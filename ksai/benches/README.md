@@ -10,7 +10,6 @@ This folder times one training step of ksai's simplest layer, written four ways,
 make                                         # build the stage1 compiler first (out/ksplc_stage1.exe)
 ksplc run ksai/benches/run_bench.kspls 1     # pinned to one core (a fair kernel comparison)
 ksplc run ksai/benches/run_bench.kspls 4     # 4 cores (how each library scales with threads)
-python3 ksai/benches/bench_pure.py           # for reference: pure Python (a triple loop, the language itself)
 ```
 
 Run it from the repository's root. It prints μs per step for each size and each backend. Without `python3` or numpy, it says so and skips the numpy reference.
@@ -45,7 +44,6 @@ flowchart LR
 | [`bench_train.kspls`](bench_train.kspls) | The KSPL training bench (`*_into` reuse; pure KSPL by default, BLAS with `--define=blas`). |
 | [`bench_ref.c`](bench_ref.c) | The C reference, calling the system OpenBLAS directly. |
 | [`bench_np.py`](bench_np.py) | The numpy reference. |
-| [`bench_pure.py`](bench_pure.py) | Pure Python, the language's own speed without BLAS. |
 
 ## What the results show
 

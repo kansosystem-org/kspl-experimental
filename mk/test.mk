@@ -91,7 +91,6 @@ suite_docsnippet   := suite/docsnippet_test.kspls
 suite_textrip      := suite/textrip_test.kspls
 suite_lsp-tree     := suite/lsp_tree_test.kspls
 suite_pytools      := suite/pytools_test.kspls
-suite_keywords     := suite/keywords_test.kspls
 suite_c-warnings   := suite/c_warnings_test.kspls
 suite_pilot-copy   := suite/pilot_copy_test.kspls
 suite_recipe-bytes := suite/recipe_bytes_test.kspls
@@ -108,8 +107,8 @@ suite_lint-gate    := suite/lint_gate_test.kspls
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
 # `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`).
 SUITES := lsp-tree extract-ksplc extract-rest kspls-trip c-warnings conventions docref pilot-copy \
-  deps spec-claims textrip docsnippet vscode recipe-bytes lint-gate link-rules keywords \
-  pytools $(PRIVATE_SUITES)
+  deps spec-claims textrip docsnippet vscode recipe-bytes lint-gate link-rules pytools \
+  $(PRIVATE_SUITES)
 
 # Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer): out of
 # `test-suites`, run by `ci-linux`.
@@ -151,6 +150,28 @@ $(addprefix test-,$(addsuffix -fuzz,$(FUZZ_PKGS))): test-%-fuzz: $(STAGE1_EXE) $
 	@$(call pkg_make,$*) test-fuzz
 .PHONY: $(addprefix test-,$(addsuffix -fuzz,$(FUZZ_PKGS)))
 
+# --- The BLAS backend built and run for real ---
+# **ksai alone holds `#cfg(blas)`** (`make test-conventions` refuses one elsewhere), so its unit tests
+# are all that `BLAS=1` changes; every other package would only repeat `make debug`.
+## Gates|test-blas|Build and run ksai's unit tests on OpenBLAS (`BLAS=1`), the one package using it
+test-blas: $(STAGE1_EXE) $(SEED_EXE)
+	@$(call pkg_make,ksai) test-unit BLAS=1
+.PHONY: test-blas
+
+# --- A deep fuzzing run with a fresh seed ---
+# CI replays each fuzzer's fixed seed at a shallow depth, which shows a regression; a fresh seed, run
+# deep now and then, reaches inputs the fixed one never does. A finding prints the line that
+# reproduces it (`--seed=` / `--trials=`), so the seed taken from the clock is not lost.
+FUZZ_LONG_TRIALS ?= 2000
+FUZZ_LONG_SEED ?= $(shell date +%s)
+fuzz_long_args := FUZZ_ARGS="--trials=$(FUZZ_LONG_TRIALS) --seed=$(FUZZ_LONG_SEED)"
+## Measure-and-inspect|fuzz-long|Fuzz every reader deep, with a fresh seed (`FUZZ_LONG_TRIALS=` / `FUZZ_LONG_SEED=`)
+fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
+	@echo "# FUZZING DEEP: $(FUZZ_LONG_TRIALS) rounds a reader, seed $(FUZZ_LONG_SEED)"
+	$(foreach p,$(FUZZ_PKGS),$(call pkg_make,$(p)) test-fuzz $(fuzz_long_args)$(nl))
+	$(call pkg_make,ksplc) test-fuzz $(fuzz_long_args)
+.PHONY: fuzz-long
+
 # Caution: **The fuzzed readers' address sanitizer is mandatory on Linux**, whose image holds it: no
 # silent pass (each package's `test-fuzz`).
 export KANSO_REQUIRE_ASAN := $(if $(filter linux,$(PLATFORM)),1,)
@@ -184,12 +205,28 @@ endef
 test-suites: $(addprefix test-,$(SUITES))
 	$(call suites_passed,ALL TEST SUITES,$(SUITES))
 
-# --- The two halves CI runs on separate jobs ---
+# --- The suites whose answer cannot differ by platform ---
+# They read the tree's text, or translate it and compare text, so a second platform gives the same
+# answer for its minutes (a Windows minute is billed double): CI runs them on Linux alone, as one
+# set (`test-suites-text`). Caution: **Keep a suite out of here when it builds, links or runs what
+# the platform decides** (`link-rules` reads `ksplc info link-libs`, which is the platform's).
+SUITES_TEXT := kspls-trip conventions docref spec-claims textrip docsnippet vscode recipe-bytes \
+  lint-gate deps pytools
+
+suites_text_unknown := $(filter-out $(SUITES),$(SUITES_TEXT))
+ifneq ($(suites_text_unknown),)
+$(error SUITES_TEXT holds a name absent from SUITES: $(suites_text_unknown))
+endif
+
+test-suites-text: $(addprefix test-,$(SUITES_TEXT))
+	$(call suites_passed,TEST SUITES (text, Linux only),$(SUITES_TEXT))
+
+# --- The two halves CI runs on separate jobs, of what is left ---
 # **Cut for the two jobs to end together on Windows**, the slowest (by the job log's timestamps;
 # MSYS2 counts no child's CPU); half A is what B leaves. A's two slots are the two extract halves,
 # the small suites filling the shorter one; `sync-share`, slow on Windows, rides B's wait.
-SUITES_B := lsp-tree kspls-trip c-warnings conventions docref $(PRIVATE_SUITES)
-SUITES_A := $(filter-out $(SUITES_B),$(SUITES))
+SUITES_B := lsp-tree c-warnings $(PRIVATE_SUITES)
+SUITES_A := $(filter-out $(SUITES_B) $(SUITES_TEXT),$(SUITES))
 
 suites_b_unknown := $(filter-out $(SUITES),$(SUITES_B))
 ifneq ($(suites_b_unknown),)
@@ -205,7 +242,7 @@ test-suites-b: $(addprefix test-,$(SUITES_B))
 ## Local-cycle|test-extract|Every package with its own `Makefile` from a copy (both halves)
 test-extract: test-extract-ksplc test-extract-rest
 
-.PHONY: test-suites test-suites-a test-suites-b test-extract $(addprefix test-,$(ALL_SUITES))
+.PHONY: test-suites test-suites-a test-suites-b test-suites-text test-extract $(addprefix test-,$(ALL_SUITES))
 
 # --- Checking the generated LLVM IR's signature agreement ---
 # Caution: **LLVM's verifier does not match a call against its `define`**: only a stack argument

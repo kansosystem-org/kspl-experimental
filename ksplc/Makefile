@@ -52,7 +52,6 @@ suite_ext-import := ext_method_import
 suite_debug-line := debug_line
 suite_decl-macros := decl_macros
 suite_spawn := spawn
-suite_slice-struct := slice_struct
 suite_one-main := one_main
 suite_write-perm := write_perm
 suite_cli := cli
@@ -72,7 +71,7 @@ suite_layout-targets := layout_targets
 # apart, under a time limit of its own, runs that first and then `make test-<name>` per name here.
 SUITES := lsp run generic-matrix thin-use negative runtime write-perm std-dir emit-runtime ship \
   property limits lint cli kspls split equiv ast-cache broken-pipe config output-flush ext-import \
-  debug-line decl-macros spawn slice-struct one-main file-path place visibility fmt doc \
+  debug-line decl-macros spawn one-main file-path place visibility fmt doc \
   layout-targets
 # The scattering is a suite too, run apart (`make test-fuzz`) and handed, after the two places, the
 # folder its seeds come from besides `std` (this one unless named) and `--trials=N` / `--seed=N`.

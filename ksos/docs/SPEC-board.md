@@ -8,18 +8,21 @@
 
 ## Words used in this document
 
+This table is the one definition of the words for the board's parts and pins.
+
 | Word | What it means here |
 | :-- | :-- |
 | GPIO | A general-purpose pin of the RP2040 that a program can switch High or Low, or read. Pins are named by number: GPIO 2, GPIO 3 … |
-| PWM | Switching a pin on and off very fast. The share of each cycle it is on is the *duty*; the cycles per second are its frequency |
-| ADC | Analog-to-digital converter: it turns a voltage on a pin into a number |
+| PWM | Switching a pin on and off very fast. The share of each cycle it is on is the *duty* (0 to 100%); the cycles per second are its frequency. The duty sets a motor's speed; the frequency sets the buzzer's pitch |
+| ADC | Analog-to-digital converter: it turns a voltage on a pin into a number. The RP2040's has 12 bits: 0 to 4095 |
 | H bridge | The motor-driver circuit that lets a pair of pins turn a motor either way |
 | mecanum wheel | A wheel with rollers set at an angle around its rim. Turning four of them in different directions moves the car sideways or diagonally without steering |
 | servo | A small motor that turns to an angle it is told, rather than spinning |
-| I2C | A two-wire bus, SDA (data) and SCL (clock), on which each device answers at its own address |
-| UF2, BOOTSEL | Held while USB is plugged in, the Pico's BOOTSEL button makes it show up as a USB drive; copying a `.uf2` file onto that drive writes the firmware |
+| I2C | A two-wire bus, SDA (data) and SCL (clock), on which each device answers at its own address. **ACK** is a device's "received"; **NACK** is no answer or a refusal |
+| BOOTSEL | A button on the Pico W. Held while USB is plugged in, it makes the chip show up as a USB drive instead of running its program |
+| UF2 | A firmware file format. Copying a `.uf2` file onto the Pico's USB drive (see BOOTSEL) writes the firmware into the chip's flash |
 | SWD probe | A debugging adapter wired to the chip's debug pins |
-| USB CDC | A kind of USB device that looks like a serial port (a COM port) to the PC |
+| USB CDC | A kind of USB device that looks like a serial port to the PC: a COM port on Windows, `/dev/ttyACM0` on Linux |
 
 ## Where the facts come from
 
@@ -103,7 +106,7 @@ The left goes front then rear, the right rear then front (the board's connectors
 
 ### The direction of rotation differs from unit to unit
 
-The motors' wiring differs per unit (on the unit here, all four are reversed). The Arduino version expresses it with commented-out `#define`s, `REVERSE_MOTOR1` to `4` in `Freenove_4WD_Car_For_Pico_W.h`. **The KSPL code has a named table of constants that is always read.** Reading a commented-out `#define` does not tell off from on, so one left ineffective goes unnoticed (Principle 5, [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+The motors' wiring differs per unit (on the unit here, all four are reversed). The Arduino version expresses it with commented-out `#define`s, `REVERSE_MOTOR1` to `4` in `Freenove_4WD_Car_For_Pico_W.h`. How ksos holds it is "What is in `boards/freenove_4wd_pico/`" in [`DESIGN.md`](DESIGN.md).
 
 ## The servos
 
@@ -141,9 +144,8 @@ Three sensors under the front of the car tell a dark line from a light floor.
 
 * Three GPIO inputs. **White = 0 / black = 1**.
 * They pack into the three bits left<<2 | centre<<1 | right, which are branched on (`010` = only the centre is black = go straight).
-* **Only [`track.kspls`](../boards/freenove_4wd_pico/track.kspls) reads them.** Do not copy the packing out: a left-right fix to one copy leaves the copies disagreeing unnoticed.
 * **The sensors sit 20 to 25mm apart, about 100mm ahead of the point the car turns about.** Measured on this unit: a 20mm line cannot cover two neighbours, and a 50mm line covers all three.
-* **Some units have the left and right sensors mounted swapped.** `board.kspls`'s `line_sensor_swapped` corrects it (true reads leftmost and rightmost swapped). It matters beyond line following: avoiding an obstacle (fleeing toward the side with no line) uses the same three bits.
+* **Some units have the left and right sensors mounted swapped.** Where ksos corrects it is "What is in `boards/freenove_4wd_pico/`" in [`DESIGN.md`](DESIGN.md).
 
 ## The WS2812 LEDs
 
@@ -157,6 +159,7 @@ Each WS2812 is an RGB LED with a small control chip inside it; eight are chained
 Flashing means writing the program (the firmware) into the Pico's storage. The debug output is how the program reports what it is doing.
 
 * Writing it takes **the BOOTSEL button plus a UF2** copied to USB mass storage; no SWD probe is needed.
+* **A standard Pico / Pico W carries 2MB of QSPI Flash**, a W25Q16JVxQ or equivalent. The part fitted on this unit is not checked against its marking.
 * **Semihosting cannot be used here.** Semihosting is printing through an attached debugger: it needs a debugger attached, and with no SWD probe the output halts the instruction that produces it.
 * Reaching the Arduino IDE's Serial Monitor takes a USB CDC driver for the RP2040's USB controller: `ksos/drivers/rp2040/usb_cdc.kspls`.
   * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** (Enumeration is the exchange in which the PC learns what a newly plugged-in USB device is.) What each beep count means is stage 2b in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).

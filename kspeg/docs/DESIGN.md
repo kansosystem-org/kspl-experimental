@@ -31,19 +31,6 @@ flowchart TD
     AGAIN --> E2["the syntax error: expected …"]
 ```
 
-## Contents
-
-* [The grammar is interpreted, not turned into code](#the-grammar-is-interpreted-not-turned-into-code)
-* [A grammar is checked when it is read](#a-grammar-is-checked-when-it-is-read)
-* [Lexical rules are not memoized](#lexical-rules-are-not-memoized)
-* [A run of keywords is looked up once](#a-run-of-keywords-is-looked-up-once)
-* [A rule that cannot begin with the next byte is not entered](#a-rule-that-cannot-begin-with-the-next-byte-is-not-entered)
-* [Indentation becomes markers before the parse](#indentation-becomes-markers-before-the-parse)
-* [The profile counts calls, not time](#the-profile-counts-calls-not-time)
-* [How the engine is split across files](#how-the-engine-is-split-across-files)
-
----
-
 ## The grammar is interpreted, not turned into code
 
 A program that uses kspeg needs only the engine and the grammar file. There is no generator tool to install or run.

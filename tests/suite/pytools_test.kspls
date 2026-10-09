@@ -10,6 +10,7 @@
 //< same as tools are added, or this file comes to hold a branch per tool.
 //< Caution: **Print a `SKIP` line when a module a tool needs is absent.** Skipped with no line, it
 //< looks like a pass.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -43,8 +44,8 @@ priv const tools: Tool[4] = ::{ Tool::{ .path = "tools/kspl_lldb.py", .module = 
     .module = "tools.ai_assist.export_qwen_to_kspl", .needs = "numpy" } }
 
 priv fn importable(name: U8[]): Bool //< whether `python3` can import the module `name`
-    arena: = harness.arena()
-    return harness
+    arena: = ksplc_harness.arena()
+    return ksplc_harness
         .run(U8[][]::{ python, "-c", arena.text().s("import ").s(name).take() }).code == 0
 
 priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with the pass mark
@@ -52,7 +53,7 @@ priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with the
     //< Caution: **Judge by the line's first word.** The mark is lower case, so a plain search also
     //< hits an English word in the output or Python's `pass` statement, and passes a round where
     //< not one self-test ran.
-    arena: = harness.arena()
+    arena: = ksplc_harness.arena()
     for line in out.lines(arena)
         sp: = line.find_char(' ')
         first: = line if sp < 0 else line.sub(0, sp)
@@ -61,7 +62,7 @@ priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with the
     return false
 
 priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
-    arena: = harness.arena()
+    arena: = ksplc_harness.arena()
     name: = arena.text().s(t.path).s("'s self-test passes").take()
     if t.needs.len > 0 && !importable(t.needs)
         verdict.skip_check(name,
@@ -70,7 +71,7 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
     argv: =
         (U8[][]::{ python, t.path } if t.module.len == 0
         else U8[][]::{ python, "-m", t.module })
-    r: = harness.run_capped(argv, harness.root(), selftest_timeout_ms)
+    r: = ksplc_harness.run_capped(argv, harness.root(), selftest_timeout_ms)
     if r.code != 0
         verdict.check(name, false,
             arena.text().s("the self-test failed (exit code \{r.code\})\n").s(r.out).take())
@@ -84,4 +85,4 @@ fn main(): I32
     harness.begin(1 << 20)
     for i in Range.asc(tools.len)
         check_tool(tools[i]@)
-    return harness.finish()
+    return ksplc_harness.finish()

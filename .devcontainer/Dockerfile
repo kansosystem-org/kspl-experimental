@@ -14,10 +14,11 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
 #   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
 #   test-pytools: python3-numpy (without it, a silent SKIP) · test-kspage-desktop: desktop-file-utils
+#   llvm.sh below: lsb-release, software-properties-common, gnupg (purged once it has run)
+# No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
     python3 \
     nodejs \
-    python3-pip \
     python3-numpy \
     python-is-python3 \
     make \
@@ -52,11 +53,14 @@ ENV LC_ALL=en_US.UTF-8
 # The rest: clang-format-19 (the Makefile's `C_FMT`), llvm-19 (OBJDUMP / OBJCOPY / NM),
 # libclang-rt-19-dev (the sanitizers `make test-ksai-fuzz` and `make test-race` build with),
 # clang-19 by name.
+# **Purge what only the script needed** (it pulls in Python and D-Bus packages), so the Linux
+# job does not pull them on every run.
 RUN wget https://apt.llvm.org/llvm.sh && \
     chmod +x llvm.sh && \
     ./llvm.sh 19 && \
     rm llvm.sh && \
     apt-get install -y clang-format-19 llvm-19 libclang-rt-19-dev && \
+    apt-get purge -y --auto-remove software-properties-common lsb-release gnupg && \
     rm -rf /var/lib/apt/lists/*
 
 # --- Letting the unversioned names through ---
@@ -109,8 +113,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ln -s /opt/chrome-linux/chrome /usr/local/bin/chromium
 
 # --- Allowing sudo for the plain 'ubuntu' user (UID 1000) ---
+# Caution: **Remove the lists in the same layer**, as every step above does, or they stay in the
+# image for good.
 RUN apt-get update \
-    && apt-get install -y sudo \
+    && apt-get install -y --no-install-recommends sudo \
+    && rm -rf /var/lib/apt/lists/* \
     && echo "ubuntu ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/ubuntu \
     && chmod 0440 /etc/sudoers.d/ubuntu
 

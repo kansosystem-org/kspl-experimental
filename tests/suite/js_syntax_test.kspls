@@ -9,6 +9,7 @@
 //   1. **one file at a time** ... reports the name and line of the broken file.
 //   2. **the concatenated form** ... a `let` / `const` / `class` collision across files is caught
 // ==========================================
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -74,16 +75,16 @@ priv fn check_joined(what: U8[], slug: U8[], files: List<|U8[]|>@, arena: Arena$
     defer body.free()
     for i in Range.asc(files.len)
         text: = io.read_file(files.get(i)) catch
-            harness
+            ksplc_harness
                 .fatal(arena.text().s("cannot read: ").s(files.get(i)).take())
             return
         body.s(text).c('\n')
     // Caution: **Build the name in ASCII**; the heading's spaces and multi-byte characters would
     // garble the path passed to node on some systems.
-    joined: = fs.join(harness.tmp_dir(),
+    joined: = fs.join(ksplc_harness.tmp_dir(),
         arena.text().s(slug).s("_joined.js").take(), arena)
     io.write_file(joined, body.slice()) catch
-        harness.fatal(arena.text().s("cannot write: ").s(joined).take())
+        ksplc_harness.fatal(arena.text().s("cannot write: ").s(joined).take())
         return
     said: = check_one(joined, arena)
     $bad: = List<|U8[]|>.new(arena)
@@ -109,4 +110,4 @@ fn main(): I32
     check_joined("the page's JS", "page_js", page@, arena)
     probe: = harness.tracked_matching(U8[][]::{ "kspage/tests/browser/*.js" })
     check_joined("the browser checks' JS", "probe_js", probe@, arena)
-    return harness.finish()
+    return ksplc_harness.finish()

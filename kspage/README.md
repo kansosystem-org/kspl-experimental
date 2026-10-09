@@ -13,20 +13,6 @@ make kspage-open FILE=out/sample.kspage  # a browser comes up with that document
 
 **This guide is the map.** It is for whoever reads or changes kspage's code, and it assumes no experience of building an editing system. It shows where things are in the code, the order to read them in, and what a change must touch. The decisions and their grounds are in [`kspage/docs/DESIGN.md`](docs/DESIGN.md); its "Words used in this document" explains the terms this guide uses without stopping (canvas, IME, run, band and the rest).
 
-## Contents
-
-* [Run it](#run-it)
-* [The idea](#the-idea)
-* [What is here](#what-is-here)
-* [Reading order](#reading-order)
-* [Common changes](#common-changes)
-* [Pitfalls](#pitfalls)
-* [The checks, and what none of them sees](#the-checks-and-what-none-of-them-sees)
-* [Files near the limit and how they split](#files-near-the-limit-and-how-they-split)
-* [Further reading](#further-reading)
-
----
-
 ## Run it
 
 **These commands build kspage and open a document in it.** `make help` lists every target under Run and Gates.
@@ -59,34 +45,9 @@ Two windows may open one file. The second to save is refused if the file changed
 
 ## The idea
 
-**A document, a spreadsheet and a presentation differ only in their arrangement, not in the shape of their data** (the grounds are "Why the three can be made one" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)). The arrangement is how a block's contents are placed on the page. All three hold the same thing underneath: blocks of text with styles.
+**A document, a spreadsheet and a presentation hold the same data, blocks of styled text, and differ only in how it is arranged**: flow for prose, a grid for a table, absolute coordinates for a slide. A block's style names its arrangement, so a table sits inside prose and a slide inside the flow. Everything under the arrangement (the document model, text layout with the IME, and the reckoning) is written once. Under that, a thin port layer (`port/web/`) measures text and draws on a canvas through wasm. The grounds are "Why the three can be made one", "How the arrangements nest" and "The core and the port" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md). **A figure is a slide**: a slide already sits in the flow, so figures need no container of their own.
 
-| How it looks | The arrangement |
-| :-- | :-- |
-| Prose | flow (a run of text split onto pages) |
-| A table | a grid (rows × columns), whose formulas are solved again in the order their values depend on each other |
-| Presentation | absolute coordinates (laid onto a slide of a set size) |
-
-Only the arrangement forks. Everything under it is shared, as the diagram shows:
-
-```mermaid
-flowchart TD
-    S["shared by all three uses:<br/>one document model, one text layout,<br/>one reckoning engine"] --> F["flowing<br/>(prose)"]
-    S --> G["a grid<br/>(a table)"]
-    S --> A["absolute coordinates<br/>(a slide)"]
-    F --> P["a thin port layer"]
-    G --> P
-    A --> P
-    P --> W["a canvas (WebAssembly)"]
-```
-
-| Shared part | What it is |
-| :-- | :-- |
-| One document model | A tree of blocks, the rows of text (inlines) each block holds, and styles the blocks name |
-| One text layout | Breaking text into lines, the range selected, the cursor, and the IME (the OS tool that turns key presses into Japanese or Chinese characters) |
-| One reckoning engine | Solves formulas along the graph of dependencies between values: mostly a table's, but it acts on a formula in prose too |
-
-Under the three laying-out strategies, a thin port layer draws to a canvas (an HTML element kspage paints on itself) through WebAssembly. It is the only port (`port/web`); because drawing is kept in that layer, a native window would replace only it.
+**The document (`Doc`) and what is shown (`Page`) are two separate trees.** `Editor` alone rewrites `Doc`, which is what is saved and what an undo puts back. Layout reads `Doc` and `Sheet` and builds `Page` afresh at every keystroke; nothing flows back. So to change what the screen shows, change `Doc` or `Sheet`, and what layout counts (the contents, chapter and note numbers, list marks) never goes into `Doc` ("The editor and the undo record" and "What layout recomputes every time" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)).
 
 ### The terms and the types behind them
 
@@ -101,59 +62,6 @@ Under the three laying-out strategies, a thin port layer draws to a canvas (an H
 | The cursor | where it is | `Caret` ([`kspage/lay/caret.kspls`](lay/caret.kspls)) |
 | The place of editing | **the only** entry point that rewrites the document | `Editor` ([`kspage/write/edit.kspls`](write/edit.kspls)) |
 | The shape it is saved in | JSON | [`kspage/share/store.kspls`](share/store.kspls) |
-
-### There are two trees, and they must not be mixed
-
-**The document (`Doc`) and what is shown (`Page`) are two separate trees.** Layout reads the first and builds the second; nothing flows back.
-
-```mermaid
-flowchart LR
-    E["Editor<br/>(the only writer)"] -->|rewrites| D["Doc<br/>saved, undone"]
-    D --> L["layout<br/>(reads only)"]
-    SH["Sheet<br/>(the styles)"] --> L
-    L --> P["Page<br/>rebuilt at every keystroke"]
-    P --> DR["drawing"]
-```
-
-* **`Doc`** is the source. Only it is saved, and only it is what an undo puts back.
-* **`Page`** is the layout result. It is thrown away and rebuilt at every keystroke. The coordinates, the line breaks and the boxes all live here and are never written into the document. To change what the screen shows, change `Doc` or `Sheet`.
-
-**This is why "it does not go into the document" turns up all over the code.** The table of contents, the chapter numbers, a list's marks, a note's number, a graph's contents and the page numbers are all counted at layout and put into `Page`. They never go into `Doc`, where typing could delete them ("What layout recomputes every time" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)).
-
-### The idea in code
-
-**This fragment builds a one-paragraph document and lays it out in a column 40 pixels wide.** `fixed.make()` stands in for real text measurement: a table of fixed measurements that needs no real font and gives the same answer every time, as the tests use.
-
-```kspls
-import "std/mem" { Arena }
-import "kspage/model/font" { Font }
-import "kspage/model/fixed_font" as fixed
-import "kspage/model/doc" { Doc }
-import "kspage/model/style" { Sheet }
-import "kspage/lay/flow"
-
-arena: = Arena.new(64 * 1024)
-defer arena.free()
-root: = Font::{ .family = "sans", .size_px = 16.0, .weight = 400U16, .italic = false }
-sheet: = Sheet.new(root, arena)
-
-doc: = Doc.new(arena)
-doc.add_block("body").add_text("aaa bbb ccc")
-
-page: = flow.layout(doc, sheet, fixed.make(), 40.0, arena)
-// An ASCII character is half an em (8px), so a width of 40px holds five of them, and it
-// breaks behind a whitespace. Three rows, and three boxes.
-```
-
-The example lays out one paragraph of plain prose. The other two arrangements, formulas and saving work like this:
-
-| To get | Write | What happens |
-| :-- | :-- | :-- |
-| A table | a block whose style says `arrange = Arrange.grid` | That block, and only that block, is laid out in rows × columns: **that is a table inside flowing prose** |
-| A slide | a block whose style says `Arrange.absolute` | It becomes a slide of `Style.width` × `Style.height`, each child in its own `frame` |
-| A formula | text such as `=A1*3`, in a table or in the body | It becomes a formula (`calc.recalc`); in the body it can name a table (`=detail!C4`). **Only the text typed stays in the document**; the value is shown through `Inline.showing` |
-| Save and open | `store.save` / `store.load` | Save and read back (the "Save" and "Open" buttons) |
-| Other formats | `markdown.write` / `text.read` | Write out Markdown. **A text (`.txt`, `.md`, source) opens line by line and is written back byte for byte** |
 
 ### What happens on one keystroke
 
@@ -172,12 +80,6 @@ The example lays out one paragraph of plain prose. The other two arrangements, f
 **Only (3) rewrites the document**: (4) only reads it, and (5) sees only `Page`. So when the screen is wrong, the fault is in the rewrite (3), the layout (4) or the drawing (5).
 
 Note: **(4) redoes everything every time.** Its cost, and why it stays, are in "Accepted limit 1: typing one character lays the whole document out again" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
-
-**A formula is written in the code's own syntax** ("Formulas use KSPL's expression syntax" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md)), so a document holding prose, tables and figures can stand beside the code.
-
-**A figure is a slide.** A slide laid out at absolute coordinates already goes into the flow, so figures need no other container. (A box, a connecting line and a number are all a figure needs.)
-
-What kspage leaves out is in "What it does not hold" in [`kspage/docs/DESIGN.md`](docs/DESIGN.md).
 
 ## What is here
 

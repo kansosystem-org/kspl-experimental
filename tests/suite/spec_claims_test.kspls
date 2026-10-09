@@ -6,6 +6,7 @@
 //< refuses everything go green.
 //< A section number marks where a case was copied from; the check does not use it
 //< (`tests/suite/docref_test.kspls` checks that the section exists).
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -429,7 +430,7 @@ priv const cases: Case[129] = ::{
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     dir: = harness.sandbox("spec_claims") catch
-        return harness.fatal("cannot make a working directory")
+        return ksplc_harness.fatal("cannot make a working directory")
     work: = dir
     // Caution: **Write each case's input to its own file**, or children running side by side read
     // each other's.
@@ -438,12 +439,12 @@ fn main(): I32
         src: = fs.join(work, arena.text().s("c\{i\}.kspl").take(), arena)
         gen: = fs.join(work, arena.text().s("c\{i\}.c").take(), arena)
         io.write_file(src, cases[i].src) catch
-            return harness.fatal("cannot place the material")
+            return ksplc_harness.fatal("cannot place the material")
         jobs
-            .push(subproc.Job::{ .argv = harness.ksplc_argv(U8[][]::{ src, gen }),
+            .push(subproc.Job::{ .argv = ksplc_harness.ksplc_argv(U8[][]::{ src, gen }),
             .cwd = harness.root() })
     io.out().s("# the specification's claims: \{cases.len\} (parallelism \{verdict.jobs()\})\n")
-    outs: = harness.run_all(jobs.slice(), "spec_claims")
+    outs: = ksplc_harness.run_all(jobs.slice(), "spec_claims")
     for i in Range.asc(cases.len)
         c: = cases[i]@
         r: = outs.get(i)
@@ -458,4 +459,4 @@ fn main(): I32
         verdict.check(name, false,
             arena.text().s("it is refused (the specification writes that it allows):\n\{r.out\}")
             .take())
-    return harness.finish()
+    return ksplc_harness.finish()

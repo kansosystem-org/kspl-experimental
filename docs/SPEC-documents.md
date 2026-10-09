@@ -4,13 +4,6 @@ This file sets the rules every document in this repository follows: which words 
 
 It is a specification: it states the rules, and does not argue for them. Two gates (checks that CI runs and that can fail the build) check the parts a machine can see: `make test-docref` checks references, and `make test-conventions` checks names and layout. Why each rule was chosen is in [`DESIGN.md`](DESIGN.md); which document to read for what is in [`README.md`](README.md).
 
-* [Terms of art](#terms-of-art) — the words that carry one meaning each
-* [Names for units](#names-for-units) — file, folder, package, all
-* [Document naming](#document-naming) — the six kinds, where documents sit, the names fixed from outside, what every README contains, where a splitting plan is written
-* [Wording and formatting rules](#wording-and-formatting-rules) — where a fact goes, the two labels, how a trap is written, another product named only for its behavior, no hand wrapping, the vertical bar inside a table, a code block that compiles
-* [Reference direction between documents](#reference-direction-between-documents) — the layers, naming is not depending, what a SPEC may point at, how a reference is written
-* [Linking documents to source](#linking-documents-to-source) — one direction, by name, and a `make` command that names a target
-
 ## Terms of art
 
 The words in this table have exactly one meaning, in every document and every source comment. Use them with that meaning.
@@ -92,6 +85,8 @@ The rules for visibility and `import` are in [`SPEC-language.md`](SPEC-language.
 
 **Every folder that holds a document also holds a `README.md`, and a package's `README.md` is its entry point.** GitHub shows a folder's README without being asked, so it always speaks to the reader who has just arrived. The root README routes to every package's README, and a package's README routes to its deeper folders that have one.
 
+**A package's `docs/` is the one exception: the package's own `README.md` lists its documents.** A `README.md` inside `docs/` could only repeat that list, a second copy to keep in step, and a reader reaches `docs/` from the package's README anyway.
+
 **A package's other documents sit under `<package>/docs/`; only its `README.md` stands beside the sources.** People open a package's folder to find a source file, and each document beside the sources is one more name to read past. The `README.md` stays there because an arriving reader must meet it without being told where to look, and GitHub shows it on the way in.
 
 ### Documents whose name is fixed from outside
@@ -113,9 +108,9 @@ A few documents have names chosen by a tool or a convention outside this reposit
 | **What is here** | A map of what the folder contains (a file table, a reading order, or an index organized by purpose). |
 | **The smallest usage example** | A code block that can be copied and run, or one line of `make`. |
 | **Further reading** | A guide at the end, under that heading, listing the same folder's other documents and the entry points of closely related folders. |
-| **Who reads it** | A column on that guide **wherever the answer differs between the folder's documents**: who each one is for, and what they must already have (a toolchain, a browser, the board itself). Where every document has the same answer, the guide says it once instead of in a column. `make test-conventions` refuses a document the folder's README never names. |
+| **Who reads it** | A column on that guide **wherever the answer differs between the folder's documents**: who each one is for, and what they must already have (a toolchain, a browser, the board itself). Where every document has the same answer, the guide says it once instead of in a column. `make test-conventions` refuses a document the folder's README never names (for a package's `docs/`, the package's README). |
 
-**A `docs/README.md` that only routes to its folder's documents carries no usage example.** The documents it routes to hold the examples, and a copy in the index would be a second copy to keep in step.
+**The root `docs/README.md`, which only routes to its folder's documents, carries no usage example.** The documents it routes to hold the examples, and a copy in the index would be a second copy to keep in step.
 
 **A folder in which nothing works says so at the top, instead of carrying a usage example.** An example that does not run, or an empty section, sends the reader looking for something that is not there.
 
@@ -241,6 +236,10 @@ This holds in documents and comments alike. A span in backquotes is code, which 
 **One paragraph, or one bullet item, is written on one line.** Wrapping is left to the width of the reader's window.
 
 **Do not pick a column and wrap by hand.** Markdown shows a newline inside a paragraph as a space, so a stray space appears mid-sentence. The wrap points also move every time the text is edited, so the diff looks like a change in content.
+
+### A document carries no list of its own headings
+
+**A document holds no hand-written table of contents.** The editor's outline and GitHub's outline button list the headings from the headings themselves. A list written by hand has to be edited with every heading it names, and a heading added later is missing from it with nothing to show it.
 
 ### Escape vertical bars only inside tables
 

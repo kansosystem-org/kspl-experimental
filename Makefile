@@ -204,7 +204,7 @@ endif
 	fmt test-fmt-tree lint lint-cfg debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install \
 	ci-linux ci-macos \
-	run fim-corpus fim-model fim-eval qwen kssrv ai-venv ci
+	run fim-corpus fim-model fim-eval qwen kssrv ci
 
 # A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
 define nl
@@ -231,9 +231,18 @@ stage1: $(STAGE1_EXE)
 # **The verdict is emitted here, not in $(DIFF_TXT)'s recipe** (run only when remaking), or an
 # incremental build passes `Gate.verdict` in `tools/ci_gates.kspls` unverified. **No `-B`**: it
 # redoes the seed.
+# **A change to how ksplc generates code differs here until the seed is re-baked**: the seed's
+# stage1 still generates the old way. Its steps are named on a fall.
+define self_host_help
+#   If you changed how ksplc generates code, the seed still generates the old way:
+#   run `make commit-seed`, then this again ("1.2 The bootstrap, and keeping the seed in step"
+#   in ksplc/docs/DESIGN.md). `git checkout ksplc/seed.c` undoes the re-bake.
+endef
+self-host: export SELF_HOST_HELP := $(self_host_help)
 ## Gates|self-host|See that the notation stage1 and stage2 emit does not differ by one byte
 self-host: $(DIFF_TXT)
-	@$(ksplc_step) verdict DIFF=$(DIFF_TXT) LABEL='self-hosting, $(BACKEND) backend'
+	@$(ksplc_step) verdict DIFF=$(DIFF_TXT) LABEL='self-hosting, $(BACKEND) backend' \
+		|| { printf '%s\n' "$$SELF_HOST_HELP"; exit 1; }
 
 # --- Measuring performance (makes the log `make ci` hands to perf_guard) ---
 # Caution: **Measure two runs of the same executable**, in a cache of its own: a rebuilt ksplc
@@ -415,17 +424,6 @@ kssrv: $(STAGE1_EXE)
 	@echo "# BUILDING KSSRV (static file HTTP server)"
 	$(call kspl_build,kssrv/main.kspls,kssrv,)
 	@echo "# built -> $(OUT_DIR)/kssrv.exe (try: ./$(OUT_DIR)/kssrv.exe 8080 .)"
-
-# --- The Python venv for ai_assist's external scripts (lora_finetune_external.py and the like) ---
-AI_VENV := .venv
-## Run|ai-venv|Rebuild the Python venv the notation outside `tools/ai_assist` uses
-ai-venv:
-	@echo "# REBUILDING PYTHON VENV ($(AI_VENV))"
-	rm -rf $(AI_VENV)
-	python3 -m venv $(AI_VENV)
-	$(AI_VENV)/bin/pip install --upgrade pip
-	$(AI_VENV)/bin/pip install torch transformers peft safetensors
-	@echo "# venv ready -> source $(AI_VENV)/bin/activate"
 
 # --- Kanso OS (RTOS): `ksos/Makefile`'s own targets, called here by the same names ---
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only

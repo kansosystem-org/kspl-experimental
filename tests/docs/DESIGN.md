@@ -2,15 +2,6 @@
 
 **Why the repository's suites are built the way they are.** A *suite* is one KSPL program under `tests/suite/` that runs many checks and reports one verdict. This document is for whoever changes a suite or the code the suites share. How to write one is in [`tests/docs/HOWTO-write-a-suite.md`](HOWTO-write-a-suite.md), and each folder's place is in [`tests/README.md`](../README.md).
 
-## Contents
-
-* [The seed runs the suites](#the-seed-runs-the-suites)
-* [What stays in the root tests folder](#what-stays-in-the-root-tests-folder)
-* [A folder holds a role, and a file name holds a role within it](#a-folder-holds-a-role-and-a-file-name-holds-a-role-within-it)
-* [Why harness holds the arena](#why-harness-holds-the-arena)
-
----
-
 ## The seed runs the suites
 
 Two compilers take part in every suite run. A fixed, older one runs the suite, and the suite tests the new one.

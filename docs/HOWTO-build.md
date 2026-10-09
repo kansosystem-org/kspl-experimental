@@ -9,10 +9,6 @@
 
 What every gate (each check CI runs, any of which can fail the build) checks, and on which platform, is in [`SPEC-gates.md`](SPEC-gates.md).
 
-* [Requirements](#requirements)
-* [Building and testing](#building-and-testing) — the bootstrap, the backend, formatting, linting, the tests, the PATH
-* [Windows natively, without Docker](#windows-natively-without-docker) — the MSYS2 UCRT64 shell, the packages, the known caveats
-
 ## Requirements
 
 **KSPL builds with a C compiler (Clang) and Make, and nothing else.** It needs no CMake, no C++ toolchain and no external library. The supported environments are in "Where it is supported" in the root [`README.md`](../README.md#where-it-is-supported).
@@ -93,6 +89,7 @@ make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ i
 It ends by printing where it installed, in lines that start `# installed ->`.
 
 * `make install PREFIX=/usr/local` installs elsewhere (writing there needs `sudo`). **Pass `PREFIX` as an absolute path.** A relative one is refused: it would land inside the repository, and the only sign would be a PATH that does not work. Where MSYS2 gives `HOME` in Windows form (`C:\msys64\home\<user>`), `make` converts it to `/` separators.
+* **It installs only a compiler that reproduces itself.** It first runs `make self-host` and `make self-host-ship`, and stops where either differs. It changes no file in the tree: it neither formats nor re-bakes the seed. After a change to how ksplc generates code, the seed still generates the old way, so it stops there until `make commit-seed` has run; the message says so.
 * **Do not put `out/ksplc_seed.exe` on the PATH.** The seed is the compiler from the last time it was re-taken: it lacks every later feature and is built with `-O0 -g` (no optimization, with debug information). `make install` installs Stage2 instead: the self-hosting fixed point (the compiler that reproduces itself), rebuilt with optimization ("A shipped executable is built optimized" in [`DESIGN.md`](DESIGN.md)).
 
 **If it goes wrong, there are three ways, each with its own sign.**

@@ -8,33 +8,13 @@ What belongs to one folder, not to Kanso as a whole, stands in that folder. The 
 
 ## How to read this document
 
-Start with the eight Development Principles. Each chapter after them applies the principles to one subject, one decision per section.
+Start with the eight Development Principles. Each chapter after them applies the principles to one subject, one decision per section. Chapters 1 to 8 decide what a program means, 9 to 11 how it is written down, 12 to 15 how the documents, the packages and the build are arranged, and 16 what the whole is for.
 
 * **Each section opens with the decision in plain words**, then gives the details, the reasons, and what the decision gives up. Reasons carry values.
 * **This document holds only KSPL's decisions and their grounds**, not a survey of how other languages handle the same problems.
 * **History is not written here** (Principle 7).
 * **Numbering restarts in each chapter** (`9.2.1` is "chapter 9, section 2, item 1"), so inserting a section renumbers only that chapter.
-* **New to KSPL?** The two tables after the chapter list give the notation and the words the chapters assume. The language itself is taught step by step in [`TOUR.md`](TOUR.md).
-
-| Band | Chapter | What it decides |
-| :-- | :-- | :-- |
-| | [Development Principles](#development-principles) | The eight that come first, in every folder |
-| **The language**: what a program means | [1. Symbols and syntax](#1-symbols-and-syntax) | Why `@` and `$` are postfix, and why immutability is the default |
-| | [2. The type system](#2-the-type-system) | How far inference reaches, where conversion applies, the rules slices and generics share, why the size type is signed, and how an optional value is written |
-| | [3. Traits and markers](#3-traits-and-markers) | How a contract is carried, and when to use an attribute rather than a trait |
-| | [4. Ownership and lifetime](#4-ownership-and-lifetime) | What is protected in a language with no borrow checker |
-| | [5. Concurrency](#5-concurrency) | What the type system does not guarantee, and what stands in its place |
-| | [6. Visibility](#6-visibility) | Closing the holes where `priv` does not reach |
-| | [7. The boundary with C](#7-the-boundary-with-c) | Which types may cross, which of C's types cannot be written, where a binding names its library, what standard output carries, how a library built from KSPL ships, and how a folded size is tied to the C compiler |
-| | [8. Function values](#8-function-values) | Why capture is explicit and escape is forbidden |
-| **The notation**: how a program is written down | [9. One notation per purpose](#9-one-notation-per-purpose) | Not carrying several means to the same end |
-| | [10. The indentation notation (`.kspls`)](#10-the-indentation-notation-kspls) | Why a second notation is kept, and why its rules are what they are |
-| | [11. How the source text is written](#11-how-the-source-text-is-written) | Names, reserved words, line ends, long literals, what a declaration says of itself, and where an enum's functions live |
-| **The project**: how the documents, the packages and the build are arranged | [12. Documents](#12-documents) | What each kind of document is for, where it sits, how it points at the source, and how the tour is kept true |
-| | [13. What crosses a package boundary](#13-what-crosses-a-package-boundary) | What is published, what is taken in, how a package is found, and how a page asks the local machine |
-| | [14. Why one repository](#14-why-one-repository) | What splitting would cost, and what would have to happen first |
-| | [15. The build and the gates](#15-the-build-and-the-gates) | Why only a shipped executable is optimized, where CI's time goes, what 'supported' rests on, and which toolchain builds the Windows executable |
-| **The aim**: what the whole is for | [16. Models write it, and AI runs in it](#16-models-write-it-and-ai-runs-in-it) | Why a model can write and check KSPL, and why AI runs in it |
+* **New to KSPL?** The two tables below give the notation and the words the chapters assume. The language itself is taught step by step in [`TOUR.md`](TOUR.md).
 
 ### The notation the examples use
 
@@ -57,23 +37,29 @@ KSPL reads like C written left to right. These are the forms the chapters use mo
 
 ### Words used throughout
 
-These words recur in every chapter. Compiler-internal words are in the compiler's glossary ([`ksplc/docs/DESIGN.md`, "14. The glossary"](../ksplc/docs/DESIGN.md#14-the-glossary)). A few words, such as *gate* (one check that CI runs), *reject* (the compiler refuses the program) and *canonical source* (the one place a fact lives), carry one fixed meaning in every document ("Terms of art" in [`SPEC-documents.md`](SPEC-documents.md)).
+These words recur in every chapter and in every package's documents. **This table is their one definition**: a package's own glossary holds only the words of that package, and points here for the rest. Compiler-internal words are in the compiler's glossary ([`ksplc/docs/DESIGN.md`, "14. The glossary"](../ksplc/docs/DESIGN.md#14-the-glossary)). A few words, such as *gate* (one check that CI runs), *reject* (the compiler refuses the program) and *canonical source* (the one place a fact lives), carry one fixed meaning in every document ("Terms of art" in [`SPEC-documents.md`](SPEC-documents.md)).
 
 | Word | What it means here |
 | :-- | :-- |
 | **translation time** | When `ksplc` compiles the program, as opposed to run time. "Rejected at translation time" means a compile error |
 | **the generated C** | `ksplc` translates KSPL into C (or LLVM IR), and a C compiler (or LLVM) finishes the job |
-| **diagnostic**, `[W0109]` | A message from the compiler. The code's letter is its weight: `E` error, `W` warning, `I` information, `H` hint. `ksplc explain W0109` prints what the code means |
+| **diagnostic**, `[W0109]` | A message from the compiler: an error, a warning, an information or a hint. Every one but an error carries a code, whose letter is its weight: `W` warning, `I` information, `H` hint. `ksplc explain W0109` prints what the code means |
 | **lint** | `ksplc lint`: the compiler's analysis alone. It prints every diagnostic, hints included, and builds nothing |
 | **desugar** | Rewrite a convenient notation into a plainer one: `a + b` becomes the call `a.add(b)` |
-| **generic**, **instantiate** | A generic is code with type parameters (`List<\|T\|>`). Instantiating it makes one concrete copy per type argument used (`List<\|I32\|>`), as C++ templates do |
+| **generic**, **type argument**, **instantiate** | A generic is code with type parameters (`List<\|T\|>`); the concrete type put in for `T` is a *type argument*. Instantiating the generic makes one concrete copy per set of type arguments used (`List<\|I32\|>`), as C++ templates do. That copy is an *instantiation*, or *specialization*, and each one costs translation time |
 | **trait**, **conform** | A trait is a named set of methods, like a Java interface. `impl X: Trait` declares that `X` has them: `X` conforms to the trait |
-| **trait value**, **vtable** | A value whose type is a trait. It is a *fat pointer*: a pointer to the object plus a pointer to its vtable, the table of that type's methods |
+| **trait value**, **fat pointer**, **vtable**, **thunk** | A value whose type is a trait. It is a *fat pointer*: a pointer carried with a second word, here a pointer to the object plus a pointer to its vtable. The vtable is the table of that type's methods; each entry points at a *thunk*, a small adapter function that calls the type's own method |
 | **receiver** | The value a method is called on: `b` in `b.free()` |
-| **ARC** | Automatic reference counting. Each value counts the places holding it; the compiler inserts `retain` (count up) and `release` (count down, free at zero) |
+| **ARC** | Automatic reference counting. For a type that conforms to `Ref_counted`, each value counts the places holding it; the compiler inserts `retain` (count up) and `release` (count down, free at zero). The type `Arc` is another thing ("The names of the reference-counting types" in [`std/docs/DESIGN.md`](../std/docs/DESIGN.md#the-names-of-the-reference-counting-types)) |
+| **arena** | A block of memory that hands out pieces and gives all of them back at once, when the arena itself is freed. Nothing inside is freed one by one. `std/mem`'s `Arena` is one ("8.4 The memory management model" in [`SPEC-language.md`](SPEC-language.md#84-the-memory-management-model-defer--arc--arenas)) |
 | **FQN** | Fully qualified name: a name with its file's path in front (`std.Ref_counted`), unique in the program |
-| **FFI**, **ABI** | FFI is calling between KSPL and C. The ABI is the binary agreement such a call rests on: how a type is laid out, and how arguments are passed |
+| **FFI**, **ABI** | FFI is calling between KSPL and C. The ABI is the binary agreement such a call rests on: how a type is laid out, and how arguments are passed. Both of `ksplc`'s backends keep it identical, so C output and LLVM output can call each other |
+| **hosted**, **freestanding**, **bare metal** | *Hosted* code runs under an operating system and may call libc. *Freestanding* code (`--freestanding`) may not; it is for *bare metal*, a chip with no operating system, such as a microcontroller |
+| **libc** | The C standard library (`printf`, `strtod`, `fopen` …). glibc is the usual one on Linux, and the CRT (UCRT) is Windows'. A freestanding build has none |
+| **the C runtime** | The C code in `ksplc/gen/runtime/` that every hosted program needs besides its own: files, threads, the clock, the checks. Its functions are named `kspl_*`, and they are the only place `std` touches an operating system's API directly |
+| **the seed**, **bootstrap** | The compiler is written in KSPL, so building it needs a compiler: the *bootstrap*. The *seed* (`ksplc/seed.c`) is the compiler, `std` included, frozen as C; any C compiler builds it into the first `ksplc`. A change the compiler needs at build time takes effect only once it reaches the seed |
 | **borrow checker** | Rust's compile-time proof that no reference outlives its data and that no two places change the same data at once. KSPL has none (chapter 4) |
+| **Principle N** | One of the eight [Development Principles](#development-principles). The table at their head states each in one line |
 
 ---
 
@@ -201,7 +187,7 @@ Each chapter below applies the principles to one subject, and [`ksplc/docs/DESIG
 | **It is a boundary** | `priv` stops at the file, so the file is what keeps its insides out of reach |
 | **It changes for another reason** | A platform, a piece of hardware, a bring-up stage, or a cut made because the file it came from neared the cap |
 
-**"Short" is 60 lines or fewer**, about one screen, so a merge costs no scrolling. Two kinds of import are not counted as a use. A link-only import (an `_` alias) brings in entry points to be linked, never called, and a package's test entry point (`all.kspls`) gathers files that each stand for a subject of their own. How the check counts, and where a file that stands alone names its reason, is "What the convention checks count" in [`SPEC-gates.md`](SPEC-gates.md).
+**"Short" is 60 lines or fewer**, about one screen, so a merge costs no scrolling. Two kinds of import are not a use. A link-only import (an `_` alias) brings in entry points to be linked, never called, and a package's test entry point (`all.kspls`) gathers files that each stand for a subject of their own.
 
 **What it gives up**: a file that has one user today and several tomorrow is merged and later split out again. A merge is cheap to undo, so that cost is accepted over a file that stays split for a reason nobody can name.
 
@@ -1237,7 +1223,7 @@ On Windows, a KSPL program writes `\n` as `\n`. The C runtime there would turn i
 
 ### 7.5 A library built from KSPL crosses as C, holding its own runtime
 
-**A library shipped without its source is reached through its C interface alone**: its `#export` functions, and the plain types they name, written as C. **It holds its own copy of the runtime and of std**, which nothing outside it can see: built with `--library`, every definition but an `#export` is C's `static`. KSPL code shares KSPL types with other KSPL code as source (13.3). The options are "Binaries crossing the boundary" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
+**A library shipped without its source is reached through its C interface alone**: its `#export` functions, and the plain types they name, written as C. **It holds its own copy of the runtime and of std**, which nothing outside it can see: built with `--library`, every definition but an `#export` is C's `static`. KSPL code shares KSPL types with other KSPL code as source (13.3). How to build, ship and use one, and what can be relied on, is "Binaries crossing the boundary" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md); this section holds why.
 
 The picture below shows one program linking two such libraries. Each reaches the program only through its C interface, and the two private copies never meet:
 
@@ -1257,14 +1243,14 @@ flowchart LR
 
 * **A shared copy ties every artifact to one compiler and one std.** Each must leave its runtime out, one artifact must supply it, and a library built by another version must be stopped at the link, by a version in every symbol name. Folding the duplicates needs weak symbols, which pick one definition without a word wherever the names agree. Every guard is a mark that a toolchain may honour or not, so each object format needs its own proof.
 * **A private copy needs none of that.** Nothing two libraries hold can meet, so libraries from different vendors and different compiler versions sit in one program. The person linking them names no runtime and learns no rule.
-* **`static` hides a symbol on every toolchain, a static archive included.** That holds because the compiler writes a library as one translation unit. A compiler that writes a library as many objects can hide symbols only in a shared library (a version script, a definition file), and two of its static archives collide on their copies of the standard library.
+* **`static` hides a symbol on every toolchain, a static archive included.** That holds because the compiler writes a library as one translation unit. A visibility attribute leaves a static archive's symbols colliding, and an export list belongs to a linker the compiler does not run. A compiler that writes a library as many objects can hide symbols only in a shared library (a version script, a definition file), and two of its static archives collide on their copies of the standard library.
 * **C's interface is the one every caller already links.** A C program includes a header; a KSPL program imports an `extern "C"` block. Both are written by the compilation that writes the library (`--library=`), so neither drifts from it.
 
 **What is given up**:
 
 * **A closed library cannot offer KSPL's own types**: a slice, a `Result`, a trait value, a generic, a method. Its interface is C's. A library offering them ships as source, as std does.
 * **Each library carries its own runtime and std.** The parts it does not reach are dropped by the C compiler and the linker; the parts it does are paid once per library.
-* **What a KSPL program's start-up sets for the whole process is the program's**: SIGPIPE's handling, the Windows console's code page and binary standard output (7.4). A library sets none of them, and writes as the program that links it writes. A KSPL program's arguments are the program's too, so `sys.args()` is empty in a library.
+* **What a KSPL program's start-up sets for the whole process is the program's** (7.4). A library sets none of it, and writes as the program that links it writes. Each step is listed in "Building a library" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 * **Every `#export` is the library's interface**, a callback passed to C (a thread's entry) included, so each is named as an API name is.
 
 ### 7.6 A size is the target machine's, and the C compiler checks each one ksplc folds
@@ -2129,16 +2115,15 @@ A function that takes an enum of the same file as its first parameter is written
 
 ### 12.1 A document's name says what it is for
 
-Every document is one of six kinds, and the file name says which (`README.md`, `TOUR.md`, `HOWTO-…`, `SPEC-…`, `DESIGN.md`, `PLAN.md`). You know what a file is for before you open it.
+The six kinds, what each holds, and how a document is named are "Document naming" in [`SPEC-documents.md`](SPEC-documents.md). This section holds why.
 
-**A reader opens a document in one of a few modes**: arriving, learning, carrying out a task, looking a rule up, understanding why, or seeing what is left. The reader needs to know which before opening it. Readers do not complain where the mode is in the name, and do where it cannot be told. So the kinds are a closed set of six, and the kind is the file's name ("Document naming" in [`SPEC-documents.md`](SPEC-documents.md)). A folder's listing is then its reading order, with nothing to learn first.
+**A reader opens a document in one of a few modes**: arriving, learning, carrying out a task, looking a rule up, understanding why, or seeing what is left. The reader needs to know which before opening it. Readers do not complain where the mode is in the name, and do where it cannot be told. So the kinds are a closed set of six, and the kind is the file's name. A folder's listing is then its reading order, with nothing to learn first.
 
 **One of the kinds is Kanso's own, and it keeps something out of `DESIGN.md`.** A `PLAN.md` holds what is left to do. A plan changes with every step taken, and a rationale only when a decision changes. Inside the slower document, a plan reads as done: a common complaint about "future work" sections.
 
-* **There is one plan per package, in its `docs/`**, so a package carved out takes what is left of it along ("How it would be split, if it were" below).
-* **[`PLAN.md`](PLAN.md) here holds only what spans packages**, with one table routing to the rest. What is given up is every package's stages on one page; that table names each package's plan and what it covers.
+**There is one plan per package**, so a package copied out on its own takes what is left of it along. What is given up is every package's stages on one page; the table in [`PLAN.md`](PLAN.md) routes to each.
 
-**What is done is deleted from the plan, not marked.** A done stage's result is a commit, and its consequences land in the documents of their kind: the rule in the `SPEC-`, the grounds in the `DESIGN.md`, what works in the `README.md`. So the plan is never read against the code. What is given up is one list of what was achieved; that list is `git log`'s.
+**What is done is deleted from the plan, not marked**, so the plan is never read against the code. What is given up is one list of what was achieved; that list is `git log`'s.
 
 **"One file, one kind" is a judgment, gated only where a count decides it** ("Document naming" in [`SPEC-documents.md`](SPEC-documents.md)). Whether a paragraph of why belongs in a how-to is a person's call. Policing it page by page is a common complaint, and Principle 8 names the rest as the gap it is.
 
@@ -2161,7 +2146,7 @@ Every document is one of six kinds, and the file name says which (`README.md`, `
 
 The shared documents all sit flat in `docs/`. The table in `docs/README.md` has a column saying who each one is for; there are no folders per kind of reader.
 
-**The documents that belong to no package sit directly in `docs/`, with no folder inside it, the shape of every package's `docs/`.** Whom each is for is the last column of the table in `docs/README.md`, the one place that question is answered.
+**The documents that belong to no package sit directly in `docs/`, with no folder inside it, the shape of every package's `docs/`** ("Where documents sit" in [`SPEC-documents.md`](SPEC-documents.md)). Whom each is for is the last column of the table in `docs/README.md`, the one place that question is answered.
 
 **The column says what a folder cannot.**
 
@@ -2286,18 +2271,7 @@ So the file would only repeat them, in two files if both the convention and GitH
 
 ### 12.5 The tour is a program, one declaration per step
 
-`TOUR.md` is generated from one KSPL program. Each step of the tour is one declaration plus its `//<` comment, so the tour cannot show code that does not compile.
-
-**The tour is one program, and each step is one of its declarations, in an order chosen for teaching** ([`TOUR.md`](TOUR.md)). Each step's prose is that declaration's `//<` comment. `make tour` writes the page from the program and what it prints, and `make test-docs` refuses a page older than its program.
-
-```mermaid
-flowchart LR
-    P["the tour program<br/>(declarations and<br/>their doc comments)"] -->|"compiled and run<br/>in both notations"| O[what it prints]
-    P --> T[make tour]
-    O --> T
-    T --> M[TOUR.md]
-    M -.->|"make test-docs refuses<br/>a page older than its program"| P
-```
+**The tour is one program, and each step is one of its declarations with its `//<` comment, in an order chosen for teaching.** How the page is written and checked is the head of [`TOUR.md`](TOUR.md); this section holds why.
 
 **The motive is a tour that cannot drift.** A tour is the one document a newcomer reads before they can tell that it is wrong, and a tour kept by hand drifts as far as its team is small. Checking only the code examples leaves the prose between them to go stale. Generated from a program the gates compile and run in both notations, the code and the words that explain it sit in one file and are checked together.
 
@@ -2449,7 +2423,7 @@ The general test helpers (run checks, compare a child program's output, make a s
 | `std/verdict` | `std` | Runs checks on past a failure, with their lines and a closing `RESULT:` line. Reads a child process's run as a check: its exit code and outputs as one text, for one child or several side by side |
 | `std/fs` | `std` | Gives a scratch folder, and writes and copies a tree |
 | `std/fuzz` | `std` | Scatters broken input at a program |
-| `tests/support/harness.kspls` | The root `tests/` | Walks the repository's root and git, and knows where its compiler lives (built on the three above) |
+| `tests/support/harness.kspls` | The root `tests/` | Walks the repository's root and git, and knows where its compiler lives (built on the three above, and on ksplc's own suites' harness, which it starts on those paths) |
 
 **The motive**: a package's tests reach only what the package reaches: itself, what it names under `uses`, and `std` (§13.4 and §13.5 above). With the whole harness in the root's `tests/`, a test standing on it could run from the repository's root alone, never from a copy of the package. Such tests are the checks on the compiler a package built, and the packages' fuzz suites. A package lifting its tests out would write its own tally, a second copy.
 
@@ -2634,57 +2608,9 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 
 **There is no cycle in the import direction** (the table in [`SPEC-documents.md`](SPEC-documents.md)). What keeps the packages together is not the shape of their dependencies but the seed, and the volume of crossing changes.
 
-### 14.3 How other large projects arrange their repositories
+### 14.3 No split is designed
 
-**LLVM, Rust and Zig each keep one repository**, and Swift keeps many, with its own tools to manage them. Git submodules (one repository embedded in another at a pinned commit) are not adopted, for four drawbacks reported on them, the first being the four steps above.
-
-### 14.4 How it would be split, if it were
-
-Even after a split, all work would stay in this repository. Each package would only be copied out, read-only, for others to use.
-
-**Even when split, the work stays in one repository, and only the distributed copy is carved out.** Do not create two writable copies: nothing would decide which is canonical.
-
-`git subtree split --prefix=<package>` gives a history rooted at that folder, carrying only the history that touched it. The carving lands it in its own repository with one commit on top, pushed to a read-only copy. **Never push to the copy.** That is the shape Symfony has long run, with issues and pull requests closed on the copy.
-
-```mermaid
-flowchart LR
-    R["this repository<br/>(all work happens here)"] -->|"git subtree split<br/>--prefix=package"| H["the package's<br/>own history"]
-    H -->|"one commit on top:<br/>references re-pointed"| C["a read-only copy<br/>(never pushed to)"]
-```
-
-**A reference leaving the package is re-pointed when the copy is made.** It points at this repository's page for what it named, pinned to the commit the package last changed in. From the copy, a relative link climbing out of the folder opens nothing. A naming read from the root opens the copy's own file of that name, if it holds one.
-
-* **Rewritten at carving, not written that way here.** Inside the repository, `make test-docref` holds a relative link to landing. An address written into a document by hand is held by nothing, and opens a branch as it stands on the day it is opened.
-* **Pinned to the package's last commit**, so the documents open as they stood when the package's content was written. Pinned to a branch, a link opens whatever the file has since become. Pinned to the carving's `HEAD`, carving again after an unrelated commit would change every address in a copy whose package did not change.
-* **What each becomes**: a link's target is replaced, a naming in a document's prose becomes a link keeping its words, and a naming in a source's comment becomes the address. Code is never rewritten: a path in a string literal is data a program reads.
-* **Read by the reference check's own reader** (`tests/support/docref_refs.kspls`), so the carving moves exactly what the check holds, never a second reading of what a reference is.
-
-**No tool carves a package today**, so nothing holds the shape above: the tool is written when a package is first split.
-
-**A package that names itself builds from its carving alone**, with nothing but a `ksplc`. It carries its own `Makefile`, and `make test-extract` runs its tests on every change from a copy of its folder holding nothing else (beside the folders of what it uses). So the carving is known to build before it is made. `std` is held without naming itself. It is found by its place (§13.5 above), so its own `make test` reads the folder it stands in as `std`, and a copy tests itself. What its carving cannot carry is the way into the compiler. A change to `std` reaches `ksplc` only by re-baking the seed (§14.2 above), so the carving distributes source, not the means to build.
-
-### 14.5 The conditions for splitting
-
-**Write not "it should be split" but what has to happen before it is split.** Without that written down, the same question means measuring again every time it comes up.
-
-| Condition | While it does not hold |
-| :-- | :-- |
-| **Changes crossing two or more packages have dropped far enough** | Splitting only turns them into multi-repository work |
-| **Packages need releasing at different versions** | While they are released at one version, splitting only adds steps to releasing |
-| **Different people come to touch only one** | While the same people touch them all, splitting does not change what anyone reads |
-
-**Judge each by "is it so now".** Split on "it surely will be", and the cost is paid up front for a gain that may never arrive (Principle 1).
-
-### 14.6 What to finish before splitting
-
-Three things are worth having whether or not it is split, and **become premises** when it is.
-
-* **Tests are inside their package.** "13.1.1 Where the entry points are" above holds that state
-* **The published API is recorded and drift is failed** (`make surface` / `make test-surface`).
-  * Caution: **Without the promises between packages visible as a diff**, the other repository's changes arrive silently once split
-* **The package names itself and builds from a copy of its folder alone** (§13.4 and §14.4 above). Without it, a path or an import reaching outside the folder is found on the day the copy is made. A check holding one package against another stays in the root `tests/`, where both stand ("What stays in the root tests folder" in [`tests/docs/DESIGN.md`](../tests/docs/DESIGN.md)), so a carved package leaves it behind with the repository
-
-**The reference check presumes one repository.** `make test-docref`, which watches "Reference direction between documents" in [`SPEC-documents.md`](SPEC-documents.md), reads the whole tree. So a split makes it unrunnable without fetching the other repository. A split is the moment to decide this check's canonical source again.
+**No way of splitting is designed, and no tool for it exists**: it is designed on the day one is decided, against the repository as it then stands. What a split would need is kept anyway, because each is worth having in one repository too. A package's tests sit inside it ("13.1.1 Where the entry points are" above), its published API is recorded (`make surface`), and `make test-extract` builds and tests a package from a copy of its folder alone (§13.4 above).
 
 ---
 

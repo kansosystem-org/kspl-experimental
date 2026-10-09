@@ -120,5 +120,4 @@ Note: The reference-counting handles can move freely. The compiler recognizes an
 The first is for anyone choosing a file; the rest are for whoever changes std.
 
 * [`std/docs/DESIGN.md`](docs/DESIGN.md) — the known problems of earlier implementations and how each file handles them, then the grounds of std's API choices.
-* [`std/docs/README.md`](docs/README.md) — every document this package carries.
 * [`std/SURFACE.txt`](SURFACE.txt) — the record of the API this package publishes, remade by `make surface` and held against the tree by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).

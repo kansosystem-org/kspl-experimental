@@ -6,6 +6,7 @@
 //< nothing at all: a name out of step with `${fileBasenameNoExtension}.exe` makes F5 silently start
 //< the last executable, and the release zip's build task naming another file does the same.
 
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -206,7 +207,7 @@ priv fn check_debug_file(root: U8[], arena: Arena$@) //<
         why: = arena.text().s("the '\{exe\}' launch.json starts is not there").take()
         verdict.check(name, false, why)
         return
-    out: = harness.run(U8[][]::{ exe })
+    out: = ksplc_harness.run(U8[][]::{ exe })
     why: = arena.text().s("the run's result differs from what was supposed: \{out.out\}").take()
     verdict.check(name, out.out.equals("ok\n"), why)
 
@@ -224,7 +225,7 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
         label: = t.get("label").as_str()
         for dep in t.get("dependsOn").arr_list(arena)
             d: = dep.as_str()
-            title: = harness.arena().text()
+            title: = ksplc_harness.arena().text()
                 .s("release-assets tasks.json[\{label\}]: dependsOn '\{d\}' is there").take()
             verdict.check(title, htext.has(labels@, d), "")
     for c in launch.get("configurations").arr_list(arena)
@@ -232,7 +233,7 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
         if pre.len == 0
             continue
         cfg_name: = c.get("name").as_str()
-        title: = harness.arena().text()
+        title: = ksplc_harness.arena().text()
             .s("release-assets launch.json[\{cfg_name\}]: preLaunchTask '\{pre\}' is there").take()
         verdict.check(title, htext.has(labels@, pre), "")
     check_build_task(tasks, launch, arena)
@@ -551,9 +552,9 @@ priv fn check_templates(dir: U8[], arena: Arena$@) //<
                 bad
                     .push(arena.text().s("\{file\}: \{use.name\}: cannot write the material").take())
                 continue
-            $r: = harness.ksplc_bare(U8[][]::{ "fmt", path })
+            $r: = ksplc_harness.ksplc_bare(U8[][]::{ "fmt", path })
             if use.place == .body
-                r = harness.ksplc(U8[][]::{ path, fs.join(work, "t.c", arena) })
+                r = ksplc_harness.ksplc(U8[][]::{ path, fs.join(work, "t.c", arena) })
             if r.code != 0
                 bad
                     .push(arena.text().s("\{file\}: \{use.name\}:\n\{src\}\{r.out\}").take())
@@ -574,7 +575,7 @@ fn main(): I32
     tasks: = load_jsonc(fs.join(vscode, "tasks.json", arena), arena)
     launch: = load_jsonc(fs.join(vscode, "launch.json", arena), arena)
     if !is_obj(tasks) || !is_obj(launch)
-        return harness.fatal(".vscode's tasks.json / launch.json cannot be read")
+        return ksplc_harness.fatal(".vscode's tasks.json / launch.json cannot be read")
 
     check_make_targets(tasks, arena)
     $labels: = labels_of(tasks, arena)
@@ -582,4 +583,4 @@ fn main(): I32
     check_debug_file(root, arena)
     check_release_assets(root, arena)
     check_extension(root, arena)
-    return harness.finish()
+    return ksplc_harness.finish()

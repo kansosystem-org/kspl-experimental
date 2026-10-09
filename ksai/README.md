@@ -63,7 +63,7 @@ The cast in everyday words:
 | [`ksai/examples/`](examples/) | Programs built from the parts, as someone using `ksai` would write them ("The examples" below) |
 | [`ksai/benches/`](benches/README.md) | The speed bench for one training step, with how to run it and what it shows |
 | [`ksai/tests/`](tests/) | The tests `make test` runs |
-| [`ksai/docs/`](docs/README.md) | The design and the generated reference |
+| [`ksai/docs/`](docs/) | The design and the generated reference |
 
 ## Reading order
 

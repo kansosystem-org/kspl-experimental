@@ -430,10 +430,49 @@ priv fn check_platform_table(arena: Arena$@)
         arena.text().s("give it a row, or a place in a row's list, in \"What each ")
         .s("platform runs\" in ").s(gates_doc).take())
 
+priv const blas_home: U8[] = "ksai/" //<
+    //< The one package `make test-blas` builds with `BLAS=1`
+    //<
+    //< **A `#cfg(blas)` elsewhere is never built**: `lint-cfg` analyses it, but no gate links or
+    //< runs it ("note 17" in `docs/SPEC-gates.md`).
+
+priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
+    //< Whether a source puts a declaration under the `blas` flag, outside a `"""` string
+    //<
+    //< A suite's material writes the attribute into such strings as data, not as its own.
+    $raw: = false
+    for line in src.lines(arena)
+        t: = line.trim_start()
+        if !raw && t.starts_with("#cfg(") && t.find_str("blas") >= 0
+            return true
+        raw = scan.flip_raw(line, raw)
+    return false
+
+// Caution: **Keep one inside a string and one in a comment on the miss side**: a plain search hits
+// both.
+priv const blas_samples: Sample[5] = ::{
+    Sample::{ .text = "#cfg(blas)\nfn f()\n", .hits = true },
+    Sample::{ .text = "    #cfg(!blas)\n    x = 1\n", .hits = true },
+    Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\n#cfg(blas)\n\"\"\"\n", .hits = false },
+    Sample::{ .text = "// #cfg(blas) is read by lint-cfg\n", .hits = false },
+    Sample::{ .text = "#cfg(llvm)\nfn f()\n", .hits = false },
+}
+
+priv fn check_blas_home(arena: Arena$@)
+    $bad: = scan.misjudged(Sample[]::blas_samples, holds_blas, arena)
+    $files: = harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in files.slice()
+        if !rel.starts_with(blas_home) && holds_blas(harness.read_under_root(rel), arena)
+            bad.push(rel)
+    verdict.check_list("`#cfg(blas)` stands only in ksai, the one package `make test-blas` builds",
+        files.len, "files", bad@,
+        "move it into ksai, or have `make test-blas` in `mk/test.mk` build its package too")
+
 fn run(arena: Arena$@) //< this section's entry point
     //<
     //< Caution: **Call it from `conventions_match.kspls`'s `run`** (there is one suite).
     check_dispatch_switches(arena)
     check_ci_shards(arena)
     check_platform_table(arena)
+    check_blas_home(arena)
     check_lint_entries(arena)

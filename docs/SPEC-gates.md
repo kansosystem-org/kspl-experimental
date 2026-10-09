@@ -2,14 +2,6 @@
 
 This file says what CI runs, what every gate promises, and what the checks count. CI (continuous integration) is the automatic build-and-test run on GitHub's machines. A gate is one check that CI runs and that can fail the build ("Terms of art" in [`SPEC-documents.md`](SPEC-documents.md)). How to run the gates yourself is in [`HOWTO-build.md`](HOWTO-build.md); why a gate has its shape is in [`DESIGN.md`](DESIGN.md) and in the design document of the package it inspects.
 
-* [How CI runs](#how-ci-runs) — once a week and on a manual launch; choosing the jobs, and what each costs
-* [How a run is read](#how-a-run-is-read) — the verdict line every gate emits, one log per gate, and the list at the tail
-* [How the gates are arranged](#how-the-gates-are-arranged) — the make targets, the sections, and what runs in parallel
-* [What each platform runs](#what-each-platform-runs) — the table, with a note on every gap
-* [The shape of a per-item pass/fail line](#the-shape-of-a-per-item-passfail-line)
-* [The record of a published API](#the-record-of-a-published-api)
-* [What the convention checks count](#what-the-convention-checks-count)
-
 ## How CI runs
 
 CI runs the gates on three platforms, Linux, macOS and Windows, with one job for each, as `.github/workflows/ci.yml` sets out. The table in "What each platform runs" below says which job runs which check. Update that table with every addition, so that a check added on one platform and never on another stays visible: `make test-conventions` refuses a gate of `tools/ci_gates.kspls`, or a suite of a `SUITES` list, that the table does not name.
@@ -110,18 +102,19 @@ flowchart TD
 |---|:---:|:---:|:---:|
 | self-host (the C backend) | ✅ | ✅ | ✅ |
 | self-host-ship (the `-O2` build `make install` and the release ship emits stage2's C to the byte) | ✅ | ➖(note 22) | ➖(note 22) |
-| debug tests | ✅ | ✅ | ✅ |
-| test-fmt-tree (the tracked sources are already formatted) | ✅ | ➖(note 2) | ✅ |
+| debug tests | ➖(note 29) | ✅ | ➖(note 29) |
+| debug-tools (the tests of `tools/`, the one folder of tests without a `Makefile`) | ✅ | ➖(note 29) | ✅ |
+| test-fmt-tree (the tracked sources are already formatted) | ✅ | ➖(note 2) | ➖(note 28) |
 | lint | ✅ | ✅ | ✅ |
-| lint-cfg (the semantic analysis inside each `#cfg` branch: BLAS, LLVM) | ✅ | ➖(note 2) | ✅ |
+| lint-cfg (the semantic analysis inside each `#cfg` branch: BLAS) | ✅ | ➖(note 2) | ➖(note 28) |
 | test-negative | ✅ | ✅ | ✅ |
 | test-equiv (C⇔LLVM equivalence) | ✅(note 1) | ✅(note 1) | ✅ |
 | test-lsp (the language server, on ksplc's folder as its workspace) | ✅ | ✅ | ✅ |
 | test-lsp-tree (the language server over the repository's whole tree) | ✅ | ➖(note 2) | ✅ |
 | test-freestanding-math | ✅ | ✅(note 3) | ✅ |
 | test-simd | ✅ | ✅ | ✅ |
-| test-surface (the published API matches its record) | ✅ | ➖(note 2) | ✅ |
-| test-docs (the language tour matches its program and output) | ✅ | ➖(note 2) | ✅ |
+| test-surface (the published API matches its record) | ✅ | ➖(note 2) | ➖(note 28) |
+| test-docs (the language tour matches its program and output) | ✅ | ➖(note 2) | ➖(note 28) |
 | test-emit-runtime | ✅ | ✅(note 4) | ✅(note 4) |
 | test-ship (two libraries built with `--library`, static and shared, linked into a C and a KSPL program) | ✅(note 21) | ➖(note 2) | ✅(note 21) |
 | run (the AI engine, a smoke test) | ➖(note 27) | ✅ | ➖(note 27) |
@@ -140,19 +133,20 @@ flowchart TD
 | test-ast-cache (the parse cache does not change the result) | ✅ | ➖(note 2) | ✅(note 14) |
 | test-property (a random expression matches on both backends) | ✅ | ➖(note 2) | ✅ |
 | test-generic-matrix (each shape of a generic, reached each way, in each position: it builds on both backends and prints its value, or is refused at the user's line; a C or LLVM error is never an outcome) | ✅ | ➖(note 2) | ✅ |
-| Fuzzing, each package's own `test-fuzz` run on its copy by `test-extract`, none may die: ksplc's earlier stages on corrupted source (the compiler the suites run), and, built with the address sanitizer (note 23), kspage opening and laying out a corrupted document, std's readers on a corrupted byte sequence, ksai on a corrupted weights file and vocabulary | ✅ | ➖(note 2) | ✅(note 23) |
+| Fuzzing, each package's own `test-fuzz` run on its copy by `test-extract` (a shallow run on a fixed seed, which shows a regression; `make fuzz-long` goes deep, 2000 rounds a reader, with a fresh seed, by hand), none may die: ksplc's earlier stages on corrupted source (the compiler the suites run), and, built with the address sanitizer (note 23), kspage opening and laying out a corrupted document, std's readers on a corrupted byte sequence, ksai on a corrupted weights file and vocabulary | ✅ | ➖(note 2) | ✅(note 23) |
 | test-kspls (ksplc reads indentation-written source directly, giving the same C, squiggles, hovers, and jump targets) | ✅ | ➖(note 2) | ✅ |
-| test-kspls-trip (every tracked source goes round the two notations and comes back byte for byte) | ✅ | ➖(note 2) | ✅ |
+| test-kspls-trip (every tracked source goes round the two notations and comes back byte for byte) | ✅ | ➖(note 2) | ➖(note 28) |
 | test-file-path (the logical name is stable however the entry point is written) | ✅ | ➖(note 2) | ✅ |
 | test-js-syntax (the page's JS parses as syntax) | ✅ | ➖(note 15) | ➖(note 15) |
 | test-broken-pipe (writing to nobody does not die, and output losing its destination ends quietly) | ✅ | ➖(note 2) | ➖(note 16) |
 | test-extract (extract-ksplc / extract-rest), every package with its own `Makefile` built and tested from a copy of its folder alone | ✅ | ➖(note 2) | ✅ |
-| The other suites (conventions / docref / docsnippet / textrip / spec-claims / keywords / c-warnings / pilot-copy / cli / config / std-dir / thin-use / output-flush / vscode / lint / lint-gate / fmt / write-perm / recipe-bytes / deps / link-rules / ext-import / pytools / doc / runtime / limits / decl-macros / spawn / slice-struct / one-main / place / visibility) | ✅(note 24) | ➖(note 2) | ✅(note 24) |
+| The checks on the tree's text (conventions / docref / docsnippet / textrip / spec-claims / vscode / lint-gate / recipe-bytes / deps / pytools) | ✅ | ➖(note 2) | ➖(note 28) |
+| The other suites (c-warnings / pilot-copy / cli / config / std-dir / thin-use / output-flush / lint / fmt / write-perm / link-rules / ext-import / doc / runtime / limits / decl-macros / spawn / one-main / place / visibility) | ✅(note 24) | ➖(note 2) | ✅(note 24) |
 | self-host (the LLVM backend) | ✅ | ✅ | ✅ |
 | debug tests (the LLVM backend) | ✅ | ✅ | ✅ |
-| A real build of the optional BLAS backend (`BLAS=1 debug`) | ✅ | ➖(note 17) | ➖(note 17) |
+| test-blas (a real build of the optional BLAS backend: ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 17) | ➖(note 17) |
 | ksbind's own tests (the OpenSSL and SQLite bindings linked and run, from a copy by `test-extract`) | ✅ | ➖(note 2) | ➖(note 20) |
-| perf-log (peak-memory regression, judged by `perf_guard`; time is recorded only) | ✅ | ➖(note 18) | ✅ |
+| perf-log (peak-memory regression, judged by `perf_guard`; time is recorded only) | ✅ | ➖(note 18) | ➖(note 18) |
 | test-race (the programs that start threads, built with ThreadSanitizer, report no data race) | ✅ | ➖(note 2) | ➖(note 19) |
 
 **The compiler's own suites run from a copy.** On Linux and ucrt64, `test-extract` copies ksplc's folder alone, rebuilds the compiler there, and runs that folder's suites (`test-negative`, `test-equiv`, `test-run` and the rest of `SUITES` in `ksplc/Makefile`) against it. macOS runs the ones its column marks by name, from the repository.
@@ -204,8 +198,8 @@ flowchart TD
   * **The target exists in every environment**, so wherever node is installed `make test-js-syntax` runs it (the procedure is in the tools table under "Windows natively, without Docker" in [`HOWTO-build.md`](HOWTO-build.md)). It is a suite but not one of `test-suites`; such suites are listed in `LINUX_SUITES` in `mk/test.mk`.
 * **note 16**: `test-broken-pipe` checks POSIX's handling of SIGPIPE (the signal sent when a program writes to a pipe nobody reads), so **Windows has nothing to check**: it has no SIGPIPE, and a write to a closed named pipe merely fails. The suite reads the C compiler's target triple (`-dumpmachine`) and says `SKIPPED` there, so it can be run anywhere. Of its three checks, only "a launched child holds SIGPIPE's default" reads `/proc/self/status`, so that check runs only on Linux (`SKIPPED` elsewhere).
   * Note: The decision's canonical source is "Writing when nobody is left to read it" in `ksplc/gen/runtime/hosted.c`.
-* **note 17**: `make BLAS=1 debug` needs libopenblas, which the windows-ucrt64 and macOS runners lack (as in note 8), so it is a Linux-only gate. **`lint-cfg` cannot replace it**: it only runs semantic analysis inside `#cfg(blas)`, and only a real build shows whether the FFI (the calls into the C library) is right: argument order, types, the library linked. BLAS's library is named in the source (`#link`), so this is also where a named library is seen linked.
-* **note 18**: `tests/tools/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's real hardware. Applied to macOS as they are, they could raise false alarms or miss regressions, so the gate stays off macOS unless a macOS baseline is added.
+* **note 17**: `make test-blas` (ksai's unit tests with `BLAS=1`; ksai is the one package holding `#cfg(blas)`) needs libopenblas, which the windows-ucrt64 and macOS runners lack (as in note 8), so it is a Linux-only gate. **`lint-cfg` cannot replace it**: it only runs semantic analysis inside `#cfg(blas)`, and only a real build shows whether the FFI (the calls into the C library) is right: argument order, types, the library linked. BLAS's library is named in the source (`#link`), so this is also where a named library is seen linked.
+* **note 18**: `tests/tools/perf_baseline.json` holds baselines (with tolerance factors) taken on the Linux CI's real hardware. Applied to macOS or Windows as they are, they could raise false alarms or miss regressions, so the gate runs on Linux alone unless another platform's baseline is added.
   * Only the peak memory decides the verdict; the build time is only recorded, as a ratio to the baseline (why is in `tests/tools/perf_guard.kspls`).
 * **note 19**: `test-race` builds these through the C backend with clang's `-fsanitize=thread` (ThreadSanitizer, which watches a running program for data races) and runs them: std's and ksplc's own tests (the packages whose tests start threads; the others' start none, which the coverage check below holds), ksai's examples with the tests that run them, ksbind's tests (where OpenSSL and SQLite link; required on Linux, as in note 20), and ksplc itself as the language server, played an editor's session: its supervisor reads the editor on a thread of its own while it restarts a crashed worker, and must end at `exit` with its input still open. It fails on any report from any process, the runtime's and libc's included. **It finds the races the tests reach, not the ones they miss** (why it stands in place of a type-system check is "5.1 Why data races are not prevented by the type system" in [`DESIGN.md`](DESIGN.md)).
   * **It shows that it can fire**: a program racing on purpose, built and run the same way, must be reported first. **And that it still covers what starts threads**: every tracked source that starts a thread is compiled into a program it runs, or named with the reason in `left_out` in `tests/suite/race_test.kspls`.
@@ -220,6 +214,8 @@ flowchart TD
 * **note 25**: `test-kspage-desktop` writes the entry alone, building nothing, and checks it with `desktop-file-validate`, which the Linux image holds. A `.desktop` entry is what Linux desktops read; macOS and Windows associate a file with a program another way. Where the validator is required is the table above.
 * **note 26**: `ksplc/tests/suite/layout_targets_test.kspls` compiles `ksplc/tests/prog/layout_probe.kspls` with `--machine` for each machine ksplc knows (`machines` in `ksplc/base/target.kspls`), and has clang compile the C for the same machine with warnings refused. The C checks every number ksplc folded, so a size laid out wrongly fails there. **Each check is shown to fire**: a 32-bit machine's C compiled for a 64-bit one, and the other way round, must fail at a check naming the machine. It needs only clang, which builds for every machine. Where `wasm-ld` and `node` are found, the wasm32 build also runs, and each way a folded size decides the program (a static `if`, a constant chain, a `case` label, reflection) must answer as wasm32 lays values out.
 * **note 27**: Linux and Windows run the same check through `test-extract`: ksai's own `make test`, run on its copy, trains `llama_engine` and requires the loss to fall (`ksai/tests/examples_main.kspls`). macOS runs no `test-extract`, so it runs `make run` instead.
+* **note 28**: what these read is the tree's text, or the text the compiler translates it to, so the answer cannot differ by platform. Run on Windows as well, they would pay a second time (a Windows minute is billed double) for the answer Linux already gave, so they run in `ci-linux-only` (`Shard.linux` in `tools/ci_gates.kspls`; the suites are `SUITES_TEXT` in `mk/test.mk`). What the platform decides stays on Windows: building, linking and running, the language server over the tree (`lsp-tree`), and the C compiler's warnings (`c-warnings`).
+* **note 29**: `make debug` runs every package's tests in one program. Linux and Windows run the same tests already, one package at a time, as each package's own `make test` from a copy of its folder (`test-extract`, in `suites_a`), which also proves the package stands alone; a failed check fails that run, since each package's tests end with the checks' own verdict. So there they run only what no copy holds: `tools/`, which has no `Makefile` (`make debug-tools`). macOS runs no copy, so it runs `make debug`, which holds `tools/` too.
 
 ## The shape of a per-item pass/fail line
 
@@ -273,14 +269,10 @@ This section says only what `make test-conventions` counts, and where. The princ
 
 ### Principle 3 - what is counted, and how
 
-**Every file written by hand is measured for size** (`.kspls` / `.kspl`, `.c` / `.h`, and the page's `.html` / `.css` / `.js`). Only generated files are left out: `size_exempt` in [`../tests/support/conventions_size.kspls`](../tests/support/conventions_size.kspls) names `ksplc/seed.c` (the split applies to the code that generates it).
+**Every file written by hand is measured for size** (`.kspls` / `.kspl`, `.c` / `.h`, and the page's `.html` / `.css` / `.js`). Only the generated `ksplc/seed.c` is left out: the split applies to the code that generates it.
 
-**A function's length and nesting are measured only in `.kspls` source.** C has no `fn `, so the count does not apply; C relies on the C compiler's warnings and on review instead.
-
-Note: The one other exception is test material that shows the ceiling refusing something: the same `size_exempt` names the files that would be useless as tests if split (`ksplc/tests/negative/deep_*.kspl` and `ksplc/tests/lint/long_function.kspls`).
+**A function's length is lint's to measure** ([H0803], 300 lines), in KSPL source alone; C relies on the C compiler's warnings and on review instead.
 
 **A file over 900 lines fails `make test-conventions` unless "Files near the limit and how they split" in the `README.md` of the top-level folder it sits in names it.** What that section holds is "Where a file's splitting plan is written" in [`SPEC-documents.md`](SPEC-documents.md). A warning on screen alone would let the README's "no file exceeds it" go stale without anyone seeing it (Principle 7).
-
-**A file of 60 lines or fewer that one file alone imports fails `make test-conventions` unless `lone_files` in [`../tests/support/conventions_size.kspls`](../tests/support/conventions_size.kspls) names it with its reason** (the reasons are "When a small file stands alone" in [`DESIGN.md`](DESIGN.md)). The imports are resolved by the three rules of path resolution. An import under an `_` alias and an import made by a file named `all.kspls` are not counted. An entry of `lone_files` that no longer needs its excuse (merged, grown past 60 lines, or imported by a second file) fails too, so the list cannot go stale.
 
 **In C, splitting only the definitions by subject is enough.** The headers (`.h`) do not multiply: the definition files are joined into one translation unit, so `static` helpers and types from an earlier file stay visible (`ksplc/gen/runtime/hosted*.c` and `write_impl` in `ksplc/gen/runtime.kspls`).

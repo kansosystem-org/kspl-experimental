@@ -2,18 +2,6 @@
 
 **The repository's suites live here.** A *suite* is one KSPL program that runs many checks on the repository and prints one verdict. This folder is for whoever adds a test or reads why a gate failed; `make ci` runs everything here. How to write a suite is in [`tests/docs/HOWTO-write-a-suite.md`](docs/HOWTO-write-a-suite.md); why the suites are built this way is in [`tests/docs/DESIGN.md`](docs/DESIGN.md).
 
-## Contents
-
-* [Run it](#run-it)
-* [Placement and naming](#placement-and-naming)
-* [The suites](#the-suites)
-* [The tools in tests/tools](#the-tools-in-teststools)
-* [The fixture folders](#the-fixture-folders)
-* [Files near the limit and how they split](#files-near-the-limit-and-how-they-split)
-* [Further reading](#further-reading)
-
----
-
 ## Run it
 
 Build the tree once with `make`, then run one suite or all of them:
@@ -45,7 +33,7 @@ flowchart LR
 | `tests/tools/` | A tool `make` calls directly, passing its subject as an argument (a file or log to inspect) |
 | `tests/debug/` | `make debug`'s entry point: `main.kspls` sets the order, `parts.kspls` calls each package's `tests/all` in turn, and `pkg/` holds the entry points that run one package (`make debug-<name>`) |
 | `tests/freestanding/` | Fixtures for one check, `make test-freestanding-math`. A *fixture* is a fixed input a check runs against. Here `probe.kspls` exports std/math's functions as built for a target with no operating system, and `harness.c`, a C program, calls them and compares each answer with the C library's |
-| `tests/docs/` | This folder's documents ([its index](docs/README.md)) |
+| `tests/docs/` | This folder's documents (["Further reading"](#further-reading) below) |
 
 **Do not put a `.kspls` directly under `tests/`**: its name would not say whether `make` runs it or it is material. Only this guide and `ksplc.cfg` live there. Settings are found by walking upwards from a file's folder, so `ksplc.cfg` must be here to cover all of `tests/`.
 
@@ -62,10 +50,10 @@ The foundation is split by the reason for reading it.
 
 | File | The reason to read it |
 |---|---|
-| `harness` | Finding the root, a suite's start and end (the verdict lines are `std/verdict`'s), starting a process, a temporary folder, the files git knows |
+| `harness` | What knows the repository: finding the root, a suite's start on its paths, `make` from the root, a temporary folder under `out/tmp`, the files git knows |
 | `harness_text` | Looking at strings (one UTF-8 character, a word boundary, folding newlines to LF, searching for a string) |
 
-The compiler's suites have their own foundation in ksplc's folder, including the build helper and the runner of `EXPECT:` fixtures ([ksplc](../ksplc/README.md)).
+The compiler's suites have their own foundation in ksplc's folder, including the build helper and the runner of `EXPECT:` fixtures ([ksplc](../ksplc/README.md)). **Its `harness` is the layer beneath this one**: `harness.begin` starts it on the repository's paths, and a suite here ends, starts a process and runs the compiler under test through it, imported as `ksplc_harness`.
 
 ## The suites
 

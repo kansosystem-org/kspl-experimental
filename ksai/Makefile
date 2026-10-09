@@ -16,7 +16,7 @@ KANSO_REQUIRE_ASAN ?=
 ASAN_CFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=address
 
 EXAMPLES := llama_engine qwen_infer fim_coder
-.PHONY: examples $(EXAMPLES) test test-fuzz
+.PHONY: examples $(EXAMPLES) test test-unit test-fuzz
 examples: $(EXAMPLES)
 
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.
@@ -25,10 +25,14 @@ examples: $(EXAMPLES)
 $(EXAMPLES):
 	"$(KSPLC)" build $(BLAS_FLAGS) examples/$@/main.kspls "$(OUT)/$@.exe"
 
+# The unit tests alone. **They reach all that `BLAS=1` changes** (the `#cfg(blas)` blocks of
+# `tensor.kspls` and `grad.kspls`), so the root's `make test-blas` runs this, not the examples' builds.
+test-unit:
+	"$(KSPLC)" run $(BLAS_FLAGS) tests/main.kspls
+
 # The examples are built and run with the tests, so one that stops building fails here (as
 # Cargo builds `examples/` on `cargo test`).
-test: examples
-	"$(KSPLC)" run $(BLAS_FLAGS) tests/main.kspls
+test: examples test-unit
 	"$(KSPLC)" run tests/stops_main.kspls "$(KSPLC_EXE)"
 	rm -rf "$(OUT)/examples_test"
 	"$(KSPLC)" run tests/examples_main.kspls "$(OUT)/llama_engine.exe" "$(OUT)/qwen_infer.exe" \

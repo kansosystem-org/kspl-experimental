@@ -5,6 +5,7 @@
 //< callers in other packages, files built not to compile, a rename reaching closed files.
 //< The rest is in ksplc's own `lsp` suite; this one drives the same client
 //< (`ksplc/tests/support/lsp_client.kspls`) with the repository's root as the workspace.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "ksplc/tests/support/lsp_calls" { Prepared, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { end_text, from_names, has_name, is_missing }
@@ -250,23 +251,23 @@ priv fn empty_obj(arena: Arena$@): json.Val
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
-    exe: = harness.ksplc_exe()
+    exe: = ksplc_harness.ksplc_exe()
     root: = harness.root()
     // Start it with the server left standing (the reason is `lsp_client.kspls`'s opening header).
-    _std_dir: = sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+    _std_dir: = sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir())
     // **Call it before the other queries.** The silence is measured with nothing read yet; placed
     // after them, the files are already read and a lighter path is measured.
     check_worker_alive_workspace(exe, root, arena)
     $c: =
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, root, arena) catch
-        return harness.fatal("the language server cannot be started")
+        return ksplc_harness.fatal("the language server cannot be started")
     defer c.free()
     init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch e
-        return harness
+        return ksplc_harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     if !verdict.check("the language server comes up over the whole tree",
         !is_missing(init.get("result").get("capabilities")), lsp_client.dump(init, arena))
-        return harness.finish()
+        return ksplc_harness.finish()
 
     check_workspace_survives_unbuildable(c@, arena)
 
@@ -294,4 +295,4 @@ fn main(): I32
     check_fn_pointer(c@, arena)
     lsp_tree_uses.check_rename(c@, arena)
     lsp_tree_uses.check_references(c@, arena)
-    return harness.finish()
+    return ksplc_harness.finish()

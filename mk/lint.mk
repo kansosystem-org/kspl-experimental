@@ -68,8 +68,8 @@ test-fmt-tree: $(SEED_EXE)
 	echo "RESULT: ALL PASS ($$(printf '%s\n' $$files | wc -l) files already formatted)"
 
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
-LINT_SUITES_OWN := ksplc/tests/suite/lsp_test.kspls ksplc/tests/suite/kspls_test.kspls \
-	ksplc/tests/suite/ast_cache_test.kspls
+# Every ksplc suite stands on its harness, which the root's suites call too.
+LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspls)
 LINT_TARGETS_OWN := ksplc/tests/main.kspls kspage/tests/main.kspls ksos/tests/main.kspls \
 	kspage/tests/fuzz_main.kspls tools/repo_stat.kspls tools/code_table.kspls $(LINT_SUITES_OWN)
 
@@ -97,7 +97,6 @@ LINT_TARGETS := ksplc/main.kspls tests/debug/main.kspls ksai/examples/llama_engi
 	ksai/tests/stops_main.kspls $(wildcard ksai/tests/stops/*.kspls) ksplc/tests/filepath/main.kspls \
 	$(wildcard ksos/demo/posix/*.kspls) \
 	$(wildcard tests/suite/*.kspls) \
-	$(filter-out $(LINT_SUITES_OWN),$(wildcard ksplc/tests/suite/*.kspls)) \
 	$(wildcard tests/tools/*.kspls) \
 	$(wildcard ksplc/tests/prog/*.kspls) \
 	$(wildcard tests/debug/pkg/*.kspls) \
@@ -133,7 +132,7 @@ lint: $(LINT_ONE_TARGETS)
 ## Per-item|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`)
 .PHONY: $(LINT_ONE_TARGETS)
 
-LINT_CFG_VARIANTS := blas llvm
+LINT_CFG_VARIANTS := blas
 
 define lint_cfg_rule
 lint-cfg-$(1): $$(STAGE1_EXE)
@@ -145,7 +144,7 @@ endef
 $(foreach v,$(LINT_CFG_VARIANTS),$(eval $(call lint_cfg_rule,$(v))))
 LINT_CFG_TARGETS := $(addprefix lint-cfg-,$(LINT_CFG_VARIANTS))
 
-## Local-cycle|lint-cfg|All the `#cfg` branches' semantic analysis (BLAS/LLVM)
+## Local-cycle|lint-cfg|All the `#cfg` branches' semantic analysis (BLAS)
 lint-cfg: $(LINT_CFG_TARGETS)
 	@echo "RESULT: ALL PASS ($(words $(LINT_CFG_VARIANTS)) #cfg variants clean)"
 

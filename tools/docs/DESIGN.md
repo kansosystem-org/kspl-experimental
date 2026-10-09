@@ -2,14 +2,6 @@
 
 **Why Kanso's own development tools are built the way they are.** It is for whoever changes a tool in `tools/`. What each file does is in the table in [`tools/README.md`](../README.md); the rules every document follows are in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md).
 
-## Contents
-
-* [The API record](#the-api-record)
-* [The coding assistant](#the-coding-assistant)
-* [The desktop opener](#the-desktop-opener)
-
----
-
 ## The API record
 
 Every package keeps a plain text list of the names it publishes (its API), and a tool writes and checks that list. A second tool turns the same information into pages you can browse.

@@ -13,25 +13,6 @@ These words come up throughout:
 | **backtrack** | Going back to an earlier position in the input after an alternative fails, to try the next one |
 | **byte** | One unit of the UTF-8 input. An ASCII character is one byte; a character such as `あ` is several |
 
-## Contents
-
-* [Part I: A reference for writing a grammar](#part-i-a-reference-for-writing-a-grammar)
-  * [1. What KSPEG is](#1-what-kspeg-is)
-  * [2. Starting from the smallest example](#2-starting-from-the-smallest-example)
-  * [3. Lexical elements](#3-lexical-elements)
-  * [4. A rule's name sets its mode](#4-a-rules-name-sets-its-mode)
-  * [5. The automatic rules: `_Space` / `_Boundary` / `_Keyword`](#5-the-automatic-rules-_space--_boundary--_keyword)
-  * [6. Operators and precedence](#6-operators-and-precedence)
-* [Part II: The specification for implementers](#part-ii-the-specification-for-implementers)
-  * [7. The AST node the engine builds](#7-the-ast-node-the-engine-builds)
-  * [8. Mode control and the AST's optimization](#8-mode-control-and-the-asts-optimization)
-  * [9. The implementation requirements for keywords and word boundaries](#9-the-implementation-requirements-for-keywords-and-word-boundaries)
-  * [10. The engine returns a CST](#10-the-engine-returns-a-cst)
-  * [11. Error handling: validating the grammar and tracking the furthest failure](#11-error-handling-validating-the-grammar-and-tracking-the-furthest-failure)
-  * [12. Performance and safety devices: packrat memoization and the recursion depth guard](#12-performance-and-safety-devices-packrat-memoization-and-the-recursion-depth-guard)
-  * [13. How to handle a language that depends on indentation](#13-how-to-handle-a-language-that-depends-on-indentation)
-* [Appendix A: KSPEG's own grammar definition (the normative grammar)](#appendix-a-kspegs-own-grammar-definition-the-normative-grammar)
-
 ---
 
 ## Part I: A reference for writing a grammar

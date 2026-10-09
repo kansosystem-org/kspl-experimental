@@ -5,6 +5,7 @@
 //< moment one is added.
 //< Caution: **Do not bring existing C files into the scope.** Only the C that ksplc writes is
 //< checked, under `-fsyntax-only` (no linking).
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -79,11 +80,11 @@ priv fn identity(cc: U8[], arena: Arena$@): U8[] //< that compiler's identity
     //<
     //< The same compiler gives the same identity: target, version and family. **Not by the name it
     //< reports** (`--version`'s first line): gcc prints the name it was called by.
-    triple: = harness.run(U8[][]::{ cc, "-dumpmachine" })
+    triple: = ksplc_harness.run(U8[][]::{ cc, "-dumpmachine" })
     if triple.code != 0
         return ""
-    version: = harness.run(U8[][]::{ cc, "-dumpversion" })
-    banner: = harness.run(U8[][]::{ cc, "--version" })
+    version: = ksplc_harness.run(U8[][]::{ cc, "-dumpversion" })
+    banner: = ksplc_harness.run(U8[][]::{ cc, "--version" })
     family: = "clang" if banner.out.find_str("clang") >= 0 else "gcc"
     return arena.text().s("\{triple.out.trim_spaces()\}|\{version.out.trim_spaces()\}|\{family\}")
         .take()
@@ -117,13 +118,40 @@ priv fn warning_lines(out: U8[], arena: Arena$@): List<|U8[]|> //<
         return ln.find_str(": warning:") >= 0;
     }).to_list(arena)
 
+priv fn builtin_slice(gen: U8[]): U8[] //<
+    //< The first name of the built-in slice type in the generated C (`kspl_I32_Slice`), or empty
+    //<
+    //< **A slice is `std/lang`'s `Slice<|$T|>`** (`std_lang_Slice_I32`); only the runtime's own
+    //< byte slice keeps a built-in name (`U8_Slice`). **One built-in constructor added back to the
+    //< type table brings the second form back** with nothing else failing, so the name is looked
+    //< for here, in C every gate generates.
+    $i: Sz = 0
+    for i < gen.len
+        at: = gen.sub_from(i).find_str("_Slice")
+        if at < 0
+            return ""
+        end: = i + at + 6
+        i = end
+        if end < gen.len && (gen[end].is_alnum() || gen[end] == '_')
+            continue
+        $from: Sz = end - 6
+        for from > 0 && (gen[from - 1].is_alnum() || gen[from - 1] == '_')
+            from -= 1
+        name: = gen.sub(from, end - from)
+        if !name.ends_with("U8_Slice")
+            return name
+    return ""
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     ccs: = compilers(arena)
     if ccs.len == 0
-        return harness.fatal("no C compiler that can put the generated C through is found")
+        return ksplc_harness.fatal("no C compiler that can put the generated C through is found")
     dir: = harness.sandbox("c_warnings") catch
-        return harness.fatal("cannot make a working directory")
+        return ksplc_harness.fatal("cannot make a working directory")
+    verdict.check("the search for a built-in slice type can fire",
+        builtin_slice("a kspl_I32_Slice b").equals("kspl_I32_Slice") &&
+        builtin_slice("kspl_U8_Slice std_lang_Slice_I32 Const_U8_Slice").len == 0, "")
     io.out().s("# warnings in the generated C\n")
     for t in targets(arena)
         gen: = fs.join(dir, arena.text().s("\{t.slot\}.c").take(), arena)
@@ -132,10 +160,13 @@ fn main(): I32
             args.push(f)
         args.push(t.src)
         args.push(gen)
-        r: = harness.ksplc(args.slice())
+        r: = ksplc_harness.ksplc(args.slice())
         if r.code != 0
             verdict.check(arena.text().s("\{t.slot\}: it can be generated").take(), false, r.out)
             continue
+        stray: = builtin_slice(io.read_file(gen) catch "")
+        verdict.check(arena.text().s("\{t.slot\}: no built-in slice type but the bytes'").take(),
+            stray.len == 0, stray)
         for cc in ccs
             name: = arena.text().s("\{t.slot\}: \{cc\} is warning-free").take()
             // No `-I` is needed: ksplc embeds the runtime headers that the generated C `#include`s.
@@ -146,8 +177,8 @@ fn main(): I32
             for f in t.cc_flags
                 argv.push(f)
             argv.push(gen)
-            out: = harness.run(argv.slice())
+            out: = ksplc_harness.run(argv.slice())
             warns: = warning_lines(out.out, arena)
             verdict.check(name, out.code == 0 && warns.len == 0,
                 arena.text().s("\{warns.len\} found\n").s(out.out).take())
-    return harness.finish()
+    return ksplc_harness.finish()

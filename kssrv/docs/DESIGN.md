@@ -2,16 +2,6 @@
 
 kssrv (Kanso Server) is an HTTP server written in KSPL on `std` and `ksai`. It is where `ksplc` and `std` meet a real run: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), what a client can ask for in [`SPEC-api.md`](SPEC-api.md), and what is left in [`PLAN.md`](PLAN.md).
 
-## Contents
-
-* [The command line and the two modes](#the-command-line-and-the-two-modes)
-* [One thread, many connections](#one-thread-many-connections)
-* [Files and the API](#files-and-the-api)
-* [The log](#the-log)
-* [The car](#the-car)
-
----
-
 ## The command line and the two modes
 
 Kssrv runs either as a *local* server for one person's browser (`--local`) or as an *outward-facing* server anyone on the network may reach. Everything else about it is set on the command line.

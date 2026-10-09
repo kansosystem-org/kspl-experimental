@@ -18,21 +18,6 @@ flowchart TD
     U --> W
 ```
 
-## Contents
-
-* [The caller picks the optimizer](#the-caller-picks-the-optimizer)
-* [A batch is spread over threads, and the weights come out the same for any count](#a-batch-is-spread-over-threads-and-the-weights-come-out-the-same-for-any-count)
-* [LoRA keeps the adapter apart from reading and writing the bundle](#lora-keeps-the-adapter-apart-from-reading-and-writing-the-bundle)
-* [The attention mechanisms are split by the head count](#the-attention-mechanisms-are-split-by-the-head-count)
-* [Each layer initializes its own weights](#each-layer-initializes-its-own-weights)
-* [The weights' gradients are matched against numerical differentiation too](#the-weights-gradients-are-matched-against-numerical-differentiation-too)
-* [The matrix backend is chosen where it is deployed](#the-matrix-backend-is-chosen-where-it-is-deployed)
-* [The kernels are spelt for the auto-vectorizer, not with intrinsics](#the-kernels-are-spelt-for-the-auto-vectorizer-not-with-intrinsics)
-* [A byte sequence from outside is read on the assumption that it is broken](#a-byte-sequence-from-outside-is-read-on-the-assumption-that-it-is-broken)
-* [Further reading](#further-reading)
-
----
-
 ## The caller picks the optimizer
 
 The optimizer is the rule that moves the weights after each step. ksai offers two, SGD and Adam, and the caller chooses by calling a different function.

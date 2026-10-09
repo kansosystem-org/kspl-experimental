@@ -2,19 +2,6 @@
 
 This guide shows how to add a test to the repository: where the file goes, how to write it, and how to run it. A *suite* is one KSPL program that runs many checks and prints one verdict. Each folder's place is in [`tests/README.md`](../README.md); why the suites are built this way is in [`tests/docs/DESIGN.md`](DESIGN.md).
 
-## Contents
-
-* [What you need first](#what-you-need-first)
-* [Where a new test goes](#where-a-new-test-goes)
-* [Adding a suite, step by step](#adding-a-suite-step-by-step)
-* [The manners for writing a suite](#the-manners-for-writing-a-suite)
-* [The arena is held by harness](#the-arena-is-held-by-harness)
-* [Showing that a check can fire](#showing-that-a-check-can-fire)
-* [Moving a tool out of Python](#moving-a-tool-out-of-python)
-* [If it goes wrong](#if-it-goes-wrong)
-
----
-
 ## What you need first
 
 You need a built tree and enough KSPL to read a short program.
@@ -52,7 +39,7 @@ These steps add a suite under `tests/suite/`.
 
 1. **Write the suite** as `tests/suite/<name>_test.kspls`, starting from the program in "The manners for writing a suite" below.
 2. **Register it in [`mk/test.mk`](../../mk/test.mk)**: add a line `suite_<name> := suite/<name>_test.kspls`, and add `<name>` to `SUITES`, where the comment above it says (longest first). `make` stops at start-up when the two disagree.
-3. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed` (`make install` does it too). The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
+3. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
 4. **Run it**: `make test-<name>`. You should see one line per check and a closing verdict:
 
    ```
@@ -65,34 +52,35 @@ These steps add a suite under `tests/suite/`.
 
 ## The manners for writing a suite
 
-Every suite is built from the same shared helpers: `tests/support/harness.kspls`, and `std/verdict.kspls` for the verdict lines. If each suite found the repository root and the compiler under test, formatted its verdict lines and used exit codes in its own way, CI's log would become unreadable.
+Every suite is built from the same shared helpers: `tests/support/harness.kspls`, `ksplc/tests/support/harness.kspls` beneath it, and `std/verdict.kspls` for the verdict lines. **The root's `harness` knows the repository** (its root, `make` from it, the files git knows), and its `begin` starts ksplc's harness on the repository's paths; **`ksplc_harness` does the rest**: the arena, the compiler under test, running a child and ending the suite. If each suite found the repository root and the compiler under test, formatted its verdict lines and used exit codes in its own way, CI's log would become unreadable.
 
 The smallest suite starts the compiler under test once and checks its exit code:
 
 ```kspls
 #!/usr/bin/env -S ksplc run
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/verdict"
 import "tests/support/harness"
 
 fn main(): I32
     harness.begin(8 * 1024 * 1024)
-    r: = harness.ksplc(U8[][]::{ "info", "std-dir" })
+    r: = ksplc_harness.ksplc(U8[][]::{ "info", "std-dir" })
     verdict.check("the exit code is 0", r.code == 0, r.out)
-    return harness.finish()
+    return ksplc_harness.finish()
 ```
 
 Each row below is one manner: what to use, and what goes wrong without it.
 
 | To do this | Use | Why |
 | :-- | :-- | :-- |
-| End the suite | `return harness.finish()` at the end of `main` | **The exit code carries the verdict.** The `RESULT:` line is for people and the log; the Makefile greps it as a marker for some targets only |
+| End the suite | `return ksplc_harness.finish()` at the end of `main` | **The exit code carries the verdict.** The `RESULT:` line is for people and the log; the Makefile greps it as a marker for some targets only |
 | Report a case that could not be confirmed | `verdict.skip_check()` | Written as `check(.., true, ..)`, a case that confirmed nothing prints the same line as one that confirmed something, and the log cannot tell them apart |
 | Get a folder to write in | `harness.sandbox("<suite name>")` | It empties `out/tmp/<suite name>` and returns it, so the last run's leftovers do not mix into this run's verdict |
-| Read a file the compiler generated | `harness.read_generated` | ksplc writes in text mode, so on Windows the newlines become `\r\n` |
+| Read a file the compiler generated | `ksplc_harness.read_generated` | ksplc writes in text mode, so on Windows the newlines become `\r\n` |
 | Read a file the repository holds | `harness.read_under_root` | `.gitattributes` pins the repository's files to LF, so nothing needs converting |
 | Take one line out of a child's output | `htext.line_after()` | A line cut at `'\n'` keeps a trailing `\r` on Windows (below) |
-| Build a `U8[]` (a string), such as a case name passed to `check` | `arena.text().s("…").take()`, the notation for "allocate and keep" | Interpolation (`\{x\}`) can be written only inside a `Writer`'s `.s()` (why there are only three shapes: "The destination is always named" in [`std/docs/DESIGN.md`](../../std/docs/DESIGN.md)). **Where no arena is in reach, use `harness.arena()`** |
-| Run several cases at once | `harness.run_all` | It runs the cases given to it in parallel, through `std/verdict`'s `run_children`, and returns the results **in input order**. `verdict.jobs()` sets the parallelism; `KANSO_TEST_JOBS=1` makes it sequential to narrow down a failure. Otherwise a suite runs its cases one at a time, in order |
+| Build a `U8[]` (a string), such as a case name passed to `check` | `arena.text().s("…").take()`, the notation for "allocate and keep" | Interpolation (`\{x\}`) can be written only inside a `Writer`'s `.s()` (why there are only three shapes: "The destination is always named" in [`std/docs/DESIGN.md`](../../std/docs/DESIGN.md)). **Where no arena is in reach, use `ksplc_harness.arena()`** |
+| Run several cases at once | `ksplc_harness.run_all` | It runs the cases given to it in parallel, through `std/verdict`'s `run_children`, and returns the results **in input order**. `verdict.jobs()` sets the parallelism; `KANSO_TEST_JOBS=1` makes it sequential to narrow down a failure. Otherwise a suite runs its cases one at a time, in order |
 
 Caution: **Do not write to a fixed path (`/tmp/out.c` and the like).** Take the folder from `harness.sandbox` instead.
 
@@ -104,7 +92,7 @@ Caution: **Give each suite its own workspace name.** Suites themselves run in pa
 
 ## The arena is held by harness
 
-`harness.begin()` makes the suite's arena and hands it back, and `harness.finish()` frees it. An *arena* is one block of memory that many allocations share and that is freed all at once. The suite can use it directly for its own allocations, so `List.new(arena)` and the like read as usual. Why `harness.*` does not take the arena per call is in "Why harness holds the arena" in [`tests/docs/DESIGN.md`](DESIGN.md).
+`harness.begin()` makes the suite's arena and hands it back, and `ksplc_harness.finish()` frees it. An *arena* is one block of memory that many allocations share and that is freed all at once. The suite can use it directly for its own allocations, so `List.new(arena)` and the like read as usual. Why the harness's helpers do not take the arena per call is in "Why harness holds the arena" in [`tests/docs/DESIGN.md`](DESIGN.md).
 
 Caution: **Do not free it with a `defer`.** `finish` / `fatal` free it, so a `defer arena.free()` frees it twice.
 
@@ -151,7 +139,7 @@ Each row is a symptom you may meet, what causes it, and where the fix is describ
 | `make` stops at start-up, before any suite runs | `suite_<name>` and `SUITES` in `mk/test.mk` disagree | Step 2 of "Adding a suite, step by step" |
 | A new package test never runs, and everything stays green | Its file is not imported and called from `<package>/tests/all.kspls` | "Where a new test goes" |
 | The suite passes on the stage1 just built, but `make test-<name>` alone fails | The suite uses a notation the seed does not know yet | Re-bake the seed (step 3) |
-| A check fails only on Windows, as "the head does not match" or "a blank line is not found" | A generated file read raw, so it holds `\r\n` | `harness.read_generated` |
+| A check fails only on Windows, as "the head does not match" or "a blank line is not found" | A generated file read raw, so it holds `\r\n` | `ksplc_harness.read_generated` |
 | A header or token holds a stray `\r` on Windows, or `make test-conventions` reports "a test does not cut a child's output into lines by hand" | A child's output cut into lines at `'\n'` by hand | `htext.line_after()` |
 | Two suites fail together, each seeing the other's files | They share a workspace name | Give each suite its own name in `harness.sandbox` |
 | The arena is freed twice at the suite's end | A `defer arena.free()` on the arena from `harness.begin()` | Remove the `defer`: `finish` frees it |

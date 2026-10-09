@@ -1,108 +1,5 @@
 # The KSPL compiler's internal design (Design)
 
-## Contents
-
-* [0. About this document](#0-about-this-document)
-* [1. The compiler as a whole](#1-the-compiler-as-a-whole)
-  * [1.1 From source code to a binary](#11-from-source-code-to-a-binary)
-  * [1.2 The bootstrap, and keeping the seed in step](#12-the-bootstrap-and-keeping-the-seed-in-step)
-  * [1.3 Keeping the grammar and the AST node kinds in step](#13-keeping-the-grammar-and-the-ast-node-kinds-in-step)
-  * [1.4 The parts that are not in the pipeline: `base` / `lsp` / `fmt` / `tools`](#14-the-parts-that-are-not-in-the-pipeline-base--lsp--fmt--tools)
-  * [1.5 String interning](#15-string-interning)
-  * [1.6 A tree node's size is fixed by rule and guarded](#16-a-tree-nodes-size-is-fixed-by-rule-and-guarded)
-  * [1.7 Measuring the compiler: `--stats` and the performance guard](#17-measuring-the-compiler---stats-and-the-performance-guard)
-* [2. The Development Principles](#2-the-development-principles)
-  * [2.1 Failing fast through an exception or an ICE](#21-failing-fast-through-an-exception-or-an-ice)
-  * [2.2 A backend writes straight out rather than assembling](#22-a-backend-writes-straight-out-rather-than-assembling)
-* [3. The Parse layer: from text to an AST (Desugar included)](#3-the-parse-layer-from-text-to-an-ast-desugar-included)
-  * [3.1 What it answers for](#31-what-it-answers-for)
-  * [3.2 The internal flow: the raw KSPEG tree → the AST conversion → normalizing → verification](#32-the-internal-flow-the-raw-kspeg-tree--the-ast-conversion--normalizing--verification)
-  * [3.3 The invariants of the normalized AST (so nothing crashes and no output differs)](#33-the-invariants-of-the-normalized-ast-so-nothing-crashes-and-no-output-differs)
-  * [3.4 The list of the normalized AST's nodes (the shape the Parse layer hands downstream)](#34-the-list-of-the-normalized-asts-nodes-the-shape-the-parse-layer-hands-downstream)
-  * [3.5 Desugar: expanding the syntactic sugar that does not know the types](#35-desugar-expanding-the-syntactic-sugar-that-does-not-know-the-types)
-  * [3.6 Synthesizing an `enum`'s `variant_name`](#36-synthesizing-an-enums-variant_name)
-  * [3.7 The normalized AST's disk cache (`ksplc/parse/ast_cache.kspls`)](#37-the-normalized-asts-disk-cache-ksplcparseast_cachekspls)
-  * [3.8 What a syntax error names](#38-what-a-syntax-error-names)
-  * [3.9 Every place a source enters reads it the same way](#39-every-place-a-source-enters-reads-it-the-same-way)
-  * [3.10 A literal's escapes are decided in one place](#310-a-literals-escapes-are-decided-in-one-place)
-* [4. The Sema layer: it knows the types](#4-the-sema-layer-it-knows-the-types)
-  * [4.1 What it answers for](#41-what-it-answers-for)
-  * [4.2 How sema is split into folders, and the direction of the dependencies](#42-how-sema-is-split-into-folders-and-the-direction-of-the-dependencies)
-  * [4.3 The internal flow: registering every file up front → the main type-inference walk → draining the work list of generic instantiations](#43-the-internal-flow-registering-every-file-up-front--the-main-type-inference-walk--draining-the-work-list-of-generic-instantiations)
-  * [4.4 The AST nodes the Sema layer creates (its contract with Lower and Genc)](#44-the-ast-nodes-the-sema-layer-creates-its-contract-with-lower-and-genc)
-  * [4.5 The extra rules concerning the type system](#45-the-extra-rules-concerning-the-type-system)
-  * [4.6 A worked example: how one expression is reshaped in each layer](#46-a-worked-example-how-one-expression-is-reshaped-in-each-layer)
-  * [4.7 Profiling where Sema's time goes](#47-profiling-where-semas-time-goes)
-* [5. The Lower layer: a flat tree that depends on no backend](#5-the-lower-layer-a-flat-tree-that-depends-on-no-backend)
-  * [5.1 What it answers for](#51-what-it-answers-for)
-  * [5.2 The internal flow: one MIR-flattening walk → generating thunks and vtables → the ABI mangling → dead-code elimination → verification](#52-the-internal-flow-one-mir-flattening-walk--generating-thunks-and-vtables--the-abi-mangling--dead-code-elimination--verification)
-  * [5.3 The limits on building an AST, and `def_node`'s strict duty to link](#53-the-limits-on-building-an-ast-and-def_nodes-strict-duty-to-link)
-* [6. The backends (Genc / Genllvm) and the runtime ABI](#6-the-backends-genc--genllvm-and-the-runtime-abi)
-  * [6.1 What they answer for](#61-what-they-answer-for)
-  * [6.2 What the two generators share: the decisions, not the spelling](#62-what-the-two-generators-share-the-decisions-not-the-spelling)
-  * [6.3 The runtime memory layout and the ABI specification](#63-the-runtime-memory-layout-and-the-abi-specification)
-  * [6.4 Embedding the runtime, and what a library keeps to itself](#64-embedding-the-runtime-and-what-a-library-keeps-to-itself)
-  * [6.5 Genc (C99): the topological output order](#65-genc-c99-the-topological-output-order)
-  * [6.6 Genllvm (LLVM IR): why the structure itself differs, and managing SSA](#66-genllvm-llvm-ir-why-the-structure-itself-differs-and-managing-ssa)
-  * [6.7 A function pointer breaks in a different place in each backend](#67-a-function-pointer-breaks-in-a-different-place-in-each-backend)
-  * [6.8 An attribute is either interpreted in both backends, or refused outright in one](#68-an-attribute-is-either-interpreted-in-both-backends-or-refused-outright-in-one)
-  * [6.9 Split compilation: emitting one program as several translation units (`--split`)](#69-split-compilation-emitting-one-program-as-several-translation-units---split)
-  * [6.10 Self-hosting does not test a feature ksplc itself does not use](#610-self-hosting-does-not-test-a-feature-ksplc-itself-does-not-use)
-* [7. The rules for handling an AST, shared by every layer](#7-the-rules-for-handling-an-ast-shared-by-every-layer)
-* [8. Memory management: the arena model](#8-memory-management-the-arena-model)
-  * [8.1 Why an arena](#81-why-an-arena)
-  * [8.2 Arena's implementation: a linked list of chunks and bump allocation](#82-arenas-implementation-a-linked-list-of-chunks-and-bump-allocation)
-  * [8.3 The three-tier allocation strategy](#83-the-three-tier-allocation-strategy)
-  * [8.4 The naming conventions for the lifecycle functions and the global variables](#84-the-naming-conventions-for-the-lifecycle-functions-and-the-global-variables)
-* [9. The development conventions (the rules for writing KSPL source)](#9-the-development-conventions-the-rules-for-writing-kspl-source)
-  * [9.1 The order of imports, and how an alias is given](#91-the-order-of-imports-and-how-an-alias-is-given)
-  * [9.2 A file using an extension method imports the file that defines it](#92-a-file-using-an-extension-method-imports-the-file-that-defines-it)
-* [10. The tools' internal implementation: the language server, the formatter and `ksplc run`](#10-the-tools-internal-implementation-the-language-server-the-formatter-and-ksplc-run)
-  * [10.1 The arena is rewound after each request (a worked example)](#101-the-arena-is-rewound-after-each-request-a-worked-example)
-  * [10.2 The language server is split into two processes: the watcher and the analyser](#102-the-language-server-is-split-into-two-processes-the-watcher-and-the-analyser)
-  * [10.3 The server finds the workspace's files without asking the client](#103-the-server-finds-the-workspaces-files-without-asking-the-client)
-  * [10.4 References and renaming are the same question, so they are gathered in one place](#104-references-and-renaming-are-the-same-question-so-they-are-gathered-in-one-place)
-  * [10.5 The call hierarchy identifies a definition by an FQN that includes the file](#105-the-call-hierarchy-identifies-a-definition-by-an-fqn-that-includes-the-file)
-  * [10.6 The call hierarchy also counts passing a function as a pointer as an edge](#106-the-call-hierarchy-also-counts-passing-a-function-as-a-pointer-as-an-edge)
-  * [10.7 Completion re-analyses the text as if one name were missing](#107-completion-re-analyses-the-text-as-if-one-name-were-missing)
-  * [10.8 Only the editor's parse recovers from a syntax error](#108-only-the-editors-parse-recovers-from-a-syntax-error)
-  * [10.9 A `didOpen` checks one document's bodies](#109-a-didopen-checks-one-documents-bodies)
-  * [10.10 Typing names the document view does not analyse](#1010-typing-names-the-document-view-does-not-analyse)
-  * [10.11 A declaration is shown as written, not as its last instantiation](#1011-a-declaration-is-shown-as-written-not-as-its-last-instantiation)
-  * [10.12 A document URI is converted to the logical name on the way in, and back to the editor's spelling on the way out](#1012-a-document-uri-is-converted-to-the-logical-name-on-the-way-in-and-back-to-the-editors-spelling-on-the-way-out)
-  * [10.13 The formatter reorders the `import`s as text, before the printer](#1013-the-formatter-reorders-the-imports-as-text-before-the-printer)
-  * [10.14 The formatter folds nothing by default (`AllowShortBlocks` / `AllowShortFunctions`)](#1014-the-formatter-folds-nothing-by-default-allowshortblocks--allowshortfunctions)
-  * [10.15 One level is four spaces (`IndentWidth`)](#1015-one-level-is-four-spaces-indentwidth)
-  * [10.16 Blank lines and the line terminator](#1016-blank-lines-and-the-line-terminator)
-  * [10.17 Where the formatter's time goes, and the record of formatted texts](#1017-where-the-formatters-time-goes-and-the-record-of-formatted-texts)
-  * [10.18 `ksplc run` builds a script one run at a time, and runs it outside the lock](#1018-ksplc-run-builds-a-script-one-run-at-a-time-and-runs-it-outside-the-lock)
-* [11. The design rules for the checks and the diagnostics](#11-the-design-rules-for-the-checks-and-the-diagnostics)
-  * [11.1 A check of the same nature is not copied into two places](#111-a-check-of-the-same-nature-is-not-copied-into-two-places)
-  * [11.2 Measuring what suppression costs](#112-measuring-what-suppression-costs)
-  * [11.3 A diagnostic points at 'the position the user wrote'](#113-a-diagnostic-points-at-the-position-the-user-wrote)
-  * [11.4 While a generic is being instantiated, a diagnostic that depends on a type argument is not emitted](#114-while-a-generic-is-being-instantiated-a-diagnostic-that-depends-on-a-type-argument-is-not-emitted)
-  * [11.5 Whether a call goes through a function pointer is decided by the declaration](#115-whether-a-call-goes-through-a-function-pointer-is-decided-by-the-declaration)
-  * [11.6 A gate checks that a diagnostic fires separately from the pass/fail verdict](#116-a-gate-checks-that-a-diagnostic-fires-separately-from-the-passfail-verdict)
-  * [11.7 A type check covers every declared type, not only the used ones](#117-a-type-check-covers-every-declared-type-not-only-the-used-ones)
-  * [11.8 Generic checks tell a written type argument from an inferred one](#118-generic-checks-tell-a-written-type-argument-from-an-inferred-one)
-  * [11.9 The static-initializer check is applied to both `var` and `const`](#119-the-static-initializer-check-is-applied-to-both-var-and-const)
-  * [11.10 Each depth limit is set by what breaks first](#1110-each-depth-limit-is-set-by-what-breaks-first)
-  * [11.11 Name resolution with no namespace goes through one function](#1111-name-resolution-with-no-namespace-goes-through-one-function)
-  * [11.12 An alias prefix is checked only for whether the name after it exists](#1112-an-alias-prefix-is-checked-only-for-whether-the-name-after-it-exists)
-  * [11.13 An explanation is printed from the specification, and only a code has one](#1113-an-explanation-is-printed-from-the-specification-and-only-a-code-has-one)
-  * [11.14 Diagnostics for a program are one JSON object per line](#1114-diagnostics-for-a-program-are-one-json-object-per-line)
-* [12. The rules for implementing ARC](#12-the-rules-for-implementing-arc)
-  * [12.1 A retain goes wherever a copy happens](#121-a-retain-goes-wherever-a-copy-happens)
-  * [12.2 The chaining is gathered into a per-type drop-glue function](#122-the-chaining-is-gathered-into-a-per-type-drop-glue-function)
-* [13. The design of the tool settings](#13-the-design-of-the-tool-settings)
-  * [13.1 lint is configured per diagnostic code, not by a group name](#131-lint-is-configured-per-diagnostic-code-not-by-a-group-name)
-  * [13.2 The settings file is `ksplc.cfg` (the use does not go in the name)](#132-the-settings-file-is-ksplccfg-the-use-does-not-go-in-the-name)
-  * [13.3 The standard library is found beside the compiler](#133-the-standard-library-is-found-beside-the-compiler)
-  * [13.4 A package other than `std` is located once per package](#134-a-package-other-than-std-is-located-once-per-package)
-* [14. The glossary](#14-the-glossary)
-
----
-
 ## 0. About this document
 
 **Who it is for**: a developer changing `ksplc/`, the compiler itself. It explains how the compiler works inside, not how to use KSPL.
@@ -125,7 +22,7 @@
 | 7 to 10 | the conventions every layer shares (handling the tree, memory management, coding), and the tools' internals | you write any compiler code |
 | 11 to 13 | the rules for adding checks and diagnostics, ARC (automatic reference counting) and the tool settings | before such work: each makes Principle 5 concrete |
 
-The terms used throughout (ICE, FQN, MIR and the rest) are in [the glossary](#14-the-glossary), the last chapter.
+The compiler's terms (ICE, MIR, monomorphization and the rest) are in [the glossary](#14-the-glossary), the last chapter. The words every package shares (FQN, ABI, ARC and the rest) are in "Words used throughout" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md#words-used-throughout).
 
 ---
 
@@ -225,7 +122,7 @@ Caution: **Confirm diff-zero with `make self-host` (or `make ci`) before `make c
 
 CI runs this check every time, so a forgotten push shows in the PR. No third stage (translating once more with the compiler Stage2 built) is needed. The self-host after burning already answers "does the burned seed reproduce itself", and a third stage would be a second means to one property (Principle 6).
 
-`make install` runs `fmt` → `commit-seed` → `install-lsp`, to finish once `make ci` has confirmed diff-zero. `make lint` depends on Stage1 and builds it itself, so it is the fast first check before the heavy `make ci`.
+**`make install` checks what it installs, and changes no file in the tree**: it runs `self-host` and `self-host-ship`, then installs the shipped executable and the language server. It neither formats the tree nor re-bakes the seed. Each rewrites files, and re-baking on every install would grow the history by the seed's size each time, so the seed is re-baked by `make commit-seed` when the rules above call for it. `make lint` depends on Stage1 and builds it itself, so it is the fast first check before the heavy `make ci`.
 
 ### 1.3 Keeping the grammar and the AST node kinds in step
 
@@ -1671,7 +1568,7 @@ Where both outputs must do the same thing, the rule lives in one shared file, an
 
 ### 6.3 The runtime memory layout and the ABI specification
 
-Every KSPL value has one fixed layout in memory, and both backends follow it, so C output and LLVM output can call each other. This agreement is the *ABI* (application binary interface, see [the glossary](#14-the-glossary)). Sema fixes it, and it keeps C and LLVM output binary-compatible.
+Every KSPL value has one fixed layout in memory, and both backends follow it, so C output and LLVM output can call each other. This agreement is the *ABI* (application binary interface, see "Words used throughout" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md#words-used-throughout)). Sema fixes it, and it keeps C and LLVM output binary-compatible.
 
 | KSPL value | Its layout | Note |
 | :-- | :-- | :-- |
@@ -1760,7 +1657,7 @@ Caution: **Do not keep the list by hand**: which names collide changes with the 
 
 **A program's symbols take the linkage their visibility gives**: `priv` is `static` and the rest external, so `--split`'s units reach each other (`has_file_local_c_symbol` in `gen/c/decl.kspls`). The runtime's `kspl_*` are external, since one program holds one runtime.
 
-**A library's are all `static` but its `#export`s** (`--library`; [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). Two libraries in one program then hold two runtimes and two copies of std that cannot meet.
+**A library's are all `static` but its `#export`s** (`--library`; what can be relied on is [`SPEC-tools.md` §2.10.1](SPEC-tools.md#2101-building-a-library---library)). Why a private copy, and why `static` rather than a hidden visibility or an export list, is "A library built from KSPL crosses as C, holding its own runtime" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md). This section holds how the generated C and the runtime make it so.
 
 | What | How it becomes `static` |
 | :-- | :-- |
@@ -1768,8 +1665,6 @@ Caution: **Do not keep the list by hand**: which names collide changes with the 
 | genc's variables, constants and embeds | `global_word` in `gen/c/ctx.kspls`; the forward declaration is a `static` tentative definition, written once the types are complete (C refuses an incomplete type there) |
 | the runtime's functions and data | `KSPL_LINK` on each declaration and definition in `gen/runtime/`, which is `static` where the generated C defined `KSPL_LIBRARY` before the preamble (`run` in `gen/c/root.kspls`) |
 | std's `extern "C"` declarations of them | `KSPL_LINK` too (`extern_word` in `gen/c/decl.kspls`): C refuses a `static` definition after an `extern` declaration |
-
-**`static` rather than a hidden visibility or an export list**: only `static` is honoured by every C toolchain, a static archive included. A visibility attribute leaves a static archive's symbols colliding, and an export list belongs to a linker ksplc does not run.
 
 Caution: **Put `KSPL_LINK` on every runtime definition with external linkage.** One left out stays visible. Two libraries then collide on it, or in shared libraries bind to each other's copy without a word. `tests/suite/ship_test.kspls` lists what a library's object leaves visible. The object holds every runtime function, used or not, so a gap shows without a list of names.
 
@@ -2164,15 +2059,14 @@ Making and discarding things uses the same few names everywhere, so a reader (an
 
 ## 9. The development conventions (the rules for writing KSPL source)
 
-### 9.1 The order of imports, and how an alias is given
+### 9.1 The order of imports, and their paths
 
-Every `import` in ksplc's own code names a full path and, for ksplc's own files, a fixed alias, so a reader can see at a glance which layer a name comes from. `ksplc/`'s own imports follow three rules, to keep the dependencies visible and names from colliding:
+Every `import` in ksplc's own code names a full path, so a reader can see at a glance which layer a name comes from. `ksplc/`'s own imports follow two rules, to keep the dependencies visible:
 
 | Rule | Example |
 | :-- | :-- |
 | 1. **Order**: by name. `ksplc fmt` sorts them (§10.13), so nobody orders them by hand | — |
 | 2. **Full paths**: the standard library from `std/`, the compiler's own files from `ksplc/` | `import "std/io"` |
-| 3. **A file under `ksplc/` always takes an explicit `as` alias**: its path without `ksplc/`, with `/` replaced by `_` | `import "ksplc/base/ast" as base_ast` |
 
 **§11.1 of [`../../docs/DESIGN.md`](../../docs/DESIGN.md) decides which names come in without a namespace (a selective import).** What is specific to `ksplc/` is how its condition 3 applies: whether the origin is information that belongs to the design.
 
@@ -3271,14 +3165,13 @@ Caution: **The seed must know the section before any file in the tree holds it.*
 
 ## 14. The glossary
 
-The terms this document assumes, grouped by the part of the compiler they belong to, each group in pipeline order. Each one's section has the full account. The words this repository uses with one fixed meaning in every document (gate, fire, reject, pass silently and the rest) are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md).
+The terms of the compiler this document assumes, grouped by the part of the compiler they belong to, each group in pipeline order. Each one's section has the full account. The words every package shares (generic, trait, vtable, ARC, arena, FQN, ABI, hosted and freestanding, libc, the C runtime, the seed and the rest) are in "Words used throughout" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md#words-used-throughout). The words this repository uses with one fixed meaning in every document (gate, fire, reject, pass silently and the rest) are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md).
 
 **The compiler as a whole**
 
 | Term | What it means | Where |
 | :-- | :-- | :-- |
 | **Pipeline** | the fixed order of stages a program goes through: Parse → Desugar → Sema → Lower → a backend | §1.1 |
-| **Bootstrap / seed** | the compiler is written in KSPL, so it needs a compiler to build it. The *seed* (`ksplc/seed.c`) is the compiler translated to C once and committed; any C compiler builds it | §1.2 |
 | **Stage1 / Stage2** | Stage1 is the current source built by the seed; Stage2 is the same source built by Stage1. The two outputs must be identical | §1.2 |
 | **Self-hosting** | a compiler compiling its own source to a byte-identical result | §1.2, §6.10 |
 | **ICE** (internal compiler error) | a stop on a state ksplc itself got wrong. `ice_assert` / `ice_panic` raise it instead of a diagnostic about the user's code | §2.1 |
@@ -3292,7 +3185,7 @@ The terms this document assumes, grouped by the part of the compiler they belong
 | **CST / AST** | the CST (concrete syntax tree) is the parser's raw output, `kspeg.Node`. The AST (abstract syntax tree) is that tree stripped of brackets, symbols and intermediate rules, and levelled by the Parse layer into the fixed shape `Ast_node` | §3.2 |
 | **Normalization** | the Parse layer's reshaping of the raw tree into the AST, where every node kind has a fixed layout | §3.2, §3.3 |
 | **Elision** | replacing a node that holds only one child and qualifies nothing with that child (`elide_node`) | §3.2 |
-| **Desugaring** | rewriting syntactic sugar into a more basic shape from the AST's shape alone, without the types | §3.5 |
+| **Desugaring** (the stage) | the shared word *desugar*, narrowed to what can be rewritten from the AST's shape alone, without the types. A sugar that needs the types is finished in Sema | §3.5 |
 | **A seam** | the one name that both halves of a sugar split across two layers agree on, such as the mark Desugar leaves for Sema | §3.5.4 |
 | **The two notations** | KSPL source is written in the brace notation (`.kspl`: `{` `}` and `;`) or the indentation notation (`.kspls`); they mean the same, and the indentation notation is read into braces once, where a source enters | §3.9 |
 
@@ -3303,15 +3196,13 @@ The terms this document assumes, grouped by the part of the compiler they belong
 | **Sema** (semantic analysis) | the stage that knows the types: it resolves every name, infers every type and reports type errors | §4 |
 | **`type_id`** | the number Sema gives each distinct type; a node's `type_id` is the type of its value | §4.3 |
 | **Symbol table** | the table from a name to what it declares (`Sema_symbol`) | §4.2 |
-| **FQN** (fully qualified name) | a declaration's name with its module path in front (`std.ds.List`, `ksos.drivers.ht16k33.init`), unique across the program | §10.5 |
 | **A mass** | a set of files that can all reach one another through imports (a strongly connected component) that cannot be split into folders any further | §4.2.1 |
-| **Generic / template / type argument** | a generic is a declaration with type parameters (`List<\|T\|>`); its written body is the *template*; the concrete type put in for `T` is a *type argument* | §4.3.5 |
-| **Monomorphization** | instantiating a generic as a separate implementation per concrete type argument used (`sema/decl/mono.kspls`). `Vec<\|T\|>` with `T=I32` becomes `Vec_I32` | §4.3 |
-| **Trait / upcast** | a trait is a set of methods a type promises (an interface). An *upcast* turns a concrete value into a trait value | §5.2.1 |
+| **Template** | a generic's written body, before any type argument is put in | §4.3.5 |
+| **Monomorphization** | ksplc's name for instantiating a generic: one separate implementation per concrete type argument used (`sema/decl/mono.kspls`). `Vec<\|T\|>` with `T=I32` becomes `Vec_I32` | §4.3 |
+| **Upcast** | turning a concrete value into a trait value | §5.2.1 |
 | **Folding** | computing an expression's value at compile time (`eval_constexpr`) | §11.9 |
 | **A place expression** | an expression that names existing memory: an identifier, a field or element chain rooted in one, or a dereference. A read from one is a copy | §12.1 |
 | **`Move_only`** | a mark on a type that must never be copied (an open file, a lock); after a hand-over the old name cannot be used | §11.1, §12 |
-| **Diagnostic / code / lint** | a diagnostic is a message about the user's code (error, warning, information, hint). Every one but an error carries a code such as `I0307`. `ksplc lint` shows the advice an ordinary build hides | §11, §13.1 |
 
 **Lower**
 
@@ -3320,7 +3211,6 @@ The terms this document assumes, grouped by the part of the compiler they belong
 | **Lowering** | rearranging nested control structure (`defer`, the short-circuiting `&&`/`\|\|`, `!`, a labelled `break`) into a shallow combination of `if` and `goto`: the Lower layer's job | §5 |
 | **MIR** (mid-level intermediate representation) | the flat, backend-neutral tree that Lower's first walk leaves. ksplc keeps it in the same `Ast_node`s, not in a type of its own | §5.2 |
 | **Name mangling** | transforming a symbol name by a regular rule to avoid collisions. A `priv` symbol becomes `kspl_priv_{file name}_{original name}` | §5.2 |
-| **A thunk** / **a vtable** | the go-between function and the table of function pointers that make a trait's dynamic dispatch, defined where Lower makes them | §5.2 |
 | **Drop glue** | the helper generated once per aggregate type that retains or releases every ARC value it owns | §12.2 |
 
 **The backends and C**
@@ -3330,17 +3220,13 @@ The terms this document assumes, grouped by the part of the compiler they belong
 | **Backend** | the stage that writes code for a target: Genc writes C99, Genllvm writes LLVM IR | §6 |
 | **C99** | the 1999 edition of the C language standard, which nearly every C compiler accepts | §6 |
 | **LLVM IR** | the text form of the code that LLVM (the toolkit behind clang) compiles to machine code | §6.6 |
-| **Runtime / preamble** | the C code every program needs besides its own (files, threads, the clock, the checks). The preamble is that code written into each generated `.c` | §6.4 |
-| **Hosted / freestanding / bare metal** | *hosted* code runs under an operating system and may call libc. *Freestanding* code (`--freestanding`) may not; it is for *bare metal*, a chip with no operating system | §6.4 |
-| **libc / glibc / CRT** | the C standard library: glibc is the usual one on Linux, and the CRT (UCRT) is Windows' | §6.4.1 |
+| **Preamble** | the C runtime as written into each generated `.c` | §6.4 |
 | **Translation unit** | one `.c` file and everything it includes, as the C compiler reads it | §6.4, §6.9 |
 | **Declaration / definition / prototype** | a declaration says a name exists; a definition gives its body or storage; a prototype is a function's declaration | §6.4 |
 | **Linkage (external / `static`)** | whether a C name is visible to other translation units at link time (external) or only inside its own (`static`) | §6.4.2 |
-| **ABI** | the binary agreement on how a type is laid out in memory, and how a call passes its arguments and return value: the slice `{ptr, len}`, the trait fat pointer, the `Result` struct and the tagged-union enum. Genc and Genllvm keep it identical, so their code can call each other's | §6.3 |
 | **Calling convention (SysV / Win64 / AAPCS)** | the part of an ABI that says which registers and stack slots carry a call's arguments. SysV is Linux's and macOS's on x86-64, Win64 is Windows', AAPCS is ARM's | §6.6.1 |
 | **Aggregate** | a value made of several parts: a struct, an array, a slice, a Result, an enum with a payload, a trait value | §6.6.3 |
 | **Alignment / padding / packed** | a type's alignment is the address multiple it must start at; padding is the unused bytes inserted to keep fields aligned; a *packed* struct has no automatic padding | §6.3 |
-| **Fat pointer** | a pointer carried with a second word: for a trait value, the object and its vtable | §6.3 |
 | **Tagged union** | an enum with payloads stored as a tag (which variant is active) plus room for the largest payload | §6.3 |
 | **Opaque pointer** | LLVM's single pointer type `ptr`, which does not say what it points at | §6.3 |
 | **Undefined behaviour** | what C leaves without any answer, such as signed overflow; the optimizer may assume it never happens | §6.5.3 |
@@ -3359,10 +3245,7 @@ The terms this document assumes, grouped by the part of the compiler they belong
 | Term | What it means | Where |
 | :-- | :-- | :-- |
 | **GC** (garbage collector) | a runtime that finds and frees memory no one can reach. KSPL has none | §8.1 |
-| **Arena** | a memory region filled piece by piece and freed all at once; ksplc keeps its tree and tables in one | §8 |
 | **Bump allocation** | allocating by moving a counter forward inside a block, the cheapest allocation there is | §8.2 |
-| **ARC** (automatic reference counting) | a count of a value's owners, kept by calls the compiler inserts; the value is freed when the count reaches 0 | §12 |
-| **Retain / release** | the inserted calls that add one to and take one from a reference count | §12.1 |
 | **Weak reference** | a handle (`Weak_rc` / `Weak_arc`) that watches a value without owning it, used to break reference cycles | §8.3 |
 | **Dangling pointer / use after free / double free / leak** | a pointer to freed memory; reading or writing through one; freeing the same memory twice; memory never freed | §8.1, §11.2 |
 

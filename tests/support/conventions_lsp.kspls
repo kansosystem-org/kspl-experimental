@@ -6,6 +6,7 @@
 //< handle the names the client sends.
 //< Caution: **Do not put a table of copied names in here**: the canonical source is the
 //< implementation, and this file **only compares the two**.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -496,10 +497,85 @@ priv fn check_wind_back(arena: Arena$@)
     verdict.check_list("everything on the arena the LSP winds back is thrown away with it",
         seen.len, "globals", bad@, "")
 
+// ==========================================
+// The grammar colours the language's keywords, no more and no fewer **The canonical source is
+// `ksplc info keywords`** (read from the compiler's grammar); the VS Code grammar is a copy, in
+// JSON, which drifts silently: a removed word stays coloured, and a new one gets no colour.
+// Caution: **Compare in both directions**; the two drifts are separate failures.
+// ==========================================
+priv const tm_grammar: U8[] = ".vscode/extensions/kspl/tmLanguage.json"
+
+priv fn ksplc_keywords(arena: Arena$@): List<|U8[]|> //<
+    //< The words `ksplc info keywords` lists (each on a line of its own, indented under a group)
+    r: = ksplc_harness.ksplc_bare(U8[][]::{ "info", "keywords" })
+    $out: = List<|U8[]|>.new(arena)
+    for ln in r.out.lines(arena)
+        if ln.starts_with("  ") && ln.trim_spaces().len > 0
+            scan.push_unique(out@, ln.trim_spaces())
+    return out
+
+priv fn grammar_keywords(src: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The words the grammar names in the form `\b(a|b|c)\b`
+    //<
+    //< **Only this form counts**, and only whole words: a numeric suffix or a run of symbols
+    //< inside the brackets is no keyword.
+    $out: = List<|U8[]|>.new(arena)
+    for body in scan.find_all(src, "\\\\b(", ")\\\\b", arena)
+        for w in body.split('|', arena)
+            if w.len > 0 && word_only(w)
+                scan.push_unique(out@, w)
+    return out
+
+priv fn as_word_in(src: U8[], want: U8[]): Bool //< whether `want` stands in `src` as a whole word
+    $i: Sz = 0
+    for i + want.len <= src.len
+        at: = src.sub_from(i).find_str(want)
+        if at < 0
+            return false
+        from: = i + at
+        to: = from + want.len
+        if (from == 0 || !word_char(src[from - 1])) &&
+            (to >= src.len || !word_char(src[to]))
+            return true
+        i = from + 1
+    return false
+
+priv fn word_char(c: U8): Bool
+    return c.is_alpha() || c.is_digit() || c == '_'
+
+priv fn word_only(w: U8[]): Bool //< whether it is made of letters, digits and `_` alone
+    for c in w
+        if !word_char(c)
+            return false
+    return true
+
+priv fn check_keywords(arena: Arena$@)
+    $mine: = ksplc_keywords(arena)
+    src: = harness.read_under_root(tm_grammar)
+    $told: = grammar_keywords(src, arena)
+    $bad: = List<|U8[]|>.new(arena)
+    for w in told.slice()
+        if !scan.has(mine@, w)
+            bad
+                .push(arena.text().s(w).s(": the grammar colours it, and ksplc has no such word")
+                .take())
+    // **A keyword may be named outside the bracketed lists** (`\\bfn\\b` in a rule of its own),
+    // so this direction asks only that the word stand somewhere in the grammar as a whole word.
+    for w in mine.slice()
+        if !as_word_in(src, w)
+            bad
+                .push(arena.text().s(w).s(": a keyword of ksplc's the grammar does not colour")
+                .take())
+    if mine.len == 0 || told.len == 0
+        bad.push("could not read the keywords from `ksplc info keywords` or the grammar")
+    verdict.check_list("the VS Code grammar colours ksplc's keywords, no more and no fewer",
+        mine.len, "keywords", bad@, "")
+
 fn run(arena: Arena$@)
     check_recovery_wake(arena)
     check_body_views(arena)
     check_exclude(arena)
+    check_keywords(arena)
     check_wind_back(arena)
     check_cap_says_fires(arena)
     check_caps(arena)

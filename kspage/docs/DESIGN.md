@@ -4,50 +4,9 @@ This document says why kspage has the shape it has: each decision, its reasons, 
 
 **How a section reads**: it opens with the decision in plain words. Then come the details, the reasons, and the traps. Terms used without stopping are in "Words used in this document" below.
 
-## Contents
-
-* [Words used in this document](#words-used-in-this-document)
-* [What it is aimed at](#what-it-is-aimed-at)
-* [Why the three can be made one](#why-the-three-can-be-made-one)
-* [Why the folders are split by 'what they know'](#why-the-folders-are-split-by-what-they-know)
-* [What it does not hold](#what-it-does-not-hold)
-* [The body is not available to a screen reader](#the-body-is-not-available-to-a-screen-reader)
-* [How the built-in manual is written](#how-the-built-in-manual-is-written)
-* [Why the styles are kspage's own, not CSS](#why-the-styles-are-kspages-own-not-css)
-* [The core and the port](#the-core-and-the-port)
-* [The boundary between the core and the browser](#the-boundary-between-the-core-and-the-browser)
-* [The document model](#the-document-model)
-* [How text flows](#how-text-flows)
-* [How a grid and absolute coordinates are laid out](#how-a-grid-and-absolute-coordinates-are-laid-out)
-* [How the arrangements nest](#how-the-arrangements-nest)
-* [How the cursor is held](#how-the-cursor-is-held)
-* [The editor and the undo record](#the-editor-and-the-undo-record)
-* [Styles and their fields](#styles-and-their-fields)
-* [What layout recomputes every time](#what-layout-recomputes-every-time)
-* [Tables](#tables)
-* [Formulas in tables](#formulas-in-tables)
-* [Slides and frames](#slides-and-frames)
-* [Pages and printing](#pages-and-printing)
-* [Saving and loading the document](#saving-and-loading-the-document)
-* [A document's past lives in its files](#a-documents-past-lives-in-its-files)
-* [A style name holds no whitespace](#a-style-name-holds-no-whitespace)
-* [The wording on the screen](#the-wording-on-the-screen)
-* [The tools, the menus and the panels](#the-tools-the-menus-and-the-panels)
-* [What a document received is trusted with](#what-a-document-received-is-trusted-with)
-* [Opening, saving and writing back](#opening-saving-and-writing-back)
-* [More than one window, and opening from the desktop](#more-than-one-window-and-opening-from-the-desktop)
-* [Markdown, plain text and source](#markdown-plain-text-and-source)
-* [The local server reaches files, and nothing else](#the-local-server-reaches-files-and-nothing-else)
-* [How the page is checked](#how-the-page-is-checked)
-* [The screen and its controls](#the-screen-and-its-controls)
-* [Accepted limits (what is decided not to change)](#accepted-limits-what-is-decided-not-to-change)
-* [Further reading](#further-reading)
-
----
-
 ## Words used in this document
 
-kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `Editor`) are introduced in [kspage's "The terms and the types behind them"](../README.md#the-terms-and-the-types-behind-them). The table below explains the other words this document uses without stopping.
+kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `Editor`) are introduced in [kspage's "The terms and the types behind them"](../README.md#the-terms-and-the-types-behind-them). The table below explains the other words of kspage this document uses without stopping. The words every package shares (arena, Principle N and the rest) are in "Words used throughout" in [`docs/DESIGN.md`](../../docs/DESIGN.md#words-used-throughout); *gate* and the other words with one fixed meaning in every document are in "Terms of art" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art).
 
 | Word | What it means here |
 | :-- | :-- |
@@ -57,7 +16,7 @@ kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `
 | **canvas** | An HTML element that is a plain surface to paint on. kspage paints the whole body onto it itself |
 | **DOM** | The browser's tree of page elements (buttons, menus, text). The tools are DOM; the body is not |
 | **IME** | Input method editor: the OS tool that turns key presses into Japanese or Chinese characters. While the person is still choosing characters, the text is *being composed*; choosing ends it (the text is *committed*) |
-| **block** | A paragraph, a heading, a list item, a table, a row, a cell or a slide. All are one type (`Block`); only the style differs |
+| **block** | A paragraph, a heading, a list item, a table, a row, a cell or a slide. All are one type (`Block`); only the style differs. This is kspage's own word, not the block of source text that "Terms of art" names |
 | **run** | A stretch of text inside a block with one style (`Inline`). Making one word of a paragraph bold splits its run into three |
 | **style** | A named set of looks (typeface, size, colour, spacing) and an arrangement. Blocks and runs point at a style by its name |
 | **arrangement** | How a block's children are placed: *flow* (prose that wraps into lines), a *grid* (a table's rows and columns) or *absolute coordinates* (a slide, where each child has its own x and y) |
@@ -66,13 +25,10 @@ kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `
 | **box** | One piece of laid-out text, or a list marker, with its position and size. Drawing paints boxes |
 | **band** | A rectangle layout leaves for a fill (background), a rule (border line) or a shape |
 | **pen** | Layout's running state while it fills lines: where the next box goes, the current right edge, and the paragraph's settings |
-| **arena** | A block of memory from which many small pieces are taken and then freed all at once. A tree lives in one arena, so its pieces are never freed one by one |
 | **entry point** | A function another part calls into, such as a function JS calls in the wasm |
 | **hit-testing** | Working out which character a click landed on |
 | **the reckoning** | Solving every formula in the document to a value |
 | **the undo record** | The list of steps that undo and redo walk through |
-| **gate** | One check that CI runs and that can fail the build (a `make test-*` target) |
-| **Principle N** | One of the eight Development Principles in [`docs/DESIGN.md`](../../docs/DESIGN.md). Those cited here: 3 (a file stays under 1000 lines), 4 (one canonical source; a copy is checked against it), 5 (nothing "writable but ineffective"), 6 (one means to one purpose) |
 
 ## What it is aimed at
 

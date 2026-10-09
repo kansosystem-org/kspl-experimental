@@ -6,6 +6,7 @@
 //< only where it holds a `...` / `…`. **The grammar's canonical source is `ksplc/kspl.kspeg`**,
 //< read by the compiler itself. Then every fragment is compiled, and a whole program and an
 //< `// error` mark are held to the result (`tests/support/docsnippet_compile.kspls`).
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -26,7 +27,7 @@ priv fn parses(path: U8[], src: U8[]): Bool //<
     //< broken.
     io.write_file(path, src) catch
         return false
-    return harness.ksplc_bare(U8[][]::{ "fmt", path }).code == 0
+    return ksplc_harness.ksplc_bare(U8[][]::{ "fmt", path }).code == 0
 
 priv const mark_samples: scan.Sample[6] = ::{
     scan.Sample::{ .text = "x: U8[] = \"n\" // error: it cannot build a value", .hits = true },
@@ -103,9 +104,9 @@ fn main(): I32
     arena: = harness.begin(256 * 1024 * 1024)
     root: = harness.root()
     dir: = harness.sandbox("docsnippet") catch
-        return harness.fatal("cannot make a working directory")
+        return ksplc_harness.fatal("cannot make a working directory")
     docs: = harness.tracked() catch
-        return harness.fatal("cannot list the files git knows")
+        return ksplc_harness.fatal("cannot list the files git knows")
     $snippets: = List<|shape.Snippet|>.new(arena)
     for rel in docs
         if !rel.ends_with(".md")
@@ -115,8 +116,8 @@ fn main(): I32
         shape.collect(rel, text, snippets@, arena)
     // Not one item means the check looks at nothing.
     if snippets.len == 0
-        return harness.fatal("not one KSPL fence in the documents")
+        return ksplc_harness.fatal("not one KSPL fence in the documents")
     check_syntax(snippets@, dir, arena)
     check_marks_fire(arena)
     compile.run(snippets@, dir, arena)
-    return harness.finish()
+    return ksplc_harness.finish()

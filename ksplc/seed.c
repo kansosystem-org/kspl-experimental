@@ -23647,67 +23647,6 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "t. A term is explained where it first appears; the compiler's terms not explained here are in th"
     "e glossary, [`DESIGN.md` §14](DESIGN.md#14-the-glossary).\n"
     "\n"
-    "## Contents\n"
-    "\n"
-    "* [1. Introduction: ksplc is one binary holding every subcommand](#1-introduction-ksplc-is-one-b"
-    "inary-holding-every-subcommand)\n"
-    "* [2. The compiler (ksplc)](#2-the-compiler-ksplc)\n"
-    "  * [2.1 Basic use](#21-basic-use)\n"
-    "  * [2.2 Choosing the language of the output (`--to`)](#22-choosing-the-language-of-the-output--"
-    "-to)\n"
-    "    * [2.2.1 Naming the machine the output is for (`--machine`)](#221-naming-the-machine-the-out"
-    "put-is-for---machine)\n"
-    "  * [2.3 The other compiler options](#23-the-other-compiler-options)\n"
-    "  * [2.4 Compilation stops at 50 errors](#24-compilation-stops-at-50-errors)\n"
-    "  * [2.5 Running as a script (ksplc run)](#25-running-as-a-script-ksplc-run)\n"
-    "  * [2.6 Splitting the generated C into several translation units (`--split`)](#26-splitting-the"
-    "-generated-c-into-several-translation-units---split)\n"
-    "  * [2.7 The cache of the parse result](#27-the-cache-of-the-parse-result)\n"
-    "  * [2.8 What crosses an artifact's boundary (a map)](#28-what-crosses-an-artifacts-boundary-a-m"
-    "ap)\n"
-    "  * [2.9 Source crossing the boundary: where it is read from, and what is recorded](#29-source-c"
-    "rossing-the-boundary-where-it-is-read-from-and-what-is-recorded)\n"
-    "  * [2.10 Binaries crossing the boundary: a library shipped through its C interface](#210-binari"
-    "es-crossing-the-boundary-a-library-shipped-through-its-c-interface)\n"
-    "  * [2.11 Diagnostics a program reads (`--diagnostic-format`)](#211-diagnostics-a-program-reads-"
-    "--diagnostic-format)\n"
-    "  * [2.12 Building one executable (ksplc build)](#212-building-one-executable-ksplc-build)\n"
-    "* [3. The formatter (ksplc fmt)](#3-the-formatter-ksplc-fmt)\n"
-    "  * [3.1 Basic use](#31-basic-use)\n"
-    "  * [3.2 The formatting settings (`--style`)](#32-the-formatting-settings---style)\n"
-    "  * [3.3 Skipping what is already formatted](#33-skipping-what-is-already-formatted)\n"
-    "* [4. The language server (ksplc lsp)](#4-the-language-server-ksplc-lsp)\n"
-    "  * [4.1 The features supported](#41-the-features-supported)\n"
-    "  * [4.2 The settings in the VS Code extension](#42-the-settings-in-the-vs-code-extension)\n"
-    "  * [4.3 How code covered by `#cfg()` is handled](#43-how-code-covered-by-cfg-is-handled)\n"
-    "  * [4.4 Colouring by meaning (semanticTokens)](#44-colouring-by-meaning-semantictokens)\n"
-    "* [5. Static analysis and the linter (ksplc lint)](#5-static-analysis-and-the-linter-ksplc-lint)"
-    "\n"
-    "  * [5.1 Basic use](#51-basic-use)\n"
-    "  * [5.2 The diagnostics' four weights](#52-the-diagnostics-four-weights)\n"
-    "  * [5.3 Enabling, disabling or promoting a diagnostic to an error (`##lint` / `--lint` / `ksplc"
-    ".cfg`)](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)\n"
-    "  * [5.4 The list of diagnostic codes](#54-the-list-of-diagnostic-codes)\n"
-    "  * [5.5 The list of warnings (W)](#55-the-list-of-warnings-w)\n"
-    "  * [5.6 The list of information diagnostics (I)](#56-the-list-of-information-diagnostics-i)\n"
-    "  * [5.7 The list of hints (H)](#57-the-list-of-hints-h)\n"
-    "* [6. The project settings file (ksplc.cfg)](#6-the-project-settings-file-ksplccfg)\n"
-    "  * [6.1 How to write it](#61-how-to-write-it)\n"
-    "  * [6.2 The search and the range it applies to](#62-the-search-and-the-range-it-applies-to)\n"
-    "  * [6.3 An invalid setting is refused](#63-an-invalid-setting-is-refused)\n"
-    "  * [6.4 A package that names itself (`[package]`)](#64-a-package-that-names-itself-package)\n"
-    "* [7. Querying and tidying up (ksplc info / ksplc clean)](#7-querying-and-tidying-up-ksplc-info-"
-    "-ksplc-clean)\n"
-    "  * [7.1 ksplc info: reporting what ksplc resolved](#71-ksplc-info-reporting-what-ksplc-resolved"
-    ")\n"
-    "  * [7.2 ksplc clean: removing what was built](#72-ksplc-clean-removing-what-was-built)\n"
-    "  * [7.3 ksplc info keywords: the list of reserved words](#73-ksplc-info-keywords-the-list-of-re"
-    "served-words)\n"
-    "  * [7.4 How reserved words are gathered automatically and grouped](#74-how-reserved-words-are-g"
-    "athered-automatically-and-grouped)\n"
-    "  * [7.5 ksplc doc: what a file publishes, as a reference to read](#75-ksplc-doc-what-a-file-pub"
-    "lishes-as-a-reference-to-read)\n"
-    "\n"
     "---\n"
     "\n"
     "## 1. Introduction: ksplc is one binary holding every subcommand\n"
@@ -24413,26 +24352,6 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "ibrary built from KSPL crosses as C, holding its own runtime\" in [`../../docs/DESIGN.md`](../.."
     "/docs/DESIGN.md).\n"
     "\n"
-    "The diagram shows one vendor compiling `greet.kspls` once, writing both interfaces, and the two "
-    "kinds of customer each using one. The C compiler builds the library from the generated `greet.c`"
-    ".\n"
-    "\n"
-    "```mermaid\n"
-    "flowchart LR\n"
-    "    subgraph V[\"each vendor (one compilation)\"]\n"
-    "        G[\"ksplc --library=greet.h --library=greet_api.kspls greet.kspls greet.c\"] --> GH[\"gr"
-    "eet.h\"]\n"
-    "        G --> GK[\"greet_api.kspls\"]\n"
-    "        G --> GC[\"greet.c\"]\n"
-    "        GC -->|\"the C compiler\"| GA[\"libgreet.a / libgreet.so<br/>greet's runtime and std, pr"
-    "ivate\"]\n"
-    "    end\n"
-    "    GA --> C[\"a C program<br/>#include &quot;greet.h&quot;\"]\n"
-    "    GH --> C\n"
-    "    GA --> P[\"a KSPL program<br/>import &quot;greet_api&quot;\"]\n"
-    "    GK --> P\n"
-    "```\n"
-    "\n"
     "#### 2.10.1 Building a library (`--library`)\n"
     "\n"
     "With `--library=`, **only the `#export` functions have external linkage** in the generated C, wh"
@@ -24527,7 +24446,9 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "#### 2.10.3 Shipping a library and using it\n"
     "\n"
     "Here a vendor, `greet`, ships a library built from KSPL, and a C program and a KSPL program use "
-    "it. The first block is the vendor's source, which is not shipped.\n"
+    "it. One compilation writes the library's C and both interfaces; the vendor ships the built libra"
+    "ry with the interface each customer reads. The first block is the vendor's source, which is not "
+    "shipped.\n"
     "\n"
     "```kspls\n"
     "// greet.kspls (the vendor's; not shipped)\n"
@@ -24579,8 +24500,6 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "et.dll` beside it. Without `-static-libgcc` a DLL links MinGW's `libgcc_s_seh-1.dll` (the runtim"
     "e's thread-local data calls into it), and a customer's machine without MinGW cannot load the DLL"
     "; an executable takes these helpers in by default.\n"
-    "* **Any number of such libraries link into one program**, each with its own runtime: `main.c` ab"
-    "ove may link `-lgreet -lcount` from two vendors.\n"
     "\n"
     "#### 2.10.4 Writing out the libraries the program names (`--emit-libs`)\n"
     "\n"
@@ -25062,10 +24981,10 @@ static const uint8_t kspl_embed_data_kspl_ksplc_tools_explain_tools_spec[] =
     "**Source that does not parse gets an empty answer**: with no tree, colouring would be a guess, a"
     "nd while typing, the editor's syntax colouring carries the colours.\n"
     "\n"
-    "**A check holds the copies of the reserved-word list together.** VS Code's grammar (`tmLanguage."
-    "json`) and kspage cannot import ksplc, so each holds a copy of the words, which could drift unno"
-    "ticed. The canonical source is `ksplc info keywords`'s output, and `make test-keywords` holds th"
-    "e copies to it.\n"
+    "**A check holds the copy of the reserved-word list to its source.** VS Code's grammar (`tmLangua"
+    "ge.json`) cannot import ksplc, so it holds a copy of the words, which could drift unnoticed. The"
+    " canonical source is `ksplc info keywords`'s output, and `make test-conventions` holds the copy "
+    "to it, in both directions.\n"
     "\n"
     "---\n"
     "\n"
@@ -130500,7 +130419,6 @@ ksplc_main_Mode kspl_ksplc_main_Mode_new() {
 
   if (_mir_tmp_016) {
     kspl_ksplc_base_core_config.target = (ksplc_base_core_Target_backend)kspl_ksplc_base_core_Target_backend_llvm;
-    kspl_std_ds_List_std_lang_Slice_U8_Const_push(kspl_ksplc_base_core_config.defines, KSPL_STR(std_lang_Slice_U8, "llvm"));
   }
 
   else {
@@ -130575,7 +130493,7 @@ ksplc_main_Mode kspl_ksplc_main_Mode_new() {
   {
     KSPL_UNUSED I32 _for_idx_s2 = 0;
     for (; (Sz)_for_idx_s2 < _for_coll2->len; _for_idx_s2 += 1) {
-      std_lang_Slice_U8 spec = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll2, (Sz)_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)239)));
+      std_lang_Slice_U8 spec = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll2, (Sz)_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)236)));
       kspl_priv_ksplc_main_apply_lint_setting(spec);
     }
   }
@@ -130726,7 +130644,7 @@ ksplc_main_Mode kspl_ksplc_main_Mode_new() {
         {
           KSPL_UNUSED I32 _for_idx_s3 = 0;
           for (; (Sz)_for_idx_s3 < _for_coll3->len; _for_idx_s3 += 1) {
-            std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll3, (Sz)_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)314)));
+            std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll3, (Sz)_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)311)));
             KSPL_UNUSED std_lang_Writer _mir_tmp_038 = kspl_std_io_out();
             KSPL_UNUSED std_lang_Writer _mir_tmp_037 = ((_mir_tmp_038).vtable->s((_mir_tmp_038).obj, KSPL_STR(std_lang_Slice_U8, "  ")));
             KSPL_UNUSED std_lang_Writer _mir_tmp_036 = ((_mir_tmp_037).vtable->s((_mir_tmp_037).obj, f));
@@ -130845,7 +130763,7 @@ kspl_Void_Result_ksplc_pipeline_Compile_error kspl_ksplc_main_Mode_dispatch(kspl
     {
       KSPL_UNUSED I32 _for_idx_s1 = 0;
       for (; (Sz)_for_idx_s1 < _for_coll1->len; _for_idx_s1 += 1) {
-        std_lang_Slice_U8 f_path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll1, (Sz)_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)364)));
+        std_lang_Slice_U8 f_path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll1, (Sz)_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)361)));
         KSPL_UNUSED Bool _mir_tmp_011 = {0};
         if (to.len > (Sz)0) {
           _mir_tmp_011 = kspl_std_lang_Slice_U8_Const_equals(to, KSPL_STR(std_lang_Slice_U8, "kspls"));
@@ -130873,7 +130791,7 @@ kspl_Void_Result_ksplc_pipeline_Compile_error kspl_ksplc_main_Mode_dispatch(kspl
       {
         KSPL_UNUSED I32 _for_idx_s2 = 0;
         for (; (Sz)_for_idx_s2 < _for_coll2.len; _for_idx_s2 += 1) {
-          std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&_for_coll2, (Sz)_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)372)));
+          std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&_for_coll2, (Sz)_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)369)));
           KSPL_UNUSED std_lang_Writer _mir_tmp_021 = kspl_std_io_err();
           KSPL_UNUSED std_lang_Writer _mir_tmp_020 = ((_mir_tmp_021).vtable->s((_mir_tmp_021).obj, KSPL_STR(std_lang_Slice_U8, "  -> ")));
           KSPL_UNUSED std_lang_Writer _mir_tmp_019 = ((_mir_tmp_020).vtable->s((_mir_tmp_020).obj, f));
@@ -131327,7 +131245,7 @@ static KSPL_UNUSED kspl_Void_Result_ksplc_pipeline_Compile_error kspl_priv_ksplc
   {
     KSPL_UNUSED I32 _for_idx_s1 = 0;
     for (; (Sz)_for_idx_s1 < _for_coll1->len; _for_idx_s1 += 1) {
-      std_lang_Slice_U8 path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll1, (Sz)_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)580)));
+      std_lang_Slice_U8 path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(_for_coll1, (Sz)_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)577)));
       KSPL_UNUSED ksplc_base_ast_Ast_node *_mir_tmp_008 = compiler->root_file;
       KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *_mir_tmp_009 = compiler->sema;
       KSPL_UNUSED ksplc_tools_interface_Form _mir_tmp_010 = kspl_ksplc_tools_interface_form_of(path);

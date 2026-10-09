@@ -8,12 +8,6 @@ A web page cannot open a file on your computer by its path. This document sets h
 
 **Both ends are built**: `kssrv --local` answers everything below, and the page asks from `kspage/port/web/local.js`.
 
-* [Who asks whom](#who-asks-whom)
-* [Where it listens](#where-it-listens) — loopback only, the token, the root
-* [Only three things can be asked for](#only-three-things-can-be-asked-for) — files, watching, holding and stopping
-* [How it refuses](#how-it-refuses)
-* [When it is not connected](#when-it-is-not-connected)
-
 ## Who asks whom
 
 The page asks and the server answers; nothing goes the other way. The picture shows the two steps, both on one machine.

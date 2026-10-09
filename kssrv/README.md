@@ -32,7 +32,7 @@ The rules of local use are [`docs/SPEC-local-server.md`](../docs/SPEC-local-serv
 | [`kssrv/api.kspls`](api.kspls) | The endpoints under `/api/` and their routing table |
 | [`kssrv/pilot.kspls`](pilot.kspls) | How the steering returned to the car (`POST /api/car`) is decided |
 | [`kssrv/tests/`](tests/) | The tests `make test` runs ("The tests" below) |
-| [`kssrv/docs/`](docs/README.md) | The client agreement, the design and the plan ("Further reading" below) |
+| [`kssrv/docs/`](docs/) | The client agreement, the design and the plan ("Further reading" below) |
 
 ## What the console says
 

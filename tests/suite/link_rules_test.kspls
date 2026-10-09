@@ -7,6 +7,7 @@
 //< a stack too small dies only on a deep recursion. So both are asked as UCRT64 through a stand-in
 //< C compiler naming its target (both decide by `CC -dumpmachine`), and once as this host is.
 //< Caution: **Do not parse the Makefile here**: make answers `LDLIBS` itself (`-p`).
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -132,7 +133,7 @@ priv fn stand_in_src(arena: Arena$@): U8[] //< a C compiler that only names a ta
         .take()
 
 priv fn info(topic: U8[]): verdict.Run_out //< what `ksplc info <topic>` answers
-    return harness.ksplc_bare(U8[][]::{ "info", topic })
+    return ksplc_harness.ksplc_bare(U8[][]::{ "info", topic })
 
 priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
     //< Builds the stand-in with the host's compiler and returns it; empty where it cannot
@@ -141,13 +142,13 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
     exe: = fs.join(work, "stand_in.exe", arena)
     io.write_file(src, stand_in_src(arena)) catch
         return ""
-    gen: = harness.ksplc(U8[][]::{ src, c })
+    gen: = ksplc_harness.ksplc(U8[][]::{ src, c })
     if !verdict.check("the stand-in C compiler compiles", gen.code == 0, gen.out)
         return ""
     libs: = info("link-libs")
     flags: = info("exe-flags")
     $argv: = List<|U8[]|>.new(arena)
-    argv.push(harness.cc())
+    argv.push(ksplc_harness.cc())
     argv.push("-std=c99")
     argv.push(c)
     for w in words(libs.out, arena)
@@ -156,7 +157,7 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
         argv.push(w)
     argv.push("-o")
     argv.push(exe)
-    linked: = harness.run(argv.slice())
+    linked: = ksplc_harness.run(argv.slice())
     if !verdict.check("the stand-in C compiler links", linked.code == 0, linked.out)
         return ""
     return exe
@@ -211,11 +212,11 @@ fn main(): I32
     arena: = harness.begin(16 * 1024 * 1024)
     check_fires(arena)
     work: = harness.sandbox("link-rules") catch
-        return harness.fatal("cannot make a working directory")
-    host_cc: = harness.cc()
+        return ksplc_harness.fatal("cannot make a working directory")
+    host_cc: = ksplc_harness.cc()
     compare("this host", host_cc, "", U8[][]::{ .ptr = null, .len = 0 }, arena)
     stand_in: = build_stand_in(work, arena)
     if stand_in.len == 0
-        return harness.finish()
+        return ksplc_harness.finish()
     compare(windows_triple, stand_in, windows_triple, U8[][]::windows_env, arena)
-    return harness.finish()
+    return ksplc_harness.finish()

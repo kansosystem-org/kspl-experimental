@@ -19,7 +19,11 @@ enum Shard //< which job runs a gate on Linux and Windows
     //< more on Windows), so measure before adding one ("Where CI's time goes" in `docs/DESIGN.md`).
     core //< the first of the two jobs both platforms split `ci` into
     rest //< the second
-    linux //< the Linux job alone: only its image holds the tool (`make ci-linux-only`)
+    linux //<
+        //< The Linux job alone (`make ci-linux-only`)
+        //<
+        //< Either only its image holds the tool, or the answer cannot differ by platform, so a
+        //< second platform would pay for the same answer.
     none //< neither: macOS alone runs it (`Gate.macos`)
 
 enum Par //< how `make` is asked to run one gate's targets
@@ -48,17 +52,22 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
 // self-host builds stage2, which perf-log measures again). **Formatting comes before lint**: a
 // file that is not formatted fails the formatter's check with the reason, where lint would only
 // name a line.
-const gates: Gate[30] = ::{
+const gates: Gate[32] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
         .shard = .core, .macos = true },
-    Gate::{ .log = "debug", .args = "debug", .par = .serial, .verdict = true, .shard = .rest,
+    // **Only macOS runs every package's tests in one program**: Linux and Windows run each
+    // package's own `make test` from a copy (`test-extract`, in `suites_a`), which macOS does not.
+    Gate::{ .log = "debug", .args = "debug", .par = .serial, .verdict = true, .shard = .none,
         .macos = true },
-    Gate::{ .log = "fmt_tree", .args = "test-fmt-tree", .par = .serial, .verdict = true,
+    // tools/ has tests but no `Makefile`, so no copy runs them; `debug` holds them on macOS.
+    Gate::{ .log = "debug_tools", .args = "debug-tools", .par = .serial, .verdict = true,
         .shard = .rest, .macos = false },
+    Gate::{ .log = "fmt_tree", .args = "test-fmt-tree", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false },
     Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .rest,
         .macos = true },
     Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = .parallel, .verdict = true,
-        .shard = .rest, .macos = false },
+        .shard = .linux, .macos = false },
     // **Only this `-j` shrinks the suites' time**, and the order they start in settles it (`SUITES`
     // in `mk/test.mk`, longest first; the halves are cut at `SUITES_B` there). Caution: **keep
     // `--output-sync=target`**, or one suite's `RESULT:` lines scatter among another's.
@@ -74,12 +83,15 @@ const gates: Gate[30] = ::{
         .macos = true },
     // On a fall, remake the record with `make surface` and commit it with its diff.
     Gate::{ .log = "surface", .args = "test-surface", .par = .serial, .verdict = true,
-        .shard = .core, .macos = false },
+        .shard = .linux, .macos = false },
     // The tour is generated from its program; `make tour` remakes it.
-    Gate::{ .log = "docs", .args = "test-docs", .par = .serial, .verdict = true, .shard = .core,
+    Gate::{ .log = "docs", .args = "test-docs", .par = .serial, .verdict = true, .shard = .linux,
         .macos = false },
     Gate::{ .log = "suites_b", .args = "test-suites-b", .par = .synced, .verdict = false,
         .shard = .rest, .macos = false },
+    // The suites that read or translate the tree's text (`SUITES_TEXT` in `mk/test.mk`).
+    Gate::{ .log = "suites_text", .args = "test-suites-text", .par = .synced, .verdict = false,
+        .shard = .linux, .macos = false },
     // **Only macOS runs it**: Linux and Windows reach the same training check through
     // `test-extract` (ksai's own `make test`), which macOS does not run.
     Gate::{ .log = "run", .args = "run", .par = .serial, .verdict = true, .shard = .none,
@@ -92,7 +104,8 @@ const gates: Gate[30] = ::{
     Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = .serial, .verdict = true,
         .shard = .rest, .macos = true },
     // Peak memory alone settles it; the time is only recorded (`tests/tools/perf_guard.kspls`).
-    Gate::{ .log = "perf", .args = "perf-log", .par = .serial, .verdict = false, .shard = .rest,
+    // **Linux alone**: the baseline is Linux's, so another platform's numbers say nothing.
+    Gate::{ .log = "perf", .args = "perf-log", .par = .serial, .verdict = false, .shard = .linux,
         .macos = false },
     // macOS runs these of ksplc's own suites, which the jobs above reach through `suites_a`. It
     // leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps what
@@ -127,8 +140,8 @@ const gates: Gate[30] = ::{
         .par = .serial, .verdict = true, .shard = .linux, .macos = false },
     // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
     // a link shows whether the FFI is right.
-    Gate::{ .log = "debug_blas", .args = "BLAS=1 debug", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false },
+    Gate::{ .log = "blas", .args = "test-blas", .par = .serial, .verdict = true, .shard = .linux,
+        .macos = false },
     Gate::{ .log = "race", .args = "test-race", .par = .serial, .verdict = true, .shard = .linux,
         .macos = false },
     // Needs no tool of the image's: it is here because Linux's minute costs least, and the release

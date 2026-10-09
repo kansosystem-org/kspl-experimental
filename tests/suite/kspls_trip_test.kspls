@@ -3,8 +3,9 @@
 //< Every tracked source goes into the other notation and back, byte for byte. **It reads the whole
 //< tree**, so it lives here; ksplc's own `kspls` suite tests the notation itself.
 //< Caution: **Samples alone are not enough**: the question is whether the repository's sources
-//< survive the round trip (Principle 8). **The steps run as batches** (`harness.run_all`); one
-//< process at a time is far too slow.
+//< survive the round trip (Principle 8). **The steps run as batches**
+//< (`ksplc_harness.run_all`); one process at a time is far too slow.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -30,7 +31,7 @@ priv fn trip_path(work: U8[], step: Sz, index: Sz, ext: U8[], arena: Arena$@): U
 priv fn spell_job(path: U8[], to: U8[], arena: Arena$@): subproc.Job //<
     //< The child that writes `path` in the `to` notation
     $argv: = List<|U8[]|>.new(arena)
-    argv.push(harness.ksplc_exe())
+    argv.push(ksplc_harness.ksplc_exe())
     argv.push("fmt")
     argv.push(arena.text().s("--to=\{to\}").take())
     argv.push(path)
@@ -53,7 +54,8 @@ priv fn spell_all(work: U8[], step: Sz, todo: List<|Sz|>@, bodies: U8[][], from_
             ok = false
         placed.push(ok)
         jobs.push(spell_job(path, to[k], arena))
-    rs: = harness.run_all(jobs.slice(), arena.text().s("kspls_trip\{step\}").take())
+    rs: = ksplc_harness.run_all(jobs.slice(),
+        arena.text().s("kspls_trip\{step\}").take())
     for k in Range.asc(todo.len)
         r: = rs.get(k)
         out.push("" if !placed.get(k) || r.code != 0 else r.out)
@@ -174,7 +176,7 @@ priv fn check_round_trip(work: U8[], arena: Arena$@)
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     work: = harness.sandbox("kspls_trip") catch
-        return harness.fatal("cannot make a working directory")
+        return ksplc_harness.fatal("cannot make a working directory")
     check_parting(arena)
     check_round_trip(work, arena)
-    return harness.finish()
+    return ksplc_harness.finish()

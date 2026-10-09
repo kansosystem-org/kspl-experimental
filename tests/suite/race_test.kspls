@@ -8,6 +8,7 @@
 //< sanitizer); elsewhere a C compiler without it gives a `SKIP` line, never a silent pass.
 //< Caution: **A file that starts a thread is compiled into a program here or named in `left_out`**,
 //< so a new one cannot stay outside the gate unseen.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "ksplc/tests/support/lsp_client"
 import "std/chars"
 import "std/ds" { List }
@@ -161,7 +162,7 @@ priv fn words_of(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     //< Appends what `ksplc info <topic>` answers, word by word
     //<
     //< Caution: **Do not copy the link words here**; ksplc knows them.
-    r: = harness.run(U8[][]::{ harness.ksplc_exe(), "info", topic })
+    r: = ksplc_harness.run(U8[][]::{ ksplc_harness.ksplc_exe(), "info", topic })
     if r.code != 0
         return false
     for w in r.out.trim_spaces().split(' ', arena)
@@ -176,15 +177,15 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Bui
     c: = arena.text().s(exe).s(".c").take()
     libs: = arena.text().s(exe).s(".libs").take()
     deps: = arena.text().s(exe).s(".deps").take()
-    gen: = harness.run_in(U8[][]::{ harness.ksplc_exe(),
-        arena.text().s("--std-dir=").s(harness.std_dir()).take(),
+    gen: = ksplc_harness.run_in(U8[][]::{ ksplc_harness.ksplc_exe(),
+        arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take(),
         arena.text().s("--pkg-src-dir=").s(harness.root()).take(),
         arena.text().s("--emit-libs=").s(libs).take(),
         arena.text().s("--emit-deps=").s(deps).take(), entry, c }, dir)
     if gen.code != 0
         return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(gen.out).take() }
     $argv: = List<|U8[]|>.new(arena)
-    argv.push(harness.cc())
+    argv.push(ksplc_harness.cc())
     for f in tsan_cflags
         argv.push(f)
     argv.push(opt)
@@ -194,7 +195,7 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Bui
         return Built::{ .why = "the link words cannot be asked of ksplc" }
     argv.push("-o")
     argv.push(exe)
-    linked: = harness.run(argv.slice())
+    linked: = ksplc_harness.run(argv.slice())
     if linked.code != 0
         return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
     listed: = io.read_file(deps) catch
@@ -284,10 +285,11 @@ priv fn sanitizer_runs(work: U8[], arena: Arena$@): U8[] //<
     exe: = fs.join(work, "probe.exe", arena)
     io.write_file(c, "int main(void) { return 0; }\n") catch
         return "cannot write the probe"
-    built: = harness.run(U8[][]::{ harness.cc(), "-fsanitize=thread", c, "-o", exe })
+    built: = ksplc_harness
+        .run(U8[][]::{ ksplc_harness.cc(), "-fsanitize=thread", c, "-o", exe })
     if built.code != 0
         return built.out
-    ran: = harness.run(U8[][]::{ exe })
+    ran: = ksplc_harness.run(U8[][]::{ exe })
     return ("" if ran.code == 0
         else arena.text().s("it builds but does not run:\n").s(ran.out).take())
 
@@ -305,7 +307,7 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     fs.mkdir_all(log_dir) catch {}
     sys.set_env("TSAN_OPTIONS",
         arena.text().s("log_path=").s(fs.join(log_dir, "tsan", arena)).take())
-    harness.run_in(U8[][]::{ b.exe }, work)
+    ksplc_harness.run_in(U8[][]::{ b.exe }, work)
     sys.unset_env("TSAN_OPTIONS")
     verdict.check("a race written on purpose is reported", reports_in(log_dir, arena).len > 0,
         "the program built with the sanitizer ran and nothing was reported")
@@ -321,8 +323,9 @@ priv fn race_tests(work: U8[], deps: Str_builder$@, runs: List<|Raced|>$@, arena
         build_all(std_name, "std", U8[][]::{ "std/tests/main.kspls" }, work, deps, arena)
     if std_exes.len > 0
         runs
-            .push(Raced::{ .name = std_name, .dir = harness.std_dir(),
-            .argv = kept(U8[][]::{ std_exes.get(0), harness.ksplc_exe() }, arena),
+            .push(Raced::{ .name = std_name, .dir = ksplc_harness.std_dir(),
+            .argv =
+            kept(U8[][]::{ std_exes.get(0), ksplc_harness.ksplc_exe() }, arena),
             .log_dir = fs.join(work, "std_log", arena), .env = pkg_env(arena) })
     ksplc_name: = "ksplc's own tests run with no data race"
     ksplc_exes: =
@@ -345,7 +348,7 @@ priv fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto t
 
 priv fn pkg_env(arena: Arena$@): U8[][] //<
     //< What a package's tests that start a child compiler, or name another package, find them by
-    return kept(U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(harness.std_dir()).take(),
+    return kept(U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take(),
         arena.text().s("KSPLC_PKG_SRC_DIR=").s(harness.root()).take() }, arena)
 
 priv fn build_all(name: U8[], pkg: U8[], entries: U8[][], work: U8[], deps: Str_builder$@,
@@ -470,7 +473,7 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
     $faults: = List<|U8[]|>.new(arena)
     argv: =
         sanitized(log_dir,
-        U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(harness.std_dir()).take() },
+        U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take() },
         U8[][]::{ exe, "lsp" }, arena)
     $c: = jsonrpc.spawn(argv, top) catch
         faults.push("the server cannot be started")
@@ -563,7 +566,7 @@ fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     check_reading_fires(arena)
     work: = harness.sandbox("race") catch
-        return harness.fatal("cannot make a working directory")
+        return ksplc_harness.fatal("cannot make a working directory")
     said: = sanitizer_runs(work, arena)
     if said.len > 0
         if sys.get_env("KANSO_REQUIRE_TSAN").unwrap_or("").equals("1")
@@ -574,7 +577,7 @@ fn main(): I32
         else
             verdict.skip_check("the programs that start threads, raced",
                 arena.text().s("the C compiler cannot build with ThreadSanitizer: ").s(said).take())
-        return harness.finish()
+        return ksplc_harness.finish()
     check_fires(work, arena)
     $deps: = Str_builder.new()
     defer deps.free()
@@ -585,4 +588,4 @@ fn main(): I32
     race_lsp(work, deps@, arena)
     run_all_raced(runs@, work, arena)
     check_covered(deps.slice(), arena)
-    return harness.finish()
+    return ksplc_harness.finish()

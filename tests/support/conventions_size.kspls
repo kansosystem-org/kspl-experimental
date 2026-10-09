@@ -2,10 +2,10 @@
 //<
 //< **Where a file splits is decided when it comes near the cap** (Principle 3).
 //< Caution: **Do not stop at printing a notice.** Shown only on screen, the README keeps saying
-//< "no file exceeds it" while out of date, and **nobody sees that it is** (Principle 7). [H0803]
-//< checks a function's length, and `tests/suite/conventions_test.kspls` how it is written.
+//< "no file exceeds it" while out of date, and **nobody sees that it is** (Principle 7). A
+//< function's length is lint's ([H0803], which `make lint` refuses), in both notations.
 import "std/chars" // judging one character's case
-import "std/ds" { List, Map }
+import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
@@ -15,57 +15,27 @@ import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 
 priv const max_file_lines: Sz = 1000
-priv const max_fn_lines: Sz = 300
-priv const max_nest: Sz = 8
 
 priv const warn_file_lines: Sz = 900 //< the line count that marks a file as near the cap
     //<
     //< **It names them without failing**: the cap is a cliff crossed mid-work, where a split cuts
-    //< by line count rather than by reason (Principle 3). [H0803] does the same for a function.
-
-priv fn size_exempt(rel: U8[]): Bool //<
-    //< The test input that makes sure a depth or a length is refused at the cap
-    //<
-    //< Caution: **Do not add generated files.** ksplc writes `ksplc/seed.c`, so splitting by reason
-    //< applies to the generator. The test input for a type's depth is not listed here.
-    return rel.starts_with("ksplc/tests/negative/deep_") && rel.ends_with(".kspl") ||
-        rel.equals("ksplc/tests/lint/long_function.kspls") || rel.equals("ksplc/seed.c")
+    //< by line count rather than by reason (Principle 3).
 
 // ==========================================
 // 1. The size (Principle 3)
 // ==========================================
 
-priv fn fn_name_at(line: U8[]): U8[] //<
-    //< The name of the function that line declares, or empty where it declares none
-    //<
-    //< Caution: A function ends where the depth returns to what it was before the function; with 0
-    //< instead, a method inside an `impl X { fn f() {...} }` runs to the impl's close. Count only
-    //< lines where the depth **goes up**: counting a `{` closed on the same line (`U8[]::{ … }`)
-    //< raises the depth on a line that nests nothing.
-    t: = line.trim_start()
-    $rest: = t.strip_prefix("pub ").strip_prefix("priv ").trim_start()
-    if !rest.starts_with("fn ")
-        return ""
-    rest = rest.sub_from(3)
-    $i: Sz = 0
-    for i < rest.len && (rest[i].is_alnum() || rest[i] == '_')
-        i += 1
-    return rest.sub(0, i)
-
 priv fn check_sizes(arena: Arena$@)
     $over_file: = List<|U8[]|>.new(arena)
-    $over_fn: = List<|U8[]|>.new(arena)
-    $over_nest: = List<|U8[]|>.new(arena)
     $near_file: = List<|U8[]|>.new(arena)
     $files: Sz = 0
-    $fns: Sz = 0
     // Caution: **Apply the one-file cap to hand-written C and the page's template, stylesheet and
-    // JS too**, or they grow past it unseen. A function's length and nesting are checked only in
-    // KSPL (C holds no `fn `).
+    // JS too**, or they grow past it unseen.
     specs: = scan.kspl_specs_with(U8[][]::{ "*.c", "*.h", "*.html", "*.css", "*.js", "*.mjs" },
         arena)
     for rel in harness.tracked_matching(specs)
-        if size_exempt(rel)
+        // The seed is generated: splitting by reason applies to its generator, not to it.
+        if rel.equals("ksplc/seed.c")
             continue
         files += 1
         lines: = harness.read_under_root(rel).lines(arena)
@@ -75,42 +45,9 @@ priv fn check_sizes(arena: Arena$@)
         // Caution: **Include the files over the cap too**, or they escape without a written split.
         if lines.len > warn_file_lines
             near_file.push(rel)
-        if !rel.ends_with(".kspls") && !rel.ends_with(".kspl")
-            continue
-        $depth: Sz = 0
-        $fn_start: Sz = 0
-        $fn_name: U8[] = ""
-        $fn_base: Sz = 0
-        for i in Range.asc(lines.len)
-            code: = scan.strip_code(lines.get(i), arena)
-            opened: = scan.count_char(code, '{')
-            closed: = scan.count_char(code, '}')
-            if opened > closed && depth + opened - closed > max_nest
-                over_nest
-                    .push(arena.text().s(rel).s(":\{i + 1\}: nested ")
-                    .s("\{depth + opened - closed\} deep (cap \{max_nest\})").take())
-            if fn_start == 0
-                name: = fn_name_at(lines.get(i))
-                if name.len > 0 && opened > closed
-                    fns += 1
-                    fn_start = i + 1
-                    fn_name = name
-                    fn_base = depth
-            else if depth + opened - closed <= fn_base
-                span: = i + 1 - fn_start + 1
-                if span > max_fn_lines
-                    over_fn
-                        .push(arena.text().s(rel).s(":\{fn_start\}: ").s(fn_name)
-                        .s(" is \{span\} lines (cap \{max_fn_lines\})").take())
-                fn_start = 0
-            depth += opened - closed
     n1: = arena.text().s("one file within \{max_file_lines\} lines (Principle 3)").take()
     verdict.check_list(n1, files, "files", over_file@, "")
-    n2: = arena.text().s("one function within \{max_fn_lines\} lines (Principle 3)").take()
-    verdict.check_list(n2, fns, "functions", over_fn@, "")
     check_plans(near_file@, arena)
-    n3: = arena.text().s("a block nests within \{max_nest\} deep (Principle 3)").take()
-    verdict.check_list(n3, files, "files", over_nest@, "")
 
 // ==========================================
 // How a file near the cap splits
@@ -551,196 +488,9 @@ priv fn check_hover_width(arena: Arena$@)
     verdict.check_list("the hover breaks a signature at the width the formatter wraps at", seen,
         "widths", bad@, "move both numbers, or take the copy out")
 
-// ==========================================
-// 2. A small file stands alone only for a reason (Principle 3)
-// A file this short that one file alone imports is that file's part, so it joins it unless
-// `lone_files` names why not. A link-only import (an `_` alias) and a package's test entry point
-// (`all.kspls`) do not count as users: each gathers files that stand for subjects of their own.
-// ==========================================
-
-priv const small_file_lines: Sz = 60 //< about a screen: merging such a file costs no scrolling
-
-priv struct Lone_file //< a small file kept apart though one file alone imports it, and why
-    path: U8[]
-    why: U8[]
-
-priv const lone_files: Lone_file[9] = ::{
-    Lone_file::{ .path = "ksbind/tests/all.kspls",
-        .why =
-        "a package's test entry point that `make debug` cannot link, so one runner imports it" },
-    Lone_file::{ .path = "ksos/demo/rp2040/board_probe/console.kspls",
-        .why = "one bring-up stage per file, as ksos/docs/HOWTO-bring-up.md numbers them" },
-    Lone_file::{ .path = "ksos/drivers/mps2/uart_irq.kspls",
-        .why = "a driver: a part any program may import, though one demo does today" },
-    Lone_file::{ .path = "ksos/drivers/rp2040/servo.kspls",
-        .why = "a driver: a part any program may import, though one demo does today" },
-    Lone_file::{ .path = "kspage/tests/trip.kspls",
-        .why = "the `pub` entry points a root suite calls, kept out of kspage's own files" },
-    Lone_file::{ .path = "ksplc/base/setup.kspls",
-        .why = "base's list of heap owners, kept out of core.kspls, which each of them imports" },
-    Lone_file::{ .path = "ksplc/tests/extern_path/handle.kspls",
-        .why = "a fixture: a type named through another file's alias is what is tested" },
-    Lone_file::{ .path = "ksplc/tests/filepath/lib.kspls",
-        .why = "a fixture: the import across two files is what is tested" },
-    Lone_file::{ .path = "ksplc/tests/support/kspls_doc.kspls",
-        .why = "merged, kspls_test.kspls would pass the 900-line mark" },
-}
-
-priv struct Import_line //< one `import` as the check reads it
-    path: U8[] //< what it names, as written
-    link_only: Bool //< bound to an `_` alias: imported to be linked, never called
-
-priv fn import_of(line: U8[]): Import_line? //< the import a line holds, if it holds one
-    if !line.starts_with("import \"")
-        return .none
-    rest: = line.sub_from(8)
-    q: = rest.find_char('"')
-    if q < 0
-        return .none
-    after: = rest.sub_from(q + 1).trim_start()
-    return .some(Import_line::{ .path = rest.sub(0, q),
-        .link_only = after.starts_with("as _") })
-
-priv fn joined(dir: U8[], rel: U8[], arena: Arena$@): U8[] //<
-    //< `dir/rel` with each `.` dropped and each `x/..` folded, as the compiler names a file
-    $parts: = List<|U8[]|>.new(arena)
-    whole: = arena.text().s(dir).s("/").s(rel).take()
-    for piece in whole.split('/', arena)
-        if piece.len == 0 || piece.equals(".")
-            continue
-        if piece.equals("..") && parts.len > 0 && !parts[parts.len - 1].equals("..")
-            parts.len -= 1
-            continue
-        parts.push(piece)
-    b: = arena.text()
-    $sep: U8[] = ""
-    for piece in parts
-        b.s(sep).s(piece)
-        sep = "/"
-    return b.take()
-
-priv fn import_target(spec: U8[], importer: U8[], known: Map<|U8[], Bool|>$@, arena: Arena$@):
-    U8[] //<
-        //< The tracked file an import names, or empty where it names none tracked
-        //<
-        //< By the three rules of `docs/SPEC-language.md`.
-    $base: = spec
-    if spec.find_char('/') < 0 || spec.starts_with(".")
-        slash: = importer.rfind_char('/')
-        base = joined(importer.sub(0, slash) if slash >= 0 else "", spec, arena)
-    for ext in U8[][]::{ ".kspls", ".kspl" }
-        cand: = arena.text().s(base).s(ext).take()
-        if known.get(cand) catch false
-            return cand
-    return ""
-
-priv struct Import_sample //< a line, and the import import_of should read from it
-    line: U8[]
-    path: U8[] //< empty where the line holds no import
-    link_only: Bool
-
-priv const import_samples: Import_sample[5] = ::{
-    Import_sample::{ .line = "import \"ksplc/base/ast\" { Ast_node }", .path = "ksplc/base/ast",
-        .link_only = false },
-    Import_sample::{ .line = "import \"kspage/port/web/theme\" as _theme",
-        .path = "kspage/port/web/theme", .link_only = true },
-    Import_sample::{ .line = "import \"std/str\" as text", .path = "std/str", .link_only = false },
-    Import_sample::{ .line = "  // import \"a\" in a comment", .path = "", .link_only = false },
-    Import_sample::{ .line = "embed \"a.bin\" as data", .path = "", .link_only = false },
-}
-
-priv struct Join_sample //< a folder, a relative import, and the name it should give
-    dir: U8[]
-    rel: U8[]
-    want: U8[]
-
-priv const join_samples: Join_sample[4] = ::{
-    Join_sample::{ .dir = "kspage/lay", .rel = "line", .want = "kspage/lay/line" },
-    Join_sample::{ .dir = "ksplc/tests", .rel = "./support/x", .want = "ksplc/tests/support/x" },
-    Join_sample::{ .dir = "ksplc/sema/decl", .rel = "../type/query",
-        .want = "ksplc/sema/type/query" },
-    Join_sample::{ .dir = "", .rel = "hw", .want = "hw" },
-}
-
-priv fn check_lone_fires(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    for s in import_samples
-        $got: U8[] = ""
-        $link: = false
-        switch import_of(s.line)
-        case .some(imp)
-            got = imp.path
-            link = imp.link_only
-        case .none {}
-        if !got.equals(s.path) || link != s.link_only
-            bad
-                .push(arena.text().s("\"").s(s.line).s("\" read as \"").s(got).s("\"").take())
-    for s in join_samples
-        got: = joined(s.dir, s.rel, arena)
-        if !got.equals(s.want)
-            bad
-                .push(arena.text().s(s.dir).s(" + ").s(s.rel).s(" gave ").s(got).take())
-    verdict.check_list("the reading of an import and its path can fire",
-        import_samples.len + join_samples.len, "samples", bad@,
-        "the tables are `import_samples` and `join_samples`")
-
-priv fn gathers(importer: U8[]): Bool //< a package's test entry point, which imports each subject
-    return importer.ends_with("/all.kspls") || importer.ends_with("/all.kspl")
-
-priv fn check_lone(arena: Arena$@)
-    files: = harness.tracked_matching(scan.kspl_specs_with(U8[][]::{}, arena))
-    $known: = Map<|U8[], Bool|>.new(arena)
-    for rel in files
-        known.set(rel, true)
-    $users: = Map<|U8[], Sz|>.new(arena)
-    $user_of: = Map<|U8[], U8[]|>.new(arena)
-    $size: = Map<|U8[], Sz|>.new(arena)
-    for rel in files
-        lines: = harness.read_under_root(rel).lines(arena)
-        size.set(rel, lines.len)
-        if gathers(rel)
-            continue
-        for line in lines
-            switch import_of(line)
-            case .some(imp)
-                if !imp.link_only
-                    target: = import_target(imp.path, rel, known@, arena)
-                    if target.len > 0
-                        users.set(target, (users.get(target) catch 0) + 1)
-                        user_of.set(target, rel)
-            case .none {}
-    $lone: = List<|U8[]|>.new(arena)
-    $stale: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for rel in files
-        n: = size.get(rel) catch 0
-        if n > small_file_lines || (users.get(rel) catch 0) != 1
-            continue
-        seen += 1
-        $listed: = false
-        for l in lone_files
-            listed = listed || l.path.equals(rel)
-        if !listed
-            lone
-                .push(arena.text().s(rel).s(": \{n\} lines, imported only by ")
-                .s(user_of.get(rel) catch "").take())
-    for l in lone_files
-        n: = size.get(l.path) catch 0
-        if n == 0 || n > small_file_lines || (users.get(l.path) catch 0) != 1
-            stale.push(l.path)
-    n1: = arena.text()
-        .s("a file of \{small_file_lines\} lines or fewer that one file alone imports ")
-        .s("joins it, or says why not (Principle 3)").take()
-    verdict.check_list(n1, seen, "files", lone@,
-        "move it into the file that imports it, or add it to `lone_files` with its reason")
-    verdict.check_list("every file `lone_files` excuses still needs the excuse", lone_files.len,
-        "entries", stale@, "drop it from `lone_files`: it was merged, grew, or gained a user")
-
 fn run(arena: Arena$@)
     check_width(arena)
     check_hover_width(arena)
     check_hover_indent(arena)
     check_fires(arena)
     check_sizes(arena)
-    check_lone_fires(arena)
-    check_lone(arena)

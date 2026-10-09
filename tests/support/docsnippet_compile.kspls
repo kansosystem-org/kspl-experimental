@@ -5,6 +5,7 @@
 //< is compiled inside a copy of the package whose documents hold it** (`place_of`), so a name the
 //< package keeps to itself resolves as it does for the package's own files. **It compiles**, since
 //< some refusals are made only after the analysis a lint stops at; a whole program is linted too.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -128,13 +129,13 @@ priv fn job_for(c: Case@, case_at: Sz, shape_at: Sz, mark_at: Sz, sandbox: U8[],
 
 priv fn argv_of(j: Job_at@, arena: Arena$@): U8[][] //<
     //< the compile of one file, run in the sandbox
-    exe: = fs.absolute(harness.ksplc_exe(), arena) catch
-        fallback harness.ksplc_exe()
+    exe: = fs.absolute(ksplc_harness.ksplc_exe(), arena) catch
+        fallback ksplc_harness.ksplc_exe()
     $argv: = List<|U8[]|>.new(arena)
     argv.push(exe)
     if j.lint
         argv.push("lint")
-    argv.push(arena.text().s("--std-dir=").s(harness.std_dir()).take())
+    argv.push(arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take())
     argv.push(arena.text().s("--pkg-src-dir=").s(harness.root()).take())
     argv.push(j.rel)
     if !j.lint
@@ -146,7 +147,7 @@ priv fn run_jobs(at: List<|Job_at|>@, sandbox: U8[], arena: Arena$@):
     $jobs: = List<|subproc.Job|>.new(arena)
     for j in at
         jobs.push(subproc.Job::{ .argv = argv_of(j@, arena), .cwd = sandbox })
-    return harness.run_all(jobs.slice(), "docsnippet")
+    return ksplc_harness.run_all(jobs.slice(), "docsnippet")
 
 priv fn said_lines(out: U8[], rel: U8[], word: U8[], arena: Arena$@): List<|Sz|> //<
     //< The lines of `rel` the compiler names with `word` (`error` / `warning`), 1-based

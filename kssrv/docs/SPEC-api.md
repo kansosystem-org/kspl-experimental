@@ -23,17 +23,6 @@ Words used below:
 | token | A random secret string the server makes and prints when it starts in local mode. Every request but the page's must carry it |
 | JSON | A plain-text format for data, such as `{"wrote":19}` |
 
-## Contents
-
-* [What it returns](#what-it-returns)
-* [The JSON API](#the-json-api)
-* [Steering the car](#steering-the-car)
-* [Downloading the policy](#downloading-the-policy)
-* [What a client can rely on](#what-a-client-can-rely-on)
-* [Known limits](#known-limits)
-
----
-
 ## What it returns
 
 A request for any path outside `/api/` gets a file from the root. The first table shows which file a path gives; the second shows when the server refuses instead.

@@ -4,52 +4,6 @@ This document tells you how to use `ksplc`, the KSPL compiler, and the tools bui
 
 It is a specification: each rule here is what the tools do, and the tests hold many of them to it. A term is explained where it first appears; the compiler's terms not explained here are in the glossary, [`DESIGN.md` §14](DESIGN.md#14-the-glossary).
 
-## Contents
-
-* [1. Introduction: ksplc is one binary holding every subcommand](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)
-* [2. The compiler (ksplc)](#2-the-compiler-ksplc)
-  * [2.1 Basic use](#21-basic-use)
-  * [2.2 Choosing the language of the output (`--to`)](#22-choosing-the-language-of-the-output---to)
-    * [2.2.1 Naming the machine the output is for (`--machine`)](#221-naming-the-machine-the-output-is-for---machine)
-  * [2.3 The other compiler options](#23-the-other-compiler-options)
-  * [2.4 Compilation stops at 50 errors](#24-compilation-stops-at-50-errors)
-  * [2.5 Running as a script (ksplc run)](#25-running-as-a-script-ksplc-run)
-  * [2.6 Splitting the generated C into several translation units (`--split`)](#26-splitting-the-generated-c-into-several-translation-units---split)
-  * [2.7 The cache of the parse result](#27-the-cache-of-the-parse-result)
-  * [2.8 What crosses an artifact's boundary (a map)](#28-what-crosses-an-artifacts-boundary-a-map)
-  * [2.9 Source crossing the boundary: where it is read from, and what is recorded](#29-source-crossing-the-boundary-where-it-is-read-from-and-what-is-recorded)
-  * [2.10 Binaries crossing the boundary: a library shipped through its C interface](#210-binaries-crossing-the-boundary-a-library-shipped-through-its-c-interface)
-  * [2.11 Diagnostics a program reads (`--diagnostic-format`)](#211-diagnostics-a-program-reads---diagnostic-format)
-  * [2.12 Building one executable (ksplc build)](#212-building-one-executable-ksplc-build)
-* [3. The formatter (ksplc fmt)](#3-the-formatter-ksplc-fmt)
-  * [3.1 Basic use](#31-basic-use)
-  * [3.2 The formatting settings (`--style`)](#32-the-formatting-settings---style)
-  * [3.3 Skipping what is already formatted](#33-skipping-what-is-already-formatted)
-* [4. The language server (ksplc lsp)](#4-the-language-server-ksplc-lsp)
-  * [4.1 The features supported](#41-the-features-supported)
-  * [4.2 The settings in the VS Code extension](#42-the-settings-in-the-vs-code-extension)
-  * [4.3 How code covered by `#cfg()` is handled](#43-how-code-covered-by-cfg-is-handled)
-  * [4.4 Colouring by meaning (semanticTokens)](#44-colouring-by-meaning-semantictokens)
-* [5. Static analysis and the linter (ksplc lint)](#5-static-analysis-and-the-linter-ksplc-lint)
-  * [5.1 Basic use](#51-basic-use)
-  * [5.2 The diagnostics' four weights](#52-the-diagnostics-four-weights)
-  * [5.3 Enabling, disabling or promoting a diagnostic to an error (`##lint` / `--lint` / `ksplc.cfg`)](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)
-  * [5.4 The list of diagnostic codes](#54-the-list-of-diagnostic-codes)
-  * [5.5 The list of warnings (W)](#55-the-list-of-warnings-w)
-  * [5.6 The list of information diagnostics (I)](#56-the-list-of-information-diagnostics-i)
-  * [5.7 The list of hints (H)](#57-the-list-of-hints-h)
-* [6. The project settings file (ksplc.cfg)](#6-the-project-settings-file-ksplccfg)
-  * [6.1 How to write it](#61-how-to-write-it)
-  * [6.2 The search and the range it applies to](#62-the-search-and-the-range-it-applies-to)
-  * [6.3 An invalid setting is refused](#63-an-invalid-setting-is-refused)
-  * [6.4 A package that names itself (`[package]`)](#64-a-package-that-names-itself-package)
-* [7. Querying and tidying up (ksplc info / ksplc clean)](#7-querying-and-tidying-up-ksplc-info--ksplc-clean)
-  * [7.1 ksplc info: reporting what ksplc resolved](#71-ksplc-info-reporting-what-ksplc-resolved)
-  * [7.2 ksplc clean: removing what was built](#72-ksplc-clean-removing-what-was-built)
-  * [7.3 ksplc info keywords: the list of reserved words](#73-ksplc-info-keywords-the-list-of-reserved-words)
-  * [7.4 How reserved words are gathered automatically and grouped](#74-how-reserved-words-are-gathered-automatically-and-grouped)
-  * [7.5 ksplc doc: what a file publishes, as a reference to read](#75-ksplc-doc-what-a-file-publishes-as-a-reference-to-read)
-
 ---
 
 ## 1. Introduction: ksplc is one binary holding every subcommand
@@ -464,22 +418,6 @@ You can hand someone a library built from KSPL without its source, as C librarie
 
 **A library built from KSPL ships as C does: its object or shared library, and its interface.** Its callers reach it through its `#export` functions alone. KSPL's own types (a slice, a `Result`, a trait value, a generic, a method) do not cross a binary, and travel as source ([§2.9](#29-source-crossing-the-boundary-where-it-is-read-from-and-what-is-recorded)). The grounds are "A library built from KSPL crosses as C, holding its own runtime" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
 
-The diagram shows one vendor compiling `greet.kspls` once, writing both interfaces, and the two kinds of customer each using one. The C compiler builds the library from the generated `greet.c`.
-
-```mermaid
-flowchart LR
-    subgraph V["each vendor (one compilation)"]
-        G["ksplc --library=greet.h --library=greet_api.kspls greet.kspls greet.c"] --> GH["greet.h"]
-        G --> GK["greet_api.kspls"]
-        G --> GC["greet.c"]
-        GC -->|"the C compiler"| GA["libgreet.a / libgreet.so<br/>greet's runtime and std, private"]
-    end
-    GA --> C["a C program<br/>#include &quot;greet.h&quot;"]
-    GH --> C
-    GA --> P["a KSPL program<br/>import &quot;greet_api&quot;"]
-    GK --> P
-```
-
 #### 2.10.1 Building a library (`--library`)
 
 With `--library=`, **only the `#export` functions have external linkage** in the generated C, which means only they are visible to other files at link time. Every other definition is `static` (visible only inside its own file): the program's own, std's (the monomorphized bodies included, that is, a generic's copy made for each type it is used with) and the runtime's, data as well as functions. So any number of libraries built from KSPL link into one program, statically or as shared libraries, whichever `ksplc` built each: none can see another's runtime or std.
@@ -533,7 +471,7 @@ The rest behaves as in a program: allocation, formatting numbers (which reads no
 
 #### 2.10.3 Shipping a library and using it
 
-Here a vendor, `greet`, ships a library built from KSPL, and a C program and a KSPL program use it. The first block is the vendor's source, which is not shipped.
+Here a vendor, `greet`, ships a library built from KSPL, and a C program and a KSPL program use it. One compilation writes the library's C and both interfaces; the vendor ships the built library with the interface each customer reads. The first block is the vendor's source, which is not shipped.
 
 ```kspls
 // greet.kspls (the vendor's; not shipped)
@@ -578,7 +516,6 @@ fn main()
 
 * **The libraries `ksplc info link-libs` answers go on every link line** that holds a library built from KSPL: its runtime needs them, as a program's does. A shared library takes them when it is linked.
 * **On Windows a DLL comes with its import library, and holds the compiler's helpers itself**: `-shared -static-libgcc -o greet.dll -Wl,--out-implib,libgreet.dll.a`, and the program finds `greet.dll` beside it. Without `-static-libgcc` a DLL links MinGW's `libgcc_s_seh-1.dll` (the runtime's thread-local data calls into it), and a customer's machine without MinGW cannot load the DLL; an executable takes these helpers in by default.
-* **Any number of such libraries link into one program**, each with its own runtime: `main.c` above may link `-lgreet -lcount` from two vendors.
 
 #### 2.10.4 Writing out the libraries the program names (`--emit-libs`)
 
@@ -851,7 +788,7 @@ Caution: `range` and `delta` are not advertised; advertising one without answeri
 
 **Source that does not parse gets an empty answer**: with no tree, colouring would be a guess, and while typing, the editor's syntax colouring carries the colours.
 
-**A check holds the copies of the reserved-word list together.** VS Code's grammar (`tmLanguage.json`) and kspage cannot import ksplc, so each holds a copy of the words, which could drift unnoticed. The canonical source is `ksplc info keywords`'s output, and `make test-keywords` holds the copies to it.
+**A check holds the copy of the reserved-word list to its source.** VS Code's grammar (`tmLanguage.json`) cannot import ksplc, so it holds a copy of the words, which could drift unnoticed. The canonical source is `ksplc info keywords`'s output, and `make test-conventions` holds the copy to it, in both directions.
 
 ---
 

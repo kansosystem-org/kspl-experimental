@@ -4,58 +4,6 @@ Ksos is a small real-time operating system (RTOS) written in KSPL. An RTOS runs 
 
 **A portable kernel core is kept apart from a thin port layer per architecture and OS.** The kernel runs on the same source from a microcontroller (bare metal, with no operating system under it) to a Linux host. Only the port layer, which absorbs each CPU's and OS's differences, is swapped. So the scheduler is checked as an ordinary Linux process with no hardware, and the same checks extend to Cortex-M bare metal and a real chip. Where to start reading the code, and the demos by make target, are in [ksos](../README.md) ("Run the worked examples and get the feel").
 
-## Contents
-
-* [🏗 The architecture](#-the-architecture)
-* [⚙️ What sets the scheduler apart](#-what-sets-the-scheduler-apart)
-  * [Which task runs](#which-task-runs)
-  * [Waiting and waking](#waiting-and-waking)
-  * [The priority-inheriting mutex](#the-priority-inheriting-mutex)
-  * [Event flags](#event-flags)
-  * [Time: ticks, delays and timeouts](#time-ticks-delays-and-timeouts)
-  * [Interrupt handlers](#interrupt-handlers)
-  * [A task's life, its stack and the idle task](#a-tasks-life-its-stack-and-the-idle-task)
-  * [The heap](#the-heap)
-* [🔌 The ports](#-the-ports)
-  * [The POSIX host port (`port/posix/`)](#the-posix-host-port-portposix)
-  * [The Cortex-M port (`port/cortex_m/`)](#the-cortex-m-port-portcortex_m)
-  * [The Cortex-M0/M0+ port (`port/cortex_m0/`)](#the-cortex-m0m0-port-portcortex_m0)
-  * [The RP2040 port (`port/rp2040/`)](#the-rp2040-port-portrp2040)
-* [🔧 The peripheral drivers](#-the-peripheral-drivers)
-  * [Which folder a driver goes in](#which-folder-a-driver-goes-in)
-  * [UART (`uart.kspls` / `uart_irq.kspls`)](#uart-uartkspls--uart_irqkspls)
-  * [The RTC (`rtc.kspls`) — real chip only](#the-rtc-rtckspls--real-chip-only)
-  * [GPIO (`gpio.kspls`) — real chip only](#gpio-gpiokspls--real-chip-only)
-  * [PWM (`pwm.kspls`) — real chip only](#pwm-pwmkspls--real-chip-only)
-  * [The clocks and the µs timer (`clocks.kspls` / `timer.kspls`) — real chip only](#the-clocks-and-the-µs-timer-clockskspls--timerkspls--real-chip-only)
-  * [USB CDC (`usb_cdc.kspls`) — real chip only](#usb-cdc-usb_cdckspls--real-chip-only)
-  * [The CDC-NCM framework (`cdc_ncm.kspls`) — **independent of the hardware**](#the-cdc-ncm-framework-cdc_ncmkspls--independent-of-the-hardware)
-  * [The ADC (`adc.kspls`) — real chip only](#the-adc-adckspls--real-chip-only)
-  * [Ultrasound (`hcsr04.kspls`) — real chip only](#ultrasound-hcsr04kspls--real-chip-only)
-  * [IR receive (`ir_nec.kspls`) — real chip only](#ir-receive-ir_neckspls--real-chip-only)
-  * [The I2C master (`i2c.kspls`) — real chip only](#the-i2c-master-i2ckspls--real-chip-only)
-  * [The LED matrix (`ht16k33.kspls`) — real chip only](#the-led-matrix-ht16k33kspls--real-chip-only)
-  * [Writing Flash (`flash.kspls`) — real chip only](#writing-flash-flashkspls--real-chip-only)
-  * [The WS2812 full-color LED (`ws2812.kspls`) — real chip only](#the-ws2812-full-color-led-ws2812kspls--real-chip-only)
-* [🌐 The network stack](#-the-network-stack)
-  * [How the bytes are assembled](#how-the-bytes-are-assembled)
-  * [The receiver does not trust what the sender claims](#the-receiver-does-not-trust-what-the-sender-claims)
-  * [Whether a send succeeded — `Link.send_frame` returns a `Bool`](#whether-a-send-succeeded--linksend_frame-returns-a-bool)
-  * [Where a link layer is swapped in (`link.kspls`)](#where-a-link-layer-is-swapped-in-linkkspls)
-* [🚗 The board: a Freenove 4WD car with a Pico W](#-the-board-a-freenove-4wd-car-with-a-pico-w)
-  * [What is in `boards/freenove_4wd_pico/`](#what-is-in-boardsfreenove_4wd_pico)
-  * [What the self-driving probe does, and where its judgement lives](#what-the-self-driving-probe-does-and-where-its-judgement-lives)
-  * [What the USB-Ethernet probe does, and what it needs on the PC](#what-the-usb-ethernet-probe-does-and-what-it-needs-on-the-pc)
-* [🤖 The AI on bare metal](#-the-ai-on-bare-metal)
-  * [What the car learns from its own record](#what-the-car-learns-from-its-own-record)
-  * [What lets ksai run with no malloc](#what-lets-ksai-run-with-no-malloc)
-* [🧭 The guidance for adding an API or an implementation](#-the-guidance-for-adding-an-api-or-an-implementation)
-* [🚫 What is out of scope, and why](#-what-is-out-of-scope-and-why)
-  * [TLS](#tls)
-  * [WiFi (CYW43439) — not implemented in this design](#wifi-cyw43439--not-implemented-in-this-design)
-
----
-
 ## 🏗 The architecture
 
 The kernel knows nothing about the hardware. Everything that differs between a Linux PC and a microcontroller sits in a small *port* underneath it, picked when the program is linked.
@@ -751,6 +699,10 @@ Caution: Do not make the reverse reference (pointing at a demo from here). Once 
 | `status.kspls` | The states' names and how they are shown (the report's line, and WS2812) |
 | `cap.kspls` | Bringing the instruction sent to the wheels within the speed cap |
 
+**What differs from unit to unit is a table of constants that is always read**, in `board.kspls`. The vendor's sample keeps each motor's direction as a commented-out `#define`, and reading one does not tell off from on (Principle 5). So `wheel_polarity` holds each wheel's direction, and `line_sensor_swapped` corrects a unit whose outer line sensors are mounted swapped ("The direction of rotation differs from unit to unit" and "Line tracking" in [`SPEC-board.md`](SPEC-board.md)).
+
+**Only `track.kspls` reads the line sensors.** Its three packed bits go unchanged into the policy's features, the record and obstacle avoidance. A copy of the packing could take a left-right fix in one place only, and nothing would show that the copies disagree.
+
 **Putting them together** (keeping the observations, bringing a distributed policy home) belongs to the demos (`ksos/demo/rp2040/common/`). It combines the console and the link, not what is attached to the board.
 
 ### What the self-driving probe does, and where its judgement lives
@@ -775,7 +727,7 @@ The policy and the observations live in **the record inside the device** (the la
 * **The distance is read once per control lap (100ms), and the line every 10ms.** An HC-SR04 measurement blocks up to 36ms and needs 36ms before the next, while the line is three GPIO reads. When the line moves mid-lap, only the steering is redone. It is not redone during the close-range reverse or while stopped, which are the safety timeouts' instructions.
 * **The speed cap scales the triple as a whole** (the three numbers of a manoeuvre). Capped per component, a manoeuvre mixing forward and turning would turn harder than instructed.
 * **The policy gets the median of the last three distance readings** (`range.steady_mm`), so one stray value does not make it dodge. Only the close-range timeout uses the raw reading (`emergency_mm`): a false alarm is safe, a miss is not.
-* **The wheels need no tighter timing than 10ms.** `motor.drive` writes the PWM compare registers directly, and 500Hz PWM gives five periods per instruction. What is coarse is the outputs (the manoeuvre table's ten), not the timing.
+* **The wheels need no tighter timing than 10ms.** `motor.drive` writes the PWM compare registers directly, and the motors' 500Hz PWM ("The motors" in [`SPEC-board.md`](SPEC-board.md)) gives five periods per instruction. What is coarse is the outputs (the manoeuvre table's ten), not the timing.
 
 **A long press on the remote prints the kept record to the console**, with no link and no PC. A record that can be kept but not read gives nothing to judge by.
 
@@ -783,13 +735,15 @@ The policy and the observations live in **the record inside the device** (the la
 
 ### What the USB-Ethernet probe does, and what it needs on the PC
 
-It runs three stages, in this order:
+It runs three stages, in this order. What each prints is stages 6a to 6c in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 
-| Stage | What it does | What success looks like |
-| :-- | :-- | :-- |
-| (a) Enumeration and raising the link | waits until it is enumerated as a composite device (CDC-ACM + CDC-NCM), the host chooses alt 1 for NCM's data interface, and the car's notification makes the link "connected" | until then, `ncm t= stage= alt= link=down` is printed every second |
-| (c) The upper layers | asks 192.168.137.1 for its MAC over ARP, raises TCP, and sends an HTTP GET | **`ksos/net/tcp_conn`'s `tcp_stream_send`/`recv` have their one real run here**; each QEMU probe tracks seq/ack itself |
-| (b) Answering | keeps answering the ARP requests and ICMP echoes addressed to the car | **a `ping` from the PC getting through** |
+| Stage | What it does |
+| :-- | :-- |
+| (a) Enumeration and raising the link | waits until it is enumerated as a composite device (CDC-ACM + CDC-NCM), the host chooses alt 1 for NCM's data interface, and the car's notification makes the link "connected" |
+| (c) The upper layers | asks 192.168.137.1 for its MAC over ARP, raises TCP, and sends an HTTP GET |
+| (b) Answering | keeps answering the ARP requests and ICMP echoes addressed to the car |
+
+**`ksos/net/tcp_conn`'s `tcp_stream_send`/`recv` have their one real run in (c)**; each QEMU probe tracks seq/ack itself.
 
 **(c) comes before (b) because (c) ends once and (b) does not.** (c)'s result is repeated on (b)'s line every second, so a Serial Monitor opened late still shows it.
 

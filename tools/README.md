@@ -2,15 +2,6 @@
 
 **Tools for working on this repository, written in KSPL wherever possible.** They are for whoever changes Kanso: they regenerate documents, run the CI's gates, and help with debugging. Nothing here ships with the compiler. Each runs from the tree with `ksplc run tools/<name>.kspls`, or through the make target named beside it.
 
-## Contents
-
-* [Run it](#run-it)
-* [What is here](#what-is-here)
-* [Files near the limit and how they split](#files-near-the-limit-and-how-they-split)
-* [Further reading](#further-reading)
-
----
-
 ## Run it
 
 After `make` has built the compiler, this writes the repository's size to `out/repo_stat.txt`:
@@ -39,7 +30,7 @@ Most tools come in pairs: the program you run, which holds `main`, and a second 
 | `ai_assist/` | The coding assistant's data, evaluation and training pipeline, with its own tests ([its guide](ai_assist/README.md)). |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
 | `tests/` | One test file per tool: `surface_test.kspls`, `tour_page_test.kspls`, `code_rows_test.kspls`, `repo_stat_test.kspls`, `aim_test.kspls` (the URL that opens kspage), and `ci_gates_test.kspls` (how the CI's sets are dealt out, and the summary). `all.kspls` runs them, and `ai_assist/tests/` too (`make debug-tools`). |
-| `docs/` | This folder's documents: the design and what is left ([its index](docs/README.md)). |
+| `docs/` | This folder's documents: the design and what is left ("Further reading" below). |
 
 ## Files near the limit and how they split
 

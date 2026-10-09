@@ -86,7 +86,7 @@ The table maps each RTOS word to everyday words and to the name in the code.
 | `ksos/boards/` | What one real board wires to what |
 | `ksos/demo/` | The demos, one firmware each; the POSIX and Cortex-M ones are tests too |
 | `ksos/tests/` | The unit tests, the USB descriptors read as text, elf2uf2 and the UART checks |
-| [`ksos/docs/`](docs/README.md) | The design, the board's facts, the bring-up and the plan ("Further reading" below) |
+| [`ksos/docs/`](docs/) | The design, the board's facts, the bring-up and the plan ("Further reading" below) |
 
 ## Reading order
 
@@ -291,7 +291,7 @@ Each row is one part of the real car, and whether someone has seen it work on th
 | Writing the flash (`ksos/drivers/rp2040/flash`) and the on-device record | ✅ (`boot #` grew at every power-on, `records`/`used` matched the append's arithmetic exactly, and a record round-tripped across a flash page boundary; stage 8) |
 | The USB CDC send queue (`Ring<\|512\|>` in `std/ring.kspls`) | ✅ (the three lines of `make ksos-rp2040-board` keep flowing; a line over one packet takes the multi-packet path, and the bytes per round do not divide 512, so the wrap shifts every round) |
 | The calendar RTC ticking (`ksos/drivers/rp2040/rtc.kspls`) | **not confirmed** (it is once `make ksos-rp2040-board`'s `[rtc]` line reads `ticking=yes` across rounds) |
-| The Flash chip's part number | **not confirmed** (a standard Pico / Pico W carries 2MB of QSPI Flash, a W25Q16JVxQ or equivalent; `boot2_generic_03h`'s setting depends on no particular chip) |
+| The Flash chip's part number | **not confirmed** (the expected part is in "Flashing the firmware, and the debug output" in [`ksos/docs/SPEC-board.md`](docs/SPEC-board.md); the boot depends on no particular chip) |
 
 ## Files near the limit and how they split
 

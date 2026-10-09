@@ -1,76 +1,5 @@
 # The KSPL language specification
 
-## Contents
-
-* [1. Overview](#1-overview)
-* [2. Lexical structure](#2-lexical-structure)
-  * [2.1 Comments](#21-comments)
-  * [2.2 Identifiers and naming rules](#22-identifiers-and-naming-rules)
-  * [2.3 Literals](#23-literals)
-  * [2.4 Trailing commas](#24-trailing-commas)
-  * [2.5 Blocks and statement ends (brace and indentation notations)](#25-blocks-and-statement-ends-brace-and-indentation-notations)
-* [3. The type system](#3-the-type-system)
-  * [3.1 Primitive types](#31-primitive-types)
-  * [3.2 Derived types](#32-derived-types)
-  * [3.3 Structs (`struct`)](#33-structs-struct)
-  * [3.4 Enums (`enum`)](#34-enums-enum)
-  * [3.5 Typedefs (`typedef`)](#35-typedefs-typedef)
-  * [3.6 The expansion specification for string interpolation](#36-the-expansion-specification-for-string-interpolation)
-* [4. Variables and constants](#4-variables-and-constants)
-  * [4.1 Declaration patterns](#41-declaration-patterns)
-  * [4.2 The two axes of mutability](#42-the-two-axes-of-mutability)
-  * [4.3 Places, and the rules for when they may be written](#43-places-and-the-rules-for-when-they-may-be-written)
-  * [4.4 Initialization rules and definite initialization](#44-initialization-rules-and-definite-initialization)
-  * [4.5 Scope and shadowing](#45-scope-and-shadowing)
-  * [4.6 Embedding resources](#46-embedding-resources)
-* [5. Implementations and traits](#5-implementations-and-traits)
-  * [5.1 Traits (`trait`)](#51-traits-trait)
-  * [5.2 Implementations (`impl`) and receivers](#52-implementations-impl-and-receivers)
-  * [5.3 Checking trait conformance](#53-checking-trait-conformance)
-  * [5.4 Worked example: forbidding copies with `Move_only`](#54-worked-example-forbidding-copies-with-move_only)
-  * [5.5 Worked example: synthesizing a field table with `Reflectable`](#55-worked-example-synthesizing-a-field-table-with-reflectable)
-* [6. Expressions and operators](#6-expressions-and-operators)
-  * [6.1 The operator list and precedence](#61-the-operator-list-and-precedence)
-  * [6.2 Pointer arithmetic and implicit dereferencing](#62-pointer-arithmetic-and-implicit-dereferencing)
-  * [6.3 Method calls and namespaces](#63-method-calls-and-namespaces)
-  * [6.4 Type conversion (`::`) and implicit casts](#64-type-conversion--and-implicit-casts)
-  * [6.5 Assignment and compound assignment](#65-assignment-and-compound-assignment)
-  * [6.6 Initialization and construction](#66-initialization-and-construction)
-  * [6.7 Built-in operators](#67-built-in-operators)
-  * [6.8 Integer arithmetic: folding, overflow, division, shifts](#68-integer-arithmetic-folding-overflow-division-shifts)
-* [7. Control flow](#7-control-flow)
-  * [7.1 Branching](#71-branching)
-  * [7.2 Loops](#72-loops)
-  * [7.3 Labelled blocks and breaking out of nested constructs](#73-labelled-blocks-and-breaking-out-of-nested-constructs)
-* [8. Functions and error handling](#8-functions-and-error-handling)
-  * [8.1 Definitions](#81-definitions)
-  * [8.2 The entry point](#82-the-entry-point)
-  * [8.3 Error handling](#83-error-handling)
-  * [8.4 The memory management model: `defer` / ARC / arenas](#84-the-memory-management-model-defer--arc--arenas)
-* [9. Files and import](#9-files-and-import)
-  * [9.1 import syntax and path resolution](#91-import-syntax-and-path-resolution)
-  * [9.2 Which names an import brings in](#92-which-names-an-import-brings-in)
-  * [9.3 Adding a method to another file's type](#93-adding-a-method-to-another-files-type)
-  * [9.4 Circular imports and visibility](#94-circular-imports-and-visibility)
-* [10. Compiler directives and attributes](#10-compiler-directives-and-attributes)
-  * [10.1 Dropping in bulk with `#cfg`](#101-dropping-in-bulk-with-cfg)
-* [11. C interoperability](#11-c-interoperability)
-  * [11.1 Types that cannot cross the C boundary](#111-types-that-cannot-cross-the-c-boundary)
-  * [11.2 External functions and opaque structs](#112-external-functions-and-opaque-structs)
-  * [11.3 Exposing a KSPL function to C (`#export`)](#113-exposing-a-kspl-function-to-c-export)
-  * [11.4 Bare-metal primitives](#114-bare-metal-primitives)
-  * [11.5 Naming the library an `extern` block needs (`#link`)](#115-naming-the-library-an-extern-block-needs-link)
-* [12. Implementation limits](#12-implementation-limits)
-* [13. Conditions that stop execution at run time](#13-conditions-that-stop-execution-at-run-time)
-* [14. What the implementation decides](#14-what-the-implementation-decides)
-  * [14.1 Implementation-defined - the value is fixed but differs per target](#141-implementation-defined---the-value-is-fixed-but-differs-per-target)
-  * [14.2 Undefined - no answer is fixed](#142-undefined---no-answer-is-fixed)
-  * [14.3 What must be the same in every implementation](#143-what-must-be-the-same-in-every-implementation)
-* [Appendix A: Features not carried, and what to write instead](#appendix-a-features-not-carried-and-what-to-write-instead)
-* [Appendix B: The standard library](#appendix-b-the-standard-library)
-
----
-
 ## 1. Overview
 
 KSPL is a statically typed language for systems programming: code that runs close to the machine, such as a compiler, an operating system or a server. Statically typed means every value's type is known when the program is compiled, so a type mistake stops the build, not the running program.
@@ -3234,7 +3163,7 @@ Every KSPL implementation, and both of the compiler's backends, must agree on th
 
 Many languages have features KSPL leaves out on purpose. The table names each one, what to write in KSPL instead, and why it is left out.
 
-At the root are simplicity and language design by subtraction. **The test is not whether a feature is syntactic sugar** (a shorter way to write something the language can already say). KSPL desugars plenty, rewriting a short form into plain code: `!`, `catch`'s expression form, the ternary operator, string interpolation, operator overloading, closures. Each is accepted because it adds to what can be written while keeping one notation. What is turned away gives a second notation to something already writable, or adds implicit behavior ([`DESIGN.md`](DESIGN.md), "Not carrying several means to the same end"). Read the "Why" column by this test.
+At the root are simplicity and language design by subtraction. **The test is not whether a feature is syntactic sugar** (a shorter way to write something the language can already say). KSPL desugars plenty, rewriting a short form into plain code: `!`, `catch`'s expression form, the ternary operator, string interpolation, operator overloading, closures. Each is accepted because it adds to what can be written while keeping one notation. What is turned away gives a second notation to something already writable, or adds implicit behavior ([`DESIGN.md`](DESIGN.md), "One notation per purpose"). Read the "Why" column by this test.
 
 | Feature | The alternative in KSPL | Why |
 | --- | --- | --- |

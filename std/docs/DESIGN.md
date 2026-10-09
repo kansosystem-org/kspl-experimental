@@ -9,121 +9,21 @@ This document says *why* the standard library (`std/`) works the way it does. Ea
 
 When adding or changing a file, check whether the table can gain a row. If it cannot, confirm the file has not become a plain copy of the API it started from. The language's own grounds are in [`../../docs/DESIGN.md`](../../docs/DESIGN.md); what each file is for is what `ksplc doc std` lists, and how many files one import brings along is [`std/README.md`](../README.md).
 
-## Contents
-
-* [Words used in this document](#words-used-in-this-document)
-  * [Where to read for each file](#where-to-read-for-each-file)
-  * [How std reaches the operating system](#how-std-reaches-the-operating-system)
-* [What was inherited, and what was changed](#what-was-inherited-and-what-was-changed)
-  * [Known problems KSPL handles](#known-problems-kspl-handles)
-  * [Known holes, and what would fill them](#known-holes-and-what-would-fill-them)
-* [Memory and ownership](#memory-and-ownership)
-  * [The names of the reference-counting types](#the-names-of-the-reference-counting-types)
-  * [A container owns its elements' ARC counts](#a-container-owns-its-elements-arc-counts)
-  * [A constructor's name says where the returned thing goes](#a-constructors-name-says-where-the-returned-thing-goes)
-  * [The receiver aligns the start of a buffer it is given](#the-receiver-aligns-the-start-of-a-buffer-it-is-given)
-* [Strings, numbers and bytes](#strings-numbers-and-bytes)
-  * [String functions are split by whether they allocate](#string-functions-are-split-by-whether-they-allocate)
-  * [A string allocated and returned is returned read-only](#a-string-allocated-and-returned-is-returned-read-only)
-  * [`dedent`, which removes common indentation, empties a whitespace-only line](#dedent-which-removes-common-indentation-empties-a-whitespace-only-line)
-  * [The destination is always named. There are three shapes, and no more are added](#the-destination-is-always-named-there-are-three-shapes-and-no-more-are-added)
-  * [The digits of a floating-point number are assembled here](#the-digits-of-a-floating-point-number-are-assembled-here)
-  * [Converting a string to F64 is not left to libc](#converting-a-string-to-f64-is-not-left-to-libc)
-  * [Format-specifier dispatch per type stays as an impl per type](#format-specifier-dispatch-per-type-stays-as-an-impl-per-type)
-  * [Hexadecimal is written with a format specifier, and only `0x` and a fixed digit count stay on the wrapper type](#hexadecimal-is-written-with-a-format-specifier-and-only-0x-and-a-fixed-digit-count-stay-on-the-wrapper-type)
-  * [Converting between bytes and integers holds no format string](#converting-between-bytes-and-integers-holds-no-format-string)
-* [Containers and iteration](#containers-and-iteration)
-  * [What a container requires of a type is written as a trait](#what-a-container-requires-of-a-type-is-written-as-a-trait)
-  * [A function that returns every entry does not build a nested generic](#a-function-that-returns-every-entry-does-not-build-a-nested-generic)
-  * [Iteration has one notation, `for x in`](#iteration-has-one-notation-for-x-in)
-  * [Why the chain's stages cannot be folded](#why-the-chains-stages-cannot-be-folded)
-  * [Only `where` and `select` ride on the chain, and a predicate is a `Callable1`](#only-where-and-select-ride-on-the-chain-and-a-predicate-is-a-callable1)
-  * [Indexing costs one comparison, and the stop is called out of line](#indexing-costs-one-comparison-and-the-stop-is-called-out-of-line)
-  * [The ring buffer neither blocks nor locks](#the-ring-buffer-neither-blocks-nor-locks)
-* [Failures and the log](#failures-and-the-log)
-  * [A failure is returned as `T!E`](#a-failure-is-returned-as-te)
-  * [Logs and diagnostics share level names, not meaning](#logs-and-diagnostics-share-level-names-not-meaning)
-  * [A line that is not emitted is not built](#a-line-that-is-not-emitted-is-not-built)
-  * [The destination is the caller's, not a global](#the-destination-is-the-callers-not-a-global)
-  * [A log line ends when the next one opens](#a-log-line-ends-when-the-next-one-opens)
-  * [Error and warning lines are flushed at once](#error-and-warning-lines-are-flushed-at-once)
-  * [The caller's position reaches `say` as a default argument, and printing it is the logger's setting](#the-callers-position-reaches-say-as-a-default-argument-and-printing-it-is-the-loggers-setting)
-  * [A comma is a separator, not a format](#a-comma-is-a-separator-not-a-format)
-  * [No time is stamped here](#no-time-is-stamped-here)
-* [The process: its arguments, its output, its children and the clock](#the-process-its-arguments-its-output-its-children-and-the-clock)
-  * [How an argument's destination is declared, and why anything unknown is an error](#how-an-arguments-destination-is-declared-and-why-anything-unknown-is-an-error)
-  * [A program does not lose its own output on an abnormal exit](#a-program-does-not-lose-its-own-output-on-an-abnormal-exit)
-  * [A run of checks goes on past a failure, and names what failed on its last line](#a-run-of-checks-goes-on-past-a-failure-and-names-what-failed-on-its-last-line)
-  * [Fuzzing watches the program from outside](#fuzzing-watches-the-program-from-outside)
-  * [Writing to a closed pipe returns an error value, and output whose destination is gone ends quietly](#writing-to-a-closed-pipe-returns-an-error-value-and-output-whose-destination-is-gone-ends-quietly)
-  * [The output of children started in parallel is received through files, not pipes](#the-output-of-children-started-in-parallel-is-received-through-files-not-pipes)
-  * [Three ways to start a child process, split by where its output goes](#three-ways-to-start-a-child-process-split-by-where-its-output-goes)
-  * [A program named without a directory is looked up in PATH alone](#a-program-named-without-a-directory-is-looked-up-in-path-alone)
-  * [A relative program path is read from the child's working directory](#a-relative-program-path-is-read-from-the-childs-working-directory)
-  * [A child that cannot start fails the start, on every OS](#a-child-that-cannot-start-fails-the-start-on-every-os)
-  * [A child's end is one code on every OS](#a-childs-end-is-one-code-on-every-os)
-  * [A child holds only the streams it is handed](#a-child-holds-only-the-streams-it-is-handed)
-  * [The clock has separate functions for 'elapsed' and 'date-time'](#the-clock-has-separate-functions-for-elapsed-and-date-time)
-  * [A date-time that does not fit a fixed-length date-time format is refused as a value](#a-date-time-that-does-not-fit-a-fixed-length-date-time-format-is-refused-as-a-value)
-* [Files and paths](#files-and-paths)
-  * [Paths are held in UTF-8, and converted to the wide API on Windows](#paths-are-held-in-utf-8-and-converted-to-the-wide-api-on-windows)
-  * [A long path is handed to Windows in the extended form](#a-long-path-is-handed-to-windows-in-the-extended-form)
-  * [A path is kept under the root by refusing, not by resolving and comparing](#a-path-is-kept-under-the-root-by-refusing-not-by-resolving-and-comparing)
-  * [A predicate asking 'may this be followed' returns true when it cannot tell](#a-predicate-asking-may-this-be-followed-returns-true-when-it-cannot-tell)
-  * [Making a directory refuses an existing name, and removing a tree is not offered](#making-a-directory-refuses-an-existing-name-and-removing-a-tree-is-not-offered)
-  * [A path is made absolute by its spelling alone](#a-path-is-made-absolute-by-its-spelling-alone)
-  * [A cache folder that others can write is refused](#a-cache-folder-that-others-can-write-is-refused)
-* [Threads, networking and the data formats](#threads-networking-and-the-data-formats)
-  * [A mutex makes the lock and what it protects one thing](#a-mutex-makes-the-lock-and-what-it-protects-one-thing)
-  * [A mutex is locked once, by one thread](#a-mutex-is-locked-once-by-one-thread)
-  * [The lock and the condition variable are value types](#the-lock-and-the-condition-variable-are-value-types)
-  * [Threads and the reactor are both kept](#threads-and-the-reactor-are-both-kept)
-  * [A walk that must not exhaust its stack asks where the stack ends](#a-walk-that-must-not-exhaust-its-stack-asks-where-the-stack-ends)
-  * [Connecting by name tries the candidates overlapped](#connecting-by-name-tries-the-candidates-overlapped)
-  * [The frame is kept apart from the transport, and a broken frame is returned as a value too](#the-frame-is-kept-apart-from-the-transport-and-a-broken-frame-is-returned-as-a-value-too)
-  * [The field table holds a number's width as data, and nests by pointing](#the-field-table-holds-a-numbers-width-as-data-and-nests-by-pointing)
-  * [JSON's numbers hold integers and decimals separately](#jsons-numbers-hold-integers-and-decimals-separately)
-* [Regular expressions](#regular-expressions)
-  * [A capture group's end is observed with a marker node](#a-capture-groups-end-is-observed-with-a-marker-node)
-  * [There are two rewinds, and neither covers the other](#there-are-two-rewinds-and-neither-covers-the-other)
-  * [A repeated group holds the rest of the current round in a single-use node](#a-repeated-group-holds-the-rest-of-the-current-round-in-a-single-use-node)
-  * [Every match is returned in a `List`. No lazy iterator is made](#every-match-is-returned-in-a-list-no-lazy-iterator-is-made)
-  * [A group reassembles the sequence per attempt, so it has no effect in a per-line use](#a-group-reassembles-the-sequence-per-attempt-so-it-has-no-effect-in-a-per-line-use)
-  * [After `\`, an alphanumeric is accepted only in a defined escape](#after--an-alphanumeric-is-accepted-only-in-a-defined-escape)
-  * [A notation that is refused stays refused](#a-notation-that-is-refused-stays-refused)
-  * [`.` does not match a newline, counts are written as `{m,n}`, and broken shapes are refused](#-does-not-match-a-newline-counts-are-written-as-mn-and-broken-shapes-are-refused)
-* [The shape of the package](#the-shape-of-the-package)
-  * [Why one import brings few files along](#why-one-import-brings-few-files-along)
-  * [A folder is made only for a unit with its own README](#a-folder-is-made-only-for-a-unit-with-its-own-readme)
-  * [Whether `pub` is needed is not settled by walking the references](#whether-pub-is-needed-is-not-settled-by-walking-the-references)
-
----
-
 ## Words used in this document
 
-**This table explains the words that appear across many sections.** A word used in one section only is explained where it appears. The language's own rules are in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md).
+**This table explains the words of `std` that appear across many sections.** A word used in one section only is explained where it appears. The words every package shares (arena, ARC, trait, generic, vtable, thunk, hosted and freestanding, libc, the C runtime, the seed, Principle N and the rest) are in "Words used throughout" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md#words-used-throughout). *Gate* and the other words with one fixed meaning in every document are in "Terms of art" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art). The language's own rules are in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md).
 
 | Word | What it means here |
 | :-- | :-- |
 | **the heap** (the global heap) | Memory taken with `malloc` and given back one block at a time with `free`. In `std`, passing `null` where a function asks for an arena means "use the heap", and then the caller owes a `free()` |
-| **arena** (`Arena` in `std/mem`) | A block of memory that hands out pieces and gives all of them back at once, when the arena itself is freed. Nothing inside is freed one by one ("8.4 The memory management model" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#84-the-memory-management-model-defer--arc--arenas)) |
-| **ARC** | Automatic Reference Counting: for a type that conforms to `Ref_counted`, the compiler adds a count up (`retain`) on each copy and a count down (`release`) when a copy goes away, and frees the value at zero. Not to be confused with the type `Arc` ("The names of the reference-counting types" below) |
+| **`Arc`** (the type) | Not ARC: `Arc<\|T\|>` is the reference-counted handle shared between threads ("The names of the reference-counting types" below) |
 | **`T@` / `T$@`** | A pointer to a `T`. Without `$`, you may only read through it; with `$`, you may also write |
 | **`U8[]` / `U8$[]`** | A slice: a pointer plus a length. `U8[]` is a read-only byte string; `U8$[]` is one whose bytes may be rewritten. A `$` before a variable's name (`$x: = 1`) instead lets the variable itself change later. The two kinds of `$` are "4.2 The two axes of mutability" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#42-the-two-axes-of-mutability) |
 | **view** | A slice that points into memory something else owns. Making one copies nothing, and it stays valid only as long as that memory does |
 | **`T!E`** | The return type of a function that may fail: it holds either the result `T` or the failure `E`. The caller must take it apart with `catch` or `!` ("8.3 Error handling" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#83-error-handling)) |
 | **`Option<\|T\|>`**, written `T?` | Either a value or none. The value comes out only through `switch` or `if v: = …`, so a forgotten check does not compile |
 | **panic** | The program stops with a message. `std` keeps it mostly for a mistake in the program itself, such as an index out of range; bad input comes back as a value |
-| **trait / impl / conforms** | A trait names methods a type must have; an `impl` block supplies them for one type, and the type then *conforms* to the trait (Java's interface and its `implements` are close) |
-| **generic / instantiation** | A type or function with type parameters, such as `List<\|T\|>`. The compiler makes one copy per set of type arguments used (an *instantiation*, or *specialization*), so each one costs translation time |
-| **vtable / thunk** | How a trait value calls its methods: a table of function pointers (the vtable), each pointing at a small adapter function (a thunk) |
-| **hosted / freestanding** | *Hosted* means a program running on an OS with a C library. *Freestanding* (`--freestanding`) means bare metal, such as a microcontroller, with no OS and no C library |
-| **libc** | The C standard library (`printf`, `strtod`, `fopen` …). A freestanding build has none |
-| **the C runtime** | The C code in `ksplc/gen/runtime/` that every hosted program links. Its functions are named `kspl_*` and are the only place `std` touches an OS API directly ("How std reaches the operating system" below) |
-| **the seed** | `ksplc/seed.c`, the compiler frozen as C source, which builds the first compiler. A change the compiler needs at build time must be in the seed first |
 | **POSIX** | The family of Unix-like systems (Linux, macOS, the BSDs) and the API they share. "Windows" here means its own API (`CreateProcessW` and the like) |
-| **gate** | One check that CI runs and that can fail the build. `make debug` runs `std`'s own tests |
-| **Principle N** | One of the eight Development Principles in [`../../docs/DESIGN.md`](../../docs/DESIGN.md#development-principles). The ones cited most here: 1, cut what does not pay for itself; 5, nothing may be accepted that then does nothing; 6, one means to one purpose; 8, a check that can be slipped past is not offered as a guarantee |
 
 ### Where to read for each file
 

@@ -46,7 +46,7 @@ node: = t.parse_rule("program")!
 
 The engine adds two default rules, `_Space` (the whitespace it skips) and `_Boundary` (what ends a word). A grammar that defines `_Space` and `_Boundary` itself never runs these defaults, so only [`kspeg/tests/engine_test.kspls`](tests/engine_test.kspls) tests them.
 
-Three complete grammars sit in [`kspeg/docs/`](docs/README.md): the notation's own, JSON's and a small scripting language's. Read JSON's first; it is the shortest.
+Three complete grammars sit in `kspeg/docs/`: [`json.kspeg`](docs/json.kspeg), JSON, the shortest, so read it first; [`script.kspeg`](docs/script.kspeg), a small scripting language with keywords, comments, operator precedence and string interpolation; and [`kspeg.kspeg`](docs/kspeg.kspeg), the notation written in itself, the normative grammar `SPEC-notation.md` refers to.
 
 ## What is here
 
@@ -88,6 +88,5 @@ No file in kspeg exceeds 900 lines; the nearest is [`kspeg/engine.kspls`](engine
 | :-- | :-- | :-- |
 | [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md) | The notation, and the requirements an engine has to meet. | Whoever writes a grammar (Part I alone); whoever writes an engine (the rest) |
 | [`kspeg/docs/DESIGN.md`](docs/DESIGN.md) | Why the engine took this shape, and what each choice gives up. | Whoever changes kspeg |
-| [`kspeg/docs/README.md`](docs/README.md) | Every document this package carries. | Anyone |
 | [`kspeg/SURFACE.txt`](SURFACE.txt) | The record of the published API, remade by `make surface` and held against the tree by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)). | Whoever changes kspeg |
 | [std](../std/README.md) | The standard library kspeg builds on; `ksplc doc std` lists every file it publishes. | Whoever changes kspeg |

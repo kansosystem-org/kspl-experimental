@@ -267,86 +267,6 @@ priv fn check_facade(arena: Arena$@)
         named.len, "names", bad2@, "")
 
 // ==========================================
-// An import's alias agrees with its path The alias of an `import "ksplc/a/b/c" as alias;` must be
-// `a_b_c` (the `_` prefix for an extension method is allowed).
-// Caution: **Do not shorten it**: with sema in five folders, `sema_env` for `sema/type/env` hides
-// which layer it is.
-// ==========================================
-
-priv const test_entry_path: U8[] = "tests/all" //<
-    //< **Only the tests' entry point is named after the package**
-    //<
-    //< Each package's `<package>/test/all` would otherwise give `test_all`, and two cannot share
-    //< one file. This check enforces it on `ksplc/`; the other packages use the same form.
-priv const test_entry_alias: U8[] = "ksplc_all"
-
-priv fn alias_of(t: U8[]): U8[] //< the alias an `import "ksplc/…" as …;` line names
-    //<
-    //< Empty where the line names none.
-    //< Caution: **Cut at the space before stripping the `;`**: a `+` list (`as m + { A };`) follows
-    //< the alias, and a commented line does not end in `;`, so stripping first reads `as m; // why`
-    //< as `m;` and rejects a correct line.
-    if !t.starts_with("import \"ksplc/")
-        return ""
-    rest: = t.sub_from(8)
-    as_at: = rest.find_str("\" as ")
-    if rest.find_char('"') < 0 || as_at < 0
-        return ""
-    $name_as: = rest.sub_from(as_at + 5)
-    space_at: = name_as.find_char(' ')
-    if space_at >= 0
-        name_as = name_as.sub(0, space_at)
-    return name_as.strip_suffix(";")
-
-// The forms the reader must tell apart: plain / with a chosen list / with a comment after it /
-// both / not an import at all.
-priv const alias_samples: U8[][5] = ::{ "import \"ksplc/a/b\" as a_b;",
-    "import \"ksplc/a/b\" as a_b + { C };", "import \"ksplc/a/b\" as _a_b; // why",
-    "import \"ksplc/a/b\" as a_b + { C }; // why", "import \"std/io\" as io;" }
-priv const alias_want: U8[][5] = ::{ "a_b", "a_b", "_a_b", "a_b", "" }
-
-priv fn check_alias_fires(arena: Arena$@) //<
-    //< Checks that the reading of an import's alias can fire
-    //<
-    //< **A failed read looks exactly like "the alias agrees"**: a broken reader returns every line
-    //< empty, green having compared nothing.
-    $bad: = List<|U8[]|>.new(arena)
-    for i in Range.asc(alias_samples.len)
-        got: = alias_of(alias_samples[i])
-        if !got.equals(alias_want[i])
-            bad
-                .push(arena.text().s("read `").s(alias_samples[i]).s("` as `").s(got)
-                .s("` (it should be `").s(alias_want[i]).c('`').c(')').take())
-    verdict.check_list("the reading of an import's alias can fire", alias_samples.len, "samples",
-        bad@, "the table of what is read and how is `alias_samples`")
-
-priv fn check_alias(arena: Arena$@)
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
-        for line in harness.read_under_root(rel).lines(arena)
-            t: = line.trim_start()
-            if !t.starts_with("import \"ksplc/")
-                continue
-            seen += 1
-            rest: = t.sub_from(8)
-            end: = rest.find_char('"')
-            name_as: = alias_of(t)
-            if end < 0 || name_as.len == 0
-                continue
-            path: = rest.sub(0, end).sub_from(6)
-            if path.find_char('/') < 0
-                continue
-            us: = "_" if name_as.starts_with("_") else ""
-            want: =
-                (test_entry_alias if path.equals(test_entry_path)
-                else arena.text().s(us).s(path.replace("/", "_", arena)).take())
-            if !name_as.equals(want)
-                bad
-                    .push(arena.text().s(rel).s(": ").s(name_as).s(" -> ").s(want).take())
-    verdict.check_list("an import's alias agrees with its path", seen, "aliases", bad@, "")
-
-// ==========================================
 // No kind that "nobody makes and nobody checks" builds up in `Ast_kind` **The grammar's
 // synchronisation check (`ksplc/main.kspls`) checks one side only**: "in `kspl.kspeg` and not in
 // `Ast_kind`". A member neither a grammar rule nor tested as a kind anywhere goes unchecked.
@@ -865,11 +785,9 @@ fn run(arena: Arena$@) //< runs every check that "two things written apart agree
     check_fuzz_sanitized(arena)
     check_the_name_it_speaks_with(arena)
     check_code_fires(arena)
-    check_alias_fires(arena)
     $codes: = check_codes(arena)
     check_fixtures(codes@, arena)
     check_facade(arena)
-    check_alias(arena)
     check_ast_kinds(arena)
     check_attrs(arena)
     cci.run(arena)

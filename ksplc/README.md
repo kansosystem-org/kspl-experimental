@@ -299,7 +299,6 @@ Rules for every fixture folder:
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
-| [`ksplc/docs/README.md`](docs/README.md) | The index of this package's documents. | Whoever looks for one of them |
 | [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md) | The CLI options, the formatter, the language server and the linter as seen from outside, and what each diagnostic code means. | Whoever writes KSPL and runs the tools. Needs a built `ksplc` to try them against |
 | [`ksplc/docs/DESIGN.md`](docs/DESIGN.md) | The compiler's internal design, data flow and implementation conventions, and why it is built this way. | Whoever changes ksplc. **Read at least chapter 1 and chapter 2 before touching anything here** |
 | [`docs/SPEC-language.md`](../docs/SPEC-language.md) | The language specification being implemented. | Whoever writes KSPL, and whoever changes ksplc |
