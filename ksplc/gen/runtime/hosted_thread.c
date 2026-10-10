@@ -33,6 +33,7 @@ typedef struct { pthread_t tid; } kspl_thread_t;
 /* Starts entry on a new thread. 0 on failure */
 KSPL_LINK I64 kspl_thread_spawn(void *(*entry)(void *arg), void *arg) {
     kspl_thread_t *t = (kspl_thread_t *)malloc(sizeof(kspl_thread_t));
+    if (t == NULL) return 0;
     if (pthread_create(&t->tid, NULL, entry, arg) != 0) {
         free(t);
         return 0;
@@ -93,6 +94,7 @@ KSPL_LINK void kspl_mutex_destroy(I64 handle) {
 
 KSPL_LINK I64 kspl_cond_create(void) {
     pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
+    if (c == NULL) return 0;
     if (pthread_cond_init(c, NULL) != 0) {
         free(c);
         return 0;
@@ -140,6 +142,7 @@ static DWORD WINAPI kspl_thread_trampoline(LPVOID param) {
 
 KSPL_LINK I64 kspl_thread_spawn(void *(*entry)(void *arg), void *arg) {
     kspl_thread_t *t = (kspl_thread_t *)malloc(sizeof(kspl_thread_t));
+    if (t == NULL) return 0;
     t->entry = entry;
     t->arg = arg;
     t->result = NULL;
@@ -203,6 +206,7 @@ KSPL_LINK void kspl_mutex_destroy(I64 handle) {
 
 KSPL_LINK I64 kspl_cond_create(void) {
     CONDITION_VARIABLE *cv = (CONDITION_VARIABLE *)malloc(sizeof(CONDITION_VARIABLE));
+    if (cv == NULL) return 0;
     InitializeConditionVariable(cv);
     return (I64)(intptr_t)cv;
 }

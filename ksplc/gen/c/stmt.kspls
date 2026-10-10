@@ -35,6 +35,8 @@ priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_t
         emit_assign_target(c, left_node, dst_seq)
         right_node.close_signed_div(c)
         return
+    if emit_wrapped_compound(c, left_node, dst_seq, op_text, right_node)
+        return
     c.s(" \{op_text\} ")
     if !c.env.is_integer(left_node.type_id)
         right_node.emit_expr(c)
@@ -46,6 +48,29 @@ priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_t
         right_node.emit_divisor(c, left_node.type_id)
         return
     right_node.emit_expr(c)
+
+priv fn emit_wrapped_compound(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_text: U8[],
+    right_node: Ast_node$@): Bool //<
+        //< Emits a signed `+=` `-=` `*=` `<<=` through the unsigned twin; false if it is not one
+        //<
+        //< Caution: **Do not leave it as C's `+=`.** KSPL wraps signed overflow (`mod 2^N`), C
+        //< makes it undefined, and the optimizer relies on that: `i += 1` on `i > 0` never ends at
+        //< `-O2`. The binary operators go the same way (signed_wrap_twin in expr.kspls).
+    op: = op_text.sub(0, op_text.len - 1) if op_text.ends_with("=") else ""
+    twin: = gen_c_expr.compound_wrap_twin(c, op, left_node.type_id)
+    if twin.len == 0
+        return false
+    c.s(" = (").t(c.env.strip_const_deep(left_node.type_id)).s(")((\{twin\})(")
+    emit_assign_target(c, left_node, dst_seq)
+    c.s(") \{op\} ")
+    if op.equals("<<")
+        right_node.emit_shift_amount(c, left_node.type_id)
+    else
+        c.s("(\{twin\})(")
+        right_node.emit_expr(c)
+        c.s(")")
+    c.s(")")
+    return true
 
 priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz)
     if dst_seq > 0

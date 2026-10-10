@@ -537,6 +537,12 @@ priv fn rx_packet_done() //< one packet arrived on EP4 OUT
             rx_rearm()
             return
     if rx_want != 0 && rx_len >= rx_want
+        // Caution: **Discard an NTB that holds no frame to read**, as one out of step is. Marked
+        // ready, nothing reads it (every caller asks `rx_available` first, which says no), and
+        // only reading re-arms: one malformed NTB from the host stopped receiving for good.
+        if !ncm.datagram_at(U8[]::rx_ntb, rx_want, 0).ok
+            rx_rearm()
+            return
         rx_index = 0
         rx_ready = true
         return // it does not re-arm (the host waits until the NTB is read)

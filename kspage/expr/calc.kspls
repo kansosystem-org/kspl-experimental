@@ -29,6 +29,22 @@ priv const unvisited: U8 = 0U8 //< a cycle is detected by whether a cell is bein
 priv const working: U8 = 1U8
 priv const settled: U8 = 2U8
 
+priv const max_nest: Sz = 64 //< how deep one formula may nest (parentheses, `-`, `if … else`)
+    //<
+    //< As Excel's cap of 64. **Each level is a call**, so without a cap a formula of a few
+    //< kilobytes (`((((…1…))))`) runs the stack out, and on wasm writes over the page's memory.
+
+priv const max_depth: Sz = 256 //< how deep one computation goes before a chain is set aside
+    //<
+    //< It counts the cells a chain passes through (`=A2`, `=A3`, …) and the nesting inside them.
+    //< **A deeper chain is not refused**: its deepest cell is set aside and settled first, and the
+    //< chain retried (`settle`), so an ordinary running total of thousands of rows still computes.
+
+priv struct Cell_at //< one cell, by its table and position
+    g: Grid$@
+    r: Sz
+    c: Sz
+
 priv struct Grid //< one table, laid out so that it can be looked up by row × column
     table: Block$@
     rows: Sz
@@ -60,12 +76,18 @@ priv struct Book //< the document's tables together
         //<
         //< **No value is shown here** (the user could not edit it without seeing the typed text);
         //< the value is still computed for the other cells.
+    depth: Sz //< how deep the computation under way is (`max_depth`)
+    // A chain went past `max_depth` at `deferred`: what was computed on the way is not kept, and
+    // `settle` computes `deferred` first.
+    deferring: Bool
+    deferred: Cell_at
 
 priv fn new_book(sheet: Sheet$@, arena: Arena$@, kept: Arena$@, editing: Inline$@): Book$@
     grids: = List<|Grid$@|>.create(arena)
     return arena
         .create(Book::{ .grids = grids, .sheet = sheet, .arena = arena, .kept = kept,
-        .editing = editing })
+        .editing = editing, .depth = 0, .deferring = false,
+        .deferred = Cell_at::{ .g = null, .r = 0, .c = 0 } })
 
 priv fn find_grid(book: Book$@, name: U8[]): Grid$@? //< the table a name points at
     //<
@@ -124,6 +146,19 @@ priv struct P //< the state partway through reading a formula
     book: Book$@
     g: Grid$@ //<
         //< The table it is in; null for a formula in the body.
+    nest: Sz //< how deep this formula is nested where it is read now (`max_nest`)
+
+impl P
+    fn enter(p: Self$@): Bool //< goes one level deeper; false past `max_nest`
+        if p.nest >= max_nest
+            return false
+        p.nest += 1
+        p.book.depth += 1
+        return true
+
+    fn leave(p: Self$@) //< comes back up one level
+        p.nest -= 1
+        p.book.depth -= 1
 
 priv fn parse_number(p: P$@): Value //< reads a number
     //<
@@ -351,7 +386,10 @@ priv fn parse_factor(p: P$@): Value
     addr.skip_ws(p.c@)
     if addr.at(p.c@) == '-'
         p.c.pos += 1
+        if !p.enter()
+            return Cell_error.syntax.failed()
         v: = parse_factor(p)
+        p.leave()
         return v if !v.ok else number(-v.num)
     $v: Value = parse_primary(p)
     // **Any number of methods can follow** (`A1.round(0).day()`).
@@ -464,6 +502,13 @@ priv fn parse_pick(p: P$@): Value //< `<value where true> if <condition> else <v
     //< **Both sides are computed**, so the same formula touches the same cells every time; the
     //< error on the side not chosen is discarded (`0 if A1 == 0 else 1/A1` is 0 where A1 is 0). It
     //< chains to the right (`a if c else b if d else e`).
+    if !p.enter()
+        return Cell_error.syntax.failed()
+    v: = parse_pick_body(p)
+    p.leave()
+    return v
+
+priv fn parse_pick_body(p: P$@): Value //< `parse_pick` within one level of nesting
     yes: = parse_compare(p)
     if !word(p, "if")
         return yes
@@ -492,7 +537,7 @@ priv fn literal_of(text: U8[], spec: Number_spec): Value //< reads a text as a n
 priv fn eval(src: U8[], book: Book$@, g: Grid$@): Value //< computes one text as a formula
     //<
     //< **The leading `=` marks a formula; it is not part of it.** g is as in `P.g`.
-    $p: = P::{ .c = Reader::{ .src = src, .pos = 1 }, .book = book, .g = g }
+    $p: = P::{ .c = Reader::{ .src = src, .pos = 1 }, .book = book, .g = g, .nest = 0 }
     v: = parse_pick(p@)
     addr.skip_ws(p.c@)
     // Anything left unread fails it; otherwise a typo would pass silently.
@@ -523,11 +568,57 @@ priv fn value_at(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value
         return g.value.get(i)
     if st == working
         return Cell_error.circular.failed()
+    book: = g.book
+    // Caution: **Set the chain aside rather than go deeper**: each cell is several calls, and a
+    // chain of thousands runs the stack out. What it stands for is not kept (`deferring`).
+    if book.depth >= max_depth
+        if !book.deferring
+            book.deferring = true
+            book.deferred = Cell_at::{ .g = g, .r = r, .c = c }
+        return Cell_error.no_cell.failed()
     g.state.set(i, working)
+    book.depth += 1
     v: = compute(g, r, c)
+    book.depth -= 1
+    if book.deferring
+        g.state.set(i, unvisited)
+        return v
     g.value.set(i, v)
     g.state.set(i, settled)
     return v
+
+priv fn settle(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value, however long its chain
+    //<
+    //< A chain set aside (`max_depth`) has its deepest cell computed first, then is retried. **A
+    //< cell set aside while it is already waiting depends on itself**: a cycle longer than one pass
+    //< sees, marked as one so the rest of it reads `#CYCLE!` as a short cycle does.
+    book: = g.book
+    $todo: = List<|Cell_at|>.new(book.arena)
+    todo.push(Cell_at::{ .g = g, .r = r, .c = c })
+    for todo.len > 0
+        top: = todo.get(todo.len - 1)
+        book.deferring = false
+        book.depth = 0
+        _v: = value_at(top.g, top.r, top.c)
+        if !book.deferring
+            todo.len -= 1
+            continue
+        d: = book.deferred
+        if waits(todo@, d)
+            i: = d.r * d.g.cols + d.c
+            d.g.value.set(i, Cell_error.circular.failed())
+            d.g.state.set(i, settled)
+            continue
+        todo.push(d)
+    book.deferring = false
+    book.depth = 0
+    return value_at(g, r, c)
+
+priv fn waits(todo: List<|Cell_at|>$@, d: Cell_at): Bool //< whether d is already set aside
+    for t in todo@
+        if t.g == d.g && t.r == d.r && t.c == d.c
+            return true
+    return false
 
 // ---- Writing a value into a text ----
 
@@ -564,7 +655,7 @@ priv fn show(n: Inline$@, v: Value, book: Book$@, out: Str_builder$@) //<
 priv fn recalc_grid(g: Grid$@, out: Str_builder$@)
     for $r: Sz = 0; r < g.rows; r += 1
         for $c: Sz = 0; c < g.cols; c += 1
-            v: = value_at(g, r, c)
+            v: = settle(g, r, c)
             // Caution: **Let every cell through** (`show` clears an old value from a non-formula
             // cell).
             if n: = cell_inline(g, r, c)

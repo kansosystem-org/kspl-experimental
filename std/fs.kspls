@@ -281,14 +281,24 @@ priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as
     //< It is a device even with an extension, and case does not matter.
     //< **It is a device at any level**: `www/CON` opens the console, and a read or write on an
     //< unconnected `COM1` never returns, stalling a single-loop server.
-    base: = seg.sub(0, seg.find_char('.').unwrap_or(seg.len))
+    //< Caution: **Windows trims spaces before the extension** (`CON .txt` is `CON`), and counts
+    //< `CONIN$`, `CONOUT$` and the superscript `COM¹²³` / `LPT¹²³` among the names too.
+    base: = seg.sub(0, seg.find_char('.').unwrap_or(seg.len)).trim_end()
     if base.equals_ignore_case("con") || base.equals_ignore_case("prn") ||
-        base.equals_ignore_case("aux") || base.equals_ignore_case("nul")
+        base.equals_ignore_case("aux") || base.equals_ignore_case("nul") ||
+        base.equals_ignore_case("conin$") || base.equals_ignore_case("conout$")
         return true
-    if base.len != 4 || !base[3].is_digit()
+    port: =
+        base.len >= 3 &&
+        (base.sub(0, 3).equals_ignore_case("com") ||
+        base.sub(0, 3).equals_ignore_case("lpt"))
+    if !port
         return false
-    return base.sub(0, 3).equals_ignore_case("com") ||
-        base.sub(0, 3).equals_ignore_case("lpt")
+    if base.len == 4 && base[3].is_digit()
+        return true
+    // ¹ ² ³ in UTF-8.
+    return base.len == 5 && base[3] == 0xC2U8 &&
+        (base[4] == 0xB9U8 || base[4] == 0xB2U8 || base[4] == 0xB3U8)
 
 priv fn is_safe_segment(seg: U8[]): Bool //<
     //< Whether one segment of a path is safe as a name under the root
@@ -420,6 +430,8 @@ priv fn made(path: U8[]): Bool
 pub fn walk_files( //< every file under a path, in one flat list (a narrower Python `os.walk`)
     //<
     //< Each element starts with `path` (`walk_files(".")` gives `./std/io.kspls`).
+    //< **A link to a directory is not entered** (Python's `os.walk` default); a link to a file is
+    //< listed as a file.
     //< **Exclude `.git` and `out`** (`skip_build_output`) in a repository, or the time and the
     //< result grow by an order of magnitude.
     path: U8[], //< where the walk starts
@@ -476,7 +488,10 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
             if !want_dirs
                 out.push(full)
             continue
-        if skip_dir(name)
+        // Caution: **Do not enter a link to a directory** (Python's `os.walk` default). Followed,
+        // two links to `.` make a walk visit 2^depth directories before `max_walk_depth` stops it,
+        // and a link out of the tree hands `copy_tree` files from elsewhere (a link to `~/.ssh`).
+        if skip_dir(name) || is_link(full)
             continue
         if want_dirs
             out.push(full)

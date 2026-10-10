@@ -12,7 +12,7 @@ import "std/fs"
 import "std/http"
 import "std/io"
 import "std/json" + { Json_builder }
-import "std/mem" { dealloc, heap_used_bytes }
+import "std/mem" { heap_used_bytes }
 import "std/str" { Str_builder }
 import "std/time"
 import "std/url"
@@ -152,13 +152,10 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
     if info.is_dir
         queue_json_error(c, 404)
         return
-    body: = io.read_file(path) catch _e
+    file: = io.open(path, "rb") catch _e
         queue_json_error(c, 500)
         return
-    // `read_file` returns raw heap memory, which a rewind does not free, so it is freed here, after
-    // the copy into `outbuf`.
-    defer dealloc(Void$@::body.ptr)
-    conn.queue_response(c, 200, "application/octet-stream", body, keep)
+    conn.queue_file(c, "application/octet-stream", file, Sz::info.size, keep)
 
 fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written

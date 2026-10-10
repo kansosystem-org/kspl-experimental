@@ -56,7 +56,11 @@ WASM_CC  := clang --target=$(WASM_MACHINE) -std=c99 -O2 -ffreestanding -nostdlib
 # so anything else **fails the link** (allowed, only the browser says "no such function").
 # **Do not line the entry points that go out up here** either: held by hand, one is left out in
 # silence. The source side's `#export` settles them; `make test-conventions` holds the two sides.
-WASM_LD  := wasm-ld --no-entry --gc-sections \
+# Caution: **Put the stack first, and give it room.** Placed after the data (the default), a deep
+# call runs past its end into the page's own memory, the arenas included, and nothing traps: the
+# open document is damaged without a word. First, running past its end leaves the memory and traps.
+# 1 MiB holds std's walks (they stop 64 KiB short of the end: `std/stack_limit`) many levels deep.
+WASM_LD  := wasm-ld --no-entry --gc-sections --stack-first -z stack-size=1048576 \
     --allow-undefined-file=$(WEB_SRC)/imports.txt
 
 export KSPAGE_OPEN_NOTE := (opening it in a browser is enough; no web server is wanted)

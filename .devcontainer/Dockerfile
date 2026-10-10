@@ -1,6 +1,8 @@
 # The image for developing the Kanso compiler; CI's Linux job uses it as it stands.
 
-FROM ubuntu:24.04
+# **Pinned by digest**: the tag moves, and a moved base changes the image on a day nobody touched
+# this file. Dependabot proposes the next digest (`.github/dependabot.yml`).
+FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
 
 # --- Fetch over IPv4: apt ---
 # **Do not take this out**: the runner has no IPv6 route and apt.llvm.org answers with an AAAA
@@ -14,7 +16,7 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
 #   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
 #   test-pytools: python3-numpy (without it, a silent SKIP) · test-kspage-desktop: desktop-file-utils
-#   llvm.sh below: lsb-release, software-properties-common, gnupg (purged once it has run)
+#   the HTTPS sources and downloads below (apt.llvm.org, Chromium): ca-certificates
 # No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -24,10 +26,8 @@ RUN apt-get update && apt-get install -y \
     make \
     git \
     locales \
-    lsb-release \
     wget \
-    software-properties-common \
-    gnupg \
+    ca-certificates \
     build-essential \
     libopenblas-dev \
     libssl-dev \
@@ -48,19 +48,23 @@ RUN locale-gen en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# --- LLVM (the official script) ---
-# **Do not add `all`**: it adds gigabytes the Linux job pulls every time, for not one gate.
-# The rest: clang-format-19 (the Makefile's `C_FMT`), llvm-19 (OBJDUMP / OBJCOPY / NM),
-# libclang-rt-19-dev (the sanitizers `make test-ksai-fuzz` and `make test-race` build with),
-# clang-19 by name.
-# **Purge what only the script needed** (it pulls in Python and D-Bus packages), so the Linux
-# job does not pull them on every run.
-RUN wget https://apt.llvm.org/llvm.sh && \
-    chmod +x llvm.sh && \
-    ./llvm.sh 19 && \
-    rm llvm.sh && \
-    apt-get install -y clang-format-19 llvm-19 libclang-rt-19-dev && \
-    apt-get purge -y --auto-remove software-properties-common lsb-release gnupg && \
+# --- LLVM 19 (apt.llvm.org's packages) ---
+# Caution: **Do not run apt.llvm.org's `llvm.sh`.** It would run, as root, whatever the script
+# holds the day the image is built. Its two effects are written out instead: the source, and the
+# key apt checks every package against. **The key is the one in this folder**
+# (`apt.llvm.org.asc`, fingerprint 6084 F3CF 814B 57C1 CF12 EFD5 15CF 4D18 AF4F 7421, LLVM's
+# Debian packages), so trust does not hang on a download either.
+# The packages: what `llvm.sh 19` installs (clang-19, lldb-19, lld-19, clangd-19), then
+# clang-format-19 (the Makefile's `C_FMT`), llvm-19 (OBJDUMP / OBJCOPY / NM) and
+# libclang-rt-19-dev (the sanitizers `make test-ksai-fuzz` and `make test-race` build with).
+# **Do not add `llvm.sh`'s `all`**: it adds gigabytes the Linux job pulls every time, for not one
+# gate.
+COPY apt.llvm.org.asc /etc/apt/keyrings/apt.llvm.org.asc
+RUN echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" \
+        > /etc/apt/sources.list.d/apt.llvm.org.list && \
+    apt-get update && \
+    apt-get install -y clang-19 lldb-19 lld-19 clangd-19 clang-format-19 llvm-19 \
+        libclang-rt-19-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # --- Letting the unversioned names through ---
@@ -81,6 +85,9 @@ RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100 && 
 # the permission to open a window move within weeks, and headless lacks that permission (the
 # caution in `kspage/Makefile`). The zip resolves no dependencies, so the libraries are listed.
 ARG CHROMIUM_REVISION=1680435
+# The zip's SHA-256 at that revision. **Change the two together**: the download is checked against
+# it before it is unpacked, so a zip altered where it is stored does not go into the image.
+ARG CHROMIUM_SHA256=b5d87794e36d5c02c174c1be3f0ff5d2bf236001056e4619c5ebb6e4867a724c
 RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     fonts-liberation \
@@ -109,6 +116,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* && \
     wget -qO /tmp/chromium.zip \
         "https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/${CHROMIUM_REVISION}/chrome-linux.zip" && \
+    echo "${CHROMIUM_SHA256}  /tmp/chromium.zip" | sha256sum -c - && \
     unzip -q /tmp/chromium.zip -d /opt && rm /tmp/chromium.zip && \
     ln -s /opt/chrome-linux/chrome /usr/local/bin/chromium
 

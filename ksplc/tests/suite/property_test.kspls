@@ -565,6 +565,7 @@ priv fn bytes_want(s: U8[], arena: Arena$@): U8[] //<
 // Caution: **Make it a loop.** The C compiler folds a straight-line expression, so both levels
 // answer alike.
 // Doubling `1` 31 times reaches the sign bit, and from `2147483640` to the maximum is 7 steps.
+// **Each is written twice, once with `*=` `+=`**: a compound assignment is emitted on its own path.
 // **The answer is returned as the exit code**: `std/io` would enlarge the C and slow `-O2`.
 priv const wrap_probe: U8[] =
     """priv fn doubling(start: I32): I32 {
@@ -587,6 +588,24 @@ priv fn adding(start: I32): I32 {
   return n;
 }
 
+priv fn doubling_in_place(start: I32): I32 {
+  $n: I32 = 0;
+  $i: I32 = start;
+  for i > 0 {
+    n += 1;
+    i *= 2;
+  }
+  return n;
+}
+
+priv fn adding_in_place(start: I32): I32 {
+  $n: I32 = 0;
+  for $i: I32 = start; i > 0; i += 1 {
+    n += 1;
+  }
+  return n;
+}
+
 fn main(): I32 {
   $bad: I32 = 0;
   if doubling(1) != 31 {
@@ -595,11 +614,18 @@ fn main(): I32 {
   if adding(2147483640) != 7 {
     bad = bad + 2;
   }
+  if doubling_in_place(1) != 31 {
+    bad = bad + 4;
+  }
+  if adding_in_place(2147483640) != 8 {
+    bad = bad + 8;
+  }
   return bad;
 }
 """
 
-priv const wrap_names: U8[][4] = ::{ "ok", "doubling", "adding", "doubling and adding" }
+priv const wrap_names: U8[][4] = ::{ "doubling", "adding", "`*=` doubling", "`+=` adding" } //<
+    //< What each bit of the probe's exit code names, from the lowest
 
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
@@ -678,9 +704,12 @@ fn main(): I32
         if !w.ok
             verdict.check(name, false, w.why)
             continue
-        // A non-zero exit code points at the function that disagreed.
+        // A non-zero exit code points at the functions that disagreed, one bit each.
         code: = w.code
-        which: = wrap_names[code] if code > 0 && code < 4 else "unknown"
-        why: = arena.text().s("what disagreed is ").s(which).s(" (code=\{code\})").take()
-        verdict.check(name, code == 0, why)
+        why: = arena.text().s("what disagreed:")
+        for bit in Range.asc(wrap_names.len)
+            if ((code >> I32::bit) & 1) != 0
+                why.s(" ").s(wrap_names[bit])
+        why.s(" (code=\{code\})")
+        verdict.check(name, code == 0, why.take())
     return harness.finish()

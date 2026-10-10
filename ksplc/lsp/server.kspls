@@ -407,7 +407,9 @@ impl Editor_reader
         //<
         //< `taken` holds the frames moved out of the inbox and not yet handed on.
         for
-            got: = jsonrpc.take_frame(taken, arena) catch
+            // **The limit the reader took the frame under** (`read_message`), or a body between
+            // the two limits leaves the frames after it misread.
+            got: = jsonrpc.take_frame(taken, lsp_msg.max_content_length, arena) catch
                 continue // the frame was dropped with its header; the next one follows
             if body: = got
                 return .message(body)

@@ -13,7 +13,7 @@ import "std/str" { Str_builder }
 import "std/verdict"
 
 priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
-    got: = jsonrpc.take_frame(acc, arena) catch
+    got: = jsonrpc.take_frame(acc, jsonrpc.max_body_bytes, arena) catch
         return "(broken)"
     switch got
     case .some(body)
@@ -80,9 +80,32 @@ fn test_jsonrpc_broken_frame()
     huge.s("Content-Length: \{jsonrpc.max_body_bytes + 1\}\r\n\r\n")
     acc.s(huge.slice())
     assert(taken_or(acc@, arena).equals("(broken)"), "a length above the cap is broken")
+
+    // **A head that never ends is broken too**, and dropped: kept, it grew for good.
+    acc.len = 0
+    for _i in Range.asc(jsonrpc.max_head_bytes / 8 + 1)
+        acc.s("X: aaaa ")
+    assert(taken_or(acc@, arena).equals("(broken)"), "a head past its cap without an end is broken")
+    assert(acc.len == 0, "the head past its cap is dropped")
+    acc.s("Content-Length: 2\r\n\r\nok")
+    assert(taken_or(acc@, arena).equals("ok"), "the next frame must still be readable")
+
+    // **The reader's own limit decides**: a body past the default, under a reader's larger limit,
+    // is taken whole, and the frame after it is read where it starts.
+    $wide: = Str_builder.new()
+    defer wide.free()
+    wide.s("Content-Length: 150\r\n\r\n")
+    for _i in Range.asc(150)
+        wide.c('x')
+    wide.s("Content-Length: 4\r\n\r\nnext")
+    big: = jsonrpc.take_frame(wide@, 200, arena) catch panic("a body under the reader's limit is \
+        read")
+    assert(big.unwrap_or("").len == 150, "the body is taken whole")
+    after: = jsonrpc.take_frame(wide@, 200, arena) catch panic("the frame after it is read")
+    assert(after.unwrap_or("").equals("next"), "the frame after it starts where it should")
     verdict
-        .pass("A head that names no length and a length above the cap come back as broken, and \
-            reading carries on after.")
+        .pass("A head that names no length, a length above the cap and a head that never ends come \
+            back as broken, and reading carries on after; a reader's own limit is the one kept.")
 
 fn test_jsonrpc_encode()
     verdict.start("[Jsonrpc] building a body test...")
@@ -105,7 +128,8 @@ fn test_jsonrpc_encode()
     $out: = Str_builder.new()
     defer out.free()
     jsonrpc.frame_into(out@, req)
-    body: = jsonrpc.take_frame(out@, arena) catch panic("a freshly framed body must be takeable")
+    body: = jsonrpc.take_frame(out@, jsonrpc.max_body_bytes, arena) catch panic("a freshly framed \
+        body must be takeable")
     switch body
     case .some(text)
         doc: = json.parse(text, arena) catch panic("the framed body must parse as JSON")

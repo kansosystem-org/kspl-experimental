@@ -270,4 +270,18 @@ export function run(ks) {
     check(large.tall <= 4,
       `in a ${how} document the vertical is asked once per typeface (${large.tall} times on 60)`);
   }
+
+  // --- Deep documents, which once ran the stack into the page's own memory ---
+  // Caution: **Check the open document after each**: the overflow did not trap, it wrote over the
+  // arenas, so a load "succeeded" and showed the startup sample instead, or damaged what was open.
+  const named = (text) => "{\"kspage\":6,\"junk\":" + "[".repeat(450) + "]".repeat(450) +
+    ",\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"inlines\":[{\"text\":\"" + text + "\"}]}]}";
+  check(load(named("deep but whole")) === 1, "a document nested 450 deep in JSON can be read");
+  w.kspage_web_layout(300);
+  check(textOf(0) === "deep but whole", `it is that document that shows (${textOf(0)})`);
+  const openNow = save();
+  const nested = "{\"kspage\":6,\"sheet\":{},\"blocks\":[" +
+    "{\"style\":\"body\",\"children\":[".repeat(200) + "]}".repeat(200) + "]}";
+  check(load(nested) !== 1, "blocks nested 200 deep are refused before they replace the document");
+  check(save() === openNow, "the open document is left as it was");
 }

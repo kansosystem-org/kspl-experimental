@@ -1,0 +1,74 @@
+import "kspage/expr/calc"
+import "kspage/model/doc" { Doc }
+import "kspage/tests/base"
+import "kspage/tests/calc_test" { add_cell, add_row, cell_text }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+// ==========================================
+// kspage: a computation deeper than one pass holds (`max_depth` and `max_nest` in
+// `kspage/expr/calc.kspls`). Each level is a call, so without the bounds a few kilobytes of
+// document ran the stack out, and on wasm wrote over the page's memory.
+// ==========================================
+
+priv const long_chain: Sz = 3000 //< rows in a running total, far past one pass's depth
+
+fn test_a_long_running_total_computes(arena: Arena$@) //<
+    //< A chain of thousands of cells (`=A2+1`, `=A3+1`, …) computes, not refused
+    verdict.start("[kspage/calc] a running total thousands of rows long test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(long_chain - 1)
+        add_cell(add_row(t), arena.text().s("=A\{i + 2\}+1").take())
+    add_cell(add_row(t), "1")
+    calc.recalc(d, base.grid_sheet(arena))
+    want: = arena.text().s("\{long_chain\}").take()
+    assert(cell_text(t, 0, 0).equals(want), "the first row adds up the whole chain")
+    assert(cell_text(t, long_chain / 2, 0)
+        .equals(arena.text().s("\{long_chain - long_chain / 2\}").take()),
+        "a row partway holds its own sum")
+    verdict.pass("a chain far deeper than one pass is settled from its end and comes out whole.")
+
+fn test_a_long_cycle_is_reported(arena: Arena$@) //<
+    //< A cycle longer than one pass (`=A2`, …, `=A1`) still reads as a cycle, and ends
+    verdict.start("[kspage/calc] a cycle longer than one pass coming out as a mark test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(long_chain - 1)
+        add_cell(add_row(t), arena.text().s("=A\{i + 2\}").take())
+    add_cell(add_row(t), "=A1")
+    // If it set the chain aside for ever, the test itself would never end.
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("#CYCLE!"), "the start of the cycle is a cycle")
+    assert(cell_text(t, long_chain - 1, 0).equals("#CYCLE!"), "so is its end")
+    verdict.pass("a cycle too long for one pass is found, not chased for ever.")
+
+priv fn nested(open: Sz, arena: Arena$@): U8[] //< `=` and `open` parentheses around a 1
+    b: = arena.text().c('=')
+    for _i in Range.asc(open)
+        b.c('(')
+    b.c('1')
+    for _i in Range.asc(open)
+        b.c(')')
+    return b.take()
+
+fn test_nesting_past_the_cap_is_refused(arena: Arena$@) //<
+    //< A formula nested 64 deep computes; past it, it reads as a syntax error rather than recursing
+    verdict.start("[kspage/calc] a formula nested past the cap test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    r: = add_row(t)
+    // `parse_pick` counts one level itself, so 63 parentheses inside it make 64.
+    add_cell(r, nested(63, arena))
+    add_cell(r, nested(2000, arena))
+    minus: = arena.text().c('=')
+    for _i in Range.asc(100000)
+        minus.c('-')
+    add_cell(r, minus.c('1').take())
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("1"), "64 levels are read")
+    assert(cell_text(t, 0, 1).equals("#SYNTAX!"), "2000 parentheses are refused")
+    assert(cell_text(t, 0, 2).equals("#SYNTAX!"), "100000 minus signs are refused")
+    verdict.pass("nesting is read to Excel's depth of 64, and refused past it.")

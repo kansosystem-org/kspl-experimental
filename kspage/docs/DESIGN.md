@@ -285,6 +285,8 @@ JS calls the core only through functions marked `#export`, and the core calls JS
 
 **Do not list the entry points on the linking side.** The `#export` in the source decides what is exported, and the generated C marks it so the linker's `--gc-sections` (which drops unused code) keeps it. A hand-kept list silently misses each new entry point, and "there is no such function" shows up only when the button is pressed.
 
+**The wasm links with its stack first and 1 MiB of it** (`--stack-first -z stack-size=1048576` in [`../Makefile`](../Makefile)). Placed after the data, the linker's default, a call too deep ran past the stack's end into the page's own memory, the arenas included, and nothing trapped: a document nested a few hundred deep "loaded" and showed the startup sample instead, or damaged what was open. First, running past the end leaves the memory and traps. The C runtime also tells std where the stack ends (from the linker's `__stack_low`), so a walk on deep input stops 64 KiB short of it (`std/stack_limit`) rather than trap.
+
 **`make test-kspage-wasm` checks that nothing else is exported**: only `kspage_web_*`, the `memory` and `__heap_base` the linker adds, and `memcmp`, which a target with no libc needs. `make test-conventions` checks that the two sides agree, matching the source's `#export` against the entry points JS calls by name.
 
 Caution: **Both directions break silently.** JS calling an entry point the source lacks still links, and fails only when pressed. An entry point nobody calls stays, holding the boundary wide (Principle 5).
@@ -1586,6 +1588,8 @@ stateDiagram-v2
 
 * **A solved cell is remembered**, or it would be solved again at every branch that refers to it.
 * **Reaching a cell that is being solved is a cycle** (`#CYCLE!`); without this the descent would never come back.
+* **A chain is solved in passes, not in one descent** (`settle` in [`expr/calc.kspls`](../expr/calc.kspls)). Each cell a chain passes through is several calls, so a running total of thousands of rows (`=A2+1`, `=A3+1`, …) ran the stack out, and on wasm wrote over the page's memory. Past `max_depth` (256 levels, cells and nesting counted together) the cell reached is set aside: what was computed on the way is dropped, that cell is solved first, and the chain is retried. A cell set aside while it is already waiting depends on itself, so a cycle longer than one pass still reads `#CYCLE!`.
+* **One formula nests at most 64 deep** (parentheses, `-`, `if … else`; Excel's cap). Deeper, it reads `#SYNTAX!` rather than recursing once per level.
 
 So cells are solved **in dependency order, not in the order written**, and an earlier row may refer to a later one.
 
@@ -2538,6 +2542,11 @@ Some numbers in a document decide how much work layout does. Each has a fixed ra
 | A column set's columns (`Style.columns`) | 0 to 64 | Word allows 45 (paper width ÷ a ½-inch minimum column) |
 | A heading's depth (`Style.outline`) | 0 to 9 | where Word and ODF stop |
 | The decimal places (`Number_spec.places`) | 0 to 9 | 10 to that power still fits an I64 |
+| How deep blocks sit inside one another | 1 to 32 levels | past any list or table people nest; layout descends one call per level |
+| The paper's width and height (`Paper.width` / `height`) | 0 (no pages), or 96 to 100000 px | a page under an inch splits a document into a page per pixel, and the page bands are drawn per page |
+| Every other length, gap and position (margins, spacing, indent, padding, sizes, a frame, a picture's size) | -100000 to 100000 px | past any paper (26 m at 96 to the inch), short of a count that hangs or a cast to an integer that overflows |
+| A font size (`size_px`) | above 0, to 1638 px | Word's own cap (1638 points), taken as pixels |
+| A line height ratio (`Style.line_spacing`) | 0 (not set) to 100 | |
 
 Caution: **Do not round into range.** Rounded, the file says 5000 and the screen shows 1000. That is a field that does not act as written (Principle 5: nothing writable but ineffective).
 
@@ -2997,6 +3006,12 @@ Note: Both numbers come from the same place the layout uses (`kspage/model/numbe
 ### Rules the Markdown writer keeps
 
 **Inline code is the innermost mark.** Emphasis and a link go outside it (`` **`x`** ``, `` [`x`](u) ``): inside a fence a mark is plain text. A text holding a `` ` `` gets a longer fence. Its style is code by role, the same role as a code block's (it does not wrap); the writer never looks at the name.
+
+**A fence is one backtick longer than the longest run of backticks inside it** (`fence_len`). A line inside with a run as long as the fence closes it, and what follows is read as Markdown, raw HTML included: a received document whose code lines hold ```` ``` ```` and ```` ```` ```` put an `<img onerror=…>` into the page that shows the export. A fixed longer fence only moves the run that closes it.
+
+**A style name a language cannot have declares no language**: anything but letters, digits and `-` `+` `.` `#`. A backtick there stops the line being a fence at all (CommonMark), with the same result as above.
+
+**A picture's address is checked as a link's is** (`linkable`), since the reader of the Markdown opens it too.
 
 **The language a fence declares is the fence style's name.** Dropped, ` ```kspl ` becomes ` ``` `, and every tool that collects the source's fences misses them (in this repository, [`../../tests/suite/docsnippet_test.kspls`](../../tests/suite/docsnippet_test.kspls)). The plain code style declares none.
 

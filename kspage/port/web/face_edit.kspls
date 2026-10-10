@@ -59,6 +59,8 @@ fn kspage_web_set_style_look(i: Sz, family_len: Sz, has_size: I32, size: F32, ha
     ensure()
     if !state.has_style(i) || family_len > input_cap
         return 0
+    if has_size != 0 && !limit.font_fits(state.given(size))
+        return 0
     // Caution: **Start from the current style** — starting from empty, the fields not passed (the
     // arrangement, a slide's size, the number format) would be dropped.
     $fresh: style.Style = sheet.styles.get(i)$
@@ -229,12 +231,21 @@ fn kspage_web_set_style_para(i: Sz, align: I32, spacing: F32, before: F32, after
     // width can be computed; too large, it lays out that many. 0 and 1 mean "no columns", in range.
     if !state.has_style(i) || !limit.columns_fits(columns)
         return 0
+    // The lengths, as a document read from a file (`checked_f32` in `kspage/share/store.kspls`).
+    sp: = state.given(spacing)
+    bf: = state.given(before)
+    af: = state.given(after)
+    ind: = state.given(indent)
+    if !limit.spacing_fits(sp) || !limit.length_fits(bf) || !limit.length_fits(af) ||
+        !limit.length_fits(ind) || !limit.length_fits(state.given(gap)) ||
+        !limit.length_fits(state.given(pad))
+        return 0
     $fresh: style.Style = sheet.styles.get(i)$
     fresh.align = state.align_at(align)
-    fresh.line_spacing = spacing
-    fresh.space_before = before
-    fresh.space_after = after
-    fresh.indent = indent
+    fresh.line_spacing = sp
+    fresh.space_before = bf
+    fresh.space_after = af
+    fresh.indent = ind
     fresh.wrap = wrap != 0
     fresh.columns = columns
     fresh.column_gap = gap if gap > 0.0 else 0.0

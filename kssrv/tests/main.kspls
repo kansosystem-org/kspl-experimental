@@ -7,6 +7,7 @@
 //< 0.0.0.0, so Windows Defender asks permission for incoming connections.
 import "kssrv/tests/car"
 import "kssrv/tests/client"
+import "kssrv/tests/guard"
 import "kssrv/tests/local"
 import "kssrv/tests/memory"
 import "kssrv/tests/start" { Running, bring_up, read_log, start_server }
@@ -204,6 +205,9 @@ priv fn serve_memory_and_check(at: Placed, arena: Arena$@) //<
         srv.stop()
 
 priv fn serve_outward_and_check(at: Placed, arena: Arena$@) //< the outward-facing server's checks
+    if !verdict.check("the files the guard asks for are placed", guard.place(at.root, arena),
+        at.root)
+        return
     started: =
         bring_up(at.exe, at.root, at.tmp, "kssrv", port, U8[][]::{},
         "kssrv comes into a state where it can answer", arena)
@@ -213,6 +217,9 @@ priv fn serve_outward_and_check(at: Placed, arena: Arena$@) //< the outward-faci
             srv.failed("kssrv goes on answering requests", e.reason(), arena)
         link_cases(at.root, arena) catch e2
             srv.failed("kssrv answers the link's request", e2.reason(), arena)
+        // Last: its check on one address's cap holds that many slots while it runs.
+        guard.cases(port, arena) catch e3
+            srv.failed("kssrv answers what the guard asks", e3.reason(), arena)
         srv.stop()
 
 priv const idle_port: I32 = 18394 //< the port of the server told to stop when idle

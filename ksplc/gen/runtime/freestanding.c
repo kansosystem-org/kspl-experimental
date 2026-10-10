@@ -53,3 +53,15 @@ Sz kspl_get_sp(void) {
     return 0;
 #endif
 }
+
+/* The lowest address the calling thread's stack may reach (std/stack_limit), or 0 where it is not
+ * known, so a walk on deep input stops short of the stack's end rather than run past it.
+ * wasm32: the linker places the stack between __stack_low and __stack_high; past the low end lies
+ * the page's own memory unless it links with --stack-first, and either way a walk must stop.
+ * A bare-metal target's bounds are its linker script's, unread here. */
+#if defined(__wasm__)
+extern unsigned char __stack_low;
+KSPL_LINK Sz kspl_stack_floor(void) { return (Sz)&__stack_low; }
+#else
+KSPL_LINK Sz kspl_stack_floor(void) { return 0; }
+#endif

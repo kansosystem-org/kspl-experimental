@@ -7,6 +7,7 @@
 import "kssrv/pilot"
 import "std/chars"
 import "std/http"
+import "std/io"
 import "std/log" { Log }
 import "std/mem" { Arena }
 import "std/net"
@@ -17,6 +18,11 @@ import "std/sys"
 const max_conns: Sz = 128 //< the cap on connections open at once
     //<
     //< The table is fixed-length; a free slot is an ARC handle's zero value (`Rc.empty()`).
+
+const max_conns_per_peer: Sz = 16 //< the cap on connections from one address, facing outward
+    //<
+    //< Without it one machine takes every slot and shuts everyone else out. A browser opens six
+    //< per host, so the rest leaves room for several behind one address (a NAT).
 
 const conn_arena_chunk: Sz = 16 * 1024 //< how far each connection's working arena grows
     //<
@@ -111,6 +117,24 @@ struct Conn
     // When a byte last went either way, on the monotonic clock; set at accept. A connection quiet
     // for `idle_conn_us` is dropped (`sweep_done` in `kssrv/main.kspls`), a holding one excepted.
     moved_us: I64
+    // When the first byte of the request still arriving came, on the monotonic clock; 0 while no
+    // request is partly read. **A request must arrive whole within `request_time_us`**, however
+    // its bytes trickle in (`sweep_done` in `kssrv/main.kspls`).
+    request_since_us: I64
+    // How long `inbuf` must be before the request in it is parsed again; 0 until its head ends.
+    // Caution: **Do not parse on every read.** Parsed from the start each time, a request arriving
+    // a byte at a time costs its length squared (`conn_build` in `kssrv/main.kspls`).
+    need: Sz
+    head_from: Sz //< where the search for the head's end resumes in `inbuf`
+    // The peer's address as text, for the cap on connections from one address
+    // (`max_conns_per_peer`).
+    peer: U8[64]
+    peer_len: Sz
+    // The file whose bytes still go out after `outbuf` (`queue_file`); its stream is null when
+    // none. **Read a chunk at a time as the connection drains**, so a large file is never held
+    // whole (`conn_send` in `kssrv/main.kspls`).
+    file: io.File_stream
+    file_left: Sz //< how many of the file's bytes, of the length the head named, are still to go
 
 struct Conn_table //< the connection table
     //<
@@ -134,6 +158,13 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
         .lingering_since_us = 0I64,
         .holding = false,
         .moved_us = sys.mono_us(),
+        .request_since_us = 0I64,
+        .need = 0,
+        .head_from = 0,
+        .peer = ::{},
+        .peer_len = 0,
+        .file = io.File_stream::{ .stream = null },
+        .file_left = 0,
     }
     return Rc<|Conn|>.new(fresh)
 
@@ -144,6 +175,7 @@ fn conn_close(c: Conn$@) //< frees a connection's resources
     c.arena.free()
     c.inbuf.free()
     c.outbuf.free()
+    c.file.free()
 
 fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server open
     //<
@@ -197,6 +229,31 @@ fn queue_response(c: Conn$@, status: I32, ctype: U8[], body: U8[], keep: Bool) /
         return
     if !keep
         c.close_after_send = true
+
+fn queue_file(c: Conn$@, ctype: U8[], file: io.File_stream, length: Sz, keep: Bool) //<
+    //< Queues a 200 whose body is `length` bytes of `file`, sent as the connection drains
+    //<
+    //< The head names `length` (the size `stat` gave). **The connection then holds one chunk at a
+    //< time, not the file** (`conn_send` in `kssrv/main.kspls`). It owns `file` from here on.
+    queue_to_head(c, 200, ctype, length, keep)
+    // A HEAD names the length and takes no body; a head the builder refused sends nothing.
+    if c.answers_head || c.outbuf.len == 0
+        $f: = file
+        f.free()
+        return
+    c.file = file
+    c.file_left = length
+
+fn peer_count(t: Conn_table$@, peer: U8[]): Sz //<
+    //< how many open connections come from that address
+    $n: Sz = 0
+    for i in Range.asc(max_conns)
+        if t.slots[i].is_empty()
+            continue
+        c: = t.slots[i].get()
+        if U8[]::{ .ptr = c.peer[0]@, .len = c.peer_len }.equals(peer)
+            n += 1
+    return n
 
 fn queue_to_head(c: Conn$@, status: I32, ctype: U8[], length: Sz, keep: Bool) //<
     //< Queues the answer to a HEAD: the head a GET would get, naming `length`, and no body

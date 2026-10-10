@@ -436,3 +436,31 @@ fn test_a_column_keeps_its_alignment(arena: Arena$@) //<
     out: = md_of(d, sample_sheet(arena), arena)
     assert(base.has(out, "| --- | --: | :-: |\n"), "the parting row carries each column's side")
     verdict.pass("each column's alignment comes from its first row.")
+
+fn test_a_fence_cannot_be_closed_from_inside(arena: Arena$@) //<
+    //< Code holding fences of its own, or a style name a language cannot have, stays code
+    //<
+    //< Closed early, what follows is read as Markdown, raw HTML included, so a document that
+    //< exports a fence could put markup into the page that shows the export.
+    verdict.start("[kspage/markdown] a fence that cannot be closed from inside test...")
+    sheet: = sample_sheet(arena)
+    odd: = sheet.add("x`y", paint.inherit_all())
+    odd.wrap = false
+    d: = Doc.new(arena)
+    d.add_block("code").add_text("```")
+    d.add_block("code").add_text("````")
+    d.add_block("code").add_text("<img src=x onerror=alert(1)>")
+    d.add_block("body").add_text("between")
+    d.add_block("x`y").add_text("<b>bold</b>")
+    d.add_block("body").add_text("after")
+    pic: = d.add_block("body")
+    pic.image = "javascript:alert(3)"
+    out: = md_of(d, sheet, arena)
+    // The fence is one longer than the longest run inside, so no line inside closes it.
+    held: = "`````\n```\n````\n<img src=x onerror=alert(1)>\n`````\n"
+    assert(base.has(out, held), "a fence is longer than any run of backticks inside it")
+    assert(base.has(out, "```\n<b>bold</b>\n```\n"),
+        "a style name with a backtick declares no language, so the fence still opens")
+    assert(!base.has(out, "javascript:"), "a picture's address is checked as a link's is")
+    verdict
+        .pass("code stays inside its fence whatever it holds, and a picture's address is checked.")

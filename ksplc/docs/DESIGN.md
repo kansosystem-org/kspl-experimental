@@ -1759,6 +1759,7 @@ Caution: **For the signed types, C makes overflow undefined.** The optimizer rel
 
 The verdict is three functions in `gen/c/expr.kspls`, used by both `emit_binary_expr` and `emit_unary_expr`: `can_exceed_width` (only `+` `-` `*` `<<`), `narrow_unsigned` (the type the result returns to) and `signed_wrap_twin` (the type the operands move to).
 
+* **A compound assignment counts too.** `i += 1`, `-=`, `*=` and `<<=` on a signed type are emitted as `i = (I32)((U32)(i) + (U32)(1))` (`emit_wrapped_compound` in `gen/c/stmt.kspls`). Left as C's `+=`, the overflow is undefined, and at `-O2` a loop on `i > 0` with `i *= 2` never ends. `make test-property` runs both forms at `-O0` and `-O2`.
 * **The unary operators count too.** For the unsigned types both `~` and unary minus exceed the width; for the signed types only unary minus does (negating the type's minimum). `!` yields a `Bool` and is out. Wrapping only the binary ones leaves `(~u8x) / 2U8` wrong.
 * **Parenthesize a converted operand.** C's cast binds only to the next unary expression, so `(U32)x * y` is `((U32)x) * y`. Where the operand is a binary expression, the type it computes in changes.
 * With `&` `|` `^` `/` `%` `>>`, operands that fit the width give a result that fits. C computes the unsigned types of `U32` and wider at their own width, so they need no conversion back.

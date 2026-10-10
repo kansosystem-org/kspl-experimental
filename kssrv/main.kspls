@@ -19,7 +19,7 @@ import "std/fs"
 import "std/http"
 import "std/io"
 import "std/log" { Log }
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena }
 import "std/net"
 import "std/rand"
 import "std/reactor"
@@ -74,6 +74,14 @@ priv const idle_conn_us: I64 = 30000000I64 //<
     //< Without it a client that connects and goes quiet holds one of the `max_conns` slots for
     //< good, and that many such clients shut everyone out. A page's hold (`GET /api/here`) is quiet
     //< by design and is not dropped.
+
+priv const request_time_us: I64 = 30000000I64 //<
+    //< How long one request may take to arrive whole, from its first byte to its last
+    //<
+    //< Caution: **The idle timer alone does not bound it.** It restarts on every byte, so a client
+    //< sending one byte every few seconds holds its slot for good, and `max_conns` such clients
+    //< shut everyone out (Slowloris). The bodies taken are small (`max_request_body`), so a client
+    //< that can send at all sends one well within it.
 
 priv const poll_timeout_ms: I32 = 1000 //< `wait()`'s wait time
     //<
@@ -132,6 +140,27 @@ priv enum Rel_path //< makes a relative path under the root from a percent-decod
     // A path not accepted as a name under the root (`..` steps, a NUL, a Windows device name, a
     // link in an intermediate folder: everything `fs.stays_under` refuses).
     rejected
+    hidden //< a name in it starts with a dot (`hides_name`), so it is answered as absent
+
+priv const well_known: U8[] = ".well-known" //< the one dot folder served (RFC 8615)
+    //<
+    //< Certificate issuance (ACME) and other discovery read under it, so hiding it would break
+    //< them.
+
+priv fn hides_name(rel: U8[]): Bool //<
+    //< whether a name in rel starts with a dot, `.well-known` aside
+    //<
+    //< Caution: **Do not serve them.** A root that is a checkout or holds settings has `.git/`,
+    //< `.env` and the like, and anyone the server faces could read them (`/.git/config`).
+    //< Answered as absent (404), so a probe learns nothing of what is there.
+    $at: Sz = 0
+    for at < rel.len
+        end: = at + rel.sub_from(at).find_char('/').unwrap_or(rel.len - at)
+        name: = rel.sub(at, end - at)
+        if name.starts_with(".") && !name.equals(well_known)
+            return true
+        at = end + 1
+    return false
 
 priv fn path_to_rel(path: U8[], root: U8[], arena: Arena$@): Rel_path
     decoded: = url.decode_component(path, arena) catch _e
@@ -154,6 +183,8 @@ priv fn path_to_rel(path: U8[], root: U8[], arena: Arena$@): Rel_path
             t = r
         case .none
             return .rejected
+    if hides_name(t)
+        return .hidden
     return .ok(t)
 
 priv fn names_this_server(req: http.Request$@): Bool //<
@@ -218,6 +249,9 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         // root. A 403, not a 404: the form was refused, and whether the name exists is not checked.
         conn.queue_error(c, 403)
         return
+    case .hidden
+        conn.queue_error(c, 404)
+        return
 
     // **Only the named page may be outside the root** (`--page`). Only `/` and `/index.html` are
     // replaced, and **the client cannot choose it with a string it wrote** (`path_to_rel` has
@@ -249,13 +283,11 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         conn.queue_to_head(c, 200, ctype, Sz::info.size, keep)
         return
 
-    // The stat found it, so a read that fails is the server's fault, not a missing name.
-    body: = io.read_file(target_path) catch _e
+    // The stat found it, so an open that fails is the server's fault, not a missing name.
+    file: = io.open(target_path, "rb") catch _e
         conn.queue_error(c, 500)
         return
-    // Freed here, after the copy into `outbuf` (the reason is at `api.queue_get_file`).
-    defer dealloc(Void$@::body.ptr)
-    conn.queue_response(c, 200, ctype, body, keep)
+    conn.queue_file(c, ctype, file, Sz::info.size, keep)
 
 // ==========================================
 // How one connection is driven
@@ -269,6 +301,10 @@ priv fn conn_build($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //<
     c: = held.get()
     if c.outbuf.len > 0 || c.inbuf.len == 0
         return true
+    // Caution: **Parse only once there is something new to decide.** Parsed from the start on
+    // every read, a request trickling in a byte at a time costs its length squared.
+    if c.inbuf.len < c.need || (c.need == 0 && !head_decided(c))
+        return true
     base: = c.arena.save()
     c.answers_head = false
     req: =
@@ -276,7 +312,11 @@ priv fn conn_build($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //<
         c.arena.restore(base)
         switch e
         case .incomplete
-            // It has not fully arrived yet; wait for the next readable event.
+            // The head is whole and the body is not: wait until all of it is there.
+            whole: =
+                http.request_length(c.inbuf.slice(), body_limit(ctx), c.arena) catch 0
+            c.need = whole if whole > 0 else c.inbuf.len + 1
+            c.arena.restore(base)
             return true
         case .head_too_large
             conn.queue_error(c, 431)
@@ -292,30 +332,68 @@ priv fn conn_build($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //<
     // Caution: Drop only what the finished parse used. Emptied completely, the start of the next
     // request that came in the same read is lost.
     c.inbuf.drop_prefix(req.consumed)
+    // What is left is the next request, already arriving.
+    c.need = 0
+    c.head_from = 0
+    c.request_since_us = sys.mono_us() if c.inbuf.len > 0 else 0I64
     // The response is in `outbuf` (on the heap) by now. Without the rewind, a keep-alive
     // connection's arena grows with every request.
     c.arena.restore(base)
     return true
 
+priv fn head_decided(c: conn.Conn$@): Bool //<
+    //< Whether `inbuf` holds what decides its head: its end, a line break it refuses, or its cap
+    //<
+    //< The search resumes where the last one stopped (`head_from`), so a head arriving a byte at a
+    //< time is searched once. A bare LF or CR is refused by `http.parse_request`, so it decides
+    //< too: waited past, it would hold the client until its time is up rather than answer 400.
+    s: = c.inbuf.slice()
+    if s.len > http.max_head_bytes
+        return true
+    $i: = c.head_from
+    for i < s.len
+        if s[i] == '\n' && (i == 0 || s[i - 1] != '\r')
+            return true
+        if s[i] == '\r' && i + 1 < s.len && s[i + 1] != '\n'
+            return true
+        if s[i] == '\n' && i >= 3 && s[i - 1] == '\r' && s[i - 2] == '\n' && s[i - 3] == '\r'
+            return true
+        i += 1
+    // The last byte is looked at again: a CR there is decided by what follows it.
+    c.head_from = s.len - 1
+    return false
+
 priv fn conn_send($held: Rc<|conn.Conn|>): Bool //< sends as much of `outbuf` as can be sent
     //<
     //< False means close.
     c: = held.get()
-    for c.sent < c.outbuf.len
-        rest: = c.outbuf.slice().sub(c.sent, c.outbuf.len - c.sent)
-        n: =
-            c.stream.write(rest.sub(0, io_chunk) if rest.len > io_chunk else rest) catch e
-            switch e
-            case .would_block
-                return true // wait for writable
-            default
-                return false
-        if n == 0
-            return false // no progress (the peer closed)
-        c.sent += n
-        c.moved_us = sys.mono_us()
-    c.outbuf.clear()
-    c.sent = 0
+    $refills: Sz = 0
+    for
+        for c.sent < c.outbuf.len
+            rest: = c.outbuf.slice().sub(c.sent, c.outbuf.len - c.sent)
+            n: =
+                c.stream.write(rest.sub(0, io_chunk) if rest.len > io_chunk else rest) catch e
+                switch e
+                case .would_block
+                    return true // wait for writable
+                default
+                    return false
+            if n == 0
+                return false // no progress (the peer closed)
+            c.sent += n
+            c.moved_us = sys.mono_us()
+        c.outbuf.clear()
+        c.sent = 0
+        if c.file_left == 0
+            break
+        if !refill_from_file(c)
+            return false
+        // Caution: **Cap the chunks per notification**, or one fast download makes everyone else
+        // wait. **Stop with a chunk queued**: an empty `outbuf` is not watched for writable, so
+        // the rest would never go.
+        refills += 1
+        if refills >= max_read_rounds
+            return true
     if !c.close_after_send
         return true
     // A peer that closed its sending side has nothing left to drain.
@@ -326,6 +404,23 @@ priv fn conn_send($held: Rc<|conn.Conn|>): Bool //< sends as much of `outbuf` as
         return false
     c.lingering_since_us = sys.mono_us()
     c.inbuf.clear()
+    return true
+
+priv fn refill_from_file(c: conn.Conn$@): Bool //< moves the file's next chunk into `outbuf`
+    //<
+    //< False means close: the read failed, or the file ended before the length the head named (it
+    //< shrank since the stat). **The client then sees the connection close short**, which tells it
+    //< the body is cut; padding it out would hand over bytes that are not the file.
+    $chunk: U8[io_chunk] = ::{}
+    want: = c.file_left if c.file_left < io_chunk else io_chunk
+    n: = c.file.read(U8$[]::{ .ptr = chunk[0]@, .len = want }) catch _e
+        return false
+    if n == 0
+        return false
+    c.outbuf.s(U8[]::{ .ptr = chunk[0]@, .len = n })
+    c.file_left -= n
+    if c.file_left == 0
+        c.file.free()
     return true
 
 priv fn conn_linger($held: Rc<|conn.Conn|>): Bool //<
@@ -365,6 +460,8 @@ priv fn conn_read($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //< reads from 
             // forever on a request whose answer is still to come**.
             c.peer_done = true
             return true
+        if c.inbuf.len == 0
+            c.request_since_us = sys.mono_us()
         c.inbuf.s(U8$[]::{ .ptr = chunk@, .len = n })
         c.moved_us = sys.mono_us()
         // **Without a cap, one client that never ends its request uses up the memory.**
@@ -428,7 +525,27 @@ priv fn drive_backlog(t: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
 // ==========================================
 priv $refused_said: I64 = 0I64 //< the refusals already told of when a slot came free again
 
-priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@)
+priv fn say_refused(lg: Log$@, per_peer: Bool) //<
+    //< Counts one refused connection, and says why only for the first of a stretch
+    //<
+    //< **Not per refusal**: a flood would bury the log. The next accepted connection closes the
+    //< stretch (`accept_all`). `per_peer` is the cap on one address, else the table is full.
+    if conn.stats.connections_refused == refused_said
+        if ln: = lg.at(.warning)
+            if per_peer
+                ln
+                    .s("a peer holds \{conn.max_conns_per_peer\} connections already; more from it \
+                        are refused until one closes")
+            else
+                ln
+                    .s("every one of the \{conn.max_conns\} connection slots is taken; new \
+                        connections are refused until one closes")
+    conn.stats.connections_refused += 1I64
+
+priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@, outward: Bool) //<
+    //< Accepts every pending connection into a free slot, or refuses it
+    //<
+    //< Facing outward, one address may hold at most `conn.max_conns_per_peer` of the slots.
     for
         stream: = listener.accept() catch e
             switch e
@@ -441,16 +558,19 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
             lg.say(.error, "cannot set the accepted socket nonblocking")
             stream.free()
             continue
+        $host: U8[64] = ::{}
+        p: = stream.peer(U8$[]::host) catch net.Peer_addr::{ .host_len = 0, .port = 0 }
+        peer: = U8[]::{ .ptr = host[0]@, .len = p.host_len }
+        // Caution: **Count by address before taking a slot**, or one machine holding them all shuts
+        // everyone else out however short the time it may hold each.
+        if outward && conn.peer_count(t, peer) >= conn.max_conns_per_peer
+            say_refused(lg, true)
+            stream.free()
+            continue
         slot: = conn.table_find_free(t)
         if slot < 0
             // The cap is reached. Refusing holds less state than waiting for a free slot.
-            // **Say so once per stretch at the cap**, not per refusal: a flood would bury the log.
-            if conn.stats.connections_refused == refused_said
-                if ln: = lg.at(.warning)
-                    ln
-                        .s("every one of the \{conn.max_conns\} connection slots is taken; new \
-                            connections are refused until one closes")
-            conn.stats.connections_refused += 1I64
+            say_refused(lg, false)
             stream.free()
             continue
         if conn.stats.connections_refused > refused_said
@@ -462,14 +582,15 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         conn.stats.connections_open += 1I64
         // The address is logged at accept, not after the request: spotting "it connected, yet no
         // request comes" needs the connection line alone.
-        $host: U8[64] = ::{}
-        p: = stream.peer(U8$[]::host) catch net.Peer_addr::{ .host_len = 0, .port = 0 }
-        who: = U8[]::{ .ptr = host[0]@, .len = p.host_len } if p.host_len > 0 else "(unknown)"
+        who: = peer if p.host_len > 0 else "(unknown)"
         if ln: = lg.at(.information)
             ln
                 .s("conn #\{conn.stats.connections_total\} from \{who\}:\{p.port\} (open \
                     \{conn.stats.connections_open\})")
         t.slots[slot] = conn.conn_new(stream, conn.stats.connections_total)
+        fresh: = t.slots[slot].get()
+        fresh.peer = host
+        fresh.peer_len = p.host_len
 
 priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
     t: conn.Conn_table$@) //<
@@ -515,9 +636,18 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
         lingered: = c.lingering_since_us != 0I64 && now - c.lingering_since_us >= linger_us
         idle: =
             !c.holding && c.lingering_since_us == 0I64 && now - c.moved_us >= idle_conn_us
+        // A request still arriving, with nothing to answer yet, past its time.
+        slow: =
+            c.request_since_us != 0I64 && c.inbuf.len > 0 && c.outbuf.len == 0 && !c.backlog &&
+            c.lingering_since_us == 0I64 && now - c.request_since_us >= request_time_us
         if idle
             if ln: = ctx.lg.at(.information)
                 ln.s("conn #\{c.serial\} passed nothing for \{idle_conn_us / us_per_s\} s; closed")
+        else if slow
+            if ln: = ctx.lg.at(.information)
+                ln
+                    .s("conn #\{c.serial\} did not send a whole request in \
+                        \{request_time_us / us_per_s\} s; closed")
         else if !lingered && (!c.peer_done || c.outbuf.len > 0 || c.backlog)
             continue
         conn.table_drop(t, i, ctx.lg)
@@ -694,7 +824,7 @@ fn main(): I32
             continue
         for ev in ready
             if ev.token == listener_token
-                accept_all(listener, table@, lg@)
+                accept_all(listener, table@, lg@, ctx.token.len == 0)
                 continue
             if table.slots[ev.token].is_empty()
                 continue

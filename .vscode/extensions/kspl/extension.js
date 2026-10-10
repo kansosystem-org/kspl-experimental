@@ -140,29 +140,13 @@ function getRelativeUri(documentUri) {
 
 function startLspServer(context) {
     const config = vsc.workspace.getConfiguration('kspl');
+    // Caution: **Never take the program from the opened folder.** A repository can carry its own
+    // `out/ksplc_server.exe`, and starting it on open runs whatever it holds. Only a person's own
+    // setting (`kspl.serverPath`, machine-scoped) names another server; to try a compiler built in
+    // a checkout, put its path there.
     let exePath = config.get('serverPath');
     if (!exePath) {
-        const platform = process.platform;
-        const bundledName = 'ksplc_server.exe';
-        const bundledPath = path.join(context.extensionPath, 'bin', platform, bundledName);
-        
-        let isDevMode = false;
-        if (vsc.workspace.workspaceFolders) {
-            const workspacePath = vsc.workspace.workspaceFolders[0].uri.fsPath;
-            const serverPath = path.join(workspacePath, 'out', 'ksplc_server.exe');
-            const stage1Path = path.join(workspacePath, 'out', 'ksplc_stage1.exe');
-            if (fs.existsSync(serverPath)) {
-                exePath = serverPath;
-                isDevMode = true;
-            } else if (fs.existsSync(stage1Path)) {
-                exePath = stage1Path;
-                isDevMode = true;
-            }
-        }
-        
-        if (!isDevMode) {
-            exePath = bundledPath;
-        }
+        exePath = path.join(context.extensionPath, 'bin', process.platform, 'ksplc_server.exe');
     }
 
     if (!fs.existsSync(exePath)) {

@@ -146,6 +146,29 @@ With no free slot, an accepted connection is closed without a response. Making i
 * **A page's hold is exempt** (`GET /api/here`, `holding`): it is quiet by design, and closing it would read as the page having gone.
 * **The clock restarts on every byte either way**, so a slow but moving transfer is not cut.
 
+### A request must arrive whole within 30 seconds of its first byte
+
+**A request still arriving 30 seconds (`request_time_us`) after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspls`). The idle timer alone does not bound it: it restarts on every byte, so a client that sends one byte every few seconds holds its slot for good, and 128 of them shut everyone out (the attack called Slowloris).
+
+* **One deadline for the head and body together.** The bodies taken are small (64 KiB facing outward), so a client that can send at all sends one well within it; a minimum rate would add a second figure to tune for no case kssrv meets.
+* **The clock starts at the request's first byte**, not at accept, so a keep-alive connection waiting between requests is the idle timer's to judge.
+
+### One address holds at most 16 connections, facing outward
+
+**A connection from an address that already holds 16 (`max_conns_per_peer`) is closed at accept**, as one at the table's cap is, and counted with them (`connections_refused`). Without it one machine takes all 128 slots, however short the time it may hold each. A browser opens six per host, so 16 leaves room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
+
+### A request is parsed only once there is something new to decide
+
+**`conn_build` parses only when the head has ended (or met a line break it refuses), and then only once the whole body is in** (`head_decided`, `need`). Parsed from the start on every read, a request arriving a byte at a time costs its length squared: a 64 KiB head of short headers, with its body sent one byte per packet, made each byte cost a full parse. `http.request_length` gives the whole request's length once the head is in, so the body's arrival is a count.
+
+### A file is sent in chunks as the connection drains
+
+**A file's body is read 16 KiB at a time as `outbuf` empties** (`queue_file`, `refill_from_file`), so a connection holds one chunk, not the file. Read whole, 128 slow readers of a large file held 128 copies of it, enough to run the server out of memory. The head names the size `stat` gave; a file that shrinks meanwhile ends the connection short, which tells the client the body is cut, rather than padding it with bytes that are not the file. The chunks per notification are capped, as reads are, so one fast download does not make the others wait.
+
+### A name starting with a dot is not served
+
+**A path with a name starting with `.` at any level answers 404**, as if absent (`hides_name` in `kssrv/main.kspls`). A root that is a checkout or holds settings has `.git/` and `.env`, and anyone the server faces could read them. **`.well-known` is served** (RFC 8615): certificate issuance and other discovery protocols read under it.
+
 ### `read` returning 0 does not mean the connection is over
 
 A TCP connection has two directions. When `read` returns 0, the client has only stopped sending; it may still be waiting to receive the answer.

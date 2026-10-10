@@ -1,0 +1,54 @@
+//< Tests of `std/fs`'s walks past links, made with `ln -s` (where there is none, the test skips)
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/subproc"
+import "std/verdict"
+
+priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
+    //< `ln -s`; false where none is made
+    r: = subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena)
+    return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
+
+fn test_fs_walk_links() //<
+    //< A walk does not enter a link to a directory
+    //<
+    //< Two links to `.` would make it visit 2^depth directories, and a link out of the tree would
+    //< hand `copy_tree` files from elsewhere.
+    verdict.start("[Fs] a walk past links to directories...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    root: = fs.mkdir_unique("out/tmp", "kspl_test_walk_links_", arena) catch
+        panic("the place for the walk cannot be made")
+    io.write_file(fs.join(root, "a.txt", arena), "a\n") catch panic("a.txt cannot be written")
+    outside: = fs.mkdir_unique("out/tmp", "kspl_test_walk_outside_", arena) catch
+        panic("the place outside cannot be made")
+    io.write_file(fs.join(outside, "secret.txt", arena), "s\n") catch
+        panic("secret.txt cannot be written")
+    // Absolute targets, so they resolve wherever the walk runs from.
+    here: = fs.absolute(root, arena) catch panic("the root has no absolute path")
+    away: = fs.absolute(outside, arena) catch panic("the outside has no absolute path")
+    made: =
+        made_link(here, fs.join(root, "self1", arena), arena) &&
+        made_link(here, fs.join(root, "self2", arena), arena) &&
+        made_link(away, fs.join(root, "away", arena), arena)
+    if !made
+        verdict.skip("a link cannot be made with `ln -s` in this environment")
+        return
+    files: = fs.walk_files(root, fs.skip_none, arena) catch
+        panic("a walk past links must succeed, not stop at too_deep")
+    assert(files.len == 1, "only the file in the tree is found, once")
+    dirs: = fs.walk_dirs(root, fs.skip_none, arena) catch panic("walk_dirs must succeed")
+    assert(dirs.len == 0, "a link to a directory is not a directory under the root")
+    copy: = fs.join(fs.join("out/tmp", "kspl_test_walk_copy", arena), sys_suffix(root), arena)
+    fs.copy_tree(root, copy, fs.skip_none, arena) catch panic("the tree must copy")
+    assert(!fs.exists(fs.join(copy, "away/secret.txt", arena)),
+        "a copy takes nothing from outside the tree")
+    verdict.pass("a walk and a copy stay inside the tree, and two links to `.` end at once.")
+
+priv fn sys_suffix(path: U8[]): U8[] //< the last name of a path, to keep the copy's place apart
+    $at: = path.len
+    for at > 0 && path[at - 1] != '/' && path[at - 1] != '\\'
+        at -= 1
+    return path.sub_from(at)

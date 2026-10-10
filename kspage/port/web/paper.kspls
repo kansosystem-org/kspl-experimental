@@ -7,6 +7,7 @@
 import "kspage/lay/chrome" as band
 import "kspage/lay/flow"
 import "kspage/model/doc" { Chrome }
+import "kspage/model/limit"
 import "kspage/model/paint"
 import "kspage/model/paper" + { Paper }
 import "kspage/port/web/state" + { doc, ed, ensure, input, input_cap, page, sheet, source }
@@ -58,6 +59,14 @@ fn kspage_web_default_paper(out: F32$@)
 fn kspage_web_set_paper(width: F32, height: F32, left: F32, top: F32, right: F32, bottom: F32,
     reading: F32)
     ensure()
+    // Past its range the change is not made, as a document read from a file is refused
+    // (`kspage/model/limit`): a page of a pixel splits the document into a page per pixel.
+    for v in F32[]::{ width, height }
+        if v > 0.0 && !limit.page_fits(v)
+            return
+    for v in F32[]::{ left, top, right, bottom, reading }
+        if !limit.length_fits(state.given(v))
+            return
     $fresh: Paper = sheet.paper
     fresh.width = width if width > 0.0 else 0.0
     fresh.height = height if height > 0.0 else 0.0

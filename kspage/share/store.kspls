@@ -319,15 +319,15 @@ priv fn paper_into($ob: Obj_builder, b: Json_builder$@, p: Paper): Obj_builder /
         ob = ob.set("reading_width", b.float_val(p.reading))
     return ob
 
-fn read_paper(v: Val): Paper //< builds the paper settings from the text
+fn read_paper(v: Val): Paper!Store_error //< builds the paper settings from the text
     $p: Paper = paper.no_paper()
-    p.height = as_f32(v.get("page_height"), p.height)
-    p.width = as_f32(v.get("page_width"), p.width)
-    p.left = as_f32(v.get("margin_left"), p.left)
-    p.top = as_f32(v.get("margin_top"), p.top)
-    p.right = as_f32(v.get("margin_right"), p.right)
-    p.bottom = as_f32(v.get("margin_bottom"), p.bottom)
-    p.reading = as_f32(v.get("reading_width"), p.reading)
+    p.height = checked_f32(v.get("page_height"), p.height, limit.page_fits)!
+    p.width = checked_f32(v.get("page_width"), p.width, limit.page_fits)!
+    p.left = checked_f32(v.get("margin_left"), p.left, limit.length_fits)!
+    p.top = checked_f32(v.get("margin_top"), p.top, limit.length_fits)!
+    p.right = checked_f32(v.get("margin_right"), p.right, limit.length_fits)!
+    p.bottom = checked_f32(v.get("margin_bottom"), p.bottom, limit.length_fits)!
+    p.reading = checked_f32(v.get("reading_width"), p.reading, limit.length_fits)!
     return p
 
 fn sheet_val(b: Json_builder$@, sheet: Sheet$@): Val //< writes the style table as text
@@ -461,23 +461,33 @@ priv fn present(v: Val): Bool //< whether a field is present
 priv fn as_f32(v: Val, dflt: F32): F32
     return F32::v.as_f64(dflt)
 
-priv fn read_font(v: Val, dflt: Font): Font
+priv fn checked_f32(v: Val, dflt: F32, fits: fn(got: F64): Bool): F32!Store_error //<
+    //< Reads a length or a size only if it is inside the allowed range
+    //<
+    //< As `checked` for an integer: **the range is `kspage/model/limit`'s**, and one outside it
+    //< refuses the document rather than being rounded into it.
+    got: = v.as_f64(dflt)
+    if !fits(got)
+        throw .out_of_range
+    return F32::got
+
+priv fn read_font(v: Val, dflt: Font): Font!Store_error
     $out: Font = dflt
     if present(v.get("family"))
         out.family = v.get("family").as_str()
-    out.size_px = as_f32(v.get("size_px"), dflt.size_px)
+    out.size_px = checked_f32(v.get("size_px"), dflt.size_px, limit.font_fits)!
     out.weight = U16::v.get("weight").as_int(dflt.weight)
     out.italic = v.get("italic").as_bool(dflt.italic)
     return out
 
-fn read_spec(v: Val): Font_spec //< builds the font settings from the text
+fn read_spec(v: Val): Font_spec!Store_error //< builds the font settings from the text
     $spec: Font_spec = paint.inherit_all()
     family: = v.get("family")
     if present(family)
         spec.family = .some(family.as_str())
     size_px: = v.get("size_px")
     if present(size_px)
-        spec.size_px = .some(as_f32(size_px, 0.0))
+        spec.size_px = .some(checked_f32(size_px, 0.0, limit.font_fits)!)
     weight: = v.get("weight")
     if present(weight)
         spec.weight = .some(U16::weight.as_int(400))
@@ -506,18 +516,21 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
     //< Builds one style from the text, adds it to the end of the table and returns it
     //<
     //< `Sheet.add` sets the defaults (setting them here too would put the default in two places).
-    s: = sheet.add(v.get("name").as_str(), read_spec(v))
+    s: = sheet.add(v.get("name").as_str(), read_spec(v)!)
     s.ink = read_ink(v)
     s.number = read_number(v)!
-    s.space_before = as_f32(v.get("space_before"), s.space_before)
-    s.space_after = as_f32(v.get("space_after"), s.space_after)
-    s.indent = as_f32(v.get("indent"), s.indent)
-    s.pad = as_f32(v.get("pad"), s.pad)
-    s.width = as_f32(v.get("width"), s.width)
-    s.height = as_f32(v.get("height"), s.height)
-    s.line_spacing = as_f32(v.get("line_spacing"), s.line_spacing)
+    s.space_before =
+        checked_f32(v.get("space_before"), s.space_before, limit.length_fits)!
+    s.space_after =
+        checked_f32(v.get("space_after"), s.space_after, limit.length_fits)!
+    s.indent = checked_f32(v.get("indent"), s.indent, limit.length_fits)!
+    s.pad = checked_f32(v.get("pad"), s.pad, limit.length_fits)!
+    s.width = checked_f32(v.get("width"), s.width, limit.length_fits)!
+    s.height = checked_f32(v.get("height"), s.height, limit.length_fits)!
+    s.line_spacing =
+        checked_f32(v.get("line_spacing"), s.line_spacing, limit.spacing_fits)!
     s.columns = checked(v.get("columns"), 0I64, limit.columns_fits)!
-    s.column_gap = as_f32(v.get("column_gap"), s.column_gap)
+    s.column_gap = checked_f32(v.get("column_gap"), s.column_gap, limit.length_fits)!
     s.outline = checked(v.get("outline"), 0I64, limit.outline_fits)!
     // Read in a fixed order (the reason is at `read_when`).
     s.collect = .none
@@ -532,7 +545,7 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
     if v.get("source").as_bool(false) || v.get("imports").as_bool(false)
         throw .withdrawn
     s.when = read_when(v)
-    s.rule_width = as_f32(v.get("rule_width"), s.rule_width)
+    s.rule_width = checked_f32(v.get("rule_width"), s.rule_width, limit.length_fits)!
     if present(v.get("rule_color"))
         s.rule_color = paint.color_from(v.get("rule_color").as_str()).unwrap_or(0U32)
     if present(v.get("fill"))
@@ -566,22 +579,22 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
     return s
 
 priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@!Store_error
-    sheet: = Sheet.new(read_font(v.get("root"), font.default_root()), arena)
-    sheet.paper = read_paper(v)
+    sheet: = Sheet.new(read_font(v.get("root"), font.default_root())!, arena)
+    sheet.paper = read_paper(v)!
     styles: = v.get("styles").arr_list(arena)
     for $i: Sz = 0; i < styles.len; i += 1
         read_style(sheet, styles.get(i))!
     return sheet
 
-priv fn read_rect(v: Val): Rect
+priv fn read_rect(v: Val): Rect!Store_error
     return Rect::{
-        .x = as_f32(v.get("x"), 0.0),
-        .y = as_f32(v.get("y"), 0.0),
-        .w = as_f32(v.get("w"), 0.0),
-        .h = as_f32(v.get("h"), 0.0),
+        .x = checked_f32(v.get("x"), 0.0, limit.length_fits)!,
+        .y = checked_f32(v.get("y"), 0.0, limit.length_fits)!,
+        .w = checked_f32(v.get("w"), 0.0, limit.length_fits)!,
+        .h = checked_f32(v.get("h"), 0.0, limit.length_fits)!,
     }
 
-priv fn read_sizes(v: Val, into: List<|F32?|>$@, arena: Arena$@) //<
+priv fn read_sizes(v: Val, into: List<|F32?|>$@, arena: Arena$@): Void!Store_error //<
     //< Reads the list and appends it to `into`
     //<
     //< null means "not set".
@@ -590,7 +603,7 @@ priv fn read_sizes(v: Val, into: List<|F32?|>$@, arena: Arena$@) //<
         got: = list.get(i)
         $spec: F32? = .none
         if present(got)
-            spec = .some(as_f32(got, 0.0))
+            spec = .some(checked_f32(got, 0.0, limit.length_fits)!)
         into.push(spec)
 
 priv fn span_of(v: Val): Sz!Store_error //< reads the size of a merge
@@ -602,22 +615,28 @@ fn read_block(v: Val, arena: Arena$@): Block$@!Store_error //<
     //< Builds one block, with its whole tree, from the text
     //<
     //< It is the counterpart of `block_val`.
+    return read_block_at(v, arena, 1)
+
+priv fn read_block_at(v: Val, arena: Arena$@, depth: Sz): Block$@!Store_error //<
+    //< `read_block` for a block `depth` levels down (`limit.nesting_fits`)
+    if !limit.nesting_fits(depth)
+        throw .out_of_range
     blk: = doc.new_block(v.get("style").as_str(), arena)
     // A number read is not assigned again (absent it is 0 = the block has no number).
     blk.name = v.get("name").as_str()
     frame: = v.get("frame")
     if present(frame)
-        blk.frame = .some(read_rect(frame))
+        blk.frame = .some(read_rect(frame)!)
     // Caution: **Read null as "not set".** Skipped, the entries after it shift one place forward.
-    read_sizes(v.get("columns"), blk.column_widths, arena)
-    read_sizes(v.get("rows"), blk.row_heights, arena)
+    read_sizes(v.get("columns"), blk.column_widths, arena)!
+    read_sizes(v.get("rows"), blk.row_heights, arena)!
     blk.span_cols = span_of(v.get("span_cols"))!
     blk.span_rows = span_of(v.get("span_rows"))!
     // The image.
     // Caution: **Read its size along with it** (the core cannot read an image to learn its size).
     blk.image = v.get("image").as_str()
-    blk.image_w = as_f32(v.get("image_w"), 0.0)
-    blk.image_h = as_f32(v.get("image_h"), 0.0)
+    blk.image_w = checked_f32(v.get("image_w"), 0.0, limit.length_fits)!
+    blk.image_h = checked_f32(v.get("image_h"), 0.0, limit.length_fits)!
     blk.chart = v.get("chart").as_str()
     if present(v.get("aim")) || present(v.get("tie_from")) || present(v.get("tie_to"))
         throw .withdrawn
@@ -635,7 +654,7 @@ fn read_block(v: Val, arena: Arena$@): Block$@!Store_error //<
         made.refers = n.get("refers").as_str()
     children: = v.get("children").arr_list(arena)
     for $i: Sz = 0; i < children.len; i += 1
-        blk.children.push(read_block(children.get(i), arena)!)
+        blk.children.push(read_block_at(children.get(i), arena, depth + 1)!)
     return blk
 
 fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<

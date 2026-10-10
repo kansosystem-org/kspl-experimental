@@ -276,8 +276,10 @@ These hold for every connection, in both modes.
 | :-- | :-- |
 | The connection | **Kept, as HTTP/1.1's default calls for** (keep-alive: one connection carries many requests). It closes where the client sent `Connection: close`, and where an error response was returned |
 | At the cap | **128 connections are held at once.** One arriving at the cap is closed at once with no response. It is not queued, so a client sees a closed socket rather than a wait |
-| An idle connection | **Nothing cuts it.** A client that sits silent holds its slot until it closes, so 128 idle clients keep any new one out |
-| A large file | Read into memory once and copied into the response buffer, so that connection holds the whole of it until it is all sent |
+| From one address | **Facing outward, 16 at most.** One more from the same address is closed at once with no response, so one machine cannot take every slot. With `--local` every peer is this machine, and only the cap of 128 applies |
+| An idle connection | **Closed once it has passed no byte either way for 30 seconds**, a page's hold (`GET /api/here`) excepted |
+| A request arriving slowly | **Closed if it has not arrived whole 30 seconds after its first byte**, however its bytes trickle in |
+| A large file | **Sent in chunks as the connection drains**, so a connection holds one chunk of it, not the whole. A file that shrinks while it is sent ends the connection before the length the head named, so the client sees the body cut short |
 
 ## Known limits
 
@@ -287,3 +289,4 @@ These are the places where the server does less than a client might expect.
 * **The steering policy is not saved.** It is trained again on every outward-facing startup. The seed is fixed, so the same version gives the same weights every time.
 * **`Range` and conditional requests (`If-Modified-Since` and the like) are not supported.** It always returns the whole thing.
 * **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served: a folder is checked together with its `index.html`.
+* **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception, since certificate issuance and other discovery read under it (RFC 8615).

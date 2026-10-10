@@ -210,7 +210,8 @@ KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
 KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return 0;
-    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    /* O_NOFOLLOW: a link planted at the lock's name would have it create or open another file. */
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     return fd < 0 ? 0 : (I64)fd + 1;
 }
 

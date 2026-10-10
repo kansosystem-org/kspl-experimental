@@ -19,8 +19,11 @@ on:
         required: true
         default: "v0.1.0"
 
+# **Read-only by default; only `release` writes.** The build and the packaging run third-party
+# code (the toolchain, vsce and its dependencies), which must not hold a token that can push or
+# replace a release.
 permissions:
-  contents: write
+  contents: read
 
 # The shared tag name, so the version can go into the zip/vsix file names (referenced by every job).
 env:
@@ -48,8 +51,11 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: msys2/setup-msys2@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The token stays out of .git/config, where any later step could read it.
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         if: runner.os == 'Windows'
         with:
           msystem: UCRT64
@@ -112,7 +118,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path dist/* -DestinationPath "ksplc-${env:TAG}-${{ matrix.slug }}.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ksplc-${{ env.TAG }}-${{ matrix.slug }}.zip
           path: ksplc-${{ env.TAG }}-${{ matrix.slug }}.zip
@@ -125,8 +131,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The token stays out of .git/config, where any later step could read it.
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       - name: Embed per-platform ksplc into the extension's bundled LSP server dir
         # download-artifact@v4 unpacks under a directory named after the artifact: <name>/<name>.
         run: |
@@ -141,7 +150,7 @@ jobs:
           embed windows-x64 ksplc.exe win32
           chmod +x .vscode/extensions/kspl/bin/linux/ksplc_server.exe
           chmod +x .vscode/extensions/kspl/bin/darwin/ksplc_server.exe
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
       - name: Package .vsix
@@ -151,10 +160,10 @@ jobs:
           set -e
           for ext in kspl kspeg; do
             cp LICENSE.md ".vscode/extensions/$ext/LICENSE.md"
-            (cd ".vscode/extensions/$ext" && npx --yes @vscode/vsce package \
+            (cd ".vscode/extensions/$ext" && npx --yes @vscode/vsce@4.0.0 package \
               --allow-missing-repository -o "${{ github.workspace }}/$ext-${TAG}.vsix")
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vsix
           path: "*.vsix"
@@ -162,10 +171,12 @@ jobs:
   release:
     needs: [build, package-vscode-ext]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # it creates the Release and its tag
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}

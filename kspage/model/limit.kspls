@@ -24,6 +24,15 @@ const most_places: I64 = 9 //< the decimal places in how a number is shown
     //< **As far as 10 to that power fits in an I64** (more places would change no text: a field
     //< with no effect though written).
 
+const most_nesting: Sz = 32 //< how deep blocks may sit inside one another
+    //<
+    //< **Laying out and drawing descend one call per level**, and so do the tables a cell holds,
+    //< so a document a few kilobytes long, nested thousands deep, runs the stack out where it is
+    //< laid out, after it has replaced the open one. 32 is past any list or table people nest.
+
+fn nesting_fits(depth: Sz): Bool //< whether a block may stand this deep (the top level is 1)
+    return depth <= most_nesting
+
 fn span_fits(got: I64): Bool //< whether it is allowed as a merge's count
     //<
     //< **1 is the smallest** (the layout cannot count a merge of 0).
@@ -43,3 +52,40 @@ fn places_fits(got: I64): Bool //< whether it is allowed as a number of decimal 
     //<
     //< **0 means "show no decimals"** (it is inside the range).
     return got >= 0I64 && got <= most_places
+
+// ==========================================
+// Lengths and sizes (pixels, F32 in the model). **A length decides work too**: the layout counts
+// pages by the paper's height and draws a band per page, and a size or a gap past any paper turns
+// those counts into billions, or past what a cast to an integer can hold.
+// ==========================================
+
+const most_length: F64 = 100000.0 //< the longest length, gap or position either way, in pixels
+    //<
+    //< About 26 metres at 96 to the inch: past any paper, well short of a count that hangs.
+
+const least_page: F64 = 96.0 //< the shortest page a document is split into: one inch
+    //<
+    //< **0 means "no pages"** and stays allowed. Between, a page of a pixel splits a document into
+    //< a page per pixel.
+
+const most_font: F64 = 1638.0 //< the largest font size, in pixels
+    //<
+    //< Word's own cap on a size (1638 points) taken as pixels: larger than any it can set.
+
+const most_spacing: F64 = 100.0 //< the largest line height ratio
+
+fn length_fits(got: F64): Bool //< whether it is allowed as a length, a gap or a position
+    //<
+    //< **Negative values are allowed** (a hanging indent, a frame dragged past the edge); the
+    //< magnitude decides the work. A value that is not a number fits nowhere.
+    return got >= -most_length && got <= most_length
+
+fn page_fits(got: F64): Bool //< whether it is allowed as the paper's width or height
+    return got == 0.0 || (got >= least_page && got <= most_length)
+
+fn font_fits(got: F64): Bool //< whether it is allowed as a font size; 0 and below are not
+    return got > 0.0 && got <= most_font
+
+fn spacing_fits(got: F64): Bool //<
+    //< whether it is allowed as a line height ratio; 0 means "not set"
+    return got >= 0.0 && got <= most_spacing

@@ -396,6 +396,18 @@ pub fn parse_request( //< the one request at the start of the buffer; fails if i
     body: = body_in(src, h, body_len)!
     return build_request(arena, req_line, h.head, body, h.head_end + body_len)
 
+pub fn request_length( //< how many bytes the request at the start of the buffer takes in all
+    //<
+    //< **For a reader that waits for the body without parsing again**: once the head has arrived,
+    //< the rest is a count. It fails as `parse_request` does on the head, `incomplete` included
+    //< until the head's empty line arrives.
+    src: U8[], //< what has arrived so far
+    max_body: Sz, //< the largest body accepted, as `parse_request` takes it
+    arena: Arena$@, //< where the head's parts are allocated
+): Sz!Http_error //< the head's length plus the body's
+    h: = scan_head(src, max_body, arena)!
+    return h.head_end + request_body_len(h)
+
 pub fn parse_response( //< the one response at the start of the buffer; fails if it is incomplete
     //<
     //< The body limit is `default_max_body_bytes`; the head's is `max_head_bytes`.

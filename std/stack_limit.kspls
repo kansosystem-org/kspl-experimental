@@ -7,20 +7,15 @@
 // ==========================================
 // The per-OS code (`pthread_getattr_np`, `pthread_get_stackaddr_np`,
 // `GetCurrentThreadStackLimits`) stays inside `kspl_stack_floor` in
-// `ksplc/gen/runtime/hosted_thread.c`. A freestanding build answers "not known" here.
+// `ksplc/gen/runtime/hosted_thread.c`. A freestanding build asks `freestanding.c` beside it: wasm32
+// knows its stack's end from the linker, bare metal answers "not known" (0).
 // ==========================================
 
-#cfg(!freestanding)
 extern "C"
     fn kspl_stack_floor(): Sz
 
-#cfg(!freestanding)
-priv fn stack_floor(): Sz //< where the calling thread's stack ends, as the OS reports it
+priv fn stack_floor(): Sz //< where the calling thread's stack ends; 0 where nothing tells
     return kspl_stack_floor()
-
-#cfg(freestanding)
-priv fn stack_floor(): Sz //< 0, "not known": the bounds are the linker script's, unread here
-    return 0
 
 pub struct Stack_limit //<
     //< where a walk on the calling thread stops, a margin before the end of its stack
@@ -66,7 +61,7 @@ impl Stack_limit
 
     pub fn near( //< whether the caller is within the margin of the stack's end
         //<
-        //< **Always false where the OS does not tell** (a freestanding build), so a walk also keeps
+        //< **Always false where the OS does not tell** (bare metal), so a walk also keeps
         //< its own depth count.
         limit: Self@,
     ): Bool

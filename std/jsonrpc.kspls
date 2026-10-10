@@ -89,11 +89,18 @@ pub fn encode( //< assembles one JSON-RPC body
     obj.build().dump(out@)
     return arena.dup_str(out.slice())
 
+pub const max_head_bytes: Sz = 8192 //< the longest header taken before its end, so a lie ends
+    //<
+    //< A real header is a few dozen bytes. Without it, a peer that never ends one grows the buffer
+    //< for good, and each read searches all of it again.
+
 pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete yet
     //<
     //< Caution: **Drop a broken header before returning too**, or every later read returns the same
-    //< failure forever.
+    //< failure forever. **Take the reader's own limit**: a reader that lets a larger body in than
+    //< this one waits for loses the frame boundary, and every frame after it is misread.
     acc: Str_builder$@, //< what has arrived so far; the frame cut out is removed from it
+    max_body: Sz, //< the largest body waited for (`max_body_bytes` unless the reader takes more)
     arena: Arena$@, //< where the body is copied to
 ): U8[]?!Rpc_end //< the body, or none for now; a bad length header fails with broken
     text: = U8[]::acc.slice()
@@ -102,9 +109,12 @@ pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete 
     case .some(i)
         sep = i
     case .none
+        if text.len > max_head_bytes
+            acc.len = 0
+            throw .broken
         return .none
     body_at: = sep + frame_sep.len
-    want: = content_length(text.sub(0, sep), max_body_bytes).unwrap_or(0)
+    want: = content_length(text.sub(0, sep), max_body).unwrap_or(0)
     if want == 0
         acc.drop_prefix(body_at)
         throw .broken
@@ -225,7 +235,7 @@ impl Client
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
         for sys.mono_us() <= deadline
             r.drain_err()
-            taken: = take_frame(r.acc@, arena)!
+            taken: = take_frame(r.acc@, max_body_bytes, arena)!
             if body: = taken
                 return json.parse(body, arena) catch
                     throw .broken

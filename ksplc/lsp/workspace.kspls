@@ -93,8 +93,10 @@ priv fn walk(rel: U8[], skip: List<|U8[]|>@, depth: Sz, out: List<|U8[]|>$@, are
         child: = name if rel.len == 0 else fs.join(rel, name, arena)
         info: = fs.stat(child) catch _e
             continue
+        // Caution: **Do not descend through a link to a folder.** Two links to `.` make the walk
+        // visit 2^depth folders, and a link out of the workspace reads files nobody opened.
         if info.is_dir
-            if !named_in(skip, name)
+            if !named_in(skip, name) && !fs.is_link(child)
                 walk(child, skip, depth + 1, out, arena)
         else if child.has_kspl_ext()
             out.push(child)

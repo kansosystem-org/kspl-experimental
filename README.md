@@ -11,7 +11,7 @@
 
 **To try it, follow the three steps of the [Quick start](#-quick-start-write-and-run-your-first-program) below**: get the compiler `ksplc`, save a five-line `hello.kspls`, and type `ksplc run hello.kspls`. Then [`docs/TOUR.md`](docs/TOUR.md) teaches the language in short steps.
 
-"Kanso" (簡素, plainness) names the design philosophy of the whole project. KSPL is its first product. Kanso OS, Kanso Server, the AI engine, Kanso DataBase and Kanso Doc follow the same philosophy (their folders are in "Repository layout" below).
+"Kanso" (簡素, simplicity) names the design philosophy of the whole project. KSPL is its first product. Kanso OS, Kanso Server, the AI engine, Kanso DataBase and Kanso Doc follow the same philosophy (their folders are in "Repository layout" below).
 
 **The compiler turns KSPL into C, and a C compiler makes the program.** The compiler `ksplc` writes C99 (the 1999 edition of C, which nearly every C compiler accepts). So a new platform needs only a C compiler, not a port of the whole toolchain. [Where it is supported](#where-it-is-supported) below lists where this is confirmed to run.
 

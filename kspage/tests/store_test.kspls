@@ -508,6 +508,32 @@ fn test_a_number_out_of_range_is_rejected(arena: Arena$@) //<
     // before.
     refused(arena, "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":-1}]}",
         "a merge that goes negative")
+    // **A length decides work too**: the page count is the height over the page's height, and a
+    // band is drawn per page; a page of a pixel's fraction made billions.
+    refused(arena, "{\"kspage\":6,\"sheet\":{\"page_height\":1e-30},\"blocks\":[]}",
+        "a page a fraction of a pixel high")
+    refused(arena, "{\"kspage\":6,\"sheet\":{\"page_width\":1e38},\"blocks\":[]}",
+        "a page wider than any paper")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"big\",\"size_px\":1e38}]},\"blocks\":[]}",
+        "a font too large")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"gap\",\"space_before\":1e30}]},\"blocks\":[]}",
+        "a gap past any paper")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"image_w\":-1e20}]}",
+        "a picture's width past any paper")
+    // **Nesting decides work too**: layout descends a call per level, and a deep one ran out of
+    // stack after it had replaced the open document.
+    $deep: = Str_builder.new()
+    defer deep.free()
+    deep.s("{\"kspage\":6,\"sheet\":{},\"blocks\":[")
+    for _i in Range.asc(40)
+        deep.s("{\"style\":\"body\",\"children\":[")
+    for _i in Range.asc(40)
+        deep.s("]}")
+    deep.s("]}")
+    refused(arena, deep.slice(), "blocks nested 40 deep")
     // Inside the range it reads as before.
     got: =
         store.load("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":3,\"span_rows\":2}]}",
