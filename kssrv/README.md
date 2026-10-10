@@ -18,8 +18,9 @@ The port and the root are **positional**; no environment variable fills either i
 | Option | What it does |
 | :-- | :-- |
 | (none) | Faces outward: any machine on the network can fetch the files, and the car can ask for its steering |
-| `--local` | **Makes it a local server**, reachable from this machine only. The file endpoints (`/api/file`, `/api/stat`) exist only under it. It starts no program, and it trains nothing, so it answers as soon as it starts. It prints a token (a secret string) that every request but the page must carry |
+| `--local` | **Makes it a local server**, reachable from this machine only. The endpoints a local page uses (`/api/file`, `/api/stat`, and `/api/here` and `/api/stop`, which keep it up and stop it) exist only under it. It starts no program, and it trains nothing, so it answers as soon as it starts. It prints a token (a secret string) that every request but the page must carry |
 | `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** It may sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md) says what naming it weighs) |
+| `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** Absent, it stays up. A page holds it through `/api/here` ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 
 The rules of local use are [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)'s, and the grounds [`kssrv/docs/DESIGN.md`](docs/DESIGN.md)'s.
 

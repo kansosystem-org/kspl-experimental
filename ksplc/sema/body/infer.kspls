@@ -1,7 +1,14 @@
+//< The main walk over the bodies: every function and initializer, then the generics' instances
+//<
+//< `run` types the top-level declarations in the files' order, then checks the body of each queued
+//< instance, evaluates the assertion directives, and runs the checks that need the whole analysis
+//< (the imports, the unused names). `Sema_ctx.bodies` chooses which bodies are checked. The
+//< declarations are registered before this, by `run` in `sema/decl/collect.kspls`.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/literal" as base_literal
 import "ksplc/sema/body/analyze" as sema_body_analyze
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/for_in" as sema_body_for_in
@@ -22,7 +29,6 @@ import "ksplc/sema/session/prof" as sema_session_prof
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
-import "std/chars"
 import "std/ds" { List, Map }
 import "std/str" { Str_builder }
 
@@ -287,69 +293,75 @@ impl Ast_node
                 c.set_current_file(prev_file)
         if param_list != null
             for item in base_ast_ext.Param_cursor.new(param_list, false)
-                p_name: = item.find_text(.k_identifier)
-                t_node: = item.find_child(.k_type_expr)
-                item.ice_assert(p_name.len > 0, "Function parameter is missing an identifier")
-
-                sym: = Sema_symbol.new(.variable, p_name, item)
-                // A parameter without `$` cannot be reassigned, as with `x: = ...`; a field write
-                // on a by-value receiver (`r: Self`) is rejected by enforce_mutability walking the
-                // `.`.
-                if !item.has_mut_binding_marker()
-                    sym.flags.is_mut = false
-                $t_id: = c.env.get_or_add("Void")
-                if t_node != null
-                    t_id = t_node.resolve_type(c)!
-                    if is_export
-                        c.check_ffi_safety(t_id, t_node)
-                if t_id == c.env.get_or_add("Unknown") || t_id == c.env.get_or_add("Void")
-                    c.err(item, "missing type annotation for parameter")
-                sym.type_id = t_id
-                item.type_id = t_id
-                c.declare_symbol(p_name, sym, false)
-                id_node: = item.find_child(.k_identifier)
-                if id_node != null
-                    id_node.def_node = item
+                item.declare_param(c, is_export)!
 
         block: = r.find_child(.k_stmt_block)
         if base_core.config.run_lint_checks && block != null
             r.lint_fn_length(c)
-        $has_err: = false
-        if block != null
-            block.infer_stmts(c) catch
-                has_err = true
-            if !has_err
-                // [W0105] A lock's borrow used outside the lock (lint only).
-                sema_body_lint_stmt.lint_lock_escape(c, block)
-                // [W0109] A way out between an `Owned` value's binding and the `defer` freeing it.
-                sema_body_lint_stmt.lint_defer_gap(c, block)
-            if !has_err && r.has_attribute("naked") && !block.holds_only_asm(c)
-                has_err = true
-            if !has_err && !c.has_error()
-                if !r.analyze_function_body(c, block)
-                    has_err = true
-                else
-                    base_ret_id: = c.env.strip_result(c.fn_ctx.ret_id)
-                    if sema_type_env.is_void(base_ret_id) ||
-                        sema_type_env.is_unknown(base_ret_id)
-                        // Caution: **Do not add it to a function that declares `#noreturn`.** A
-                        // `return;` under C's `__attribute__((noreturn))` triggers
-                        // `-Winvalid-noreturn` (Principle 2). Nor to a `#naked` one: its assembly
-                        // returns, and clang refuses any other statement.
-                        $needs_return: =
-                            !r.has_attribute("noreturn") && !r.has_attribute("naked")
-                        if needs_return && block.children.len > 0
-                            last: = block.last_child()
-                            if last.kind_id == .k_stmt_return || last.kind_id == .k_stmt_throw ||
-                                last.kind_id == .k_stmt_fallback
-                                needs_return = false
-                        if needs_return
-                            implicit_ret: = Ast_node.new(.k_stmt_return, "return", block.loc)
-                            implicit_ret
-                                .add_child(Ast_node.new(.k_keyword, "return", block.loc))
-                            block.add_child(implicit_ret)
-        if has_err
+        if block != null && !r.infer_body(c, block)
             throw .analysis_failed
+
+    priv fn declare_param(r: Self$@, c: Sema_ctx$@, is_export: Bool): Void!Sema_error //<
+        //< It declares one parameter in the function's scope, with its written type
+        p_name: = r.find_text(.k_identifier)
+        r.ice_assert(p_name.len > 0, "Function parameter is missing an identifier")
+        sym: = Sema_symbol.new(.variable, p_name, r)
+        // A parameter without `$` cannot be reassigned, as with `x: = ...`; a field write on a
+        // by-value receiver (`r: Self`) is rejected by enforce_mutability walking the `.`.
+        if !r.has_mut_binding_marker()
+            sym.flags.is_mut = false
+        $t_id: = c.env.get_or_add("Void")
+        t_node: = r.find_child(.k_type_expr)
+        if t_node != null
+            t_id = t_node.resolve_type(c)!
+            if is_export
+                c.check_ffi_safety(t_id, t_node)
+        c.check_param_type(r, t_id)
+        sym.type_id = t_id
+        r.type_id = t_id
+        c.declare_symbol(p_name, sym, false)
+        id_node: = r.find_child(.k_identifier)
+        if id_node != null
+            id_node.def_node = r
+
+    priv fn infer_body(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool //<
+        //< It analyzes a function's body; false where it found an error
+        //<
+        //< A body whose function returns nothing gets the `return` its writer left out.
+        block.infer_stmts(c) catch
+            return false
+        // [W0105] A lock's borrow used outside the lock (lint only).
+        sema_body_lint_stmt.lint_lock_escape(c, block)
+        // [W0109] A way out between an `Owned` value's binding and the `defer` freeing it.
+        sema_body_lint_stmt.lint_defer_gap(c, block)
+        if r.has_attribute("naked") && !block.holds_only_asm(c)
+            return false
+        if c.has_error()
+            return true
+        if !r.analyze_function_body(c, block)
+            return false
+        r.add_implicit_return(c, block)
+        return true
+
+    priv fn add_implicit_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@) //<
+        //< It ends the body of a function returning nothing with `return`, where it does not end so
+        //<
+        //< Caution: **Do not add it to a function that declares `#noreturn`.** A `return;` under
+        //< C's `__attribute__((noreturn))` triggers `-Winvalid-noreturn` (Principle 2). Nor to a
+        //< `#naked` one: its assembly returns, and clang refuses any other statement.
+        base_ret_id: = c.env.strip_result(c.fn_ctx.ret_id)
+        if !sema_type_env.is_void(base_ret_id) && !sema_type_env.is_unknown(base_ret_id)
+            return
+        if r.has_attribute("noreturn") || r.has_attribute("naked")
+            return
+        if block.children.len > 0
+            last: = block.last_child()
+            if last.kind_id == .k_stmt_return || last.kind_id == .k_stmt_throw ||
+                last.kind_id == .k_stmt_fallback
+                return
+        implicit_ret: = Ast_node.new(.k_stmt_return, "return", block.loc)
+        implicit_ret.add_child(Ast_node.new(.k_keyword, "return", block.loc))
+        block.add_child(implicit_ret)
 
     priv fn holds_only_asm(r: Self$@, c: Sema_ctx$@): Bool //<
         //< Whether a `#naked` function's body is `__kspl_asm_volatile(...)` statements alone
@@ -447,13 +459,14 @@ impl Ast_node
                 msg_node = ch
 
         if expr_node != null
-            val: = expr_node.eval_constexpr(c) catch 0
+            // Caution: **A condition that does not fold is reported, not taken as false**: folding
+            // names why, and the file's own message would then claim a failure that did not happen.
+            val: = expr_node.eval_constexpr(c) catch
+                return
             if val == 0
                 $msg_slice: U8[] = "Assertion failed"
                 if msg_node != null
-                    raw_msg: = msg_node.text
-                    if raw_msg.len >= 2
-                        msg_slice = raw_msg.sub(1, raw_msg.len - 2)
+                    msg_slice = msg_node.text.literal_value(base_core.arena)
                 // Caution: Send both through the same path as other diagnostics; printed directly,
                 // they get no position and are missing from the final count. No code is assigned:
                 // the words are the user's, and silencing them with `##lint` would void the

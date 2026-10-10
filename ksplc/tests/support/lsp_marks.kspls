@@ -85,8 +85,8 @@ priv fn hover_at(c: jsonrpc.Client$@, spot: Spot, arena: Arena$@): json.Val!json
     return c.request("textDocument/hover", pos, normal_ms, arena)
 
 fn check_hover_marks(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(marks_uri, marks_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(marks_uri, marks_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, marks_uri, arena)
     for spot in blank_spots
         label: = arena.text().s("a hover on ").s(spot.name).s(" answers nothing").take()
@@ -104,5 +104,5 @@ fn check_hover_marks(c: jsonrpc.Client$@, arena: Arena$@)
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
-        verdict.check(label, text.find_str(spot.want) >= 0,
+        verdict.check(label, text.find_str(spot.want).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))

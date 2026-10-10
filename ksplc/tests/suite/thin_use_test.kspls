@@ -262,8 +262,9 @@ priv fn imported_std_name(line: U8[]): U8[] //<
     rest: = t.sub_from(head.len)
     if !rest.starts_with("std/")
         return ""
-    close: = rest.find_char('"')
-    return "" if close < 0 else rest.sub(0, close)
+    if close: = rest.find_char('"')
+        return rest.sub(0, close)
+    return ""
 
 priv fn collect_std(files: List<|Std_file|>$@, edges: List<|Edge|>$@, arena: Arena$@): Bool //<
     //< It gathers the `.kspls` files of the `std` the compiler reads, each named as it is imported
@@ -278,9 +279,10 @@ priv fn collect_std(files: List<|Std_file|>$@, edges: List<|Edge|>$@, arena: Are
             continue
         // Caution: **Do not trim by length.** A changed extension leaves a name with a trailing
         // `.`.
+        entry: = text.starts_with("fn main(") || text.find_str("\nfn main(").is_some()
         files
             .push(Std_file::{ .name = rel.strip_suffix(ext), .lines = text.count_str("\n"),
-            .entry = text.starts_with("fn main(") || text.find_str("\nfn main(") >= 0 })
+            .entry = entry })
         idx: = files.len - 1
         for line in text.lines(arena)
             to: = imported_std_name(line)
@@ -330,7 +332,7 @@ priv fn thin_case(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
         verdict.check(name, false, "cannot write the material")
         return
     r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "thin.kspl", "thin.c" }), dir)
-    if !verdict.check(name, r.code == 0 && r.out.find_str("error:") < 0, r.out)
+    if !verdict.check(name, r.code == 0 && r.out.find_str("error:").is_none(), r.out)
         return
     // Caution: **Build the generated C too.** A thin user fails as "zero diagnostics yet the C does
     // not build" (an uncalled `pub fn`'s `T!E` with its inner type undeclared), reaching the user
@@ -363,7 +365,7 @@ priv fn check_no_unused_stage_types(gen: U8[], arena: Arena$@) //<
     name: = "a program writing no chain has no stage type left"
     stage_names: U8[][3] = ::{ "std_seq_List_seq", "std_seq_Keep", "std_seq_Conv" }
     for stage in stage_names
-        if gen.find_str(stage) >= 0
+        if gen.find_str(stage).is_some()
             verdict.check(name, false,
                 arena.text().s("'\{stage\}' is left in the generated C. ")
                 .s("a generic's body nobody names cannot be dropped (ksplc/lower/prune.kspls)")

@@ -645,8 +645,9 @@ What the parser above does with a few command lines:
 | `-5` as a positional argument | Refused as an unknown option |
 | `-` | A positional argument, meaning standard input by convention |
 | `-h` | Refused as an unknown option, and the refusal prints the usage |
+| `-- -5 --help` | Two positional arguments, `-5` and `--help`: after a lone `--` nothing is read as an option or a command |
 
-Caution: **Anything starting with `-` that no declaration knows is an error, never let through silently.** Besides misspellings, it catches the pieces the shell makes when it splits a path holding a space into several words; ignored, they cause an untraceable failure. The price: a negative number such as `-5` cannot be a positional argument (the convention that everything after `--` is positional is not implemented). A lone `-` is positional, meaning standard input by convention.
+Caution: **Anything starting with `-` that no declaration knows is an error, never let through silently.** Besides misspellings, it catches the pieces the shell makes when it splits a path holding a space into several words; ignored, they cause an untraceable failure. The price: a negative number such as `-5`, or a file named `-x`, is a positional argument only after a lone `--`, the POSIX convention that everything after it is positional. A lone `-` is positional, meaning standard input by convention.
 
 **A value is joined with `=`, and only so** (`--out=result.jsonl`); `--out result.jsonl` is refused with "needs a value, written as '--out=<value>'". Two spellings of one option are two ways to write the same thing (Principle 6 in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)), and the spaced one has to guess. Is the next argument the value or another option? In `--root --show`, taking `--show` as the value serves a folder that does not exist, which shows 30 seconds later as the server failing to start. And may a value start with `-`? Joined, the value is whatever follows the first `=`, `-7` and an empty value included, and an option never takes the argument after it. Positional arguments are taken only where declared (`p.positional`, read from `p.rest`), since a word-split fragment can also arrive in the positional shape.
 
@@ -870,6 +871,20 @@ Caution: **Do not measure elapsed time with the wall clock.** Rewound by NTP or 
 
 **No function for CPU time is held**: CPU time does not advance while waiting, so used as elapsed time it erases whole spans spent reading the source. If "how much was computed" is needed, add it under a different name; merged into `mono_us`, one name would mean different things per environment. Zig, Rust and Go make the same split. C has only `time()` and `clock()`, neither correct for elapsed time, so everyone calls `clock_gettime` directly.
 
+### A wait's sign means one thing everywhere
+
+Every wait std takes in milliseconds (a child's pipe, a socket, `std/reactor`'s `wait`, an HTTP read, a JSON-RPC call) reads its number the same way:
+
+| The wait | What it does |
+| :-- | :-- |
+| a positive number | waits at most that long, then answers "timed out" |
+| `0` | looks once, without waiting |
+| a negative number | a time already up: it looks once, as `0` does |
+
+**There is no "wait for good".** A wait is required exactly so that a peer that goes silent comes back as a value; a forever wait would make that silence a hang again. A deadline counted down (`deadline - now`) can go negative on a slow machine, and it then means "the time is up", never "no limit".
+
+Caution: **Read the sign in one place, the runtime's entry** (`kspl_wait_ms`). Read where each OS call takes it, `-1` waited for good in POSIX `poll()`, 49 days through Windows' unsigned tick comparison, and not at all on POSIX's write deadline: one number, three behaviours, and a program that worked on one OS hung on another.
+
 ### A date-time that does not fit a fixed-length date-time format is refused as a value
 
 `write_rfc1123` / `write_iso8601` refuse a year they cannot write in exactly four digits, rather than write a wrong one.
@@ -1085,9 +1100,9 @@ Each call of a recursive function takes some of the thread's *stack*; when the s
 
 **`std/stack_limit` asks the OS where the calling thread's stack ends, and a walk compares its own position with that** (`Stack_limit.new(margin)` once per walk, `near()` at each level; the per-OS calls are in `kspl_stack_floor` in [`../../ksplc/gen/runtime/hosted_thread.c`](../../ksplc/gen/runtime/hosted_thread.c)). The margin is the caller's: what runs after the walk refuses (the unwinding, building the message) runs below where it stopped, and only the walk knows how much that is.
 
-**A walk run many times over mostly shallow input asks late** (`Stack_limit.later(margin, deep)`, checked by `near_at(depth)`). Asking costs a read of `/proc/self/maps` on Linux's main thread, far more than a shallow walk, so it is asked only once the walk reaches `deep`. `std/json`'s parse and `std/regex`'s compile and match take that shape, since `find` runs once per line in a scan. The levels above `deep` are few enough to fit in any stack.
+**A walk run many times over mostly shallow input asks late** (`Stack_limit.later(margin, deep)`, checked by `near_at(depth)`). Asking costs a read of `/proc/self/maps` on Linux's main thread, far more than a shallow walk, so it is asked only once the walk reaches `deep`. `std/json`'s parse and `std/regex`'s compile take that shape. The levels above `deep` are few enough to fit in any stack.
 
-**A walk that reaches a limit refuses the whole input**, never one branch of it. If a match too deep for its count answered "no match" in that branch alone, backtracking could report a shorter match or none: a wrong answer rather than a refusal. So in `std/regex` the depth, the stack and the attempt budget all end the `find` as `too_complex`.
+**A walk that reaches a limit refuses the whole input**, never one branch of it. If a match too deep for its count answered "no match" in that branch alone, backtracking could report a shorter match or none: a wrong answer rather than a refusal. So `std/regex`'s attempt budget ends the whole `find` as `too_complex`, and its compile's depth and stack end the whole pattern as `too_deep`.
 
 **Not taken: growing the stack** (rustc's `stacker`, Go's goroutines). It lifts the limit instead of reporting it, but it needs a way of switching stacks the language lacks, and a debugger and a profiler lose the thread across the switch. Not taken either: running the walk on a thread whose stack size is chosen. The size must still be guessed from what a level costs, the very number that moves.
 
@@ -1220,55 +1235,44 @@ Caution: **Hold separate buffers for standard output and standard error.** Share
 
 `std/regex` matches by *backtracking*: it tries one way to match, and on failure steps back and tries the next.
 
-Two words used below: a *capture group* is a part of the pattern in parentheses, `( … )`, whose matched text `Match.group(n)` returns afterwards. The *continuation* is what is still left to match after the current piece.
+Two words used below: a *capture group* is a part of the pattern in parentheses, `( … )`, whose matched text `Match.group(n)` returns afterwards. A *backtracking point* is a place the matcher may step back to: another alternative, one byte less of a repetition, one round fewer.
 
-### A capture group's end is observed with a marker node
+### The pattern runs as a flat program, and the backtracking points live in a list
 
-To know where a group ends, the matcher puts a marker at the seam between the group's content and what follows it. The position where matching reaches the marker is the group's end.
+`compile` turns the pattern into a tree once, and the tree into a program of steps: match one byte, try this and keep that, jump, record where a group starts or ends, test a boundary, begin a round, done. A match runs the program; each choice it makes pushes a backtracking point onto a list on the heap, and a failure pops the newest one.
 
-`std/regex` matches by naive backtracking, but **does not hold the continuation in a closure**: `match_group` builds a temporary sequence, an alternative's atoms followed by the outer sequence's remainder, and matches it from the head. That shape erases the group's end, since nothing in the joined sequence shows where the group stops and the remainder begins. So a `.group_end` marker node is inserted at the seam, and the position when matching reaches it is the group's end.
+**Matching does not recurse.** Walking the tree by recursion costs one native call per atom and per round, so `(ab)*` over a text of a few thousand rounds either refused the text at a depth limit or would have exhausted the stack, though the text only is long, not hard. In the list, a round costs one entry, and **only the attempt budget**, which grows with the text, ends a search.
 
-For the pattern `(ab|c)d`, the two attempts match these sequences from their head:
+For the pattern `(ab|c)d` the program is:
 
-| Attempt | The temporary sequence |
+| Step | What it does |
 | :-- | :-- |
-| The first alternative | `a`, `b`, *group end*, `d` |
-| The second alternative | `c`, *group end*, `d` |
+| 0 | group 1 starts here |
+| 1 | go on at 2; keep 5 to try on failure |
+| 2, 3 | match `a`, then `b` |
+| 4 | go on at 6 |
+| 5 | match `c` |
+| 6 | group 1 ends here |
+| 7 | match `d` |
+| 8 | done |
 
-Caution: **Make one marker at compile time and have the `.group` node hold it.** `match_group` rebuilds the sequence on every attempt, so making it there would allocate once per attempt.
+**A single atom repeated (`a*`, `[0-9]{2,4}`) is one step**, not a loop: it reads its whole run at once, and its backtracking point gives back one byte at a time (the longest first), or takes one more (the shortest first). The order is all that separates longest from shortest match.
 
-### There are two rewinds, and neither covers the other
+### A failure undoes what it passes on its way back
 
-When an attempt fails, the group positions it recorded must be erased, or a later answer would show them. Two places do that, at two levels, and each covers a case the other misses.
+When an attempt fails, the group positions it recorded must be erased, or a later answer would show them: `((a)x|ab)c` matching through `ab` must keep no group 2 from the failed `(a)x`, and `(a)(b)|c` matching `c` must keep nothing in groups 1 and 2.
 
-**Both erase the captures, by different mechanisms**.
+**Each write records the old value on the same list**, below the backtracking points pushed after it. Stepping back pops the list down to the newest point, restoring every value written since, so one mechanism covers an alternative inside a group and one of the whole pattern alike. `find` still clears the groups at each start position, since nothing on the list crosses from one start to the next.
 
-| Where | When | The case it covers |
-| :-- | :-- | :-- |
-| `find`'s `reset_slots` | Per start position, and per alternative of **the whole pattern** | `(a)(b)\|c` matching `c` keeps no earlier attempt's values in groups 1 and 2 |
-| `match_group`'s save and restore | Per alternative **inside a group** | `((a)x\|ab)c` matching through `ab` keeps no group 2 from the failed `(a)x` |
+### A repeated group counts its rounds, and a round that did not advance stops it
 
-Note: The tests cover the two separately (`make debug`), since **a test for one still passes with the other erased**.
+For `(…)*`, `(…)+` and `(…){m,n}` the program holds one step that every round passes through. It reads the group's round count and where the current round started from a register of its own; both are written through the list too, so stepping back restores them. Entering the group from outside sets them afresh, so an outer repetition's rounds do not share an inner one's count.
 
-**The whole set of positions is saved**: restoring per group would mean walking into the failed alternative's nested groups too. With the group count capped at `max_groups` (9), copying the whole is cheap.
+**A round that ended where it started stops the repetition**: without the check, `(a?)*` would loop on the empty match for good. **The round is not undone; only the repetition stops**, so `(a?)*b`'s group holds the empty string, as Python's `re` and PCRE answer.
 
-### A repeated group holds the rest of the current round in a single-use node
-
-For a repeated group such as `(ab)*`, each round joins a fresh, throw-away copy of the repeat node, and that copy remembers where its round started.
-
-In the joining shape, `(ab)*` is "the body once + **itself** + the outer remainder".
-
-Caution: **Do not join the node itself here.** The joined sequence is flat, so the outside has nowhere to pass "which round is this" or "where did the previous round start". The node's fields cannot hold it either: under backtracking the same node stands at several positions at once, so an inner attempt overwrites the outer one's values.
-
-So what is joined is **a single-use shallow copy** carrying the position its round started at; reached at the same position, the round consumed nothing. The copy's `sub` shares the compile-time tree, so it must not be freed deeply (`drop_repeat_step`).
-
-**`(a?)*`'s cut-off affects the answer, not the speed**: without it, every failing position descends to the depth limit and spends the backtracking budget shared across the whole `find`. That ends in `too_complex` and misses a genuine match further along. So the test checks "is it found", not "is it fast" (`make debug`'s `late_match_start`).
-
-**A round that matched empty is not undone; only the repetition stops**, so `(a?)*b`'s group holds the empty string, as Python's `re` and PCRE answer.
+**The count bounds `{m,n}` without copying the group**, so `(…){1000}` is one step and one register, not a thousand copies of the group's steps.
 
 **`(…)?` is not a repetition** but an empty alternative, wrapped from outside in a non-capturing group, so that `(ab)?c` matching `c` leaves the group "not participating", as Python's `re` and PCRE answer.
-
-**Each round descends one more level of recursion**, unlike a quantifier on a single character, which merely counts, so input whose count reaches the limit fails with `too_complex`. It is meant for a few rounds within one line.
 
 ### Every match is returned in a `List`. No lazy iterator is made
 
@@ -1282,17 +1286,15 @@ So what is joined is **a single-use shallow copy** carrying the position its rou
 
 **The positions are indices into the original string**: the search moves its start (`find_from`) rather than cutting the string and searching again. Cutting would leave even the groups' positions for the caller to add back, and forgetting it leaves the match itself correct, so it goes unnoticed (`make debug`'s `test_regex_find_all` catches it by reading the second entry's group from the original string).
 
-The backtracking budget (`max_match_steps`) restarts per match, as when calling `find` again by hand, since one budget shared across a long string would make correct input `too_complex`. **The cost**: each entry holds a whole `Slots`, heavier than the span alone, which a caller streaming through a huge input accounts for.
+The backtracking budget restarts per match, as when calling `find` again by hand, and within one `find` it grows with the text (`max_match_steps` plus `steps_per_byte` a byte), since a fixed budget across a long string's start positions would make correct input `too_complex`. **The cost**: each entry holds a whole `Slots`, heavier than the span alone, which a caller streaming through a huge input accounts for.
 
-### A group reassembles the sequence per attempt, so it has no effect in a per-line use
+### For a hot loop over many lines, look by hand
 
-A pattern holding a group is slow, because every attempt builds a new list. For line-by-line work over many lines, look at the text by hand instead.
+A pattern costs far more per line than a direct look at the string. For line-by-line work over hundreds of thousands of lines, look at the text by hand instead.
 
-`match_group` rebuilds "the alternative's content + the group-end marker + the outer remainder" **into a new `List` on every attempt** and recurses, holding the continuation as data ("A capture group's end is observed with a marker node" above).
+Over 200,000 short lines, `^GET /` takes about 10 ms, `^(GET|POST) /` about 20 ms and the unanchored `(GET|POST) /` about 50 ms, while `starts_with` for the same two words is under 1 ms. A group costs a little (its alternatives are tried one after another, and each choice leaves a backtracking point), and moving the start position costs one run of the program per byte; looking by hand costs neither. **So for "line by line, over hundreds of thousands of lines", look by hand** (`starts_with` and an index). A regular expression suits few applications of a complex pattern, such as a few searches over one log.
 
-One group makes matching several times slower, and each added alternative grows the cost nearly in proportion. Looking at the string by hand (`starts_with` and an index) is over an order of magnitude faster than a pattern holding a group. **So for "line by line, over hundreds of thousands of lines", look by hand.** A regular expression suits few applications of a complex pattern, such as a few searches over one log.
-
-A pattern whose every alternative starts with `^` does not move the start position (`anchored`), but **this does not cancel the group's cost**: the difference above holds with the start position fixed.
+A pattern whose every alternative starts with `^` does not move the start position (`anchored`), which is the larger of the two costs.
 
 ### After `\`, an alphanumeric is accepted only in a defined escape
 

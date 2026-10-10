@@ -1,3 +1,10 @@
+//< Infers a call `f(…)`: the callee its name names, a generic's instance, and the result's type
+//<
+//< Covers a function or method by name, an enum variant with a payload, a call through a function
+//< value, and the intrinsics the compiler builds in (`__kspl_<name>`). Matching the arguments
+//< against the parameters is in `call_args.kspls`; reading a generic's type arguments off them is
+//< in `generic_infer.kspls`. **`intrinsic_of` is the one test for an intrinsic**, which Sema and
+//< both backends ask.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -381,16 +388,8 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
     $fn_tmpl: = named.fn_tmpl
     of_instance: = named.sym if is_through_type else null
 
-    if is_method_access
-        m_node: = left.get_postfix_member()
-        if m_node != null && m_node.def_node != null
-            if m_node.def_node.sym_ptr != null
-                sym = Sema_symbol$@::m_node.def_node.sym_ptr
-    else if !is_fn_ptr
-        sym = named.sym
-        if sym == null && !left.is_callable_target() && left.def_node != null &&
-            left.def_node.sym_ptr != null
-            sym = Sema_symbol$@::left.def_node.sym_ptr
+    if !is_fn_ptr
+        sym = callee_symbol(left, named.sym, is_method_access).unwrap_or(null)
 
     // Only the template table answers for a generic.
     // Caution: **Do not take "the resolved declaration has no `sym_ptr`" as a template's sign**: a
@@ -425,35 +424,13 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
             c.check_visibility_and_mark_used(sym, left)
         if named.reach == .by_fqn
             c.report_name_by_fqn(node, named)
-    else if generic_fn_ptr == null && !is_fn_ptr
-        // **Report a callee once**: where resolving its name already reported it, a second report
-        // is the same mistake counted twice. So is an instance whose type arguments were refused
-        // having no methods (check_type_constraint reports it at the type's use).
-        if !is_method_access && fqn_lookup.find_str("<|") == -1 &&
-            !c.undefined_reported_at(left) && !owner_was_refused(c, parts)
-            head: = left.get_child(0).text if left.children.len > 0 else left.text
-            if reach: = c.alias_reaching(head)
-                c.report_without_alias(node, head, reach.path)
-            else
-                c.report_undefined_symbol(node, fqn_lookup)
+    else if generic_fn_ptr == null && !is_fn_ptr && !is_method_access
+        report_unresolved_callee(c, node, left, parts, fqn_lookup)
 
-    // Caution: **Reject a type argument with nothing to bind to.** The type arguments of a generic
-    // type's method are **fixed by the receiver's instance**, so ones written at the call bind
-    // nothing. A method declaring **its own** (`fn m<|T|>(…)`) is a template and passes here.
-    if generic_fn_ptr == null && is_method_access && parts.own != null
-        c.err(parts.own,
-            "type arguments cannot be written here: this method's type parameters come from its \
-                'impl', so the receiver's own type already fixes them (write them on the type \
-                instead, as in 'Plain<|I32|>'). Drop the '<|...|>' after the method name")
-        throw .analysis_failed
-    if generic_fn_ptr == null && !is_method_access && sym != null && sym.kind.is_function() &&
-        parts.own != null
-        refuse_type_args_on_plain_fn(c, base_fn_name.slice(), parts.own)
-        throw .analysis_failed
-    // Both a type's and the function's own on a function that declares none of its own
-    // (`List<|I32|>.new<|U8|>`): the type's chose the instance, and the second binds nothing.
-    if through_type == null && !is_method_access && parts.on_type != null && parts.own != null
-        refuse_type_args_on_plain_fn(c, base_fn_name.slice(), parts.own)
+    stray_type_args: =
+        refuses_stray_type_args(c, parts, base_fn_name.slice(), generic_fn_ptr != null,
+        through_type != null, sym, is_method_access)
+    if stray_type_args
         throw .analysis_failed
     if generic_fn_ptr != null
         is_generic_call = true
@@ -463,15 +440,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
     // A call of something that cannot be called is caught here. A named function's symbol holds
     // **the return type** in type_id, so `type_id = target_id` below is right for it, but for a
     // plain variable it would emit `I32 y = x(1);` with no diagnostic and a raw C error.
-    if sym != null && sym.kind.is_var_or_const() && !is_fn_ptr && !is_method_access &&
-        !sema_type_env.is_unknown(target_id)
-        shown: = c.env.display(target_id)
-        c.clear_scratch()
-            .s("cannot call '\{sym.name\}': it is a value of type '\{shown\}', not a function")
-        // A pointer to a function pointer becomes callable once dereferenced, so say how.
-        if c.env.is_fn_ptr(c.env.strip_ptr(target_id))
-            c.scratch.s(". Dereference it first: '\{sym.name\}$(...)'")
-        c.err(node, c.scratch.slice())
+    if !is_fn_ptr && !is_method_access && refuses_value_called(c, node, sym, target_id)
         return I32::sema_type_env.Builtin_type_id.unknown
 
     op_text: = node.text
@@ -492,18 +461,7 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         type_id = expected_id
 
     if args_node != null
-        $def_node: Ast_node$@ = null
-        if is_method_access
-            m_node: = left.get_postfix_member()
-            if m_node != null
-                def_node = m_node.def_node
-        else if sym != null
-            def_node = sym.node
-        else if generic_fn_ptr != null
-            def_node = generic_fn_ptr
-        else if left.def_node != null
-            def_node = left.def_node
-
+        def_node: = callee_decl(left, sym, generic_fn_ptr, is_method_access)
         if is_method_access && def_node != null
             check_method_receiver_lvalue(c, left, def_node)
 
@@ -522,6 +480,91 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
                 infer_generic_call_result(c, node, left, fn_tmpl, written, is_method_access,
                 def_node, args_node, arg0_id, type_id)!
     return type_id
+
+priv fn callee_symbol(left: Ast_node$@, named_sym: Sema_symbol$@, is_method_access: Bool):
+    Sema_symbol$@? //<
+        //< The symbol a call names: a method's through its access, else the name's
+    if is_method_access
+        m_node: = left.get_postfix_member()
+        if m_node != null && m_node.def_node != null && m_node.def_node.sym_ptr != null
+            return .some(Sema_symbol$@::m_node.def_node.sym_ptr)
+        return .none
+    if named_sym == null && !left.is_callable_target() && left.def_node != null &&
+        left.def_node.sym_ptr != null
+        return .some(Sema_symbol$@::left.def_node.sym_ptr)
+    return .some(named_sym) if named_sym != null else .none
+
+priv fn report_unresolved_callee(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
+    parts: sema_decl_name.Named_fn, fqn_lookup: U8[]) //<
+        //< Reports a called name that names no function
+        //<
+        //< **Report a callee once**: where resolving its name already reported it, a second report
+        //< is the same mistake counted twice. So is an instance whose type arguments were refused
+        //< having no methods (check_type_constraint reports it at the type's use).
+    if fqn_lookup.find_str("<|").is_some() || c.undefined_reported_at(left) ||
+        owner_was_refused(c, parts)
+        return
+    head: = left.get_child(0).text if left.children.len > 0 else left.text
+    if reach: = c.alias_reaching(head)
+        c.report_without_alias(node, head, reach.path)
+    else
+        c.report_undefined_symbol(node, fqn_lookup)
+
+priv fn refuses_stray_type_args(c: Sema_ctx$@, parts: sema_decl_name.Named_fn, fn_name: U8[],
+    is_template: Bool, is_through_template: Bool, sym: Sema_symbol$@, is_method_access: Bool): Bool //<
+        //< Whether it reported type arguments written where nothing binds them
+        //<
+        //< Caution: **Reject a type argument with nothing to bind to.** The type arguments of a
+        //< generic type's method are **fixed by the receiver's instance**, so ones written at the
+        //< call bind nothing. A method declaring **its own** (`fn m<|T|>(…)`) is a template and
+        //< passes here.
+    if parts.own == null
+        return false
+    if !is_template && is_method_access
+        c.err(parts.own,
+            "type arguments cannot be written here: this method's type parameters come from its \
+                'impl', so the receiver's own type already fixes them (write them on the type \
+                instead, as in 'Plain<|I32|>'). Drop the '<|...|>' after the method name")
+        return true
+    if is_method_access
+        return false
+    // Both a type's and the function's own on a function that declares none of its own
+    // (`List<|I32|>.new<|U8|>`): the type's chose the instance, and the second binds nothing.
+    if (!is_template && sym != null && sym.kind.is_function()) ||
+        (!is_through_template && parts.on_type != null)
+        refuse_type_args_on_plain_fn(c, fn_name, parts.own)
+        return true
+    return false
+
+priv fn refuses_value_called(c: Sema_ctx$@, node: Ast_node$@, sym: Sema_symbol$@, target_id: I32):
+    Bool //<
+        //< Whether it reported a call of a value that is no function
+        //<
+        //< A named function's symbol holds **the return type** in type_id, so the call's type is
+        //< right for it, but for a plain variable it would emit `I32 y = x(1);` with no diagnostic
+        //< and a raw C error.
+    if sym == null || !sym.kind.is_var_or_const() || sema_type_env.is_unknown(target_id)
+        return false
+    shown: = c.env.display(target_id)
+    c.clear_scratch()
+        .s("cannot call '\{sym.name\}': it is a value of type '\{shown\}', not a function")
+    // A pointer to a function pointer becomes callable once dereferenced, so say how.
+    if c.env.is_fn_ptr(c.env.strip_ptr(target_id))
+        c.scratch.s(". Dereference it first: '\{sym.name\}$(...)'")
+    c.err(node, c.scratch.slice())
+    return true
+
+priv fn callee_decl(left: Ast_node$@, sym: Sema_symbol$@, template: Ast_node$@,
+    is_method_access: Bool): Ast_node$@ //<
+        //< The declaration whose parameters a call's arguments are checked against, or null
+    if is_method_access
+        m_node: = left.get_postfix_member()
+        return m_node.def_node if m_node != null else null
+    if sym != null
+        return sym.node
+    if template != null
+        return template
+    return left.def_node
 
 priv fn infer_value_call(c: Sema_ctx$@, node: Ast_node$@, callee_id: I32, args_node: Ast_node$@):
     I32!Sema_error //<
@@ -568,6 +611,21 @@ priv fn finish_intrinsic(node: Ast_node$@, left: Ast_node$@, id: I32): I32 //<
     left.set_kind(.k_identifier)
     return id
 
+priv fn check_asm_args(c: Sema_ctx$@, args_node: Ast_node$@, is_llvm: Bool): Void!Sema_error //<
+    //< `__kspl_asm_volatile`'s arguments: a template string first, operands only on the C target
+    first_arg: = args_node.get_child(0)
+    if first_arg.kind_id != .k_string
+        c.err(first_arg, "__kspl_asm_volatile requires a string literal as the first argument")
+    for ch in args_node.children
+        if ch.is_literal(",")
+            continue
+        ch.infer_expr(c, 0)!
+        // LLVM cannot convert C's constrained operands mechanically.
+        if is_llvm && ch.kind_id != .k_string
+            c.err(ch,
+                "__kspl_asm_volatile operands are only supported on the C target; use \
+                    __kspl_inline_c for LLVM")
+
 priv fn check_and_infer_intrinsic(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     lookup_name: U8[]): I32!Sema_error
     intr: = intrinsic_of(lookup_name)
@@ -593,18 +651,7 @@ priv fn check_and_infer_intrinsic(c: Sema_ctx$@, node: Ast_node$@, left: Ast_nod
         return finish_intrinsic(node, left, void_id)
     if intr == .asm_volatile
         if args_node != null && args_node.children.len > 0
-            first_arg: = args_node.get_child(0)
-            if first_arg.kind_id != .k_string
-                c.err(first_arg,
-                    "__kspl_asm_volatile requires a string literal as the first argument")
-            for ch in args_node.children
-                if !ch.is_literal(",")
-                    ch.infer_expr(c, 0)!
-                    // LLVM cannot convert C's constrained operands mechanically.
-                    if is_llvm && ch.kind_id != .k_string
-                        c.err(ch,
-                            "__kspl_asm_volatile operands are only supported on the C target; use \
-                                __kspl_inline_c for LLVM")
+            check_asm_args(c, args_node, is_llvm)!
         else
             c.err(node, "__kspl_asm_volatile requires at least one string argument")
         return finish_intrinsic(node, left, void_id)

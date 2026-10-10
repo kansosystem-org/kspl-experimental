@@ -26,21 +26,20 @@ priv fn empty_case_payloads(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
     code: = scan.strip_code(line, arena)
     $at: Sz = 0
     for at < code.len
-        hit: = code.sub(at, code.len - at).find_str("case ")
-        if hit < 0
+        if hit: = code.sub(at, code.len - at).find_str("case ")
+            head: = at + hit + 5
+            // The pattern runs to the first `{`.
+            if open: = code.sub(head, code.len - head).find_str("{")
+                pat: = code.sub(head, open)
+                shut: = head + open + 1
+                // Only a clause with an empty body is checked (where a `{}` follows).
+                if shut < code.len && code[shut] == '}' && pat.find_str("(").is_some()
+                    found.push(arena.dup_str(pat.trim_spaces()))
+                at = shut
+            else
+                break
+        else
             break
-        head: = at + hit + 5
-        // The pattern runs to the first `{`.
-        open: = code.sub(head, code.len - head).find_str("{")
-        at = head
-        if open < 0
-            break
-        pat: = code.sub(head, open)
-        shut: = head + open + 1
-        // Only a clause with an empty body is checked (where a `{}` follows).
-        if shut < code.len && code[shut] == '}' && pat.find_str("(") >= 0
-            found.push(arena.dup_str(pat.trim_spaces()))
-        at = shut
     return found
 
 priv fn check_empty_case_payload(arena: Arena$@) //<
@@ -216,21 +215,21 @@ priv fn check_enum_functions_fire(arena: Arena$@)
 priv fn names_arena(ty: U8[]): Bool //< whether a type's text names `Arena` as a whole word
     $at: Sz = 0
     for at < ty.len
-        hit: = ty.sub_from(at).find_str("Arena")
-        if hit < 0
+        if hit: = ty.sub_from(at).find_str("Arena")
+            start: = at + hit
+            end: = start + 5
+            if (start == 0 || !ty[start - 1].is_alnum() && ty[start - 1] != '_') &&
+                (end >= ty.len || !ty[end].is_alnum() && ty[end] != '_')
+                return true
+            at = end
+        else
             return false
-        start: = at + Sz::hit
-        end: = start + 5
-        if (start == 0 || !ty[start - 1].is_alnum() && ty[start - 1] != '_') &&
-            (end >= ty.len || !ty[end].is_alnum() && ty[end] != '_')
-            return true
-        at = end
     return false
 
 priv fn is_compound_eq(code: U8[], at: Sz): Bool //< whether the `=` at `at` belongs to `==`, `<=`
     if at + 1 < code.len && code[at + 1] == '='
         return true
-    return at > 0 && "=!<>+-*/%&|^".find_char(code[at - 1]) >= 0
+    return at > 0 && "=!<>+-*/%&|^".find_char(code[at - 1]).is_some()
 
 priv fn defaults_an_arena(line: U8[], arena: Arena$@): Bool //<
     //< Whether the line gives a parameter whose type names `Arena` a default
@@ -251,7 +250,7 @@ priv fn defaults_an_arena(line: U8[], arena: Arena$@): Bool //<
             v += 1
         $end: = v
         for end < code.len &&
-            (code[end].is_alnum() || "_.-'\"".find_char(code[end]) >= 0)
+            (code[end].is_alnum() || "_.-'\"".find_char(code[end]).is_some())
             end += 1
         $after: = end
         for after < code.len && code[after] == ' '
@@ -262,9 +261,9 @@ priv fn defaults_an_arena(line: U8[], arena: Arena$@): Bool //<
         for from > 0 && code[from - 1] != '(' && code[from - 1] != ','
             from -= 1
         decl: = code.sub(from, eq - from)
-        colon: = decl.find_char(':')
-        if colon >= 0 && decl.find_char(')') < 0 && names_arena(decl.sub_from(colon + 1))
-            return true
+        if colon: = decl.find_char(':')
+            if decl.find_char(')').is_none() && names_arena(decl.sub_from(colon + 1))
+                return true
     return false
 
 priv fn check_arena_default(arena: Arena$@) //<

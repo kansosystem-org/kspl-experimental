@@ -16,6 +16,18 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/str"
 
+priv fn emit_enum_tag_macros(cg: Genc_ctx$@, name: U8[], e_def: sema_type_def.Enum_def$@) //<
+    //< A scalar enum's tags as macros of its own type, for tags past a C `int`
+    for v in e_def.variants_list
+        cg.clear_scratch()
+        v.name.mangle_c_identifier_to(cg.scratch)
+        cg.s("#define kspl_\{name\}_\{cg.scratch.slice()\} ((\{name\})")
+        if cg.env.is_unsigned(e_def.base_type_id)
+            cg.s("\{U64::v.tag_value\}ULL)\n")
+        else
+            cg.s("\{v.tag_value\}LL)\n")
+    cg.s("\n")
+
 impl Ast_node
     fn emit_enum_decl(r: Ast_node$@, cg: Genc_ctx$@)
         cg.emit_line_directive(r)
@@ -36,15 +48,7 @@ impl Ast_node
         // A C99 enumerator is an `int`, so a scalar enum with a tag past it (a `U32`'s top bit, an
         // `I64`) names its tags as macros of its own type instead; both are constant expressions.
         if is_scalar && !e_def.tags_fit_i32()
-            for v in e_def.variants_list
-                cg.clear_scratch()
-                v.name.mangle_c_identifier_to(cg.scratch)
-                cg.s("#define kspl_\{name\}_\{cg.scratch.slice()\} ((\{name\})")
-                if cg.env.is_unsigned(e_def.base_type_id)
-                    cg.s("\{U64::v.tag_value\}ULL)\n")
-                else
-                    cg.s("\{v.tag_value\}LL)\n")
-            cg.s("\n")
+            emit_enum_tag_macros(cg, name, e_def)
             return
         cg.s("enum {\n" if is_scalar else "typedef enum {\n")
         for v in e_def.variants_list
@@ -60,34 +64,34 @@ impl Ast_node
         // a C enum type would be an `int`.
         cg.s("} kspl_\{name\}_Tag;\n\nstruct \{name\} {\n    ").t(e_def.base_type_id).s(" tag;\n")
 
-        $has_payloads: = false
         if _found: = r.find_deep_child(.k_enum_payload)
-            has_payloads = true
-
-        if has_payloads
             cg.s("    union {\n")
             for child2 in r.children
                 if child2.kind_id == .k_enum_variant
-                    cg.clear_scratch()
-                    child2.get_child(0).text.mangle_c_identifier_to(cg.scratch)
-                    v_name: = cg.scratch.slice()
-
-                    f_list: = child2.find_child(.k_enum_payload)
-                    if f_list != null
-                        cg.s("        struct {\n")
-                        for f_node in f_list.children
-                            if f_node.kind_id == .k_enum_field
-                                f_name_node: = f_node.get_enum_field_name_node()
-                                f_name: = f_name_node.text if f_name_node != null else ""
-                                f_type: = f_node.get_enum_field_type_node()
-                                cg.s("            ")
-                                f_type.emit_resolved_type(cg, false)
-                                cg.s(" ")
-                                cg.nm(f_name)
-                                cg.s(";\n")
-                        cg.s("        } \{v_name\};\n")
+                    child2.emit_variant_payload(cg)
             cg.s("    } payload;\n")
         cg.s("};\n\n")
+
+    fn emit_variant_payload(r: Ast_node$@, cg: Genc_ctx$@) //<
+        //< A variant's payload as a struct member of the enum's union, named after the variant
+        //<
+        //< A variant with no payload writes nothing.
+        f_list: = r.find_child(.k_enum_payload)
+        if f_list == null
+            return
+        cg.clear_scratch()
+        r.get_child(0).text.mangle_c_identifier_to(cg.scratch)
+        v_name: = cg.scratch.slice()
+        cg.s("        struct {\n")
+        for f_node in f_list.children
+            if f_node.kind_id != .k_enum_field
+                continue
+            f_name_node: = f_node.get_enum_field_name_node()
+            f_name: = f_name_node.text if f_name_node != null else ""
+            cg.s("            ")
+            f_node.get_enum_field_type_node().emit_resolved_type(cg, false)
+            cg.s(" ").nm(f_name).s(";\n")
+        cg.s("        } \{v_name\};\n")
 
     fn emit_vtable_param(r: Ast_node$@, cg: Genc_ctx$@, pi: Sz) //<
         //< It writes one argument of a vtable's function pointer
@@ -122,37 +126,37 @@ impl Ast_node
 
         for c in r.children
             if c.has_vtable_slot()
-                m_name: = c.find_text(.k_identifier)
-                type_node: = c.get_decl_type_node()
-
-                cg.s("    ")
-                if type_node != null
-                    type_node.emit_resolved_type(cg, true)
-                    cg.s(" (*")
-                else
-                    cg.s("void (*")
-                // A method name is emitted plain as the vtable struct's member, so it gets the
-                // suffix here just as at the call (`vtable->` in gen/c/expr.kspls).
-                cg.nm(m_name)
-                cg.s(")(")
-
-                param_list: = c.get_fn_params()
-                if param_list != null
-                    $is_first: = true
-                    for pi in Range.asc(param_list.children.len)
-                        item: = param_list.get_child(pi)
-                        if item.kind_id == .k_fn_param
-                            if !is_first
-                                cg.s(", ")
-                            item.emit_vtable_param(cg, pi)
-                            is_first = false
-                        else if item.kind_id == .k_literal && item.text.equals("...")
-                            if !is_first
-                                cg.s(", ")
-                            cg.s("...")
-                            is_first = false
-                cg.s(");\n")
+                c.emit_vtable_slot(cg)
         cg.s("};\n\n")
+
+    fn emit_vtable_slot(r: Ast_node$@, cg: Genc_ctx$@) //<
+        //< One method's function pointer in a trait's vtable struct
+        type_node: = r.get_decl_type_node()
+        cg.s("    ")
+        if type_node != null
+            type_node.emit_resolved_type(cg, true)
+            cg.s(" (*")
+        else
+            cg.s("void (*")
+        // A method name is emitted plain as the vtable struct's member, so it gets the suffix here
+        // just as at the call (`vtable->` in gen/c/expr.kspls).
+        cg.nm(r.find_text(.k_identifier)).s(")(")
+        param_list: = r.get_fn_params()
+        if param_list != null
+            $is_first: = true
+            for pi in Range.asc(param_list.children.len)
+                item: = param_list.get_child(pi)
+                is_rest: = item.kind_id == .k_literal && item.text.equals("...")
+                if item.kind_id != .k_fn_param && !is_rest
+                    continue
+                if !is_first
+                    cg.s(", ")
+                is_first = false
+                if is_rest
+                    cg.s("...")
+                else
+                    item.emit_vtable_param(cg, pi)
+        cg.s(");\n")
 
     fn emit_impl_decl(r: Ast_node$@, cg: Genc_ctx$@)
         cg.emit_line_directive(r)

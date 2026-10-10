@@ -83,7 +83,7 @@ priv fn run_http(): Bool //< the HTTP stage
     ln.str("[http] status200=")
     ln.u32(1 if status_ok else 0)
     ln.str(" head=")
-    ln.u32(U32::body_at)
+    ln.u32(U32::body_at.unwrap_or(0))
     _s3: = ln.flush()
 
     // It closes **only after the rest has been read** (the reason is at nc.drain_stream). This is
@@ -96,7 +96,7 @@ priv fn run_http(): Bool //< the HTTP stage
     ln.u32(1 if total > got else 0)
     _s4: = ln.flush()
     nc.close_conn()
-    return status_ok && body_at > 0
+    return status_ok && body_at.is_some()
 
 priv fn wait_link_up() //< (a) Prints the state every second until the link comes up
     //<
@@ -120,17 +120,17 @@ priv fn wait_link_up() //< (a) Prints the state every second until the link come
 priv fn say_peer_mac()
     ln.reset()
     ln.str("[arp] peer mac ")
-    ln.hex2(nc.addrs.peer_mac_hi >> 8)
+    ln.hex2(nc.addrs.peer_mac.hi >> 8)
     ln.str(":")
-    ln.hex2(nc.addrs.peer_mac_hi)
+    ln.hex2(nc.addrs.peer_mac.hi)
     ln.str(":")
-    ln.hex2(nc.addrs.peer_mac_lo >> 24)
+    ln.hex2(nc.addrs.peer_mac.lo >> 24)
     ln.str(":")
-    ln.hex2(nc.addrs.peer_mac_lo >> 16)
+    ln.hex2(nc.addrs.peer_mac.lo >> 16)
     ln.str(":")
-    ln.hex2(nc.addrs.peer_mac_lo >> 8)
+    ln.hex2(nc.addrs.peer_mac.lo >> 8)
     ln.str(":")
-    ln.hex2(nc.addrs.peer_mac_lo)
+    ln.hex2(nc.addrs.peer_mac.lo)
     _s: = ln.flush()
 
 priv fn run_upper() //< (c) Runs once
@@ -150,13 +150,12 @@ priv fn answer(n: Sz) //< (b) Answers one received frame
     //<
     //< Caution: Check ARP first; without it the peer has no MAC for the ping.
     a: = nc.addrs
-    $reply: = ip4.build_arp_reply(U8$[]::nc.tx_buf, U8[]::nc.rx_buf, n, a.our_ip, a.our_mac_hi,
-        a.our_mac_lo)
+    $reply: = ip4.build_arp_reply(U8$[]::nc.tx_buf, U8[]::nc.rx_buf, n, a.our_ip, a.our_mac)
     if reply > 0
         arp_answered += 1
     else
         reply = ip4.build_icmp_echo_reply(U8$[]::nc.tx_buf, U8[]::nc.rx_buf, n, a.our_ip,
-            a.our_mac_hi, a.our_mac_lo)
+            a.our_mac)
         if reply > 0
             ping_answered += 1
     // Caution: Check whether it could send, or ARP / ping answers vanish silently.

@@ -354,6 +354,31 @@ function kspageProbeLocal(ks) {
     ks.check(twice.ok && (await twice.text()) === ks.app.save(),
       "the second time too the text now is written");
 
+    // ---- Writing back where the server cannot say whether the file changed ----
+    //
+    // Caution: **A question that failed is not "it is not there"**: read so, the check above is
+    // skipped and the save overwrites. This check's stand-in answers every `/api/stat` with 500.
+    const keep = ks.app.save();
+    const put3 = await fetch(at("mine.json"),
+      { method: "PUT", headers: head, body: byOther });
+    ks.check(put3.ok, "it can be rewritten from outside again");
+    const realFetch = window.fetch;
+    window.fetch = (url, opts) => (String(url).indexOf("/api/stat") >= 0
+      ? Promise.resolve(new Response("", { status: 500 })) : realFetch(url, opts));
+    try {
+      clear();
+      document.getElementById("save").click();
+      ks.check(await untilSays("refused it (500)"),
+        "where the server cannot say whether it changed, it says why");
+    } finally {
+      window.fetch = realFetch;
+    }
+    const unasked = await fetch(at("mine.json"), { headers: head });
+    ks.check(unasked.ok && (await unasked.text()) === byOther,
+      "where the server cannot say whether it changed, it does not overwrite");
+    // Put back what the page last saved, so the sections below start from a file it wrote.
+    await fetch(at("mine.json"), { method: "PUT", headers: head, body: keep });
+
     // ---- Opening a different document in a different window ----
     //
     // **This can be seen nowhere else**: an opened window declares itself to the opener, and one

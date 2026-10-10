@@ -106,9 +106,11 @@ priv fn read_regex(src: U8[], arena: Arena$@): I32 //<
     //<
     //< Caution: **Do not split on a newline.** A file written in text mode on Windows gets `\r\n`,
     //< which leaves an invisible `\r` at the end of the first part.
-    at: = src.find_char(split_at)
-    pattern: = src if at < 0 else src.sub(0, at)
-    text: = "" if at < 0 else src.sub_from(at + 1)
+    $pattern: = src
+    $text: U8[] = ""
+    if at: = src.find_char(split_at)
+        pattern = src.sub(0, at)
+        text = src.sub_from(at + 1)
     rx: = Regex.compile(pattern) catch
         return 1
     defer rx.free()
@@ -148,8 +150,7 @@ priv fn read_http_request(src: U8[], arena: Arena$@): I32
     use_len(req.consumed)
     // Caution: **Also parse the received target as a query**, since a real server parses what
     // follows the `!` again.
-    qm: = req.target.find_char('?')
-    if qm >= 0
+    if qm: = req.target.find_char('?')
         head: = url.parse_query(req.target.sub_from(qm), arena) catch
             return 0
         use_query(head, arena)

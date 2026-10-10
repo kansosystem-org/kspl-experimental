@@ -33,11 +33,14 @@ struct Addrs //< this device's and the peer's addresses
     //< ignore the answer.
     our_ip: U32
     peer_ip: U32
-    our_mac_hi: U32
-    our_mac_lo: U32
-    peer_mac_hi: U32 //< resolve_peer fills it in
-    peer_mac_lo: U32
+    our_mac: net.Mac
+    peer_mac: net.Mac //< resolve_peer fills it in
 $addrs: Addrs = ::{}
+
+fn ends(our_port: U16, peer_port: U16): net.Ends //< from this device to the peer, on these ports
+    return net.Ends::{ .src_mac = addrs.our_mac, .dst_mac = addrs.peer_mac,
+        .src_ip = addrs.our_ip, .dst_ip = addrs.peer_ip, .src_port = our_port,
+        .dst_port = peer_port }
 
 fn link(): netlink.Link
     return netlink.Link::{ .send_frame = usb.send_frame, .rx_available = usb.rx_available,
@@ -48,10 +51,8 @@ fn init_addrs() //< fills in this device's addresses
     //< Caution: Call it once USB's initialization is done (the MAC comes from the driver).
     addrs.our_ip = net.ip4(192, 168, 137, 50)
     addrs.peer_ip = net.ip4(192, 168, 137, 1)
-    addrs.our_mac_hi = net.get_mac_hi(U8[]::usb.mac_addr, 0)
-    addrs.our_mac_lo = net.get_mac_lo(U8[]::usb.mac_addr, 0)
-    addrs.peer_mac_hi = 0
-    addrs.peer_mac_lo = 0
+    addrs.our_mac = net.get_mac(U8[]::usb.mac_addr, 0)
+    addrs.peer_mac = net.Mac::{ .hi = 0, .lo = 0 }
 
 fn drain_tx() //< runs USB until the send buffer is empty
     //<
@@ -109,10 +110,9 @@ fn next_frame(budget_ms: U32$@): Sz //<
     return 0
 
 fn resolve_peer(ln: con.Line$@): Bool //<
-    //< Asks for the peer's MAC with ARP, and stores it in addrs.peer_mac_*
+    //< Asks for the peer's MAC with ARP, and stores it in addrs.peer_mac
     for $attempt: U32 = 0; attempt < 10; attempt += 1
-        arp_len: = net.build_arp_request(U8$[]::tx_buf, addrs.our_mac_hi, addrs.our_mac_lo,
-            addrs.our_ip, addrs.peer_ip)
+        arp_len: = net.build_arp_request(U8$[]::tx_buf, addrs.our_mac, addrs.our_ip, addrs.peer_ip)
         if !send_now(arp_len)
             continue // it could not send; the next attempt sends it again
         $budget: U32 = wait_frame_ms
@@ -122,8 +122,7 @@ fn resolve_peer(ln: con.Line$@): Bool //<
                 break // the budget ran out; send the request again
             reply: = net.parse_arp_reply(U8[]::rx_buf, rx_len, addrs.peer_ip)
             if reply.ok
-                addrs.peer_mac_hi = reply.sender_mac_hi
-                addrs.peer_mac_lo = reply.sender_mac_lo
+                addrs.peer_mac = reply.sender_mac
                 return true
             // Another frame: check the next **within the same budget** (nothing is resent).
     con.say(ln, "[arp]", "TIMEOUT: peer never answered")
@@ -134,9 +133,8 @@ fn open(ln: con.Line$@, our_port: U16, peer_port: U16, isn: U32): Bool //<
     //<
     //< Caution: resolve_peer must be done first (the peer's MAC is needed).
     for $attempt: U32 = 0; attempt < 10; attempt += 1
-        syn_len: = net.build_tcp_segment(U8$[]::tx_buf, addrs.peer_mac_hi, addrs.peer_mac_lo,
-            addrs.our_mac_hi, addrs.our_mac_lo, addrs.our_ip, addrs.peer_ip, our_port, peer_port,
-            isn, 0, net.tcp_flag_syn, "")
+        syn_len: = net.build_tcp_segment(U8$[]::tx_buf, ends(our_port, peer_port), isn, 0,
+            net.tcp_flag_syn, "")
         if !send_now(syn_len)
             continue // it could not send; the next attempt sends it again
         $budget: U32 = wait_frame_ms
@@ -148,16 +146,13 @@ fn open(ln: con.Line$@, our_port: U16, peer_port: U16, isn: U32): Bool //<
             want: U8 = net.tcp_flag_syn | net.tcp_flag_ack
             if seg.ok && (seg.flags & want) == want && seg.ack == isn + 1
                 // The handshake's final ACK.
-                ack_len: = net.build_tcp_segment(U8$[]::tx_buf, addrs.peer_mac_hi,
-                    addrs.peer_mac_lo, addrs.our_mac_hi, addrs.our_mac_lo, addrs.our_ip,
-                    addrs.peer_ip, our_port, peer_port, isn + 1, seg.seq + 1, net.tcp_flag_ack, "")
+                ack_len: = net.build_tcp_segment(U8$[]::tx_buf, ends(our_port, peer_port), isn + 1,
+                    seg.seq + 1, net.tcp_flag_ack, "")
                 // If it is not sent, the handshake is incomplete; start again from the SYN.
                 if !send_now(ack_len)
                     break
                 lk: = link()
-                conn = tcpc.make(lk, addrs.peer_mac_hi, addrs.peer_mac_lo, addrs.our_mac_hi,
-                    addrs.our_mac_lo, addrs.our_ip, addrs.peer_ip, our_port, peer_port, isn + 1,
-                    seg.seq + 1)
+                conn = tcpc.make(lk, ends(our_port, peer_port), isn + 1, seg.seq + 1)
                 return true
             // An unrelated frame. Check the next within the same budget (for the same reason as in
             // resolve_peer).
@@ -200,7 +195,6 @@ fn drain_stream(ms: U32): Sz //<
     return total
 
 fn close_conn() //< closes the open connection with a FIN
-    fin_len: = net.build_tcp_segment(U8$[]::tx_buf, conn.peer_mac_hi, conn.peer_mac_lo,
-        conn.our_mac_hi, conn.our_mac_lo, conn.our_ip, conn.peer_ip, conn.our_port, conn.peer_port,
-        conn.our_seq, conn.peer_seq, net.tcp_flag_fin | net.tcp_flag_ack, "")
+    fin_len: = net.build_tcp_segment(U8$[]::tx_buf, conn.ends, conn.our_seq, conn.peer_seq,
+        net.tcp_flag_fin | net.tcp_flag_ack, "")
     _fin_ok: = send_now(fin_len)

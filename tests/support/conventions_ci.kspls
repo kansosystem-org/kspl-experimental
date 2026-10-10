@@ -29,13 +29,11 @@ priv fn key_at(line: U8[], pad: U8[]): U8[] //< takes the name out of a `<indent
     if !line.starts_with(pad) || line.starts_with(" ", pad.len)
         return ""
     rest: = line.sub_from(pad.len)
-    at: = rest.find_char(':')
-    if at < 0
-        return ""
-    name: = rest.sub(0, at)
-    if name.len == 0 || name.find_char(' ') >= 0
-        return ""
-    return name
+    if at: = rest.find_char(':')
+        name: = rest.sub(0, at)
+        if name.len > 0 && name.find_char(' ').is_none()
+            return name
+    return ""
 
 priv fn job_blocks(yml: U8[], names: List<|U8[]|>$@, bodies: List<|U8[]|>$@, arena: Arena$@) //<
     //< Lists the jobs under `jobs:`, by name and body
@@ -87,8 +85,7 @@ priv fn crons_of(yml: U8[], arena: Arena$@): List<|U8[]|> //<
         if !t.starts_with(cron_head)
             continue
         rest: = t.sub_from(cron_head.len)
-        end: = rest.find_char('"')
-        if end >= 0
+        if end: = rest.find_char('"')
             out.push(rest.sub(0, end))
     return out
 
@@ -100,16 +97,16 @@ priv fn quoted_crons(guard: U8[], arena: Arena$@): List<|U8[]|> //<
     $out: = List<|U8[]|>.new(arena)
     $rest: = guard
     for
-        open: = rest.find_char('\'')
-        if open < 0
+        if open: = rest.find_char('\'')
+            tail: = rest.sub_from(open + 1)
+            if close: = tail.find_char('\'')
+                if tail.sub(0, close).find_char(' ').is_some()
+                    out.push(tail.sub(0, close))
+                rest = tail.sub_from(close + 1)
+            else
+                break
+        else
             break
-        tail: = rest.sub_from(open + 1)
-        close: = tail.find_char('\'')
-        if close < 0
-            break
-        if tail.sub(0, close).find_char(' ') >= 0
-            out.push(tail.sub(0, close))
-        rest = tail.sub_from(close + 1)
     return out
 
 priv fn guard_of(body: U8[], arena: Arena$@): U8[] //<
@@ -142,8 +139,7 @@ priv fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
         if !line.starts_with("  ")
             break
         t: = line.trim_spaces()
-        at: = t.find_char(' ')
-        name: = t if at < 0 else t.sub(0, at)
+        name: = t.sub(0, t.find_char(' ').unwrap_or(t.len))
         if name.len > 0 && !name.starts_with("//")
             out.push(name)
     return out
@@ -161,17 +157,13 @@ priv fn matrix_of(body: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Caution: **Search only within the body** (what `job_blocks` cut). Searching the whole file,
     //< it reads another job's matrix as its own.
     $out: = List<|U8[]|>.new(arena)
-    head: = body.find_str(matrix_head)
-    if head < 0
-        return out
-    rest: = body.sub_from(head + matrix_head.len)
-    end: = rest.find_char(']')
-    if end < 0
-        return out
-    for w in rest.sub(0, end).split(',', arena)
-        t: = w.trim_spaces()
-        if t.len > 0
-            out.push(t)
+    if head: = body.find_str(matrix_head)
+        rest: = body.sub_from(head + matrix_head.len)
+        if end: = rest.find_char(']')
+            for w in rest.sub(0, end).split(',', arena)
+                t: = w.trim_spaces()
+                if t.len > 0
+                    out.push(t)
     return out
 
 priv fn check_job(body: U8[], job: U8[], want: List<|U8[]|>@, bad: List<|U8[]|>$@, arena: Arena$@) //<
@@ -190,16 +182,14 @@ priv fn check_ci_shards(arena: Arena$@)
     sets: = set_variants(src, arena)
     // **`set_order` is how a name is read back**, so a set missing there cannot be run.
     $order: U8[] = ""
-    head: = src.find_str(set_order_head)
-    if head >= 0
+    if head: = src.find_str(set_order_head)
         tail: = src.sub_from(head)
-        end: = tail.find_char('}')
-        order = tail if end < 0 else tail.sub(0, end)
+        order = tail.sub(0, tail.find_char('}').unwrap_or(tail.len))
     $want: = List<|U8[]|>.new(arena)
     for i in Range.asc(sets.len)
         v: = sets.get(i)
-        if order.find_str(arena.text().s("Set.").s(v).s(",").take()) < 0 &&
-            order.find_str(arena.text().s("Set.").s(v).s(" ").take()) < 0
+        if order.find_str(arena.text().s("Set.").s(v).s(",").take()).is_none() &&
+            order.find_str(arena.text().s("Set.").s(v).s(" ").take()).is_none()
             bad
                 .push(arena.text().s("Set.").s(v).s(" is not in set_order in ").s(gates_src).take())
         if v.starts_with(shard_prefix)
@@ -244,7 +234,7 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
     for i in Range.asc(names.len)
         guard: = guard_of(bodies.get(i), arena)
         want: = arena.text().s("inputs['").s(names.get(i)).s("']").take()
-        if guard.find_str(want) < 0
+        if guard.find_str(want).is_none()
             bad
                 .push(arena.text().s(names.get(i)).s("'s if: does not look at ").s(want).take())
         // Caution: Allow a cron that is not declared and the condition silently stops taking effect
@@ -345,7 +335,7 @@ priv fn first_cells(doc: U8[], arena: Arena$@): List<|U8[]|> //< the table's fir
         if !line.starts_with("|")
             break
         rest: = line.sub_from(1)
-        end: = rest.find_char('|')
+        end: = rest.find_char('|').unwrap_or(0)
         if end > 0 && !rest.starts_with("---")
             out.push(rest.sub(0, end))
     return out
@@ -359,24 +349,22 @@ priv fn cell_names(text: U8[], arena: Arena$@): Bool //<
     //<
     //< **The cell's first word, or an item of the list in its brackets** (`(cli / config)`). Any
     //< word would do, but a suite named by an English word (`conventions`) is then found in prose.
-    tab: = text.find_char('\t')
-    if tab < 0
-        return false
-    cell: = text.sub(0, tab).trim_spaces()
-    name: = text.sub_from(tab + 1)
-    $head: = cell.len
-    for i in Range.asc(cell.len)
-        if head == cell.len && (cell[i] == ' ' || cell[i] == '(')
-            head = i
-    if is_check(cell.sub(0, head), name)
-        return true
-    open: = cell.find_char('(')
-    close: = cell.rfind_char(')')
-    if open < 0 || close <= open
-        return false
-    for item in cell.sub(open + 1, close - open - 1).split('/', arena)
-        if is_check(item, name)
+    if tab: = text.find_char('\t')
+        cell: = text.sub(0, tab).trim_spaces()
+        name: = text.sub_from(tab + 1)
+        $head: = cell.len
+        for i in Range.asc(cell.len)
+            if head == cell.len && (cell[i] == ' ' || cell[i] == '(')
+                head = i
+        if is_check(cell.sub(0, head), name)
             return true
+        // The list runs to the last `)`, which must come after the `(`.
+        if open: = cell.find_char('(')
+            inside: = cell.sub_from(open + 1)
+            if close: = inside.rfind_char(')')
+                for item in inside.sub(0, close).split('/', arena)
+                    if is_check(item, name)
+                        return true
     return false
 
 // Caution: **Keep a prefix, a longer name and a word of prose on the miss side**: a search for
@@ -400,7 +388,7 @@ priv fn ci_checks(arena: Arena$@): List<|U8[]|> //<
     $out: = List<|U8[]|>.new(arena)
     for args in scan.find_all(harness.read_under_root(gates_src), args_mark, "\"", arena)
         for w in args.split(' ', arena)
-            if w.len > 0 && w.find_char('=') < 0 && !w.starts_with("test-suites")
+            if w.len > 0 && w.find_char('=').is_none() && !w.starts_with("test-suites")
                 scan.push_unique(out@, w)
     for rel in suite_lists
         text: = harness.read_under_root(rel)
@@ -443,7 +431,7 @@ priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
     $raw: = false
     for line in src.lines(arena)
         t: = line.trim_start()
-        if !raw && t.starts_with("#cfg(") && t.find_str("blas") >= 0
+        if !raw && t.starts_with("#cfg(") && t.find_str("blas").is_some()
             return true
         raw = scan.flip_raw(line, raw)
     return false

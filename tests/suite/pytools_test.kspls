@@ -55,8 +55,7 @@ priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with the
     //< not one self-test ran.
     arena: = ksplc_harness.arena()
     for line in out.lines(arena)
-        sp: = line.find_char(' ')
-        first: = line if sp < 0 else line.sub(0, sp)
+        first: = line.sub(0, line.find_char(' ').unwrap_or(line.len))
         if first.equals(mark_ok)
             return true
     return false
@@ -78,7 +77,7 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
         return
     // Caution: **The exit code alone is not enough.** It passes a run that returned 0 with not one
     // self-test run (a wrong entry point printing its usage, and the like).
-    verdict.check(name, ran_one(r.out) || r.out.find_str("self-test") >= 0,
+    verdict.check(name, ran_one(r.out) || r.out.find_str("self-test").is_some(),
         arena.text().s("not one self-test ran\n").s(r.out).take())
 
 fn main(): I32

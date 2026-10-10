@@ -1,13 +1,15 @@
+//< Tests of `std/argp` through `parse_list`
+//<
+//< `sys.Args` reads libc's argv and cannot be faked. The list holds no executable name (`parse`
+//< drops it).
 import "std/argp"
+import "std/chars" // `starts_with`
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
+import "std/subproc"
+import "std/tests/sys_test"
 import "std/verdict"
-
-// ==========================================
-// Tests of std/argp through `parse_list`: `sys.Args` reads libc's argv and cannot be faked. The
-// list holds no executable name (`parse` drops it).
-// ==========================================
 
 priv fn argv_of(items: U8[][], arena: Arena$@): List<|U8[]|>$@
     l: = List<|U8[]|>.create(arena)
@@ -18,7 +20,24 @@ priv fn argv_of(items: U8[][], arena: Arena$@): List<|U8[]|>$@
 fn test_argp(arena: Arena$@)
     verdict.start("[argp] parsing command line arguments test...")
 
-    // --- a default is the variable's initial value itself ---
+    check_defaults_and_joined(arena)
+    check_rest(arena)
+    check_errors(arena)
+    check_required_and_help(arena)
+
+    test_no_short_names(arena)
+    test_repeatable(arena)
+    test_commands(arena)
+    test_trailing(arena)
+    test_operands_marker(arena)
+
+    verdict
+        .pass("Defaults, the `=` shape and refusing the spaced one, rest, refusing a single dash, \
+            each error, what is required, --help, refusing short forms, repetition, commands, the \
+            uninterpreted remainder and `--` are all confirmed.")
+
+priv fn check_defaults_and_joined(arena: Arena$@) //<
+    //< A default is the variable's initial value itself, and a value is joined with `=`
     $out: U8[] = "default.jsonl"
     $count: I64 = 10
     $ratio: F64 = 0.5
@@ -33,7 +52,7 @@ fn test_argp(arena: Arena$@)
     kept_defaults: = out.equals("default.jsonl") && count == 10 && !verbose
     assert(kept_defaults, "argp: the default stays when nothing is handed over")
 
-    // --- a value is joined with `=` ---
+    // A value is joined with `=`.
     joined: =
         argv_of(U8[][]::{ "--out=a.txt", "--count=3", "--ratio=0.25", "--verbose" }, arena)
     p.parse_list(joined) catch panic("argp: the --name=value shape failed")
@@ -49,7 +68,7 @@ fn test_argp(arena: Arena$@)
         --name=value shape failed")
     assert(out2.equals("b.txt") && count2 == -7, "argp: --name=value (a negative number reads too)")
 
-    // --- an argument that is not an option goes into rest, in order ---
+priv fn check_rest(arena: Arena$@) //< an argument that is not an option goes into rest, in order
     $dummy: = false
     rp: = argp.Parser.create("t", "", arena)
     rp.positional("<file>...")
@@ -144,7 +163,7 @@ fn test_argp(arena: Arena$@)
         default {}
     assert(saw_short_help, "argp: -h is an unknown option, not --help")
 
-    // --- an error is never ignored: the item at fault is reported ---
+priv fn check_errors(arena: Arena$@) //< an error is never ignored: the item at fault is reported
     // If an unknown --name were ignored, a typo or a word-splitting fragment would get through.
     $ignored: U8[] = ""
     ep: = argp.Parser.create("t", "", arena)
@@ -188,7 +207,7 @@ fn test_argp(arena: Arena$@)
         default {}
     assert(saw_unexpected, "argp: a value put on a flag is refused")
 
-    // --- what is required, and --help ---
+priv fn check_required_and_help(arena: Arena$@) //< what is required, and --help
     $req: U8[] = ""
     reqp: = argp.Parser.create("t", "", arena)
     reqp.str_required("--must", req@, "")
@@ -211,16 +230,6 @@ fn test_argp(arena: Arena$@)
         default {}
     // --help is not a failure but stops the run, so it returns before the required check.
     assert(saw_help, "argp: --help returns before the check on what is required")
-
-    test_no_short_names(arena)
-    test_repeatable(arena)
-    test_commands(arena)
-    test_trailing(arena)
-
-    verdict
-        .pass("Defaults, the `=` shape and refusing the spaced one, rest, refusing a single dash, \
-            each error, what is required, --help, refusing short forms, repetition, commands and \
-            the uninterpreted remainder are all confirmed.")
 
 // ==========================================
 // There are no short forms: a letter nobody declared is refused, joined to a value or not.
@@ -349,3 +358,99 @@ priv fn test_trailing(arena: Arena$@)
         rest_args.get(1).equals("--help") && rest_args.get(2).equals("x")
     assert(passed_through,
         "argp: what is after the subject is passed on uninterpreted, --help included")
+
+// ==========================================
+// `--`: what follows is positional, a name starting with `-`, `--help` and a command's name alike.
+// ==========================================
+priv fn test_operands_marker(arena: Arena$@)
+    $verbose: = false
+    p: = argp.Parser.create("t", "", arena)
+    p.positional("<file>...")
+    p.flag("--verbose", verbose@, "")
+    p.subcommand("fmt", "")
+    args: = argv_of(U8[][]::{ "--verbose", "--", "-x", "--help", "fmt", "--" }, arena)
+    p.parse_list(args) catch panic("argp: the arguments after `--` were refused")
+    taken: =
+        p.rest.len == 4 && p.rest.get(0).equals("-x") && p.rest.get(1).equals("--help") &&
+        p.rest.get(2).equals("fmt") && p.rest.get(3).equals("--")
+    assert(taken && verbose && p.command.len == 0,
+        "argp: after `--` each argument is positional, even one naming an option or a command")
+    // A CLI that takes no positional refuses one after `--` as well.
+    np: = argp.Parser.create("t", "", arena)
+    $refused: = false
+    np.parse_list(argv_of(U8[][]::{ "--", "-x" }, arena)) catch e
+        switch e
+        case .unexpected_arg(n)
+            refused = n.equals("-x")
+        default {}
+    assert(refused, "argp: `--` does not make a positional welcome where none is declared")
+
+priv const usage_src: U8[] = //< a child that declares a little and prints its usage
+    """import "std/argp"
+import "std/io"
+import "std/mem" { Arena }
+import "std/sys"
+
+fn main()
+  a: = Arena.new(1 << 16)
+  $quiet: = false
+  $name: U8[] = ""
+  p: = argp.Parser.create(sys.program_name(), "says hello", a)
+  p.positional("<file>")
+  p.flag("--quiet", quiet@, "say nothing")
+  p.str_opt("--name", name@, "who to greet")
+  p.print_usage(io.out())
+  a.free()
+"""
+
+fn test_argp_prints_usage(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //<
+    //< **What a person reads first**: the program's name, what it takes, and one line per option
+    //< with the value it wants.
+    verdict.start("[argp] the usage printed from the declarations test...")
+    r: = subproc.run_capture(sys_test.child_argv(ksplc, "usage_probe", usage_src, arena), "",
+        300000, 4096, arena)
+    out: = r.stdout_data
+    assert(r.exit_code == 0, "the child must print its usage and end")
+    assert(out.starts_with("Usage: usage_probe [options] <file>\n"),
+        "the first line names the program, its options and its positional")
+    assert(out.find_str("says hello").is_some(), "the line saying what it is follows")
+    assert(out.find_str("  --quiet ").is_some() && out.find_str("say nothing").is_some(),
+        "a flag is listed with its help")
+    assert(out.find_str("  --name=<str>").is_some(), "an option names the value it takes")
+    verdict.pass("The usage names the program, the positional, and each option with its value.")
+
+priv const refuse_src: U8[] = //< a child that reads its own arguments with parse_or_exit
+    """import "std/argp"
+import "std/mem" { Arena }
+import "std/sys"
+
+fn main()
+  a: = Arena.new(1 << 16)
+  $quiet: = false
+  p: = argp.Parser.create("refuse_probe", "", a)
+  p.flag("--quiet", quiet@, "say nothing")
+  p.parse_or_exit(sys.args(), a)
+  a.free()
+"""
+
+fn test_argp_refusal_goes_to_stderr(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //<
+    //< Caution: **A refusal and its usage go to standard error, `--help` to standard output.** A
+    //< caller that reads the output (`$(prog)`, a pipe) would otherwise take the usage for it.
+    verdict.start("[argp] where a refusal and --help are written test...")
+    argv: = List<|U8[]|>.create(arena)
+    for one in sys_test.child_argv(ksplc, "refuse_probe", refuse_src, arena)
+        argv.push(one)
+    argv.push("--bogus")
+    r: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena)
+    assert(r.exit_code == 2, "a refused command line ends with 2")
+    assert(r.stdout_data.len == 0, "a refusal writes nothing to standard output")
+    assert(r.stderr_data.find_str("unknown option '--bogus'").is_some() &&
+        r.stderr_data.find_str("Usage: refuse_probe").is_some(),
+        "the reason and the usage go to standard error")
+    argv.set(argv.len - 1, "--help")
+    h: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena)
+    assert(h.exit_code == 0 && h.stdout_data.starts_with("Usage: refuse_probe"),
+        "--help writes the usage to standard output and ends with 0")
+    verdict.pass("A refusal and its usage go to standard error with 2; --help to standard output.")

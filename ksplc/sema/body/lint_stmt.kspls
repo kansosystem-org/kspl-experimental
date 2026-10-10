@@ -1,3 +1,9 @@
+//< The lints on statements, called as hooks from where a statement or an initializer is typed
+//<
+//< A constant condition, a call subject that wraps, an empty block, a lock used past its unlock or
+//< never released, an exit between an `Owned` binding and its `defer`, a digit-accumulating loop
+//< with no bound, and a type written twice. **This is not where all the lints are**: the rest sit
+//< with the checks that hold the context to detect them.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -48,7 +54,7 @@ fn spans_multiple_lines(c: Sema_ctx$@, node: Ast_node$@): Bool
     end_offset: = last_leaf.loc.offset + last_leaf.text.len
     if end_offset <= node.loc.offset || end_offset > c.source.len
         return false
-    return c.source.sub(node.loc.offset, end_offset - node.loc.offset).find_char('\n') != -1
+    return c.source.sub(node.loc.offset, end_offset - node.loc.offset).find_char('\n').is_some()
 
 fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8$[]) //<
     //< [H0804] Detects a switch or if whose subject is a call with an argument list spanning lines
@@ -96,8 +102,8 @@ fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     if !base_core.config.run_lint_checks || node == null
         return false
     k: = node.kind_id
-    if k == .k_stmt_block || k == .k_stmt_labeled_block || k == .k_stmt_if || k == .k_stmt_loop ||
-        k == .k_stmt_match || k == .k_stmt_defer || k == .k_loop_init || k == .k_loop_step
+    if k == .k_stmt_block || k == .k_stmt_labeled_block || k == .k_stmt_if || k == .k_stmt_for ||
+        k == .k_stmt_switch || k == .k_stmt_defer || k == .k_for_init || k == .k_for_step
         return false
     if k == .k_expr_postfix
         op: = node.get_postfix_op()
@@ -258,7 +264,7 @@ fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
                     s.settled = true
             borrows.len = 0
             continue
-        if k == .k_stmt_if || k == .k_stmt_loop || k == .k_stmt_match || k == .k_stmt_block ||
+        if k == .k_stmt_if || k == .k_stmt_for || k == .k_stmt_switch || k == .k_stmt_block ||
             k == .k_stmt_labeled_block
             borrows.len = 0
             settle_all_sites(sites@)
@@ -411,7 +417,7 @@ impl Ast_node
             return .none
         if k == .k_stmt_throw || ((k == .k_stmt_break || k == .k_stmt_continue) && !in_loop)
             return .some(r)
-        nested: = in_loop || k == .k_stmt_loop
+        nested: = in_loop || k == .k_stmt_for
         for child in r.children
             if way: = child.way_out(name, nested)
                 return .some(way)
@@ -632,7 +638,7 @@ priv fn find_accumulator_assigns(c: Sema_ctx$@, node: Ast_node$@,
         //< A nested for has its own lint_accumulator_overflow call, so it is not descended into.
         //< guarded_names holds the names the loop's if conditions reference (see
         //< collect_if_cond_idents).
-    if node == null || node.kind_id == .k_stmt_loop
+    if node == null || node.kind_id == .k_stmt_for
         return
     digit_name: = accumulator_var_name(node)
     mul_name: = compound_mul_var_name(node)
@@ -774,7 +780,7 @@ priv fn callee_owner_text(callee: Ast_node$@): U8[] //<
         // way.
         return base_core.arena.text().s(callee.get_child(0).text).s(callee.get_child(1).text).take()
     if callee.kind_id == .k_expr_path
-        dot: = callee.text.rfind_char('.')
-        if dot > 0
-            return callee.text.sub(0, dot)
+        if dot: = callee.text.rfind_char('.')
+            if dot > 0
+                return callee.text.sub(0, dot)
     return ""

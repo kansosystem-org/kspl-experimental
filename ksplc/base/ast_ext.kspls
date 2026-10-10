@@ -1,3 +1,9 @@
+//< The safe accessors of `Ast_node`: each returns one named child, so no reader counts indexes
+//<
+//< **Which child of the normalized layout is which is known here and nowhere else** (beside
+//< `ast_place.kspls` and `ast_spell.kspls` for their own questions), so a change to the grammar is
+//< met in one file. The marks a synthesized node carries (`if_bind_mark`, `made_by_compiler`,
+//< `is_left_by_break`) and the reading of attributes stand here too.
 import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/ast_kinds" as base_ast_kinds
 import "std/chars" // the one-character tests and cuts
@@ -8,13 +14,13 @@ import "std/str"
 // ksplc/base/ast.kspls, are tree-walking primitives used everywhere that promise to return null.
 ##lint(H0701 = off)
 
-const if_bind_mark: U8[] = "stmt_match_if_bind" //<
+const if_bind_mark: U8[] = "stmt_switch_if_bind" //<
     //< The mark on a `switch` synthesized to unwrap an `Option`
     //<
-    //< Caution: **Keep it apart from an ordinary switch's "stmt_match", with one mark per kind of
+    //< Caution: **Keep it apart from an ordinary switch's "stmt_switch", with one mark per kind of
     //< synthesis.** A diagnostic names what the user wrote, and one shared mark would say
     //< `if <name>: = <expr>` on a `for x in` line.
-const for_in_mark: U8[] = "stmt_match_for_in"
+const for_in_mark: U8[] = "stmt_switch_for_in"
 
 priv const compiler_made: I32 = 1 //<
     //< The mark in `ival` on a declaration the compiler made rather than one the user wrote
@@ -154,7 +160,7 @@ impl Ast_node
         //< It is true whatever the inside does: `blk: { if c { break blk; } return 1; }` can still
         //< end.
         return r != null && r.ival == left_by_break &&
-            (r.kind_id == .k_stmt_loop || r.kind_id == .k_stmt_if || r.kind_id == .k_stmt_match ||
+            (r.kind_id == .k_stmt_for || r.kind_id == .k_stmt_if || r.kind_id == .k_stmt_switch ||
             r.kind_id == .k_stmt_labeled_block)
 
     fn is_endless_loop(r: Ast_node$@): Bool //<
@@ -162,10 +168,10 @@ impl Ast_node
         //<
         //< **The one judgement of a loop's end**, read by the missing-return check and the catch
         //< block's (`is_guaranteed_to_leave` in `../sema/body/analyze.kspls`) and by [W0201]
-        //< (`df_stmt_loop` in `../sema/flow/stmt.kspls`). `continue` does not leave the loop. A
+        //< (`df_stmt_for` in `../sema/flow/stmt.kspls`). `continue` does not leave the loop. A
         //< condition that is constant `true` still counts as a condition, which [W0205] asks to
         //< drop.
-        if r == null || r.kind_id != .k_stmt_loop || r.is_left_by_break()
+        if r == null || r.kind_id != .k_stmt_for || r.is_left_by_break()
             return false
         cond: = r.get_loop_cond()
         return cond == null || cond.kind_id == .k_empty
@@ -178,7 +184,7 @@ impl Ast_node
         //< it.
         return r != null && r.kind_id == .k_decl_fn_proto
 
-    fn build_option_match(subject: Ast_node$@, bind: Ast_node$@, some_block: Ast_node$@,
+    fn build_option_switch(subject: Ast_node$@, bind: Ast_node$@, some_block: Ast_node$@,
         none_block: Ast_node$@, label_slot: Ast_node$@, mark: U8[], loc: Loc): Ast_node$@ //<
             //< Builds `switch subject case .some(name) { some_block } case .none { none_block }`
             //<
@@ -188,13 +194,13 @@ impl Ast_node
             //< crashes.
             //< **`bind` is the name as written, not a copy**, so it keeps its own position: built
             //< at the statement's, the editor found nothing on `v` in `if v: = opt`.
-        some_pat: = Ast_node.new(.k_match_pattern, "match_pattern", loc)
+        some_pat: = Ast_node.new(.k_case_pattern, "case_pattern", loc)
             .add_child(Ast_node.new(.k_literal, ".", loc))
             .add_child(Ast_node.build_ident("some", 0, loc)).add_child(bind)
-        none_pat: = Ast_node.new(.k_match_pattern, "match_pattern", loc)
+        none_pat: = Ast_node.new(.k_case_pattern, "case_pattern", loc)
             .add_child(Ast_node.new(.k_literal, ".", loc))
             .add_child(Ast_node.build_ident("none", 0, loc))
-        return Ast_node.new(.k_stmt_match, mark, loc)
+        return Ast_node.new(.k_stmt_switch, mark, loc)
             .add_child(label_slot if label_slot != null else Ast_node.new(.k_empty, "", loc))
             .add_child(subject).add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(some_pat)
             .add_child(some_block).add_child(Ast_node.new(.k_keyword, "case", loc))
@@ -206,7 +212,7 @@ impl Ast_node
         //< Empty where it is not synthesized.
         //< **A diagnostic's wording is decided here.** Add each new mark here too, or that
         //< synthesis silently accepts "a subject that is not an Option"
-        //< (`../sema/body/match.kspls`).
+        //< (`../sema/body/switch.kspls`).
         if r.text.equals(if_bind_mark)
             return "if <name>: = <expr>"
         if r.text.equals(for_in_mark)
@@ -336,11 +342,11 @@ impl Ast_node
 
     fn get_loop_label(r: Self$@): Ast_node$@
         return r.get_non_empty_child(0)
-    fn get_loop_init(r: Self$@): Ast_node$@
+    fn get_for_init(r: Self$@): Ast_node$@
         return r.safe_get_child(1)
     fn get_loop_cond(r: Self$@): Ast_node$@
         return r.safe_get_child(2)
-    fn get_loop_step(r: Self$@): Ast_node$@
+    fn get_for_step(r: Self$@): Ast_node$@
         return r.safe_get_child(3)
     fn get_loop_block(r: Self$@): Ast_node$@
         return r.safe_get_child(4)
@@ -549,7 +555,7 @@ impl Ast_node
             if r.get_child(i).text.equals("::")
                 return true
         return false
-    fn get_match_cond(r: Self$@): Ast_node$@
+    fn get_switch_cond(r: Self$@): Ast_node$@
         return r.safe_get_child(1)
     fn get_sizeof_target(r: Self$@): Ast_node$@
         return r.safe_get_child(1)
@@ -614,7 +620,7 @@ impl Ast_node
                 return .some(c)
         return .none
 
-    fn get_match_label(r: Self$@): Ast_node$@
+    fn get_switch_label(r: Self$@): Ast_node$@
         return r.get_non_empty_child(0)
 
     fn get_field_init_name(r: Self$@): Ast_node$@?

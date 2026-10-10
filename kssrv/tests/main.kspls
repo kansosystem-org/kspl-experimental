@@ -142,7 +142,7 @@ priv fn link_cases(root: U8[], arena: Arena$@): Void!client.Http_end //<
         for target in link_escapes
             r: = client.get(port, target, "", arena)!
             nm_l: = arena.text().s("a link inside the root cannot get outside: \{target\}").take()
-            ok_l: = r.status == 403 && r.body.find_str("secret") < 0
+            ok_l: = r.status == 403 && r.body.find_str("secret").is_none()
             d_l: = client.shown(r, arena)
             verdict.check(nm_l, ok_l, d_l)
         // **A folder's index is checked as the name served.** Checked before the index was added, a
@@ -153,7 +153,8 @@ priv fn link_cases(root: U8[], arena: Arena$@): Void!client.Http_end //<
                 r: = client.get(port, target, "", arena)!
                 nm_i: = arena.text().s("a link at a folder's index cannot get outside: \{target\}")
                     .take()
-                verdict.check(nm_i, r.status == 403 && r.body.find_str("secret") < 0,
+                verdict.check(nm_i,
+                    r.status == 403 && r.body.find_str("secret").is_none(),
                     client.shown(r, arena))
         // Caution: **Check that a legitimate file still passes**, or refusing everything would
         // pass.
@@ -249,11 +250,11 @@ priv fn serve_idle_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
             srv.failed("GET /api/here is answered", e.reason(), arena)
             srv.stop()
             return
-        // **The head is read with a timeout, not until the close.** The close must not come, so
+        // **The head is read until it is in, not until the close.** The close must not come, so
         // reading to it would take the whole wait.
-        _first: = hold.drain(head_wait_ms, arena)
+        hold.read_head(head_wait_ms)
         verdict.check("GET /api/here answers with a head that names no length",
-            hold.head(arena).find_str("200") >= 0, hold.head(arena))
+            hold.head(arena).find_str("200").is_some(), hold.head(arena))
         sys.sleep_ms(held_ms)
         verdict.check("a page holding it keeps it up past the wait", srv.child.alive(),
             srv.log(arena))
@@ -309,7 +310,9 @@ priv fn stop_cases(token: U8[], srv: Running$@, arena: Arena$@): Void!client.Htt
         client.shown(asked, arena))
     verdict.check("it stops once it has answered", wait_gone(srv.child@), srv.log(arena))
 
-priv const head_wait_ms: I32 = 500 //< how long the head is waited for (it arrives at once)
+priv const head_wait_ms: I32 = 10000 //< the cap on waiting for the head, which comes at once
+    //<
+    //< Generous: it ends as soon as the head is in, and only a slow runner comes near it.
 
 priv fn wait_gone(srv: subproc.Child$@): Bool //< whether it exited by itself within the cap
     //<
@@ -343,7 +346,7 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         // Caution: **Log one line naming the page**, the only way to see which file is returned.
         said: = srv.log(arena)
         verdict.check("--page puts one line out for the page named",
-            said.find_str("kssrv: I: page=") >= 0, said)
+            said.find_str("kssrv: I: page=").is_some(), said)
         page_cases(arena) catch e
             srv.failed("--page answers requests", e.reason(), arena)
         srv.stop()
@@ -359,7 +362,7 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
         U8[][]::{ arena.text().s("--page=\{gone\}").take() }, arena)
     told: = read_log(out2, err2, arena)
     verdict.check("naming a page that is not there does not come up",
-        !missing.child.is_some() && told.find_str("no such page") >= 0, told)
+        !missing.child.is_some() && told.find_str("no such page").is_some(), told)
     if c2: = missing.child
         $bad: = c2
         bad.kill()
@@ -421,8 +424,7 @@ priv fn token_from(out_log: U8[], arena: Arena$@): U8[] //< extracts the token f
     // `lines` drops the `\r` at a line's end, which a child's output on Windows has.
     text: = U8[]::arena.dup_str(body)
     for line in text.lines(arena)
-        at: = line.find_str(token_line)
-        if at >= 0
+        if at: = line.find_str(token_line)
             return line.sub_from(at + token_line.len)
     return ""
 
@@ -464,19 +466,19 @@ priv fn serve_cases(arena: Arena$@): Void!client.Http_end
     for target in escapes
         r: = client.get(port, target, "", arena)!
         nm11: = arena.text().s("it cannot get outside the root: \{target\}").take()
-        ok12: = r.status == 403 && r.body.find_str("secret") < 0
+        ok12: = r.status == 403 && r.body.find_str("secret").is_none()
         d13: = client.shown(r, arena)
         verdict.check(nm11, ok12, d13)
     // A double encoding is resolved only once (`%252e` is a name `%2e`, not a `.`).
     twice: = client.get(port, "/%252e%252e/secret.txt", "", arena)!
-    ok14: = twice.status == 404 && twice.body.find_str("secret") < 0
+    ok14: = twice.status == 404 && twice.body.find_str("secret").is_none()
     d15: = client.shown(twice, arena)
     verdict.check("a double encoding is not resolved (a 404, not a 200)", ok14, d15)
 
     for target in reinterpreted
         r: = client.get(port, target, "", arena)!
         nm16: = arena.text().s("a name the OS rereads is not taken: \{target\}").take()
-        ok17: = r.status == 403 && r.body.find_str("root index") < 0
+        ok17: = r.status == 403 && r.body.find_str("root index").is_none()
         d18: = client.shown(r, arena)
         verdict.check(nm16, ok17, d18)
     // Only a step that is exactly a device name is refused; a partial match would refuse

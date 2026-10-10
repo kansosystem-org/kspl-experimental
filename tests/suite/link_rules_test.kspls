@@ -173,10 +173,11 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
     //<
     //< Caution: **Pass `CC` to make on its command line**: the Makefile assigns it, which an
     //< environment variable does not override.
-    if triple.len > 0 && !sys.set_env(triple_var, triple)
-        verdict.check(arena.text().s("\{name\}: the stand-in can be told the target").take(), false,
-            "")
-        return
+    if triple.len > 0
+        sys.set_env(triple_var, triple) catch
+            verdict.check(arena.text().s("\{name\}: the stand-in can be told the target").take(),
+                false, "")
+            return
     $args: = List<|U8[]|>.new(arena)
     args.push("LOGGING=1")
     args.push("-pRrq")
@@ -187,11 +188,17 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
     saved: = arena.dup_str(sys.get_env("CC").unwrap_or(""))
     $libs: = verdict.Run_out::{ .code = -1, .out = "CC could not be set" }
     $flags: = libs
-    if sys.set_env("CC", cc)
+    $cc_set: = true
+    sys.set_env("CC", cc) catch
+        cc_set = false
+    if cc_set
         libs = info("link-libs")
         flags = info("exe-flags")
-    _restored: = sys.unset_env("CC") if saved.len == 0 else sys.set_env("CC", saved)
-    _cleared: = sys.unset_env(triple_var)
+    if saved.len == 0
+        sys.unset_env("CC") catch panic("CC could not be unset")
+    else
+        sys.set_env("CC", saved) catch panic("CC could not be put back")
+    sys.unset_env(triple_var) catch panic("the target variable could not be unset")
     $ldlibs: U8[] = ""
     switch ldlibs_of(made.out, arena)
     case .some(v)

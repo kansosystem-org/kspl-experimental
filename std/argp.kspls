@@ -5,7 +5,8 @@
 //< up in by name.
 //< Caution: **Anything starting with `-` that no declaration knows is an error**, and a value is
 //< always joined with `=`. Otherwise a path containing a space arrives as word-split fragments,
-//< and the failure shows up far from them.
+//< and the failure shows up far from them. **After a lone `--`, every argument is positional**,
+//< so a file named `-x` can still be named (`rm -- -x`).
 //< The design and its costs are in "How an argument's destination is declared, and why
 //< anything unknown is an error" in `std/docs/DESIGN.md`.
 import "std/chars"
@@ -286,6 +287,7 @@ impl Parser
     ): Void!Argp_error
         // subcommand_trailing's rest, pushed once its target has arrived.
         $trail: List<|U8[]|>$@ = null
+        $operands_only: = false // after `--`
         for $i: Sz = 0; i < argv.len; i += 1
             arg: = argv.get(i)
             // Caution: Make this check before every other one: after the target, not even `--help`
@@ -293,12 +295,16 @@ impl Parser
             if trail != null && r.rest.len > 0
                 trail.push(arg)
                 continue
-            if arg.equals("--help")
+            if !operands_only && arg.equals("--")
+                operands_only = true
+                continue
+            if !operands_only && arg.equals("--help")
                 throw .help_requested
             // A misspelling with a single `-` (`-out=X`) is refused too, not passed on to rest. A
-            // lone `-` is positional and means "standard input".
-            if !arg.starts_with("-") || arg.equals("-")
-                c: = r.find_cmd(arg)
+            // lone `-` is positional and means "standard input". After `--`, not even a command's
+            // name is read as one.
+            if operands_only || !arg.starts_with("-") || arg.equals("-")
+                c: = null if operands_only else r.find_cmd(arg)
                 if c != null
                     r.set_command(c.name)!
                     if c.trailing != null
@@ -317,8 +323,7 @@ impl Parser
             $has_val: = false
             $o: = r.find(arg)
             if o == null
-                eq: = arg.find_char('=')
-                if eq >= 0
+                if eq: = arg.find_char('=')
                     name = arg.sub(0, eq)
                     o = r.find(name)
                     if o != null
@@ -349,8 +354,10 @@ impl Parser
             if o.required && !o.seen
                 throw .missing_required(o.name)
 
-    pub fn print_usage(r: Self$@) //< writes the whole usage to standard output
-        out: = io.out()
+    pub fn print_usage( //< writes the whole usage
+        r: Self$@,
+        out: Writer, //< `io.out()` when asked for (`--help`), `io.err()` after a refusal
+    )
         out.s("Usage: ").s(r.prog)
         if r.cmds.len > 0
             out.s(" [command]")
@@ -360,13 +367,15 @@ impl Parser
         out.s("\n")
         if r.about.len > 0
             out.s("\n").s(r.about).s("\n")
-        r.print_options()
+        r.print_options(out)
 
-    pub fn print_options(r: Self$@) //< writes only the commands and options, with no heading
+    pub fn print_options( //< writes only the commands and options, with no heading
         //<
         //< For a CLI that appends **the list built from the declarations** after its own text; a
         //< copied list goes stale.
-        out: = io.out()
+        r: Self$@,
+        out: Writer, //< where its usage goes, as `print_usage` takes it
+    )
         if r.cmds.len > 0
             out.s("\nCommands:\n")
             for i in Range.asc(r.cmds.len)
@@ -409,7 +418,9 @@ impl Parser
 
     pub fn parse_or_exit( //< reads the arguments, or prints why and ends the process
         //<
-        //< **It returns only on success.** The exit code is 0 for `--help` and 2 for an error.
+        //< **It returns only on success.** `--help` prints the usage on standard output and exits
+        //< 0; an error prints the reason and the usage on standard error and exits 2, so a caller
+        //< reading the output never takes a refusal for it.
         r: Self$@,
         a: sys.Args, //< what `sys.args()` returned
         arena: Arena$@, //< the arena the parsed values are allocated in
@@ -417,11 +428,11 @@ impl Parser
         r.parse(a, arena) catch e
             switch e
             case .help_requested
-                r.print_usage()
+                r.print_usage(io.out())
                 sys.exit(0)
             default
                 io.err().s("\{r.prog\}: \{e\}\n")
-                r.print_usage()
+                r.print_usage(io.err())
                 sys.exit(2)
 
 impl Argp_error: Formattable //< so a failure can be written straight into a message

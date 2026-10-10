@@ -112,9 +112,9 @@ fn make_argv(args: U8[][]): U8[][] //<
     arena: = ksplc_harness.arena()
     // Caution: Drop the job server's setting: this process is not make's child and holds no token,
     // and on Windows the named semaphore cannot open and a warning is printed.
-    sys.unset_env("MAKEFLAGS")
-    sys.unset_env("MFLAGS")
-    sys.unset_env("MAKELEVEL")
+    sys.unset_env("MAKEFLAGS") catch panic("MAKEFLAGS could not be unset")
+    sys.unset_env("MFLAGS") catch panic("MFLAGS could not be unset")
+    sys.unset_env("MAKELEVEL") catch panic("MAKELEVEL could not be unset")
     $argv: = List<|U8[]|>.new(arena)
     argv.push(arena.dup_str(sys.get_env("KANSO_MAKE").unwrap_or("make")))
     argv.push("-o")
@@ -186,19 +186,23 @@ priv fn clear_tree(dir: U8[], depth: Sz)
 priv $listed: List<|U8[]|>$@ = null //< `tracked`'s answer, kept from its first call
 priv $texts: Map<|U8[], U8[]|>$@ = null //< `read_under_root`'s answers, by the path from the root
 
-fn tracked(): List<|U8[]|>!Run_error //<
+fn tracked(): List<|U8[]|> //<
     //< The tracked files plus the untracked files that are not ignored, asked of git once a suite
     //<
     //< Caution: **Do not pass a wildcard to `git ls-files`** (the reason is at `tracked_matching`
     //< below); the caller narrows the list. **Do not list the tracked files alone**: a new file is
     //< absent until committed and slips past the check. **Every call shares one list**: change none
     //< of its elements, and write a case's own files in `sandbox` (a later file is not listed).
+    //< Caution: **Where git cannot list them, the suite ends failed here.** Handed an empty list,
+    //< every walk over it would find nothing wrong and pass, having read nothing.
     if listed == null
         arena: = ksplc_harness.arena()
         out: = List<|U8[]|>.create(arena)
-        collect_ls_files(U8[][]::{ "git", "ls-files" }, out, arena)!
+        collect_ls_files(U8[][]::{ "git", "ls-files" }, out, arena) catch
+            sys.exit(ksplc_harness.fatal("git cannot list the files it knows (git ls-files)"))
         collect_ls_files(U8[][]::{ "git", "ls-files", "--others", "--exclude-standard" }, out,
-            arena)!
+            arena) catch
+            sys.exit(ksplc_harness.fatal("git cannot list the untracked files (git ls-files)"))
         listed = out
     return listed$
 
@@ -224,7 +228,7 @@ priv fn spec_match(path: U8[], spec: U8[]): Bool //< whether it matches git's pa
     //<
     //< **A `*` crosses a `/`** (`*.md` matches at any level), unlike a shell's or fnmatch's; `**`
     //< is the same as `*`. A pattern with no wildcard names a folder too (as in git).
-    if spec.find_char('*') < 0 && spec.find_char('?') < 0
+    if spec.find_char('*').is_none() && spec.find_char('?').is_none()
         return path.equals(spec) ||
             path.starts_with(spec.strip_suffix("/")) &&
             path.len > spec.strip_suffix("/").len &&
@@ -257,9 +261,7 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
     //< wildcards itself**, so `*.md` shrinks to the top level and goes green unseen.
     arena: = ksplc_harness.arena()
     $out: = List<|U8[]|>.new(arena)
-    files: = tracked() catch
-        ksplc_harness.fatal("git ls-files failed")
-        return out
+    files: = tracked()
     for f in files
         $keep: = false
         $drop: = false
@@ -271,9 +273,8 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
         if keep && !drop
             out.push(f)
     // **An exclusion (`:!`) that matches nothing is normal**; only including patterns are checked.
-    // **`fatal` frees the suite's arena**, `files` included, so return on the spot.
     for p in patterns
-        if p.starts_with(":!") || p.find_char('*') >= 0 || p.find_char('?') >= 0
+        if p.starts_with(":!") || p.find_char('*').is_some() || p.find_char('?').is_some()
             continue
         $seen: = false
         for f in files

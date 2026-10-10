@@ -1,3 +1,9 @@
+//< The checks on the program as a whole, and on a function body once its types are known
+//<
+//< On the program: one `main`, with a signature the start-up code can call; what `--library`
+//< refuses; the target file's unused names ([W0206], [I0402]). On a body: that control cannot fall
+//< off the end of a function returning a value, definite initialization (`sema/flow/track.kspls`),
+//< and the lints on its return and on the methods that release.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -141,7 +147,8 @@ impl Sema_ctx
                 // **Nor can the user drop `pub` from a synthesized symbol**: the per-enum
                 // `variant_name` (`parse/load.kspls`) and a lifted anonymous function
                 // (`_anon_env_N.call`).
-                if sym.name.ends_with(".variant_name") || sym.name.find_str("._anon_") >= 0
+                if sym.name.ends_with(".variant_name") ||
+                    sym.name.find_str("._anon_").is_some()
                     continue
                 // Nor from a generated instance; and a function called from C has users that the
                 // unit's references do not show.
@@ -302,7 +309,7 @@ impl Ast_node
             return true
         case .k_stmt_fallback, .k_stmt_break, .k_stmt_continue
             return any_exit
-        case .k_stmt_loop
+        case .k_stmt_for
             // **Control never leaves a loop with no condition and no `break`** (`con.exit(); for
             // {}` is how a freestanding probe stops), in a function body as in a catch block.
             return r.is_endless_loop()
@@ -321,19 +328,19 @@ impl Ast_node
             return then_block != null && else_block != null &&
                 then_block.is_guaranteed_to_leave(any_exit) &&
                 else_block.is_guaranteed_to_leave(any_exit)
-        case .k_stmt_match
-            return r.ret_stmt_match(any_exit)
+        case .k_stmt_switch
+            return r.ret_stmt_switch(any_exit)
         case .k_stmt_labeled_block
             return r.children.len > 1 && r.get_child(1).is_guaranteed_to_leave(any_exit)
         default
             return false
 
-    fn ret_stmt_match(r: Self$@, any_exit: Bool): Bool //<
+    fn ret_stmt_switch(r: Self$@, any_exit: Bool): Bool //<
         //< Whether every case of the switch, its default included, is sure to leave.
         //<
-        //< Note: has_default needs no check. sema/body/match.kspls requires 'default' on a non-enum
-        //< switch, and every variant covered without it (process_match_exhaustiveness), so a switch
-        //< here always enters a case or the default.
+        //< Note: has_default needs no check. sema/body/switch.kspls requires 'default' on a
+        //< non-enum switch, and every variant covered without it (process_switch_exhaustiveness),
+        //< so a switch here always enters a case or the default.
         $all_returns: = true
         $has_case: = false
         for i in Range.asc(r.children.len)

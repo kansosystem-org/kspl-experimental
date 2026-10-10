@@ -15,6 +15,7 @@ import "std/mem" { Arena }
 import "std/net"
 import "std/str" { Str_builder }
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/sys"
 
 pub enum Http_error //< why a message could not be read, or cannot be trusted
     invalid_request_line //< the first line is not `METHOD target VERSION`
@@ -58,7 +59,7 @@ priv fn is_token(s: U8[]): Bool //<
     if s.len == 0
         return false
     for i in Range.asc(s.len)
-        if !s[i].is_alnum() && "!#$%&'*+-.^_`|~".find_char(s[i]) < 0
+        if !s[i].is_alnum() && "!#$%&'*+-.^_`|~".find_char(s[i]).is_none()
             return false
     return true
 
@@ -240,16 +241,17 @@ priv fn parse_headers(ctx: Scan_ctx$@, arena: Arena$@): Header$@!Http_error //<
         line: = read_line(ctx)!
         if line.len == 0
             break
-        colon: = line.find_char(':')
-        if colon < 0
+        switch line.find_char(':')
+        case .none
             throw .invalid_header
-        // Caution: **Check the name as it is, without trimming** (see is_token); the value is
-        // trimmed by convention.
-        name: = line.sub(0, colon)
-        value: = line.sub_from(colon + 1).trim_spaces()
-        if !is_token(name) || !is_field_value(value)
-            throw .invalid_header
-        b = b.add(name, value)
+        case .some(colon)
+            // Caution: **Check the name as it is, without trimming** (see is_token); the value is
+            // trimmed by convention.
+            name: = line.sub(0, colon)
+            value: = line.sub_from(colon + 1).trim_spaces()
+            if !is_token(name) || !is_field_value(value)
+                throw .invalid_header
+            b = b.add(name, value)
     return b.build()
 
 priv struct Request_line //< parses the request line ("METHOD SP target SP HTTP-version")
@@ -258,22 +260,19 @@ priv struct Request_line //< parses the request line ("METHOD SP target SP HTTP-
     version: U8[]
 
 priv fn parse_request_line(line: U8[]): Request_line!Http_error
-    sp1: = line.find_char(' ')
-    if sp1 < 0
-        throw .invalid_request_line
-    rest: = line.sub_from(sp1 + 1)
-    sp2: = rest.find_char(' ')
-    if sp2 < 0
-        throw .invalid_request_line
-    method: = line.sub(0, sp1)
-    target: = rest.sub(0, sp2)
-    version: = rest.sub_from(sp2 + 1)
-    // Caution: Do not accept an empty method or an empty target (`" / HTTP/1.1"`, `"GET
-    // HTTP/1.1"`); every later branch would run on an empty string.
-    if !is_token(method) || target.len == 0
-        throw .invalid_request_line
-    check_version(version)!
-    return Request_line::{ .method = method, .target = target, .version = version }
+    if sp1: = line.find_char(' ')
+        rest: = line.sub_from(sp1 + 1)
+        if sp2: = rest.find_char(' ')
+            method: = line.sub(0, sp1)
+            target: = rest.sub(0, sp2)
+            version: = rest.sub_from(sp2 + 1)
+            // Caution: Do not accept an empty method or an empty target (`" / HTTP/1.1"`, `"GET
+            // HTTP/1.1"`); every later branch would run on an empty string.
+            if !is_token(method) || target.len == 0
+                throw .invalid_request_line
+            check_version(version)!
+            return Request_line::{ .method = method, .target = target, .version = version }
+    throw .invalid_request_line
 
 priv struct Status_line //< parses the status line ("HTTP-version SP status SP reason")
     version: U8[]
@@ -281,20 +280,23 @@ priv struct Status_line //< parses the status line ("HTTP-version SP status SP r
     reason: U8[]
 
 priv fn parse_status_line(line: U8[]): Status_line!Http_error
-    sp1: = line.find_char(' ')
-    if sp1 < 0
-        throw .invalid_status_line
-    check_version(line.sub(0, sp1))!
-    rest: = line.sub_from(sp1 + 1)
-    sp2: = rest.find_char(' ')
-    status_str: = rest.sub(0, sp2) if sp2 >= 0 else rest
-    reason: = rest.sub_from(sp2 + 1) if sp2 >= 0 else ""
-    // status-code is three digits; otherwise `I32::` truncates silently (`4294967496` becomes 200).
-    if status_str.len != 3 || !is_field_value(reason)
-        throw .invalid_status_line
-    status: = parse_digits(status_str) catch
-        throw .invalid_status_line
-    return Status_line::{ .version = line.sub(0, sp1), .status = I32::status, .reason = reason }
+    if sp1: = line.find_char(' ')
+        check_version(line.sub(0, sp1))!
+        rest: = line.sub_from(sp1 + 1)
+        $status_str: = rest
+        $reason: U8[] = ""
+        if sp2: = rest.find_char(' ')
+            status_str = rest.sub(0, sp2)
+            reason = rest.sub_from(sp2 + 1)
+        // status-code is three digits; otherwise `I32::` truncates silently (`4294967496` becomes
+        // 200).
+        if status_str.len != 3 || !is_field_value(reason)
+            throw .invalid_status_line
+        status: = parse_digits(status_str) catch
+            throw .invalid_status_line
+        return Status_line::{ .version = line.sub(0, sp1), .status = I32::status,
+            .reason = reason }
+    throw .invalid_status_line
 
 priv fn build_request(arena: Arena$@, line: Request_line, head: Header$@, body: U8[], consumed: Sz):
     Request$@ //<
@@ -410,9 +412,16 @@ pub fn parse_response( //< the one response at the start of the buffer; fails if
 // Reading from a socket (reading until the header and the Content-Length body are all present)
 // ---------------------------------------------------------
 
-priv fn read_chunk_into(stream: net.Tcp_stream$@, b: Str_builder$@, chunk: U8$[]): Void!Http_error //<
-    //< Appends up to chunk.len bytes read from stream to b (0 bytes: the peer closed)
-    n: = stream.read(chunk) catch e
+priv fn read_chunk_into(stream: net.Tcp_stream$@, b: Str_builder$@, chunk: U8$[], deadline_us: I64):
+    Void!Http_error //<
+        //< Appends up to chunk.len bytes read from stream to b, waiting no later than the deadline
+        //<
+        //< 0 bytes means the peer closed (`connection_closed`); the deadline passing is
+        //< `timed_out`.
+    left_ms: = (deadline_us - sys.mono_us()) / 1000I64
+    if left_ms <= 0I64
+        throw .io(.timed_out)
+    n: = stream.read_for(chunk, I32::left_ms) catch e
         throw .io(e)
     if n == 0
         throw .connection_closed
@@ -420,49 +429,57 @@ priv fn read_chunk_into(stream: net.Tcp_stream$@, b: Str_builder$@, chunk: U8$[]
 
 priv const read_chunk: Sz = 4096 //< how much one read from a connection takes
 
-priv fn read_head(stream: net.Tcp_stream$@, b: Str_builder$@, arena: Arena$@, max_body: Sz):
-    Head_parts!Http_error //<
+priv fn read_head(stream: net.Tcp_stream$@, b: Str_builder$@, arena: Arena$@, max_body: Sz,
+    deadline_us: I64): Head_parts!Http_error //<
         //< Reads from stream to the head's empty line (or past `max_head_bytes`); reads the head
         //<
         //< Caution: **Parse the first line before `read_body`.** It is a view into b, which a
-        //< further read may move.
+        //< further read may move. **Look for the empty line only where it can newly be**, from
+        //< three bytes before what the last read added: searched from the start each time, a head
+        //< arriving a byte at a time costs its length squared.
     chunk: U8[read_chunk] = ::{}
-    for b.slice().find_str("\r\n\r\n") < 0 && b.len <= max_head_bytes
-        read_chunk_into(stream, b, U8$[]::chunk)!
+    $from: Sz = 0
+    for b.slice().sub_from(from).find_str("\r\n\r\n").is_none() && b.len <= max_head_bytes
+        from = b.len - 3 if b.len > 3 else 0
+        read_chunk_into(stream, b, U8$[]::chunk, deadline_us)!
     return scan_head(b.slice(), max_body, arena)
 
-priv fn read_body(stream: net.Tcp_stream$@, b: Str_builder$@, h: Head_parts, body_len: Sz):
-    U8[]!Http_error //<
+priv fn read_body(stream: net.Tcp_stream$@, b: Str_builder$@, h: Head_parts, body_len: Sz,
+    deadline_us: I64): U8[]!Http_error //<
         //< Reads from stream until the body after the head is all in b; returns it, a view into b
     chunk: U8[read_chunk] = ::{}
     for b.len - h.head_end < body_len
-        read_chunk_into(stream, b, U8$[]::chunk)!
+        read_chunk_into(stream, b, U8$[]::chunk, deadline_us)!
     return b.slice().sub(h.head_end, body_len)
 
 pub fn read_request( //< reads one whole request from a connection and splits it into its parts
     stream: net.Tcp_stream$@, //< the connection to read from, which blocks
     arena: Arena$@, //< where the parts are allocated
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
+    timeout_ms: I32, //< how long the whole request may take to arrive; past it `.io(.timed_out)`
 ): Request$@!Http_error //< the request, held in `arena`; fails if the connection closes first
+    deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
     $b: = Str_builder.new()
     defer b.free()
-    h: = read_head(stream, b@, arena, max_body)!
+    h: = read_head(stream, b@, arena, max_body, deadline)!
     req_line: = parse_request_line(h.first_line)!
     body_len: = request_body_len(h)
-    body: = read_body(stream, b@, h, body_len)!
+    body: = read_body(stream, b@, h, body_len, deadline)!
     return build_request(arena, req_line, h.head, body, h.head_end + body_len)
 
 pub fn read_response( //< reads one whole response from a connection and splits it into its parts
     stream: net.Tcp_stream$@, //< the connection to read from, which blocks
     arena: Arena$@, //< where the parts are allocated
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
+    timeout_ms: I32, //< how long the whole response may take to arrive; past it `.io(.timed_out)`
 ): Response$@!Http_error //< the response, held in `arena`; fails if the connection closes first
+    deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
     $b: = Str_builder.new()
     defer b.free()
-    h: = read_head(stream, b@, arena, max_body)!
+    h: = read_head(stream, b@, arena, max_body, deadline)!
     status_line: = parse_status_line(h.first_line)!
     body_len: = response_body_len(h, status_line.status)!
-    body: = read_body(stream, b@, h, body_len)!
+    body: = read_body(stream, b@, h, body_len, deadline)!
     return build_response(arena, status_line, h.head, body, h.head_end + body_len)
 
 // ---------------------------------------------------------
@@ -517,7 +534,7 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
     // lenient server on any whitespace), so either makes the rest the version, and a second request
     // can be packed into one line.
     if !is_token(method) || target.len == 0 || !is_field_value(target) ||
-        target.find_char(' ') >= 0 || target.find_char('\t') >= 0
+        target.find_char(' ').is_some() || target.find_char('\t').is_some()
         throw .invalid_request_line
     check_framing(head, body.len, true)!
     $b: = Str_builder.new()

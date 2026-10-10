@@ -159,7 +159,7 @@ pacman -S --needed \
 
 Caution: **Do not install `mingw-w64-ucrt-x86_64-make`.** UCRT64's PATH would pick it first. If it is installed, the Makefile rejects it at start-up and says what breaks and how to reach MSYS2's `make`.
 
-`make BLAS=1` needs `libopenblas-dev`, which MSYS2 also packages; ordinary language development does not need it.
+`make BLAS=1` needs OpenBLAS, which MSYS2 packages as `mingw-w64-ucrt-x86_64-openblas`; ordinary language development does not need it.
 
 **To build Kanso OS for bare metal (`ksos-cm*` / `ksos-rp*`) on Windows**, which only a real microcontroller needs, add these:
 

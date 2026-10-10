@@ -12,6 +12,7 @@ import "std/mem" { Arena }
 import "std/net"
 import "std/refcount" { Rc }
 import "std/str" { Str_builder }
+import "std/sys"
 
 const max_conns: Sz = 128 //< the cap on connections open at once
     //<
@@ -32,6 +33,7 @@ struct Stats
     commands: I64 //< how many manoeuvres were returned to the car
     connections_total: I64
     connections_open: I64
+    connections_refused: I64 //< how many arrived while every slot was taken
 $stats: Stats = ::{}
 
 $stop_asked_by: I64 = 0I64 //< the serial of the connection that asked the server to stop
@@ -106,6 +108,9 @@ struct Conn
     // Caution: **Do not sweep it away for having nothing to send.** It has nothing to send by
     // design, so the sweep's usual reason does not apply (`sweep_done` in `kssrv/main.kspls`).
     holding: Bool
+    // When a byte last went either way, on the monotonic clock; set at accept. A connection quiet
+    // for `idle_conn_us` is dropped (`sweep_done` in `kssrv/main.kspls`), a holding one excepted.
+    moved_us: I64
 
 struct Conn_table //< the connection table
     //<
@@ -128,6 +133,7 @@ fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
         .answers_head = false,
         .lingering_since_us = 0I64,
         .holding = false,
+        .moved_us = sys.mono_us(),
     }
     return Rc<|Conn|>.new(fresh)
 
@@ -241,14 +247,12 @@ struct Target //< splits the request target (`/a/b?x=1#f`) into the path part an
     //<
     //< Both are still raw, not yet percent-decoded.
     path: U8[] //< with the leading `/` (`/a/b`)
-    query: U8[] //< without the `!` (`x=1`); empty if there is none
+    query: U8[] //< without the `?` (`x=1`); empty if there is none
 
 fn split_target(target: U8[]): Target
     $t: = target
-    h: = t.find_char('#')
-    if h >= 0
+    if h: = t.find_char('#')
         t = t.sub(0, h) // a fragment should not reach the server; one that does is dropped
-    q: = t.find_char('?')
-    if q < 0
-        return Target::{ .path = t, .query = "" }
-    return Target::{ .path = t.sub(0, q), .query = t.sub_from(q + 1) }
+    if q: = t.find_char('?')
+        return Target::{ .path = t.sub(0, q), .query = t.sub_from(q + 1) }
+    return Target::{ .path = t, .query = "" }

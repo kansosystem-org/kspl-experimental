@@ -1,3 +1,9 @@
+//< Tests of `std/verdict`'s run of checks that continues past a failure
+//<
+//< **Each run is its own child process**: the tally lasts as long as the process, so a run in
+//< this process would end this one. The test checks all of the child's output and its exit code.
+//< Caution: **Test the failing path above all.** No suite would notice a `finish` that prints
+//< `ALL PASS` after a failure.
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -5,14 +11,6 @@ import "std/mem" { Arena }
 import "std/str" // `arena.text()` and `replace`
 import "std/subproc"
 import "std/verdict"
-
-// ==========================================
-// std/verdict: tests of a run of checks that continues past a failure.
-// **Each run is its own child process**: the tally lasts as long as the process, so a run in this
-// process would end this one. The test checks all of the child's output and its exit code.
-// Caution: **Test the failing path above all.** No suite would notice a `finish` that prints
-// `ALL PASS` after a failure.
-// ==========================================
 
 priv const work_dir: U8[] = "out/tmp/kspl_test_verdict"
 
@@ -160,3 +158,19 @@ fn test_verdict_names_what_fits(ksplc: U8[], arena: Arena$@)
     verdict
         .pass("A `RESULT:` line naming more than its room holds keeps the count whole and says \
             `…`.")
+
+fn test_verdict_names_an_unmade_work_folder(arena: Arena$@) //<
+    //< `run_children` with a work folder that cannot be made says so in each run
+    //<
+    //< **Not "it could not start"**, which reads as a child that could not be found.
+    verdict.start("[Verdict] run_children naming a work folder it cannot make test...")
+    fs.mkdir_all("out/tmp") catch panic("out/tmp must be creatable")
+    io.write_file("out/tmp/kspl_test_not_a_folder", "") catch panic("the file must be writable")
+    job: = subproc.Job::{ .argv = U8[][]::{ "no-such-program" }, .cwd = "" }
+    outs: = verdict.run_children(subproc.Job[]::{ job, job }, "out/tmp/kspl_test_not_a_folder/w",
+        arena)
+    assert(outs.len == 2, "every run gets its answer")
+    assert(outs.get(0).code == -1 &&
+        outs.get(0).out.find_str("work folder").is_some(),
+        "the answer names the work folder, not a start that failed")
+    verdict.pass("A work folder that cannot be made is named in each run's answer.")

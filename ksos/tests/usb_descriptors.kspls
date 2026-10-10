@@ -91,10 +91,13 @@ priv fn parse_u8_array(src: U8[], name: U8[], arena: Arena$@): Arr //<
     head: = arena.text().s("\{name\}: U8[").take()
     $i: Sz = 0
     for i + head.len <= src.len
-        at: = src.sub_from(i).find_str(head)
-        if at < 0
+        $at: Sz = 0
+        switch src.sub_from(i).find_str(head)
+        case .some(found)
+            at = found
+        case .none
             break
-        p: = i + Sz::at
+        p: = i + at
         i = p + head.len
         if p > 0 && (src[p - 1].is_alnum() || src[p - 1] == '_' || src[p - 1] == '.')
             continue
@@ -119,10 +122,13 @@ priv fn parse_body(src: U8[], from: Sz, arena: Arena$@): Arr //<
     if j + tail.len > src.len || !src.sub(j, tail.len).equals(tail)
         return none
     body_at: = j + tail.len
-    end: = src.sub_from(body_at).find_char('}')
-    if end < 0
+    $end: Sz = 0
+    switch src.sub_from(body_at).find_char('}')
+    case .some(found)
+        end = found
+    case .none
         return none
-    after: = body_at + Sz::end + 1
+    after: = body_at + end + 1
     $k: = after
     for k < src.len && (src[k] == ' ' || src[k] == '\t')
         k += 1
@@ -251,14 +257,20 @@ priv fn check_reply_len(src: U8[], arena: Arena$@) //<
     $bad: = List<|U8[]|>.new(arena)
     $i: Sz = 0
     for i < src.len
-        at: = src.sub_from(i).find_str("reply_ep0(")
-        if at < 0
+        $at: Sz = 0
+        switch src.sub_from(i).find_str("reply_ep0(")
+        case .some(found)
+            at = found
+        case .none
             break
-        p: = i + Sz::at + 10
+        p: = i + at + 10
         i = p
         call: = src.sub_from(p)
-        stop: = call.find_str("[0]@, ")
-        if stop < 0
+        $stop: Sz = 0
+        switch call.find_str("[0]@, ")
+        case .some(found)
+            stop = found
+        case .none
             continue
         name: = last_segment(call.sub(0, stop))
         if name.len == 0
@@ -444,10 +456,13 @@ priv fn enabled_eps(src: U8[], arena: Arena$@): List<|Sz|> //<
     $out: = List<|Sz|>.new(arena)
     $i: Sz = 0
     for i < src.len
-        at: = src.sub_from(i).find_str("enable_ep(")
-        if at < 0
+        $at: Sz = 0
+        switch src.sub_from(i).find_str("enable_ep(")
+        case .some(found)
+            at = found
+        case .none
             break
-        p: = i + Sz::at + 10
+        p: = i + at + 10
         i = p
         rest: = src.sub_from(p)
         $k: Sz = 0

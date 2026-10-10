@@ -88,10 +88,8 @@ impl Sema_ctx
                 if p_type != null
                     param.type_id = p_type.resolve_and_apply_type(r)!
                     // An omitted annotation (`fn draw(r);`) is an "Unknown" type_expr, not null:
-                    // check the resolved type ID, as infer_fn in infer.kspls does.
-                    if param.type_id == r.env.get_or_add("Unknown") ||
-                        param.type_id == r.env.get_or_add("Void")
-                        r.err(param, "missing type annotation for parameter")
+                    // the resolved type ID is checked, as infer_fn in infer.kspls does.
+                    r.check_param_type(param, param.type_id)
 
         type_node: = m_node.get_decl_type_node()
         if type_node != null
@@ -283,7 +281,9 @@ impl Sema_ctx
         known: = sema_type_arc.shadowed_known_trait(trait_fqn)
         if known.len == 0
             return
-        simple: = known.sub_from(known.rfind_char('.') + 1)
+        $simple: = known
+        if dot: = known.rfind_char('.')
+            simple = known.sub_from(dot + 1)
         r.clear_scratch()
             .s("[W0501] '\{trait_fqn\}' shadows the compiler-known '\{known\}'. Conforming to this \
                 declaration does not enable the built-in behavior, and nothing else reports it. \

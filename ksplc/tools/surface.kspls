@@ -338,7 +338,7 @@ priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@) //<
         add_enum(lines, held, n, src)
     case .k_decl_trait
         add_trait(lines, held, n, src)
-    case .k_decl_const, .k_decl_alias
+    case .k_decl_const, .k_decl_typedef
         add(lines, key_of("", name_of(n), held.attrs),
             joined(held.vis, flat(src, n.loc.offset, end_of(n))),
             doc_of(src, n.loc.offset, body_brace(src, n)))
@@ -349,20 +349,22 @@ fn is_file_row(key: U8[]): Bool //< whether the line is the file's own descripti
 
 fn owner_of(key: U8[]): U8[] //<
     //< The key of the declaration a part's line describes; empty where the line is no part
-    mark: = key.find_char(part_mark)
-    return "" if mark <= 0 else key.sub(0, mark)
+    if mark: = key.find_char(part_mark)
+        if mark > 0
+            return key.sub(0, mark)
+    return ""
 
 fn part_name_of(key: U8[]): U8[] //<
     //< A parameter's name; **empty for the return value**, and for a line that is no part
     //<
     //< **A parameter has its position in front of its name** (`param_key`), so the name starts
     //< after the `.`; the return value has the mark a second time and no name.
-    mark: = key.find_char(part_mark)
-    if mark <= 0
-        return ""
-    rest: = key.sub_from(mark + 1)
-    dot: = rest.find_char('.')
-    return "" if dot < 0 else rest.sub_from(dot + 1)
+    if mark: = key.find_char(part_mark)
+        if mark > 0
+            rest: = key.sub_from(mark + 1)
+            if dot: = rest.find_char('.')
+                return rest.sub_from(dot + 1)
+    return ""
 
 fn surface_lines(raw_root: Ast_node$@, src: U8[]): List<|Line|> //<
     //< One file's lines, in ascending key order

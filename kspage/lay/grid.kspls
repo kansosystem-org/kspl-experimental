@@ -146,46 +146,60 @@ priv fn fit_panel(dst: Page$@, from: Sz, spot: Cell$@) //<
         if panel.block == spot.block
             panel.rect = spot.rect
 
-priv fn place_row(dst: Page$@, table: Block$@, sheet: Sheet$@, tiles: List<|Tile|>$@, r: Sz,
-    x0: F32, y: F32, widths: List<|F32|>$@, look: Look, tall: List<|Tall|>$@, arena: Arena$@): F32 //<
-        //< Lays out one row and returns its height.
-    row: = table.children.get(r)
-    row_look: = style.look_for(sheet, row.style, look)
-    // A row's height is set by the tallest cell, once the cells are laid out.
-    $row_h: F32 = 0.0
-    // This row's cells, **remembered for filling in the height afterwards** (in `dst.cells` an
-    // inner table's cells come between).
-    mine: = List<|Cell$@|>.create(arena)
-    panel_from: = dst.panels.len
-    for $i: Sz = 0; i < tiles.len; i += 1
-        t: = tiles.get(i)
-        if t.row != r
-            continue
-        cell: = Rect::{ .x = x0 + left_of(widths, t.column), .y = y, .w = width_of(widths, t),
-            .h = 0.0 }
-        // Caution: **Add it before the contents**, or an inner table goes in first and the
-        // innermost cell could not be found by searching from the end.
-        spot: = arena
-            .create(Cell::{ .rect = cell, .block = t.block, .table = table, .row = r,
-            .column = t.column })
-        dst.cells.push(spot)
-        // **A cell merged downward does not decide the row's height** (the first row would carry
-        // them all); it is filled in once the rows it covers are laid out.
-        if t.rows > 1
-            tall.push(Tall::{ .spot = spot, .rows = t.rows })
-        else
-            mine.push(spot)
-        used: = flow.place_blocks(dst, only(t.block, arena), sheet, cell, row_look, 0.0, 0.0, arena)
-        if used > row_h && t.rows <= 1
-            row_h = used
-    // **A set height does not change with the contents**; tall contents stick out (as in a column).
-    if v: = table.size_of(.row, r)
-        row_h = v if v > 0.0F32 else 0.0F32
-    // **The height is made even across the row**, or neighbouring frames disagree.
-    for $i: Sz = 0; i < mine.len; i += 1
-        mine.get(i).rect.h = row_h
-        fit_panel(dst, panel_from, mine.get(i))
-    return row_h
+priv struct Grid //< one table being laid out, and where its rows go
+    dst: Page$@
+    table: Block$@
+    sheet: Sheet$@
+    tiles: List<|Tile|>$@
+    widths: List<|F32|>$@ //< each column's width
+    x0: F32 //< the table's left edge
+    look: Look
+    tall: List<|Tall|>$@ //< the cells merged downward, laid out so far
+    arena: Arena$@
+
+impl Grid
+    fn place_row(g: Self$@, r: Sz, y: F32): F32 //< lays out row r at y, and returns its height
+        dst: = g.dst
+        table: = g.table
+        row: = table.children.get(r)
+        row_look: = style.look_for(g.sheet, row.style, g.look)
+        // A row's height is set by the tallest cell, once the cells are laid out.
+        $row_h: F32 = 0.0
+        // This row's cells, **remembered for filling in the height afterwards** (in `dst.cells` an
+        // inner table's cells come between).
+        mine: = List<|Cell$@|>.create(g.arena)
+        panel_from: = dst.panels.len
+        for $i: Sz = 0; i < g.tiles.len; i += 1
+            t: = g.tiles.get(i)
+            if t.row != r
+                continue
+            cell: = Rect::{ .x = g.x0 + left_of(g.widths, t.column), .y = y,
+                .w = width_of(g.widths, t), .h = 0.0 }
+            // Caution: **Add it before the contents**, or an inner table goes in first and the
+            // innermost cell could not be found by searching from the end.
+            spot: = g.arena
+                .create(Cell::{ .rect = cell, .block = t.block, .table = table, .row = r,
+                .column = t.column })
+            dst.cells.push(spot)
+            // **A cell merged downward does not decide the row's height** (the first row would
+            // carry them all); it is filled in once the rows it covers are laid out.
+            if t.rows > 1
+                g.tall.push(Tall::{ .spot = spot, .rows = t.rows })
+            else
+                mine.push(spot)
+            used: = flow.place_blocks(dst, only(t.block, g.arena), g.sheet, cell, row_look, 0.0, 0.0,
+                g.arena)
+            if used > row_h && t.rows <= 1
+                row_h = used
+        // **A set height does not change with the contents**; tall contents stick out (as in a
+        // column).
+        if v: = table.size_of(.row, r)
+            row_h = v if v > 0.0F32 else 0.0F32
+        // **The height is made even across the row**, or neighbouring frames disagree.
+        for $i: Sz = 0; i < mine.len; i += 1
+            mine.get(i).rect.h = row_h
+            fit_panel(dst, panel_from, mine.get(i))
+        return row_h
 
 fn place_rows(dst: Page$@, table: Block$@, sheet: Sheet$@, at: Rect, look: Look, page_height: F32,
     arena: Arena$@): F32 //<
@@ -202,6 +216,8 @@ fn place_rows(dst: Page$@, table: Block$@, sheet: Sheet$@, at: Rect, look: Look,
     tops: = List<|F32|>.create(arena)
     heights: = List<|F32|>.create(arena)
     tall: = List<|Tall|>.create(arena)
+    $g: = Grid::{ .dst = dst, .table = table, .sheet = sheet, .tiles = tiles, .widths = widths,
+        .x0 = at.x, .look = look, .tall = tall, .arena = arena }
     panel_from: = dst.panels.len
 
     $y: F32 = at.y
@@ -217,15 +233,13 @@ fn place_rows(dst: Page$@, table: Block$@, sheet: Sheet$@, at: Rect, look: Look,
         // **A page break never splits a row**: a row that crosses is rolled back and laid out anew.
         back: = page.placed_of(dst)
         tall_back: = tall.len
-        $row_h: F32 =
-            place_row(dst, table, sheet, tiles, r, at.x, y, widths, look, tall, arena)
+        $row_h: F32 = g.place_row(r, y)
         if top: = page.page_break(page_height, y, row_h)
             page.rewind(dst, back)
             // Caution: **Throw the remembered cells away with it**, or a stale height is filled in.
             tall.len = tall_back
             y = top
-            row_h =
-                place_row(dst, table, sheet, tiles, r, at.x, y, widths, look, tall, arena)
+            row_h = g.place_row(r, y)
         tops.push(y)
         heights.push(row_h)
         y += row_h

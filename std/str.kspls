@@ -36,12 +36,25 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         //< Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC
         //< 8259); escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for
         //< a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the
-        //< round trip.
+        //< round trip. A byte that is not well-formed UTF-8 is written as U+FFFD.
         r: Self$@,
         src: U8[], //< the plain text, not yet escaped
     ): Self$@
-        for i in Range.asc(src.len)
+        $i: Sz = 0
+        for i < src.len
             c: = (src.ptr + i)$
+            // Caution: **Do not pass a byte that is not UTF-8 through.** JSON text is UTF-8 (RFC
+            // 8259 §8.1), so std/json's parser refuses it, and the writer's output would not read
+            // back.
+            if c >= 0x80U8
+                n: = src.utf8_seq_len(i)
+                if n == 0
+                    r.s("\uFFFD")
+                    i += 1
+                else
+                    r.s(src.sub(i, n))
+                    i += n
+                continue
             switch c
             case '"'
                 r.s("\\\"")
@@ -62,6 +75,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
                     r.s("\\u00").c((c >> 4U8).to_hex_lower()).c((c & 0xfU8).to_hex_lower())
                 else
                     r.c(c)
+            i += 1
         return r
 
     pub fn clear(r: Self$@): Self$@ //< empties it, keeping the memory already allocated
@@ -82,7 +96,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
             r.len = 0
             return r
         rest: = r.len - n
-        mem.copy(Void$@::r.ptr, Void$@::(r.ptr + n), rest)
+        mem.move(Void$@::r.ptr, Void$@::(r.ptr + n), rest) // the two ranges overlap
         r.len = rest
         return r
 
@@ -219,12 +233,13 @@ impl U8[]
         $pos: Sz = 0
         for pos < r.len
             rest: = r.sub_from(pos)
-            idx: = rest.find_str(old)
-            if idx < 0
+            switch rest.find_str(old)
+            case .some(idx)
+                b.s(rest.sub(0, idx)).s(new)
+                pos += idx + old.len
+            case .none
                 b.s(rest)
                 break
-            b.s(rest.sub(0, idx)).s(new)
-            pos += idx + old.len
         return b.take()
 
     // Use this for a text file, not `split('\n', ...)`: lines of a CRLF file from Windows would
@@ -279,7 +294,11 @@ impl U8[]
         $i: = 0
         for i < r.len
             c: = (r.ptr + i)$
-            if c == '\\' && i + 1 < r.len
+            // Caution: **A `\` with nothing after it is broken, not a backslash.** Kept, it would
+            // read as one, and a literal cut off inside an escape would pass as whole.
+            if c == '\\' && i + 1 >= r.len
+                throw .invalid_format
+            if c == '\\'
                 i += 1
                 ec: = (r.ptr + i)$
                 if ec == 'u'
@@ -334,15 +353,12 @@ impl U8[]
             if c == '\n'
                 is_empty_line = true
                 current_indent = 0
-            else if c != '\r'
-                if c == ' ' || c == '\t'
-                    if is_empty_line
-                        current_indent += 1
-                else
-                    if is_empty_line
-                        if current_indent < min_indent
-                            min_indent = current_indent
-                        is_empty_line = false
+            else if is_empty_line && (c == ' ' || c == '\t')
+                current_indent += 1
+            else if is_empty_line && c != '\r'
+                if current_indent < min_indent
+                    min_indent = current_indent
+                is_empty_line = false
             i += 1
 
         if min_indent == 999999

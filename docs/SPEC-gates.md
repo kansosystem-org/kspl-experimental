@@ -42,13 +42,13 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 | :-- | :-- |
 | `RESULT:` | The gate's verdict, and nothing else |
 | `OUTPUT:` | The path of a built file |
-| `NOTE:` | A refusal along the way |
+| `NOTE:` | A refusal along the way, or a child that took three quarters of its time cap (`run_child` in `std/verdict.kspls`) |
 
 **One gate's full log is in the run's Artifacts** (the files a run keeps for download). The log on screen merges a whole job into one stream, and a reader that gets only the tail (GitHub's API) cannot see its middle. `tools/ci.kspls` writes each gate's log to `out/log/ci/<name>.log`, and the workflow uploads it as `log-<job>-<section>`. It uploads on a failing run too (`if:always()`), which is the run you need it for.
 
 **The log's tail lists what actually ran.** `make ci` / `ci-linux` / `ci-macos` end by listing the gates they ran and the seconds each took (`gate seconds:` is the total). The list is read from `out/log/ci/` itself, not written by hand. Where the time goes, and what shrinks it, is "Where CI's time goes" in [`DESIGN.md`](DESIGN.md).
 
-**A gate that passed silently stays in the list, green, as `SKIPPED`** (`test-ksos-link` off Linux, `test-kspage-browser` with no browser), so only reading the list reveals it.
+**A gate that passed silently on an expected SKIP stays in the list as `PASS`, with its `SKIP` lines printed under it** (`test-ksos-link` off Linux, `test-kspage-browser` with no browser), and the count line says how many gates carry one, so only reading the list reveals it.
 
 ## How the gates are arranged
 
@@ -88,7 +88,7 @@ flowchart TD
 
 **Do not remove `fail-fast: false`**: without it the first failing job cancels the rest, and their results are lost.
 
-**The gates run one after another, in the table's order, and a gate that fails stops the set.** Inside a gate that the table marks with `jobs`, the items run in parallel (`-j$(TEST_JOBS)`). `lint` / `lint-cfg` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` are each split into one target per item, so a failing item is named by its target.
+**The gates run one after another, in the table's order, and a gate that fails does not stop the set**, so one round names every gate that falls. Only the self-host stops it (`Gate.stops` in `tools/ci_gates.kspls`): the gates after it build on what it built, so what falls after it is noise. Inside a gate whose `par` in `tools/ci_gates.kspls` is `parallel` or `synced`, the items run in parallel (`-j<jobs>`). `lint` / `lint-cfg` / `test-suites` / `test-ksos-link` / `test-ksos-posix` / `test-ksos-qemu` are each split into one target per item, so a failing item is named by its target.
 
 **Every demo `test-ksos-posix` and `test-ksos-qemu` run has a time cap** (`KSOS_RUN_CAP` in `ksos/Makefile`). One that hangs fails its item with a `[FAIL] … it hung` line instead of stalling the set; `test-ksos-posix` first checks that a run spinning for ever is stopped that way.
 
@@ -121,7 +121,7 @@ flowchart TD
 | test-run (`ksplc run`'s cache) | ✅ | ➖(note 2) | ✅ |
 | test-llvm-abi (the calling conventions agree) | ✅ | ➖(note 2) | ✅ |
 | test-ksos-posix (running on the POSIX host port) | ✅ | ➖(note 5) | ➖(note 5) |
-| test-ksos-link (bare-metal linking, `test-ksos-ramtext` with it) | ✅ | ➖(note 2) | ➖(note 6) |
+| test-ksos-link (bare-metal linking, `test-ksos-ramtext` with it) | ✅ | ➖(note 2) | ✅(note 6) |
 | test-ksos-qemu (bare-metal execution under QEMU) | ✅ | ➖(note 7) | ➖(note 7) |
 | test-kspage-wasm (running the browser-facing wasm) | ✅ | ➖(note 8) | ➖(note 8) |
 | test-kspage-browser (the input entry point in a real browser) | ✅(note 9) | ➖(note 10) | ➖(note 10) |
@@ -133,7 +133,7 @@ flowchart TD
 | test-ast-cache (the parse cache does not change the result) | ✅ | ➖(note 2) | ✅(note 14) |
 | test-property (a random expression matches on both backends) | ✅ | ➖(note 2) | ✅ |
 | test-generic-matrix (each shape of a generic, reached each way, in each position: it builds on both backends and prints its value, or is refused at the user's line; a C or LLVM error is never an outcome) | ✅ | ➖(note 2) | ✅ |
-| Fuzzing, each package's own `test-fuzz` run on its copy by `test-extract` (a shallow run on a fixed seed, which shows a regression; `make fuzz-long` goes deep, 2000 rounds a reader, with a fresh seed, by hand), none may die: ksplc's earlier stages on corrupted source (the compiler the suites run), and, built with the address sanitizer (note 23), kspage opening and laying out a corrupted document, std's readers on a corrupted byte sequence, ksai on a corrupted weights file and vocabulary | ✅ | ➖(note 2) | ✅(note 23) |
+| Fuzzing, each package's own `test-fuzz` run on its copy by `test-extract` (a shallow run on a fixed seed, which shows a regression; `make fuzz-long` goes deep, 2000 rounds a reader, with a fresh seed, by hand, and draws ksplc's property check 600 times on the same seed), none may die: ksplc's earlier stages on corrupted source (the compiler the suites run), and, built with the address sanitizer (note 23), kspage opening and laying out a corrupted document, std's readers on a corrupted byte sequence, ksai on a corrupted weights file and vocabulary | ✅ | ➖(note 2) | ✅(note 23) |
 | test-kspls (ksplc reads indentation-written source directly, giving the same C, squiggles, hovers, and jump targets) | ✅ | ➖(note 2) | ✅ |
 | test-kspls-trip (every tracked source goes round the two notations and comes back byte for byte) | ✅ | ➖(note 2) | ➖(note 28) |
 | test-file-path (the logical name is stable however the entry point is written) | ✅ | ➖(note 2) | ✅ |
@@ -144,6 +144,7 @@ flowchart TD
 | The other suites (c-warnings / pilot-copy / cli / config / std-dir / thin-use / output-flush / lint / fmt / write-perm / link-rules / ext-import / doc / runtime / limits / decl-macros / spawn / one-main / place / visibility) | ✅(note 24) | ➖(note 2) | ✅(note 24) |
 | self-host (the LLVM backend) | ✅ | ✅ | ✅ |
 | debug tests (the LLVM backend) | ✅ | ✅ | ✅ |
+| test-llvm-pkgs (kssrv's and ksbind's tests on code the LLVM backend built) | ✅ | ➖(note 30) | ➖(note 30) |
 | test-blas (a real build of the optional BLAS backend: ksai's unit tests with `BLAS=1`) | ✅ | ➖(note 17) | ➖(note 17) |
 | ksbind's own tests (the OpenSSL and SQLite bindings linked and run, from a copy by `test-extract`) | ✅ | ➖(note 2) | ➖(note 20) |
 | perf-log (peak-memory regression, judged by `perf_guard`; time is recorded only) | ✅ | ➖(note 18) | ➖(note 18) |
@@ -151,13 +152,13 @@ flowchart TD
 
 **The compiler's own suites run from a copy.** On Linux and ucrt64, `test-extract` copies ksplc's folder alone, rebuilds the compiler there, and runs that folder's suites (`test-negative`, `test-equiv`, `test-run` and the rest of `SUITES` in `ksplc/Makefile`) against it. macOS runs the ones its column marks by name, from the repository.
 
-**Formatting is checked before lint, and the order matters** (why is the comment above the table in `tools/ci_gates.kspls`).
+**Where one set runs both, formatting is checked before lint** (`make ci`, `ci-linux`; why is the comment above the table in `tools/ci_gates.kspls`). CI puts the two in different jobs (`fmt_tree` in `ci-linux-only`, `lint` in `ci-shard-rest`), where each reports alone.
 
 **The lint gate passes only when every count is 0, hints included.** It analyses the entry points listed in `LINT_TARGETS` in `mk/lint.mk`. A generic (code written once for many types) is analysed only where it is instantiated, that is, used with a concrete type. So code that only one entry point instantiates (`tests/debug/main.kspls`, say) escapes the gate unless that entry point is listed. `make test-lint-gate` checks that a file holding one information diagnostic makes `make lint` exit non-zero.
 
 ### Gates that pass silently where a tool is missing
 
-**Some gates need a tool or a library that not every machine has. Without it, the gate says `SKIP` and passes silently.** On Linux CI a setting marks most of these tools as required, so a missing tool fails the gate there instead; the devcontainer holds every one of them unless the row says otherwise. Elsewhere a green run has not checked what the gate checks. The note on each row says what the gate itself does.
+**Some gates need a tool or a library that not every machine has. Without it, the gate says `SKIP` and passes silently.** **A SKIP its platform does not expect fails its gate**: `expected_skips` in `tools/ci_gates.kspls` holds, per platform, the reasons a round may skip for (the rows below), so a runner that loses a tool fails rather than going green. On Linux CI a setting marks most of these tools as required, so a missing tool fails the gate there instead; the devcontainer holds every one of them unless the row says otherwise. Elsewhere a green run has not checked what the gate checks. The note on each row says what the gate itself does.
 
 | Gate | What it needs | On Linux CI | Elsewhere, without it |
 | :-- | :-- | :-- | :-- |
@@ -179,7 +180,7 @@ flowchart TD
 * **note 4**: a program built by the LLVM backend holds no runtime (the support code every program needs, such as the checks that stop it on a bad index). `ksplc emit-runtime` writes the runtime as a separate C file, and the program is linked with it. A runtime from another ksplc version must not link silently, so the runtime ends with an empty function named after a hash of its whole source (`kspl_runtime_abi_` and 16 hex digits), and the program's `main` calls that function first. A runtime of another version holds another name, so the link stops on an undefined symbol. The gate links a program with a runtime whose function is renamed and checks that the link fails. Each platform's own linker resolves that symbol, so each platform runs the gate.
 * **note 5**: `test-ksos-posix` runs demos of ksos's POSIX host port, which runs ksos's tasks inside an ordinary Linux process and switches between them with ucontext. **Nothing else exercises the host-side port layer, task liveness management, the ISR-safe API (the calls an interrupt handler may make) or the stack canary (a guard value that shows a stack overflow)**: `test-ksos-qemu`'s Cortex-M demos exercise the kernel core, not this port layer. It needs `<ucontext.h>`, which Windows lacks and macOS deprecates with no guaranteed behavior, so it is Linux-only.
   * The comment at `KSOS_POSIX_TEMPLATED` in `ksos/Makefile` says how a demo joins it; `KSOS_CM_DEMOS` and `KSOS_RP2040_DEMOS` take the same shape.
-* **note 6**: `test-ksos-link` links ksos's bare-metal demos (programs that run on a microcontroller with no operating system) and needs the `arm-none-eabi` toolchain: a libgcc that defines soft-float and 64-bit integer division. **`test-ksos-ramtext` runs first, as its prerequisite**, so the two are green or absent together, never one alone. `test-ksos-ramtext` checks that each window function sits in RAM rather than in flash. A window function is code that must finish within a tight deadline or run while flash cannot be read, such as writing to flash or sending the timed signal of an LED strip (`rp2040_flash_in_window`, `rp2040_ws2812_send_window`); in flash it links fine and freezes only on the real chip. Where the toolchain is required and where the gate passes silently is the table above.
+* **note 6**: `test-ksos-link` links ksos's bare-metal demos (programs that run on a microcontroller with no operating system) and needs the `arm-none-eabi` toolchain: a libgcc that defines soft-float and 64-bit integer division. **`test-ksos-ramtext` runs first, as its prerequisite**, so the two are green or absent together, never one alone. `test-ksos-ramtext` checks that each window function sits in RAM rather than in flash. A window function is code that must finish within a tight deadline or run while flash cannot be read, such as writing to flash or sending the timed signal of an LED strip (`rp2040_flash_in_window`, `rp2040_ws2812_send_window`); in flash it links fine and freezes only on the real chip. Where the toolchain is required and where the gate passes silently is the table above: the windows-ucrt64 runner holds no ARM toolchain, so it runs the gate and the gate says `SKIPPED`.
   * It checks the bare-metal demos under `ksos/demo/<port>/` (`cortex_m` / `rp2040`); the comment at `demo_stems` in `ksos/Makefile` says how the listing is built, and how a port joins it.
 * **note 7**: `test-ksos-qemu` runs ksos's bare-metal demos under `qemu-system-arm` (an emulator of the ARM board) and checks that no failure marker (`[FAIL]` / `N FAIL`) appears in the log. A demo that links may still fail to work, and `test-ksos-link` checks only the link. Do not check the exit code alone: semihosting's exit (the way the demo ends the emulator) returns 0 whatever the demo's own verdict. The macOS and Windows runners have no qemu (as in note 8), so it is a Linux-only gate (`make ci-linux`).
 * **note 8**: `test-kspage-wasm` builds `kspage`'s core to wasm32 (WebAssembly, which a browser runs) under `--freestanding` (no operating system, no libc), runs it with `node`, and checks that placing and editing give the expected result. The canvas is not inspected: text sizes are fixed values instead, since a browser's measurements change with the model and version. **The link checks that the set of imported functions has not grown**: `kspage/port/web/imports.txt` constrains it, not `--allow-undefined`, so libc code slipping in fails it. `wasm-ld` and `node` are in `.devcontainer/Dockerfile` but not on the macOS and Windows runners, so it is a Linux-only gate.
@@ -215,7 +216,8 @@ flowchart TD
 * **note 26**: `ksplc/tests/suite/layout_targets_test.kspls` compiles `ksplc/tests/prog/layout_probe.kspls` with `--machine` for each machine ksplc knows (`machines` in `ksplc/base/target.kspls`), and has clang compile the C for the same machine with warnings refused. The C checks every number ksplc folded, so a size laid out wrongly fails there. **Each check is shown to fire**: a 32-bit machine's C compiled for a 64-bit one, and the other way round, must fail at a check naming the machine. It needs only clang, which builds for every machine. Where `wasm-ld` and `node` are found, the wasm32 build also runs, and each way a folded size decides the program (a static `if`, a constant chain, a `case` label, reflection) must answer as wasm32 lays values out.
 * **note 27**: Linux and Windows run the same check through `test-extract`: ksai's own `make test`, run on its copy, trains `llama_engine` and requires the loss to fall (`ksai/tests/examples_main.kspls`). macOS runs no `test-extract`, so it runs `make run` instead.
 * **note 28**: what these read is the tree's text, or the text the compiler translates it to, so the answer cannot differ by platform. Run on Windows as well, they would pay a second time (a Windows minute is billed double) for the answer Linux already gave, so they run in `ci-linux-only` (`Shard.linux` in `tools/ci_gates.kspls`; the suites are `SUITES_TEXT` in `mk/test.mk`). What the platform decides stays on Windows: building, linking and running, the language server over the tree (`lsp-tree`), and the C compiler's warnings (`c-warnings`).
-* **note 29**: `make debug` runs every package's tests in one program. Linux and Windows run the same tests already, one package at a time, as each package's own `make test` from a copy of its folder (`test-extract`, in `suites_a`), which also proves the package stands alone; a failed check fails that run, since each package's tests end with the checks' own verdict. So there they run only what no copy holds: `tools/`, which has no `Makefile` (`make debug-tools`). macOS runs no copy, so it runs `make debug`, which holds `tools/` too.
+* **note 29**: `make debug` runs the tests of every package but kssrv and ksbind in one program (kssrv's start the server as a child, and ksbind's link OpenSSL and SQLite, so each runs only as its package's own `make test`). Linux and Windows run the same tests already, one package at a time, as each package's own `make test` from a copy of its folder (`test-extract`, in `suites_a`), which also proves the package stands alone; a failed check fails that run, since each package's tests end with the checks' own verdict. So there they run only what no copy holds: `tools/`, which has no `Makefile` (`make debug-tools`). macOS runs no copy, so it runs `make debug`, which holds `tools/` too; kssrv's and ksbind's tests go unrun there.
+* **note 30**: `make LLVM=1 debug` holds neither kssrv nor ksbind (note 29), so `test-llvm-pkgs` builds the server and ksbind's tests through the LLVM backend and runs kssrv's tests on that server and ksbind's as they are. It runs in `ci-linux-only`, the one job whose image holds ksbind's libraries (OpenSSL, SQLite).
 
 ## The shape of a per-item pass/fail line
 

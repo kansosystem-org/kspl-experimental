@@ -340,7 +340,18 @@ function kspageFile(ui) {
     }
     // Caution: **Do not ask for the handle again where it could not be read** — obtained within the
     // click's user activation, once dropped it cannot be obtained again.
-    takeChosen(await got[0].getFile(), got[0]);
+    let body = null;
+    try {
+      body = await got[0].getFile();
+    } catch (e) {
+      // Caution: **Say so** (a file removed or locked after it was chosen, a permission withdrawn):
+      // a rejection no one catches reaches only the console, and the click looks as if it did
+      // nothing.
+      deny("The file could not be read (" + why(e) + ")");
+      app.focus();
+      return;
+    }
+    takeChosen(body, got[0]);
   });
   // Cleared so that choosing the same file again still fires a change.
   file.addEventListener("change", () => {
@@ -371,6 +382,12 @@ function kspageFile(ui) {
       say("Loaded it" + kf.aside);
       app.focus();
       return true;
+    }, (e) => {
+      // A file that cannot be read after it was chosen (removed, locked, a permission withdrawn)
+      // is refused out loud, for the picker, the file field and a drop alike.
+      deny("The file could not be read (" + why(e) + ")");
+      app.focus();
+      return false;
     });
   }
 
@@ -418,6 +435,9 @@ function kspageFile(ui) {
     pathNow: () => kf.seen.path,
     // The function that takes a file the browser passed in (dropping borrows it).
     takeChosen: takeChosen,
+    // An error's reason as text, **one wording for every refusal** ([`inout.js`](inout.js)
+    // borrows it).
+    why: why,
     // Where the current document lives: "path" (through the server) / "pick" (chosen in a browser,
     // the name only) / "none" — **never mixed** (shown as a path, a bare name would look like one).
     placeNow: () => {

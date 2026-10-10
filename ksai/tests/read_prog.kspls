@@ -15,6 +15,7 @@
 import "ksai/safetensors" as st
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as tok
+import "std/chars" // `find_str` / `sub_from`
 import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str"
@@ -60,11 +61,18 @@ priv fn read_safetensors(path: U8[], arena: Arena$@): I32 //< reads the weights 
 
 priv fn read_vocab(path: U8[], arena: Arena$@): I32 //< reads the vocabulary
     //<
-    //< Caution: **Pass the same file as both the vocabulary and the merges.** Separate seeds would
-    //< make the fuzzer build two mutations, with **fewer combinations of damage**; both readers
-    //< skip a line they cannot read, so one text through both changes nothing else.
+    //< **One file holds both texts**, the vocabulary up to its first empty line and the merges
+    //< after it, so one mutation can damage either or both.
+    text: = io.read_file(path) catch
+        return 1
+    defer dealloc(Void$@::text.ptr)
+    $vocab: U8[] = text
+    $merges: U8[] = ""
+    if at: = text.find_str("\n\n")
+        vocab = text.sub(0, at + 1)
+        merges = text.sub_from(at + 2)
     $t: = tok.Tokenizer.new(arena)
-    t.load(path, path) catch
+    t.load_text(vocab, merges) catch
         return 1
     ids: = t.encode("Kanso café ✓ 12 <unk>")
     used += F64::ids.len

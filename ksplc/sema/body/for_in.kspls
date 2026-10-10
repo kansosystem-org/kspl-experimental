@@ -23,7 +23,7 @@ priv const iter_trait_fqn: U8[] = "std.lang.Iter" //<
 impl Ast_node
     fn expand_for_in(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Expands the loop if it carries the mark (a bare identifier at the init position)
-        item_id: = r.get_loop_init()
+        item_id: = r.get_for_init()
         if item_id == null || item_id.kind_id != .k_identifier
             return
         coll_ref: = r.get_loop_cond()
@@ -73,14 +73,14 @@ impl Ast_node
         //< The form that loops by `next()`
         //<
         //< Caution: **Leave the condition and the step empty**: `next()` advances, so anything
-        //< there advances twice. It folds like `if item: = coll.next()` (build_option_match in
+        //< there advances twice. It folds like `if item: = coll.next()` (build_option_switch in
         //< `base/ast_ext.kspls`).
         loc: = r.loc
         call: = Ast_node.build_method_call(Ast_node.build_ident(coll_ref.text, 0, loc), "next", null,
             0, loc)
         none_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
             .add_child(Ast_node.new(.k_stmt_break, "break", loc))
-        step: = Ast_node.build_option_match(call, item_id, r.get_loop_block(), none_block, null,
+        step: = Ast_node.build_option_switch(call, item_id, r.get_loop_block(), none_block, null,
             base_ast_ext.for_in_mark, loc)
 
         loop_children: = base_ast.new_ast_node_list()

@@ -73,6 +73,26 @@ function kspageProbeDrag(ks) {
         "a dropped picture goes into the document rather than being opened");
       // Caution: **Do not undo what was put in**: the undo record is shared too, so a waiting
       // section's undo puts another's rewrite back. The picture only adds, so it may stay.
+
+      // **A file that cannot be read once dropped is refused out loud** (removed or locked after
+      // it was chosen); a rejection no one catches reaches only the console. Every text the status
+      // note takes is watched, so another section's later notice cannot hide this one's.
+      const told = [];
+      const note = document.getElementById("note");
+      const watch = new MutationObserver(() => told.push(note.textContent));
+      watch.observe(note, { childList: true, characterData: true, subtree: true });
+      let loose = false;
+      const onLoose = (e) => {
+        if (String(e.reason && e.reason.message).indexOf("drag-unreadable") >= 0) loose = true;
+      };
+      window.addEventListener("unhandledrejection", onLoose);
+      const gone = new File(["{}"], "gone.json", { type: "application/json" });
+      gone.text = () => Promise.reject(new Error("drag-unreadable"));
+      fire("drop", carry(gone));
+      const refused = await until(() => told.some((t) => t.indexOf("drag-unreadable") >= 0));
+      watch.disconnect();
+      window.removeEventListener("unhandledrejection", onLoose);
+      check(refused && !loose, "a dropped file that cannot be read is refused, with its reason");
     } finally {
       free();
     }

@@ -260,17 +260,17 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         //<
         //< Each variant has its own payload, and only one is live at run time. So a switch on the
         //< tag is synthesized, and each case binds the payload before recursing into each element.
-        //< Caution: **Bind `p$` to a temporary here**, as lower_stmt_match would: this body is
+        //< Caution: **Bind `p$` to a temporary here**, as lower_stmt_switch would: this body is
         //< built after Lower's walk and never lowered, and a switch's subject has to be a plain
         //< name.
     loc: = parts.helper_fn.loc
     enum_id: = lctx.sema.env.strip_ptr(parts.ptr_id)
-    match_node: = Ast_node.new(.k_stmt_match, "switch", loc)
+    switch_node: = Ast_node.new(.k_stmt_switch, "switch", loc)
         .add_child(Ast_node.new(.k_empty, "", loc))
         .add_child(Ast_node.new(.k_empty, "", loc))
     $case_count: = 0
     for v in def.variants_list
-        pat: = Ast_node.new(.k_match_pattern, "pattern", loc)
+        pat: = Ast_node.new(.k_case_pattern, "pattern", loc)
             .add_child(Ast_node.new(.k_literal, ".", loc))
             .add_child(Ast_node.new(.k_identifier, v.name, loc))
         ops: = List<|Ast_node$@|>.create(base_core.arena)
@@ -292,19 +292,19 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
         for op in ops
             block.add_child(op)
-        match_node.add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(pat).add_child(block)
+        switch_node.add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(pat).add_child(block)
         case_count += 1
     if case_count == 0
         return
     // The default covers the variants that need no operation; without it such a tag goes nowhere.
-    match_node.add_child(Ast_node.new(.k_keyword, "default", loc))
+    switch_node.add_child(Ast_node.new(.k_keyword, "default", loc))
         .add_child(Ast_node.new(.k_stmt_block, "stmt_block", loc))
     deref: = Ast_node.new(.k_expr_postfix, "$", loc).with_type(enum_id)
         .add_child(parts.arc_param_ref(loc)).add_child(Ast_node.new(.k_literal, "$", loc))
     subject: = lctx.gen_tmp_name()
     out.push(lctx.build_let_decl(subject, enum_id, deref, loc))
-    match_node.set_child(1, Ast_node.build_ident(subject, enum_id, loc))
-    out.push(match_node)
+    switch_node.set_child(1, Ast_node.build_ident(subject, enum_id, loc))
+    out.push(switch_node)
 
 impl Lowering_ctx
     // It registers a release on top of the current block's cleanup_stack (run in reverse when the

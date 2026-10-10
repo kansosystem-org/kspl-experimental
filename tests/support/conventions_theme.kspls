@@ -20,7 +20,7 @@ priv const color_marks: U8[][] = U8[][]::{ "rgb(", "rgba(", "hsl(", "hsla(", "co
 
 priv fn holds_color(code: U8[], _arena: Arena$@): Bool
     for mark in color_marks
-        if code.find_str(mark) >= 0
+        if code.find_str(mark).is_some()
             return true
     for $i: Sz = 0; i + 3 < code.len; i += 1
         if code[i] != '#'
@@ -47,12 +47,11 @@ priv fn check_theme_roles(arena: Arena$@)
             i += 1
             // Caution: **Check the line with its comment removed**, or a colour named in an
             // explanation fails here.
-            cut: = line.find_str("/*")
-            code: = line.sub(0, cut) if cut >= 0 else line
+            code: = line.sub(0, line.find_str("/*").unwrap_or(line.len))
             if code.trim_spaces().starts_with(":root")
                 in_root = true
             if in_root
-                if code.find_str("}") >= 0
+                if code.find_str("}").is_some()
                     in_root = false
                 continue
             if holds_color(code, arena)
@@ -152,29 +151,26 @@ priv fn check_theme_contrast(arena: Arena$@) //<
         $names: = List<|U8[]|>.new(arena)
         $vals: = List<|U8[]|>.new(arena)
         for line in harness.read_under_root(rel).lines(arena)
-            cut: = line.find_str("/*")
-            code: = line.sub(0, cut) if cut >= 0 else line
+            code: = line.sub(0, line.find_str("/*").unwrap_or(line.len))
             t: = code.trim_spaces()
             if t.equals(":root {")
                 inside = true
                 continue
             if !inside
                 continue
-            if t.find_str("}") >= 0
+            if t.find_str("}").is_some()
                 measured += theme_defects(rel, names@, vals@, bad@, arena)
                 inside = false
                 continue
             if !t.starts_with("--")
                 continue
-            c: = t.find_str(":")
-            if c < 0
-                continue
-            $v: = t.sub(c + 1, t.len - c - 1).trim_spaces()
-            if v.ends_with(";")
-                v = v.sub(0, v.len - 1).trim_spaces()
-            names.push(t.sub(0, c).trim_spaces())
-            vals.push(v)
-            seen += 1
+            if c: = t.find_str(":")
+                $v: = t.sub(c + 1, t.len - c - 1).trim_spaces()
+                if v.ends_with(";")
+                    v = v.sub(0, v.len - 1).trim_spaces()
+                names.push(t.sub(0, c).trim_spaces())
+                vals.push(v)
+                seen += 1
     if measured == 0
         bad
             .push("not one pair of written colours was measured (`:root {` in \
@@ -271,19 +267,17 @@ priv const style_where: U8[][2] = ::{ "kspage/*.kspls", ":!kspage/tests/" } //<
     //< **`kspage/tests/` is left out**: a check there makes a name holding a space on purpose
     //< (`style_test.kspls`'s refusal), and others hold one as a fixture.
 
-priv fn name_at(line: U8[], from: Sz): Sz //<
-    //< The position of the first byte of a style's name written at or after from, or -1.
+priv fn name_at(line: U8[], from: Sz): Sz? //<
+    //< The position of the first byte of a style's name written at or after from, or none.
     //<
     //< **All marks are searched and the nearest one wins**, so a line writing two names is read to
     //< the end.
-    $best: Sz = -1
+    $best: Sz? = .none
     for mark in style_marks
-        at: = line.sub_from(from).find_str(mark)
-        if at < 0
-            continue
-        got: = from + at + mark.len
-        if best < 0 || got < best
-            best = got
+        if at: = line.sub_from(from).find_str(mark)
+            got: = from + at + mark.len
+            if best.is_none() || got < best.unwrap_or(got)
+                best = .some(got)
     return best
 
 priv fn spaced_style_name(line: U8[], _arena: Arena$@): Bool //<
@@ -294,26 +288,26 @@ priv fn spaced_style_name(line: U8[], _arena: Arena$@): Bool //<
     //< here.**
     $i: Sz = 0
     for i < line.len
-        at: = name_at(line, i)
-        if at < 0
+        if at: = name_at(line, i)
+            $k: = at
+            for k < line.len && line[k] != '"'
+                if line[k] == ' ' || line[k] == '\t'
+                    return true
+                k += 1
+            i = k + 1
+        else
             break
-        $k: Sz = at
-        for k < line.len && line[k] != '"'
-            if line[k] == ' ' || line[k] == '\t'
-                return true
-            k += 1
-        i = k + 1
     return false
 
 priv fn names_on(line: U8[]): Sz //< how many style names that line writes
     $n: Sz = 0
     $i: Sz = 0
     for i < line.len
-        at: = name_at(line, i)
-        if at < 0
+        if at: = name_at(line, i)
+            n += 1
+            i = at + 1
+        else
             break
-        n += 1
-        i = at + 1
     return n
 
 priv const style_names_floor: Sz = 20 //<

@@ -101,13 +101,12 @@ pub fn parse_query( //< splits a query string into a linked list of pairs
     $start: Sz = 0
     for start <= q.len
         amp: = q.sub_from(start).find_char('&')
-        end: = start + Sz::amp if amp >= 0 else q.len
+        end: = start + amp.unwrap_or(q.len - start)
         pair: = q.sub(start, end - start)
         if pair.len > 0
-            eq: = pair.find_char('=')
             $raw_name: U8[] = pair
             $raw_value: U8[] = ""
-            if eq >= 0
+            if eq: = pair.find_char('=')
                 raw_name = pair.sub(0, eq)
                 raw_value = pair.sub_from(eq + 1)
             param: Query_param = ::{ .name = U8$[]::decode_form(raw_name, arena)!,
@@ -118,7 +117,7 @@ pub fn parse_query( //< splits a query string into a linked list of pairs
             else
                 tail.next = node
             tail = node
-        if amp < 0
+        if amp.is_none()
             break
         start = end + 1
     return head

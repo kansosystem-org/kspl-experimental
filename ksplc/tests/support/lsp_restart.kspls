@@ -78,8 +78,8 @@ priv fn recover(c: jsonrpc.Client$@, hook: U8[], open: Sz, id: I32, text: U8[], 
     $seen: Bool[copies] = ::{}
     $out: = Recovery::{ .ms = -1, .answered = false, .published = 0 }
     t0: = sys.mono_us()
-    _hook: = c.notify(hook, empty_obj(arena), arena)
-    _asked: = c.send_raw(jsonrpc.encode("textDocument/hover", pos, id, arena))
+    c.notify(hook, empty_obj(arena), lsp_client.send_ms, arena) catch {}
+    c.send_raw(jsonrpc.encode("textDocument/hover", pos, id, arena), lsp_client.send_ms) catch {}
     for out.ms < 0 || out.published < open
         // The first answer after a hang comes once the watchdog has given up.
         wait: = I32::(watchdog_ms + I64::normal_ms)
@@ -87,7 +87,7 @@ priv fn recover(c: jsonrpc.Client$@, hook: U8[], open: Sz, id: I32, text: U8[], 
             break
         if msg.get("id").as_int(-1) == id
             out.ms = (sys.mono_us() - t0) / 1000I64
-            out.answered = lsp_client.hover_text(msg).find_str("first") >= 0
+            out.answered = lsp_client.hover_text(msg).find_str("first").is_some()
             continue
         if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
@@ -102,8 +102,9 @@ priv fn open_copies(c: jsonrpc.Client$@, from: Sz, to: Sz, text: U8[], arena: Ar
     //<
     //< **Settle before the hook**: diagnostics still on the way would be counted as the recovery's.
     for k in Range.asc(to - from)
-        _sent: = c.notify("textDocument/didOpen",
-            lsp_client.did_open(copy_uri(from + k, arena), text, arena), arena)
+        c.notify("textDocument/didOpen",
+            lsp_client.did_open(copy_uri(from + k, arena), text, arena), lsp_client.send_ms, arena)
+            catch {}
     $left: = to - from
     for left > 0
         msg: = c.read_msg(normal_ms, arena) catch
@@ -114,7 +115,7 @@ priv fn open_copies(c: jsonrpc.Client$@, from: Sz, to: Sz, text: U8[], arena: Ar
 
 priv fn told(c: jsonrpc.Client$@, line: U8[], arena: Arena$@): Bool //<
     //< Whether the supervisor's log carries `line`, copied at once (`err_tail` borrows its buffer)
-    return arena.text().s(c.err_tail()).take().find_str(line) >= 0
+    return arena.text().s(c.err_tail()).take().find_str(line).is_some()
 
 fn check_first_answer(exe: U8[], arena: Arena$@) //<
     //< That a recovery with many documents open answers in about one document's analysis
@@ -195,13 +196,14 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
     _init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch
         fallback .null_val
     for uri in kept_uris
-        _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, kept_src, arena), arena)
-    _poison: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(poison_uri, kept_src, arena), arena)
+        c.notify("textDocument/didOpen", lsp_client.did_open(uri, kept_src, arena),
+            lsp_client.send_ms, arena) catch {}
+    c.notify("textDocument/didOpen", lsp_client.did_open(poison_uri, kept_src, arena),
+        lsp_client.send_ms, arena) catch {}
     for uri in kept_uris
         text: = lsp_client.hover_text(probe_hover(c@, uri, arena))
         verdict.check(arena.text().s("a document beside the quarantined one answers: ").s(uri)
-            .take(), text.find_str("I64") >= 0,
+            .take(), text.find_str("I64").is_some(),
             lsp_client.why(c@, arena.text().s("'").s(text).s("'").take(), arena))
     poisoned: = probe_hover(c@, poison_uri, arena)
     verdict.check("the crashing document answers nothing, without bringing the worker down",
@@ -212,7 +214,7 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
         lsp_client.why(c@, "", arena))
     again: = lsp_client.hover_text(probe_hover(c@, kept_uris[0], arena))
     verdict.check("after the quarantine the worker goes on answering",
-        again.find_str("I64") >= 0,
+        again.find_str("I64").is_some(),
         lsp_client.why(c@, arena.text().s("'").s(again).s("'").take(), arena))
 
 fn run(exe: U8[], arena: Arena$@)

@@ -133,6 +133,11 @@ priv const max_fmt_depth: Sz = 2000 //<
     //< per tree level, and max_parse_depth (kspeg/rule.kspls) already bounds the trees that reach
     //< it.
 
+priv struct Brace_shape //< how a node's braces are laid out
+    is_block: Bool //< they open a block, its body one statement a line
+    is_brace_container: Bool //< they hold a value or an empty or one-line block
+    force_multiline: Bool //< their contents break onto lines of their own
+
 priv struct Body_scan //< the children of a node, counted in one pass
     //<
     //< `body_count` is the number of real members **after** the opening brace. The braces'
@@ -232,7 +237,7 @@ impl Formatter
         line: = r.out.slice()
         if r.code_end > line.len
             return false
-        return line.sub_from(r.code_end).find_str("//") >= 0
+        return line.sub_from(r.code_end).find_str("//").is_some()
 
     fn write_nl(r: Self$@)
         r.flags.wrap_indent = r.in_continuation()
@@ -300,7 +305,7 @@ impl Formatter
         r.last_text.s(content)
         r.code_end = r.out.len
 
-    priv fn indent_for(r: Self$@, text: U8[]): Sz //<
+    fn indent_for(r: Self$@, text: U8[]): Sz //<
         //< The column a line opening with `text` is written at
         //<
         //< **A `//<` continuing the run above it goes one step in from the line that opened the
@@ -554,6 +559,109 @@ impl Formatter
         r.write_nl()
         r.flags.wrap_indent = true
 
+    priv fn format_choice(r: Self$@, node: Ast_node$@, no_space_mode: Bool,
+        allow_single_line_block: Bool, depth: Sz) //<
+            //< It writes a conditional value (`a if c else b`), noting where it must be bracketed
+            //<
+            //< **A conditional value split outside every bracket is put in parentheses.** A line
+            //< starting with its `if` or `else` cannot be told apart from a statement's heading,
+            //< and a newline inside a bracket never starts one (`../parse/layout.kspls`). The split
+            //< is read from what this pass wrote, not guessed.
+        r.ternary_depth = 0
+        r.ternary_broke = false
+        r.format_internal(node, no_space_mode, allow_single_line_block, depth + 1)
+        if r.ternary_broke
+            r.paren_spans.push(fmt_source.skip_space_from(r.src, node.loc.offset))
+            r.paren_spans.push(node.source_end(r.src))
+        r.ternary_depth = -1
+
+    priv fn format_string_token(r: Self$@, node: Ast_node$@, no_space_mode: Bool) //<
+        //< It writes a string literal, joined and carried onto the next line where it does not fit
+        //<
+        //< A whole string (its \{...\} interpolations included) is one token, so its leading space
+        //< and its wrapping are decided by calc_spacing_requirement / check_line_wrap, as for the
+        //< other leaves.
+        // Caution: **Keep the line break where a comment stands before the string.** Pulled up, a
+        // comment on a line of its own moves onto the line above, and after a `//<` there it would
+        // join the summary's text.
+        r.catch_up_trivia(node.loc.offset,
+            !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset))
+        span: = node.get_string_span(r.src)
+        raw_text: = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
+        // Laid out from its joined spelling, as in `write_token`.
+        $joined: = Str_builder.new()
+        defer joined.free()
+        carry: = join_string_lines(raw_text, joined@)
+        text: = joined.slice() if carry else raw_text
+        last_txt: = r.last_text.slice()
+        require_space: = calc_spacing_requirement(last_txt, text, r.flags, no_space_mode)
+        will_break: =
+            !takes_value_on_its_line(last_txt) &&
+            r.calc_will_break(last_txt, text, require_space, text.len, false)
+        if will_break
+            r.write_nl()
+            r.flags.wrap_indent = true
+        else if require_space && !r.flags.is_line_start
+            r.write_space()
+        if carry
+            r.write_carried_string(text)
+        else
+            r.write_raw(text)
+        r.seek_to(node.loc.offset + span)
+        r.set_last_text("\"")
+
+    priv fn brace_shape(r: Self$@, node: Ast_node$@, body: Body_scan, is_block_kind: Bool,
+        allow_single_line_block: Bool): Brace_shape //<
+            //< Whether a node's braces open a block, stay a container on one line, or must break
+            //<
+            //< Three ways fold a block onto one line: (1) an empty body folds to "{}", (2) a short
+            //< function or `defer` body where the setting allows it, (3) a short control statement.
+            //< Caution: **(1) and (3) both require no comment inside.** If folded, only the
+            //< comment's first line moves onto the `{` line and the rest splits across the brace
+            //< (and loses a level of indentation). The split shape is **idempotent**, so
+            //< `test-fmt-tree` does not catch it.
+        kind_id: = node.kind_id
+        has_inner_comment: = fmt_source.has_comment_in(r.src, body.open_brace_off,
+            body.close_brace_off)
+        $shape: = Brace_shape::{ .is_block = is_block_kind, .is_brace_container = false,
+            .force_multiline = is_block_kind }
+        if is_block_kind
+            folds: =
+                (body.body_count == 0 && !has_inner_comment) ||
+                (kind_id == .k_stmt_block && body.body_count == 1 &&
+                r.folds_block(body.body_inner, has_inner_comment, allow_single_line_block))
+            if folds
+                shape = Brace_shape::{ .is_block = false, .is_brace_container = true,
+                    .force_multiline = false }
+        else if fmt_kinds.rules.is_brace_container(kind_id)
+            shape.is_brace_container = true
+        if (!fmt_kinds.rules.is_list(kind_id) && !shape.is_brace_container) ||
+            shape.force_multiline
+            return shape
+        // A trailing comma says "keep it multi-line": it is not folded even where it fits (as
+        // rustfmt does).
+        if body.content_count > 0 && node.has_trailing_comma()
+            shape.force_multiline = true
+        // **A comment inside a brace container forces it multi-line too**, as a block's body does
+        // (`has_inner_comment` above). **Braces only, not brackets**: on a call's argument list it
+        // would break a method chain, moving each link's `)` to the start of the next line
+        // (`b.obj(` / `).set(…`).
+        if shape.is_brace_container && brace_span_ok(body) && has_inner_comment
+            shape.force_multiline = true
+        return shape
+
+    priv fn folds_block(r: Self$@, body_inner: Ast_node$@, has_inner_comment: Bool,
+        allow_single_line_block: Bool): Bool //<
+            //< Whether a one-statement block fits on its line and the settings let it stay there
+        is_short_ctrl: = body_inner.is_short_control_stmt()
+        enable_single_line: =
+            allow_single_line_block || (r.config.allow_short_blocks && is_short_ctrl)
+        // A comment folded onto the `{` line could not return to the default spelling either.
+        if !enable_single_line || has_inner_comment || body_inner.contains_multiline_block()
+            return false
+        // +10 is the margin for what calc_text_len does not count ("{ " / " }", the separators).
+        return r.current_col + body_inner.calc_text_len(r.src) + 10 <= r.config.column_limit
+
     fn format_internal(r: Self$@, node: Ast_node$@, no_space_mode: Bool,
         allow_single_line_block: Bool, depth: Sz)
         if node == null
@@ -561,55 +669,11 @@ impl Formatter
         if depth >= max_fmt_depth
             r.too_deep = true
             return
-        // **A conditional value split outside every bracket is put in parentheses.** A line
-        // starting with its `if` or `else` cannot be told apart from a statement's heading, and a
-        // newline inside a bracket never starts one (`../parse/layout.kspls`). The split is read
-        // from what this pass wrote, not guessed.
         if node.is_choice() && r.paren_depth == 0 && r.ternary_depth < 0
-            r.ternary_depth = 0
-            r.ternary_broke = false
-            r.format_internal(node, no_space_mode, allow_single_line_block, depth + 1)
-            if r.ternary_broke
-                r.paren_spans.push(fmt_source.skip_space_from(r.src, node.loc.offset))
-                r.paren_spans.push(node.source_end(r.src))
-            r.ternary_depth = -1
+            r.format_choice(node, no_space_mode, allow_single_line_block, depth)
             return
-
         if node.kind_id == .k_string_interp || node.kind_id == .k_string
-            // Caution: **Keep the line break where a comment stands before the string.** Pulled
-            // up, a comment on a line of its own moves onto the line above, and after a `//<`
-            // there it would join the summary's text.
-            r.catch_up_trivia(node.loc.offset,
-                !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset))
-            // A whole string (its \{...\} interpolations included) is one token, so its leading
-            // space and its wrapping are decided by calc_spacing_requirement / check_line_wrap, as
-            // for the other leaves.
-            span: = node.get_string_span(r.src)
-            raw_text: = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
-            // Laid out from its joined spelling, as in `write_token`.
-            $joined: = Str_builder.new()
-            defer joined.free()
-            carry: = join_string_lines(raw_text, joined@)
-            text: = joined.slice() if carry else raw_text
-            last_txt: = r.last_text.slice()
-            require_space: =
-                calc_spacing_requirement(last_txt, text, r.flags, no_space_mode)
-
-            will_break: =
-                !takes_value_on_its_line(last_txt) &&
-                r.calc_will_break(last_txt, text, require_space, text.len, false)
-            if will_break
-                r.write_nl()
-                r.flags.wrap_indent = true
-            else if require_space && !r.flags.is_line_start
-                r.write_space()
-            if carry
-                r.write_carried_string(text)
-            else
-                r.write_raw(text)
-            r.seek_to(node.loc.offset + span)
-
-            r.set_last_text("\"")
+            r.format_string_token(node, no_space_mode)
             return
 
         kind_id: = node.kind_id
@@ -624,64 +688,15 @@ impl Formatter
             r.flags.in_type_expr = true
 
         body: = scan_body(node)
-        content_count: = body.content_count
         body_count: = body.body_count
-        body_inner: = body.body_inner
 
-        $is_extern: = false
-        if kind_id == .k_top_level_item
-            is_extern = node.has_literal_child("{")
-
-        $force_multiline: = false
-        $is_block: = fmt_kinds.rules.is_block(kind_id) || is_extern
-        $is_brace_container: = false
-
-        // Three ways fold a block onto one line: (1) an empty body folds to "{}".
-        // Caution: **(1) and (3) both require no comment inside.** If folded, only the comment's
-        // first line moves onto the `{` line and the rest splits across the brace (and loses a
-        // level of indentation).
-        // The split shape is **idempotent**, so `test-fmt-tree` does not catch it.
-        has_inner_comment: = fmt_source.has_comment_in(r.src, body.open_brace_off,
-            body.close_brace_off)
-        if is_block
-            force_multiline = true
-            if body_count == 0 && !has_inner_comment
-                is_block = false
-                is_brace_container = true
-                force_multiline = false
-            else if kind_id == .k_stmt_block && body_count == 1
-                is_short_ctrl: = body_inner.is_short_control_stmt()
-                enable_single_line: =
-                    allow_single_line_block || (r.config.allow_short_blocks && is_short_ctrl)
-
-                // A comment folded onto the `{` line could not return to the default spelling
-                // either.
-                if enable_single_line && !has_inner_comment &&
-                    !body_inner.contains_multiline_block()
-                    inner_len: = body_inner.calc_text_len(r.src)
-                    // +10 is the margin for what calc_text_len does not count ("{ " / " }", the
-                    // separators).
-                    if r.current_col + inner_len + 10 <= r.config.column_limit
-                        is_block = false
-                        is_brace_container = true
-                        force_multiline = false
-        else if fmt_kinds.rules.is_brace_container(kind_id)
-            is_brace_container = true
-
+        is_extern: = kind_id == .k_top_level_item && node.has_literal_child("{")
+        shape: = r.brace_shape(node, body, fmt_kinds.rules.is_block(kind_id) || is_extern,
+            allow_single_line_block)
+        is_block: = shape.is_block
+        is_brace_container: = shape.is_brace_container
+        force_multiline: = shape.force_multiline
         is_list: = fmt_kinds.rules.is_list(kind_id)
-        if (is_list || is_brace_container) && !force_multiline
-            // A trailing comma says "keep it multi-line": it is not folded even where it fits (as
-            // rustfmt does).
-            trailing_comma: = node.has_trailing_comma()
-            if content_count > 0 && trailing_comma
-                force_multiline = true
-            // **A comment inside a brace container forces it multi-line too**, as a block's body
-            // does (`has_inner_comment` above). **Braces only, not brackets**: on a call's argument
-            // list it would break a method chain, moving each link's `)` to the start of the next
-            // line (`b.obj(` / `).set(…`).
-            if is_brace_container && brace_span_ok(body) &&
-                fmt_source.has_comment_in(r.src, body.open_brace_off, body.close_brace_off)
-                force_multiline = true
 
         $my_brace_suppress: = is_brace_container && !force_multiline
         my_list_suppress: = is_list && !force_multiline
@@ -719,7 +734,7 @@ impl Formatter
             // indentation notation writes none (`force_next_nl`). Caution: **Never one level in**:
             // the `switch` opens no block ("No lines are added, and `switch` gets no block" in
             // `../../docs/DESIGN.md`), and there an arm reads as a statement of the block above.
-            if kind_id == .k_stmt_match &&
+            if kind_id == .k_stmt_switch &&
                 (child.is_keyword("case") || child.is_keyword("default"))
                 if (first_arm || r.block_on_one_line) && r.suppress_nl_depth == 0
                     r.catch_up_trivia(child.loc.offset, false)
@@ -736,7 +751,7 @@ impl Formatter
             // closure signature's parameters from its captures (`fn(x: I32; n: I32)`, even with no
             // capture after it). Those get a space, never a newline.
             ends_stmt: =
-                is_semi && kind_id != .k_stmt_loop && kind_id != .k_loop_init &&
+                is_semi && kind_id != .k_stmt_for && kind_id != .k_for_init &&
                 kind_id != .k_expr_fn_lit_sig
             is_comma: = child.is_literal(",")
             is_assign: = child.kind_id == .k_assign_op || child.is_literal("=")
@@ -766,7 +781,7 @@ impl Formatter
                 continue
             if is_comma || is_assign || is_logical || is_ret_colon
                 r.format_internal(child, my_no_space, pass_allow_single, depth + 1)
-                if is_comma && force_multiline && kind_id != .k_stmt_match
+                if is_comma && force_multiline && kind_id != .k_stmt_switch
                     r.flags.force_next_nl = true
                 else if i + 1 < len
                     r.wrap_before_next_element(node, i, is_comma, is_assign)

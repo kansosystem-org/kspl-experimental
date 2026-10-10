@@ -169,17 +169,22 @@ priv fn recv_step(sock: net.Tcp_stream$@, buf: U8$[]): I32
 priv fn take_resp(r: Conn$@, no_body: Bool, arena: Arena$@): Resp? //<
     //< Cuts one response out of the collected bytes (none if it is incomplete)
     text: = U8[]::r.acc.slice()
-    head_end: = text.find_str("\r\n\r\n")
-    if head_end < 0
+    $head_end: Sz = 0
+    switch text.find_str("\r\n\r\n")
+    case .some(i)
+        head_end = i
+    case .none
         return .none
     all_head: = text.sub(0, head_end)
-    nl: = all_head.find_str("\r\n")
-    head: = "" if nl < 0 else all_head.sub_from(nl + 2)
+    $status_line: = all_head
+    $head: U8[] = ""
+    if nl: = all_head.find_str("\r\n")
+        status_line = all_head.sub(0, nl)
+        head = all_head.sub_from(nl + 2)
     want: = 0 if no_body else header_int(head, "content-length")
     body_at: = head_end + 4
     if body_at + want > text.len
         return .none
-    status_line: = all_head if nl < 0 else all_head.sub(0, nl)
     // Caution: **Copy before trimming the buffer**: head and body point into it, and after
     // trimming they would read the next response.
     resp: = Resp::{ .status = status_of(status_line), .head = arena.dup_str(head),
@@ -190,10 +195,9 @@ priv fn take_resp(r: Conn$@, no_body: Bool, arena: Arena$@): Resp? //<
 priv fn status_of(line: U8[]): I32 //< the 200 of `HTTP/1.1 200 OK`
     //<
     //< 0 where it cannot be read.
-    sp: = line.find_char(' ')
-    if sp < 0
-        return 0
-    return I32::digits_of(line.sub_from(sp + 1).trim_start())
+    if sp: = line.find_char(' ')
+        return I32::digits_of(line.sub_from(sp + 1).trim_start())
+    return 0
 
 priv fn digits_of(text: U8[]): Sz //< reads the decimal digits at the start
     //<
@@ -212,14 +216,12 @@ fn header(head: U8[], name: U8[]): U8[] //<
     $at: Sz = 0
     for at < head.len
         rest: = head.sub_from(at)
-        nl: = rest.find_str("\r\n")
-        line: = rest if nl < 0 else rest.sub(0, nl)
-        colon: = line.find_char(':')
-        if colon > 0 && line.sub(0, colon).trim_spaces().equals_ignore_case(name)
-            return line.sub_from(colon + 1).trim_spaces()
-        if nl < 0
-            break
-        at += nl + 2
+        line: = rest.sub(0, rest.find_str("\r\n").unwrap_or(rest.len))
+        if colon: = line.find_char(':')
+            if colon > 0 && line.sub(0, colon).trim_spaces().equals_ignore_case(name)
+                return line.sub_from(colon + 1).trim_spaces()
+        // After the last line, which has no CRLF, this steps past the end and ends the walk.
+        at += line.len + 2
     return ""
 
 priv fn header_int(head: U8[], name: U8[]): Sz
@@ -260,7 +262,7 @@ fn raw( //< the bytes of one request
     // The loopback's name, as a browser sends it: under `--local` any other `Host` is refused. A
     // case naming another host puts its own in `extra`.
     b: = arena.text().s(method).c(' ').s(target).s(" HTTP/1.1\r\n")
-    if extra.find_str("Host:") < 0
+    if extra.find_str("Host:").is_none()
         b.s("Host: 127.0.0.1\r\n")
     b.s(extra)
     if !method.equals("GET") && !method.equals("HEAD") && !method.equals("DELETE")
@@ -304,8 +306,23 @@ impl Stream
             // read).
             r.conn.acc.s(U8[]::{ .ptr = r.conn.buf.ptr, .len = n })
         whole: = r.conn.acc.slice()
-        at: = whole.find_str("\r\n\r\n")
-        return arena.dup_str("" if at < 0 else whole.sub_from(at + 4))
+        if at: = whole.find_str("\r\n\r\n")
+            return arena.dup_str(whole.sub_from(at + 4))
+        return arena.dup_str("")
+
+    fn read_head(r: Self$@, timeout_ms: I32) //< reads until the head is in, or the time runs out
+        //<
+        //< For a connection the server holds open: reading to the close would take the whole wait.
+        deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        for sys.mono_us() <= deadline &&
+            r.conn.acc.slice().find_str("\r\n\r\n").is_none()
+            n: = recv_step(r.conn.sock, r.conn.buf)
+            if n == 0 || n == fail_step
+                break
+            if n < 0
+                sys.sleep_ms(1)
+                continue
+            r.conn.acc.s(U8[]::{ .ptr = r.conn.buf.ptr, .len = n })
 
     fn head(r: Self$@, arena: Arena$@): U8[] //< only the head, after reading is done
         //<
@@ -313,8 +330,9 @@ impl Stream
         //< `Content-Length: 0` (this file reads to the close), where **a client that follows the
         //< protocol reads no body**.
         whole: = r.conn.acc.slice()
-        at: = whole.find_str("\r\n\r\n")
-        return arena.dup_str(whole if at < 0 else whole.sub(0, at + 2))
+        if at: = whole.find_str("\r\n\r\n")
+            return arena.dup_str(whole.sub(0, at + 2))
+        return arena.dup_str(whole)
 
     fn free(r: Self$@)
         r.conn.free()

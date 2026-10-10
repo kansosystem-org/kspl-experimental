@@ -56,7 +56,7 @@ priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Result, are
     dir: = harness.sandbox(name) catch
         return failed("cannot make a working directory")
     work: = dir
-    if !sys.set_env("KSPLC_CACHE_DIR", fs.join(work, "cache", arena))
+    sys.set_env("KSPLC_CACHE_DIR", fs.join(work, "cache", arena)) catch
         return failed("cannot point the location at the child")
     return body(work, arena)
 
@@ -110,6 +110,6 @@ fn run_script(path: U8[], arena: Arena$@): verdict.Run_out //<
     return ksplc_run(U8[][]::{ path }, arena)
 
 fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Result
-    if r.code != 0 || r.out.find_str(want) < 0
+    if r.code != 0 || r.out.find_str(want).is_none()
         return failed(arena.text().s(what).s("(code=\{r.code\})\n").s(r.out).take())
     return ok_result()

@@ -1,3 +1,9 @@
+//< `textDocument/hover`: what the name, literal or label under the caret stands for, as Markdown
+//<
+//< **A declaration is shown as written, not as its last instantiation**: `Self` stays `Self`, and a
+//< member is named by its owner's path, never by its file. At a call, the type arguments shown are
+//< the ones called. A literal shows the type it took. In a range a `#cfg()` dropped, the answer is
+//< why it is not analysed (`send_cfg_inactive_hover`).
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -172,7 +178,6 @@ priv fn find_parent_type_name(state: Doc_state$@, def_node: Ast_node$@, keep_arg
     //< The type name (str_repr) of the struct or enum def_node belongs to, or ""
     if state.sema == null
         return ""
-    d_kind: = def_node.kind_id
     if def_node.is_fn_decl()
         // Caution: **Build every entrusted table, not just the one wanted.** A table is built only
         // on demand, the scan below needs one, and which type holds the function is the question,
@@ -180,25 +185,35 @@ priv fn find_parent_type_name(state: Doc_state$@, def_node: Ast_node$@, keep_arg
         state.sema.build_entrusted_tables()
         return find_owner_of_fn(state, def_node, keep_args)
     for entry in state.sema.env.id_to_type
-        if d_kind == .k_struct_field
-            switch entry.info
-            case .struct_type(s_def)
-                for field in s_def.fields_list
-                    if field.node == def_node
-                        return entry.str_repr
-            default {}
-        else
-            switch entry.info
-            case .enum_type(e_def)
-                for vv in e_def.variants_list
-                    if d_kind == .k_enum_field
-                        for pfield in vv.payload_fields
-                            if pfield.node == def_node
-                                return entry.str_repr
-                    else if vv.node == def_node
-                        return entry.str_repr
-            default {}
+        if declares(entry, def_node)
+            return entry.str_repr
     return ""
+
+priv fn declares(entry: sema_type_def.Entry$@, def_node: Ast_node$@): Bool //<
+    //< Whether the type declares def_node: a struct's field, an enum's variant or payload field
+    is_field: = def_node.kind_id == .k_struct_field
+    switch entry.info
+    case .struct_type(s_def)
+        if is_field
+            for field in s_def.fields_list
+                if field.node == def_node
+                    return true
+    case .enum_type(e_def)
+        if !is_field
+            for vv in e_def.variants_list
+                if declares_in_variant(vv, def_node)
+                    return true
+    default {}
+    return false
+
+priv fn declares_in_variant(vv: sema_type_def.Enum_variant$@, def_node: Ast_node$@): Bool //<
+    //< Whether def_node is the variant itself, or, for a payload's field, one of its fields
+    if def_node.kind_id != .k_enum_field
+        return vv.node == def_node
+    for pfield in vv.payload_fields
+        if pfield.node == def_node
+            return true
+    return false
 priv fn append_enum_variant_hover(hover_text: Str_builder$@, ctx: Hover_ctx$@, state: Doc_state$@) //<
     //< For an enum variant, it appends the payload `(name: T, ...)` and the tag value to the hover.
     if ctx.def_node == null || ctx.def_node.kind_id != .k_enum_variant
@@ -246,10 +261,10 @@ priv fn is_label_name(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Bool
         return parent.get_jump_label() == target_node
     case .k_stmt_if
         return parent.get_if_label() == target_node
-    case .k_stmt_loop
+    case .k_stmt_for
         return parent.get_loop_label() == target_node
-    case .k_stmt_match
-        return parent.get_match_label() == target_node
+    case .k_stmt_switch
+        return parent.get_switch_label() == target_node
     default
         return false
 
@@ -286,119 +301,111 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
 
     resolve_hover_target(state, path, target_node, ctx@)
 
-    if (ctx.type_id != 0 && state.sema != null) || ctx.fallback_str.len > 0
-        $formatted_name: = Str_builder.new()
-        defer formatted_name.free()
-
-        if ctx.type_id != 0 && state.sema != null
-            tmp: = state.sema.env.display(ctx.type_id)
-            if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
-                id_n: = ctx.def_node.find_child(.k_identifier)
-                sub_name: = id_n.text if id_n != null else ""
-                formatted_name.s("\{tmp\}.\{sub_name\}")
-            else
-                formatted_name.s(tmp)
-        else
-            formatted_name.s(ctx.fallback_str.slice())
-        $def_code: = Str_builder.new()
-        defer def_code.free()
-        build_hover_def_code(state, ctx@, def_code@)
-
-        $fqn_name: = Str_builder.new()
-        defer fqn_name.free()
-        get_fqn_name(state, ctx@, target_node, fqn_name@)
-
-        $hover_text: = Str_builder.new()
-        defer hover_text.free()
-
-        $is_func: = false
-        $is_type: = false
-        $decl_keyword: U8$[] = ""
-
-        if ctx.prefix.equals("(Function) ") || ctx.prefix.equals("(Generic Function) ")
-            is_func = true
-        else if ctx.prefix.equals("(Type) ") || ctx.prefix.equals("(Generic Struct) ") ||
-            ctx.prefix.equals("(Interface) ") || ctx.prefix.equals("(File) ")
-            is_type = true
-            if ctx.def_node != null
-                decl_keyword =
-                    ("struct " if ctx.def_node.kind_id == .k_decl_struct
-                    else "enum " if ctx.def_node.kind_id == .k_decl_enum
-                    else "typedef " if ctx.def_node.kind_id == .k_decl_alias
-                    else "trait " if ctx.def_node.kind_id == .k_decl_trait
-                    else "file " if ctx.prefix.equals("(File) ") else "type ")
-            else
-                decl_keyword = "type "
-        else if ctx.prefix.equals("(Constant) ")
-            decl_keyword = "const "
-
-        f_name_slice: =
-            formatted_name.slice() if formatted_name.len > 0 else ctx.fallback_str.slice()
-
-        if is_func
-            if ctx.def_node.is_fn_decl()
-                is_pub: =
-                    ctx.def_node.get_visibility() == sema_type_scope.Visibility.public
-                hover_text.s("pub fn " if is_pub else "fn ").s(fqn_name.slice())
-                // With the source, a parameter's `//<` sits on its own line; without it, it is one
-                // line.
-                sig_src: U8[] =
-                    (base_core.source_of(state.sema.source_map, ctx.def_node.loc.file())
-                    if state.sema != null else "")
-                $sig_str: = lsp_spell.format_fn_sig(state.sema, ctx.def_node, sig_src)
-                defer sig_str.free()
-                hover_text.s(sig_str.slice())
-            else if def_code.len > 0
-                def_s: = def_code.slice()
-                fn_idx: Sz =
-                    (3 if def_s.starts_with("fn ") else 7 if def_s.starts_with("pub fn ")
-                    else 8 if def_s.starts_with("priv fn ") else 0)
-
-                if fn_idx > 0
-                    hover_text.s(U8$[]::{ .ptr = def_s.ptr, .len = fn_idx }).s(fqn_name.slice())
-                    p_pos: = def_s.find_char_out('(')
-                    if p_pos >= 0
-                        hover_text
-                            .s(U8$[]::{ .ptr = def_s.ptr + p_pos, .len = def_s.len - p_pos })
-                    else
-                        hover_text.s("()")
-                else
-                    hover_text.s(def_s)
-            else
-                hover_text.s("fn \{fqn_name.slice()\}()")
-                if ctx.type_id != 0 && state.sema != null
-                    ret_str: = state.sema.env.get_str(ctx.type_id)
-                    if !ret_str.equals("Void")
-                        hover_text.s(": \{f_name_slice\}")
-        else if is_type
-            hover_text.s("\{decl_keyword\}\{fqn_name.slice()\}")
-        else
-            if ctx.def_node != null
-                decl_keyword =
-                    ("const " if ctx.def_node.kind_id == .k_decl_const
-                    else "field "
-                    if (ctx.def_node.kind_id == .k_struct_field ||
-                    ctx.def_node.kind_id == .k_enum_field) else decl_keyword)
-
-            if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
-                hover_text.s("\{decl_keyword\}\{fqn_name.slice()\}")
-            else
-                hover_text.s("\{decl_keyword\}\{fqn_name.slice()\}: \{f_name_slice\}")
-
-        append_enum_variant_hover(hover_text@, ctx@, state)
-        $md_str: = Str_builder.new()
-        defer md_str.free()
-        md_str.s("```kspl\n\{hover_text.slice()\}\n
-```")
-        // **The description goes below the fence**, or the editor shows it as part of the
-        // signature.
-        doc: = lsp_nav.linked_doc(state.sema, state.root_file, ctx.def_node)
-        if doc.len > 0
-            md_str.s("\n\{doc\}")
-
-        send_markdown(id_val, md_str.slice(), arena)
-    else
+    if (ctx.type_id == 0 || state.sema == null) && ctx.fallback_str.len == 0
         lsp_msg.send_null_response(id_val, arena)
+        return
+    $formatted_name: = Str_builder.new()
+    defer formatted_name.free()
+    write_shown_type(state, ctx@, formatted_name@)
+    $def_code: = Str_builder.new()
+    defer def_code.free()
+    build_hover_def_code(state, ctx@, def_code@)
+    $fqn_name: = Str_builder.new()
+    defer fqn_name.free()
+    get_fqn_name(state, ctx@, target_node, fqn_name@)
+    f_name_slice: =
+        formatted_name.slice() if formatted_name.len > 0 else ctx.fallback_str.slice()
+    $hover_text: = Str_builder.new()
+    defer hover_text.free()
+    write_hover_head(state, ctx@, def_code.slice(), fqn_name.slice(), f_name_slice, hover_text@)
+    append_enum_variant_hover(hover_text@, ctx@, state)
+    $md_str: = Str_builder.new()
+    defer md_str.free()
+    md_str.s("```kspl\n\{hover_text.slice()\}\n\n```")
+    // **The description goes below the fence**, or the editor shows it as part of the signature.
+    doc: = lsp_nav.linked_doc(state.sema, state.root_file, ctx.def_node)
+    if doc.len > 0
+        md_str.s("\n\{doc\}")
+    send_markdown(id_val, md_str.slice(), arena)
+
+priv fn write_shown_type(state: Doc_state$@, ctx: Hover_ctx$@, out: Str_builder$@) //<
+    //< The type a hover shows: the analysed type (a variant's as `Enum.variant`), else the fallback
+    if ctx.type_id == 0 || state.sema == null
+        out.s(ctx.fallback_str.slice())
+        return
+    out.s(state.sema.env.display(ctx.type_id))
+    if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
+        id_n: = ctx.def_node.find_child(.k_identifier)
+        out.c('.').s(id_n.text if id_n != null else "")
+
+priv fn write_hover_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn: U8[],
+    shown: U8[], out: Str_builder$@) //<
+        //< The hover's first line: a function's signature, a type's declaration, or `name: type`
+    if ctx.prefix.equals("(Function) ") || ctx.prefix.equals("(Generic Function) ")
+        write_fn_head(state, ctx, def_code, fqn, shown, out)
+        return
+    if ctx.prefix.equals("(Type) ") || ctx.prefix.equals("(Generic Struct) ") ||
+        ctx.prefix.equals("(Interface) ") || ctx.prefix.equals("(File) ")
+        out.s(type_decl_keyword(ctx)).s(fqn)
+        return
+    $decl_keyword: U8[] = "const " if ctx.prefix.equals("(Constant) ") else ""
+    if ctx.def_node != null
+        k: = ctx.def_node.kind_id
+        if k == .k_decl_const
+            decl_keyword = "const "
+        else if k == .k_struct_field || k == .k_enum_field
+            decl_keyword = "field "
+    out.s(decl_keyword).s(fqn)
+    if ctx.def_node == null || ctx.def_node.kind_id != .k_enum_variant
+        out.s(": ").s(shown)
+
+priv fn type_decl_keyword(ctx: Hover_ctx$@): U8[] //< the word a type's hover opens with
+    if ctx.def_node == null
+        return "type "
+    switch ctx.def_node.kind_id
+    case .k_decl_struct
+        return "struct "
+    case .k_decl_enum
+        return "enum "
+    case .k_decl_typedef
+        return "typedef "
+    case .k_decl_trait
+        return "trait "
+    default
+        return "file " if ctx.prefix.equals("(File) ") else "type "
+
+priv fn write_fn_head(state: Doc_state$@, ctx: Hover_ctx$@, def_code: U8[], fqn: U8[],
+    shown: U8[], out: Str_builder$@) //<
+        //< A function's hover line, from its declaration where there is one
+    if ctx.def_node.is_fn_decl()
+        is_pub: = ctx.def_node.get_visibility() == sema_type_scope.Visibility.public
+        out.s("pub fn " if is_pub else "fn ").s(fqn)
+        // With the source, a parameter's `//<` sits on its own line; without it, it is one line.
+        sig_src: U8[] =
+            (base_core.source_of(state.sema.source_map, ctx.def_node.loc.file())
+            if state.sema != null else "")
+        $sig_str: = lsp_spell.format_fn_sig(state.sema, ctx.def_node, sig_src)
+        defer sig_str.free()
+        out.s(sig_str.slice())
+        return
+    if def_code.len == 0
+        out.s("fn \{fqn\}()")
+        if ctx.type_id != 0 && state.sema != null &&
+            !state.sema.env.get_str(ctx.type_id).equals("Void")
+            out.s(": \{shown\}")
+        return
+    fn_idx: Sz =
+        (3 if def_code.starts_with("fn ") else 7 if def_code.starts_with("pub fn ")
+        else 8 if def_code.starts_with("priv fn ") else 0)
+    if fn_idx == 0
+        out.s(def_code)
+        return
+    out.s(def_code.sub(0, fn_idx)).s(fqn)
+    p_pos: = def_code.find_char_out('(')
+    if p_pos >= 0
+        out.s(def_code.sub_from(p_pos))
+    else
+        out.s("()")
 
 priv fn send_literal_type(state: Doc_state$@, literal: Ast_node$@, id_val: json.Val,
     arena: Arena$@) //<
@@ -513,15 +520,9 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
 
         if self_spelt.len > 0
             ctx.fallback_str.s(self_spelt)
-            for $k: = path.len; k > 0; k -= 1
-                if path.get(k - 1).kind_id == .k_decl_impl
-                    $tp: = path.get(k - 1).find_child(.k_type_path)
-                    if tp == null
-                        tp = path.get(k - 1).find_child(.k_type_expr)
-                    if tp != null
-                        ctx.fallback_str.len = 0
-                        ctx.fallback_str.s("\{self_spelt\} (\{tp.get_path_name()\})")
-                    break
+            target: = enclosing_impl_target(path)
+            if target.len > 0
+                ctx.fallback_str.s(" (").s(target).c(')')
         else if type_n != null && !type_n.text.equals("Unknown")
             lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
         else
@@ -701,6 +702,37 @@ priv fn build_hover_def_code(state: Doc_state$@, ctx: Hover_ctx$@, def_code: Str
         if span > 150
             def_code.s("...")
 
+priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bool,
+    out: Str_builder$@): Bool //<
+        //< It writes `Owner.` for a member, the owner as the source spells it; false where none is
+        //<
+        //< **The owner's name is already complete**, with its own module: the member's file is not
+        //< the owner's where an `impl` is in a different file from its type.
+    parent_name: = find_parent_type_name(state, def_node, keep_args)
+    if parent_name.len == 0
+        return false
+    if state.sema == null
+        out.s(parent_name)
+    else
+        // The parent can be an instantiated type too, so it goes through the display as well.
+        $shown: = state.sema.env.display_str_named(parent_name)
+        defer shown.free()
+        out.s(shown.slice())
+    out.c('.')
+    return true
+
+priv fn enclosing_impl_target(path: List<|Ast_node$@|>$@): U8[] //<
+    //< The name of the type the innermost enclosing `impl` is for, or ""
+    for $k: = path.len; k > 0; k -= 1
+        n: = path.get(k - 1)
+        if n.kind_id != .k_decl_impl
+            continue
+        $tp: = n.find_child(.k_type_path)
+        if tp == null
+            tp = n.find_child(.k_type_expr)
+        return tp.get_path_name() if tp != null else ""
+    return ""
+
 priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node$@,
     fqn_name: Str_builder$@)
     $name_str: = target_node.text
@@ -740,24 +772,12 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
         // method does (`out.probe.Point.area`). A non-generic one only while its name is bare: an
         // impl's already reads `out.probe.Point.area` (twice doubles the owner); a trait
         // requirement's does not.
-        owner_missing: = is_fn_def && orig_name.find_char('.') == -1
+        owner_missing: = is_fn_def && orig_name.find_char('.').is_none()
         inst_fn: = sym.flags.is_generated_instance && is_fn_def
         if d_kind == .k_struct_field || d_kind == .k_enum_variant || d_kind == .k_enum_field ||
             inst_fn || owner_missing
-            $parent_name: = find_parent_type_name(state, ctx.def_node, inst_fn)
-            if parent_name.len > 0
-                $parent_sb: = Str_builder.new()
-                defer parent_sb.free()
-                if state.sema != null
-                    // The parent can be an instantiated type too, so it goes through the display as
-                    // well.
-                    $p_src: = state.sema.env.display_str_named(parent_name)
-                    defer p_src.free()
-                    parent_sb.s(p_src.slice())
-                    parent_name = parent_sb.slice()
-                // **The owner's name is already complete**, with its own module: the member's file
-                // is not the owner's where an `impl` is in a different file from its type.
-                fqn_name.s(parent_name).s(".").s(orig_name)
+            if write_owner_prefix(state, ctx.def_node, inst_fn, fqn_name)
+                fqn_name.s(orig_name)
                 return
 
         declared_in: = sym.get_defined_in() if sym.flags.is_global else ""

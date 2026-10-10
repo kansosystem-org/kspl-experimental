@@ -60,7 +60,7 @@ priv fn safe_name(name: U8[]): Bool //< whether it is safe as a text's name
             || c == '_' || c == '-'
         if !ok
             return false
-    return !(name.find_str("..") >= 0)
+    return name.find_str("..").is_none()
 
 priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]): Sz!Bundle_error //<
     //< Writes out one mark's contents, and returns the length of the mark consumed
@@ -73,8 +73,11 @@ priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]):
                 \{page.sub(at, 32 if at + 32 <= page.len else page.len - at)\}\n")
         throw .bad_mark
     from: = at + mark_file.len
-    end: = page.sub_from(from).find_str(mark_tail)
-    if end < 0
+    $end: Sz = 0
+    switch page.sub_from(from).find_str(mark_tail)
+    case .some(i)
+        end = i
+    case .none
         io.err().s("bundle: the mark never shuts (no `__`)\n")
         throw .bad_mark
     name: = page.sub(from, end)
@@ -87,7 +90,7 @@ priv fn put_mark(out: Str_builder$@, page: U8[], at: Sz, dir: U8[], blob: U8[]):
     body: = read_or_report(where.slice())!
     defer dealloc(Void$@::body.ptr)
     out.s(body)
-    return from + Sz::end + mark_tail.len - at
+    return from + end + mark_tail.len - at
 
 priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
     page_raw: = read_or_report(template)!
@@ -97,7 +100,7 @@ priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
     page: = page_raw
     // Caution: **The wasm mark must be present** — a template without it bundles fine and fails
     // only when opened.
-    if page.find_str(mark_wasm) < 0
+    if page.find_str(mark_wasm).is_none()
         io.err().s("bundle: the template has no \{mark_wasm\}: \{template\}\n")
         throw .no_wasm
     blob: = base64.encode(blob_raw, null)
@@ -110,13 +113,14 @@ priv fn bundle(template: U8[], wasm: U8[], out: U8[]): Void!Bundle_error
     defer built.free()
     $at: Sz = 0
     for at < page.len
-        step: = page.sub_from(at).find_str(mark_head)
-        if step < 0
+        switch page.sub_from(at).find_str(mark_head)
+        case .some(step)
+            next: = at + step
+            built.s(page.sub(at, step))
+            at = next + put_mark(built@, page, next, dir, blob)!
+        case .none
             built.s(page.sub_from(at))
             break
-        next: = at + Sz::step
-        built.s(page.sub(at, step))
-        at = next + put_mark(built@, page, next, dir, blob)!
 
     io.write_file(out, built.slice()) catch
         io.err().s("bundle: cannot write: \{out\}\n")

@@ -51,8 +51,8 @@ priv const all_marks: Sz = -2
 
 priv fn place_of(doc: U8[], marked: List<|U8[]|>@): U8[] //<
     //< The folder a document's fragments compile in: the top folder that holds a `ksplc.cfg`
-    slash: = doc.find_char('/')
-    if slash <= 0
+    slash: = doc.find_char('/').unwrap_or(0)
+    if slash == 0
         return ""
     top: = doc.sub(0, slash)
     for m in marked
@@ -155,11 +155,11 @@ priv fn said_lines(out: U8[], rel: U8[], word: U8[], arena: Arena$@): List<|Sz|>
     head: = arena.text().s(rel).c(':').take()
     tail: = arena.text().s(": ").s(word).c(':').take()
     for ln in out.lines(arena)
-        if !ln.starts_with(head) || ln.find_str(tail) < 0
+        if !ln.starts_with(head) || ln.find_str(tail).is_none()
             continue
         rest: = ln.sub_from(head.len)
-        stop: = rest.find_char(':')
-        if stop <= 0
+        stop: = rest.find_char(':').unwrap_or(0)
+        if stop == 0
             continue
         n: = rest.sub(0, stop).to_i64() catch 0
         if n > 0
@@ -172,22 +172,20 @@ priv fn first_said(c: Case@, j: Job_at@, out: U8[], word: U8[], arena: Arena$@):
     tail: = arena.text().s(": ").s(word).s(": ").take()
     sh: = c.shapes.get(j.shape_at)
     for ln in out.lines(arena)
-        said: = ln.find_str(tail)
-        if said < 0
-            continue
-        if !ln.starts_with(head)
-            return ln.trim_spaces()
-        rest: = ln.sub_from(head.len)
-        stop: = rest.find_char(':')
-        $n: I64 = 0
-        if stop > 0
-            n = rest.sub(0, stop).to_i64() catch 0
-        at: =
-            sh.from.get(Sz::n - 1) if n > 0 && Sz::n <= sh.from.len else shape.added_line
-        what: = ln.sub_from(said + tail.len)
-        if at == shape.added_line
-            return arena.text().s("on the line the wrapping added: ").s(what).take()
-        return arena.text().s("line \{doc_line(c, at)\}: ").s(what).take()
+        if said: = ln.find_str(tail)
+            if !ln.starts_with(head)
+                return ln.trim_spaces()
+            rest: = ln.sub_from(head.len)
+            stop: = rest.find_char(':').unwrap_or(0)
+            $n: I64 = 0
+            if stop > 0
+                n = rest.sub(0, stop).to_i64() catch 0
+            at: =
+                sh.from.get(Sz::n - 1) if n > 0 && Sz::n <= sh.from.len else shape.added_line
+            what: = ln.sub_from(said + tail.len)
+            if at == shape.added_line
+                return arena.text().s("on the line the wrapping added: ").s(what).take()
+            return arena.text().s("line \{doc_line(c, at)\}: ").s(what).take()
     for ln in out.lines(arena)
         if ln.trim_spaces().len > 0
             return ln.trim_spaces()
@@ -212,8 +210,7 @@ priv fn mark_judged(c: Case@, j: Job_at@, out: verdict.Run_out@, arena: Arena$@)
 
 fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
     //< Compiles every fragment and reports what disagrees with its marks, as one check
-    tracked: = harness.tracked() catch
-        fallback List<|U8[]|>.new(arena)
+    tracked: = harness.tracked()
     $marked: = List<|U8[]|>.new(arena)
     for rel in tracked
         if rel.ends_with(package_mark) && rel.count_str("/") == 1

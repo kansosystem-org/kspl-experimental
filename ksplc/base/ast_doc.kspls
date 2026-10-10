@@ -1,3 +1,10 @@
+//< The one reader of the documentation a declaration, or a whole file, carries (`//<`)
+//<
+//< **Everything that shows it reads it here**: the record (`tools/surface.kspls`), a library's
+//< interface (`tools/interface.kspls`) and the editor's hover (`lsp/hover.kspls`) (Principle 6).
+//< A following line that starts with the mark continues a `//<` and is joined into the record's
+//< one line. **`///` and `//!` are not read** (`is_unread_mark`). The marker and the
+//< summary/detail rule are "The documentation a declaration carries" in `../../docs/DESIGN.md`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -5,16 +12,6 @@ import "ksplc/base/lines" { line_end, line_from, line_start, skip_blanks }
 import "std/chars" // `trim_spaces`
 import "std/ds" { List }
 import "std/str" { Str_builder }
-
-// ==========================================
-// Reading the documentation a declaration carries (`//<`).
-//
-// **One reader for everything that shows it**: the record (`tools/surface.kspls`), a library's
-// interface (`tools/interface.kspls`) and the editor's hover (`lsp/hover.kspls`) (Principle 6).
-// The marker and the summary/detail rule are in "The documentation a declaration carries" in
-// `../../docs/DESIGN.md`. A following line that starts with the mark continues a `//<` and is
-// joined into the record's one line. **`///` and `//!` are not read** (`is_unread_mark`).
-// ==========================================
 
 fn end_of(n: Ast_node$@): Sz //< the section's end (the next character's position)
     sp: = n.get_span_offset()
@@ -87,8 +84,9 @@ priv fn has_trailing_summary(src: U8[], at: Sz): Bool //<
     //<
     //< That is what a continuation below continues; a line with only the mark is a continuation.
     line: = line_from(src, at)
-    mark: = line.find_str("//<")
-    return mark > 0 && line.sub(0, mark).trim_spaces().len > 0
+    if mark: = line.find_str("//<")
+        return mark > 0 && line.sub(0, mark).trim_spaces().len > 0
+    return false
 
 fn opens_a_summary_run(src: U8[], at: Sz): Bool //<
     //< Whether a continuation directly below the line at `at` would continue something
@@ -105,8 +103,9 @@ fn is_bare_summary(src: U8[], at: Sz): Bool //<
     if !has_trailing_summary(src, at)
         return false
     line: = line_from(src, at)
-    mark: = line.find_str("//<")
-    return line.sub_from(mark + 3).trim_spaces().len == 0
+    if mark: = line.find_str("//<")
+        return line.sub_from(mark + 3).trim_spaces().len == 0
+    return false
 
 struct Doc_run //< one `//<` run, split where a mark with no text appears inside it
     summary: U8[] //< the run's first paragraph, which is what goes into a declaration file
@@ -125,9 +124,15 @@ priv fn run_at(src: U8[], at: Sz, limit: Sz): Doc_run //<
     //< nothing**: under an anchor, such a mark is part of the anchor's shape.
     e: = line_end(src, at)
     line: = src.sub(at, e - at)
-    mark: = line.find_str("//<")
-    if mark < 0 || at + Sz::mark >= limit
-        return Doc_run::{ .summary = "", .detail = "", .lines = 0 }
+    empty: = Doc_run::{ .summary = "", .detail = "", .lines = 0 }
+    $mark: Sz = 0
+    switch line.find_str("//<")
+    case .some(found)
+        mark = found
+    case .none
+        return empty
+    if at + mark >= limit
+        return empty
     $head: = Str_builder.new()
     defer head.free()
     $tail: = Str_builder.new()
@@ -242,7 +247,7 @@ priv fn mark_offset(src: U8[], at: Sz, brace: Sz): Sz //<
     //< type (`return_doc`), as "The documentation a declaration carries" in `../../docs/DESIGN.md`
     //< decides.
     e: = line_end(src, at)
-    if src.sub(at, e - at).find_str("//<") >= 0
+    if src.sub(at, e - at).find_str("//<").is_some()
         return at
     if brace >= src.len || src[brace] != '{' || brace <= e
         return at

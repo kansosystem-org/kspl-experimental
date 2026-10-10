@@ -30,14 +30,17 @@ fn rows_of(data: U8[], arena: Arena$@): List<|Row|> //< the record's text as a l
     for ln in ls
         if ln.len == 0 || ln[0] == '#'
             continue
-        first: = ln.find_char('\t')
-        if first < 0
+        switch ln.find_char('\t')
+        case .none
             continue
-        second: = ln.sub_from(first + 1).find_char('\t')
-        if second < 0
-            continue
-        cut: = first + 1 + second
-        out.push(Row::{ .key = ln.sub(0, cut), .text = ln.sub_from(cut + 1) })
+        case .some(first)
+            switch ln.sub_from(first + 1).find_char('\t')
+            case .none
+                continue
+            case .some(second)
+                cut: = first + 1 + second
+                out
+                    .push(Row::{ .key = ln.sub(0, cut), .text = ln.sub_from(cut + 1) })
     return out
 
 struct Parts //< one row taken apart into its four fields
@@ -68,28 +71,29 @@ fn parts_of(r: Row): Parts //< takes one row apart
     //<
     //< Caution: **Split rows here and nowhere else**; a second place that splits on tabs goes wrong
     //< the day a column is added.
-    at: = r.key.find_char('\t')
-    cut: = r.text.find_char('\t')
-    key: = "" if at < 0 else r.key.sub_from(at + 1)
-    mark: = key.find_char(part_mark)
+    // With no tab, the whole half is the first field and the second is empty.
+    at: = r.key.find_char('\t').unwrap_or(r.key.len)
+    cut: = r.text.find_char('\t').unwrap_or(r.text.len)
+    key: = r.key.sub_from(at + 1)
     $owner: U8[] = ""
     $part: U8[] = ""
     // **The mark alone is the file's own row**; a part has its owner's key in front of the mark.
-    if mark > 0
-        owner = key.sub(0, mark)
-        rest: = key.sub_from(mark + 1)
-        // **A parameter has its position in front of its name** (the name starts after the `.`);
-        // the return value has the mark a second time and no name.
-        dot: = rest.find_char('.')
-        part = "" if dot < 0 else rest.sub_from(dot + 1)
+    if mark: = key.find_char(part_mark)
+        if mark > 0
+            owner = key.sub(0, mark)
+            rest: = key.sub_from(mark + 1)
+            // **A parameter has its position in front of its name** (the name starts after the
+            // `.`); the return value has the mark a second time and no name.
+            if dot: = rest.find_char('.')
+                part = rest.sub_from(dot + 1)
     return Parts::{
-        .file = r.key if at < 0 else r.key.sub(0, at),
+        .file = r.key.sub(0, at),
         .key = key,
-        .text = r.text if cut < 0 else r.text.sub(0, cut),
-        .doc = "" if cut < 0 else r.text.sub_from(cut + 1),
+        .text = r.text.sub(0, cut),
+        .doc = r.text.sub_from(cut + 1),
         .owner = owner,
         .part = part,
-        .of_file = key.len == 1 && mark == 0,
+        .of_file = key.len == 1 && key[0] == part_mark,
     }
 
 fn is_declaration(r: Row): Bool //< whether the row is a declaration in its own right
@@ -133,7 +137,7 @@ fn undocumented( //< lists the published entries with no description, and return
 ): Sz
     $n: Sz = 0
     for r in rows
-        if r.text.find_char('\t') >= 0
+        if r.text.find_char('\t').is_some()
             continue
         write_row(b, "no summary", r.key)
         n += 1

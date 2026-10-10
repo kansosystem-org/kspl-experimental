@@ -48,6 +48,13 @@ KSPL_LINK I64 kspl_mono_us(void) {
 }
 #endif
 
+/* A wait in milliseconds as every wait here reads it: 0 looks once without waiting, a positive
+ * value waits at most that long, and a negative one is a time already up, so it does not wait.
+ * Caution: **Pass every wait through this first.** Read raw, -1 waited for good in POSIX poll(),
+ * 49 days through Windows' unsigned tick compare, and not at all on POSIX send's deadline: one
+ * argument, three behaviours. There is no "forever": a silent peer would hang the caller. */
+static I32 kspl_wait_ms(I32 timeout_ms) { return timeout_ms < 0 ? 0 : timeout_ms; }
+
 /* Copies (ptr, len) to a NUL terminator in out. Every narrow path and host name the OS is handed
  * goes through here.
  * Caution: **Returns 0 where it does not fit or holds a NUL.** A truncated copy, or one the OS
@@ -471,7 +478,7 @@ KSPL_LINK void kspl_io_attach_console(void) {}
  * partner has gone, **putting nothing out**, so not one clue to the cause appears anywhere.
  *
  * **The decision: ignore it and return it to the writer as EPIPE.** Every writing call
- * returns a failure as a value (`kspl_proc_write` returns -1, `kspl_net_send` send's return value),
+ * returns a failure as a value (`kspl_proc_send` returns -2, `kspl_net_send` send's return value),
  * so the side receiving it can treat it as a refusal.
  *
  * Caution: **But do not let the output vanish unnoticed.** Where standard output is joined to

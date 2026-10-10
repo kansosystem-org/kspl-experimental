@@ -1,3 +1,8 @@
+//< Types a `switch`: its subject, each case's pattern and payload bindings, and exhaustiveness
+//<
+//< Only a scalar subject is matched (an integer, a `Bool` or an enum). An enum's cases name every
+//< variant or end in a `default`, and a non-enum case value is a constant no earlier case names.
+//< **A `switch` synthesized from `if v: =` is accepted only on an `Option`.**
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -15,26 +20,56 @@ import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List, Map }
 import "std/str"
 
-priv struct Match_ctx
+priv struct Switch_ctx
     target_id: I32
     enum_name: U8[]
     is_enum: Bool
     enum_def: sema_type_def.Enum_def$@
-    matched_variants: List<|Ast_node$@|>$@
+    covered_variants: List<|Ast_node$@|>$@
     bound_vars: List<|Sema_symbol$@|>$@
     seen_values: Map<|I64, Ast_node$@|>$@ //< a non-enum switch's case values so far, by value
     success: Bool
 
+priv fn payload_type_at(c: Sema_ctx$@, variant_def: sema_type_def.Enum_variant$@, idx: Sz): I32 //<
+    //< The type of the variant's payload field at idx, `I32` past the last
+    if idx < variant_def.payload_fields.len
+        return variant_def.payload_fields.get(idx).type_id
+    return c.env.get_or_add("I32")
+
+priv fn check_or_binding(c: Sema_ctx$@, mctx: Switch_ctx$@, bind_var: Ast_node$@,
+    expected_sym: Sema_symbol$@, actual_type_id: I32) //<
+        //< It binds a name a later OR-pattern arm writes to the first arm's, checking it agrees
+        //<
+        //< The names and types must match the first arm's, or the body would read a variable that
+        //< holds something else depending on which arm matched.
+    if !bind_var.text.equals(expected_sym.name)
+        c.clear_scratch()
+            .s("OR pattern variable name mismatch. Expected '\{expected_sym.name\}', but got \
+                '\{bind_var.text\}'")
+        c.err(bind_var, c.scratch.slice())
+        mctx.success = false
+    if actual_type_id != expected_sym.type_id
+        exp: = c.env.display(expected_sym.type_id)
+        act: = c.env.display(actual_type_id)
+        c.clear_scratch()
+            .s("OR pattern variable '\{bind_var.text\}' type mismatch. Expected '\{exp\}', but got \
+                '\{act\}'")
+        c.err(bind_var, c.scratch.slice())
+        mctx.success = false
+    bind_var.sym_ptr = Void$@::expected_sym
+    bind_var.def_node = expected_sym.node
+    bind_var.type_id = expected_sym.type_id
+
 impl Ast_node
-    fn infer_match_stmt(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
-        label_node: = r.get_match_label()
+    fn infer_switch_stmt(r: Ast_node$@, ctx: Sema_ctx$@): Void!Sema_error
+        label_node: = r.get_switch_label()
         label_name: = label_node.text if label_node != null else ""
         ctx.jump_stack
             .push(sema_session_ctx.Jump_label::{ .name = label_name, .is_loop = false,
             .name_node = label_node, .stmt = r })
         defer ctx.jump_stack.len -= 1
 
-        cond_node: = r.get_match_cond()
+        cond_node: = r.get_switch_cond()
         r.ice_assert(cond_node != null, "switch statement is missing a condition expression")
 
         if base_core.config.run_lint_checks && cond_node.was_parenthesized()
@@ -83,9 +118,9 @@ impl Ast_node
 
         $seen_values: = Map<|I64, Ast_node$@|>.new(null)
         defer seen_values.free()
-        $mctx: = Match_ctx::{ .target_id = target_id, .enum_name = enum_name,
+        $mctx: = Switch_ctx::{ .target_id = target_id, .enum_name = enum_name,
             .is_enum = enum_def != null, .enum_def = enum_def,
-            .matched_variants = base_ast.new_ast_node_list(),
+            .covered_variants = base_ast.new_ast_node_list(),
             .bound_vars = List<|Sema_symbol$@|>.create(base_core.arena),
             .seen_values = seen_values@, .success = true }
 
@@ -94,12 +129,12 @@ impl Ast_node
         for $j: Sz = 0; j < r.children.len; j += 1
             child: = r.get_child(j)
             if child.is_keyword("case")
-                j = r.infer_match_case(ctx, mctx@, j + 1)!
+                j = r.infer_switch_case(ctx, mctx@, j + 1)!
             else if child.is_keyword("default")
                 has_default = true
-                r.infer_match_default(ctx, mctx@, j + 1)
+                r.infer_switch_default(ctx, mctx@, j + 1)
 
-        if !r.process_match_exhaustiveness(ctx, enum_name, enum_def, mctx.matched_variants,
+        if !r.process_switch_exhaustiveness(ctx, enum_name, enum_def, mctx.covered_variants,
             has_default)
             mctx.success = false
         else if base_core.config.run_lint_checks && has_default && enum_def != null
@@ -107,7 +142,7 @@ impl Ast_node
 
         if !mctx.success
             throw .analysis_failed
-    priv fn infer_match_default(r: Ast_node$@, ctx: Sema_ctx$@, mctx: Match_ctx$@, start_idx: Sz)
+    priv fn infer_switch_default(r: Ast_node$@, ctx: Sema_ctx$@, mctx: Switch_ctx$@, start_idx: Sz)
         $def_block: Ast_node$@ = null
         for $k: = start_idx; k < r.children.len; k += 1
             if r.get_child(k).kind_id == .k_stmt_block
@@ -118,8 +153,8 @@ impl Ast_node
             defer ctx.symtab.exit_scope()
             def_block.infer_stmts(ctx) catch
                 mctx.success = false
-    priv fn check_redundant_default(r: Ast_node$@, ctx: Sema_ctx$@, mctx: Match_ctx$@)
-        if mctx.matched_variants.len == mctx.enum_def.variants_list.len
+    priv fn check_redundant_default(r: Ast_node$@, ctx: Sema_ctx$@, mctx: Switch_ctx$@)
+        if mctx.covered_variants.len == mctx.enum_def.variants_list.len
             for child in r.children
                 if child.is_keyword("default")
                     ctx.information(child,
@@ -127,7 +162,7 @@ impl Ast_node
                             covered.")
                     break
 
-    priv fn infer_match_case(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@, start_idx: Sz):
+    priv fn infer_switch_case(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@, start_idx: Sz):
         Sz!Sema_error
         $pat_idx: = start_idx
         $target_block: Ast_node$@ = null
@@ -149,8 +184,8 @@ impl Ast_node
 
         for pat_idx < r.children.len
             pat: = r.get_child(pat_idx)
-            if pat.kind_id == .k_match_pattern
-                bound_payload = pat.infer_match_pattern(c, mctx, bound_payload)!
+            if pat.kind_id == .k_case_pattern
+                bound_payload = pat.infer_case_pattern(c, mctx, bound_payload)!
                 pat_idx += 1
             else if pat.is_literal(",")
                 pat_idx += 1
@@ -158,7 +193,7 @@ impl Ast_node
                 if pat.kind_id == .k_stmt_block || pat.kind_id == .k_keyword
                     break
                 pat_type_id: = pat.infer_expr(c, mctx.target_id)!
-                if !pat.check_match_pattern_type(c, pat_type_id, mctx.target_id) ||
+                if !pat.check_case_pattern_type(c, pat_type_id, mctx.target_id) ||
                     !pat.record_case_value(c, mctx)
                     mctx.success = false
                 pat_idx += 1
@@ -169,14 +204,14 @@ impl Ast_node
 
         return block_idx if block_idx != -1 else pat_idx - 1
 
-    priv fn infer_match_pattern(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@,
+    priv fn infer_case_pattern(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         bound_payload: Bool): Bool!Sema_error
-        r.ice_assert(r.children.len > 0, "infer_match_stmt: match_pattern is empty")
+        r.ice_assert(r.children.len > 0, "infer_switch_stmt: case_pattern is empty")
         first_child: = r.get_child(0)
         $processed_as_variant: = false
         $new_bound_payload: = bound_payload
 
-        switch r.extract_match_variant()
+        switch r.extract_case_variant()
         case .variant(v_name_node, p_start_idx)
             if mctx.is_enum
                 new_bound_payload = r.process_enum_variant(c, mctx, v_name_node, p_start_idx,
@@ -197,7 +232,7 @@ impl Ast_node
             r.process_non_enum_pattern(c, mctx, first_child, null)!
         return new_bound_payload
 
-    priv fn process_enum_variant(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@,
+    priv fn process_enum_variant(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         v_name_node: Ast_node$@, p_start_idx: Sz, bound_payload: Bool): Bool
         $new_bound: = bound_payload
 
@@ -222,7 +257,7 @@ impl Ast_node
                 r.verify_variant_payload(c, mctx, variant_def, p_start_idx)
 
             if v_name_node != null
-                record_matched_variant(c, mctx, variant_name, v_name_node)
+                record_covered_variant(c, mctx, variant_name, v_name_node)
         else if r.get_child(0).is_literal(".")
             c.clear_scratch().s("enum '\{mctx.enum_name\}' has no variant named '\{variant_name\}'")
             if v_name_node != null
@@ -232,7 +267,7 @@ impl Ast_node
             mctx.success = false
         return new_bound
 
-    priv fn bind_variant_payload(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@,
+    priv fn bind_variant_payload(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         variant_def: sema_type_def.Enum_variant$@, p_start_idx: Sz)
         $field_idx: Sz = 0
         for $k_b: = p_start_idx; k_b < r.children.len; k_b += 1
@@ -252,41 +287,20 @@ impl Ast_node
                 mctx.bound_vars.push(sym)
                 field_idx += 1
 
-    priv fn verify_variant_payload(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@,
+    priv fn verify_variant_payload(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         variant_def: sema_type_def.Enum_variant$@, p_start_idx: Sz)
         $field_idx: Sz = 0
         $bound_count: Sz = 0
 
         for $k_b: = p_start_idx; k_b < r.children.len; k_b += 1
             bind_var: = r.get_child(k_b)
-            if bind_var.kind_id == .k_identifier
-                bound_count += 1
-                if field_idx < mctx.bound_vars.len
-                    expected_sym: = mctx.bound_vars.get(field_idx)
-                    if !bind_var.text.equals(expected_sym.name)
-                        c.clear_scratch()
-                            .s("OR pattern variable name mismatch. Expected \
-                                '\{expected_sym.name\}', but got '\{bind_var.text\}'")
-                        c.err(bind_var, c.scratch.slice())
-                        mctx.success = false
-                    $actual_type_id: = c.env.get_or_add("I32")
-                    if field_idx < variant_def.payload_fields.len
-                        actual_type_id = variant_def.payload_fields.get(field_idx).type_id
-                    if actual_type_id != expected_sym.type_id
-                        $exp: = c.env.display_str(expected_sym.type_id)
-                        $act: = c.env.display_str(actual_type_id)
-                        defer
-                            exp.free()
-                            act.free()
-                        c.clear_scratch()
-                            .s("OR pattern variable '\{bind_var.text\}' type mismatch. Expected \
-                                '\{exp.slice()\}', but got '\{act.slice()\}'")
-                        c.err(bind_var, c.scratch.slice())
-                        mctx.success = false
-                    bind_var.sym_ptr = Void$@::expected_sym
-                    bind_var.def_node = expected_sym.node
-                    bind_var.type_id = expected_sym.type_id
-                field_idx += 1
+            if bind_var.kind_id != .k_identifier
+                continue
+            bound_count += 1
+            if field_idx < mctx.bound_vars.len
+                check_or_binding(c, mctx, bind_var, mctx.bound_vars.get(field_idx),
+                    payload_type_at(c, variant_def, field_idx))
+            field_idx += 1
         // An OR pattern's later arms may omit the names; then only the payload's count and types
         // are checked against the first arm's.
         if bound_count == 0 && mctx.bound_vars.len > 0
@@ -314,7 +328,7 @@ impl Ast_node
             c.err(r, c.scratch.slice())
             mctx.success = false
 
-    priv fn process_non_enum_pattern(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@,
+    priv fn process_non_enum_pattern(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@,
         first_child: Ast_node$@, v_name_node: Ast_node$@): Void!Sema_error
         $pat_expr: Ast_node$@ = null
         switch r.first_expr()
@@ -323,15 +337,15 @@ impl Ast_node
         case .none
             pat_expr = first_child
         pat_type_id: = pat_expr.infer_expr(c, mctx.target_id)!
-        if !pat_expr.check_match_pattern_type(c, pat_type_id, mctx.target_id) ||
+        if !pat_expr.check_case_pattern_type(c, pat_type_id, mctx.target_id) ||
             !pat_expr.record_case_value(c, mctx)
             mctx.success = false
         else if mctx.is_enum && v_name_node != null
             v_name: = v_name_node.text
             if v_name.len > 0
-                record_matched_variant(c, mctx, v_name, v_name_node)
+                record_covered_variant(c, mctx, v_name, v_name_node)
 
-    priv fn record_case_value(r: Ast_node$@, c: Sema_ctx$@, mctx: Match_ctx$@): Bool //<
+    priv fn record_case_value(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@): Bool //<
         //< Whether a non-enum case value is a constant no earlier case names; it reports where not
         //<
         //< Caution: **Compare the folded values, not the spellings**: `'a'` and `97` are one value,
@@ -353,7 +367,7 @@ impl Ast_node
         mctx.seen_values.set(v, r)
         return true
 
-    fn check_match_pattern_type(r: Ast_node$@, c: Sema_ctx$@, pat_id: I32, cond_id: I32): Bool
+    fn check_case_pattern_type(r: Ast_node$@, c: Sema_ctx$@, pat_id: I32, cond_id: I32): Bool
         if pat_id != cond_id && !sema_type_env.is_unknown(pat_id) &&
             !sema_type_env.is_unknown(cond_id)
             c.report_type_mismatch(r, cond_id, pat_id)
@@ -369,7 +383,7 @@ impl Ast_node
                 child.is_keyword("default")
                 continue
             $pat: = child
-            if child.kind_id == .k_match_pattern
+            if child.kind_id == .k_case_pattern
                 switch child.first_expr()
                 case .some(e)
                     pat = e
@@ -380,13 +394,13 @@ impl Ast_node
                 seen_false = seen_false || pat.text.equals("false")
         return seen_true && seen_false
 
-    fn process_match_exhaustiveness(r: Ast_node$@, c: Sema_ctx$@, enum_name: U8$[],
-        enum_def: sema_type_def.Enum_def$@, matched_variants: List<|Ast_node$@|>$@,
+    fn process_switch_exhaustiveness(r: Ast_node$@, c: Sema_ctx$@, enum_name: U8$[],
+        enum_def: sema_type_def.Enum_def$@, covered_variants: List<|Ast_node$@|>$@,
         has_default: Bool): Bool
         if has_default
             return true
         // A `Bool` has two values, so naming both covers it as naming every variant does.
-        if enum_def == null && c.env.is_bool(r.get_match_cond().type_id) &&
+        if enum_def == null && c.env.is_bool(r.get_switch_cond().type_id) &&
             r.matches_both_bools()
             return true
         if enum_def == null
@@ -397,12 +411,12 @@ impl Ast_node
         $first_unhandled: = ""
 
         for variant_def in enum_def.variants_list
-            $is_matched: = false
-            for matched_variant in matched_variants
-                if matched_variant.text.equals(variant_def.name)
-                    is_matched = true
+            $is_covered: = false
+            for covered_variant in covered_variants
+                if covered_variant.text.equals(variant_def.name)
+                    is_covered = true
                     break
-            if !is_matched
+            if !is_covered
                 unhandled += 1
                 if first_unhandled.len == 0
                     first_unhandled = variant_def.name
@@ -417,15 +431,15 @@ impl Ast_node
             return false
         return true
 
-priv fn record_matched_variant(c: Sema_ctx$@, mctx: Match_ctx$@, variant_name: U8[],
+priv fn record_covered_variant(c: Sema_ctx$@, mctx: Switch_ctx$@, variant_name: U8[],
     v_name_node: Ast_node$@)
     $already_covered: = false
-    for mv_node in mctx.matched_variants
+    for mv_node in mctx.covered_variants
         if mv_node.text.equals(variant_name)
             already_covered = true
             break
     if !already_covered
-        mctx.matched_variants.push(v_name_node)
+        mctx.covered_variants.push(v_name_node)
     else
         c.clear_scratch().s("switch pattern '\{variant_name\}' is already covered or duplicated.")
         c.err(v_name_node, c.scratch.slice())

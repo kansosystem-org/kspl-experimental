@@ -234,6 +234,9 @@ fn test_ncm_rejects_broken() //<
 // checked here first.
 // ==========================================
 
+priv fn our_mac(): ip4.Mac //< the MAC the answers go out under
+    return ip4.Mac::{ .hi = 0x0002, .lo = 0x00000002 }
+
 priv fn arp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8$[]) //<
     //< Checks that it does not answer a frame with one byte of the original changed
     //<
@@ -242,7 +245,7 @@ priv fn arp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U8
     for i in Range.asc(orig.len)
         work[i] = orig[i]
     work[off] = v
-    n: = ip4.build_arp_reply(U8$[]::out, work, 60, our_ip, 0x0002, 0x00000002)
+    n: = ip4.build_arp_reply(U8$[]::out, work, 60, our_ip, our_mac())
     assert(n == 0, msg)
 
 fn test_arp_reply() //<
@@ -256,7 +259,7 @@ fn test_arp_reply() //<
         0x06, 0x00, 0x01, 0x08, 0x00, 6, 4, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 192, 168,
         137, 1, 0, 0, 0, 0, 0, 0, 192, 168, 137, 50 }
     out: U8[64] = ::{}
-    n: = ip4.build_arp_reply(U8$[]::out, U8[]::req, 60, our_ip, 0x0002, 0x00000002)
+    n: = ip4.build_arp_reply(U8$[]::out, U8[]::req, 60, our_ip, our_mac())
     assert(n == 60, "it fills to the smallest frame length and returns")
     assert(out[0] == 0xaa && out[5] == 0xff, "the destination is the requester's MAC")
     assert(out[12] == 0x08 && out[13] == 0x06, "the EtherType is ARP")
@@ -269,12 +272,12 @@ fn test_arp_reply() //<
     for i in Range.asc(60)
         other[i] = req[i]
     other[41] = 99 // the target IP to 192.168.137.99
-    for_other: = ip4.build_arp_reply(U8$[]::out, U8[]::other, 60, our_ip, 0x0002, 0x00000002)
+    for_other: = ip4.build_arp_reply(U8$[]::out, U8[]::other, 60, our_ip, our_mac())
     assert(for_other == 0, "it does not answer an ARP addressed to somebody else")
     // It does not answer a reply (oper=2) (answering would cause an ARP storm).
     other[41] = 50
     other[21] = 2
-    to_reply: = ip4.build_arp_reply(U8$[]::out, U8[]::other, 60, our_ip, 0x0002, 0x00000002)
+    to_reply: = ip4.build_arp_reply(U8$[]::out, U8[]::other, 60, our_ip, our_mac())
     assert(to_reply == 0, "it does not answer an ARP answer")
 
     // The offsets hold only at hwlen=6 / protolen=4 (the reason is at `build_arp_reply` in
@@ -298,7 +301,7 @@ priv fn icmp_reject(work: U8$[], orig: U8[], off: Sz, v: U8, our_ip: U32, msg: U
     for i in Range.asc(orig.len)
         work[i] = orig[i]
     work[off] = v
-    n: = ip4.build_icmp_echo_reply(U8$[]::out, work, 60, our_ip, 0x0002, 0x00000002)
+    n: = ip4.build_icmp_echo_reply(U8$[]::out, work, 60, our_ip, our_mac())
     assert(n == 0, msg)
 
 fn test_icmp_echo_reply() //<
@@ -358,7 +361,7 @@ fn test_icmp_echo_reply() //<
         0xef
     }
     out: U8[64] = ::{}
-    n: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::req, 60, our_ip, 0x0002, 0x00000002)
+    n: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::req, 60, our_ip, our_mac())
     assert(n == 60, "it fills to the smallest frame length and returns (the body is 14 + 32 = 46)")
     assert(out[0] == 0xaa && out[5] == 0xff, "the destination is the sender's MAC")
     assert(out[26] == 192 && out[29] == 50, "the src IP is its own")
@@ -390,7 +393,7 @@ fn test_icmp_echo_reply() //<
     for i in Range.asc(60)
         other[i] = req[i]
     other[33] = 99
-    ping_other: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::other, 60, our_ip, 0x0002, 0x00000002)
+    ping_other: = ip4.build_icmp_echo_reply(U8$[]::out, U8[]::other, 60, our_ip, our_mac())
     assert(ping_other == 0, "it does not answer a ping addressed to somebody else")
 
     // A fragment, or a version other than 4, must not be answered (the reason is at

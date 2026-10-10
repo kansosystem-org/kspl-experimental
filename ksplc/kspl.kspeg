@@ -5,12 +5,12 @@
 // analyser (`parse/layout.kspls`). **A check reads the rosters** (`make test-kspls`): mend them.
 // [opens] decl_extern_block decl_trait decl_struct decl_enum decl_impl stmt_block
 // [value] decl_import_selector_list String_content
-// [uses] decl_fn stmt_defer stmt_if stmt_loop stmt_match stmt_labeled_block expr_catch
+// [uses] decl_fn stmt_defer stmt_if stmt_for stmt_switch stmt_labeled_block expr_catch
 // [uses] expr_fn_lit
-// [ends] decl_import decl_embed decl_extern decl_top decl_directive decl_const decl_fn decl_alias
+// [ends] decl_import decl_embed decl_extern decl_top decl_directive decl_const decl_fn decl_typedef
 // [ends] decl_trait decl_struct struct_field enum_variant stmt stmt_return stmt_throw
 // [ends] stmt_fallback stmt_break stmt_continue stmt_defer item_broken stmt_broken
-// [keeps] stmt_loop expr_fn_lit_sig
+// [keeps] stmt_for expr_fn_lit_sig
 // **[opens]** opens a block by `Block_open` / `Block_close`. **[value]** a brace that is a value
 // and remains (an `import … { … }`, a string's escape; a `::{` is another spelling). **[uses]**
 // draws `stmt_block` without opening one. **[ends]** ends a declaration or statement by
@@ -48,7 +48,7 @@ decl_extern_struct = 'struct' Identifier
 decl_top =
     decl_const
     | decl_var Stmt_end
-    | decl_alias
+    | decl_typedef
     | decl_struct
     | decl_enum
     | decl_trait
@@ -80,7 +80,7 @@ type_gen_params = "<|" type_gen_param ( "," type_gen_param )* ","? "|>"
 type_gen_param  = ( 'const' Identifier ( ":" type_expr )? ) | "$"? Identifier ( ":" type_constraint )?
 type_constraint = type_path ( "+" type_path )*
 
-decl_alias = 'typedef' Identifier "=" type_expr Stmt_end
+decl_typedef = 'typedef' Identifier "=" type_expr Stmt_end
 
 // A method is a declaration alone or holds a default body (`sema/decl/trait_default.kspls`).
 // Caution: **The declaration-alone side goes first**: `decl_fn` swallows the `;` too, and
@@ -124,8 +124,8 @@ stmt = attribute_list? (
     | stmt_continue
     | stmt_defer
     | stmt_if
-    | stmt_loop
-    | stmt_match
+    | stmt_for
+    | stmt_switch
     | decl_const
     | decl_var Stmt_end
     | stmt_expr Stmt_end
@@ -152,18 +152,18 @@ if_bind = Identifier ":" "=" expr
 
 label = Identifier ":"
 
-stmt_loop = label? 'for' (
+stmt_for = label? 'for' (
     Identifier 'in' expr stmt_block
-    | loop_init? ";" expr? ";" loop_step? stmt_block
+    | for_init? ";" expr? ";" for_step? stmt_block
     | expr stmt_block
     | stmt_block
 )
-loop_init = decl_var | stmt_expr
-loop_step = stmt_expr ( "," stmt_expr )*
+for_init = decl_var | stmt_expr
+for_step = stmt_expr ( "," stmt_expr )*
 
-stmt_match = label? 'switch' expr ( 'case' match_pattern ( "," match_pattern )* stmt_block )+ ( 'default' stmt_block )?
+stmt_switch = label? 'switch' expr ( 'case' case_pattern ( "," case_pattern )* stmt_block )+ ( 'default' stmt_block )?
 stmt_labeled_block = label stmt_block
-match_pattern = ( "." Identifier ( "(" identifier_list ")" )? ) | expr
+case_pattern = ( "." Identifier ( "(" identifier_list ")" )? ) | expr
 identifier_list = Identifier ( "," Identifier )*
 
 stmt_expr = expr ( assign_op expr )?

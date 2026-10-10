@@ -1,3 +1,4 @@
+//< Tests of `std/reactor` watching TCP connections, and of what a non-blocking listener accepts
 import "std/net"
 import "std/reactor"
 import "std/sys"
@@ -23,18 +24,19 @@ fn test_reactor_multi_connection()
         .start("[Reactor] register/wait/unregister over several connections test (real loopback \
             traffic)...")
 
-    listener: = net.Tcp_listener.bind("127.0.0.1", 17657) catch panic("bind should succeed on a \
-        fresh port")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
     t: =
         thread.Thread.spawn<|net.Tcp_listener|>(reactor_multi_echo_server, listener) catch panic("thread spawn failed")
 
     $r: = reactor.Reactor.new()
     defer r.free()
-    c0: = net.Tcp_stream.connect("127.0.0.1", 17657) catch panic("connect should succeed once the \
+    c0: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once the \
         listener is bound")
-    c1: = net.Tcp_stream.connect("127.0.0.1", 17657) catch panic("connect should succeed once the \
+    c1: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once the \
         listener is bound")
-    c2: = net.Tcp_stream.connect("127.0.0.1", 17657) catch panic("connect should succeed once the \
+    c2: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once the \
         listener is bound")
     c0.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
     c1.set_nonblocking() catch panic("set_nonblocking should succeed on a connected socket")
@@ -111,13 +113,14 @@ fn test_reactor_nonblocking_connect()
         .start("[Reactor] connect_nonblocking + the writable notification test (real loopback \
             traffic)...")
 
-    listener: = net.Tcp_listener.bind("127.0.0.1", 17658) catch panic("bind should succeed on a \
-        fresh port")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
     t: =
         thread.Thread.spawn<|net.Tcp_listener|>(reactor_accept_once, listener) catch panic("thread \
             spawn failed")
 
-    client: = net.Tcp_stream.connect_nonblocking("127.0.0.1", 17658) catch panic("connect_nonblocking should return immediately with a pending stream")
+    client: = net.Tcp_stream.connect_nonblocking("127.0.0.1", port) catch panic("connect_nonblocking should return immediately with a pending stream")
 
     $r: = reactor.Reactor.new()
     defer r.free()
@@ -150,10 +153,11 @@ fn reactor_late_write(client: net.Tcp_stream$@): Void$@
 fn test_accept_returns_blocking()
     verdict
         .start("[Reactor] a connection accepted from a non-blocking listener waits for its data...")
-    listener: = net.Tcp_listener.bind("127.0.0.1", 17669) catch panic("bind should succeed on a \
-        fresh port")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
     listener.set_nonblocking() catch panic("set_nonblocking should succeed on a listener")
-    client: = net.Tcp_stream.connect("127.0.0.1", 17669) catch panic("connect should succeed once \
+    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
         the listener is bound")
     $r: = reactor.Reactor.new()
     defer r.free()

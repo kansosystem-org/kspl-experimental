@@ -22,8 +22,12 @@ function kspageSave(kf) {
       return false;
     }
     // Caution: **Ask whether it exists first** (reading a missing file shows a refusal; asking is
-    // silent).
-    if (!(await ui.localStat(path))) {
+    // silent). Where it could not be asked, refuse as for a failed read below.
+    const there = await ui.localStat(path);
+    if (there === null) {
+      return true;
+    }
+    if (!there) {
       return false;
     }
     const bytes = await ui.localRead(path);
@@ -147,7 +151,12 @@ function kspageSave(kf) {
     // Caution: **Do not write the extension here** — only `file.js`'s `bodyExt` decides it, or a
     // text document would be offered kspage's extension.
     const first = nameOf(bodyExt());
-    if (await ui.localStat(first)) {
+    const there = await ui.localStat(first);
+    if (there === null) {
+      app.focus();
+      return;   // `localStat` has said why it could not tell
+    }
+    if (there) {
       deny(first + " is already there. To overwrite it, enter it into " + pathIsAt);
       app.focus();
       return;
@@ -366,7 +375,9 @@ function kspageSave(kf) {
       }
       // **Ask whether it exists first** (`openPlace`'s refusal names no path, and the field is
       // empty here).
-      if (!(await ui.localStat(was.path))) return lost(was.path, "it is no longer there");
+      const there = await ui.localStat(was.path);
+      if (there === null) return lost(was.path, "the server could not say whether it is there");
+      if (!there) return lost(was.path, "it is no longer there");
       if (await openPlace(was.path)) return true;
       forgetWhere();
       return false;   // `localRead` has already reported what happened

@@ -7,7 +7,8 @@
 # ==================================================================
 TEST_JOBS ?= $(HOST_CORES)
 
-ci_run = ./$(SEED_EXE) run tools/ci.kspls --make='$(MAKE)' --jobs=$(TEST_JOBS)
+# `--platform`: a SKIP that platform's rows in `tools/ci_gates.kspls` do not expect fails its gate.
+ci_run = ./$(SEED_EXE) run tools/ci.kspls --make='$(MAKE)' --jobs=$(TEST_JOBS) --platform=$(PLATFORM)
 
 ## Gates|ci|Every gate runnable on this environment
 ## Gates|ci-linux|Every Linux gate (`ci` plus what has its tool on Linux only)

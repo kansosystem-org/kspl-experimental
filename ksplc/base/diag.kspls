@@ -1,3 +1,9 @@
+//< Printing a diagnostic: as text or one line of JSON on stderr, or kept for the language server
+//<
+//< **`print_diagnostic` is the one writer for both forms** (`print_unplaced` for an error with no
+//< place in a source): it counts the place once, so the text and the JSON never disagree. Under
+//< the language server the findings are collected in `lsp_diags` instead. An internal compiler
+//< error stops the run through `ice_panic` / `ice_assert`.
 import "ksplc/base/as_written" as base_as_written
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
@@ -83,6 +89,22 @@ fn ice_panic(msg: U8$[])
         .s("\n=========================================\n[Internal Compiler Error] \
             \{msg\}\n=========================================\n")
     panic("ICE")
+
+fn io_line(e: io.Io_error, kind: U8[]): U8[] //<
+    //< One line naming an I/O failure, `<kind>/<variant>: <details>`, on the arena
+    //<
+    //< The parse phase's I/O errors, the top-level ones and the formatter's share it.
+    out: = base_core.arena.text()
+    switch e
+    case .file_not_found(path)
+        out.s("\{kind\}/file_not_found: file not found or unreadable: \{path\}\n")
+    case .read_failed(path)
+        out.s("\{kind\}/read_failed: failed to read file: \{path\}\n")
+    case .write_failed(path)
+        out.s("\{kind\}/write_failed: failed to write file: \{path\}\n")
+    default
+        out.s("\{kind\}/other: generic I/O error\n")
+    return out.take()
 
 fn ice_assert(cond: Bool, msg: U8$[])
     if !cond

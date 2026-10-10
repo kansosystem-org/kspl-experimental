@@ -36,7 +36,7 @@ impl Ast_node
 
         switch kind
         case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct, .k_decl_enum,
-            .k_decl_alias, .k_decl_trait
+            .k_decl_typedef, .k_decl_trait
             r.transform_decl_name(c)
         case .k_expr_postfix
             op_node: = r.get_postfix_op()
@@ -65,8 +65,8 @@ impl Ast_node
             return
 
         w: = c.clear_scratch()
-        if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum || r.kind_id == .k_decl_alias ||
-            r.kind_id == .k_decl_trait
+        if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum ||
+            r.kind_id == .k_decl_typedef || r.kind_id == .k_decl_trait
             def_in: = sym.get_defined_in()
             // Caution: **Write the file as a qualifier first (`s_path_as_dots`)**, as the type's
             // own name is. Mangled straight from the path, a folder like `.hidden` loses its dot
@@ -345,9 +345,8 @@ priv fn write_priv_prefix_to(fname: U8[], w: Writer): Writer
 
     // The extension's '.' is looked for only after start_idx: counting a relative path's leading
     // '.' empties the range and turns every priv symbol's prefix into the same string.
-    dot_idx_rel: = fname.sub_from(start_idx).find_char('.')
     $end_idx: Sz = fname.len
-    if dot_idx_rel >= 0
+    if dot_idx_rel: = fname.sub_from(start_idx).find_char('.')
         end_idx = start_idx + dot_idx_rel
 
     for $i: = start_idx; i < end_idx; i += 1

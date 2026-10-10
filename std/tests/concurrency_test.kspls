@@ -1,3 +1,4 @@
+//< Tests of `std/thread` over real OS threads, and of `std/subproc` started from two at once
 import "std/mem" + { dealloc }
 import "std/refcount" { Rc }
 import "std/subproc"
@@ -134,6 +135,51 @@ fn test_atomic_and_cond_var()
     verdict
         .pass("Lock-free addition (20000/20000) and Cond_var's signal/wait round trip are \
             confirmed.")
+
+// ==========================================
+// std/thread: Cond_var.broadcast wakes every thread waiting, where signal wakes one.
+// ==========================================
+struct Broadcast_ctx
+    gate: thread.Mutex<|Sz|> //< 0 while shut; how many wait is counted beside it
+    cv: thread.Cond_var
+    waiting: thread.Atomic_sz //< the waiters that hold the lock and wait
+    woke: thread.Atomic_sz //< the waiters past the wait
+
+#export
+fn broadcast_waiter(arg: Broadcast_ctx$@): Void$@
+    open: = arg.gate.lock()
+    arg.waiting.fetch_add(1)
+    for open$ == 0
+        arg.cv.wait(arg.gate@)
+    arg.gate.unlock()
+    arg.woke.fetch_add(1)
+    return null
+
+fn test_cond_var_broadcast()
+    verdict.start("[Thread] Cond_var.broadcast wakes every waiting thread...")
+    ctx: = mem.alloc_as<|Broadcast_ctx|>()
+    ctx.gate = thread.Mutex<|Sz|>.new(0) catch panic("mutex create failed")
+    ctx.cv = thread.Cond_var.new() catch panic("cond create failed")
+    ctx.waiting = thread.Atomic_sz.new(0)
+    ctx.woke = thread.Atomic_sz.new(0)
+    t1: = thread.Thread.spawn<|Broadcast_ctx|>(broadcast_waiter, ctx) catch panic("thread spawn \
+        failed")
+    t2: = thread.Thread.spawn<|Broadcast_ctx|>(broadcast_waiter, ctx) catch panic("thread spawn \
+        failed")
+    // **Open the gate only once both wait**, or a late waiter would see it open and prove nothing.
+    for ctx.waiting.load() < 2
+        sys.sleep_ms(1)
+    open: = ctx.gate.lock()
+    open$ = 1
+    ctx.cv.broadcast()
+    ctx.gate.unlock()
+    t1.join_and_free()
+    t2.join_and_free()
+    assert(ctx.woke.load() == 2, "broadcast wakes both waiters")
+    ctx.gate.free()
+    ctx.cv.free()
+    dealloc(Void$@::ctx)
+    verdict.pass("Both threads waiting on one Cond_var wake at one broadcast.")
 
 // ==========================================
 // std/subproc with std/thread: children started from two threads at once. A start whose pipe ends

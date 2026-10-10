@@ -27,14 +27,13 @@ priv fn hook_name(line: U8[]): U8[] //< whether the field has the form `name: fn
     //< Caution: **Do not check the visibility** (a member cannot be wider than what encloses it):
     //< filtering by the modifier counts zero and goes silent the day the text changes.
     t: = line.trim_spaces().strip_prefix("pub ").strip_prefix("priv ")
-    at: = t.find_str(": fn(")
-    if at < 0
-        return ""
-    name: = t.sub(0, at)
-    for c in name
-        if !(c.is_alnum() || c == '_')
-            return ""
-    return name
+    if at: = t.find_str(": fn(")
+        name: = t.sub(0, at)
+        for c in name
+            if !(c.is_alnum() || c == '_')
+                return ""
+        return name
+    return ""
 
 priv fn import_paths(rel: U8[], arena: Arena$@): List<|U8[]|> //< the paths rel's imports name
     $out: = List<|U8[]|>.new(arena)
@@ -43,8 +42,7 @@ priv fn import_paths(rel: U8[], arena: Arena$@): List<|U8[]|> //< the paths rel'
         if !t.starts_with("import \"")
             continue
         path: = t.sub_from(8)
-        end: = path.find_char('"')
-        if end >= 0
+        if end: = path.find_char('"')
             out.push(path.sub(0, end))
     return out
 
@@ -160,26 +158,21 @@ priv fn order_of(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The tab-separated text following a `priv const <name>_order: U8[] =`
     $out: = List<|U8[]|>.new(arena)
     head: = arena.text().s("priv const ").s(name).s("_order: U8[] =").take()
-    at: = src.find_str(head)
-    if at < 0
-        return out
-    rest: = src.sub_from(at + head.len)
-    open: = rest.find_str("\"")
-    if open < 0
-        return out
-    body: = rest.sub_from(open + 1)
-    end: = body.find_str("\"")
-    if end < 0
-        return out
-    // **It is read as text, so the separator is the two characters `\\t`** (not a tab itself).
-    $left: U8[] = body.sub(0, end)
-    for left.len > 0
-        cut: = left.find_str("\\t")
-        if cut < 0
-            out.push(left)
-            return out
-        out.push(left.sub(0, cut))
-        left = left.sub_from(cut + 2)
+    if at: = src.find_str(head)
+        rest: = src.sub_from(at + head.len)
+        if open: = rest.find_str("\"")
+            body: = rest.sub_from(open + 1)
+            if end: = body.find_str("\"")
+                // **It is read as text, so the separator is the two characters `\\t`** (not a
+                // tab itself).
+                $left: U8[] = body.sub(0, end)
+                for left.len > 0
+                    if cut: = left.find_str("\\t")
+                        out.push(left.sub(0, cut))
+                        left = left.sub_from(cut + 2)
+                    else
+                        out.push(left)
+                        return out
     return out
 
 priv fn js_list_of(src: U8[], name: U8[], head_mark: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -188,15 +181,11 @@ priv fn js_list_of(src: U8[], name: U8[], head_mark: U8[], arena: Arena$@): List
     //< Caution: **Pick it up in order** (drop the repeats and the order drifts).
     $out: = List<|U8[]|>.new(arena)
     head: = arena.text().s("const ").s(name).s(" = [").take()
-    at: = src.find_str(head)
-    if at < 0
-        return out
-    rest: = src.sub_from(at + head.len)
-    end: = rest.find_str("];")
-    if end < 0
-        return out
-    for w in scan.find_all(rest.sub(0, end), head_mark, "\"", arena)
-        out.push(w)
+    if at: = src.find_str(head)
+        rest: = src.sub_from(at + head.len)
+        if end: = rest.find_str("];")
+            for w in scan.find_all(rest.sub(0, end), head_mark, "\"", arena)
+                out.push(w)
     return out
 
 priv const order_pairs: U8[][10] = ::{ "shape", "SHAPES", "dating", "DATINGS", "collect",
@@ -266,7 +255,7 @@ priv fn arrows_of(md: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Caution: **Do not read it as guaranteeing "it is in the table".**
     $out: = List<|U8[]|>.new(arena)
     for w in scan.find_all(md, "`", "`", arena)
-        if w.find_str("→") > 0
+        if w.find_str("→").unwrap_or(0) > 0
             scan.push_unique(out@, w)
     return out
 
@@ -276,16 +265,12 @@ priv fn copy_targets(src: U8[], unit: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The line has the form `"ksplc docs std root"`.
     $out: = List<|U8[]|>.new(arena)
     head: = arena.text().s("\"").s(unit).s(" ").take()
-    at: = src.find_str(head)
-    if at < 0
-        return out
-    rest: = src.sub_from(at + head.len)
-    end: = rest.find_str("\"")
-    if end < 0
-        return out
-    for w in rest.sub(0, end).split(' ', arena)
-        if w.len > 0
-            scan.push_unique(out@, w)
+    if at: = src.find_str(head)
+        rest: = src.sub_from(at + head.len)
+        if end: = rest.find_str("\"")
+            for w in rest.sub(0, end).split(' ', arena)
+                if w.len > 0
+                    scan.push_unique(out@, w)
     return out
 
 priv fn check_reference_arrows(arena: Arena$@)
@@ -322,8 +307,8 @@ priv fn check_reference_arrows(arena: Arena$@)
         // Whether the check allows the directions the table holds.
         for k in Range.asc(arrows.len)
             a: = arrows.get(k)
-            cut: = a.find_str("→")
-            if cut <= 0 || !a.sub(0, cut).equals(from)
+            cut: = a.find_str("→").unwrap_or(0)
+            if cut == 0 || !a.sub(0, cut).equals(from)
                 continue
             to: = a.sub_from(cut + 3)
             if !scan.has(targets@, to)
@@ -492,18 +477,14 @@ priv fn bound_of(src: U8[], name: U8[], arena: Arena$@): U8[] //<
     mark: = arena.text().s("> Sz::").take()
     tail: = arena.text().s(".").s(name).s(".").take()
     for line in src.lines(arena)
-        at: = line.find_str(mark)
-        if at < 0
-            continue
-        rest: = line.sub_from(at + mark.len)
-        hit: = rest.find_str(tail)
-        if hit < 0
-            continue
-        word: = rest.sub_from(hit + tail.len)
-        $k: Sz = 0
-        for k < word.len && (word[k].is_alnum() || word[k] == '_')
-            k += 1
-        return word.sub(0, k)
+        if at: = line.find_str(mark)
+            rest: = line.sub_from(at + mark.len)
+            if hit: = rest.find_str(tail)
+                word: = rest.sub_from(hit + tail.len)
+                $k: Sz = 0
+                for k < word.len && (word[k].is_alnum() || word[k] == '_')
+                    k += 1
+                return word.sub(0, k)
     return ""
 
 priv fn check_enum_order(arena: Arena$@)
@@ -568,15 +549,15 @@ priv fn web_names_in(src: U8[], out: List<|U8[]|>$@) //<
     //< everything after it.
     $rest: U8[] = src
     for rest.len > 0
-        at: = rest.find_str(web_prefix)
-        if at < 0
+        if at: = rest.find_str(web_prefix)
+            rest = rest.sub_from(at + web_prefix.len)
+            $i: Sz = 0
+            for i < rest.len && (rest[i].is_alnum() || rest[i] == '_')
+                i += 1
+            if i > 0
+                scan.push_unique(out, rest.sub(0, i))
+        else
             return
-        rest = rest.sub_from(at + web_prefix.len)
-        $i: Sz = 0
-        for i < rest.len && (rest[i].is_alnum() || rest[i] == '_')
-            i += 1
-        if i > 0
-            scan.push_unique(out, rest.sub(0, i))
 
 priv fn web_exports(arena: Arena$@): List<|U8[]|> //< the exported entry points
     //<
@@ -590,7 +571,7 @@ priv fn web_exports(arena: Arena$@): List<|U8[]|> //< the exported entry points
                 marks += 1
             if line.starts_with("fn kspage_web_")
                 rest: = line.sub_from(3 + web_prefix.len)
-                at: = rest.find_str("(")
+                at: = rest.find_str("(").unwrap_or(0)
                 if at > 0
                     scan.push_unique(out@, rest.sub(0, at))
     // Caution: **Check the count too.** An entry point not starting with `kspage_web_` widens the
@@ -686,7 +667,7 @@ priv fn check_hand_lists(arena: Arena$@) //<
                 continue
             seen += 1
             name: = sys.strip_last_ext(said) if stem else said
-            if holder.find_str(name) < 0
+            if holder.find_str(name).is_none()
                 bad
                     .push(arena.text().s(what).s(" (").s(hand_lists[i + 1]).s(") does not name ")
                     .s(rel).take())

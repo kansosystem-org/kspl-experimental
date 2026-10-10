@@ -44,6 +44,66 @@ static void check2(const char* name, double got, double want, double a, double b
     }
 }
 
+// Where libm's answer is NaN, an infinity or a zero, the same answer exactly: a NaN for a NaN, and
+// an infinity or a zero with the same sign (`1/x` tells -0 from +0).
+static void check_same(const char* name, double got, double want, double a, double b) {
+    int same = isnan(want) ? isnan(got)
+        : got == want && (want != 0.0 || (1.0 / got > 0.0) == (1.0 / want > 0.0));
+    if (!same) {
+        printf("FAIL %s(%.17g,%.17g) got=%.17g want=%.17g (an edge answer differs)\n", name, a, b,
+            got, want);
+        fails++;
+    }
+}
+
+// The edges of the range, where libm answers NaN, an infinity or a zero (C99 Annex F), and the
+// largest and smallest finite answers, which must stay finite.
+static void check_edges(void) {
+    const double inf = INFINITY, nan = NAN;
+    double specials[] = { inf, -inf, nan, 0.0, -0.0, -1.0, -1e-300 };
+    for (size_t i = 0; i < sizeof(specials) / sizeof(specials[0]); i++) {
+        double x = specials[i];
+        if (isnan(sqrt(x)) || isinf(sqrt(x)) || sqrt(x) == 0.0)
+            check_same("sqrt", probe_sqrt(x), sqrt(x), x, 0.0);
+        if (isnan(log(x)) || isinf(log(x)))
+            check_same("log", probe_log(x), log(x), x, 0.0);
+        if (isnan(exp(x)) || isinf(exp(x)) || exp(x) == 0.0)
+            check_same("exp", probe_exp(x), exp(x), x, 0.0);
+        if (isnan(sin(x))) {
+            check_same("sin", probe_sin(x), sin(x), x, 0.0);
+            check_same("cos", probe_cos(x), cos(x), x, 0.0);
+            check_same("tan", probe_tan(x), tan(x), x, 0.0);
+        }
+    }
+    // exp past F64's range, and the finite answers at its two ends (subnormal at the low one).
+    static const double exp_xs[] = { 710.0, 1000.0, -746.0, -1000.0, 709.0, -708.0, -740.0, -745.0 };
+    for (size_t i = 0; i < sizeof(exp_xs) / sizeof(exp_xs[0]); i++) {
+        double x = exp_xs[i];
+        if (isinf(exp(x)) || exp(x) == 0.0)
+            check_same("exp", probe_exp(x), exp(x), x, 0.0);
+        else
+            check1("exp", probe_exp(x), exp(x), x);
+    }
+    // sqrt and log at F64's largest and smallest (subnormal) values.
+    static const double ends[] = { 1.7976931348623157e308, 2.2250738585072014e-308, 5e-324 };
+    for (size_t i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {
+        check1("sqrt", probe_sqrt(ends[i]), sqrt(ends[i]), ends[i]);
+        check1("log", probe_log(ends[i]), log(ends[i]), ends[i]);
+    }
+    // pow: Annex F's cases, a negative base under a whole and a fractional exponent included.
+    double bases[] = { -2.0, -0.5, -1.0, -0.0, 0.0, 0.5, 1.0, 2.0, inf, -inf, nan };
+    double exps[] = { -3.0, -2.0, -0.5, 0.0, 0.5, 2.0, 3.0, inf, -inf, nan };
+    for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+        for (size_t j = 0; j < sizeof(exps) / sizeof(exps[0]); j++) {
+            double a = bases[i], b = exps[j], want = pow(a, b);
+            if (isnan(want) || isinf(want) || want == 0.0)
+                check_same("pow", probe_pow(a, b), want, a, b);
+            else
+                check2("pow", probe_pow(a, b), want, a, b);
+        }
+    }
+}
+
 // std/strfmt's equivalent of `%.*f` is compared **as a string** against a real libc's snprintf:
 // a rounding one step out (ties to even: 0.5 under `%.0f` as "1" or "0") escapes a relative error.
 static void check_float_format(void) {
@@ -161,6 +221,7 @@ int main(void) {
         }
     }
 
+    check_edges();
     check_float_format();
     check_ptr_format();
 

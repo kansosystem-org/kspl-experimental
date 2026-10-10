@@ -470,16 +470,10 @@ impl Ast_node
             if child.kind_id != .k_expr_field_init
                 continue
             $idx: = next_idx
-            if name_node: = child.get_field_init_name()
-                if name_node != null && name_node.kind_id == .k_identifier
-                    $found: = n
-                    for f in Range.asc(n)
-                        if s_def.fields_list.get(f).name.equals(name_node.text)
-                            found = f
-                            break
-                    r.ice_assert(found < n,
-                        "genllvm: unknown field name in a global struct initializer")
-                    idx = found
+            name_node: = child.get_field_init_name().unwrap_or(null)
+            if name_node != null && name_node.kind_id == .k_identifier
+                idx = field_index_named(s_def, name_node.text)
+                r.ice_assert(idx < n, "genllvm: unknown field name in a global struct initializer")
             r.ice_assert(idx < n, "genllvm: too many fields in a global struct initializer")
             slots.set(idx, child.get_field_init_expr())
             next_idx = idx + 1
@@ -665,62 +659,57 @@ impl Ast_node
         cg.s(") ")
         r.emit_llvm_fn_attributes(cg)
         cg.s("{\n")
-        if block != null
-            cg.s("entry_block:\n")
-            cg.emit.target = .body
-            cg.emit.body_out.len = 0
-            cg.emit.alloca_out.len = 0
-            cg.is_terminated = false
-
-            // A naked function's arguments stay in their registers for the assembly to read; a
-            // spill would be the very prologue it has none of.
-            if params != null && !r.has_attribute("naked")
-                for param in params.children
-                    if param.kind_id == .k_fn_param
-                        id_node: = param.find_child(.k_identifier)
-                        p_name: = id_node.text if id_node != null else "unknown"
-                        decl: =
-                            (id_node.def_node if id_node != null && id_node.def_node != null
-                            else param)
-                        slot: = cg.local_slot_name(p_name, decl)
-                        p_type_id: = param.type_id
-
-                        cg.emit_alloca(slot, p_type_id)
-                        // An internal-ABI aggregate argument arrives as a pointer, so the memory it
-                        // points at is copied into the local slot. That memory is a copy the caller
-                        // made for this call only, so a write after the copy does not reach the
-                        // caller (by-value semantics hold). An identifier always resolves to
-                        // `%v_<name>_<id>` (gen/llvm/expr.kspls), so the slot keeps that name.
-                        $src_reg: = base_core.arena.dup_str("")
-                        if use_kspl_abi && cg.is_llvm_aggregate(p_type_id)
-                            load_reg: = cg.next_reg()
-                            cg.s("    %\{load_reg\} = load ")
-                            cg.t(p_type_id).s(", ptr %").s(p_name).s("\n")
-                            src_reg = cg.reg_str(load_reg)
-                        else
-                            cg.clear_scratch().s("%").s(p_name)
-                            src_reg = cg.take_scratch()
-                        cg.s("    store ")
-                        cg.t(p_type_id).s(" ").s(src_reg).s(", ptr ").s(slot).s("\n")
-
-            block.emit_llvm_stmt(cg)
-
-            if !cg.is_terminated
-                is_res: = cg.env.is_result(cg.current_ret_id)
-                if is_res
-                    // A Result's success case has is_err=0, so the zeroinitializer works.
-                    cg.emit_ret_value("zeroinitializer")
-                else if (type_node == null || sema_type_env.is_void(type_node.type_id)) &&
-                    !r.has_attribute("naked")
-                    cg.s("    ret void\n")
-                else
-                    cg.s("    unreachable\n")
-                cg.terminate()
-            cg.emit.target = .direct
-
-            emit_in_chunks(cg, cg.emit.alloca_out.slice())
-            emit_in_chunks(cg, cg.emit.body_out.slice())
+        cg.s("entry_block:\n")
+        cg.emit.target = .body
+        cg.emit.body_out.len = 0
+        cg.emit.alloca_out.len = 0
+        cg.is_terminated = false
+        // A naked function's arguments stay in their registers for the assembly to read; a spill
+        // would be the very prologue it has none of.
+        if params != null && !r.has_attribute("naked")
+            for param in params.children
+                if param.kind_id == .k_fn_param
+                    param.spill_llvm_param(cg, use_kspl_abi)
+        block.emit_llvm_stmt(cg)
+        if !cg.is_terminated
+            if cg.env.is_result(cg.current_ret_id)
+                // A Result's success case has is_err=0, so the zeroinitializer works.
+                cg.emit_ret_value("zeroinitializer")
+            else if (type_node == null || sema_type_env.is_void(type_node.type_id)) &&
+                !r.has_attribute("naked")
+                cg.s("    ret void\n")
+            else
+                cg.s("    unreachable\n")
+            cg.terminate()
+        cg.emit.target = .direct
+        emit_in_chunks(cg, cg.emit.alloca_out.slice())
+        emit_in_chunks(cg, cg.emit.body_out.slice())
         cg.s("}\n\n")
+
+    priv fn spill_llvm_param(r: Ast_node$@, cg: Genllvm_ctx$@, use_kspl_abi: Bool) //<
+        //< It copies one parameter into a local slot of its own, where the body reads it
+        //<
+        //< An internal-ABI aggregate argument arrives as a pointer, so the memory it points at is
+        //< copied into the local slot. That memory is a copy the caller made for this call only, so
+        //< a write after the copy does not reach the caller (by-value semantics hold). An
+        //< identifier always resolves to `%v_<name>_<id>` (gen/llvm/expr.kspls), so the slot keeps
+        //< that name.
+        id_node: = r.find_child(.k_identifier)
+        p_name: = id_node.text if id_node != null else "unknown"
+        decl: = (id_node.def_node if id_node != null && id_node.def_node != null else r)
+        slot: = cg.local_slot_name(p_name, decl)
+        p_type_id: = r.type_id
+        cg.emit_alloca(slot, p_type_id)
+        $src_reg: = base_core.arena.dup_str("")
+        if use_kspl_abi && cg.is_llvm_aggregate(p_type_id)
+            load_reg: = cg.next_reg()
+            cg.s("    %\{load_reg\} = load ").t(p_type_id).s(", ptr %").s(p_name).s("\n")
+            src_reg = cg.reg_str(load_reg)
+        else
+            cg.clear_scratch().s("%").s(p_name)
+            src_reg = cg.take_scratch()
+        cg.s("    store ").t(p_type_id).s(" ").s(src_reg).s(", ptr ").s(slot).s("\n")
+
 priv fn emit_in_chunks(cg: Genllvm_ctx$@, data: U8[]) //<
     //< It copies alloca_out / body_out to the output in 4096-byte pieces, not one huge cg.s()
 
@@ -796,3 +785,10 @@ impl Genllvm_ctx
             return r.holds_laid_value(elem_id, depth + 1)
         default
             return false
+
+priv fn field_index_named(s_def: sema_type_def.Struct_def$@, name: U8[]): Sz //<
+    //< The index of the struct's field called name, or the field count where none is
+    for f in Range.asc(s_def.fields_list.len)
+        if s_def.fields_list.get(f).name.equals(name)
+            return f
+    return s_def.fields_list.len

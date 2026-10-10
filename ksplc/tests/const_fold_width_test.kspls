@@ -72,6 +72,20 @@ fn test_const_fold_width()
         .start("[eval] an integer expression is computed at the declared type's width and sign \
             test...")
 
+    check_global_folds()
+    check_shift_propagation()
+    check_negated_left()
+    check_nested_folds()
+    check_global_wraps()
+    check_narrow_wraps()
+    check_widening()
+    check_signed_overflow()
+    check_literal_exception()
+    check_min_rendering()
+    verdict.pass("")
+
+priv fn check_global_folds() //<
+    //< A global `const` folds at its declared width and sign
     assert(u64_bit40 == 1099511627776, "1U64 << 40 must shift a 64-bit operand")
     assert(u64_bit63 == 9223372036854775808, "1U64 << 63 must reach the top bit")
     assert(i64_bit40 == 1099511627776, "1I64 << 40 must shift a 64-bit operand")
@@ -96,6 +110,8 @@ fn test_const_fold_width()
     assert(u64_top_shr == 9223372036854775807, "U64 right shift must not sign-extend")
     assert(u64_top_gt, "U64 comparison must use the full 64-bit range")
 
+priv fn check_shift_propagation() //<
+    //< A local's declared type reaches a shift's left side
     // The expected type propagates to a shift's left side.
     // Caution: Test it with a local. A global `const` is folded, so a broken propagation goes
     // unnoticed.
@@ -108,6 +124,8 @@ fn test_const_fold_width()
     assert(local_u32 == 2147483648, "the declared U32 must reach the shift's left operand")
     assert(local_shr == 9223372036854775807, "a U64 right shift must not sign-extend")
 
+priv fn check_negated_left() //<
+    //< A negated literal left of `-` is computed at the declared type
     // The expected type propagates to a literal on a `-`'s left side, the one exception there
     // (otherwise pointer subtraction stops it from propagating).
     // Caution: **Test a negative literal too.** A unary minus is a separate node; left out of the
@@ -122,6 +140,8 @@ fn test_const_fold_width()
     assert(local_min == -9223372036854775807I64 - 1I64,
         "I64::MIN must be writable as '-9223372036854775807 - 1' without a suffix")
 
+priv fn check_nested_folds() //<
+    //< A divisor and a shift amount fold unsigned inside an expression
     // The divisor and the shift amount sit at a position **folded inside the expression**.
     // Caution: Do not replace this with a global `const`. The divisor's zero check and the shift
     // range check (infer_binary_expr in sema/body/binary.kspls) fold before the right side is
@@ -133,6 +153,8 @@ fn test_const_fold_width()
     assert(nested_mod == 25, "an unsigned modulo divisor must fold unsigned when nested")
     assert(nested_shift == 2147483648, "a folded shift amount must stay inside the width check")
 
+priv fn check_global_wraps() //<
+    //< A folded narrow unsigned wraps at its width
     // The values that go through the fold.
     // Caution: **Test both a global `const` and a local**: sema's fold (`fit_result`) and the
     // generated code can disagree.
@@ -142,6 +164,8 @@ fn test_const_fold_width()
     assert(u8_shl == U8::0, "U8 left shift must wrap mod 2^8")
     assert(I32::u8_wrap == 0, "a folded U8 wrap must stay wrapped when widened")
 
+priv fn check_narrow_wraps() //<
+    //< A narrow unsigned wraps at the declared width at every operation
     // A narrow unsigned wraps to the declared width at every operation.
     // An assignment narrows anyway, so **always follow with an operation that reads the wrapped
     // value** (`d` at 44 but `a` not 22 is broken).
@@ -164,6 +188,8 @@ fn test_const_fold_width()
     assert(g == 48, "U8 left shift must wrap to mod 2^8 before it is divided")
     assert(h == 2232, "U16 addition must wrap to mod 2^16 before it is divided")
 
+priv fn check_widening() //<
+    //< A run-time narrow result wraps before it is widened
     // Converting explicitly to a wider type; a comparison alone (`e` above) misses the widening
     // path.
     a8: = U8::255
@@ -175,6 +201,8 @@ fn test_const_fold_width()
     assert(I32::(m8 * U8::2) == 32, "a U8 product inside the range must keep its value")
     assert(I32::(a8 & m8) == 16, "a bitwise U8 operation must keep its value")
 
+priv fn check_signed_overflow() //<
+    //< A signed overflow wraps by mod 2^N, division by -1 included
     // A signed overflow wraps by `mod 2^N` too. **C leaves signed overflow undefined.** Unless the
     // generated code goes through an unsigned of the same width, the answer changes with the
     // optimization level (signed_wrap_twin in gen/c/expr.kspls).
@@ -214,6 +242,8 @@ fn test_const_fold_width()
     seven: I32 = 0 - 7
     assert(seven / 2 == -3 && seven % 2 == -1, "signed division must truncate toward zero")
 
+priv fn check_literal_exception() //<
+    //< A right-side literal takes the left side's type only where widths agree
     // A binary's right-side literal takes the outer expected type only where that type is the same
     // as the left side's.
     // Caution: **Always pair the case that passes with one whose width does not change.** Too wide
@@ -245,6 +275,8 @@ fn test_const_fold_width()
     // A shift's amount does not take the left side's type (outside the exception).
     assert(I32::(n8 << 1) == 10, "a shift amount stays independent of the left operand's type")
 
+priv fn check_min_rendering() //<
+    //< I64::MIN renders every digit
     // I64::MIN has no absolute value; written without unsigned digits, only `-` is printed
     // (write_int in std/strnum.kspls).
     min_i64: I64 = -9223372036854775807I64 - 1I64
@@ -253,4 +285,3 @@ fn test_const_fold_width()
     shown.s("\{min_i64\}")
     assert(shown.slice().equals("-9223372036854775808"),
         "I64::MIN must render every digit, not just the sign")
-    verdict.pass("")

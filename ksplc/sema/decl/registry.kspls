@@ -158,47 +158,48 @@ impl Ast_node
         struct_vis: = r.get_visibility()
 
         for c_node in r.children
-            if c_node.kind_id == .k_struct_field
-                f_vis: = c_node.get_visibility()
-                f_id_node: = c_node.find_child(.k_identifier)
-                f_name: = f_id_node.text if f_id_node != null else ""
-                if f_id_node != null
-                    f_id_node.def_node = c_node
-                f_type_node: = c_node.get_decl_type_node()
+            if c_node.kind_id != .k_struct_field
+                continue
+            f_vis: = c_node.get_visibility()
+            f_id_node: = c_node.find_child(.k_identifier)
+            f_name: = f_id_node.text if f_id_node != null else ""
+            if f_id_node != null
+                f_id_node.def_node = c_node
+            f_type_node: = c_node.get_decl_type_node()
 
-                if f_name.len > 0 && f_type_node != null
-                    c.check_snake_case(f_name, c_node, "Field")
-                    f_type_id: = f_type_node.resolve_type(c)!
-                    f_eff_vis: = sema_decl_access.narrower_vis(struct_vis, f_vis)
-                    c.check_type_vis_leak(f_type_node, f_eff_vis, "field type", "field")
-                    real_f_type: = c.env.get_real_type(f_type_id)
-                    if sema_type_env.is_void(real_f_type)
-                        c.err(f_type_node, "struct fields cannot be of type 'Void'")
+            if f_name.len == 0 || f_type_node == null
+                continue
+            c.check_snake_case(f_name, c_node, "Field")
+            f_type_id: = f_type_node.resolve_type(c)!
+            f_eff_vis: = sema_decl_access.narrower_vis(struct_vis, f_vis)
+            c.check_type_vis_leak(f_type_node, f_eff_vis, "field type", "field")
+            real_f_type: = c.env.get_real_type(f_type_id)
+            if sema_type_env.is_void(real_f_type)
+                c.err(f_type_node, "struct fields cannot be of type 'Void'")
 
-                    switch c.env.get_info(real_f_type)
-                    case .array(_b, s)
-                        if s == -1
-                            c.err(f_type_node, "array size cannot be inferred for struct fields.")
-                    default {}
+            switch c.env.get_info(real_f_type)
+            case .array(_b, s)
+                if s == -1
+                    c.err(f_type_node, "array size cannot be inferred for struct fields.")
+            default {}
 
-                    // An array field's elements are made mutable: **the binding holding it**
-                    // decides writing, as for other fields ("The two axes of mutability" in
-                    // `docs/SPEC-language.md`).
-                    // Caution: Write it back to the type node too; genc emits the type name from
-                    // there.
-                    eff_f_type: = c.binding_value_type(f_type_id, true)
-                    f_type_node.type_id = eff_f_type
+            // An array field's elements are made mutable: **the binding holding it**
+            // decides writing, as for other fields ("The two axes of mutability" in
+            // `docs/SPEC-language.md`).
+            // Caution: Write it back to the type node too; genc emits the type name from
+            // there.
+            eff_f_type: = c.binding_value_type(f_type_id, true)
+            f_type_node.type_id = eff_f_type
 
-                    field_def: = sema_type_def.Struct_field
-                        .new(f_name, eff_f_type, f_vis, c_node)
+            field_def: = sema_type_def.Struct_field.new(f_name, eff_f_type, f_vis, c_node)
 
-                    is_dup: = seen_fields.get(f_name) catch false
-                    if is_dup
-                        c.clear_scratch().s("field '\{f_name\}' is already defined in struct")
-                        c.err(f_id_node, c.scratch.slice())
-                    else if !c.check_c_keyword_collision_field(f_name, f_id_node, seen_fields@)
-                        seen_fields.set(f_name, true)
-                        struct_def.fields_list.push(field_def)
+            is_dup: = seen_fields.get(f_name) catch false
+            if is_dup
+                c.clear_scratch().s("field '\{f_name\}' is already defined in struct")
+                c.err(f_id_node, c.scratch.slice())
+            else if !c.check_c_keyword_collision_field(f_name, f_id_node, seen_fields@)
+                seen_fields.set(f_name, true)
+                struct_def.fields_list.push(field_def)
 
     priv fn lint_manual_owner_struct(r: Ast_node$@, c: Sema_ctx$@,
         struct_def: sema_type_def.Struct_def$@, target_fqn: U8[]) //<

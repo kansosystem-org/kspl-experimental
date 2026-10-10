@@ -9,11 +9,11 @@
 | Part | In scope when a crafted input makes it … |
 | :-- | :-- |
 | `ksplc` (the compiler) | Execute arbitrary code, or write outside its allowed range |
-| An analyzer in `std/` (JSON, URL, regex, safetensors, etc.) | Read or write out of range |
+| An analyzer in `std/` (JSON, URL, regex, etc.), or `ksai`'s safetensors reader | Read or write out of range |
 | `ksos/net`'s receive path (the OS's network code), on a crafted frame | Read or write out of range |
 | `kspage` (the document editor) | Write unintentionally, depending on an opened document's contents |
 | `kssrv` (the server), on a crafted request | Serve or list a file outside its root, or read or write out of range |
-| `kssrv` under `--local` | Answer `/api/` without the token, or start a process outside the allowed combinations |
+| `kssrv` under `--local` | Answer `/api/` without the token |
 
 **A compiler crash on corrupted input is not by itself a vulnerability.** It is an ordinary defect, so an Issue is fine.
 

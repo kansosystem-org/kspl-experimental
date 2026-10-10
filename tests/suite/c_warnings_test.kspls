@@ -85,7 +85,7 @@ priv fn identity(cc: U8[], arena: Arena$@): U8[] //< that compiler's identity
         return ""
     version: = ksplc_harness.run(U8[][]::{ cc, "-dumpversion" })
     banner: = ksplc_harness.run(U8[][]::{ cc, "--version" })
-    family: = "clang" if banner.out.find_str("clang") >= 0 else "gcc"
+    family: = "clang" if banner.out.find_str("clang").is_some() else "gcc"
     return arena.text().s("\{triple.out.trim_spaces()\}|\{version.out.trim_spaces()\}|\{family\}")
         .take()
 
@@ -115,7 +115,7 @@ priv fn warning_lines(out: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Collects only the warning lines
     lines: = out.lines(arena)
     return lines.where(fn(ln: U8[]; ): Bool {
-        return ln.find_str(": warning:") >= 0;
+        return ln.find_str(": warning:").is_some();
     }).to_list(arena)
 
 priv fn builtin_slice(gen: U8[]): U8[] //<
@@ -127,19 +127,20 @@ priv fn builtin_slice(gen: U8[]): U8[] //<
     //< for here, in C every gate generates.
     $i: Sz = 0
     for i < gen.len
-        at: = gen.sub_from(i).find_str("_Slice")
-        if at < 0
+        switch gen.sub_from(i).find_str("_Slice")
+        case .none
             return ""
-        end: = i + at + 6
-        i = end
-        if end < gen.len && (gen[end].is_alnum() || gen[end] == '_')
-            continue
-        $from: Sz = end - 6
-        for from > 0 && (gen[from - 1].is_alnum() || gen[from - 1] == '_')
-            from -= 1
-        name: = gen.sub(from, end - from)
-        if !name.ends_with("U8_Slice")
-            return name
+        case .some(at)
+            end: = i + at + 6
+            i = end
+            if end < gen.len && (gen[end].is_alnum() || gen[end] == '_')
+                continue
+            $from: Sz = end - 6
+            for from > 0 && (gen[from - 1].is_alnum() || gen[from - 1] == '_')
+                from -= 1
+            name: = gen.sub(from, end - from)
+            if !name.ends_with("U8_Slice")
+                return name
     return ""
 
 fn main(): I32

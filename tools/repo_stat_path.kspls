@@ -78,7 +78,8 @@ pub fn opening(line: U8[], mark: U8[], block: Block_marks, open: Bool): Opening 
     //< ...")`, so the first `//` would return the program's output, not a comment
     //< (`ksplc/tools/interface.kspls`).
     if open
-        return Opening::{ .at = 0, .block = true, .open = line.find_str(block.close) < 0 }
+        return Opening::{ .at = 0, .block = true,
+            .open = line.find_str(block.close).is_none() }
     $i: Sz = 0
     $quote: U8 = 0
     for i < line.len
@@ -101,7 +102,7 @@ pub fn opening(line: U8[], mark: U8[], block: Block_marks, open: Bool): Opening 
         if block.open.len > 0 && rest.starts_with(block.open)
             at: = past_mark(line, i, block.open)
             return Opening::{ .at = at, .block = true,
-                .open = line.sub_from(at).find_str(block.close) < 0 }
+                .open = line.sub_from(at).find_str(block.close).is_none() }
         i += 1
     return Opening::{ .at = -1, .block = false, .open = false }
 
@@ -118,13 +119,15 @@ priv fn past_mark(line: U8[], at: Sz, mark: U8[]): Sz //< just past a comment's 
 fn ext_of(path: U8[]): U8[] //< the extension
     //<
     //< A name with no `.` returns itself (`Makefile`, where the name stands for the kind).
-    slash: = path.rfind_char('/')
-    name: = path if slash < 0 else path.sub_from(slash + 1)
-    dot: = name.rfind_char('.')
-    return name if dot <= 0 else name.sub_from(dot)
+    $name: = path
+    if slash: = path.rfind_char('/')
+        name = path.sub_from(slash + 1)
+    dot: = name.rfind_char('.').unwrap_or(0)
+    return name if dot == 0 else name.sub_from(dot) // a name that opens with its `.` has none
 
 fn top_of(path: U8[]): U8[] //< the top-level folder's name, empty for a file at the root
     //<
     //< Sorted, the root's files fall between the folders, so "same as the last" cannot group them.
-    slash: = path.find_char('/')
-    return "" if slash < 0 else path.sub(0, slash)
+    if slash: = path.find_char('/')
+        return path.sub(0, slash)
+    return ""

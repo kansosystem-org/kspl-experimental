@@ -68,12 +68,12 @@ priv fn link_libs_for(cc: U8[], arena: Arena$@): U8[][] //<
     //<
     //< ksplc reads the target from `CC`, so it is set for the one question and then put back.
     before: = arena.dup_str(sys.get_env("CC").unwrap_or(""))
-    sys.set_env("CC", cc)
+    sys.set_env("CC", cc) catch panic("CC could not be set")
     r: = harness.run(U8[][]::{ harness.ksplc_exe(), "info", "link-libs" })
     if before.len > 0
-        sys.set_env("CC", before)
+        sys.set_env("CC", before) catch panic("CC could not be set")
     else
-        sys.unset_env("CC")
+        sys.unset_env("CC") catch panic("CC could not be unset")
     $out: = List<|U8[]|>.new(arena)
     for w in r.out.trim_spaces().split(' ', arena)
         if w.len > 0
@@ -138,7 +138,7 @@ priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<
             continue
         for line in r.out.lines(arena)
             sym: = last_word(line, arena)
-            if sym.len > 0 && line.find_char(':') < 0 && !is_export(sym)
+            if sym.len > 0 && line.find_char(':').is_none() && !is_export(sym)
                 bad
                     .push(arena.text().s("\{lib\}.o: ").s(line.trim_spaces()).take())
     verdict.check(name, bad.len == 0, "\n".join(bad, arena))
@@ -277,8 +277,8 @@ priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) 
     r: = harness.run_in(argv.slice(), vendor)
     collided: =
         r.code != 0 &&
-        (r.out.find_str("multiple definition") >= 0 ||
-        r.out.find_str("duplicate symbol") >= 0)
+        (r.out.find_str("multiple definition").is_some() ||
+        r.out.find_str("duplicate symbol").is_some())
     verdict.check("two libraries built without --library collide at the link", collided,
         arena.text().s("exit code \{r.code\}:\n\{r.out\}").take())
 
@@ -290,8 +290,8 @@ priv fn check_stop(exe: U8[], dir: U8[], arena: Arena$@) //<
     r: = harness.run_in(U8[][]::{ exe, "stop" }, dir)
     out: = r.out.replace("\r\n", "\n", arena)
     verdict.check("a panic in a library ends the program, its earlier output flushed",
-        r.code != 0 && out.find_str("greet stops here\n") >= 0 &&
-        out.find_str("panic: greet was asked to stop") >= 0,
+        r.code != 0 && out.find_str("greet stops here\n").is_some() &&
+        out.find_str("panic: greet was asked to stop").is_some(),
         arena.text().s("exit code \{r.code\}; it printed:\n\{out\}").take())
 
 priv fn kspl_customer(tc: Toolchain, vendor: U8[], root: U8[], arena: Arena$@) //<
@@ -318,7 +318,8 @@ priv fn kspl_customer(tc: Toolchain, vendor: U8[], root: U8[], arena: Arena$@) /
         return
     named: = harness.read_generated(fs.join(customer, "app.libs", arena))
     verdict.check("the KSPL customer's --emit-libs carries the library greet names",
-        named.find_str("-lm") >= 0, arena.text().s("app.libs holds: \{named\}").take())
+        named.find_str("-lm").is_some(),
+        arena.text().s("app.libs holds: \{named\}").take())
     exe: = fs.join(customer, "app.exe", arena)
     if !ok_step("the KSPL customer links libgreet.a",
         argv_of(U8[][]::{ tc.cc, "-std=c99", "app.c", "-L.", "-lgreet", "@app.libs" },
@@ -378,9 +379,10 @@ priv fn host_toolchain(arena: Arena$@): Toolchain //<
     //< the host's C compiler, as `harness.cc` names it
     target: = harness.cc_target()
     windows: =
-        target.find_str("mingw") >= 0 || target.find_str("windows") >= 0 ||
-        target.find_str("cygwin") >= 0 || (target.len == 0 && sys.is_windows())
-    macho: = target.find_str("darwin") >= 0 || target.find_str("apple") >= 0
+        target.find_str("mingw").is_some() || target.find_str("windows").is_some() ||
+        target.find_str("cygwin").is_some() || (target.len == 0 && sys.is_windows())
+    macho: =
+        target.find_str("darwin").is_some() || target.find_str("apple").is_some()
     return Toolchain::{ .cc = harness.cc(), .ar = "ar", .windows = windows, .macho = macho,
         .link_libs = link_libs_for(harness.cc(), arena) }
 

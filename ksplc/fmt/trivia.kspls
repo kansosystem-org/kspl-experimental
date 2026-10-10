@@ -4,6 +4,7 @@
 //< the line and level it was written on, a blank line the author placed stays as one, and a `//<`
 //< too long for its line moves its text to the line below.
 import "ksplc/base/lines" { line_end, opens_its_line }
+import "ksplc/fmt/comment" as fmt_comment
 import "ksplc/fmt/printer" { Formatter }
 import "ksplc/fmt/source" as fmt_source
 import "std/chars"
@@ -166,6 +167,35 @@ impl Formatter
         line.s("//< ").s(text.sub_from(3).trim_spaces())
         r.write_raw(line.slice())
 
+    priv fn write_own_comment(r: Self$@, text: U8[], carry: Str_builder$@) //<
+        //< It writes a comment standing on a line of its own, cut where it crosses the limit
+        //<
+        //< What does not fit goes into `carry`, for the paragraph's next line to take up or for
+        //< `flush_carry` to write on lines of its own (`cut_at` in `comment.kspls`).
+        if !r.flags.is_line_start || fmt_comment.keeps_layout(text)
+            r.write_comment_text(text, false)
+            return
+        room: = r.config.column_limit - r.indent_for(text)
+        cut: =
+            fmt_comment.cut_at(text, room) if fmt_comment.disp_width(text) > room else -1
+        if cut < 0
+            r.write_comment_text(text, false)
+            return
+        r.write_comment_text(text.sub(0, cut), false)
+        carry.s(text.sub_from(cut + 1).trim_start())
+
+    priv fn flush_carry(r: Self$@, mark: U8[], carry: Str_builder$@) //<
+        //< It writes the text carried from a cut comment on lines of its own, as many as it needs
+        //<
+        //< Each line goes through the same cut, so carried text never crosses the limit either.
+        $line: = Str_builder.new()
+        defer line.free()
+        for carry.len > 0
+            line.clear().s(mark).s(" ").s(carry.slice())
+            carry.clear()
+            r.write_own_comment(line.slice(), carry)
+            r.write_nl()
+
     fn catch_up_trivia(r: Self$@, target_offset: Sz, force_no_nl: Bool)
         if target_offset <= r.last_offset
             return
@@ -177,6 +207,13 @@ impl Formatter
 
         $new_lines: Sz = 0
         is_suppressed: = r.suppress_nl_depth > 0 || force_no_nl
+        // The words cut off a comment line, waiting for the paragraph's next line or for a line of
+        // their own (`write_own_comment`).
+        $carry: = Str_builder.new()
+        defer carry.free()
+        $carry_mark: U8[] = ""
+        $joined: = Str_builder.new()
+        defer joined.free()
 
         for i < end
             c: = (r.src.ptr + i)$
@@ -188,13 +225,30 @@ impl Formatter
             else if c == '/' && i + 1 < end
                 nc: = (r.src.ptr + i + 1)$
                 if nc == '/'
-                    r.write_pre_comment_sep(new_lines, is_suppressed)
-
                     c_start: = i
                     for i < end && (r.src.ptr + i)$ != '\n'
                         i += 1
                     comment_slice: = U8[]::{ .ptr = r.src.ptr + c_start, .len = i - c_start }
-                    r.write_comment_text(comment_slice, new_lines == 0)
+                    // **Carried words join the next line only within one paragraph**: the line
+                    // right below, with the same mark, opening no paragraph of its own.
+                    joins: =
+                        carry.len > 0 && new_lines == 1 && !is_suppressed &&
+                        fmt_comment.mark_of(comment_slice).equals(carry_mark) &&
+                        !fmt_comment.opens_paragraph(comment_slice)
+                    if carry.len > 0 && !joins
+                        r.flush_carry(carry_mark, carry@)
+                    r.write_pre_comment_sep(new_lines, is_suppressed)
+                    $text: = comment_slice
+                    if joins
+                        body: = comment_slice.sub_from(carry_mark.len).trim_start()
+                        joined.clear().s(carry_mark).s(" ").s(carry.slice()).s(" ").s(body)
+                        carry.clear()
+                        text = joined.slice()
+                    if r.flags.is_line_start
+                        carry_mark = fmt_comment.mark_of(text)
+                        r.write_own_comment(text, carry@)
+                    else
+                        r.write_comment_text(text, true)
                     new_lines = 0
                     r.write_nl()
                 else
@@ -202,6 +256,8 @@ impl Formatter
             else
                 break
 
+        if carry.len > 0
+            r.flush_carry(carry_mark, carry@)
         next_char: U8 = (r.src.ptr + i)$ if i < r.src.len else 0
         // No whitespace from trivia goes before a '.' (calc_spacing_requirement adds it for
         // 'return .Ok'). An empty block gets none even with the newline folded, or two passes give

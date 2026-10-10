@@ -72,7 +72,7 @@ These are checks that read one file or log `make` hands them, rather than the wh
 | Thing | How it is called |
 |---|---|
 | `tests/tools/llvm_ir_abi_check.kspls` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form of a compiled program). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
-| `tests/tools/perf_guard.kspls` | `make ci` passes it the build log at the end (reference values in `perf_baseline.json`) |
+| `tests/tools/perf_guard.kspls` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
 
 ## The fixture folders
 

@@ -29,7 +29,7 @@ priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //< the top folders car
     $out: = List<|U8[]|>.new(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
         dir: = sys.get_dir_name(rel)
-        if dir.find_char('/') < 0
+        if dir.find_char('/').is_none()
             out.push(dir)
     return out
 
@@ -74,14 +74,17 @@ priv fn make_args(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Are
     //<
     //< Caution: **Set both paths again every time**, or the caller's leftovers let a run that
     //< should find nothing pass.
-    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir())
+    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir()) catch panic("KSPLC_STD_DIR could not be \
+        set")
     if deps.len > 0
-        sys.set_env("KSPLC_PKG_SRC_DIR", deps)
+        sys.set_env("KSPLC_PKG_SRC_DIR", deps) catch panic("KSPLC_PKG_SRC_DIR could not be set")
     else
-        sys.unset_env("KSPLC_PKG_SRC_DIR")
+        sys.unset_env("KSPLC_PKG_SRC_DIR") catch panic("KSPLC_PKG_SRC_DIR could not be unset")
     scratch: = fs.join(sys.get_dir_name(copy), "scratch", arena)
     $args: = List<|U8[]|>.new(arena)
-    for a in U8[][]::{ "-C", copy, target }
+    // `--no-print-directory`: make's "Entering directory" line would be the first of a failed
+    // run's output, the line its FAIL and the CI's mark quote.
+    for a in U8[][]::{ "-C", copy, "--no-print-directory", target }
         args.push(a)
     args.push(arena.text().s("KSPLC=\{ksplc_harness.ksplc_exe()\}").take())
     args.push(arena.text().s("SCRATCH=\{scratch\}").take())

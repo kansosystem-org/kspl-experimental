@@ -4,9 +4,9 @@
 //< It also checks that no instruction follows a block's terminator. LLVM's verifier checks
 //< neither.
 //< Caution: **Do not rewrite it with a regular expression.** It cannot count nested brackets (the
-//< commas inside `{i64, i64}`), a wrapped declaration must be joined first, and a group costs
-//< several times a plain match ("A group reassembles the sequence per attempt, so it has no effect
-//< in a per-line use" in `std/docs/DESIGN.md`).
+//< commas inside `{i64, i64}`), a wrapped declaration must be joined first, and a pattern costs
+//< far more per line than a look by hand ("For a hot loop over many lines, look by hand" in
+//< `std/docs/DESIGN.md`).
 //< Usage: ksplc run tests/tools/llvm_ir_abi_check.kspls <file.ll> [<file.ll> ...]
 import "std/chars"
 import "std/ds" { List, Map }
@@ -184,18 +184,19 @@ priv fn callee_at(s: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
     //< Caution: **Check only the first `@`.** In a call through a function pointer (`call void
     //< %12(ptr @g)`) it is an argument, not followed by `(`, so it fails here; search further and
     //< **the function passed as an argument is mistaken for the callee**.
-    rel: = s.sub_from(from).find_char('@')
-    if rel < 0
+    switch s.sub_from(from).find_char('@')
+    case .none
         return false
-    start: = from + rel + 1
-    $i: = start
-    for i < s.len && is_name_char(s[i])
-        i += 1
-    if i == start || i >= s.len || s[i] != '('
-        return false
-    out_name$ = s.sub(start, i - start)
-    out_open$ = i
-    return true
+    case .some(rel)
+        start: = from + rel + 1
+        $i: = start
+        for i < s.len && is_name_char(s[i])
+            i += 1
+        if i == start || i >= s.len || s[i] != '('
+            return false
+        out_name$ = s.sub(start, i - start)
+        out_open$ = i
+        return true
 
 priv fn define_parts(ln: U8[], out_name: U8[]$@, out_params: U8[]$@, out_ret: U8[]$@): Bool //<
     //< Reads `define [attributes] <return type> @name(<parameters>) [attributes] {`
@@ -212,8 +213,8 @@ priv fn define_parts(ln: U8[], out_name: U8[]$@, out_params: U8[]$@, out_ret: U8
     $open: Sz = 0
     if !callee_at(body, 6, name@, open@)
         return false
-    close: = body.rfind_char(')')
-    if close <= open
+    close: = body.rfind_char(')').unwrap_or(open)
+    if close <= open // no `)` after the `(`
         return false
     at: = open - name.len - 1
     out_name$ = name
@@ -249,8 +250,8 @@ priv fn call_parts(ln: U8[], out_name: U8[]$@, out_args: U8[]$@): Bool //<
     $open: Sz = 0
     if !callee_at(rest, 4, name@, open@)
         return false
-    close: = rest.rfind_char(')')
-    if close <= open
+    close: = rest.rfind_char(')').unwrap_or(open)
+    if close <= open // no `)` after the `(`
         return false
     out_name$ = name
     out_args$ = rest.sub(open + 1, close - open - 1)
@@ -260,9 +261,8 @@ priv fn is_varargs(raw: U8[]): Bool //< whether it is a variadic call
     //<
     //< Such a call is not matched. The check is **before the callee's `@`** (the arguments hold no
     //< `...`).
-    at: = raw.find_char('@')
-    head: = raw if at < 0 else raw.sub(0, at)
-    return head.find_str("...") >= 0
+    head: = raw.sub(0, raw.find_char('@').unwrap_or(raw.len))
+    return head.find_str("...").is_some()
 
 priv fn ret_type(ln: U8[], out_ty: U8[]$@): Bool //< the type of `ret <type> [value]`
     //<
@@ -384,7 +384,7 @@ priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$
         // --- Is an instruction placed after a block's terminator (checked on the raw line) ---
         // A `switch`'s table of targets runs from `[` to `]` over lines that are not instructions.
         if in_switch
-            in_switch = raw.find_char(']') < 0
+            in_switch = raw.find_char(']').is_none()
         else if define_parts(raw, t_name@, t_params@, t_ret@)
             term_fn = t_name
             terminated = false

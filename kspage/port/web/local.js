@@ -126,15 +126,24 @@ function kspageLocal(ui) {
     }
     return got.ok ? "" : reasonOf(got.status);
   };
-  // Whether it changed. null if it does not exist. **The contents are not returned** (read it again
-  // where they are needed).
+  // Whether something is at that path: true or false, and null where it could not be asked (it
+  // gives the reason, as `readAt` does). **The contents are not returned** (read it again where
+  // they are needed).
+  // Caution: **Do not answer "absent" for a failed question.** Only a 404 says nothing is there; a
+  // lost token, a refusal or a dropped connection read as absent would let a save overwrite a file
+  // without the check that guards it.
   const statAt = async (path) => {
+    let got = null;
     try {
-      const got = await fetch("/api/stat?path=" + encodeURIComponent(path), { headers: head() });
-      return got.ok ? await got.json() : null;
-    } catch (_) {
+      got = await fetch("/api/stat?path=" + encodeURIComponent(path), { headers: head() });
+    } catch (e) {
+      deny("Could not connect to the local server (" + String((e && e.message) || e) + ")");
       return null;
     }
+    if (got.ok) return true;
+    if (got.status === 404) return false;
+    deny(reasonOf(got.status));
+    return null;
   };
 
   // ---- Telling the server this page is still open ----
@@ -175,7 +184,8 @@ function kspageLocal(ui) {
   // with the token**: the server answers no file but the page without one, and an `<img>` cannot
   // send a header, so the bytes come back as a `blob:` address. An embedded picture (`data:`), an
   // outside one, and any picture where there is no server keep their source (whether an outside
-  // one may load is `draw.js`'s `outside`). null where it cannot be read.
+  // one may load is `draw.js`'s `outside`). null where it cannot be read. **A `blob:` address
+  // belongs to the caller**, who releases it once done (`URL.revokeObjectURL`); each call makes one.
   // Caution: **The server does not say the type** (`application/octet-stream`), so it is given
   // here from the name's end; an SVG without it does not draw.
   const PICTURE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",

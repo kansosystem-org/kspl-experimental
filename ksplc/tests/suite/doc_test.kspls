@@ -96,9 +96,10 @@ priv fn doc(dir: U8[], args: U8[][], arena: Arena$@): verdict.Run_out //< one `k
     return harness.run_in(harness.ksplc_argv(argv.slice()), dir)
 
 priv fn before(out: U8[], first: U8[], then: U8[]): Bool //< whether both stand, `first` earlier
-    a: = out.find_str(first)
-    b: = out.find_str(then)
-    return a >= 0 && b > a
+    if a: = out.find_str(first)
+        if b: = out.find_str(then)
+            return b > a
+    return false
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
@@ -187,9 +188,9 @@ fn main(): I32
     // **A name that names nothing is an error**, so a typo does not read as an empty package.
     gone: = doc(dir, U8[][]::{ "pk/nope" }, arena)
     verdict.check("a name that resolves to nothing fails and says what it looked for",
-        gone.code != 0 && gone.out.find_str("no file or folder is called 'pk/nope'") >= 0,
-        gone.out)
+        gone.code != 0 &&
+        gone.out.find_str("no file or folder is called 'pk/nope'").is_some(), gone.out)
     miss: = doc(dir, U8[][]::{ "pk/argp.Nope" }, arena)
     verdict.check("an entry the file does not publish fails",
-        miss.code != 0 && miss.out.find_str("publishes nothing called 'Nope'") >= 0, miss.out)
+        miss.code != 0 && miss.out.find_str("publishes nothing called 'Nope'").is_some(), miss.out)
     return harness.finish()

@@ -49,17 +49,13 @@ priv fn collect_impl_cli(out: List<|U8[]|>$@, arena: Arena$@)
             scan.push_unique(out, w)
     // The short side of a `p.short("--long", "-s")`.
     for line in src.lines(arena)
-        at: = line.find_str("p.short(\"")
-        if at < 0
-            continue
-        rest: = line.sub_from(at)
-        second: = rest.find_str("\", \"")
-        if second < 0
-            continue
-        tail: = rest.sub_from(second + 4)
-        end: = tail.find_char('"')
-        if end > 0
-            scan.push_unique(out, tail.sub(0, end))
+        if at: = line.find_str("p.short(\"")
+            rest: = line.sub_from(at)
+            if second: = rest.find_str("\", \"")
+                tail: = rest.sub_from(second + 4)
+                end: = tail.find_char('"').unwrap_or(0)
+                if end > 0
+                    scan.push_unique(out, tail.sub(0, end))
 
 priv fn collect_dash_words(text: U8[], out: List<|U8[]|>$@) //<
     //< The forms `-x` / `--xxx` that appear in the documents
@@ -197,7 +193,7 @@ priv fn check_style(arena: Arena$@)
             continue
         // "The reader", apart from the declaration and the default: `r.config.<field>`.
         want: = arena.text().s(".config.").s(style_fields[i]).take()
-        if read.find_str(want) < 0
+        if read.find_str(want).is_none()
             bad
                 .push(arena.text().s(style_keys[i]).s(" is accepted and ").s(read_src)
                 .s(" does not read `").s(want).s("`").take())
@@ -228,9 +224,8 @@ priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@
             t = t.sub(0, t.len - 1)
         for w in t.split(' ', arena)
             word: = w.trim_spaces()
-            at: = word.find_char(':')
             if word.len > 0
-                out.push(word if at < 0 else word.sub(0, at))
+                out.push(word.sub(0, word.find_char(':').unwrap_or(word.len)))
         if !cont
             return
 
@@ -255,8 +250,8 @@ priv fn check_ksos_targets(arena: Arena$@)
     for line in mk_text.lines(arena)
         if !line.starts_with("ksos")
             continue
-        at: = line.find_char(':')
-        if at <= 0 || (Sz::at + 1 < line.len && line[at + 1] == '=')
+        at: = line.find_char(':').unwrap_or(0)
+        if at == 0 || (at + 1 < line.len && line[at + 1] == '=')
             continue
         name: = line.sub(0, at)
         $ok: = true
@@ -270,16 +265,16 @@ priv fn check_ksos_targets(arena: Arena$@)
         text: = harness.read_under_root(rel)
         $i: Sz = 0
         for i + 10 <= text.len
-            at: = text.sub_from(i).find_str("make ksos")
-            if at < 0
+            if at: = text.sub_from(i).find_str("make ksos")
+                p: = i + at + 5
+                $k: = p
+                for k < text.len &&
+                    (text[k].is_alnum() || text[k] == '_' || text[k] == '-')
+                    k += 1
+                scan.push_unique(runnable@, text.sub(p, k - p))
+                i = k
+            else
                 break
-            p: = i + Sz::at + 5
-            $k: = p
-            for k < text.len &&
-                (text[k].is_alnum() || text[k] == '_' || text[k] == '-')
-                k += 1
-            scan.push_unique(runnable@, text.sub(p, k - p))
-            i = k
     $bad: = List<|U8[]|>.new(arena)
     scan.diff_into(targets@, runnable@, ksos_mk, "a document in the `make ...` shape", bad@, arena)
     scan.diff_into(runnable@, targets@, ".md", ksos_mk, bad@, arena)
@@ -307,7 +302,7 @@ priv fn check_std_list(arena: Arena$@)
         files.push(rel.sub_from(4).strip_suffix(".kspls").strip_suffix(".kspl"))
     $recorded: = List<|U8[]|>.new(arena)
     for line in harness.read_under_root(std_record).lines(arena)
-        tab: = line.find_char('\t')
+        tab: = line.find_char('\t').unwrap_or(0)
         if line.starts_with("std/") && tab > 4
             scan.push_unique(recorded@, line.sub(4, tab - 4))
     $bad: = List<|U8[]|>.new(arena)
@@ -353,8 +348,7 @@ priv fn check_flash(arena: Arena$@)
             drv = value_at(bare.sub_from(drv_head.len))
     $ld: U8[] = ""
     for line in harness.read_under_root(flash_ld).lines(arena)
-        at: = line.find_str(ld_head)
-        if at >= 0
+        if at: = line.find_str(ld_head)
             ld = value_at(line.sub_from(at + ld_head.len))
     ok: = drv.len > 0 && ld.len > 0 && drv.equals(ld)
     why: = arena.text().s(flash_drv).s(": ").s("(not found)" if drv.len == 0 else drv).s("\n")

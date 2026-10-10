@@ -1,3 +1,9 @@
+//< Constant folding: the value of an integer expression known at translation time
+//<
+//< It folds literals, the operators, `sizeof` / `offsetof`, casts and references to a `const`, at
+//< the operands' width. **A signed result that does not fit is an error**, as is a division by
+//< zero. The quiet forms (`try_eval_constexpr`) tell whether an expression folds, reporting
+//< nothing. It also checks that a top-level initializer is a static one.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/literal" as base_literal
@@ -548,10 +554,13 @@ impl Ast_node
                 c.resolving.consts.set(decl_key, true)
                 defer c.resolving.consts.remove(decl_key)
                 return expr_node.eval_constexpr_internal(c, depth + 1)!
+        // **Name what was written and what would fold**: "path" is the compiler's word for a
+        // dotted name, not the writer's.
         if !c.suppress_errors
-            c.err(r,
-                "identifier is not a compile-time constant" if r.kind_id == .k_identifier
-                else "path does not resolve to a compile-time constant")
+            c.clear_scratch()
+                .s("'\{r.text\}' is not a compile-time constant (only a `const`, an enum variant or \
+                    a literal is)")
+            c.err(r, c.scratch.slice())
         throw .not_constant
 
     priv fn fold_cast(r: Self$@, c: Sema_ctx$@, v: I64, depth: I32): I64 //<

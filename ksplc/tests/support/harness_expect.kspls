@@ -56,26 +56,30 @@ priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
     mid: = "', but got '"
     $rest: = out
     for
-        at: = rest.find_str(head)
-        if at < 0
+        $at: Sz = 0
+        switch rest.find_str(head)
+        case .some(found)
+            at = found
+        case .none
             break
         tail: = rest.sub_from(at + head.len)
         rest = tail
-        end: = tail.find_char('\'')
-        if end < 0
+        $end: Sz = 0
+        switch tail.find_char('\'')
+        case .some(found)
+            end = found
+        case .none
             break
         want: = tail.sub(0, end)
         after: = tail.sub_from(end)
         if !after.starts_with(mid)
             continue
         got_all: = after.sub_from(mid.len)
-        close: = got_all.find_char('\'')
-        if close < 0
-            continue
-        if want.equals(got_all.sub(0, close))
-            return arena.text()
-                .s("a diagnostic with the same string on both sides came out: expected '\{want\}', \
-                    but got '\{want\}'").take()
+        if close: = got_all.find_char('\'')
+            if want.equals(got_all.sub(0, close))
+                return arena.text()
+                    .s("a diagnostic with the same string on both sides came out: expected \
+                        '\{want\}', but got '\{want\}'").take()
     return ""
 
 priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, arena: Arena$@):

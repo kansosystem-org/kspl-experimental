@@ -1,3 +1,13 @@
+//< The check that stops a frame's memory escaping outward
+//<
+//< It rejects a pointer the compiler synthesizes into the frame (a slice cast from a frame's
+//< array, a trait upcast of a frame's value) leaving by `return` or `throw`. **This asks a
+//< different question from type inference**: not whether the types agree but whether the lifetime
+//< holds, since a frame dies even when the types agree.
+// ==========================================
+// Caution: **Where it cannot be decided, lean to the safe side (false).** Wrongly deciding "not
+// escaped" lets a use-after-free pass with zero diagnostics.
+// ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -6,15 +16,6 @@ import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/query" as sema_type_query
-
-// ==========================================
-// The check that stops a frame's memory escaping outward.
-//
-// **This asks a different question from type inference**: not whether the types agree but whether
-// the lifetime holds, since a frame dies even when the types agree.
-// Caution: **Where it cannot be decided, lean to the safe side (false).** Wrongly deciding "not
-// escaped" lets a use-after-free pass with zero diagnostics.
-// ==========================================
 
 priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Whether the name refers to **the current frame's memory**

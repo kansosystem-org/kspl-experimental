@@ -90,6 +90,53 @@ priv fn place_picture(p: Pen$@, b: Block$@) //< lays out one picture
     p.x = p.left
     p.line_start = p.out.boxes.len
 
+priv fn block_mark(p: Pen$@, b: Block$@, s: style.Style$@, ord: Sz): U8[] //<
+    //< The mark a block's style puts before it (a bullet or a number), or "" where it puts none
+    //<
+    //< Caution: **Copy the mark into the layout's arena** (a box only points at a text, and `mk` is
+    //< freed on the way out).
+    $mk: = Str_builder.new()
+    defer mk.free()
+    // **Neither a running number nor a chapter number is a sibling number** (they come from the
+    // list collected over the whole document).
+    no: = number.serial_number(p.out.serials, b) if s.marker.serialed() else ord
+    if s.marker.outlined()
+        marker.mark_outline_into(mk@, s.marker, number.heading_number(p.out.headings, b))
+    else
+        marker.mark_into(mk@, s.marker, no)
+    return p.arena.dup_str(mk.slice()) if mk.slice().len > 0 else ""
+
+priv fn place_columns_on_one_page(p: Pen$@, b: Block$@, sheet: Sheet$@, at: Rect$@, look: Look,
+    count: Sz, gap: F32): F32 //<
+        //< Lays a block's children out in columns, and returns their height
+        //<
+        //< **A column layout does not cross pages**: like a slide, one that does not fit goes whole
+        //< to the next page.
+    tall: = columns.place_columns(p.out, b, sheet, at$, look, count, gap, p.arena)
+    if top: = page_break(p.page_height, p.y, tall)
+        // **Moved, it is rolled back and laid out again** (a column once laid out cannot move).
+        rewind(p.out, placed_of(p.out))
+        p.y = top
+        at.y = top
+        return columns.place_columns(p.out, b, sheet, at$, look, count, gap, p.arena)
+    return tall
+
+priv fn place_collected(p: Pen$@, b: Block$@, sheet: Sheet$@, look: Look, indent: F32,
+    collect: Collect): Bool //<
+        //< Lays out what a collecting block collected; false where the block collects nothing
+    switch collect
+    case .contents
+        gather.place_contents(p, sheet, look, indent)
+    case .notes
+        gather.place_notes(p, look)
+    case .bars
+        gather.place_chart(p, b, sheet, look, .bars)
+    case .lines
+        gather.place_chart(p, b, sheet, look, .lines)
+    case .none
+        return false
+    return true
+
 priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F32, ord: Sz,
     floor: F32, joint: Joint) //<
         //< Lays out one block
@@ -132,20 +179,7 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
         p.align = s.align
         p.lead = s.line_spacing
         p.wrap = s.wrap
-        // Caution: **Copy the mark into the layout's arena** (a box only points at a text, and `mk`
-        // is freed on the way out).
-        $mk: = Str_builder.new()
-        defer mk.free()
-        // **Neither a running number nor a chapter number is a sibling number** (they come from the
-        // list collected over the whole document).
-        no: = number.serial_number(p.out.serials, b) if s.marker.serialed() else ord
-        if s.marker.outlined()
-            marker.mark_outline_into(mk@, s.marker,
-                number.heading_number(p.out.headings, b))
-        else
-            marker.mark_into(mk@, s.marker, no)
-        if mk.slice().len > 0
-            p.mark = p.arena.dup_str(mk.slice())
+        p.mark = block_mark(p, b, s, ord)
 
     // A style under a condition changes the look by the value. **Only the look is laid over** (a
     // line height that moved with a value would confuse the reader). It reads the first text.
@@ -224,20 +258,8 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
         // Columns. **The style gives the number of columns** (not a section break), and **a block
         // with no children is not laid out in columns** (there is nothing to distribute).
         if column_count > 1 && b.children.len > 0
-            // **A column layout does not cross pages**: like a slide, one that does not fit goes
-            // whole to the next page.
-            $tall: F32 = columns.place_columns(p.out, b, sheet, at, look, column_count, column_gap,
-                p.arena)
-            if top: = page_break(p.page_height, p.y, tall)
-                // **Moved, it is rolled back and laid out again** (a column once laid out cannot
-                // move).
-                back: = placed_of(p.out)
-                rewind(p.out, back)
-                p.y = top
-                at.y = top
-                tall = columns.place_columns(p.out, b, sheet, at, look, column_count, column_gap,
-                    p.arena)
-            used = tall
+            used =
+                place_columns_on_one_page(p, b, sheet, at@, look, column_count, column_gap)
     if used >= 0.0
         p.y += used
         // **In a column layout too, a positioned child does not go into the flow** (only the column
@@ -251,19 +273,7 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
 
     // A collecting block lays out what it collected instead of its children. **The document's
     // children are not laid out.**
-    $gathered: = true
-    switch collect
-    case .contents
-        gather.place_contents(p, sheet, look, indent)
-    case .notes
-        gather.place_notes(p, look)
-    case .bars
-        gather.place_chart(p, b, sheet, look, .bars)
-    case .lines
-        gather.place_chart(p, b, sheet, look, .lines)
-    case .none
-        gathered = false
-    if gathered
+    if place_collected(p, b, sheet, look, indent, collect)
         close_block(p, band, from, floor, pad, space_after, room)
         return
 

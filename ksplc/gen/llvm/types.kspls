@@ -434,19 +434,19 @@ fn emit_complex_types(cg: Genllvm_ctx$@)
         cg.clear_scratch()
         cg.env.mangle_type_id_to(type_id, cg.scratch)
         m_slice: = cg.scratch.slice()
-        if seen.admit(type_id)
-            switch info
-            case .result(base_id, err_id)
-                // A Result is the struct { is_err (i8), error_code, val }.
-                if cg.is_laid(type_id, 0)
-                    emit_laid_result(cg, m_slice, type_id, base_id, err_id)
-                else
-                    cg.s("%kspl_").s(m_slice).s(" = type { i8, ")
-                    cg.t(err_id)
-                    if !sema_type_env.is_void(base_id)
-                        cg.s(", ").t(base_id)
-                    cg.s(" }\n")
-            default {}
+        if !seen.admit(type_id)
+            continue
+        switch info
+        case .result(base_id, err_id)
+            // A Result is the struct { is_err (i8), error_code, val }.
+            if cg.is_laid(type_id, 0)
+                emit_laid_result(cg, m_slice, type_id, base_id, err_id)
+                continue
+            cg.s("%kspl_").s(m_slice).s(" = type { i8, ").t(err_id)
+            if !sema_type_env.is_void(base_id)
+                cg.s(", ").t(base_id)
+            cg.s(" }\n")
+        default {}
     // It defines the base type of a string slice.
     cg.s("%U8_Slice = type { ptr, i64 }\n")
     cg.s("%Const_U8_Slice = type { ptr, i64 }\n\n")

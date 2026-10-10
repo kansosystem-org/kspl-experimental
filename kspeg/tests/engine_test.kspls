@@ -258,7 +258,20 @@ priv fn expect_same_entering_all(label: U8[], grammar: U8[], input: U8[], rule: 
 pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     verdict.start("[KSPEG] the engine on small grammars and the examples")
 
-    // --- Injecting the defaults: a grammar writing neither `_Space` nor `_Boundary` ---
+    default_tokens(arena)
+    overridden_tokens(arena)
+    synthesized_keyword(arena)
+    folded_keywords(arena)
+    first_byte_skips(arena)
+    doc_examples(arena)
+    odd_keyword(arena)
+    literal_escapes(arena)
+    unicode_escapes(arena)
+    peg_termination(arena)
+    rule_profile(arena)
+
+priv fn default_tokens(arena: Arena$@) //<
+    //< Injecting the defaults: a grammar writing neither `_Space` nor `_Boundary`
     bare: U8[] = "pair = 'a' 'b'\n"
     expect("injected _Space skips a run of spaces", bare, "a   b", "pair", true, arena)
     expect("injected _Space skips tab and newline", bare, "a\t\r\n b", "pair", true, arena)
@@ -267,7 +280,8 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     expect("injected _Boundary rejects an underscore after a keyword", bare, "a_ b", "pair", false,
         arena)
 
-    // --- The grammar side's definition takes precedence over the default ---
+priv fn overridden_tokens(arena: Arena$@) //<
+    //< The grammar side's definition takes precedence over the default
     // Make `_Space` skip only dots, and a space is no longer a delimiter.
     own_space: U8[] = "pair = 'a' 'b'\n_Space = [.]*\n"
     expect("grammar _Space replaces the default", own_space, "a...b", "pair", true, arena)
@@ -282,12 +296,14 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     expect("narrowed _Boundary accepts 'a' before x", word_narrow, "ax", "word", true, arena)
     expect("narrowed _Boundary still rejects 'a' before 1", word_narrow, "a1", "word", false, arena)
 
-    // --- The automatically synthesised `_Keyword` ---
+priv fn synthesized_keyword(arena: Arena$@) //<
+    //< The automatically synthesised `_Keyword`
     kw: U8[] = "stmt = 'if' Ident\nIdent = !_Keyword [a-z]+\n"
     expect("_Keyword lets a plain word through", kw, "if foo", "stmt", true, arena)
     expect("_Keyword blocks a reserved word", kw, "if if", "stmt", false, arena)
 
-    // --- Keywords folded into one lookup ---
+priv fn folded_keywords(arena: Arena$@) //<
+    //< Keywords folded into one lookup
     // A run of keywords inside a choice becomes one set lookup (`fold_keyword_choices` in
     // kspeg/rule.kspls). **The plain twin cannot fold**: its `_Boundary` is a reference, not a
     // character class, so each keyword is tried in turn. Both must leave the same tree and the same
@@ -313,7 +329,8 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     expect_same_outcome("labels after a later keyword matched", folded, plain, "priv fn int", "top",
         arena)
 
-    // --- Rules skipped by their first byte ---
+priv fn first_byte_skips(arena: Arena$@) //<
+    //< Rules skipped by their first byte
     // A rule that cannot begin with the next byte is not entered (`First_bytes` in
     // kspeg/rule.kspls). Each case parses with and without the skipping, and requires the same tree
     // and labels.
@@ -346,7 +363,8 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     expect_bad_grammar("left recursion through a lookahead is rejected",
         "pair = !pair \"y\" | \"z\"\n", arena)
 
-    // --- The example grammars in kspeg/docs (SPEC-notation.md points at them) ---
+priv fn doc_examples(arena: Arena$@) //<
+    //< The example grammars in kspeg/docs (SPEC-notation.md points at them)
     // The notation's grammar must read every example, itself included, or Appendix A is wrong.
     expect("the notation's grammar reads itself", notation_grammar, notation_grammar, "grammar",
         true, arena)
@@ -388,13 +406,15 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     expect_parts("the scripting example keeps a run of + in one level", script_grammar, "1 + 2 + 3",
         "term", "factor + factor + factor", arena)
 
-    // --- A keyword not shaped like a word ---
+priv fn odd_keyword(arena: Arena$@) //<
+    //< A keyword not shaped like a word
     // `_Keyword` must work for a keyword not made only of `_Boundary`'s characters.
     arrow: U8[] = "jump = '->' Ident\nIdent = !_Keyword [a-z]+\n"
     expect("non-word keyword matches", arrow, "-> foo", "jump", true, arena)
     expect("non-word keyword is in _Keyword", arrow, "-> ->", "jump", false, arena)
 
-    // --- An escape inside a literal ("Escape sequences" in kspeg/docs/SPEC-notation.md) ---
+priv fn literal_escapes(arena: Arena$@) //<
+    //< An escape inside a literal ("Escape sequences" in kspeg/docs/SPEC-notation.md)
     // Caution: A `\X` not in the list must not pass as the character itself (the reason is at
     // `bad_escape_msg` in `kspeg/notation.kspls`).
     expect_bad_grammar("unknown escape in a string literal is rejected", "pair = \"a\\db\"\n", arena)
@@ -403,7 +423,9 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     // The control: a listed escape still works (the rejection is not too broad).
     expect("listed escape still decodes", "pair = \"a\\nb\"\n", "a\nb", "pair", true, arena)
 
-    // --- `\uXXXX` (the same heading) --- **The only way to write an untypeable byte in a grammar**,
+priv fn unicode_escapes(arena: Arena$@) //<
+    //< `\uXXXX` in a literal or a class ("Escape sequences" in kspeg/docs/SPEC-notation.md)
+    // **The only way to write an untypeable byte in a grammar**,
     // such as a control byte used as a marker ("How to handle a language that depends on
     // indentation" in kspeg/docs/SPEC-notation.md).
     hex_lit: U8[] = "pair = \"a\\u0041b\"\n"
@@ -421,7 +443,8 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     // **Reject a `\u` with too few digits** (it must not pass as the three bytes `u00`).
     expect_bad_grammar("a short \\u is rejected", "pair = \"\\u00\"\n", arena)
 
-    // --- The classic shapes on which a PEG parser fails to terminate ---
+priv fn peg_termination(arena: Arena$@) //<
+    //< The classic shapes on which a PEG parser fails to terminate
     // **What is checked is that it stops, before the answer**; when broken, it shows as a hang, a
     // CI timeout. Left recursion never ends under PEG, so the grammar is refused when it is read.
     expect_bad_grammar("direct left recursion is rejected", "pair = pair \"x\" | \"y\"\n", arena)
@@ -466,7 +489,8 @@ pub fn test_engine(arena: Arena$@) //< every case, each named on its own line
     expect_deep_fatal("a depth cutoff inside a repetition reaches the caller",
         "pair = \"(\" pair* \")\"\n", deep_in, arena)
 
-    // --- The rule profile: calls / memo hits / read and succeeded / read and failed ---
+priv fn rule_profile(arena: Arena$@) //<
+    //< The rule profile: calls / memo hits / read and succeeded / read and failed
     // Caution: **Use only a grammar and input with exactly one possible answer.** A real grammar's
     // numbers move with it and with its input, so pinning them only says "it changed".
     // `seq` never backtracks: each rule is called and succeeds once, so a dropped increment shows.

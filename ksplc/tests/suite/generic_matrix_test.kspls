@@ -148,7 +148,7 @@ priv fn write_unit(dir: U8[], runs: Bool, idx: List<|Sz|>, cells: List<|Cell|>@,
     $named: = List<|Sz|>.new(arena)
     spelt: = generic_matrix_table.base_name(a, s.owner, arena)
     for n in Range.asc(f.all.len)
-        if f.all.get(n).find_str(spelt) >= 0
+        if f.all.get(n).find_str(spelt).is_some()
             named.push(n + 1)
     $rels: = List<|U8[]|>.new(arena)
     $bodies: = List<|U8[]|>.new(arena)
@@ -301,7 +301,7 @@ priv fn at_line(line: U8[], n: Sz, arena: Arena$@): Bool //< whether a diagnosti
 priv fn says_one(line: U8[], says: U8[], arena: Arena$@): Bool //<
     //< Whether a diagnostic's line holds one of the texts, parted by a tab, a refusal may say
     for one in says.split('\t', arena)
-        if line.find_str(one) >= 0
+        if line.find_str(one).is_some()
             return true
     return false
 
@@ -309,17 +309,17 @@ priv fn judge_refusal(c: Cell@, mark: Sz, named: List<|Sz|>@, r: Ran@, arena: Ar
     //< Why a refused cell fails, or empty
     if r.code == 0
         return arena.text().s("ksplc accepted it; expected '").s(c.o.says).s("'").take()
-    if r.said.find_str("[ICE]") >= 0
+    if r.said.find_str("[ICE]").is_some()
         return arena.text().s("ksplc stopped on an internal error\n")
             .s(excerpt(r.said, arena)).take()
     // A diagnostic names a type as the source spells it, never by its mangled name
     // (`other_lib_kspl_Box_I64`), which the reader cannot match to a line.
     for line in r.said.lines(arena)
-        if line.find_str("error:") >= 0 && line.find_str(mangled_mark) >= 0
+        if line.find_str("error:").is_some() && line.find_str(mangled_mark).is_some()
             return arena.text().s("a diagnostic spells a mangled name\n").s(line).take()
     $elsewhere: = false
     for line in r.said.lines(arena)
-        if line.find_str("error:") < 0 || !says_one(line, c.o.says, arena)
+        if line.find_str("error:").is_none() || !says_one(line, c.o.says, arena)
             continue
         if c.o.any_line
             for q in Range.asc(named.len)
@@ -340,11 +340,11 @@ priv fn judge_open(c: Cell@, mark: Sz, r: Ran@, arena: Arena$@): U8[] //<
     //< Why a cell the language leaves open fails: neither a run nor a refusal at its line
     if r.code == 0
         return judge_run(c, r, arena)
-    if r.said.find_str("[ICE]") >= 0
+    if r.said.find_str("[ICE]").is_some()
         return arena.text().s("ksplc stopped on an internal error\n")
             .s(excerpt(r.said, arena)).take()
     for line in r.said.lines(arena)
-        if line.find_str("error:") >= 0 && at_line(line, mark, arena)
+        if line.find_str("error:").is_some() && at_line(line, mark, arena)
             return ""
     return arena.text().s("refused, but not at ").s(main_rel).s(":\{mark\}\n")
         .s(excerpt(r.said, arena)).take()

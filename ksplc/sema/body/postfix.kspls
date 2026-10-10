@@ -1,3 +1,9 @@
+//< Infers a postfix expression: `.`, a call `(…)`, an index `[…]`, a cast `::`, `@`, `$` and `!`
+//<
+//< It types the receiver, then hands `.` to `dot.kspls` and a call to `call.kspls`, and keeps the
+//< index, the casts and the address and dereference operators here. **`[]` takes only what
+//< carries its own length** (a slice, an array, an `Index` type); a raw pointer cannot be
+//< bounds-checked.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -78,165 +84,178 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
         c.fn_ctx.callee = left if op.equals("(") else null
         defer c.fn_ctx.callee = outer_callee
         target_id = left.infer_expr(c, pass_expected_id)!
-    $type_id: = I32::sema_type_env.Builtin_type_id.unknown
-
     if op.equals(".")
-        $is_namespace: = false
-        $is_enum: = false
-        $sym_ptr: Sema_symbol$@ = null
-
-        is_path_kind: =
-            left.kind_id == .k_expr_path || left.kind_id == .k_type_path ||
-            left.kind_id == .k_generic_path
-        if left.kind_id == .k_primitive_type
-            is_namespace = true
-        else if left.kind_id == .k_identifier || is_path_kind
-            // What left names, read as any value's name is (read_written_name in
-            // sema/decl/name.kspls): a local first, then an import alias, then a declaration.
-            named: = c.read_written_name(left)
-            $is_alias: = false
-            if named.sym != null && !named.sym.flags.is_global
-                sym_ptr = named.sym
-            else
-                is_alias =
-                    named.parts.owner == null &&
-                    c.get_file_alias(c.file_name, named.parts.name.text)
-
-            if is_alias
-                is_namespace = true
-            else
-                if left.def_node != null && left.def_node.sym_ptr != null
-                    sym_ptr = Sema_symbol$@::left.def_node.sym_ptr
-                else
-                    sym_ptr = named.sym
-
-                if sym_ptr != null
-                    sym_ptr.flags.is_used = true
-                    if sym_ptr.kind.is_var_or_const()
-                        is_namespace = false
-                    else if sym_ptr.kind.is_enum()
-                        is_namespace = true
-                        is_enum = true
-                    else
-                        is_namespace = true
-                else
-                    is_namespace = true
-
-        if is_namespace
-            return sema_body_dot.infer_namespace_access(c, node, left, sym_ptr, is_enum, expected_id)
-        // The pointer is stripped only here, and only recv_id is passed on to `.` / `[]` (the
-        // convention is at receiver_base_id in sema/type/env.kspls).
+        return infer_dot_postfix(c, node, left, target_id, expected_id)
+    if op.equals("(")
+        return sema_body_call.infer(c, node, left, target_id, expected_id)!
+    if op.equals("[")
         recv_id: = c.env.receiver_base_id(target_id)
-        type_id = sema_body_dot.infer_dot_access(c, node, left, target_id, recv_id, expected_id)
-    else if op.equals("(")
-        type_id = sema_body_call.infer(c, node, left, target_id, expected_id)!
-    else if op.equals("[")
-        type_id =
-            infer_postfix_array(c, node, target_id, c.env.receiver_base_id(target_id), expected_id)!
-    else if op.equals("::")
-        if c.env.is_result(target_id)
-            c.err(node, "cannot directly cast a Result type. Unwrap it using '!' or 'catch' first.")
-        if node.children.len >= 3
-            // A struct type is an aggregate in C, so a C cast `(StructType)value` is invalid. It is
-            // allowed only where the value already has that type (a no-op) and rejected here
-            // otherwise (gen/c/expr.kspls's emit_as_cast trusts this check and emits the cast as
-            // is).
-            as_real_id: = c.env.get_real_type(as_target_id)
-            src_real_id: = c.env.get_real_type(target_id)
-            if as_real_id != src_real_id
-                $is_struct_target: = false
-                switch c.env.get_info(as_real_id)
-                case .struct_type(_)
-                    is_struct_target = true
-                default {}
-                // Caution: **Do not reject `Slice<|T|>` here.** `U8$[]::buf` is the legitimate
-                // "build a descriptor" cast (check_slice_cast_source below checks its shape and
-                // element size).
-                if is_struct_target && c.env.is_slice(as_real_id) &&
-                    (c.env.is_slice(target_id) || c.env.is_array(target_id))
-                    is_struct_target = false
-                if is_struct_target
-                    $cast_resolved: = false
-                    if c.env.has_implemented_operator_trait(src_real_id, "Cast")
-                        c.clear_scratch().s(c.env.base_type_name(src_real_id)).s(".cast")
-                        if method_sym: = c.resolve_type_method_fqn(c.scratch.slice())
-                            if c.env.get_real_type(method_sym.type_id) == as_real_id
-                                node.def_node = method_sym.node
-                                cast_resolved = true
-                    if !cast_resolved
-                        // Caution: Show the name as written (`List<|I32|>`), not the instance's
-                        // registered name (`std_ds_List_I32`), which the writer never wrote.
-                        shown: = c.env.display(as_target_id)
-                        msg: = c.clear_scratch().s("cannot cast to struct type '").s(shown)
-                            .s("'; structs do not support direct value casts (use a constructor, a \
-                                struct literal, or an 'operator.Cast' implementation instead)")
-                            .slice()
-                        c.err(node, msg)
-                check_slice_cast_source(c, node, as_target_id, target_id)
-                check_scalar_cast_source(c, node, as_target_id, target_id)
-            type_id = as_target_id
-    else if op.equals("@")
-        // `Index`'s `get` returns a **copy**, so `l[0]@` is a temporary's address, and a write
-        // through it silently misses the container.
-        if left.is_trait_index_access() && !c.env.is_place_index_node(left)
-            c.err(node,
-                "cannot take the address of an element accessed through the 'Index' interface; \
-                    'get' returns a copy, so '@' would yield the address of a temporary")
-            throw .analysis_failed
-        // The general form: `@` on a non-place (a return value, a literal, a computed result)
-        // becomes `&temporary` in C, and the user gets a **raw C compiler error** instead of
-        // KSPL's.
-        if left.is_unaddressable_value()
-            c.err(node,
-                "cannot take the address of a call result, literal, or computed value; '@' would \
-                    yield the address of a temporary. Bind it first (`x: = ...;`) and take the \
-                    address of that.")
-            throw .analysis_failed
-        $pointee_id: = target_id
-        if c.env.is_array(target_id)
-            pointee_id = c.env.strip_array(target_id)
-        //   * the path crossed a read-only pointer … `hp.buf[0]@` on an `hp: Holder@`
-        //     (a field type of `U8[4]` must still not become a mutable pointer)
-        //   * the path crossed a slice or array with immutable elements … `b.imm[0].v@`
-        //   * the root is a `const` declaration or an immutable binding … `cs.buf[0]@` on a
-        //     `const cs: Holder` (writes ROM), `n@` on `n: Sz = 0;` (an immutable binding
-        //     rewritten through an output argument)
-        if c.place_denies_write(left) || c.place_crosses_const_elem(left) ||
-            c.root_binding_is_immutable(left, false)
-            pointee_id = c.env.make_const(pointee_id)
-        type_id = c.env.make_ptr(pointee_id)
-    else if op.equals("$")
-        if !sema_type_env.is_unknown(target_id) && !c.env.is_pointer(target_id)
-            c.clear_scratch()
-                .s("cannot dereference non-pointer type '\{c.env.get_str(target_id)\}'")
-            c.err(node, c.scratch.slice())
-        type_id = c.env.strip_ptr(target_id)
-    else if op.equals("!")
-        if c.fn_ctx.in_defer
-            c.err(node, "cannot use '!' operator (which may throw) inside a defer block")
-        if !sema_type_env.is_unknown(target_id) && !c.env.is_result(target_id)
-            c.err(node, "'!' operator can only be applied to a Result type")
-        else if !sema_type_env.is_unknown(c.fn_ctx.ret_id) &&
-            !c.env.is_result(c.fn_ctx.ret_id)
-            c.err(node, "cannot use '!' operator in a function that does not return a Result type")
-        else if !sema_type_env.is_unknown(target_id) &&
-            !sema_type_env.is_unknown(c.fn_ctx.ret_id)
-            target_err_id: = c.env.get_real_type(c.env.get_result_err_id(target_id))
-            ret_err_id: = c.env.get_real_type(c.env.get_result_err_id(c.fn_ctx.ret_id))
-            if target_err_id != ret_err_id && !sema_type_env.is_unknown(target_err_id) &&
-                !sema_type_env.is_unknown(ret_err_id)
-                t_err_str: = c.env.get_str(target_err_id)
-                r_err_str: = c.env.get_str(ret_err_id)
-                c.clear_scratch()
-                    .s("cannot propagate error of type '\{t_err_str\}' using '!' operator. The \
-                        enclosing function expects error type '\{r_err_str\}'.")
-                c.err(node, c.scratch.slice())
-        type_id = c.env.strip_result(target_id)
-    else
-        if !sema_type_env.is_unknown(expected_id)
-            type_id = expected_id
+        return infer_postfix_array(c, node, target_id, recv_id, expected_id)!
+    if op.equals("::")
+        return infer_cast_postfix(c, node, target_id, as_target_id)
+    if op.equals("@")
+        return infer_address_postfix(c, node, left, target_id)!
+    if op.equals("$")
+        return infer_deref_postfix(c, node, target_id)
+    if op.equals("!")
+        return infer_propagate_postfix(c, node, target_id)
+    if !sema_type_env.is_unknown(expected_id)
+        return expected_id
+    return I32::sema_type_env.Builtin_type_id.unknown
 
-    return type_id
+priv struct Dot_receiver //< what stands before a `.`: a namespace (a type, an enum…) or a value
+    is_namespace: Bool
+    is_enum: Bool
+    sym: Sema_symbol$@ //< the symbol it names, or null
+
+priv fn read_dot_receiver(c: Sema_ctx$@, left: Ast_node$@): Dot_receiver //<
+    //< Whether `left.` names a namespace or a value, and the symbol it names
+    $out: = Dot_receiver::{ .is_namespace = false, .is_enum = false, .sym = null }
+    if left.kind_id == .k_primitive_type
+        out.is_namespace = true
+        return out
+    is_path_kind: =
+        left.kind_id == .k_expr_path || left.kind_id == .k_type_path ||
+        left.kind_id == .k_generic_path
+    if left.kind_id != .k_identifier && !is_path_kind
+        return out
+    // What left names, read as any value's name is (read_written_name in sema/decl/name.kspls): a
+    // local first, then an import alias, then a declaration.
+    named: = c.read_written_name(left)
+    if named.sym != null && !named.sym.flags.is_global
+        out.sym = named.sym
+    else if named.parts.owner == null &&
+        c.get_file_alias(c.file_name, named.parts.name.text)
+        out.is_namespace = true
+        return out
+    if left.def_node != null && left.def_node.sym_ptr != null
+        out.sym = Sema_symbol$@::left.def_node.sym_ptr
+    else
+        out.sym = named.sym
+    if out.sym == null
+        out.is_namespace = true
+        return out
+    out.sym.flags.is_used = true
+    out.is_namespace = !out.sym.kind.is_var_or_const()
+    out.is_enum = out.is_namespace && out.sym.kind.is_enum()
+    return out
+
+priv fn infer_dot_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32,
+    expected_id: I32): I32!Sema_error //<
+        //< `left.name`: a member of a namespace, or a field or method of a value
+    recv: = read_dot_receiver(c, left)
+    if recv.is_namespace
+        return sema_body_dot.infer_namespace_access(c, node, left, recv.sym, recv.is_enum,
+            expected_id)
+    // The pointer is stripped only here, and only recv_id is passed on to `.` / `[]` (the
+    // convention is at receiver_base_id in sema/type/env.kspls).
+    recv_id: = c.env.receiver_base_id(target_id)
+    return sema_body_dot.infer_dot_access(c, node, left, target_id, recv_id, expected_id)
+
+priv fn infer_cast_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, as_target_id: I32): I32 //<
+    //< `T::value`: the cast, checked against what may be cast to what
+    if c.env.is_result(target_id)
+        c.err(node, "cannot directly cast a Result type. Unwrap it using '!' or 'catch' first.")
+    if node.children.len < 3
+        return I32::sema_type_env.Builtin_type_id.unknown
+    if c.env.get_real_type(as_target_id) != c.env.get_real_type(target_id)
+        refuse_struct_cast(c, node, as_target_id, target_id)
+        check_slice_cast_source(c, node, as_target_id, target_id)
+        check_scalar_cast_source(c, node, as_target_id, target_id)
+    return as_target_id
+
+priv fn refuse_struct_cast(c: Sema_ctx$@, node: Ast_node$@, as_target_id: I32, target_id: I32) //<
+    //< Reports a cast to a struct type that no `operator.Cast` implementation provides
+    //<
+    //< A struct type is an aggregate in C, so a C cast `(StructType)value` is invalid. It is
+    //< allowed only where the value already has that type (a no-op) and rejected here otherwise
+    //< (gen/c/expr.kspls's emit_as_cast trusts this check and emits the cast as is).
+    as_real_id: = c.env.get_real_type(as_target_id)
+    src_real_id: = c.env.get_real_type(target_id)
+    $is_struct_target: = false
+    switch c.env.get_info(as_real_id)
+    case .struct_type(_)
+        is_struct_target = true
+    default {}
+    // Caution: **Do not reject `Slice<|T|>` here.** `U8$[]::buf` is the legitimate "build a
+    // descriptor" cast (check_slice_cast_source checks its shape and element size).
+    if !is_struct_target ||
+        (c.env.is_slice(as_real_id) &&
+        (c.env.is_slice(target_id) || c.env.is_array(target_id)))
+        return
+    if c.env.has_implemented_operator_trait(src_real_id, "Cast")
+        c.clear_scratch().s(c.env.base_type_name(src_real_id)).s(".cast")
+        if method_sym: = c.resolve_type_method_fqn(c.scratch.slice())
+            if c.env.get_real_type(method_sym.type_id) == as_real_id
+                node.def_node = method_sym.node
+                return
+    // Caution: Show the name as written (`List<|I32|>`), not the instance's registered name
+    // (`std_ds_List_I32`), which the writer never wrote.
+    shown: = c.env.display(as_target_id)
+    msg: = c.clear_scratch().s("cannot cast to struct type '").s(shown)
+        .s("'; structs do not support direct value casts (use a constructor, a struct literal, or \
+            an 'operator.Cast' implementation instead)").slice()
+    c.err(node, msg)
+
+priv fn infer_address_postfix(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32):
+    I32!Sema_error //<
+        //< `place@`: a pointer to the place, immutable where the place may not be written
+    // `Index`'s `get` returns a **copy**, so `l[0]@` is a temporary's address, and a write through
+    // it silently misses the container.
+    if left.is_trait_index_access() && !c.env.is_place_index_node(left)
+        c.err(node,
+            "cannot take the address of an element accessed through the 'Index' interface; 'get' \
+                returns a copy, so '@' would yield the address of a temporary")
+        throw .analysis_failed
+    // The general form: `@` on a non-place (a return value, a literal, a computed result) becomes
+    // `&temporary` in C, and the user gets a **raw C compiler error** instead of KSPL's.
+    if left.is_unaddressable_value()
+        c.err(node,
+            "cannot take the address of a call result, literal, or computed value; '@' would yield \
+                the address of a temporary. Bind it first (`x: = ...;`) and take the address of \
+                that.")
+        throw .analysis_failed
+    $pointee_id: = target_id
+    if c.env.is_array(target_id)
+        pointee_id = c.env.strip_array(target_id)
+    // The pointer is immutable where the place may not be written: the path crossed a read-only
+    // pointer (`hp.buf[0]@` on an `hp: Holder@`; a field of type `U8[4]` must still not become a
+    // mutable pointer) or a slice or array with immutable elements (`b.imm[0].v@`), or its root is
+    // a `const` or an immutable binding (`cs.buf[0]@` on a `const cs: Holder` writes ROM; `n@` on
+    // `n: Sz = 0;` rewrites an immutable binding through an output argument).
+    if c.place_denies_write(left) || c.place_crosses_const_elem(left) ||
+        c.root_binding_is_immutable(left, false)
+        pointee_id = c.env.make_const(pointee_id)
+    return c.env.make_ptr(pointee_id)
+
+priv fn infer_deref_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32): I32 //<
+    //< `pointer$`: what the pointer points at
+    if !sema_type_env.is_unknown(target_id) && !c.env.is_pointer(target_id)
+        c.clear_scratch().s("cannot dereference non-pointer type '\{c.env.get_str(target_id)\}'")
+        c.err(node, c.scratch.slice())
+    return c.env.strip_ptr(target_id)
+
+priv fn infer_propagate_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32): I32 //<
+    //< `result!`: the success value, the failure passed on to the caller
+    if c.fn_ctx.in_defer
+        c.err(node, "cannot use '!' operator (which may throw) inside a defer block")
+    ret_id: = c.fn_ctx.ret_id
+    if !sema_type_env.is_unknown(target_id) && !c.env.is_result(target_id)
+        c.err(node, "'!' operator can only be applied to a Result type")
+    else if !sema_type_env.is_unknown(ret_id) && !c.env.is_result(ret_id)
+        c.err(node, "cannot use '!' operator in a function that does not return a Result type")
+    else if !sema_type_env.is_unknown(target_id) && !sema_type_env.is_unknown(ret_id)
+        target_err_id: = c.env.get_real_type(c.env.get_result_err_id(target_id))
+        ret_err_id: = c.env.get_real_type(c.env.get_result_err_id(ret_id))
+        if target_err_id != ret_err_id && !sema_type_env.is_unknown(target_err_id) &&
+            !sema_type_env.is_unknown(ret_err_id)
+            t_err_str: = c.env.get_str(target_err_id)
+            r_err_str: = c.env.get_str(ret_err_id)
+            c.clear_scratch()
+                .s("cannot propagate error of type '\{t_err_str\}' using '!' operator. The \
+                    enclosing function expects error type '\{r_err_str\}'.")
+            c.err(node, c.scratch.slice())
+    return c.env.strip_result(target_id)
 
 priv fn read_as_path(c: Sema_ctx$@, node: Ast_node$@, operand: Ast_node$@, type_node: Ast_node$@,
     op_node: Ast_node$@): Bool //<
@@ -461,6 +480,18 @@ fn index_is_static_in_range(c: Sema_ctx$@, index_node: Ast_node$@, size: I32): B
 // target_id is the type as written (for the diagnostic), recv_id stripped by receiver_base_id.
 // `[]` is allowed **only on what carries its own length** (a slice, an array, an Index /
 // Index_place type); a raw pointer cannot be bounds-checked, so the user is pointed to `(p + i)$`.
+priv fn lint_index_out_of_bounds(c: Sema_ctx$@, index: Ast_node$@, recv_id: I32) //<
+    //< [W0101] A constant index past a fixed-length array's end
+    switch c.env.get_info(recv_id)
+    case .array(_b, size)
+        if idx_val: = const_index(c, index)
+            if idx_val >= size
+                c.clear_scratch()
+                    .s("[W0101] Array index out of bounds. The array size is \{size\}, but the \
+                        index is \{idx_val\}.")
+                c.warn(index, c.scratch.slice())
+    default {}
+
 priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, recv_id: I32,
     expected_id: I32): I32!Sema_error
     // Only `index_route` decides the route (sema/decl/access.kspls); decided apart from the
@@ -500,17 +531,8 @@ priv fn infer_postfix_array(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, rec
     if next_op != null
         next_op.infer_expr(c, I32::sema_type_env.Builtin_type_id.size_type)!
 
-        if base_core.config.run_lint_checks && c.env.is_array(recv_id)
-            info: = c.env.get_info(recv_id)
-            switch info
-            case .array(_b, size)
-                if idx_val: = const_index(c, next_op)
-                    if idx_val >= size
-                        c.clear_scratch()
-                            .s("[W0101] Array index out of bounds. The array size is \{size\}, but \
-                                the index is \{idx_val\}.")
-                        c.warn(next_op, c.scratch.slice())
-            default {}
+        if base_core.config.run_lint_checks
+            lint_index_out_of_bounds(c, next_op, recv_id)
 
     $stripped: = c.env.slice_elem(recv_id)
     if stripped == recv_id

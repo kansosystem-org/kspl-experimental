@@ -78,10 +78,10 @@ impl Ast_node
             r.lower_arc_aggregate_literal(lctx)
         case .k_enum_init_call
             r.lower_arc_enum_init_call(lctx)
-        case .k_stmt_loop
-            r.lower_stmt_loop(lctx)
-        case .k_stmt_match
-            r.lower_stmt_match(lctx)
+        case .k_stmt_for
+            r.lower_stmt_for(lctx)
+        case .k_stmt_switch
+            r.lower_stmt_switch(lctx)
         case .k_expr
             r.lower_expr_node(lctx)
         case .k_expr_unary
@@ -204,7 +204,7 @@ impl Ast_node
         inner_text: U8[], loc: base_ast.Loc, brk_label: U8[], needs_label: Bool) //<
             //< It wraps a labelled statement a break refers to as `{ <the statement>; label: }`
             //<
-            //< The wrapper is a stmt_block. lower_stmt_if, lower_stmt_loop and lower_stmt_match use
+            //< The wrapper is a stmt_block. lower_stmt_if, lower_stmt_for and lower_stmt_switch use
             //< it. **With no label to place, it wraps nothing**: the wrapper would be a scope
             //< holding only the statement (a loop's init is scoped by `emit_loop_stmt` itself).
         if !needs_label
@@ -250,13 +250,13 @@ impl Ast_node
             if is_brk_used
                 r.wrap_stmt_with_break_label(.k_stmt_if, "if", r.loc, brk_label, true)
 
-    fn lower_stmt_loop(r: Ast_node$@, lctx: Lowering_ctx$@)
+    fn lower_stmt_for(r: Ast_node$@, lctx: Lowering_ctx$@)
         label_node: = r.get_loop_label()
         user_label: = label_node.text if label_node != null else ""
 
-        init_node: = r.get_loop_init()
+        init_node: = r.get_for_init()
         cond_node: = r.get_loop_cond()
-        step_node: = r.get_loop_step()
+        step_node: = r.get_for_step()
         body_block: = r.get_loop_block()
         loc: = r.loc
 
@@ -320,25 +320,24 @@ impl Ast_node
             for step_stmt in step_stmts
                 body_block.add_child(step_stmt)
 
-            if step_node.kind_id == .k_loop_step
+            if step_node.kind_id == .k_for_step
                 for step_child in step_node.children
                     step_expr: = Ast_node.new(.k_stmt_expr, "expr", loc)
                     step_expr.add_child(step_child)
                     body_block.add_child(step_expr)
                 r.set_child(3, Ast_node.new(.k_empty, "", loc))
 
-        r.wrap_stmt_with_break_label(.k_stmt_loop, "for", loc, brk_label,
-            is_brk_used || has_cond_pre)
+        r.wrap_stmt_with_break_label(.k_stmt_for, "for", loc, brk_label, is_brk_used || has_cond_pre)
 
-    fn lower_stmt_match(r: Ast_node$@, lctx: Lowering_ctx$@)
-        label_node: = r.get_match_label()
+    fn lower_stmt_switch(r: Ast_node$@, lctx: Lowering_ctx$@)
+        label_node: = r.get_switch_label()
         user_label: = label_node.text if label_node != null else ""
         is_jumpable: = user_label.len > 0
         brk_label: = lctx.gen_label_name() if is_jumpable else ""
 
         lctx.push_jump_ctx("", brk_label, user_label, false)
 
-        cond: = r.get_match_cond()
+        cond: = r.get_switch_cond()
         // A subject built in place (`switch Wrap.filled(mk(9))`) is owned by its temporary.
         owned: = lctx.can_own_temporaries() && cond.is_arc_fresh(lctx)
         cond.lower(lctx)
@@ -355,14 +354,14 @@ impl Ast_node
 
             if child.kind_id == .k_stmt_block
                 child.lower(lctx)
-            else if child.kind_id == .k_match_pattern
+            else if child.kind_id == .k_case_pattern
                 if expr_node: = child.first_expr()
                     expr_node.lower(lctx)
 
         is_brk_used: = lctx.pop_jump_ctx().break_used
 
         if is_jumpable && is_brk_used
-            r.wrap_stmt_with_break_label(.k_stmt_match, "switch", r.loc, brk_label, true)
+            r.wrap_stmt_with_break_label(.k_stmt_switch, "switch", r.loc, brk_label, true)
 
     fn lower_default(r: Ast_node$@, lctx: Lowering_ctx$@)
         for child in r.children

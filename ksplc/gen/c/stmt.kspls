@@ -88,10 +88,10 @@ impl Ast_node
             r.emit_if_stmt(c)
         case .k_stmt_expr
             r.emit_assign_stmt(c)
-        case .k_stmt_loop
+        case .k_stmt_for
             r.emit_loop_stmt(c)
-        case .k_stmt_match
-            r.emit_match_stmt(c)
+        case .k_stmt_switch
+            r.emit_switch_stmt(c)
         case .k_stmt_break
             r.emit_break_stmt(c)
         case .k_stmt_continue
@@ -276,16 +276,16 @@ impl Ast_node
             c.s(";\n")
 
     priv fn emit_loop_stmt(r: Ast_node$@, c: Genc_ctx$@)
-        r.ice_assert(r.children.len >= 5, "emit_loop_stmt: stmt_loop must have 5 children")
-        init_node: = r.get_loop_init()
+        r.ice_assert(r.children.len >= 5, "emit_loop_stmt: stmt_for must have 5 children")
+        init_node: = r.get_for_init()
         cond_node: = r.get_loop_cond()
-        step_node: = r.get_loop_step()
+        step_node: = r.get_for_step()
         block_node: = r.get_loop_block()
         has_init: = init_node != null && init_node.kind_id != .k_empty
 
         if has_init
             c.s("    {\n")
-            if init_node.kind_id == .k_loop_init
+            if init_node.kind_id == .k_for_init
                 for child in init_node.children
                     child.emit(c)
             else
@@ -298,12 +298,12 @@ impl Ast_node
         c.s("; ")
 
         if step_node != null && step_node.kind_id != .k_empty
-            limit: = step_node.children.len if step_node.kind_id == .k_loop_step else 1
+            limit: = step_node.children.len if step_node.kind_id == .k_for_step else 1
             for i in Range.asc(limit)
                 if i > 0
                     c.s(", ")
                 step_ch: =
-                    step_node.get_child(i) if step_node.kind_id == .k_loop_step else step_node
+                    step_node.get_child(i) if step_node.kind_id == .k_for_step else step_node
                 if step_ch.kind_id == .k_stmt_expr && step_ch.get_assign_right() != null
                     step_left: = step_ch.get_assign_left()
                     step_left.emit_expr(c)
@@ -322,8 +322,8 @@ impl Ast_node
         if has_init
             c.s("    }\n")
 
-    priv fn emit_match_stmt(r: Ast_node$@, c: Genc_ctx$@)
-        cond_node: = r.get_match_cond()
+    priv fn emit_switch_stmt(r: Ast_node$@, c: Genc_ctx$@)
+        cond_node: = r.get_switch_cond()
         // The switch and its payload bindings write the subject more than once, and anything but a
         // name would come out as broken C such as `switch (.tag)`; Lower binds it to a temporary.
         if !cond_node.is_plain_name()
@@ -359,7 +359,7 @@ impl Ast_node
         for $i: Sz = 2; i < r.children.len; i += 1
             child_node: = r.get_child(i)
             if child_node.is_keyword("case")
-                i = r.emit_match_case(c, i, cond_slice, is_enum, enum_def_ptr, safe_enum_name)
+                i = r.emit_switch_case(c, i, cond_slice, is_enum, enum_def_ptr, safe_enum_name)
             else if child_node.is_keyword("default")
                 has_default = true
                 c.s("    default:\n")
@@ -375,7 +375,7 @@ impl Ast_node
                 if !def_jumps
                     c.s("        break;\n")
                 i += 1
-        // sema (process_match_exhaustiveness) accepts an enum or Bool switch without an explicit
+        // sema (process_switch_exhaustiveness) accepts an enum or Bool switch without an explicit
         // 'default' only if it covers every value, so this branch is never reached at run time. But
         // a scalar enum is emitted as its base type (`emit_struct_enum_fwd` in
         // ksplc/gen/c/decl.kspls) and a Bool as an int, so the C compiler does not know that. Even
@@ -389,12 +389,12 @@ impl Ast_node
         enum_def_ptr: sema_type_def.Enum_def$@, cond_slice: U8[]) //<
             //< It emits a case's payload binding `Type name = cond.payload.variant.field;`.
             //<
-            //< self is the first pattern (a k_match_pattern).
-        if r == null || r.kind_id != .k_match_pattern || r.children.len == 0
+            //< self is the first pattern (a k_case_pattern).
+        if r == null || r.kind_id != .k_case_pattern || r.children.len == 0
             return
         $v_name_node: Ast_node$@ = null
         $payload_start_idx: Sz = 0
-        switch r.extract_match_variant()
+        switch r.extract_case_variant()
         case .variant(vn, ps)
             v_name_node = vn
             payload_start_idx = ps
@@ -428,30 +428,30 @@ impl Ast_node
                 c.s(";\n")
             field_idx += 1
 
-    priv fn emit_match_case(r: Ast_node$@, c: Genc_ctx$@, case_idx: Sz, cond_slice: U8[],
+    priv fn emit_switch_case(r: Ast_node$@, c: Genc_ctx$@, case_idx: Sz, cond_slice: U8[],
         is_enum: Bool, enum_def_ptr: sema_type_def.Enum_def$@, safe_enum_name: U8[]): Sz
         $pat_idx: = case_idx + 1
-        r.ice_assert(pat_idx < r.children.len, "emit_match_case: case missing pattern")
+        r.ice_assert(pat_idx < r.children.len, "emit_switch_case: case missing pattern")
         first_pattern: = r.get_child(pat_idx)
 
         for pat_idx < r.children.len
             pat_node: = r.get_child(pat_idx)
-            if pat_node.kind_id == .k_match_pattern
+            if pat_node.kind_id == .k_case_pattern
                 pat_node.ice_assert(pat_node.children.len > 0,
-                    "emit_match_case: empty match_pattern")
+                    "emit_switch_case: empty case_pattern")
 
-                $is_v_match: = false
-                switch pat_node.extract_match_variant()
+                $is_variant_case: = false
+                switch pat_node.extract_case_variant()
                 case .variant(v_name_node, _p_start)
                     if is_enum && v_name_node != null
                         variant_name: = v_name_node.text
                         $mangled_variant: = variant_name.mangle_c_identifier()
                         c.s("    case kspl_\{safe_enum_name\}_\{mangled_variant.slice()\}:\n")
                         mangled_variant.free()
-                        is_v_match = true
+                        is_variant_case = true
                 default {}
 
-                if !is_v_match
+                if !is_variant_case
                     c.s("    case ")
                     $expr_node: Ast_node$@ = null
                     switch pat_node.first_expr()
@@ -476,7 +476,7 @@ impl Ast_node
         if is_enum
             first_pattern.emit_case_payload_bindings(c, enum_def_ptr, cond_slice)
 
-        r.ice_assert(pat_idx < r.children.len, "emit_match_case: case missing block")
+        r.ice_assert(pat_idx < r.children.len, "emit_switch_case: case missing block")
         // The body goes inline inside the case's {}, not in a second block.
         body: = r.get_child(pat_idx)
         body.emit_block_inline(c)

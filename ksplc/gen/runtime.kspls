@@ -3,18 +3,16 @@
 //< **Both backends take the runtime from here** (the C backend writes it around the generated
 //< body, the LLVM backend references its version symbol, `ksplc emit-runtime` writes it alone), so
 //< neither backend imports the other for it.
+//< **The declaration half (`write_decls`) goes into every translation unit, and the body half
+//< (`write_impl`) into only one**: in every unit, the body's non-static functions and initialized
+//< globals would be duplicate definitions at link time under a split compile.
 import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/str" { Str_builder }
-// The C runtime preamble (the type definitions, the tracing machinery, the panic and bounds checks,
-// the process isolation), kept in .c files and built into the compiler with embed.
-//
-// Each target splits it in two, "the declaration half (`.h`)" and "the body half (`.c`)".
-// **The declaration half goes into every translation unit, and the body half into only one.**
-// Unsplit, the body half in every translation unit makes the non-static functions and the
-// initialized globals duplicate definitions at link time (under a split compile). Each file's
-// head says which half it is.
+// The runtime's sources (the type definitions, the tracing machinery, the panic and bounds checks,
+// the process isolation), kept in `.h` and `.c` files and built into the compiler with embed. Each
+// file's head says which half it is.
 embed "ksplc/gen/runtime/core.h" as rt_core_decls
 embed "ksplc/gen/runtime/core.c" as rt_core_impl
 embed "ksplc/gen/runtime/freestanding.h" as rt_freestanding_decls

@@ -10,8 +10,12 @@ import "std/strfmt" as _strfmt // lets interpolation (Formattable) write into yo
 
 pub enum Io_error //< why a read, a write or an open failed
     file_not_found(path: U8[]) //< the file could not be opened for reading; names the file
-    read_failed(path: U8[]) //< the read was refused, or the path is a directory; names the file
-    write_failed(path: U8[]) //< the write was refused or incomplete; names the file
+    read_failed(path: U8[]) //< the read was refused, or the path is a directory; names the file.
+        //<
+        //< Empty from an open `File_stream`, which does not keep its path.
+    write_failed(path: U8[]) //< the write was refused or incomplete; names the file.
+        //<
+        //< Empty from an open `File_stream`, as `read_failed`.
     close_failed //< buffered data could not be flushed on closing
     invalid_arg //< an argument is invalid, such as a path containing a NUL
 
@@ -30,7 +34,7 @@ impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
             wrote: = libc.fwrite(Void$@::val.ptr, 1, val.len, r.stream_of())
             if wrote < val.len
                 kspl_io_broken_pipe()
-            if line_buffered && val.find_char('\n') >= 0
+            if line_buffered && val.find_char('\n').is_some()
                 r.flush_if_stdout()
         return r
     pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the stream
@@ -58,7 +62,12 @@ impl File_stream: Reader //< so it can be used wherever a `Reader` is expected
             throw .invalid_arg
         if buf.len == 0
             return 0
-        return libc.fread(Void$@::buf.ptr, 1, buf.len, r.stream)
+        got: = libc.fread(Void$@::buf.ptr, 1, buf.len, r.stream)
+        // Caution: **A short read is the end or a failure, and only the stream tells which.**
+        // Taken as the end, a read error would pass for a whole file cut short.
+        if got < buf.len && libc.ferror(r.stream) != 0
+            throw .read_failed("")
+        return got
 
 impl File_stream: Owned //< it owns the handle and releases it in `free()`
     pub fn free(r: Self$@) //< closes the handle; a failure while closing is not reported
@@ -74,11 +83,14 @@ impl File_stream
         //<
         //< It does not mean the data reached the disk (the OS's own sync covers that).
         //< `Writer.flush()` returns `Self$@` for chaining, so only this method can report a
-        //< failure.
+        //< failure, **an earlier write's included**: a write the stream refused (a full disk) is
+        //< kept on it, and a flush with nothing left to write would report success.
         if r.stream == null
             throw .invalid_arg
         if libc.fflush(r.stream) != 0
             throw .close_failed
+        if libc.ferror(r.stream) != 0
+            throw .write_failed("")
 
 // Set by set_line_buffered(): a write to stdout containing a newline flushes at once.
 priv $line_buffered: Bool = false
@@ -219,6 +231,9 @@ pub fn write_file( //< writes the whole file, creating or replacing it
         throw .write_failed(path)
 
 pub fn copy( //< reads to the end, writes it all out, and returns how much was copied
+    //<
+    //< Caution: **A write failure is not reported here**: `Writer` returns no failure. Check the
+    //< destination after it (`File_stream.sync()!`), or a full disk passes for a whole copy.
     src: Reader, //< where the bytes come from
     dst: Writer, //< where they go
 ): Sz!Io_error //< the number of bytes copied; fails if a read fails

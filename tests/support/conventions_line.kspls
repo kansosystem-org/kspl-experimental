@@ -70,7 +70,7 @@ priv fn check_one_place(arena: Arena$@) //<
             continue
         src: = harness.read_under_root(rel)
         for shape in line_shapes
-            if src.find_str(shape) >= 0
+            if src.find_str(shape).is_some()
                 bad
                     .push(arena.text().s(rel).s(" builds a mark of its own").take())
     verdict.check_list("the places building a per-verdict line are inside the table alone", seen,
@@ -101,12 +101,12 @@ priv fn check_marks(arena: Arena$@)
             // Caution: **Search with the quote mark included.** A mention in a comment or in
             // English satisfies the bare word (`pass` is also Python's statement), and **a place
             // that forgot to fix its mark passes**.
-            if src.find_str(arena.text().c('"').s(m).take()) < 0 &&
-                src.find_str(arena.text().c('\'').s(m).take()) < 0
+            if src.find_str(arena.text().c('"').s(m).take()).is_none() &&
+                src.find_str(arena.text().c('\'').s(m).take()).is_none()
                 bad
                     .push(arena.text().s(rel).s(" does not hold \"").s(m).s("\"").take())
         for b in line_banned
-            if src.find_str(b) >= 0
+            if src.find_str(b).is_some()
                 bad
                     .push(arena.text().s(rel).s(" has \"").s(b.sub_from(1)).s("\" left in it")
                     .take())
@@ -134,12 +134,12 @@ priv fn check_readers(arena: Arena$@) //<
         seen += 1
         // **Each reader waits for a different mark** (the summary for failed lines, the tools'
         // check for passed ones), so each must wait for one current mark and write no rejected one.
-        if src.find_str(mark_bad) < 0 && src.find_str(mark_ok) < 0
+        if src.find_str(mark_bad).is_none() && src.find_str(mark_ok).is_none()
             bad
                 .push(arena.text().s(rel).s(" waits on not one of the marks as they now stand")
                 .take())
         for b in line_banned
-            if src.find_str(b) >= 0
+            if src.find_str(b).is_some()
                 bad
                     .push(arena.text().s(rel).s(" writes the turned-away mark \"")
                     .s(b.sub_from(1)).s("\"").take())
@@ -160,7 +160,7 @@ priv fn check_line_flush(arena: Arena$@)
     for rel in flush_files
         src: = harness.read_under_root(rel)
         seen += 1
-        if src.find_str(flush_mark) < 0
+        if src.find_str(flush_mark).is_none()
             bad
                 .push(arena.text().s(rel).s(" does not send out a line at a time").take())
     verdict.check_list("a place putting a per-verdict line out sends it a line at a time", seen,

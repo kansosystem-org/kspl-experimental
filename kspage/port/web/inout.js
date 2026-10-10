@@ -10,9 +10,9 @@
 function kspageInout(ui) {
   const app = ui.app;
   const tell = ui.tell, deny = ui.deny;
-  // Caution: **Borrow the download and the name** ([`file.js`](file.js) holds the one copy); with
-  // two, one ends up not reading the name field.
-  const download = ui.download, nameOf = ui.nameOf;
+  // Caution: **Borrow the download, the name and the wording of a reason** ([`file.js`](file.js)
+  // holds the one copy); with two, one ends up not reading the name field.
+  const download = ui.download, nameOf = ui.nameOf, why = ui.why;
 
   // **Exported Markdown cannot be reloaded** (it is separate from the save); it is for putting
   // next to code.
@@ -40,6 +40,10 @@ function kspageInout(ui) {
       // **The style's name belongs to the document, not to this page**: `table` is what the sample,
       // the manual and `command.js` use, so a translated name would create a second style.
       tell(app.insertCsv(text, "table"), "", "It cannot be inserted inside a table's cell");
+      app.focus();
+    }, (e) => {
+      // A file removed or locked after it was chosen: said, not left to the console.
+      deny("The file could not be read (" + why(e) + ")");
       app.focus();
     });
   });

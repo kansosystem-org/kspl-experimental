@@ -1,3 +1,9 @@
+//< Spelling a node back as text: a type's name, a path, a function's signature
+//<
+//< Unlike the accessors (`ast_ext.kspls`), which say which child is what, it walks the tree into a
+//< string, with its own depth limit. **Spellings are built here and nowhere else**: a mangled
+//< name, a diagnostic and the generated C's type names must agree, so do not rebuild one in the
+//< caller.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "std/chars"
@@ -6,12 +12,8 @@ import "std/io"
 import "std/str" { Str_builder }
 import "std/sys"
 
-// It builds **the spelling of types and names** from the AST. Unlike the accessors
-// (ksplc/base/ast_ext.kspls), which say which child is what, it walks the tree into a string, with
-// its own depth limit.
-//
-// **Spellings are built here and nowhere else**: a mangled name, a diagnostic and the generated
-// C's type names must agree, so do not rebuild one in the caller.
+// last_path_segment_node, like the find_child family in ksplc/base/ast.kspls, is a tree-walking
+// primitive that keeps its promise to return null.
 ##lint(H0701 = off)
 
 priv const max_extract_type_name_depth: Sz = 1000 //<
@@ -145,7 +147,7 @@ impl Ast_node
         //< A path node's trailing segment, before any `type_args`
         //<
         //< The path node is an expr_path, a type_path or a generic_path.
-        //< null without children. get_path_name and extract_match_variant share it.
+        //< null without children. get_path_name and extract_case_variant share it.
         len: = r.children.len
         if len == 0
             return null
@@ -274,7 +276,7 @@ impl Ast_node
         r.ice_assert(r != null, "flatten_to_identifier: node is null")
         r.morph(.k_identifier, c_name)
 
-    fn extract_match_variant(r: Self$@): base_ast.Match_variant_info
+    fn extract_case_variant(r: Self$@): base_ast.Case_variant_info
         if r == null || r.children.len == 0
             return .not_variant
 

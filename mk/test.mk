@@ -63,6 +63,24 @@ debug-$(1): $$(STAGE1_EXE)
 endef
 $(foreach p,$(DEBUG_PKGS),$(eval $(call debug_pkg_rule,$(p))))
 
+# --- kssrv and ksbind through the LLVM backend ---
+# **`make LLVM=1 debug` holds neither** (they run only as their own `make test`), so genllvm broken
+# on code only they reach would go unseen. The server is built through LLVM and kssrv's tests drive
+# it; ksbind's tests are built through LLVM and run. **Linux alone**: its image holds ksbind's
+# libraries, where elsewhere ksbind's own tests skip.
+## Gates|test-llvm-pkgs|Build kssrv and ksbind's tests through the LLVM backend, and run kssrv's and ksbind's tests on them
+test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
+	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=kssrv/main.kspls OUT_STEM=kssrv_llvm \
+		$(C_FMT_OFF)
+	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
+	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
+		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspls)" \
+		"$(abspath $(OUT_DIR))/kssrv_llvm.exe" \
+		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
+	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=ksbind/tests/main.kspls \
+		OUT_STEM=ksbind_llvm $(C_FMT_OFF)
+	./$(OUT_DIR)/ksbind_llvm.exe
+
 # **The one way to call a package's `Makefile`**: $(call pkg_make,<package>) <target> [<var>=<val>]
 # Caution: **Keep the leading `+`**: make passes its job slots only to a line it sees as a sub-make,
 # and a `$(MAKE)` reached through a variable is not seen, so the child warns and runs at `-j1`.
@@ -165,11 +183,12 @@ test-blas: $(STAGE1_EXE) $(SEED_EXE)
 FUZZ_LONG_TRIALS ?= 2000
 FUZZ_LONG_SEED ?= $(shell date +%s)
 fuzz_long_args := FUZZ_ARGS="--trials=$(FUZZ_LONG_TRIALS) --seed=$(FUZZ_LONG_SEED)"
-## Measure-and-inspect|fuzz-long|Fuzz every reader deep, with a fresh seed (`FUZZ_LONG_TRIALS=` / `FUZZ_LONG_SEED=`)
+## Measure-and-inspect|fuzz-long|Fuzz every reader deep, and draw the property check long, with a fresh seed (`FUZZ_LONG_TRIALS=` / `FUZZ_LONG_SEED=`)
 fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 	@echo "# FUZZING DEEP: $(FUZZ_LONG_TRIALS) rounds a reader, seed $(FUZZ_LONG_SEED)"
 	$(foreach p,$(FUZZ_PKGS),$(call pkg_make,$(p)) test-fuzz $(fuzz_long_args)$(nl))
 	$(call pkg_make,ksplc) test-fuzz $(fuzz_long_args)
+	$(call pkg_make,ksplc) test-property PROPERTY_ARGS="--n=600 --seed=$(FUZZ_LONG_SEED)"
 .PHONY: fuzz-long
 
 # Caution: **The fuzzed readers' address sanitizer is mandatory on Linux**, whose image holds it: no

@@ -136,8 +136,7 @@ priv fn request_at(c: jsonrpc.Client$@, method: U8[], ask: Ask, arena: Arena$@):
 
 priv fn shown_line(text: U8[]): U8[] //< the answer's first line inside its code fence
     body: = text.strip_prefix("```kspl\n")
-    at: = body.find_char('\n')
-    return body.sub(0, at) if at >= 0 else body
+    return body.sub(0, body.find_char('\n').unwrap_or(body.len))
 
 priv fn check_asks(c: jsonrpc.Client$@, asks: Ask[], arena: Arena$@) //<
     //< Each hover shows exactly what that position's `want` says
@@ -187,8 +186,8 @@ priv fn check_refs(c: jsonrpc.Client$@, arena: Arena$@) //<
             lsp_client.why(c, found, arena))
 
 fn check_hover_values(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(values_uri, values_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(values_uri, values_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, values_uri, arena)
     check_asks(c, Ask[]::literal_asks, arena)
     // Caution: **These come after the literals**, which hold an empty answer a dead worker would

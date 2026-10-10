@@ -48,77 +48,85 @@ priv fn is_header_lead(line: U8[]): Bool //<
     return t.starts_with("import ") ||
         t.starts_with("#!") && t.sub_from(2).trim_start().starts_with("/")
 
+priv struct Comment_run //< the comment lines being counted toward the cap
+    len: Sz
+    start: Sz //< the first counted line, 1-based
+    in_detail: Bool //< whether the run has passed its separator (what follows is its detail)
+
+impl Comment_run
+    fn add(r: Self$@, i: Sz) //< counts line i (0-based) into the run
+        if r.len == 0
+            r.start = i + 1
+        r.len += 1
+
 priv fn check_comments(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
         seen += 1
-        lines: = harness.read_under_root(rel).lines(arena)
-        $run_len: Sz = 0
-        $start: Sz = 0
-        $seen_decl: = false
-        // **A `//` inside a `\"\"\"` string is not this file's comment.** genc carries whole C
-        // preambles in one, and counting their lines here would apply KSPL's cap to the emitted C.
-        $in_raw: = false
-        // Whether the run being walked has passed its separator (what follows is its detail).
-        $in_detail: = false
-        for i in Range.asc(lines.len + 1)
-            text: = "" if i >= lines.len else lines.get(i).trim_spaces()
-            raw_here: = in_raw
-            if i < lines.len
-                in_raw = scan.flip_raw(lines.get(i), in_raw)
-            if i < lines.len && raw_here
-                continue
-            // A run's separator ends with the run; kept, the next run would count as its detail.
-            if !text.starts_with("//<")
-                in_detail = false
-            // A comment is ended by a line of code, or by a section divider saying something new
-            // starts.
-            // Caution: **A blank line ends nothing.** Otherwise the cap limits a paragraph rather
-            // than a comment: anything over it passes by adding a blank line in the middle.
-            $closed: = false
-            if i < lines.len && text.starts_with("//")
-                // **A `//<` belongs to the line above, not to the code below**, so it ends the run
-                // instead of counting into it.
-                // Caution: **What comes after the separator counts.** A run's detail takes the
-                // place of an explanation; if it counted nowhere, turning every explanation into a
-                // detail would silently remove every cap.
-                if text.starts_with("//<")
-                    if text.len == 3
-                        in_detail = true
-                        run_len = 0
-                    else if in_detail
-                        if run_len == 0
-                            start = i + 1
-                        run_len += 1
-                    else
-                        run_len = 0
-                    continue
-                // **A machine-read marker is not prose** (`EXPECT:` is a fixture's assertion).
-                if !scan.marker_head(text.sub_from(2).trim_spaces())
-                    if run_len == 0
-                        start = i + 1
-                    run_len += 1
-                if !scan.is_divider(text.sub_from(2))
-                    continue
-                closed = true
-            if !closed && i < lines.len && text.len == 0 && run_len > 0
-                continue
-            if run_len > max_comment_lines
-                // The first run over the body cap before any declaration is the header (the wider
-                // cap).
-                cap: = max_comment_lines if seen_decl else max_header_lines
-                if run_len > cap
-                    bad
-                        .push(arena.text().s(rel).s(":\{start\}: \{run_len\} lines ")
-                        .s("(cap \{cap\})").take())
-                seen_decl = true
-            run_len = 0
-            if !closed && i < lines.len && text.len > 0 && !is_header_lead(lines.get(i))
-                seen_decl = true
+        check_comment_runs(rel, harness.read_under_root(rel).lines(arena), bad@, arena)
     n: = arena.text().s("a comment is within \{max_comment_lines\} lines to the next code line, a ")
         .s("file's header within \{max_header_lines\} (Principle 7 in docs/DESIGN.md)").take()
     verdict.check_list(n, seen, "files", bad@, "long background belongs on the DESIGN.md side")
+
+priv fn check_comment_runs(rel: U8[], lines: List<|U8[]|>, bad: List<|U8[]|>$@, arena: Arena$@) //<
+    //< Adds to bad each comment run of one file that is over its cap
+    $run: = Comment_run::{ .len = 0, .start = 0, .in_detail = false }
+    $seen_decl: = false
+    // **A `//` inside a `\"\"\"` string is not this file's comment.** genc carries whole C
+    // preambles in one, and counting their lines here would apply KSPL's cap to the emitted C.
+    $in_raw: = false
+    for i in Range.asc(lines.len + 1)
+        text: = "" if i >= lines.len else lines.get(i).trim_spaces()
+        raw_here: = in_raw
+        if i < lines.len
+            in_raw = scan.flip_raw(lines.get(i), in_raw)
+        if i < lines.len && raw_here
+            continue
+        // A run's separator ends with the run; kept, the next run would count as its detail.
+        if !text.starts_with("//<")
+            run.in_detail = false
+        // A comment is ended by a line of code, or by a section divider saying something new
+        // starts.
+        // Caution: **A blank line ends nothing.** Otherwise the cap limits a paragraph rather
+        // than a comment: anything over it passes by adding a blank line in the middle.
+        $closed: = false
+        if i < lines.len && text.starts_with("//")
+            // **A `//<` belongs to the line above, not to the code below**, so it ends the run
+            // instead of counting into it.
+            // Caution: **What comes after the separator counts.** A run's detail takes the place
+            // of an explanation; if it counted nowhere, turning every explanation into a detail
+            // would silently remove every cap.
+            if text.starts_with("//<")
+                if text.len == 3
+                    run.in_detail = true
+                    run.len = 0
+                else if run.in_detail
+                    run.add(i)
+                else
+                    run.len = 0
+                continue
+            // **A machine-read marker is not prose** (`EXPECT:` is a fixture's assertion).
+            if !scan.marker_head(text.sub_from(2).trim_spaces())
+                run.add(i)
+            if !scan.is_divider(text.sub_from(2))
+                continue
+            closed = true
+        if !closed && i < lines.len && text.len == 0 && run.len > 0
+            continue
+        if run.len > max_comment_lines
+            // The first run over the body cap before any declaration is the header (the wider
+            // cap).
+            cap: = max_comment_lines if seen_decl else max_header_lines
+            if run.len > cap
+                bad
+                    .push(arena.text().s(rel).s(":\{run.start\}: \{run.len\} lines ")
+                    .s("(cap \{cap\})").take())
+            seen_decl = true
+        run.len = 0
+        if !closed && i < lines.len && text.len > 0 && !is_header_lead(lines.get(i))
+            seen_decl = true
+
 priv fn check_summary_inside(arena: Arena$@) //<
     //< A declaration that carries braces keeps its description inside them
     //<
@@ -137,8 +145,7 @@ priv fn check_summary_inside(arena: Arena$@) //<
             in_raw = scan.flip_raw(line, in_raw)
             if raw_here || i + 1 >= lines.len
                 continue
-            mark: = line.find_str("//")
-            code: = line if mark < 0 else line.sub(0, mark)
+            code: = line.sub(0, line.find_str("//").unwrap_or(line.len))
             if !code.trim_spaces().ends_with("{}")
                 continue
             next: = lines.get(i + 1)
@@ -184,25 +191,27 @@ priv fn check_lang_prefix(arena: Arena$@)
             body: = scan.strip_code(line, arena)
             $at: Sz = 0
             for at + 5 <= body.len
-                found: = body.sub_from(at).find_str("lang.")
-                if found < 0
+                switch body.sub_from(at).find_str("lang.")
+                case .none
                     break
-                p: = at + Sz::found
-                at = p + 5
-                // When an identifier or a `.` comes before, it is something else (a string such as
-                // `std.lang.Ref_counted`).
-                if p > 0 && (htext.is_word_before(body, p) || body[p - 1] == '.')
-                    continue
-                $k: = p + 5
-                if k >= body.len || !(body[k].is_alpha() || body[k] == '_')
-                    continue
-                for k < body.len && htext.is_word_at(body, k)
-                    k += 1
-                name: = body.sub(p + 5, k - p - 5)
-                if declares(src, name, arena)
-                    continue
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: lang.").s(name).s(" -> ").s(name).take())
+                case .some(found)
+                    p: = at + found
+                    at = p + 5
+                    // When an identifier or a `.` comes before, it is something else (a string
+                    // such as `std.lang.Ref_counted`).
+                    if p > 0 && (htext.is_word_before(body, p) || body[p - 1] == '.')
+                        continue
+                    $k: = p + 5
+                    if k >= body.len || !(body[k].is_alpha() || body[k] == '_')
+                        continue
+                    for k < body.len && htext.is_word_at(body, k)
+                        k += 1
+                    name: = body.sub(p + 5, k - p - 5)
+                    if declares(src, name, arena)
+                        continue
+                    bad
+                        .push(arena.text().s(rel).s(":\{i\}: lang.").s(name).s(" -> ").s(name)
+                        .take())
     verdict.check_list("`lang.` is written only where the unqualified letter is blocked", files,
         "files", bad@,
         "that file does not declare the same name, so the unqualified letter points at the same \
@@ -238,25 +247,26 @@ priv fn array_sizes(src: U8[], names: List<|U8[]|>$@, sizes: List<|Sz|>$@, arena
             if name.len == 0 || !(name[0].is_lower() || name[0] == '_')
                 continue
             // The `[count]` inside the type on the same line.
-            open: = line.sub_from(i).find_char('[')
-            if open < 0
+            switch line.sub_from(i).find_char('[')
+            case .none
                 continue
-            p: = i + Sz::open + 1
-            $k: = p
-            for k < line.len && line[k].is_digit()
-                k += 1
-            if k == p || k >= line.len || line[k] != ']'
-                continue
-            size: = Sz::(line.sub(p, k - p).to_i64() catch 0I64)
-            $seen: Sz = 0
-            for j in Range.asc(names.len)
-                if names.get(j).equals(name)
-                    seen = j + 1
-            if seen == 0
-                names.push(name)
-                sizes.push(size)
-            else if sizes.get(seen - 1) != size
-                sizes.set(seen - 1, 0) // a name whose sizes do not agree is not judged
+            case .some(open)
+                p: = i + open + 1
+                $k: = p
+                for k < line.len && line[k].is_digit()
+                    k += 1
+                if k == p || k >= line.len || line[k] != ']'
+                    continue
+                size: = Sz::(line.sub(p, k - p).to_i64() catch 0I64)
+                $seen: Sz = 0
+                for j in Range.asc(names.len)
+                    if names.get(j).equals(name)
+                        seen = j + 1
+                if seen == 0
+                    names.push(name)
+                    sizes.push(size)
+                else if sizes.get(seen - 1) != size
+                    sizes.set(seen - 1, 0) // a name whose sizes do not agree is not judged
 
 priv fn hand_descriptor(raw: U8[], names: List<|U8[]|>@, sizes: List<|Sz|>@, arena: Arena$@): Bool //<
     //< Whether a line's `[]::{ .ptr = <name>@, .len = <count> }` carries the declared length
@@ -265,38 +275,41 @@ priv fn hand_descriptor(raw: U8[], names: List<|U8[]|>@, sizes: List<|Sz|>@, are
     line: = scan.strip_code(raw, arena)
     $i: Sz = 0
     for i + 5 <= line.len
-        at: = line.sub_from(i).find_str("[]::{")
-        if at < 0
+        switch line.sub_from(i).find_str("[]::{")
+        case .none
             return false
-        p: = i + Sz::at
-        i = p + 5
-        rest: = line.sub_from(i).trim_start()
-        if !rest.starts_with(".ptr")
-            continue
-        eq: = rest.find_char('=')
-        if eq < 0
-            continue
-        $tail: = rest.sub_from(eq + 1).trim_start()
-        $k: Sz = 0
-        for k < tail.len && htext.is_word_at(tail, k)
-            k += 1
-        name: = tail.sub(0, k)
-        tail = tail.sub_from(k).strip_prefix("[0]")
-        if !tail.starts_with("@")
-            continue
-        len_at: = tail.find_str(".len")
-        if len_at < 0
-            continue
-        num: = tail.sub_from(len_at + 4).trim_start().strip_prefix("=").trim_start()
-        $d: Sz = 0
-        for d < num.len && num[d].is_digit()
-            d += 1
-        if d == 0
-            continue
-        want: = Sz::(num.sub(0, d).to_i64() catch 0I64)
-        for j in Range.asc(names.len)
-            if names.get(j).equals(name) && sizes.get(j) == want && want > 0
-                return true
+        case .some(at)
+            p: = i + at
+            i = p + 5
+            rest: = line.sub_from(i).trim_start()
+            if !rest.starts_with(".ptr")
+                continue
+            switch rest.find_char('=')
+            case .none
+                continue
+            case .some(eq)
+                $tail: = rest.sub_from(eq + 1).trim_start()
+                $k: Sz = 0
+                for k < tail.len && htext.is_word_at(tail, k)
+                    k += 1
+                name: = tail.sub(0, k)
+                tail = tail.sub_from(k).strip_prefix("[0]")
+                if !tail.starts_with("@")
+                    continue
+                switch tail.find_str(".len")
+                case .none
+                    continue
+                case .some(len_at)
+                    num: = tail.sub_from(len_at + 4).trim_start().strip_prefix("=").trim_start()
+                    $d: Sz = 0
+                    for d < num.len && num[d].is_digit()
+                        d += 1
+                    if d == 0
+                        continue
+                    want: = Sz::(num.sub(0, d).to_i64() catch 0I64)
+                    for j in Range.asc(names.len)
+                        if names.get(j).equals(name) && sizes.get(j) == want && want > 0
+                            return true
     return false
 
 // Caution: **Declare the same name twice at different sizes** (`mixed`). Nothing else exercises
@@ -389,10 +402,10 @@ priv fn check_map_at_boundary(arena: Arena$@)
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            at: = line.find_str("Map<|")
-            if at >= 0 && (at == 0 || !htext.is_word_before(line, at))
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+            if at: = line.find_str("Map<|")
+                if at == 0 || !htext.is_word_before(line, at)
+                    bad
+                        .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
     verdict.check_list("a folder taking keys from outside does not use Map (kssrv/ksdb/kspage)",
         seen, "lines", bad@,
         "design the seed before putting it in (the Map line under std/docs/DESIGN.md's 'Known \
@@ -415,22 +428,22 @@ priv fn check_compiler_named_std(arena: Arena$@)
             i += 1
             // Caution: **Do not read the comments.** A line explaining "write it this way and it
             // breaks" mentions an imaginary FQN (`"std.io.U8[]"` in `sema/decl/resolve.kspl`).
-            code: =
-                line.sub(0, line.find_str("//")) if line.find_str("//") >= 0 else line
+            code: = line.sub(0, line.find_str("//").unwrap_or(line.len))
             for fqn in std_fqns_in(code, arena)
                 // `std.lang.Add` -> file `lang`, declaration `Add`.
                 rest: = fqn.sub_from(4)
-                cut: = rest.find_char('.')
-                if cut < 0
+                switch rest.find_char('.')
+                case .none
                     continue
-                // `std/` uses the default extension (`default_ext` in
-                // `../../ksplc/base/core.kspls`).
-                file: = arena.text().s("std/").s(rest.sub(0, cut)).s(".kspls").take()
-                name: = rest.sub_from(cut + 1)
-                if !declares_name(harness.read_under_root(file), name, arena)
-                    bad
-                        .push(arena.text().s(rel).s(":\{i\}: ").s(fqn).s(" is not in ").s(file)
-                        .take())
+                case .some(cut)
+                    // `std/` uses the default extension (`default_ext` in
+                    // `../../ksplc/base/core.kspls`).
+                    file: = arena.text().s("std/").s(rest.sub(0, cut)).s(".kspls").take()
+                    name: = rest.sub_from(cut + 1)
+                    if !declares_name(harness.read_under_root(file), name, arena)
+                        bad
+                            .push(arena.text().s(rel).s(":\{i\}: ").s(fqn).s(" is not in ").s(file)
+                            .take())
     verdict.check_list("the letters by which the compiler names std really exist", seen, "lines",
         bad@, "rename and mend ksplc's letters too (docs/DESIGN.md's 3.2.4)")
 
@@ -441,19 +454,21 @@ priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
     found: = arena.create(List<|U8[]|>.new(arena))
     $at: Sz = 0
     for at < line.len
-        hit: = line.sub_from(at).find_str("\"std.")
-        if hit < 0
+        switch line.sub_from(at).find_str("\"std.")
+        case .none
             break
-        start: = at + Sz::hit + 1
-        $end: Sz = start
-        for end < line.len &&
-            (line[end].is_alpha() || line[end].is_digit() || line[end] == '_' || line[end] == '.')
-            end += 1
-        word: = line.sub(start, end - start)
-        // Only strings complete down to the name (not a prefix such as `"std.lang."`).
-        if word.count_str(".") >= 2 && !word.ends_with(".")
-            found.push(arena.dup_str(word))
-        at = end
+        case .some(hit)
+            start: = at + hit + 1
+            $end: Sz = start
+            for end < line.len &&
+                (line[end].is_alpha() || line[end].is_digit() || line[end] == '_' ||
+                line[end] == '.')
+                end += 1
+            word: = line.sub(start, end - start)
+            // Only strings complete down to the name (not a prefix such as `"std.lang."`).
+            if word.count_str(".") >= 2 && !word.ends_with(".")
+                found.push(arena.dup_str(word))
+            at = end
     return found
 
 priv fn declares_name(src: U8[], name: U8[], arena: Arena$@): Bool //<
@@ -493,7 +508,8 @@ priv fn check_runtime_check_location(arena: Arena$@) //<
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            if line.find_str("loc.offset") >= 0 && line.find_str("print_diagnostic") < 0
+            if line.find_str("loc.offset").is_some() &&
+                line.find_str("print_diagnostic").is_none()
                 bad
                     .push(arena.text().s(rel)
                     .s(":\{i\}: it puts loc.offset where the line number goes").take())
@@ -505,10 +521,11 @@ priv fn panic_off(line: U8[], _arena: Arena$@): Bool //<
     //<
     //< Caution: **Keep the verdict in this one place** (inside the runtime the sample table cannot
     //< reach it). Breaking it means a capital prefix, or a capital after `panic: `.
-    if line.find_str("Panic: ") >= 0
+    if line.find_str("Panic: ").is_some()
         return true
-    at: = line.find_str("panic: ")
-    return at >= 0 && at + 7 < line.len && line[at + 7].is_upper()
+    if at: = line.find_str("panic: ")
+        return at + 7 < line.len && line[at + 7].is_upper()
+    return false
 
 priv fn check_panic_spelling(arena: Arena$@) //<
     //< Keeps the run-time stop message to one form
@@ -658,17 +675,19 @@ priv fn check_result_line(arena: Arena$@)
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            at: = line.find_str("RESULT: ")
-            if at < 0
+            switch line.find_str("RESULT: ")
+            case .none
                 continue
-            // **This file (it lists the forms) and the browser's `BROWSER-RESULT:` are left out.**
-            if rel.equals("tests/suite/conventions_test.kspls") ||
-                rel.equals("std/verdict.kspls") || rel.equals("docs/SPEC-gates.md") ||
-                (at >= 8 && line[at - 1] == '-')
-                continue
-            if !result_form_ok(line.sub_from(at + 8), arena)
-                bad
-                    .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
+            case .some(at)
+                // **This file (it lists the forms) and the browser's `BROWSER-RESULT:` are left
+                // out.**
+                if rel.equals("tests/suite/conventions_test.kspls") ||
+                    rel.equals("std/verdict.kspls") || rel.equals("docs/SPEC-gates.md") ||
+                    (at >= 8 && line[at - 1] == '-')
+                    continue
+                if !result_form_ok(line.sub_from(at + 8), arena)
+                    bad
+                        .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
     hint: = arena.text().s("after 'RESULT: ' comes ALL PASS / SOME FAILED / SKIPPED ")
         .s("(\"How a run is read\" in docs/SPEC-gates.md)").take()
     verdict.check_list("the letter of a gate's verdict line is one", seen, "lines", bad@, hint)
@@ -689,8 +708,9 @@ priv fn check_case_line(arena: Arena$@)
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            if line.find_str("-> Passed!") >= 0 || line.find_str("-> Skipped") >= 0 ||
-                line.find_str("io.out().s(\"\\n[") >= 0
+            if line.find_str("-> Passed!").is_some() ||
+                line.find_str("-> Skipped").is_some() ||
+                line.find_str("io.out().s(\"\\n[").is_some()
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
     verdict.check_list("a package's tests do not write a single test's line by hand", seen, "lines",
@@ -709,7 +729,8 @@ priv fn check_slice_name(arena: Arena$@)
         for line in harness.read_under_root(rel).lines(arena)
             seen += 1
             i += 1
-            if line.find_str("\"Slice\"") >= 0 || line.find_str("\"std.lang.Slice\"") >= 0
+            if line.find_str("\"Slice\"").is_some() ||
+                line.find_str("\"std.lang.Slice\"").is_some()
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: \{line.trim_spaces()\}").take())
     verdict.check_list("the slice's type name is not written directly", seen, "lines", bad@,
@@ -753,6 +774,12 @@ priv const plural_names: U8[][6] = ::{ "test", "tool", "doc", "app", "board", "d
     //< name that is not such a noun (`parse`, `sema`, `model`) names an aspect of its package, and
     //< stays.
 
+priv fn names_a_kind(part: U8[]): Bool //< whether a folder's name is one of plural_names
+    for one in U8[][]::plural_names
+        if part.equals(one)
+            return true
+    return false
+
 priv fn check_folder_names(arena: Arena$@) //<
     //< A folder holding many of a kind is named in the plural
     //<
@@ -760,27 +787,19 @@ priv fn check_folder_names(arena: Arena$@) //<
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
     $said: = List<|U8[]|>.new(arena)
-    files: = harness.tracked() catch
-        ksplc_harness.fatal("cannot list the files git knows")
-        return
+    files: = harness.tracked()
     for rel in files
         $at: Sz = 0
         for at < rel.len
-            cut: = rel.sub_from(at).find_char('/')
-            if cut < 0
+            switch rel.sub_from(at).find_char('/')
+            case .none
                 break
-            part: = rel.sub(at, cut)
-            at += cut + 1
-            seen += 1
-            for one in U8[][]::plural_names
-                if !part.equals(one)
-                    continue
+            case .some(cut)
+                part: = rel.sub(at, cut)
+                at += cut + 1
+                seen += 1
                 where: = rel.sub(0, at - 1)
-                $had: = false
-                for w in said
-                    if w.equals(where)
-                        had = true
-                if had
+                if !names_a_kind(part) || scan.has(said@, where)
                     continue
                 said.push(arena.dup_str(where))
                 bad
@@ -797,15 +816,16 @@ priv fn calls_in(src: U8[], name: U8[]): Sz //< how often `name(` is called in s
     $n: Sz = 0
     $i: Sz = 0
     for i < src.len
-        at: = src.sub_from(i).find_str(name)
-        if at < 0
+        switch src.sub_from(i).find_str(name)
+        case .none
             break
-        p: = i + Sz::at
-        defined: = p >= 3 && src.sub(p - 3, 3).equals("fn ")
-        if !htext.is_word_before(src, p) && p + name.len < src.len && src[p + name.len] == '(' &&
-            !defined
-            n += 1
-        i = p + name.len
+        case .some(at)
+            p: = i + at
+            defined: = p >= 3 && src.sub(p - 3, 3).equals("fn ")
+            if !htext.is_word_before(src, p) && p + name.len < src.len &&
+                src[p + name.len] == '(' && !defined
+                n += 1
+            i = p + name.len
     return n
 
 priv fn check_tests_registered(arena: Arena$@)
@@ -816,14 +836,15 @@ priv fn check_tests_registered(arena: Arena$@)
         src: = harness.read_under_root(rel)
         $i: Sz = 0
         for i + 6 < src.len
-            at: = src.sub_from(i).find_str(".test_")
-            if at < 0
+            switch src.sub_from(i).find_str(".test_")
+            case .none
                 break
-            $e: = i + Sz::at + 1
-            for e < src.len && htext.is_word_at(src, e)
-                e += 1
-            called.s(src.sub(i + Sz::at + 1, e - i - Sz::at - 1)).c(' ')
-            i = e
+            case .some(at)
+                $e: = i + at + 1
+                for e < src.len && htext.is_word_at(src, e)
+                    e += 1
+                called.s(src.sub(i + at + 1, e - i - at - 1)).c(' ')
+                i = e
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
     for rel in harness
@@ -831,13 +852,17 @@ priv fn check_tests_registered(arena: Arena$@)
         src: = harness.read_under_root(rel)
         for line in src.lines(arena)
             t: = line.strip_prefix("pub ")
-            if !t.starts_with("fn test_") || t.find_char('(') < 0
+            if !t.starts_with("fn test_")
                 continue
-            name: = t.sub(3, t.find_char('(') - 3)
-            seen += 1
-            wanted: = arena.text().s(" ").s(name).s(" ").take()
-            if called.slice().find_str(wanted) < 0 && calls_in(src, name) == 0
-                bad.push(arena.text().s(rel).s(": ").s(name).take())
+            switch t.find_char('(')
+            case .none
+                continue
+            case .some(open)
+                name: = t.sub(3, open - 3)
+                seen += 1
+                wanted: = arena.text().s(" ").s(name).s(" ").take()
+                if called.slice().find_str(wanted).is_none() && calls_in(src, name) == 0
+                    bad.push(arena.text().s(rel).s(": ").s(name).take())
     verdict.check_list("every test function is called from a runner", seen, "tests", bad@,
         "call it from its package's test runner, its folder's all.kspls (or remove the test)")
 

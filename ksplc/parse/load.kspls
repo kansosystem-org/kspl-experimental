@@ -1,3 +1,10 @@
+//< The loading: reading each source, parsing it with the grammar, and following its `import`s
+//<
+//< **`load_and_parse_file` is the one function that runs it**: it takes the editor's text or
+//< reads the disk, turns the indentation notation into braces, parses and normalizes (or takes the
+//< file's declarations from the disk cache), adds them to the root, then loads each import.
+//< **Every synthesized declaration is parsed through `parse_synth_decls`**, never built by hand.
+//< The indentation notes are only collected here, for Sema to report.
 import "kspeg/engine" as kspeg
 import "kspeg/rule" { Kspeg_signal }
 import "ksplc/base/as_written" as base_as_written
@@ -7,6 +14,7 @@ import "ksplc/base/ast_kinds" as base_ast_kinds
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
+import "ksplc/base/literal" as base_literal
 import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
 import "ksplc/parse/ast_cache"
@@ -516,7 +524,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         path_node: = decl.get_embed_path()
         if path_node == null || path_node.text.len < 2
             continue
-        written: = path_node.text.sub(1, path_node.text.len - 2)
+        written: = path_node.text.literal_value(base_core.arena)
         written_refusal: = base_package.refused_written(written)
         if written_refusal.len > 0
             print_at_import(written_refusal, decl, import_path, perm_src)

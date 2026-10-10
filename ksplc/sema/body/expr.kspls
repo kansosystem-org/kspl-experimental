@@ -1,3 +1,10 @@
+//< Infers an expression's type: the dispatch on its kind, and the kinds no other file takes
+//<
+//< `infer_expr` hands a literal, a path, a postfix, a binary operator and a struct literal to their
+//< own files, and keeps the small kinds here: a character, a string, `sizeof` / `offsetof`, a unary
+//< operator, `?:`, a `catch` chain and an enum's `.variant`. Every expression ends in
+//< `settle_expected`, which fits it to the expected type.
+//< **`infer_expr_of` is the one way in from `sema/decl`** (for `sizeof(<an expression>)`).
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -373,7 +380,14 @@ priv fn infer_ternary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I
 
     return final_id
 
-priv fn infer_unknown_expr_type(_node: Ast_node$@, _c: Sema_ctx$@, _expected_id: I32): I32
+priv fn infer_unknown_expr_type(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32 //<
+    //< An expression form no rule above takes: reported, then Unknown
+    //<
+    //< Caution: **Do not return Unknown in silence.** Unknown reads as "already reported" to every
+    //< later check, so the form would pass to the backend and fail there with no word from ksplc.
+    //< Not an internal error that stops: the language server analyses half-written text too.
+    c.err(node,
+        "this expression has a form the analysis has no rule for; it cannot be used as a value here")
     return I32::sema_type_env.Builtin_type_id.unknown
 
 priv fn infer_upcast_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32!Sema_error
@@ -397,84 +411,85 @@ priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): 
     if !sema_type_env.is_unknown(current_id) && !ctx.env.is_result(current_id)
         ctx.err(node, "'catch' operator can only be applied to a Result type")
     base_id: = ctx.env.strip_result(current_id)
-    $is_result_overall: = false
-
-    $err_id: U8[] = ""
     $err_id_node: Ast_node$@ = null
     $target_block: Ast_node$@ = null
     $target_expr: Ast_node$@ = null
-
     for ch in catch_node.children
         if ch.kind_id == .k_identifier
-            err_id = ch.text
             err_id_node = ch
         else if ch.kind_id == .k_stmt_block
             target_block = ch
-        else if ch.kind_id != .k_keyword && ch.kind_id != .k_stmt_block
+        else if ch.kind_id != .k_keyword
             target_expr = ch
-
-    err_type_id: = ctx.env.get_result_err_id(current_id)
-    $fb_is_result: = false
-
     if target_block != null
-        if base_core.config.run_lint_checks && err_id.len > 0
-            $stmt_count: = 0
-            $target_stmt: Ast_node$@ = null
-            for c_node in target_block.children
-                if c_node.kind_id != .k_empty && c_node.kind_id != .k_underscore
-                    stmt_count += 1
-                    target_stmt = c_node
-            if stmt_count == 1 && target_stmt != null && target_stmt.kind_id == .k_stmt_throw
-                throw_expr: = target_stmt.get_throw_expr()
-                // A bare variable is a k_expr_path after normalization; checking k_identifier alone
-                // would miss `throw e` (as with W0204).
-                if throw_expr != null && throw_expr.is_path_or_ident()
-                    if throw_expr.get_path_or_ident_name().equals(err_id)
-                        ctx.information(catch_node,
-                            "[I0701] Redundant error propagation. Consider using '!' instead of \
-                                'catch e { throw e; }'.")
+        lint_rethrow_only(ctx, catch_node, target_block, err_id_node)
+        infer_catch_block(ctx, catch_node, target_block, err_id_node,
+            ctx.env.get_result_err_id(current_id), base_id, value_unread)!
+        return base_id
+    if target_expr == null
+        return base_id
+    $exp_for_fb: = expected_id
+    if sema_type_env.is_unknown(exp_for_fb) || sema_type_env.is_void(exp_for_fb)
+        exp_for_fb = base_id
+    // Caution: **Set the same flag as the `fallback` statement.** It lets a `#noreturn` call pass
+    // at a value position (sema/body/coerce.kspls); without it here, only `catch panic(…)` would be
+    // rejected.
+    prev_in_fallback: = ctx.fn_ctx.in_fallback_value
+    ctx.fn_ctx.in_fallback_value = true
+    fb_is_result: = ctx.env.is_result(target_expr.infer_expr(ctx, exp_for_fb)!)
+    sema_body_lint_stmt.lint_type_given(ctx, target_expr, exp_for_fb,
+        "The type of the value it stands in for already gives it.")
+    ctx.fn_ctx.in_fallback_value = prev_in_fallback
+    return ctx.env.make_result(base_id) if fb_is_result else base_id
 
-        ctx.symtab.enter_scope()
-        prev_fb_type: = ctx.fn_ctx.fallback_type
-        ctx.fn_ctx.fallback_type = base_id
-        ctx.fn_ctx.catch_depth += 1
-        if err_id.len > 0
-            err_sym: = Sema_symbol.new(.variable, err_id, err_id_node)
-            err_sym.type_id = err_type_id
-            ctx.declare_symbol(err_id, err_sym, false)
-            err_id_node.def_node = err_id_node
-            err_id_node.type_id = err_type_id
-        target_block.infer_stmts(ctx)!
-        // Caution: **A handler in a value position must produce a value.** Reaching its end would
-        // silently leave the zero value, while `catch alt()` produces one, so the two spellings
-        // would silently differ (Principle 8 in `../../../docs/DESIGN.md`).
-        if !value_unread && !sema_type_env.is_void(base_id) &&
-            !sema_type_env.is_unknown(base_id) && !target_block.is_guaranteed_to_leave(true)
-            ctx.clear_scratch()
-                .s("'catch' is expected to produce '\{ctx.env.get_str(base_id)\}', but control may \
-                    reach ").s("the end of its block without 'fallback'")
-            ctx.err(catch_node, ctx.scratch.slice())
-        ctx.fn_ctx.catch_depth -= 1
-        ctx.fn_ctx.fallback_type = prev_fb_type
-        ctx.symtab.exit_scope()
-    else if target_expr != null
-        $exp_for_fb: = expected_id
-        if sema_type_env.is_unknown(exp_for_fb) || sema_type_env.is_void(exp_for_fb)
-            exp_for_fb = base_id
-        // Caution: **Set the same flag as the `fallback` statement.** It lets a `#noreturn` call
-        // pass at a value position (sema/body/coerce.kspls); without it here, only `catch panic(…)`
-        // would be rejected.
-        prev_in_fallback: = ctx.fn_ctx.in_fallback_value
-        ctx.fn_ctx.in_fallback_value = true
-        fb_is_result = ctx.env.is_result(target_expr.infer_expr(ctx, exp_for_fb)!)
-        sema_body_lint_stmt.lint_type_given(ctx, target_expr, exp_for_fb,
-            "The type of the value it stands in for already gives it.")
-        ctx.fn_ctx.in_fallback_value = prev_in_fallback
+priv fn lint_rethrow_only(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_node$@,
+    err_id_node: Ast_node$@) //<
+        //< [I0701] A handler that only throws the error it caught, which `!` says shorter
+    if !base_core.config.run_lint_checks || err_id_node == null
+        return
+    $stmt_count: = 0
+    $target_stmt: Ast_node$@ = null
+    for c_node in block.children
+        if c_node.kind_id != .k_empty && c_node.kind_id != .k_underscore
+            stmt_count += 1
+            target_stmt = c_node
+    if stmt_count != 1 || target_stmt.kind_id != .k_stmt_throw
+        return
+    throw_expr: = target_stmt.get_throw_expr()
+    // A bare variable is a k_expr_path after normalization; checking k_identifier alone would miss
+    // `throw e` (as with W0204).
+    if throw_expr != null && throw_expr.is_path_or_ident() &&
+        throw_expr.get_path_or_ident_name().equals(err_id_node.text)
+        ctx.information(catch_node,
+            "[I0701] Redundant error propagation. Consider using '!' instead of 'catch e { throw e; \
+                }'.")
 
-    if fb_is_result
-        is_result_overall = true
-
-    return ctx.env.make_result(base_id) if is_result_overall else base_id
+priv fn infer_catch_block(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_node$@,
+    err_id_node: Ast_node$@, err_type_id: I32, base_id: I32, value_unread: Bool): Void!Sema_error //<
+        //< A `catch` handler's block, with the caught error bound in a scope of its own
+    ctx.symtab.enter_scope()
+    prev_fb_type: = ctx.fn_ctx.fallback_type
+    ctx.fn_ctx.fallback_type = base_id
+    ctx.fn_ctx.catch_depth += 1
+    if err_id_node != null
+        err_sym: = Sema_symbol.new(.variable, err_id_node.text, err_id_node)
+        err_sym.type_id = err_type_id
+        ctx.declare_symbol(err_id_node.text, err_sym, false)
+        err_id_node.def_node = err_id_node
+        err_id_node.type_id = err_type_id
+    block.infer_stmts(ctx)!
+    // Caution: **A handler in a value position must produce a value.** Reaching its end would
+    // silently leave the zero value, while `catch alt()` produces one, so the two spellings would
+    // silently differ (Principle 8 in `../../../docs/DESIGN.md`).
+    if !value_unread && !sema_type_env.is_void(base_id) && !sema_type_env.is_unknown(base_id) &&
+        !block.is_guaranteed_to_leave(true)
+        ctx.clear_scratch()
+            .s("'catch' is expected to produce '\{ctx.env.get_str(base_id)\}', but control may \
+                reach the end of its block without 'fallback'")
+        ctx.err(catch_node, ctx.scratch.slice())
+    ctx.fn_ctx.catch_depth -= 1
+    ctx.fn_ctx.fallback_type = prev_fb_type
+    ctx.symtab.exit_scope()
 
 fn mark_variant_used(c: Sema_ctx$@, enum_name: U8[], variant_name: U8[]) //<
     //< Marks `Enum.variant`'s symbol used, for a variant written as the shorthand `.variant`

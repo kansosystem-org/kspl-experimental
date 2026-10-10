@@ -1,3 +1,12 @@
+//< The C backend's postfix chain (`.` / `[]` / `()` / `::`), beside the rest of `expr.kspls`
+//<
+//< **Some places write the same subexpression twice** (a subscript names the receiver for `.ptr`
+//< and for the bounds check's `.len`), so a side effect would run twice. `lower/expr.kspls` copies
+//< such values to temporaries first (`ksplc/tests/lang_test.kspls` checks the count).
+// ==========================================
+// **`receiver_needs_hoist` decides whether the receiver needs a temporary before its address is
+// taken** (`base/ast_place.kspls`). Do not decide it again here.
+// ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/gen/c/ctx" { Genc_ctx }
@@ -7,16 +16,6 @@ import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
 import "std/str"
-
-// ==========================================
-// Where the postfix chain (`.` / `[]` / `()` / `::`) is emitted as C.
-//
-// **Some places write the same subexpression twice** (a subscript names the receiver for `.ptr`
-// and for the bounds check's `.len`), so a side effect would run twice. `lower/expr.kspls` copies
-// such values to temporaries first (`ksplc/tests/lang_test.kspls` checks the count).
-// **`receiver_needs_hoist` decides whether the receiver needs a temporary before its address is
-// taken** (`base/ast_place.kspls`). Do not decide it again here.
-// ==========================================
 
 impl Ast_node
     fn emit_method_call(r: Self$@, c: Genc_ctx$@, args_node: Ast_node$@)
@@ -71,56 +70,8 @@ impl Ast_node
         $intr: = sema_body_call.Intrinsic.not_intrinsic
         if expr_node.kind_id == .k_identifier
             intr = sema_body_call.intrinsic_of(expr_node.text)
-        if !is_method && intr != .not_intrinsic
-            if intr == .read_volatile
-                if arg1: = args_node.get_arg_at(0)
-                    val_type: = c.env.strip_ptr(arg1.type_id)
-                    c.s("(*(volatile ")
-                    c.t(val_type)
-                    c.s("*)(")
-                    arg1.emit_expr(c)
-                    c.s("))")
-                    return
-            if intr == .write_volatile
-                arg1: = args_node.get_arg_at(0).unwrap_or(null)
-                arg2: = args_node.get_arg_at(1).unwrap_or(null)
-                if arg1 != null && arg2 != null
-                    val_type: = c.env.strip_ptr(arg1.type_id)
-                    c.s("((*(volatile ")
-                    c.t(val_type)
-                    c.s("*)(")
-                    arg1.emit_expr(c)
-                    c.s(")) = (")
-                    arg2.emit_expr(c)
-                    c.s("))")
-                    return
-            if intr == .inline_c
-                if args_node != null
-                    if arg1: = args_node.get_arg_at(0)
-                        if arg1.kind_id == .k_string
-                            raw: = arg1.text
-                            if raw.len >= 6 && raw.starts_with("\"\"\"")
-                                inner: = U8[]::{ .ptr = raw.ptr + 3, .len = raw.len - 6 }
-                                c.s(inner)
-                            else if raw.len >= 2
-                                inner: = U8[]::{ .ptr = raw.ptr + 1, .len = raw.len - 2 }
-                                c.s(inner)
-                return
-            if intr == .asm_volatile
-                c.s("__asm__ volatile(")
-                if args_node != null
-                    $is_first: = true
-                    for ch in args_node.children
-                        if !ch.is_literal(",")
-                            if !is_first
-                                c.s(", ")
-                            if ch.kind_id == .k_string
-                                c.s(ch.text)
-                            else
-                                ch.emit_expr(c)
-                            is_first = false
-                c.s(")")
-                return
+        if !is_method && intr != .not_intrinsic && emit_intrinsic_call(c, intr, args_node)
+            return
 
         if is_method
             expr_node.emit_method_call(c, args_node)
@@ -262,3 +213,64 @@ impl Ast_node
         else
             expr_node.emit_expr_as_receiver(c)
             c.s(op_text)
+
+priv fn emit_intrinsic_call(c: Genc_ctx$@, intr: sema_body_call.Intrinsic, args_node: Ast_node$@):
+    Bool //<
+        //< It writes an intrinsic's call as the C it stands for; false where it wrote none
+        //<
+        //< A volatile access missing its arguments falls back to an ordinary call, which C rejects.
+    switch intr
+    case .read_volatile
+        arg1: = args_node.get_arg_at(0).unwrap_or(null)
+        if arg1 == null
+            return false
+        c.s("(*(volatile ").t(c.env.strip_ptr(arg1.type_id)).s("*)(")
+        arg1.emit_expr(c)
+        c.s("))")
+    case .write_volatile
+        arg1: = args_node.get_arg_at(0).unwrap_or(null)
+        arg2: = args_node.get_arg_at(1).unwrap_or(null)
+        if arg1 == null || arg2 == null
+            return false
+        c.s("((*(volatile ").t(c.env.strip_ptr(arg1.type_id)).s("*)(")
+        arg1.emit_expr(c)
+        c.s(")) = (")
+        arg2.emit_expr(c)
+        c.s("))")
+    case .inline_c
+        emit_inline_c(c, args_node)
+    case .asm_volatile
+        emit_asm_volatile(c, args_node)
+    default
+        return false
+    return true
+
+priv fn emit_inline_c(c: Genc_ctx$@, args_node: Ast_node$@) //<
+    //< `inline_c("…")`: the string's contents, written into the C as they are
+    if args_node == null
+        return
+    arg1: = args_node.get_arg_at(0).unwrap_or(null)
+    if arg1 == null || arg1.kind_id != .k_string
+        return
+    raw: = arg1.text
+    if raw.len >= 6 && raw.starts_with("\"\"\"")
+        c.s(U8[]::{ .ptr = raw.ptr + 3, .len = raw.len - 6 })
+    else if raw.len >= 2
+        c.s(U8[]::{ .ptr = raw.ptr + 1, .len = raw.len - 2 })
+
+priv fn emit_asm_volatile(c: Genc_ctx$@, args_node: Ast_node$@) //<
+    //< `asm_volatile(…)`: GCC's `__asm__ volatile(…)`, its strings written as they are
+    c.s("__asm__ volatile(")
+    if args_node != null
+        $is_first: = true
+        for ch in args_node.children
+            if ch.is_literal(",")
+                continue
+            if !is_first
+                c.s(", ")
+            if ch.kind_id == .k_string
+                c.s(ch.text)
+            else
+                ch.emit_expr(c)
+            is_first = false
+    c.s(")")

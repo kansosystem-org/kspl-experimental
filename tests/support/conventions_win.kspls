@@ -6,7 +6,6 @@
 //< covered range silently shrinks", "an invisible byte gets mixed in", "that one entry point can
 //< start nothing"**, so the log leads to no cause.
 //< Note: Which Windows jobs run the gates is "What each platform runs" in `docs/SPEC-gates.md`.
-import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars" // `trim_spaces`
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -32,7 +31,7 @@ priv fn cuts_by_hand(line: U8[], arena: Arena$@): Bool //< whether it cuts into 
     //< Caution: **Keep the judging in this one place**: the check and its samples both call it, so
     //< the samples show the very judgment the check runs ("a check shows it can fire" in
     //< `conventions_scan.kspls`).
-    return scan.strip_code(line, arena).find_str(hand_cut) >= 0
+    return scan.strip_code(line, arena).find_str(hand_cut).is_some()
 
 priv fn check_line_cut(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
@@ -60,10 +59,10 @@ priv fn gates_on_exec(body: U8[], _arena: Arena$@): Bool //<
     //< Whether a file that starts a child uses that predicate for the check before starting
     //<
     //< Caution: **Keep the judging in this one place** (the reason is at `cuts_by_hand`).
-    if body.find_str("is_executable") < 0
+    if body.find_str("is_executable").is_none()
         return false
     for call in spawn_calls
-        if body.find_str(call) >= 0
+        if body.find_str(call).is_some()
             return true
     return false
 
@@ -98,7 +97,7 @@ priv fn opens_tmp(line: U8[], _arena: Arena$@): Bool //< whether a string starts
     //<
     //< Caution: **Keep the judging in this one place** (the reason is at `cuts_by_hand`).
     for lit in tmp_literals
-        if line.find_str(lit) >= 0
+        if line.find_str(lit).is_some()
             return true
     return false
 
@@ -153,7 +152,7 @@ priv fn win_device(part: U8[]): Bool //<
     //<
     //< Caution: **Check without the extension** (`nul.txt` is a device too), **and ignore case**
     //< (names there are case-insensitive).
-    dot: = part.find_char('.')
+    dot: = part.find_char('.').unwrap_or(0)
     stem: = part.sub(0, dot) if dot > 0 else part
     for d in win_devices
         if stem.equals_ignore_case(d)
@@ -173,7 +172,7 @@ priv fn win_hostile(path: U8[], arena: Arena$@): Bool //<
         if part.len == 0
             continue
         for $i: Sz = 0; i < part.len; i += 1
-            if part[i] < ' ' || win_bad_chars.find_char(part[i]) >= 0
+            if part[i] < ' ' || win_bad_chars.find_char(part[i]).is_some()
                 return true
         last: = part[part.len - 1]
         if last == '.' || last == ' ' || win_device(part)
@@ -182,9 +181,7 @@ priv fn win_hostile(path: U8[], arena: Arena$@): Bool //<
 
 priv fn check_win_paths(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    files: = harness.tracked() catch
-        ksplc_harness.fatal("git ls-files failed")
-        return
+    files: = harness.tracked()
     for rel in files
         if win_hostile(rel, arena)
             bad.push(arena.dup_str(rel))

@@ -1,3 +1,6 @@
+//< Tests that a walk guarded by `std/stack_limit` stops before its stack runs out
+//<
+//< On the main thread, on a thread of its own, and in std's walks that read input.
 import "std/json"
 import "std/mem" { Arena }
 import "std/regex" { Regex }
@@ -123,21 +126,26 @@ priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_d
         default {}
     return refused
 
-priv fn regex_refuses(_arena: Arena$@): Bool //< a flat pattern recursing once per character
-    $text: = Str_builder.new()
-    defer text.free()
-    for _i in Range.asc(2000)
-        text.c('a')
-    re: = Regex.compile(text.slice()) catch
-        return false
-    defer re.free()
+priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_nesting_depth`
+    //<
+    //< **Compiling is the walk that recurses**, once per group level; matching keeps its
+    //< backtracking points on the heap, so only the pattern's nesting can reach the stack.
+    $pattern: = Str_builder.new()
+    defer pattern.free()
+    for _i in Range.asc(400)
+        pattern.s("(?:")
+    pattern.c('a')
+    for _i in Range.asc(400)
+        pattern.c(')')
     $refused: = false
-    re.find(text.slice()) catch e
+    re: = Regex.compile(pattern.slice()) catch e
         switch e
-        case .too_complex
+        case .too_deep
             refused = true
         default {}
-    return refused
+        return refused
+    re.free()
+    return false
 
 fn test_walks_stop_on_a_short_stack(arena: Arena$@)
     verdict
@@ -147,5 +155,5 @@ fn test_walks_stop_on_a_short_stack(arena: Arena$@)
     assert(on_short_stack(limit@, 0, U8$[]::seed, json_refuses, arena),
         "json.parse refuses nesting the stack left cannot hold, as too_deep")
     assert(on_short_stack(limit@, 0, U8$[]::seed, regex_refuses, arena),
-        "Regex.find refuses recursion the stack left cannot hold, as too_complex")
+        "Regex.compile refuses nesting the stack left cannot hold, as too_deep")
     verdict.pass("")

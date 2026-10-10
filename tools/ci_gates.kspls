@@ -47,107 +47,111 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
         //< worth, where one line would speak for the rest; `make` failing still fails it.
     shard: Shard
     macos: Bool //< the macOS job runs it too
+    stops: Bool //< a fall stops the set, since the gates after it build on what it built
 
 // Caution: **The order is the order they run in**: a gate may use what one before it built (the
 // self-host builds stage2, which perf-log measures again). **Formatting comes before lint**: a
 // file that is not formatted fails the formatter's check with the reason, where lint would only
 // name a line.
-const gates: Gate[32] = ::{
+const gates: Gate[33] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
-        .shard = .core, .macos = true },
+        .shard = .core, .macos = true, .stops = true },
     // **Only macOS runs every package's tests in one program**: Linux and Windows run each
     // package's own `make test` from a copy (`test-extract`, in `suites_a`), which macOS does not.
     Gate::{ .log = "debug", .args = "debug", .par = .serial, .verdict = true, .shard = .none,
-        .macos = true },
+        .macos = true, .stops = false },
     // tools/ has tests but no `Makefile`, so no copy runs them; `debug` holds them on macOS.
     Gate::{ .log = "debug_tools", .args = "debug-tools", .par = .serial, .verdict = true,
-        .shard = .rest, .macos = false },
+        .shard = .rest, .macos = false, .stops = false },
     Gate::{ .log = "fmt_tree", .args = "test-fmt-tree", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .rest,
-        .macos = true },
+        .macos = true, .stops = false },
     Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = .parallel, .verdict = true,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     // **Only this `-j` shrinks the suites' time**, and the order they start in settles it (`SUITES`
     // in `mk/test.mk`, longest first; the halves are cut at `SUITES_B` there). Caution: **keep
     // `--output-sync=target`**, or one suite's `RESULT:` lines scatter among another's.
     Gate::{ .log = "suites_a", .args = "test-suites-a", .par = .synced, .verdict = false,
-        .shard = .core, .macos = false },
+        .shard = .core, .macos = false, .stops = false },
     // The QEMU run covers the Cortex-M demos; the link check stays to notice a demo falling out of
     // QEMU's list. **One make for both**, so stage1's check is paid once (no verdict: one log).
     Gate::{ .log = "link_abi", .args = "test-ksos-link test-llvm-abi", .par = .synced,
-        .verdict = false, .shard = .core, .macos = false },
+        .verdict = false, .shard = .core, .macos = false, .stops = false },
     Gate::{ .log = "fm", .args = "test-freestanding-math", .par = .serial, .verdict = true,
-        .shard = .core, .macos = true },
+        .shard = .core, .macos = true, .stops = false },
     Gate::{ .log = "simd", .args = "test-simd", .par = .serial, .verdict = true, .shard = .core,
-        .macos = true },
+        .macos = true, .stops = false },
     // On a fall, remake the record with `make surface` and commit it with its diff.
     Gate::{ .log = "surface", .args = "test-surface", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     // The tour is generated from its program; `make tour` remakes it.
     Gate::{ .log = "docs", .args = "test-docs", .par = .serial, .verdict = true, .shard = .linux,
-        .macos = false },
+        .macos = false, .stops = false },
     Gate::{ .log = "suites_b", .args = "test-suites-b", .par = .synced, .verdict = false,
-        .shard = .rest, .macos = false },
+        .shard = .rest, .macos = false, .stops = false },
     // The suites that read or translate the tree's text (`SUITES_TEXT` in `mk/test.mk`).
     Gate::{ .log = "suites_text", .args = "test-suites-text", .par = .synced, .verdict = false,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     // **Only macOS runs it**: Linux and Windows reach the same training check through
     // `test-extract` (ksai's own `make test`), which macOS does not run.
     Gate::{ .log = "run", .args = "run", .par = .serial, .verdict = true, .shard = .none,
-        .macos = true },
+        .macos = true, .stops = false },
     Gate::{ .log = "selfhost_llvm", .args = "LLVM=1 self-host STATS=1", .par = .serial,
-        .verdict = true, .shard = .rest, .macos = true },
+        .verdict = true, .shard = .rest, .macos = true, .stops = false },
     // Caution: **Put the run-time tests through the LLVM backend too.** A self-host that passes
     // does not tread a shape ksplc itself never uses, so a broken genllvm goes unseen. Windows runs
     // it as well: only Win64 passes arguments on the stack, where a wrong argument type shows.
     Gate::{ .log = "debug_llvm", .args = "LLVM=1 debug", .par = .serial, .verdict = true,
-        .shard = .rest, .macos = true },
+        .shard = .rest, .macos = true, .stops = false },
+    // kssrv's and ksbind's tests through LLVM, which `debug` holds neither of (`test-llvm-pkgs`).
+    Gate::{ .log = "llvm_pkgs", .args = "test-llvm-pkgs", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false, .stops = false },
     // Peak memory alone settles it; the time is only recorded (`tests/tools/perf_guard.kspls`).
     // **Linux alone**: the baseline is Linux's, so another platform's numbers say nothing.
     Gate::{ .log = "perf", .args = "perf-log", .par = .serial, .verdict = false, .shard = .linux,
-        .macos = false },
+        .macos = false, .stops = false },
     // macOS runs these of ksplc's own suites, which the jobs above reach through `suites_a`. It
     // leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps what
     // meets Apple's toolchain only there (`fm`, `emit_runtime`).
     Gate::{ .log = "lsp", .args = "test-lsp", .par = .serial, .verdict = true, .shard = .none,
-        .macos = true },
+        .macos = true, .stops = false },
     Gate::{ .log = "negative", .args = "test-negative", .par = .serial, .verdict = true,
-        .shard = .none, .macos = true },
+        .shard = .none, .macos = true, .stops = false },
     Gate::{ .log = "equiv", .args = "test-equiv", .par = .serial, .verdict = true, .shard = .none,
-        .macos = true },
+        .macos = true, .stops = false },
     Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = .serial, .verdict = true,
-        .shard = .none, .macos = true },
+        .shard = .none, .macos = true, .stops = false },
     // Each needs a tool only the devcontainer image holds: `<ucontext.h>`, `qemu-system-arm`, node,
     // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer. **A browser and
     // the validator are required here** (`KSPAGE_REQUIRE_*`): the image bundles them, so their
     // absence is a fault, not the place.
     Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = .serial, .verdict = false,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = .serial, .verdict = false,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "js_syntax", .args = "test-js-syntax", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "kspage_wasm", .args = "test-kspage-wasm", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "kspage_browser", .args = "test-kspage-browser KSPAGE_REQUIRE_BROWSER=1",
-        .par = .serial, .verdict = true, .shard = .linux, .macos = false },
+        .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
     // No substitute for the `file://` gate above: one sees the page with a server, the other
     // without.
     Gate::{ .log = "kspage_served", .args = "test-kspage-served KSPAGE_REQUIRE_BROWSER=1",
-        .par = .serial, .verdict = true, .shard = .linux, .macos = false },
+        .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "kspage_desktop", .args = "test-kspage-desktop KSPAGE_REQUIRE_DESKTOP=1",
-        .par = .serial, .verdict = true, .shard = .linux, .macos = false },
+        .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
     // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
     // a link shows whether the FFI is right.
     Gate::{ .log = "blas", .args = "test-blas", .par = .serial, .verdict = true, .shard = .linux,
-        .macos = false },
+        .macos = false, .stops = false },
     Gate::{ .log = "race", .args = "test-race", .par = .serial, .verdict = true, .shard = .linux,
-        .macos = false },
+        .macos = false, .stops = false },
     // Needs no tool of the image's: it is here because Linux's minute costs least, and the release
     // checks each platform's own (`.github/workflows/release.yml`). It pays one `-O2` build.
     Gate::{ .log = "selfhost_ship", .args = "self-host-ship", .par = .serial, .verdict = true,
-        .shard = .linux, .macos = false },
+        .shard = .linux, .macos = false, .stops = false },
 }
 
 enum Set //< a set of gates one command runs, named as `make` names it
@@ -186,6 +190,101 @@ impl Set
             return g.shard == Shard.core
         case .ci_shard_rest
             return g.shard == Shard.rest
+
+// ==========================================
+// The SKIP lines a round expects. **A SKIP no row holds fails its gate**: a tool gone missing from
+// a runner would otherwise pass in silence. A row names the platform as make's `PLATFORM` spells
+// it, and a piece of the reason's line (the reasons: "Some gates need a tool or a library that not
+// every machine has" in `docs/SPEC-gates.md`). **Linux's rows are the fewest**: its image holds
+// every tool but the Windows cross-compiler and Wine.
+// ==========================================
+struct Expected_skip //< one SKIP a platform's round may print
+    on: U8[] //< the platform: `linux`, `darwin` or `win32`
+    says: U8[] //< a piece of the line that tells its reason apart
+
+const expected_skips: Expected_skip[68] = ::{
+    Expected_skip::{ .on = "linux", .says = "this machine has no IPv6 loopback" },
+    Expected_skip::{ .on = "linux", .says = "x86_64-w64-mingw32-gcc is not installed" },
+    Expected_skip::{ .on = "linux", .says = "Wine is not installed" },
+    Expected_skip::{ .on = "win32", .says = "this machine has no IPv6 loopback" },
+    Expected_skip::{ .on = "win32", .says = "so none goes silent" },
+    Expected_skip::{ .on = "win32", .says = "which Windows does not have" },
+    Expected_skip::{ .on = "win32", .says = "taskset is not installed" },
+    Expected_skip::{ .on = "win32", .says = "cannot grow a file past 2 GiB" },
+    Expected_skip::{ .on = "win32", .says = "no tool that marks a file read-only" },
+    Expected_skip::{ .on = "win32", .says = "which only Linux has" },
+    Expected_skip::{ .on = "win32", .says = "marks every new file executable" },
+    Expected_skip::{ .on = "win32", .says = "native Windows is out of scope" },
+    Expected_skip::{ .on = "win32", .says = "POSIX-specific executable paths" },
+    Expected_skip::{ .on = "win32", .says = "no POSIX mode" },
+    Expected_skip::{ .on = "win32", .says = "holds no sanitizer runtime" },
+    Expected_skip::{ .on = "win32", .says = "cannot be made with `ln -s`" },
+    Expected_skip::{ .on = "win32", .says = "do not link here" },
+    Expected_skip::{ .on = "win32", .says = "the libraries ksbind binds are not installed" },
+    Expected_skip::{ .on = "win32", .says = "test-ksos-link" },
+    Expected_skip::{ .on = "win32", .says = "no ARM toolchain" },
+    Expected_skip::{ .on = "win32", .says = "Windows has no SIGPIPE" },
+    Expected_skip::{ .on = "win32", .says = "/proc/self/status" },
+    Expected_skip::{ .on = "win32", .says = "nm is not installed" },
+    Expected_skip::{ .on = "win32", .says = "only one of the two C compilers is installed" },
+    Expected_skip::{ .on = "win32", .says = "Windows's permissions are an ACL" },
+    Expected_skip::{ .on = "win32", .says = "cannot open the folder to everyone" },
+    Expected_skip::{ .on = "win32", .says = "can hand a folder to another user" },
+    Expected_skip::{ .on = "win32", .says = "wasm-ld is not installed" },
+    Expected_skip::{ .on = "win32", .says = "node is not installed" },
+    Expected_skip::{ .on = "win32", .says = "x86_64-w64-mingw32-gcc is not installed" },
+    Expected_skip::{ .on = "win32", .says = "Wine is not installed" },
+    Expected_skip::{ .on = "win32", .says = "does not take --target" },
+    Expected_skip::{ .on = "win32", .says = "a drive is a root on Windows" },
+    Expected_skip::{ .on = "win32", .says = "Windows's executable path resolves no link" },
+    Expected_skip::{ .on = "win32", .says = "the section-cutting option is not handed here" },
+    Expected_skip::{ .on = "win32", .says = "numpy is absent" },
+    Expected_skip::{ .on = "win32", .says = "it is Linux only" },
+    Expected_skip::{ .on = "win32", .says = "the hook cannot be" },
+    Expected_skip::{ .on = "win32", .says = "cannot build with ThreadSanitizer" },
+    Expected_skip::{ .on = "win32", .says = "the real-time clock is degraded" },
+    Expected_skip::{ .on = "win32", .says = "clock cannot measure a silence" },
+    Expected_skip::{ .on = "win32", .says = "it is not split" },
+    Expected_skip::{ .on = "darwin", .says = "this machine has no IPv6 loopback" },
+    Expected_skip::{ .on = "darwin", .says = "taskset is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "cannot grow a file past 2 GiB" },
+    Expected_skip::{ .on = "darwin", .says = "no tool that marks a file read-only" },
+    Expected_skip::{ .on = "darwin", .says = "which only Linux has" },
+    Expected_skip::{ .on = "darwin", .says = "neither Windows's sharing check nor /proc" },
+    Expected_skip::{ .on = "darwin", .says = "it is Linux only" },
+    Expected_skip::{ .on = "darwin", .says = "/proc/self/status" },
+    Expected_skip::{ .on = "darwin", .says = "only one of the two C compilers is installed" },
+    Expected_skip::{ .on = "darwin", .says = "does not take --target" },
+    Expected_skip::{ .on = "darwin", .says = "the real-time clock is degraded" },
+    Expected_skip::{ .on = "darwin", .says = "clock cannot measure a silence" },
+    Expected_skip::{ .on = "darwin", .says = "it is not split" },
+    Expected_skip::{ .on = "darwin", .says = "wasm-ld is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "node is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "nm is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "the section-cutting option is not handed here" },
+    Expected_skip::{ .on = "darwin", .says = "holds no sanitizer runtime" },
+    Expected_skip::{ .on = "darwin", .says = "can hand a folder to another user" },
+    Expected_skip::{ .on = "darwin", .says = "do not link here" },
+    Expected_skip::{ .on = "darwin", .says = "the libraries ksbind binds are not installed" },
+    Expected_skip::{ .on = "darwin", .says = "numpy is absent" },
+    Expected_skip::{ .on = "darwin", .says = "x86_64-w64-mingw32-gcc is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "Wine is not installed" },
+    Expected_skip::{ .on = "darwin", .says = "no browser" },
+    Expected_skip::{ .on = "darwin", .says = "desktop-file-validate is not installed" },
+}
+
+fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that carry `SKIP`
+    $out: = List<|U8[]|>.new(arena)
+    for line in text.lines(arena)
+        if line.find_str("SKIP").is_some()
+            out.push(line)
+    return out
+
+fn is_expected_skip(line: U8[], platform: U8[]): Bool //< whether a row holds this SKIP line
+    for e in expected_skips
+        if e.on.equals(platform) && line.find_str(e.says).is_some()
+            return true
+    return false
 
 // ==========================================
 // What a run leaves, and the summary read back from it
@@ -228,11 +327,9 @@ fn outcomes(arena: Arena$@): List<|Outcome|> //< what the gates left, in the tab
                 rc: = words.get(0).to_i64() catch 1I64
                 ok = rc == 0I64
                 sec = words.get(1).to_i64() catch 0I64
-        $skips: = List<|U8[]|>.new(arena)
-        for line in held.lines(arena)
-            if line.find_str("SKIP") >= 0
-                skips.push(line)
-        out.push(Outcome::{ .log = g.log, .ok = ok, .sec = sec, .skips = skips })
+        out
+            .push(Outcome::{ .log = g.log, .ok = ok, .sec = sec,
+            .skips = skip_lines(held, arena) })
     return out
 
 priv struct Tally //< the counts both summaries open or close with
@@ -287,13 +384,21 @@ fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) /
                 b.s("* `").s(o.log).s("`\n")
     b.s("\na fallen gate's reason is in the per-gate log among the same round's artifacts, log-*\n")
 
-fn reset_logs(arena: Arena$@) //< removes what an earlier round left, so it is not counted again
+fn reset_logs(arena: Arena$@): Bool //<
+    //< Removes what an earlier round left, so it is not counted again; false where one stays
     //<
     //< Caution: **Remove the suites' times too** (`out/log/suite/*.times`): `make test-suites`
     //< counts every one it finds.
+    //< Caution: **Stop the round on a file that stays.** An old log left in place reads as this
+    //< round's PASS for a gate that never ran. A folder that is not there holds nothing to remove.
+    $all_gone: = true
     for dir in U8[][]::{ log_dir, "out/log/suite" }
         names: = fs.read_dir(dir, arena) catch
             continue
         for name in names
             if name.ends_with(".log") || name.ends_with(end_ext) || name.ends_with(".times")
-                fs.remove_path(fs.join(dir, name, arena)) catch {}
+                path: = fs.join(dir, name, arena)
+                fs.remove_path(path) catch
+                    io.err().s("ci: an earlier round's \{path\} cannot be removed\n")
+                    all_gone = false
+    return all_gone

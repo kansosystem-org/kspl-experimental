@@ -58,6 +58,7 @@ pub enum Fs_error //< why a filesystem operation failed
     operation_failed //< the OS refused; it cannot tell whether it exists, permission, or no parent
     too_deep //< a walk reached the depth limit (see `max_walk_depth`)
     held_elsewhere //< another holder has the lock (only `File_lock.try_take`, which does not wait)
+    io(err: io.Io_error) //< reading or writing a file's contents failed; it names the file
     mkdir_failed(at: U8[]) //< the segment that could not be created, as a view into the path.
         //<
         //< **Which segment it stopped at** tells a path problem from a permission problem. It is
@@ -253,26 +254,34 @@ pub fn join( //< a path with a segment appended (Python's `os.path.join`)
         return arena.dup_str(b)
     if b.len == 0
         return arena.dup_str(a)
-    // Caution: **Trim no further than the root**, or `C:\` loses the separator that makes it
-    // rooted.
     top: = sys.root_len(a)
-    $left: = a
-    for left.len > top && sys.is_path_sep(left[left.len - 1])
-        left = left.sub(0, left.len - 1)
+    left: = without_trailing_seps(a)
     $right: = b
     for right.len > 0 && sys.is_path_sep(right[0])
         right = right.sub_from(1)
-    if left.len == top
+    // A bare drive (`C:`) takes `b` directly and stays drive-relative; a share (`\\srv\sh`) is
+    // from the root, so it takes a separator as any folder does.
+    if left.len == top &&
+        (sys.is_path_sep(left[top - 1]) || !sys.is_path_sep(left[0]))
         return arena.text().s(left).s(right).take()
     return arena.text().s(left).c('/').s(right).take()
+
+priv fn without_trailing_seps(path: U8[]): U8[] //< the path with its trailing separators cut
+    //<
+    //< Caution: **Cut no further than the root**, or `C:\` loses the separator that makes it
+    //< rooted. `join` trims the left side by this, so a path it built starts with this answer.
+    top: = sys.root_len(path)
+    $left: = path
+    for left.len > top && sys.is_path_sep(left[left.len - 1])
+        left = left.sub(0, left.len - 1)
+    return left
 
 priv fn is_dos_device(seg: U8[]): Bool //< whether it is a name Windows opens as a device
     //<
     //< It is a device even with an extension, and case does not matter.
     //< **It is a device at any level**: `www/CON` opens the console, and a read or write on an
     //< unconnected `COM1` never returns, stalling a single-loop server.
-    dot: = seg.find_char('.')
-    base: = seg.sub(0, dot) if dot >= 0 else seg
+    base: = seg.sub(0, seg.find_char('.').unwrap_or(seg.len))
     if base.equals_ignore_case("con") || base.equals_ignore_case("prn") ||
         base.equals_ignore_case("aux") || base.equals_ignore_case("nul")
         return true
@@ -555,8 +564,8 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
         parent: = sys.get_dir_name(path)
         if parent.len > 0
             mkdir_all(parent)!
-        io.write_file(path, bodies[i]) catch
-            throw .operation_failed
+        io.write_file(path, bodies[i]) catch e
+            throw .io(e)
 
 pub fn copy_tree( //< copies every file under one directory to a path that does not exist yet
     //<
@@ -572,8 +581,12 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
     if parent.len > 0
         mkdir_all(parent)!
     mkdir(to)!
+    // Caution: **Cut the source's prefix as `join` wrote it**: the walk's paths carry `from` with
+    // its trailing separators trimmed, so measured by `from` as given, `a//` would cut one letter
+    // off every name.
+    top: = without_trailing_seps(from)
     for path in walk_files(from, skip_dir, arena)!
-        $k: = from.len
+        $k: = top.len
         for k < path.len && sys.is_path_sep(path[k])
             k += 1
         dest: = join(to, path.sub_from(k), arena)
@@ -581,11 +594,11 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
         copy_file(path, dest)!
 
 priv fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error //< copies one file's contents
-    body: = io.read_file(from_path) catch
-        throw .operation_failed
+    body: = io.read_file(from_path) catch e
+        throw .io(e)
     defer dealloc(Void$@::body.ptr)
-    io.write_file(to_path, body) catch
-        throw .operation_failed
+    io.write_file(to_path, body) catch e
+        throw .io(e)
 
 // ==========================================
 // A lock on a file, shared between processes

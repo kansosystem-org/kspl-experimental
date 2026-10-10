@@ -1,3 +1,9 @@
+//< Checks the attributes (`#name` / `#name(...)`) and the directives (`##name(...)`)
+//<
+//< An attribute passes when its name is known, it takes effect at that position, and the backend
+//< can emit it. Only what passes is read later (sema/decl/registry.kspls, gen/c and gen/llvm).
+//< **An attribute that can be written but does nothing is an error** (Principle 5 of
+//< docs/DESIGN.md): silently ignored, its intent and the real behaviour diverge.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -5,15 +11,6 @@ import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "std/chars" // testing and slicing single characters
 import "std/str"
-
-// ==========================================
-// Checks attributes (`#name` / `#name(...)`): the name is known, it takes effect at that position,
-// and the backend can emit it. Only what passes is read later (sema/decl/registry.kspls, gen/c and
-// gen/llvm).
-// Caution: **Do not let through an attribute that can be written but does nothing** (Principle 5
-// of docs/DESIGN.md). Silently ignored, the attribute's intent and the real behaviour diverge, so
-// a name, position or backend that cannot interpret it is an error.
-// ==========================================
 
 priv fn is_known_attribute(name: U8[]): Bool //<
     //< The complete list of the attributes the compiler interprets
@@ -174,14 +171,14 @@ priv fn classify_owner(r: Ast_node$@): Attr_owner
         return .value_decl
     case .k_decl_enum
         return .enum_decl
-    case .k_decl_trait, .k_decl_alias
+    case .k_decl_trait, .k_decl_typedef
         return .type_decl
     case .k_decl_extern_block
         return .extern_block
     case .k_decl_import, .k_decl_impl
         return .group_decl
     case .k_stmt_block, .k_stmt_labeled_block, .k_stmt_return, .k_stmt_throw, .k_stmt_fallback,
-        .k_stmt_break, .k_stmt_continue, .k_stmt_defer, .k_stmt_if, .k_stmt_loop, .k_stmt_match,
+        .k_stmt_break, .k_stmt_continue, .k_stmt_defer, .k_stmt_if, .k_stmt_for, .k_stmt_switch,
         .k_stmt_expr
         return .stmt
     default

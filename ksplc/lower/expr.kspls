@@ -396,67 +396,73 @@ impl Ast_node
         r.finish_call_as_tmp(lctx, tmp_name, expr_node, method_node, next_op, res_type_id, loc)
 
     fn lower_expr_postfix(r: Ast_node$@, lctx: Lowering_ctx$@)
-        if r.children.len >= 2
-            op_node: = r.get_child(1)
-            op_text: = op_node.text
-
-            // Caution: **Copy a slice receiver of a subscript to a temporary.** `at(r: Self@, …)`
-            // needs the receiver's address, and genc would emit `&f()` (see `receiver_needs_hoist`;
-            // Principle 2). An array has no descriptor and needs none.
-            if op_text.equals("[")
-                r.order_index_operands(lctx)
-                index_recv: = r.get_child(0)
-                if index_recv != null && index_recv.has_side_effect() &&
-                    lctx.sema.env
-                    .is_slice(lctx.sema.env.receiver_base_id(index_recv.type_id))
-                    new_recv: = index_recv.hoist_complex_expr(lctx)
-                    if new_recv != null
-                        r.set_child(0, new_recv)
-
-            if op_text.equals("!")
-                r.lower_try_op(lctx)
-                return
-
-            if op_text.equals(".") && r.lower_arc_field_of_fresh(lctx)
-                return
-
-            if op_text.equals("::") && r.def_node.is_fn_decl()
-                r.lower_user_cast(lctx)
-                return
-
-            if op_text.equals("[") && r.def_node.is_fn_decl()
-                r.lower_postfix_index_operator(lctx)
-                return
-
-            if op_text.equals("(")
-                r.lower_arc_call_arg_retains(lctx)
-                r.order_call_operands(lctx)
-                recv_node: = r.get_child(0)
-                if recv_node.kind_id == .k_method_access
-                    obj_node: = recv_node.get_postfix_receiver()
-                    if obj_node != null
-                        is_trait: = lctx.sema.env.trait_def_of_receiver(obj_node.type_id).is_some()
-                        if is_trait && obj_node.has_side_effect()
-                            // genc writes a vtable call's receiver twice (vtable pointer, self
-                            // argument), so one with a side effect is copied into a temporary.
-                            new_obj: = obj_node.hoist_complex_expr(lctx)
-                            recv_node.set_child(0, new_obj)
-                        else if !is_trait &&
-                            obj_node.receiver_needs_hoist(lctx.sema.env
-                            .is_pointer(obj_node.type_id),
-                            lctx.sema.env.is_slice(obj_node.type_id)) &&
-                            recv_node.receiver_wants_ptr(lctx.sema)
-                            // Caution: **Put it in a slot before taking the address**
-                            // (`receiver_needs_hoist` decides, as in sema/body/call.kspls). The
-                            // slot lives as if the writer had bound `x: = f();`, and is released as
-                            // that binding would be.
-                            owned: =
-                                lctx.can_own_temporaries() && obj_node.is_arc_fresh(lctx)
-                            new_obj: =
-                                (obj_node.arc_hoist_owned(lctx) if owned
-                                else obj_node.hoist_complex_expr(lctx, true))
-                            recv_node.set_child(0, new_obj)
+        if r.children.len < 2
+            r.lower_default(lctx)
+            return
+        op_text: = r.get_child(1).text
+        if op_text.equals("[")
+            r.order_index_operands(lctx)
+            r.hoist_index_receiver(lctx)
+        if op_text.equals("!")
+            r.lower_try_op(lctx)
+            return
+        if op_text.equals(".") && r.lower_arc_field_of_fresh(lctx)
+            return
+        if op_text.equals("::") && r.def_node.is_fn_decl()
+            r.lower_user_cast(lctx)
+            return
+        if op_text.equals("[") && r.def_node.is_fn_decl()
+            r.lower_postfix_index_operator(lctx)
+            return
+        if op_text.equals("(")
+            r.lower_arc_call_arg_retains(lctx)
+            r.order_call_operands(lctx)
+            r.hoist_method_receiver(lctx)
         r.lower_default(lctx)
+
+    priv fn hoist_index_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
+        //< It copies a subscript's slice receiver with a side effect into a temporary
+        //<
+        //< Caution: **Copy a slice receiver of a subscript to a temporary.** `at(r: Self@, …)`
+        //< needs the receiver's address, and genc would emit `&f()` (see `receiver_needs_hoist`;
+        //< Principle 2). An array has no descriptor and needs none.
+        index_recv: = r.get_child(0)
+        if index_recv == null || !index_recv.has_side_effect() ||
+            !lctx.sema.env.is_slice(lctx.sema.env.receiver_base_id(index_recv.type_id))
+            return
+        new_recv: = index_recv.hoist_complex_expr(lctx)
+        if new_recv != null
+            r.set_child(0, new_recv)
+
+    priv fn hoist_method_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
+        //< It copies a method call's receiver into a temporary where the C would misuse it
+        //<
+        //< A trait's receiver with a side effect is written twice; one whose address the method
+        //< takes cannot be a call's result.
+        recv_node: = r.get_child(0)
+        if recv_node.kind_id != .k_method_access
+            return
+        obj_node: = recv_node.get_postfix_receiver()
+        if obj_node == null
+            return
+        if lctx.sema.env.trait_def_of_receiver(obj_node.type_id).is_some()
+            // genc writes a vtable call's receiver twice (vtable pointer, self argument), so one
+            // with a side effect is copied into a temporary.
+            if obj_node.has_side_effect()
+                recv_node.set_child(0, obj_node.hoist_complex_expr(lctx))
+            return
+        env: = lctx.sema.env
+        if !obj_node.receiver_needs_hoist(env.is_pointer(obj_node.type_id),
+            env.is_slice(obj_node.type_id)) || !recv_node.receiver_wants_ptr(lctx.sema)
+            return
+        // Caution: **Put it in a slot before taking the address** (`receiver_needs_hoist` decides,
+        // as in sema/body/call.kspls). The slot lives as if the writer had bound `x: = f();`, and
+        // is released as that binding would be.
+        owned: = lctx.can_own_temporaries() && obj_node.is_arc_fresh(lctx)
+        new_obj: =
+            (obj_node.arc_hoist_owned(lctx) if owned
+            else obj_node.hoist_complex_expr(lctx, true))
+        recv_node.set_child(0, new_obj)
 
     priv fn order_index_operands(r: Self$@, lctx: Lowering_ctx$@) //<
         //< A subscript's operands in order: the receiver (an array by its address), then the index

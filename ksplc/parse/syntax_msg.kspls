@@ -142,7 +142,7 @@ priv fn is_switch_head(src: U8[], from: Sz, to: Sz): Bool //<
     e: = word_end(code, 0)
     if e > 0 && e < code.len && code[e] == ':' && !code.starts_with("::", e)
         code = code.sub_from(e + 1).trim_spaces()
-    return starts_with_word(code, "switch") && code.find_str(" case ") < 0 &&
+    return starts_with_word(code, "switch") && code.find_str(" case ").is_none() &&
         !ends_with_word(code, "case")
 
 priv fn odd_indent_name(src: U8[], pos: Sz): U8[] //<
@@ -276,7 +276,7 @@ priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //
         return true
     split_choice: =
         ((ends_with_word(cur.code, "if") || ends_with_word(cur.code, "else")) &&
-        cur.code.find_char(' ') >= 0) || starts_with_word(next.code, "if") ||
+        cur.code.find_char(' ').is_some()) || starts_with_word(next.code, "if") ||
         starts_with_word(next.code, "else")
     if !split_choice || heads_a_block(cur.code)
         return false
@@ -334,7 +334,8 @@ priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
         $k: = after.len
         for k > 0 && after[k - 1].is_alnum()
             k -= 1
-        if after.find_char('=') >= 0 || k == 0 || k == after.len || !after[k].is_alpha()
+        if after.find_char('=').is_some() || k == 0 || k == after.len ||
+            !after[k].is_alpha()
             return false
         msg.s("\n  Note: 'typedef' puts the new name first, the type after '=': '")
             .s(code.sub(0, s)).s("typedef ").s(after.sub_from(k)).s(" = ")
@@ -365,8 +366,7 @@ priv fn append_statement_word_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
     if e == 0 || (e < code.len && code[e] != ' ') || rest.starts_with("=") ||
         rest.starts_with(":") || rest.starts_with(".")
         return false
-    brace: = rest.find_char('{')
-    head: = rest.sub(0, brace).trim_spaces() if brace >= 0 else rest
+    head: = rest.sub(0, rest.find_char('{').unwrap_or(rest.len)).trim_spaces()
     if word.equals("while") && head.len > 0
         msg
             .s("\n  Note: every loop is written with 'for', and a condition alone makes it repeat \
@@ -382,7 +382,7 @@ priv fn append_statement_word_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
     msg
         .s("\n  Note: KSPL branches on a value with 'switch'; each case opens with 'case', with no \
             braces around them all: 'switch ").s(head)
-        .s("" if head.find_str(" case ") >= 0 else " case ...").s("'.")
+        .s("" if head.find_str(" case ").is_some() else " case ...").s("'.")
     return true
 
 priv fn statement_start(src: U8[], pos: Sz): Sz //<
@@ -434,7 +434,7 @@ priv fn statement_has_if_without_else(src: U8[], pos: Sz): Bool //<
     for start >= 0 && src[start] != ';' && src[start] != '{' && src[start] != '}'
         start -= 1
     span: = src.sub(start + 1, pos - start - 1)
-    return span.find_str(" if") >= 0 && span.find_str(" else") < 0
+    return span.find_str(" if").is_some() && span.find_str(" else").is_none()
 
 priv const max_open: Sz = 64 //< how many brackets may be open before the count below gives up
 
@@ -652,7 +652,7 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     // every line and would fire on unrelated errors; the expected set says if a level is needed.
     if laid_out && append_split_value_hint(msg@, src, pos)
         return msg
-    wants_block: = msg.slice().find_str("'{'") >= 0
+    wants_block: = msg.slice().find_str("'{'").is_some()
     if laid_out && wants_block && block_head_without_body(src, pos)
         msg
             .s("\n  Note: a block with no body cannot be written by indentation alone — there is \

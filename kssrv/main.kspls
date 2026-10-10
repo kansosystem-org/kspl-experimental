@@ -68,6 +68,13 @@ priv const linger_us: I64 = 5000000I64 //<
     //< Long enough for a client to finish sending a body it started (nginx's `lingering_timeout` is
     //< the same 5 seconds), short enough that a client that never stops cannot hold a slot.
 
+priv const idle_conn_us: I64 = 30000000I64 //<
+    //< How long a connection may pass no byte either way before it is dropped
+    //<
+    //< Without it a client that connects and goes quiet holds one of the `max_conns` slots for
+    //< good, and that many such clients shut everyone out. A page's hold (`GET /api/here`) is quiet
+    //< by design and is not dropped.
+
 priv const poll_timeout_ms: I32 = 1000 //< `wait()`'s wait time
     //<
     //< It returns even with no connection, so a request to stop is noticed.
@@ -155,8 +162,7 @@ priv fn names_this_server(req: http.Request$@): Bool //<
     //< **The port is not compared**: a re-pointed page always sends its own name, so the name alone
     //< tells it apart.
     host: = req.headers.find("Host").unwrap_or("")
-    colon: = host.find_char(':')
-    name: = host if colon < 0 else host.sub(0, colon)
+    name: = host.sub(0, host.find_char(':').unwrap_or(host.len))
     return name.equals(local_host) || name.equals_ignore_case("localhost")
 
 priv fn wants_close(req: http.Request$@): Bool //<
@@ -243,8 +249,9 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         conn.queue_to_head(c, 200, ctype, Sz::info.size, keep)
         return
 
+    // The stat found it, so a read that fails is the server's fault, not a missing name.
     body: = io.read_file(target_path) catch _e
-        conn.queue_error(c, 404)
+        conn.queue_error(c, 500)
         return
     // Freed here, after the copy into `outbuf` (the reason is at `api.queue_get_file`).
     defer dealloc(Void$@::body.ptr)
@@ -306,6 +313,7 @@ priv fn conn_send($held: Rc<|conn.Conn|>): Bool //< sends as much of `outbuf` as
         if n == 0
             return false // no progress (the peer closed)
         c.sent += n
+        c.moved_us = sys.mono_us()
     c.outbuf.clear()
     c.sent = 0
     if !c.close_after_send
@@ -358,6 +366,7 @@ priv fn conn_read($held: Rc<|conn.Conn|>, ctx: conn.Ctx$@): Bool //< reads from 
             c.peer_done = true
             return true
         c.inbuf.s(U8$[]::{ .ptr = chunk@, .len = n })
+        c.moved_us = sys.mono_us()
         // **Without a cap, one client that never ends its request uses up the memory.**
         if c.inbuf.len > http.max_head_bytes + body_limit(ctx)
             conn.queue_error(c, 431)
@@ -417,6 +426,8 @@ priv fn drive_backlog(t: conn.Conn_table$@, ctx: conn.Ctx$@): Bool //<
 // ==========================================
 // Accepting
 // ==========================================
+priv $refused_said: I64 = 0I64 //< the refusals already told of when a slot came free again
+
 priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@)
     for
         stream: = listener.accept() catch e
@@ -433,8 +444,20 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
         slot: = conn.table_find_free(t)
         if slot < 0
             // The cap is reached. Refusing holds less state than waiting for a free slot.
+            // **Say so once per stretch at the cap**, not per refusal: a flood would bury the log.
+            if conn.stats.connections_refused == refused_said
+                if ln: = lg.at(.warning)
+                    ln
+                        .s("every one of the \{conn.max_conns\} connection slots is taken; new \
+                            connections are refused until one closes")
+            conn.stats.connections_refused += 1I64
             stream.free()
             continue
+        if conn.stats.connections_refused > refused_said
+            meanwhile: = conn.stats.connections_refused - refused_said
+            if ln: = lg.at(.information)
+                ln.s("a connection slot is free again (\{meanwhile\} refused meanwhile)")
+            refused_said = conn.stats.connections_refused
         conn.stats.connections_total += 1I64
         conn.stats.connections_open += 1I64
         // The address is logged at accept, not after the request: spotting "it connected, yet no
@@ -476,8 +499,8 @@ priv fn rebuild_interests(r: reactor.Reactor$@, listener: net.Tcp_listener$@,
 priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
     //< Clears away the connections that are done: nothing left to send, or lingered their time
     //<
-    //< A connection is done when its peer stopped sending and nothing is left to send or answer, or
-    //< when it lingered its full time (`linger_us`).
+    //< A connection is done when its peer stopped sending and nothing is left to send or answer,
+    //< when it lingered its full time (`linger_us`), or when it passed nothing for `idle_conn_us`.
     //< **This is needed because such a connection is not watched for reading** (the reason is at
     //< `rebuild_interests`).
     for i in Range.asc(conn.max_conns)
@@ -488,9 +511,14 @@ priv fn sweep_done(t: conn.Conn_table$@, ctx: conn.Ctx$@) //<
         // (`backlog`). No notification comes after EOF, so what is left is a request cut off
         // partway, which cannot be answered.
         // **A lingering connection is dropped once its time is up**, whatever its peer still sends.
-        lingered: =
-            c.lingering_since_us != 0I64 && sys.mono_us() - c.lingering_since_us >= linger_us
-        if !lingered && (!c.peer_done || c.outbuf.len > 0 || c.backlog)
+        now: = sys.mono_us()
+        lingered: = c.lingering_since_us != 0I64 && now - c.lingering_since_us >= linger_us
+        idle: =
+            !c.holding && c.lingering_since_us == 0I64 && now - c.moved_us >= idle_conn_us
+        if idle
+            if ln: = ctx.lg.at(.information)
+                ln.s("conn #\{c.serial\} passed nothing for \{idle_conn_us / us_per_s\} s; closed")
+        else if !lingered && (!c.peer_done || c.outbuf.len > 0 || c.backlog)
             continue
         conn.table_drop(t, i, ctx.lg)
 
@@ -540,8 +568,7 @@ fn main(): I32
     cli: = argp.Parser
         .create("kssrv", "serves the files under <root>, and JSON under /api/", arg_arena)
     cli.positional("<port> <root>")
-    cli.flag("--local", local@,
-        "serve 127.0.0.1 only, make a token, open the file and process ports")
+    cli.flag("--local", local@, "serve 127.0.0.1 only, make a token, open the file endpoints")
     cli.str_opt("--page", page@,
         "answer / and /index.html with this file (it may sit outside <root>)")
     // **Absent means it stays up.** Facing outward there is no page to hold it, so a server given
@@ -551,7 +578,7 @@ fn main(): I32
         "stop once no page has held it this many seconds (absent: stay up)")
     cli.parse_or_exit(sys.args(), arg_arena)
     if cli.rest.len != 2
-        cli.print_usage()
+        cli.print_usage(io.err())
         return 2
     port_text: = cli.rest.get(0)
     root: = cli.rest.get(1)
@@ -628,7 +655,7 @@ fn main(): I32
             ln.s("page=\{page\}")
     if local
         // **The token goes in the fragment (`#`)**, which is not sent to the server, so another
-        // process's `GET /` cannot get it; in the query (`!`) it would stay in the log. **It is
+        // process's `GET /` cannot get it; in the query (`?`) it would stay in the log. **It is
         // printed only once**: an endpoint returning it would give it to anyone who does not know
         // it.
         if ln: = lg.at(.information)

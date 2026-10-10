@@ -74,7 +74,8 @@ priv fn picks_at(c: jsonrpc.Client$@, which: Sz, arena: Arena$@): List<|Row|> //
 priv fn picks_in(c: jsonrpc.Client$@, uri: U8[], text: U8[], line: Sz, character: Sz,
     arena: Arena$@): List<|Row|> //<
         //< It opens that text and sends completion at (line, character)
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), lsp_client.send_ms,
+        arena) catch {}
     defer lsp_client.close(c, uri, arena)
     $b: = Json_builder.new(arena)
     pos: = b.obj().set("line", b.int_val(I32::line))
@@ -147,7 +148,7 @@ fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
     // description — wired on only one, the others go silent without anything saying so.
     f_doc: = doc_of(fields@, "water")
     verdict.check("a receiver type's field carries what it says of itself",
-        f_doc.find_str("how much water it holds") >= 0, said(c, f_doc, arena))
+        f_doc.find_str("how much water it holds").is_some(), said(c, f_doc, arena))
     // **The shape is shown beside the name too** (a field's is its type), needed before choosing.
     f_det: = det_of(fields@, "water")
     verdict.check("a receiver type's field shows its type", f_det.equals("I32"),
@@ -164,7 +165,7 @@ fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
         !holds(mods@, "g_stdout"), d2)
     m_doc: = doc_of(mods@, "out")
     verdict.check("a name beyond a step carries what it says of itself",
-        m_doc.find_str("standard output") >= 0, said(c, m_doc, arena))
+        m_doc.find_str("standard output").is_some(), said(c, m_doc, arena))
     m_det: = det_of(mods@, "getchar")
     verdict.check("a name beyond a step shows its signature", m_det.equals("(): I32"),
         said(c, m_det, arena))
@@ -181,7 +182,7 @@ fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
     verdict.check("a name that no prefix matches is not returned", !holds(names@, "drink"), d3)
     n_doc: = doc_of(names@, "twice")
     verdict.check("a bare name carries what it says of itself",
-        n_doc.find_str("the number doubled") >= 0, said(c, n_doc, arena))
+        n_doc.find_str("the number doubled").is_some(), said(c, n_doc, arena))
     n_det: = det_of(names@, "twice")
     verdict.check("a bare name shows its signature", n_det.equals("(v: I32): I32"),
         said(c, n_det, arena))

@@ -26,7 +26,7 @@ priv fn holding(path: U8[], want: U8[]): Bool //< whether the file at path holds
     got: = io.read_file(path) catch
         return false
     defer dealloc(Void$@::got.ptr)
-    return got.find_str(want) >= 0
+    return got.find_str(want).is_some()
 
 priv fn owner_only(path: U8[], arena: Arena$@): Bool //< whether only its owner may read it
     //<
@@ -258,9 +258,10 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     for win in Bool[2]::{ false, true }
         way: = aim.browser_argv("xdg-open", page, win, arena)
         for one in way
-            assert(one.find_str("#t=") < 0 && one.find_str("secret0123") < 0,
+            assert(one.find_str("#t=").is_none() && one.find_str("secret0123").is_none(),
                 "no argument handed to the browser's starter holds the token")
-        assert(!win || way[1].find_char('/') < 0, "on Windows the page's path is written with `\\`")
+        assert(!win || way[1].find_char('/').is_none(),
+            "on Windows the page's path is written with `\\`")
     moving: = arena.text().s("content=\"0;url=").s(secret_url).c('"').take()
     assert(holding(page, moving), "the page moves on to the URL")
     linked: = arena.text().s("href=\"").s(secret_url).c('"').take()
@@ -270,8 +271,8 @@ fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the c
     $text: = Str_builder.new()
     defer text.free()
     quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", text@)
-    assert(quoted.find_str("a&quot;b&lt;c&gt;&amp;d") >= 0 && quoted.find_str("a\"b") < 0,
-        "a mark in the URL is escaped")
+    assert(quoted.find_str("a&quot;b&lt;c&gt;&amp;d").is_some() &&
+        quoted.find_str("a\"b").is_none(), "a mark in the URL is escaped")
     fs.remove_path(page) catch {}
     fs.remove_path(dir) catch {}
     verdict

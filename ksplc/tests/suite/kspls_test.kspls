@@ -56,7 +56,7 @@ priv fn same_program(name: U8[], a: U8[], b: U8[], stem: U8[], arena: Arena$@): 
         r: = right.get(i)
         if l.equals(r)
             continue
-        if l.find_str(stem) >= 0 && r.find_str(stem) >= 0
+        if l.find_str(stem).is_some() && r.find_str(stem).is_some()
             continue // a line carrying a position: only the source's name and line number differ
         bad.push(arena.text().s("line \{i + 1\}: ").s(l).take())
     return verdict.check_list(arena.text().s(name).s(": the C put out agrees").take(), n, "lines",
@@ -139,8 +139,8 @@ priv const decl_line: I64 = 2I64 //< the line `twice`'s declaration is on (0-bas
 priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
     //<
     //< **The returned URI must be `.kspls`**, or the editor puts squiggles on a different file.
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(probe_uri, probe_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, probe_src, arena),
+        lsp_client.send_ms, arena) catch {}
     $found: = false
     $line: I64 = -1I64
     $col: I64 = -1I64
@@ -176,7 +176,7 @@ priv fn check_hover(c: jsonrpc.Client$@, arena: Arena$@) //< the hovers
     // Caution: **Check the name too.** The type alone passes with the position drifted to another
     // `I32`.
     verdict.check("a hover answers with the name and the type under the indentation notation",
-        text.find_str("v: I32") >= 0,
+        text.find_str("v: I32").is_some(),
         arena.text().s("returned=").s(lsp_client.dump(got, arena)).take())
 
 priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a definition
@@ -238,7 +238,7 @@ priv fn check_import(work: U8[], arena: Arena$@)
         return
     r: = harness.ksplc(U8[][]::{ "run", user })
     verdict.check("the indentation notation can import the indentation notation",
-        r.code == 0 && r.out.find_str("v=8") >= 0, r.out)
+        r.code == 0 && r.out.find_str("v=8").is_some(), r.out)
 
 // The brace notation behind an import with no extension, faulty on purpose: the diagnostic must
 // name the file it was found under.
@@ -270,8 +270,8 @@ priv fn check_import_braced(work: U8[], arena: Arena$@) //<
         return
     r: = harness.ksplc(U8[][]::{ "run", user })
     verdict.check(name,
-        r.code != 0 && r.out.find_str("helper.kspl:") >= 0 &&
-        r.out.find_str("helper.kspls") < 0, r.out)
+        r.code != 0 && r.out.find_str("helper.kspl:").is_some() &&
+        r.out.find_str("helper.kspls").is_none(), r.out)
 
 // The same helper, without the fault, and two users: one spelling the extension out, one
 // importing both twins.
@@ -318,7 +318,7 @@ priv fn check_import_spelt(work: U8[], arena: Arena$@) //<
         verdict.check(stem, false, "the importing file cannot be written")
         return
     r: = harness.ksplc(U8[][]::{ "run", user })
-    verdict.check(stem, r.code == 0 && r.out.find_str("v=8") >= 0, r.out)
+    verdict.check(stem, r.code == 0 && r.out.find_str("v=8").is_some(), r.out)
     io.write_file(fs.join(dir, "helper.kspls", arena), helper_src) catch
         verdict.check(twin, false, "the twin cannot be written")
         return
@@ -328,7 +328,8 @@ priv fn check_import_spelt(work: U8[], arena: Arena$@) //<
         return
     t: = harness.ksplc(U8[][]::{ "run", both })
     verdict.check(twin,
-        t.code != 0 && t.out.find_str("import alias 'helper' already points at") >= 0, t.out)
+        t.code != 0 &&
+        t.out.find_str("import alias 'helper' already points at").is_some(), t.out)
 
 priv const labelled_block_src: U8[] = //< a block carrying a label
     """import "std/io";
@@ -357,7 +358,7 @@ priv fn check_labelled_block_kept(work: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the material cannot be written")
         return
     yes: = harness.ksplc_bare(U8[][]::{ "fmt", "--to=kspls", labelled })
-    verdict.check(name, yes.code == 0 && yes.out.find_str("while_locked:") >= 0,
+    verdict.check(name, yes.code == 0 && yes.out.find_str("while_locked:").is_some(),
         arena.text().s("labelled=\{yes.code\}\n\{yes.out\}").take())
 
 // ---------------------------------------------------------
@@ -502,7 +503,7 @@ priv fn doc_marks(src: U8[], arena: Arena$@): Sz //<
     //< The number of doc comments (`//<` and `///`) in one source
     $n: Sz = 0
     for line in src.lines(arena)
-        if line.find_str("//<") >= 0 || line.find_str("///") >= 0
+        if line.find_str("//<").is_some() || line.find_str("///").is_some()
             n += 1
     return n
 
@@ -629,14 +630,18 @@ priv fn layout_heads(src: U8[], arena: Arena$@): List<|U8[]|> //<
     //< next (`head_skips`' `pub` and `priv`). A value's `::{ … }` keeps its braces in either
     //< notation.
     $out: = List<|U8[]|>.new(arena)
-    at: = src.find_str("block_heads:")
-    if at < 0
+    $at: Sz = 0
+    switch src.find_str("block_heads:")
+    case .some(found)
+        at = found
+    case .none
         return out
-    after: = src.sub_from(at)
-    opens: = after.find_str("{")
-    if opens < 0
+    $i: Sz = 0
+    switch src.sub_from(at).find_str("{")
+    case .some(opens)
+        i = at + opens
+    case .none
         return out
-    $i: Sz = at + opens
     for i < src.len && src[i] != '}'
         if src[i] == '"'
             e: = end_of_quoted(src, i, '"')
@@ -701,15 +706,15 @@ priv fn check_grammar_link(arena: Arena$@)
     for one in rules
         if named_in(U8[][]::role_rules, one.name)
             continue
-        if one.body.find_str("Block_open") >= 0
+        if one.body.find_str("Block_open").is_some()
             opens.push(one.name)
-        if one.body.find_str("\"{\"") >= 0
+        if one.body.find_str("\"{\"").is_some()
             values.push(one.name)
-        if one.body.find_str("stmt_block") >= 0 && !one.name.equals("stmt_block")
+        if one.body.find_str("stmt_block").is_some() && !one.name.equals("stmt_block")
             uses.push(one.name)
-        if one.body.find_str("Stmt_end") >= 0
+        if one.body.find_str("Stmt_end").is_some()
             terms.push(one.name)
-        if one.body.find_str("\";\"") >= 0
+        if one.body.find_str("\";\"").is_some()
             keeps.push(one.name)
 
     $bad: = List<|U8[]|>.new(arena)
@@ -781,11 +786,11 @@ priv fn check_shown_line(work: U8[], arena: Arena$@)
         return
     r: = harness.ksplc(U8[][]::{ path, fs.join(work, "shown.c", arena) })
     verdict.check("the diagnostic prints the line typed as it is",
-        r.out.find_str("3 |   return n.nope\n") >= 0, r.out)
+        r.out.find_str("3 |   return n.nope\n").is_some(), r.out)
     // Caution: **Check "the mark is not printed" too**, or printing the rewritten line passes on a
     // prefix match.
     verdict.check("the diagnostic does not print the marks added by mending",
-        r.out.find_str("return n.nope;") < 0, r.out)
+        r.out.find_str("return n.nope;").is_none(), r.out)
 
 // ---------------------------------------------------------
 // 7. A string carried onto the next line is rewritten like any other
@@ -808,7 +813,7 @@ priv fn check_carried_line(work: U8[], arena: Arena$@)
         return
     r: = harness.ksplc(U8[][]::{ path, fs.join(work, "carried.c", arena) })
     verdict.check("a string carried onto the next line mends, builds and prints its own line",
-        r.out.find_str("5 |   return I32::s.len + n.nope\n") >= 0, r.out)
+        r.out.find_str("5 |   return I32::s.len + n.nope\n").is_some(), r.out)
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
@@ -841,7 +846,7 @@ fn main(): I32
 
     io.out().s("\n# using it from an editor\n")
     // Start it with the server left running (the reason is in `../support/lsp_client.kspls`).
-    _std_dir: = sys.set_env("KSPLC_STD_DIR", harness.std_dir())
+    sys.set_env("KSPLC_STD_DIR", harness.std_dir()) catch panic("KSPLC_STD_DIR could not be set")
     $c: =
         lsp_client.start(harness.ksplc_exe(), U8[][]::{ .ptr = null, .len = 0 }, "", arena) catch
         return harness.fatal("the language server cannot be started")

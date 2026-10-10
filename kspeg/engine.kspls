@@ -11,8 +11,8 @@
 // ==========================================
 import "kspeg/expected" { Expected, Fail_track }
 import "kspeg/memo" { Memo_key, Memo_table }
-import "kspeg/rule" { Kspeg_signal, Rule, Rule_entry, collect_keywords, compute_first_bytes,
-    max_parse_depth, char_class_matches, sub_rules, walk_limit }
+import "kspeg/rule" { Keyword_set, Kspeg_signal, Rule, Rule_entry, collect_keywords,
+    compute_first_bytes, max_parse_depth, char_class_matches, sub_rules, walk_limit }
 import "std/chars" // classifying and extracting one character
 import "std/ds" { List, Map }
 import "std/mem" { Arena }
@@ -419,6 +419,88 @@ priv fn resolve_rule(ctx: Target$@, rule: Rule$@) //< turns each reference into 
     for kid in kids
         resolve_rule(ctx, kid)
 
+priv fn parse_keyword_set(ctx: Target$@, parent: Node$@, set: Keyword_set$@, start_pos: Sz):
+    Bool!Kspeg_signal //<
+        //< It matches one keyword of a folded set, by extracting the word and looking it up once
+        //<
+        //< Every keyword consists only of `_Boundary`'s characters (checked when it is folded), so
+        //< a keyword with no boundary character after it means the whole extracted run is that
+        //< keyword.
+    $end: = ctx.pos
+    for end < ctx.source.len &&
+        char_class_matches(set.boundary, (ctx.source.ptr + end)$)
+        end += 1
+    $index: = set.order.len
+    if end > ctx.pos
+        index = set.words.get(ctx.source.sub(ctx.pos, end - ctx.pos)) catch set.order.len
+    if index >= set.order.len
+        ctx.track_keywords_tried(set.order, set.order.len, start_pos)
+        throw .mismatch
+    // The labels are those of the choice it was folded from, which tries the keywords in order: a
+    // hit on the third keyword first fails on two, and the choice demotes what they recorded.
+    p0: = ctx.fail.max_fail_pos
+    n0: = ctx.fail.expected_label_count
+    ctx.track_keywords_tried(set.order, index, start_pos)
+    ctx.fail.demote_expected_since(p0, n0)
+    ctx.pos = end
+    ctx.add_node(parent, "Keyword" if ctx.is_syntax_mode else "Literal",
+        ctx.source.sub(start_pos, end - start_pos), start_pos)
+    return true
+
+priv fn parse_keyword_literal(ctx: Target$@, parent: Node$@, text: U8[], start_pos: Sz):
+    Bool!Kspeg_signal //<
+        //< It matches a keyword spelled out, refusing one a name goes on from (`iffy` is no `if`)
+    if !ctx.source.starts_with(text, ctx.pos) ||
+        followed_by_boundary(ctx, ctx.pos + text.len)!
+        ctx.track_fail(start_pos, text)
+        throw .mismatch
+    ctx.pos += text.len
+    ctx.add_node(parent, "Keyword" if ctx.is_syntax_mode else "Literal", text, start_pos)
+    return true
+
+priv fn followed_by_boundary(ctx: Target$@, at: Sz): Bool!Kspeg_signal //<
+    //< Whether the `_Boundary` rule matches at `at`, so a keyword there would run into a name
+    //<
+    //< Only the `_Boundary` rule says what a boundary is, for the reason at handle_space_skipping.
+    //< With no rule, no boundary is checked.
+    boundary_rule: = ctx.rule_boundary
+    if boundary_rule == null
+        return false
+    saved_pos: = ctx.pos
+    prev_sup: = ctx.is_suppressed
+    prev_syn: = ctx.is_syntax_mode
+    ctx.pos = at
+    ctx.is_suppressed = true
+    ctx.is_syntax_mode = false
+    try_parse(boundary_rule, ctx, null)!
+    has_boundary: = ctx.pos != at
+    ctx.is_suppressed = prev_sup
+    ctx.is_syntax_mode = prev_syn
+    ctx.pos = saved_pos
+    return has_boundary
+
+priv fn parse_recover(ctx: Target$@, parent: Node$@, stops: U8[], start_pos: Sz):
+    Bool!Kspeg_signal //<
+        //< It absorbs broken input up to a stop character, as a `Broken` node
+        //<
+        //< **In a run that is not lenient it matches nothing**, which keeps the branch dead for the
+        //< compiler.
+    if !ctx.is_lenient
+        ctx.track_fail(start_pos, "a statement")
+        throw .mismatch
+    $i: = ctx.pos
+    for i < ctx.source.len && stops.find_char(ctx.source[i]).is_none()
+        i += 1
+    // Caution: **Swallow at least one byte.** Matching an empty run would make the `*` above it
+    // loop forever at the same position.
+    if i == ctx.pos
+        ctx.track_fail(start_pos, "a statement")
+        throw .mismatch
+    text: = ctx.source.sub(ctx.pos, i - ctx.pos)
+    ctx.pos = i
+    ctx.add_node(parent, "Broken", text, start_pos)
+    return true
+
 impl Rule
     priv fn parse_skippable(r: Self$@, ctx: Target$@, parent: Node$@): Bool!Kspeg_signal //<
         //< Tries it once as a skippable attempt (the step `*`, `+` and `?` share)
@@ -605,64 +687,9 @@ impl Rule
             ctx.track_fail(start_pos, text)
             throw .mismatch
         case .keyword_set(set)
-            // Every keyword consists only of `_Boundary`'s characters (checked when it is folded),
-            // so a keyword with no boundary character after it means the whole extracted run is
-            // that keyword: extract once and look up once.
-            $end: = ctx.pos
-            for end < ctx.source.len &&
-                char_class_matches(set.boundary, (ctx.source.ptr + end)$)
-                end += 1
-            $index: = set.order.len
-            if end > ctx.pos
-                index =
-                    set.words.get(ctx.source.sub(ctx.pos, end - ctx.pos)) catch set.order.len
-            // The labels are those of the choice it was folded from, which tries the keywords in
-            // order: a hit on the third keyword first fails on two, and the choice demotes what
-            // they recorded.
-            if index < set.order.len
-                p0: = ctx.fail.max_fail_pos
-                n0: = ctx.fail.expected_label_count
-                ctx.track_keywords_tried(set.order, index, start_pos)
-                ctx.fail.demote_expected_since(p0, n0)
-                ctx.pos = end
-                ctx.add_node(parent, "Keyword" if ctx.is_syntax_mode else "Literal",
-                    ctx.source.sub(start_pos, end - start_pos), start_pos)
-                return true
-            ctx.track_keywords_tried(set.order, set.order.len, start_pos)
-            throw .mismatch
+            return parse_keyword_set(ctx, parent, set, start_pos)!
         case .keyword_literal(text)
-            if ctx.source.starts_with(text, ctx.pos)
-                saved_pos: = ctx.pos
-                ctx.pos += text.len
-
-                // Only the `_Boundary` rule says what a boundary is, for the reason at
-                // handle_space_skipping. With no rule, no boundary is checked.
-                boundary_rule: = ctx.rule_boundary
-                $has_boundary: = false
-
-                if boundary_rule != null
-                    lookahead_pos: = ctx.pos
-                    prev_sup: = ctx.is_suppressed
-                    ctx.is_suppressed = true
-                    prev_syn: = ctx.is_syntax_mode
-                    ctx.is_syntax_mode = false
-
-                    try_parse(boundary_rule, ctx, null)!
-                    has_boundary = ctx.pos != lookahead_pos
-
-                    ctx.is_suppressed = prev_sup
-                    ctx.is_syntax_mode = prev_syn
-                    ctx.pos = lookahead_pos
-
-                if has_boundary
-                    ctx.pos = saved_pos
-                    ctx.track_fail(start_pos, text)
-                    throw .mismatch
-
-                ctx.add_node(parent, "Keyword" if ctx.is_syntax_mode else "Literal", text, start_pos)
-                return true
-            ctx.track_fail(start_pos, text)
-            throw .mismatch
+            return parse_keyword_literal(ctx, parent, text, start_pos)!
         case .wildcard
             if ctx.pos < ctx.source.len
                 text: = ctx.source.sub(ctx.pos, 1)
@@ -672,23 +699,7 @@ impl Rule
             ctx.track_fail(start_pos, "any character")
             throw .mismatch
         case .recover(stops)
-            // **In a run that is not lenient it matches nothing**, which keeps the branch dead for
-            // the compiler.
-            if !ctx.is_lenient
-                ctx.track_fail(start_pos, "a statement")
-                throw .mismatch
-            $i: = ctx.pos
-            for i < ctx.source.len && stops.find_char(ctx.source[i]) < 0
-                i += 1
-            // Caution: **Swallow at least one byte.** Matching an empty run would make the `*`
-            // above it loop forever at the same position.
-            if i == ctx.pos
-                ctx.track_fail(start_pos, "a statement")
-                throw .mismatch
-            text: = ctx.source.sub(ctx.pos, i - ctx.pos)
-            ctx.pos = i
-            ctx.add_node(parent, "Broken", text, start_pos)
-            return true
+            return parse_recover(ctx, parent, stops, start_pos)!
         case .sequence(rules)
             for i in Range.asc(rules.len)
                 rules.get(i).parse(ctx, parent)!

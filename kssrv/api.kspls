@@ -66,6 +66,7 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
         .set("commands", b.int_val(conn.stats.commands))
         .set("connections_total", b.int_val(conn.stats.connections_total))
         .set("connections_open", b.int_val(conn.stats.connections_open))
+        .set("connections_refused", b.int_val(conn.stats.connections_refused))
         .set("max_connections", b.int_val(conn.max_conns))
         .set("heap_bytes", b.int_val(heap_used_bytes())).set("pilot", pilot_val).build()
     queue_json(c, 200, val, keep)
@@ -352,7 +353,7 @@ priv const routes: Route[7] = ::{ //<
 priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that method
     $rest: = r.methods
     for rest.len > 0
-        sp: = rest.find_char(' ')
+        sp: = rest.find_char(' ').unwrap_or(rest.len)
         if rest.sub(0, sp).equals(method)
             return true
         rest = rest.sub_from(sp + 1)

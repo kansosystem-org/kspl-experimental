@@ -110,19 +110,20 @@ fn test_elf2uf2_refuses_what_it_cannot_place(ksplc: U8[], work: U8[], arena: Are
     verdict.start("[ksos/elf2uf2] an ELF of sound provenance becomes a UF2")
     sane: =
         convert(ksplc, tmp, "sane", elf32(flash_base, 0x180, phentsize, 1, arena), arena)
-    assert(sane.code == 0 && sane.said.find_str("format verified") >= 0, detail(sane, arena))
+    assert(sane.code == 0 && sane.said.find_str("format verified").is_some(),
+        detail(sane, arena))
     verdict.pass("")
     // 0x200 bytes at 0xffffff00: the wrap case listed at the top of this file.
     verdict.start("[ksos/elf2uf2] an ELF whose load target goes past 32 bits is not converted")
     wrap: =
         convert(ksplc, tmp, "wrap", elf32(0xFFFFFF00U64, 0x200, phentsize, 1, arena), arena)
-    assert(wrap.code != 0 && wrap.said.find_str("load_address_out_of_range") >= 0,
+    assert(wrap.code != 0 && wrap.said.find_str("load_address_out_of_range").is_some(),
         detail(wrap, arena))
     verdict.pass("")
     // e_phentsize=0 would read the same entry e_phnum times over.
     verdict.start("[ksos/elf2uf2] an ELF whose e_phentsize is not 32 is not converted")
     phent0: =
         convert(ksplc, tmp, "phent0", elf32(flash_base, 0x100, 0, 64, arena), arena)
-    assert(phent0.code != 0 && phent0.said.find_str("bad_program_header_size") >= 0,
+    assert(phent0.code != 0 && phent0.said.find_str("bad_program_header_size").is_some(),
         detail(phent0, arena))
     verdict.pass("")

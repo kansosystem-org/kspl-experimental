@@ -17,6 +17,7 @@ import "ksplc/base/diag" as base_diag
 import "ksplc/base/locate" as base_locate
 import "std/chars"
 import "std/ds" { List, Map }
+import "std/fs"
 import "std/io"
 import "std/mem" { dealloc }
 import "std/str" { Str_builder }
@@ -91,7 +92,11 @@ priv fn note_once(names: List<|U8[]|>$@, path: U8[]) //< adds a file's project-r
 
 priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
     //< It reads one `ksplc.cfg` and appends to out; false where there is no such file
+    // Caution: **Stop on one that is there and cannot be read.** Taken as absent, the build would
+    // go on under the defaults, reading sources from another place than `[package]` says.
     text: = io.read_file(path) catch
+        if fs.exists(path)
+            fail(path, 0, "this ksplc.cfg is there but cannot be read")
         note_once(files_missed(), path)
         return false
     note_once(files_read(), path)
@@ -108,8 +113,7 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
         raw: = lines.get(idx)
 
         // Drop the comment and trim both ends.
-        hash: = raw.find_char('#')
-        body: = raw.sub(0, hash) if hash >= 0 else raw
+        body: = raw.sub(0, raw.find_char('#').unwrap_or(raw.len))
         line: = body.trim_spaces()
         if line.len == 0
             continue
@@ -128,8 +132,11 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
                     .push(Setting::{ .section = section, .key = "", .value = "",
                     .file = base_core.perm_arena.dup_str(path), .line = line_no })
             continue
-        eq: = line.find_char('=')
-        if eq < 0
+        $eq: Sz = 0
+        switch line.find_char('=')
+        case .some(at)
+            eq = at
+        case .none
             fail(path, line_no, "expected 'key = value'")
         if section.len == 0
             fail(path, line_no, "setting appears before any '[section]' header")

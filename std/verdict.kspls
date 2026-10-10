@@ -7,6 +7,14 @@
 //< - **a run of checks that continues past a failure** (`begin` / `check` / `finish`): a failing
 //<   check prints its `FAIL` line and the run continues, ending with one `RESULT:` line.
 //< **A child's run is read here too** (`run_child` / `run_children`): its code and its one text.
+
+// ==========================================
+// Usage:
+//   fn test_foo()
+//       verdict.start("[Foo]")
+//       assert(1 + 1 == 2, "1 + 1 must equal 2")
+//       verdict.pass("addition works correctly.")
+// ==========================================
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -16,13 +24,6 @@ import "std/str" { Str_builder }
 import "std/strnum" // `to_i64`
 import "std/subproc"
 import "std/sys"
-
-// Usage:
-//   fn test_foo() {
-//     verdict.start("[Foo]");
-//     assert(1 + 1 == 2, "1 + 1 must equal 2");
-//     verdict.pass("addition works correctly.");
-//   }
 
 priv const mark_pass: U8[] = "pass" //< the marks at the start of a line
     //<
@@ -58,11 +59,9 @@ priv fn remember(name: U8[]) //<
     cur_body = without_tail_dots(name)
     if !name.starts_with("[")
         return
-    close: = name.find_char(']')
-    if close < 1
-        return
-    cur_tag = name.sub(1, close - 1)
-    cur_body = without_tail_dots(name.sub_from(close + 1).trim_start())
+    if close: = name.find_char(']')
+        cur_tag = name.sub(1, close - 1)
+        cur_body = without_tail_dots(name.sub_from(close + 1).trim_start())
 
 priv fn without_tail_dots(name: U8[]): U8[] //<
     //< Returns **a view** of name without trailing whitespace and the `.`s before it
@@ -295,7 +294,9 @@ priv fn folded(r: subproc.Run_result@, arena: Arena$@): Run_out //< one run, as 
     //< non-zero".
     if r.spawn_failed
         return Run_out::{ .code = -1, .out = "[harness] it could not start" }
-    text: = r.text(arena)
+    $text: = r.text(arena)
+    if r.output_lost
+        text = arena.text().s(text).s("\n[harness] its output could not be read back\n").take()
     if r.timed_out
         return Run_out::{ .code = -1,
             .out = arena.text().s(text).s("\n[harness] killed on a timeout\n").take() }
@@ -307,8 +308,22 @@ pub fn run_child( //< runs one child to its end, and returns how it ended and wh
     timeout_ms: I32, //< how long it may run before it is killed (-1 in `code`)
     arena: Arena$@, //< where the text is kept
 ): Run_out
+    t0: = sys.mono_us()
     r: = subproc.run_capture(argv, cwd, timeout_ms, run_output_cap, arena)
+    note_near_cap(argv, (sys.mono_us() - t0) / 1000I64, timeout_ms, r.timed_out)
     return folded(r@, arena)
+
+priv fn note_near_cap(argv: U8[][], took_ms: I64, cap_ms: I32, timed_out: Bool) //<
+    //< Says so where a child that ended took three quarters of its cap or more
+    //<
+    //< **Before the kill, not at it**: a run that grows towards its cap passes until the round it
+    //< is killed, and the slow machine it is killed on is seldom the one where someone looks.
+    if timed_out || cap_ms <= 0 || took_ms * 4I64 < I64::cap_ms * 3I64 || argv.len == 0
+        return
+    io.out().s("NOTE: [harness] ").s(sys.get_file_name(argv[0]))
+    if argv.len > 1
+        io.out().c(' ').s(argv[1])
+    io.out().s(" took \{took_ms / 1000I64\} s of its \{cap_ms / 1000\} s cap\n")
 
 pub fn jobs(): Sz //< how many children `run_children` runs side by side
     //<
@@ -334,9 +349,15 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
     work_dir: U8[], //< where the outputs are collected; made where missing
     arena: Arena$@, //< where the texts are kept
 ): List<|Run_out|>$@
-    fs.mkdir_all(work_dir) catch {}
-    rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, arena)
     outs: = List<|Run_out|>.create(arena)
+    // Caution: **Say a work folder that cannot be made.** Its runs would fail to start, and each
+    // would read as a child that could not be found.
+    fs.mkdir_all(work_dir) catch
+        lost: = arena.text().s("[harness] the work folder \{work_dir\} cannot be made").take()
+        for _item in items
+            outs.push(Run_out::{ .code = -1, .out = lost })
+        return outs
+    rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, arena)
     for i in Range.asc(rs.len)
         r: = rs.get(i)
         outs.push(folded(r@, arena))

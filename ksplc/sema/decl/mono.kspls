@@ -1,3 +1,9 @@
+//< Monomorphization: makes a generic type's or function's instance, once per type arguments
+//<
+//< `instantiate_struct` and `instantiate_fn` take the template's FQN, copy its tree, bind the type
+//< arguments and register the instance; an instance already made is returned as it is. The
+//< instance's method table and trait conformance are queued (`sema/decl/mono_queue.kspls`), and
+//< the copied tree is rewritten by `sema/decl/subst.kspls`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -355,26 +361,27 @@ impl Sema_ctx
         for generic_impl in r.generics.impls
             if r.has_failed_constraint(inst_name)
                 break
-            if r.generic_impl_applies(generic_impl, inst)
-                if trait_node: = generic_impl.get_impl_trait_node()
-                    inst_trait: = trait_node.clone()
-                    r.set_current_file(generic_impl.loc.file())
-                    inst_trait.propagate_loc_file(generic_impl.loc.file())
-                    inst_trait.replace_type_vars(r)
-                    trait_id: = inst_trait.resolve_type(r) catch 0
-                    if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
-                        r.env.add_implemented_trait(target_id, trait_id)
-                        // Caution: **Record the thunks only once the table exists.** It is lower's
-                        // only source for the vtable, which would name a function with no instance.
-                        if with_table
-                            r.verify_trait_implementation(target_id, trait_id, inst_trait)
-                            r.record_trait_inst(target_id, trait_id, generic_impl)
-                        // **`Index_place` promises a writable place**, confirmed per instance since
-                        // a type argument can carry the immutability. The trait's record names its
-                        // template.
-                        trait_tmpl: = r.env.instance_base(r.env.get_real_type(trait_id))
-                        if trait_tmpl.ends_with("Index_place")
-                            r.reject_const_index_place(target_id, inst_trait)
+            if !r.generic_impl_applies(generic_impl, inst)
+                continue
+            if trait_node: = generic_impl.get_impl_trait_node()
+                inst_trait: = trait_node.clone()
+                r.set_current_file(generic_impl.loc.file())
+                inst_trait.propagate_loc_file(generic_impl.loc.file())
+                inst_trait.replace_type_vars(r)
+                trait_id: = inst_trait.resolve_type(r) catch 0
+                if trait_id != 0 && !sema_type_env.is_unknown(trait_id)
+                    r.env.add_implemented_trait(target_id, trait_id)
+                    // Caution: **Record the thunks only once the table exists.** It is lower's
+                    // only source for the vtable, which would name a function with no instance.
+                    if with_table
+                        r.verify_trait_implementation(target_id, trait_id, inst_trait)
+                        r.record_trait_inst(target_id, trait_id, generic_impl)
+                    // **`Index_place` promises a writable place**, confirmed per instance since
+                    // a type argument can carry the immutability. The trait's record names its
+                    // template.
+                    trait_tmpl: = r.env.instance_base(r.env.get_real_type(trait_id))
+                    if trait_tmpl.ends_with("Index_place")
+                        r.reject_const_index_place(target_id, inst_trait)
 
     priv fn generic_impl_applies(r: Self$@, generic_impl: Ast_node$@,
         inst: sema_type_env.Instance): Bool //<

@@ -1,12 +1,11 @@
+//< Tests of `std/regex`: matching, groups, `find_all`, escapes, repetition, bad counts and ranges
+//<
+//< Encoding itself is tested in `encoding_test.kspls`.
 import "std/mem" + { Arena }
 import "std/regex"
 import "std/str" { Str_builder }
 import "std/verdict"
 
-// ==========================================
-// Tests of std/regex: matching, capture groups, find_all, escapes, group repetition, and refusing
-// a bad count or range. Encoding itself is tested in `encoding_test.kspls`.
-// ==========================================
 priv fn compile_is_rejected(pattern: U8[]): Bool //<
     //< Compiles one pattern and returns only whether it was refused (freeing it if it compiled)
     r: = regex.Regex.compile(pattern) catch
@@ -475,3 +474,44 @@ fn test_regex_bounds()
     verdict
         .pass("Counted repetition stops at its upper bound, a malformed `{` and a reversed range \
             are refused, and `.` does not fit a newline.")
+
+fn test_regex_long_text() //< a search through a long text is no ReDoS, and is answered
+    //<
+    //< **Each start fails in a couple of attempts**, but there are 1.5 million of them: a budget
+    //< counted across the starts without growing with the text refused this search.
+    verdict.start("[Regex] a plain search through a long text test...")
+    $text: = Str_builder.new()
+    defer text.free()
+    for _i in Range.asc(1500000)
+        text.c('a')
+    text.s("xyz")
+    r: = regex.Regex.compile("xyz") catch panic("regex: the pattern must compile")
+    defer r.free()
+    m: = r.find(text.slice()) catch panic("regex: a plain search through a long text is answered")
+    assert(m.start == 1500000, "the match is found at the end")
+    verdict.pass("A search failing cheaply at 1.5 million starts finds the match at the end.")
+
+fn test_regex_many_rounds() //< a repeated group over a long text is matched, not refused
+    //<
+    //< Caution: **Test a text that only is long.** A round of `(ab)*` was one more native call, so
+    //< 1500 rounds already passed the depth limit and a plainly matching text came back
+    //< `too_complex`; now a round costs one backtracking entry on the heap.
+    verdict.start("[Regex] a repeated group over many rounds test...")
+    $text: = Str_builder.new()
+    defer text.free()
+    for _i in Range.asc(20000)
+        text.s("ab")
+    text.c('c')
+    for pat in U8[][]::{ "(ab)*c", "^(?:ab)+c$", "a(ba)*bc", "(a|b)*c" }
+        r: = regex.Regex.compile(pat) catch panic("regex: the pattern must compile")
+        m: = r.find(text.slice()) catch panic("regex: a repeated group over a long text is matched")
+        assert(m.start == 0 && m.end == text.len, "the whole text is matched")
+        r.free()
+    // The last round's capture is the group's, as other implementations answer.
+    g: = regex.Regex.compile("(ab)*c") catch panic("regex: the pattern must compile")
+    defer g.free()
+    gm: = g.find(text.slice()) catch panic("regex: the group pattern matches")
+    assert(gm.group(1, text.slice()).equals("ab") && gm.end == text.len,
+        "the group holds the last round, at the text's end")
+    verdict
+        .pass("A repeated group over 20000 rounds matches the whole text, its group the last round.")

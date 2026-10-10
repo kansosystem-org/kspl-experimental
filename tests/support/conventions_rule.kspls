@@ -35,8 +35,8 @@ priv fn numbers_in_doc(arena: Arena$@): List<|U8[]|> //<
         if line.starts_with("## ")
             inside = line.trim_end().equals(rule_head)
             continue
-        dot: = line.find_str(rule_mark)
-        if !inside || dot <= 0
+        dot: = line.find_str(rule_mark).unwrap_or(0)
+        if !inside || dot == 0
             continue
         $all: = true
         for i in Range.asc(dot)
@@ -54,11 +54,11 @@ priv fn cited(line: U8[], arena: Arena$@): List<|U8[]|> //<
     $out: = List<|U8[]|>.new(arena)
     $at: Sz = 0
     for at < line.len
-        hit: = line.sub_from(at).find_str(cite_word)
-        if hit < 0
+        if hit: = line.sub_from(at).find_str(cite_word)
+            at = at + hit + cite_word.len
+            take_numbers(line, at, out@)
+        else
             break
-        at = at + Sz::hit + cite_word.len
-        take_numbers(line, at, out@)
     return out
 
 priv fn take_numbers(line: U8[], from: Sz, out: List<|U8[]|>$@) //<

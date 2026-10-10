@@ -105,7 +105,7 @@ priv fn named_by(node: Ast_node$@): Pick //< the name and kind of that declarati
         kind = kind_enum
     case .k_decl_trait
         kind = kind_interface
-    case .k_decl_alias
+    case .k_decl_typedef
         kind = kind_struct
     case .k_decl_const
         kind = kind_constant
@@ -208,10 +208,10 @@ priv fn qualifier_of(path: List<|Ast_node$@|>$@, mark: Ast_node$@): U8[] //<
     parent: = path.get(path.len - 2)
     if parent == mark || !parent.text.ends_with(pick_mark)
         return ""
-    cut: = parent.text.rfind_char('.')
-    if cut <= 0
-        return ""
-    return parent.text.sub(0, cut)
+    if cut: = parent.text.rfind_char('.')
+        if cut > 0
+            return parent.text.sub(0, cut)
+    return ""
 
 priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //<
     //< From an import's alias, it works out the module name its symbols are registered under
@@ -231,8 +231,11 @@ priv fn alias_module_of(state: Doc_state$@, head: U8[], arena: Arena$@): U8[] //
         // **The double quotes are included**; not stripped, the last part is `io"`.
         way: = path_node.text.strip_prefix("\"").strip_suffix("\"")
         named: = child.find_child(.k_identifier)
-        cut: = way.rfind_char('/')
-        called: = named.text if named != null else way.sub_from(cut + 1)
+        $called: = way
+        if named != null
+            called = named.text
+        else if cut: = way.rfind_char('/')
+            called = way.sub_from(cut + 1)
         if !called.equals(head)
             continue
         // It turns the path's separators into module separators (`std/io` -> `std.io`).
@@ -389,7 +392,7 @@ priv fn add_by_dot_prefix_syms(map: Map<|U8[], sema_type_scope.Sema_symbol$@|>$@
             continue
         tail: = e.key.sub_from(lead.len)
         // **Exclude those one level deeper** (`io.Writer.s` is no direct child of `io.`).
-        if tail.find_char('.') >= 0
+        if tail.find_char('.').is_some()
             continue
 
         // Caution: **List only what can be called from outside**, or C declarations and internal

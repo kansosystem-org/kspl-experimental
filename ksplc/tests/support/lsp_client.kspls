@@ -16,6 +16,11 @@ import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/subproc"
 
+pub const send_ms: I32 = 15000 //< how long the server may go without reading what is sent to it
+    //<
+    //< A send that fails is not checked where it is made: the request after it then fails, and its
+    //< check names the server's standard error.
+
 pub fn start(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
     jsonrpc.Client!subproc.Spawn_error //<
         //< It starts `ksplc lsp`, with `extra` after the subcommand (empty for none)
@@ -70,7 +75,7 @@ pub fn close(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@) //<
     //< suite's crash and hang hooks), by `defer` right after its didOpen. The worker the
     //< supervisor remakes analyses every open document again while the editor is idle, so a
     //< document left behind is work the recovery's request may find under way.
-    _sent: = c.notify("textDocument/didClose", at_doc(uri, arena), arena)
+    c.notify("textDocument/didClose", at_doc(uri, arena), send_ms, arena) catch {}
 
 fn at_doc(uri: U8[], arena: Arena$@): json.Val //<
     //< The params pointing at only the document (`textDocument`)

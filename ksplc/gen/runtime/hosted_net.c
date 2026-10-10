@@ -454,6 +454,21 @@ KSPL_LINK I32 kspl_tcp_peer(I64 handle, U8 *host_out, Sz host_cap, Sz *host_len_
     return kspl_write_addr(&peer, host_out, host_cap, host_len_out, port_out);
 }
 
+/* The port a socket is bound to, in host order, TCP or UDP alike; -1 on failure. It is how a
+ * socket bound to port 0 learns the port the OS chose. */
+KSPL_LINK I32 kspl_net_local_port(I64 handle) {
+    struct sockaddr_storage self;
+    kspl_socklen_t self_len = sizeof(self);
+    if (handle == 0) return -1;
+    memset(&self, 0, sizeof(self));
+    if (getsockname(kspl_socket_of(handle)->fd, (struct sockaddr *)&self, &self_len) != 0) {
+        return -1;
+    }
+    if (self.ss_family == AF_INET6) return (I32)ntohs(((struct sockaddr_in6 *)&self)->sin6_port);
+    if (self.ss_family == AF_INET) return (I32)ntohs(((struct sockaddr_in *)&self)->sin_port);
+    return -1;
+}
+
 /* The longest address text kspl_net_resolve_all writes: an IPv6 address, `%` and its scope. */
 #define KSPL_HOST_TEXT_MAX (INET6_ADDRSTRLEN + 1 + 64)
 
@@ -601,7 +616,7 @@ KSPL_LINK I32 kspl_net_poll(I64 *handles, U8 *interest, Sz n, I32 timeout_ms, U8
         pfds[i].events = ev;
         pfds[i].revents = 0;
     }
-    int r = kspl_net_poll_call(pfds, n, timeout_ms);
+    int r = kspl_net_poll_call(pfds, n, kspl_wait_ms(timeout_ms));
     if (kspl_poll_failed(r)) { free(pfds); return -1; }
     for (Sz i = 0; i < n; i++) {
         U8 rv = 0;

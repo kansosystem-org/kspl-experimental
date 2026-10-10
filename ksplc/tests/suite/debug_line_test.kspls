@@ -60,11 +60,9 @@ priv fn mark_lines(body: U8[], arena: Arena$@): List<|Sz|> //<
     $n: Sz = 0
     for raw in body.lines(arena)
         n += 1
-        at: = raw.find_str(mark_tag)
-        if at < 0
-            continue
-        if is_ident(raw.sub_from(at + mark_tag.len).trim_end())
-            out.push(n)
+        if at: = raw.find_str(mark_tag)
+            if is_ident(raw.sub_from(at + mark_tag.len).trim_end())
+                out.push(n)
     return out
 
 priv fn directives(text: U8[], arena: Arena$@): List<|Directive|> //<
@@ -75,16 +73,17 @@ priv fn directives(text: U8[], arena: Arena$@): List<|Directive|> //<
         if !raw.starts_with(head)
             continue
         rest: = raw.sub_from(head.len)
-        quote: = rest.find_str(" \"")
-        if quote < 0
+        $quote: Sz = 0
+        switch rest.find_str(" \"")
+        case .some(at)
+            quote = at
+        case .none
             continue
         n: = rest.sub(0, quote).to_i64() catch
             continue
         path: = rest.sub_from(quote + 2)
-        close: = path.find_char('"')
-        if close < 0
-            continue
-        out.push(Directive::{ .line = Sz::n, .path = path.sub(0, close) })
+        if close: = path.find_char('"')
+            out.push(Directive::{ .line = Sz::n, .path = path.sub(0, close) })
     return out
 
 // ==========================================
@@ -136,7 +135,7 @@ priv fn check_for_has_its_own_line(text: U8[], arena: Arena$@) //<
     $drifted: = ""
     for raw in text.lines(arena)
         if raw.starts_with("#line ")
-            in_fixture = raw.find_str(fixture) >= 0
+            in_fixture = raw.find_str(fixture).is_some()
         else if in_fixture && raw.trim_start().starts_with("for (")
             seen += 1
             if !prev.starts_with("#line ") && drifted.len == 0
@@ -205,7 +204,7 @@ fn main(): I32
     // --- the executable: the file name stays in an artefact built with `-g` --- **From here on it is
     // checked only on Linux.** macOS leaves `-g`'s DWARF in the `.o` and `.dSYM` files (the
     // executable holds only a debug map), so no source name is inside the executable.
-    if harness.cc_target().find_str("linux") < 0
+    if harness.cc_target().find_str("linux").is_none()
         verdict.skip_check("the executable-side check",
             "it is Linux only (the reason is the caution at the top of the source)")
         return harness.finish()
@@ -240,5 +239,5 @@ fn main(): I32
     // The fixture itself is not broken (alpha=11, beta=22 -> 33).
     out: = harness.run(U8[][]::{ exe_g })
     verdict.check("the fixture works as expected",
-        out.code == 0 && out.out.find_str("dl=36") >= 0, out.out)
+        out.code == 0 && out.out.find_str("dl=36").is_some(), out.out)
     return harness.finish()

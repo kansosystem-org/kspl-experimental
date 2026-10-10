@@ -2294,7 +2294,7 @@ Do not head them with the kinds' names (character style, paragraph style). As us
 
 Note: The verb "insert" also stays the core's word ([`write/insert.kspls`](../write/insert.kspls)). **A menu's name and an operation's name are two things.**
 
-**The first level holds only the names of the things inserted; the values and the "insert" sit inside each thing's submenu.** Fields on the first level would number over 10, passing the menu's 400px cap and covering the canvas. The first level has seven submenus (a table, a slide, a picture, a graph, a figure, a link, a note). It also has two commands with no settings (insert the table of contents; delete the table, slide or picture you are in).
+**The first level holds only the names of the things inserted; the values and the "insert" sit inside each thing's submenu.** Fields on the first level would number over 10, taller than a window leaves below the band, so the menu would cover the canvas. The first level has seven submenus (a table, a slide, a picture, a graph, a figure, a link, a note). It also has two commands with no settings (insert the table of contents; delete the table, slide or picture you are in).
 
 **One thing's matters are done in one submenu.** Do not scatter a thing's rows over two. The note's submenu holds adding one, removing it and inserting the list together. The figure's submenu holds the shapes, the name and the reference from the body for the same reason: all point at a figure by name, and the reference does nothing until the figure has one.
 
@@ -3256,13 +3256,13 @@ One window cannot show two documents side by side. Open a second window instead.
 
 A document goes out as a printed page (PDF), as Markdown, or a table as CSV; there is no HTML export.
 
-**Why it was dropped.** An HTML export is a second rendering of the document with rules the screen does not use: styles turned into CSS classes and rules, a line's leading scaled to CSS's measure, escaping for a stylesheet. It carried its own tests and checks, and the layout could still differ, since the browser breaks the lines. Printing already gives a page that looks as the screen does, and the Markdown export keeps a document beside the code.
+**Why there is none.** An HTML export is a second rendering of the document with rules the screen does not use: styles turned into CSS classes and rules, a line's leading scaled to CSS's measure, escaping for a stylesheet. It would carry its own tests and checks, and the layout could still differ, since the browser breaks the lines. Printing already gives a page that looks as the screen does, and the Markdown export keeps a document beside the code.
 
 ### Accepted limit 4: a `.md` file is not read as Markdown
 
 A `.md` opens as plain text, one line a paragraph, and saves back byte for byte ("A `.md` opens as plain text" above). It is not turned into headings, lists and tables.
 
-**Why it was dropped.** Reading Markdown into styled blocks needed a reader, a table of looks handed to it, and a check that real files survive the trip there and back, and it promised only that the text settled, not that it stayed as typed. Every code host and editor already shows Markdown rendered.
+**Why it is not.** Reading Markdown into styled blocks needs a reader, a table of looks handed to it, and a check that real files survive the trip there and back, and it would promise only that the text settled, not that it stayed as typed. Every code host and editor already shows Markdown rendered.
 
 ## Further reading
 

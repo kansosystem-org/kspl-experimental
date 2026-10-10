@@ -7,6 +7,11 @@
 //< editor is idle, so the first answer after a recovery waits for one document, not for all; a
 //< document that crashes that analysis is quarantined. The analysis never runs here, so no fault in
 //< it takes down the editor's connection.
+// ==========================================
+// Caution: **Do not write your own wrapper for talking to a child process.** `Piped_child` in
+// `std/subproc` is the only one (declared twice, the timeout's guarantee or the cleanup steps
+// would change on one side only).
+// ==========================================
 import "kspeg/engine" as kspeg
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/state" { Doc_store }
@@ -21,10 +26,6 @@ import "std/str" { Str_builder }
 import "std/subproc"
 import "std/sys"
 import "std/thread"
-
-// Caution: **Do not write your own wrapper for talking to a child process.** `Piped_child` in
-// `std/subproc` is the only one (declared twice, the timeout's guarantee or the cleanup steps
-// would change on one side only).
 
 priv const worker_timeout_ms: I32 = 10000 // the hang-detection timeout (a first analysis is slow)
 
@@ -130,11 +131,14 @@ priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
         return .none
     return .some(child)
 
-priv fn exchange(w: subproc.Piped_child?, frame: U8$[], arena: Arena$@): Worker_end //<
+priv fn exchange(w: subproc.Piped_child?, frame: U8[], arena: Arena$@): Worker_end //<
     //< It writes one framed message to the worker and relays what it answers, up to the marker
+    // Caution: **Bound the write by the watchdog too.** A worker stuck in an analysis reads
+    // nothing, and once the pipe is full an unbounded write would hang the editor's server with it.
     if c: = w
-        if c.write(frame)
-            return pump_worker_output(c, arena)
+        c.write(frame, worker_timeout_ms) catch
+            return .write_failed
+        return pump_worker_output(c, arena)
     return .write_failed
 priv struct Lsp_docs //< the open documents' texts, and what the worker has made of them
     //<
@@ -366,7 +370,7 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
             got = false
         // A cheap look first: only a body naming `exit` is parsed here.
         $last: = !got
-        if got && body.slice().find_str("\"exit\"") >= 0
+        if got && body.slice().find_str("\"exit\"").is_some()
             doc: = json.parse(body.slice(), arena) catch .null_val
             last = doc.get("method").as_str().equals("exit")
         box: = r.inbox.lock()

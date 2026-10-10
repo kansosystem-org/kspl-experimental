@@ -1,0 +1,128 @@
+//< Which comment lines the formatter rewraps, and where it cuts one that crosses the column limit
+//<
+//< **Only a line past the limit is cut**, at its last space that fits; `trivia.kspls` carries the
+//< rest to the start of the next line of the same paragraph, so a rename rewraps only the comment
+//< it widened. Widths are display columns: CJK and `✅` take two, `—` one.
+//< Caution: **A line whose layout carries meaning is never cut** (`keeps_layout`): an aligned
+//< sub-line, a table row, a divider, a marker a gate reads, a list item. A line whose first word
+//< already crosses the limit is left as it is.
+import "std/chars" // `next_codepoint`, the one-character checks
+
+fn disp_width(text: U8[]): Sz //< one line's width in **display** columns
+    //<
+    //< Caution: **Do not count bytes**: `✅` and CJK take two columns and three bytes.
+    $w: Sz = 0
+    $i: Sz = 0
+    for i < text.len
+        step: = text.next_codepoint(i)
+        if step <= 0
+            break
+        w += cp_width(codepoint_at(text, i, step))
+        i += step
+    return w
+
+priv fn codepoint_at(text: U8[], at: Sz, step: Sz): I32 //<
+    //< The code point at `at`, whose encoding runs `step` bytes
+    b0: = I32::(text.ptr + at)$
+    if step == 1
+        return b0
+    lead: = (b0 & 0x1F) if step == 2 else (b0 & 0x0F) if step == 3 else (b0 & 0x07)
+    $cp: = lead
+    for k in Range.asc(step - 1)
+        cp = cp * 64 + (I32::(text.ptr + at + 1 + k)$ & 0x3F)
+    return cp
+
+priv fn cp_width(cp: I32): Sz //<
+    //< How many columns a code point takes on a terminal
+    //<
+    //< **Ambiguous counts one**: a terminal shows `—` and `§` one column wide. The wide blocks and
+    //< the marks followed by a `U+FE0F` count two, and the selector itself counts none.
+    if cp == 0xFE0F
+        return 0
+    if cp == 0x26A0 || cp == 0x2705
+        return 2 // a mark that is Neutral by itself and two wide with the selector behind it
+    wide: =
+        (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
+        (cp >= 0x3041 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+        (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+        (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+        (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F300 && cp <= 0x1FAFF) ||
+        (cp >= 0x20000 && cp <= 0x3FFFD)
+    return 2 if wide else 1
+
+fn mark_of(text: U8[]): U8[] //<
+    //< The mark a rewrappable comment opens with, `//<` or `//`; empty for one written as it is
+    //<
+    //< `///` and `//!` are marks the documentation does not read ([W0212]); they stay as written.
+    if text.starts_with("//<")
+        return "//<"
+    if text.starts_with("///") || text.starts_with("//!") || !text.starts_with("//")
+        return ""
+    return "//"
+
+priv fn marker_head(t: U8[]): Bool //<
+    //< Whether a line opens with a marker a gate reads a line at a time (`EXPECT:`, `ARGS:`)
+    //<
+    //< That is an upper-case name of three letters or more followed by a colon.
+    $i: Sz = 0
+    for i < t.len &&
+        (t[i].is_upper() || t[i].is_digit() || t[i] == '_' || t[i] == '-')
+        i += 1
+    return i >= 3 && i < t.len && t[i] == ':' && t[0].is_upper()
+
+priv fn numbered_head(t: U8[]): Bool //< whether a line opens a numbered list item (`1. `)
+    $i: Sz = 0
+    for i < t.len && t[i].is_digit()
+        i += 1
+    return i > 0 && i + 1 < t.len && t[i] == '.' && t[i + 1] == ' '
+
+fn keeps_layout(text: U8[]): Bool //<
+    //< Whether a comment line's layout carries meaning, so it is never cut and nothing joins it
+    //<
+    //< An empty one is a paragraph's break; an aligned sub-line's columns carry the meaning (a
+    //< register map, a pin list, a hanging continuation); a table row, a divider and a marker are
+    //< read a line at a time; a list item's wrap wants a hanging indent the formatter does not
+    //< invent.
+    mark: = mark_of(text)
+    if mark.len == 0
+        return true
+    body: = text.sub_from(mark.len)
+    t: = body.trim_spaces()
+    if t.len == 0 || body.starts_with("  ") || t.starts_with("|")
+        return true
+    if t.starts_with("---") || t.starts_with("===")
+        return true
+    return marker_head(t) || t.starts_with("* ") || t.starts_with("- ") || numbered_head(t)
+
+fn opens_paragraph(text: U8[]): Bool //<
+    //< Whether a comment line starts a paragraph of its own, so text carried from above stops
+    //<
+    //< Besides a line that keeps its layout, a `Caution:` and a `Note:` open their own line in this
+    //< repository's comments, and carried text run into one would hide where it begins.
+    if keeps_layout(text)
+        return true
+    t: = text.sub_from(mark_of(text).len).trim_spaces()
+    return t.starts_with("Caution:") || t.starts_with("Note:")
+
+fn cut_at(text: U8[], room: Sz): Sz //<
+    //< Where to cut a line wider than `room` columns: its last space that fits, or -1
+    //<
+    //< The answer is a byte index into `text`. **The mark and the first word always stay on the
+    //< line**, so a cut never leaves a bare mark; a first word wider than the room leaves the line
+    //< as it is.
+    mark: = mark_of(text)
+    $at: Sz = mark.len
+    for at < text.len && text[at] == ' '
+        at += 1
+    // The first word, which stays whatever its width.
+    for at < text.len && text[at] != ' '
+        at += 1
+    $best: Sz = -1
+    for at < text.len
+        if text[at] == ' '
+            if disp_width(text.sub(0, at)) > room
+                break
+            best = at
+        at += 1
+    return best

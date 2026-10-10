@@ -1,3 +1,9 @@
+//< Resolves a written type to its type id, making a generic's instance on the way
+//<
+//< `resolve_type` reads a type expression (its name, its type arguments, its postfixes), and
+//< `resolve_all_types` walks a tree doing so. The name itself is read through
+//< `sema/decl/name.kspls`; this file turns what it names into a type, checks a type argument's
+//< constraint, and builds a function's own type (`fn_signature_type_id`).
 import "ksplc/base/ast" { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -110,25 +116,28 @@ impl Sema_ctx
 
     fn resolve_type_method_fqn(r: Self$@, fqn: U8[]): Sema_symbol$@?
         last_dot: = fqn.rfind_char_out('.')
-        if last_dot >= 0
-            t_fqn: = fqn.sub(0, last_dot)
-            m_name: = fqn.sub_from(last_dot + 1)
+        if last_dot < 0
+            return .none
+        t_fqn: = fqn.sub(0, last_dot)
+        m_name: = fqn.sub_from(last_dot + 1)
 
-            t_id: = r.env.type_to_id.get(t_fqn) catch 0
-            if t_id != 0
-                // An impl target is never immutable (collect_impl_decl rejects one), so an
-                // immutable type's methods live in its plain type's table.
-                for id in I32[]::{ t_id, r.env.get_clean_real_type(t_id) }
-                    real: = r.env.get_real_type(id)
-                    // Caution: **Finish building the table before the lookup**
-                    // (ensure_instance_methods in mono_queue.kspls). A name that stands for an
-                    // instance (`typedef Nums = List<|I32|>`) reaches here with nothing on the way
-                    // that builds it, so `Nums.new` would be undefined.
-                    r.ensure_instance_methods(real) catch {}
-                    t_entry: = r.env.id_to_type.get(real)
-                    if t_entry != null
-                        if sym: = t_entry.get_method(m_name)
-                            return .some(sym)
+        t_id: = r.env.type_to_id.get(t_fqn) catch 0
+        if t_id == 0
+            return .none
+        // An impl target is never immutable (collect_impl_decl rejects one), so an immutable
+        // type's methods live in its plain type's table.
+        for id in I32[]::{ t_id, r.env.get_clean_real_type(t_id) }
+            real: = r.env.get_real_type(id)
+            // Caution: **Finish building the table before the lookup** (ensure_instance_methods in
+            // mono_queue.kspls). A name that stands for an instance (`typedef Nums = List<|I32|>`)
+            // reaches here with nothing on the way that builds it, so `Nums.new` would be
+            // undefined.
+            r.ensure_instance_methods(real) catch {}
+            t_entry: = r.env.id_to_type.get(real)
+            if t_entry == null
+                continue
+            if sym: = t_entry.get_method(m_name)
+                return .some(sym)
         return .none
 
     // Looks up an operator's method (Type.method) after check_operator_trait decided it is
@@ -151,11 +160,13 @@ impl Sema_ctx
         // and it counts as circular from then on.
         for alias_name in r.resolving.aliases
             if alias_name.equals(name)
-                r.err(sym.node, "circular typedef detected")
+                r.err(sym.node,
+                    base_core.arena.text().s("circular typedef: '\{name\}' leads back to itself")
+                    .take())
                 sym.type_id = 0
                 return 0
         if r.resolving.aliases.len >= sema_type_query.max_alias_chain_depth
-            r.err(sym.node, "typedef chain too deep")
+            r.err(sym.node, too_deep(name))
             sym.type_id = 0
             return 0
         r.resolving.aliases.push(name)
@@ -174,7 +185,7 @@ impl Sema_ctx
         // forward chain (`A0 = A1; A1 = A2; …`); a backward one (`A1 = A0; A2 = A1; …`) does not
         // nest.
         if r.env.alias_chain_len(target_id) + 1 >= sema_type_query.max_alias_chain_depth
-            r.err(sym.node, "typedef chain too deep")
+            r.err(sym.node, too_deep(name))
             sym.type_id = 0
             r.resolving.aliases.len -= 1
             return 0
@@ -614,76 +625,92 @@ priv fn apply_type_postfixes(c: Sema_ctx$@, base_tid: I32, r: Ast_node$@): I32!S
     $current_tid: = base_tid
     for p in r.children
         if p.kind_id == .k_type_postfix
-            // A `$` on the postfix makes that level's subject mutable, no mark immutable, per
-            // level, so `U8$[]@` and `U8[]$@` differ. The marker is at the head of the postfix's
-            // text (the k_type_expr normalization in parse/load.kspls).
-            has_mut_mark: = p.text.starts_with("$")
-            pt: = p.text.sub_from(1) if has_mut_mark else p.text
-            qualified: = current_tid if has_mut_mark else c.env.make_const(current_tid)
-            if pt.equals("@")
-                // No expression produces a pointer to a fixed-length array (`a@` decays, as in C),
-                // so it is rejected (Principle 5 of docs/DESIGN.md).
-                if c.env.is_array(current_tid) && !c.suppress_errors
-                    shown: = c.env.display(current_tid)
-                    c.clear_scratch()
-                        .s("cannot take a pointer to a fixed-size array ('\{shown\}@'): '@' on an \
-                            array decays to a pointer to its first element, so no expression can \
-                            produce this type. Use 'T$[]' (a slice, which carries its length) or \
-                            'T$@' (a pointer to the first element).")
-                    c.err(p, c.scratch.slice())
-                current_tid = c.env.make_ptr(qualified)
-            else if pt.starts_with("[")
-                // **A `$` on the type side cannot be written on a fixed-length array's elements**:
-                // they are part of the array's value, so the binding that holds it decides (unlike
-                // `T$[]`, `T$@`).
-                if has_mut_mark && p.children.len > 0 && !c.suppress_errors
-                    shown_arr: = c.env.display(current_tid)
-                    c.clear_scratch()
-                        .s("a fixed-size array cannot carry '$' on its element type \
-                            ('\{shown_arr\}[N]'): element writability comes from the binding, not \
-                            the type. Write '$name: \{shown_arr\}[N]' for a writable array (a \
-                            struct field is writable when its receiver is). '$' on the element \
-                            stage is only for slices ('T$[]') and pointers ('T$@'), which refer to \
-                            a different object.")
-                    c.err(p, c.scratch.slice())
-                if p.children.len > 0
-                    size_node: = p.get_child(0)
-                    $actual_size: I32 = -1
-                    if size_node.text.equals("_")
-                        actual_size = -1
-                    else
-                        size_val: = c.eval_constexpr_quiet(size_node, -1)
-                        actual_size = size_val
-                        if size_val <= 0
-                            // Stay silent if a `sizeof` cycle is recorded: this is its consequence
-                            // (report_registry_cycle in sema/decl/layout.kspls reports it).
-                            if !c.suppress_errors && c.resolving.registry_cycle_at == null
-                                c.err(size_node,
-                                    "array size must be a positive constant expression greater than \
-                                        0")
-                            actual_size = 1
-                    current_tid = c.env.make_array(qualified, actual_size)
-                else if pt.len > 2 && (pt.ptr + 1)$ != ']'
-                    // A resolved "[N]" / "[_]" text with no child (from copying a template): the
-                    // size is extracted here for make_array.
-                    inner: = pt.sub(1, pt.len - 2)
-                    $parsed_size: I32 = -1
-                    if !inner.equals("_")
-                        parsed_size = I32::(inner.parse_size() catch 0)
-                    current_tid = c.env.make_array(qualified, parsed_size)
-                else
-                    current_tid = c.slice_type_of(qualified)
-            else if pt.starts_with("!")
-                if p.children.len > 0
-                    err_id: = p.get_child(0).resolve_type(c)!
-                    // `T!E?` folds `?` into the error type; read as an optional result it would
-                    // pass, and an absent error would mean a failure with nothing to say.
-                    if c.env.instance_base(c.env.get_clean_real_type(err_id))
-                        .equals(base_core.option_fqn)
-                        c.err(p,
-                            "an error type cannot be optional: an optional result is written \
-                                '(T!E)?', and a result whose value may be absent 'T?!E'")
-                    current_tid = c.env.make_result_with_err(current_tid, err_id)
-                else
-                    current_tid = c.env.make_result(current_tid)
+            current_tid = apply_type_postfix(c, current_tid, p)!
     return current_tid
+
+priv fn apply_type_postfix(c: Sema_ctx$@, current_tid: I32, p: Ast_node$@): I32!Sema_error //<
+    //< The type one postfix level (`@`, `[…]` or `!E`) makes of `current_tid`
+    // A `$` on the postfix makes that level's subject mutable, no mark immutable, per level, so
+    // `U8$[]@` and `U8[]$@` differ. The marker is at the head of the postfix's text (the
+    // k_type_expr normalization in parse/load.kspls).
+    has_mut_mark: = p.text.starts_with("$")
+    pt: = p.text.sub_from(1) if has_mut_mark else p.text
+    qualified: = current_tid if has_mut_mark else c.env.make_const(current_tid)
+    if pt.equals("@")
+        return pointer_postfix(c, current_tid, qualified, p)
+    if pt.starts_with("[")
+        return array_postfix(c, current_tid, qualified, p, pt, has_mut_mark)
+    if pt.starts_with("!")
+        return result_postfix(c, current_tid, p)!
+    return current_tid
+
+priv fn pointer_postfix(c: Sema_ctx$@, current_tid: I32, qualified: I32, p: Ast_node$@): I32 //<
+    //< `@`: a pointer to `qualified`
+    // No expression produces a pointer to a fixed-length array (`a@` decays, as in C), so it is
+    // rejected (Principle 5 of docs/DESIGN.md).
+    if c.env.is_array(current_tid) && !c.suppress_errors
+        shown: = c.env.display(current_tid)
+        c.clear_scratch()
+            .s("cannot take a pointer to a fixed-size array ('\{shown\}@'): '@' on an array decays \
+                to a pointer to its first element, so no expression can produce this type. Use \
+                'T$[]' (a slice, which carries its length) or 'T$@' (a pointer to the first \
+                element).")
+        c.err(p, c.scratch.slice())
+    return c.env.make_ptr(qualified)
+
+priv fn array_postfix(c: Sema_ctx$@, current_tid: I32, qualified: I32, p: Ast_node$@, pt: U8[],
+    has_mut_mark: Bool): I32 //<
+        //< `[N]`, `[_]` or `[]`: a fixed-length array of `qualified`, or a slice of it
+    // **A `$` on the type side cannot be written on a fixed-length array's elements**: they are
+    // part of the array's value, so the binding that holds it decides (unlike `T$[]`, `T$@`).
+    if has_mut_mark && p.children.len > 0 && !c.suppress_errors
+        shown_arr: = c.env.display(current_tid)
+        c.clear_scratch()
+            .s("a fixed-size array cannot carry '$' on its element type ('\{shown_arr\}[N]'): \
+                element writability comes from the binding, not the type. Write '$name: \
+                \{shown_arr\}[N]' for a writable array (a struct field is writable when its \
+                receiver is). '$' on the element stage is only for slices ('T$[]') and pointers \
+                ('T$@'), which refer to a different object.")
+        c.err(p, c.scratch.slice())
+    if p.children.len > 0
+        return c.env.make_array(qualified, array_size(c, p.get_child(0)))
+    if pt.len > 2 && (pt.ptr + 1)$ != ']'
+        // A resolved "[N]" / "[_]" text with no child (from copying a template): the size is
+        // extracted here for make_array.
+        inner: = pt.sub(1, pt.len - 2)
+        parsed_size: I32 =
+            -1 if inner.equals("_") else I32::(inner.parse_size() catch 0)
+        return c.env.make_array(qualified, parsed_size)
+    return c.slice_type_of(qualified)
+
+priv fn array_size(c: Sema_ctx$@, size_node: Ast_node$@): I32 //<
+    //< A written array size: -1 for `_`, else its constant value (1 after reporting a bad one)
+    if size_node.text.equals("_")
+        return -1
+    size_val: = c.eval_constexpr_quiet(size_node, -1)
+    if size_val > 0
+        return size_val
+    // Stay silent if a `sizeof` cycle is recorded: this is its consequence (report_registry_cycle
+    // in sema/decl/layout.kspls reports it).
+    if !c.suppress_errors && c.resolving.registry_cycle_at == null
+        c.err(size_node, "array size must be a positive constant expression greater than 0")
+    return 1
+
+priv fn result_postfix(c: Sema_ctx$@, current_tid: I32, p: Ast_node$@): I32!Sema_error //<
+    //< `!E` or `!`: a result of `current_tid`
+    if p.children.len == 0
+        return c.env.make_result(current_tid)
+    err_id: = p.get_child(0).resolve_type(c)!
+    // `T!E?` folds `?` into the error type; read as an optional result it would pass, and an
+    // absent error would mean a failure with nothing to say.
+    if c.env.instance_base(c.env.get_clean_real_type(err_id)).equals(base_core.option_fqn)
+        c.err(p,
+            "an error type cannot be optional: an optional result is written '(T!E)?', and a result \
+                whose value may be absent 'T?!E'")
+    return c.env.make_result_with_err(current_tid, err_id)
+
+priv fn too_deep(name: U8[]): U8[] //<
+    //< the refusal of an alias chain past the limit, naming its alias
+    return base_core.arena.text()
+        .s("typedef chain too deep: '\{name\}' is an alias of an alias more than \
+            \{sema_type_query.max_alias_chain_depth\} levels down").take()

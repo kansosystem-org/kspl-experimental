@@ -1,3 +1,9 @@
+//< A file holding one broken line still answers in the editor
+//<
+//< Not a suite; part of `../suite/lsp_test.kspls`, whose client it uses (one of its own would start
+//< the language server a second time). **The editor reads the file a second time with the
+//< recovering branches enabled** ("Only the editor's parse recovers from a syntax error" in
+//< `../../docs/DESIGN.md`), so after a half-typed `pt.` the hover and the jump still answer.
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
 import "std/chars"
@@ -8,14 +14,6 @@ import "std/mem" { Arena }
 import "std/str" // `find_str` and `equals`
 import "std/strfmt" as _strfmt
 import "std/verdict"
-
-// ==========================================
-// A file holding one broken line still answers. **The editor reads it a second time with the
-// recovering branches enabled** (the grounds are "Only the editor's parse recovers from a syntax
-// error" in `../../docs/DESIGN.md`), so after a half-typed `pt.` hover and the jump still answer.
-// **This is not a suite of its own**; one would start the language server a second time, so it
-// uses the suite's client (the reason is in `lsp_docs.kspls`'s header).
-// ==========================================
 
 priv const normal_ms: I32 = 15000
 
@@ -41,8 +39,8 @@ fn main(): I32 {
 priv const broken_uri: U8[] = "file:///recover_probe.kspl"
 
 priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(broken_uri, broken_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(broken_uri, broken_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, broken_uri, arena)
     line: = decl_line(broken_src, "  n: = area(pt);", arena)
     col: = col_in_line(broken_src, "  n: = area(pt);", "area", arena)
@@ -53,7 +51,7 @@ priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
         return
     text: = lsp_client.hover_text(got)
     verdict.check("a hover beside a broken line still answers",
-        text.find_str("how much it covers") >= 0,
+        text.find_str("how much it covers").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
     // Caution: **Test a jump too**: a hover needs only the node under the caret, the jump the tree
@@ -74,8 +72,8 @@ priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
     //<
     //< **Only the parse reports it**. In a recovered tree the later stages find only the chain of
     //< unrelated errors one missing bracket sets off.
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(broken_uri, broken_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(broken_uri, broken_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, broken_uri, arena)
     $count: Sz = 0
     $came: = false
@@ -109,8 +107,8 @@ fn tail(): I32 {
 priv const unclosed_uri: U8[] = "file:///unclosed_probe.kspl"
 
 priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(unclosed_uri, unclosed_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(unclosed_uri, unclosed_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, unclosed_uri, arena)
     line: = decl_line(unclosed_src, "fn area(p: I32): I32 {", arena)
     col: = col_in_line(unclosed_src, "fn area(p: I32): I32 {", "area", arena)
@@ -121,7 +119,7 @@ priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
         return
     text: = lsp_client.hover_text(got)
     verdict.check("a block left unclosed does not take the file with it",
-        text.find_str("how much it covers") >= 0,
+        text.find_str("how much it covers").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
 fn run(c: jsonrpc.Client$@, arena: Arena$@)

@@ -25,27 +25,27 @@ struct Case_info
     ast_node: Ast_node$@
     block_node: Ast_node$@
 
-struct Match_default
+struct Switch_default
     lbl: I32
     block: Ast_node$@
 
-priv struct Match_variant_ref //<
+priv struct Case_variant_ref //<
     //< The result of resolving an enum variant definition from a pattern node
     //<
-    //< emit_llvm_match_payload and collect_match_cases share it; it is null where unresolved.
+    //< emit_llvm_case_payload and collect_switch_cases share it; it is null where unresolved.
     p_start: I32
     def: sema_type_def.Enum_variant$@
 
-priv fn resolve_match_pattern_variant(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@):
-    Match_variant_ref$@? //<
+priv fn resolve_case_pattern_variant(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@):
+    Case_variant_ref$@? //<
         //< It resolves, from e_def, the variant that the pattern node pn names.
         //<
         //< It is null where the name is unknown or the variant undefined.
-    switch pn.extract_match_variant()
+    switch pn.extract_case_variant()
     case .variant(v_name_node, p_start)
         if v_name_node != null && e_def != null
             if v_def: = e_def.get_variant(v_name_node.text)
-                mvr: = Match_variant_ref::{ .p_start = I32::p_start, .def = v_def }
+                mvr: = Case_variant_ref::{ .p_start = I32::p_start, .def = v_def }
                 return .some(base_core.arena.create(mvr))
     default {}
     return .none
@@ -62,7 +62,7 @@ impl Ast_node
             return
 
         switch r.kind_id
-        case .k_stmt_block, .k_loop_init, .k_loop_step
+        case .k_stmt_block, .k_for_init, .k_for_step
             for child in r.children
                 child.emit_llvm_stmt(cg)
         case .k_stmt_return
@@ -78,10 +78,10 @@ impl Ast_node
             r.emit_llvm_jump(cg)
         case .k_stmt_if
             r.emit_llvm_if(cg)
-        case .k_stmt_loop
+        case .k_stmt_for
             r.emit_llvm_loop(cg)
-        case .k_stmt_match
-            r.emit_llvm_match(cg)
+        case .k_stmt_switch
+            r.emit_llvm_switch(cg)
         case .k_stmt_expr
             r.emit_llvm_assign(cg)
         default
@@ -220,7 +220,7 @@ impl Ast_node
         cg.emit_b_label(merge_lbl)
 
     fn emit_llvm_loop(r: Ast_node$@, cg: Genllvm_ctx$@)
-        init_node: = r.get_loop_init()
+        init_node: = r.get_for_init()
         if init_node != null && init_node.kind_id != .k_empty
             init_node.emit_llvm_stmt(cg)
 
@@ -250,7 +250,7 @@ impl Ast_node
         if block_node != null && block_node.kind_id != .k_empty
             block_node.emit_llvm_stmt(cg)
 
-        step_node: = r.get_loop_step()
+        step_node: = r.get_for_step()
         if step_node != null && step_node.kind_id != .k_empty
             step_node.emit_llvm_stmt(cg)
 
@@ -260,8 +260,8 @@ impl Ast_node
 
         cg.emit_b_label(loop_end_lbl)
 
-    fn emit_llvm_match(r: Ast_node$@, cg: Genllvm_ctx$@)
-        cond_node: = r.get_match_cond()
+    fn emit_llvm_switch(r: Ast_node$@, cg: Genllvm_ctx$@)
+        cond_node: = r.get_switch_cond()
         cond_reg: = cond_node.emit_llvm_expr(cg)
         merge_lbl: = cg.next_label()
 
@@ -291,7 +291,7 @@ impl Ast_node
             switch_cond_reg = cg.reg_str(tag_reg)
 
         cases: = List<|Case_info|>.create(base_core.arena)
-        dflt: = collect_match_cases(r, cg, e_def, cases, merge_lbl)
+        dflt: = collect_switch_cases(r, cg, e_def, cases, merge_lbl)
         default_lbl: = dflt.lbl
         default_block: = dflt.block
 
@@ -319,7 +319,7 @@ impl Ast_node
 
                 if !is_scalar && tmp_cond_ptr_str.len > 0
                     ci.ast_node
-                        .emit_llvm_match_payload(cg, e_def, cond_node.type_id, tmp_cond_ptr_str)
+                        .emit_llvm_case_payload(cg, e_def, cond_node.type_id, tmp_cond_ptr_str)
 
                 if ci.block_node != null
                     ci.block_node.emit_llvm_stmt(cg)
@@ -339,15 +339,15 @@ impl Ast_node
             cg.terminate()
 
         cg.emit_b_label(merge_lbl)
-    fn emit_llvm_match_payload(r: Ast_node$@, cg: Genllvm_ctx$@,
-        e_def: sema_type_def.Enum_def$@, cond_type_id: I32, tmp_cond_ptr_str: U8[]) //<
+    fn emit_llvm_case_payload(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
+        cond_type_id: I32, tmp_cond_ptr_str: U8[]) //<
             //< At the start of a switch's case block, it extracts the enum payload into the binding
             //<
             //< r is the pattern node.
         $p_start_idx: = 0
         $has_payload: = false
         $v_def: sema_type_def.Enum_variant$@ = null
-        vr: = resolve_match_pattern_variant(r, e_def)
+        vr: = resolve_case_pattern_variant(r, e_def)
         if v_ref: = vr
             if !e_def.is_scalar() && v_ref.p_start < r.children.len
                 has_payload = true
@@ -439,8 +439,40 @@ impl Ast_node
                     cg.clear_scratch().s("%\{res_reg\}")
                     cg.op_store(store_type_id2, cg.scratch.slice(), ptr_reg)
 
-priv fn collect_match_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
-    cases: List<|Case_info|>$@, merge_lbl: I32): Match_default //<
+priv fn arm_block(r: Ast_node$@, from: Sz): Ast_node$@? //<
+    //< The block of the `switch` arm whose patterns start at `from`
+    for $j: = from; j < r.children.len; j += 1
+        n: = r.get_child(j)
+        if n.kind_id == .k_stmt_block
+            return .some(n)
+        if n.is_keyword("case") || n.is_keyword("default")
+            break
+    return .none
+
+priv fn after_arm(r: Ast_node$@, from: Sz, block_node: Ast_node$@): Sz //<
+    //< Where the next arm starts: past `block_node`, or at the next `case` / `default`
+    $i: = from
+    for i < r.children.len
+        n: = r.get_child(i)
+        if n == block_node
+            return i + 1
+        if n.is_keyword("case") || n.is_keyword("default")
+            return i
+        i += 1
+    return i
+
+priv fn case_value(pn: Ast_node$@, e_def: sema_type_def.Enum_def$@, cg: Genllvm_ctx$@): I64 //<
+    //< The value a case pattern stands for: a variant's tag, else its constant
+    if v_ref: = resolve_case_pattern_variant(pn, e_def)
+        return v_ref.def.tag_value
+    $target: = pn
+    if pn.kind_id == .k_case_pattern
+        target = pn.first_expr()
+            .unwrap_or(pn.get_child(0) if pn.children.len > 0 else null)
+    return cg.sema.try_eval_constexpr_wide(target).unwrap_or(0)
+
+priv fn collect_switch_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_def.Enum_def$@,
+    cases: List<|Case_info|>$@, merge_lbl: I32): Switch_default //<
         //< It collects the Case_infos of a switch's cases and returns default's label and block.
     $default_lbl: = merge_lbl
     $default_block: Ast_node$@ = null
@@ -453,64 +485,6 @@ priv fn collect_match_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_d
     $i: Sz = 2
     for i < r.children.len
         child: = r.get_child(i)
-        if child.is_keyword("case")
-            block_lbl: = cg.next_label()
-            $block_node: Ast_node$@ = null
-            c_idx: = i + 1
-
-            for $j: = c_idx; j < r.children.len; j += 1
-                if r.get_child(j).kind_id == .k_stmt_block
-                    block_node = r.get_child(j)
-                    break
-                if r.get_child(j).is_keyword("case") ||
-                    r.get_child(j).is_keyword("default")
-                    break
-
-            for $j: = c_idx; j < r.children.len; j += 1
-                pn: = r.get_child(j)
-                if pn == block_node
-                    break
-                if pn.is_keyword("case") || pn.is_keyword("default")
-                    break
-
-                if pn.kind_id == .k_match_pattern ||
-                    (pn.kind_id != .k_stmt_block && !pn.is_literal(","))
-                    $pat_val: I64 = 0
-                    $resolved_as_variant: = false
-                    vr: = resolve_match_pattern_variant(pn, e_def)
-                    if v_ref: = vr
-                        pat_val = v_ref.def.tag_value
-                        resolved_as_variant = true
-
-                    if !resolved_as_variant
-                        $eval_target: = pn
-                        if pn.kind_id == .k_match_pattern
-                            switch pn.first_expr()
-                            case .some(fe)
-                                eval_target = fe
-                            case .none
-                                eval_target =
-                                    pn.get_child(0) if pn.children.len > 0 else null
-                        pat_val = cg.sema.try_eval_constexpr_wide(eval_target).unwrap_or(0)
-                    // LLVM switch requires unique case values
-                    is_dup: = seen_vals.get(pat_val) catch false
-                    if !is_dup
-                        seen_vals.set(pat_val, true)
-                        cases
-                            .push(Case_info::{ .val = pat_val, .lbl = block_lbl, .ast_node = pn,
-                            .block_node = block_node })
-            i += 1
-            for i < r.children.len
-                c2: = r.get_child(i)
-                if c2 == block_node
-                    i += 1
-                    break
-                if c2.is_keyword("case") || c2.is_keyword("default")
-                    break
-                i += 1
-            // The inner loop has already moved i to the next case/default, so running the trailing
-            // `i += 1` would skip the whole next case.
-            continue
         if child.is_keyword("default")
             default_lbl = cg.next_label()
             for $j: = i + 1; j < r.children.len; j += 1
@@ -518,7 +492,25 @@ priv fn collect_match_cases(r: Ast_node$@, cg: Genllvm_ctx$@, e_def: sema_type_d
                     default_block = r.get_child(j)
                     break
             break
+        if !child.is_keyword("case")
+            i += 1
+            continue
+        block_lbl: = cg.next_label()
+        block_node: = arm_block(r, i + 1).unwrap_or(null)
+        for $j: = i + 1; j < r.children.len; j += 1
+            pn: = r.get_child(j)
+            if pn == block_node || pn.is_keyword("case") || pn.is_keyword("default")
+                break
+            if pn.kind_id != .k_case_pattern &&
+                (pn.kind_id == .k_stmt_block || pn.is_literal(","))
+                continue
+            pat_val: = case_value(pn, e_def, cg)
+            // LLVM switch requires unique case values
+            if !(seen_vals.get(pat_val) catch false)
+                seen_vals.set(pat_val, true)
+                cases
+                    .push(Case_info::{ .val = pat_val, .lbl = block_lbl, .ast_node = pn,
+                    .block_node = block_node })
+        i = after_arm(r, i + 1, block_node)
 
-        i += 1
-
-    return Match_default::{ .lbl = default_lbl, .block = default_block }
+    return Switch_default::{ .lbl = default_lbl, .block = default_block }

@@ -1,3 +1,12 @@
+//< `Ast_node`, the one node type of every layer's syntax tree, with its position `Loc`
+//<
+//< A node holds its kind (an `Ast_kind` of `ast_kinds.kspls`), its children and what Sema
+//< attaches. Here are its builders (`build_*`), copying, walking, `validate_layout` (the check of
+//< a finished tree), the ICE reports that name a node, and the spelling of type arguments and
+//< import paths. **Build a new node through `build_*`, never by hand**; they leave `def_node`
+//< unset, so link a synthesized name to its declaration yourself.
+//< Caution: **Reach a child through the accessors of `ast_ext.kspls`**, not by an index: which
+//< child is which is the layout's knowledge, kept there.
 import "ksplc/base/ast_kinds" as base_ast_kinds
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
@@ -68,7 +77,7 @@ fn is_anon_env_type(name: U8[]): Bool //<
     $sb: = Str_builder.new()
     defer sb.free()
     sb.c('.').s(anon_env_prefix)
-    return name.find_str(sb.slice()) >= 0
+    return name.find_str(sb.slice()).is_some()
 
 priv const max_offset: Sz = 2147483647 //<
     //< The largest position an I32 can hold
@@ -117,7 +126,7 @@ enum Generic_bounds
     found(start_idx: Sz, inner_start: Sz, inner_end: Sz, end_idx: Sz)
     not_found
 
-enum Match_variant_info
+enum Case_variant_info
     variant(name_node: Ast_node$@, payload_start_idx: Sz)
     not_variant
 
@@ -268,11 +277,14 @@ impl U8[]
         //< It takes the part after the last separator.
         //< Caution: Keep the rule in this one place. Otherwise the code that creates the alias
         //< (collect.kspls) and imports.kspls's [I0310] drift apart unnoticed.
-        last_slash: = r.rfind_char('/')
-        base: = r.sub_from(last_slash + 1) if last_slash >= 0 else r
+        $base: = r
+        if last_slash: = r.rfind_char('/')
+            base = r.sub_from(last_slash + 1)
         // **The extension is not part of a name that can be written**; kept, `lib.helper()` would
         // fail with "undefined path or identifier 'lib'", and only an `as` would get past it.
-        return base.sub(0, base.rfind_char('.')) if base.has_kspl_ext() else base
+        if !base.has_kspl_ext()
+            return base
+        return base.sub(0, base.rfind_char('.').unwrap_or(base.len))
 
     fn resolve_import_path(r: U8[], import_str: U8[]): Str_builder
         $res: = r.logical_path(import_str)
@@ -301,7 +313,7 @@ impl U8[]
         //< file next to this one.
         $res: = Str_builder.new()
         if written.starts_with("std/") ||
-            (written.find_char('/') >= 0 && !written.starts_with("."))
+            (written.find_char('/').is_some() && !written.starts_with("."))
             res.s(written)
         else
             dir: = sys.get_dir_name(r)
@@ -681,14 +693,14 @@ impl Ast_node
             r.ice_assert(r.get_child(2).kind_id == .k_identifier, "Child 2 must be Identifier")
         case .k_stmt_if
             r.ice_assert(len == 4, "AST Validation Error: stmt_if must have exactly 4 children")
-        case .k_stmt_loop
-            r.ice_assert(len == 5, "AST Validation Error: stmt_loop must have exactly 5 children")
+        case .k_stmt_for
+            r.ice_assert(len == 5, "AST Validation Error: stmt_for must have exactly 5 children")
         case .k_stmt_labeled_block
             r.ice_assert(len == 2,
                 "AST Validation Error: stmt_labeled_block must have exactly 2 children")
             r.ice_assert(r.get_child(0).kind_id == .k_label, "Child 0 must be label")
             r.ice_assert(r.get_child(1).kind_id == .k_stmt_block, "Child 1 must be stmt_block")
-        case .k_stmt_match, .k_expr_postfix, .k_decl_import, .k_decl_struct, .k_decl_enum,
+        case .k_stmt_switch, .k_expr_postfix, .k_decl_import, .k_decl_struct, .k_decl_enum,
             .k_decl_impl, .k_decl_trait, .k_enum_field
             r.ice_assert(len >= 2, "AST Validation Error: node must have at least 2 children")
         case .k_stmt_return, .k_stmt_break, .k_stmt_continue
@@ -711,7 +723,7 @@ impl Ast_node
         case .k_expr_field_init
             r.ice_assert(len >= 1 && len <= 4,
                 "AST Validation Error: expr_field_init must have 1 to 4 children")
-        case .k_decl_embed, .k_decl_alias
+        case .k_decl_embed, .k_decl_typedef
             r.ice_assert(len >= 3, "AST Validation Error: node must have at least 3 children")
         case .k_enum_payload
             r.ice_assert(len >= 1, "AST Validation Error: enum_payload must have at least 1 child")

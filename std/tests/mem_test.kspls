@@ -1,3 +1,4 @@
+//< Tests of `std/mem`: what an arena keeps across a reset, and the heap's counters under threads
 import "std/mem" + { Arena, alloc, dealloc }
 import "std/tests/sys_test"
 import "std/thread"
@@ -38,6 +39,17 @@ fn test_arena_reset_fixed_buffer()
     assert(a.remaining() == whole, "Arena: a fixed buffer is whole again after reset")
     a.alloc(whole)
     verdict.pass("Arena.reset on a fixed buffer frees nothing and hands it all out again")
+
+fn test_move_overlap()
+    verdict.start("[Mem] move shifts bytes within one buffer, either way...")
+    $buf: U8[8] = ::{ '0', '1', '2', '3', '4', '5', '6', '7' }
+    p: = buf@
+    mem.move(Void$@::(p + 2), Void$@::p, 5)
+    assert(buf[2] == '0' && buf[6] == '4', "Mem: move toward the tail keeps the source's order")
+    mem.move(Void$@::p, Void$@::(p + 2), 5)
+    assert(buf[0] == '0' && buf[4] == '4', "Mem: move toward the head keeps the source's order")
+    mem.move(Void$@::p, Void$@::p, 0)
+    verdict.pass("mem.move copies overlapping ranges in both directions, and 0 bytes does nothing")
 
 priv const arena_zero_src: U8[] = //< a child that asks for an arena whose chunks hold nothing
     """import "std/mem" { Arena }

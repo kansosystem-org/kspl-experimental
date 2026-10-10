@@ -69,7 +69,7 @@ priv fn build(dir: U8[], cache: U8[], stem: U8[], src: U8[], extra: U8[][], aren
         args.push(e)
     args.push(src)
     args.push(gen)
-    sys.set_env("KSPLC_CACHE_DIR", cache)
+    sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
     r: = harness.ksplc(args.slice())
     if r.code != 0
         return Built::{ .ok = false, .gen = "",
@@ -120,14 +120,13 @@ priv fn cfg_probe_line(src: U8[]): Sz //<
     //< The line the dropped `cfg_probe` is on, counted from the `#cfg()` above it
     //<
     //< **The number is not written here**; written twice, it drifts with nothing saying so.
-    at: = src.find_str("#cfg(ac_cache_probe)")
-    if at < 0
-        return 0
-    $n: Sz = 0
-    for $i: Sz = 0; i < at; i += 1
-        if src[i] == '\n'
-            n += 1
-    return n + 1
+    if at: = src.find_str("#cfg(ac_cache_probe)")
+        $n: Sz = 0
+        for $i: Sz = 0; i < at; i += 1
+            if src[i] == '\n'
+                n += 1
+        return n + 1
+    return 0
 
 priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
     //< What the editor answers at the range a `#cfg()` dropped, with `cache` as the cache directory
@@ -135,7 +134,7 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
     //< The reason is the normalization's other result, read by the editor
     //< (`send_cfg_inactive_hover` in `../../lsp/hover.kspls`). **A hit that returns only the
     //< declarations is exactly the lie this file rejects.**
-    _set: = sys.set_env("KSPLC_CACHE_DIR", cache)
+    sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
     src: = io.read_file(fixture) catch
         return ""
     // The workspace is the package's top, where the suite runs (an empty path inherits it).
@@ -148,7 +147,8 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
         fallback .null_val
     // **The buffer is the file's own bytes.** The key covers the source's whole content, so one
     // byte off makes it a miss and the check tests the parse twice.
-    _open: = c.notify("textDocument/didOpen", lsp_client.did_open(fixture, src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(fixture, src, arena), lsp_client.send_ms,
+        arena) catch {}
     got: =
         c.request("textDocument/hover",
         lsp_client.at_pos(fixture, cfg_probe_line(src), 9, arena), lsp_ms, arena) catch
@@ -199,7 +199,7 @@ fn main(): I32
     // The editor's reading of an entry, too, must be indistinguishable from a parse.
     cold_reason: = cfg_reason(fs.join(work, "cfg_cold", arena), arena)
     verdict.check("with nothing cached, what a `#cfg()` dropped carries the reason",
-        cold_reason.find_str("not analyzed") >= 0, cold_reason)
+        cold_reason.find_str("not analyzed").is_some(), cold_reason)
     warm_reason: = cfg_reason(cache, arena)
     verdict.check("the same reason comes out where the tree came from the cache",
         warm_reason.equals(cold_reason),
@@ -226,7 +226,8 @@ fn main(): I32
     verdict.check("the rewritten version builds", after.ok, after.out)
     if before.ok && after.ok
         verdict.check("change the content at the same path and the generated C changes too (no old \
-            AST)", after.gen.find_str("AC=") >= 0 && !before.gen.equals(after.gen), "")
+            AST)",
+            after.gen.find_str("AC=").is_some() && !before.gen.equals(after.gen), "")
 
     // --- each `--define` flag gives a different result ---
     // `#cfg()` works inside normalisation, so **the same source gives a different AST per flag
@@ -275,7 +276,7 @@ fn main(): I32
     gens_before: = fs.read_dir(ast_dir, arena) catch
         return harness.fatal("the generations' place cannot be read")
     // It makes a new generation: the sweep runs only then, not on a build in an existing one.
-    sys.set_env("KSPLC_CACHE_DIR", cache)
+    sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
     other: = harness
         .run(U8[][]::{ other_spelling(harness.ksplc_exe()),
         arena.text().s("--std-dir=\{harness.std_dir()\}").take(), fixture,

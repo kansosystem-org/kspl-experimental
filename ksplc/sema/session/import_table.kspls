@@ -1,3 +1,13 @@
+//< The table of import lines, which every pass reads to look up a name's renaming
+//<
+//< `import "m" as a;` (an import alias) and `import "m" { A as B };` (a selective import) are kept
+//< in one Map keyed `"file name::name"` (import_key). It also registers the `std/lang` every file
+//< imports implicitly, and records which imported names are written.
+// ==========================================
+// Caution: **Do not put the table and the checks on it in the same place.** Every pass reads the
+// table, while the checks (unused, existence) run once at the end; mixed, the lookup layer looks
+// as if it depended on the checking layer.
+// ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -9,15 +19,6 @@ import "ksplc/sema/type/scope" as sema_type_scope
 import "std/chars" // testing and slicing single characters
 import "std/ds" { List, Map }
 import "std/str"
-
-// ==========================================
-// The table of import lines: `import "m" as a;` (an import alias) and `import "m" { A as B };` (a
-// selective import) in one Map keyed `"file name::name"` (import_key), used to look up a name's
-// renaming.
-// Caution: **Do not put the table and the checks on it in the same place.** Every pass reads the
-// table, while the checks (unused, existence) run once at the end; mixed, the lookup layer looks
-// as if it depended on the checking layer.
-// ==========================================
 
 const lang_file_path: U8[] = "std/lang"
 
@@ -32,7 +33,7 @@ priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
     //<
     //< A kind with no name (an impl, an extern block and so on) returns empty.
     switch r.kind_id
-    case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_const, .k_decl_alias {}
+    case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_const, .k_decl_typedef {}
     case .k_decl_var
         item: = r.find_child(.k_decl_var_item)
         if item != null
@@ -44,8 +45,9 @@ priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
     return name_node.text if name_node != null else ""
 
 fn import_key_name(key: U8[]): U8[] //< the name half of an import table key (`file::name`)
-    sep: = key.find_str("::")
-    return key.sub_from(sep + 2) if sep >= 0 else key
+    if sep: = key.find_str("::")
+        return key.sub_from(sep + 2)
+    return key
 
 fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
     //< Adds std/lang's public names to every file as "a selective import nobody wrote"
@@ -184,8 +186,8 @@ impl Sema_ctx
         //< build_import_reach's key for one line: "the file writing it::the file it names"
         //<
         //< Caution: **Copy it before storing it**, as with import_key.
-        sep: = import_key.find_str("::")
-        return r.import_key(import_key.sub(0, sep) if sep >= 0 else import_key, target_path)
+        file: = import_key.sub(0, import_key.find_str("::").unwrap_or(import_key.len))
+        return r.import_key(file, target_path)
 
     fn drop_import_reach(r: Self$@) //< forgets the index, to be built again on the next question
         if r.import_reach != null

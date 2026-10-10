@@ -57,8 +57,8 @@ priv fn listed_in(text: U8[], arena: Arena$@): List<|Listed|>$@ //<
             head = line.trim_end()
         if !line.starts_with("| `")
             continue
-        close: = line.sub_from(3).find_char('`')
-        if close <= 0
+        close: = line.sub_from(3).find_char('`').unwrap_or(0)
+        if close == 0
             continue
         $owes: = true
         for h in no_notice_heads
@@ -74,7 +74,7 @@ fn carries_license_words(text: U8[], arena: Arena$@): Bool //< whether it holds 
         b.c(c.to_lower())
     low: = b.take()
     for w in license_words
-        if low.find_str(w) >= 0
+        if low.find_str(w).is_some()
             return true
     return false
 
@@ -169,9 +169,7 @@ priv fn check_fires(arena: Arena$@)
 
 priv fn check_notices(arena: Arena$@)
     listed: = listed_in(harness.read_under_root(notices), arena)
-    $tracked: = harness.tracked() catch
-        verdict.skip_check("a file owing a notice is listed", "git ls-files failed")
-        return
+    $tracked: = harness.tracked()
     $gone: = List<|U8[]|>.new(arena)
     $unlisted: = List<|U8[]|>.new(arena)
     $shipped: = List<|U8[]|>.new(arena)

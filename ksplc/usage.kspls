@@ -1,3 +1,10 @@
+//< The usage and the help text, and what each subcommand accepts, kept apart from `main.kspls`
+//<
+//< **The table of which options apply to which subcommand (`flag_faces`) is here and nowhere
+//< else**, and `check_flag_faces` refuses an option given where it does nothing (Principle 5).
+// ==========================================
+// Caution: **Do not list the options by hand** (see `print_faces_and_flags`).
+// ==========================================
 import "ksplc/base/core" as base_core
 import "ksplc/base/target" as base_target
 import "std/argp"
@@ -8,12 +15,6 @@ import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/sys"
 
-// ==========================================
-// Where the usage and the help text are printed, apart from `main.kspls`.
-// **The table of which options apply to which subcommand (`flag_faces`) is here and nowhere
-// else**; a combination that is silently ignored goes against Principle 5.
-// Caution: **Do not list the options by hand** (see `print_faces_and_flags`).
-// ==========================================
 enum Info_topic //< the subjects `ksplc info` answers
     //<
     //< **A subject is named after its variant**, with `_` written `-` (`std_dir` is `std-dir`), so
@@ -295,12 +296,13 @@ fn usage_of(face: U8[]): U8[] //< the one usage line of a subcommand, for refusi
             return base_core.arena.text().s("usage: ").s(f.form).c('\n').take()
     return base_core.arena.text().s("usage: ksplc ").s(face).c('\n').take()
 
-fn print_usage()
+fn print_usage(out: Writer) //<
+    //< the whole usage: `io.out()` for `--help`, `io.err()` after a refusal
     for i in Range.asc(faces.len)
-        io.out().s("usage: " if i == 0 else "       ").s(faces[i].form)
+        out.s("usage: " if i == 0 else "       ").s(faces[i].form)
         if i == 0
-            io.out().s("          compile (the default subcommand)")
-        io.out().c('\n')
+            out.s("          compile (the default subcommand)")
+        out.c('\n')
     $usage: =
         """
 
@@ -315,18 +317,18 @@ fn print_usage()
         """
         .dedent()
     defer usage.free()
-    io.out().s(usage.slice())
-    print_topics("info", info_topics())
-    print_topics("clean", clean_topics)
+    out.s(usage.slice())
+    print_topics(out, "info", info_topics())
+    print_topics(out, "clean", clean_topics)
     if cli != null
-        print_faces_and_flags(cli)
-        io.out().c('\n')
-        cli.print_options()
+        print_faces_and_flags(out, cli)
+        out.c('\n')
+        cli.print_options(out)
 
-fn print_topics(face: U8[], topics: U8[])
-    io.out().s("\n").s(face).s("'s subjects: ").s(topics).c('\n')
+fn print_topics(out: Writer, face: U8[], topics: U8[])
+    out.s("\n").s(face).s("'s subjects: ").s(topics).c('\n')
 
-fn print_faces_and_flags(p: argp.Parser$@) //<
+fn print_faces_and_flags(out: Writer, p: argp.Parser$@) //<
     //< It lists the options that apply, per subcommand
     //<
     //< Caution: **Build the list from `flag_faces`**; a list written by hand drifts silently.
@@ -335,7 +337,7 @@ fn print_faces_and_flags(p: argp.Parser$@) //<
     $names: = List<|U8[]|>.new(arena)
     defer names.free()
     p.append_names(names@)
-    io.out()
+    out
         .s("\nThe options that take effect per subcommand (an option not here is an error on that \
             subcommand):\n")
     for face in faces
@@ -346,16 +348,17 @@ fn print_faces_and_flags(p: argp.Parser$@) //<
             f: = flag_faces(name)
             if f.len > 0 && faces_include(f, face.name)
                 line.c(' ').s(name)
-        io.out().s(line.slice()).c('\n')
-    io.out().s("  on every subcommand: --help\n")
+        out.s(line.slice()).c('\n')
+    out.s("  on every subcommand: --help\n")
 
 fn usage_exit(): Void //< it prints the usage as an argument error and exits
-    print_usage()
+    print_usage(io.err())
     sys.exit(1)
 
 fn error_exit(msg: U8[]): Void //< it prints one message and exits
     //<
     //< Caution: **Make the exit code non-zero**, or a calling script carries on unaware of the
-    //< error.
-    io.out().s(msg)
+    //< error. **Write it to standard error**: a caller reading the output (`$(ksplc info ...)`)
+    //< would otherwise take the refusal for the answer.
+    io.err().s(msg)
     sys.exit(1)

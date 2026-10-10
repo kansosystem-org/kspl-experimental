@@ -35,25 +35,33 @@ fn ip4(a: U8, b: U8, c: U8, d: U8): U32 //<
     //< Builds a 32-bit IPv4 address value from the four octets a.b.c.d
     return (U32::a << 24) | (U32::b << 16) | (U32::c << 8) | U32::d
 
-fn put_mac(buf: U8$[], off: Sz, mac_hi: U32, mac_lo: U32) //<
-    //< Writes a MAC held as two U32 into buf at off
-    //<
-    //< Inside this file a MAC (6 bytes) is split into two U32 (mac_hi = the top 2 bytes, mac_lo =
-    //< the bottom 4).
-    //<
-    //< **It uses the _le writers, not _be**: this writes that internal form back in the original
-    //< byte order, not in network order (get_mac reads it back the same way).
-    buf.put_u32_le(off, mac_lo)
-    buf.put_u16_le(off + 4, U16::mac_hi)
+struct Mac //< a MAC address (6 bytes), held as two U32
+    hi: U32 //< the top 2 bytes
+    lo: U32 //< the bottom 4
 
-fn get_mac_lo(buf: U8[], off: Sz): U32 //< reads back a MAC in the form put_mac wrote
+struct Ends //< who a frame goes from and to: each end's MAC, IPv4 address and port
     //<
-    //< off is the start of the MAC. It is also how a 6-byte MAC (a driver's mac_addr) is split into
-    //< hi/lo, so no caller writes the shifts again.
-    return buf.get_u32_le(off)
+    //< The ports are read only by UDP and TCP.
+    src_mac: Mac
+    dst_mac: Mac
+    src_ip: U32
+    dst_ip: U32
+    src_port: U16
+    dst_port: U16
 
-fn get_mac_hi(buf: U8[], off: Sz): U32
-    return buf.get_u16_le(off + 4)
+fn put_mac(buf: U8$[], off: Sz, mac: Mac) //<
+    //< Writes a MAC into buf at off
+    //<
+    //< **It uses the _le writers, not _be**: this writes the two U32 back in the original byte
+    //< order, not in network order (get_mac reads it back the same way).
+    buf.put_u32_le(off, mac.lo)
+    buf.put_u16_le(off + 4, U16::mac.hi)
+
+fn get_mac(buf: U8[], off: Sz): Mac //< reads back a MAC in the form put_mac wrote
+    //<
+    //< off is the start of the MAC. It is also how a 6-byte MAC (a driver's mac_addr) becomes a
+    //< Mac, so no caller writes the shifts again.
+    return Mac::{ .hi = buf.get_u16_le(off + 4), .lo = buf.get_u32_le(off) }
 
 fn checksum16_step(acc: U32, buf: U8[], off: Sz, len: Sz): U32 //<
     //< Continues the unfinished 16-bit one's-complement sum defined by RFC 1071
@@ -109,15 +117,14 @@ priv fn fits(out: U8$[], need: Sz): Bool //<
 const ipv4_hdr_len: Sz = 20 // with no options, as every frame built here has
 const eth_ipv4_len: Sz = eth_hdr_len + ipv4_hdr_len
 
-priv fn put_eth_ipv4(buf: U8$[], dst_mac_hi: U32, dst_mac_lo: U32, src_mac_hi: U32, src_mac_lo: U32,
-    src_ip: U32, dst_ip: U32, proto: U8, ip_payload_len: Sz) //<
-        //< Writes the Ethernet header and an IPv4 header with no options, checksum and all
-        //<
-        //< ip_payload_len is what follows the IPv4 header (the UDP or TCP header plus its payload);
-        //< the caller has checked with fits that it all fits.
+priv fn put_eth_ipv4(buf: U8$[], ends: Ends, proto: U8, ip_payload_len: Sz) //<
+    //< Writes the Ethernet header and an IPv4 header with no options, checksum and all
+    //<
+    //< ip_payload_len is what follows the IPv4 header (the UDP or TCP header plus its payload);
+    //< the caller has checked with fits that it all fits.
     const ip_off: Sz = eth_hdr_len
-    put_mac(buf, 0, dst_mac_hi, dst_mac_lo)
-    put_mac(buf, 6, src_mac_hi, src_mac_lo)
+    put_mac(buf, 0, ends.dst_mac)
+    put_mac(buf, 6, ends.src_mac)
     buf.put_u16_be(12, ethertype_ipv4)
     buf[ip_off] = 0x45 // version=4, IHL=5 (20 bytes, no options)
     buf[ip_off + 1] = 0 // DSCP/ECN
@@ -127,8 +134,8 @@ priv fn put_eth_ipv4(buf: U8$[], dst_mac_hi: U32, dst_mac_lo: U32, src_mac_hi: U
     buf[ip_off + 8] = 64 // TTL
     buf[ip_off + 9] = proto
     buf.put_u16_be(ip_off + 10, 0) // checksum (computed below)
-    buf.put_u32_be(ip_off + 12, src_ip)
-    buf.put_u32_be(ip_off + 16, dst_ip)
+    buf.put_u32_be(ip_off + 12, ends.src_ip)
+    buf.put_u32_be(ip_off + 16, ends.dst_ip)
     ip_csum: = checksum16(buf, ip_off, ipv4_hdr_len)
     buf.put_u16_be(ip_off + 10, ip_csum)
 
@@ -174,9 +181,8 @@ const ip_proto_icmp: U8 = 1
 const icmp_echo_request: U8 = 8
 const icmp_echo_reply: U8 = 0
 
-fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac_hi: U32, our_mac_lo: U32):
-    Sz //<
-        //< Answers an ARP request. 0 if it is not asking about our_ip.
+fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): Sz //<
+    //< Answers an ARP request. 0 if it is not asking about our_ip.
     if len < arp_frame_len || !fits(out, arp_frame_len)
         return 0
     if req.get_u16_be(12) != ethertype_arp || req.get_u16_be(20) != arp_op_request
@@ -191,25 +197,24 @@ fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac_hi: U32,
         return 0 // it is asking about another host
     out.copy_from(0, req.sub(6, 6)) // the destination = the requester
     out.copy_from(32, req.sub(22, 6)) // target MAC = the requester
-    put_mac(out, 6, our_mac_hi, our_mac_lo)
+    put_mac(out, 6, our_mac)
     out.put_u16_be(12, ethertype_arp)
     out.put_u16_be(14, 1) // htype: Ethernet
     out.put_u16_be(16, ethertype_ipv4) // ptype
     out[18] = 6
     out[19] = 4
     out.put_u16_be(20, 2) // oper: a reply
-    put_mac(out, 22, our_mac_hi, our_mac_lo)
+    put_mac(out, 22, our_mac)
     out.put_u32_be(28, our_ip)
     out.copy_from(38, req.sub(28, 4)) // target IP = the requester
     return pad_to_min(out, arp_frame_len)
 
-fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac_hi: U32,
-    our_mac_lo: U32): Sz //<
-        //< Answers an ICMP echo request (a ping)
-        //<
-        //< 0 if it is not an echo request addressed to our_ip.
-        //< Caution: **Return the identifier, the sequence number and the payload unchanged**, or
-        //< the peer cannot match them and the ping looks unanswered.
+fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): Sz //<
+    //< Answers an ICMP echo request (a ping)
+    //<
+    //< 0 if it is not an echo request addressed to our_ip.
+    //< Caution: **Return the identifier, the sequence number and the payload unchanged**, or
+    //< the peer cannot match them and the ping looks unanswered.
     ip: = ipv4_view(req, len, ip_proto_icmp, 8)
     if !ip.ok || req.get_u32_be(eth_hdr_len + 16) != our_ip
         return 0
@@ -221,7 +226,7 @@ fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac_hi
     if !fits(out, total)
         return 0
     out.copy_from(0, req.sub(6, 6)) // the destination = the sender
-    put_mac(out, 6, our_mac_hi, our_mac_lo)
+    put_mac(out, 6, our_mac)
     out.put_u16_be(12, ethertype_ipv4)
     // Copy the IP packet as it is, then rewrite only the direction and the type.
     out.copy_from(eth_hdr_len, req.sub(eth_hdr_len, ip_total))
@@ -239,16 +244,15 @@ fn build_icmp_echo_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac_hi
     out.put_u16_be(eth_hdr_len + ihl + 2, icmp_sum)
     return pad_to_min(out, total)
 
-fn build_arp_request(buf: U8$[], sender_mac_hi: U32, sender_mac_lo: U32, sender_ip: U32,
-    target_ip: U32): Sz //<
-        //< Builds a broadcast ARP request (who-has target_ip? tell sender_ip) into buf
-        //<
-        //< It returns the full length after padding, or 0 if it does not fit (see fits).
+fn build_arp_request(buf: U8$[], sender_mac: Mac, sender_ip: U32, target_ip: U32): Sz //<
+    //< Builds a broadcast ARP request (who-has target_ip? tell sender_ip) into buf
+    //<
+    //< It returns the full length after padding, or 0 if it does not fit (see fits).
     if !fits(buf, arp_frame_len)
         return 0
     bcast: = buf.sub_mut(0, 6)
     bcast.fill(0xFF) // the destination = the broadcast
-    put_mac(buf, 6, sender_mac_hi, sender_mac_lo)
+    put_mac(buf, 6, sender_mac)
     buf.put_u16_be(12, ethertype_arp)
 
     buf.put_u16_be(14, arp_hw_ethernet)
@@ -256,7 +260,7 @@ fn build_arp_request(buf: U8$[], sender_mac_hi: U32, sender_mac_lo: U32, sender_
     buf[18] = 6 // hwlen
     buf[19] = 4 // protolen
     buf.put_u16_be(20, arp_op_request)
-    put_mac(buf, 22, sender_mac_hi, sender_mac_lo)
+    put_mac(buf, 22, sender_mac)
     buf.put_u32_be(28, sender_ip)
     target_mac: = buf.sub_mut(32, 6)
     target_mac.fill(0) // target MAC (unknown on a request, so 0)
@@ -266,8 +270,7 @@ fn build_arp_request(buf: U8$[], sender_mac_hi: U32, sender_mac_lo: U32, sender_
 
 struct Arp_reply
     ok: Bool
-    sender_mac_hi: U32
-    sender_mac_lo: U32
+    sender_mac: Mac
 
 fn frame_ethertype(buf: U8[], len: Sz): U16 //<
     //< Returns a received frame's EtherType unchanged (0 = too short)
@@ -282,22 +285,19 @@ struct Arp_probe
     is_arp: Bool
     op: U16 //< 1 = request, 2 = reply
     sender_ip: U32
-    sender_mac_hi: U32
-    sender_mac_lo: U32
+    sender_mac: Mac
 
 fn probe_arp(buf: U8[], len: Sz): Arp_probe //<
     //< If it is an ARP frame, returns its content unchanged, **without matching it**
     //<
     //< For diagnosis: parse_arp_reply says nothing when the expected peer itself is wrong, so this
     //< shows who sent the ARP that arrived.
-    none: Arp_probe = ::{ .is_arp = false, .op = 0, .sender_ip = 0, .sender_mac_hi = 0,
-        .sender_mac_lo = 0 }
+    none: Arp_probe = ::{ .is_arp = false, .op = 0, .sender_ip = 0,
+        .sender_mac = ::{ .hi = 0, .lo = 0 } }
     if len < arp_frame_len || buf.get_u16_be(12) != ethertype_arp
         return none
-    mac_lo: = get_mac_lo(buf, 22)
-    mac_hi: = get_mac_hi(buf, 22)
     return ::{ .is_arp = true, .op = buf.get_u16_be(20), .sender_ip = buf.get_u32_be(28),
-        .sender_mac_hi = mac_hi, .sender_mac_lo = mac_lo }
+        .sender_mac = get_mac(buf, 22) }
 
 fn parse_arp_reply(buf: U8[], len: Sz, expect_sender_ip: U32): Arp_reply //<
     //< Returns the sender MAC if buf[0..len) is an ARP reply from expect_sender_ip
@@ -306,26 +306,23 @@ fn parse_arp_reply(buf: U8[], len: Sz, expect_sender_ip: U32): Arp_reply //<
     arp: = probe_arp(buf, len)
     ok: = arp.is_arp && arp.op == arp_op_reply && arp.sender_ip == expect_sender_ip
     if !ok
-        return ::{ .ok = false, .sender_mac_hi = 0, .sender_mac_lo = 0 }
-    return ::{ .ok = true, .sender_mac_hi = arp.sender_mac_hi,
-        .sender_mac_lo = arp.sender_mac_lo }
+        return ::{ .ok = false, .sender_mac = ::{ .hi = 0, .lo = 0 } }
+    return ::{ .ok = true, .sender_mac = arp.sender_mac }
 
-fn build_udp_packet(buf: U8$[], dst_mac_hi: U32, dst_mac_lo: U32, src_mac_hi: U32, src_mac_lo: U32,
-    src_ip: U32, dst_ip: U32, src_port: U16, dst_port: U16, payload: U8[]): Sz //<
-        //< Builds Ethernet (14) + IPv4 (20, no options) + UDP (8) + payload
-        //<
-        //< The UDP checksum is 0 (allowed on IPv4). It returns the padded full length, or 0 if it
-        //< does not fit (see fits).
+fn build_udp_packet(buf: U8$[], ends: Ends, payload: U8[]): Sz //<
+    //< Builds Ethernet (14) + IPv4 (20, no options) + UDP (8) + payload
+    //<
+    //< The UDP checksum is 0 (allowed on IPv4). It returns the padded full length, or 0 if it
+    //< does not fit (see fits).
     const udp_off: Sz = eth_ipv4_len
     const payload_off: Sz = udp_off + 8
     udp_len: Sz = 8 + payload.len
     if !fits(buf, eth_ipv4_len + udp_len)
         return 0
-    put_eth_ipv4(buf, dst_mac_hi, dst_mac_lo, src_mac_hi, src_mac_lo, src_ip, dst_ip, ip_proto_udp,
-        udp_len)
+    put_eth_ipv4(buf, ends, ip_proto_udp, udp_len)
 
-    buf.put_u16_be(udp_off, src_port)
-    buf.put_u16_be(udp_off + 2, dst_port)
+    buf.put_u16_be(udp_off, ends.src_port)
+    buf.put_u16_be(udp_off + 2, ends.dst_port)
     buf.put_u16_be(udp_off + 4, U16::udp_len)
     buf.put_u16_be(udp_off + 6, 0) // checksum=0 (optional on IPv4)
 
@@ -341,25 +338,22 @@ struct Tcp_segment
     payload_off: Sz
     payload_len: Sz
 
-fn build_tcp_segment(buf: U8$[], dst_mac_hi: U32, dst_mac_lo: U32, src_mac_hi: U32, src_mac_lo: U32,
-    src_ip: U32, dst_ip: U32, src_port: U16, dst_port: U16, seq: U32, ack: U32, flags: U8,
-    payload: U8[]): Sz //<
-        //< Builds Ethernet (14) + IPv4 (20, no options) + TCP (20, no options) + payload
-        //<
-        //< The caller manages seq/ack; flags combines tcp_flag_* (tcp_flag_syn to open,
-        //< tcp_flag_ack|tcp_flag_psh for data). The window is fixed (no congestion or flow
-        //< control).
+fn build_tcp_segment(buf: U8$[], ends: Ends, seq: U32, ack: U32, flags: U8, payload: U8[]): Sz //<
+    //< Builds Ethernet (14) + IPv4 (20, no options) + TCP (20, no options) + payload
+    //<
+    //< The caller manages seq/ack; flags combines tcp_flag_* (tcp_flag_syn to open,
+    //< tcp_flag_ack|tcp_flag_psh for data). The window is fixed (no congestion or flow
+    //< control).
     const tcp_off: Sz = eth_ipv4_len
     const tcp_hdr_len: Sz = 20 // fixed, with no options
     const payload_off: Sz = tcp_off + tcp_hdr_len
     tcp_total_len: Sz = tcp_hdr_len + payload.len
     if !fits(buf, eth_ipv4_len + tcp_total_len)
         return 0
-    put_eth_ipv4(buf, dst_mac_hi, dst_mac_lo, src_mac_hi, src_mac_lo, src_ip, dst_ip, ip_proto_tcp,
-        tcp_total_len)
+    put_eth_ipv4(buf, ends, ip_proto_tcp, tcp_total_len)
 
-    buf.put_u16_be(tcp_off, src_port)
-    buf.put_u16_be(tcp_off + 2, dst_port)
+    buf.put_u16_be(tcp_off, ends.src_port)
+    buf.put_u16_be(tcp_off + 2, ends.dst_port)
     buf.put_u32_be(tcp_off + 4, seq)
     buf.put_u32_be(tcp_off + 8, ack)
     buf[tcp_off + 12] = 0x50 // data offset=5 words (20 bytes, no options), reserved=0
@@ -376,8 +370,8 @@ fn build_tcp_segment(buf: U8$[], dst_mac_hi: U32, dst_mac_lo: U32, src_mac_hi: U
     // Bind one descriptor and reuse it: a writer called on a cast's temporary is rejected with "a
     // temporary's address cannot be taken" (the receiver is `Self@`).
     ps: = U8$[]::pseudo
-    ps.put_u32_be(0, src_ip)
-    ps.put_u32_be(4, dst_ip)
+    ps.put_u32_be(0, ends.src_ip)
+    ps.put_u32_be(4, ends.dst_ip)
     pseudo[8] = 0
     pseudo[9] = ip_proto_tcp
     ps.put_u16_be(10, U16::tcp_total_len)

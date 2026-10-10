@@ -49,7 +49,7 @@ priv fn cap_says(src: U8[], name: U8[], arena: Arena$@): Bool? //<
         arena.text().s(".set(\"").s(name).s("\", b.bool_val(").take(), "))", arena)
         return .some(got.equals("true"))
     // A declaration with a body (an object like `semanticTokensProvider`) counts as true.
-    if src.find_str(arena.text().s(".set(\"").s(name).s("\", ").take()) >= 0
+    if src.find_str(arena.text().s(".set(\"").s(name).s("\", ").take()).is_some()
         return .some(true)
     return .none
 
@@ -146,7 +146,7 @@ priv fn sent_by(rel: U8[], heads: U8[][], arena: Arena$@): List<|U8[]|> //<
     src: = harness.read_under_root(rel)
     for head in heads
         for m in scan.find_all(src, head, "\"", arena)
-            if m.find_char('/') >= 0 || m.equals("initialize") || m.equals("initialized") ||
+            if m.find_char('/').is_some() || m.equals("initialize") || m.equals("initialized") ||
                 m.equals("shutdown")
                 scan.push_unique(out@, m)
     return out
@@ -198,12 +198,12 @@ priv fn check_body_views(arena: Arena$@) //<
     //< one is narrowed too the editor goes quiet with nothing saying why.
     src: = harness.read_under_root(server_file)
     $bad: = List<|U8[]|>.new(arena)
-    if src.find_str(doc_view) < 0
+    if src.find_str(doc_view).is_none()
         bad
             .push(arena.text().s(server_file)
             .s(": the document view does not narrow the bodies to the one document (looked for `")
             .s(doc_view).c('`').take())
-    if src.find_str(ws_view) < 0
+    if src.find_str(ws_view).is_none()
         bad
             .push(arena.text().s(server_file)
             .s(": the workspace view does not check every body naming the word (looked for `")
@@ -231,7 +231,7 @@ priv fn check_recovery_wake(arena: Arena$@) //<
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspls" })
         for line in harness.read_under_root(rel).lines(arena)
-            if line.trim_spaces().starts_with("//") || line.find_str(wake_line) < 0
+            if line.trim_spaces().starts_with("//") || line.find_str(wake_line).is_none()
                 continue
             seen += 1
             if !rel.equals(wake_file)
@@ -263,7 +263,7 @@ priv fn ignored_dirs(arena: Arena$@): List<|U8[]|> //<
         t = t.sub(0, t.len - 1)
         if t.len > 0 && t[0] == '/'
             t = t.sub_from(1)
-        if t.len > 0 && t.find_char('/') < 0 && t.find_char('*') < 0
+        if t.len > 0 && t.find_char('/').is_none() && t.find_char('*').is_none()
             scan.push_unique(out@, t)
     return out
 
@@ -274,19 +274,15 @@ priv fn check_exclude(arena: Arena$@)
     for got in scan.find_all(harness.read_under_root(vscode_client), "findFiles(", ")", arena)
         // Caution: **Check the second argument.** The first is the pattern searched for
         // (`'**/*.{kspls,kspl}'`), not the pattern left out.
-        at: = got.find_str(", '**/")
-        if at < 0
-            continue
-        seen += 1
-        rest: = got.sub_from(at + 6)
-        end: = rest.find_str("/**'")
-        if end < 0
-            continue
-        name: = rest.sub(0, end)
-        if !scan.has(told@, name)
-            bad
-                .push(arena.text().s(vscode_client).s(": it leaves `").s(name).s("` out, and ")
-                .s(ignore_file).s(" does not name that folder").take())
+        if at: = got.find_str(", '**/")
+            seen += 1
+            rest: = got.sub_from(at + 6)
+            if end: = rest.find_str("/**'")
+                name: = rest.sub(0, end)
+                if !scan.has(told@, name)
+                    bad
+                        .push(arena.text().s(vscode_client).s(": it leaves `").s(name)
+                        .s("` out, and ").s(ignore_file).s(" does not name that folder").take())
     verdict.check_list("`.gitignore` names the folders the extension leaves out", seen, "exclusions",
         bad@, "the origin for where things are built into is `.gitignore`")
 
@@ -382,14 +378,14 @@ priv fn row_head(row: U8[]): U8[] //< the `<path>:<name>` half of a row
     //<
     //< Where there is no separator, the whole row (so a row written wrong is reported by name
     //< rather than silently matching nothing).
-    at: = row.find_str(row_bar)
-    return row if at < 0 else row.sub(0, at)
+    return row.sub(0, row.find_str(row_bar).unwrap_or(row.len))
 
 priv fn row_tail(row: U8[]): U8[] //< the half after the separator
     //<
     //< Where there is none, empty — and an empty one fails below.
-    at: = row.find_str(row_bar)
-    return "" if at < 0 else row.sub_from(at + row_bar.len)
+    if at: = row.find_str(row_bar)
+        return row.sub_from(at + row_bar.len)
+    return ""
 
 priv const globals_floor: Sz = 25 //<
     //< The fewest `$` globals the count may find
@@ -401,12 +397,10 @@ priv fn wind_body(): U8[] //< the body of the one function that rewinds the aren
     //<
     //< Where it cannot be found, empty.
     src: = harness.read_under_root(wind_file)
-    at: = src.find_str(wind_head)
-    if at < 0
-        return ""
-    rest: = src.sub_from(at)
-    end: = rest.find_str("\n}\n")
-    return rest if end < 0 else rest.sub(0, end)
+    if at: = src.find_str(wind_head)
+        rest: = src.sub_from(at)
+        return rest.sub(0, rest.find_str("\n}\n").unwrap_or(rest.len))
+    return ""
 
 priv fn ksplc_globals(arena: Arena$@): List<|U8[]|> //<
     //< The `$` globals ksplc declares, as `<path>:<name>`
@@ -425,7 +419,7 @@ priv fn ksplc_globals(arena: Arena$@): List<|U8[]|> //<
                 line = line.sub_from(4)
             if !line.starts_with("$")
                 continue
-            end: = line.find_char(':')
+            end: = line.find_char(':').unwrap_or(0)
             if end < 2
                 continue
             scan.push_unique(out@,
@@ -447,7 +441,7 @@ priv fn check_wind_back(arena: Arena$@)
     $calls: Sz = 0
     for rel in harness.tracked_matching(U8[][]::global_specs)
         for line in harness.read_under_root(rel).lines(arena)
-            if line.trim_spaces().starts_with("//") || line.find_str(wind_call) < 0
+            if line.trim_spaces().starts_with("//") || line.find_str(wind_call).is_none()
                 continue
             calls += 1
             if !rel.equals(wind_file)
@@ -459,7 +453,7 @@ priv fn check_wind_back(arena: Arena$@)
         bad
             .push(arena.text().s("`").s(wind_call)
             .s("` stands on \{calls\} lines of code; it is to stand on one").take())
-    if body.find_str(wind_call) < 0
+    if body.find_str(wind_call).is_none()
         no_wind: = arena.text().s(wind_file)
             .s(": `wind_back` does not wind the arena back (either the body reading broke, or the \
                 line went)").take()
@@ -467,7 +461,7 @@ priv fn check_wind_back(arena: Arena$@)
 
     // ② Every container on the arena is discarded there, and no row of either table is stale.
     for i in Range.asc(on_arena.len)
-        if body.find_str(row_tail(on_arena[i])) < 0 || row_tail(on_arena[i]).len == 0
+        if body.find_str(row_tail(on_arena[i])).is_none() || row_tail(on_arena[i]).len == 0
             bad
                 .push(arena.text().s(row_head(on_arena[i])).s(": `wind_back` does not hold `")
                 .s(row_tail(on_arena[i])).c('`').take())
@@ -529,15 +523,15 @@ priv fn grammar_keywords(src: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn as_word_in(src: U8[], want: U8[]): Bool //< whether `want` stands in `src` as a whole word
     $i: Sz = 0
     for i + want.len <= src.len
-        at: = src.sub_from(i).find_str(want)
-        if at < 0
+        if at: = src.sub_from(i).find_str(want)
+            from: = i + at
+            to: = from + want.len
+            if (from == 0 || !word_char(src[from - 1])) &&
+                (to >= src.len || !word_char(src[to]))
+                return true
+            i = from + 1
+        else
             return false
-        from: = i + at
-        to: = from + want.len
-        if (from == 0 || !word_char(src[from - 1])) &&
-            (to >= src.len || !word_char(src[to]))
-            return true
-        i = from + 1
     return false
 
 priv fn word_char(c: U8): Bool

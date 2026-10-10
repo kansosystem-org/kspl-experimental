@@ -1,15 +1,15 @@
+//< Tests of `std/net` over real loopback traffic, TCP and UDP
+import "std/ds" { List }
 import "std/io"
 import "std/net"
 import "std/reactor"
 import "std/str"
 import "std/subproc"
+import "std/sys"
 import "std/thread"
 import "std/verdict"
 
-// ==========================================
-// std/net: real loopback traffic over TCP and UDP. The TCP server accept()s on a separate thread
-// and echoes what it receives.
-// ==========================================
+// The TCP server accept()s on a separate thread and echoes what it receives.
 #export
 fn net_tcp_echo_server(listener: net.Tcp_listener$@): Void$@
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
@@ -29,6 +29,24 @@ fn net_tcp_echo_server(listener: net.Tcp_listener$@): Void$@
 #export
 fn net_accept_once(listener: net.Tcp_listener$@): Void$@
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    conn.free()
+    return null
+
+// Reads until the client's end, then answers with how much came (test_tcp_half_close).
+#export
+fn net_count_then_answer(listener: net.Tcp_listener$@): Void$@
+    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    $buf: U8[64] = ::{}
+    $total: Sz = 0
+    for
+        n: = conn.read(U8$[]::buf) catch panic("server read should succeed")
+        if n == 0
+            break
+        total += n
+    $said: = str.Str_builder.new()
+    defer said.free()
+    said.s("\{total\}")
+    conn.write_all(said.slice()) catch panic("server write should succeed")
     conn.free()
     return null
 
@@ -101,18 +119,18 @@ fn test_net_names() //<
     hn: = net.resolve_one("localhost", U8$[]::home) catch panic("resolve_one should resolve \
         localhost")
     local: = U8[]::{ .ptr = home[0]@, .len = hn }
-    listener: = net.Tcp_listener.bind(local, 17660) catch panic("bind should succeed on a fresh \
-        port")
+    listener: = net.Tcp_listener.bind(local, 0) catch panic("bind should succeed on a free port")
+    port: = listener.port() catch panic("a bound socket knows its port")
     t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener) catch panic("thread \
         spawn failed")
-    client: = net.Tcp_stream.connect("localhost", 17660) catch panic("connect by name should reach \
+    client: = net.Tcp_stream.connect("localhost", port) catch panic("connect by name should reach \
         the loopback listener")
     $peer_host: U8[64] = ::{}
     p: = client.peer(U8$[]::peer_host) catch panic("peer should succeed on a connected stream")
     host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
     // Caution: **Do not merge the two into one condition**, or the log does not say which differed.
     assert(host.equals(local), "the address a name connected to is the waiting port's address")
-    assert(p.port == 17660, "the port a name connected to is the waiting port's port")
+    assert(p.port == port, "the port a name connected to is the waiting port's port")
     $tight: U8[8] = ::{}
     $tight_refused: = false
     _p: = client.peer(U8$[]::tight) catch e
@@ -156,17 +174,18 @@ fn test_net_names() //<
 // ==========================================
 fn test_tcp_ipv6()
     verdict.start("[Net] connecting over the IPv6 loopback and peer() test...")
-    listener: = net.Tcp_listener.bind("::1", 17662) catch
+    listener: = net.Tcp_listener.bind("::1", 0) catch
         verdict.skip("this machine has no IPv6 loopback")
         return
+    port: = listener.port() catch panic("a bound socket knows its port")
     t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener) catch panic("thread \
         spawn failed")
-    client: = net.Tcp_stream.connect("::1", 17662) catch panic("connect should succeed on the IPv6 \
+    client: = net.Tcp_stream.connect("::1", port) catch panic("connect should succeed on the IPv6 \
         loopback")
     $peer_host: U8[64] = ::{}
     p: = client.peer(U8$[]::peer_host) catch panic("peer should succeed on a connected stream")
     host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
-    assert(host.equals("::1") && p.port == 17662, "an IPv6 address round-trips as text")
+    assert(host.equals("::1") && p.port == port, "an IPv6 address round-trips as text")
     client.free()
     t.join_and_free()
     listener.free()
@@ -178,8 +197,8 @@ fn test_tcp_ipv6()
 // ==========================================
 fn connect_peer(candidates: U8[][], port: I32, peer_host: U8$[]): U8[] //<
     //< Connects over the candidates and returns the address text of the one that won
-    client: = net.connect_over(candidates, port) catch panic("connect_over should reach the one \
-        candidate that accepts")
+    client: = net.connect_over(candidates, port, 30000I64) catch panic("connect_over should reach \
+        the one candidate that accepts")
     p: = client.peer(peer_host) catch panic("peer should succeed on a connected stream")
     client.free()
     return U8[]::{ .ptr = peer_host.ptr, .len = p.host_len }
@@ -191,6 +210,12 @@ priv fn expect_winner(got: U8[], want: U8[]) //<
     if !got.equals(want)
         io.err().s("[Net] the overlapped attempts: ").s(got).s(" won where ").s(want).s(" should\n")
 
+fn port_nobody_holds(): I32 //< a port the OS just handed out and took back, so nothing listens
+    l: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
+    port: = l.port() catch panic("a bound socket knows its port")
+    l.free()
+    return port
+
 fn test_tcp_overlapped()
     verdict
         .start("[Net] overlapped attempts: a refusing candidate does not keep the accepting one \
@@ -198,26 +223,27 @@ fn test_tcp_overlapped()
     $peer_host: U8[64] = ::{}
     // Nothing listens on 127.0.0.2: it refuses on Linux, and on a machine whose loopback holds only
     // 127.0.0.1 it never answers, which the next attempt overtakes. Either way 127.0.0.1 wins.
-    v4: = net.Tcp_listener.bind("127.0.0.1", 17663) catch panic("bind should succeed on a fresh \
-        port")
+    v4: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
+    port: = v4.port() catch panic("a bound socket knows its port")
     t4: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4) catch panic("thread spawn \
         failed")
     won4: =
-        connect_peer(U8[][]::{ "127.0.0.2", "127.0.0.1" }, 17663, U8$[]::peer_host)
+        connect_peer(U8[][]::{ "127.0.0.2", "127.0.0.1" }, port, U8$[]::peer_host)
     expect_winner(won4, "127.0.0.1")
     assert(won4.equals("127.0.0.1"), "the accepting candidate wins over a refusing one before it")
     t4.join_and_free()
     // The IPv6 loopback refuses, or cannot be opened where there is none: skipped, not a failure.
     t4b: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v4) catch panic("thread spawn \
         failed")
-    won4b: = connect_peer(U8[][]::{ "::1", "127.0.0.1" }, 17663, U8$[]::peer_host)
+    won4b: = connect_peer(U8[][]::{ "::1", "127.0.0.1" }, port, U8$[]::peer_host)
     expect_winner(won4b, "127.0.0.1")
     assert(won4b.equals("127.0.0.1"), "the IPv4 candidate wins over an IPv6 one that refuses")
     t4b.join_and_free()
     v4.free()
 
     $nobody: = false
-    _n: = net.connect_over(U8[][]::{ "127.0.0.1" }, 17665) catch e
+    _n: =
+        net.connect_over(U8[][]::{ "127.0.0.1" }, port_nobody_holds(), 30000I64) catch e
         nobody = e == net.Net_error.connect_failed
         fallback null
     assert(nobody, "candidates that all refuse fail as connect_failed")
@@ -225,17 +251,48 @@ fn test_tcp_overlapped()
         .pass("A candidate that accepts wins over one that refuses or never answers before it, and \
             candidates that all refuse fail as connect_failed.")
 
+fn test_tcp_connect_wait() //< a candidate that never answers ends the connect at its wait
+    //<
+    //< **A full backlog makes the silence**: past its accept queue, Linux and BSD drop a SYN
+    //< without a word, so the next connect hears nothing, as from an address whose packets are
+    //< dropped. Without the wait it would hang for the OS's minutes.
+    verdict.start("[Net] connect gives up at its wait on a candidate that never answers...")
+    if sys.is_windows()
+        verdict.skip("Windows refuses a connection past a full backlog, so none goes silent")
+        return
+    l: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
+    port: = l.port() catch panic("a bound socket knows its port")
+    // More than the backlog (128), none accepted, so the queue stays full.
+    $held: = List<|net.Tcp_stream$@|>.new(null)
+    for _i in Range.asc(300)
+        s: = net.Tcp_stream.connect_nonblocking("127.0.0.1", port) catch panic("a connect starts")
+        held.push(s)
+    t0: = sys.mono_us()
+    $timed_out: = false
+    _c: = net.connect_over(U8[][]::{ "127.0.0.1" }, port, 500I64) catch e
+        timed_out = e == net.Net_error.timed_out
+        fallback null
+    took_ms: = (sys.mono_us() - t0) / 1000I64
+    for s in held.slice()
+        s.free()
+    held.free()
+    l.free()
+    assert(timed_out, "a connect that hears nothing fails as timed_out")
+    assert(took_ms < 10000I64, "it gives up near its wait, not at the OS's own limit")
+    verdict.pass("A connect that hears nothing gives up at its wait, as timed_out.")
+
 fn test_tcp_overlapped_ipv6()
     verdict
         .start("[Net] overlapped attempts: an IPv6 candidate that accepts wins over a refusing IPv4 \
             one...")
     $peer_host: U8[64] = ::{}
-    v6: = net.Tcp_listener.bind("::1", 17664) catch
+    v6: = net.Tcp_listener.bind("::1", 0) catch
         verdict.skip("this machine has no IPv6 loopback")
         return
+    port: = v6.port() catch panic("a bound socket knows its port")
     t6: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v6) catch panic("thread spawn \
         failed")
-    won6: = connect_peer(U8[][]::{ "127.0.0.1", "::1" }, 17664, U8$[]::peer_host)
+    won6: = connect_peer(U8[][]::{ "127.0.0.1", "::1" }, port, U8$[]::peer_host)
     expect_winner(won6, "::1")
     assert(won6.equals("::1"),
         "the accepting IPv6 candidate wins over a refusing IPv4 one before it")
@@ -246,19 +303,20 @@ fn test_tcp_overlapped_ipv6()
 fn test_tcp_echo()
     verdict.start("[Net] TCP listener/accept/connect/read/write test (real loopback traffic)...")
 
-    listener: = net.Tcp_listener.bind("127.0.0.1", 17654) catch panic("bind should succeed on a \
-        fresh port")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
     t: =
         thread.Thread.spawn<|net.Tcp_listener|>(net_tcp_echo_server, listener) catch panic("thread \
             spawn failed")
 
-    client: = net.Tcp_stream.connect("127.0.0.1", 17654) catch panic("connect should succeed once \
+    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
         the listener is bound")
     // The client's peer is the server, at the address given to bind.
     $peer_host: U8[64] = ::{}
     p: = client.peer(U8$[]::peer_host) catch panic("peer should succeed on a connected stream")
     host: = U8[]::{ .ptr = peer_host[0]@, .len = p.host_len }
-    assert(host.equals("127.0.0.1") && p.port == 17654,
+    assert(host.equals("127.0.0.1") && p.port == port,
         "connected peer must be the server we dialed")
     sent: = client.write("ping") catch panic("client write should succeed")
     assert(sent == 4, "client should send exactly 4 bytes")
@@ -278,12 +336,13 @@ fn test_tcp_echo()
 fn test_udp_echo()
     verdict.start("[Net] UDP bind/send_to/recv_from test (real loopback traffic)...")
 
-    server: = net.Udp_socket.bind("127.0.0.1", 17655) catch panic("udp bind should succeed on a \
-        fresh port")
+    server: = net.Udp_socket.bind("127.0.0.1", 0) catch panic("udp bind should succeed on a free \
+        port")
+    port: = server.port() catch panic("a bound socket knows its port")
     client: = net.Udp_socket.bind("127.0.0.1", 0) catch panic("udp client bind (ephemeral port) \
         should succeed")
 
-    sent: = client.send_to("hello-udp", "127.0.0.1", 17655) catch panic("udp send_to should succeed")
+    sent: = client.send_to("hello-udp", "127.0.0.1", port) catch panic("udp send_to should succeed")
     assert(sent == 9, "should send exactly 9 bytes")
 
     $recv_buf: U8[64] = ::{}
@@ -309,12 +368,13 @@ fn test_udp_echo()
 fn test_udp_too_long()
     verdict
         .start("[Net] a datagram longer than the buffer is refused, and the next one still comes...")
-    server: = net.Udp_socket.bind("127.0.0.1", 17670) catch panic("udp bind should succeed on a \
-        fresh port")
+    server: = net.Udp_socket.bind("127.0.0.1", 0) catch panic("udp bind should succeed on a free \
+        port")
+    port: = server.port() catch panic("a bound socket knows its port")
     client: = net.Udp_socket.bind("127.0.0.1", 0) catch panic("udp client bind should succeed")
-    _l: = client.send_to("a datagram longer than ten bytes", "127.0.0.1", 17670) catch panic("udp \
+    _l: = client.send_to("a datagram longer than ten bytes", "127.0.0.1", port) catch panic("udp \
         send_to should succeed")
-    _s: = client.send_to("short", "127.0.0.1", 17670) catch panic("udp send_to should succeed")
+    _s: = client.send_to("short", "127.0.0.1", port) catch panic("udp send_to should succeed")
     $buf: U8[10] = ::{}
     $from: U8[64] = ::{}
     $too_long: = false
@@ -377,9 +437,10 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     verdict
         .start("[Net] a child started meanwhile holds no socket: the port binds again, and the peer \
             sees the close...")
-    listener: = net.Tcp_listener.bind("127.0.0.1", 17667) catch panic("bind should succeed on a \
-        fresh port")
-    client: = net.Tcp_stream.connect("127.0.0.1", 17667) catch panic("connect should succeed once \
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
         the listener is bound")
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
     $child: = subproc.spawn_piped(U8[][]::{ ksplc, "lsp" }, "") catch panic("the child must start")
@@ -387,7 +448,7 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     conn.free()
 
     $rebound: = true
-    again: = net.Tcp_listener.bind("127.0.0.1", 17667) catch
+    again: = net.Tcp_listener.bind("127.0.0.1", port) catch
         rebound = false
         fallback null
     assert(rebound, "a closed listener's port binds again while a child started before is running")
@@ -413,3 +474,49 @@ fn test_child_holds_no_socket(ksplc: U8[]) //<
     verdict
         .pass("A child started while a listener and a connection were open holds neither: the port \
             binds again and the peer sees the close at once.")
+
+fn test_tcp_half_close() //<
+    //< shut_write ends what this side sends, and it still reads the answer; raw_fd names the socket
+    verdict.start("[Net] closing only the sending half, and the socket's raw number test...")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    t: =
+        thread.Thread.spawn<|net.Tcp_listener|>(net_count_then_answer, listener) catch panic("thread spawn failed")
+    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
+        the listener is bound")
+    assert(client.raw_fd() >= 0, "a connected stream has a socket number")
+    client.write_all("hello") catch panic("client write should succeed")
+    client.shut_write() catch panic("shut_write should succeed on a connected stream")
+    $buf: U8[16] = ::{}
+    n: = client.read(U8$[]::buf) catch panic("the answer should still be readable")
+    assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("5"),
+        "the peer saw the end after five bytes, and its answer still arrives")
+    client.free()
+    t.join_and_free()
+    listener.free()
+    verdict.pass("After shut_write the peer reads the end, and its answer still comes back.")
+
+fn test_tcp_read_for() //<
+    //< a read with a time limit ends at it on a quiet peer, and reads what comes
+    verdict.start("[Net] a read that waits at most its timeout test...")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    // The connection is made before any accept, and the peer then says nothing.
+    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
+        the listener is bound")
+    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    $buf: U8[16] = ::{}
+    $timed_out: = false
+    _n: = client.read_for(U8$[]::buf, 200) catch e
+        timed_out = e == net.Net_error.timed_out
+        fallback 0
+    assert(timed_out, "a quiet peer makes read_for fail as timed_out")
+    conn.write_all("hi") catch panic("server write should succeed")
+    n: = client.read_for(U8$[]::buf, 60000) catch panic("what the peer sent should be read")
+    assert(U8[]::{ .ptr = buf[0]@, .len = n }.equals("hi"), "read_for reads what arrives")
+    conn.free()
+    client.free()
+    listener.free()
+    verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")

@@ -1,3 +1,4 @@
+//< Tests of `std/sys`, `std/time` and `std/subproc`: the environment, signals, dates, children
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -36,16 +37,19 @@ fn test_env_set_unset()
     verdict.start("[Sys] setting and deleting an environment variable (set_env / unset_env)...")
     name: = "KSPL_TEST_ENV_SET_UNSET"
 
-    assert(sys.set_env(name, "value1"), "set_env should succeed")
+    sys.set_env(name, "value1") catch panic("set_env should succeed")
     switch sys.get_env(name)
     case .some(v)
         assert(v.equals("value1"), "get_env must return what set_env wrote")
     case .none
         panic("get_env must find the variable set_env wrote")
 
-    // An empty value is refused, and **the previous value must remain**: the caller reads false as
-    // "nothing happened".
-    assert(!sys.set_env(name, ""), "set_env must refuse an empty value")
+    // An empty value is refused, and **the previous value must remain**: the caller reads the
+    // refusal as "nothing happened".
+    $empty_refused: = false
+    sys.set_env(name, "") catch e
+        empty_refused = e == sys.Env_error.empty_value
+    assert(empty_refused, "set_env must refuse an empty value as empty_value")
     switch sys.get_env(name)
     case .some(v)
         assert(v.equals("value1"), "a refused set_env must leave the old value alone")
@@ -58,19 +62,26 @@ fn test_env_set_unset()
     defer long.free()
     for _i in Range.asc(5000)
         long.c('v')
-    assert(sys.set_env(name, long.slice()), "set_env takes a value of 5000 characters")
+    sys.set_env(name, long.slice()) catch panic("set_env takes a value of 5000 characters")
     switch sys.get_env(name)
     case .some(v)
         assert(v.equals(long.slice()), "get_env returns a value of 5000 characters whole")
     case .none
         panic("get_env must find a value of 5000 characters")
 
-    assert(sys.unset_env(name), "unset_env should succeed")
+    sys.unset_env(name) catch panic("unset_env should succeed")
     if _v: = sys.get_env(name)
         panic("unset_env must remove the variable")
 
+    // A name holding `=` is refused alike on every OS: POSIX refuses it, and Windows would cut the
+    // name there and set another variable.
+    $eq_refused: = false
+    sys.set_env("KSPL_TEST=ENV", "v") catch e
+        eq_refused = e == sys.Env_error.bad_name
+    assert(eq_refused, "set_env must refuse a name holding `=` as bad_name")
+
     // Deleting a name that was never there is a success too.
-    assert(sys.unset_env("KSPL_TEST_ENV_NEVER_SET_XYZ"), "unset_env on a missing name succeeds")
+    sys.unset_env("KSPL_TEST_ENV_NEVER_SET_XYZ") catch panic("unset_env on a missing name succeeds")
 
     verdict
         .pass("an empty value was refused and nothing changed, and unset_env is the only route for \
@@ -173,6 +184,30 @@ fn test_dir_name() //< the folder that contains a path
         want: = on_windows[i] if win else on_posix[i]
         assert(sys.get_dir_name(paths[i]).equals(want), "get_dir_name's answer differs")
     verdict.pass("a file under the root is in the root, and the root itself is in none.")
+
+fn test_share_roots() //< a Windows share, and a path past `\\?\`, as a root
+    //<
+    //< Caution: **Test a file directly in a share.** Its folder is the share; a root cut at the
+    //< first separator would make it the server, and a share's parent `\\`.
+    verdict.start("[Sys] measuring the root of a share and of a path past `\\\\?\\`...")
+    paths: U8[][9] = ::{ "\\\\srv\\sh\\x", "\\\\srv\\sh", "\\\\?\\C:\\x", "\\\\?\\UNC\\srv\\sh\\x",
+        "\\\\.\\COM1", "//", "\\\\\\x", "C:\\x", "/x" }
+    // On POSIX each opens with a separator, the root `/`, but `C:\x`, a relative name.
+    on_windows: Sz[9] = ::{ 9, 8, 7, 15, 8, 1, 1, 3, 1 }
+    on_posix: Sz[9] = ::{ 1, 1, 1, 1, 1, 1, 1, 0, 1 }
+    win: = sys.is_windows()
+    for i in Range.asc(paths.len)
+        want: = on_windows[i] if win else on_posix[i]
+        assert(sys.root_len(paths[i]) == want, "root_len's answer differs")
+    assert(sys.is_absolute("\\\\srv\\sh"), "a share is from the root without a separator after it")
+    in_share: U8[] = "\\\\srv\\sh\\" if win else "\\\\srv\\sh"
+    assert(sys.get_dir_name("\\\\srv\\sh\\x").equals(in_share), "a file in a share is in the share")
+    arena: = Arena.new(1024)
+    defer arena.free()
+    assert(fs.join("\\\\srv\\sh", "x", arena).equals("\\\\srv\\sh/x"), "a share takes a separator")
+    verdict
+        .pass("on Windows a share and what follows `\\\\?\\` are roots; `\\\\` alone is not a \
+            share.")
 
 fn test_fs_absolute() //< a relative path joined onto the working directory, nothing collapsed
     verdict.start("[Fs] making a path absolute...")
@@ -312,7 +347,8 @@ fn test_io_read_edges() //< a directory is refused; a file under-reporting its s
     status: = "/proc/self/status"
     if fs.exists(status)
         text: = io.read_file(status) catch panic("/proc/self/status should be readable")
-        assert(text.len > 0 && text.find_str("Name:") >= 0, "a /proc file must be read to its end")
+        assert(text.len > 0 && text.find_str("Name:").is_some(),
+            "a /proc file must be read to its end")
         dealloc(Void$@::text.ptr)
     verdict.pass("a directory is refused on both entry points, and a size is only a first guess.")
 
@@ -410,6 +446,39 @@ fn test_io_write_refused_at_close() //< a write the device refuses only at the f
     assert(refused, "write_file must report the write a full device refused at the close")
     verdict.pass("a write refused at the close is reported, not taken for success.")
 
+fn test_io_stream_errors() //< an open stream's read and write failures are reported, not lost
+    verdict
+        .start("[Io] a stream's read error is no end of file, and its refused write reaches sync...")
+    // A stream opened for writing alone refuses a read on every OS (EBADF); taken as the end, it
+    // would read as an empty file.
+    fs.mkdir_all("out/tmp") catch panic("out/tmp must be creatable")
+    $wo: = io.open("out/tmp/kspl_test_write_only.txt", "wb") catch panic("the file must open")
+    $buf: U8[16] = ::{}
+    $failed: = false
+    _n: = wo.read(U8$[]::buf) catch
+        failed = true
+        fallback 0
+    wo.free()
+    assert(failed, "a read the stream refused must fail, not read as the end")
+    full: = "/dev/full"
+    if !fs.exists(full)
+        verdict.skip("the read is checked; the write needs /dev/full, which only Linux has")
+        return
+    // A write wider than the stream's buffer goes out at once and is refused there; the flush at
+    // `sync` then has nothing left to write, so only the stream's error mark tells.
+    $w: = io.open(full, "wb") catch panic("/dev/full must open for writing")
+    $wide: = Str_builder.new()
+    defer wide.free()
+    for _i in Range.asc(1 << 16)
+        wide.c('x')
+    w.s(wide.slice())
+    $refused: = false
+    w.sync() catch
+        refused = true
+    w.free()
+    assert(refused, "sync must report a write the stream refused before it")
+    verdict.pass("a refused read fails, and a write refused before sync is reported by it.")
+
 priv const args_below_src: U8[] = //< a child that reads the argument before the program's name
     """import "std/io"
 import "std/sys"
@@ -440,7 +509,7 @@ fn stops_with( //< whether a child stopped and said why, its argv given whole
 ): Bool
     r: = subproc.run_capture(argv, "", 300000, 1 << 20, arena)
     assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
-    return r.exit_code != 0 && r.stderr_data.find_str(why) >= 0
+    return r.exit_code != 0 && r.stderr_data.find_str(why).is_some()
 
 fn test_args_index_refused(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     verdict.start("[Sys] an argument read below index 0...")
@@ -498,6 +567,10 @@ fn test_can_run() //< that the answer to "can it be started" is correct per envi
 // std/sys: run_capture's result for a clean exit, stdout apart from stderr, a non-zero exit code,
 // a kill on timeout, and an absent executable.
 // ==========================================
+priv const finish_cap_ms: I32 = 60000 //< the cap on a child that must finish of itself
+    //<
+    //< Generous, as only a stalled child reaches it; one that ends returns at once.
+
 fn test_run_capture(arena: Arena$@)
     verdict.start("[Sys] running a subprocess (run_capture)...")
     // /bin/echo and the like exist only on POSIX, so Windows skips this (the windows-lsp job covers
@@ -509,14 +582,14 @@ fn test_run_capture(arena: Arena$@)
         return
 
     ok_argv: = U8[][]::{ "/bin/echo", "hello", "kspl" }
-    ok: = subproc.run_capture(ok_argv, "", 5000, 65536, arena)
+    ok: = subproc.run_capture(ok_argv, "", finish_cap_ms, 65536, arena)
     assert(!ok.spawn_failed && !ok.timed_out, "echo should spawn and finish normally")
     assert(ok.exit_code == 0, "echo should exit with status 0")
     assert(ok.stdout_data.equals("hello kspl\n"), "echo stdout should be captured verbatim")
     assert(ok.stderr_data.len == 0, "echo should produce no stderr output")
 
     split_argv: = U8[][]::{ "/bin/sh", "-c", "echo out_line; echo err_line 1>&2; exit 3" }
-    split: = subproc.run_capture(split_argv, "", 5000, 65536, arena)
+    split: = subproc.run_capture(split_argv, "", finish_cap_ms, 65536, arena)
     assert(split.exit_code == 3, "nonzero exit code must be propagated verbatim")
     split_ok: =
         split.stdout_data.equals("out_line\n") && split.stderr_data.equals("err_line\n")
@@ -525,13 +598,13 @@ fn test_run_capture(arena: Arena$@)
     // /bin/pwd resolves symbolic links, and macOS's /tmp is one to /private/tmp, so the cwd is "/",
     // which is never a link.
     cwd_argv: = U8[][]::{ "/bin/pwd" }
-    cwd_r: = subproc.run_capture(cwd_argv, "/", 5000, 65536, arena)
+    cwd_r: = subproc.run_capture(cwd_argv, "/", finish_cap_ms, 65536, arena)
     cwd_ok: = cwd_r.stdout_data.equals("/\n")
     assert(cwd_ok, "cwd override must change the child's working directory")
 
     // What it wrote, as one text: standard output, then standard error, each `\r\n` folded to `\n`.
     mixed_argv: = U8[][]::{ "/bin/sh", "-c", "printf 'a\\r\\nb\\r'; printf 'e\\r\\n' 1>&2" }
-    mixed: = subproc.run_capture(mixed_argv, "", 5000, 65536, arena)
+    mixed: = subproc.run_capture(mixed_argv, "", finish_cap_ms, 65536, arena)
     assert(mixed.text(arena).equals("a\nb\re\n"),
         "text folds each \\r\\n, keeps a lone \\r, and lays standard error after standard output")
 
@@ -542,11 +615,11 @@ fn test_run_capture(arena: Arena$@)
     // Caution: **Do not start a process when an argument contains a NUL.** The C side splits there,
     // adding an argument nobody wrote (`--INJECTED`) and losing the last (`should-be-last`).
     inject_argv: = U8[][]::{ "/bin/echo", "a\0--INJECTED", "should-be-last" }
-    inject: = subproc.run_capture(inject_argv, "", 5000, 65536, arena)
+    inject: = subproc.run_capture(inject_argv, "", finish_cap_ms, 65536, arena)
     assert(inject.spawn_failed, "an argument containing NUL must be refused, not silently split")
     // An empty argument is legitimate and goes through.
     empty_arg_argv: = U8[][]::{ "/bin/echo", "", "x" }
-    empty_arg: = subproc.run_capture(empty_arg_argv, "", 5000, 65536, arena)
+    empty_arg: = subproc.run_capture(empty_arg_argv, "", finish_cap_ms, 65536, arena)
     empty_ok: = !empty_arg.spawn_failed && empty_arg.stdout_data.equals(" x\n")
     assert(empty_ok, "an empty argument is legitimate and must still be passed through")
 
@@ -603,7 +676,8 @@ fn test_run_many(arena: Arena$@)
         Job::{ .argv = U8[][]::{ "/bin/echo", "after" }, .cwd = "" },
     }
     t2: = sys.mono_us()
-    cut: = subproc.run_many(stuck, 1, 300, 4096, work, arena)
+    // Long enough for the shell to start and print on a slow runner; the job sleeps far longer.
+    cut: = subproc.run_many(stuck, 1, 3000, 4096, work, arena)
     assert(sys.mono_us() - t2 < 10000000I64, "the stuck job is killed at its limit")
     assert(cut.get(0).timed_out && cut.get(0).exit_code == -1, "it comes back timed out")
     assert(cut.get(0).stdout_data.trim_end().equals("begun"), "with what it wrote by then")
@@ -625,14 +699,14 @@ fn test_run(arena: Arena$@)
         return
 
     ok_argv: = U8[][]::{ "/bin/echo", "hello" }
-    out: = subproc.run(ok_argv, "", 5000, 65536, arena) catch
+    out: = subproc.run(ok_argv, "", finish_cap_ms, 65536, arena) catch
         fallback ""
     assert(out.equals("hello\n"), "run must return stdout verbatim, trailing newline included")
 
     fail_argv: = U8[][]::{ "/bin/sh", "-c", "echo why 1>&2; exit 7" }
     $code: I32 = 0
     $err: U8[] = ""
-    subproc.run(fail_argv, "", 5000, 65536, arena) catch e
+    subproc.run(fail_argv, "", finish_cap_ms, 65536, arena) catch e
         switch e
         case .exited(c, m)
             code = c
@@ -655,7 +729,7 @@ fn test_run(arena: Arena$@)
 
     gone_argv: = U8[][]::{ "/bin/echo", "a\0--INJECTED" }
     $spawn_failed: = false
-    subproc.run(gone_argv, "", 5000, 65536, arena) catch e
+    subproc.run(gone_argv, "", finish_cap_ms, 65536, arena) catch e
         switch e
         case .spawn_failed
             spawn_failed = true
@@ -814,7 +888,7 @@ fn test_child_holds_no_file(ksplc: U8[], arena: Arena$@) //<
             65536, arena)
         file.free()
         assert(listing.exit_code == 0, "the child must list its open files")
-        assert(listing.stdout_data.find_str("held.txt") < 0,
+        assert(listing.stdout_data.find_str("held.txt").is_none(),
             "a child does not hold a file it was not handed")
     else
         file.free()

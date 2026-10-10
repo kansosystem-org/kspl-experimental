@@ -1,3 +1,4 @@
+//< Tests of std's string operations: `std/str`, `std/strnum` and the writers into memory
 import "std/bignat"
 import "std/buf" { Buf_writer }
 import "std/chars"
@@ -113,6 +114,10 @@ fn test_str_ops(arena: Arena$@)
     assert(b.len == 0, "drop_prefix: len or more throws everything away")
     b.s("again")
     assert(b.slice().equals("again"), "drop_prefix: more can be appended after throwing away")
+    // The rest is longer than what is dropped, so the two ranges overlap.
+    b.clear().s("ab0123456789")
+    b.drop_prefix(2)
+    assert(b.slice().equals("0123456789"), "drop_prefix: a rest overlapping the dropped part")
 
     // Caution: **Do not confuse the number of code points with the byte count** (a Japanese
     // character is 3 bytes).
@@ -158,6 +163,11 @@ fn test_unescape_and_dedent(arena: Arena$@) //<
         rejected = true
         fallback ""
     assert(rejected, "unescape: `\\q` is refused too")
+    rejected = false
+    _t: = "ab\\".unescape_to_arena(arena) catch
+        rejected = true
+        fallback ""
+    assert(rejected, "unescape: a `\\` with nothing after it is refused, not kept")
 
     $d: = "  a\n   \n  b\n".dedent()
     defer d.free()

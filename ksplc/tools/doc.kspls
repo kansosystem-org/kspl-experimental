@@ -159,10 +159,12 @@ priv fn target_of(rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[], name: 
     //< part with the entry the rest names (`mem.dealloc` inside `std/mem`). **Only this file's
     //< entries link**: another file's name stays text, and `ksplc doc` on it shows it.
     whole: = link_for(rows, links, name)
-    dot: = name.find_char('.')
-    if whole.len > 0 || dot <= 0 || !name.sub(0, dot).equals(tail)
+    if whole.len > 0
         return whole
-    return link_for(rows, links, name.sub_from(dot + 1))
+    if dot: = name.find_char('.')
+        if dot > 0 && name.sub(0, dot).equals(tail)
+            return link_for(rows, links, name.sub_from(dot + 1))
+    return whole
 
 priv fn link_for(rows: List<|Entry|>@, links: List<|U8[]|>@, name: U8[]): U8[] //<
     //< The anchor of the entry `name` names, or empty where none does
@@ -217,10 +219,12 @@ priv fn linked(doc: U8[], rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[]
         if doc[i] != '`'
             i += 1
             continue
-        rel: = doc.sub_from(i + 1).find_char('`')
-        if rel < 0
+        $close: Sz = 0
+        switch doc.sub_from(i + 1).find_char('`')
+        case .some(rel)
+            close = i + 1 + rel
+        case .none
             break
-        close: = i + 1 + Sz::rel
         got: = dotted_len(doc, i + 1, close)
         if got > 0 && (i == 0 || doc[i - 1] != '[')
             target: = target_of(rows, links, tail, doc.sub(i + 1, got))
@@ -243,10 +247,12 @@ priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from
     for one in labels
         $i: = from
         for i < best
-            at: = doc.sub_from(i).find_str(one)
-            if at < 0
+            $here: Sz = 0
+            switch doc.sub_from(i).find_str(one)
+            case .some(at)
+                here = i + at
+            case .none
                 break
-            here: = i + at
             if here > from && doc[here - 1] == ' '
                 if here - 1 < best
                     best = here - 1
@@ -295,7 +301,7 @@ priv fn write_entry(rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[], at: 
     out: Str_builder$@) //<
         //< One entry: its heading, the declaration as written, its description and its parts
     r: = rows.get(at)
-    heading: = "###" if r.key.find_char('.') >= 0 else "##"
+    heading: = "###" if r.key.find_char('.').is_some() else "##"
     out.s("\n").s(heading).s(" `").s(r.key).s("`\n\n")
     // **The declaration goes in a fence that names no language**: the fence keeps a generic's `|`
     // from reading as a table column, and `impl X: Owned` alone is not a program.
@@ -307,8 +313,9 @@ priv fn write_entry(rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[], at: 
     write_parts(rows, links, tail, r.key, out)
 
 priv fn tail_of(file: U8[]): U8[] //< a logical name's last part (`std/mem` gives `mem`)
-    at: = file.rfind_char('/')
-    return file if at < 0 else file.sub_from(at + 1)
+    if at: = file.rfind_char('/')
+        return file.sub_from(at + 1)
+    return file
 
 priv fn said_of_file(rows: List<|Entry|>@): U8[] //< the file's own description
     for r in rows
@@ -428,9 +435,12 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     //<
     //< **The entry follows the first `.` after the last `/`** (`std/mem.Arena.alloc` is the file
     //< `std/mem` and the entry `Arena.alloc`), since a logical name holds no `.`.
-    slash: = target.rfind_char('/')
-    dot_rel: = target.sub_from(slash + 1).find_char('.')
-    cut: = target.len if dot_rel < 0 else slash + 1 + Sz::dot_rel
+    $after_slash: Sz = 0
+    if slash: = target.rfind_char('/')
+        after_slash = slash + 1
+    $cut: = target.len
+    if dot_rel: = target.sub_from(after_slash).find_char('.')
+        cut = after_slash + dot_rel
     name: = target.sub(0, cut)
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
     $out: = Str_builder.new()

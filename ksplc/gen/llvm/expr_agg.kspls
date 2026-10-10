@@ -12,6 +12,20 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { Map }
 
+priv struct Field_slot //< where one initializer's value is stored
+    reg: I32 //< the register holding the slot's address
+    type_id: I32 //< the type the store is emitted in (the reason is at Ctx.emit_numeric_coerce)
+
+priv fn named_field_index(child: Ast_node$@, by_name: Map<|U8[], I32|>$@, at: I32): I32 //<
+    //< The field a struct literal's initializer writes: the one it names, else the one at `at`
+    if by_name == null
+        return at
+    name_node: = child.get_field_init_name().unwrap_or(null)
+    if name_node == null || name_node.kind_id != .k_identifier
+        return at
+    found_idx: = by_name.get(name_node.text) catch -1
+    return at if found_idx == -1 else found_idx
+
 impl Ast_node
     priv fn emit_enum_tag_init(r: Ast_node$@, cg: Genllvm_ctx$@, real_type_id: I32, tag_value: I64):
         U8$[] //<
@@ -178,59 +192,58 @@ impl Ast_node
                     field_name_idx.set(s_def.fields_list.get(f).name, I32::f)
 
         for child in r.children
-            if child.kind_id == .k_expr_field_init
-                val_expr: = child.get_field_init_expr()
-                val_reg: = val_expr.emit_llvm_expr(cg)
-                $field_idx_reg: = 0
-                // The type of the destination field. The store is always emitted in this type (the
-                // reason is at Ctx.emit_numeric_coerce). Only where it cannot be resolved is the
-                // value's type used.
-                $field_type_id: = val_expr.type_id
+            if child.kind_id != .k_expr_field_init
+                continue
+            val_expr: = child.get_field_init_expr()
+            val_reg: = val_expr.emit_llvm_expr(cg)
+            $slot: Field_slot = ::{}
+            if is_array
+                slot = r.array_slot(cg, tmp_ptr, child, current_field_idx, val_expr.type_id)
+                if child.get_field_init_index().is_none()
+                    current_field_idx += 1
+            else
+                field_idx: = named_field_index(child, field_name_idx, current_field_idx)
+                current_field_idx = field_idx + 1
+                slot = r.struct_slot(cg, tmp_ptr, field_idx, val_expr.type_id)
+            stored_reg: = cg.emit_numeric_coerce(val_reg, val_expr.type_id, slot.type_id)
+            cg.s("    store ").t(slot.type_id).s(" ").s(stored_reg).s(", ptr %\{slot.reg\}\n")
 
-                if is_array
-                    switch cg.env.get_info(cg.env.get_real_type(r.type_id))
-                    case .array(elem_id, _size)
-                        field_type_id = elem_id
-                    default {}
-                    switch child.get_field_init_index()
-                    case .some(idx_node)
-                        // idx_node can use registers of its own, so field_idx_reg's next_reg() call
-                        // comes after idx_node is evaluated (SSA register numbers must follow
-                        // allocation order = output order; see emit_llvm_binary).
-                        idx_val: = idx_node.emit_llvm_expr(cg)
-                        field_idx_reg = cg.next_reg()
-                        cg.s("    %\{field_idx_reg\} = getelementptr inbounds ")
-                        cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, ")
-                            .t(idx_node.type_id).s(" ").s(idx_val).s("\n")
-                    case .none
-                        field_idx_reg = cg.next_reg()
-                        cg.s("    %\{field_idx_reg\} = getelementptr inbounds ")
-                        cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr)
-                            .s(", i32 0, i32 \{current_field_idx\}\n")
-                        current_field_idx += 1
-                else
-                    name_node: = child.get_field_init_name().unwrap_or(null)
+    priv fn array_slot(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[], child: Ast_node$@, at: I32,
+        fallback_type_id: I32): Field_slot //<
+            //< The element an array literal's initializer fills: the index written, else `at`
+        $type_id: = fallback_type_id
+        switch cg.env.get_info(cg.env.get_real_type(r.type_id))
+        case .array(elem_id, _size)
+            type_id = elem_id
+        default {}
+        if idx_node: = child.get_field_init_index()
+            // idx_node can use registers of its own, so the slot's next_reg() call comes after
+            // idx_node is evaluated (SSA register numbers must follow allocation order = output
+            // order; see emit_llvm_binary).
+            idx_val: = idx_node.emit_llvm_expr(cg)
+            reg: = cg.next_reg()
+            cg.s("    %\{reg\} = getelementptr inbounds ")
+            cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, ").t(idx_node.type_id).s(" ")
+                .s(idx_val).s("\n")
+            return Field_slot::{ .reg = reg, .type_id = type_id }
+        reg: = cg.next_reg()
+        cg.s("    %\{reg\} = getelementptr inbounds ")
+        cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 \{at\}\n")
+        return Field_slot::{ .reg = reg, .type_id = type_id }
 
-                    $field_idx: = current_field_idx
-
-                    if field_name_idx != null
-                        if name_node != null && name_node.kind_id == .k_identifier
-                            found_idx: = field_name_idx.get(name_node.text) catch -1
-                            if found_idx != -1
-                                field_idx = found_idx
-                    current_field_idx = field_idx + 1
-                    clean_name: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
-                    if sd: = cg.env.get_struct_def(clean_name)
-                        if field_idx >= 0 && field_idx < sd.fields_list.len
-                            field_type_id = sd.fields_list.get(field_idx).type_id
-
-                    field_idx_reg = cg.next_reg()
-                    cg.s("    %\{field_idx_reg\} = getelementptr inbounds ")
-                    cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr)
-                        .s(", i32 0, i32 \{cg.field_index(r.type_id, field_idx)\}\n")
-                stored_reg: = cg.emit_numeric_coerce(val_reg, val_expr.type_id, field_type_id)
-                cg.s("    store ").t(field_type_id).s(" ").s(stored_reg)
-                    .s(", ptr %\{field_idx_reg\}\n")
+    priv fn struct_slot(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[], field_idx: I32,
+        fallback_type_id: I32): Field_slot //<
+            //< The field a struct literal's initializer fills
+        $type_id: = fallback_type_id
+        clean_name: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
+        if sd: = cg.env.get_struct_def(clean_name)
+            if field_idx >= 0 && field_idx < sd.fields_list.len
+                type_id = sd.fields_list.get(field_idx).type_id
+        reg: = cg.next_reg()
+        cg.s("    %\{reg\} = getelementptr inbounds ")
+        cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr)
+            .s(", i32 0, i32 \{cg.field_index(r.type_id, field_idx)\}\n")
+        return Field_slot::{ .reg = reg, .type_id = type_id }
 
     fn emit_llvm_result_wrap(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         inner: = r.get_child(0)

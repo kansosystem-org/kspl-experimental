@@ -1,3 +1,9 @@
+//< Navigation: which declaration a name stands for, the jump to it, and what it says of itself
+//<
+//< `get_definition_node` answers "which declaration does this name stand for" for the hover,
+//< references and renaming alike; **only the jump (`handle_definition`) goes on from a declared
+//< name to its type**. `declared_doc` and `linked_doc` read a declaration's description for every
+//< editor feature, and `write_full_name` gives the name the whole program knows it by.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_doc" as base_ast_doc
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -35,7 +41,7 @@ fn write_full_name(name: U8[], file: U8[], out: Str_builder$@) //<
     //< (`collect_impl_decl` in `../sema/decl/collect.kspls`), and the owner need not be in the
     //< `impl`'s file: `impl pipeline.Compile_error` in `main.kspls` holds
     //< `ksplc.pipeline.Compile_error.report_and_exit`, which prefixed reads `ksplc.main.ksplc.…`.
-    if name.get_generic_base_name().find_char('.') < 0
+    if name.get_generic_base_name().find_char('.').is_none()
         module: = file.strip_kspl_ext()
         if module.len > 0
             out.s_path_as_dots(module).c('.')
@@ -371,6 +377,19 @@ priv fn field_of(c: Sema_ctx$@, owner: U8[], name: U8[]): Ast_node$@? //<
     case .none {}
     return .none
 
+priv fn declared_field(c: Sema_ctx$@, struct_name: U8[], name: U8[]): Ast_node$@? //<
+    //< The field called name in the declaration of the struct struct_name names
+    struct_sym: = c.symtab.resolve(struct_name) catch null
+    if struct_sym == null || struct_sym.node == null
+        return .none
+    for field_node in struct_sym.node.children
+        if field_node.kind_id != .k_struct_field
+            continue
+        fid: = field_node.find_child(.k_identifier)
+        if fid != null && fid.text.equals(name)
+            return .some(field_node)
+    return .none
+
 priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
     //< What a `.name` names on a type: a method on its table, a field, or a `<type>.<name>` method
     //<
@@ -399,14 +418,8 @@ priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
             resolved_struct_name = base_type_only
 
     if struct_def != null
-        struct_sym: = c.symtab.resolve(resolved_struct_name) catch null
-        if struct_sym != null && struct_sym.node != null
-            st_node: = struct_sym.node
-            for field_node in st_node.children
-                if field_node.kind_id == .k_struct_field
-                    fid: = field_node.find_child(.k_identifier)
-                    if fid != null && fid.text.equals(name)
-                        return .some(field_node)
+        if field: = declared_field(c, resolved_struct_name, name)
+            return .some(field)
     // A generic nothing instantiated has no struct entry of its own: its fields are those its
     // declaration holds.
     switch field_of(c, raw_type, name)
@@ -451,47 +464,62 @@ priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target
 priv fn resolve_fallback_parent_def(_c: Sema_ctx$@, path: List<|Ast_node$@|>$@,
     target_node: Ast_node$@, target_text: U8[]): Ast_node$@?
     for $i: = path.len; i > 0; i -= 1
-        p: = path.get(i - 1)
+        if found: = binding_in(path.get(i - 1), target_node, target_text)
+            return .some(found)
+    return .none
 
-        switch p.kind_id
-        case .k_decl_fn, .k_decl_fn_proto, .k_decl_struct, .k_decl_enum, .k_decl_impl,
-            .k_decl_trait, .k_decl_alias
-            gen_params: = p.find_child(.k_type_gen_params)
-            if gen_params != null
-                for param in gen_params.children
-                    if param.kind_id == .k_type_gen_param
-                        id_n: = param.find_child(.k_identifier)
-                        if id_n != null && id_n.text.equals(target_text)
-                            return .some(param)
-                    else if param.kind_id == .k_identifier && param.text.equals(target_text)
-                        return .some(param)
-        default {}
+priv fn binding_in(p: Ast_node$@, target_node: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< What p binds as name, seen from target_node
+    //<
+    //< A declaration binds its type parameters (a function its parameters too), a block the locals
+    //< declared before target_node, and a case pattern its bound names.
+    switch p.kind_id
+    case .k_decl_fn, .k_decl_fn_proto
+        if type_param: = type_param_named(p, name)
+            return .some(type_param)
+        return fn_param_named(p, name)
+    case .k_decl_struct, .k_decl_enum, .k_decl_impl, .k_decl_trait, .k_decl_typedef
+        return type_param_named(p, name)
+    case .k_stmt_block
+        for stmt in p.children
+            if stmt.loc.offset > target_node.loc.offset
+                break
+            if stmt.kind_id == .k_decl_var || stmt.kind_id == .k_decl_const
+                id_n: = stmt.get_var_decl_id()
+                if id_n != null && id_n.text.equals(name)
+                    return .some(stmt)
+    case .k_case_pattern
+        for bind_var in p.children
+            if bind_var.kind_id == .k_identifier && bind_var.text.equals(name)
+                return .some(bind_var)
+    default {}
+    return .none
 
-        switch p.kind_id
-        case .k_decl_fn, .k_decl_fn_proto
-            params: = p.get_fn_params()
-            if params != null
-                for param in params.children
-                    if param.kind_id == .k_fn_param
-                        id_n: = param.find_child(.k_identifier)
-                        if id_n != null && id_n.text.equals(target_text)
-                            return .some(param)
-                        if param.text.equals(target_text)
-                            return .some(param)
-        case .k_stmt_block
-            for stmt in p.children
-                if stmt.loc.offset > target_node.loc.offset
-                    break
-                if stmt.kind_id == .k_decl_var || stmt.kind_id == .k_decl_const
-                    id_n: = stmt.get_var_decl_id()
-                    if id_n != null && id_n.text.equals(target_text)
-                        return .some(stmt)
-        case .k_match_pattern
-            for bind_var in p.children
-                if bind_var.kind_id == .k_identifier
-                    if bind_var.text.equals(target_text)
-                        return .some(bind_var)
-        default {}
+priv fn type_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< The declaration's type parameter called name
+    gen_params: = decl.find_child(.k_type_gen_params)
+    if gen_params == null
+        return .none
+    for param in gen_params.children
+        if param.kind_id == .k_type_gen_param
+            id_n: = param.find_child(.k_identifier)
+            if id_n != null && id_n.text.equals(name)
+                return .some(param)
+        else if param.kind_id == .k_identifier && param.text.equals(name)
+            return .some(param)
+    return .none
+
+priv fn fn_param_named(decl: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< The function's parameter called name
+    params: = decl.get_fn_params()
+    if params == null
+        return .none
+    for param in params.children
+        if param.kind_id != .k_fn_param
+            continue
+        id_n: = param.find_child(.k_identifier)
+        if (id_n != null && id_n.text.equals(name)) || param.text.equals(name)
+            return .some(param)
     return .none
 
 fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? //<
@@ -700,49 +728,39 @@ fn resolve_def_node(sema: Sema_ctx$@, root_file: Ast_node$@, path: List<|Ast_nod
             def_node = d
     return Def_resolve_result::{ .def_node = def_node, .enum_node = enum_res.enum_node }
 
+priv fn written_type_name(n: Ast_node$@): U8[] //<
+    //< The type's own name as a variant's head writes it (`Kind` of `m.Kind.small`), or ""
+    if n.kind_id == .k_identifier
+        return n.text
+    if (n.kind_id == .k_type_path || n.kind_id == .k_expr_path) && n.children.len > 0 &&
+        n.last_child().kind_id == .k_identifier
+        return n.last_child().text
+    return ""
+
 fn resolve_enum_variant_def(sema: Sema_ctx$@, _root_file: Ast_node$@,
     path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Enum_resolve_result
     $res: = Enum_resolve_result::{ .variant_node = null, .enum_node = null }
     if sema == null || path.len < 2
         return res
     parent: = path.get(path.len - 2)
-
-    switch parent.kind_id
-    case .k_enum_init, .k_enum_init_call, .k_expr_postfix
-        $is_target: = false
-        for child in parent.children
-            if child == target_node
-                is_target = true
-                break
-
-        if is_target && sema != null
-            type_name_node: = parent.get_child(0)
-            $type_name: = ""
-
-            if type_name_node.kind_id == .k_identifier
-                type_name = type_name_node.text
-            else if type_name_node.kind_id == .k_type_path ||
-                type_name_node.kind_id == .k_expr_path
-                if type_name_node.children.len > 0
-                    last_id: = type_name_node.last_child()
-                    if last_id.kind_id == .k_identifier
-                        type_name = last_id.text
-
-            $type_id: I32 = 0
-            if type_name.len > 0
-                type_id = sema.env.type_to_id.get(type_name) catch 0
-            if type_id == 0 && parent.type_id != 0
-                type_id = parent.type_id
-
-            if type_id != 0
-                // Through an alias (`Form.dot`), the variants are on the enum the alias names.
-                resolved_name: = sema.env.get_str(sema.env.get_real_type(type_id))
-                sym: = sema.symtab.resolve(resolved_name) catch null
-                if scan_enum_variant(sym, target_node, res@)
-                    return res
-            else if type_name.len > 0
-                sym: = sema.symtab.resolve(type_name) catch null
-                if scan_enum_variant(sym, target_node, res@)
-                    return res
-    default {}
+    k: = parent.kind_id
+    if k != .k_enum_init && k != .k_enum_init_call && k != .k_expr_postfix
+        return res
+    $is_child: = false
+    for child in parent.children
+        is_child = is_child || child == target_node
+    if !is_child
+        return res
+    type_name: = written_type_name(parent.get_child(0))
+    $type_id: I32 = 0
+    if type_name.len > 0
+        type_id = sema.env.type_to_id.get(type_name) catch 0
+    if type_id == 0 && parent.type_id != 0
+        type_id = parent.type_id
+    // Through an alias (`Form.dot`), the variants are on the enum the alias names.
+    $enum_name: = type_name
+    if type_id != 0
+        enum_name = sema.env.get_str(sema.env.get_real_type(type_id))
+    if enum_name.len > 0
+        scan_enum_variant(sema.symtab.resolve(enum_name) catch null, target_node, res@)
     return res

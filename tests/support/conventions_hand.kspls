@@ -129,7 +129,7 @@ priv fn brace_hidden(text: U8[], arena: Arena$@): Bool //<
     //< whether a `{` is left in the masked text
     //<
     //< Caution: **List samples on both sides** (otherwise masking too much or too little passes).
-    return mask_js(text, arena).find_char('{') < 0
+    return mask_js(text, arena).find_char('{').is_none()
 
 priv const mask_samples: Sample[8] = ::{ Sample::{ .text = "const a = \"{\";", .hits = true },
     Sample::{ .text = "// a { is masked", .hits = true },
@@ -295,18 +295,18 @@ priv fn home_gives(home: U8[], obj: U8[], gives: List<|U8[]|>$@, bad: List<|U8[]
         //< The fields listed by the `const <obj> = {` in the file that builds the entry points.
     src: = mask_js(harness.read_under_root(home), arena)
     head: = arena.text().s("const ").s(obj).s(" = {").take()
-    at: = src.find_str(head)
-    if at < 0
+    switch src.find_str(head)
+    case .none
         bad
             .push(arena.text().s(home).s(" does not hold `").s(head).s("`").take())
-        return
-    brace: = at + head.len - 1
-    end: = literal_end(src, brace)
-    if end >= src.len
-        bad
-            .push(arena.text().s(home).s(": `").s(head).s("`'s close is not found").take())
-        return
-    keys_into(src, brace, end, gives)
+    case .some(at)
+        brace: = at + head.len - 1
+        end: = literal_end(src, brace)
+        if end >= src.len
+            bad
+                .push(arena.text().s(home).s(": `").s(head).s("`'s close is not found").take())
+            return
+        keys_into(src, brace, end, gives)
 
 priv fn returns_gives(src: U8[], rel: U8[], start: Sz, end: Sz, gives: List<|U8[]|>$@,
     bad: List<|U8[]|>$@, arena: Arena$@) //<
@@ -317,31 +317,31 @@ priv fn returns_gives(src: U8[], rel: U8[], start: Sz, end: Sz, gives: List<|U8[
     mark: = "\n  return {"
     $i: = start
     for i < end
-        at: = src.sub(i, end - i).find_str(mark)
-        if at < 0
+        if at: = src.sub(i, end - i).find_str(mark)
+            brace: = i + at + mark.len - 1
+            close: = literal_end(src, brace)
+            if close >= src.len
+                bad
+                    .push(arena.text().s(rel).s(": the close of a `return {` is not found").take())
+                return
+            keys_into(src, brace, close, gives)
+            i = close
+        else
             return
-        brace: = i + at + mark.len - 1
-        close: = literal_end(src, brace)
-        if close >= src.len
-            bad
-                .push(arena.text().s(rel).s(": the close of a `return {` is not found").take())
-            return
-        keys_into(src, brace, close, gives)
-        i = close
 
 priv fn ui_parts(page: U8[], out: List<|U8[]|>$@) //<
     //< The names of the parts the frame mixes in with `Object.assign(ui, kspageXxx(ui))`
     mark: = "Object.assign(ui, "
     $i: Sz = 0
     for i < page.len
-        at: = page.sub_from(i).find_str(mark)
-        if at < 0
+        if at: = page.sub_from(i).find_str(mark)
+            p: = i + at + mark.len
+            n: = name_len(page, p)
+            if n > 0
+                scan.push_unique(out, page.sub(p, n))
+            i = p + n + 1
+        else
             return
-        p: = i + at + mark.len
-        n: = name_len(page, p)
-        if n > 0
-            scan.push_unique(out, page.sub(p, n))
-        i = p + n + 1
 
 priv fn part_gives(rels: List<|U8[]|>@, srcs: List<|U8[]|>@, part: U8[],
     gives: List<|U8[]|>$@, bad: List<|U8[]|>$@, arena: Arena$@) //<
@@ -349,15 +349,12 @@ priv fn part_gives(rels: List<|U8[]|>@, srcs: List<|U8[]|>@, part: U8[],
     want: = arena.text().s("\nfunction ").s(part).s("(").take()
     for k in Range.asc(srcs.len)
         src: = srcs.get(k)
-        at: = src.find_str(want)
-        if at < 0
-            continue
-        start: = at + 1
-        tail: = src.sub_from(start + 1)
-        more: = tail.find_str("\nfunction ")
-        end: = src.len if more < 0 else start + 1 + more
-        returns_gives(src, rels.get(k), start, end, gives, bad, arena)
-        return
+        if at: = src.find_str(want)
+            start: = at + 1
+            tail: = src.sub_from(start + 1)
+            end: = start + 1 + tail.find_str("\nfunction ").unwrap_or(tail.len)
+            returns_gives(src, rels.get(k), start, end, gives, bad, arena)
+            return
     bad.push(arena.text().s("there is no file writing ").s(part).take())
 
 // ==========================================

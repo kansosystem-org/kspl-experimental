@@ -1,3 +1,14 @@
+//< `textDocument/semanticTokens/full`: the colouring of names, read from the syntax tree
+//<
+//< It comes on top of the editor's own grammar colouring; a document with no tree gets an empty
+//< answer (`handle`). A call's target is not coloured as a call: it cannot be told apart from a
+//< call through a function-pointer variable.
+// ==========================================
+// Caution: **Do not send a token that spans lines** (the LSP forbids it). Identifiers cannot,
+// but one that did is dropped.
+// **Sort them in ascending order** (they are packed as differences, so a wrong order breaks the
+// positions).
+// ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
@@ -9,17 +20,6 @@ import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/seq"
 import "std/str"
-
-// ==========================================
-// `textDocument/semanticTokens/full` — it reports the colouring of names from the syntax tree, on
-// top of the editor's own grammar colouring; a document with no tree gets an empty answer
-// (`handle`). A call's target could be reported, but it cannot be told apart from a call through
-// a function-pointer variable.
-// Caution: **Do not send a token that spans lines** (the LSP forbids it). Identifiers cannot,
-// but one that did is dropped.
-// **Sort them in ascending order** (they are packed as differences, so a wrong order breaks the
-// positions).
-// ==========================================
 
 // The kinds that are sent. **The position in this list is the number** (sent in the same order as
 // `legend`'s tokenTypes). Do not reorder them. The names are the LSP's (editors colour by them).
@@ -77,7 +77,7 @@ priv fn kind_of_decl(k: base_ast_kinds.Ast_kind): I32 //<
         return t_enum
     case .k_decl_trait
         return t_interface
-    case .k_decl_alias
+    case .k_decl_typedef
         return t_type
     case .k_struct_field, .k_enum_field
         return t_property

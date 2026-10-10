@@ -83,7 +83,7 @@ priv fn has_openblas(arena: Arena$@): Bool //< whether the system OpenBLAS is in
     r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena)
     if r.spawn_failed || r.timed_out || r.exit_code != 0
         return false
-    return (U8[]::r.stdout_data).find_str("libopenblas.so ") >= 0
+    return (U8[]::r.stdout_data).find_str("libopenblas.so ").is_some()
 
 priv fn core_list(threads: U8[], arena: Arena$@): U8$[] //<
     //< The string passed for pinning the cores
@@ -100,7 +100,7 @@ priv fn core_list(threads: U8[], arena: Arena$@): U8$[] //<
 priv fn run_all(threads: U8[], arena: Arena$@)
     cores: = U8[]::core_list(threads, arena)
     for name in thread_env
-        sys.set_env(name, threads)
+        sys.set_env(name, threads) catch panic("an environment variable could not be set")
     pin: = which("taskset", arena)
     io.out().s("=== threads=\{threads\}  pinned-cores=\{cores\}  (min-of-7, wall-clock) ===\n")
 

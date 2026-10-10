@@ -137,6 +137,15 @@ Note: The check is "requests past the cap in one write are all answered" in `kss
 
 With no free slot, an accepted connection is closed without a response. Making it wait would mean tracking who is waiting, since when, and how many.
 
+* **The refusal is not silent.** The log says once that every slot is taken, and again when one comes free, with how many were refused meanwhile; `/api/status` counts them (`connections_refused`). A line per refusal would let a flood bury the log.
+
+### A connection that passes nothing for 30 seconds is dropped
+
+**A connection that has neither sent nor received a byte for `idle_conn_us` (30 seconds) is closed** by `sweep_done` (`moved_us` in `kssrv/conn.kspls`). Without it, a client that connects and goes quiet holds its slot for good, and `max_conns` such clients shut everyone else out.
+
+* **A page's hold is exempt** (`GET /api/here`, `holding`): it is quiet by design, and closing it would read as the page having gone.
+* **The clock restarts on every byte either way**, so a slow but moving transfer is not cut.
+
 ### `read` returning 0 does not mean the connection is over
 
 A TCP connection has two directions. When `read` returns 0, the client has only stopped sending; it may still be waiting to receive the answer.

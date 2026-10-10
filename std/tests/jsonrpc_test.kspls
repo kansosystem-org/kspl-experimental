@@ -1,3 +1,8 @@
+//< Tests of extracting a JSON-RPC frame from a stream and of building one (`std/jsonrpc`)
+//<
+//< Caution: **Always include a case where a read's boundary and a frame's boundary differ**, or
+//< the tests pass without ever extracting from a backlog. **Check that the next frame is still
+//< readable after a broken header**; a broken header that is not discarded fails forever.
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -7,13 +12,6 @@ import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
 
-// ==========================================
-// std/jsonrpc: tests of extracting a frame and of building one.
-//
-// Caution: **Always include a case where a read's boundary and a frame's boundary differ**, or the
-// tests pass without ever extracting from a backlog. **Check that the next frame is still readable
-// after a broken header**; a broken header that is not discarded fails forever.
-// ==========================================
 priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
     got: = jsonrpc.take_frame(acc, arena) catch
         return "(broken)"
@@ -95,13 +93,13 @@ fn test_jsonrpc_encode()
 
     // With an id (a request).
     req: = jsonrpc.encode("ping", params, 3, arena)
-    assert(req.find_str("\"id\":3") >= 0, "a request must carry its id")
-    assert(req.find_str("\"jsonrpc\":\"2.0\"") >= 0, "the version must be named")
-    assert(req.find_str("\"method\":\"ping\"") >= 0, "the method must be named")
+    assert(req.find_str("\"id\":3").is_some(), "a request must carry its id")
+    assert(req.find_str("\"jsonrpc\":\"2.0\"").is_some(), "the version must be named")
+    assert(req.find_str("\"method\":\"ping\"").is_some(), "the method must be named")
 
     // Without an id (a notification). A negative id means "do not write one".
     note: = jsonrpc.encode("ping", params, -1, arena)
-    assert(note.find_str("\"id\"") < 0, "a notification must not carry an id")
+    assert(note.find_str("\"id\"").is_none(), "a notification must not carry an id")
 
     // A built frame can be extracted again (the round trip).
     $out: = Str_builder.new()

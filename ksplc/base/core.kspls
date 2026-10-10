@@ -1,3 +1,9 @@
+//< The state every layer shares: the arenas, the compiler's configuration and the string pools
+//<
+//< `arena` holds the compilation's data and `perm_arena` what must outlive a language-server
+//< request; `config` is what the command line asked for; `pools` turns node kinds, names and
+//< sources' logical names into numbers. **A name one layer writes and another matches stands here
+//< once** (`slice_fqn`, `option_fqn`, the format methods), so the two never spell it apart.
 import "std/chars" as std_chars
 import "std/ds" { List, Map }
 import "std/mem" + { Arena, alloc, dealloc }
@@ -23,8 +29,9 @@ fn slice_ident(): U8[] //< the last word of `slice_fqn` (`Slice`)
     //< **This is the identifier put into the AST.**
     //< Caution: **Do not write the bare name directly.** That breaks "keep it in one place" above:
     //< after a rename, the desugaring would still insert the old name.
-    at: = slice_fqn.rfind_char('.')
-    return slice_fqn if at < 0 else slice_fqn.sub_from(at + 1)
+    if at: = slice_fqn.rfind_char('.')
+        return slice_fqn.sub_from(at + 1)
+    return slice_fqn
 
 const option_fqn: U8[] = "std.lang.Option" //<
     //< The FQN of a value that may be absent (`T?`, the enum `Option` in `std/lang`)
@@ -34,8 +41,9 @@ const option_fqn: U8[] = "std.lang.Option" //<
 
 fn option_ident(): U8[] //<
     //< the last word of `option_fqn` (`Option`), the identifier put into the AST
-    at: = option_fqn.rfind_char('.')
-    return option_fqn if at < 0 else option_fqn.sub_from(at + 1)
+    if at: = option_fqn.rfind_char('.')
+        return option_fqn.sub_from(at + 1)
+    return option_fqn
 
 const fmt_method_char: U8[] = "fmt_char" //<
     //< The method names that the format spec `\{value:SPEC\}` desugars to

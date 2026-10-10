@@ -22,6 +22,7 @@ import "ksai/safetensors" as st
 import "ksai/sampler"
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer"
+import "std/chars" // `is_digit`
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
@@ -211,11 +212,31 @@ fn read_tokens(arena: Arena$@): List<|I32|>$@ //<
                 break
     return list
 
-fn cmd_logits(a: sys.Args, arena: Arena$@)
+priv fn is_decimal(text: U8[]): Bool //< whether it is digits alone, at least one
+    if text.len == 0
+        return false
+    for c in text
+        if !c.is_digit()
+            return false
+    return true
+
+priv fn outside_vocab(ids: List<|I32|>$@, vocab: Sz): Bool //<
+    //< Whether a token ID falls outside the model's table, said on standard error
+    //<
+    //< Caution: **Check before the first step**, not inside it: the embedding's own bound is a
+    //< panic, which reads as a crash rather than as a bad input.
+    for t in ids
+        if t < 0 || Sz::t >= vocab
+            io.err()
+                .s("[Error] token ID \{t\} is outside the model's vocabulary of \{I32::vocab\}\n")
+            return true
+    return false
+
+fn cmd_logits(a: sys.Args, arena: Arena$@): Bool //< prints the logits; false after an error
     model_path: = "out/qwen_kspl.safetensors" if a.len < 2 else a[1]
     $m: = Qwen_model<|F32|>.load(model_path, max_seq, arena) catch
         io.err().s("[Error] model load failed: \{model_path\}\n")
-        return
+        return false
     defer m.backing.free()
     io.err().s("[qwen] loaded: layers=\{I32::m.cfg.n_layers\} hidden=\{I32::m.cfg.hidden\} ")
     io.err()
@@ -225,17 +246,19 @@ fn cmd_logits(a: sys.Args, arena: Arena$@)
     if a.len >= 3
         adapters = m.load_lora_set(a[2], arena) catch
             io.err().s("[Error] LoRA load failed: \{a[2]\}\n")
-            return
+            return false
         io.err().s("[qwen] LoRA adapter loaded: \{a[2]\}\n")
 
     tokens: = read_tokens(arena)
     if tokens.len == 0
         io.err().s("[Error] there is no token ID on standard input\n")
-        return
+        return false
     if tokens.len > max_seq
         io.err()
             .s("[Error] input has \{I32::tokens.len\} tokens, exceeds max_seq=\{I32::max_seq\}\n")
-        return
+        return false
+    if outside_vocab(tokens, m.cfg.vocab)
+        return false
 
     $logits: = Tensor<|F32|>.new(Sz$[]::{ .ptr = null, .len = 0 }, arena)
     for i in Range.asc(tokens.len)
@@ -251,42 +274,60 @@ fn cmd_logits(a: sys.Args, arena: Arena$@)
     for i in Range.asc(n)
         io.out().s(" \{(logits.data + i)\}")
     io.out().s("\n")
+    return true
 
-fn cmd_generate(a: sys.Args, arena: Arena$@)
+fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
+    //< generates from a prompt; false after an error
     if a.len < 6
         io.err()
             .s("usage: qwen_infer generate <model.safetensors> <vocab.txt> <merges.txt> <eos_id> \
                 [lora.safetensors]\n")
-        return
+        return false
     model_path: = a[2]
     vocab_path: = a[3]
     merges_path: = a[4]
+    // Caution: **Refuse an eos_id that is no token ID.** Read as 0, a typo would stop the
+    // generation at the first token 0 rather than at the end of the text.
+    if !is_decimal(a[5])
+        io.err().s("[Error] eos_id is not a token ID: '\{a[5]\}'\n")
+        return false
     eos_id: = I32::(a[5].parse_size() catch 0)
 
     $m: = Qwen_model<|F32|>.load(model_path, max_seq, arena) catch
         io.err().s("[Error] model load failed: \{model_path\}\n")
-        return
+        return false
     defer m.backing.free()
+    if Sz::eos_id >= m.cfg.vocab
+        io.err().s("[Error] eos_id \{eos_id\} is outside the model's vocabulary of ")
+            .s("\{I32::m.cfg.vocab\}\n")
+        return false
     $adapters: lora_set.Qkv_lora<|F32|>$@ = null
     if a.len >= 7
         adapters = m.load_lora_set(a[6], arena) catch
             io.err().s("[Error] LoRA load failed: \{a[6]\}\n")
-            return
+            return false
         io.err().s("[qwen] LoRA adapter loaded: \{a[6]\}\n")
 
     $tok: = tokenizer.Tokenizer.new(arena)
-    tok.load(vocab_path, merges_path) catch
-        io.err().s("[Error] tokenizer load failed: \{vocab_path\}, \{merges_path\}\n")
-        return
+    tok.load(vocab_path, merges_path) catch e
+        switch e
+        case .broken(path, line)
+            io.err().s("[Error] the tokenizer's \{path\}:\{line\} is not an entry\n")
+        default
+            io.err().s("[Error] tokenizer load failed: \{vocab_path\}, \{merges_path\}\n")
+        return false
 
     prompt: = io.read_stdin(arena)
     ids: = tok.encode(prompt)
     if ids.len == 0
         io.err().s("[Error] an empty prompt\n")
-        return
+        return false
     if ids.len > max_seq
         io.err().s("[Error] prompt has \{I32::ids.len\} tokens, exceeds max_seq=\{I32::max_seq\}\n")
-        return
+        return false
+    // A tokenizer that is not the model's gives IDs past its table.
+    if outside_vocab(ids, m.cfg.vocab)
+        return false
     io.err().s("[qwen] prompt tokens=\{I32::ids.len\}\n")
 
     // Up to here it is cmd_logits' main loop; from here on is the autoregressive generation
@@ -315,6 +356,7 @@ fn cmd_generate(a: sys.Args, arena: Arena$@)
 
     io.out().s(tok.decode(gen))
     io.out().s("\n")
+    return true
 
 fn main() //<
     //< Runs a small Qwen: prints the logits for token IDs, or generates text from a prompt
@@ -324,8 +366,10 @@ fn main() //<
     //< generates (for Qwen2.5-Coder-0.5B, eos_id is 151643 = config.json's eos_token_id).
     a: = sys.args()
     arena: = Arena.new(1024 * 1024 * 64)
-    defer arena.free()
-    if a.len >= 2 && a[1].equals("generate")
-        cmd_generate(a, arena)
-    else
-        cmd_logits(a, arena)
+    // **An error ends the run with 1**, so a script or a test sees it; each command has said why.
+    ok: =
+        (cmd_generate(a, arena) if a.len >= 2 && a[1].equals("generate")
+        else cmd_logits(a, arena))
+    arena.free()
+    if !ok
+        sys.exit(1)

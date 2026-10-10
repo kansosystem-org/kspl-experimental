@@ -62,18 +62,32 @@ fn test_the_summary_lists_what_needs_attention(arena: Arena$@) //<
     defer plain.free()
     ci_gates.digest_plain(outs@, 4I64, plain@)
     p: = plain.slice()
-    assert(p.find_str("debug          FAIL 7s") >= 0, "a fallen gate is marked FAIL with its time")
-    assert(p.find_str("#     RESULT: SKIPPED") >= 0, "a skipping gate's line is shown under it")
-    assert(p.find_str("gates invoked: 3 (1 FAIL, SKIP lines in 1), gate seconds: 42, -j4") >= 0,
-        "the closing line counts them")
+    assert(p.find_str("debug          FAIL 7s").is_some(),
+        "a fallen gate is marked FAIL with its time")
+    assert(p.find_str("#     RESULT: SKIPPED").is_some(),
+        "a skipping gate's line is shown under it")
+    closing: = "gates invoked: 3 (1 FAIL, SKIP lines in 1), gate seconds: 42, -j4"
+    assert(p.find_str(closing).is_some(), "the closing line counts them")
     $md: = Str_builder.new()
     defer md.free()
     ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)
     m: = md.slice()
     assert(m.starts_with("## linux ci-shard-core - 2 PASS / 1 FAIL   (42s, -j4)"),
         "the heading counts them")
-    assert(m.find_str("| debug | **FAIL** | 7 |") >= 0, "a fallen gate is in bold")
-    assert(m.find_str("\nSKIP:\n\n* `link_abi`\n") >= 0, "a skipping gate is listed by name")
+    assert(m.find_str("| debug | **FAIL** | 7 |").is_some(), "a fallen gate is in bold")
+    assert(m.find_str("\nSKIP:\n\n* `link_abi`\n").is_some(), "a skipping gate is listed by name")
     // Caution: **No log line goes in** (the reason is at `digest_md`).
-    assert(m.find_str("no ARM toolchain") < 0, "the page holds no line of a log")
+    assert(m.find_str("no ARM toolchain").is_none(), "the page holds no line of a log")
     verdict.pass("the summary marks a fall and lists a skip, on the screen and on the page.")
+
+fn test_a_skip_is_held_by_its_platform_alone() //<
+    //< A SKIP a platform's rows hold passes there, and fails where no row holds it
+    verdict.start("[tools/ci_gates] the lines a platform may skip on test...")
+    arm: = "RESULT: SKIPPED (no ARM toolchain)"
+    assert(ci_gates.is_expected_skip(arm, "win32"), "Windows holds no ARM toolchain")
+    assert(!ci_gates.is_expected_skip(arm, "linux"), "Linux's image holds one, so it may not skip")
+    v6: = "SKIP Net: connecting over the IPv6 loopback: this machine has no IPv6 loopback"
+    for p in U8[][]::{ "linux", "darwin", "win32" }
+        assert(ci_gates.is_expected_skip(v6, p), "a runner may lack an IPv6 loopback anywhere")
+    assert(!ci_gates.is_expected_skip(v6, "solaris"), "a platform with no rows holds no SKIP")
+    verdict.pass("each platform holds its own reasons to skip, and nothing else passes in silence.")

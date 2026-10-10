@@ -110,11 +110,12 @@ priv fn target_kind(arena: Arena$@): Target_kind
         return target_answer
     triple: = target_triple(arena)
     // Where the triple could not be read (empty), it falls back to the OS check.
-    target_answer = Target_kind::{ .msvc = triple.find_str("msvc") >= 0,
-        .darwin = triple.find_str("darwin") >= 0 || triple.find_str("apple") >= 0,
+    target_answer = Target_kind::{ .msvc = triple.find_str("msvc").is_some(),
+        .darwin =
+        triple.find_str("darwin").is_some() || triple.find_str("apple").is_some(),
         .windows =
-        triple.find_str("windows") >= 0 || triple.find_str("mingw") >= 0 ||
-        triple.find_str("cygwin") >= 0 || (triple.len == 0 && sys.is_windows()) }
+        triple.find_str("windows").is_some() || triple.find_str("mingw").is_some() ||
+        triple.find_str("cygwin").is_some() || (triple.len == 0 && sys.is_windows()) }
     target_known = true
     return target_answer
 
@@ -486,7 +487,9 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
     //< It returns true once they all exist.
     //< Caution: Always reap as many as were started (see spawn_async), even on failure partway.
     //< **Start cc with the slot as its cwd** (see under_slot).
-    $running: Sz = 0
+    // Caution: **A cc that did not start fails the build**, as one that failed does: its object
+    // is missing, so reporting success would send the link after a file that is not there.
+    $started_all: = true
     for $i: Sz = 0; i < units.len; i += 1
         u: = units.get(i)
         if fs.exists(u.obj)
@@ -504,11 +507,9 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
         $updated: = u
         updated.handle = handle
         units.set(i, updated)
-        if handle != 0
-            running += 1
-    if running == 0
-        return true
-    $ok: = true
+        if handle == 0
+            started_all = false
+    $ok: = started_all
     for u in units
         if u.handle == 0
             continue
@@ -555,7 +556,7 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     $env_val: = Str_builder.new()
     defer env_val.free()
     env_val.s(exe).c('\n').s(script)
-    if !sys.set_env(sys.script_env_name, env_val.slice())
+    sys.set_env(sys.script_env_name, env_val.slice()) catch
         io.err()
             .s("ksplc run: cannot set \{sys.script_env_name\} (script_path() will report none)\n")
     $argv: = List<|U8[]|>.new(arena)
@@ -631,11 +632,40 @@ fn run_script(script: U8[], script_args: List<|U8[]|>$@) //<
     //< runs outside the lock, so a long run blocks no other.
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-
     if !fs.exists(script)
         io.err().s("ksplc run: no such file: \{script\}\n")
         sys.exit(1)
+    slot: = open_run_slot(script, arena)
+    // The lock covers the check below and the build; a run waiting here finds the build done.
+    $lock: = hold_slot(fs.join(slot.dir, "lock", arena))
+    // --- tier 1: where every input is the same as in the last run, the build is skipped entirely ---
+    if !(slot.cacheable && fs.exists(slot.exe) && deps_are_fresh(slot.deps, arena))
+        rebuild_in_slot(slot@, script, arena)
+    lock.free()
+    sys.exit(exec_program(script, slot.exe, script_args, arena))
 
+priv struct Run_slot //< a script's place in the run cache, and the paths a build writes there
+    dir: U8[]
+    cacheable: Bool //< whether the script's slot key could be computed, so a hit may be trusted
+    exe: U8[]
+    deps: U8[]
+    objs: U8[] //<
+        //< The record of what prog.exe was linked from (the objects, then the libraries)
+        //<
+        //< All objects existing does not mean the executable was built from them (a compile passed
+        //< and a link failed), and skipping the link then **runs the previous binary as a
+        //< success**.
+    new_exe: U8[] //<
+        //< The executable before the commit, renamed onto `exe` once the build succeeds
+        //<
+        //< Caution: Keep the extension at the end (not `prog.c.new`). The C compiler picks the
+        //< language by it and takes a `.new` for a linker script.
+    new_c: U8[]
+    new_deps: U8[]
+    libs: U8[] //< the libraries the program names; read by the link alone, recorded in `objs`
+
+priv fn open_run_slot(script: U8[], arena: Arena$@): Run_slot //<
+    //< The script's slot in the run cache, made where it is new and marked used
     $root: = Str_builder.new()
     defer root.free()
     if !base_cache.append_cache_root(root@)
@@ -647,168 +677,157 @@ fn run_script(script: U8[], script_args: List<|U8[]|>$@) //<
     $slot_key: = Str_builder.new()
     defer slot_key.free()
     cacheable: = append_slot_key(script, slot_key@)
-    slot: = fs.join(runs_dir, slot_key.slice(), arena)
-    is_new_slot: = !fs.is_dir(slot)
-    fs.mkdir_all(slot) catch e
-        exit_mkdir_failed("cache directory", slot, e)
+    dir: = fs.join(runs_dir, slot_key.slice(), arena)
+    is_new_slot: = !fs.is_dir(dir)
+    fs.mkdir_all(dir) catch e
+        exit_mkdir_failed("cache directory", dir, e)
     // Caution: **Mark it used every time.** The sweep removes the least recently used, so if a hit
     // left no mark, the most-used slot would go first.
-    base_cache.touch_dir(slot, arena)
+    base_cache.touch_dir(dir, arena)
     if is_new_slot
         base_cache.prune_dirs(runs_dir, base_cache.hash_hex_len, max_run_slots, run_slot_spare_secs,
-            slot, arena)
+            dir, arena)
+    deps: = fs.join(dir, "deps", arena)
+    return Run_slot::{ .dir = dir, .cacheable = cacheable,
+        .exe = fs.join(dir, "prog.exe", arena), .deps = deps,
+        .objs = fs.join(dir, "prog.objs", arena),
+        .new_exe = fs.join(dir, "prog.new.exe", arena),
+        .new_c = fs.join(dir, "prog.new.c", arena),
+        .new_deps = arena.text().s(deps).s(".new").take(),
+        .libs = fs.join(dir, "prog.libs", arena) }
 
-    exe_path: = fs.join(slot, "prog.exe", arena)
-    deps_path: = fs.join(slot, "deps", arena)
-    // The record of what the current prog.exe was linked from (the objects, then the libraries).
-    // All objects existing does not mean the executable was built from them (a compile passed and a
-    // link failed), and skipping the link then **runs the previous binary as a success**.
-    objs_path: = fs.join(slot, "prog.objs", arena)
-    // The paths before the commit, renamed onto the three above once the build succeeds.
-    // Caution: Keep the extension at the end (not `prog.c.new`). The C compiler picks the language
-    // by it and takes a `.new` for a linker script.
-    new_exe_path: = fs.join(slot, "prog.new.exe", arena)
-    new_c_path: = fs.join(slot, "prog.new.c", arena)
-    new_deps_path: = arena.text().s(deps_path).s(".new").take()
-    // The libraries the program names. Only the link right after reads it, so it is not committed;
-    // it goes into prog.objs's record instead.
-    libs_path: = fs.join(slot, "prog.libs", arena)
+priv fn rebuild_in_slot(slot: Run_slot@, script: U8[], arena: Arena$@) //<
+    //< It builds the script into its slot: C, then the objects that changed, then the link
+    //<
+    //< Each step that fails exits with its code, leaving the previous build in place.
+    sweep_aside(slot.exe, arena)
+    units_n: = generate_c(slot, script, arena)
+    $named_libs: = List<|U8[]|>.new(arena)
+    if !append_named_libs(slot.libs, named_libs@, arena)
+        io.err().s("ksplc run: the compile left no list of libraries (\{slot.libs\})\n")
+        fs.remove_path(slot.new_deps) catch {}
+        sys.exit(1)
+    // --- tier 2: per unit, an object whose contents match the last run is not rebuilt ---
+    $units: = List<|Unit|>.new(arena)
+    all_cached: = plan_units(slot, units_n, units@, arena)
+    // Caution: **The libraries go into the record too.** Adding only a `#link` leaves every object
+    // unchanged, so the link would be skipped and the executable would lack the library.
+    $want_objs: = Str_builder.new()
+    defer want_objs.free()
+    for u in units
+        want_objs.s(sys.get_file_name(u.obj)).c('\n')
+    for lib in named_libs
+        want_objs.s(lib).c('\n')
+    // All objects exist and the executable was built from exactly this set: no link either.
+    have_objs: = io.read_file(slot.objs) catch ""
+    linked_from_same: = have_objs.len > 0 && have_objs.equals(want_objs.slice())
+    if have_objs.len > 0
+        dealloc(Void$@::have_objs.ptr)
+    if !(all_cached && linked_from_same && fs.exists(slot.exe))
+        build_and_link(slot, units@, named_libs@, want_objs.slice(), arena)
+    // The exe now matches this run's input, so the deps are updated. Without them (write_deps_file
+    // writes none where a file cannot be read) the old deps are removed, and tier 1 simply misses.
+    if !commit_path(slot.new_deps, slot.deps)
+        fs.remove_path(slot.deps) catch {}
 
-    // The lock covers the check below and the build; a run waiting here finds the build done.
-    $lock: = hold_slot(fs.join(slot, "lock", arena))
+priv fn generate_c(slot: Run_slot@, script: U8[], arena: Arena$@): Sz //<
+    //< It calls ksplc itself to translate the script to C, and returns how many units it split into
+    //<
+    //< Calling itself avoids copying the pipeline.
+    $ksplc_argv: = List<|U8[]|>.new(arena)
+    append_child_ksplc(ksplc_argv@, arena)
+    ksplc_argv.push(arena.text().s("--emit-deps=").s(slot.new_deps).take())
+    ksplc_argv.push(arena.text().s("--emit-libs=").s(slot.libs).take())
+    // It splits the generated C into translation units so that it can be compiled in parallel.
+    // **The split count is not part of the cache key.** Which unit a declaration goes to depends on
+    // the split count (ksplc/gen/c/ctx.unit_for), so sharing one cache across machines with
+    // different core counts changes the contents. An object's name comes from the unit's contents,
+    // so even then it is rebuilt correctly.
+    units_n: = pick_unit_count()
+    if units_n > 1
+        ksplc_argv.push(arena.text().s("--split=\{units_n\}").take())
+    ksplc_argv.push(script)
+    ksplc_argv.push(slot.new_c)
+    code: = spawn_or_exit(ksplc_argv@, "ksplc", "")
+    if code != 0
+        fs.remove_path(slot.new_c) catch {}
+        fs.remove_path(slot.new_deps) catch {}
+        sys.exit(code)
+    return units_n
 
-    // --- tier 1: where every input is the same as in the last run, the build is skipped entirely ---
-    if !(cacheable && fs.exists(exe_path) && deps_are_fresh(deps_path, arena))
-        sweep_aside(exe_path, arena)
-
-        // --- it calls ksplc itself to generate the C (calling itself avoids copying the pipeline) ---
-        $ksplc_argv: = List<|U8[]|>.new(arena)
-        append_child_ksplc(ksplc_argv@, arena)
-        $emit_deps_arg: = Str_builder.new()
-        defer emit_deps_arg.free()
-        emit_deps_arg.s("--emit-deps=").s(new_deps_path)
-        ksplc_argv.push(emit_deps_arg.slice())
-        $emit_libs_arg: = Str_builder.new()
-        defer emit_libs_arg.free()
-        emit_libs_arg.s("--emit-libs=").s(libs_path)
-        ksplc_argv.push(emit_libs_arg.slice())
-        // It splits the generated C into translation units so that it can be compiled in parallel.
-        // **The split count is not part of the cache key.** Which unit a declaration goes to
-        // depends on the split count (ksplc/gen/c/ctx.unit_for), so sharing one cache across
-        // machines with different core counts changes the contents. An object's name comes from the
-        // unit's contents, so even then it is rebuilt correctly.
-        units_n: = pick_unit_count()
-        $split_arg: = Str_builder.new()
-        defer split_arg.free()
-        split_arg.s("--split=\{units_n\}")
+priv fn plan_units(slot: Run_slot@, units_n: Sz, units: List<|Unit|>$@, arena: Arena$@): Bool //<
+    //< It lists each generated unit with the object it compiles to; true where every one exists
+    //<
+    //< An object's name is hashed from its `.c`, the shared header and the C compiler with its
+    //< flags, so if it exists it needs no rebuilding.
+    obj_dir: = fs.join(slot.dir, "obj", arena)
+    fs.mkdir_all(obj_dir) catch e
+        exit_mkdir_failed("object directory", obj_dir, e)
+    $header_path: = Str_builder.new()
+    defer header_path.free()
+    if units_n > 1
+        header_path.s(sys.strip_last_ext(slot.new_c)).s(".h")
+    $all_cached: = true
+    for i in Range.asc(units_n)
+        $src: = Str_builder.new()
+        defer src.free()
         if units_n > 1
-            ksplc_argv.push(split_arg.slice())
-        ksplc_argv.push(script)
-        ksplc_argv.push(new_c_path)
-        code: = spawn_or_exit(ksplc_argv@, "ksplc", "")
-        if code != 0
-            fs.remove_path(new_c_path) catch {}
-            fs.remove_path(new_deps_path) catch {}
-            sys.exit(code)
-        $named_libs: = List<|U8[]|>.new(arena)
-        if !append_named_libs(libs_path, named_libs@, arena)
-            io.err().s("ksplc run: the compile left no list of libraries (\{libs_path\})\n")
-            fs.remove_path(new_deps_path) catch {}
+            append_unit_path(sys.strip_last_ext(slot.new_c), i, src@)
+        else
+            src.s(slot.new_c) // unsplit, there is just one
+        $key: = Str_builder.new()
+        defer key.free()
+        if !append_obj_key(src.slice(), header_path.slice(), key@)
+            io.err().s("ksplc run: cannot read the generated C (\{src.slice()\})\n")
             sys.exit(1)
+        obj: = fs.join(obj_dir, arena.text().s(key.slice()).s(".o").take(), arena)
+        if has_obj(units, obj)
+            continue
+        if !fs.exists(obj)
+            all_cached = false
+        units
+            .push(Unit::{ .src = arena.dup_str(src.slice()), .obj = obj, .handle = 0 })
+    return all_cached
 
-        // --- tier 2: per unit, an object whose contents match the last run is not rebuilt ---
-        // An object's name is hashed from its `.c`, the shared header and the C compiler with its
-        // flags, so if it exists it needs no rebuilding.
-        obj_dir: = fs.join(slot, "obj", arena)
-        fs.mkdir_all(obj_dir) catch e
-            exit_mkdir_failed("object directory", obj_dir, e)
-        $header_path: = Str_builder.new()
-        defer header_path.free()
-        if units_n > 1
-            header_path.s(sys.strip_last_ext(new_c_path)).s(".h")
-
-        $units: = List<|Unit|>.new(arena)
-        $all_cached: = true
-        for i in Range.asc(units_n)
-            $src: = Str_builder.new()
-            defer src.free()
-            if units_n > 1
-                append_unit_path(sys.strip_last_ext(new_c_path), i, src@)
-            else
-                src.s(new_c_path) // unsplit, there is just one
-            $key: = Str_builder.new()
-            defer key.free()
-            if !append_obj_key(src.slice(), header_path.slice(), key@)
-                io.err().s("ksplc run: cannot read the generated C (\{src.slice()\})\n")
-                sys.exit(1)
-            obj: = fs.join(obj_dir, arena.text().s(key.slice()).s(".o").take(), arena)
-            if has_obj(units@, obj)
-                continue
-            if !fs.exists(obj)
-                all_cached = false
-            unit: = Unit::{ .src = arena.dup_str(src.slice()), .obj = obj, .handle = 0 }
-            units.push(unit)
-
-        // Caution: **The libraries go into the record too.** Adding only a `#link` leaves every
-        // object unchanged, so the link would be skipped and the executable would lack the library.
-        $want_objs: = Str_builder.new()
-        defer want_objs.free()
-        for u in units
-            want_objs.s(sys.get_file_name(u.obj)).c('\n')
-        for lib in named_libs
-            want_objs.s(lib).c('\n')
-        // All objects exist and the executable was built from exactly this set: no link either.
-        have_objs: = io.read_file(objs_path) catch ""
-        linked_from_same: = have_objs.len > 0 && have_objs.equals(want_objs.slice())
-        if have_objs.len > 0
-            dealloc(Void$@::have_objs.ptr)
-        if !(all_cached && linked_from_same && fs.exists(exe_path))
-            // The sweep runs **before** the compile (see sweep_objects).
-            sweep_objects(obj_dir, units@, arena)
-            if !compile_units(units@, slot, arena)
-                // The C that failed is kept as the user's only clue; the previous set (prog.exe /
-                // deps) is left untouched, so the next run comes here again.
-                io.err()
-                    .s("ksplc run: the C compiler failed on the generated code \
-                        (\{sys.strip_last_ext(new_c_path)\}*.c)\n")
-                fs.remove_path(new_deps_path) catch {}
-                sys.exit(1)
-            $link_argv: = List<|U8[]|>.new(arena)
-            link_argv.push(cc_name())
-            for u in units
-                link_argv.push(under_slot(u.obj, slot))
-            link_argv.push("-o")
-            link_argv.push(under_slot(new_exe_path, slot))
-            // Libraries go after the objects, the program's own before the common ones (they may
-            // need `-lm`): GNU ld resolves from the left only.
-            for lib in named_libs
-                link_argv.push(lib)
-            append_link_libs(link_argv@, arena)
-            append_dead_strip_flag(link_argv@, arena)
-            append_stack_flag(link_argv@, arena)
-            link_code: = spawn_or_exit(link_argv@, cc_name(), slot)
-            if link_code != 0
-                io.err().s("ksplc run: linking failed\n")
-                fs.remove_path(new_exe_path) catch {}
-                fs.remove_path(new_deps_path) catch {}
-                sys.exit(link_code)
-            if !commit_path(new_exe_path, exe_path)
-                io.err().s("ksplc run: cannot update the cache: \{exe_path\}\n")
-                sys.exit(1)
-            // Caution: **Write it after swapping the executable.** Written first, a failed swap
-            // leaves a false record "built from this set", so the next run skips the link and runs
-            // the old one.
-            io.write_file(objs_path, want_objs.slice()) catch
-                fs.remove_path(objs_path) catch {}
-
-        // The exe now matches this run's input, so the deps are updated. Without them
-        // (write_deps_file writes none where a file cannot be read) the old deps are removed, and
-        // tier 1 simply misses.
-        if !commit_path(new_deps_path, deps_path)
-            fs.remove_path(deps_path) catch {}
-
-    lock.free()
-    sys.exit(exec_program(script, exe_path, script_args, arena))
+priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<|U8[]|>$@,
+    want_objs: U8[], arena: Arena$@) //<
+        //< It compiles the units whose objects are missing, links them, and commits the executable
+    // The sweep runs **before** the compile (see sweep_objects).
+    sweep_objects(fs.join(slot.dir, "obj", arena), units, arena)
+    if !compile_units(units, slot.dir, arena)
+        // The C that failed is kept as the user's only clue; the previous set (prog.exe / deps) is
+        // left untouched, so the next run comes here again.
+        io.err()
+            .s("ksplc run: the C compiler failed on the generated code \
+                (\{sys.strip_last_ext(slot.new_c)\}*.c)\n")
+        fs.remove_path(slot.new_deps) catch {}
+        sys.exit(1)
+    $link_argv: = List<|U8[]|>.new(arena)
+    link_argv.push(cc_name())
+    for u in units
+        link_argv.push(under_slot(u.obj, slot.dir))
+    link_argv.push("-o")
+    link_argv.push(under_slot(slot.new_exe, slot.dir))
+    // Libraries go after the objects, the program's own before the common ones (they may need
+    // `-lm`): GNU ld resolves from the left only.
+    for lib in named_libs
+        link_argv.push(lib)
+    append_link_libs(link_argv@, arena)
+    append_dead_strip_flag(link_argv@, arena)
+    append_stack_flag(link_argv@, arena)
+    link_code: = spawn_or_exit(link_argv@, cc_name(), slot.dir)
+    if link_code != 0
+        io.err().s("ksplc run: linking failed\n")
+        fs.remove_path(slot.new_exe) catch {}
+        fs.remove_path(slot.new_deps) catch {}
+        sys.exit(link_code)
+    if !commit_path(slot.new_exe, slot.exe)
+        io.err().s("ksplc run: cannot update the cache: \{slot.exe\}\n")
+        sys.exit(1)
+    // Caution: **Write it after swapping the executable.** Written first, a failed swap leaves a
+    // false record "built from this set", so the next run skips the link and runs the old one.
+    io.write_file(slot.objs, want_objs) catch
+        fs.remove_path(slot.objs) catch {}
 
 // ==========================================
 // Building one executable (`ksplc build <input> <output>`)

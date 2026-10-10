@@ -166,27 +166,33 @@ impl U8[]
     pub fn strip_suffix(r: U8[], suffix: U8[]): U8[] //< a view without the suffix, or all of it
         return r.sub(0, r.len - suffix.len) if r.ends_with(suffix) else r
 
-    pub fn find_char(r: U8[], ch: U8): I32 //< where the byte first appears, or -1
+    pub fn find_char(r: U8[], ch: U8): Sz? //< where the byte first appears, or none
+        //<
+        //< Caution: **"Not found" is no position**: a `-1` passed on as one read the wrong byte far
+        //< from the search, and an `I32` could not name a place past 2 GiB. "Is it there" is
+        //< `.is_some()` on this same call.
         for i in Range.asc(r.len)
             if (r.ptr + i)$ == ch
-                return I32::i
-        return -1
+                return .some(i)
+        return .none
 
-    pub fn rfind_char(r: U8[], ch: U8): I32 //< where the byte last appears, or -1
-        for $i: = I32::r.len - 1; i >= 0; i -= 1
+    pub fn rfind_char(r: U8[], ch: U8): Sz? //< where the byte last appears, or none
+        for i in Range.desc(r.len)
             if (r.ptr + i)$ == ch
-                return i
-        return -1
+                return .some(i)
+        return .none
 
-    pub fn find_str(r: U8[], target: U8[]): I32 //< where the text first appears, or -1
+    pub fn find_str(r: U8[], target: U8[]): Sz? //< where the text first appears, or none
+        //<
+        //< An empty target is found at 0, as in every other language's search.
         if target.len == 0
-            return 0
+            return .some(0)
         if r.len < target.len
-            return -1
-        for $i: = 0; i <= r.len - target.len; i += 1
+            return .none
+        for i in Range.asc(r.len - target.len + 1)
             if r.starts_with(target, i)
-                return i
-        return -1
+                return .some(i)
+        return .none
 
     pub fn count_str( //< how many times the text appears, without overlaps
         //<

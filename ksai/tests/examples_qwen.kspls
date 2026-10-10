@@ -167,16 +167,16 @@ priv fn ran(exe: U8[], weights: U8[], input: U8[], arena: Arena$@): Said //<
     $child: = subproc.spawn_piped(U8[][]::{ exe, weights }, "") catch
         return Said::{ .out = "",
             .err = arena.text().s("cannot be started: ").s(exe).take() }
-    if input.len > 0
-        $feed: = Str_builder.new()
-        defer feed.free()
-        feed.s(input)
-        child.write(feed.slice())
+    // **Say a write that stopped in the answer**, as a read's timeout is: the child then answers
+    // to part of the input, which would read as a wrong answer.
+    $stopped: U8[] = ""
+    child.write(input, read_wait) catch
+        stopped = "\n[the input could not be written whole]"
     child.close_stdin()
     out: = drain(child@, false, arena)
     err: = drain(child@, true, arena)
     child.kill()
-    return Said::{ .out = out, .err = err }
+    return Said::{ .out = out, .err = arena.text().s(err).s(stopped).take() }
 
 priv fn after(text: U8[], head: U8[], arena: Arena$@): U8[] //<
     //< Returns what follows `<head>` on a `<head><number>` line
@@ -229,7 +229,7 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
     // The shape read matches the config. **Check this first**: with the wrong shape the answer
     // never matches, so this tells "the weights are not being read" apart.
     shape_said: = "layers=2 hidden=8 heads=2/1 vocab=8"
-    assert(said.err.find_str(shape_said) >= 0,
+    assert(said.err.find_str(shape_said).is_some(),
         U8$[]::arena.text().s("it did not name the shape \{shape_said\}: \{said.err\}").take())
     verdict
         .pass(arena.text().s("it names the shape it read (").s(shape_said).s(")").take())
@@ -285,6 +285,6 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
     // Caution: **Do not end silently**: an empty answer cannot be told apart from "it could not be
     // read".
     empty: = ran(exe, weights, "", arena)
-    assert(empty.err.find_str("there is no token ID on standard input") >= 0,
+    assert(empty.err.find_str("there is no token ID on standard input").is_some(),
         U8$[]::arena.text().s("with no token it said: \{empty.err.trim_spaces()\}").take())
     verdict.pass("with no token handed over it says the reason")

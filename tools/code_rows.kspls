@@ -26,7 +26,7 @@ priv fn is_off(registry: U8[], code: U8[], arena: Arena$@): Bool //<
     needle: = arena.text().s("\"").s(code).s("\"").take()
     for line in registry.lines(arena)
         if line.starts_with("priv const off_by_default")
-            return line.find_str(needle) >= 0
+            return line.find_str(needle).is_some()
     return false
 
 priv fn row_name(title: U8[], arena: Arena$@): U8[] //< a heading's title as a cell
@@ -54,15 +54,16 @@ priv fn rows_of(spec: U8[], registry: U8[], arena: Arena$@): U8[] //<
             in_fence = !in_fence
         if in_fence || !line.starts_with(section_head)
             continue
-        close: = line.find_char(']')
-        if close < 0
+        switch line.find_char(']')
+        case .none
             continue
-        code: = line.sub(section_head.len, close - section_head.len)
-        title: = line.sub_from(close + 1).trim_spaces()
-        b.s("| ").s(code).s(" | ").s(row_name(title, arena))
-        if is_off(registry, code, arena)
-            b.s(" (off by default)")
-        b.s(" |\n")
+        case .some(close)
+            code: = line.sub(section_head.len, close - section_head.len)
+            title: = line.sub_from(close + 1).trim_spaces()
+            b.s("| ").s(code).s(" | ").s(row_name(title, arena))
+            if is_off(registry, code, arena)
+                b.s(" (off by default)")
+            b.s(" |\n")
     return b.take()
 
 pub fn with_table(spec: U8[], registry: U8[], arena: Arena$@): U8[] //<

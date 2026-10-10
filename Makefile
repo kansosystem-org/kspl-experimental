@@ -244,7 +244,7 @@ self-host: $(DIFF_TXT)
 	@$(ksplc_step) verdict DIFF=$(DIFF_TXT) LABEL='self-hosting, $(BACKEND) backend' \
 		|| { printf '%s\n' "$$SELF_HOST_HELP"; exit 1; }
 
-# --- Measuring performance (makes the log `make ci` hands to perf_guard) ---
+# --- Measuring performance (the two logs it hands to perf_guard) ---
 # Caution: **Measure two runs of the same executable**, in a cache of its own: a rebuilt ksplc
 # misses on its first, and one run alone hides the other's regression.
 ## Measure-and-inspect|perf-log|Measure and record translation's elapsed time and peak memory

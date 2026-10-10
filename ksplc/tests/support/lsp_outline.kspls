@@ -1,3 +1,9 @@
+//< The outline (`textDocument/documentSymbol`): what a file declares, nested as written
+//<
+//< Not a suite; part of `../suite/lsp_test.kspls`. It asks for the outline of a source that parses
+//< and of one that does not.
+//< **It is not a suite of its own**, since one would start the language server a second time
+//< ("Files near the limit and how they split" in `../../README.md`).
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { is_missing }
 import "std/ds" { List }
@@ -6,13 +12,6 @@ import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" // `equals`
 import "std/verdict"
-
-// ==========================================
-// The outline (`textDocument/documentSymbol`): what a file declares, nested as written.
-//
-// **This is not a suite of its own**; one would start the language server a second time, so it
-// uses the suite's client ("Files near the limit and how they split" in `../../README.md`).
-// ==========================================
 
 priv const normal_ms: I32 = 15000
 
@@ -83,7 +82,8 @@ priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
 
 priv fn ask(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val //<
     //< Opens `src` and returns the answer to `documentSymbol` (null where none came)
-    _open: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
+        catch {}
     got: =
         c.request("textDocument/documentSymbol", lsp_client.at_doc(uri, arena), normal_ms, arena)
         catch

@@ -13,6 +13,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/locate" as base_locate
+import "ksplc/sema/decl/mono_queue" as _sema_decl_mono_queue // `ensure_instance_methods`
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -173,6 +174,8 @@ impl Sema_ctx
         //< (sema/body/stmt.kspls) decided separately, one could take `at` and the other
         //< `get`/`set`, and `xs[0] = 5` would become broken C calling the two-argument `get` with
         //< three, with zero diagnostics from ksplc.
+        // The table first: a slice made in this statement (`I32[]::{ 1, 2 }[i]`) is still queued.
+        r.ensure_instance_methods(recv_id) catch {}
         base_id: = r.env.strip_ptr(recv_id)
         writable: = recv_node == null || !r.place_is_readonly(recv_node)
         if r.env.has_implemented_operator_trait(base_id, "Index_place") &&
@@ -289,8 +292,7 @@ impl Sema_ctx
             return false
         if node.kind_id == .k_identifier || node.kind_id == .k_expr_path
             name: = node.get_path_or_ident_name()
-            dot: = name.find_char('.')
-            root: = name.sub(0, dot) if dot >= 0 else name
+            root: = name.sub(0, name.find_char('.').unwrap_or(name.len))
             if root.len == 0
                 return false
             sym: = r.symtab.resolve(root) catch null

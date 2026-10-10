@@ -60,7 +60,7 @@ impl Ast_node
                 .is_reassigned = false, .is_mutated = false })
             case_state.add(pchild)
 
-    fn process_df_match_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
+    fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@, start_idx: Sz): sema_flow_track.Df_state$@
         $block_node: Ast_node$@ = null
         case_state: = state.clone()
@@ -74,8 +74,8 @@ impl Ast_node
                 break
             if case_child.is_keyword("case") || case_child.is_keyword("default")
                 break
-            if case_child.kind_id == .k_match_pattern
-                switch case_child.extract_match_variant()
+            if case_child.kind_id == .k_case_pattern
+                switch case_child.extract_case_variant()
                 case .variant(_v_node, payload_start)
                     case_child.bind_pattern_payload(c, case_state, bound_names, payload_start)
                 default {}
@@ -86,8 +86,8 @@ impl Ast_node
             block_node.analyze_df_node(c, case_state)
         return case_state
 
-    fn df_stmt_match(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
-        cond: = r.get_match_cond()
+    fn df_stmt_switch(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+        cond: = r.get_switch_cond()
         cond.analyze_df_node(c, state)
         $merged_state: sema_flow_track.Df_state$@ = null
         $has_default: = false
@@ -98,7 +98,7 @@ impl Ast_node
                 if child.is_keyword("default")
                     has_default = true
 
-                case_state: = r.process_df_match_case(c, state, i + 1)
+                case_state: = r.process_df_switch_case(c, state, i + 1)
 
                 if merged_state == null
                     merged_state = case_state
@@ -120,10 +120,10 @@ impl Ast_node
             r.get_labeled_block_inner().analyze_df_node(c, state)
         state.reachable = prev_reachable
 
-    fn df_stmt_loop(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
-        init_node: = r.get_loop_init()
+    fn df_stmt_for(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+        init_node: = r.get_for_init()
         cond_node: = r.get_loop_cond()
-        step_node: = r.get_loop_step()
+        step_node: = r.get_for_step()
         block_node: = r.get_loop_block()
         if init_node != null
             init_node.analyze_df_node(c, state)

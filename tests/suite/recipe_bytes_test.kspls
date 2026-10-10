@@ -60,7 +60,7 @@ priv fn make_files(arena: Arena$@): List<|U8[]|> //<
         if !line.starts_with(head)
             continue
         rest: = line.sub_from(head.len).trim_spaces()
-        if rest.len == 0 || rest.find_char(' ') >= 0
+        if rest.len == 0 || rest.find_char(' ').is_some()
             continue
         if !optional || fs.exists(fs.join(harness.root(), rest, arena))
             out.push(rest)
@@ -73,7 +73,7 @@ priv fn recipe_files(arena: Arena$@): List<|U8[]|> //<
     //< the platforms). `make help` does not list its targets, so `scan_names` leaves it out.
     $out: = make_files(arena)
     for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
-        if sys.get_dir_name(rel).find_char('/') < 0
+        if sys.get_dir_name(rel).find_char('/').is_none()
             out.push(rel)
     return out
 
@@ -106,19 +106,20 @@ priv fn has_bare_curdir(line: U8[]): Bool //< whether there is an unquoted `$(CU
     $base: Sz = 0
     $found: = false
     for !found
-        at: = rest.find_str(want)
-        if at < 0
+        switch rest.find_str(want)
+        case .none
             break
-        pos: = base + Sz::at
-        rest = rest.sub_from(at + want.len)
-        base = pos + want.len
-        if pos == 0 || line[pos - 1] != '$'
-            continue // a `(CURDIR)` with no `$` is not expanded
-        $start: = pos - 1
-        for start > 0 && line[start - 1] == '$'
-            start -= 1
-        if start == 0 || line[start - 1] != '"'
-            found = true
+        case .some(at)
+            pos: = base + at
+            rest = rest.sub_from(at + want.len)
+            base = pos + want.len
+            if pos == 0 || line[pos - 1] != '$'
+                continue // a `(CURDIR)` with no `$` is not expanded
+            $start: = pos - 1
+            for start > 0 && line[start - 1] == '$'
+                start -= 1
+            if start == 0 || line[start - 1] != '"'
+                found = true
     return found
 
 priv fn starts_word(s: U8[], word: U8[]): Bool //<
@@ -201,27 +202,25 @@ priv fn rule_deps(line: U8[]): U8[]? //<
     //< **A `:=`, and a target-specific variable (`install: export V := x`), are not rules** (told
     //< by what follows the `:`, and by an `=` on the dependency side); mixed in, the next recipe's
     //< dependencies go wrong.
-    colon: = line.find_char(':')
-    if colon < 1
+    colon: = line.find_char(':').unwrap_or(0)
+    if colon == 0 // no `:`, or nothing before it
         return .none
     head: = line.sub(0, colon)
-    if head.find_char('=') >= 0 || head.find_char('#') >= 0
+    if head.find_char('=').is_some() || head.find_char('#').is_some()
         return .none
     $rest: = line.sub_from(colon + 1)
     if rest.starts_with("=")
         return .none
-    note: = rest.find_char('#')
-    if note >= 0
+    if note: = rest.find_char('#')
         rest = rest.sub(0, note)
-    if rest.find_char('=') >= 0
+    if rest.find_char('=').is_some()
         return .none
     return .some(rest)
 
 priv fn dep_count(deps: U8[]): Sz //< the dependency count
     //<
     //< Caution: **Do not count order-only dependencies (after the `|`)**; `$<` never points there.
-    bar: = deps.find_char('|')
-    s: = deps if bar < 0 else deps.sub(0, bar)
+    s: = deps.sub(0, deps.find_char('|').unwrap_or(deps.len))
     $n: Sz = 0
     $in_word: = false
     for i in Range.asc(s.len)
@@ -249,7 +248,8 @@ priv fn scan_first_dep(path: U8[], arena: Arena$@): List<|Hit|> //<
         i = one.next
         if is_recipe(one.text)
             body: = recipe_body(one.text)
-            if !is_shell_comment(body) && one.text.find_str("$<") >= 0 && dep_count(deps) != 1
+            if !is_shell_comment(body) && one.text.find_str("$<").is_some() &&
+                dep_count(deps) != 1
                 out.push(Hit::{ .line = start + 1, .text = one.text.trim_spaces() })
             continue
         if got: = rule_deps(one.text)
@@ -290,7 +290,7 @@ priv fn scan(path: U8[], kind: Sz, arena: Arena$@): List<|Hit|> //<
         joined: = chunk.take()
         body: = recipe_body(joined)
         if !is_shell_comment(body) && !is_shell_comment(body.strip_prefix("@")) &&
-            joined.find_str("set -o pipefail") < 0 && has_failing_pipe(joined)
+            joined.find_str("set -o pipefail").is_none() && has_failing_pipe(joined)
             out.push(Hit::{ .line = start + 1, .text = joined.trim_spaces() })
     return out
 
@@ -332,7 +332,8 @@ priv fn words(line: U8[], arena: Arena$@): List<|U8[]|> //< the words cut on whi
 
 priv fn plain_name(w: U8[]): Bool //<
     //< Whether it is a bare name (leaving out what is unknown without expanding)
-    return w.len > 0 && w.find_char('$') < 0 && w.find_char('(') < 0 && w.find_char(',') < 0
+    return w.len > 0 && w.find_char('$').is_none() && w.find_char('(').is_none() &&
+        w.find_char(',').is_none()
 
 priv struct Said //< one name listed in `.PHONY`, and where it is
     where: U8[]
@@ -343,11 +344,11 @@ priv fn rule_targets(line: U8[]): U8[]? //<
     //<
     //< **Leave out a `:=` and a target-specific variable** (the same reason as `rule_deps`).
     //< Caution: **Do not count `.PHONY` itself as a target**, or everything "has a rule".
-    colon: = line.find_char(':')
-    if colon < 1
+    colon: = line.find_char(':').unwrap_or(0)
+    if colon == 0 // no `:`, or nothing before it
         return .none
     head: = line.sub(0, colon).trim_spaces()
-    if head.find_char('=') >= 0 || head.find_char('#') >= 0 || head.starts_with(".")
+    if head.find_char('=').is_some() || head.find_char('#').is_some() || head.starts_with(".")
         return .none
     if line.sub_from(colon + 1).starts_with("=")
         return .none
@@ -371,6 +372,26 @@ priv const help_hidden: U8[][1] = ::{ "FORCE" } //<
     //<
     //< `FORCE` keeps the wrapper always running (the reason is `%: FORCE` in `Makefile`).
 
+priv fn read_help_line(rest: U8[], path: U8[], start: Sz, arena: Arena$@): Doc? //<
+    //< The Doc that the `## ` line at path, line start + 1, gives; none without both bars
+    bar: = rest.find_char('|').unwrap_or(0)
+    if bar == 0 // no bar, or no group before it
+        return .none
+    tail: = rest.sub_from(bar + 1)
+    bar2: = tail.find_char('|').unwrap_or(0)
+    if bar2 == 0 // no second bar, or no target before it
+        return .none
+    return .some(Doc::{ .where = arena.text().s(path).s(":\{start + 1\}").take(),
+        .group = rest.sub(0, bar).trim_spaces(),
+        .spec = tail.sub(0, bar2).trim_spaces() })
+
+priv fn push_phony(list: U8[], path: U8[], start: Sz, said: List<|Said|>$@, arena: Arena$@) //<
+    //< Adds each bare name a `.PHONY:` line lists, with where the line is
+    for w in words(list, arena)
+        if plain_name(w)
+            said
+                .push(Said::{ .where = arena.text().s(path).s(":\{start + 1\}").take(), .name = w })
+
 priv fn scan_names(arena: Arena$@): Names //<
     //< Collects `.PHONY`'s bare names, the rules' targets and the `##` lines from every file
     $said: = List<|Said|>.new(arena)
@@ -389,25 +410,13 @@ priv fn scan_names(arena: Arena$@): Names //<
                 continue
             body: = one.text.trim_spaces()
             if body.starts_with("## ")
-                rest: = body.sub_from(3)
-                bar: = rest.find_char('|')
-                if bar > 0
-                    tail: = rest.sub_from(bar + 1)
-                    bar2: = tail.find_char('|')
-                    if bar2 > 0
-                        docs
-                            .push(Doc::{ .where = arena.text().s(path).s(":\{start + 1\}").take(),
-                            .group = rest.sub(0, bar).trim_spaces(),
-                            .spec = tail.sub(0, bar2).trim_spaces() })
+                if doc: = read_help_line(body.sub_from(3), path, start, arena)
+                    docs.push(doc)
                 continue
             if body.starts_with("#")
                 continue
             if body.starts_with(".PHONY:")
-                for w in words(body.sub_from(7), arena)
-                    if plain_name(w)
-                        said
-                            .push(Said::{ .where = arena.text().s(path).s(":\{start + 1\}").take(),
-                            .name = w })
+                push_phony(body.sub_from(7), path, start, said@, arena)
                 continue
             if got: = rule_targets(one.text)
                 for w in words(got, arena)
@@ -588,8 +597,8 @@ priv fn assigned_name(line: U8[]): U8[] //<
     //<
     //< **A rule's line sets none**, including a target's own variable (`install: export V := x`):
     //< left of its operator it holds more than one name.
-    eq: = line.find_char('=')
-    if eq < 1
+    eq: = line.find_char('=').unwrap_or(0)
+    if eq == 0 // no `=`, or nothing before it
         return ""
     $head: = line.sub(0, eq).trim_end()
     for op in U8[][]::{ "::", ":", "?", "+" }
@@ -598,10 +607,17 @@ priv fn assigned_name(line: U8[]): U8[] //<
             break
     for w in U8[][]::{ "export ", "override " }
         head = head.strip_prefix(w)
-    if head.len == 0 || head.find_char(' ') >= 0 || head.find_char('\t') >= 0 ||
-        head.find_char(':') >= 0 || head.find_char('$') >= 0
+    if head.len == 0 || head.find_char(' ').is_some() || head.find_char('\t').is_some() ||
+        head.find_char(':').is_some() || head.find_char('$').is_some()
         return ""
     return head
+
+priv fn define_name(line: U8[]): U8[] //< the name a `define` line opens, its operator dropped
+    name: = line.sub_from(7).trim_spaces()
+    for op in U8[][]::{ "::=", ":=", "?=", "+=", "=" }
+        if name.ends_with(op)
+            return name.sub(0, name.len - op.len).trim_end()
+    return name
 
 priv fn scan_fns(paths: List<|U8[]|>@, arena: Arena$@): List<|Fn_read|> //<
     //< Every function a run's files define: each `define`, each variable (a call may name either)
@@ -614,11 +630,7 @@ priv fn scan_fns(paths: List<|U8[]|>@, arena: Arena$@): List<|Fn_read|> //<
         for i < lines.len
             line: = lines.get(i)
             if line.starts_with("define ")
-                $name: = line.sub_from(7).trim_spaces()
-                for op in U8[][]::{ "::=", ":=", "?=", "+=", "=" }
-                    if name.ends_with(op)
-                        name = name.sub(0, name.len - op.len).trim_end()
-                        break
+                name: = define_name(line)
                 body: = arena.text()
                 i += 1
                 for i < lines.len && !lines.get(i).starts_with("endef")
@@ -669,25 +681,26 @@ priv fn check_run(paths: List<|U8[]|>@, finds: Call_finds$@, arena: Arena$@): Sz
                 continue
             $at: Sz = 0
             for at < one.text.len
-                hit: = one.text.sub_from(at).find_str("$(call ")
-                if hit < 0
+                switch one.text.sub_from(at).find_str("$(call ")
+                case .none
                     break
-                call: = one.text.sub_from(at + Sz::hit)
-                at += hit + 7
-                name: = call_name(call)
-                if name.find_char('$') >= 0
-                    continue
-                seen += 1
-                reads: = reads_of(fns@, name)
-                where: = arena.text().s(path).s(":\{start + 1\}: ").s(name).take()
-                if reads < 0
-                    finds.nowhere.push(where)
-                    continue
-                passed: = args_passed(call)
-                if passed > reads
-                    finds.unread
-                        .push(arena.text().s(where)
-                        .s(" is handed \{passed\}, reads up to \{reads\}").take())
+                case .some(hit)
+                    call: = one.text.sub_from(at + hit)
+                    at += hit + 7
+                    name: = call_name(call)
+                    if name.find_char('$').is_some()
+                        continue
+                    seen += 1
+                    reads: = reads_of(fns@, name)
+                    where: = arena.text().s(path).s(":\{start + 1\}: ").s(name).take()
+                    if reads < 0
+                        finds.nowhere.push(where)
+                        continue
+                    passed: = args_passed(call)
+                    if passed > reads
+                        finds.unread
+                            .push(arena.text().s(where)
+                            .s(" is handed \{passed\}, reads up to \{reads\}").take())
     return seen
 
 priv fn check_calls(arena: Arena$@) //<

@@ -12,6 +12,8 @@
  * What starts one is kspl_proc_start in hosted_spawn.c (the tool assembling argv is there).
  * ============================================================ */
 #ifndef _WIN32
+#include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <poll.h>
@@ -29,23 +31,47 @@ typedef struct {
     int out_eof; int err_eof; /* The streams whose read returned EOF. poll skips them */
 } kspl_proc_t;
 
-KSPL_LINK I32 kspl_proc_write(I64 handle, U8 *ptr, Sz len) {
-    if (handle == 0) return -1;
+/* Writes all len bytes to the child's standard input within timeout_ms: 0 when all of it went,
+ * -1 when the time ran out first (what went by then stays written), -2 when the child closed its
+ * standard input or ended.
+ * Caution: **Never block on the write itself.** A child that stops reading fills the pipe, and a
+ * blocking write would outlast every timeout, so the end is non-blocking and waited on by poll. */
+KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) {
+    timeout_ms = kspl_wait_ms(timeout_ms);
+    if (handle == 0) return -2;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
-    if (h->to_w < 0) return -1; /* An attempt to write after closing */
+    if (h->to_w < 0) return -2; /* An attempt to write after closing */
+    int fl = fcntl(h->to_w, F_GETFL);
+    if (fl < 0 || ((fl & O_NONBLOCK) == 0 && fcntl(h->to_w, F_SETFL, fl | O_NONBLOCK) != 0)) {
+        return -2;
+    }
+    I64 deadline = kspl_mono_us() + (I64)timeout_ms * 1000;
     Sz off = 0;
     while (off < len) {
         ssize_t w = write(h->to_w, ptr + off, (size_t)(len - off));
-        if (w <= 0) return -1;
-        off += w;
+        if (w > 0) {
+            off += w;
+            continue;
+        }
+        if (w < 0 && errno == EINTR) continue;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            I64 left = deadline - kspl_mono_us();
+            struct pollfd pfd;
+            if (left <= 0) return -1;
+            pfd.fd = h->to_w; pfd.events = POLLOUT; pfd.revents = 0;
+            if (poll(&pfd, 1, (int)((left + 999) / 1000)) < 0 && errno != EINTR) return -2;
+            continue;
+        }
+        return -2;
     }
-    return (I32)len;
+    return 0;
 }
 
 /* >0: the bytes read, -1: out of time, 0: EOF (the partner died), -2: an error (a stream not
  * joined by a pipe comes here too) */
 static I32 kspl_proc_read_end(int fd, U8 *buf, Sz cap, I32 timeout_ms) {
     struct pollfd pfd;
+    timeout_ms = kspl_wait_ms(timeout_ms);
     if (fd < 0) return -2;
     pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
     int r = poll(&pfd, 1, timeout_ms);
@@ -120,6 +146,7 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
  * Caution: **Look at the two in one go.** One at a time, the other waits out the silent one's
  * timeout too (run_capture in std/subproc.kspls gathers everything). */
 KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
+    timeout_ms = kspl_wait_ms(timeout_ms);
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     struct pollfd pfds[2];
@@ -160,23 +187,38 @@ typedef struct {
     int out_eof; int err_eof;
 } kspl_proc_t;
 
-KSPL_LINK I32 kspl_proc_write(I64 handle, U8 *ptr, Sz len) {
-    if (handle == 0) return -1;
+/* The same contract as the POSIX side. The end is put in PIPE_NOWAIT, so a write takes what the
+ * pipe has room for and returns at once; it is looked at again after a pause until the deadline.
+ * **A step is 4096 bytes at most**, the size CreatePipe gives a pipe: a write wider than the room
+ * may take nothing at all, and could then never go. */
+KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) {
+    timeout_ms = kspl_wait_ms(timeout_ms);
+    if (handle == 0) return -2;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
-    if (h->to_w == NULL) return -1; /* An attempt to write after closing */
+    if (h->to_w == NULL) return -2; /* An attempt to write after closing */
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+    if (!SetNamedPipeHandleState(h->to_w, &mode, NULL, NULL)) return -2;
+    ULONGLONG start = GetTickCount64();
     Sz off = 0;
     while (off < len) {
+        DWORD want = (len - off > 4096) ? 4096 : (DWORD)(len - off);
         DWORD wrote = 0;
-        if (!WriteFile(h->to_w, ptr + off, (DWORD)(len - off), &wrote, NULL) || wrote == 0) return -1;
-        off += wrote;
+        if (!WriteFile(h->to_w, ptr + off, want, &wrote, NULL)) return -2;
+        if (wrote > 0) {
+            off += wrote;
+            continue;
+        }
+        if (GetTickCount64() - start >= (ULONGLONG)timeout_ms) return -1;
+        Sleep(1);
     }
-    return (I32)len;
+    return 0;
 }
 
 /* >0: the bytes read, -1: out of time, 0: EOF (the partner died), -2: an error
  * A Windows anonymous pipe cannot wait for readable, so it peeks and sleeps 1 ms while empty. */
 static I32 kspl_proc_read_end(HANDLE pipe, U8 *buf, Sz cap, I32 timeout_ms) {
     DWORD start = GetTickCount();
+    timeout_ms = kspl_wait_ms(timeout_ms);
     if (pipe == NULL) return -2; /* A stream not joined by a pipe */
     for (;;) {
         DWORD avail = 0;
@@ -271,6 +313,7 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
    Caution: It peeks and sleeps as kspl_proc_read_end does. A stream whose peek failed has its
  * bit raised as closed (a read then returns 0 = EOF). */
 KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
+    timeout_ms = kspl_wait_ms(timeout_ms);
     if (handle == 0) return -1;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     int watch_out = h->from_w != NULL && !h->out_eof;

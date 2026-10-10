@@ -104,7 +104,7 @@ priv fn check_fixtures(codes: List<|U8[]|>@, arena: Arena$@) //<
     text: = all.slice()
     $bad: = List<|U8[]|>.new(arena)
     for i in Range.asc(codes.len)
-        if text.find_str(codes.get(i)) < 0
+        if text.find_str(codes.get(i)).is_none()
             bad.push(codes.get(i))
     verdict.check_list("every diagnostic code has material holding it", codes.len, "codes", bad@,
         "add a source holding `// EXPECT: [CODE] ...` under ksplc/tests/lint/")
@@ -136,33 +136,40 @@ priv fn collect_declared(out: List<|U8[]|>$@, arena: Arena$@) //<
     //< read too, since either backend may build it.
     specs: = scan.kspl_specs_with(U8[][]::{ ":!tests/" }, arena)
     for rel in harness.tracked_matching(specs)
-        text: = harness.read_under_root(rel)
-        lines: = text.lines(arena)
-        $in_block: = false
-        $braced: = false
-        $depth: Sz = 0
-        for i in Range.asc(lines.len)
-            raw: = lines.get(i)
-            line: = raw.trim_spaces()
-            if in_block
-                $ends: = line.starts_with("}")
-                if !braced
-                    ends = line.len > 0 && raw.len - raw.trim_start().len <= depth
-                if !ends
-                    sig: = line.strip_prefix("pub ")
-                    if sig.starts_with("fn kspl_")
-                        rest: = sig.sub_from(3)
-                        at: = rest.find_char('(')
-                        if at > 0
-                            scan.push_unique(out, rest.sub(0, at))
-                    continue
-                in_block = false
-                if braced
-                    continue
-            if line.starts_with("extern \"C\"")
-                in_block = true
-                braced = line.ends_with("{")
-                depth = raw.len - raw.trim_start().len
+        collect_declared_in(harness.read_under_root(rel).lines(arena), out)
+
+priv fn collect_declared_in(lines: List<|U8[]|>, out: List<|U8[]|>$@) //<
+    //< The `kspl_*` names one file's `extern "C"` blocks declare
+    $in_block: = false
+    $braced: = false
+    $depth: Sz = 0
+    for i in Range.asc(lines.len)
+        raw: = lines.get(i)
+        line: = raw.trim_spaces()
+        if in_block
+            $ends: = line.starts_with("}")
+            if !braced
+                ends = line.len > 0 && raw.len - raw.trim_start().len <= depth
+            if !ends
+                push_kspl_fn(line, out)
+                continue
+            in_block = false
+            if braced
+                continue
+        if line.starts_with("extern \"C\"")
+            in_block = true
+            braced = line.ends_with("{")
+            depth = raw.len - raw.trim_start().len
+
+priv fn push_kspl_fn(line: U8[], out: List<|U8[]|>$@) //<
+    //< adds the name a `fn kspl_*(` line declares
+    sig: = line.strip_prefix("pub ")
+    if !sig.starts_with("fn kspl_")
+        return
+    rest: = sig.sub_from(3)
+    at: = rest.find_char('(').unwrap_or(0)
+    if at > 0
+        scan.push_unique(out, rest.sub(0, at))
 
 priv fn collect_module_symbols(defined: List<|U8[]|>$@, declared: List<|U8[]|>$@, arena: Arena$@) //<
     //< The names of the symbols a `define` / `declare` at a line's start in `module.kspls` emits
@@ -174,17 +181,15 @@ priv fn collect_module_symbols(defined: List<|U8[]|>$@, declared: List<|U8[]|>$@
         is_def: = t.starts_with("define ")
         if !is_def && !t.starts_with("declare ")
             continue
-        at: = t.find_str("@")
-        if at < 0
-            continue
-        rest: = t.sub_from(at + 1)
-        open: = rest.find_char('(')
-        if open <= 0
-            continue
-        name: = rest.sub(0, open)
-        if name.starts_with("llvm.")
-            continue
-        scan.push_unique(defined if is_def else declared, name)
+        if at: = t.find_str("@")
+            rest: = t.sub_from(at + 1)
+            open: = rest.find_char('(').unwrap_or(0)
+            if open == 0
+                continue
+            name: = rest.sub(0, open)
+            if name.starts_with("llvm.")
+                continue
+            scan.push_unique(defined if is_def else declared, name)
 
 priv const preamble_head: U8[] = "const preamble_fns:" //<
     //< The line that starts `ctx.kspls`'s table of what the preamble emits itself
@@ -209,7 +214,7 @@ priv fn collect_preamble(named: List<|U8[]|>$@, by_hand: List<|U8[]|>$@, arena: 
         if names.len == 0
             continue
         named.push(names.get(0))
-        if t.find_str(".ret = ") < 0
+        if t.find_str(".ret = ").is_none()
             by_hand.push(names.get(0))
     return found && named.len > 0
 
@@ -306,18 +311,16 @@ priv fn check_ast_kinds(arena: Arena$@)
         if !nxt.starts_with("return \"")
             continue
         spelled: = nxt.sub_from(8)
-        end: = spelled.find_char('"')
-        if end < 0
-            continue
-        kinds.push(kind)
-        names.push(spelled.sub(0, end))
+        if end: = spelled.find_char('"')
+            kinds.push(kind)
+            names.push(spelled.sub(0, end))
     // A grammar rule's name (`name = …`). The line comments are dropped.
     $rules: = List<|U8[]|>.new(arena)
     for line in harness.read_under_root(kspeg).lines(arena)
         if line.starts_with("//")
             continue
-        at: = line.find_char('=')
-        if at <= 0
+        at: = line.find_char('=').unwrap_or(0)
+        if at == 0
             continue
         head: = line.sub(0, at).trim_spaces()
         if head.len == 0 || !(head[0].is_alpha() || head[0] == '_')
@@ -365,15 +368,15 @@ priv fn mentions_kind(text: U8[], kind: U8[]): Bool //<
     //< Whether it appears in a kind test as a `.k_xxx` (checked at a word boundary)
     $i: Sz = 0
     for i + kind.len + 1 <= text.len
-        at: = text.sub_from(i).find_str(kind)
-        if at < 0
+        if at: = text.sub_from(i).find_str(kind)
+            p: = i + at
+            i = p + kind.len
+            if p == 0 || text[p - 1] != '.'
+                continue
+            if p + kind.len >= text.len || !htext.is_word_at(text, p + kind.len)
+                return true
+        else
             return false
-        p: = i + Sz::at
-        i = p + kind.len
-        if p == 0 || text[p - 1] != '.'
-            continue
-        if p + kind.len >= text.len || !htext.is_word_at(text, p + kind.len)
-            return true
     return false
 
 // ==========================================
@@ -391,15 +394,14 @@ priv fn names_in(src: U8[], head: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Caution: **Search only inside the function**: `attrs.kspls` holds the directives' list too,
     //< and mixing the two passes neither check.
     $out: = List<|U8[]|>.new(arena)
-    at: = src.find_str(head)
-    if at < 0
-        return out
-    rest: = src.sub_from(at)
-    body: = rest.sub(0, body_end(rest))
-    // Caution: **Count one per name.** Counting by occurrence swings with how the implementation is
-    // written, and the comparison with the specification stops meaning anything.
-    for w in scan.find_all(body, "name.equals(\"", "\")", arena)
-        scan.push_unique(out@, w)
+    if at: = src.find_str(head)
+        rest: = src.sub_from(at)
+        body: = rest.sub(0, body_end(rest))
+        // Caution: **Count one per name.** Counting by occurrence swings with how the
+        // implementation is written, and the comparison with the specification stops meaning
+        // anything.
+        for w in scan.find_all(body, "name.equals(\"", "\")", arena)
+            scan.push_unique(out@, w)
     return out
 
 priv fn body_end(rest: U8[]): Sz //<
@@ -476,11 +478,9 @@ priv fn check_directives(src: U8[], arena: Arena$@)
         scan.push_unique(spec@, w)
     // The list carried with a diagnostic is the same string (`##error ##warning ##lint`).
     $msg: = List<|U8[]|>.new(arena)
-    at: = src.find_str(dir_list_head)
-    if at >= 0
+    if at: = src.find_str(dir_list_head)
         rest: = src.sub_from(at + dir_list_head.len)
-        end: = rest.find_char('"')
-        list: = rest if end < 0 else rest.sub(0, end)
+        list: = rest.sub(0, rest.find_char('"').unwrap_or(rest.len))
         for w in list.split(' ', arena)
             if w.starts_with("##")
                 scan.push_unique(msg@, w.sub_from(2))
@@ -509,12 +509,10 @@ priv fn bits_after(text: U8[], mark: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Pushes the one digit right after `mark`
     $out: = List<|U8[]|>.new(arena)
     for line in text.lines(arena)
-        at: = line.find_str(mark)
-        if at < 0
-            continue
-        rest: = line.sub_from(at + mark.len)
-        if rest.len > 0 && rest.ptr.is_digit()
-            out.push(rest.sub(0, 1))
+        if at: = line.find_str(mark)
+            rest: = line.sub_from(at + mark.len)
+            if rest.len > 0 && rest.ptr.is_digit()
+                out.push(rest.sub(0, 1))
     return out
 
 priv fn check_reactor_bits(arena: Arena$@)
@@ -566,8 +564,7 @@ priv fn word_after(text: U8[], mark: U8[], arena: Arena$@): U8[] //<
     //<
     //< Empty where there is none.
     for line in text.lines(arena)
-        at: = line.find_str(mark)
-        if at >= 0
+        if at: = line.find_str(mark)
             return line.sub_from(at + mark.len).trim_spaces()
     return ""
 
@@ -587,7 +584,7 @@ priv fn check_the_name_it_speaks_with(arena: Arena$@)
         bad
             .push(arena.text().s("the page opens `").s(spoken).s("` and the gate cuts on `").s(cut)
             .s(": `").take())
-    if gate.find_str(said_flag) < 0
+    if gate.find_str(said_flag).is_none()
         bad
             .push(arena.text().s(said_gate).s(" does not hand `").s(said_flag)
             .s("` over, so nothing the page says is heard").take())
@@ -609,7 +606,7 @@ priv const asan_marks: U8[][3] = ::{ "ASAN_CFLAGS := ", "$(call fuzz_build,$(ASA
 priv fn fuzzes_sanitized(text: U8[], _arena: Arena$@): Bool //<
     //< Whether a `Makefile` builds what it fuzzes with the sanitizer and hands the requirement on
     for m in asan_marks
-        if text.find_str(m) < 0
+        if text.find_str(m).is_none()
             return false
     return true
 
@@ -633,7 +630,8 @@ priv fn check_fuzz_sanitized(arena: Arena$@)
     $seen: Sz = 0
     for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
         text: = harness.read_under_root(rel)
-        if sys.get_dir_name(rel).find_char('/') >= 0 || text.find_str(fuzz_target) < 0
+        if sys.get_dir_name(rel).find_char('/').is_some() ||
+            text.find_str(fuzz_target).is_none()
             continue
         seen += 1
         if !fuzzes_sanitized(text, arena)
@@ -666,26 +664,22 @@ priv fn c_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Each `case` line names an NTSTATUS in a `/* STATUS_... */` comment, and the next `return`
     //< gives the code of every name before it.
     $out: = List<|U8[]|>.new(arena)
-    at: = text.find_str(status_c_head)
-    if at < 0
-        return out
-    body: = text.sub_from(at)
-    end: = body.find_str("default:")
-    if end < 0
-        return out
-    $pending: = List<|U8[]|>.new(arena)
-    for line in body.sub(0, end).lines(arena)
-        names: = scan.find_all(line, "/* ", " */", arena)
-        name: = names.get(0).trim_spaces() if names.len == 1 else ""
-        if line.find_str("case ") >= 0 && name.starts_with("STATUS_")
-            pending.push(name)
-        codes: = scan.find_all(line, "return ", ";", arena)
-        if codes.len == 1
-            for i in Range.asc(pending.len)
-                out
-                    .push(arena.text().s(pending.get(i)).c('=')
-                    .s(codes.get(0).trim_spaces()).take())
-            pending = List<|U8[]|>.new(arena)
+    if at: = text.find_str(status_c_head)
+        body: = text.sub_from(at)
+        if end: = body.find_str("default:")
+            $pending: = List<|U8[]|>.new(arena)
+            for line in body.sub(0, end).lines(arena)
+                names: = scan.find_all(line, "/* ", " */", arena)
+                name: = names.get(0).trim_spaces() if names.len == 1 else ""
+                if line.find_str("case ").is_some() && name.starts_with("STATUS_")
+                    pending.push(name)
+                codes: = scan.find_all(line, "return ", ";", arena)
+                if codes.len == 1
+                    for i in Range.asc(pending.len)
+                        out
+                            .push(arena.text().s(pending.get(i)).c('=')
+                            .s(codes.get(0).trim_spaces()).take())
+                    pending = List<|U8[]|>.new(arena)
     return out
 
 priv fn doc_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -693,38 +687,35 @@ priv fn doc_status_rows(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //<
     //< Every `` `STATUS_...` `` in a row's first cell is paired with the row's last cell.
     $out: = List<|U8[]|>.new(arena)
-    at: = text.find_str(status_doc_head)
-    if at < 0
-        return out
-    $section: = text.sub_from(at + status_doc_head.len)
-    end: = section.find_str("\n### ")
-    if end >= 0
-        section = section.sub(0, end)
-    for line in section.lines(arena)
-        if !line.starts_with("| `STATUS_")
-            continue
-        cells: = line.trim_spaces().split('|', arena)
-        if cells.len < 4
-            continue
-        code: = cells.get(cells.len - 2).trim_spaces()
-        for name in scan.find_all(cells.get(1), "`", "`", arena)
-            if name.starts_with("STATUS_")
-                out.push(arena.text().s(name).c('=').s(code).take())
+    if at: = text.find_str(status_doc_head)
+        after: = text.sub_from(at + status_doc_head.len)
+        section: = after.sub(0, after.find_str("\n### ").unwrap_or(after.len))
+        for line in section.lines(arena)
+            if !line.starts_with("| `STATUS_")
+                continue
+            cells: = line.trim_spaces().split('|', arena)
+            if cells.len < 4
+                continue
+            code: = cells.get(cells.len - 2).trim_spaces()
+            for name in scan.find_all(cells.get(1), "`", "`", arena)
+                if name.starts_with("STATUS_")
+                    out.push(arena.text().s(name).c('=').s(code).take())
     return out
 
 priv fn status_tables_disagree(text: U8[], arena: Arena$@): Bool //<
     //< Whether a sample's C half and table half fail to agree (an empty half counts as failing)
-    at: = text.find_str(status_split)
-    if at < 0
+    switch text.find_str(status_split)
+    case .none
         return true
-    c: = c_status_rows(text.sub(0, at), arena)
-    doc: = doc_status_rows(text.sub_from(at + status_split.len), arena)
-    if c.len == 0 || c.len != doc.len
-        return true
-    for i in Range.asc(c.len)
-        if !scan.has(doc@, c.get(i))
+    case .some(at)
+        c: = c_status_rows(text.sub(0, at), arena)
+        doc: = doc_status_rows(text.sub_from(at + status_split.len), arena)
+        if c.len == 0 || c.len != doc.len
             return true
-    return false
+        for i in Range.asc(c.len)
+            if !scan.has(doc@, c.get(i))
+                return true
+        return false
 
 // The samples for the judgment above: the agreeing pair, and one break of each kind.
 // Caution: **Keep a sample for each way the two can part**: a code changed, a name missing on

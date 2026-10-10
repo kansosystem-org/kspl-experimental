@@ -50,8 +50,8 @@ priv const types_want: U8[][5] = ::{ "std.ds.List<|U8[]|>", "std.ds.List<|U8$[]|
 priv const types_uri: U8[] = "file:///types_probe.kspl"
 
 fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(types_uri, types_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(types_uri, types_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, types_uri, arena)
     for i in Range.asc(types_names.len)
         var_name: = types_names[i]
@@ -68,7 +68,7 @@ fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
         text: = lsp_client.hover_text(got)
         d2: = lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena)
         label2: = arena.text().s("a hover's type becomes the source's letter: ").s(var_name).take()
-        verdict.check(label2, text.find_str(types_want[i]) >= 0, d2)
+        verdict.check(label2, text.find_str(types_want[i]).is_some(), d2)
     // An instantiated **function**'s name is spelt likewise, with the owner's type (as a
     // non-generic method `<file>.Point.area`). A symbol's `type_id` is **the return type**, useless
     // for the name (`pub fn std.ds.U8[](...): U8[]`), and the symbol's name is internal.
@@ -81,7 +81,8 @@ fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
         return
     ftext: = lsp_client.hover_text(fgot)
     fok: =
-        ftext.find_str("std.ds.List<|U8[]|>.new(") >= 0 && ftext.find_str("std_ds_") < 0
+        ftext.find_str("std.ds.List<|U8[]|>.new(").is_some() &&
+        ftext.find_str("std_ds_").is_none()
     verdict.check(fname, fok,
         lsp_client.why(c, arena.text().s("'").s(ftext).s("'").take(), arena))
 
@@ -119,7 +120,8 @@ priv const away_wants: U8[][3] = ::{ "s: U8[]", "buf: U8$[]", "argv: U8[][]" }
 priv const away_names: U8[][3] = ::{ "a parameter", "a mutable parameter", "a field" }
 
 fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(away_uri, away_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(away_uri, away_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, away_uri, arena)
     for i in Range.asc(away_decls.len)
         decl: = away_decls[i]
@@ -131,7 +133,7 @@ fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
-        verdict.check(label, text.find_str(away_wants[i]) >= 0,
+        verdict.check(label, text.find_str(away_wants[i]).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     // **A jump into std lands where std is**, outside the workspace as an installed one is.
     jump: = "a declaration in std is answered in std's place"
@@ -168,7 +170,8 @@ impl<|T|> Box<|T|> {
 priv const self_uri: U8[] = "file:///self_probe.kspl"
 
 fn check_hover_self_param(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(self_uri, self_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(self_uri, self_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, self_uri, arena)
     label: = "a parameter written Self names its owner, spelt out"
     decl: = "  fn get(r: Self)"
@@ -181,7 +184,7 @@ fn check_hover_self_param(c: jsonrpc.Client$@, arena: Arena$@)
     // Caution: **Check the braces too.** If the owner were printed as the code's own text,
     // `{type_n.get_path_name()} ({tp.get_path_name()})`, a looser match would still pass around it.
     verdict.check(label,
-        text.find_str("r: Self (Box<|T|>)") >= 0 && text.find_str("{") < 0,
+        text.find_str("r: Self (Box<|T|>)").is_some() && text.find_str("{").is_none(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
 // ==========================================
@@ -232,7 +235,8 @@ priv const recv_names: U8[][4] = ::{ "a receiver written Self$@", "a receiver wr
     "a generic's receiver written Self$@", "a generic method named as the prelude's `put`" }
 
 fn check_hover_receiver(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(recv_uri, recv_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(recv_uri, recv_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, recv_uri, arena)
     for i in Range.asc(recv_decls.len)
         decl: = recv_decls[i]
@@ -243,7 +247,7 @@ fn check_hover_receiver(c: jsonrpc.Client$@, arena: Arena$@)
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
-        verdict.check(label, text.find_str(recv_wants[i]) >= 0,
+        verdict.check(label, text.find_str(recv_wants[i]).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
 // ==========================================
@@ -274,8 +278,8 @@ priv const label_lines: U8[][2] = ::{ "  outer: for {", "        break outer;" }
 priv const label_names: U8[][2] = ::{ "a label where it is written", "a label a break names" }
 
 fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(label_uri, label_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(label_uri, label_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, label_uri, arena)
     for i in Range.asc(label_lines.len)
         line: = label_lines[i]
@@ -287,7 +291,8 @@ fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
             continue
         text: = lsp_client.hover_text(got)
         verdict.check(label,
-            text.find_str("label outer") >= 0 && text.find_str("outer: outer") < 0,
+            text.find_str("label outer").is_some() &&
+            text.find_str("outer: outer").is_none(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     jump: = "a jump from a break lands on the label it names"
     from: = lsp_client.at_pos(label_uri, decl_line(label_src, label_lines[1], arena),
@@ -378,8 +383,8 @@ priv const generic_names: U8[][8] = ::{ "a call on a generic named by an alias n
     "a call on a local set from a function through `catch` (`w.left.peek`) names its method" }
 
 fn check_hover_generic_body(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(generic_uri, generic_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(generic_uri, generic_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, generic_uri, arena)
     for i in Range.asc(generic_lines.len)
         line: = generic_lines[i]
@@ -390,7 +395,7 @@ fn check_hover_generic_body(c: jsonrpc.Client$@, arena: Arena$@)
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
-        verdict.check(label, text.find_str(generic_wants[i]) >= 0,
+        verdict.check(label, text.find_str(generic_wants[i]).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     jump: = "a jump from a call in an uninstantiated generic lands on the method"
     from: = lsp_client.at_pos(generic_uri, decl_line(generic_src, generic_lines[1], arena),
@@ -422,8 +427,8 @@ fn main(): I32 {
 priv const default_uri: U8[] = "file:///default_probe.kspl"
 
 fn check_hover_default_arg(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(default_uri, default_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(default_uri, default_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, default_uri, arena)
     label: = "a default argument shows in the hover as written"
     call: = "  return bump(2);"
@@ -433,7 +438,7 @@ fn check_hover_default_arg(c: jsonrpc.Client$@, arena: Arena$@)
         verdict.check(label, false, end_text(e))
         return
     text: = lsp_client.hover_text(got)
-    verdict.check(label, text.find_str("step: I32 = 1") >= 0,
+    verdict.check(label, text.find_str("step: I32 = 1").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
 // ==========================================
@@ -476,8 +481,8 @@ priv const owner_kinds: U8[][3] = ::{ "a type of std's", "a generic nothing inst
     "a built-in type" }
 
 fn check_hover_owner(c: jsonrpc.Client$@, arena: Arena$@)
-    _sent: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(owner_uri, owner_src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(owner_uri, owner_src, arena),
+        lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, owner_uri, arena)
     for i in Range.asc(owner_marks.len)
         decl: = arena.text().s("  fn ").s(owner_marks[i]).take()
@@ -489,7 +494,7 @@ fn check_hover_owner(c: jsonrpc.Client$@, arena: Arena$@)
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
-        verdict.check(label, text.find_str(owner_wants[i]) >= 0,
+        verdict.check(label, text.find_str(owner_wants[i]).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
 // ==========================================
@@ -518,7 +523,8 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
         verdict.check("the prelude can be read", false, std_dir)
         return
     uri: = lsp_client.uri_of(std_dir, lang_file, arena)
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
+        catch {}
     defer lsp_client.close(c, uri, arena)
     // **Opened by its path, it is still std's file**, named as its imports name it (`name_entry` in
     // `ksplc/base/package.kspls`); named by the path, every owner carries `.home.me.std.lang.…` and
@@ -537,10 +543,11 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
         text: = lsp_client.hover_text(got)
         // Caution: **Check for the internal name too.** The owner and the receiver can both read
         // right while the method's own name is still the mangled one.
-        ok: = text.find_str(lang_wants[i]) >= 0 && text.find_str("std_lang_") < 0
+        ok: =
+            text.find_str(lang_wants[i]).is_some() && text.find_str("std_lang_").is_none()
         verdict.check(label, ok,
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
-        if text.find_str("fn std.lang.") < 0
+        if text.find_str("fn std.lang.").is_none()
             named_as_std = false
             seen = text
     verdict.check("a file of std's opened by its own path is named as its imports name it",
@@ -560,7 +567,8 @@ priv const spell_decl: U8[] = "fn find_path_at_offset"
 
 priv fn def_uri_under(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): U8[] //<
     //< It asks where that name is defined, under one spelling, and returns the URI that came back
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
+        catch {}
     defer lsp_client.close(c, uri, arena)
     pos: = lsp_client.at_pos(uri, decl_line(src, spell_decl, arena),
         col_in_line(src, spell_decl, "find_path", arena) + 1, arena)

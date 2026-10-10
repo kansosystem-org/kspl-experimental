@@ -56,6 +56,18 @@ priv fn emit(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
         return missing(arena.text().s("the file has not been made: \{path\}").take())
     return Text::{ .ok = true, .body = text, .why = "" }
 
+priv fn in_order(first: Sz?, then: Sz?, last: Sz?): Bool //< whether all three are found, in order
+    if a: = first
+        if b: = then
+            if c: = last
+                return a < b && b < c
+    return false
+
+priv fn place(at: Sz?, arena: Arena$@): U8[] //< where a search found its text, for a message
+    if i: = at
+        return arena.text().s("\{i\}").take()
+    return "none"
+
 priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
     //< The calls the generated `main` must make before `kspl_main`
     //<
@@ -68,25 +80,26 @@ priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
         .take()
     if tag.equals("freestanding")
         // A freestanding artefact holds no `main` and no C runtime.
-        verdict.check(name, gen.body.find_str("kspl_io_set_stdio_binary();") < 0,
+        verdict.check(name, gen.body.find_str("kspl_io_set_stdio_binary();").is_none(),
             "a freestanding artefact must not carry the hosted startup calls")
         return
     // Caution: **Search only inside `main`.** `kspl_main` is declared further up the file, so a
     // search over the whole text finds that declaration and reports the order as wrong.
-    entry: = gen.body.find_str("int main(int _argc, char **_argv) {")
-    if entry < 0
+    $entry: Sz = 0
+    switch gen.body.find_str("int main(int _argc, char **_argv) {")
+    case .some(at)
+        entry = at
+    case .none
         verdict.check(name, false, "the generated C holds no hosted entry point")
         return
     body: = gen.body.sub_from(entry)
     console_at: = body.find_str("kspl_io_init_console();")
     binary_at: = body.find_str("kspl_io_set_stdio_binary();")
     call_at: = body.find_str("kspl_main(")
-    ok: =
-        console_at >= 0 && binary_at >= 0 && call_at >= 0 && binary_at > console_at &&
-        binary_at < call_at
-    verdict.check(name, ok,
-        arena.text().s("inside main: console at \{console_at\}, byte mode at \{binary_at\}, ")
-        .s("kspl_main at \{call_at\}; every one must be found, in that order").take())
+    verdict.check(name, in_order(console_at, binary_at, call_at),
+        arena.text().s("inside main: console at \{place(console_at, arena)\}, ")
+        .s("byte mode at \{place(binary_at, arena)\}, kspl_main at \{place(call_at, arena)\}; ")
+        .s("every one must be found, in that order").take())
 
 priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
     //< It reads the generated C made under the same settings
@@ -147,7 +160,7 @@ priv fn atomics_block(body: U8[], arena: Arena$@): U8[] //<
             inside = true
         if inside
             block.push(line)
-        if line.find_str(atomic_names[0]) >= 0 && line.ends_with("{")
+        if line.find_str(atomic_names[0]).is_some() && line.ends_with("{")
             found = inside
         if line.starts_with("#endif")
             if found
@@ -182,7 +195,7 @@ priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
         r: = harness
             .run(U8[][]::{ harness.cc(), arena.text().s("--target=\{t\}").take(), "-E", "-P", src })
         for n in atomic_names
-            if r.code != 0 || r.out.find_str(n) < 0
+            if r.code != 0 || r.out.find_str(n).is_none()
                 bad.push(arena.text().s("\{t\}: no \{n\}").take())
     why: = arena.text()
     for b in bad
@@ -191,7 +204,7 @@ priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
     off: = harness
         .run(U8[][]::{ harness.cc(),
         arena.text().s("--target=\{no_lock_free_triple\}").take(), "-E", "-P", src })
-    verdict.check(off_name, off.code == 0 && off.out.find_str("kspl_atomic_") < 0,
+    verdict.check(off_name, off.code == 0 && off.out.find_str("kspl_atomic_").is_none(),
         arena.text().s("under \{no_lock_free_triple\}:\n\{off.out\}").take())
 
 fn main(): I32
@@ -214,24 +227,25 @@ fn main(): I32
     if llvm.code == 0
         ir: = harness.read_generated(llvm_ll)
         declares_only: =
-            ir.find_str("declare void @kspl_io_init_console()") >= 0 &&
-            ir.find_str("declare void @kspl_runtime_abi_") >= 0 &&
-            ir.find_str("define i64 @kspl_thread_spawn") < 0 &&
-            ir.find_str("define ptr @kspl_os_argv") < 0
+            ir.find_str("declare void @kspl_io_init_console()").is_some() &&
+            ir.find_str("declare void @kspl_runtime_abi_").is_some() &&
+            ir.find_str("define i64 @kspl_thread_spawn").is_none() &&
+            ir.find_str("define ptr @kspl_os_argv").is_none()
         verdict.check("the LLVM IR only declares the runtime and does not define it", declares_only,
             "kspl_*'s bodies are left in the IR, or there is no reference to the version symbol")
         // The LLVM entry point makes the C entry point's startup calls, in the same order.
-        main_at: = ir.find_str("define i32 @main(")
-        entry_ir: = ir.sub_from(main_at) if main_at >= 0 else ""
+        $entry_ir: U8[] = ""
+        if main_at: = ir.find_str("define i32 @main(")
+            entry_ir = ir.sub_from(main_at)
         console_at: = entry_ir.find_str("call void @kspl_io_init_console()")
         binary_at: = entry_ir.find_str("call void @kspl_io_set_stdio_binary()")
         call_at: = entry_ir.find_str("@kspl_main(")
         verdict.check("the LLVM main sets up the console and the byte mode first, as C's does",
-            ir.find_str("declare void @kspl_io_set_stdio_binary()") >= 0 && console_at >= 0 &&
-            binary_at > console_at && call_at > binary_at,
-            arena.text().s("inside main: console at \{console_at\}, byte mode at \{binary_at\}, ")
-            .s("kspl_main at \{call_at\}; every one must be declared and found, in that order")
-            .take())
+            ir.find_str("declare void @kspl_io_set_stdio_binary()").is_some() &&
+            in_order(console_at, binary_at, call_at),
+            arena.text().s("inside main: console at \{place(console_at, arena)\}, ")
+            .s("byte mode at \{place(binary_at, arena)\}, kspl_main at \{place(call_at, arena)\}; ")
+            .s("every one must be declared and found, in that order").take())
         llvm_exe: = fs.join(work, "rt_llvm.exe", arena)
         built: = harness_build.build_llvm_exe(U8[][]::{ llvm_ll }, llvm_exe,
             U8[][]::harness_build.llvm_cflags)
@@ -262,15 +276,18 @@ fn main(): I32
         // after the generated body, or the definition half slipping into the middle, goes
         // unnoticed. In the distributed runtime the halves are contiguous, the version symbol's
         // body at the end.
-        tail_cut: = rt.body.find_str(abi_def)
-        runtime: = rt.body if tail_cut < 0 else rt.body.sub(0, tail_cut)
-        mark_at: = runtime.find_str(impl_mark)
+        runtime: = rt.body.sub(0, rt.body.find_str(abi_def).unwrap_or(rt.body.len))
+        mark: = runtime.find_str(impl_mark)
         verdict.check(arena.text().s("\{tag\}'s distributing side has the body half's mark").take(),
-            mark_at >= 0, arena.text().s("not found: \{impl_mark\}").take())
-        if mark_at < 0
+            mark.is_some(), arena.text().s("not found: \{impl_mark\}").take())
+        $mark_at: Sz = 0
+        switch mark
+        case .some(at)
+            mark_at = at
+        case .none
             continue
         decls: = runtime.sub(0, mark_at)
-        impl_half: = runtime.sub(mark_at, runtime.len - Sz::mark_at)
+        impl_half: = runtime.sub(mark_at, runtime.len - mark_at)
         verdict.check(arena.text()
             .s("\{tag\}'s distributing side's declaration half agrees with the generated C's head")
             .take(), gen.body.starts_with(decls),
@@ -288,7 +305,7 @@ fn main(): I32
     if !hosted.ok
         return harness.finish()
     verdict.check("the version symbol is present in the runtime written out",
-        hosted.body.find_str(abi_def) >= 0,
+        hosted.body.find_str(abi_def).is_some(),
         arena.text().s("not found: \{abi_def\}").take())
 
     // The receiver builds only this one file, so it must build on its own.

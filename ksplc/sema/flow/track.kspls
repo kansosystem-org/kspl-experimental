@@ -1,3 +1,8 @@
+//< The dataflow analysis of one function body: each local binding's state, through the expressions
+//<
+//< `analyze_definite_initialization` walks the body once, keeping which locals are initialized and
+//< which released, and whether each is read, mutated or reassigned. Branching and merging per
+//< statement are in `sema/flow/stmt.kspls`; how a state is reported is in `sema/flow/report.kspls`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -221,19 +226,7 @@ impl Ast_node
         if r == null
             return
         if !state.reachable
-            if r.kind_id != .k_empty && r.kind_id != .k_stmt_block && r.kind_id != .k_stmt_label &&
-                r.kind_id != .k_decl_var && r.kind_id != .k_decl_const
-                if !c.has_reported_unreachable
-                    $target_node: = r
-                    kw: = r.find_child(.k_keyword)
-                    if kw != null
-                        target_node = kw
-                    else if r.children.len > 0
-                        first: = r.get_child(0)
-                        if first.kind_id == .k_identifier || first.kind_id == .k_literal
-                            target_node = first
-                    c.sema.warn(target_node, "[W0201] Unreachable code detected")
-                    c.has_reported_unreachable = true
+            r.report_unreachable(c)
             return
 
         switch r.kind_id
@@ -249,17 +242,17 @@ impl Ast_node
             r.df_method_access(c, state)
         case .k_expr_postfix
             r.df_expr_postfix(c, state)
-        case .k_stmt_if, .k_stmt_match
+        case .k_stmt_if, .k_stmt_switch
             if r.kind_id == .k_stmt_if
                 r.df_stmt_if(c, state)
             else
-                r.df_stmt_match(c, state)
+                r.df_stmt_switch(c, state)
             // **A `break` to its label leaves it**, so what follows can run whatever its branches
             // do (`is_left_by_break`, which the missing-return check reads too).
             if r.is_left_by_break()
                 state.reachable = true
-        case .k_stmt_loop
-            r.df_stmt_loop(c, state)
+        case .k_stmt_for
+            r.df_stmt_for(c, state)
         case .k_stmt_labeled_block
             r.df_stmt_labeled_block(c, state)
         case .k_stmt_block
@@ -272,6 +265,25 @@ impl Ast_node
             r.df_expr_ternary(c, state)
         default
             r.df_default_traverse(c, state)
+
+    priv fn report_unreachable(r: Self$@, c: Df_ctx$@) //<
+        //< [W0201] Warns of a statement nothing reaches, unless one is already reported
+        //<
+        //< Empty statements, blocks, labels and declarations are passed over. The mark points at
+        //< the statement's keyword, else at a leading name or literal.
+        if r.kind_id == .k_empty || r.kind_id == .k_stmt_block || r.kind_id == .k_stmt_label ||
+            r.kind_id == .k_decl_var || r.kind_id == .k_decl_const || c.has_reported_unreachable
+            return
+        $target_node: = r
+        kw: = r.find_child(.k_keyword)
+        if kw != null
+            target_node = kw
+        else if r.children.len > 0
+            first: = r.get_child(0)
+            if first.kind_id == .k_identifier || first.kind_id == .k_literal
+                target_node = first
+        c.sema.warn(target_node, "[W0201] Unreachable code detected")
+        c.has_reported_unreachable = true
 
     fn df_expr_ternary(r: Self$@, c: Df_ctx$@, state: Df_state$@)
         if r.children.len == 3

@@ -13,15 +13,18 @@ import "std/strnum"
 import "std/sys"
 import "std/url" as url_text
 
-fn split_path(path: U8[]): U8[][2] //< a path split into its folder and its name
+priv fn last_sep(path: U8[]): Sz? //< where the last separator stands, or none
     //<
     //< Caution: **Look at both separators** (Windows has `\`).
-    cut: = path.rfind_char('/')
-    back: = path.rfind_char('\\')
-    at: = cut if cut > back else back
-    if at < 0
-        return U8[][2]::{ ".", path }
-    return U8[][2]::{ path.sub(0, at), path.sub_from(at + 1) }
+    for i in Range.desc(path.len)
+        if path[i] == '/' || path[i] == '\\'
+            return .some(i)
+    return .none
+
+fn split_path(path: U8[]): U8[][2] //< a path split into its folder and its name
+    if at: = last_sep(path)
+        return U8[][2]::{ path.sub(0, at), path.sub_from(at + 1) }
+    return U8[][2]::{ ".", path }
 
 fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its last name
     //<
@@ -38,12 +41,9 @@ fn parent_of(dir: U8[]): U8[] //< the folder one above
     //<
     //< With nothing further up it returns itself, so the caller stops (above `kspage` is `.`,
     //< above `.` is nothing).
-    cut: = dir.rfind_char('/')
-    back: = dir.rfind_char('\\')
-    at: = cut if cut > back else back
-    if at < 0
-        return "" if dir.equals(".") || dir.len == 0 else "."
-    return dir.sub(0, at + 1) if at == 0 else dir.sub(0, at)
+    if at: = last_sep(dir)
+        return dir.sub(0, at + 1) if at == 0 else dir.sub(0, at)
+    return "" if dir.equals(".") || dir.len == 0 else "."
 
 fn doc_under(root: U8[], path: U8[]): U8[] //< the document's path relative to the served folder
     //<
@@ -62,18 +62,17 @@ fn url_in_log(log: U8[]): U8[] //< the URL from the line kssrv printed, empty wh
     // matches nothing and the opener waits 30 seconds for a server that is already up
     // (`kssrv/main.kspls` names this reader and `kspage/Makefile` in the same comment).
     mark: = "kssrv: I: open "
-    at: = log.find_str(mark)
-    if at < 0
-        return ""
-    rest: = log.sub_from(at + mark.len)
-    end: = rest.find_char('\n')
-    return rest if end < 0 else rest.sub(0, end)
+    if at: = log.find_str(mark)
+        rest: = log.sub_from(at + mark.len)
+        return rest.sub(0, rest.find_char('\n').unwrap_or(rest.len))
+    return ""
 
 fn token_in_url(url: U8[]): U8[] //<
     //< the token from the URL's fragment (`#t=…`), empty where there is none
     mark: = "#t="
-    at: = url.find_str(mark)
-    return "" if at < 0 else url.sub_from(at + mark.len)
+    if at: = url.find_str(mark)
+        return url.sub_from(at + mark.len)
+    return ""
 
 fn port_in_url(url: U8[]): U8[] //<
     //< the port to wait on, from the URL, empty where there is none
@@ -81,14 +80,12 @@ fn port_in_url(url: U8[]): U8[] //<
     //< Caution: **Look only after the `://` and before the first `/`** (`http:` and the fragment
     //< can hold a `:` too).
     mark: = "://"
-    at: = url.find_str(mark)
-    if at < 0
-        return ""
-    rest: = url.sub_from(at + mark.len)
-    end: = rest.find_char('/')
-    host: = rest if end < 0 else rest.sub(0, end)
-    cut: = host.find_char(':')
-    return "" if cut < 0 else host.sub_from(cut + 1)
+    if at: = url.find_str(mark)
+        rest: = url.sub_from(at + mark.len)
+        host: = rest.sub(0, rest.find_char('/').unwrap_or(rest.len))
+        if cut: = host.find_char(':')
+            return host.sub_from(cut + 1)
+    return ""
 
 fn port_num(at: U8[]): I32 //< a port string as a number, 0 where it is not a valid port
     //<
@@ -109,9 +106,9 @@ fn url_for( //< the URL to open, with the document to open added
     win: Bool, //< only when this is set is `\` turned into `/`
     text: Str_builder$@, //< where the URL is built
 ): U8[]
-    cut: = url.find_char('#')
-    head: = url if cut < 0 else url.sub(0, cut)
-    tail: = "" if cut < 0 else url.sub_from(cut)
+    cut: = url.find_char('#').unwrap_or(url.len) // with no fragment, the tail is empty
+    head: = url.sub(0, cut)
+    tail: = url.sub_from(cut)
     text.s(head).s("?doc=")
     $start: Sz = 0
     for i in Range.asc(doc.len + 1)
@@ -270,11 +267,11 @@ priv fn state_line(body: U8[], i: Sz): U8[] //< the note's i-th line
     //< **Empty where the note has fewer lines** (a note cut off partway can still be read).
     $from: Sz = 0
     for $n: Sz = 0; n <= i; n += 1
-        end: = body.sub_from(from).find_char('\n')
-        line: = body.sub_from(from) if end < 0 else body.sub(from, end)
-        if n == i
-            return line
-        if end < 0
-            return ""
-        from += end + 1
+        switch body.sub_from(from).find_char('\n')
+        case .none
+            return body.sub_from(from) if n == i else ""
+        case .some(end)
+            if n == i
+                return body.sub(from, end)
+            from += end + 1
     return ""

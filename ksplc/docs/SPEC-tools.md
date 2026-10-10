@@ -133,10 +133,13 @@ This table lists every option of a compile. Most have a section of their own, li
 | `--emit-libs=<FILE>` | on success, writes the libraries the program names with `#link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
 | `--surface-scope=<pub\|all>` | what `--emit-surface` writes: `pub` (the default), what the package publishes, or `all`, everything a file beside it may reach ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
 | `--emit-surface=<FILE>` | writes the record of the API the file publishes to `<FILE>`: not the interface a caller links against (`--library=`), but **the record that two versions are compared by** ([§2.9.4](#294-writing-out-the-published-api---emit-surface)). |
+| `--lint=<CODE>=<level>` | sets one diagnostic's level, `off`, `on` or `error`, on a compile as on `ksplc lint`; it may be repeated, and the later one wins ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)) |
 | `--diagnostic-format=<text\|json>` | how the diagnostics are written to standard error: `text` (the default), for a person, or `json`, one object per line, for a program ([§2.11](#211-diagnostics-a-program-reads---diagnostic-format)). |
-| `--help` | prints the usage and exits with 0. |
+| `--help` | prints the usage on standard output and exits with 0. |
 
 **An option's value is joined with `=`** (`--std-dir=std`), and `--std-dir std` is refused. An option has no short spelling, `--help` included: each option has one spelling (Principle 6 in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). [`std/argp`](../../std/README.md) parses them, and also refuses two subcommands at once (`ksplc fmt lint`).
+
+**A refused command line writes to standard error alone**: the reason, then the usage, and exit code 1. A script reading an answer (`$(ksplc info std-dir)`) so never takes a refusal for it. The line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`) goes with the summary on standard output; an error with no diagnostic before it (a file that cannot be read) goes to standard error.
 
 **Which subcommands each option acts on is what `ksplc --help` lists** ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)).
 
@@ -144,7 +147,7 @@ This table lists every option of a compile. Most have a section of their own, li
 
 Caution: **Quote a path that a script or a Makefile passes from a variable.** Unquoted, a path holding a space (a folder such as `OneDrive - Kanso System`) is split by the shell, and the pieces arrive as file names. If the first two were used with no message, an unrelated file would compile for no visible reason.
 
-`ksplc fmt`'s own options (`--in-place`, `--to`, `--style`) are in [§3.1](#31-basic-use) and [§3.2](#32-the-formatting-settings---style), and `ksplc lint`'s `--lint` in [§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg).
+`ksplc fmt`'s own options (`--in-place`, `--to`, `--style`) are in [§3.1](#31-basic-use) and [§3.2](#32-the-formatting-settings---style), and `--lint`'s levels in [§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg).
 
 ### 2.4 Compilation stops at 50 errors
 
@@ -627,6 +630,8 @@ ksplc fmt --to=kspls src/main.kspl      # the indentation notation to standard o
 
 **A formatted source comes back byte for byte from the other notation, with one exception for the writer to fix.** A comment after a `}` that the indentation notation leaves out has no line to stand on there. `--to=kspls` moves it to the line above, or onto a line of its own where the line above already has a comment, and it does not come back; `ksplc lint` names each one ([I0801]). A comment after a `}` that the notation keeps (a value's, or a block's inside a call's brackets) stays where it is in both directions.
 
+**A comment line past the column limit is cut at its last space that fits**, and the words cut off go to the start of the next line of the same paragraph, or onto a line of their own where none follows. A line within the limit is not touched. Never cut, and never joined by carried words: a trailing comment, a `///` or `//!` line, an aligned sub-line (two spaces after the mark), a table row (`|`), a divider (`---`, `===`), a marker (`EXPECT:`), a list item (`- `, `* `, `1. `), and a line whose first word alone crosses the limit. A line opening with `Caution:` or `Note:` takes no carried words. Widths are display columns.
+
 **`fmt` never meets a bare block**: a `{ … }` standing as a statement does not parse in either notation ("A bare block carries a label" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). A labelled block (`while_locked: { … }`) keeps its label, and an empty `{}` is written as it stands.
 
 ### 3.2 The formatting settings (`--style`)
@@ -638,7 +643,7 @@ ksplc fmt --to=kspls src/main.kspl      # the indentation notation to standard o
 | The option's name | The default | Description |
 | :-- | :-- | :-- |
 | **`IndentWidth`** | `4` | the number of spaces per indentation level. |
-| **`ColumnLimit`** | `100` | the maximum number of characters on a line. An argument list, a method chain and the like that exceed it are broken at a safe position. |
+| **`ColumnLimit`** | `100` | the maximum width of a line, in display columns (a CJK character or `✅` takes two). An argument list, a method chain and the like that exceed it are broken at a safe position. |
 | **`AllowShortBlocks`** | `false` | `true` lets a short block go on one line (`if cond { break; }`; in `.kspls`, `if cond { break }` with no `;`), except one with a comment inside its braces, which is never folded (below). |
 | **`AllowShortFunctions`** | `false` | `true` lets an `fn` whose body is a single statement go on one line (a method in an `impl` too; in `.kspls` without the statement's `;`). As with `AllowShortBlocks`, one with a comment inside, one too wide for the column limit, and one of two or more statements stay on three lines. |
 

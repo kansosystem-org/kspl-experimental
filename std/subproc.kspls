@@ -27,7 +27,7 @@ extern "C"
     // and a stream with neither inherits the parent's.
     fn kspl_proc_start(argv_buf: U8@, argv_buf_len: Sz, argc: I32, cwd: U8@, cwd_len: Sz,
         stdio: I32, out_path: U8@, out_len: Sz, err_path: U8@, err_len: Sz): I64
-    fn kspl_proc_write(handle: I64, ptr: U8$@, len: Sz): I32
+    fn kspl_proc_send(handle: I64, ptr: U8@, len: Sz, timeout_ms: I32): I32
     fn kspl_proc_read(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
     fn kspl_proc_read_err(handle: I64, buf: U8$@, cap: Sz, timeout_ms: I32): I32
     fn kspl_proc_poll(handle: I64, timeout_ms: I32): I32
@@ -91,7 +91,7 @@ priv fn fold_crlf_into(b: Str_builder$@, text: U8[]) //< appends text, with each
 
 priv fn spawn_failed_result(): Run_result
     return Run_result::{ .spawn_failed = true, .timed_out = false, .exit_code = -1,
-        .stdout_data = "", .stderr_data = "" }
+        .stdout_data = "", .stderr_data = "", .output_lost = false }
 
 priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
     //< Appends one read's bytes to the builder (bytes beyond the cap are discarded)
@@ -123,7 +123,12 @@ pub struct Run_result //< the outcome of one run: how it ended, and what it wrot
         //< Not named stdout/stderr: MSVC UCRT's headers make those object-like macros, so a field
         //< of that name in the generated C struct fails to compile on Windows.
     pub stderr_data: U8$[] //< what it wrote to standard error, cut at the cap
+    pub output_lost: Bool //< an output could not be read back, so the two above may lack some.
+        //<
+        //< Only `run_many` collects through files, and only it sets this; read as empty, a lost
+        //< output would pass for a child that wrote nothing.
 
+#cfg(!freestanding)
 pub fn run_capture( //< runs one child to the end and collects both its outputs
     //<
     //< argv[0] is as for `spawn_wait`; stdout and stderr are collected separately, watched in one
@@ -162,17 +167,22 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
             err_open =
                 take_into(err@, U8[]::chunk,
                 kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap)
+    // Caution: **Bound the wait after the pipes close too.** A child can close both and run on (a
+    // daemon, or a grandchild holding nothing), and a bare wait would outlast every timeout.
     $exit_code: I32 = -1
     if timed_out
         kspl_proc_kill(h)
     else
-        exit_code = kspl_proc_wait(h)
+        ended: = wait_until(h, deadline)
+        timed_out = ended.is_none()
+        exit_code = ended.unwrap_or(-1)
     return Run_result::{
         .spawn_failed = false,
         .timed_out = timed_out,
         .exit_code = exit_code,
         .stdout_data = arena.dup_str(out.slice()),
         .stderr_data = arena.dup_str(err.slice()),
+        .output_lost = false,
     }
 
 pub struct Job //< one of many children to start
@@ -188,14 +198,14 @@ priv const arena_slack_bytes: Sz = 4096 //<
 
 // **Keep `#cfg(!freestanding)`.** A freestanding build has no `kspl_fopen_path`, and no `reap_job`.
 #cfg(!freestanding)
-priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[] //<
-    //< At most `cap` bytes of a job's output file, on the arena; empty when it cannot be read
+priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[]? //<
+    //< At most `cap` bytes of a job's output file, on the arena; none when it cannot be read
     //<
     //< Caution: **Keep the cap** (`io.read_file_capped`): even a child that writes forever stops at
     //< it.
     got: = io.read_file_capped(path, cap, arena) catch
-        return U8$[]::{ .ptr = null, .len = 0 }
-    return U8$[]::got
+        return .none
+    return .some(U8$[]::got)
 
 // Starts one job; returns 0 on failure (the caller turns that into a spawn_failed result).
 #cfg(!freestanding)
@@ -208,34 +218,38 @@ priv const reap_pause_max_ms: I32 = 10 //< the longest pause between two looks a
     //< **Short beside a job's own run**, so a slot stands idle at most this long after its job
     //< ends; the pauses start at 1 ms and double up to it, so a long job costs a look every 10 ms.
 
-// Waits for one started job until its deadline and reads its output into a result.
+// Waits for a started child until its deadline: its exit code, or none once the deadline passed,
+// the child then killed.
 // **Waiting with a limit is looking again after a pause**: POSIX's `waitpid` takes no time limit,
-// and a signal to wake on would reach the whole program. Past the deadline the job is killed and
-// marked `timed_out`, with what it wrote by then.
+// and a signal to wake on would reach the whole program.
+#cfg(!freestanding)
+priv fn wait_until(handle: I64, deadline_us: I64): I32?
+    $code: I32 = 0
+    $pause: I32 = 1
+    for !kspl_proc_ended(handle, code@)
+        if kspl_mono_us() >= deadline_us
+            kspl_proc_kill(handle)
+            return .none
+        sys.sleep_ms(pause)
+        pause = pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
+    return .some(kspl_proc_wait(handle))
+
+// Waits for one started job until its deadline and reads its output into a result. Past the
+// deadline the job is killed and marked `timed_out`, with what it wrote by then.
 #cfg(!freestanding)
 priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_dir: U8[],
     arena: Arena$@): Run_result
     if handle == 0
         return spawn_failed_result()
-    $code: I32 = 0
-    $timed_out: = false
-    $pause: I32 = 1
-    for !kspl_proc_ended(handle, code@)
-        if kspl_mono_us() >= deadline_us
-            timed_out = true
-            break
-        sys.sleep_ms(pause)
-        pause = pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
-    if timed_out
-        kspl_proc_kill(handle)
-        code = -1
-    else
-        code = kspl_proc_wait(handle)
+    ended: = wait_until(handle, deadline_us)
+    timed_out: = ended.is_none()
+    code: = ended.unwrap_or(-1)
+    out: = read_capped(job_path(work_dir, index, "out", arena), output_cap, arena)
+    err: = read_capped(job_path(work_dir, index, "err", arena), output_cap, arena)
+    empty: = U8$[]::{ .ptr = null, .len = 0 }
     return Run_result::{ .spawn_failed = false, .timed_out = timed_out, .exit_code = code,
-        .stdout_data =
-        read_capped(job_path(work_dir, index, "out", arena), output_cap, arena),
-        .stderr_data =
-        read_capped(job_path(work_dir, index, "err", arena), output_cap, arena) }
+        .stdout_data = out.unwrap_or(empty), .stderr_data = err.unwrap_or(empty),
+        .output_lost = out.is_none() || err.is_none() }
 
 // Runs jobs at most max_parallel at a time and returns the results **in the input order**.
 // **The caller creates work_dir.** A file with the same name is truncated and rewritten.
@@ -254,26 +268,49 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
 ): List<|Run_result|>$@ //< one result per job; a job that fails is marked in its own result
     results: = List<|Run_result|>.create(arena)
     slots: = max_parallel if max_parallel > 0 else 1
+    // Each job's handle (0 once collected, or for one that did not start) and its deadline.
     live: = List<|I64|>.create(arena)
     deadlines: = List<|I64|>.create(arena)
-    $reaped: Sz = 0
+    $running: Sz = 0
     for i in Range.asc(jobs.len)
-        if live.len - reaped >= slots
-            r: =
-                reap_job(live.get(reaped), deadlines.get(reaped), reaped, output_cap, work_dir,
-                arena)
-            results.push(r)
-            reaped += 1
-        live.push(start_job(jobs[i], i, work_dir, arena))
+        for running >= slots
+            collect_one(live, deadlines, results, output_cap, work_dir, arena)
+            running -= 1
+        h: = start_job(jobs[i], i, work_dir, arena)
+        live.push(h)
         deadlines.push(kspl_mono_us() + I64::timeout_ms * 1000I64)
-    for reaped < live.len
-        r: =
-            reap_job(live.get(reaped), deadlines.get(reaped), reaped, output_cap, work_dir, arena)
-        results.push(r)
-        reaped += 1
+        results.push(spawn_failed_result())
+        if h != 0
+            running += 1
+    for running > 0
+        collect_one(live, deadlines, results, output_cap, work_dir, arena)
+        running -= 1
     live.free()
     deadlines.free()
     return results
+
+// Waits for whichever running job ends first, or reaches its deadline first, and puts its result
+// in its place.
+// Caution: **Not the oldest first.** Waiting on the job started first holds every slot a later,
+// quicker job freed, so the jobs behind it start late.
+#cfg(!freestanding)
+priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
+    results: List<|Run_result|>$@, output_cap: Sz, work_dir: U8[], arena: Arena$@)
+    $pause: I32 = 1
+    for
+        now: = kspl_mono_us()
+        for k in Range.asc(live.len)
+            h: = live.get(k)
+            if h == 0
+                continue
+            $code: I32 = 0
+            if kspl_proc_ended(h, code@) || now >= deadlines.get(k)
+                results.set(k,
+                    reap_job(h, deadlines.get(k), k, output_cap, work_dir, arena))
+                live.set(k, 0)
+                return
+        sys.sleep_ms(pause)
+        pause = pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
 
 pub enum Run_error //< why a run did not produce a result
     //<
@@ -305,6 +342,7 @@ impl Run_error
                 if !err.ends_with("\n")
                     io.err().s("\n")
 
+#cfg(!freestanding)
 pub fn run( //< runs one child and returns its standard output; any failure is thrown
     //<
     //< The arguments are as for run_capture; **the failure is thrown**: "cannot start", "timed out"
@@ -380,6 +418,10 @@ pub fn spawn_reap( //< waits for one `spawn_async` child, so no zombie is left
 // in any language) **cannot be written at all** ("Three ways to start a child process, split by
 // where its output goes" in std/docs/DESIGN.md).
 
+pub enum Write_end //< why a write to a child's standard input stopped
+    timed_out //< the child took nothing for that long; what went before stays written
+    closed //< the child closed its standard input, or ended
+
 pub enum Read_end //< why a read from a child returned no bytes
     timed_out //< no byte arrived in time; the child may still be running
     closed //< the child finished, so waiting again returns nothing
@@ -439,14 +481,19 @@ pub fn spawn_piped( //< starts a child for two-way communication over pipes
 
 #cfg(!freestanding)
 impl Piped_child
-    pub fn write( //< writes all of it to standard input; false if the child has closed it
+    pub fn write( //< writes all of it to standard input, or fails saying why it stopped
         //<
-        //< **It takes a mutable slice to match the C signature** (`U8 *ptr`); a `Str_builder`'s
-        //< `slice()` already is one.
+        //< **The timeout is required**, as a read's is: a child that stops reading fills the pipe,
+        //< and the write would wait for it for good.
         r: Self@,
-        data: U8$[], //< the bytes to send
-    ): Bool
-        return kspl_proc_write(r.handle, data.ptr, data.len) >= 0
+        data: U8[], //< the bytes to send
+        timeout_ms: I32, //< how long the child may go without taking any of them
+    ): Void!Write_end
+        got: = kspl_proc_send(r.handle, data.ptr, data.len, timeout_ms)
+        if got == -1
+            throw .timed_out
+        if got != 0
+            throw .closed
 
     pub fn read( //< reads from standard output
         //<

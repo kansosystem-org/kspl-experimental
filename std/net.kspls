@@ -20,6 +20,7 @@ extern "C"
     pub fn kspl_tcp_send(handle: I64, buf: U8@, len: Sz): I32
     pub fn kspl_tcp_recv(handle: I64, buf: U8$@, cap: Sz): I32
     pub fn kspl_tcp_close(handle: I64) //< closes a socket, TCP or UDP alike
+    fn kspl_net_local_port(handle: I64): I32 //< the port a socket is bound to, or -1
 
     pub fn kspl_udp_open(host_ptr: U8@, host_len: Sz, port: I32): I64
     pub fn kspl_udp_send_to(handle: I64, buf: U8@, len: Sz, host_ptr: U8@, host_len: Sz, port: I32):
@@ -47,6 +48,7 @@ extern "C"
         cap: Sz): I32
     // The same declaration as std/reactor's, held here so a connect does not bring the reactor in.
     fn kspl_net_poll(handles: I64$@, interest: U8$@, n: Sz, timeout_ms: I32, revents_out: U8$@): I32
+    fn kspl_mono_us(): I64
 
 pub const addr_text_max: Sz = 46 //< a buffer size that any address in text form fits in.
     //<
@@ -68,6 +70,8 @@ pub enum Net_error //< why a socket operation failed
     addr_buffer_too_small //< the buffer for the address is shorter than `addr_text_max`
     bad_port //< the port is outside 0 to 65535, which a socket address cannot hold
     datagram_too_long //< the datagram was longer than the buffer; it is consumed, its rest lost
+    timed_out //<
+        //< the peer did not answer within the wait (`read_for`, a connect past `connect_wait_ms`)
 
 impl Net_error
     priv fn would_block_or(other: Self): Net_error //<
@@ -84,6 +88,12 @@ priv fn checked_port(port: I32): Void!Net_error //< refuses a port no socket add
     //< 65535, so the socket would bind or reach another port in silence.
     if port < 0 || port > port_max
         throw .bad_port
+
+priv fn bound_port(handle: I64): I32!Net_error //< the port a socket is bound to
+    p: = kspl_net_local_port(handle)
+    if p < 0
+        throw .io_failed
+    return p
 
 priv fn transferred(n: I32): Sz!Net_error //<
     //< Turns the return value of a C send or receive (negative on failure) into a byte count
@@ -126,7 +136,7 @@ impl Tcp_listener
         //< accept IPv4 clients**, whatever the system default ("Connecting by name tries the
         //< candidates overlapped" in std/docs/DESIGN.md); to accept both, open two listeners.
         host: U8[], //< the address to listen on; empty means `"0.0.0.0"`
-        port: I32, //< the port to listen on
+        port: I32, //< the port to listen on; 0 lets the OS choose a free one (see `port`)
     ): Tcp_listener$@!Net_error
         checked_port(port)!
         h: = kspl_tcp_listen(host.ptr, host.len, port, default_backlog)
@@ -147,6 +157,9 @@ impl Tcp_listener
         s: = mem.alloc_as<|Tcp_stream|>()
         s.handle = h
         return s
+
+    pub fn port(r: Self$@): I32!Net_error //< the port it listens on, the OS's choice for a 0
+        return bound_port(r.handle)!
 
     pub fn free(r: Self$@) //< closes the listener and frees it
         kspl_tcp_close(r.handle)
@@ -175,6 +188,11 @@ priv const max_candidates: Sz = 8 //<
 priv const candidate_text_max: Sz = 112 //< the room for one candidate's text, with its scope
 priv const candidate_hold: Sz = max_candidates * candidate_text_max
 priv const poll_writable: U8 = 0x2 //< `std/reactor`'s `writable`, the mark kspl_net_poll takes
+priv const poll_readable: U8 = 0x1 //< `std/reactor`'s `readable`
+priv const connect_wait_ms: I64 = 30000I64 //< how long a connect waits for any candidate at all
+    //<
+    //< Caution: **Bound it here.** A candidate whose packets are dropped never refuses, and the
+    //< OS's own limit is minutes, so a connect to a dead address would hang its caller that long.
 
 priv struct Round //< what one round of the attempts settled
     winner: I64 //< the attempt that connected (the others are closed), or 0
@@ -225,8 +243,10 @@ fn connect_over( //< the overlapped attempts `Tcp_stream.connect` makes over res
     //< one it returns is blocking. Package-wide, so `std/tests` can hand it candidates of its own.
     candidates: U8[][], //< address texts, at most `max_candidates`, in the order to try them
     port: I32, //< the port on each
+    wait_ms: I64, //< how long to wait for any candidate at all (`connect` gives `connect_wait_ms`)
 ): Tcp_stream$@!Net_error
     checked_port(port)!
+    deadline: = kspl_mono_us() + wait_ms * 1000I64
     $live: I64[max_candidates] = ::{}
     flight: = I64$[]::live
     $seen: U8[max_candidates] = ::{}
@@ -254,6 +274,10 @@ fn connect_over( //< the overlapped attempts `Tcp_stream.connect` makes over res
                 throw .connect_failed
             return Tcp_stream.connected_stream(won.winner)
         in_flight = won.left
+        if in_flight > 0 && next >= candidates.len && kspl_mono_us() >= deadline
+            for i in Range.asc(in_flight)
+                kspl_tcp_close(live[i])
+            throw .timed_out
     for i in Range.asc(in_flight)
         kspl_tcp_close(live[i])
     throw .connect_failed
@@ -297,7 +321,7 @@ impl Tcp_stream
         $candidates: U8[][max_candidates] = ::{}
         for i in Range.asc(got)
             candidates[i] = U8[]::{ .ptr = hold.ptr + i * candidate_text_max, .len = lens[i] }
-        return connect_over((U8[][]::candidates).sub(0, got), port)
+        return connect_over((U8[][]::candidates).sub(0, got), port, connect_wait_ms)
 
     pub fn connect_nonblocking( //< starts a connection and returns at once
         //<
@@ -346,6 +370,25 @@ impl Tcp_stream
         buf: U8$[], //< where the bytes go
     ): Sz!Net_error
         return transferred(kspl_tcp_recv(r.handle, buf.ptr, buf.len))
+
+    pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
+        //<
+        //< For a blocking stream whose peer may go quiet: `read` would wait for it for good.
+        r: Self$@,
+        buf: U8$[], //< where the bytes go
+        timeout_ms: I32, //< how long to wait for something to read; `timed_out` past it
+    ): Sz!Net_error
+        $h: I64[1] = ::{ r.handle }
+        $want: U8[1] = ::{ poll_readable }
+        $got: U8[1] = ::{}
+        ready: =
+            kspl_net_poll((I64$[]::h).ptr, (U8$[]::want).ptr, 1, timeout_ms,
+            (U8$[]::got).ptr)
+        if ready < 0
+            throw .io_failed
+        if ready == 0
+            throw .timed_out
+        return r.read(buf)!
 
     pub fn peer( //< the address of the peer
         //<
@@ -404,7 +447,7 @@ impl Udp_socket
         //<
         //< The host works as in `Tcp_listener.bind`.
         host: U8[], //< the address to bind to; empty means `"0.0.0.0"`
-        port: I32, //< the port; 0 lets the OS choose a free one
+        port: I32, //< the port; 0 lets the OS choose a free one (see `port`)
     ): Udp_socket$@!Net_error
         checked_port(port)!
         h: = kspl_udp_open(host.ptr, host.len, port)
@@ -454,6 +497,9 @@ impl Udp_socket
             .from_host_len = from_host_len,
             .from_port = from_port,
         }
+
+    pub fn port(r: Self$@): I32!Net_error //< the port it is bound to, the OS's choice for a 0
+        return bound_port(r.handle)!
 
     pub fn free(r: Self$@) //< closes the socket and frees it
         kspl_tcp_close(r.handle)

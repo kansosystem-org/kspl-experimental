@@ -76,7 +76,7 @@ Caution: The dependencies run one way, downward; do not add an `import` in the r
 
 * **Do not mix the two readers.** kspeg reads two different things. [`kspeg/notation.kspls`](notation.kspls) reads a `.kspeg` grammar file; it is a recursive descent parser written by hand (one function per piece of the notation). [`kspeg/engine.kspls`](engine.kspls) reads your input by following a grammar. They are separate code.
 * **kspeg reaches only what `std` publishes.** The compiler rejects a name under `std/` that is not marked `pub` (`cannot access symbol`). Making one `pub` in `std` is a decision to weigh: an engine that only interprets a grammar cannot be swapped out once it depends on `std/`'s internals.
-* **Only `try_parse` in `kspeg/engine.kspls` swallows a backtracking signal** ("A backtracking signal may be swallowed, a real failure may not" in [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). A backtracking signal means "this alternative did not match, try the next"; a real failure must reach the caller.
+* **Inside the grammar, only `try_parse` in `kspeg/engine.kspls` swallows a backtracking signal** ("A backtracking signal may be swallowed, a real failure may not" in [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). A backtracking signal means "this alternative did not match, try the next"; a real failure must reach the caller. The one other place is the top: a first run that skips rules by the next byte takes a mismatch as a cue to run again without skipping, which then reports it.
 
 ## Files near the limit and how they split
 

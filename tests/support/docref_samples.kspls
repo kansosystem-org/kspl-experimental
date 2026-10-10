@@ -625,11 +625,15 @@ priv const step_samples: Step_sample[6] = ::{
 fn step_defects(arena: Arena$@): List<|U8[]|> //< the samples whose step folder is read wrong
     $bad: = List<|U8[]|>.new(arena)
     for s in step_samples
-        got: = cite.step_dir(step_workflow, step_workflow.find_str(s.word), arena)
-        if !got.equals(s.want)
+        if at: = step_workflow.find_str(s.word)
+            got: = cite.step_dir(step_workflow, at, arena)
+            if !got.equals(s.want)
+                bad
+                    .push(arena.text().s("'").s(s.word).s("' should run from '").s(s.want)
+                    .s("' but gave '").s(got).c('\'').take())
+        else
             bad
-                .push(arena.text().s("'").s(s.word).s("' should run from '").s(s.want)
-                .s("' but gave '").s(got).c('\'').take())
+                .push(arena.text().s("'").s(s.word).s("' is not in the sample workflow").take())
     return bad
 
 fn step_sample_count(): Sz

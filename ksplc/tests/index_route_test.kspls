@@ -1,13 +1,11 @@
+//< Which of the four indexing methods a subscript resolves to, and its write permission
+//<
+//< The four are `Index.get` / `Index_mut.set` / `Index_place.at` / `Index_ref.at_ref`. **No copy
+//< is made.**
 import "std/ds"
 import "std/mem" { Arena }
 import "std/verdict"
 
-// ==========================================
-// Which of the four methods (`Index.get` / `Index_mut.set` / `Index_place.at` /
-// `Index_ref.at_ref`) a subscript resolves to, and its write permission. **No copy is made.**
-// ==========================================
-// ==========================================
-// ==========================================
 priv struct Ro_view<|T|>
     ptr: T@
     len: Sz
@@ -97,3 +95,17 @@ fn test_view_receiver_decides_write_permission()
     verdict
         .pass("a view giving `at(r: Self@, …)` can write to an element through a read-only frame \
             too.")
+
+fn test_slice_made_in_the_statement() //< a slice made in the indexing statement is a slice
+    //<
+    //< Caution: **Use an element type nothing else in the file slices.** Its instance is still
+    //< queued when the subscript is read; read as implementing nothing, the subscript took the
+    //< built-in array route and stopped the C generation (`I32[]::{ 1, 2 }[i]`, `(I64[]::a)[i]`).
+    verdict.start("[Index] a slice made in the indexing statement test...")
+    i: Sz = 1
+    from_literal: = I16[]::{ 10, 20, 30 }[i]
+    arr: U16[3] = ::{ 4, 5, 6 }
+    from_cast: = (U16[]::arr)[i]
+    assert(from_literal == 20I16 && from_cast == 5U16,
+        "the element at the index comes back from a literal and from a cast alike")
+    verdict.pass("A slice made in the indexing statement is indexed as any slice.")

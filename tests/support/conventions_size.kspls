@@ -62,9 +62,9 @@ priv fn plan_readme_of(rel: U8[], arena: Arena$@): U8[] //<
     //< The README that says how a file splits: the one in the file's top-level folder
     //<
     //< For example, `ksplc/lsp/nav.kspls` is planned in `ksplc/README.md`.
-    cut: = rel.find_char('/')
-    return ("README.md" if cut < 0
-        else arena.text().s(rel.sub(0, cut)).s("/README.md").take())
+    if cut: = rel.find_char('/')
+        return arena.text().s(rel.sub(0, cut)).s("/README.md").take()
+    return "README.md"
 priv const none_lead: U8[] = "No file" //<
     //< The two texts of the sentence that says the section is empty
     //<
@@ -77,7 +77,7 @@ priv fn claims_none(line: U8[], _arena: Arena$@): Bool //<
     //<
     //< **The line count itself is not checked here** (`check_plans` below does); built into the
     //< judgment, it would make the sample table impossible to write.
-    return line.find_str(none_lead) >= 0 && line.find_str(none_tail) >= 0
+    return line.find_str(none_lead).is_some() && line.find_str(none_tail).is_some()
 
 // The texts that hit `claims_none` and the texts that do not.
 priv const none_samples: Sample[5] = ::{
@@ -108,7 +108,7 @@ priv fn plan_body(readme: U8[], arena: Arena$@): U8[] //<
         if d > 0
             if depth > 0 && d <= depth
                 depth = 0
-            if ln.find_str(plan_head) >= 0
+            if ln.find_str(plan_head).is_some()
                 depth = d
             continue
         if depth > 0
@@ -122,10 +122,11 @@ priv fn planned(readme: U8[], rel: U8[], arena: Arena$@): Bool //<
     body: = plan_body(readme, arena)
     if body.len == 0
         return false
-    if body.find_str(rel) >= 0
+    if body.find_str(rel).is_some()
         return true
-    cut: = rel.find_char('/')
-    return cut >= 0 && body.find_str(rel.sub_from(cut + 1)) >= 0
+    if cut: = rel.find_char('/')
+        return body.find_str(rel.sub_from(cut + 1)).is_some()
+    return false
 
 priv struct Plan_sample //< the texts that hit `planned` and the texts that do not
     //<
@@ -159,8 +160,9 @@ priv const plan_samples: Plan_sample[6] = ::{
 
 priv fn covered_by(readme_rel: U8[]): U8[] //<
     //< From a README's path, the prefix it is responsible for (for `a/b/README.md`, `a/b/`)
-    cut: = readme_rel.rfind_char('/')
-    return "" if cut < 0 else readme_rel.sub(0, cut + 1)
+    if cut: = readme_rel.rfind_char('/')
+        return readme_rel.sub(0, cut + 1)
+    return ""
 
 priv fn claim_under(line: U8[], readme_rel: U8[], arena: Arena$@): U8[] //<
     //< The prefix one "there is no file over it" line speaks for
@@ -169,15 +171,15 @@ priv fn claim_under(line: U8[], readme_rel: U8[], arena: Arena$@): U8[] //<
     //< by its folder the line matches no file and passes next to one over the cap (Principle 8).
     //< The scope comes from the claim's words ("No file in kspeg exceeds 900 lines" is `kspeg/`'s);
     //< when it names none, it is its README's folder.
-    lead: = line.find_str(none_lead)
-    tail: = line.find_str(none_tail)
-    if lead >= 0 && tail > lead
-        from: = Sz::lead + none_lead.len
-        mid: = line.sub(from, tail - from).trim_spaces()
-        if mid.starts_with("in ")
-            name: = mid.sub_from(3).trim_spaces()
-            if name.len > 0 && name.find_char(' ') < 0
-                return arena.text().s(name).s("/").take()
+    if lead: = line.find_str(none_lead)
+        if tail: = line.find_str(none_tail)
+            if tail > lead
+                from: = lead + none_lead.len
+                mid: = line.sub(from, tail - from).trim_spaces()
+                if mid.starts_with("in ")
+                    name: = mid.sub_from(3).trim_spaces()
+                    if name.len > 0 && name.find_char(' ').is_none()
+                        return arena.text().s(name).s("/").take()
     return covered_by(readme_rel)
 
 priv struct Scope_sample //< one claim, and the prefix it should speak for
@@ -228,7 +230,7 @@ priv fn check_plans(near: List<|U8[]|>@, arena: Arena$@) //<
             under: = claim_under(ln, readme_rel, arena)
             // Caution: **Check the line count here too.** The README's number and `warn_file_lines`
             // are written separately, so if not tied, one of them changes alone (Principle 4).
-            if ln.find_str(arena.text().s("\{warn_file_lines\}").take()) < 0
+            if ln.find_str(arena.text().s("\{warn_file_lines\}").take()).is_none()
                 stale
                     .push(arena.text().s(readme_rel).s(": the \"").s(none_lead)
                     .s("\" line says a number other than \{warn_file_lines\}").take())
@@ -264,8 +266,8 @@ priv fn check_fires(arena: Arena$@)
         scope_samples.len, "samples", u@, "the table of claims is `scope_samples`")
 
 // ==========================================
-// A comment line is inside the source file's width **A width nobody checks drifts silently.** A
-// line past it is one the reader scrolls sideways to finish.
+// The hover's widths follow the formatter's. A comment past the width is the formatter's to cut
+// (`ksplc/fmt/comment.kspls`), so `make test-fmt-tree` holds it.
 // ==========================================
 
 priv const width_file: U8[] = "ksplc/fmt/style.kspls" //<
@@ -283,151 +285,6 @@ priv fn source_width(arena: Arena$@): Sz //< the width the formatter keeps
     for got in scan.find_all(harness.read_under_root(width_file), width_mark, ",", arena)
         return got.trim_spaces().parse_size(0) catch 0
     return 0
-
-fn disp_width(text: U8[]): Sz //< one line's width in **display** columns
-    //<
-    //< Caution: **Do not count bytes**: `✅` and CJK take two columns and three bytes. The decoding
-    //< is here, not in `std/chars` (a byte width there), since code there costs every program
-    //< (`ksplc/tests/suite/thin_use_test.kspls`).
-    $w: Sz = 0
-    $i: Sz = 0
-    for i < text.len
-        step: = text.next_codepoint(i)
-        if step <= 0
-            break
-        w += cp_width(codepoint_at(text, i, step))
-        i += step
-    return w
-
-priv fn codepoint_at(text: U8[], at: Sz, step: Sz): I32 //<
-    //< The code point at `at`, whose encoding runs `step` bytes
-    b0: = I32::(text.ptr + at)$
-    if step == 1
-        return b0
-    lead: = (b0 & 0x1F) if step == 2 else (b0 & 0x0F) if step == 3 else (b0 & 0x07)
-    $cp: = lead
-    for k in Range.asc(step - 1)
-        cp = cp * 64 + (I32::(text.ptr + at + 1 + k)$ & 0x3F)
-    return cp
-
-priv fn cp_width(cp: I32): Sz //<
-    //< How many columns a code point takes on a terminal
-    //<
-    //< **Ambiguous counts one.** A terminal shows `—` and `§` one column wide, and counting them
-    //< two would call a line wide that is not.
-    //<
-    //< The wide blocks and the marks followed by a `U+FE0F` count two, and the selector itself
-    //< counts none.
-    if cp == 0xFE0F
-        return 0
-    if cp == 0x26A0 || cp == 0x2705
-        return 2 // a mark that is Neutral by itself and two wide with the selector behind it
-    wide: =
-        (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
-        (cp >= 0x3041 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-        (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
-        (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
-        (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
-        (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F300 && cp <= 0x1FAFF) ||
-        (cp >= 0x20000 && cp <= 0x3FFFD)
-    return 2 if wide else 1
-
-priv fn comment_body(line: U8[]): U8[] //<
-    //< The comment body: what comes after the `//`, without the line's own indentation
-    t: = line.trim_start()
-    return "" if !t.starts_with("//") else t.sub_from(2)
-
-priv fn width_held(line: U8[], limit: Sz): U8[] //< why a line past the width is allowed
-    //<
-    //< Empty means it is not.
-    //< Caution: **Exempt a form here only where it cannot be narrowed at all**, never because
-    //< narrowing it reads worse. Let an ordinary paragraph in and the check stops meaning anything.
-    body: = comment_body(line)
-    t: = body.trim_spaces()
-    if t.len == 0
-        return "a bare //"
-    // An aligned run (a register map, a pin list, a command table, a hanging continuation): its
-    // columns carry the meaning.
-    if body.starts_with("  ")
-        return "an aligned sub-line"
-    if t.starts_with("|")
-        return "a markdown table row"
-    if scan.is_divider(t)
-        return "a section divider"
-    // `// EXPECT:` and `// ARGS:` are read a line at a time by the gates, so wrapping one breaks
-    // it.
-    if scan.marker_head(t)
-        return "a marker a machine reads"
-    if t.starts_with("* ") || t.starts_with("- ") || numbered_head(t)
-        return "a list item (its wrap wants a hanging indent)"
-    $longest: Sz = 0
-    $at: Sz = 0
-    for at < t.len
-        for at < t.len && t[at] == ' '
-            at += 1
-        $end: = at
-        for end < t.len && t[end] != ' '
-            end += 1
-        if end > at
-            w: = disp_width(t.sub(at, end - at))
-            if w > longest
-                longest = w
-        at = end
-    indent: = line.len - line.trim_start().len
-    if indent + 3 + longest > limit
-        return "one word already crosses it"
-    // Caution: **Do not exempt a comment at Principle 7's cap from the width.** Six-line comments
-    // are a large share of the tree, so the exemption would swallow the check (Principle 8); such a
-    // comment is reworded, not widened.
-    return ""
-
-priv fn numbered_head(t: U8[]): Bool
-    $i: Sz = 0
-    for i < t.len && t[i].is_digit()
-        i += 1
-    return i > 0 && i + 1 < t.len && t[i] == '.' && t[i + 1] == ' '
-
-priv const width_floor: Sz = 30000
-
-priv fn check_width(arena: Arena$@)
-    limit: = source_width(arena)
-    $bad: = List<|U8[]|>.new(arena)
-    $seen: Sz = 0
-    if limit == 0
-        bad
-            .push(arena.text().s(width_file).s(": `").s(width_mark)
-            .s("` cannot be read, so the width is not known").take())
-    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
-        lines: = harness.read_under_root(rel).lines(arena)
-        $i: Sz = 0
-        for i < lines.len
-            if !lines.get(i).trim_start().starts_with("//")
-                i += 1
-                continue
-            $j: = i
-            for j < lines.len && lines.get(j).trim_start().starts_with("//")
-                j += 1
-            for k in Range.asc(j - i)
-                line: = lines.get(i + k)
-                seen += 1
-                w: = disp_width(line)
-                if w <= limit || limit == 0
-                    continue
-                if width_held(line, limit).len > 0
-                    continue
-                bad
-                    .push(arena.text().s(rel)
-                    .s(":\{i + k + 1\}: \{w\} columns (the width is \{limit\})").take())
-            i = j
-    // Caution: **Fail where the count comes out short.** Break the reading of a comment line and
-    // every line vanishes, and the check goes green having checked nothing.
-    if seen < width_floor
-        bad
-            .push(arena.text()
-            .s("read \{seen\} comment lines (the floor is \{width_floor\}) — the reading broke")
-            .take())
-    verdict.check_list("a comment line is inside the source file's width", seen, "comment lines",
-        bad@, "narrow it, or move the background to the DESIGN.md side")
 
 priv const hover_width_file: U8[] = "ksplc/lsp/spell.kspls" //<
     //< Where the hover's one-line signature holds its own copy of the width
@@ -489,7 +346,6 @@ priv fn check_hover_width(arena: Arena$@)
         "widths", bad@, "move both numbers, or take the copy out")
 
 fn run(arena: Arena$@)
-    check_width(arena)
     check_hover_width(arena)
     check_hover_indent(arena)
     check_fires(arena)

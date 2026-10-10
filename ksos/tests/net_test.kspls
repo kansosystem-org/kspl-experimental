@@ -19,6 +19,22 @@ const peer_port: U16 = 80
 const peer_isn: U32 = 5000
 const our_isn: U32 = 1000
 
+priv fn to_peer(): net.Ends //< a frame's ends from us to the peer
+    return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = our_ip,
+        .dst_ip = peer_ip, .src_port = our_port, .dst_port = peer_port }
+
+priv fn from_peer(): net.Ends //< a frame's ends from the peer to us
+    //<
+    //< The MACs stay as in to_peer: nothing here reads them back.
+    return net.Ends::{ .src_mac = our_mac(), .dst_mac = peer_mac(), .src_ip = peer_ip,
+        .dst_ip = our_ip, .src_port = peer_port, .dst_port = our_port }
+
+priv fn our_mac(): net.Mac
+    return net.Mac::{ .hi = 0x0000, .lo = 0x00000001 }
+
+priv fn peer_mac(): net.Mac
+    return net.Mac::{ .hi = 0x0000, .lo = 0x00000002 }
+
 // The fake link layer. It holds one frame and returns it once.
 $fake_frame: U8[1600] = ::{}
 $fake_len: Sz = 0
@@ -56,8 +72,7 @@ priv fn stage_segment(payload: U8$[], seq: U32) //<
     //< Puts a data segment of payload.len bytes on the fake link
     for i in Range.asc(payload.len)
         payload[i] = U8::(i % 251) // a prime, so the period does not line up with the buffer
-    fake_len = net.build_tcp_segment(U8$[]::fake_frame, 0x0000, 0x00000002, 0x0000, 0x00000001,
-        peer_ip, our_ip, peer_port, our_port, seq, our_isn + 1,
+    fake_len = net.build_tcp_segment(U8$[]::fake_frame, from_peer(), seq, our_isn + 1,
         net.tcp_flag_ack | net.tcp_flag_psh, payload)
     fake_ready = true
 
@@ -76,8 +91,7 @@ fn test_tcp_conn_segment_larger_than_buffer() //<
 
     stage_segment(U8$[]::payload_buf, peer_isn + 1)
     link: = fake_link()
-    conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
-        peer_port, our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
 
     // The buffer is 500 bytes. A 1200-byte segment should come out as 500 + 500 + 200.
     $total: Sz = 0
@@ -116,8 +130,7 @@ fn test_tcp_conn_rejects_wrong_seq() //<
             state) test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
-        peer_port, our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
 
     stage_segment(U8$[]::payload_buf, peer_isn + 999) // a seq that differs from the expected one
     n_bad: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
@@ -137,8 +150,7 @@ fn test_tcp_conn_send_is_partial() //< sending is one frame per call
     verdict.start("[ksos/net] a send request over the ceiling becoming a partial send test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
-        peer_port, our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
     sent_count = 0
     n: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 1200)
     assert(n == 1200, "1200 bytes fit under the 1400-byte per-frame limit")
@@ -154,8 +166,7 @@ fn test_tcp_conn_send_failure_does_not_advance_seq() //<
     verdict.start("[ksos/net] not advancing seq where it could not send test...")
 
     link: = fake_link()
-    conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
-        peer_port, our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
     sent_count = 0
     fake_send_ok = false
     n_fail: = tcpc.tcp_stream_send(Void$@::conn@, payload_buf[0]@, 100)
@@ -187,21 +198,19 @@ fn test_frame_builders_pad_to_min() //<
 
     // Refill with non-zero before each call, or a 0 left by the previous call hides a missed fill.
     b.fill(0xEE)
-    arp_len: = net.build_arp_request(b, 0x0000, 0x00000001, our_ip, peer_ip)
+    arp_len: = net.build_arp_request(b, our_mac(), our_ip, peer_ip)
     assert(arp_len == 60, "a 42-byte ARP request must be padded out to the 60-byte minimum")
     check_zero_tail(view, 42, arp_len,
         "ARP request: the padding up to the minimum frame must be zero")
 
     b.fill(0xEE)
-    udp_len: = net.build_udp_packet(b, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
-        our_port, peer_port, empty)
+    udp_len: = net.build_udp_packet(b, to_peer(), empty)
     assert(udp_len == 60, "an empty UDP packet (42 bytes) must be padded out to 60")
     check_zero_tail(view, 42, udp_len,
         "UDP packet: the padding up to the minimum frame must be zero")
 
     b.fill(0xEE)
-    tcp_len: = net.build_tcp_segment(b, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
-        our_port, peer_port, our_isn, peer_isn, net.tcp_flag_ack, empty)
+    tcp_len: = net.build_tcp_segment(b, to_peer(), our_isn, peer_isn, net.tcp_flag_ack, empty)
     assert(tcp_len == 60, "an empty TCP segment (54 bytes) must be padded out to 60")
     check_zero_tail(view, 54, tcp_len,
         "TCP segment: the padding up to the minimum frame must be zero")
@@ -223,22 +232,20 @@ fn test_frame_builders_refuse_a_small_buffer() //<
     tiny: U8[40] = ::{} // not even enough for the smallest frame (60)
     t: = U8$[]::tiny
     empty: = U8[]::{ .ptr = null, .len = 0 }
-    arp_len: = net.build_arp_request(t, 0x0000, 0x00000001, our_ip, peer_ip)
+    arp_len: = net.build_arp_request(t, our_mac(), our_ip, peer_ip)
     assert(arp_len == 0,
         "an ARP request must not be built into a buffer smaller than the minimum frame")
-    udp_len: = net.build_udp_packet(t, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
-        our_port, peer_port, empty)
+    udp_len: = net.build_udp_packet(t, to_peer(), empty)
     assert(udp_len == 0, "a UDP packet must not be built into a too-small buffer")
-    tcp_len: = net.build_tcp_segment(t, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
-        our_port, peer_port, our_isn, peer_isn, net.tcp_flag_ack, empty)
+    tcp_len: = net.build_tcp_segment(t, to_peer(), our_isn, peer_isn, net.tcp_flag_ack, empty)
     assert(tcp_len == 0, "a TCP segment must not be built into a too-small buffer")
 
     // A buffer big enough for the minimum frame but too small for the payload is the same.
     small: U8[64] = ::{}
     s: = U8$[]::small
     body: U8[32] = ::{}
-    big_len: = net.build_tcp_segment(s, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip,
-        our_port, peer_port, our_isn, peer_isn, net.tcp_flag_ack, U8[]::body)
+    big_len: = net.build_tcp_segment(s, to_peer(), our_isn, peer_isn, net.tcp_flag_ack,
+        U8[]::body)
     assert(big_len == 0, "a 54+32-byte segment must not be built into a 64-byte buffer")
 
     verdict.pass("where it does not fit the buffer it returns 0 without writing.")
@@ -252,8 +259,8 @@ fn test_tcp_parse_ignores_ethernet_padding() //<
 
     buf: U8[128] = ::{}
     empty: = U8[]::{ .ptr = null, .len = 0 }
-    n: = net.build_tcp_segment(U8$[]::buf, 0x0000, 0x00000002, 0x0000, 0x00000001, peer_ip, our_ip,
-        peer_port, our_port, peer_isn + 1, our_isn + 1, net.tcp_flag_ack, empty)
+    n: = net.build_tcp_segment(U8$[]::buf, from_peer(), peer_isn + 1, our_isn + 1,
+        net.tcp_flag_ack, empty)
     assert(n == 60, "an empty segment is padded out to the 60-byte minimum")
 
     seg: = net.parse_tcp_segment(U8[]::buf, n, peer_ip, peer_port, our_port)
@@ -262,8 +269,7 @@ fn test_tcp_parse_ignores_ethernet_padding() //<
 
     // The layer above too: peer_seq must not move when there is no readable data.
     link: = fake_link()
-    conn = tcpc.make(link, 0x0000, 0x00000002, 0x0000, 0x00000001, our_ip, peer_ip, our_port,
-        peer_port, our_isn + 1, peer_isn + 1)
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
     fake_len = n
     for i in Range.asc(n)
         fake_frame[i] = buf[i]
@@ -287,9 +293,8 @@ fn test_tcp_parse_rejects_malformed_headers() //< the lengths the peer declares 
     $buf: U8[128] = ::{}
     body: U8[20] = ::{}
     b: = U8$[]::buf
-    base: = net.build_tcp_segment(b, 0x0000, 0x00000002, 0x0000, 0x00000001, peer_ip, our_ip,
-        peer_port, our_port, peer_isn + 1, our_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh,
-        U8[]::body)
+    base: = net.build_tcp_segment(b, from_peer(), peer_isn + 1, our_isn + 1,
+        net.tcp_flag_ack | net.tcp_flag_psh, U8[]::body)
     intact: = net.parse_tcp_segment(U8[]::buf, base, peer_ip, peer_port, our_port)
     assert(intact.payload_len == 20,
         "the unmodified segment must parse with its real payload length")
@@ -330,9 +335,8 @@ fn test_tcp_parse_follows_ip_options() //<
     $buf: U8[128] = ::{}
     body: U8[20] = ::{}
     b: = U8$[]::buf
-    base: = net.build_tcp_segment(b, 0x0000, 0x00000002, 0x0000, 0x00000001, peer_ip, our_ip,
-        peer_port, our_port, peer_isn + 1, our_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh,
-        U8[]::body)
+    base: = net.build_tcp_segment(b, from_peer(), peer_isn + 1, our_isn + 1,
+        net.tcp_flag_ack | net.tcp_flag_psh, U8[]::body)
     assert(base == 74, "14 + 20 + 20 + 20 = 74 bytes, above the padding threshold")
 
     // A 4-byte option (three NOPs plus the terminator) is inserted right after the IP header.

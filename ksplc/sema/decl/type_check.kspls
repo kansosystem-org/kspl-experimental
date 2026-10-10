@@ -24,13 +24,11 @@ fn report_type_existence_error(c: Sema_ctx$@, kind: sema_decl_name.Written_kind,
         //< base_name is the path as written up to its type arguments, the whole path for a value's.
     switch kind
     case .unknown_alias
-        first_dot: = base_name.find_char('.')
-        prefix: = base_name.sub(0, first_dot)
+        prefix: = base_name.sub(0, base_name.find_char('.').unwrap_or(base_name.len))
         c.clear_scratch().s("unknown import alias '\{prefix\}'")
         c.err(err_node, c.scratch.slice())
     case .elsewhere
-        dot: = base_name.find_char('.')
-        head: = base_name if dot < 0 else base_name.sub(0, dot)
+        head: = base_name.sub(0, base_name.find_char('.').unwrap_or(base_name.len))
         if reach: = c.alias_reaching(head)
             c.report_without_alias(err_node, head, reach.path)
     case .names_value(what)
@@ -235,6 +233,25 @@ impl Ast_node
                 return true
         return false
 
+    priv fn push_own_gen_params(r: Ast_node$@, gen_params: List<|U8[]|>$@): I32 //<
+        //< Pushes the names of the type parameters r declares, and returns how many
+        gen_node: = r.find_child(.k_type_gen_params)
+        if gen_node == null
+            return 0
+        $added: = 0
+        for p in gen_node.children
+            if p.kind_id == .k_type_gen_param
+                $id_node: = p.find_child(.k_identifier)
+                if id_node == null && p.kind_id == .k_identifier
+                    id_node = p
+                if id_node != null
+                    gen_params.push(id_node.text)
+                    added += 1
+            else if p.kind_id == .k_identifier
+                gen_params.push(p.text)
+                added += 1
+        return added
+
     fn validate_all_type_exprs(r: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
         bound: List<|U8[]|>$@ = null) //<
             //< Reports each type expression under r naming no type
@@ -259,19 +276,7 @@ impl Ast_node
         $added_params: = 0
         if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_fn || r.kind_id == .k_decl_impl ||
             r.kind_id == .k_decl_trait || r.kind_id == .k_decl_enum
-            gen_node: = r.find_child(.k_type_gen_params)
-            if gen_node != null
-                for p in gen_node.children
-                    if p.kind_id == .k_type_gen_param
-                        $id_node: = p.find_child(.k_identifier)
-                        if id_node == null && p.kind_id == .k_identifier
-                            id_node = p
-                        if id_node != null
-                            gen_params.push(id_node.text)
-                            added_params += 1
-                    else if p.kind_id == .k_identifier
-                        gen_params.push(p.text)
-                        added_params += 1
+            added_params = r.push_own_gen_params(gen_params)
         if r.kind_id == .k_decl_impl
             if trait_node: = r.get_impl_trait_node()
                 check_and_report_type(trait_node, c, gen_params, trait_node)
@@ -281,7 +286,6 @@ impl Ast_node
                     check_and_report_type(p_node, c, gen_params, p_node)
 
         if r.kind_id == .k_type_fn_sig
-            r.report_untyped_fn_ptr_params(c)
             r.report_bad_param_defaults(c, gen_params, false)
         if r.kind_id == .k_expr_fn_lit_sig
             r.report_bad_param_defaults(c, gen_params, true)
@@ -305,6 +309,12 @@ impl Ast_node
                 if path.children.len == 1 && c.names_module_only(path.get_child(0).text)
                     left_to_body = r.get_postfix_member()
         for child in r.children
+            // **A declared function's own signature is no function-pointer type**: its untyped
+            // parameter is reported by the function's check, which names the parameter
+            // (`check_param_type` in `../session/ctx.kspls`); read here too, one mistake gave two
+            // errors.
+            if child.kind_id == .k_type_fn_sig && r.kind_id != .k_decl_fn
+                child.report_untyped_fn_ptr_params(c)
             if child != left_to_body
                 child.validate_all_type_exprs(c, gen_params, inner_bound)
         if added_params > 0

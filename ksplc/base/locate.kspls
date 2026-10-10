@@ -49,8 +49,9 @@ fn package_of(file_path: U8[]): U8[] //< the name of the package that file belon
         // become a package `C:`, with the package folder put in front (`deps/C:/Users/…/s.kspl`,
         // not found).
         return ""
-    slash: = file_path.find_char('/')
-    return "" if slash < 0 else file_path.sub(0, slash)
+    if slash: = file_path.find_char('/')
+        return file_path.sub(0, slash)
+    return ""
 
 fn std_dir(): U8[] //< the standard library's folder, resolved once (`SPEC-tools.md` §2.9.1)
     if base_core.config.std_dir.len > 0
@@ -235,7 +236,7 @@ priv fn one_name(path: U8[]): U8[] //<
     //< `sub/../lib/n` and `lib/n`, one file becomes two modules in two units, each with its own
     //< globals. So separators become `/` (a command line's keep the OS's), `.` levels are dropped,
     //< and each `x/..` folds by spelling, as the walk up to a package reads it (`fold_dots` below).
-    keep: = path.find_str("..") >= 0 && placed_elsewhere(first_part(path))
+    keep: = path.find_str("..").is_some() && placed_elsewhere(first_part(path))
     return fold_dots(path, keep)
 
 fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
@@ -245,11 +246,11 @@ fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
     //< the same trade-off Go's `filepath.Clean` makes. A leading `..` of a relative path stays (it
     //< names the folder above); one at the root is dropped (the root's parent is itself).
     //< With `keep_first`, a `..` that would fold away the first part stays too (`one_name` above).
-    $head: Sz = 0 // the root it keeps: `//` (a Windows share), or std/sys's (`C:/` on Windows only)
-    if path.len >= 2 && sys.is_path_sep(path[0]) && sys.is_path_sep(path[1])
+    // The root it keeps is std/sys's (`C:/` and `//srv/sh/` on Windows only), and at least the `//`
+    // a path opens with: POSIX leaves `//` to the system, so it is not folded into `/`.
+    $head: Sz = sys.root_len(path) if sys.is_absolute(path) else 0
+    if head < 2 && path.len >= 2 && sys.is_path_sep(path[0]) && sys.is_path_sep(path[1])
         head = 2
-    else if sys.is_absolute(path)
-        head = sys.root_len(path)
     $parts: = List<|U8[]|>.new(null)
     defer parts.free()
     $at: = head

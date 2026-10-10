@@ -55,13 +55,13 @@ priv fn ksplc_env(args: U8[][], cwd: U8[], env_std: U8[], env_unit: U8[], arena:
 priv fn run_exe(exe: U8[], args: U8[][], cwd: U8[], env_std: U8[], env_unit: U8[], arena: Arena$@):
     verdict.Run_out //< the same as above, with a compiler other than the one under inspection
     if env_std.len > 0
-        sys.set_env("KSPLC_STD_DIR", env_std)
+        sys.set_env("KSPLC_STD_DIR", env_std) catch panic("KSPLC_STD_DIR could not be set")
     else
-        sys.unset_env("KSPLC_STD_DIR")
+        sys.unset_env("KSPLC_STD_DIR") catch panic("KSPLC_STD_DIR could not be unset")
     if env_unit.len > 0
-        sys.set_env("KSPLC_PKG_SRC_DIR", env_unit)
+        sys.set_env("KSPLC_PKG_SRC_DIR", env_unit) catch panic("KSPLC_PKG_SRC_DIR could not be set")
     else
-        sys.unset_env("KSPLC_PKG_SRC_DIR")
+        sys.unset_env("KSPLC_PKG_SRC_DIR") catch panic("KSPLC_PKG_SRC_DIR could not be unset")
     $argv: = List<|U8[]|>.new(arena)
     argv.push(exe)
     for a in args
@@ -98,7 +98,7 @@ priv fn case_default(arena: Arena$@) //<
         return
     // std/lang is read first (`ksplc/pipeline.kspls` puts it into every program), so with no std/
     // it stops here.
-    verdict.check(name, r.out.find_str("std/lang.kspls") >= 0,
+    verdict.check(name, r.out.find_str("std/lang.kspls").is_some(),
         arena.text().s("the path hunted does not come out in the diagnostic\n\{r.out\}").take())
 
 priv fn case_flag_and_env(arena: Arena$@)
@@ -148,7 +148,7 @@ priv fn case_only_std_prefix(arena: Arena$@)
     if r.code == 0
         verdict.check(name, false, "it succeeded on a file that does not exist")
         return
-    verdict.check(name, r.out.find_str("mylib/thing.kspl") >= 0,
+    verdict.check(name, r.out.find_str("mylib/thing.kspl").is_some(),
         arena.text().s("the user's file is being hunted on the std_dir side\n\{r.out\}").take())
 
 // ==========================================
@@ -195,7 +195,7 @@ priv fn case_pkg_src_dir(arena: Arena$@)
     // Without the setting, it searches relative to its own folder and fails.
     none: = ksplc_env(U8[][]::{ std_flag, "a.kspl", "a.c" }, proj, "", "", arena)
     verdict.check("without being taught it looks only at the folder it is in",
-        none.code != 0 && none.out.find_str("mylib/thing.kspl") >= 0,
+        none.code != 0 && none.out.find_str("mylib/thing.kspl").is_some(),
         arena.text().s("the path hunted does not come out in the diagnostic\n\{none.out\}").take())
     unit_flag: = arena.text().s("--pkg-src-dir=\{libs\}").take()
     r: =
@@ -500,10 +500,11 @@ priv fn case_named_dotted(std: U8[], arena: Arena$@) //<
     c: = io.read_file(fs.join(top, "lone.c", arena)) catch
         fallback ""
     verdict.check("a file the package's .. only passes through is not named as its file",
-        lone.code == 0 && c.find_str("used_helper") >= 0 && c.find_str("mylib") < 0, lone.out)
+        lone.code == 0 && c.find_str("used_helper").is_some() &&
+        c.find_str("mylib").is_none(), lone.out)
     lint: = ksplc_env(U8[][]::{ "lint", beside }, top, std, "", arena)
     verdict.check("and the package's settings do not reach it",
-        lint.out.find_str("[W0206]") >= 0, lint.out)
+        lint.out.find_str("[W0206]").is_some(), lint.out)
 
 // ==========================================
 // A file outside every package, named through `..`, is the file its plain name names: one module
@@ -571,7 +572,7 @@ priv fn case_unit_dotted(std: U8[], arena: Arena$@) //<
     verdict.check(name, twice.code == 2, twice.out)
     peek: = ksplc_env(U8[][]::{ "peek.kspl", "peek.c" }, dir, std, "", arena)
     verdict.check("and it stands in the package its folded name says, not the one it passes through",
-        peek.code != 0 && peek.out.find_str("cannot access symbol 'peek'") >= 0, peek.out)
+        peek.code != 0 && peek.out.find_str("cannot access symbol 'peek'").is_some(), peek.out)
 
 priv fn case_named_uses(std: U8[], arena: Arena$@) //<
     //< It checks an import of an unlisted package is rejected where it is written
@@ -585,8 +586,8 @@ priv fn case_named_uses(std: U8[], arena: Arena$@) //<
     stray: = ksplc_env(U8[][]::{ "probe/stray.kspl", "stray.c" }, top, std, "", arena)
     verdict.check(name,
         stray.code != 0 &&
-        stray.out.find_str("probe/stray.kspl:1:1: error: the package 'mylib' does ") >= 0 &&
-        stray.out.find_str("not say it uses 'otherlib'") >= 0, stray.out)
+        stray.out.find_str("probe/stray.kspl:1:1: error: the package 'mylib' does ").is_some() &&
+        stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
     fs.write_tree(dir,
         U8[][]::{ "lib_here/ksplc.cfg", "lib_here/probe/used.kspl", "deps/otherlib/x.kspl" },
         U8[][]::{ used_cfg, used_main, used_x }, arena) catch
@@ -628,8 +629,8 @@ priv fn case_named_embed(std: U8[], arena: Arena$@) //<
         ksplc_env(U8[][]::{ "probe/embed_stray.kspl", "stray.c" }, top, std, "", arena)
     verdict.check("an embed of a package not listed in uses is refused at the embed",
         stray.code != 0 &&
-        stray.out.find_str("probe/embed_stray.kspl:1:1: error: the package 'mylib' does ") >= 0 &&
-        stray.out.find_str("not say it uses 'otherlib'") >= 0, stray.out)
+        stray.out.find_str("probe/embed_stray.kspl:1:1: error: the package 'mylib' does ").is_some()
+        && stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
 
 priv fn case_named_refused(std: U8[], arena: Arena$@) //<
     //< A declaration that cannot mean what it says is rejected on reading, with its line
@@ -652,7 +653,7 @@ priv fn case_named_refused(std: U8[], arena: Arena$@) //<
             verdict.check(names[i], false, "cannot write the settings")
             continue
         r: = ksplc_env(U8[][]::{ "probe/main.kspl", "main.c" }, top, std, "", arena)
-        verdict.check(names[i], r.code != 0 && r.out.find_str(wants[i]) >= 0, r.out)
+        verdict.check(names[i], r.code != 0 && r.out.find_str(wants[i]).is_some(), r.out)
 
 priv fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
     //< It checks a folder reached under one name and naming itself another is rejected
@@ -671,7 +672,8 @@ priv fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
         ksplc_env(U8[][]::{ "main.kspl", "main.c" }, fs.join(dir, "proj", arena), std, "", arena)
     verdict.check(name,
         r.code != 0 &&
-        r.out.find_str("reached as the package 'mylib' but names itself 'otherlib'") >= 0, r.out)
+        r.out.find_str("reached as the package 'mylib' but names itself 'otherlib'").is_some(),
+        r.out)
     outer: = named_dir("the settings above a package do not reach into it", "named_outer")
     if outer.len == 0
         return
@@ -686,7 +688,7 @@ priv fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
         inside.out)
     plain: = ksplc_env(U8[][]::{ "plain/main.kspl", "plain.c" }, outer, std, "", arena)
     verdict.check("and the folder one is in covers a file in a folder below it",
-        plain.code != 0 && plain.out.find_str("unknown diagnostic code") >= 0, plain.out)
+        plain.code != 0 && plain.out.find_str("unknown diagnostic code").is_some(), plain.out)
 
 // ==========================================
 // The standard library is closed: a file of it reaches only its own files, and a name under
@@ -782,7 +784,8 @@ priv fn case_std_closed(arena: Arena$@) //<
     for i in Range.asc(files.len)
         r: = ksplc_env(U8[][]::{ files[i], "out.c" }, proj, std, deps, arena)
         verdict.check(names[i],
-            r.code != 0 && r.out.find_str(ats[i]) >= 0 && r.out.find_str(whys[i]) >= 0, r.out)
+            r.code != 0 && r.out.find_str(ats[i]).is_some() &&
+            r.out.find_str(whys[i]).is_some(), r.out)
     ok: = ksplc_env(U8[][]::{ "sibling.kspl", "out.c" }, proj, std, deps, arena)
     verdict.check("a file of the standard library still reaches its neighbour by a bare name",
         ok.code == 0, ok.out)
@@ -925,7 +928,7 @@ priv fn cli_case(name: U8[], args: U8[][], want_ok: Bool, expect: U8[], equals: 
         verdict.check(name, false,
             arena.text().s("the output is not \{equals\}: \{r.out\}").take())
         return
-    if expect.len > 0 && r.out.find_str(expect) < 0
+    if expect.len > 0 && r.out.find_str(expect).is_none()
         verdict.check(name, false,
             arena.text().s("\{expect\} does not come out\n\{r.out\}").take())
         return

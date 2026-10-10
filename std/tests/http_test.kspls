@@ -1,3 +1,4 @@
+//< Tests of `std/url`'s percent-encoding, and of `std/http` reading and writing a message
 import "std/chars"
 import "std/http"
 import "std/mem" + { Arena, dealloc }
@@ -380,8 +381,8 @@ fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     server_arena: = Arena.new(64 * 1024)
     defer server_arena.free()
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
-    req: = http.read_request(conn, server_arena, http.default_max_body_bytes) catch panic("server \
-        read_request should succeed")
+    req: =
+        http.read_request(conn, server_arena, http.default_max_body_bytes, 60000) catch panic("server read_request should succeed")
     req_ok: =
         req.method.equals("POST") && req.target.equals("/echo") && req.body.equals("ping")
     assert(req_ok, "server must parse the client's request correctly")
@@ -399,12 +400,13 @@ fn test_http_socket_roundtrip()
 
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    listener: = net.Tcp_listener.bind("127.0.0.1", 17656) catch panic("bind should succeed on a \
-        fresh port")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
+        port")
+    port: = listener.port() catch panic("a bound socket knows its port")
     t: = thread.Thread.spawn<|net.Tcp_listener|>(http_echo_server, listener) catch panic("thread \
         spawn failed")
 
-    client: = net.Tcp_stream.connect("127.0.0.1", 17656) catch panic("connect should succeed once \
+    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
         the listener is bound")
     // A tab splits the request line for a lenient server as a space does, so it is refused before
     // anything is written; the round trip below then shows the connection was left clean.
@@ -428,8 +430,9 @@ fn test_http_socket_roundtrip()
     req_headers: = http.headers(arena).add("Host", "example.com").build()
     http.write_request(client, "POST", "/echo", req_headers, "ping") catch panic("client \
         write_request should succeed")
-    resp: = http.read_response(client, arena, http.default_max_body_bytes) catch panic("client \
-        read_response should succeed")
+    resp: =
+        http.read_response(client, arena, http.default_max_body_bytes, 60000) catch panic("client \
+            read_response should succeed")
     resp_ok: =
         resp.status == 200 && resp.reason.equals("OK") && resp.body.equals("pong")
     assert(resp_ok, "client must parse the server's response correctly")

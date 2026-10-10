@@ -1,3 +1,4 @@
+//< Tests of the encodings: SHA-256 and HMAC, Base64, and reading and writing JSON
 import "std/base64"
 import "std/chars"
 import "std/json" + { Json_builder }
@@ -480,7 +481,19 @@ fn test_json_utf8(arena: Arena$@) //<
         "f48fbfbf", "e38182" }
     for hex in good
         assert(json_parses(quoted_hex(hex, arena), arena), "json: well-formed UTF-8 is accepted")
-    verdict.pass("Every ill-formed UTF-8 sequence is refused, and every width's edges go through.")
+    // **What the writer puts out must read back**: a string holding bytes that are not UTF-8 is
+    // written with U+FFFD in their place, and well-formed ones as they are.
+    mixed: U8[6] = ::{ 'a', 0xffU8, 0xe3U8, 0x81U8, 0x82U8, 0xc0U8 }
+    $jb: = Json_builder.new(arena)
+    $ob: = Str_builder.new()
+    defer ob.free()
+    jb.str_val(U8[]::mixed).dump(ob@)
+    back: = json.parse(ob.slice(), arena) catch panic("json: what the writer puts out must parse")
+    assert(back.as_str().equals("a\uFFFDあ\uFFFD"),
+        "json: bytes that are not UTF-8 are written as U+FFFD, and UTF-8 stays as it is")
+    verdict
+        .pass("Every ill-formed UTF-8 sequence is refused, every width's edges go through, and the \
+            writer replaces what is not UTF-8.")
 
 fn test_json_duplicate_keys(arena: Arena$@) //<
     //< std/json: pins the behaviour when a key is duplicated

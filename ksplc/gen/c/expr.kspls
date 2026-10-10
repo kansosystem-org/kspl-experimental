@@ -102,6 +102,26 @@ impl Ast_node
             c.s(" }")
         c.s(" }")
 
+    priv fn emit_init_designator(r: Ast_node$@, c: Genc_ctx$@, child_node: Ast_node$@,
+        is_array: Bool): Bool //<
+            //< It writes an initializer's `.name = ` or `[i] = `; true for a const slice's `.ptr`
+            //<
+            //< Only a slice of const elements needs its `.ptr` cast; on a mutable slice the cast
+            //< would only clutter the generated C.
+        if is_array
+            if idx_node: = child_node.get_field_init_index()
+                c.s("[")
+                idx_node.emit_expr(c)
+                c.s("] = ")
+            return false
+        name_node: = child_node.get_field_init_name().unwrap_or(null)
+        if name_node == null || name_node.kind_id != .k_identifier
+            return false
+        c.s(".").nm(name_node.text).s(" = ")
+        slice_real_id: = c.env.get_real_type(r.type_id)
+        return name_node.text.equals("ptr") && c.env.is_slice(slice_real_id) &&
+            c.env.is_const(c.env.slice_elem(slice_real_id))
+
     priv fn emit_struct_literal(r: Ast_node$@, c: Genc_ctx$@)
         is_array: = c.env.is_array(r.type_id)
         has_fields: = r.find_child(.k_expr_field_init) != null
@@ -119,46 +139,27 @@ impl Ast_node
 
         $is_first: = true
         for child_node in r.children
-            if child_node != null && child_node.kind_id == .k_expr_field_init
-                child_len: = child_node.children.len
-                if child_len > 0
-                    if !is_first
-                        c.s(", ")
-
-                    $slice_ptr_field: = false
-                    if !is_array
-                        if name_node: = child_node.get_field_init_name()
-                            if name_node.kind_id == .k_identifier
-                                c.s(".").nm(name_node.text).s(" = ")
-                                slice_real_id: = c.env.get_real_type(r.type_id)
-                                // Only a slice of const elements needs it on `.ptr`; on a mutable
-                                // slice the cast would only clutter the generated C.
-                                slice_ptr_field =
-                                    name_node.text.equals("ptr") &&
-                                    c.env.is_slice(slice_real_id) &&
-                                    c.env.is_const(c.env.slice_elem(slice_real_id))
-                    else
-                        if idx_node: = child_node.get_field_init_index()
-                            c.s("[")
-                            idx_node.emit_expr(c)
-                            c.s("] = ")
-
-                    val_node: = child_node.get_field_init_expr()
-                    child_node.ice_assert(val_node != null,
-                        "emit_struct_literal: field missing value node")
-                    if slice_ptr_field
-                        // An immutable slice's C type is the alias `Const_T_Slice = T_Slice`, and
-                        // its `ptr` is non-const (the reason is in the matching comment in
-                        // gen/c/decl.kspls). Storing a `const T *` from a KSPL `T@` there warns
-                        // about a discarded qualifier, so it is cast to the element type's
-                        // non-const version (as emit_slice_cast_prefix does for arrays).
-                        elem_id: = c.env.slice_elem(c.env.get_real_type(r.type_id))
-                        c.s("(").t(c.env.strip_const(elem_id)).s("*)(")
-                        val_node.emit_expr(c)
-                        c.s(")")
-                    else
-                        val_node.emit_expr(c)
-                    is_first = false
+            if child_node == null || child_node.kind_id != .k_expr_field_init ||
+                child_node.children.len == 0
+                continue
+            if !is_first
+                c.s(", ")
+            is_first = false
+            slice_ptr_field: = r.emit_init_designator(c, child_node, is_array)
+            val_node: = child_node.get_field_init_expr()
+            child_node.ice_assert(val_node != null, "emit_struct_literal: field missing value node")
+            if !slice_ptr_field
+                val_node.emit_expr(c)
+                continue
+            // An immutable slice's C type is the alias `Const_T_Slice = T_Slice`, and its `ptr` is
+            // non-const (the reason is in the matching comment in gen/c/decl.kspls). Storing a
+            // `const T *` from a KSPL `T@` there warns about a discarded qualifier, so it is cast
+            // to the element type's non-const version (as emit_slice_cast_prefix does for
+            // arrays).
+            elem_id: = c.env.slice_elem(c.env.get_real_type(r.type_id))
+            c.s("(").t(c.env.strip_const(elem_id)).s("*)(")
+            val_node.emit_expr(c)
+            c.s(")")
         if is_array
             c.s(" }")
         c.s("}")

@@ -6,6 +6,7 @@
 //< A literal's **type and range** belong to `ksplc/sema/body/literal.kspls`, and **turning it into
 //< a C string** to `ksplc/gen/c/literal.kspls` (one per layer).
 import "std/chars"
+import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
 struct Number_u64 //< the result of converting a numeric literal to U64
@@ -254,6 +255,16 @@ impl U8[]
             else if !step.is_cont
                 out.c(step.byte)
 
+    fn literal_value(r: U8[], arena: Arena$@): U8[] //< the bytes a string literal stands for
+        //<
+        //< For a string the compiler reads itself (`##error`'s message, `embed`'s path). Caution:
+        //< **Do not cut the quotes off by hand**: `"a\"b"` would keep its backslash, and a path
+        //< read one way at loading and another at emitting names two files.
+        $b: = Str_builder.new()
+        defer b.free()
+        r.append_literal_bytes(b@)
+        return arena.dup_str(b.slice())
+
     fn append_clean_number(r: U8[], out: Str_builder$@, stops: U8[]): I32 //<
         //< It writes a numeric literal's body into out, without '_', stopping at any of stops
         //<
@@ -261,7 +272,7 @@ impl U8[]
         //< suffix.
         for i in Range.asc(r.len)
             ch: = (r.ptr + i)$
-            if stops.find_char(ch) >= 0
+            if stops.find_char(ch).is_some()
                 return I32::i
             if ch != '_'
                 out.c(ch)

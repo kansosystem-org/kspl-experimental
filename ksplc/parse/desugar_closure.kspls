@@ -14,10 +14,6 @@ import "ksplc/parse/load" as parse_load
 import "std/ds" { List }
 import "std/str" { Str_builder }
 
-// ==========================================
-// The expansion of a function literal (a closure)
-// ==========================================
-
 impl Ast_node
     fn desugar_fn_lit(r: Ast_node$@, ctx: Desugar_ctx$@) //<
         //< It lifts an anonymous function to a top-level `priv fn _anon_fn_N`, referred to by name
@@ -125,15 +121,13 @@ impl Ast_node
                     function pointer, or move the closure into the function that uses it")
             return
         serial: = next_anon_serial(ctx, loc.file())
-        env_name: = build_anon_env_name(serial)
         // The synthesized declarations go to the top level, where the enclosing type arguments are
         // not visible; those the signature uses are copied over (with none, it stays non-generic).
         fwd_params: = forwarded_gen_params(ctx, sig, params, captures)
 
         $src: = Str_builder.new()
         defer src.free()
-        if !r.build_closure_src(ctx, sig, params, captures, env_name,
-            build_anon_env_ctor_name(serial), arity, gen_args_text(fwd_params), src@)
+        if !r.build_closure_src(ctx, sig, captures, serial, gen_args_text(fwd_params), src@)
             return
 
         // Caution: **Do not copy the ordinary path (parse -> normalize -> validate) here**; it
@@ -184,9 +178,15 @@ impl Ast_node
 
     // It builds the KSPL source of the declarations to synthesize (false: a diagnostic was
     // reported).
-    fn build_closure_src(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
-        captures: Ast_node$@, env_name: U8[], ctor_name: U8[], arity: Sz, gen_args: U8[],
-        src: Str_builder$@): Bool
+    fn build_closure_src(r: Ast_node$@, ctx: Desugar_ctx$@, sig: Ast_node$@, captures: Ast_node$@,
+        serial: Sz, gen_args: U8[], src: Str_builder$@): Bool //<
+            //< Writes the closure's struct, constructor and impl as KSPL source into src
+            //<
+            //< False when it refused the closure (the diagnostic is already reported).
+        params: = sig.find_child(.k_param_list)
+        arity: = count_fn_params(params)
+        env_name: = build_anon_env_name(serial)
+        ctor_name: = build_anon_env_ctor_name(serial)
         // The environment struct. The captures are held by pointer.
         src.s("priv struct \{env_name\}\{gen_args\} {\n")
         // One field is placed even with zero captures. C99 has no empty struct, and the generated C

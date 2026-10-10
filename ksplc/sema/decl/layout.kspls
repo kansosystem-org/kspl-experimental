@@ -394,6 +394,37 @@ impl Sema_ctx
         defer resolving.free()
         return r.calc_type_layout(type_id, resolving@)
 
+    priv fn named_type_layout(r: Self$@, real_id: I32, resolving: List<|I32|>$@):
+        sema_session_state.Type_layout //<
+            //< The layout of a scalar, a struct, an enum or a function pointer
+        machine: = base_target.current()
+        if sema_type_env.is_builtin(real_id)
+            // A scalar (Void and `Void@` are handled by the caller) is aligned to its own width,
+            // but for `I64` / `U64` / `F64`, which a machine may align to less (`wide_align`).
+            width: = Sz::(r.env.get_primitive_bit_size(real_id) / 8)
+            is_sz: = real_id == I32::sema_type_env.Builtin_type_id.size_type
+            return ::{ .size = width,
+                .align = machine.wide_align if width == 8 && !is_sz else width }
+        clean_name: = r.env.base_type_name(real_id)
+        if struct_def: = r.env.get_struct_def(clean_name)
+            fields_lay: = r.calc_fields_layout(struct_def.fields_list, resolving,
+                !struct_def.is_packed)
+            align: = struct_def.align_attr if struct_def.align_attr > 0 else fields_lay.align
+            return ::{ .size = align_to(fields_lay.size, align), .align = align }
+        if enum_def: = r.env.get_enum_def(clean_name)
+            if enum_def.is_scalar()
+                return r.calc_type_layout(enum_def.base_type_id, resolving)
+            parts: = r.enum_parts(enum_def, resolving)
+            align: =
+                (parts.payload.align if parts.payload.align > parts.tag.align
+                else parts.tag.align)
+            return ::{ .size = align_to(parts.payload_offset + parts.payload.size, align),
+                .align = align }
+        // A function pointer is a kind of its own (is_fn_ptr in sema/type/query.kspls); if missed,
+        // it measures the default 4 rather than the machine's width.
+        width: = machine.fn_pointer_bytes if r.env.is_fn_ptr(real_id) else 4
+        return ::{ .size = width, .align = width }
+
     priv fn calc_type_layout(r: Self$@, type_id: I32, resolving: List<|I32|>$@):
         sema_session_state.Type_layout //<
             //< The size and alignment of the type type_id
@@ -467,44 +498,7 @@ impl Sema_ctx
             // walk.
             res.size = align_to(result_val_at(s2, s1) + s1.size, res.align)
         default
-            if sema_type_env.is_builtin(real_id)
-                // A scalar (Void and `Void@` are handled above) is aligned to its own width, but
-                // for `I64` / `U64` / `F64`, which a machine may align to less (`wide_align`).
-                width: = Sz::(r.env.get_primitive_bit_size(real_id) / 8)
-                is_sz: = real_id == I32::sema_type_env.Builtin_type_id.size_type
-                res.align = machine.wide_align if width == 8 && !is_sz else width
-                res.size = width
-            else
-                clean_name: = r.env.base_type_name(real_id)
-                switch r.env.get_struct_def(clean_name)
-                case .some(struct_def)
-                    fields_lay: = r.calc_fields_layout(struct_def.fields_list, resolving,
-                        !struct_def.is_packed)
-                    res.align =
-                        struct_def.align_attr if struct_def.align_attr > 0 else fields_lay.align
-                    res.size = align_to(fields_lay.size, res.align)
-                case .none
-                    switch r.env.get_enum_def(clean_name)
-                    case .some(enum_def)
-                        if enum_def.is_scalar()
-                            tag: = r.calc_type_layout(enum_def.base_type_id, resolving)
-                            res.align = tag.align
-                            res.size = tag.size
-                        else
-                            parts: = r.enum_parts(enum_def, resolving)
-                            res.align = parts.tag.align
-                            res.align =
-                                (parts.payload.align if parts.payload.align > res.align
-                                else res.align)
-                            res.size =
-                                align_to(parts.payload_offset + parts.payload.size, res.align)
-                    case .none
-                        // A function pointer is a kind of its own (is_fn_ptr in
-                        // sema/type/query.kspls); if missed, it measures the default 4 rather than
-                        // the machine's width.
-                        is_fn: = r.env.is_fn_ptr(real_id)
-                        res.align = machine.fn_pointer_bytes if is_fn else 4
-                        res.size = machine.fn_pointer_bytes if is_fn else 4
+            res = r.named_type_layout(real_id, resolving)
         resolving.len -= 1
         r.layout.memo.set(real_id, res)
         return res

@@ -97,8 +97,11 @@ pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete 
     arena: Arena$@, //< where the body is copied to
 ): U8[]?!Rpc_end //< the body, or none for now; a bad length header fails with broken
     text: = U8[]::acc.slice()
-    sep: = text.find_str(frame_sep)
-    if sep < 0
+    $sep: Sz = 0
+    switch text.find_str(frame_sep)
+    case .some(i)
+        sep = i
+    case .none
         return .none
     body_at: = sep + frame_sep.len
     want: = content_length(text.sub(0, sep), max_body_bytes).unwrap_or(0)
@@ -163,19 +166,29 @@ impl Client
         dealloc(Void$@::r.out_buf.ptr)
         dealloc(Void$@::r.err_buf.ptr)
 
-    pub fn send_raw(r: Self$@, body: U8[]): Bool //< sends one already built body, in a frame
+    pub fn send_raw( //< sends one already built body, in a frame
+        r: Self$@,
+        body: U8[], //< the body, without its header
+        timeout_ms: I32, //< how long the server may go without reading any of it
+    ): Void!Rpc_end //< fails as `timed_out` or `closed`
         $out: = Str_builder.new()
         defer out.free()
         frame_into(out@, body)
-        return r.child.write(out.slice())
+        r.child.write(out.slice(), timeout_ms) catch e
+            switch e
+            case .timed_out
+                throw .timed_out
+            case .closed
+                throw .closed
 
     pub fn notify( //< sends a notification, which expects no response
         r: Self$@,
         method: U8[], //< the name of the method to call
         params: json.Val, //< the parameters sent with it
+        timeout_ms: I32, //< how long the server may go without reading it
         arena: Arena$@, //< where the text is built
-    ): Bool
-        return r.send_raw(encode(method, params, -1, arena))
+    ): Void!Rpc_end //< fails as `send_raw` does
+        r.send_raw(encode(method, params, -1, arena), timeout_ms)!
 
     pub fn request( //< sends a request and reads until the response with that id arrives
         //<
@@ -191,9 +204,9 @@ impl Client
     ): json.Val!Rpc_end
         id: = r.next_id
         r.next_id += 1
-        if !r.send_raw(encode(method, params, id, arena))
-            throw .closed
+        // The write spends the same budget: the round trip's timeout bounds both halves.
         deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        r.send_raw(encode(method, params, id, arena), timeout_ms)!
         for sys.mono_us() <= deadline
             left_ms: = (deadline - sys.mono_us()) / 1000I64 + 1I64
             msg: = r.read_msg(I32::left_ms, arena)!

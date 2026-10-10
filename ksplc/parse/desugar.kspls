@@ -176,11 +176,11 @@ impl Ast_node
             ctx.hoisted.len = start
 
             // `for item in collection { ... }`, marked by the bare k_identifier normalize_loop
-            // (parse/normalize_stmt.kspls) leaves at loop_init. It becomes two statements (the
+            // (parse/normalize_stmt.kspls) leaves at for_init. It becomes two statements (the
             // collection's cache plus a C-style for), so it is handled here, where the statement
             // list can be rebuilt.
-            if stmt.kind_id == .k_stmt_loop
-                init_node: = stmt.get_loop_init()
+            if stmt.kind_id == .k_stmt_for
+                init_node: = stmt.get_for_init()
                 if init_node != null && init_node.kind_id == .k_identifier
                     stmt.desugar_for_in_loop(new_children)
                     continue
@@ -224,7 +224,7 @@ impl Ast_node
         loop_children
             .push(r.get_loop_label() if r.get_loop_label() != null
             else Ast_node.new(.k_empty, "", loc))
-        loop_children.push(r.get_loop_init())
+        loop_children.push(r.get_for_init())
         loop_children.push(Ast_node.build_ident(coll_name, 0, loc))
         loop_children.push(Ast_node.new(.k_empty, "", loc))
         loop_children.push(r.get_loop_block())
@@ -408,7 +408,7 @@ impl Ast_node
         //< It folds `if v: = X { A } else { B }` to `switch X case .some(v) { A } case .none { B }`
         //<
         //< Sema, which knows the types, rejects anything but `Option`; this side only builds the
-        //< shape (`../sema/body/match.kspls` reads the mark it leaves). The grounds are in
+        //< shape (`../sema/body/switch.kspls` reads the mark it leaves). The grounds are in
         //< "Branching" in `../../docs/SPEC-language.md`.
         //< Caution: **Keep it to `Option`.** On a user's enum, a variant added later makes a branch
         //< that silently passes through; `Option` always has exactly two.
@@ -423,7 +423,7 @@ impl Ast_node
         none_block: =
             (else_block if else_block != null
             else Ast_node.new(.k_stmt_block, "stmt_block", loc))
-        return Ast_node.build_option_match(subject, name_node, then_block, none_block,
+        return Ast_node.build_option_switch(subject, name_node, then_block, none_block,
             r.safe_get_child(0), base_ast_ext.if_bind_mark, loc)
 
 fn next_anon_serial(ctx: Desugar_ctx$@, file: U8[]): Sz //<

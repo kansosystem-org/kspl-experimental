@@ -1,3 +1,7 @@
+//< Tests of creating a scratch folder, and of writing and copying a tree (`std/fs`)
+//<
+//< **Each check works in a folder that `mkdir_unique` creates for it**, so a run never sees what
+//< an earlier run left. The check removes the folder best-effort at the end.
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -7,12 +11,6 @@ import "std/subproc"
 import "std/sys"
 import "std/tests/fs_test"
 import "std/verdict"
-
-// ==========================================
-// std/fs: creating a scratch folder, and writing and copying a tree.
-// **Each check works in a folder that `mkdir_unique` creates for it**, so a run never sees what an
-// earlier run left. The check removes the folder best-effort at the end.
-// ==========================================
 
 priv const base: U8[] = "out/tmp/kspl_test_tree"
 
@@ -55,7 +53,7 @@ pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -l` 
     if r.spawn_failed || r.timed_out || r.exit_code != 0 || r.stdout_data.len < 10
         return ""
     shown: = r.stdout_data.sub(0, 10)
-    return "" if shown.find_char('x') >= 0 else shown
+    return "" if shown.find_char('x').is_some() else shown
 
 fn test_fs_write_unique()
     verdict.start("[Fs] writing a file nobody took, for its owner alone test...")
@@ -126,5 +124,39 @@ fn test_fs_copy_tree()
     fs.copy_tree(from, to, fs_test.skip_skipme, arena) catch
         refused = true
     assert(refused, "a destination that stands already must be refused")
+    // The walk's paths drop the source's trailing separators; measured by the source as written,
+    // `from//` would cut a letter off every name.
+    again: = fs.join(dir, "again", arena)
+    fs.copy_tree(arena.text().s(from).s("//").take(), again, fs_test.skip_skipme, arena) catch
+        panic("copy_tree should copy from a path ending in separators")
+    assert(holds(fs.join(again, "a.txt", arena), "a") &&
+        holds(fs.join(again, "sub/b.txt", arena), "b"),
+        "a source ending in separators keeps every name whole")
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is copied whole to a new place, and a place that stands is refused.")
+
+priv fn trust_at_mode(dir: U8[], mode: U8[], arena: Arena$@): fs.Dir_trust //<
+    //< `dir_trust`'s answer once `chmod` has given the folder that mode
+    r: = subproc.run_capture(U8[][]::{ "chmod", mode, dir }, "", 60000, 1024, arena)
+    assert(r.exit_code == 0, "chmod must change the folder's mode")
+    return fs.dir_trust(dir)
+
+fn test_fs_dir_trust() //< dir_trust tells a folder others may write from one they may not
+    verdict.start("[Fs] dir_trust: a folder's owner alone, everyone, and nothing there test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(base, "trust_", arena) catch panic("mkdir_unique should make a directory")
+    assert(fs.dir_trust(fs.join(dir, "absent", arena)) == fs.Dir_trust.missing,
+        "a folder that is not there is missing")
+    if sys.is_windows()
+        assert(fs.dir_trust(dir) == fs.Dir_trust.unchecked, "Windows's ACL is not read")
+        fs_test.clear_tree_best_effort(dir, arena)
+        verdict.pass("A folder not there is missing, and Windows answers unchecked.")
+        return
+    // The umask decides the new folder's mode, so it is set on purpose before each look.
+    assert(trust_at_mode(dir, "700", arena) == fs.Dir_trust.own, "its owner alone writes it")
+    assert(trust_at_mode(dir, "777", arena) == fs.Dir_trust.shared, "everyone may write it")
+    fs_test.clear_tree_best_effort(dir, arena)
+    verdict
+        .pass("A folder its owner alone writes is own, one everyone writes is shared, and one not \
+            there is missing.")

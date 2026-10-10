@@ -59,15 +59,16 @@ priv fn declared_name(head: U8[]): U8[] //<
         for end < s.len && s[end] != ':' && s[end] != ' '
             end += 1
         return s.sub(1, end - 1)
-    sp: = s.find_char(' ')
-    if sp < 0
+    switch s.find_char(' ')
+    case .none
         return s
-    rest: = s.sub_from(sp + 1).trim_spaces()
-    $end: Sz = 0
-    for end < rest.len && rest[end] != '(' && rest[end] != '<' && rest[end] != ':' &&
-        rest[end] != ' '
-        end += 1
-    return rest.sub(0, end)
+    case .some(sp)
+        rest: = s.sub_from(sp + 1).trim_spaces()
+        $end: Sz = 0
+        for end < rest.len && rest[end] != '(' && rest[end] != '<' && rest[end] != ':' &&
+            rest[end] != ' '
+            end += 1
+        return rest.sub(0, end)
 
 priv fn is_head_line(line: U8[]): Bool //< whether a line opens a top-level declaration
     //<
@@ -89,34 +90,35 @@ fn walk_steps(laid: U8[], arena: Arena$@): List<|Step|> //<
         if !is_head_line(line)
             i += 1
             continue
-        at: = line.find_str(point_mark)
-        if at < 0
+        switch line.find_str(point_mark)
+        case .none
             i += 1
             continue
-        title: = line.sub_from(at + point_mark.len).trim_spaces()
-        $prose: = Str_builder.new()
-        defer prose.free()
-        $code: = Str_builder.new()
-        defer code.free()
-        code.s(line.sub(0, at).trim_end()).c('\n')
-        $j: = i + 1
-        for j < ls.len && !is_head_line(ls.get(j))
-            body: = ls.get(j)
-            t: = body.trim_spaces()
-            if t.starts_with(point_mark)
-                rest: = t.sub_from(point_mark.len).trim_spaces()
-                if rest.len > 0
-                    (prose.s(rest) if prose.len == 0 else prose.c(' ').s(rest))
-            else
-                code.s(body).c('\n')
-            j += 1
-        if title.len > 0
-            out
-                .push(Step::{ .name = declared_name(line.sub(0, at)),
-                .title = arena.dup_str(title),
-                .prose = arena.dup_str(prose.slice().trim_spaces()),
-                .code = arena.dup_str(code.slice().trim_end()) })
-        i = j
+        case .some(at)
+            title: = line.sub_from(at + point_mark.len).trim_spaces()
+            $prose: = Str_builder.new()
+            defer prose.free()
+            $code: = Str_builder.new()
+            defer code.free()
+            code.s(line.sub(0, at).trim_end()).c('\n')
+            $j: = i + 1
+            for j < ls.len && !is_head_line(ls.get(j))
+                body: = ls.get(j)
+                t: = body.trim_spaces()
+                if t.starts_with(point_mark)
+                    rest: = t.sub_from(point_mark.len).trim_spaces()
+                    if rest.len > 0
+                        (prose.s(rest) if prose.len == 0 else prose.c(' ').s(rest))
+                else
+                    code.s(body).c('\n')
+                j += 1
+            if title.len > 0
+                out
+                    .push(Step::{ .name = declared_name(line.sub(0, at)),
+                    .title = arena.dup_str(title),
+                    .prose = arena.dup_str(prose.slice().trim_spaces()),
+                    .code = arena.dup_str(code.slice().trim_end()) })
+            i = j
     return out
 
 priv fn braced_step(braced: U8[], name: U8[], arena: Arena$@): U8[] //<
@@ -130,8 +132,10 @@ priv fn braced_step(braced: U8[], name: U8[], arena: Arena$@): U8[] //<
         if !is_head_line(line) || !declared_name(line).equals(name)
             i += 1
             continue
-        at: = line.find_str(point_mark)
-        b.s(line.sub(0, at).trim_end() if at >= 0 else line).c('\n')
+        if at: = line.find_str(point_mark)
+            b.s(line.sub(0, at).trim_end()).c('\n')
+        else
+            b.s(line).c('\n')
         $j: = i + 1
         for j < ls.len && !is_head_line(ls.get(j))
             body: = ls.get(j)

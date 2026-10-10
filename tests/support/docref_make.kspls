@@ -62,19 +62,19 @@ priv fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` 
             file_only = false
             continue
         if ln.starts_with("suite_")
-            eq: = ln.find_str(" := ")
-            if eq > 0
+            if eq: = ln.find_str(" := ")
                 out.suites.push(ln.sub(6, eq - 6))
             continue
-        colon: = ln.find_char(':')
-        if colon <= 0 || file_only || ln[0] == '.' || ln[0] == '#' || ln[0] == '\t'
+        colon: = ln.find_char(':').unwrap_or(0)
+        if colon == 0 || file_only || ln[0] == '.' || ln[0] == '#' || ln[0] == '\t'
             continue
-        if Sz::colon + 1 < ln.len && ln[colon + 1] == '='
+        if colon + 1 < ln.len && ln[colon + 1] == '='
             continue
         name: = ln.sub(0, colon)
-        if name.find_char(' ') >= 0 || name.find_char('/') >= 0 || name.find_char('$') >= 0
+        if name.find_char(' ').is_some() || name.find_char('/').is_some() ||
+            name.find_char('$').is_some()
             continue
-        if name.find_char('%') >= 0
+        if name.find_char('%').is_some()
             out.patterns.push(name)
         else
             out.targets.push(name)
@@ -97,12 +97,12 @@ priv fn mention_of(text: U8[], arena: Arena$@): List<|Mention|> //<
             continue
         // A shell operator or a redirection ends the command.
         if w.equals("|") || w.equals("&&") || w.equals(";") || w.equals("||") || w.equals("#") ||
-            w.find_char('>') >= 0
+            w.find_char('>').is_some()
             break
         if w.equals("-C")
             after_c = true
             continue
-        if w[0] == '-' || w.find_char('=') >= 0 || !w[0].is_lower()
+        if w[0] == '-' || w.find_char('=').is_some() || !w[0].is_lower()
             continue
         $end: Sz = 0
         for end < w.len && (w[end].is_alnum() || w[end] == '-' || w[end] == '_')
@@ -183,8 +183,7 @@ priv fn names_a_target(text: U8[], arena: Arena$@): Bool
     return mention_of(text, arena).len > 0
 
 fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref_test.kspls`
-    tracked: = harness.tracked() catch
-        fallback List<|U8[]|>.new(arena)
+    tracked: = harness.tracked()
     $dirs: = List<|U8[]|>.new(arena)
     for rel in tracked
         if rel.ends_with("/Makefile") && rel.count_str("/") == 1

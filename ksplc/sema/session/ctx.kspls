@@ -1,3 +1,9 @@
+//< `Sema_ctx`, the context one whole analysis carries, and the diagnostics it reports
+//<
+//< It holds what every part of Sema reads (the current file and its source, the symbol table, the
+//< environment), the analysis's switches, a body walk's flags (`Fn_ctx`) and each concern's state
+//< (`sema/session/state.kspls`). Every diagnostic goes through `report_diagnostic`, which applies
+//< the `##lint` levels; declaring a symbol is checked here (`declare_symbol`).
 import "ksplc/base/ast" { Ast_node, Loc, is_anon_env_type, is_anon_fn_name }
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
@@ -279,6 +285,19 @@ impl Sema_ctx
 
     fn err(r: Self$@, node: Ast_node$@, msg: U8[])
         r.report_diagnostic(node, .error, msg)
+    fn check_param_type(r: Self$@, param: Ast_node$@, t_id: I32) //<
+        //< Refuses a parameter whose type is missing or Void, naming it
+        //<
+        //< **One wording for a function and a trait's prototype** (`infer_fn`, `trait_check`). An
+        //< omitted type resolves as "Unknown": normalisation writes the empty type in.
+        name: = param.find_text(.k_identifier)
+        if t_id == r.env.get_or_add("Unknown")
+            r.clear_scratch().s("parameter '\{name\}' has no type: write '\{name\}: <type>'")
+        else if t_id == r.env.get_or_add("Void")
+            r.clear_scratch().s("parameter '\{name\}' cannot be Void, which holds no value")
+        else
+            return
+        r.err(param, r.scratch.slice())
     fn warn(r: Self$@, node: Ast_node$@, msg: U8[])
         r.report_diagnostic(node, .warning, msg)
     fn information(r: Self$@, node: Ast_node$@, msg: U8[])
@@ -522,8 +541,8 @@ impl Sema_ctx
     fn report_undefined_symbol(r: Self$@, node: Ast_node$@, name: U8[])
         r.clear_scratch().s("undefined path or identifier '\{name\}'")
         if !r.append_anon_fn_capture_note(name)
-            dot: = name.find_char('.')
-            r.append_withheld_alias_note(name if dot < 0 else name.sub(0, dot))
+            head: = name.sub(0, name.find_char('.').unwrap_or(name.len))
+            r.append_withheld_alias_note(head)
         r.err(node, r.scratch.slice())
 
     fn append_withheld_alias_note(r: Self$@, name: U8[]): Bool //<
@@ -576,7 +595,7 @@ impl Sema_ctx
 
     fn append_missing_capture_list_note(r: Self$@, expected_id: I32) //<
         //< Adds the explanation above only where a function pointer is passed for a `Callable`
-        if r.env.get_str(r.env.get_clean_real_type(expected_id)).find_str("Callable") < 0
+        if r.env.get_str(r.env.get_clean_real_type(expected_id)).find_str("Callable").is_none()
             return
         r.append_closure_note()
 
@@ -644,54 +663,54 @@ impl Sema_ctx
 
         if !r.suppress_errors && name.len > 0 && !name.starts_with("_")
             if r.symtab.scope_stack.len > 0 && !sym.flags.is_global
-                existing_sym: = r.symtab.resolve(name) catch null
-                if existing_sym != null && !existing_sym.flags.is_global &&
-                    existing_sym.kind.is_var_or_const()
-                    r.clear_scratch()
-                        .s("[I0501] Declaration of '\{name\}' shadows an existing declaration in an \
-                            outer scope.")
-                    r.information(target_node, r.scratch.slice())
-                // **A local with an imported module's name hides the module**, and KSPL reaches
-                // both with `.`: an `io.out()` below it reads the local and fails as a missing
-                // member, far from the cause. A warning, not an error: shadowing stays legal
-                // ("Scope and shadowing" in docs/SPEC-language.md). The prelude's `lang`, an import
-                // nobody wrote, is excluded.
-                named: = r.peek_file_alias(r.file_name, name)
-                if named != null && named.decl_node != null
-                    r.clear_scratch()
-                        .s("[W0502] '\{name\}' hides the imported module '\{name\}': from here to \
-                            the end of its scope, '\{name\}.x' reads this instead. Rename it.")
-                    r.warn(target_node, r.scratch.slice())
-
+                r.report_hidden_name(name, target_node)
             if base_core.config.run_lint_checks && !sym.flags.is_ext &&
-                !sym.flags.is_generated_instance && name.find_char('.') == -1
-                if sym.kind.is_type()
-                    is_single_upper: = name.len == 1 && (name.ptr + 0).is_upper()
-                    $is_cap_snake: = name.len > 0 && (name.ptr + 0).is_upper()
-                    if is_cap_snake
-                        for $i_c: Sz = 1; i_c < name.len; i_c += 1
-                            ch: = (name.ptr + i_c)$
-                            if ch.is_upper()
-                                is_cap_snake = false
-                                break
-                    if !is_single_upper && !is_cap_snake
-                        r.clear_scratch()
-                            .s("[I0502] Type name '\{name\}' should use Capital_snake_case.")
-                        r.information(target_node, r.scratch.slice())
-                else if sym.kind.is_value()
-                    $allow_upper: = false
-                    if sym.flags.is_global
-                        switch sym.kind
-                        case .constant
-                            allow_upper = true
-                        default {}
-                    if !allow_upper
-                        r.check_snake_case(name, target_node, "Identifier")
+                !sym.flags.is_generated_instance && name.find_char('.').is_none()
+                r.lint_declared_name(name, sym, target_node)
 
         r.symtab.define_symbol(name, sym, export_global)
         if sym.node != null
             sym.node.sym_ptr = Void$@::sym
         return true
+
+    priv fn report_hidden_name(r: Self$@, name: U8[], target_node: Ast_node$@) //<
+        //< Reports a local that hides an outer local [I0501] or an imported module [W0502]
+        existing_sym: = r.symtab.resolve(name) catch null
+        if existing_sym != null && !existing_sym.flags.is_global &&
+            existing_sym.kind.is_var_or_const()
+            r.clear_scratch()
+                .s("[I0501] Declaration of '\{name\}' shadows an existing declaration in an outer \
+                    scope.")
+            r.information(target_node, r.scratch.slice())
+        // **A local with an imported module's name hides the module**, and KSPL reaches both with
+        // `.`: an `io.out()` below it reads the local and fails as a missing member, far from the
+        // cause. A warning, not an error: shadowing stays legal ("Scope and shadowing" in
+        // docs/SPEC-language.md). The prelude's `lang`, an import nobody wrote, is excluded.
+        named: = r.peek_file_alias(r.file_name, name)
+        if named != null && named.decl_node != null
+            r.clear_scratch()
+                .s("[W0502] '\{name\}' hides the imported module '\{name\}': from here to the end \
+                    of its scope, '\{name\}.x' reads this instead. Rename it.")
+            r.warn(target_node, r.scratch.slice())
+
+    priv fn lint_declared_name(r: Self$@, name: U8[], sym: Sema_symbol$@, target_node: Ast_node$@) //<
+        //< [I0502] Reports a name off its kind's convention
+        //<
+        //< A type is in Capital_snake_case (or a single capital, `T`), a value in snake_case; a
+        //< global constant may be upper case.
+        if sym.kind.is_type()
+            if !(name.len == 1 && (name.ptr + 0).is_upper()) && !is_capital_snake(name)
+                r.clear_scratch().s("[I0502] Type name '\{name\}' should use Capital_snake_case.")
+                r.information(target_node, r.scratch.slice())
+            return
+        if !sym.kind.is_value()
+            return
+        if sym.flags.is_global
+            switch sym.kind
+            case .constant
+                return
+            default {}
+        r.check_snake_case(name, target_node, "Identifier")
 
 // It releases what it owns with `free()`; see `Owned` in std/lang.kspls for why it conforms.
 impl Sema_ctx: Owned {}
@@ -754,3 +773,12 @@ impl Ast_node
                 c.clear_scratch()
                     .s("unknown lint level '\{level_node.text\}' (expected 'off', 'on', or 'error')")
                 c.err(level_node, c.scratch.slice())
+
+priv fn is_capital_snake(name: U8[]): Bool //<
+    //< whether name is `Capital_snake_case`: one capital, first
+    if name.len == 0 || !(name.ptr + 0).is_upper()
+        return false
+    for $i: Sz = 1; i < name.len; i += 1
+        if (name.ptr + i).is_upper()
+            return false
+    return true

@@ -467,7 +467,8 @@ fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field o
     $out: = Str_builder.new()
     defer out.free()
     store.save(got.doc, got.sheet, out@)
-    assert(out.slice().find_str("\"kspage\"") >= 0, "what is written back carries the version field")
+    assert(out.slice().find_str("\"kspage\"").is_some(),
+        "what is written back carries the version field")
     // **A version under another field name is refused**, not opened as version 0.
     store.load("{\"kswrite\":6,\"sheet\":{},\"blocks\":[]}", arena) catch e
         switch e
@@ -558,7 +559,7 @@ fn test_an_old_origin_mark_is_left_behind(arena: Arena$@) //<
     $again: = Str_builder.new()
     defer again.free()
     store.save(got.doc, got.sheet, again@)
-    assert(again.slice().find_str("origin") < 0, "the next save does not write the mark")
+    assert(again.slice().find_str("origin").is_none(), "the next save does not write the mark")
     verdict.pass("an old text's origin mark is read past, and not written again.")
 
 fn test_a_tied_line_is_refused(arena: Arena$@) //<
@@ -705,10 +706,10 @@ fn test_a_note_survives_the_round_trip(arena: Arena$@) //<
     written: = sb.slice()
     // **The text's packing is not copied** (`spacing` in `share/store.kspls`): only that the key
     // and the value are there. The round trip below checks that the value comes back right.
-    assert(written.find_str("\"note\"") >= 0 && written.find_str("\"the note's text\"") >= 0,
-        "the note's text is written out")
+    assert(written.find_str("\"note\"").is_some() &&
+        written.find_str("\"the note's text\"").is_some(), "the note's text is written out")
     // The number is not written; written, one added note would leave every number after it stale.
-    assert(written.find_str("\"note_number\"") < 0, "the number is not written out")
+    assert(written.find_str("\"note_number\"").is_none(), "the number is not written out")
 
     back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
     body: = back.doc.blocks.get(1)

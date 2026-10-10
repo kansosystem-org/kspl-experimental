@@ -154,6 +154,8 @@ priv fn tree_root(from: U8[], arena: Arena$@): U8[] //<
         at = up
     return ""
 
+priv const answer_wait_ms: I32 = 10000 //< how long a local server may take to answer one request
+
 priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
     //< Sends one request with our token to the server on that port, and returns the status
     //<
@@ -170,7 +172,9 @@ priv fn ask(at: I32, token: U8[], method: U8[], target: U8[]): I32 //<
         .build()
     http.write_request(stream, method, target, head, "") catch
         return 0
-    answer: = http.read_response(stream, arena, http.default_max_body_bytes) catch
+    // **A server that takes the request and goes quiet is no answer**: bounded, not waited on.
+    answer: =
+        http.read_response(stream, arena, http.default_max_body_bytes, answer_wait_ms) catch
         return 0
     return answer.status
 
@@ -337,6 +341,32 @@ priv fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, 
                 .s("\{sys.program_name()\}: could not start a browser. Please open the URL above\n")
     tell_how(doc, handed)
 
+priv fn wait_for_url(log: U8[]): U8[] //<
+    //< The URL the server writes to its log once it is up, or "" after `wait_steps` tries
+    for _step in Range.asc(wait_steps)
+        url: = aim.url_in_log(io.read_file(log) catch "")
+        if url.len > 0
+            return url
+        sys.sleep_ms(100)
+    return ""
+
+priv fn relay_log(log: U8[], child: subproc.Child$@) //<
+    //< It passes the server's log on to the output as it grows, until the server exits
+    //<
+    //< **`make kspage` watches this output**, so the server's output is passed through unchanged
+    //< (otherwise the lines about who connected reach nobody).
+    $sent: Sz = 0
+    for
+        seen: = io.read_file(log) catch
+            sys.sleep_ms(200)
+            continue
+        if seen.len > sent
+            io.out().s(seen.sub_from(sent))
+            sent = seen.len
+        if !child.alive()
+            return
+        sys.sleep_ms(200)
+
 fn main(): I32 //< opens one document in kspage, starting the server and the browser as needed
     io.set_line_buffered()
     arena: = Arena.new(64 * 1024)
@@ -369,7 +399,7 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
             .s("\{sys.program_name()\}: --list, --stop=<folder> and --stop-all each stand alone\n")
         return 1
     if !tending && p.rest.len != 1
-        p.print_usage()
+        p.print_usage(io.err())
         return 1
     cmd: = sys.args()
     where: = where_from(cmd.get(0), arena)
@@ -447,15 +477,7 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
             .s("\{sys.program_name()\}: cannot start \{where.server\} (the log it points at: \
                 \{where.log\})\n")
         return 1
-    $url: U8[] = ""
-    for $step: Sz = 0; step < wait_steps; step += 1
-        seen: = io.read_file(where.log) catch
-            sys.sleep_ms(100)
-            continue
-        url = aim.url_in_log(seen)
-        if url.len > 0
-            break
-        sys.sleep_ms(100)
+    url: = wait_for_url(where.log)
     if url.len == 0
         io.err()
             .s("\{sys.program_name()\}: the server did not come up in 30 seconds (\{where.log\})\n")
@@ -482,17 +504,5 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
         io.out().s("  * --list shows the servers left running, --stop=\{root\} stops this one\n\n")
         return 0
     io.out().s("  * to stop it: Ctrl+C\n\n")
-    // **`make kspage` watches this output**, so the server's output is passed through unchanged
-    // (otherwise the lines about who connected reach nobody).
-    $sent: Sz = 0
-    for
-        seen: = io.read_file(where.log) catch
-            sys.sleep_ms(200)
-            continue
-        if seen.len > sent
-            io.out().s(seen.sub_from(sent))
-            sent = seen.len
-        if !child.alive()
-            break
-        sys.sleep_ms(200)
+    relay_log(where.log, child@)
     return child.wait()

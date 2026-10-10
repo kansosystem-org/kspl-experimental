@@ -446,9 +446,19 @@ function kspageApi(ks) {
           img.src = src;
           return;
         }
+        // **The address is this measure's alone**, so it is released once the size is read; the
+        // drawing reads its own, kept while its picture is cached.
         load(src).then((url) => {
-          if (url) img.src = url;
-          else done(null);
+          if (!url) {
+            done(null);
+            return;
+          }
+          if (url.startsWith("blob:")) {
+            const release = () => URL.revokeObjectURL(url);
+            img.addEventListener("load", release);
+            img.addEventListener("error", release);
+          }
+          img.src = url;
         });
       });
     },

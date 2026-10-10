@@ -168,47 +168,63 @@ pub const script_env_name: U8[] = "KSPL_SCRIPT" //< how a launcher passes a scri
     //< The value is "<the launched executable's path>\n<the script's path>" (see script_path).
     //< Caution: Changing the name on only one side makes script_path silently return .none.
 
-// Overwrites an existing value; true if it was set. **A value set here is inherited by child
-// processes, and by grandchildren too**, so it does not apply to this launch only. **An empty value
-// is not set, and false is returned.** Windows's CRT treats an empty assignment as "delete", so the
-// same call would do different things per OS. To delete, call `unset_env`.
+#cfg(!freestanding)
+pub enum Env_error //< why an environment variable was not set or deleted
+    empty_value //< `set_env` was given an empty value; `unset_env` is what deletes
+    bad_name //< the name is empty, or holds `=` or a NUL, which no environment can store
+    bad_value //< the value holds a NUL, where C ends the text
+    refused //< the OS did not take it (out of memory, say)
+
+// Overwrites an existing value. **A value set here is inherited by child processes, and by
+// grandchildren too**, so it does not apply to this launch only. **An empty value is refused**:
+// Windows's CRT treats an empty assignment as "delete", so the same call would do different things
+// per OS. To delete, call `unset_env`.
+// Caution: **A failure is an error value, not a Bool**: a Bool left unread let a test go on under
+// the environment it meant to change, and its failure showed somewhere else.
 #cfg(!freestanding)
 pub fn set_env( //< sets an environment variable, which children inherit
     name: U8[], //< the variable's name
     value: U8[], //< the value; empty is refused, since `unset_env` is what deletes
-): Bool //< true when it was set; false for an empty value or a failure
+): Void!Env_error
     // **This is the only place that refuses.** Refusing in the per-OS layer would let one OS turn
     // it into "delete" as soon as only the other OS's layer was changed.
-    if value.len <= 0
-        return false
-    $name_buf: U8$@ = null
-    switch name.to_cstr()
-    case .some(p)
-        name_buf = p
-    case .none
-        return false
+    if value.len == 0
+        throw .empty_value
+    name_buf: = env_name_cstr(name)!
     defer dealloc(Void$@::name_buf)
     $val_buf: U8$@ = null
     switch value.to_cstr()
     case .some(p)
         val_buf = p
     case .none
-        return false
+        throw .bad_value
     defer dealloc(Void$@::val_buf)
-    return kspl_set_env(name_buf, val_buf)
+    if !kspl_set_env(name_buf, val_buf)
+        throw .refused
 
 // **This is the only way to delete** (see `set_env`). **A deletion is inherited by child
-// processes, and by grandchildren too**: it cleans up a variable passed along temporarily.
+// processes, and by grandchildren too**: it cleans up a variable passed along temporarily. Deleting
+// a name that is not set succeeds.
 #cfg(!freestanding)
-pub fn unset_env(name: U8[]): Bool //< deletes an environment variable, which children inherit
-    $name_buf: U8$@ = null
+pub fn unset_env(name: U8[]): Void!Env_error //<
+    //< deletes an environment variable, which children inherit
+    name_buf: = env_name_cstr(name)!
+    defer dealloc(Void$@::name_buf)
+    if !kspl_unset_env(name_buf)
+        throw .refused
+
+#cfg(!freestanding)
+priv fn env_name_cstr(name: U8[]): U8$@!Env_error //< the name as C takes it; the caller frees it
+    //<
+    //< **Refused here, the same on every OS**: POSIX's `setenv` refuses `=` while Windows's
+    //< `_wputenv_s` reads it as the end of the name, so the two would store different variables.
+    if name.len == 0 || name.find_char('=').is_some()
+        throw .bad_name
     switch name.to_cstr()
     case .some(p)
-        name_buf = p
+        return p
     case .none
-        return false
-    defer dealloc(Void$@::name_buf)
-    return kspl_unset_env(name_buf)
+        throw .bad_name
 
 // The equivalent of Python's `__file__`, so a script can find files beside it (with
 // `get_dir_name`). **It decides by matching argv[0].** The environment variable is inherited by
@@ -221,13 +237,12 @@ pub fn script_path(): U8[]? //< the script being run, if a launcher started this
         raw = v
     case .none
         return .none
-    sep: = raw.find_char('\n')
-    if sep < 0
-        return .none
-    a: = args()
-    if a.len == 0 || !raw.sub(0, sep).equals(a.get(0))
-        return .none
-    return .some(raw.sub_from(sep + 1))
+    if sep: = raw.find_char('\n')
+        a: = args()
+        if a.len == 0 || !raw.sub(0, sep).equals(a.get(0))
+            return .none
+        return .some(raw.sub_from(sep + 1))
+    return .none
 
 // The running program's **path as typed** (without the folder).
 // Caution: **Do not keep two paths**: argp uses the same `prog` for the usage and for errors, so
@@ -237,7 +252,7 @@ pub fn script_path(): U8[]? //< the script being run, if a launcher started this
 pub fn program_name(): U8[] //< this program's name for messages, without folder or extension
     switch script_path()
     case .some(p)
-        return get_file_name(p)
+        return strip_last_ext(get_file_name(p))
     case .none {}
     a: = args()
     if a.len == 0
@@ -288,8 +303,9 @@ pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Win
     //< Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to
     //< **that drive's current working directory**, not the root; skipping the separator creates a
     //< copy that answers differently in just that case. On POSIX `C:\x` is a relative name.
+    //< A root that opens with a separator is from the root whatever follows (`\\server\share`).
     n: = root_len(path)
-    return n > 0 && is_path_sep(path[n - 1])
+    return n > 0 && (is_path_sep(path[0]) || is_path_sep(path[n - 1]))
 
 pub fn is_path_sep(c: U8): Bool //< a path separator, `/` or `\`, on every OS; std/fs splits by it
     //<
@@ -301,12 +317,46 @@ pub fn root_len(path: U8[]): Sz //< the length of the root a path starts from; 0
     //<
     //< A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and
     //< `C:\` three there, while on POSIX `C:\x` is a relative name whose first folder is `C:`.
-    //< std/fs measures the root by this too, so the two cannot disagree.
+    //< On Windows a share is a root too, `\\server\share\`, and so is what follows `\\?\` or
+    //< `\\.\` (`\\?\C:\`, `\\?\UNC\server\share\`). A share needs its server's name: `\\` alone, or
+    //< a third separator, is the plain root `\`. std/fs measures the root by this too, so the two
+    //< cannot disagree.
+    if is_windows() && path.len >= 3 && is_path_sep(path[0]) && is_path_sep(path[1]) &&
+        !is_path_sep(path[2])
+        return windows_long_root_len(path)
     if path.len > 0 && is_path_sep(path[0])
         return 1
-    if !is_windows() || path.len < 2 || path[1] != ':'
+    if !is_windows()
+        return 0
+    return drive_root_len(path)
+
+priv fn drive_root_len(path: U8[]): Sz //< `C:` is two and `C:\` three; 0 for no drive
+    if path.len < 2 || path[1] != ':'
         return 0
     return 3 if path.len >= 3 && is_path_sep(path[2]) else 2
+
+priv fn windows_long_root_len(path: U8[]): Sz //< the root of a path opening with two separators
+    //<
+    //< Caution: **A share's root is its server and its share**: cut at the first separator, every
+    //< path on `\\server\share` would read as directly under `\\`, and its parent as the server.
+    //< After `\\?\` the next name is the root's (`C:`, `Volume{...}`), save `UNC`, which a share
+    //< follows.
+    if path.len >= 4 && (path[2] == '?' || path[2] == '.') && is_path_sep(path[3])
+        rest: = path.sub_from(4)
+        if rest.len >= 4 && rest.sub(0, 3).equals_ignore_case("UNC") && is_path_sep(rest[3])
+            return 8 + share_root_len(path.sub_from(8))
+        return 4 + name_len(rest)
+    return 2 + share_root_len(path.sub_from(2))
+
+priv fn share_root_len(rest: U8[]): Sz //< `server\share\`'s length at the start of rest
+    server: = name_len(rest)
+    return server + name_len(rest.sub_from(server))
+
+priv fn name_len(rest: U8[]): Sz //< the first name's length in rest, with the separator after it
+    $i: Sz = 0
+    for i < rest.len && !is_path_sep(rest[i])
+        i += 1
+    return i + 1 if i < rest.len else i
 
 pub fn get_dir_name(path: U8[]): U8[] //< the folder part, or empty if there is none
     //<
@@ -327,22 +377,23 @@ pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder 
     last_slash: = last_path_sep(path)
     return path if last_slash == -1 else path.sub(last_slash + 1, path.len - last_slash - 1)
 
-priv fn ext_dot(path: U8[]): I32 //<
-    //< The position of the extension's leading `.` (-1 if there is none)
+priv fn ext_dot(path: U8[]): Sz? //<
+    //< The position of the extension's leading `.`, or none
     //<
     //< **A filename's leading `.` is not an extension** (`.bashrc` has none).
-    dot: = path.rfind_char('.')
-    if dot < 0
-        return -1
-    return -1 if dot <= last_path_sep(path) + 1 else dot
+    if dot: = path.rfind_char('.')
+        if dot > Sz::last_path_sep(path) + 1
+            return .some(dot)
+    return .none
 
 pub fn strip_last_ext(path: U8[]): U8[] //< the path without its last extension
     //<
     //< **Joined with `last_ext`, it restores the original path** (`strip_last_ext(p) + last_ext(p)
     //< == p`), so there is no "which side gets the dot" to remember.
     //< Caution: Do not change only one of them.
-    dot: = ext_dot(path)
-    return path if dot < 0 else path.sub(0, dot)
+    if dot: = ext_dot(path)
+        return path.sub(0, dot)
+    return path
 
 pub fn last_ext(path: U8[]): U8[] //< the last extension with its dot, or empty if none
     //<
@@ -350,8 +401,9 @@ pub fn last_ext(path: U8[]): U8[] //< the last extension with its dot, or empty 
     //< (`last_ext(strip_last_ext("a.tar.gz"))` gives `".tar"`). **Do not add a plural such as
     //< `suffixes` in advance** (Principle 1 in `docs/DESIGN.md`); adding one later only joins
     //< paths.
-    dot: = ext_dot(path)
-    return "" if dot < 0 else path.sub_from(dot)
+    if dot: = ext_dot(path)
+        return path.sub_from(dot)
+    return ""
 
 extern "C"
     fn kspl_mono_us(): I64

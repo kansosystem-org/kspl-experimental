@@ -52,8 +52,10 @@ fn main(): I32 {
   buf.s("Content-Length: 58\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1}");
   $refused: = false;
   for i in Range.asc(20) {
-    if !ch.write(buf.slice()) {
+    ch.write(buf.slice(), 1000) catch {
       refused = true;
+    };
+    if refused {
       break;
     }
   }
@@ -132,7 +134,7 @@ priv fn check_dead_child(work: U8[], arena: Arena$@) //<
     verdict.check("writing to a peer that has ended does not crash", r.code == 0,
         arena.text().s("exit status \{r.code\} (141 = died by SIGPIPE) / output: \{r.out\}").take())
     verdict.check("a write to a peer that has ended gets an error back",
-        r.out.find_str("REFUSED") >= 0, r.out)
+        r.out.find_str("REFUSED").is_some(), r.out)
 
 priv fn check_head(work: U8[], arena: Arena$@) //<
     //< checks that it ends quietly once the destination is gone
@@ -163,7 +165,7 @@ priv fn check_child_default(work: U8[], arena: Arena$@) //<
         return
     r: = harness.run(U8[][]::{ exe })
     said: = r.out
-    if said.find_str("SigIgn:") < 0
+    if said.find_str("SigIgn:").is_none()
         verdict.skip_check("a started child holds SIGPIPE's default",
             arena.text().s("it cannot be read from `/proc/self/status`: \{said\}").take())
         return
@@ -180,8 +182,8 @@ fn main(): I32 //<
     arena: = harness.begin(64 * 1024 * 1024)
     // **On Windows there is nothing to test**: no SIGPIPE, and a write to a closed named pipe
     // returns a failure (hosted.c's Windows branch).
-    if harness.cc_target().find_str("windows") >= 0 ||
-        harness.cc_target().find_str("mingw") >= 0
+    if harness.cc_target().find_str("windows").is_some() ||
+        harness.cc_target().find_str("mingw").is_some()
         verdict.skip_check("writing when nobody is left to read it", "Windows has no SIGPIPE")
         return harness.finish()
     work: = harness.sandbox("brokenpipe") catch

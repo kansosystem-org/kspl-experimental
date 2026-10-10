@@ -71,7 +71,7 @@ Eight rules come first in every folder: in the language, the libraries, the tool
 | :-- | :-- | :-- | :-- | :-- |
 | 1 | The Zen of Subtraction | Take a feature on only if its benefit outweighs all it costs, and remove one that stops paying its way | `Callable3` is not added: `std/seq` needs no more than two arguments, and "it would be handy" shows no price (§8.1) | By review |
 | 2 | Warning Zero | The build prints no warning, from `ksplc` or from the C compiler | A C `char*` is received as `Void@`, since `U8@` makes the C compiler warn (§7.2) | `make lint`, which passes only at zero, and `make test-c-warnings` |
-| 3 | Keeping file size down and even | Keep files and functions short: split a file where its parts are read for different reasons, and merge a small file into its only user | A file holds at most 1000 lines, a function 300 | `make test-conventions` |
+| 3 | Keeping file size down and even | Keep files and functions short: split a file where its parts are read for different reasons, and merge a small file into its only user | A file holds at most 1000 lines, a function 300 | `make test-conventions` for a file, `make lint` (H0803) for a function |
 | 4 | Following DRY — one canonical source, copies tied together by a check | Keep each fact in one place. Where a copy must exist, a check compares it with the original | A runtime helper written in C and its LLVM counterpart are compared by `make test-conventions` (§7.2) | The check added with each copy, most of them in `make test-conventions` |
 | 5 | Do not leave anything "writable but ineffective" | Whatever the compiler or a tool accepts must have an effect; otherwise it is an error | `defer` has no capture list, since one would change nothing (§4.2) | By review; each check's own samples show that the check can fire |
 | 6 | One means to one purpose | Offer one way to write each thing | No number casts to `Bool`, since `x != 0` already says it (§2.10) | By review |
@@ -2654,7 +2654,7 @@ CI's machines effectively have one core, so the only way to make the gates faste
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, so the wall clock does not shrink (the total fixes it), while a fine-grained name points straight at the cause when it fails. Only the same property inspected in two places may be merged.
 
-**When reducing the total, look at the heavy individuals, not the count.** The time is skewed per suite and per case. `ksplc/tests/negative/` is mostly a handful of cases that poke the depth safety valve. Their input must exceed a 1000-level ceiling and costs quadratically in the level count, so a large count does not mean a large amount of time.
+**When reducing the total, look at the heavy individuals, not the count.** The time is skewed per suite and per case. `ksplc/tests/negative/` is mostly a handful of cases that poke the depth safety valve. Their input must exceed the 1000 levels the compiler's walks over a type allow (`max_type_unwrap_depth` in `ksplc/sema/type/query.kspls` and its kind) and costs quadratically in the level count, so a large count does not mean a large amount of time.
 
 ### 15.3 'Supported' means someone uses it
 
@@ -2677,7 +2677,7 @@ stateDiagram-v2
     Supported --> CI: nobody develops on it any more
 ```
 
-**The C compiler is part of the environment.** ksplc emits C, and what becomes of it is the C compiler's: the warnings, the libraries a link needs, the object format, what C leaves unspecified. So a row names an operating system, an architecture and a C compiler together, and "Linux" alone is no row. No gate builds the generated C with GCC. So Principle 2's warning zero is kept on clang only, and GCC stands among the untested (Principle 8: a check seeing part is not read as the whole).
+**The C compiler is part of the environment.** ksplc emits C, and what becomes of it is the C compiler's: the warnings, the libraries a link needs, the object format, what C leaves unspecified. So a row names an operating system, an architecture and a C compiler together, and "Linux" alone is no row. GCC compiles the generated C in one gate alone, `make test-c-warnings`, which keeps Principle 2's warning zero on it as on clang. No gate builds the compiler or runs a program with GCC, so GCC stands among the untested (Principle 8: a check seeing part is not read as the whole).
 
 **A level is named by what stands behind it, not numbered.** A number, or "it builds", tells a reader nothing about whether their program runs, and a reader not told rounds it up to "supported".
 

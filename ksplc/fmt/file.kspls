@@ -81,6 +81,7 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
         io.err().s(" (leave `--in-place` off and it puts it out to standard output).\n")
         throw .refused
     raw: = io.read_file(in_path) catch e
+        io.err().s(base_diag.io_line(e, "fmt/io"))
         throw .parse(.io(e))
     defer dealloc(Void$@::raw.ptr)
     // The `defer` above frees the original buffer. The fixed-up text lives on the arena, so never
@@ -145,6 +146,7 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
     if in_place
         if !raw.equals(out_bytes)
             io.write_file(in_path, out_bytes) catch e
+                io.err().s(base_diag.io_line(e, "fmt/io"))
                 throw .parse(.io(e))
             base_diag.log().s("Formatted (in-place): \{in_path\}\n")
     else

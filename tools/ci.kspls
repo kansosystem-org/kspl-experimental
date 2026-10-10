@@ -4,13 +4,13 @@
 //< **The gates and which job runs each are `tools/ci_gates.kspls`'s table**; this file only runs
 //< them. `make ci` and its siblings call it with their own name (`mk/ci.mk`), and `make ci-summary`
 //< asks it for the summary the workflow shows.
-//< Caution: **Stop at the first gate that falls**, as `make` did: later gates build on earlier
-//< ones, so what fails after a fall is noise.
+//< **A fallen gate does not stop the set**, so one round names every gate that falls; only a gate
+//< the later ones build on (`Gate.stops`, the self-host) stops it, as what fails after it is noise.
 
 // ==========================================
 // Usage:
 //     ksplc run tools/ci.kspls ci|ci-linux|ci-linux-only|ci-macos|ci-shard-<shard>
-//         [--make=<make>] [--jobs=<n>]
+//         [--make=<make>] [--jobs=<n>] [--platform=<linux|darwin|win32>]
 //     ksplc run tools/ci.kspls summary [--jobs=<n>] [--title=<text>]
 // ==========================================
 import "std/argp"
@@ -32,28 +32,30 @@ fn main(): I32
     $make: U8[] = "make"
     $jobs: I64 = 1I64
     $title: U8[] = "ci"
+    $platform: U8[] = ""
     p: = argp.Parser
         .create(sys.program_name(), "run a set of CI gates, or print the summary", arena)
     p.positional("<set> | summary")
     p.str_opt("--make", make@, "the make to run each gate with (make passes its own)")
     p.int_opt("--jobs", jobs@, "how many jobs a gate run with -j takes")
     p.str_opt("--title", title@, "the summary's heading (the workflow names its job)")
+    p.str_opt("--platform", platform@, "make's PLATFORM: a SKIP its rows do not expect fails")
     p.parse_or_exit(sys.args(), arena)
     if p.rest.len != 1 || jobs < 1I64
-        p.print_usage()
+        p.print_usage(io.err())
         return 2
     name: = p.rest.get(0)
     if name.equals("summary")
         return summary(title, jobs, arena)
     switch ci_gates.set_from(name, arena)
     case .some(s)
-        return run_set(name, s, make, jobs, arena)
+        return run_set(name, s, make, jobs, platform, arena)
     case .none
         io.err().s("ci: no set is named '\{name\}'\n")
-        p.print_usage()
+        p.print_usage(io.err())
         return 2
 
-priv fn run_set(name: U8[], s: Set, make: U8[], jobs: I64, arena: Arena$@): I32 //<
+priv fn run_set(name: U8[], s: Set, make: U8[], jobs: I64, platform: U8[], arena: Arena$@): I32 //<
     //< Runs every gate of the set in the table's order; 0 when all passed
     //<
     //< **Every set refuses a gate no set runs**: it would go green everywhere, run nowhere.
@@ -66,20 +68,25 @@ priv fn run_set(name: U8[], s: Set, make: U8[], jobs: I64, arena: Arena$@): I32 
                 .s("ci: macOS runs the gate '\{g.log\}', and its make 3.81 has no --output-sync\n")
             return 1
     fs.mkdir_all(ci_gates.log_dir) catch {}
-    ci_gates.reset_logs(arena)
+    if !ci_gates.reset_logs(arena)
+        return 1
     $count: Sz = 0
+    $fallen: Sz = 0
     for g in ci_gates.gates
         if !s.runs(g)
             continue
         count += 1
-        if !run_gate(g, make, jobs, arena)
-            print_digest(jobs, arena)
-            return 1
+        if !run_gate(g, make, jobs, platform, arena)
+            fallen += 1
+            if g.stops
+                break
     // **A set that runs nothing has gone wrong**: a gate moved to a shard no job runs.
     if count == 0
         io.err().s("ci: the set '\{name\}' holds no gate\n")
         return 1
     print_digest(jobs, arena)
+    if fallen > 0
+        return 1
     io.out().s("# \{name\}: ALL GREEN\n")
     return 0
 
@@ -89,7 +96,7 @@ priv fn run_anywhere(g: Gate): Bool //< whether some set runs the gate
             return true
     return false
 
-priv fn run_gate(g: Gate, make: U8[], jobs: I64, arena: Arena$@): Bool //<
+priv fn run_gate(g: Gate, make: U8[], jobs: I64, platform: U8[], arena: Arena$@): Bool //<
     //< Runs one gate through `make`, its output on the screen and in its log; true when it passed
     //<
     //< **`bash -o pipefail`**, or the pipe answers with `tee`'s status and a fallen gate passes.
@@ -114,6 +121,12 @@ priv fn run_gate(g: Gate, make: U8[], jobs: I64, arena: Arena$@): Bool //<
     if rc == 0 && g.verdict && !said_verdict(log, arena)
         rc = 1
         why = "no RESULT line"
+    if rc == 0 && platform.len > 0
+        if odd: = unexpected_skip(log, platform, arena)
+            rc = 1
+            why = odd
+            io.out().s("# \{g.log\}: a SKIP no row of `expected_skips` holds for \{platform\}: ")
+                .s(odd).c('\n')
     $end: = Str_builder.new()
     defer end.free()
     end.s("\{rc\} \{sec\}\n")
@@ -121,6 +134,17 @@ priv fn run_gate(g: Gate, make: U8[], jobs: I64, arena: Arena$@): Bool //<
     if rc != 0
         annotate(g.log, log, rc, why, arena)
     return rc == 0
+
+priv fn unexpected_skip(log: U8[], platform: U8[], arena: Arena$@): U8[]? //<
+    //< The log's first SKIP line `ci_gates.expected_skips` does not hold for the platform, if any
+    text: = io.read_file(log) catch
+        return .none
+    held: = arena.dup_str(text)
+    dealloc(Void$@::text.ptr)
+    for line in ci_gates.skip_lines(held, arena)
+        if !ci_gates.is_expected_skip(line, platform)
+            return .some(line)
+    return .none
 
 priv fn said_verdict(log: U8[], arena: Arena$@): Bool //<
     //< Whether the log holds the line a passing gate prints
@@ -147,7 +171,7 @@ priv fn annotate(name: U8[], log: U8[], rc: I32, why: U8[], arena: Arena$@) //<
                 break
     if reason.len == 0
         for line in text.lines(arena)
-            if line.find_str("*** [") >= 0
+            if line.find_str("*** [").is_some()
                 reason = arena.dup_str(line)
                 break
     if text.len > 0

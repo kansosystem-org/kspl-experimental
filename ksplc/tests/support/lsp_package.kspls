@@ -38,7 +38,8 @@ priv fn def_uri(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[] //<
 
 priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
     //< How many diagnostics a `didOpen` of the user's document reports; -1 where none came
-    _sent: = c.notify("textDocument/didOpen", lsp_client.did_open(uri, own_user, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(uri, own_user, arena), lsp_client.send_ms,
+        arena) catch {}
     for _k in Range.asc(12)
         msg: = c.read_msg(normal_ms, arena) catch
             break
@@ -79,8 +80,8 @@ fn run(exe: U8[], arena: Arena$@)
     verdict.check("asked by the file:// URI, the jump lands on the file in its folder",
         back.equals(want),
         lsp_client.why(c@, arena.text().s("'").s(back).s("'").take(), arena))
-    _flat_open: = c.notify("textDocument/didOpen",
-        lsp_client.did_open("use/user.kspls", own_user, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open("use/user.kspls", own_user, arena),
+        lsp_client.send_ms, arena) catch {}
     flat: = def_uri(c@, "use/user.kspls", arena)
     verdict.check("asked by the folder-relative name, it answers by that name",
         flat.equals("lib.kspls"),
@@ -100,13 +101,13 @@ fn run(exe: U8[], arena: Arena$@)
     // **The range left out is recorded under the logical name**, which a copy's URI need not end
     // with.
     gated: = lsp_client.uri_of(top, "gated.kspls", arena)
-    _gated_open: = c.notify("textDocument/didOpen",
-        lsp_client.did_open(gated, own_gated, arena), arena)
+    c.notify("textDocument/didOpen", lsp_client.did_open(gated, own_gated, arena),
+        lsp_client.send_ms, arena) catch {}
     why: =
         c.request("textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena), normal_ms, arena)
         catch
         fallback .null_val
     said: = lsp_client.hover_text(why)
     verdict.check("what an unraised #cfg leaves out of it answers with the reason",
-        said.find_str("not analyzed") >= 0,
+        said.find_str("not analyzed").is_some(),
         lsp_client.why(c@, arena.text().s("'").s(said).s("'").take(), arena))

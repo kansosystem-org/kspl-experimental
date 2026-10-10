@@ -17,9 +17,6 @@ import "std/reflect"
 import "std/str" { Str_builder }
 import "std/verdict"
 
-// ==========================================
-// The round trip through std/reflect's field table (from_struct / into_struct).
-// ==========================================
 priv struct Sample
     label: U8[]
     count: I64
@@ -116,14 +113,30 @@ impl Narrow_bag: reflect.Reflectable {}
 
 fn test_json_struct_roundtrip(arena: Arena$@)
     verdict.start("[Json] walking the table to round-trip a whole container test...")
-    src: Sample = ::{ .label = "cold", .count = 7052, .ratio = 1.25, .ok = true, .tries = 3 }
 
-    // A key is the field's name, in the table's order.
     $b: = Json_builder.new(arena)
     $out: = Str_builder.new()
     defer out.free()
-    written1: = json_struct.from_struct(src@, b@) catch panic("json: writing does not fail")
-    written1.dump(out@, 0)
+    roundtrip_flat(b@, out@, arena)
+    refuse_missing_and_null(arena)
+    roundtrip_nest(b@, out@, arena)
+    roundtrip_container(b@, out@, arena)
+    roundtrip_option(b@, out@, arena)
+    roundtrip_widths(b@, out@, arena)
+    roundtrip_narrow(b@, out@, arena)
+
+    verdict
+        .pass("A synthesized table walks nests, containers, present-or-absent and number widths, \
+            while a hand-written table stays as it is. A missing key, a null and a difference in \
+            shape are refused with different values.")
+
+priv fn roundtrip_flat(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
+    //< A flat struct round-trips under a hand-written and a synthesized table
+    src: Sample = ::{ .label = "cold", .count = 7052, .ratio = 1.25, .ok = true, .tries = 3 }
+
+    // A key is the field's name, in the table's order.
+    written1: = json_struct.from_struct(src@, b) catch panic("json: writing does not fail")
+    written1.dump(out, 0)
     want: U8[] = "{\"tag\":\"cold\",\"count\":7052,\"ratio\":1.25,\"ok\":true,\"tries\":3}"
     hand_written: = out.slice().equals(want)
     assert(hand_written,
@@ -142,8 +155,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     // Where ksplc builds the table, **a key is the declared field name.**
     out.clear()
     derived: Derived = ::{ .label = "cold", .count = 7052, .ratio = 1.25, .ok = true, .tries = 3 }
-    written2: = json_struct.from_struct(derived@, b@) catch panic("json: writing does not fail")
-    written2.dump(out@, 0)
+    written2: = json_struct.from_struct(derived@, b) catch panic("json: writing does not fail")
+    written2.dump(out, 0)
     want_derived: U8[] =
         "{\"label\":\"cold\",\"count\":7052,\"ratio\":1.25,\"ok\":true,\"tries\":3}"
     derived_keys: = out.slice().equals(want_derived)
@@ -158,6 +171,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
         derived_back.tries == 3
     assert(all_back, "json: everything round-trips under a synthesized table")
 
+priv fn refuse_missing_and_null(arena: Arena$@) //<
+    //< A missing key and a null key are refused with different values
     // Refuse a missing key and a null one with different values; with a default, a misspelled name
     // on the sender's side would show only as "the value was 0".
     $absent: U8[] = ""
@@ -183,12 +198,14 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     assert(nulled_at.equals("label"),
         "json: a key that is present and null is refused as a difference in kind")
 
+priv fn roundtrip_nest(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
+    //< A nest round-trips, and its shape errors name the key
     // A nest becomes nested JSON, not a flat key (`cold.ms`).
     out.clear()
     both: Both = ::{ .tag = "t", .cold = ::{ .ms = 1, .bytes = 2 },
         .warm = ::{ .ms = 3, .bytes = 4 } }
-    written3: = json_struct.from_struct(both@, b@) catch panic("json: writing does not fail")
-    written3.dump(out@, 0)
+    written3: = json_struct.from_struct(both@, b) catch panic("json: writing does not fail")
+    written3.dump(out, 0)
     want_nested: U8[] =
         "{\"tag\":\"t\",\"cold\":{\"ms\":1,\"bytes\":2},\"warm\":{\"ms\":3,\"bytes\":4}}"
     nested_keys: = out.slice().equals(want_nested)
@@ -231,6 +248,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     named_key: = not_obj.equals("cold")
     assert(named_key, "json: a value handed over that is not a nest is refused by the key's name")
 
+priv fn roundtrip_container(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
+    //< A container round-trips, and a non-array is refused by its key
     // **A container's positions do not depend on the element type**: `std/json` uses those of `U8`
     // for all of them.
     same_ptr: = offsetof(List<|I64|>, ptr) == offsetof(List<|Half|>, ptr)
@@ -246,8 +265,8 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     $items: = List<|Half|>.new(arena)
     items.push(::{ .ms = 10, .bytes = 20 })
     doc: Doc = ::{ .name = "d", .nums = nums, .items = items }
-    written4: = json_struct.from_struct(doc@, b@) catch panic("json: writing does not fail")
-    written4.dump(out@, 0)
+    written4: = json_struct.from_struct(doc@, b) catch panic("json: writing does not fail")
+    written4.dump(out, 0)
     want_list: U8[] = "{\"name\":\"d\",\"nums\":[1,2],\"items\":[{\"ms\":10,\"bytes\":20}]}"
     list_keys: = out.slice().equals(want_list)
     assert(list_keys,
@@ -280,12 +299,14 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     named_list: = not_arr.equals("nums")
     assert(named_list, "json: a value handed over that is not an array is refused by the key's name")
 
+priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
+    //< A field that may be absent round-trips, and an explicit null is refused
     // **`.none` writes no key.** Writing `null` would give two ways to say "it is absent".
     out.clear()
     spec: Spec = ::{ .family = .some("serif"), .size_px = .none, .weight = .some(700I64),
         .part = .some(::{ .ms = 1, .bytes = 2 }) }
-    written5: = json_struct.from_struct(spec@, b@) catch panic("json: writing does not fail")
-    written5.dump(out@, 0)
+    written5: = json_struct.from_struct(spec@, b) catch panic("json: writing does not fail")
+    written5.dump(out, 0)
     want_opt: U8[] = "{\"family\":\"serif\",\"weight\":700,\"part\":{\"ms\":1,\"bytes\":2}}"
     opt_keys: = out.slice().equals(want_opt)
     assert(opt_keys, "json: an absent field writes no key, and only the fields present line up")
@@ -321,14 +342,16 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     named_null: = null_at.equals("family")
     assert(named_null, "json: an explicit null is refused with the key's name attached")
 
+priv fn roundtrip_widths(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
+    //< Every number width round-trips with its sign
     // Caution: **Check that an unsigned value is not read with sign extension**, which makes
     // `U8`=200, `U16`=60000 and `U32`=0xFFFFFFFF negative.
     out.clear()
     widths: Widths = ::{ .tiny = -5, .short_num = -300, .mid = -70000, .wide = -5000000000I64,
         .u_tiny = 200, .u_short = 60000, .u_mid = 4294967295, .u_wide = U64::12345678901234I64,
         .count = 42, .narrow = 1.5, .broad = 2.25 }
-    written6: = json_struct.from_struct(widths@, b@) catch panic("json: writing does not fail")
-    written6.dump(out@, 0)
+    written6: = json_struct.from_struct(widths@, b) catch panic("json: writing does not fail")
+    written6.dump(out, 0)
     want_widths: U8[] =
         "{\"tiny\":-5,\"short_num\":-300,\"mid\":-70000,\"wide\":-5000000000,\"u_tiny\":200,\"u_short\":60000,\"u_mid\":4294967295,\"u_wide\":12345678901234,\"count\":42,\"narrow\":1.5,\"broad\":2.25}"
     width_keys: = out.slice().equals(want_widths)
@@ -353,14 +376,16 @@ fn test_json_struct_roundtrip(arena: Arena$@)
     float_back: = widths_back.narrow == 1.5 && widths_back.broad == 2.25
     assert(float_back, "json: F32 and F64 round-trip")
 
+priv fn roundtrip_narrow(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
+    //< A narrow element and a narrow content round-trip
     // A container's element and an option's content: **the `extra.elem_size` path.**
     out.clear()
     $codes: = List<|U16|>.new(arena)
     codes.push(60000)
     codes.push(1)
     bag: Narrow_bag = ::{ .codes = codes, .scale = .some(1.5) }
-    written7: = json_struct.from_struct(bag@, b@) catch panic("json: writing does not fail")
-    written7.dump(out@, 0)
+    written7: = json_struct.from_struct(bag@, b) catch panic("json: writing does not fail")
+    written7.dump(out, 0)
     want_bag: U8[] = "{\"codes\":[60000,1],\"scale\":1.5}"
     bag_keys: = out.slice().equals(want_bag)
     assert(bag_keys, "json: a narrow element and content are written keeping their sign too")
@@ -378,11 +403,6 @@ fn test_json_struct_roundtrip(arena: Arena$@)
         got_scale = v
     scale_back: = got_scale == 1.5
     assert(scale_back, "json: a narrow content round-trips")
-
-    verdict
-        .pass("A synthesized table walks nests, containers, present-or-absent and number widths, \
-            while a hand-written table stays as it is. A missing key, a null and a difference in \
-            shape are refused with different values.")
 
 priv struct Lengths //< a size, which is signed
     gap: Sz
@@ -487,3 +507,27 @@ fn test_json_struct_out_of_range(arena: Arena$@)
     assert(wide_named, "json: a U64 past the largest I64 is refused on writing")
     verdict
         .pass("An integer past its field's sign or width is refused by name, reading and writing.")
+
+fn test_reflect_load_store() //<
+    //< Each width stored and read back, signed and unsigned, and a float through either width
+    //<
+    //< **The same bytes read two ways**: -1 stored in one byte is -1 signed and 255 unsigned, so a
+    //< reader that sign-extends the wrong kind shows here.
+    verdict.start("[Reflect] storing and loading a field of each width test...")
+    $buf: U8[8] = ::{}
+    at: = buf@
+    for width in Sz[]::{ 1, 2, 4, 8 }
+        reflect.store_int(at, width, -1)
+        assert(reflect.load_int(at, width) == -1I64, "a signed field reads back what was stored")
+    reflect.store_int(at, 1, -1)
+    assert(reflect.load_uint(at, 1) == 255I64, "one byte of ones is 255 unsigned")
+    reflect.store_int(at, 2, -2)
+    assert(reflect.load_uint(at, 2) == 65534I64, "two bytes read unsigned are not sign-extended")
+    reflect.store_int(at, 4, 1234567)
+    assert(reflect.load_int(at, 4) == 1234567I64, "four bytes keep a value that fits")
+    reflect.store_int(at, 2, 70000)
+    assert(reflect.load_uint(at, 2) == 70000I64 - 65536I64, "a store narrows to its width")
+    for width in Sz[]::{ 4, 8 }
+        reflect.store_float(at, width, 1.5)
+        assert(reflect.load_float(at, width) == 1.5, "a float of either width reads back")
+    verdict.pass("Each width round-trips, read signed and unsigned, and floats of both widths.")

@@ -69,11 +69,11 @@ priv fn check_ht16k33_callers(c: jsonrpc.Client$@, item: json.Val, arena: Arena$
     for i in Range.asc(calls.len)
         from: = calls.get(i).get("from")
         rel: = from.get("uri").as_str()
-        if harness.read_under_root(rel).find_str("ht16k33") < 0
+        if harness.read_under_root(rel).find_str("ht16k33").is_none()
             strays.push(rel)
         // An ordinary call must not carry the "passed as a function pointer" mark, or the reader
         // cannot tell how certain the call is.
-        if from.get("detail").as_str().find_str("fn pointer") >= 0
+        if from.get("detail").as_str().find_str("fn pointer").is_some()
             marked.push(from.get("name").as_str())
     // Caution: **Do not merge "did it come back" and "is nothing mixed in" into one check**, or an
     // empty answer fails as "an unrelated file mixed in" with an empty explanation.
@@ -139,7 +139,7 @@ priv fn check_fn_pointer(c: jsonrpc.Client$@, arena: Arena$@) //< callers via a 
             found = true
     entry: = call.get("from")
     d10: = lsp_client.dump(entry, arena)
-    ok8: = found && entry.get("detail").as_str().find_str("fn pointer") >= 0
+    ok8: = found && entry.get("detail").as_str().find_str("fn pointer").is_some()
     verdict.check("that place carries the fn pointer mark", ok8, d10)
     // One range per place the pointer is passed (counting both identifier and path gives two).
     ranges: = call.get("fromRanges").arr_list(arena)
@@ -211,7 +211,10 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", init, 1, arena))
     jsonrpc.frame_into(frames@,
         jsonrpc.encode("callHierarchy/incomingCalls", params, query_id, arena))
-    _wrote: = w.write(frames.slice())
+    w.write(frames.slice(), 300000) catch
+        verdict.check(name, false, "the worker took no request")
+        w.kill()
+        return
     w.close_stdin()
     buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
     $last: = sys.mono_us()
@@ -254,7 +257,8 @@ fn main(): I32
     exe: = ksplc_harness.ksplc_exe()
     root: = harness.root()
     // Start it with the server left standing (the reason is `lsp_client.kspls`'s opening header).
-    _std_dir: = sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir())
+    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir()) catch panic("KSPLC_STD_DIR could not be \
+        set")
     // **Call it before the other queries.** The silence is measured with nothing read yet; placed
     // after them, the files are already read and a lighter path is measured.
     check_worker_alive_workspace(exe, root, arena)

@@ -81,9 +81,9 @@ The design is chapter 3 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md).
 
 | Folder | The question it answers | Files |
 | :-- | :-- | :-- |
-| [`type/`](sema/type/) | How is a type or a name expressed? | `env` / `query` / `arc` (the type table and its queries), `scope` (the symbol table: from a name to what it declares), `display` (the strings a diagnostic prints) |
+| [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `scope` (the symbol table: from a name to what it declares), `display` (the strings a diagnostic prints) |
 | [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx` itself, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the import declarations and their ledger), `pointer` (what a comment's pointer stands for), `c_boundary` (what the generated C cannot hold), `prof` (the breakdown of sema's time) |
-| [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst` / `variance`), the traits (`trait_check` / `trait_default`) |
+| [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
 | [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
 | [`body/`](sema/body/) | Is the code right? | `infer` (the main walk), the expressions, the statements, the calls (`generic_infer` reads a call's type arguments off its arguments), the coercions, `lint_stmt` |
 
@@ -186,7 +186,7 @@ The design is §10.1 to §10.12 of [`ksplc/docs/DESIGN.md`](docs/DESIGN.md). Wha
 **It turns the Parse layer's AST back into neatly laid-out source text** (`ksplc fmt`).
 
 * [`printer.kspls`](fmt/printer.kspls) — the printer, moving forward through the original text and never back.
-* [`trivia.kspls`](fmt/trivia.kspls) the comments and blank lines between the tokens, [`space.kspls`](fmt/space.kspls) the whitespace and wrapping (carrying a string onto the next line among them), and [`style.kspls`](fmt/style.kspls) the settings `--style` reads.
+* [`trivia.kspls`](fmt/trivia.kspls) the comments and blank lines between the tokens (with [`comment.kspls`](fmt/comment.kspls) deciding where a comment too wide is cut), [`space.kspls`](fmt/space.kspls) the whitespace and wrapping (carrying a string onto the next line among them), and [`style.kspls`](fmt/style.kspls) the settings `--style` reads.
 * What it reads from, kept apart: [`kinds.kspls`](fmt/kinds.kspls) sorts the node kinds and the token spellings, [`source.kspls`](fmt/source.kspls) reads the original text around a position, and [`measure.kspls`](fmt/measure.kspls) a node's shape and width.
 * [`import.kspls`](fmt/import.kspls) — puts the run of `import`s into name order before the printer runs.
 * [`text.kspls`](fmt/text.kspls) — the one path through a text that both `ksplc fmt` and the lint take (the imports' order, the printer, the rounds that put parentheses in).

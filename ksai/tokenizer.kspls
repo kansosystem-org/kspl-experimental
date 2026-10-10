@@ -12,11 +12,45 @@ import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 
 priv fn hex_byte(hi: U8, lo: U8): U8 //< two hex digits -> one byte
     //<
-    //< Restores vocab.txt's byte sequences; an invalid character reads as 0 (vocab.txt is not
-    //< strictly validated). The digit decoding itself is `U8.hex_val` in str.
-    h: = hi.hex_val()
-    l: = lo.hex_val()
-    return U8::(((h if h >= 0 else 0) << 4) | (l if l >= 0 else 0))
+    //< Restores vocab.txt's byte sequences, which `load` has checked are hex (`is_hex_bytes`). The
+    //< digit decoding itself is `U8.hex_val` in str.
+    return U8::((hi.hex_val() << 4) | lo.hex_val())
+
+priv fn is_hex_bytes(text: U8[]): Bool //< whether it is whole bytes written as hex digits
+    if text.len % 2 != 0
+        return false
+    for c in text
+        if c.hex_val() < 0
+            return false
+    return true
+
+priv const id_max: Sz = 2147483647 //< the largest ID an `I32` holds
+
+priv fn token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
+    //<
+    //< Caution: **Check every character is a digit.** `parse_size` stops at the first one that is
+    //< not, so `12x` would read as 12.
+    if text.len == 0
+        return .none
+    for c in text
+        if !c.is_digit()
+            return .none
+    n: = text.parse_size() catch
+        return .none
+    if n < 0 || n > id_max
+        return .none
+    return .some(I32::n)
+
+priv fn bare_line(line: U8[]): U8[] //< a line without the `\r` a CRLF file leaves on it
+    return line.sub(0, line.len - 1) if line.ends_with("\r") else line
+
+pub enum Load_error //< why `Tokenizer.load` refused a vocabulary or its merges
+    io(err: io.Io_error) //< a file could not be read
+    broken(path: U8[], line: Sz) //< a line is not one `train_bpe.py` writes; the file and the
+        //<
+        //< line's number from 1 (`load_text` names `vocabulary` or `merges` for the file).
+        //< **Refused, not skipped**: a word or a rule dropped in silence makes every text it
+        //< touches encode to other IDs, which nothing downstream can notice.
 
 priv struct Bpe_key
     val: U64
@@ -153,52 +187,71 @@ impl Tokenizer
 
     // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and
     // merges.txt "<id1> <id2> <merged_id>", loaded through `add_token`/`add_merge` into
-    // encode/decode's representation (a 1-byte base + merges).
+    // encode/decode's representation (a 1-byte base + merges). An empty line is skipped.
     pub fn load( //< loads the vocabulary and merge rules that `train_bpe.py` wrote
         r: Self$@,
         vocab_path: U8[], //< the vocabulary file, one word per line
         merges_path: U8[], //< the merge rules, in priority order
-    ): Void!io.Io_error
-        vocab_data: = io.read_file(vocab_path)!
+    ): Void!Load_error //< a file that cannot be read, or the first line that is not an entry
+        vocab_data: = io.read_file(vocab_path) catch e
+            throw .io(e)
         defer dealloc(Void$@::vocab_data.ptr)
-        $vocab_lines: = vocab_data.lines(null)
-        defer vocab_lines.free()
-        for line in vocab_lines
-            tab: = line.find_char('\t')
-            if tab < 0
-                continue
-            id: = I32::(line.sub(0, tab).parse_size() catch {
-                continue;
-            })
-            hex: = line.sub_from(((tab + 1)))
-            $b: = Str_builder.new()
-            for $i: Sz = 0; i + 1 < hex.len; i += 2
-                b.c(hex_byte(hex[i], hex[i + 1]))
-            r.add_token(b.slice(), id)
-            b.free()
-
-        merges_data: = io.read_file(merges_path)!
+        merges_data: = io.read_file(merges_path) catch e
+            throw .io(e)
         defer dealloc(Void$@::merges_data.ptr)
-        $merges_lines: = merges_data.lines(null)
-        defer merges_lines.free()
-        for line in merges_lines
-            sp1: = line.find_char(' ')
-            if sp1 < 0
+        r.add_vocab(vocab_data, vocab_path)!
+        r.add_merges(merges_data, merges_path)!
+
+    pub fn load_text( //< loads the two files' texts already in memory, with no file read
+        //<
+        //< For a program with no filesystem, or texts `embed`ded at build time. A broken line is
+        //< named in `vocabulary` or `merges`, as a file's path would be.
+        r: Self$@,
+        vocab: U8[], //< what vocab.txt holds
+        merges: U8[], //< what merges.txt holds
+    ): Void!Load_error //< the first line that is not an entry
+        r.add_vocab(vocab, "vocabulary")!
+        r.add_merges(merges, "merges")!
+
+    priv fn add_vocab(r: Self$@, text: U8[], name: U8[]): Void!Load_error //< vocab.txt's words
+        $lines: = text.lines(null)
+        defer lines.free()
+        for i in Range.asc(lines.len)
+            line: = bare_line(lines.get(i))
+            if line.len == 0
                 continue
-            rest: = line.sub_from(((sp1 + 1)))
-            sp2: = rest.find_char(' ')
-            if sp2 < 0
+            switch line.find_char('\t')
+            case .none
+                throw .broken(name, i + 1)
+            case .some(tab)
+                id: = token_id(line.sub(0, tab))
+                hex: = line.sub_from(tab + 1)
+                if id.is_none() || !is_hex_bytes(hex)
+                    throw .broken(name, i + 1)
+                $b: = Str_builder.new()
+                defer b.free()
+                for $k: Sz = 0; k + 1 < hex.len; k += 2
+                    b.c(hex_byte(hex[k], hex[k + 1]))
+                r.add_token(b.slice(), id.unwrap_or(0))
+
+    priv fn add_merges(r: Self$@, text: U8[], name: U8[]): Void!Load_error //< merges.txt's rules
+        $lines: = text.lines(null)
+        defer lines.free()
+        for i in Range.asc(lines.len)
+            line: = bare_line(lines.get(i))
+            if line.len == 0
                 continue
-            id1: = I32::(line.parse_size() catch {
-                continue;
-            })
-            id2: = I32::(rest.parse_size() catch {
-                continue;
-            })
-            id3: = I32::(rest.parse_size(((sp2 + 1))) catch {
-                continue;
-            })
-            r.add_merge(id1, id2, id3)
+            if sp1: = line.find_char(' ')
+                rest: = line.sub_from(sp1 + 1)
+                if sp2: = rest.find_char(' ')
+                    id1: = token_id(line.sub(0, sp1))
+                    id2: = token_id(rest.sub(0, sp2))
+                    id3: = token_id(rest.sub_from(sp2 + 1))
+                    if id1.is_none() || id2.is_none() || id3.is_none()
+                        throw .broken(name, i + 1)
+                    r.add_merge(id1.unwrap_or(0), id2.unwrap_or(0), id3.unwrap_or(0))
+                    continue
+            throw .broken(name, i + 1)
 
     pub fn encode( //< the token IDs for a text, allocated on the tokenizer's arena
         //<

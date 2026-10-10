@@ -50,7 +50,7 @@ priv fn has_definition(text: U8[], marker: U8[]): Bool //<
     //< Caution: Check the line's start; a forward declaration contains the same text.
     if text.starts_with(marker)
         return true
-    return text.find_str(harness.arena().text().s("\n\{marker\}").take()) >= 0
+    return text.find_str(harness.arena().text().s("\n\{marker\}").take()).is_some()
 
 priv fn build_split(dir: U8[], n: Sz, arena: Arena$@): Built //<
     //< It builds the fixture at n splits and runs it
@@ -185,18 +185,18 @@ fn main(): I32
             .ksplc(U8[][]::{ arena.text().s("--split=\{bad\}").take(), fixture,
             fs.join(dir, "ubad.c", arena) })
         verdict.check(arena.text().s("--split=\{bad\} is refused").take(),
-            r.code != 0 && r.out.find_str("--split") >= 0, r.out)
+            r.code != 0 && r.out.find_str("--split").is_some(), r.out)
     // The LLVM backend cannot split ("Genllvm (LLVM IR): why the structure itself differs, and
     // managing SSA" in `ksplc/docs/DESIGN.md`), so it must not be accepted with no effect.
     llvm: = harness
         .ksplc(U8[][]::{ "--to=llvm", "--split=2", fixture, fs.join(dir, "ullvm.ll", arena) })
     verdict.check("using it together with --to=llvm is refused",
-        llvm.code != 0 && llvm.out.find_str("--split") >= 0, llvm.out)
+        llvm.code != 0 && llvm.out.find_str("--split").is_some(), llvm.out)
     // A unit that cannot be written names its own file. The path lived in a builder freed before
     // the message was printed, so it read freed memory (another string's bytes).
     missing: = fs.join(fs.join(dir, "no_such_dir", arena), "prog.c", arena)
     header: = fs.join(fs.join(dir, "no_such_dir", arena), "prog.h", arena)
     unwritable: = harness.ksplc(U8[][]::{ "--split=4", fixture, missing })
     verdict.check("a unit that cannot be written is named in the error",
-        unwritable.code != 0 && unwritable.out.find_str(header) >= 0, unwritable.out)
+        unwritable.code != 0 && unwritable.out.find_str(header).is_some(), unwritable.out)
     return harness.finish()

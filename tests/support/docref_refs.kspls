@@ -69,6 +69,26 @@ priv fn first_bytes_of(dirs: U8[][], bares: U8[][]): Bool[256] //<
     t['.'] = true
     return t
 
+priv fn path_cut(text: U8[], from: Sz, exts: U8[][], word_end: Bool): Sz //<
+    //< Where a path from `from` ends: just past its first ending in one of `exts`, else 0
+    $j: = from
+    for j < text.len && is_path_at(text, j)
+        if text[j] == '.'
+            if k: = ext_end(text, j, exts, word_end)
+                return k
+        j += htext.cp_len(text[j])
+    return 0
+
+priv fn ext_end(text: U8[], dot: Sz, exts: U8[][], word_end: Bool): Sz? //<
+    //< Just past the first of `exts` that follows the `.` at dot (and, with word_end, ends a word)
+    for e in exts
+        if dot + 1 + e.len > text.len || !text.sub(dot + 1, e.len).equals(e)
+            continue
+        k: = dot + 1 + e.len
+        if !word_end || !htext.is_word_at(text, k)
+            return .some(k)
+    return .none
+
 fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[][],
     arena: Arena$@): List<|Hit|> //<
         //< Picks up the paths that are cited
@@ -117,21 +137,7 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
                 .extra = "" })
             i = end
             continue
-        $cut: Sz = 0
-        $j: = after_dots + n
-        for j < text.len && is_path_at(text, j)
-            if text[j] == '.'
-                for e in exts
-                    if cut > 0 || j + 1 + e.len > text.len
-                        continue
-                    if !text.sub(j + 1, e.len).equals(e)
-                        continue
-                    k: = j + 1 + e.len
-                    if !word_end || !htext.is_word_at(text, k)
-                        cut = k
-            if cut > 0
-                break
-            j += htext.cp_len(text[j])
+        cut: = path_cut(text, after_dots + n, exts, word_end)
         if cut == 0
             i = after_dots + n
             continue
@@ -279,10 +285,9 @@ fn find_kspage_links(text: U8[], arena: Arena$@): List<|Hit|> //< the links insi
         if raw.len == 0
             i = j
             continue
-        hash: = raw.find_char('#')
         $path: = raw
         $anchor: U8[] = ""
-        if hash >= 0
+        if hash: = raw.find_char('#')
             path = raw.sub(0, hash)
             anchor = raw.sub(hash + 1, raw.len - hash - 1)
         out.push(Hit::{ .at = i, .end = j, .text = path, .extra = anchor })
@@ -384,7 +389,7 @@ priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[
     //< that already has a folder is relative to the root.
     //< Caution: **Read a link the other way and a correct one looks broken** where its first folder
     //< shares a root folder's name (`ksai/README.md`'s link to its own `docs/DESIGN.md`).
-    if linked || text.starts_with("../") || text.find_char('/') < 0
+    if linked || text.starts_with("../") || text.find_char('/').is_none()
         return normalize(arena.text().s("\{here\}/\{text\}").take(), arena)
     return normalize(text, arena)
 
@@ -439,7 +444,7 @@ fn src_places(here: U8[], raw: U8[], arena: Arena$@): Src_places //<
     $bases: = List<|U8[]|>.new(arena)
     if here.len > 0
         bases.push(arena.text().s("\{here\}/\{raw\}").take())
-    cut: = here.find_char('/')
+    cut: = here.find_char('/').unwrap_or(0)
     if cut > 0
         bases.push(arena.text().s("\{here.sub(0, cut)\}/\{raw\}").take())
     bases.push(raw)
@@ -467,6 +472,7 @@ fn src_place(p: Src_places@, k: Sz, arena: Arena$@): U8[] //<
 priv fn last_segment_has_dot(raw: U8[]): Bool //< whether the last step has an extension
     //<
     //< If it does, none is added (having one yet not existing is the naming's own error).
-    cut: = raw.rfind_char('/')
-    tail: = raw if cut < 0 else raw.sub_from(cut + 1)
-    return tail.find_char('.') >= 0
+    $tail: = raw
+    if cut: = raw.rfind_char('/')
+        tail = raw.sub_from(cut + 1)
+    return tail.find_char('.').is_some()

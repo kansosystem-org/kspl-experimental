@@ -132,7 +132,7 @@ fn holds_name(text: U8[], name: U8[], arena: Arena$@): Bool //<
     for line in text.lines(arena)
         t: = line.trim_spaces()
         if heading_text(t, 6).len > 0
-            if t.find_str(name) >= 0
+            if t.find_str(name).is_some()
                 return true
             continue
         if bold_holds(t, name) || opens_with(t, name)
@@ -142,16 +142,16 @@ fn holds_name(text: U8[], name: U8[], arena: Arena$@): Bool //<
 priv fn bold_holds(t: U8[], name: U8[]): Bool //< whether a bold span in the line holds the name
     $at: Sz = 0
     for at < t.len
-        open: = t.sub_from(at).find_str("**")
-        if open < 0
+        if open: = t.sub_from(at).find_str("**")
+            from: = at + open + 2
+            if close: = t.sub_from(from).find_str("**")
+                if t.sub(from, close).find_str(name).is_some()
+                    return true
+                at = from + close + 2
+            else
+                return false
+        else
             return false
-        from: = at + Sz::open + 2
-        close: = t.sub_from(from).find_str("**")
-        if close < 0
-            return false
-        if t.sub(from, close).find_str(name) >= 0
-            return true
-        at = from + Sz::close + 2
     return false
 
 priv fn opens_with(t: U8[], name: U8[]): Bool //<
@@ -161,13 +161,14 @@ priv fn opens_with(t: U8[], name: U8[]): Bool //<
     if t.starts_with("|")
         $rest: = t.sub_from(1)
         for rest.len > 0
-            close: = rest.find_char('|')
-            cell: = (rest if close < 0 else rest.sub(0, close)).trim_spaces()
+            bar: = rest.find_char('|')
+            cell: = rest.sub(0, bar.unwrap_or(rest.len)).trim_spaces()
             if cell.strip_prefix("**").starts_with(name)
                 return true
-            if close < 0
+            if close: = bar
+                rest = rest.sub_from(close + 1)
+            else
                 return false
-            rest = rest.sub_from(close + 1)
         return false
     $item: = t
     if item.starts_with("* ") || item.starts_with("- ")
@@ -195,7 +196,7 @@ fn sym_base(sym: U8[]): U8[] //<
     //< the leading identifier (`sym_member` handles the member), so a spelling difference alone
     //< does not fail it.
     s: = sym.trim_spaces()
-    if s.len == 0 || s.find_char(' ') >= 0
+    if s.len == 0 || s.find_char(' ').is_some()
         return ""
     $i: Sz = 0
     for i < s.len && s[i] != '.' && s[i] != ':' && s[i] != '(' && s[i] != '[' && s[i] != '$' &&
@@ -222,12 +223,10 @@ fn sym_member(sym: U8[]): U8[] //<
     if sym_base(sym).len == 0
         return ""
     s: = sym.trim_spaces()
-    paren: = s.find_char('(')
-    head: = s if paren < 0 else s.sub(0, paren)
-    dot: = head.rfind_char('.')
-    if dot <= 0
+    head: = s.sub(0, s.find_char('(').unwrap_or(s.len))
+    at: = head.rfind_char('.').unwrap_or(0)
+    if at == 0
         return ""
-    at: Sz = dot
     if !htext.is_word_before(head, at) && head[at - 1] != '>' && head[at - 1] != ']'
         return ""
     start: = at + 1
@@ -250,8 +249,8 @@ priv fn looks_like_place(s: U8[], dirs: U8[][]): Bool //<
     //< place and a real citation is dropped.
     if looks_like_path(s)
         return true
-    cut: = s.find_char('/')
-    if cut <= 0 || cut + 1 >= s.len
+    cut: = s.find_char('/').unwrap_or(0)
+    if cut == 0 || cut + 1 >= s.len
         return false
     $named: = false
     for d in dirs
@@ -296,6 +295,57 @@ priv fn skip_spaces(text: U8[], i: Sz): Sz
         j += 1
     return j
 
+priv fn read_in_form(text: U8[], i: Sz, first: Hit, dirs: U8[][], out: List<|Hit|>$@,
+    arena: Arena$@): Sz //<
+        //< The `` `symbol` in `path` `` form at i: a Hit per name, and where it ends (else i + 1)
+        //<
+        //< **A name that looks like a path is not treated as a symbol** (`` `a/x.md` in `b/y.md`
+        //< `` is for the check above). Caution: **Read a run (`A` / `B` / `C` in `path`) to the
+        //< end.** The run comes **before** the joiner, so looking only at the last one silently
+        //< drops the rest.
+    $names: = List<|U8[]|>.new(arena)
+    names.push(first.text)
+    $k: = first.end
+    for k < text.len
+        sep: = skip_spaces(text, k)
+        if sep >= text.len || text[sep] != '/'
+            break
+        at: = skip_spaces(text, sep + 1)
+        item: = read_ticks(text, at)
+        if item.end == at || looks_like_place(item.text, dirs)
+            break
+        names.push(item.text)
+        k = item.end
+    $joiner: Sz = 0
+    for j in sym_joiners
+        if joiner == 0 && k + j.len <= text.len && text.sub(k, j.len).equals(j)
+            joiner = j.len
+    if joiner == 0
+        return i + 1
+    at: = k + joiner
+    item: = read_ticks(text, at)
+    if item.end <= at || !looks_like_place(item.text, dirs)
+        return i + 1
+    for n in names
+        out.push(Hit::{ .at = i, .end = item.end, .text = item.text, .extra = n })
+    return item.end
+
+priv fn read_paren_form(text: U8[], i: Sz, first: Hit, dirs: U8[][], out: List<|Hit|>$@): Sz //<
+    //< The `` `symbol`(`path`) `` form at i: a Hit, and where it ends (else i + 1)
+    $k: = skip_spaces(text, first.end)
+    if k >= text.len || text[k] != '('
+        return i + 1
+    k = skip_spaces(text, k + 1)
+    inner: = read_ticks(text, k)
+    if inner.end <= k || !looks_like_place(inner.text, dirs)
+        return i + 1
+    m: = skip_spaces(text, inner.end)
+    if m >= text.len || text[m] != ')'
+        return i + 1
+    out
+        .push(Hit::{ .at = i, .end = inner.end, .text = inner.text, .extra = first.text })
+    return m + 1
+
 fn find_symbol_refs(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
     //< Picks up the citations of symbols
     //<
@@ -315,50 +365,8 @@ fn find_symbol_refs(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
             continue
         $next: = i + 1
         if !looks_like_place(first.text, dirs)
-            // The `` `symbol` in `path` `` form.
-            // **A name that looks like a path is not treated as a symbol** (`` `a/x.md` in `b/y.md`
-            // `` is for the check above).
-            // Caution: **Read a run (`A` / `B` / `C` in `path`) to the end.** The run comes
-            // **before** the joiner, so looking only at the last one silently drops the rest.
-            $names: = List<|U8[]|>.new(arena)
-            names.push(first.text)
-            $k: = first.end
-            for k < text.len
-                sep: = skip_spaces(text, k)
-                if sep >= text.len || text[sep] != '/'
-                    break
-                at: = skip_spaces(text, sep + 1)
-                item: = read_ticks(text, at)
-                if item.end == at || looks_like_place(item.text, dirs)
-                    break
-                names.push(item.text)
-                k = item.end
-            $joiner: Sz = 0
-            for j in sym_joiners
-                if joiner == 0 && k + j.len <= text.len && text.sub(k, j.len).equals(j)
-                    joiner = j.len
-            if joiner > 0
-                at: = k + joiner
-                item: = read_ticks(text, at)
-                if item.end > at && looks_like_place(item.text, dirs)
-                    for n in names
-                        out
-                            .push(Hit::{ .at = i, .end = item.end, .text = item.text, .extra = n })
-                    next = item.end
+            next = read_in_form(text, i, first, dirs, out@, arena)
         if next == i + 1
-            // The `` `symbol`(`path`) `` form.
-            $k: = skip_spaces(text, first.end)
-            open: = k < text.len && text[k] == '('
-            if open
-                k = skip_spaces(text, k + 1)
-                inner: = read_ticks(text, k)
-                if inner.end > k && looks_like_place(inner.text, dirs)
-                    m: = skip_spaces(text, inner.end)
-                    closed: = m < text.len && text[m] == ')'
-                    if closed
-                        out
-                            .push(Hit::{ .at = i, .end = inner.end, .text = inner.text,
-                            .extra = first.text })
-                        next = m + 1
+            next = read_paren_form(text, i, first, dirs, out@)
         i = next
     return out

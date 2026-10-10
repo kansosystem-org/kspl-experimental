@@ -23,10 +23,10 @@ std/argp	Parser.flag	pub fn flag(r: Self$@, name: U8[], out: Bool$@, help: U8[])
 std/argp	Parser.int_opt	pub fn int_opt(r: Self$@, name: U8[], out: I64$@, help: U8[])	an integer; a value that cannot be read gives `bad_value`
 std/argp	Parser.parse	pub fn parse(r: Self$@, a: sys.Args, arena: Arena$@): Void!Argp_error	reads the process's own arguments, skipping the program name at the start
 std/argp	Parser.parse_list	pub fn parse_list(r: Self$@, argv: List<|U8[]|>$@): Void!Argp_error	reads an argument list into the declared destinations. Also for arguments from elsewhere, such as a configuration file or a test.
-std/argp	Parser.parse_or_exit	pub fn parse_or_exit(r: Self$@, a: sys.Args, arena: Arena$@)	reads the arguments, or prints why and ends the process. **It returns only on success.** The exit code is 0 for `--help` and 2 for an error.
+std/argp	Parser.parse_or_exit	pub fn parse_or_exit(r: Self$@, a: sys.Args, arena: Arena$@)	reads the arguments, or prints why and ends the process. **It returns only on success.** `--help` prints the usage on standard output and exits 0; an error prints the reason and the usage on standard error and exits 2, so a caller reading the output never takes a refusal for it.
 std/argp	Parser.positional	pub fn positional(r: Self$@, usage: U8[])	declares that this CLI takes positional arguments. **A positional argument given to a CLI that declares none is an error**, for the same reason as an unknown `--name`: a path's word-split fragments arrive **as positional arguments**, and dropping them silently hides the cause.
-std/argp	Parser.print_options	pub fn print_options(r: Self$@)	writes only the commands and options, with no heading. For a CLI that appends **the list built from the declarations** after its own text; a copied list goes stale.
-std/argp	Parser.print_usage	pub fn print_usage(r: Self$@)	writes the whole usage to standard output
+std/argp	Parser.print_options	pub fn print_options(r: Self$@, out: Writer)	writes only the commands and options, with no heading. For a CLI that appends **the list built from the declarations** after its own text; a copied list goes stale.
+std/argp	Parser.print_usage	pub fn print_usage(r: Self$@, out: Writer)	writes the whole usage
 std/argp	Parser.prog	pub prog: U8[]	the program's name, used in the usage and in every error
 std/argp	Parser.rest	pub rest: List<|U8[]|>$@	the positional arguments, in the order they appeared. Neither an option nor a command name. Unless `positional` declared them, each is an error.
 std/argp	Parser.saw	pub fn saw(r: Self$@, name: U8[]): Bool	whether that item was given at all, whatever its value. It tells "not given" from "given empty" (`--out=`), which the value alone cannot.
@@ -100,11 +100,11 @@ std/chars	U8[].count_codepoints	pub fn count_codepoints(r: U8[]): Sz	how many co
 std/chars	U8[].count_str	pub fn count_str(r: U8[], target: U8[]): Sz	how many times the text appears, without overlaps. **It counts from the start, and each match steps past itself** (the same places `std/str`'s `replace` replaces), so `"aaaa"` holds `"aa"` twice. **An empty text counts as zero**, as `replace` replaces none.
 std/chars	U8[].ends_with	pub fn ends_with(r: U8[], suffix: U8[]): Bool	whether the text appears at the end
 std/chars	U8[].equals_ignore_case	pub fn equals_ignore_case(r: U8[], b: U8[]): Bool	the same text, ignoring ASCII case. For a name whose case is not fixed, such as an HTTP header name. ASCII only: no Unicode folding (ß→ss).
-std/chars	U8[].find_char	pub fn find_char(r: U8[], ch: U8): I32	where the byte first appears, or -1
-std/chars	U8[].find_str	pub fn find_str(r: U8[], target: U8[]): I32	where the text first appears, or -1
+std/chars	U8[].find_char	pub fn find_char(r: U8[], ch: U8): Sz?	where the byte first appears, or none. Caution: **"Not found" is no position**: a `-1` passed on as one read the wrong byte far from the search, and an `I32` could not name a place past 2 GiB. "Is it there" is `.is_some()` on this same call.
+std/chars	U8[].find_str	pub fn find_str(r: U8[], target: U8[]): Sz?	where the text first appears, or none. An empty target is found at 0, as in every other language's search.
 std/chars	U8[].hex4	pub fn hex4(r: U8[], at: Sz): I32	four hex digits as a number, or -1 when there are not four. Four, because every `\uXXXX` that uses it (JSON, KSPL, KSPEG) has four.
 std/chars	U8[].next_codepoint	pub fn next_codepoint(r: U8[], offset: Sz): Sz	how far to step to the next code point; 0 when offset is past the end
-std/chars	U8[].rfind_char	pub fn rfind_char(r: U8[], ch: U8): I32	where the byte last appears, or -1
+std/chars	U8[].rfind_char	pub fn rfind_char(r: U8[], ch: U8): Sz?	where the byte last appears, or none
 std/chars	U8[].starts_with	pub fn starts_with(r: U8[], prefix: U8[], offset: Sz = 0): Bool	whether the text appears at that position. **Omitting `offset` and writing `0` call the same function** (a default argument; the rule is "A default argument is allowed only for a foldable constant" in docs/DESIGN.md).
 std/chars	U8[].strip_prefix	pub fn strip_prefix(r: U8[], prefix: U8[]): U8[]	a view past the prefix, or the whole string. Python's `str.removeprefix`. Use it instead of `x.sub_from(7)`, whose count silently goes wrong when the string changes.
 std/chars	U8[].strip_suffix	pub fn strip_suffix(r: U8[], suffix: U8[]): U8[]	a view without the suffix, or all of it
@@ -348,6 +348,7 @@ std/fs	File_lock:Owned	impl File_lock: Owned	it owns its lock and releases it wi
 std/fs	Fs_error	pub enum Fs_error	why a filesystem operation failed. Every failure in this file is returned as this type (the same convention as `!Io_error` in `std/io.kspls`). Only the predicates (`exists` / `is_dir`) do not fail, so they return `Bool`. Splitting `operation_failed` further would need errno passed up from the C code (ksplc/gen/runtime/hosted.c). Do not split into variants what the code cannot tell apart.
 std/fs	Fs_error.held_elsewhere	held_elsewhere	another holder has the lock (only `File_lock.try_take`, which does not wait)
 std/fs	Fs_error.invalid_path	invalid_path	a path the OS cannot take, such as one containing a NUL
+std/fs	Fs_error.io	io(err: io.Io_error)	reading or writing a file's contents failed; it names the file
 std/fs	Fs_error.mkdir_failed	mkdir_failed(at: U8[])	the segment that could not be created, as a view into the path. **Which segment it stopped at** tells a path problem from a permission problem. It is not a copy; to keep it longer than the caller's path, the caller copies it.
 std/fs	Fs_error.not_found	not_found	the named path does not exist, or could not be opened
 std/fs	Fs_error.operation_failed	operation_failed	the OS refused; it cannot tell whether it exists, permission, or no parent
@@ -473,8 +474,8 @@ std/http	headers	pub fn headers(arena: Arena$@): Header_builder	an empty header 
 std/http	max_head_bytes	pub const max_head_bytes: Sz = 64 * 1024	the most a message's head may take, against DoS. The head is the first line and the headers; every reader here refuses a longer one.
 std/http	parse_request	pub fn parse_request(src: U8[], max_body: Sz, arena: Arena$@): Request$@!Http_error	the one request at the start of the buffer; fails if it is incomplete. **A body over `max_body` fails as soon as the head says so**, before it arrives, and a head over `max_head_bytes` as soon as that much has arrived without its end.
 std/http	parse_response	pub fn parse_response(src: U8[], arena: Arena$@): Response$@!Http_error	the one response at the start of the buffer; fails if it is incomplete. The body limit is `default_max_body_bytes`; the head's is `max_head_bytes`.
-std/http	read_request	pub fn read_request(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz): Request$@!Http_error	reads one whole request from a connection and splits it into its parts
-std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz): Response$@!Http_error	reads one whole response from a connection and splits it into its parts
+std/http	read_request	pub fn read_request(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz, timeout_ms: I32): Request$@!Http_error	reads one whole request from a connection and splits it into its parts
+std/http	read_response	pub fn read_response(stream: net.Tcp_stream$@, arena: Arena$@, max_body: Sz, timeout_ms: I32): Response$@!Http_error	reads one whole response from a connection and splits it into its parts
 std/http	reason_phrase	pub fn reason_phrase(status: I32): U8[]	the standard phrase for a status number, so the two cannot disagree. RFC 9110's "reason-phrase"; empty for a number it does not know. The builders below write it from the number, so no caller passes the number and the phrase as a pair (which could say `404 Bad Request`). Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
 std/http	write_request	pub fn write_request(stream: net.Tcp_stream$@, method: U8[], target: U8[], head: Header$@, body: U8[]): Void!Http_error	sends one whole request: the first line, the headers and the body
 std/http	write_response	pub fn write_response(stream: net.Tcp_stream$@, status: I32, head: Header$@, body: U8[]): Void!Http_error	builds one whole response and sends every byte of it
@@ -485,7 +486,7 @@ std/io	File_stream.free	pub fn free(r: Self$@)	closes the handle; a failure whil
 std/io	File_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Io_error	fills the buffer; 0 means the end
 std/io	File_stream.s	pub fn s(r: Self$@, val: U8[]): Self$@	writes a string and returns the stream
 std/io	File_stream.stream	pub stream: Void$@	the C `FILE *`; null means standard output
-std/io	File_stream.sync	pub fn sync(r: Self$@): Void!Io_error	flushes buffered data and reports a failure. It does not mean the data reached the disk (the OS's own sync covers that). `Writer.flush()` returns `Self$@` for chaining, so only this method can report a failure.
+std/io	File_stream.sync	pub fn sync(r: Self$@): Void!Io_error	flushes buffered data and reports a failure. It does not mean the data reached the disk (the OS's own sync covers that). `Writer.flush()` returns `Self$@` for chaining, so only this method can report a failure, **an earlier write's included**: a write the stream refused (a full disk) is kept on it, and a flush with nothing left to write would report success.
 std/io	File_stream:Owned	impl File_stream: Owned	it owns the handle and releases it in `free()`
 std/io	File_stream:Reader	impl File_stream: Reader	so it can be used wherever a `Reader` is expected
 std/io	File_stream:Writer	impl File_stream: Writer	so it can be used wherever a `Writer` is expected
@@ -493,11 +494,11 @@ std/io	Io_error	pub enum Io_error	why a read, a write or an open failed
 std/io	Io_error.close_failed	close_failed	buffered data could not be flushed on closing
 std/io	Io_error.file_not_found	file_not_found(path: U8[])	the file could not be opened for reading; names the file
 std/io	Io_error.invalid_arg	invalid_arg	an argument is invalid, such as a path containing a NUL
-std/io	Io_error.read_failed	read_failed(path: U8[])	the read was refused, or the path is a directory; names the file
-std/io	Io_error.write_failed	write_failed(path: U8[])	the write was refused or incomplete; names the file
+std/io	Io_error.read_failed	read_failed(path: U8[])	the read was refused, or the path is a directory; names the file. Empty from an open `File_stream`, which does not keep its path.
+std/io	Io_error.write_failed	write_failed(path: U8[])	the write was refused or incomplete; names the file. Empty from an open `File_stream`, as `read_failed`.
 std/io	Reader	pub trait Reader	anything bytes can be read from
 std/io	Reader.read	fn read(r: Self, $buf: U8$[]): Sz!Io_error	fills buf; returns the count read, 0 at the end
-std/io	copy	pub fn copy(src: Reader, dst: Writer): Sz!Io_error	reads to the end, writes it all out, and returns how much was copied
+std/io	copy	pub fn copy(src: Reader, dst: Writer): Sz!Io_error	reads to the end, writes it all out, and returns how much was copied. Caution: **A write failure is not reported here**: `Writer` returns no failure. Check the destination after it (`File_stream.sync()!`), or a full disk passes for a whole copy.
 std/io	err	pub fn err(): Writer	standard error, opened on the first call
 std/io	getchar	pub fn getchar(): I32	one byte from standard input, or negative at the end
 std/io	open	pub fn open(path: U8[], mode: U8[]): File_stream!Io_error	opens a file, handling a non-ASCII path on Windows too. A child process started while it is open does not get it.
@@ -570,10 +571,10 @@ std/jsonrpc	Client #cfg(!freestanding)	pub struct Client	exchanges JSON-RPC mess
 std/jsonrpc	Client.alive #cfg(!freestanding)	pub fn alive(r: Self@): Bool	whether the child is still running
 std/jsonrpc	Client.err_tail #cfg(!freestanding)	pub fn err_tail(r: Self$@): U8[]	the end of what the server wrote to standard error. Caution: **Attach it to a failure's description**; if it is discarded, no reason remains. **It borrows the buffer**, which the next drain reallocates: **copy it at once** (`arena.text().s(c.err_tail())`).
 std/jsonrpc	Client.free #cfg(!freestanding)	pub fn free(r: Self$@)	kills the child and frees every buffer
-std/jsonrpc	Client.notify #cfg(!freestanding)	pub fn notify(r: Self$@, method: U8[], params: json.Val, arena: Arena$@): Bool	sends a notification, which expects no response
+std/jsonrpc	Client.notify #cfg(!freestanding)	pub fn notify(r: Self$@, method: U8[], params: json.Val, timeout_ms: I32, arena: Arena$@): Void!Rpc_end	sends a notification, which expects no response
 std/jsonrpc	Client.read_msg #cfg(!freestanding)	pub fn read_msg(r: Self$@, timeout_ms: I32, arena: Arena$@): json.Val!Rpc_end	reads one frame and returns it as JSON. Caution: **Keep draining standard error while waiting too** (the reason is at `read_slice_ms`). The timeout bounds **this one call**, even when data trickles in.
 std/jsonrpc	Client.request #cfg(!freestanding)	pub fn request(r: Self$@, method: U8[], params: json.Val, timeout_ms: I32, arena: Arena$@): json.Val!Rpc_end	sends a request and reads until the response with that id arrives. Caution: **The clock bounds the wait, not a count of messages.** A server may send any number of notifications first (a language server sends one per open document), so a cap on skipped messages turns a valid burst into `broken`; a lost response still ends at the deadline.
-std/jsonrpc	Client.send_raw #cfg(!freestanding)	pub fn send_raw(r: Self$@, body: U8[]): Bool	sends one already built body, in a frame
+std/jsonrpc	Client.send_raw #cfg(!freestanding)	pub fn send_raw(r: Self$@, body: U8[], timeout_ms: I32): Void!Rpc_end	sends one already built body, in a frame
 std/jsonrpc	Client:Owned #cfg(!freestanding)	impl Client: Owned	it owns its memory and releases it with `free()`
 std/jsonrpc	Rpc_end	pub enum Rpc_end	why a response could not be read
 std/jsonrpc	Rpc_end.broken	broken	the frame could not be read, or the response was dropped
@@ -734,8 +735,8 @@ std/mem	alloc #cfg(!freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw b
 std/mem	alloc #cfg(freestanding)	pub fn alloc(size: Sz): Void$@	allocates raw bytes from the free-list heap, which must already be set up
 std/mem	alloc_as	pub fn alloc_as<|T|>(): T$@	heap memory for one value, with no `sizeof` written by hand. Caution: Do not write it out as `T$@::alloc(sizeof(T))` in the caller (docs/DESIGN.md's "One means to one purpose"): nothing catches a mismatch between the two types. `alloc(<byte count>)` remains for raw bytes (`U8$@::alloc(n + 1)`), which no type describes.
 std/mem	alloc_in	pub fn alloc_in(arena: Arena$@, size: Sz): Void$@	allocates from the arena, or from the global heap if there is none
-std/mem	copy #cfg(!freestanding)	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap
-std/mem	copy #cfg(freestanding)	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap
+std/mem	copy #cfg(!freestanding)	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap (`move` where they may)
+std/mem	copy #cfg(freestanding)	pub fn copy(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes; the two ranges must not overlap (`move` where they may)
 std/mem	dealloc #cfg(!freestanding)	pub fn dealloc(ptr: Void$@)	returns bytes to the global heap
 std/mem	dealloc #cfg(freestanding)	pub fn dealloc(ptr: Void$@)	returns bytes to the free-list heap
 std/mem	heap_capacity_bytes #cfg(freestanding)	pub fn heap_capacity_bytes(): Sz	the size of the static buffer the heap uses
@@ -746,6 +747,8 @@ std/mem	heap_used_bytes #cfg(!freestanding)	pub fn heap_used_bytes(): Sz	the byt
 std/mem	heap_used_bytes #cfg(freestanding)	pub fn heap_used_bytes(): Sz	the bytes allocated now; 0 while there is no heap
 std/mem	init_freestanding_heap #cfg(freestanding)	pub fn init_freestanding_heap(buf: U8$[])	makes a static buffer the whole heap
 std/mem	memcmp #cfg(freestanding) #export	pub fn memcmp(a: Void$@, b: Void$@, n: Sz): I32	C's `memcmp`, written here so freestanding needs no libc
+std/mem	move #cfg(!freestanding)	pub fn move(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes that may overlap the destination. For shifting bytes within one buffer, where `copy` is undefined.
+std/mem	move #cfg(freestanding)	pub fn move(dest: Void$@, src: Void$@, bytes: Sz)	copies a range of bytes that may overlap the destination. For shifting bytes within one buffer, where `copy` is undefined.
 std/mem	zero #cfg(!freestanding)	pub fn zero(dest: Void$@, bytes: Sz)	sets a range of bytes to 0
 std/mem	zero #cfg(freestanding)	pub fn zero(dest: Void$@, bytes: Sz)	sets a range of bytes to 0
 std/net	Net_error	pub enum Net_error	why a socket operation failed
@@ -759,6 +762,7 @@ std/net	Net_error.datagram_too_long	datagram_too_long	the datagram was longer th
 std/net	Net_error.io_failed	io_failed	the send or receive failed (a disconnection, for example)
 std/net	Net_error.resolve_failed	resolve_failed	the host name did not resolve to an address. **Keep "it did not resolve" apart from "it did not connect"**: otherwise a wrong name and a missing peer look the same, and nobody can tell which to fix.
 std/net	Net_error.set_option_failed	set_option_failed	changing a socket option failed
+std/net	Net_error.timed_out	timed_out	the peer did not answer within the wait (`read_for`, a connect past `connect_wait_ms`)
 std/net	Net_error.would_block	would_block	in non-blocking mode, the socket is just not ready yet
 std/net	Peer_addr	pub struct Peer_addr	the address of the peer of a connection. The result of peer(); the address text goes into the caller's host_out.
 std/net	Peer_addr.host_len	pub host_len: Sz	how many bytes of address text were written into the caller's buffer
@@ -767,6 +771,7 @@ std/net	Tcp_listener	pub struct Tcp_listener	a socket that waits for incoming co
 std/net	Tcp_listener.accept	pub fn accept(r: Self$@): Tcp_stream$@!Net_error	accepts the next waiting connection. The stream it returns is blocking on every OS, whatever the listener's mode.
 std/net	Tcp_listener.bind	pub fn bind(host: U8[], port: I32): Tcp_listener$@!Net_error	starts listening on the address and port. "0.0.0.0" listens on every IPv4 interface, "::" on every IPv6 one. **"::" does not accept IPv4 clients**, whatever the system default ("Connecting by name tries the candidates overlapped" in std/docs/DESIGN.md); to accept both, open two listeners.
 std/net	Tcp_listener.free	pub fn free(r: Self$@)	closes the listener and frees it
+std/net	Tcp_listener.port	pub fn port(r: Self$@): I32!Net_error	the port it listens on, the OS's choice for a 0
 std/net	Tcp_listener.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket. Only for registering; send/recv/accept still go only through this type's methods.
 std/net	Tcp_listener.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void!Net_error	makes it non-blocking, for use with `std/reactor`
 std/net	Tcp_listener:Owned	impl Tcp_listener: Owned	it owns its resources and frees them with `free()`.
@@ -779,6 +784,7 @@ std/net	Tcp_stream.peer	pub fn peer(r: Self$@, host_out: U8$[]): Peer_addr!Net_e
 std/net	Tcp_stream.raw_fd	pub fn raw_fd(r: Self$@): I32	the OS's socket number, for a C library that reads and writes the socket itself. Caution: **Do not also read or write through this type**: the bytes would interleave with that library's. `free()` still closes the socket.
 std/net	Tcp_stream.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
 std/net	Tcp_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Net_error	receives and returns how much arrived; 0 means the peer closed
+std/net	Tcp_stream.read_for	pub fn read_for(r: Self$@, buf: U8$[], timeout_ms: I32): Sz!Net_error	receives as `read` does, waiting at most `timeout_ms` for the first byte. For a blocking stream whose peer may go quiet: `read` would wait for it for good.
 std/net	Tcp_stream.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void!Net_error	makes it non-blocking, for use with `std/reactor`
 std/net	Tcp_stream.shut_write	pub fn shut_write(r: Self$@): Void!Net_error	closes only the sending half, to signal the end. **This is not a disconnection.** The peer's `read` returns 0, while this side **can still read and wait for a response**. Caution: **Do not use it instead of closing** (only `free` releases the memory).
 std/net	Tcp_stream.write	pub fn write(r: Self$@, buf: U8[]): Sz!Net_error	sends and returns how much was sent; a partial send is normal. To send everything, use `write_all` (a separate name, as in Rust, because a missing loop silently truncates).
@@ -791,6 +797,7 @@ std/net	Udp_recv_result.len	pub len: Sz	the payload size in bytes
 std/net	Udp_socket	pub struct Udp_socket	a socket that sends and receives datagrams
 std/net	Udp_socket.bind	pub fn bind(host: U8[], port: I32): Udp_socket$@!Net_error	opens a socket on the address and port. The host works as in `Tcp_listener.bind`.
 std/net	Udp_socket.free	pub fn free(r: Self$@)	closes the socket and frees it
+std/net	Udp_socket.port	pub fn port(r: Self$@): I32!Net_error	the port it is bound to, the OS's choice for a 0
 std/net	Udp_socket.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
 std/net	Udp_socket.recv_from	pub fn recv_from(r: Self$@, buf: U8$[], from_host_out: U8$[]): Udp_recv_result!Net_error	receives one datagram and returns its size and who sent it. A datagram longer than `buf` fails as `datagram_too_long`, on every OS, rather than come back cut.
 std/net	Udp_socket.send_to	pub fn send_to(r: Self$@, buf: U8[], host: U8[], port: I32): Sz!Net_error	sends one datagram and returns how much was sent. The destination must be **an address string**; resolve a name once with `resolve_one`.
@@ -894,7 +901,7 @@ std/regex	Regex	pub struct Regex	one compiled pattern, matched against any numbe
 std/regex	Regex.compile	pub fn compile(pattern: U8[]): Regex$@!Regex_error	reads a pattern once, so it can be matched many times. Caution: **On failure, free the tree before throwing.** The parse returns the whole tree even on an error (Compiler's description says why); this is the only place it is freed.
 std/regex	Regex.find	pub fn find(r: Self$@, text: U8[]): Match!Regex_error	the first matched span; fails when nothing matches
 std/regex	Regex.find_all	pub fn find_all(r: Self$@, text: U8[], arena: Arena$@): List<|Match|>!Regex_error	every matched span; the search resumes past each one. Front to back; **even an empty match advances one byte.** The budget (max_match_steps) restarts per match. An element holds a whole `Slots`. Why it is eager, and how it differs from Python's `findall`, is in "Every match is returned in a `List`. No lazy iterator is made" in `std/docs/DESIGN.md`.
-std/regex	Regex.free	pub fn free(r: Self$@)	frees the compiled tree
+std/regex	Regex.free	pub fn free(r: Self$@)	frees the compiled tree and its program
 std/regex	Regex.is_match	pub fn is_match(r: Self$@, text: U8[]): Bool!Regex_error	whether anything in the text matches. Caution: **Only `no_match` is "no".** `too_complex` is thrown, not read as false: the budget ran out before the whole text was tried, so a match may still stand in it.
 std/regex	Regex:Owned	impl Regex: Owned	it owns its resources and frees them in `free()`.
 std/regex	Regex_error	pub enum Regex_error	why a pattern could not be compiled, or matched nothing
@@ -903,7 +910,7 @@ std/regex	Regex_error.invalid_escape	invalid_escape	nothing follows `\`, or an e
 std/regex	Regex_error.invalid_range	invalid_range	a range's ends are reversed, or a set such as `\d` is at a range's end
 std/regex	Regex_error.invalid_repeat	invalid_repeat	`{` has no valid count, m > n, or the count exceeds `max_repeat_count`
 std/regex	Regex_error.no_match	no_match	nothing in the text matched
-std/regex	Regex_error.too_complex	too_complex	matching went over its attempt budget, or deeper than its limit or the stack
+std/regex	Regex_error.too_complex	too_complex	matching went over its attempt budget
 std/regex	Regex_error.too_deep	too_deep	the `(` nesting is deeper than its limit, or than the stack left can hold
 std/regex	Regex_error.too_many_groups	too_many_groups	there are more capturing groups than `max_groups`
 std/regex	Regex_error.unmatched_bracket	unmatched_bracket	a `[` has no `]`
@@ -914,7 +921,6 @@ std/regex_node	Rx_kind.any	any	`.`
 std/regex_node	Rx_kind.class	class	a `[...]` set
 std/regex_node	Rx_kind.end_anchor	end_anchor	`$`
 std/regex_node	Rx_kind.group	group	a `(...)`; its alternatives hang off it
-std/regex_node	Rx_kind.group_end	group_end	the mark that closes a group, so the capture's end gets recorded
 std/regex_node	Rx_kind.group_repeat	group_repeat	a whole group repeated
 std/regex_node	Rx_kind.lit	lit	one literal byte
 std/regex_node	Rx_kind.not_word_boundary	not_word_boundary	`\B`
@@ -923,15 +929,13 @@ std/regex_node	Rx_kind.start_anchor	start_anchor	`^`
 std/regex_node	Rx_kind.word_boundary	word_boundary	`\b`
 std/regex_node	Rx_node	pub struct Rx_node	one node of a compiled pattern; `kind` decides which fields mean something
 std/regex_node	Slots	pub struct Slots	what each capturing group caught; `-1` means it did not take part. **`-1` is not 0**: an empty match has `start == end`.
-std/regex_node	drop_repeat_step	pub fn drop_repeat_step(n: Rx_node$@)	frees one `new_repeat_step` copy, but nothing it shares. Caution: **Do not use `free_rx_node`** (it walks the shared `sub`).
 std/regex_node	free_rx_alts	pub fn free_rx_alts(alts: List<|List<|Rx_node$@|>|>$@)	frees a group's alternatives and every node under them. It frees the Lists too. Walk .alts only for the .group kind (for others it is uninitialized).
 std/regex_node	free_rx_node	pub fn free_rx_node(n: Rx_node$@)	frees one node and everything under it
 std/regex_node	max_groups	pub const max_groups: Sz = 9	how many capturing groups a pattern may have. Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
-std/regex_node	max_repeat_count	pub const max_repeat_count: Sz = 1000	the largest `{m,n}` count accepted, as in RE2 and Go. Caution: **Refuse a count that exceeds it** (`invalid_repeat`). A repeated group recurses one level per round, so a large count hits regex.kspls's max_match_depth first.
+std/regex_node	max_repeat_count	pub const max_repeat_count: Sz = 1000	the largest `{m,n}` count accepted, as in RE2 and Go. Caution: **Refuse a count that exceeds it** (`invalid_repeat`), as a count no engine accepts would make a pattern that works here alone.
 std/regex_node	new_class_node	pub fn new_class_node(): Rx_node$@	one new `[...]` node with an empty membership table
-std/regex_node	new_group_node	pub fn new_group_node(alts: List<|List<|Rx_node$@|>|>, gidx: I32): Rx_node$@	one new group node, with its alternatives and closing mark
+std/regex_node	new_group_node	pub fn new_group_node(alts: List<|List<|Rx_node$@|>|>, gidx: I32): Rx_node$@	one new group node, with its alternatives
 std/regex_node	new_node	pub fn new_node(kind: Rx_kind): Rx_node$@	one new node; a `.group` is made with `new_group_node` instead. Caution: Make a .group only with new_group_node. Made here, its .alts stays uninitialized and free_rx_alts walks a garbage list.
-std/regex_node	new_repeat_step	pub fn new_repeat_step(from: Rx_node$@, started_at: Sz): Rx_node$@	a temporary copy that stands for this round of a repeated group. Caution: **Make it a shallow copy.** `sub` **shares** the compile-time tree; free the copy with `drop_repeat_step` (see the caution at the top of this file).
 std/regex_node	reset_slots	pub fn reset_slots(c: Slots$@, count: Sz)	marks every group as not having taken part
 std/regex_node	set_range	pub fn set_range(n: Rx_node$@, lo: U8, hi: U8)	adds every byte in a range to a `[...]` set
 std/ring	Ring	pub struct Ring<|const cap: Sz|>	a fixed-size byte queue held in memory the caller owns
@@ -1005,7 +1009,7 @@ std/str	Str_builder.c #inline	pub fn c(r: Self$@, c: U8): Self$@	writes one byte
 std/str	Str_builder.cap	pub cap: Sz	how many bytes fit before it has to grow
 std/str	Str_builder.clear	pub fn clear(r: Self$@): Self$@	empties it, keeping the memory already allocated
 std/str	Str_builder.drop_prefix	pub fn drop_prefix(r: Self$@, n: Sz): Self$@	drops the leading bytes and moves the rest to the start. For removing a message already read from a receive buffer, which may hold the start of the next one. It frees no memory: a long-lived buffer stays at the size of the longest message.
-std/str	Str_builder.escape_and_append	pub fn escape_and_append(r: Self$@, src: U8[]): Self$@	writes a JSON string's contents; the caller writes the quotes. Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC 8259); escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the round trip.
+std/str	Str_builder.escape_and_append	pub fn escape_and_append(r: Self$@, src: U8[]): Self$@	writes a JSON string's contents; the caller writes the quotes. Caution: **Escape everything below 0x20.** JSON allows no raw control character (RFC 8259); escaping only `\n`, `\r` and `\t` makes **JSON that no other parser accepts** for a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the round trip. A byte that is not well-formed UTF-8 is written as U+FFFD.
 std/str	Str_builder.flush	pub fn flush(r: Self$@): Self$@	does nothing, and is here to complete `Writer`
 std/str	Str_builder.fmt	pub fn fmt(r: Self$@, w: Writer): Writer	writes its contents to `w`
 std/str	Str_builder.free	pub fn free(r: Self$@)	frees the memory and empties it
@@ -1126,7 +1130,7 @@ std/subproc	Piped_child.exit_code #cfg(!freestanding)	pub fn exit_code(r: Self@)
 std/subproc	Piped_child.kill #cfg(!freestanding)	pub fn kill(r: Self$@)	kills it, reaps it, and closes the pipes. Caution: **Call it once only.**
 std/subproc	Piped_child.read #cfg(!freestanding)	pub fn read(r: Self@, buf: U8$[], timeout_ms: I32): Sz!Read_end	reads from standard output. **The timeout is required**, so a stall returns as a value and can be diagnosed right away.
 std/subproc	Piped_child.read_err #cfg(!freestanding)	pub fn read_err(r: Self@, buf: U8$[], timeout_ms: I32): Sz!Read_end	reads from standard error, where the child says why it is silent. Caution: **Do not discard it.** Without it, nothing tells you why the response was empty.
-std/subproc	Piped_child.write #cfg(!freestanding)	pub fn write(r: Self@, data: U8$[]): Bool	writes all of it to standard input; false if the child has closed it. **It takes a mutable slice to match the C signature** (`U8 *ptr`); a `Str_builder`'s `slice()` already is one.
+std/subproc	Piped_child.write #cfg(!freestanding)	pub fn write(r: Self@, data: U8[], timeout_ms: I32): Void!Write_end	writes all of it to standard input, or fails saying why it stopped. **The timeout is required**, as a read's is: a child that stops reading fills the pipe, and the write would wait for it for good.
 std/subproc	Read_end	pub enum Read_end	why a read from a child returned no bytes
 std/subproc	Read_end.closed	closed	the child finished, so waiting again returns nothing
 std/subproc	Read_end.failed	failed	the read itself failed
@@ -1138,6 +1142,7 @@ std/subproc	Run_error.spawn_failed	spawn_failed	it could not start; the causes a
 std/subproc	Run_error.timed_out	timed_out	the time ran out, so it was killed
 std/subproc	Run_result	pub struct Run_result	the outcome of one run: how it ended, and what it wrote
 std/subproc	Run_result.exit_code	pub exit_code: I32	the child's exit code; 0 means success. **A child that crashed or was killed gives 128 + the signal number on every OS** (the shell's convention: a segmentation fault is 139, an abort 134); Windows's crash codes are read as the signal POSIX raises for the same fault ("A child's end is one code on every OS" in std/docs/DESIGN.md). Any other code is the child's own, which on Windows may be negative.
+std/subproc	Run_result.output_lost	pub output_lost: Bool	an output could not be read back, so the two above may lack some. Only `run_many` collects through files, and only it sets this; read as empty, a lost output would pass for a child that wrote nothing.
 std/subproc	Run_result.spawn_failed	pub spawn_failed: Bool	if true, every other field is invalid
 std/subproc	Run_result.stderr_data	pub stderr_data: U8$[]	what it wrote to standard error, cut at the cap
 std/subproc	Run_result.stdout_data	pub stdout_data: U8$[]	what it wrote to standard output, cut at the cap. Not named stdout/stderr: MSVC UCRT's headers make those object-like macros, so a field of that name in the generated C struct fails to compile on Windows.
@@ -1145,8 +1150,11 @@ std/subproc	Run_result.text	pub fn text(r: Self@, arena: Arena$@): U8[]	the chil
 std/subproc	Run_result.timed_out	pub timed_out: Bool	if true, the child was killed, so the exit code means nothing
 std/subproc	Spawn_error	pub enum Spawn_error	why a child could not be started
 std/subproc	Spawn_error.spawn_failed	spawn_failed	it could not start, and it cannot say why. The causes are the same on every OS: no such program, no permission to run it, a working directory or output file that cannot be opened, an argument holding a NUL, or the OS refusing a new process. Telling them apart would need errno passed up from the C code (as with fs.Fs_error).
-std/subproc	run	pub fn run(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): U8$[]!Run_error	runs one child and returns its standard output; any failure is thrown. The arguments are as for run_capture; **the failure is thrown**: "cannot start", "timed out" and "exited non-zero" all become `Run_error`, so the caller can pass them on with `!`. **When you need the exit code itself, use run_capture**; this one treats anything but 0 as a failure, which does not suit a program where a non-zero exit is normal.
-std/subproc	run_capture	pub fn run_capture(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): Run_result	runs one child to the end and collects both its outputs. argv[0] is as for `spawn_wait`; stdout and stderr are collected separately, watched in one wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this it is cut"), not the size to allocate.
+std/subproc	Write_end	pub enum Write_end	why a write to a child's standard input stopped
+std/subproc	Write_end.closed	closed	the child closed its standard input, or ended
+std/subproc	Write_end.timed_out	timed_out	the child took nothing for that long; what went before stays written
+std/subproc	run #cfg(!freestanding)	pub fn run(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): U8$[]!Run_error	runs one child and returns its standard output; any failure is thrown. The arguments are as for run_capture; **the failure is thrown**: "cannot start", "timed out" and "exited non-zero" all become `Run_error`, so the caller can pass them on with `!`. **When you need the exit code itself, use run_capture**; this one treats anything but 0 as a failure, which does not suit a program where a non-zero exit is normal.
+std/subproc	run_capture #cfg(!freestanding)	pub fn run_capture(argv: U8[][], cwd: U8[], timeout_ms: I32, output_cap: Sz, arena: Arena$@): Run_result	runs one child to the end and collects both its outputs. argv[0] is as for `spawn_wait`; stdout and stderr are collected separately, watched in one wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this it is cut"), not the size to allocate.
 std/subproc	run_many #cfg(!freestanding)	pub fn run_many(jobs: Job[], max_parallel: Sz, timeout_ms: I32, output_cap: Sz, work_dir: U8[], arena: Arena$@): List<|Run_result|>$@	runs many children, a few at a time, and collects each one's output
 std/subproc	spawn_async #cfg(!freestanding)	pub fn spawn_async(argv: U8[][], cwd: U8[]): I64!Spawn_error	starts a child with the standard I/O inherited, without waiting
 std/subproc	spawn_piped #cfg(!freestanding)	pub fn spawn_piped(argv: U8[][], cwd: U8[]): Piped_child!Spawn_error	starts a child for two-way communication over pipes
@@ -1157,6 +1165,11 @@ std/sys	Args	pub struct Args	the arguments this process was started with; `[0]` 
 std/sys	Args.get	pub fn get(r: Self@, index: Sz): U8[]	one argument; an index out of range stops the program
 std/sys	Args.len	pub len: Sz	how many there are, counting the program's own name
 std/sys	Args:Index<|Sz, U8[]|>	impl Args: Index<|Sz, U8[]|>	so `args()[i]` can be written
+std/sys	Env_error #cfg(!freestanding)	pub enum Env_error	why an environment variable was not set or deleted
+std/sys	Env_error.bad_name #cfg(!freestanding)	bad_name	the name is empty, or holds `=` or a NUL, which no environment can store
+std/sys	Env_error.bad_value #cfg(!freestanding)	bad_value	the value holds a NUL, where C ends the text
+std/sys	Env_error.empty_value #cfg(!freestanding)	empty_value	`set_env` was given an empty value; `unset_env` is what deletes
+std/sys	Env_error.refused #cfg(!freestanding)	refused	the OS did not take it (out of memory, say)
 std/sys	args	pub fn args(): Args	the arguments this process was started with
 std/sys	cpu_count #cfg(!freestanding)	pub fn cpu_count(): Sz	how many CPUs this process may run on; 1 if unknown, never 0. It follows the affinity (`taskset`, a job object) where the OS has one; a container's CPU quota is not read.
 std/sys	cwd #cfg(!freestanding)	pub fn cwd(buf: U8$[]): U8[]	the working directory, or empty if it cannot be read or does not fit
@@ -1165,7 +1178,7 @@ std/sys	get_dir_name	pub fn get_dir_name(path: U8[]): U8[]	the folder part, or e
 std/sys	get_env #cfg(!freestanding)	pub fn get_env(name: U8[]): U8[]?	an environment variable, or nothing when unset
 std/sys	get_file_name	pub fn get_file_name(path: U8[]): U8[]	the last segment, without the folder part
 std/sys	install_shutdown_handler	pub fn install_shutdown_handler()	makes Ctrl+C and a stop request set a flag, not kill. Call this, then poll `shutdown_requested()` in the loop. For finer control, use `libc.signal()`.
-std/sys	is_absolute	pub fn is_absolute(path: U8[]): Bool	whether it starts from the root; on Windows `C:\` counts. Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to **that drive's current working directory**, not the root; skipping the separator creates a copy that answers differently in just that case. On POSIX `C:\x` is a relative name.
+std/sys	is_absolute	pub fn is_absolute(path: U8[]): Bool	whether it starts from the root; on Windows `C:\` counts. Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to **that drive's current working directory**, not the root; skipping the separator creates a copy that answers differently in just that case. On POSIX `C:\x` is a relative name. A root that opens with a separator is from the root whatever follows (`\\server\share`).
 std/sys	is_path_sep	pub fn is_path_sep(c: U8): Bool	a path separator, `/` or `\`, on every OS; std/fs splits by it. Caution: Check both `/` and `\`. A path from Windows can be mixed (MSYS2 rewrites a `/tmp/...` it passes to a child process as `D:/a/_temp/...`).
 std/sys	is_windows	pub fn is_windows(): Bool	whether the OS running this is Windows. Lets a test or tool that relies on a POSIX-only path such as `/bin/echo` skip itself.
 std/sys	last_ext	pub fn last_ext(path: U8[]): U8[]	the last extension with its dot, or empty if none. **The leading `.` is included.** For a double extension, call it again yourself (`last_ext(strip_last_ext("a.tar.gz"))` gives `".tar"`). **Do not add a plural such as `suffixes` in advance** (Principle 1 in `docs/DESIGN.md`); adding one later only joins paths.
@@ -1173,17 +1186,17 @@ std/sys	mono_us	pub fn mono_us(): I64	a clock that only goes forward, in microse
 std/sys	print_trace	pub fn print_trace()	writes the route this thread's last failure took to standard error. Caution: **Do not use `io`.** Many files import `sys`, so importing `io` here would make all of them carry the file-I/O implementation (bare metal has no standard output). The text is built in a `Str_builder` and written with one libc `fwrite`, so it is less likely to mix with other output.
 std/sys	program_name #cfg(!freestanding)	pub fn program_name(): U8[]	this program's name for messages, without folder or extension
 std/sys	raise_signal	pub fn raise_signal(sig: I32)	sends a signal to this process itself. For a test, or to resend a signal for its default behaviour after your own clean-up.
-std/sys	root_len	pub fn root_len(path: U8[]): Sz	the length of the root a path starts from; 0 if it has none. A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and `C:\` three there, while on POSIX `C:\x` is a relative name whose first folder is `C:`. std/fs measures the root by this too, so the two cannot disagree.
+std/sys	root_len	pub fn root_len(path: U8[]): Sz	the length of the root a path starts from; 0 if it has none. A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and `C:\` three there, while on POSIX `C:\x` is a relative name whose first folder is `C:`. On Windows a share is a root too, `\\server\share\`, and so is what follows `\\?\` or `\\.\` (`\\?\C:\`, `\\?\UNC\server\share\`). A share needs its server's name: `\\` alone, or a third separator, is the plain root `\`. std/fs measures the root by this too, so the two cannot disagree.
 std/sys	script_env_name	pub const script_env_name: U8[] = "KSPL_SCRIPT"	how a launcher passes a script its own path. The value is "<the launched executable's path>\n<the script's path>" (see script_path). Caution: Changing the name on only one side makes script_path silently return .none.
 std/sys	script_path #cfg(!freestanding)	pub fn script_path(): U8[]?	the script being run, if a launcher started this
-std/sys	set_env #cfg(!freestanding)	pub fn set_env(name: U8[], value: U8[]): Bool	sets an environment variable, which children inherit
+std/sys	set_env #cfg(!freestanding)	pub fn set_env(name: U8[], value: U8[]): Void!Env_error	sets an environment variable, which children inherit
 std/sys	shutdown_requested	pub fn shutdown_requested(): Bool	whether a stop was requested since the handler was installed
 std/sys	sigint	pub const sigint: I32 = 2	Ctrl+C, shared by POSIX and Windows
 std/sys	sigterm	pub const sigterm: I32 = 15	a request to exit cleanly; it can be registered on Windows too
 std/sys	sleep_ms #cfg(!freestanding)	pub fn sleep_ms(ms: I32)	waits that many milliseconds, yielding the CPU
 std/sys	strip_last_ext	pub fn strip_last_ext(path: U8[]): U8[]	the path without its last extension. **Joined with `last_ext`, it restores the original path** (`strip_last_ext(p) + last_ext(p) == p`), so there is no "which side gets the dot" to remember. Caution: Do not change only one of them.
 std/sys	timing_available	pub fn timing_available(): Bool	whether this environment has a clock at all. A working clock never returns 0, whatever its origin, so that is what is checked.
-std/sys	unset_env #cfg(!freestanding)	pub fn unset_env(name: U8[]): Bool	deletes an environment variable, which children inherit
+std/sys	unset_env #cfg(!freestanding)	pub fn unset_env(name: U8[]): Void!Env_error	deletes an environment variable, which children inherit
 std/thread	Atomic_sz	pub struct Atomic_sz	a shared counter or flag that changes without taking a lock. Lock-free; it uses the same kspl_atomic_add/cas as the `Arc<T>` reference counts in std/refcount.
 std/thread	Atomic_sz.compare_and_swap	pub fn compare_and_swap(r: Self$@, expected: Sz, new_val: Sz): Bool	writes only if the value is still the one read; true if it wrote
 std/thread	Atomic_sz.fetch_add	pub fn fetch_add(r: Self$@, delta: Sz): Sz	adds, and returns the value from before the addition

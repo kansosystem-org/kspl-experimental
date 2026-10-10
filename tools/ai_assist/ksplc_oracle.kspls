@@ -65,19 +65,21 @@ priv fn parse_error_summary(stdout_data: U8[]): I32? //<
     $lines: = stdout_data.lines(null)
     defer lines.free()
     for line in lines
-        if line.find_str("error(s)") < 0
+        if line.find_str("error(s)").is_none()
             continue
-        with_pos: = line.find_str("with")
-        if with_pos < 0
+        switch line.find_str("with")
+        case .none
             continue
-        after_with: = line.sub_from(with_pos + 4)
-        err_pos: = after_with.find_str("error")
-        if err_pos < 0
-            continue
-        num_str: = U8$[]::after_with.sub(0, err_pos).trim_spaces()
-        n: = num_str.parse_size() catch
-            continue
-        return .some(I32::n)
+        case .some(with_pos)
+            after_with: = line.sub_from(with_pos + 4)
+            switch after_with.find_str("error")
+            case .none
+                continue
+            case .some(err_pos)
+                num_str: = U8$[]::after_with.sub(0, err_pos).trim_spaces()
+                n: = num_str.parse_size() catch
+                    continue
+                return .some(I32::n)
     return .none
 
 pub fn compile_errors( //< runs one source through ksplc and counts the errors it reports
@@ -121,7 +123,7 @@ pub fn compile_errors( //< runs one source through ksplc and counts the errors i
     // No summary: a parse or syntax error exited partway; count stderr's diagnostic lines.
     err_lines: = r.stderr_data.lines(arena)
     $n: = I32::err_lines.where(fn(line: U8[]; ): Bool {
-        return line.find_str(": error:") >= 0;
+        return line.find_str(": error:").is_some();
     }).count()
     if n == 0 && r.exit_code != 0
         n = uncompilable // an abnormal exit with no diagnostic either = unusable (a timeout or a crash)
@@ -137,6 +139,6 @@ fn first_diagnostic(stderr_data: U8[]): U8[] //<
     $lines: = stderr_data.lines(null)
     defer lines.free()
     for line in lines
-        if line.find_str(": error:") >= 0
+        if line.find_str(": error:").is_some()
             return line.trim_spaces()
     return ""

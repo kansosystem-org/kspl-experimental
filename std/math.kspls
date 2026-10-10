@@ -4,7 +4,11 @@
 //< freestanding build has no libm, so it uses software implementations with no dependencies
 //< (Newton's method, the Taylor and atanh series, range reduction). **The two must agree**: a
 //< model's softmax, rmsnorm and RoPE depend on these, and one model must give the same answer
-//< whether it runs hosted or embedded.
+//< whether it runs hosted or embedded. That holds at the edges too: a NaN, an infinity, a negative
+//< under `sqrt` or `log` and an `exp` past F64's range get libm's answers (C99 Annex F), not a
+//< panic, so a masked softmax's `exp(-inf)` is 0 on both. The one gap: freestanding `sin`, `cos`
+//< and `tan` panic for a finite |x| of 2^63 × pi/2 (about 1.4e19) or more, which libm reduces
+//< exactly and the series here cannot.
 #cfg(!freestanding)
 import "std/libc"
 
@@ -55,25 +59,27 @@ pub fn round(x: F64): F64 //< rounds to the nearest whole number, halves away fr
 // cfg(freestanding): the dependency-free software implementations
 // ==========================================
 
-priv const max_reduce_iters: Sz = 1100 //<
-    //< The iteration limit, which covers F64's exponent range with room to spare
-    //<
-    //< For +Infinity, "v >= 4.0" (sqrt_reduce) and "m >= 2.0" (log) stay true forever, so the
-    //< reduction would never end (the x<0.0 check lets +Infinity pass).
+// The non-finite answers libm gives, made by IEEE 754 arithmetic at run time.
+#cfg(freestanding)
+priv fn infinity(): F64
+    return 1.0e308 * 10.0
+#cfg(freestanding)
+priv fn not_a_number(): F64
+    inf: = infinity()
+    return inf - inf
+#cfg(freestanding)
+priv fn is_finite(x: F64): Bool
+    return x - x == 0.0
 
-// Scales x into [1,4); returns v and sets scale so that sqrt(x) = sqrt(v) * scale.
+// Scales a finite x > 0 into [1,4); returns v and sets scale so that sqrt(x) = sqrt(v) * scale.
 #cfg(freestanding)
 priv fn sqrt_reduce(x: F64, scale_out: F64$@): F64
     $v: = x
     $scale: = 1.0
-    for $i: Sz = 0; v >= 4.0; i += 1
-        if i >= max_reduce_iters
-            panic("math.sqrt: argument is not finite")
+    for v >= 4.0
         v /= 4.0
         scale *= 2.0
-    for $i: Sz = 0; v < 1.0; i += 1
-        if i >= max_reduce_iters
-            panic("math.sqrt: argument is not finite")
+    for v < 1.0
         v *= 4.0
         scale /= 2.0
     scale_out$ = scale
@@ -83,10 +89,12 @@ priv fn sqrt_reduce(x: F64, scale_out: F64$@): F64
 // so 8 steps reach F64's precision with room to spare.
 #cfg(freestanding)
 pub fn sqrt(x: F64): F64 //< the non-negative square root
-    if x < 0.0
-        panic("math.sqrt: negative argument")
-    if x == 0.0
-        return 0.0
+    // libm's answers off the finite positives: NaN below 0 (and for a NaN), and 0, -0 and +inf as
+    // they are.
+    if !(x >= 0.0)
+        return not_a_number()
+    if x == 0.0 || !is_finite(x)
+        return x
     $scale: = 1.0
     v: = sqrt_reduce(x, scale@)
     $y: = (1.0 + v) / 2.0 // within 2x for v in [1,4)
@@ -101,8 +109,8 @@ priv fn exp_taylor_small(r: F64): F64
     for $n: = 20; n >= 1; n -= 1
         acc = 1.0 + r * acc / (F64::n)
     return acc
-// Whether v is finite and within I64's range, which exp() and sincos_reduce() check before their
-// I64::(...) casts.
+// Whether v is finite and within I64's range, which sincos_reduce() checks before its I64::(...)
+// cast.
 #cfg(freestanding)
 priv fn is_safe_round_to_i64(v: F64): Bool
     return (v - v == 0.0) && v < 9.0e18 && v > -9.0e18
@@ -123,16 +131,23 @@ priv fn pow2_int(k: F64): F64
 // exp(x) = 2^k * exp(r)   (x = k*ln2 + r, r∈[-ln2/2, ln2/2])
 #cfg(freestanding)
 pub fn exp(x: F64): F64 //< e raised to the power of `x`
+    if x != x
+        return x
+    // Past these the true value is over F64's largest, or under half its smallest subnormal, as
+    // libm answers. Caution: **Cut before the cast below**, which is undefined behaviour in C for
+    // an infinity.
+    if x > 709.782712893384
+        return infinity()
+    if x < -745.1332191019412
+        return 0.0
     ln2: = 0.6931471805599453
     scaled: = ((x / ln2) + 0.5) if x >= 0.0 else ((x / ln2) - 0.5)
-    // Caution: For a NaN, an Infinity or a value outside I64's range, the I64::(...) cast below is
-    // undefined behaviour in C, so those values panic as "not finite".
-    if !is_safe_round_to_i64(scaled)
-        panic("math.exp: argument is not finite")
     rounded: = I64::scaled
-    k: = F64::rounded
-    r: = x - k * ln2
-    return exp_taylor_small(r) * pow2_int(k)
+    r: = x - (F64::rounded) * ln2
+    // **2^k in two halves**: k runs from -1075 to 1024, where 2^k alone is 0 or infinity although
+    // the product lands in range.
+    half: = rounded / 2I64
+    return exp_taylor_small(r) * pow2_int(F64::half) * pow2_int(F64::(rounded - half))
 
 // log(m) for m in [1,2): with t=(m-1)/(m+1) in [0,1/3), log(m)=2*atanh(t)=2*sum t^(2i+1)/(2i+1);
 // 18 terms reach F64 precision.
@@ -147,30 +162,56 @@ priv fn log_atanh_small(m: F64): F64
 // log(x) = e*ln2 + log(m)   (x = m*2^e, m∈[1,2))
 #cfg(freestanding)
 pub fn log(x: F64): F64 //< the natural logarithm, base e
-    if x <= 0.0
-        panic("math.log: non-positive argument")
+    // libm's answers off the finite positives: NaN below 0 (and for a NaN), -inf at 0, and +inf as
+    // it is. Caution: **Cut +inf before the loop**, where "m >= 2.0" stays true for good.
+    if !(x >= 0.0)
+        return not_a_number()
+    if x == 0.0
+        return -infinity()
+    if !is_finite(x)
+        return x
     ln2: = 0.6931471805599453
     $m: = x
     $e_exp: = 0.0
-    // Caution: For +Infinity "m >= 2.0" stays true forever; max_reduce_iters cuts it off.
-    for $i: Sz = 0; m >= 2.0; i += 1
-        if i >= max_reduce_iters
-            panic("math.log: argument is not finite")
+    for m >= 2.0
         m /= 2.0
         e_exp += 1.0
-    for $i: Sz = 0; m < 1.0; i += 1
-        if i >= max_reduce_iters
-            panic("math.log: argument is not finite")
+    for m < 1.0
         m *= 2.0
         e_exp -= 1.0
     return e_exp * ln2 + log_atanh_small(m)
 
-// RoPE and similar uses always have base>0 (theta=10000.0, for example). base<=0 is not
-// supported.
+// Whether a finite x is a whole number; from 2^52 up every F64 is one, and the cast is only below.
+#cfg(freestanding)
+priv fn is_integral(x: F64): Bool
+    if x >= 4503599627370496.0 || x <= -4503599627370496.0
+        return true
+    return F64::(I64::x) == x
+
+// Whether x is an odd whole number; from 2^53 up every F64 is even.
+#cfg(freestanding)
+priv fn is_odd_integral(x: F64): Bool
+    if !is_finite(x) || x >= 9007199254740992.0 || x <= -9007199254740992.0 || !is_integral(x)
+        return false
+    return I64::x % 2I64 != 0I64
+
+// libm's answers (C99 Annex F): anything to the 0 is 1, and 1 to anything, NaN included. A base
+// below 0 (or -0) takes its magnitude's answer, negated for an odd whole exponent; a finite one
+// under an exponent that is not whole has no real answer, NaN. The rest is exp(y * log(x)), whose
+// infinities and zeros fall out as Annex F's do.
 #cfg(freestanding)
 pub fn pow(base: F64, exponent: F64): F64 //< `base` raised to the power of `exponent`
-    if base <= 0.0
-        panic("math.pow: the freestanding version carries base>0 only")
+    if exponent == 0.0 || base == 1.0
+        return 1.0
+    if base != base || exponent != exponent
+        return not_a_number()
+    if base < 0.0 || (base == 0.0 && 1.0 / base < 0.0)
+        magnitude: = pow(-base, exponent)
+        if is_odd_integral(exponent)
+            return -magnitude
+        if base < 0.0 && is_finite(base) && is_finite(exponent) && !is_integral(exponent)
+            return not_a_number()
+        return magnitude
     return exp(exponent * log(base))
 
 // The Taylor series of sin(r) and cos(r) for |r| <= pi/4: 10 terms reach F64 precision.
@@ -193,10 +234,15 @@ priv fn cos_taylor_small(r: F64): F64
 priv fn sincos_reduce(x: F64, sin_out: F64$@, cos_out: F64$@)
     half_pi: = pi / 2.0
     scaled: = (x / half_pi + 0.5) if x >= 0.0 else (x / half_pi - 0.5)
-    // Caution: A non-finite or huge x makes the I64::(...) cast below undefined behaviour (as in
-    // exp()); sin/cos/tan all panic here.
+    // A NaN or an infinity has no angle: NaN, as libm answers. Caution: **Cut before the cast
+    // below**, undefined behaviour in C for a non-finite or huge x; a huge finite one is the gap
+    // the file's header names.
+    if !is_finite(x)
+        sin_out$ = not_a_number()
+        cos_out$ = not_a_number()
+        return
     if !is_safe_round_to_i64(scaled)
-        panic("math.sin/cos/tan: argument is not finite")
+        panic("math.sin/cos/tan: the freestanding version carries |x| below 1.4e19 only")
     k: = I64::scaled
     r: = x - (F64::k) * half_pi
     s: = sin_taylor_small(r)

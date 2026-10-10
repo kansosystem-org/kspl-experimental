@@ -228,39 +228,40 @@ impl Ast_node
     priv fn emit_fwd_extern_decls(r: Ast_node$@, cg: Genc_ctx$@)
         for raw in r.children
             child: = raw.unwrap_top_level()
-            if child.kind_id == .k_decl_extern || child.kind_id == .k_decl_extern_block
-                if !child.is_alive_for_backend()
-                    continue
-                for item in child.children
-                    if !item.is_alive_for_backend()
-                        continue
+            if (child.kind_id != .k_decl_extern && child.kind_id != .k_decl_extern_block) ||
+                !child.is_alive_for_backend()
+                continue
+            for item in child.children
+                if item.is_alive_for_backend()
+                    item.emit_fwd_extern_item(cg)
 
-                    switch item.kind_id
-                    case .k_decl_var
-                        id: = item.get_decl_id_text()
-                        type_node: = item.get_decl_type_node()
-                        cg.s(extern_word(item))
-                        item.emit_attributes(cg)
-                        if type_node != null
-                            type_node.emit_c_decl(cg, id, false)
-                        else
-                            cg.s("int32_t \{id\}")
-                        cg.s(";\n")
-                    case .k_decl_extern_struct
-                        id: = item.find_text(.k_identifier)
-                        if id.len > 0
-                            cg.s("typedef struct \{id\} \{id\};\n")
-                    case .k_decl_fn_proto
-                        // Under hosted, the standard headers already declare a std/libc function,
-                        // so it is not emitted here (two declarations disagree over variadics and
-                        // the like). Freestanding includes no standard header (gen/c/ctx.kspls),
-                        // so even an unused one is an "implicit declaration" error; it is emitted
-                        // to get the compile through, and --gc-sections drops it if uncalled.
-                        if !item.loc.file().equals("std/libc") ||
-                            base_core.config.is_freestanding
-                            cg.s(extern_word(item))
-                            item.emit_single_func_proto(cg, 0)
-                    default {}
+    priv fn emit_fwd_extern_item(r: Ast_node$@, cg: Genc_ctx$@) //<
+        //< The forward declaration of one item an `extern` block declares
+        switch r.kind_id
+        case .k_decl_var
+            id: = r.get_decl_id_text()
+            type_node: = r.get_decl_type_node()
+            cg.s(extern_word(r))
+            r.emit_attributes(cg)
+            if type_node != null
+                type_node.emit_c_decl(cg, id, false)
+            else
+                cg.s("int32_t \{id\}")
+            cg.s(";\n")
+        case .k_decl_extern_struct
+            id: = r.find_text(.k_identifier)
+            if id.len > 0
+                cg.s("typedef struct \{id\} \{id\};\n")
+        case .k_decl_fn_proto
+            // Under hosted, the standard headers already declare a std/libc function, so it is not
+            // emitted here (two declarations disagree over variadics and the like). Freestanding
+            // includes no standard header (gen/c/ctx.kspls), so even an unused one is an "implicit
+            // declaration" error; it is emitted to get the compile through, and --gc-sections drops
+            // it if uncalled.
+            if !r.loc.file().equals("std/libc") || base_core.config.is_freestanding
+                cg.s(extern_word(r))
+                r.emit_single_func_proto(cg, 0)
+        default {}
 
     fn emit_fn_def(r: Self$@, cg: Genc_ctx$@)
         // Sema refuses a function without a body (collect_fn_def in sema/decl/collect.kspls).
@@ -478,7 +479,7 @@ impl Ast_node
         defer emitted.free()
         for raw in r.children
             child: = raw.unwrap_top_level()
-            if child.kind_id == .k_decl_alias && child.is_emittable() && child.type_id != 0 &&
+            if child.kind_id == .k_decl_typedef && child.is_emittable() && child.type_id != 0 &&
                 child.alias_target_node() != null
                 pending.push(child)
                 emitted.push(false)
@@ -605,27 +606,32 @@ priv fn emit_complex_types_fwd(cg: Genc_ctx$@)
         cg.clear_scratch()
         cg.env.mangle_type_id_to(type_id, cg.scratch)
         m_slice: = cg.scratch.slice()
-        if seen.admit(type_id)
-            switch info
-            case .array(_base_id, _size)
-                if _size != -1
-                    // An array with immutable elements is emitted as an alias sharing **the same
-                    // struct tag** as the plain type (the same reason as a slice's; see the comment
-                    // above). As a separate struct it would be a different type in C, and a value
-                    // copy (a return value, an assignment) would fail with "the types differ". The
-                    // declaration's `const ` makes it read-only (map_c_type_to_impl in
-                    // gen/c/ctx.kspls). **Every level is stripped** (`strip_const_deep`).
-                    plain_arr_id: = cg.env.strip_const_deep(type_id)
-                    if plain_arr_id != type_id
-                        $plain_arr_b: = Str_builder.new()
-                        defer plain_arr_b.free()
-                        cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
-                        cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
-                    else
-                        cg.s("typedef struct \{m_slice\} \{m_slice\};\n")
-            case .result(_base_id, _err_id)
-                cg.s("typedef struct kspl_\{m_slice\} kspl_\{m_slice\};\n")
-            default {}
+        if !seen.admit(type_id)
+            continue
+        switch info
+        case .array(_base_id, size)
+            if size != -1
+                emit_array_typedef_fwd(cg, type_id, m_slice)
+        case .result(_base_id, _err_id)
+            cg.s("typedef struct kspl_\{m_slice\} kspl_\{m_slice\};\n")
+        default {}
+
+priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<
+    //< The forward typedef of a fixed-length array's struct, named `m_slice`
+    //<
+    //< An array with immutable elements is emitted as an alias sharing **the same struct tag** as
+    //< the plain type (the same reason as a slice's). As a separate struct it would be a different
+    //< type in C, and a value copy (a return value, an assignment) would fail with "the types
+    //< differ". The declaration's `const ` makes it read-only (map_c_type_to_impl in
+    //< gen/c/ctx.kspls). **Every level is stripped** (`strip_const_deep`).
+    plain_arr_id: = cg.env.strip_const_deep(type_id)
+    if plain_arr_id == type_id
+        cg.s("typedef struct \{m_slice\} \{m_slice\};\n")
+        return
+    $plain_arr_b: = Str_builder.new()
+    defer plain_arr_b.free()
+    cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
+    cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
 
 priv fn is_text_data(data: U8[]): Bool //< whether this run may be printed as a C string literal
     //<

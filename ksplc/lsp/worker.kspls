@@ -78,7 +78,7 @@ priv fn populate_source_map_from_store(server: Server$@,
 priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@): pipeline.Compiler$@
     // Caution: **The URI becomes the one logical name here** (`doc_name` above). The AST records a
     // file by its logical name; with only the scheme stripped an absolute URI would not match it,
-    // so `traverse_and_find_best` (`position.kspls`) rejects every node of the open document and
+    // so `Pick_walk.visit` (`position.kspls`) rejects every node of the open document and
     // the editor shows nothing.
     ptr.mod_name_perm = base_core.arena.dup_str(doc_name(ptr.uri_perm).strip_kspl_ext())
 
@@ -95,8 +95,9 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
     //< its last part; searched whole it matches no file. Off a name the answer is empty, and only
     //< the entry file's import tree is read.
     if hint.len > 0
-        dot: = hint.rfind_char('.')
-        return hint.sub_from(dot + 1) if dot >= 0 else hint
+        if dot: = hint.rfind_char('.')
+            return hint.sub_from(dot + 1)
+        return hint
     switch params.get("position")
     case .null_val
         return ""
@@ -132,10 +133,8 @@ priv fn mended_from_disk(path: U8[], raw: U8[]): U8[] //<
 
 priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U8[],
     params: json.Val): Doc_state$@
-    arena_state: = base_core.arena.save()
     uri_perm: = base_core.arena.dup_str(target_uri)
-    ptr: = base_core.arena
-        .create(Doc_state::{ .arena_state = arena_state, .uri_perm = uri_perm })
+    ptr: = base_core.arena.create(Doc_state::{ .uri_perm = uri_perm })
 
     $target_src: U8[] = ""
     switch server.docs.open_text(target_uri)
@@ -219,12 +218,9 @@ priv const test_poison_scheme: U8[] = "kspl-test-poison:" //<
 priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: Bool): Doc_state$@
     if uri.starts_with(test_poison_scheme)
         panic("injected test crash while analysing a document")
-    arena_state: = base_core.arena.save()
     uri_perm: = base_core.arena.dup_str(uri)
     src_perm: = base_core.arena.dup_str(src)
-    ptr: = base_core.arena
-        .create(Doc_state::{ .arena_state = arena_state, .uri_perm = uri_perm,
-        .src_perm = src_perm })
+    ptr: = base_core.arena.create(Doc_state::{ .uri_perm = uri_perm, .src_perm = src_perm })
 
     // Caution: Discard the pair with the document. Left over, the previous document's dropped
     // ranges would give the old reason at the same position in another file. `wind_back` clears
@@ -250,8 +246,13 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
     // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN.md`).
     compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, .main_file) catch {}
     if send_diag
+        // **A failure with no diagnostic still says what to do**: a bare "error" at the top of
+        // the file names neither the cause nor where to look (an import that cannot be read, say,
+        // is reported only on the compiler's own output).
         if !compiler.is_valid && base_diag.lsp_diags.list.len == 0
-            lsp_msg.send_single_diagnostic(uri, .error, 0, 0, 0, "Semantic Error")
+            lsp_msg.send_single_diagnostic(uri, .error, 0, 0, 0,
+                "This file could not be analysed, and no diagnostic says why: run `ksplc lint` on \
+                    it to see the compiler's own report")
         else
             lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
 
@@ -300,12 +301,12 @@ impl Server
         else if method.equals("textDocument/rename") ||
             method.equals("textDocument/references")
             ws: = r.workspace_state(params)
-            defer ws.discard()
+            defer r.drop_workspace_state(ws)
             lsp_uses.handle(ws, method, params, id_val, arena)
         else if method.equals("callHierarchy/incomingCalls") ||
             method.equals("callHierarchy/outgoingCalls")
             ws: = r.workspace_state(params)
-            defer ws.discard()
+            defer r.drop_workspace_state(ws)
             is_incoming: = method.equals("callHierarchy/incomingCalls")
             lsp_call_hier.handle_calls(ws, params, id_val, is_incoming, arena)
         else
@@ -324,7 +325,7 @@ impl Server
         return .none
 
     priv fn workspace_state(r: Self$@, params: json.Val): Doc_state$@ //<
-        //< The workspace analysed for one request; the caller discards it (`Doc_state.discard`)
+        //< The workspace analysed for one request; the caller frees it (`drop_workspace_state`)
         //<
         //< Caution: **Do not ask the client for the filter's search word.** The server holds the
         //< position and the source; asking would keep the same thing in two places. Only the call
@@ -340,6 +341,16 @@ impl Server
             else params.get("item").get("uri").as_str())
         target_fqn: = "" if has_doc else lsp_call_hier.item_fqn(params)
         return build_workspace_state(r, uri, target_fqn, params)
+
+    priv fn drop_workspace_state(r: Self$@, ws: Doc_state$@) //<
+        //< It frees a workspace state, and the document state built before it
+        //<
+        //< Caution: **Do not keep `latest_state` past it.** The rewind clears what the compiler
+        //< keeps in module-level variables (the ranges a `#cfg()` dropped, the text as written,
+        //< the diagnostics: `wind_back`), which the document state's answers read; kept, its hover
+        //< would lose a dropped range's reason. The next request that needs it builds it again.
+        ws.free()
+        r.reset_current_state()
 
     priv fn handle_completion_req(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
         //< It answers a completion request

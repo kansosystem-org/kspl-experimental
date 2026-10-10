@@ -96,18 +96,21 @@ priv fn base_vocab(at: Paths): Sz //< how many words the tokenizer has: its high
         sys.exit(1)
     $top: Sz = 0
     for line in data.lines(null)
-        tab: = line.find_char('\t')
-        if tab <= 0
-            continue
-        id: = line.sub(0, tab).parse_size() catch 0
-        if id + 1 > top
-            top = id + 1
+        if tab: = line.find_char('\t')
+            if tab > 0
+                id: = line.sub(0, tab).parse_size() catch 0
+                if id + 1 > top
+                    top = id + 1
     return top
 
 priv fn load_tokenizer(at: Paths, arena: Arena$@): ai_tokenizer.Tokenizer
     $tok: = ai_tokenizer.Tokenizer.new(arena)
-    tok.load(at.vocab, at.merges) catch
-        io.err().s("[error] cannot read the tokenizer (\{at.vocab\}, \{at.merges\})\n")
+    tok.load(at.vocab, at.merges) catch e
+        switch e
+        case .broken(path, line)
+            io.err().s("[error] the tokenizer's \{path\}:\{line\} is not an entry\n")
+        default
+            io.err().s("[error] cannot read the tokenizer (\{at.vocab\}, \{at.merges\})\n")
         sys.exit(1)
     return tok
 
@@ -338,12 +341,11 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
             if pick >= ids.pre
                 break
             mid.push(pick)
-            if tok.decode_one(pick).find_char('\n') >= 0
+            if tok.decode_one(pick).find_char('\n').is_some()
                 break
             logits = model.forward(pick, pos, work)
         text: = tok.decode(mid@)
-        cut: = text.find_char('\n')
-        out.push(text.sub(0, cut) if cut >= 0 else text)
+        out.push(text.sub(0, text.find_char('\n').unwrap_or(text.len)))
     return out
 
 priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], samples: Sz, seed: U64) //<

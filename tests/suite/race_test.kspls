@@ -96,7 +96,10 @@ priv fn races_in(text: U8[], arena: Arena$@): List<|U8[]|> //<
             on = ""
         else if open && line.starts_with(global_head)
             rest: = line.sub_from(global_head.len)
-            on = rest.sub(0, rest.find_char('\''))
+            if end: = rest.find_char('\'')
+                on = rest.sub(0, end)
+            else
+                on = ""
         else if open && line.starts_with(summary_head)
             what: = line.sub_from(summary_head.len)
             out
@@ -203,8 +206,8 @@ priv fn build(dir: U8[], entry: U8[], exe: U8[], opt: U8[], arena: Arena$@): Bui
     // A package's own files are listed from its folder; each path is made whole here.
     whole: = arena.text()
     for line in listed.lines(arena)
-        at: = line.find_char(' ')
-        if at > 0
+        at: = line.find_char(' ').unwrap_or(0)
+        if at > 0 // a space, with a name before it
             path: = line.sub_from(at + 1)
             whole.s(path if sys.is_absolute(path) else fs.join(dir, path, arena)).c('\n')
     return Built::{ .exe = exe, .deps = whole.take() }
@@ -306,9 +309,10 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
     log_dir: = fs.join(work, "racy_log", arena)
     fs.mkdir_all(log_dir) catch {}
     sys.set_env("TSAN_OPTIONS",
-        arena.text().s("log_path=").s(fs.join(log_dir, "tsan", arena)).take())
+        arena.text().s("log_path=").s(fs.join(log_dir, "tsan", arena)).take()) catch
+        panic("TSAN_OPTIONS could not be set")
     ksplc_harness.run_in(U8[][]::{ b.exe }, work)
-    sys.unset_env("TSAN_OPTIONS")
+    sys.unset_env("TSAN_OPTIONS") catch panic("TSAN_OPTIONS could not be unset")
     verdict.check("a race written on purpose is reported", reports_in(log_dir, arena).len > 0,
         "the program built with the sanitizer ran and nothing was reported")
 
@@ -444,7 +448,7 @@ impl Lsp_session
         change: = b.obj().set("text", b.str_val(lsp_text(fn_name, k, arena))).build()
         params: = b.obj().set("textDocument", td)
             .set("contentChanges", b.arr().push(change).build()).build()
-        _sent: = r.c.notify("textDocument/didChange", params, arena)
+        r.c.notify("textDocument/didChange", params, lsp_client.send_ms, arena) catch {}
 
     priv fn hover(r: Self$@, k: Sz, fn_name: U8[], when: U8[], arena: Arena$@) //<
         //< A hover at document k's call, which must name fn_name and k
@@ -453,14 +457,14 @@ impl Lsp_session
             fallback .null_val
         text: = lsp_client.hover_text(got)
         want: = arena.text().s(fn_name).s("\{k\}").take()
-        if text.find_str(want) < 0
+        if text.find_str(want).is_none()
             said: = arena.text().s("a hover on d\{k\} ").s(when).s(" did not name `").s(want)
                 .s("`: '").s(text).s("'").take()
             r.faults.push(lsp_client.why(r.c, said, arena))
 
     priv fn crash(r: Self$@, arena: Arena$@) //< the worker's crash hook (`$/ksplTestCrash`)
         $b: = Json_builder.new(arena)
-        _sent: = r.c.notify("$/ksplTestCrash", b.obj().build(), arena)
+        r.c.notify("$/ksplTestCrash", b.obj().build(), lsp_client.send_ms, arena) catch {}
 
 priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): List<|U8[]|> //<
     //< An editor's session with the server, returning what went wrong; empty where it all answered
@@ -484,11 +488,12 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
     _init: =
         s.c.request("initialize", b.obj().build(), lsp_wait_ms, arena) catch
         fallback .null_val
-    _ready: = s.c.notify("initialized", b.obj().build(), arena)
+    s.c.notify("initialized", b.obj().build(), lsp_client.send_ms, arena) catch {}
     for k in Range.asc(lsp_docs)
-        _sent: = s.c
+        s.c
             .notify("textDocument/didOpen",
-            lsp_client.did_open(s.uri(k, arena), lsp_text("add", k, arena), arena), arena)
+            lsp_client.did_open(s.uri(k, arena), lsp_text("add", k, arena), arena),
+            lsp_client.send_ms, arena) catch {}
     for k in Range.asc(lsp_docs)
         s.hover(k, "add", "before the crash", arena)
     // The first document's request comes while the worker is remade; the others are analysed
@@ -506,7 +511,7 @@ priv fn play_lsp_session(exe: U8[], log_dir: U8[], top: U8[], arena: Arena$@): L
         s.hover(k, "sum", "after the edits", arena)
     _down: = s.c.request("shutdown", .null_val, lsp_wait_ms, arena) catch
         fallback .null_val
-    _bye: = s.c.notify("exit", .null_val, arena)
+    s.c.notify("exit", .null_val, lsp_client.send_ms, arena) catch {}
     deadline: = sys.mono_us() + lsp_exit_ms * 1000I64
     for s.c.alive() && sys.mono_us() < deadline
         sys.sleep_ms(20)
@@ -548,7 +553,8 @@ priv fn check_covered(deps: U8[], arena: Arena$@) //<
         text: = harness.read_under_root(rel)
         // This file's own spawn is the race written on purpose, raced by `check_fires`.
         if rel.equals(self_path) ||
-            (text.find_str("Thread.spawn") < 0 && text.find_str("kspl_thread_spawn") < 0)
+            (text.find_str("Thread.spawn").is_none() &&
+            text.find_str("kspl_thread_spawn").is_none())
             continue
         seen += 1
         full: = fs.join(harness.root(), rel, arena)

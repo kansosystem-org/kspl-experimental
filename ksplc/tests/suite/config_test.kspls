@@ -1,6 +1,5 @@
 #!/usr/bin/env -S ksplc run
 //< The test on the project settings file (`ksplc.cfg`)
-//<
 
 // ==========================================
 // The properties pinned down:
@@ -167,6 +166,11 @@ priv fn main_cases(arena: Arena$@)
         U8[][]::{ "a.kspl", "ksplc.cfg" },
         U8[][]::{ arena.text().s("##lint(I0307 = off);\n\{src\}").take(), "[lint]\nI0307 = off\n" },
         "a.kspl", U8[][]::{ "--lint=I0307=on" }, none, U8[][]::{ "[I0307]" }, false, false, arena)
+    // --- A file that is there but cannot be read stops the run, not taken as absent ---
+    // A folder under the name is one no OS lets be read as a file, root included.
+    lint_case("unread", "cfg: one that is there and cannot be read is refused",
+        U8[][]::{ "a.kspl", "ksplc.cfg/held" }, U8[][]::{ src, "" }, "a.kspl", none,
+        U8[][]::{ "cannot be read", "ksplc.cfg:" }, none, true, false, arena)
     // --- How comments, empty lines and whitespace are handled ---
     lint_case("comment", "cfg: comments and extra whitespace are tolerated",
         U8[][]::{ "a.kspl", "ksplc.cfg" },
@@ -176,7 +180,7 @@ priv fn main_cases(arena: Arena$@)
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
-    io.out().s("# ksplc.cfg: \{12 + bad_cfgs.len * 2\}\n")
+    io.out().s("# ksplc.cfg: \{13 + bad_cfgs.len * 2\}\n")
     main_cases(arena)
     none: = U8[][]::{}
     for b in bad_cfgs

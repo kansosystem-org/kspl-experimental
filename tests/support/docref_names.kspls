@@ -121,10 +121,10 @@ fn is_tied(after: U8[]): Bool //< whether the text after a span ties it to its f
         rest: = t.trim_start().sub_from(1).trim_start()
         if !rest.starts_with("`")
             break
-        shut: = rest.sub_from(1).find_char('`')
-        if shut < 0
+        if shut: = rest.sub_from(1).find_char('`')
+            t = rest.sub_from(shut + 2)
+        else
             return false
-        t = rest.sub_from(shut + 2)
     if t.starts_with("(`")
         return true
     for w in file_words
@@ -159,22 +159,23 @@ priv fn read_uses(rel: U8[], text: U8[], out: List<|Use|>$@, arena: Arena$@) //<
             for i + n < ln.len && ln[i + n] == '`'
                 n += 1
             // A span closes on a run of as many backticks; an unmatched run is plain text.
-            shut: = ln.sub_from(i + n).find_str(ln.sub(i, n))
-            if shut < 0
+            switch ln.sub_from(i + n).find_str(ln.sub(i, n))
+            case .none
                 i += n
-                continue
-            body: = ln.sub(i + n, shut)
-            end: = i + n + Sz::shut + n
-            parts: = dotted(body, arena)
-            // One letter stands for any name (`P.new`).
-            if n == 1 && parts.len >= 2 && !is_foreign(ln.sub(0, i)) &&
-                !is_tied(ln.sub_from(end)) && !names_a_file(parts@) && parts.get(0).len > 1 &&
-                parts.get(1).len > 1
-                kept: = List<|U8[]|>.create(arena)
-                for p in parts
-                    kept.push(p)
-                out.push(Use::{ .rel = rel, .line = lineno, .body = body, .parts = kept })
-            i = end
+            case .some(shut)
+                body: = ln.sub(i + n, shut)
+                end: = i + n + shut + n
+                parts: = dotted(body, arena)
+                // One letter stands for any name (`P.new`).
+                if n == 1 && parts.len >= 2 && !is_foreign(ln.sub(0, i)) &&
+                    !is_tied(ln.sub_from(end)) && !names_a_file(parts@) &&
+                    parts.get(0).len > 1 && parts.get(1).len > 1
+                    kept: = List<|U8[]|>.create(arena)
+                    for p in parts
+                        kept.push(p)
+                    out
+                        .push(Use::{ .rel = rel, .line = lineno, .body = body, .parts = kept })
+                i = end
 
 // ==========================================
 // What the tree declares
@@ -206,23 +207,22 @@ priv fn add_entries(alias: U8[], std: Bool, said: U8[], ix: Index@, arena: Arena
     for ln in said.lines(arena)
         if !ln.starts_with(entry_head)
             continue
-        shut: = ln.find_str(entry_tail)
-        if shut < 0
-            continue
-        key: = bare_key(ln.sub(entry_head.len, shut - entry_head.len), arena)
-        // A conformance (`List<|T|>:Owned`) adds no name.
-        if key.len == 0 || key.find_char(':') >= 0
-            continue
-        $parts: = key.split('.', arena)
-        // An impl on another file's type is keyed with that file's alias first
-        // (`sync.Sem.init_dyn`).
-        for parts.len > 2 && parts.get(0)[0].is_lower() && parts.get(1)[0].is_upper()
-            parts.remove_at(0)
-        if parts.len >= 2
-            add_to(ix.members, parts.get(parts.len - 2), parts.get(parts.len - 1), arena)
-        if std
-            for p in parts
-                add_to(ix.modules, alias, p, arena)
+        if shut: = ln.find_str(entry_tail)
+            key: = bare_key(ln.sub(entry_head.len, shut - entry_head.len), arena)
+            // A conformance (`List<|T|>:Owned`) adds no name.
+            if key.len == 0 || key.find_char(':').is_some()
+                continue
+            $parts: = key.split('.', arena)
+            // An impl on another file's type is keyed with that file's alias first
+            // (`sync.Sem.init_dyn`).
+            for parts.len > 2 && parts.get(0)[0].is_lower() &&
+                parts.get(1)[0].is_upper()
+                parts.remove_at(0)
+            if parts.len >= 2
+                add_to(ix.members, parts.get(parts.len - 2), parts.get(parts.len - 1), arena)
+            if std
+                for p in parts
+                    add_to(ix.modules, alias, p, arena)
 
 priv fn add_externs(alias: U8[], src: U8[], ix: Index@, arena: Arena$@) //<
     //< Files the functions a std file declares in an `extern` block, which `ksplc doc` leaves out
@@ -234,7 +234,7 @@ priv fn add_externs(alias: U8[], src: U8[], ix: Index@, arena: Arena$@) //<
         t: = ln.trim_spaces().strip_prefix("pub ")
         if !in_block || !t.starts_with("fn ")
             continue
-        open: = t.find_char('(')
+        open: = t.find_char('(').unwrap_or(0)
         if open > 3
             add_to(ix.modules, alias, t.sub(3, open - 3), arena)
 
@@ -261,9 +261,9 @@ priv fn declares_one(src: U8[], heads: Map<|U8[], Bool|>$@, arena: Arena$@): Boo
     return false
 
 priv fn std_alias(rel: U8[]): U8[] //< a file directly under `std/`'s alias, or empty
-    if !rel.starts_with("std/") || rel.sub_from(4).find_char('/') >= 0
+    if !rel.starts_with("std/") || rel.sub_from(4).find_char('/').is_some()
         return ""
-    dot: = rel.rfind_char('.')
+    dot: = rel.rfind_char('.').unwrap_or(0)
     return rel.sub(4, dot - 4) if dot > 4 else ""
 
 priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
@@ -282,8 +282,7 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
             heads.set(head, true)
         else
             lower.set(head, true)
-    tracked: = harness.tracked() catch
-        return ix
+    tracked: = harness.tracked()
     $stems: = List<|U8[]|>.new(arena)
     for rel in tracked
         if !rel.ends_with(".kspls") && !rel.ends_with(".kspl")
@@ -298,8 +297,7 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
         if named
             add_externs(alias, src, ix@, arena)
         if named || declares_one(src, heads@, arena)
-            dot: = rel.rfind_char('.')
-            stems.push(rel.sub(0, dot))
+            stems.push(rel.sub(0, rel.rfind_char('.').unwrap_or(rel.len)))
     $jobs: = List<|subproc.Job|>.new(arena)
     for stem in stems
         argv: = ksplc_harness.ksplc_argv(U8[][]::{ "doc", "--surface-scope=all", stem })
@@ -308,7 +306,8 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
     for i in Range.asc(stems.len)
         r: = outs.get(i)
         stem: = stems.get(i)
-        std: = stem.starts_with("std/") && stem.sub_from(4).find_char('/') < 0
+        std: =
+            stem.starts_with("std/") && stem.sub_from(4).find_char('/').is_none()
         if r.code == 0
             add_entries(sys.get_file_name(stem), std, r.out, ix@, arena)
     return ix
@@ -371,8 +370,7 @@ priv fn left_alone(text: U8[], arena: Arena$@): Bool
     return is_foreign(parts.get(0)) || is_tied(parts.get(2))
 
 fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref_test.kspls`
-    tracked: = harness.tracked() catch
-        fallback List<|U8[]|>.new(arena)
+    tracked: = harness.tracked()
     private: = harness.private_docs()
     $uses: = List<|Use|>.new(arena)
     $owns: = Map<|U8[], Map<|U8[], Bool|>$@|>.new(arena)

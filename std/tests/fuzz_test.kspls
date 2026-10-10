@@ -1,3 +1,9 @@
+//< Tests of `std/fuzz`: mutating bytes, picking seeds, and reading how a round ended
+//<
+//< **Read a round's end from a real child where possible**: the marks an abort prints and the
+//< exit codes differ per platform, and a constructed result would agree with itself on every
+//< platform. The line that `report_all` prints is checked in a child, since it goes into the
+//< run's own tally.
 import "std/ds" { List }
 import "std/fs"
 import "std/fuzz"
@@ -8,14 +14,6 @@ import "std/str" // `arena.text()` and `replace`
 import "std/subproc"
 import "std/tests/fs_test"
 import "std/verdict"
-
-// ==========================================
-// std/fuzz: mutating bytes, picking seeds, and reading how a round ended.
-// **Read a round's end from a real child where possible**: the marks an abort prints and the exit
-// codes differ per platform, and a constructed result would agree with itself on every platform.
-// The line that `report_all` prints is checked in a child, since it goes into the run's own
-// tally.
-// ==========================================
 
 priv const work_dir: U8[] = "out/tmp/kspl_test_fuzz"
 
@@ -109,7 +107,8 @@ fn test_fuzz_rounds(ksplc: U8[], arena: Arena$@) //< ksplc runs the subject
         fuzz.note(found, t@, 0, mode, mode, work_dir, ".txt", arena)
     // A round that also ran past the extended wait, as `run_trial` returns it.
     hung: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = true,
-        .exit_code = 0, .stdout_data = "", .stderr_data = "" }, .slow = false }
+        .exit_code = 0, .stdout_data = "", .stderr_data = "", .output_lost = false },
+        .slow = false }
     fuzz.note(found, hung@, 1, "hung", "h", work_dir, ".txt", arena)
     assert(found.aborts.len == 1 && found.aborts.get(0).seed_name.equals("stop"),
         "a panic is a stop the program announced")
@@ -135,7 +134,7 @@ fn main(): I32
   defer arena.free()
   found: = fuzz.findings_new(arena)
   t: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = false,
-    .exit_code = 139, .stdout_data = "", .stderr_data = "" }, .slow = false }
+    .exit_code = 139, .stdout_data = "", .stderr_data = "", .output_lost = false }, .slow = false }
   fuzz.note(found, t@, 3, "seed.txt", "broken", "out/tmp/kspl_test_fuzz", ".txt", arena)
   o: = fuzz.Opts::{ .trials = 5I64, .seed = 9I64 }
   fuzz.report_all(found, o, "probe", 100, "run it", arena)

@@ -159,71 +159,32 @@ impl Ast_node
     // count, or the items after it stay blocked.
     priv fn resolve_pending_queues(_r: Ast_node$@, cg: Genc_ctx$@,
         pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@)
-        n_ast: = pending_ast.len
-        total: = n_ast + pending_complex.len
-        if total == 0
+        if pending_ast.len + pending_complex.len == 0
             return
-
-        $type_pending: = Map<|I32, I32|>.new(null)
-        defer type_pending.free()
-        $name_pending: = Map<|U8[], I32|>.new(null)
-        defer name_pending.free()
-        for i in Range.asc(n_ast)
-            p_node: = pending_ast.get(i)
-            if p_node != null && p_node.type_id > 0
-                real_id: = c_order_id(cg, p_node.type_id)
-                type_pending.set(real_id, (type_pending.get(real_id) catch 0) + 1)
-            name_node: = p_node.find_child(.k_identifier) if p_node != null else null
-            if name_node != null && name_node.text.len > 0
-                name_pending.set(name_node.text,
-                    (name_pending.get(name_node.text) catch 0) + 1)
-        for i in Range.asc(pending_complex.len)
-            real_id: = c_order_id(cg, pending_complex.get(i))
-            type_pending.set(real_id, (type_pending.get(real_id) catch 0) + 1)
-
-        // The wait queue is a singly-linked list threaded through the items, not a List per key.
-        // Caution: Store the indices 1-based. 0 means "not waiting".
-        $done: = List<|Bool|>.new(null)
-        defer done.free()
-        $wait_next: = List<|Sz|>.new(null)
-        defer wait_next.free()
-        for _i in Range.asc(total)
-            done.push(false)
-            wait_next.push(0)
-        $wait_id: = Map<|I32, Sz|>.new(null)
-        defer wait_id.free()
-        $wait_name: = Map<|U8[], Sz|>.new(null)
-        defer wait_name.free()
-        $ready: = List<|Sz|>.new(null)
-        defer ready.free()
-
-        for i in Range.asc(total)
-            park_pending_item(cg, i, n_ast, pending_ast, pending_complex, type_pending@,
-                name_pending@, wait_next@, wait_id@, wait_name@, ready@)
+        $q: = Decl_queue.new(cg, pending_ast, pending_complex)
+        defer q.free()
+        for i in Range.asc(q.done.len)
+            q.park(cg, i)
 
         // Caution: Take from the front (FIFO); from the back, the output loses declaration order
         // and the diff becomes unreadable.
         $cursor: Sz = 0
-        for cursor < ready.len
-            i: = ready.get(cursor)
+        for cursor < q.ready.len
+            i: = q.ready.get(cursor)
             cursor += 1
-            if done.get(i)
+            if q.done.get(i)
                 continue
-            done.set(i, true)
-            emit_pending_item(cg, i, n_ast, pending_ast, pending_complex)
-            release_pending_item(cg, i, n_ast, pending_ast, pending_complex, type_pending@,
-                name_pending@, wait_next@, wait_id@, wait_name@, ready@, done@)
+            q.emit(cg, i)
+            q.release(cg, i)
 
         // Only cycles remain; their forward declarations are already emitted, so emit them as they
         // are.
-        for i in Range.asc(total)
-            if !done.get(i) && i >= n_ast
-                done.set(i, true)
-                emit_pending_item(cg, i, n_ast, pending_ast, pending_complex)
-        for i in Range.asc(total)
-            if !done.get(i)
-                done.set(i, true)
-                emit_pending_item(cg, i, n_ast, pending_ast, pending_complex)
+        for i in Range.asc(q.done.len)
+            if !q.done.get(i) && i >= q.n_ast
+                q.emit(cg, i)
+        for i in Range.asc(q.done.len)
+            if !q.done.get(i)
+                q.emit(cg, i)
 
     priv fn emit_top_level_vars(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< The **definitions** of globals, constants and embed data
@@ -447,95 +408,131 @@ priv fn node_block(curr: Ast_node$@, cg: Genc_ctx$@, type_pending: Map<|I32, I32
                 return Dep_block::{ .id = 0, .name = key }
     return no_block()
 
-priv fn emit_pending_item(cg: Genc_ctx$@, i: Sz, n_ast: Sz,
-    pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@) //<
-        //< It emits item i.
-        //<
-        //< The indices cover "the AST declarations first, then the composite types".
-    if i < n_ast
-        node: = pending_ast.get(i)
+priv struct Decl_queue //< the declarations not yet emitted, each waiting on one key at most
+    //<
+    //< An index below `n_ast` is `pending_ast`'s, the rest `pending_complex`'s. The wait queue
+    //< is a singly-linked list threaded through the items, not a List per key.
+    //< Caution: Store the indices 1-based. 0 means "not waiting".
+    pending_ast: List<|Ast_node$@|>$@
+    pending_complex: List<|I32|>$@
+    n_ast: Sz
+    type_pending: Map<|I32, I32|> //< the items not yet emitted, counted per real type ID
+    name_pending: Map<|U8[], I32|> //< the same, counted per declared name
+    done: List<|Bool|>
+    wait_next: List<|Sz|> //< the next item waiting on the same key
+    wait_id: Map<|I32, Sz|> //< the first item waiting on a type ID
+    wait_name: Map<|U8[], Sz|> //< the first item waiting on a name
+    ready: List<|Sz|> //< the items free to emit, in the order they became free
+
+impl Decl_queue: Owned {}
+
+impl Decl_queue
+    fn new(cg: Genc_ctx$@, pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@):
+        Decl_queue
+        $q: = Decl_queue::{ .pending_ast = pending_ast, .pending_complex = pending_complex,
+            .n_ast = pending_ast.len, .type_pending = Map<|I32, I32|>.new(null),
+            .name_pending = Map<|U8[], I32|>.new(null), .done = List<|Bool|>.new(null),
+            .wait_next = List<|Sz|>.new(null), .wait_id = Map<|I32, Sz|>.new(null),
+            .wait_name = Map<|U8[], Sz|>.new(null), .ready = List<|Sz|>.new(null) }
+        for p_node in pending_ast
+            if p_node != null && p_node.type_id > 0
+                real_id: = c_order_id(cg, p_node.type_id)
+                q.type_pending.set(real_id, (q.type_pending.get(real_id) catch 0) + 1)
+            name_node: = p_node.find_child(.k_identifier) if p_node != null else null
+            if name_node != null && name_node.text.len > 0
+                q.name_pending
+                    .set(name_node.text,
+                    (q.name_pending.get(name_node.text) catch 0) + 1)
+        for t_id in pending_complex
+            real_id: = c_order_id(cg, t_id)
+            q.type_pending.set(real_id, (q.type_pending.get(real_id) catch 0) + 1)
+        for _i in Range.asc(pending_ast.len + pending_complex.len)
+            q.done.push(false)
+            q.wait_next.push(0)
+        return q
+
+    fn free(r: Self$@)
+        r.type_pending.free()
+        r.name_pending.free()
+        r.done.free()
+        r.wait_next.free()
+        r.wait_id.free()
+        r.wait_name.free()
+        r.ready.free()
+
+    fn emit(r: Self$@, cg: Genc_ctx$@, i: Sz) //< emits item i, and marks it done
+        r.done.set(i, true)
+        if i >= r.n_ast
+            gen_c_decl.emit_single_complex_type(cg, r.pending_complex.get(i - r.n_ast))
+            return
+        node: = r.pending_ast.get(i)
         if node != null
             node.emit(cg)
-        return
-    gen_c_decl.emit_single_complex_type(cg, pending_complex.get(i - n_ast))
 
-priv fn park_pending_item(cg: Genc_ctx$@, i: Sz, n_ast: Sz,
-    pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@,
-    type_pending: Map<|I32, I32|>$@, name_pending: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@,
-    wait_id: Map<|I32, Sz|>$@, wait_name: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@) //<
+    fn park(r: Self$@, cg: Genc_ctx$@, i: Sz) //<
         //< It puts item i on ready, or on the wait queue of the key it is blocked on
-    $blk: = Dep_block::{ .id = 0, .name = "" }
-    if i < n_ast
-        node: = pending_ast.get(i)
-        if node != null
-            self_real: = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
-            self_name_node: = node.find_child(.k_identifier)
-            self_name: = self_name_node.text if self_name_node != null else ""
-            blk = node.decl_block(cg, type_pending, name_pending, self_real, self_name)
-    else
-        t_id: = pending_complex.get(i - n_ast)
-        blk = complex_block(cg, t_id, type_pending, c_order_id(cg, t_id))
-    if blk.id > 0
-        wait_next.set(i, wait_id.get(blk.id) catch 0)
-        wait_id.set(blk.id, i + 1)
-        return
-    if blk.name.len > 0
-        wait_next.set(i, wait_name.get(blk.name) catch 0)
-        wait_name.set(blk.name, i + 1)
-        return
-    ready.push(i)
+        $blk: = no_block()
+        if i < r.n_ast
+            node: = r.pending_ast.get(i)
+            if node != null
+                self_real: = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
+                self_name_node: = node.find_child(.k_identifier)
+                self_name: = self_name_node.text if self_name_node != null else ""
+                blk = node.decl_block(cg, r.type_pending@, r.name_pending@, self_real, self_name)
+        else
+            t_id: = r.pending_complex.get(i - r.n_ast)
+            blk = complex_block(cg, t_id, r.type_pending@, c_order_id(cg, t_id))
+        if blk.id > 0
+            r.wait_next.set(i, r.wait_id.get(blk.id) catch 0)
+            r.wait_id.set(blk.id, i + 1)
+            return
+        if blk.name.len > 0
+            r.wait_next.set(i, r.wait_name.get(blk.name) catch 0)
+            r.wait_name.set(blk.name, i + 1)
+            return
+        r.ready.push(i)
 
-priv fn release_pending_item(cg: Genc_ctx$@, i: Sz, n_ast: Sz,
-    pending_ast: List<|Ast_node$@|>$@, pending_complex: List<|I32|>$@,
-    type_pending: Map<|I32, I32|>$@, name_pending: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@,
-    wait_id: Map<|I32, Sz|>$@, wait_name: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@,
-    done: List<|Bool|>$@) //<
+    fn release(r: Self$@, cg: Genc_ctx$@, i: Sz) //<
         //< The cleanup after item i is emitted
         //<
         //< It decrements the count and retries what was waiting on a key whose count reached 0.
-    $own_id: I32 = 0
-    $own_name: U8[] = ""
-    if i < n_ast
-        node: = pending_ast.get(i)
-        if node != null
-            own_id = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
-            name_node: = node.find_child(.k_identifier)
-            own_name = name_node.text if name_node != null else ""
-    else
-        own_id = c_order_id(cg, pending_complex.get(i - n_ast))
-    if own_id > 0
-        left: = (type_pending.get(own_id) catch 0) - 1
-        type_pending.set(own_id, left)
-        if left <= 0
-            head: = wait_id.get(own_id) catch 0
-            wait_id.set(own_id, 0)
-            wake_waiters(cg, head, n_ast, pending_ast, pending_complex, type_pending, name_pending,
-                wait_next, wait_id, wait_name, ready, done)
-    if own_name.len > 0
-        left: = (name_pending.get(own_name) catch 0) - 1
-        name_pending.set(own_name, left)
-        if left <= 0
-            head: = wait_name.get(own_name) catch 0
-            wait_name.set(own_name, 0)
-            wake_waiters(cg, head, n_ast, pending_ast, pending_complex, type_pending, name_pending,
-                wait_next, wait_id, wait_name, ready, done)
+        $own_id: I32 = 0
+        $own_name: U8[] = ""
+        if i < r.n_ast
+            node: = r.pending_ast.get(i)
+            if node != null
+                own_id = c_order_id(cg, node.type_id) if node.type_id > 0 else 0
+                name_node: = node.find_child(.k_identifier)
+                own_name = name_node.text if name_node != null else ""
+        else
+            own_id = c_order_id(cg, r.pending_complex.get(i - r.n_ast))
+        if own_id > 0
+            left: = (r.type_pending.get(own_id) catch 0) - 1
+            r.type_pending.set(own_id, left)
+            if left <= 0
+                head: = r.wait_id.get(own_id) catch 0
+                r.wait_id.set(own_id, 0)
+                r.wake(cg, head)
+        if own_name.len > 0
+            left: = (r.name_pending.get(own_name) catch 0) - 1
+            r.name_pending.set(own_name, left)
+            if left <= 0
+                head: = r.wait_name.get(own_name) catch 0
+                r.wait_name.set(own_name, 0)
+                r.wake(cg, head)
 
-priv fn wake_waiters(cg: Genc_ctx$@, head: Sz, n_ast: Sz, pending_ast: List<|Ast_node$@|>$@,
-    pending_complex: List<|I32|>$@, type_pending: Map<|I32, I32|>$@,
-    name_pending: Map<|U8[], I32|>$@, wait_next: List<|Sz|>$@, wait_id: Map<|I32, Sz|>$@,
-    wait_name: Map<|U8[], Sz|>$@, ready: List<|Sz|>$@, done: List<|Bool|>$@) //<
-        //< It walks the wait queue (the 1-based indices linked by wait_next), re-parking each item.
+    fn wake(r: Self$@, cg: Genc_ctx$@, head: Sz) //<
+        //< It walks a wait queue (the 1-based indices linked by wait_next), re-parking each item
         //<
-        //< Caution: Detach the key's queue head before walking. park_pending_item can put the item
-        //< back on the same key.
-    $cur: = head
-    for cur != 0
-        j: = cur - 1
-        cur = wait_next.get(j)
-        wait_next.set(j, 0)
-        if !done.get(j)
-            park_pending_item(cg, j, n_ast, pending_ast, pending_complex, type_pending, name_pending,
-                wait_next, wait_id, wait_name, ready)
+        //< Caution: Detach the key's queue head before walking. park can put the item back on the
+        //< same key.
+        $cur: = head
+        for cur != 0
+            j: = cur - 1
+            cur = r.wait_next.get(j)
+            r.wait_next.set(j, 0)
+            if !r.done.get(j)
+                r.park(cg, j)
 
 priv struct Dep_block //< the key an item is blocked on
     //<

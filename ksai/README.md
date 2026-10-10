@@ -8,7 +8,7 @@ ksai is the KSPL-native AI engine: a small neural-network engine written in KSPL
 
 ```sh
 make test    # here in ksai/: the tests that check ksai's parts (matrix product, gradients, training) are correct
-make run     # at the repository's root: the demo that trains a tiny language model from scratch and generates characters
+make run     # at the repository's root: the demo that trains a tiny language model further from the weights built into it, and generates characters
 ```
 
 `make run` shows the loss falling, which means the model is learning: the numbers shrink as training proceeds.
@@ -17,7 +17,7 @@ make run     # at the repository's root: the demo that trains a tiny language mo
 | :-- | :-- | :-- | :-- |
 | `make test` | `ksai/` | Checks the parts, and builds and runs the examples ("The examples" below; [`ksai/Makefile`](Makefile)). It also runs the programs that must stop on purpose (an empty `argmax`, a shape whose product overflows), each as a child that has to say why ([`ksai/tests/stops_main.kspls`](tests/stops_main.kspls)) | A `ksplc` and a C compiler, nothing else |
 | `make test BLAS=1` | `ksai/` | The same, with `matmul` passed to OpenBLAS (a widely used library of fast matrix routines) | OpenBLAS |
-| `make test-fuzz` | `ksai/` (from the repository, `make test-ksai-fuzz`) | Feeds broken weights files and vocabularies to the readers, to catch a crash. They are built with the address sanitizer (a compiler option that stops a program at a bad memory access) where the C compiler has it; `KSAI_REQUIRE_ASAN=1` makes it required | A `ksplc` and a C compiler |
+| `make test-fuzz` | `ksai/` (from the repository, `make test-ksai-fuzz`) | Feeds broken weights files and vocabularies to the readers, to catch a crash. They are built with the address sanitizer (a compiler option that stops a program at a bad memory access) where the C compiler has it; `KANSO_REQUIRE_ASAN=1` makes it required | A `ksplc` and a C compiler |
 | `make run` | the repository's root | Trains the demo model and generates characters | A C compiler (it builds the compiler first) |
 
 ksai names itself in [`ksai/ksplc.cfg`](ksplc.cfg), so a copy of this folder alone runs the tests the same way.
@@ -121,7 +121,7 @@ The parts built from tensor operations. A model stacks them like blocks.
 
 * **Load into a model with `map_into`, not `get_tensor`.** Why, and what `get_tensor` leaves unchecked, is what `ksplc doc ksai/safetensors` says of each.
 * **Which LoRA format to use**: `ksai/lora_set.kspls` (the standard format) to carry a result elsewhere. `Lora.save_raw` (no JSON, no allocation) only to save and re-read in the same environment.
-* **`ksai/model_file.kspls` and `ksai/tokenizer.kspls` (whose `Tokenizer.load` reads a vocabulary by path) are the only files of the library itself that import `std/io`**, split off so code using only tensors skips the file-I/O cost. With no filesystem, pass an `embed`ed byte sequence (one baked into the program at build time) through `load_from_bytes` → `load_set_from` instead.
+* **`ksai/model_file.kspls` and `ksai/tokenizer.kspls` (whose `Tokenizer.load` reads a vocabulary by path) are the only files of the library itself that import `std/io`**, split off so code using only tensors skips the file-I/O cost. With no filesystem, pass an `embed`ed byte sequence (one baked into the program at build time) instead: the weights through `load_from_bytes` → `load_set_from`, the vocabulary and its merges through `Tokenizer.load_text`.
 
 ## Pitfalls
 
@@ -137,7 +137,7 @@ The parts built from tensor operations. A model stacks them like blocks.
 
 | Folder | What it does | How to build it |
 | :-- | :-- | :-- |
-| `examples/llama_engine/` | Trains a tiny language model from scratch and generates: `main.kspls` (load → train → generate) and `model.kspls` (the layer stack) | `make run` at the root: builds and runs |
+| `examples/llama_engine/` | Trains a tiny language model further from the weights embedded in it, and generates: `main.kspls` (load → train → generate) and `model.kspls` (the layer stack) | `make run` at the root: builds and runs |
 | `examples/qwen_infer/` | A CLI inferring from real Qwen2.5-Coder weights; the model sits inside `main.kspls` | `make qwen` at the root: builds only |
 | `examples/fim_coder/` | A small coding model trained from scratch on a FIM corpus (fill-in-the-middle: a hole cut from code, to be filled from the code around it). `train` writes its weights (a batch of sequences a step, spread over every CPU). `complete` fills holes with candidates, greedy first. It takes the corpus and the tokenizer by path | `make fim-model` at the root: trains on this repository |
 

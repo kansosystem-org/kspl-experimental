@@ -40,7 +40,9 @@ suite_runtime := runtime
 suite_std-dir := std_dir
 suite_emit-runtime := emit_runtime
 suite_property := property
-suite_args_property := --n=60
+# `--n=N` / `--seed=N` replace the draw's count and its start (`make fuzz-long` hands a fresh seed).
+PROPERTY_ARGS ?=
+suite_args_property = --n=60 $(PROPERTY_ARGS)
 suite_limits := limits
 suite_lint := lint
 suite_split := split

@@ -121,10 +121,10 @@ impl Ast_node
         if r == null
             return false
         switch r.kind_id
-        case .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init, .k_loop_step, .k_stmt_return,
+        case .k_stmt, .k_top_level_item, .k_decl_top, .k_for_init, .k_for_step, .k_stmt_return,
             .k_stmt_throw, .k_stmt_fallback, .k_stmt_expr, .k_decl_extern, .k_decl_extern_block,
             .k_decl_extern_struct, .k_decl_var, .k_decl_const, .k_stmt_break, .k_stmt_labeled_block,
-            .k_stmt_continue, .k_decl_embed, .k_decl_alias
+            .k_stmt_continue, .k_decl_embed, .k_decl_typedef
             return true
         default
             return false
@@ -137,7 +137,7 @@ impl Ast_node
         if r == null
             return false
         switch r.kind_id
-        case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top, .k_loop_init, .k_loop_step
+        case .k_empty, .k_stmt, .k_top_level_item, .k_decl_top, .k_for_init, .k_for_step
             return true
         default
             return is_expr_wrapper_kind(r.kind_id)
@@ -153,7 +153,7 @@ impl Ast_node
             return false
         switch r.kind_id
         case .k_decl_extern, .k_decl_extern_block, .k_decl_extern_struct, .k_decl_var,
-            .k_decl_const, .k_decl_embed, .k_decl_alias, .k_decl_struct, .k_decl_enum,
+            .k_decl_const, .k_decl_embed, .k_decl_typedef, .k_decl_struct, .k_decl_enum,
             .k_decl_trait, .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import,
             .k_decl_directive
             return true
@@ -200,12 +200,12 @@ impl Ast_node
         switch r.kind_id
         case .k_decl_extern_struct, .k_decl_struct, .k_decl_enum, .k_decl_trait,
             .k_expr_implicit_dot, .k_implicit_enum, .k_stmt_break, .k_stmt_continue, .k_decl_embed,
-            .k_decl_alias, .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import,
-            .k_decl_import_selector_list, .k_decl_import_selector, .k_decl_directive, .k_stmt_match,
-            .k_expr_args, .k_identifier_list, .k_type_gen_params, .k_type_args, .k_expr_compound,
-            .k_expr_field_init, .k_param_list, .k_fn_param, .k_type_constraint, .k_stmt_block,
-            .k_struct_field, .k_enum_variant, .k_enum_field, .k_string, .k_string_expr,
-            .k_attribute_list, .k_attribute, .k_capture_list
+            .k_decl_typedef, .k_decl_fn, .k_decl_fn_proto, .k_decl_impl, .k_decl_import,
+            .k_decl_import_selector_list, .k_decl_import_selector, .k_decl_directive,
+            .k_stmt_switch, .k_expr_args, .k_identifier_list, .k_type_gen_params, .k_type_args,
+            .k_expr_compound, .k_expr_field_init, .k_param_list, .k_fn_param, .k_type_constraint,
+            .k_stmt_block, .k_struct_field, .k_enum_variant, .k_enum_field, .k_string,
+            .k_string_expr, .k_attribute_list, .k_attribute, .k_capture_list
             return true
         default
             return false
@@ -338,23 +338,23 @@ impl Ast_node
         pending_mods: = base_ast.new_ast_node_list()
 
         for c in r.children
-            is_mod: = c.is_modifier()
-            if is_mod && c.kind_id == .k_literal
-                c.set_kind(.k_keyword)
-
-            if is_mod
+            if c.is_modifier()
+                if c.kind_id == .k_literal
+                    c.set_kind(.k_keyword)
                 pending_mods.push(c)
-            else
-                if pending_mods.len > 0
-                    target_node: =
-                        c.get_child(0) if c.kind_id == .k_decl_top && c.children.len > 0 else c
-                    if target_node.is_modifier_target()
-                        target_node.prepend_children(pending_mods)
-                    else
-                        for mod_node in pending_mods
-                            pushed_children.push(mod_node)
-                    pending_mods.len = 0
-                pushed_children.push(c)
+                continue
+            if pending_mods.len > 0
+                target_node: =
+                    c.get_child(0) if c.kind_id == .k_decl_top && c.children.len > 0 else c
+                // A modifier with no declaration to take it stays where it was written, to be
+                // reported there.
+                if target_node.is_modifier_target()
+                    target_node.prepend_children(pending_mods)
+                else
+                    for mod_node in pending_mods
+                        pushed_children.push(mod_node)
+                pending_mods.len = 0
+            pushed_children.push(c)
         for mod_node in pending_mods
             pushed_children.push(mod_node)
         r.children = pushed_children
@@ -517,8 +517,8 @@ impl Ast_node
         switch r.kind_id
         case .k_expr_args
             r.text = "args"
-        case .k_match_pattern
-            r.normalize_match_pattern()
+        case .k_case_pattern
+            r.normalize_case_pattern()
         case .k_decl_extern, .k_decl_extern_block
             r.normalize_extern_decl()
         case .k_decl_impl
@@ -530,10 +530,10 @@ impl Ast_node
                 flat.push(r.get_child(0))
                 flat.push(r.get_child(4))
                 r.children = flat
-        case .k_stmt_loop
+        case .k_stmt_for
             // A multi-variable init (`for i: = 0, j: = 10; ...`) is split before normalize_loop
-            // bundles it into loop_init, keeping five children; the later flatten does not reach
-            // inside loop_init.
+            // bundles it into for_init, keeping five children; the later flatten does not reach
+            // inside for_init.
             r.flatten_var_decl_lists()
             r.normalize_loop()
         case .k_if_bind
@@ -595,8 +595,8 @@ impl Ast_node
             r.text = base_core.arena.dup_str(s.slice())
 
         r.flatten_var_decl_lists()
-        if r.kind_id == .k_stmt_match
-            r.normalize_match_stmt()
+        if r.kind_id == .k_stmt_switch
+            r.normalize_switch_stmt()
 
         return r
 

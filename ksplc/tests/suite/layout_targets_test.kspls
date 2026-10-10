@@ -56,12 +56,8 @@ priv fn generate(dir: U8[], machine: U8[], arena: Arena$@): U8[] //<
     if !verdict.check(arena.text().s("\{machine\}: ksplc compiles the probe").take(), r.code == 0,
         r.out)
         return ""
-    $rest: = harness.read_generated(out)
     mark: = arena.text().s("typedef char ").s(check_name).take()
-    $count: Sz = 0
-    for $at: = rest.find_str(mark); at >= 0; at = rest.find_str(mark)
-        count += 1
-        rest = rest.sub_from(at + mark.len)
+    count: = harness.read_generated(out).count_str(mark)
     verdict.check(arena.text().s("\{machine\}: the C checks every folded number").take(),
         count >= min_checks,
         arena.text().s("\{count\} checks, fewer than \{min_checks\}").take())
@@ -103,7 +99,7 @@ priv fn check_fires(dir: U8[], arena: Arena$@) //<
         r: = compile_for(c_file, other, fs.join(dir, "mismatch.o", arena))
         named: = arena.text().s(check_name).s(folded.replace("-", "_", arena)).take()
         verdict.check(arena.text().s("\{folded\}'s C compiled for \{other\} fails at a check")
-            .take(), r.code != 0 && r.out.find_str(named) >= 0, r.out)
+            .take(), r.code != 0 && r.out.find_str(named).is_some(), r.out)
 
 priv fn has_tool(name: U8[]): Bool //< whether the tool answers `--version`
     return harness.run(U8[][]::{ name, "--version" }).code == 0
@@ -147,7 +143,7 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
     for a in wasm_answers
         line: = arena.text().s(a.name).c('=').s(a.want).c('\n').take()
         verdict.check(arena.text().s("wasm32: \{a.name\} returns \{a.want\}").take(),
-            ran.out.find_str(line) >= 0, ran.out)
+            ran.out.find_str(line).is_some(), ran.out)
 
 priv const unlisted_host: U8[] = "riscv64-linux-gnu" //< a host machine the table has no row for
 
@@ -173,15 +169,15 @@ priv fn check_unlisted_host(arena: Arena$@) //<
     for face in analysing
         said: = refusal(face, "", unlisted_host, arena)
         verdict.check(arena.text().s("an unlisted host: \{face\} refuses, naming the fix").take(),
-            said.find_str(unlisted_host) >= 0 && said.find_str("--machine=") >= 0 &&
-            said.find_str("thumbv7m-none-eabi") >= 0, said)
+            said.find_str(unlisted_host).is_some() && said.find_str("--machine=").is_some() &&
+            said.find_str("thumbv7m-none-eabi").is_some(), said)
     for face in parsing_only
         said: = refusal(face, "", unlisted_host, arena)
         verdict.check(arena.text().s("an unlisted host: \{face\} runs, reading no type").take(),
             said.len == 0, said)
     said: = refusal("compile", "pdp11-unknown", "x86_64-linux-gnu", arena)
     verdict.check("a named machine the table lacks is refused by its own name",
-        said.find_str("'pdp11-unknown'") >= 0, said)
+        said.find_str("'pdp11-unknown'").is_some(), said)
     verdict.check("a listed host needs no machine named",
         refusal("lsp", "", "x86_64-linux-gnu", arena).len == 0, "")
 

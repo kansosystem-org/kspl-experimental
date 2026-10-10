@@ -1,4 +1,6 @@
 import "ksai/tokenizer" as ai_tokenizer
+import "std/fs"
+import "std/io"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -51,3 +53,54 @@ fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
     after: = tok.encode("ab")
     assert(after.len == 1 && after[0] == 3, "the rule added after an encoding is taken")
     verdict.pass("a repeat is answered alike, and a rule added later is taken")
+
+priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
+    //< The line `load` names as broken in the pair written out, or 0 where it takes them
+    dir: = "out/tmp/ksai_tokenizer_load"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
+    io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
+    scratch: = Arena.new(1024 * 1024)
+    defer scratch.free()
+    $tok: = ai_tokenizer.Tokenizer.new(scratch)
+    tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
+        catch e
+        switch e
+        case .broken(_path, line)
+            return line
+        default
+            panic("the files written must be readable")
+    return 0
+
+fn test_tokenizer_load(arena: Arena$@) //<
+    //< `load` reads what `train_bpe.py` writes, and refuses a damaged line by its number
+    //<
+    //< **A line skipped in silence** would make every text it touches encode to other IDs.
+    verdict.start("[Tokenizer] load reads the two files, and names a damaged line...")
+    vocab: = "0\t\n1\t61\n2\t62\n3\t6162\n"
+    merges: = "1 2 3\n"
+    dir: = "out/tmp/ksai_tokenizer_load"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
+    io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
+    $tok: = ai_tokenizer.Tokenizer.new(arena)
+    tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
+        catch panic("the files train_bpe.py would write must load")
+    ids: = tok.encode("ab")
+    assert(ids.len == 1 && ids[0] == 3, "the merge loaded joins a and b into 3")
+    assert(tok.decode(ids).equals("ab"), "the word loaded decodes back")
+    assert(broken_line("0\t\n1\t6\n", merges) == 2, "an odd hex digit is refused")
+    assert(broken_line("0\t\n1x\t61\n", merges) == 2, "an ID with a letter in it is refused")
+    assert(broken_line("0\t\n1 61\n", merges) == 2, "a line with no tab is refused")
+    assert(broken_line("1\t9999999999\n9999999999\t61\n", merges) == 2, "an ID past I32 is refused")
+    assert(broken_line(vocab, "\n1 2\n") == 2, "a merge with two IDs is refused")
+    assert(broken_line("0\t\r\n1\t61\r\n", "1 1 2\r\n") == 0, "CRLF line ends are taken")
+    $bare: = ai_tokenizer.Tokenizer.new(arena)
+    $named: U8[] = ""
+    bare.load_text("0\t\n1\t61\n", "1 2\n") catch e
+        switch e
+        case .broken(path, _line)
+            named = path
+        default {}
+    assert(named.equals("merges"), "load_text names the text a damaged line is in")
+    verdict.pass("the two files load into working rules, and each damaged line is named.")

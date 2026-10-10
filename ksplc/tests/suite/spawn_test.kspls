@@ -98,9 +98,9 @@ fn main(): I32
     // stream; **only the content catches both with the same check**.
     verdict.check("it starts even with both outputs pointed at the same record", said.len > 0, one)
     verdict.check("standard output remains in the same record",
-        said.find_str("this is standard output") >= 0, said)
+        said.find_str("this is standard output").is_some(), said)
     verdict.check("standard error remains in the same record too",
-        said.find_str("this is standard error") >= 0, said)
+        said.find_str("this is standard error").is_some(), said)
 
     // 2. Different paths go to their own targets (**merged into one, this fails**).
     two_out: = fs.join(work, "two_out.log", arena)
@@ -109,11 +109,11 @@ fn main(): I32
     split_err: = io.read_file(two_err) catch
         return harness.finish()
     verdict.check("pointed at separate records, only standard output enters one",
-        split_out.find_str("this is standard output") >= 0 &&
-        split_out.find_str("this is standard error") < 0, split_out)
+        split_out.find_str("this is standard output").is_some() &&
+        split_out.find_str("this is standard error").is_none(), split_out)
     verdict.check("pointed at separate records, only standard error enters the other",
-        split_err.find_str("this is standard error") >= 0 &&
-        split_err.find_str("this is standard output") < 0, split_err)
+        split_err.find_str("this is standard error").is_some() &&
+        split_err.find_str("this is standard output").is_none(), split_err)
     check_long(work, arena)
     return harness.finish()
 
@@ -133,11 +133,13 @@ priv fn check_long(work: U8[], arena: Arena$@) //<
     defer value.free()
     for _i in Range.asc(long_value_len)
         value.c('a')
-    verdict.check("a long environment value can be set",
-        sys.set_env("KSPL_SPAWN_LONG", value.slice()), "")
+    $long_set: = true
+    sys.set_env("KSPL_SPAWN_LONG", value.slice()) catch
+        long_set = false
+    verdict.check("a long environment value can be set", long_set, "")
     r: = harness.run(U8[][]::{ exe, kana.slice() })
-    sys.unset_env("KSPL_SPAWN_LONG")
+    sys.unset_env("KSPL_SPAWN_LONG") catch panic("KSPL_SPAWN_LONG could not be unset")
     verdict.check("an argument of 2800 kana starts the child and arrives whole",
-        r.code == 0 && r.out.find_str("arg ok") >= 0, r.out)
+        r.code == 0 && r.out.find_str("arg ok").is_some(), r.out)
     verdict.check("an environment value of 5000 characters reaches the child whole",
-        r.out.find_str("env ok") >= 0, r.out)
+        r.out.find_str("env ok").is_some(), r.out)

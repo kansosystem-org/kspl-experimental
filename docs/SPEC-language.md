@@ -106,7 +106,7 @@ A `#!` line (a shebang) is skipped like a comment **on a file's first line only*
 
 An identifier (a name) starts with a letter (`A-Z`, `a-z`) or `_`, followed by letters, digits or underscores. KSPL's reserved words (keywords) cannot be identifiers.
 
-This naming is recommended; **nothing checks it**.
+This naming is recommended; **the compile does not refuse a name that breaks it**, and `ksplc lint` reports one (I0502).
 
 | Style | Used for | Example |
 | :-- | :-- | :-- |
@@ -140,7 +140,7 @@ Such a name would clash with C in the generated C, so `ksplc` adds the suffix `_
 
 Names only OS headers define (`st_mtime` / `O_RDONLY` / `AF_INET`) are usable too, and get no suffix. The order of the generated C keeps them apart, not this list.
 
-**A debugger shows such a variable with its suffix** (`for` becomes `for_kw`), since it shows the generated C's names. The suffix is always `_kw`; drop it when reading.
+**A debugger shows such a variable with its suffix** (`int` becomes `int_kw`), since it shows the generated C's names. The suffix is always `_kw`; drop it when reading.
 
 ### 2.3 Literals
 
@@ -216,12 +216,12 @@ An escape sequence is a `\` followed by a code that stands for one byte, such as
 
 #### 2.3.3 Writing a code point with `\uXXXX`
 
-`\u` followed by four hex digits writes one Unicode character by its number (its code point). **The hex is exactly four digits** (`"é"` is `é`, `"あ"` is `あ`). Too few is a compile error, and a fifth digit is not taken in (`"A0"` is the two characters `A` and `0`).
+`\u` followed by four hex digits writes one Unicode character by its number (its code point). **The hex is exactly four digits** (`"\u00E9"` is `é`, `"\u3042"` is `あ`). Too few is a compile error, and a fifth digit is not taken in (`"\u00410"` is the two characters `A` and `0`).
 
 | Where, or which code point | Result |
 | :-- | :-- |
-| In a string | **A UTF-8 byte sequence**, which `.len` counts (`"あ".len` is 3) |
-| In a character literal | **One byte, so only up to U+007F** (`'é'` is a compile error, and so is `'あ'` written directly) |
+| In a string | **A UTF-8 byte sequence**, which `.len` counts (`"\u3042".len` is 3) |
+| In a character literal | **One byte, so only up to U+007F** (`'\u00E9'` is a compile error, and so is `'あ'` written directly) |
 | A surrogate code point (U+D800–U+DFFF) | **Cannot be written**: mapped to UTF-8, it gives an invalid byte sequence |
 | Above U+FFFF | **Cannot be written with `\u`**: write the character itself into the source, which is UTF-8 (an emoji is accepted as one character) |
 | In a comment or a raw string | Nothing: `\u` is expanded only where a literal's bytes are decided |
@@ -626,7 +626,7 @@ typedef Node_id = I32
 **A cycle cannot be written**: a typedef that leads back to itself, directly or through other typedefs, is a compile error (it never reaches an underlying type).
 
 ```kspls
-typedef A = B // error: circular typedef detected
+typedef A = B // error: circular typedef: 'A' leads back to itself
 typedef B = A // error: the same cycle
 ```
 
@@ -1649,6 +1649,8 @@ Assignment changes a value in place. It is a statement of its own, never part of
 * **Assignment**: `=`
 * **Arithmetic compound assignment**: `+=`, `-=`, `*=`, `/=`, `%=`
 * **Bitwise compound assignment**: `&=`, `|=`, `^=`, `<<=`, `>>=`
+
+**`a op= b` takes the operands `a = a op b` takes**, and the place must be a number or a `Bool` (on a `Bool`, `&=` `|=` `^=` alone). A pointer takes `+=` and `-=` alone, counting elements. **On a type of your own, write `a = a + b`**: an operator trait ([6.1.1](#611-operator-overloading)) rewrites the binary operator, not its compound form.
 
 #### 6.5.1 Evaluation order
 
