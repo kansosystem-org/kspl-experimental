@@ -95,9 +95,7 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
     //< its last part; searched whole it matches no file. Off a name the answer is empty, and only
     //< the entry file's import tree is read.
     if hint.len > 0
-        if dot: = hint.rfind_char('.')
-            return hint.sub_from(dot + 1)
-        return hint
+        return hint.fqn_last()
     switch params.get("position")
     case .null_val
         return ""
@@ -236,14 +234,14 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
 
     // **A recovered tree reports nothing it finds.** The later stages would find only the chain of
     // errors one missing bracket sets off, so the parse's report is the only one ("Do not put a
-    // diagnostic out from a recovered result" in `../docs/DESIGN.md`).
+    // diagnostic out from a recovered result" in `../docs/DESIGN-tools.md`).
     // Caution: Not `has_load_error` — that means the file did not load at all, and the branch above
     // returns on it, which takes away the tree and every answer.
     quiet: = compiler.has_load_error || parse_load.recovered()
 
     // **Only this document's bodies are checked.** The hover, the jump, the colouring and this
     // document's diagnostics rely on this state, and none looks inside another file's body (the
-    // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN.md`).
+    // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN-tools.md`).
     compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, .main_file) catch {}
     if send_diag
         // **A failure with no diagnostic still says what to do**: a bare "error" at the top of
@@ -427,7 +425,7 @@ impl Server
         //< **A restart must not make the next answer wait for every open document.** The
         //< supervisor sends each document's analysis later, as a didOpen: before the first request
         //< naming it, or while the editor is idle (the grounds are "The language server is split
-        //< into two processes: the watcher and the analyser" in `../docs/DESIGN.md`). The
+        //< into two processes: the watcher and the analyser" in `../docs/DESIGN-tools.md`). The
         //< conversion's notes are dropped: that didOpen converts again and records them.
         text_doc: = params.get("textDocument")
         scratch: = Arena.new(layout_scratch_bytes)
@@ -466,7 +464,7 @@ priv fn answer_initialize(id_val: json.Val, arena: Arena$@)
     // For stability CodeAction and InlayHint are disabled.
     // textDocumentSync=1 (Full): didChange's contentChanges[0].text is the whole document, so
     // handle_did_open_change looks only at index 0.
-    cap: = b.obj().set("textDocumentSync", b.int_val(1))
+    cap: = b.obj().set("textDocumentSync", b.int_val(lsp_msg.sync_full))
         .set("hoverProvider", b.bool_val(true)).set("definitionProvider", b.bool_val(true))
         .set("renameProvider", b.bool_val(true)).set("referencesProvider", b.bool_val(true))
         .set("codeActionProvider", b.bool_val(false))
@@ -500,7 +498,7 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
     base_core.config.is_lsp = true
     // **The one place that turns the recovery branches on.** Turned on anywhere the compiler runs,
     // input that should be rejected would be accepted (the grounds are "Only the editor's parse
-    // recovers from a syntax error" in `../docs/DESIGN.md`).
+    // recovers from a syntax error" in `../docs/DESIGN-tools.md`).
     base_core.config.recover_syntax = true
     // Caution: **Tie the lower layer's progress to the liveness marker.** The supervisor detects a
     // hang by how long silence lasts, so otherwise a heavy didOpen (hundreds of files plus the

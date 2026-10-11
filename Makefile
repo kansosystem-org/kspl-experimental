@@ -199,12 +199,13 @@ $(error Build this project's artifacts with MSYS2 UCRT64's own compiler [$(CC)'s
     GUI_LDFLAGS := -mwindows
 endif
 
-.PHONY: all clean \
-	stage1 self-host self-host-ship commit-seed surface \
+# Caution: **A target an `mk/*.mk` declares is not listed again here** (`clean` above, `ci-*`,
+# `surface`); each `.PHONY` names the rules in its own file.
+.PHONY: all \
+	stage1 self-host self-host-ship commit-seed \
 	fmt test-fmt-tree lint lint-cfg debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install \
-	ci-linux ci-macos \
-	run fim-corpus fim-model fim-eval qwen kssrv ci
+	run fim-corpus fim-model fim-eval qwen kssrv perf-log
 
 # A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
 define nl
@@ -235,7 +236,7 @@ stage1: $(STAGE1_EXE)
 # stage1 still generates the old way. Its steps are named on a fall.
 define self_host_help
 #   If you changed how ksplc generates code, the seed still generates the old way:
-#   run `make commit-seed`, then this again ("1.2 The bootstrap, and keeping the seed in step"
+#   run `make commit-seed`, then this again ("The bootstrap, and keeping the seed in step"
 #   in ksplc/docs/DESIGN.md). `git checkout ksplc/seed.c` undoes the re-bake.
 endef
 self-host: export SELF_HOST_HELP := $(self_host_help)

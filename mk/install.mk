@@ -65,7 +65,7 @@ install: export STD_DIR_HELP := $(install_std_dir_help)
 # **What it installs is checked first**: stage2 reproduces itself (`self-host`) and the optimized
 # build emits stage2's notation to the byte (`self-host-ship`). It neither formats the tree nor
 # re-bakes the seed: each rewrites files, and the seed is re-baked when the seed's rules call for
-# it, by `make commit-seed` ("1.2 The bootstrap, and keeping the seed in step" in
+# it, by `make commit-seed` ("The bootstrap, and keeping the seed in step" in
 # `ksplc/docs/DESIGN.md`).
 ## Build-and-install|install|Check that ksplc reproduces itself, then put it in as `ksplc` (the place is `PREFIX=`)
 install: self-host self-host-ship install-lsp

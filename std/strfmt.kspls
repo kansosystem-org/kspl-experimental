@@ -11,7 +11,7 @@
 // **`std/str` imports this file**, not the other way round; the split is "how a value is written"
 // here and "how a string is cut and joined" there (Principle 3 in `../docs/DESIGN.md`).
 // ==========================================
-import "std/bignat" + { Bignat }
+import "std/bignat" + { Bignat, Binary_float }
 #cfg(!freestanding)
 import "std/libc"
 
@@ -272,9 +272,9 @@ impl Sz: Formattable //< so it can be used inside an interpolation
 impl U8: Formattable //< so it can be used inside an interpolation
     //<
     //< Caution: **Do not copy an unsigned value into a narrower signed type**: `U32` to `I32`, or
-    //< `U64` to `Sz`, turns a set high bit into `-1`. Types up to U32 widen implicitly into the I64
-    //< of `w.i`; `U64` does not fit and goes through write_uint. Do not pass `I64` through `Sz`
-    //< either, which is 32-bit on some targets.
+    //< `U64` to `Sz`, turns a set high bit into `-1`. Types up to U32 widen implicitly into an I64
+    //< for write_int; `U64` does not fit and goes through write_uint. Do not pass `I64` through
+    //< `Sz` either, which is 32-bit on some targets.
     pub fn fmt(r: Self, w: Writer): Writer //< writes the value to w
         return write_int(w, r)
 impl U16: Formattable //< so it can be used inside an interpolation
@@ -403,28 +403,11 @@ priv fn write_float_special(w: Writer, v: F64, width: Sz): Bool //< writes NaN a
 // The text form of a floating-point number
 // ==========================================
 
-priv struct Binary_float //<
-    //< A floating-point value split into f × 2^e, without the sign
-    //<
-    //< Two forms are written from it: the shortest round-trip form (`\{x\}`, the fewest digits
-    //< that read back to the same value) and the form with a set number of digits after the decimal
-    //< point (`\{x:.N\}`). **libc's `%f` is not used**: its text and rounding differ between
-    //< implementations, so the same value would give a different string on each target
-    //< ("The digits of a floating-point number are assembled here" in std/docs/DESIGN.md).
-    f: U64
-    e: I32
-    unequal: Bool
-
-priv fn decompose_f64(mag: U64): Binary_float //< splits the bit pattern, without the sign
-    //<
-    //< A subnormal has no hidden bit, and its exponent is fixed at the minimum.
-    exp_field: = mag >> 52U64
-    mant: = mag & 0x000FFFFFFFFFFFFFU64
-    if exp_field == 0U64
-        return Binary_float::{ .f = mant, .e = -1074, .unequal = false }
-    return Binary_float::{ .f = mant | 0x0010000000000000U64, .e = I32::exp_field - 1075,
-        .unequal = mant == 0U64 && exp_field > 1U64 }
-
+// The forms written from a `bignat.Binary_float`: the shortest round-trip form (`\{x\}`, the
+// fewest digits that read back to the same value) and the form with a set number of digits after
+// the decimal point (`\{x:.N\}`). **libc's `%f` is not used**: its text and rounding differ
+// between implementations ("The digits of a floating-point number are assembled here" in
+// std/docs/DESIGN.md).
 priv fn decompose_f32(mag: U32): Binary_float
     exp_field: = mag >> 23U32
     mant: = mag & 0x007FFFFFU32
@@ -713,9 +696,9 @@ pub fn write_float( //< writes a floating-point number
     if write_float_special(w, v, width)
         return w
     bits: = bignat.f64_to_bits(v)
-    mag: = bits & 0x7FFFFFFFFFFFFFFFU64
-    return write_decomposed(w, decompose_f64(mag), mag == 0U64, bits != mag, precision, width, fill,
-        comma)
+    mag: = bits & ~bignat.f64_sign_bit
+    return write_decomposed(w, bignat.decompose_f64(mag), mag == 0U64, bits != mag, precision, width,
+        fill, comma)
 
 pub fn write_float32( //< writes an `F32`, whose shortest digits differ from an `F64`'s
     //<
@@ -753,18 +736,8 @@ pub fn write_ptr( //< writes an address as `0x` plus lowercase hex, whatever the
     w: Writer, //< where it goes
     val: Void$@, //< the address to write
 ): Writer //< the same writer, for chaining
-    n: = Sz::val
-    if n == 0
-        return w.s("0x0")
-    $digits: U8[16] = ::{}
-    $idx: Sz = 0
-    $rest: = n
-    for rest > 0
-        d: = rest % 16
-        (digits@ + idx)$ = U8::('0' + d) if d < 10 else U8::('a' + (d - 10))
-        idx += 1
-        rest /= 16
-    w.s("0x")
-    for k in Range.asc(idx)
-        w.c((digits@ + (idx - 1 - k))$)
-    return w
+    // **An address is unsigned, and `Sz` is signed**: on a 32-bit board an address from 0x80000000
+    // up (RP2040's SIO and PPB) is negative as an `Sz`, and widening it to U64 copies the sign.
+    // The mask keeps the address's own width: all 64 bits on a 64-bit target, the low 32 on one.
+    bits: = U64::Sz::val & ((~0U64) >> U64::(64 - sizeof(Sz) * 8))
+    return hex(bits, 1).fmt(w)

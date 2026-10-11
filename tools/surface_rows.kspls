@@ -143,6 +143,43 @@ fn undocumented( //< lists the published entries with no description, and return
         n += 1
     return n
 
+priv fn twin_spelling(text: U8[], arena: Arena$@): U8[] //<
+    //< A signature with the unused mark taken off its parameters' names
+    //<
+    //< **An argument is passed by place, not by name**, and one twin may leave unused what the
+    //< other uses (`_file` against `file`).
+    return text.replace("(_", "(", arena).replace(", _", ", ", arena)
+
+fn drifted_twins( //< lists the names declared once per `#cfg` whose signatures differ
+    //<
+    //< **A caller is checked only against the twin its own build picks**, so a twin that drifts
+    //< breaks just the builds that pick it (a freestanding one, which no hosted run compiles).
+    rows: List<|Row|>$@, //< the package as it is now
+    b: Str_builder$@, //< where their names are written
+    arena: Arena$@,
+): Sz
+    $names: = List<|U8[]|>.new(arena)
+    $texts: = List<|U8[]|>.new(arena)
+    $n: Sz = 0
+    for r in rows
+        p: = parts_of(r)
+        if at: = r.key.find_str(" #cfg(")
+            name: = r.key.sub(0, at)
+            text: = twin_spelling(p.text, arena)
+            $found: = false
+            for i in Range.asc(names.len)
+                if !found && names.get(i).equals(name)
+                    found = true
+                    if !texts.get(i).equals(text)
+                        write_row(b, "twin differs", r.key)
+                        b.s("          first:  \{texts.get(i)\}\n")
+                        b.s("          this:   \{text\}\n")
+                        n += 1
+            if !found
+                names.push(name)
+                texts.push(text)
+    return n
+
 fn classify( //< writes the differences out and returns how many there were
     //<
     //< Compares the record with the current sources.

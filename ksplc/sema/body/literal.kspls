@@ -21,7 +21,7 @@ fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         // type: see pass_right_id in infer_binary_expr in `binary.kspls`), so correct code would
         // fail.
         type_is_known: =
-            !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(c, node.text)) ||
+            !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text)) ||
             (!sema_type_env.is_unknown(expected_id) && c.env.is_integer(expected_id))
         // **Not while a generic is being instantiated**: the fit changes with the type argument,
         // and as an error it would forbid a template merely because T=U8 exists ("While a generic
@@ -31,7 +31,7 @@ fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
             check_literal_bounds(c, node, type_id, c.fn_ctx.literal_negated)
     return type_id
 
-fn is_untyped_int_literal(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+fn is_untyped_int_literal(node: Ast_node$@): Bool //<
     //< Whether it is an integer literal with no type suffix
     //<
     //< **Such a literal takes the expected type when one is passed down.**
@@ -39,7 +39,7 @@ fn is_untyped_int_literal(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< suffix table goes stale when an integer type is added.
     lit: = literal_under_minus(node)
     return lit.node != null &&
-        sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(c, lit.node.text))
+        sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
 
 priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     if node.kind_id == .k_bool
@@ -48,7 +48,7 @@ priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         return c.env.resolve_null_type(expected_id)
 
     txt: = node.text
-    suffix_id: = sema_decl_eval.int_suffix_type_id(c, txt)
+    suffix_id: = sema_decl_eval.int_suffix_type_id(txt)
     if !sema_type_env.is_unknown(suffix_id)
         return suffix_id
     if txt.ends_with("F32")
@@ -91,7 +91,7 @@ fn check_operand_literal_bounds(c: Sema_ctx$@, node: Ast_node$@, other_id: I32) 
     //< A suffixed literal is left to the ordinary type check (report_type_mismatch).
     lit: = literal_under_minus(node)
     if lit.node == null ||
-        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(c, lit.node.text))
+        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
         return
     check_literal_bounds(c, lit.node, other_id, lit.is_neg)
 
@@ -102,7 +102,7 @@ fn settle_untyped_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Boo
     //< a widening of an I32 whose bits read -1, and a backend that extends the constant by its type
     //< gets -1. Its range against that type is check_operand_literal_bounds's.
     if node == null || node.kind_id != .k_integer || !c.env.is_integer(operand_id) ||
-        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(c, node.text))
+        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(node.text))
         return false
     node.type_id = operand_id
     return true
@@ -117,7 +117,7 @@ fn settle_negated_literal(c: Sema_ctx$@, node: Ast_node$@, operand_id: I32): Boo
     //< computes the unary minus at that node's type (emit_unary_expr in gen/c/expr.kspls).
     lit: = literal_under_minus(node)
     if lit.node == null || !lit.is_neg || !c.env.is_integer(operand_id) ||
-        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(c, lit.node.text))
+        !sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
         return false
     lit.node.type_id = operand_id
     node.type_id = operand_id

@@ -43,7 +43,8 @@ priv const prefix_tokens: Sz = 96
 priv const suffix_tokens: Sz = 48
 priv const middle_tokens: Sz = 32
 priv const context_bytes: Sz = 512 // how much text each side is encoded from, before the cut
-priv const max_seq: Sz = prefix_tokens + suffix_tokens + middle_tokens + 4
+priv const fim_markers: Sz = 4 //< how many markers `Fim_ids` numbers after the tokenizer's words
+priv const max_seq: Sz = prefix_tokens + suffix_tokens + middle_tokens + fim_markers
 
 struct Fim_ids //< the four markers, numbered after the tokenizer's own words
     pre: I32
@@ -91,16 +92,15 @@ priv fn head(text: U8[]): U8[] //< the suffix's start, where the hole ends
     return text.sub(0, context_bytes) if text.len > context_bytes else text
 
 priv fn base_vocab(at: Paths): Sz //< how many words the tokenizer has: its highest id, plus one
-    data: = io.read_file(at.vocab) catch
-        io.err().s("[error] cannot read \{at.vocab\}\n")
-        sys.exit(1)
+    //<
+    //< Read through `Tokenizer.load`, which refuses a broken line rather than reading it as 0.
+    scratch: = Arena.new(1024 * 1024)
+    defer scratch.free()
+    tok: = load_tokenizer(at, scratch)
     $top: Sz = 0
-    for line in data.lines(null)
-        if tab: = line.find_char('\t')
-            if tab > 0
-                id: = line.sub(0, tab).parse_size() catch 0
-                if id + 1 > top
-                    top = id + 1
+    for entry in tok.vocab.items()
+        if entry.value + 1 > top
+            top = entry.value + 1
     return top
 
 priv fn load_tokenizer(at: Paths, arena: Arena$@): ai_tokenizer.Tokenizer
@@ -200,11 +200,11 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
     if n == 0
         io.err().s("[error] the corpus holds no example\n")
         sys.exit(1)
-    io.out().s("examples=\{n\}  tokens=\{data.tokens.len\}  vocab=\{base + 4\}\n")
+    io.out().s("examples=\{n\}  tokens=\{data.tokens.len\}  vocab=\{base + fim_markers\}\n")
     // **Printed once, before the first loss**: the number alone reads as a rate, which it is not.
     io.out().s("loss: nats per token on what it learns from, over the recent steps; lower is ")
         .s("better, 0 is every next token certain and right\n")
-    $model: = new_model(base + 4, model_arena)
+    $model: = new_model(base + fim_markers, model_arena)
     $rng: = prng.Prng.new(seed)
     model.randomize(rng@)
     work: = Arena.new(64 * 1024 * 1024)
@@ -279,7 +279,8 @@ priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
     defer model_arena.free()
     base: = base_vocab(at)
     ids: = fim_ids(base)
-    $model: = new_model(base + 4, model_arena)
+    $model: = new_model(base + fim_markers, model_arena)
+    // **The weights point into the file read**, so it lives as long as the model does.
     $st: = ai_file.load_safetensors(weights, model_arena) catch
         io.err().s("[error] cannot read \{weights\} (train writes it)\n")
         sys.exit(1)
@@ -355,7 +356,8 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
     base: = base_vocab(at)
     ids: = fim_ids(base)
     $tok: = load_tokenizer(at, model_arena)
-    $model: = new_model(base + 4, model_arena)
+    $model: = new_model(base + fim_markers, model_arena)
+    // **The weights point into the file read**, so it lives as long as the model does.
     $st: = ai_file.load_safetensors(weights, model_arena) catch
         io.err().s("[error] cannot read \{weights\} (train writes it)\n")
         sys.exit(1)
@@ -390,11 +392,11 @@ fn main()
     io.set_line_buffered()
     arena: = Arena.new(1024 * 1024)
     defer arena.free()
-    $steps: U8[] = "3000"
+    $steps: I64 = 3000
     $optimizer: U8[] = "adam"
     $lr: U8[] = ""
-    $seed: U8[] = "1"
-    $samples: U8[] = "4"
+    $seed: I64 = 1
+    $samples: I64 = 4
     $corpus: U8[] = ""
     $vocab: U8[] = ""
     $merges: U8[] = ""
@@ -411,31 +413,35 @@ fn main()
     p.str_opt("--weights", weights@, "complete: the weights train wrote")
     p.str_opt("--in", in_path@, "complete: the holes, one {prefix, suffix} per line")
     p.str_opt("--out", out_path@, "train: the weights written; complete: the answers written")
-    p.str_opt("--steps", steps@, "train: how many times the weights move (3000)")
-    $batch: U8[] = "1"
-    p.str_opt("--batch", batch@, "train: how many sequences' gradients each move sums (1)")
-    $threads: U8[] = ""
-    p.str_opt("--threads", threads@, "train: how many threads share a batch (every CPU)")
+    p.int_opt("--steps", steps@, "train: how many times the weights move (3000)")
+    $batch: I64 = 1
+    p.int_opt("--batch", batch@, "train: how many sequences' gradients each move sums (1)")
+    $threads: I64 = 0
+    p.int_opt("--threads", threads@, "train: how many threads share a batch (0: every CPU)")
     p.str_opt("--optimizer", optimizer@, "train: adam or sgd (adam)")
     p.str_opt("--lr", lr@, "train: the step size (0.001 for adam, 0.05 for sgd)")
-    p.str_opt("--samples", samples@, "complete: candidates per hole, the greedy one first (4)")
-    p.str_opt("--seed", seed@, "where the randomness starts (1)")
-    $most: U8[] = "1000"
-    p.str_opt("--most", most@, "loss: how many examples are measured (1000)")
+    p.int_opt("--samples", samples@, "complete: candidates per hole, the greedy one first (4)")
+    p.int_opt("--seed", seed@, "where the randomness starts (1)")
+    $most: I64 = 1000
+    p.int_opt("--most", most@, "loss: how many examples are measured (1000)")
     p.parse_or_exit(sys.args(), arena)
+    for n in I64[]::{ steps, batch, threads, samples, seed, most }
+        if n < 0
+            io.err().s("--steps, --batch, --threads, --samples, --seed, --most: expected no ")
+                .s("negative number\n")
+            sys.exit(2)
     // **Every path is explicit, none assumed**: a default would tie this program to one repository.
     if p.command.equals("loss")
         if vocab.len == 0 || merges.len == 0 || corpus.len == 0 || weights.len == 0
             io.err().s("loss needs --corpus=<fim.jsonl> --vocab=<v> --merges=<m> --weights=<w>\n")
             sys.exit(2)
-        held_out_loss(corpus, Paths::{ .vocab = vocab, .merges = merges }, weights,
-            most.parse_size() catch 1000)
+        held_out_loss(corpus, Paths::{ .vocab = vocab, .merges = merges }, weights, Sz::most)
         return
     if vocab.len == 0 || merges.len == 0 || out_path.len == 0
         io.err().s("name the tokenizer and the output: --vocab=<v> --merges=<m> --out=<file>\n")
         sys.exit(2)
     at: = Paths::{ .vocab = vocab, .merges = merges }
-    seed_n: = U64::(seed.parse_size() catch 1)
+    seed_n: = U64::seed
     if p.command.equals("train")
         if corpus.len == 0
             io.err().s("train needs --corpus=<fim.jsonl>\n")
@@ -454,19 +460,17 @@ fn main()
             (ai_optim.Updater<|F32|>.adam(step) if is_adam
             else ai_optim.Updater<|F32|>.sgd(step))
         defer u.free()
-        plan: = Schedule::{ .steps = steps.parse_size() catch 3000,
-            .batch = batch.parse_size() catch 1,
-            .threads =
-            (threads.parse_size() catch 1) if threads.len > 0 else sys.cpu_count() }
-        if plan.batch == 0 || plan.threads == 0
-            io.err().s("--batch and --threads: expected at least 1\n")
+        plan: = Schedule::{ .steps = Sz::steps, .batch = Sz::batch,
+            .threads = Sz::threads if threads > 0 else sys.cpu_count() }
+        if plan.batch == 0
+            io.err().s("--batch: expected at least 1\n")
             sys.exit(2)
         train(corpus, at, plan, u@, seed_n, out_path)
     else if p.command.equals("complete")
         if weights.len == 0 || in_path.len == 0
             io.err().s("complete needs --weights=<file> and --in=<holes.jsonl>\n")
             sys.exit(2)
-        complete(at, weights, in_path, out_path, samples.parse_size() catch 4, seed_n)
+        complete(at, weights, in_path, out_path, Sz::samples, seed_n)
     else
         io.err().s("name a command: train or complete (--help lists the options)\n")
         sys.exit(2)

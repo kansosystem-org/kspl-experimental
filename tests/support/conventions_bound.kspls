@@ -52,7 +52,7 @@ priv fn imports_from(rel: U8[], prefix: U8[], out: List<|U8[]|>$@, arena: Arena$
         if p.starts_with(prefix)
             out.push(arena.text().s(rel).s(" -> ").s(p).take())
 
-priv const sideways_allowed: U8[][1] = ::{ "ksplc/sema/flow/stmt.kspls -> ksplc/sema/decl/eval" } //<
+priv const sideways_allowed: U8[][_] = ::{ "ksplc/sema/flow/stmt.kspls -> ksplc/sema/decl/eval" } //<
     //< The sideways flows allowed
     //<
     //< **Add to them and decl and flow merge into one layer.** The one here lets flow count the
@@ -77,7 +77,8 @@ priv fn check_sema_layers(arena: Arena$@)
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/sema/decl/*.kspls" })
         seen += 1
         imports_from(rel, "ksplc/sema/body/", up@, arena)
-    verdict.check_list("ksplc/sema/decl does not import ksplc/sema/body", seen, "files", up@, "")
+    verdict.check_list("ksplc/sema/decl does not import ksplc/sema/body", seen, "files", up@,
+        "move what decl needs from body down into decl, or into a folder both use")
 
     // session is the base that decl / flow / body all depend on, so even one upward import merges
     // the three layers into one.
@@ -88,7 +89,7 @@ priv fn check_sema_layers(arena: Arena$@)
         for pre in U8[][]::{ "ksplc/sema/decl/", "ksplc/sema/flow/", "ksplc/sema/body/" }
             imports_from(rel, pre, up_ctx@, arena)
     verdict.check_list("ksplc/sema/session does not import decl / flow / body", ctx_seen, "files",
-        up_ctx@, "")
+        up_ctx@, "session sits below decl / flow / body: move the shared part down into session")
 
     $sideways: = List<|U8[]|>.new(arena)
     for pair in U8[][]::{ "decl flow", "flow decl" }
@@ -113,7 +114,8 @@ priv fn check_sema_layers(arena: Arena$@)
                 .push(arena.text().s("a sideways flow that has gone (delete it from the list): ")
                 .s(a).take())
     verdict.check_list("the sideways flows between decl and flow are only the ones let through",
-        sideways_allowed.len, "flows", bad@, "")
+        sideways_allowed.len, "flows", bad@,
+        "cut the new edge, or add it to `sideways_allowed` with the reason")
 
 // ==========================================
 // kspage's layers do not import upward **It cannot be left to the compiler alone**: an upward edge
@@ -124,7 +126,7 @@ priv fn check_sema_layers(arena: Arena$@)
 // `content` (the shipped documents) imports only `model` and only `port` imports it, so it is one
 // layer below that.
 // **`test` is at the very top** (otherwise the test code goes into what is shipped).
-priv const kspage_layers: U8[][8] = ::{ "model", "expr", "lay", "share", "write", "content", "port",
+priv const kspage_layers: U8[][_] = ::{ "model", "expr", "lay", "share", "write", "content", "port",
     "test" }
 
 priv fn check_kspage_layers(arena: Arena$@)
@@ -145,6 +147,39 @@ priv fn check_kspage_layers(arena: Arena$@)
                 imports_from(rel, pre, up@, arena)
     verdict.check_list("a kspage folder does not import one above itself", seen, "files", up@,
         "the run is the table in kspage/README.md (model < expr < lay < share < write < content)")
+
+// ==========================================
+// ksos's folders import only those below them **The compiler does not see an upward edge** that
+// closes no cycle: a driver importing a board builds, and then serves that board alone.
+// ==========================================
+
+// Each folder, then the folders it may import, itself included (the run is in ksos/README.md).
+// **`tests` is left out**: a test reaches whatever it checks.
+priv const ksos_layers: U8[][_] = ::{ "kernel", "kernel", "net", "net", "drivers", "kernel drivers",
+    "boards", "kernel drivers boards", "demo", "kernel net drivers boards demo", "port", "" }
+
+priv fn check_ksos_layers(arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    $seen: Sz = 0
+    for i in Range.new(0, ksos_layers.len, 2)
+        folder: = arena.text().s("ksos/").s(ksos_layers[i]).s("/").take()
+        allowed: = ksos_layers[i + 1].split(' ', arena)
+        for rel in harness
+            .tracked_matching(U8[][]::{ arena.text().s(folder).s("*.kspls").take() })
+            seen += 1
+            for p in import_paths(rel, arena)
+                if !p.starts_with("ksos/")
+                    continue
+                rest: = p.sub_from(5)
+                top: = rest.sub(0, rest.find_char('/').unwrap_or(rest.len))
+                $ok: = false
+                for a in allowed
+                    if a.equals(top)
+                        ok = true
+                if !ok
+                    bad.push(arena.text().s(rel).s(" -> ").s(p).take())
+    verdict.check_list("a ksos folder imports only those below it", seen, "files", bad@,
+        "the run is in \"What is here\" in ksos/README.md")
 
 // ==========================================
 // The boundary's lists (the order of the strings passed by number) **A number is read in the same
@@ -188,8 +223,8 @@ priv fn js_list_of(src: U8[], name: U8[], head_mark: U8[], arena: Arena$@): List
                 out.push(w)
     return out
 
-priv const order_pairs: U8[][10] = ::{ "shape", "SHAPES", "dating", "DATINGS", "collect",
-    "COLLECTS", "sketch", "SKETCHES", "keep", "KEEPS" }
+priv const order_pairs: U8[][_] = ::{ "shape", "SHAPES", "dating", "DATINGS", "collect", "COLLECTS",
+    "sketch", "SKETCHES", "keep", "KEEPS" }
 
 priv fn diff_order(core: List<|U8[]|>@, js: List<|U8[]|>@, home: U8[], label: U8[],
     bad: List<|U8[]|>$@, arena: Arena$@) //<
@@ -334,7 +369,7 @@ priv const menu_form: U8[] = "kspage/port/web/form.js"
 // canonical form / the file holding the choices). `page.html` holds only where the set is placed.
 // Caution: **Do not return to a `<select>`** (the check is "no `<select>` is left in a menu" in
 // `kspage/tests/browser/menu.js`).
-priv const menu_pairs: U8[][45] = ::{ "DATED_PICKS", "kspage/port/web/state.kspls", "dating",
+priv const menu_pairs: U8[][_] = ::{ "DATED_PICKS", "kspage/port/web/state.kspls", "dating",
     "order", menu_form, "ALIGN_PICKS", "kspage/model/style.kspls", "Align", "enum", menu_form,
     "MARK_PICKS", "kspage/model/marker.kspls", "Marker", "enum", menu_form, "COLLECT_PICKS",
     "kspage/port/web/state.kspls", "collect", "order", menu_form, "STYLE_SHAPE_PICKS",
@@ -344,7 +379,7 @@ priv const menu_pairs: U8[][45] = ::{ "DATED_PICKS", "kspage/port/web/state.kspl
     "kspage/port/web/state.kspls", "shape", "order", menu_fly, "KEEP_PICKS",
     "kspage/port/web/state.kspls", "keep", "order", menu_fly }
 
-priv const own_door: U8[][2] = ::{ "source", "imports" } //<
+priv const own_door: U8[][_] = ::{ "source", "imports" } //<
     //< The kinds that correctly stay out of the choices
     //<
     //< Caution: **Write the reason.**
@@ -399,7 +434,7 @@ priv fn check_menu_choices(arena: Arena$@)
 // from the entry point's file, so at a demo's entry point it names the kernel's and drivers' `pub`
 // too (those stay, as a promise to their users).
 // ==========================================
-priv const entry_trees: U8[][1] = ::{ "ksos/demo" }
+priv const entry_trees: U8[][_] = ::{ "ksos/demo" }
 
 priv fn enum_order(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //< a text enum's list
     //<
@@ -445,7 +480,7 @@ priv fn enum_order(src: U8[], name: U8[], arena: Arena$@): List<|U8[]|> //< a te
 // exhaustive, so nothing is forgotten; the screen side passes a dropped one** (read as the first
 // kind). A list of four (the text's file / the enum / the screen's list / the prefix cutting the
 // text out); a `key: "` prefix means a table with labels.
-priv const enum_pairs: U8[][16] = ::{ "kspage/model/marker.kspls", "Marker", "MARKS", "\"",
+priv const enum_pairs: U8[][_] = ::{ "kspage/model/marker.kspls", "Marker", "MARKS", "\"",
     "kspage/model/style.kspls", "Align", "ALIGNS", "\"", "kspage/model/style_when.kspls", "Compare",
     "COMPARES", "\"", "kspage/model/style.kspls", "Arrange", "REGIONS", "key: \"" }
 
@@ -609,7 +644,7 @@ priv const spell_stem: U8[] = "stem" //<
     //< itself. The prefix leaves out a folder whose own guide holds its list (`tools/ai_assist/`),
     //< since a `*` crosses a `/`.
 priv const skip_none: U8[] = ""
-priv const hand_lists: U8[][165] = ::{ "the list of make's checks", "kspage/Makefile",
+priv const hand_lists: U8[][_] = ::{ "the list of make's checks", "kspage/Makefile",
     "kspage/tests/browser/*.js", spell_stem, skip_none, "the text the page binds in",
     "kspage/port/web/page.html", "kspage/port/web/*.js", "name", skip_none,
     "the text the page binds in", "kspage/port/web/page.html", "kspage/port/web/*.html", "name",
@@ -721,6 +756,7 @@ fn run(arena: Arena$@)
     check_menu_choices(arena)
     check_reference_arrows(arena)
     check_kspage_layers(arena)
+    check_ksos_layers(arena)
     check_boundary_order(arena)
     check_no_pub_in_entries(arena)
     check_wasm_boundary(arena)

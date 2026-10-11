@@ -97,7 +97,8 @@ impl Ast_node
                     'io.out().s(\"...\")' or 'b.s(\"...\")'); it streams into the writer instead of \
                     producing a value. Build the value with 'Str_builder' first, then pass \
                     '.slice()'")
-            type_id = c.slice_type_of(c.env.make_const(c.env.get_or_add("U8")))
+            type_id = c
+                .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
         case .k_expr_implicit_dot, .k_implicit_enum, .k_enum_init, .k_enum_init_call
             type_id = infer_implicit_enum_expr(r, c, effective_expected)!
         case .k_struct_literal, .k_expr_compound
@@ -186,7 +187,7 @@ priv fn check_literal_escapes(node: Ast_node$@, c: Sema_ctx$@, one_byte: Bool) /
 
 priv fn infer_char_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     check_literal_escapes(node, c, true)
-    u8_id: = c.env.get_or_add("U8")
+    u8_id: = I32::sema_type_env.Builtin_type_id.u8_type
     const_u8_id: = c.env.make_const(u8_id)
     return expected_id if expected_id == const_u8_id else u8_id
 
@@ -239,14 +240,17 @@ priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I3
     //< Caution: **Do not add `U8@`.** One of the two then always mismatches in sign
     //< (-Wpointer-sign).
     check_literal_escapes(node, c, false)
-    u8_ptr_id: = c.env.make_ptr(c.env.make_const(c.env.get_or_add("U8")))
-    u8_ptr_id2: = c.env.make_ptr(c.env.get_or_add("U8"))
-    u8_slice_id: = c.slice_type_of(c.env.get_or_add("U8"))
-    void_ptr_id: = c.env.make_ptr(c.env.make_const(c.env.get_or_add("Void")))
+    u8_ptr_id: = c.env
+        .make_ptr(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
+    u8_ptr_id2: = c.env.make_ptr(I32::sema_type_env.Builtin_type_id.u8_type)
+    u8_slice_id: = c.slice_type_of(I32::sema_type_env.Builtin_type_id.u8_type)
+    void_ptr_id: = c.env
+        .make_ptr(c.env.make_const(I32::sema_type_env.Builtin_type_id.void_type))
     if expected_id == u8_ptr_id || expected_id == u8_ptr_id2 || expected_id == u8_slice_id ||
         expected_id == void_ptr_id
         return expected_id
-    return c.slice_type_of(c.env.make_const(c.env.get_or_add("U8")))
+    return c
+        .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
 
 priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     inner: = node.get_unary_target()
@@ -295,9 +299,9 @@ priv fn ternary_numeric_type(c: Sema_ctx$@, true_node: Ast_node$@, t_id: I32,
     promoted: = c.env.get_promoted_numeric_type(t_id, f_id)
     if !sema_type_env.is_unknown(promoted)
         return promoted
-    if c.env.is_integer(t_id) && sema_body_literal.is_untyped_int_literal(c, false_node)
+    if c.env.is_integer(t_id) && sema_body_literal.is_untyped_int_literal(false_node)
         return t_id
-    if c.env.is_integer(f_id) && sema_body_literal.is_untyped_int_literal(c, true_node)
+    if c.env.is_integer(f_id) && sema_body_literal.is_untyped_int_literal(true_node)
         return f_id
     return I32::sema_type_env.Builtin_type_id.unknown
 

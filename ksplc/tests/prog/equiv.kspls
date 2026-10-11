@@ -291,6 +291,8 @@ priv const g_cast_back: I32 = U8::(0 - 1) //< a cast in a global, which LLVM fol
     //< Caution: **Keep a constant naming another through a cast**: C inlines the folded value
     //< there, so a fold that drops the cast is wrong on both backends at once.
 priv const g_cast_u16: I32 = U16::70000
+priv const g_cast_sz: Sz = Sz::(0xFFFFFFFFFFFFFFFFU64 >> 1U64) //<
+    //< a cast to `Sz`, folded at its width
 priv const g_cast_ref: I32 = g_cast_back + 1
 priv const g_wide: Bool = true
 priv const g_picked: Sz = 64 if g_wide else 8 //< a conditional in a top-level constant
@@ -433,6 +435,11 @@ impl Exit_probe
 priv const shift_mask: U32 = 6U32 //<
     //< Conversely, the constant for building an amount that can be folded at translation time
 priv const div_pick: I32 = 6
+
+priv fn global_cast_lines(b: Str_builder$@) //< the casts and choices folded in global constants
+    b.s("gcast=\{g_cast_back\}/\{g_cast_u16\}/\{g_cast_ref\}/\{g_picked\}/\{g_picked_buf.len\}")
+        .s(" gsz=\{g_cast_sz\}")
+    b.s("/\{case_named(runtime_divisor(1))\}\{case_named(runtime_divisor(2))\}")
 
 fn main(): Void!Exit_probe
     $b: = Str_builder.new()
@@ -603,8 +610,7 @@ raw-line-2""").s("<END>\n")
     eval_order_lines(b@)
     tagged_union_lines(b@)
     layout_lines(b@)
-    b.s("gcast=\{g_cast_back\}/\{g_cast_u16\}/\{g_cast_ref\}/\{g_picked\}/\{g_picked_buf.len\}")
-    b.s("/\{case_named(runtime_divisor(1))\}\{case_named(runtime_divisor(2))\}")
+    global_cast_lines(b@)
     bare: Bare_fn = naked_ret
     bare()
     b.s("/naked\n")

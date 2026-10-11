@@ -223,10 +223,10 @@ impl Ast_node
         loop_children: = base_ast.new_ast_node_list()
         loop_children
             .push(r.get_loop_label() if r.get_loop_label() != null
-            else Ast_node.new(.k_empty, "", loc))
+            else Ast_node.build_empty(loc))
         loop_children.push(r.get_for_init())
         loop_children.push(Ast_node.build_ident(coll_name, 0, loc))
-        loop_children.push(Ast_node.new(.k_empty, "", loc))
+        loop_children.push(Ast_node.build_empty(loc))
         loop_children.push(r.get_loop_block())
         r.children = loop_children
         new_children.push(r)
@@ -307,7 +307,7 @@ impl Ast_node
                     // returns the trait `Writer`, losing `Str_builder` and its `.slice()` further
                     // along the chain; `put` returns the destination in the type it was given
                     // (std/lang.kspls).
-                    put_args: = Ast_node.new(.k_expr_args, "args", part.loc)
+                    put_args: = Ast_node.build_args(part.loc)
                     put_args.add_child(current_recv)
                     put_args.add_child(fmt_recv)
                     current_recv = Ast_node.build_fn_call("put", put_args, part.loc)
@@ -401,8 +401,7 @@ impl Ast_node
         if alt == null || alt.kind_id != .k_stmt_if ||
             (!r.is_if_bind() && !alt.is_if_bind())
             return
-        r.set_child(3,
-            Ast_node.new(.k_stmt_block, "stmt_block", alt.loc).add_child(alt))
+        r.set_child(3, Ast_node.build_block(alt.loc).add_child(alt))
 
     priv fn desugar_if_bind(r: Ast_node$@): Ast_node$@ //<
         //< It folds `if v: = X { A } else { B }` to `switch X case .some(v) { A } case .none { B }`
@@ -420,9 +419,7 @@ impl Ast_node
         then_block: = r.get_if_then_block()
         else_block: = r.get_if_else_block()
 
-        none_block: =
-            (else_block if else_block != null
-            else Ast_node.new(.k_stmt_block, "stmt_block", loc))
+        none_block: = (else_block if else_block != null else Ast_node.build_block(loc))
         return Ast_node.build_option_switch(subject, name_node, then_block, none_block,
             r.safe_get_child(0), base_ast_ext.if_bind_mark, loc)
 

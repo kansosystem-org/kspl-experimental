@@ -9,8 +9,6 @@
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List, Map }
-import "std/fs"
-import "std/io"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -25,14 +23,14 @@ priv const entry_head: U8[] = "* [`" //< how `ksplc doc` opens one entry of its 
 priv const entry_tail: U8[] = "`](" //< and closes the entry's name
 
 // The words that open a declaration of a type or of what a type gains, after `pub` / `priv`.
-priv const decl_words: U8[][5] = ::{ "struct ", "enum ", "trait ", "typedef ", "impl" }
+priv const decl_words: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "impl" }
 
 // What ties a name to its file (`name` in `file`), as "Linking documents to source" in
 // `docs/SPEC-documents.md` spells it.
-priv const file_words: U8[][3] = ::{ "in `", "of `", "inside `" }
+priv const file_words: U8[][_] = ::{ "in `", "of `", "inside `" }
 
 // The endings that make a name a file's name (`edit.kspls`, `ci.yml`).
-priv const file_exts: U8[][29] = ::{ "kspls", "kspl", "md", "c", "h", "txt", "cfg", "json", "html",
+priv const file_exts: U8[][_] = ::{ "kspls", "kspl", "md", "c", "h", "txt", "cfg", "json", "html",
     "js", "css", "mk", "py", "ll", "sh", "exe", "yml", "ld", "kspeg", "toml", "kspage", "uf2", "elf",
     "o", "a", "so", "dll", "wasm", "svg" }
 
@@ -290,7 +288,8 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
         // Programs written to be refused declare nothing to point at.
         if rel.starts_with("ksplc/tests/negative/") || rel.starts_with("ksplc/tests/lint/")
             continue
-        src: = io.read_file(fs.join(harness.root(), rel, arena)) catch
+        src: = harness.read_under_root(rel)
+        if src.len == 0
             continue
         alias: = std_alias(rel)
         named: = alias.len > 0 && (lower.get(alias) catch false)
@@ -341,7 +340,7 @@ priv fn wrong_name(ix: Index@, u: Use@, own: Map<|U8[], Bool|>$@): Bool //<
             !(own.get(member) catch false)
     return knows(ix.modules, head) && !holds(ix.modules, head, member)
 
-priv const span_samples: scan.Sample[8] = ::{
+priv const span_samples: scan.Sample[_] = ::{
     scan.Sample::{ .text = "Map.items", .hits = true },
     scan.Sample::{ .text = "io.out()", .hits = true },
     scan.Sample::{ .text = "mem.dealloc(text.ptr)", .hits = true },
@@ -354,7 +353,7 @@ priv const span_samples: scan.Sample[8] = ::{
         //< What reads as a pointer and what does not, in a span's text
 }
 
-priv const left_samples: scan.Sample[6] = ::{ scan.Sample::{ .text = "Python's |`json.dumps`|",
+priv const left_samples: scan.Sample[_] = ::{ scan.Sample::{ .text = "Python's |`json.dumps`|",
     .hits = true }, scan.Sample::{ .text = "C++'s |`std.move`|", .hits = true },
     scan.Sample::{ .text = "|`List.order_by`| in `std/seq`", .hits = true },
     scan.Sample::{ .text = "|`List.where`| / `List.select` in `std/seq`", .hits = true },
@@ -380,7 +379,8 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
             skip = skip || sys.get_file_name(rel).equals(p)
         if skip
             continue
-        text: = io.read_file(fs.join(harness.root(), rel, arena)) catch
+        text: = harness.read_under_root(rel)
+        if text.len == 0
             continue
         read_uses(rel, text, uses@, arena)
         owns.set(rel, fence_words(text, arena))

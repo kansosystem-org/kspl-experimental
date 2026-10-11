@@ -7,6 +7,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as _base_core // `fqn_head` / `fqn_last`
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_default" as sema_decl_trait_default
@@ -17,7 +18,6 @@ import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
-import "std/chars"
 import "std/str" { Str_builder }
 
 enum Op_trait_status
@@ -98,7 +98,7 @@ impl Sema_ctx
             // target makes it `priv`, and the type leaks through a `pub trait`.
             r.check_type_vis_leak(type_node, m_sym.vis, "return type", "interface method")
         else
-            m_sym.type_id = r.env.get_or_add("Void")
+            m_sym.type_id = I32::sema_type_env.Builtin_type_id.void_type
 
         trait_def.methods_list.push(m_sym)
         return m_sym
@@ -281,9 +281,7 @@ impl Sema_ctx
         known: = sema_type_arc.shadowed_known_trait(trait_fqn)
         if known.len == 0
             return
-        $simple: = known
-        if dot: = known.rfind_char('.')
-            simple = known.sub_from(dot + 1)
+        simple: = known.fqn_last()
         r.clear_scratch()
             .s("[W0501] '\{trait_fqn\}' shadows the compiler-known '\{known\}'. Conforming to this \
                 declaration does not enable the built-in behavior, and nothing else reports it. \

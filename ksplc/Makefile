@@ -81,6 +81,21 @@ suite_fuzz := fuzz
 FUZZ_SEEDS ?= .
 FUZZ_ARGS ?=
 suite_args_fuzz = "$(FUZZ_SEEDS)" $(FUZZ_ARGS)
+# A suite file no name above runs, or a name left out of SUITES, would never run in `make test`,
+# and nothing would say so. **Only the list written here is held to it**: `make test SUITES=` names
+# a part on purpose.
+suite_names := $(filter-out args_%,$(patsubst suite_%,%,$(filter suite_%,$(.VARIABLES))))
+ifneq ($(origin SUITES),command line)
+suite_unlisted := $(filter-out $(SUITES) fuzz,$(suite_names))
+ifneq ($(suite_unlisted),)
+$(error there are suites missing from SUITES: $(suite_unlisted))
+endif
+endif
+suite_orphans := $(filter-out $(foreach s,$(suite_names),tests/suite/$(suite_$(s))_test.kspls), \
+  $(wildcard tests/suite/*_test.kspls))
+ifneq ($(suite_orphans),)
+$(error there are suite files no suite_<name> names: $(suite_orphans))
+endif
 
 test-suites: $(addprefix test-,$(SUITES))
 

@@ -403,7 +403,9 @@ Caution: **Do not repeat the folder's name in a file name** (`rp2040/gpio.kspls`
 
 The port layer (`port/`) is something else: the boot and the C/asm glue (startup, the linker script, the context switch), not KSPL's MMIO drivers.
 
-**`poll` in `ksos/drivers/mmio.kspls` is the one home of the busy wait every driver shares** (`mmio.poll(addr, mask, want_nonzero)`). A *busy wait* reads a register over and over until a bit changes. It gives up with `false` after `poll_timeout_iters` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
+**`wait` in `ksos/drivers/mmio.kspls` is the one home of the busy wait every driver shares** (`mmio.wait(addr, mask, want_nonzero)!`). A *busy wait* reads a register over and over until a bit changes. It gives up with `timed_out` after `poll_timeout_iters` iterations, so hardware that does not answer cannot stall a driver forever. Do not copy the loop or the constant into a driver.
+
+**A driver's call that can fail returns `Void!Driver_error`** (`Driver_error` in the same file), not a `Bool`. A `Bool` said only "it did not work", and a caller could drop it unseen; a result must be passed on with `!` or handled with `catch`, and its kind (`timed_out`, `no_answer`, `not_found`, `out_of_range`, `full`) says why. A board passes a driver's failure on; a demo decides there what to leave out and how to say so. Two kinds stay `Bool`: a question (`i2c.present`, `usb_cdc.is_configured`), and a try that is answered at once (`usb_cdc.write`, `flash.program_at`, which implements ksdb's `Store`).
 
 ### UART (`uart.kspls` / `uart_irq.kspls`)
 
@@ -412,7 +414,7 @@ The port layer (`port/`) is something else: the boot and the C/asm glue (startup
 | Demo | What it proves |
 | :-- | :-- |
 | `make ksos-cm-uart-probe` | **it is genuine memory-mapped I/O, not ARM semihosting** (`ksos/demo/common/semihost_console.kspls`, the `BKPT` trap). With QEMU's `serial0` redirected to a file apart from the console, only UART0's output appears in that file. |
-| `make ksos-cm-uart-echo` | the receive path, polled (`getc`). `ksos/tests/uart_echo_test.py` sends bytes over a Unix domain socket and matches the echo (`RESULT: PASS`). |
+| `make ksos-cm-uart-echo` | the receive path, polled (`getc`). `ksos/tests/uart_echo_test.py` sends bytes over a Unix domain socket and matches the echo (`RESULT: ALL PASS`). |
 | `make ksos-cm-uart-irq-echo` | the receive path **driven by an interrupt** (below) |
 
 `uart_irq.kspls` turns on CTRL's RX_INTEN and NVIC IRQ0 (UART0's RX in QEMU's board definition; the NVIC is the Cortex-M's interrupt controller). The ISR `uart0_irq0_handler`, joined to the shared vector table through a weak symbol, raises a flag the caller watches while resting on `WFI` (an instruction that sleeps until an interrupt). `WFI` has no other way out, so wrong NVIC or ISR wiring hangs it. An echo from `ksos/tests/uart_irq_echo_test.py` is direct evidence that a real interrupt woke the CPU.
@@ -696,6 +698,7 @@ Caution: Do not make the reverse reference (pointing at a demo from here). Once 
 | `track.kspls` | The three reflective sensors for line tracking |
 | `range.kspls` | The sense of the distance ahead (an HC-SR04) |
 | `face.kspls` | The face (an 8×16 LED matrix) |
+| `head.kspls` | The servo swinging the ultrasonic's head, held to its range of motion |
 | `status.kspls` | The states' names and how they are shown (the report's line, and WS2812) |
 | `cap.kspls` | Bringing the instruction sent to the wheels within the speed cap |
 
@@ -817,10 +820,10 @@ The car runs a small neural net with no operating system and no `malloc`. It als
 
 **Do not add a `peek` or a bulk API to `Queue`.** Its role would overlap `Ring`'s, and the reader could not decide which to use (the opposite prohibition is in `std/docs/DESIGN.md`). Bytes streamed from an interrupt handler go through `Ring`; a typed value waited for between tasks goes through `Queue`.
 
-**`pub` stands as a promise to whoever builds on ksos; counting references does not decide it.** The `pub` items in the kernel, the drivers and the board (`Task`, `Event`, `gpio.read`, `rtc.Date_time` and their kind) are what that work calls.
+**ksos marks nothing `pub`: no package builds on it.** Everything that calls the kernel, the drivers and the board (`Task`, `Event`, `gpio.read`, `rtc.Date_time` and their kind) stands inside `ksos/`, and an unmarked name is visible across the whole package. `pub` is a promise to another package, and none has asked for one.
 
-* **Do not remove one because nothing outside this unit refers to it.** The only users are the demos and the board, both inside `ksos/`, so counting references says it is not needed. The same rule is in "Whether `pub` is needed is not settled by walking the references" in `std/docs/DESIGN.md`.
-* **`ksos/demo/` is the reverse: it has no `pub` at all.** It holds the entry points and their shared parts, and no package imports it, so a `pub` widens nothing. `make test-conventions` watches it; why a diagnostic cannot is in "13.1 A test inspecting the inside of a unit goes inside that unit" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
+* **The package that first builds on ksos adds `pub` to what it calls**, in the same change, so the promise and its first user arrive together. Once given, it is not removed because nothing outside refers to it ("Whether `pub` is needed is not settled by walking the references" in `std/docs/DESIGN.md`).
+* **`ksos/demo/` has no `pub` either, and must keep none.** It holds the entry points and their shared parts, and no package imports it, so a `pub` widens nothing. `make test-conventions` watches it; why a diagnostic cannot is in "A test inspecting the inside of a unit goes inside that unit" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
 
 ## 🚫 What is out of scope, and why
 

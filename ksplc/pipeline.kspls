@@ -206,6 +206,9 @@ impl Compiler
         bodies: Bodies): Void!Sema_error
         // Desugar runs here, once over root_file, not in parse_file, which the LSP's workspace walk
         // (lsp/worker.build_workspace_state) calls per file. ksplc.cfg is checked here too.
+        // Run the checks in lint mode or when the command line raised a code to an error; a
+        // ksplc.cfg or a `##lint` in this analysis's files may turn them on after this.
+        base_core.config.run_lint_checks = is_lint || base_core.config.cli_raises_lint
         for loaded in r.loaded_files
             base_lint_codes.validate_config_for_file(loaded)
 
@@ -213,7 +216,7 @@ impl Compiler
         // A failed closure synthesis has already reported its diagnostic. **It stops the run only
         // where diagnostics are shown**, so a half-desugared tree cannot cause a distant error;
         // when they are suppressed, going on lets the rest of a workspace answer ("One bad file
-        // does not poison" in `ksplc/docs/DESIGN.md`).
+        // does not poison" in `ksplc/docs/DESIGN-tools.md`).
         quiet: = suppress_errors || r.has_load_error
         if !parse_desugar.run(r.root_file, r.base_parser, r.source_map) && !quiet
             throw .analysis_failed
@@ -236,9 +239,6 @@ impl Compiler
         // user.
         sema.infer_expr_fn = sema_body_expr.infer_expr_of
         base_core.config.is_lint = is_lint
-        // Run the checks in lint mode or when any code is raised to an error; an or, so the CLI's
-        // --lint=CODE=error is kept.
-        base_core.config.run_lint_checks = is_lint || base_core.config.run_lint_checks
         sema.suppress_errors = suppress_errors || r.has_load_error
         sema.bodies = bodies
         r.sema = sema

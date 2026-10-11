@@ -17,9 +17,13 @@ import "std/str" + { Str_builder }
 // ==========================================
 
 extern "C"
-    pub fn kspl_error_trace_depth(): I32
-    pub fn kspl_get_trace_frame_info(index: I32, out_file: U8@$@, out_func: U8@$@,
-        out_line: I32$@)
+    pub fn kspl_error_trace_depth(): I32 //< how many frames the error trace holds
+    pub fn kspl_get_trace_frame_info( //< the file, function and line of the trace's frame at index
+        index: I32,
+        out_file: U8@$@,
+        out_func: U8@$@,
+        out_line: I32$@,
+    )
 
 priv fn demangle_fn_name(raw_func: U8[], file_path: U8[]): U8[] //<
     //< The original function name from genc's symbol, "kspl_[priv_]<mod_with_underscores>_<func>"
@@ -121,11 +125,8 @@ pub fn exit( //< ends the process at once, without unwinding
 #cfg(!freestanding)
 pub fn get_env(name: U8[]): U8[]? //< an environment variable, or nothing when unset
     // The C side would cut a name at a NUL, so such a name gives .none (see str.to_cstr).
-    $name_buf: U8$@ = null
-    switch name.to_cstr()
-    case .some(p)
-        name_buf = p
-    case .none
+    name_buf: = name.to_cstr().unwrap_or(null)
+    if name_buf == null
         return .none
     defer dealloc(Void$@::name_buf)
     // Caution: **Do not use `libc.getenv`.** Windows's narrow API returns the current code page, so
@@ -192,11 +193,8 @@ pub fn set_env( //< sets an environment variable, which children inherit
         throw .empty_value
     name_buf: = env_name_cstr(name)!
     defer dealloc(Void$@::name_buf)
-    $val_buf: U8$@ = null
-    switch value.to_cstr()
-    case .some(p)
-        val_buf = p
-    case .none
+    val_buf: = value.to_cstr().unwrap_or(null)
+    if val_buf == null
         throw .bad_value
     defer dealloc(Void$@::val_buf)
     if !kspl_set_env(name_buf, val_buf)
@@ -291,12 +289,11 @@ pub fn raise_signal(sig: I32) //< sends a signal to this process itself
 // The filesystem
 // ==========================================
 
-priv fn last_path_sep(path: U8[]): I32 //<
-    //< Returns the position of the last separator in path (-1 if there is none)
-    for $i: = I32::path.len - 1; i >= 0; i -= 1
-        if is_path_sep(path[i])
-            return i
-    return -1
+priv fn last_path_sep(path: U8[]): Sz? //< the position of the last separator in path, or none
+    for $i: = path.len; i > 0; i -= 1
+        if is_path_sep(path[i - 1])
+            return .some(i - 1)
+    return .none
 
 pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Windows `C:\` counts
     //<
@@ -362,27 +359,30 @@ pub fn get_dir_name(path: U8[]): U8[] //< the folder part, or empty if there is 
     //<
     //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`),
     //< as Python, Go, Rust and C++ answer; the root itself is in nothing.
-    last_slash: = last_path_sep(path)
-    if last_slash == -1
-        return ""
-    // Caution: **Do not return empty for a file under the root.** Empty means the current
-    // directory, so a search beside `/x` would search beside the working directory instead, and a
-    // file there would pick up the settings of wherever the compiler was started.
-    top: = root_len(path)
-    if Sz::last_slash < top
-        return "" if path.len == top else path.sub(0, top)
-    return path.sub(0, last_slash)
+    if last_slash: = last_path_sep(path)
+        // Caution: **Do not return empty for a file under the root.** Empty means the current
+        // directory, so a search beside `/x` would search beside the working directory instead,
+        // and a file there would pick up the settings of wherever the compiler was started.
+        top: = root_len(path)
+        if last_slash < top
+            return "" if path.len == top else path.sub(0, top)
+        return path.sub(0, last_slash)
+    return ""
 
 pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder part
-    last_slash: = last_path_sep(path)
-    return path if last_slash == -1 else path.sub(last_slash + 1, path.len - last_slash - 1)
+    if last_slash: = last_path_sep(path)
+        return path.sub_from(last_slash + 1)
+    return path
 
 priv fn ext_dot(path: U8[]): Sz? //<
     //< The position of the extension's leading `.`, or none
     //<
     //< **A filename's leading `.` is not an extension** (`.bashrc` has none).
+    $name_at: Sz = 0
+    if last_slash: = last_path_sep(path)
+        name_at = last_slash + 1
     if dot: = path.rfind_char('.')
-        if dot > Sz::last_path_sep(path) + 1
+        if dot > name_at
             return .some(dot)
     return .none
 
@@ -417,6 +417,11 @@ pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
     //< can rewind it, so a difference can go negative. **It is not CPU time**: it advances while
     //< waiting.
     return kspl_mono_us()
+
+pub fn deadline_after_ms(ms: I64): I64 //< the `mono_us` reading `ms` milliseconds from now
+    //<
+    //< **Each caller rounds what is left its own way** (a wait that must not end early rounds up).
+    return mono_us() + ms * 1000I64
 
 pub fn timing_available(): Bool //< whether this environment has a clock at all
     //<

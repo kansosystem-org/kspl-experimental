@@ -12,7 +12,7 @@ Kssrv runs either as a *local* server for one person's browser (`--local`) or as
 
 Caution: **Read the options by name.** Told apart by the argument count, the premise "the third must be `--local`" breaks silently once there are two options.
 
-`--page` names the file returned for `/`, which may lie outside the root (the folder the server serves). It is the agreement's one exception: the rule is "Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md), and the reason is "13.10 A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
+`--page` names the file returned for `/`, which may lie outside the root (the folder the server serves). It is the agreement's one exception: the rule is "Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md), and the reason is "A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
 
 ### Local use and outward-facing use are split by one decision
 
@@ -39,6 +39,8 @@ How the token is made, passed on and compared is in the agreement ("How the toke
 ## One thread, many connections
 
 Kssrv serves every client from one thread. It never waits on one client; it asks the operating system which sockets are ready and does a little work on each.
+
+**The limits below are named by their constants, not by their values.** The values are what a client relies on, so they stand in "What a client can rely on" in [`SPEC-api.md`](SPEC-api.md) alone, and `make test-conventions` holds them to the constants.
 
 One round of the loop goes like this (the accept loop in `main` in `kssrv/main.kspls`):
 
@@ -139,23 +141,25 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 * **The refusal is not silent.** The log says once that every slot is taken, and again when one comes free, with how many were refused meanwhile; `/api/status` counts them (`connections_refused`). A line per refusal would let a flood bury the log.
 
-### A connection that passes nothing for 30 seconds is dropped
+### A connection that passes nothing for a while is dropped
 
-**A connection that has neither sent nor received a byte for `idle_conn_us` (30 seconds) is closed** by `sweep_done` (`moved_us` in `kssrv/conn.kspls`). Without it, a client that connects and goes quiet holds its slot for good, and `max_conns` such clients shut everyone else out.
+**A connection that has neither sent nor received a byte for `idle_conn_us` is closed** by `sweep_done` (`moved_us` in `kssrv/conn.kspls`). Without it, a client that connects and goes quiet holds its slot for good, and `max_conns` such clients shut everyone else out.
 
 * **A page's hold is exempt** (`GET /api/here`, `holding`): it is quiet by design, and closing it would read as the page having gone.
 * **The clock restarts on every byte either way**, so a slow but moving transfer is not cut.
 
-### A request must arrive whole within 30 seconds of its first byte
+### A request must arrive whole within a deadline from its first byte
 
-**A request still arriving 30 seconds (`request_time_us`) after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspls`). The idle timer alone does not bound it: it restarts on every byte, so a client that sends one byte every few seconds holds its slot for good, and 128 of them shut everyone out (the attack called Slowloris).
+**A request still arriving `request_time_us` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspls`). The idle timer alone does not bound it: it restarts on every byte, so a client that sends one byte every few seconds holds its slot for good, and `max_conns` of them shut everyone out (the attack called Slowloris).
 
-* **One deadline for the head and body together.** The bodies taken are small (64 KiB facing outward), so a client that can send at all sends one well within it; a minimum rate would add a second figure to tune for no case kssrv meets.
+* **One deadline for the head and body together.** The bodies taken are small (`max_request_body` facing outward), so a client that can send at all sends one well within it; a minimum rate would add a second figure to tune for no case kssrv meets.
 * **The clock starts at the request's first byte**, not at accept, so a keep-alive connection waiting between requests is the idle timer's to judge.
 
-### One address holds at most 16 connections, facing outward
+### One address holds only a few connections, facing outward
 
-**A connection from an address that already holds 16 (`max_conns_per_peer`) is closed at accept**, as one at the table's cap is, and counted with them (`connections_refused`). Without it one machine takes all 128 slots, however short the time it may hold each. A browser opens six per host, so 16 leaves room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
+**A connection from an address that already holds `max_conns_per_peer` is closed at accept**, as one at the table's cap is, and counted with them (`connections_refused`). Without it one machine takes every slot, however short the time it may hold each. A browser opens six per host, so the cap is set to leave room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
+
+**Accepting comes last in each wakeup**, after its closes and the sweep (`accept_all` in `kssrv/main.kspls`). Accepted first, a connection already gone still counts against its address and the table's cap, so a client that closes one and reconnects at once is refused.
 
 ### A request is parsed only once there is something new to decide
 
@@ -200,7 +204,7 @@ Note: The check is "after a 413 it reads the rest of the body rather than resett
 
 ### The server stops when no page is holding it
 
-**`--idle=<seconds>` stops the server once no page is holding it and nothing has been asked for that long.** The rule is "Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Why a held connection, and not a timer, is in "13.10 A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md). Without the option the server stays up. Facing outward no page holds it, and a server told nothing must not stop itself.
+**`--idle=<seconds>` stops the server once no page is holding it and nothing has been asked for that long.** The rule is "Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Why a held connection, and not a timer, is in "A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md). Without the option the server stays up. Facing outward no page holds it, and a server told nothing must not stop itself.
 
 Caution: **Stamp the clock for every request, in one place** (`queue_for_request` in `kssrv/main.kspls`). Stamped per entry point, the next one added is the one forgotten.
 
@@ -208,7 +212,7 @@ Caution: **Stamp the clock for every request, in one place** (`queue_for_request
 
 ### The server stops when asked, once the answer is out
 
-**`POST /api/stop` marks the connection that asked, and the accept loop stops once that connection is gone** (`stop_asked_by` / `open_serial` in `kssrv/conn.kspls`). A connection is dropped only after its last byte is sent, so the answer is out before the listener closes. Stopping inside the handler would close the socket with the answer still queued, and the asker would see a broken connection. The rule is "Stopping it when asked" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md); why it is a request and not a signal is in "13.10 A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
+**`POST /api/stop` marks the connection that asked, and the accept loop stops once that connection is gone** (`stop_asked_by` / `open_serial` in `kssrv/conn.kspls`). A connection is dropped only after its last byte is sent, so the answer is out before the listener closes. Stopping inside the handler would close the socket with the answer still queued, and the asker would see a broken connection. The rule is "Stopping it when asked" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md); why it is a request and not a signal is in "A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
 
 `kssrv/tests/main.kspls` tests both halves ("a refused stop leaves it answering" and "it stops once it has answered"), for the same reason as the idle stop.
 
@@ -246,7 +250,7 @@ The counters `/api/status` returns (uptime, requests, connections) sit in one `p
 
 ### No process is started
 
-**kssrv starts no program on a request.** The file endpoints at worst read and write under the root. A started process would be outside the root check: able to read beyond it, reach the network and write anything, with one token as the whole defence. What would need it (a language server, a plugin) serves writing code, which the page is not for ("No program is started" in "13.10 A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+**kssrv starts no program on a request.** The file endpoints at worst read and write under the root. A started process would be outside the root check: able to read beyond it, reach the network and write anything, with one token as the whole defence. What would need it (a language server, a plugin) serves writing code, which the page is not for ("No program is started" in "A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 
 ## The log
 

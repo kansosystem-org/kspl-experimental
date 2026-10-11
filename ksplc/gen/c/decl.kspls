@@ -9,6 +9,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
+import "ksplc/base/mangle" as base_mangle
 import "ksplc/gen/c/ctx" as gen_c_ctx + { Genc_ctx }
 import "ksplc/gen/c/expr" as gen_c_expr
 import "ksplc/gen/c/literal" as gen_c_literal
@@ -35,17 +36,16 @@ priv fn write_c_fn_name($w: Writer, fn_name: U8[], s_impl: U8[], verbatim_name: 
     //< The name is kspl_<Impl>_<fn_name>, without doubling the prefix on an fn_name that already
     //< starts with <Impl>_.
     if s_impl.len > 0
-        w = w.s("kspl_")
+        w = w.s(base_mangle.kspl_prefix)
         skip_prefix: =
             fn_name.len > s_impl.len && (fn_name.ptr + s_impl.len)$ == '_' &&
             fn_name.starts_with(s_impl)
         if !skip_prefix
             w = w.s(s_impl).s("_")
         return w.s(fn_name)
-    is_kspl: = fn_name.starts_with("kspl_")
-    if verbatim_name || is_kspl
+    if verbatim_name
         return w.s(fn_name)
-    return w.s("kspl_").s(fn_name)
+    return fn_name.kspl_symbol_to(w)
 
 priv fn extern_word(item: Ast_node$@): U8[] //< the storage word of an `extern` block's item
     //<
@@ -161,7 +161,7 @@ impl Ast_node
                         cg.s("KSPL_UNUSED ")
 
                     if t_node != null && t_node.kind_id != .k_empty &&
-                        !t_node.text.equals("Unknown")
+                        !t_node.text.equals(base_core.unknown_type_name)
                         t_node.emit_c_decl(cg, p_name, false)
                     else if !sema_type_env.is_unknown(item.type_id) &&
                         !sema_type_env.is_void(item.type_id)
@@ -497,10 +497,9 @@ impl Ast_node
                 t_node: = child.alias_target_node()
                 if emitted.get(i) || alias_refs_waiting(cg, t_node, waiting@)
                     continue
-                cg.clear_scratch()
-                cg.env.mangle_type_id_to(child.type_id, cg.scratch)
+                alias_name: = cg.mangled_in_scratch(child.type_id)
                 cg.s("typedef ")
-                t_node.emit_c_decl(cg, cg.scratch.slice(), false)
+                t_node.emit_c_decl(cg, alias_name, false)
                 cg.s(";\n")
                 emitted.set(i, true)
                 left -= 1
@@ -511,10 +510,9 @@ impl Ast_node
                     if emitted.get(i)
                         continue
                     child: = pending.get(i)
-                    cg.clear_scratch()
-                    cg.env.mangle_type_id_to(child.type_id, cg.scratch)
+                    alias_name: = cg.mangled_in_scratch(child.type_id)
                     cg.s("typedef ")
-                    child.alias_target_node().emit_c_decl(cg, cg.scratch.slice(), false)
+                    child.alias_target_node().emit_c_decl(cg, alias_name, false)
                     cg.s(";\n")
                     emitted.set(i, true)
                 left = 0
@@ -551,9 +549,7 @@ impl Ast_node
 
             $s_impl: U8$[] = ""
             if impl_id != 0
-                cg.clear_scratch()
-                cg.env.mangle_type_id_to(impl_id, cg.scratch)
-                s_impl = cg.scratch.slice()
+                s_impl = cg.mangled_in_scratch(impl_id)
             write_c_fn_name(cg, fn_name, s_impl, verbatim_name)
             cg.s("(")
         r.emit_param_list(cg)
@@ -561,9 +557,7 @@ impl Ast_node
 
 fn emit_single_complex_type(cg: Genc_ctx$@, type_id: I32)
     info: = cg.env.get_info(type_id)
-    cg.clear_scratch()
-    cg.env.mangle_type_id_to(type_id, cg.scratch)
-    m_str: = cg.scratch.slice()
+    m_str: = cg.mangled_in_scratch(type_id)
 
     switch info
     case .array(base_id, size)
@@ -601,19 +595,16 @@ priv fn emit_complex_types_fwd(cg: Genc_ctx$@)
     $seen: = sema_type_env.Mangle_seen.new(cg.env)
     defer seen.free()
 
+    // **A type is admitted only once it is to be emitted** (`Mangle_seen.admit`).
     for type_id in cg.env.complex_types
-        info: = cg.env.get_info(type_id)
-        cg.clear_scratch()
-        cg.env.mangle_type_id_to(type_id, cg.scratch)
-        m_slice: = cg.scratch.slice()
-        if !seen.admit(type_id)
-            continue
-        switch info
+        switch cg.env.get_info(type_id)
         case .array(_base_id, size)
-            if size != -1
-                emit_array_typedef_fwd(cg, type_id, m_slice)
+            if size != -1 && seen.admit(type_id)
+                emit_array_typedef_fwd(cg, type_id, cg.mangled_in_scratch(type_id))
         case .result(_base_id, _err_id)
-            cg.s("typedef struct kspl_\{m_slice\} kspl_\{m_slice\};\n")
+            if seen.admit(type_id)
+                m_slice: = cg.mangled_in_scratch(type_id)
+                cg.s("typedef struct kspl_\{m_slice\} kspl_\{m_slice\};\n")
         default {}
 
 priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<

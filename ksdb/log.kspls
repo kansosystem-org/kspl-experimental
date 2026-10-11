@@ -21,6 +21,12 @@ import "std/chars" // classifying and extracting one character
 //   $it: = lg.iter(); for it.next() { … }        // oldest first
 //   n: = lg.last(kind_policy, U8$[]::dst)?;     // the newest one of that kind
 pub const header_size: Sz = 8 //< the size of a record's header, in bytes.
+// Where each field sits in a record's header (the layout is in ksdb/docs/DESIGN.md).
+priv const len_at: Sz = 0 //< the content's length (U16)
+priv const kind_at: Sz = 2 //< the record's kind (U16)
+priv const crc_at: Sz = 4 //< the CRC (U32) of the header before it and of the content
+priv const crc_seed: U32 = 0xffffffff //< CRC-32 starts from this and is finished by xoring it
+
 pub const max_payload: Sz = 0xfffe //< the largest content one record can hold.
     //<
     //< `0xFFFF` marks an empty slot, so it cannot be a content length.
@@ -84,13 +90,17 @@ priv fn crc_range(store: Store, at: Sz, len: Sz, seed: U32): U32 //<
         c = rd.next(U8$[]::chunk).crc32(c)
     return c
 
+priv fn head_crc(header: U8[]): U32 //<
+    //< the CRC over the header's fields before its own, unfinished
+    return header.sub(0, crc_at).crc32(crc_seed)
+
 priv fn record_is_valid(store: Store, at: Sz, header: U8[]): Bool //<
     //< Whether the CRC of the record at `at`, whose header has been read into `header`, matches
     //<
     //< The CRC covers the header except its own crc field.
-    head4: = header.sub(0, 4).crc32(0xffffffff)
-    c: = crc_range(store, at + header_size, header.get_u16_le(0), head4)
-    return (c ^ 0xffffffff) == header.get_u32_le(4)
+    c: =
+        crc_range(store, at + header_size, header.get_u16_le(len_at), head_crc(header))
+    return (c ^ crc_seed) == header.get_u32_le(crc_at)
 
 priv fn is_erased(store: Store, at: Sz, len: Sz): Bool //< whether len bytes from at are erased
     $chunk: U8[chunk_size] = ::{}
@@ -162,10 +172,9 @@ impl Log
                 r.tail = r.store.next_sector(r.tail)
         $head: U8[header_size] = ::{}
         hv: = U8$[]::head
-        hv.put_u16_le(0, U16::payload.len)
-        hv.put_u16_le(2, kind)
-        head4: = U8[]::{ .ptr = head[0]@, .len = 4 }
-        hv.put_u32_le(4, payload.crc32(head4.crc32(0xffffffff)) ^ 0xffffffff)
+        hv.put_u16_le(len_at, U16::payload.len)
+        hv.put_u16_le(kind_at, kind)
+        hv.put_u32_le(crc_at, payload.crc32(head_crc(U8[]::head)) ^ crc_seed)
         // Caution: **Write the content first and the header last.** The other way round, a power
         // cut after the header leaves a record with a correct length but no content. Content first,
         // the header stays erased, so the scan sees an empty slot and the partial write never
@@ -290,14 +299,14 @@ impl Cursor
         header: = U8[]::h
         for r.at + header_size <= r.end
             r.store.read_at(r.at, U8$[]::h)
-            len: = header.get_u16_le(0)
+            len: = header.get_u16_le(len_at)
             span: = record_span(len)
             valid: =
                 len != empty_len && r.at + span <= r.end &&
                 record_is_valid(r.store, r.at, header)
             if valid
                 r.len = len
-                r.kind = header.get_u16_le(2)
+                r.kind = header.get_u16_le(kind_at)
                 return true
             // **It must always advance**; with a sector size of 0 the scan would never end.
             // `Log.open` rejects that size up front, so no check is needed here (Principle 5: a

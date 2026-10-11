@@ -43,9 +43,13 @@ pub fn cos(x: F64): F64 //< the cosine of an angle in radians
 pub fn tan(x: F64): F64 //< the tangent of an angle in radians
     return libc.tan(x)
 
+priv const ln2: F64 = 0.6931471805599453 //< the natural logarithm of 2
+priv const two_pow_52: F64 = 4503599627370496.0 //< from here up every F64 is a whole number
+priv const two_pow_53: F64 = 9007199254740992.0 //< from here up every F64 is even
+
 priv fn is_already_integral_or_non_finite(x: F64): Bool //<
     //< Whether x is a NaN or +/-Infinity, or so large (2^52 or more) that it is already an integer
-    return !(x - x == 0.0) || x >= 4503599627370496.0 || x <= -4503599627370496.0
+    return !(x - x == 0.0) || x >= two_pow_52 || x <= -two_pow_52
 
 // It needs only the integer cast, so hosted and freestanding builds share it.
 pub fn round(x: F64): F64 //< rounds to the nearest whole number, halves away from 0
@@ -140,7 +144,6 @@ pub fn exp(x: F64): F64 //< e raised to the power of `x`
         return infinity()
     if x < -745.1332191019412
         return 0.0
-    ln2: = 0.6931471805599453
     scaled: = ((x / ln2) + 0.5) if x >= 0.0 else ((x / ln2) - 0.5)
     rounded: = I64::scaled
     r: = x - (F64::rounded) * ln2
@@ -170,7 +173,6 @@ pub fn log(x: F64): F64 //< the natural logarithm, base e
         return -infinity()
     if !is_finite(x)
         return x
-    ln2: = 0.6931471805599453
     $m: = x
     $e_exp: = 0.0
     for m >= 2.0
@@ -184,14 +186,14 @@ pub fn log(x: F64): F64 //< the natural logarithm, base e
 // Whether a finite x is a whole number; from 2^52 up every F64 is one, and the cast is only below.
 #cfg(freestanding)
 priv fn is_integral(x: F64): Bool
-    if x >= 4503599627370496.0 || x <= -4503599627370496.0
+    if x >= two_pow_52 || x <= -two_pow_52
         return true
     return F64::(I64::x) == x
 
 // Whether x is an odd whole number; from 2^53 up every F64 is even.
 #cfg(freestanding)
 priv fn is_odd_integral(x: F64): Bool
-    if !is_finite(x) || x >= 9007199254740992.0 || x <= -9007199254740992.0 || !is_integral(x)
+    if !is_finite(x) || x >= two_pow_53 || x <= -two_pow_53 || !is_integral(x)
         return false
     return I64::x % 2I64 != 0I64
 

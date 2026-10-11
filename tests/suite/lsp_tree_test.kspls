@@ -22,8 +22,6 @@ import "std/verdict"
 import "tests/support/harness"
 import "tests/support/lsp_tree_uses"
 
-priv const normal_ms: I32 = 15000 //< the read deadline for a request that walks no files
-
 priv fn prepare_in_tree(c: jsonrpc.Client$@, rel: U8[], decl: U8[], arena: Arena$@): Prepared //<
     //< prepareCallHierarchy at `decl`'s name in the repository's file `rel`, opened as on disk
     return prepare_fn(c, rel, harness.read_under_root(rel), decl, arena)
@@ -266,7 +264,8 @@ fn main(): I32
         lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, root, arena) catch
         return ksplc_harness.fatal("the language server cannot be started")
     defer c.free()
-    init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch e
+    init: =
+        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch e
         return ksplc_harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     if !verdict.check("the language server comes up over the whole tree",

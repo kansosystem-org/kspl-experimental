@@ -587,7 +587,8 @@ priv fn case_surface_doc(arena: Arena$@) //<
     //< Caution: **Check both sides of the parting**, the opening paragraph and the detail; one
     //< alone lets the other be lost unnoticed. **Check the full stop between them too**: without it
     //< two fragments run into one broken sentence, and none is wanted where the summary ends in its
-    //< own (`described` in `../../base/ast_doc.kspls`).
+    //< own (`described` in `../../base/ast_doc.kspls`). **A `pub` C function is a row too**, keyed
+    //< with its block's attributes; without it, what reaches every package goes unrecorded.
     dir: = fs.join(harness.tmp_dir(), "cli_surface", arena)
     fs.mkdir_all(dir) catch {}
     src: = fs.join(dir, "api.kspl", arena)
@@ -618,6 +619,12 @@ pub fn closed(rows: Row[1]): Sz { //< it closes its own sentence.
   return rows[0].text.len;
 }
 
+#link("m")
+extern "C" {
+  pub fn c_reached(x: I32): I32; //< reached from every package
+  fn c_kept(): I32;
+}
+
 fn main(): I32 {
   return 0;
 }
@@ -631,17 +638,20 @@ fn main(): I32 {
         verdict.check("the record's documentation: it is put out", false, r.out)
         return
     got: = io.read_file(tsv) catch ""
-    wants: U8[][5] = ::{ "Row\tpub struct Row\tone row of the table. What a row stands for, in a \
+    wants: U8[][6] = ::{ "Row\tpub struct Row\tone row of the table. What a row stands for, in a \
         sentence.", "Row.text\tpub text: U8[]\tthe text as the writer typed it",
         "count\tpub fn count(rows: Row[1]): Sz\thow many rows carry text. Walks the table once and \
             counts.",
         "named\tpub fn named(rows: Row[1]): Sz\tit names the column as `text`. A summary closing on \
             a code span takes its stop behind the span.",
         "closed\tpub fn closed(rows: Row[1]): Sz\tit closes its own sentence. No second stop is put \
-            in behind it." }
+            in behind it.",
+        "c_reached #link(\"m\")\tpub fn c_reached(x: I32): I32\treached from every package" }
     for want in wants
         verdict.check(arena.text().s("the record's documentation carries \"").s(want).s("\"").take(),
             got.find_str(want).is_some(), got)
+    verdict.check("the record leaves out a C function that is not pub",
+        got.find_str("c_kept").is_none(), got)
 
 priv fn emitted_libs(dir: U8[], entry: U8[], flags: U8[][], arena: Arena$@): U8[] //<
     //< What `--emit-libs` wrote for the entry file, or `FAILED` and the output where it failed

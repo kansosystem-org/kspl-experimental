@@ -32,15 +32,23 @@ fn write8(addr: U32, val: U8)
 // ==========================================
 const poll_timeout_iters: Sz = 1000000
 
-fn poll(addr: U32, mask: U32, want_nonzero: Bool): Bool //<
+enum Driver_error //< why a driver's call did not take effect
+    //<
+    //< **One type for every driver**, so a board or a demo passes a driver's failure on with `!`
+    //< and names its kind once, where it decides what to do.
+    timed_out //< the hardware did not reach the state waited for within `poll_timeout_iters`
+    no_answer //< a device on a bus did not acknowledge (an I2C NACK)
+    not_found //< what was looked up is absent (a ROM routine, a device)
+    out_of_range //< an address or a length lies outside what the device holds or takes
+    full //< there is no room to take it now; nothing was queued
+
+fn wait(addr: U32, mask: U32, want_nonzero: Bool): Void!Driver_error //<
     //< Waits until (the value read at addr & mask) is non-zero or zero, as want_nonzero asks
     //<
     //< With want_nonzero=true it waits for the bit to be set, with false for it to be cleared.
-    //< After poll_timeout_iters it gives up and returns false (the caller treats that as a
-    //< timeout).
+    //< After poll_timeout_iters it gives up with `timed_out`.
     $i: Sz = 0
     for ((read32(addr) & mask) != 0) != want_nonzero
         i += 1
         if i >= poll_timeout_iters
-            return false
-    return true
+            throw .timed_out

@@ -61,7 +61,7 @@ priv fn check_theme_roles(arena: Arena$@)
         seen, "lines", bad@,
         "add one more role and point at it with `var(--…)` (kspage/port/web/page.css)")
 
-priv const lum_weight: F64[3] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
+priv const lum_weight: F64[_] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
     //<
     //< **A pair is measured only where both roles hold a written colour**: a role set from the
     //< environment (`CanvasText` and the like) follows the screen's light or dark, which the
@@ -106,7 +106,7 @@ priv fn is_hex6(v: U8[]): Bool
 // Caution: **List only pairs that really overlap** (a pair that never meets adds a finding
 // nobody can fix).
 // **List them two at a time, the foreground colour then the background's.**
-priv const theme_pair: U8[][24] = ::{ "--ink", "--panel", "--ink", "--paper", "--ink", "--field",
+priv const theme_pair: U8[][_] = ::{ "--ink", "--panel", "--ink", "--paper", "--ink", "--field",
     "--ink", "--raised", "--ink-dim", "--panel", "--ink-dim", "--paper", "--ink-dim", "--field",
     "--ink-dim", "--raised", "--accent", "--panel", "--accent", "--raised", "--accent-ink",
     "--accent", "--warn-ink", "--warn" }
@@ -182,7 +182,7 @@ priv fn check_theme_contrast(arena: Arena$@) //<
 // Caution: **Include both a role's name and a selector that looks like hex but is not**, or a
 // check that hits every line of CSS passes. `#ab` shows why fewer than three digits are not a
 // colour (`#id`).
-priv const color_samples: Sample[8] = ::{ Sample::{ .text = "  --ink: #1a1a1a;", .hits = true },
+priv const color_samples: Sample[_] = ::{ Sample::{ .text = "  --ink: #1a1a1a;", .hits = true },
     Sample::{ .text = "  --ink: #eee;", .hits = true },
     Sample::{ .text = "  --x: #ab;", .hits = false },
     Sample::{ .text = "  color: var(--ink);", .hits = false },
@@ -194,17 +194,17 @@ priv const color_samples: Sample[8] = ::{ Sample::{ .text = "  --ink: #1a1a1a;",
 // The samples for whether it is six hex digits.
 // Caution: **Include both a value short of digits and one with a non-hex letter** (a role's value
 // may be `color-mix(…)` or a system colour, which the luminance cannot read).
-priv const hex6_samples: U8[][5] = ::{ "#1a1a1a", "#1a1a1", "#1a1a1g", "Canvas",
+priv const hex6_samples: U8[][_] = ::{ "#1a1a1a", "#1a1a1", "#1a1a1g", "Canvas",
     "color-mix(in srgb, Canvas 50%, CanvasText)" }
-priv const hex6_want: Bool[5] = ::{ true, false, false, false, false }
+priv const hex6_want: Bool[_] = ::{ true, false, false, false, false }
 
 // The samples for the contrast.
 // Caution: **Place the samples right at 4.5:1.** Far-apart values alone let a rounding error
 // pass.
 // Listed two at a time, as `theme_pair` is.
-priv const contrast_pair: U8[][8] = ::{ "#000000", "#ffffff", "#ffffff", "#000000", "#ffffff",
+priv const contrast_pair: U8[][_] = ::{ "#000000", "#ffffff", "#ffffff", "#000000", "#ffffff",
     "#ffffff", "#767676", "#ffffff" }
-priv const contrast_want: I64[4] = ::{ 2100, 2100, 100, 454 } //<
+priv const contrast_want: I64[_] = ::{ 2100, 2100, 100, 454 } //<
     //< The expected contrast for each sample, times 100
     //<
     //< In order: black on white (21.00:1) / the same swapped / one colour against itself (1.00:1) /
@@ -213,7 +213,7 @@ priv const contrast_want: I64[4] = ::{ 2100, 2100, 100, 454 } //<
 // The samples for reading a style's name off a line.
 // Caution: **Include both a name written with a mark and a name in prose**; the second makes
 // explicit that prose is not read here.
-priv const style_samples: Sample[7] = ::{
+priv const style_samples: Sample[_] = ::{
     Sample::{ .text = "  sheet.add(\"page break\", paint.inherit_all());", .hits = true },
     Sample::{ .text = "  sheet.add(\"page-break\", paint.inherit_all());", .hits = false },
     Sample::{ .text = "priv const line_name: U8[] = \"code line\";", .hits = true },
@@ -237,7 +237,7 @@ priv fn check_theme_fires(arena: Arena$@)
             b
                 .push(arena.text().s("read \"").s(hex6_samples[i]).s("\" as \{got\}").take())
     verdict.check_list("the judgment of whether it is six hex digits can fire", hex6_samples.len,
-        "samples", b@, "")
+        "samples", b@, "the judgment misreads its own samples: mend the judgment, not the table")
 
     $c: = List<|U8[]|>.new(arena)
     for i in Range.asc(contrast_want.len)
@@ -248,7 +248,8 @@ priv fn check_theme_fires(arena: Arena$@)
             c
                 .push(arena.text().s("read ").s(fg).s(" against ").s(bg)
                 .s(" as \{got\} (it should be \{contrast_want[i]\})").take())
-    verdict.check_list("the contrast's reckoning can fire", contrast_want.len, "pairs", c@, "")
+    verdict.check_list("the contrast's reckoning can fire", contrast_want.len, "pairs", c@,
+        "the judgment misreads its own samples: mend the judgment, not the table")
 
     scan.check_samples("the reading of a style's name written down can fire",
         Sample[]::style_samples, "style_samples", spaced_style_name, arena)
@@ -259,9 +260,9 @@ priv fn check_theme_fires(arena: Arena$@)
 // Caution: **Do not search for the names themselves**: a table of names needs a fix for each name
 // added, and **a name added in the wrong form is exactly the case that must fail**. `sheet.add`
 // makes every product name; the `…_name` constants are the ones code uses.
-priv const style_marks: U8[][2] = ::{ "sheet.add(\"", "_name: U8[] = \"" }
+priv const style_marks: U8[][_] = ::{ "sheet.add(\"", "_name: U8[] = \"" }
 
-priv const style_where: U8[][2] = ::{ "kspage/*.kspls", ":!kspage/tests/" } //<
+priv const style_where: U8[][_] = ::{ "kspage/*.kspls", ":!kspage/tests/" } //<
     //< Where the product's names are written
     //<
     //< **`kspage/tests/` is left out**: a check there makes a name holding a space on purpose

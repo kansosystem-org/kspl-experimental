@@ -21,7 +21,6 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 extern "C"
-    fn kspl_mono_us(): I64
     // argv is passed as one buffer with NUL separators (`pack_argv`). `stdio` is the sum of the
     // `stdio_*` bits below; when `out_path` / `err_path` is not empty, that stream goes to a file,
     // and a stream with neither inherits the parent's.
@@ -148,12 +147,12 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     $err: = Str_builder.new()
     defer err.free()
     $chunk: U8[4096] = ::{}
-    deadline: = kspl_mono_us() + I64::timeout_ms * 1000I64
+    deadline: = sys.deadline_after_ms(timeout_ms)
     $out_open: = true
     $err_open: = true
     $timed_out: = false
     for out_open || err_open
-        remaining_us: = deadline - kspl_mono_us()
+        remaining_us: = deadline - sys.mono_us()
         if remaining_us <= 0I64
             timed_out = true
             break
@@ -193,10 +192,7 @@ priv fn job_path(work_dir: U8[], index: Sz, ext: U8[], arena: Arena$@): U8[] //<
     //< The temporary file that collects a child's output (`<work_dir>/j<number>.<ext>`)
     return arena.text().s(work_dir).s("/j\{index\}.").s(ext).take()
 
-priv const arena_slack_bytes: Sz = 4096 //<
-    //< The extra space a temporary arena needs beyond the request, for its header and alignment
-
-// **Keep `#cfg(!freestanding)`.** A freestanding build has no `kspl_fopen_path`, and no `reap_job`.
+// **Keep `#cfg(!freestanding)`.** A freestanding build has no `kspl_fopen_cstr`, and no `reap_job`.
 #cfg(!freestanding)
 priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[]? //<
     //< At most `cap` bytes of a job's output file, on the arena; none when it cannot be read
@@ -218,6 +214,9 @@ priv const reap_pause_max_ms: I32 = 10 //< the longest pause between two looks a
     //< **Short beside a job's own run**, so a slot stands idle at most this long after its job
     //< ends; the pauses start at 1 ms and double up to it, so a long job costs a look every 10 ms.
 
+priv fn next_pause(pause: I32): I32 //< the pause doubled, up to reap_pause_max_ms
+    return pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
+
 // Waits for a started child until its deadline: its exit code, or none once the deadline passed,
 // the child then killed.
 // **Waiting with a limit is looking again after a pause**: POSIX's `waitpid` takes no time limit,
@@ -227,11 +226,11 @@ priv fn wait_until(handle: I64, deadline_us: I64): I32?
     $code: I32 = 0
     $pause: I32 = 1
     for !kspl_proc_ended(handle, code@)
-        if kspl_mono_us() >= deadline_us
+        if sys.mono_us() >= deadline_us
             kspl_proc_kill(handle)
             return .none
         sys.sleep_ms(pause)
-        pause = pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
+        pause = next_pause(pause)
     return .some(kspl_proc_wait(handle))
 
 // Waits for one started job until its deadline and reads its output into a result. Past the
@@ -278,7 +277,7 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
             running -= 1
         h: = start_job(jobs[i], i, work_dir, arena)
         live.push(h)
-        deadlines.push(kspl_mono_us() + I64::timeout_ms * 1000I64)
+        deadlines.push(sys.deadline_after_ms(timeout_ms))
         results.push(spawn_failed_result())
         if h != 0
             running += 1
@@ -298,7 +297,7 @@ priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
     results: List<|Run_result|>$@, output_cap: Sz, work_dir: U8[], arena: Arena$@)
     $pause: I32 = 1
     for
-        now: = kspl_mono_us()
+        now: = sys.mono_us()
         for k in Range.asc(live.len)
             h: = live.get(k)
             if h == 0
@@ -310,7 +309,7 @@ priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
                 live.set(k, 0)
                 return
         sys.sleep_ms(pause)
-        pause = pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
+        pause = next_pause(pause)
 
 pub enum Run_error //< why a run did not produce a result
     //<

@@ -118,7 +118,7 @@ fn kspage_web_load(len: Sz): I32
         return 0
     // The arena is global (`state.load_arena`) so it can be freed when things stop partway; as a
     // local, unwinding would leave nothing pointing at it and the arena would leak **forever**.
-    load_arena = Arena.new(64 * 1024)
+    load_arena = Arena.new(state.fresh_chunk)
     got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, load_arena) catch e
         state.drop_load()
         switch e
@@ -142,7 +142,7 @@ fn kspage_web_load_manual(): I32
     // by the handover, which calls `kspage_web_load_buffer` first).
     ensure()
     // Global for the same reason as `kspage_web_load`'s: unwinding must leave it reachable.
-    load_arena = Arena.new(64 * 1024)
+    load_arena = Arena.new(state.fresh_chunk)
     got: = store.load(manual_text, load_arena) catch _e
         state.drop_load()
         return 0
@@ -175,7 +175,7 @@ fn kspage_web_load_plain_text(len: Sz, spoken_len: Sz): I32
         return 0
     if !text.texty(src)
         return not_text
-    load_arena = Arena.new(64 * 1024)
+    load_arena = Arena.new(state.fresh_chunk)
     made: = text.sheet_for(sheet.root, load_arena.dup_str(spoken), load_arena)
     got: = text.read(src, made, load_arena)
     // One line is one block, so the gate matters most here ("Plain text holds one line per

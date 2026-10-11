@@ -81,6 +81,8 @@ test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
 		OUT_STEM=ksbind_llvm $(C_FMT_OFF)
 	./$(OUT_DIR)/ksbind_llvm.exe
 
+.PHONY: test-llvm-pkgs
+
 # **The one way to call a package's `Makefile`**: $(call pkg_make,<package>) <target> [<var>=<val>]
 # Caution: **Keep the leading `+`**: make passes its job slots only to a line it sees as a sub-make,
 # and a `$(MAKE)` reached through a variable is not seen, so the child warns and runs at `-j1`.
@@ -124,8 +126,8 @@ suite_lint-gate    := suite/lint_gate_test.kspls
 # `make -j` starts them in this order, and a heavy one at the back runs alone; `make test-suites`
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
 # `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`).
-SUITES := lsp-tree extract-ksplc extract-rest kspls-trip c-warnings conventions docref pilot-copy \
-  deps spec-claims textrip docsnippet vscode recipe-bytes lint-gate link-rules pytools \
+SUITES := lsp-tree extract-ksplc extract-rest kspls-trip docref c-warnings docsnippet pilot-copy \
+  conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate \
   $(PRIVATE_SUITES)
 
 # Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer): out of
@@ -142,6 +144,12 @@ endif
 suite_undeclared := $(filter-out $(suite_declared),$(ALL_SUITES))
 ifneq ($(suite_undeclared),)
 $(error there are names listed with no suite_<name>: $(suite_undeclared))
+endif
+# A file under tests/suite/ that no suite_<name> names would never run, and nothing would say so.
+suite_orphans := $(filter-out $(addprefix tests/,$(foreach s,$(suite_declared),$(suite_$(s)))), \
+  $(wildcard tests/suite/*_test.kspls))
+ifneq ($(suite_orphans),)
+$(error there are suite files no suite_<name> names: $(suite_orphans))
 endif
 
 suite_cmd = ./$(SEED_EXE) run tests/$(1)
@@ -205,7 +213,7 @@ export KSBIND_REQUIRE_LIBS := $(if $(filter linux,$(PLATFORM)),1,)
 # `times` into seconds, ASCII with `#` as `\#` (above Makefile's `include`); MSYS2's 0.00s gets
 # one line instead.
 suite_cpu_prog := function sec(t) { split(t, a, /[ms]/); return a[1] * 60 + a[2] } \
-  FNR == 2 { n = FILENAME; sub(/.*suite_/, "", n); sub(/\.times$$/, "", n); \
+  FNR == 2 { n = FILENAME; sub(/.*\//, "", n); sub(/\.times$$/, "", n); \
   k++; name[k] = n; cpu[k] = sec($$1) + sec($$2); tot += cpu[k] } \
   END { if (tot < 1) { \
       printf "\# suite cpu: not measurable on this host (the shell does not count native children)\n"; \
@@ -330,14 +338,14 @@ SURFACE_PKGS := std ksai kspeg ksdb ksbind
 ## Measure-and-inspect|surface|Rewrite each package's API record (`SURFACE.txt`), and write its reference to browse under `out/docs/`
 surface: $(STAGE1_EXE)
 	@echo "# UPDATING THE PUBLISHED API'S RECORDS, AND WRITING THE REFERENCE UNDER out/docs/"
-	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls write $(p)$(nl))
-	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls pages $(p)$(nl))
+	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls write $(p) --ksplc=$(STAGE1_EXE)$(nl))
+	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls pages $(p) --ksplc=$(STAGE1_EXE)$(nl))
 
 # **This is the only `RESULT:` line**; it also refuses a published declaration that says nothing.
 ## Gates|test-surface|Whether the published API matches its record, and every entry says what it is
 test-surface: $(STAGE1_EXE)
 	@echo "# CHECKING THE PUBLISHED API'S RECORDS (run 'make surface' to update)"
-	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls check $(p)$(nl))
+	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls check $(p) --ksplc=$(STAGE1_EXE)$(nl))
 	@echo "RESULT: ALL PASS ($(words $(SURFACE_PKGS)) package record(s) match)"
 
 .PHONY: surface test-surface
@@ -346,12 +354,12 @@ test-surface: $(STAGE1_EXE)
 ## Measure-and-inspect|tour|Rewrite the tour of the language (`docs/TOUR.md`) from its program
 tour: $(STAGE1_EXE)
 	@echo "# WRITING THE TOUR OF THE LANGUAGE"
-	./$(STAGE1_EXE) run tools/tour.kspls write
+	./$(STAGE1_EXE) run tools/tour.kspls write --ksplc=$(STAGE1_EXE)
 
 ## Gates|test-docs|Whether the tour of the language matches its program and what it prints
 test-docs: $(STAGE1_EXE)
 	@echo "# CHECKING THE TOUR OF THE LANGUAGE (run 'make tour' to update)"
-	./$(STAGE1_EXE) run tools/tour.kspls check
+	./$(STAGE1_EXE) run tools/tour.kspls check --ksplc=$(STAGE1_EXE)
 	@echo "RESULT: ALL PASS (the tour matches its program)"
 
 .PHONY: tour test-docs

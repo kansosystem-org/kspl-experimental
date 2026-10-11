@@ -172,7 +172,7 @@ fn test_rmsnorm_grad(arena: Arena$@)
     (x.data + 2)$ = F32::0.9
     (x.data + 3)$ = F32::0.3
     // dy = 1 (L = Σ y)
-    $dy: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
+    dy: = Tensor<|F32|>.new(Sz[]::x_shape, arena)
     dy.fill(F32::1.0)
     // lr=0 leaves the weights frozen and gives dX
     dx: = rn.backward(x, dy, 0.0)
@@ -205,7 +205,7 @@ fn test_adam(arena: Arena$@)
     (x.data + 1)$ = F32::0.9
     (x.data + 2)$ = -(F32::0.6)
     w_shape: Sz[2] = ::{ in_dim, vocab }
-    $w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+    w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
     w.fill(F32::0.0)
 
     $opt: = ai_optim.Adam<|F32|>.new_default(w, 0.1)
@@ -241,7 +241,7 @@ fn test_attention_grad(arena: Arena$@)
         (x.data + i)$ = 0.1 * (F64::i) - 0.5 // a deterministic input that varies
     // the analytic gradient (lr=0 freezes the weights)
     $c: = att.train_forward(x)
-    $dout: = Tensor<|F64|>.new(c.out.shape, arena)
+    dout: = Tensor<|F64|>.new(c.out.shape, arena)
     dout.fill(1.0)
     dx: = att.backward(c@, dout, 0.0)
 
@@ -264,7 +264,7 @@ fn test_attention_grad(arena: Arena$@)
     before: = common_test.tsum_f64(att.train_forward(x).out)
     for _step in Range.asc(20)
         $cc: = att.train_forward(x)
-        $d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+        d1: = Tensor<|F64|>.new(cc.out.shape, arena)
         d1.fill(1.0)
         att.backward(cc@, d1, 0.01)
     after: = common_test.tsum_f64(att.train_forward(x).out)
@@ -289,7 +289,7 @@ fn test_block_grad(arena: Arena$@)
         (x.data + i)$ = 0.07 * (F64::i) - 0.4
     // the analytic gradient (lr=0 freezes every layer)
     $c: = blk.train_forward(x)
-    $dout: = Tensor<|F64|>.new(c.out.shape, arena)
+    dout: = Tensor<|F64|>.new(c.out.shape, arena)
     dout.fill(1.0)
     dx: = blk.backward(c@, dout, 0.0)
 
@@ -310,7 +310,7 @@ fn test_block_grad(arena: Arena$@)
     before: = common_test.tsum_f64(blk.train_forward(x).out)
     for _step in Range.asc(20)
         $cc: = blk.train_forward(x)
-        $d1: = Tensor<|F64|>.new(cc.out.shape, arena)
+        d1: = Tensor<|F64|>.new(cc.out.shape, arena)
         d1.fill(1.0)
         blk.backward(cc@, d1, 0.01)
     after: = common_test.tsum_f64(blk.train_forward(x).out)

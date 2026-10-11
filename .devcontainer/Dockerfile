@@ -5,8 +5,8 @@
 FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
 
 # --- Fetch over IPv4: apt ---
-# **Do not take this out**: the runner has no IPv6 route and apt.llvm.org answers with an AAAA
-# record, so the image build stops at `Network is unreachable`.
+# **Do not take this out**: the runner has no IPv6 route, and a source answering with an AAAA
+# record stops the image build at `Network is unreachable`.
 RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 
 # --- The plain tools ---
@@ -16,7 +16,7 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
 #   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
 #   test-pytools: python3-numpy (without it, a silent SKIP) · test-kspage-desktop: desktop-file-utils
-#   the HTTPS sources and downloads below (apt.llvm.org, Chromium): ca-certificates
+#   the HTTPS download below (Chromium): ca-certificates
 # No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -48,34 +48,27 @@ RUN locale-gen en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# --- LLVM 19 (apt.llvm.org's packages) ---
-# Caution: **Do not run apt.llvm.org's `llvm.sh`.** It would run, as root, whatever the script
-# holds the day the image is built. Its two effects are written out instead: the source, and the
-# key apt checks every package against. **The key is the one in this folder**
-# (`apt.llvm.org.asc`, fingerprint 6084 F3CF 814B 57C1 CF12 EFD5 15CF 4D18 AF4F 7421, LLVM's
-# Debian packages), so trust does not hang on a download either.
-# The packages: what `llvm.sh 19` installs (clang-19, lldb-19, lld-19, clangd-19), then
-# clang-format-19 (the Makefile's `C_FMT`), llvm-19 (OBJDUMP / OBJCOPY / NM) and
-# libclang-rt-19-dev (the sanitizers `make test-ksai-fuzz` and `make test-race` build with).
-# **Do not add `llvm.sh`'s `all`**: it adds gigabytes the Linux job pulls every time, for not one
-# gate.
-COPY apt.llvm.org.asc /etc/apt/keyrings/apt.llvm.org.asc
-RUN echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" \
-        > /etc/apt/sources.list.d/apt.llvm.org.list && \
-    apt-get update && \
-    apt-get install -y clang-19 lldb-19 lld-19 clangd-19 clang-format-19 llvm-19 \
-        libclang-rt-19-dev && \
+# --- LLVM 22 (Ubuntu's own packages) ---
+# **From the base image's own archive**, signed by Ubuntu and updated with the rest of the system:
+# no other source and no other key. Caution: **Take the major version from this release's
+# archive**: a version it lacks needs a third-party source, built for another release.
+# The packages: clang-22, lldb-22, lld-22 and clangd-22, then clang-format-22 (the Makefile's
+# `C_FMT`), llvm-22 (OBJDUMP / OBJCOPY / NM) and libclang-rt-22-dev (the sanitizers
+# `make test-ksai-fuzz` and `make test-race` build with).
+RUN apt-get update && \
+    apt-get install -y clang-22 lldb-22 lld-22 clangd-22 clang-format-22 llvm-22 \
+        libclang-rt-22-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # --- Letting the unversioned names through ---
 # **The Makefile calls the unversioned names**; a tool left out here fails as command not found.
-RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100 && \
-    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-19 100 && \
-    update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-19 100 && \
-    update-alternatives --install /usr/bin/lldb lldb /usr/bin/lldb-19 100 && \
-    update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-19 100 && \
-    update-alternatives --install /usr/bin/wasm-ld wasm-ld /usr/bin/wasm-ld-19 100 && \
-    update-alternatives --install /usr/bin/llvm-objdump llvm-objdump /usr/bin/llvm-objdump-19 100
+RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-22 100 && \
+    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-22 100 && \
+    update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-22 100 && \
+    update-alternatives --install /usr/bin/lldb lldb /usr/bin/lldb-22 100 && \
+    update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-22 100 && \
+    update-alternatives --install /usr/bin/wasm-ld wasm-ld /usr/bin/wasm-ld-22 100 && \
+    update-alternatives --install /usr/bin/llvm-objdump llvm-objdump /usr/bin/llvm-objdump-22 100
 
 # --- A real browser (`make test-kspage-browser` uses it) ---
 # Focus, visibility and repeated keystrokes break only in a real browser. Ubuntu's `chromium`

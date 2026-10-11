@@ -38,7 +38,7 @@ priv fn setup_result_unwrap(lhs: Ast_node$@, val_type_id: I32, lctx: Lowering_ct
 
     bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
     is_err_expr: = Ast_node.build_field_access(res_name, res_type_id, "is_err", bool_id, loc)
-    then_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+    then_block: = Ast_node.build_block(loc)
 
     return Unwrap_ctx::{ .res_name = res_name, .res_type_id = res_type_id,
         .val_type_id = val_type_id, .err_type_id = err_type_id,
@@ -65,7 +65,7 @@ fn gen_result_placeholder(lctx: Lowering_ctx$@, type_id: I32, is_void: Bool, loc
     // expression (with const, C rejects the assignment). A fixed-length array drops its **element**
     // qualifier too (as binding_value_type does).
     decl_type_id: = lctx.sema.env.copy_value_type(type_id)
-    empty_node: = Ast_node.new(.k_empty, "", loc)
+    empty_node: = Ast_node.build_empty(loc)
     let_decl: = lctx.build_let_decl(name, decl_type_id, empty_node, loc)
     lctx.pre_stmts.push(let_decl)
     return name
@@ -88,7 +88,7 @@ priv fn lower_into_block(lctx: Lowering_ctx$@, node: Ast_node$@, loc: base_ast.L
     lctx.relocating += 1
     node.lower(lctx)
     lctx.relocating -= 1
-    block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+    block: = Ast_node.build_block(loc)
     lctx.flush_pre_stmts_to_node(start, block)
     return block
 
@@ -239,7 +239,7 @@ impl Ast_node
 
         $else_block: Ast_node$@ = null
         if !u.is_void
-            else_block = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+            else_block = Ast_node.build_block(loc)
             right_val: =
                 (Ast_node.build_ident(u.res_name, u.res_type_id, loc)
                 if lctx.sema.env.is_result(u.val_type_id)
@@ -313,8 +313,7 @@ impl Ast_node
                 return
 
         if right != null && left != null && left.kind_id == .k_expr_postfix
-            op_node: = left.get_postfix_op()
-            op_text: = op_node.text if op_node != null else left.text
+            op_text: = left.postfix_op_text()
 
             // A place-returning subscript (operator.Index_place) is not made a `set`: its `at(i)$`
             // is an lvalue, so lower_default treats it as an ordinary (or compound) assignment.
@@ -335,8 +334,7 @@ impl Ast_node
                 index_node.lower(lctx)
                 right.lower(lctx)
 
-                args: = Ast_node.new(.k_expr_args, "args", loc).add_child(index_node)
-                    .add_child(right)
+                args: = Ast_node.build_args(loc).add_child(index_node).add_child(right)
                 call_node: =
                     build_linked_method_call(recv_node, method_node, args, left.type_id, loc)
                 r.clear_children()
@@ -369,7 +367,7 @@ impl Ast_node
             // It rewrites an `a[i]` as `a.at(i)$`, dereferenced at once, so reads, assignments and
             // `a[i]@` take the built-in slice's path. The `get` case copies into a temporary
             // (below).
-            args: = Ast_node.new(.k_expr_args, "args", loc).add_child(next_op)
+            args: = Ast_node.build_args(loc).add_child(next_op)
             // Caution: **Fill in the default values here.** A subscript passes only the receiver
             // and the index, not any further parameter (the caller's position, say).
             sema_body_call_defaults.fill_operator_defaults(lctx.sema, args, method_node, 2)
@@ -512,7 +510,7 @@ impl Ast_node
             child.lower(lctx)
 
         tmp_name: = lctx.gen_tmp_name()
-        args_node: = Ast_node.new(.k_expr_args, "args", loc)
+        args_node: = Ast_node.build_args(loc)
         $recv_node: Ast_node$@ = null
 
         if r.kind_id == .k_expr
@@ -544,7 +542,7 @@ impl Ast_node
             recv_node = recv_node.hoist_to_tmp(lctx, loc)
 
         tmp_name: = lctx.gen_tmp_name()
-        args_node: = Ast_node.new(.k_expr_args, "args", loc)
+        args_node: = Ast_node.build_args(loc)
         r.finish_call_as_tmp(lctx, tmp_name, recv_node, method_node, args_node, res_type_id, loc)
 
     fn lower_expr_ternary(r: Self$@, lctx: Lowering_ctx$@)

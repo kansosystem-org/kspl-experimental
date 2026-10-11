@@ -124,11 +124,11 @@ priv fn git_list(args: U8[][], arena: Arena$@): U8[]!fs.Fs_error //< what `git <
     argv.push("git")
     for a in args
         argv.push(a)
-    r: = subproc.run_capture(argv.slice(), "", git_timeout_ms, git_list_cap, arena)
-    if r.spawn_failed || r.timed_out || r.exit_code != 0
-        io.err().s("\{sys.program_name()\}: git cannot list the files here\n").s(r.stderr_data)
+    listed: =
+        subproc.run(argv.slice(), "", git_timeout_ms, git_list_cap, arena) catch e
+        e.describe("listing the files here", "git")
         throw .operation_failed
-    return r.stdout_data
+    return listed
 
 priv fn write_files(b: Str_builder$@, exts: List<|Ext_row|>$@, arena: Arena$@): Void!fs.Fs_error //<
     //< 1. The line count per file

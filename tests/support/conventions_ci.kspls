@@ -254,7 +254,7 @@ priv const lint_mk: U8[] = "mk/lint.mk" //<
     //< Caution: **A source holding `fn main` that is missing from the list is never linted**: the
     //< analysis walks imports, so **an entry point nobody imports is not covered**.
 
-priv const lint_sources: U8[][6] = ::{ "*.kspl", "*.kspls", ":!ksplc/tests/negative/*",
+priv const lint_sources: U8[][_] = ::{ "*.kspl", "*.kspls", ":!ksplc/tests/negative/*",
     ":!ksplc/tests/lint/*", ":!ksplc/tests/runtime/*", ":!ksplc/tests/ship/*" } //<
         //< Sources searched for an entry point, and the fixtures left out, each linted by its suite
         //<
@@ -273,7 +273,7 @@ priv fn is_entry(src: U8[], arena: Arena$@): Bool //<
     return false
 
 // Caution: **Keep a `main` inside a string on the miss side**: it is what a plain search hits.
-priv const entry_samples: Sample[5] = ::{
+priv const entry_samples: Sample[_] = ::{
     Sample::{ .text = "fn main(): I32\n  return 0\n", .hits = true },
     Sample::{ .text = "import \"std/io\"\n\nfn main() {\n}\n", .hits = true },
     Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\nfn main()\n\"\"\"\n", .hits = false },
@@ -321,9 +321,9 @@ priv fn check_lint_entries(arena: Arena$@)
 priv const gates_doc: U8[] = "docs/SPEC-gates.md"
 priv const table_head: U8[] = "| Check | Linux"
 priv const args_mark: U8[] = ".args = \""
-priv const suite_lists: U8[][2] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
+priv const suite_lists: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
     //< The files whose `SUITES` (and `LINUX_SUITES`) list the suites CI runs
-priv const list_heads: U8[][2] = ::{ "SUITES := ", "LINUX_SUITES := " }
+priv const list_heads: U8[][_] = ::{ "SUITES := ", "LINUX_SUITES := " }
 
 priv fn first_cells(doc: U8[], arena: Arena$@): List<|U8[]|> //< the table's first column, by row
     $out: = List<|U8[]|>.new(arena)
@@ -369,7 +369,7 @@ priv fn cell_names(text: U8[], arena: Arena$@): Bool //<
 
 // Caution: **Keep a prefix, a longer name and a word of prose on the miss side**: a search for
 // the name anywhere in the cell hits all three.
-priv const cell_samples: Sample[8] = ::{
+priv const cell_samples: Sample[_] = ::{
     Sample::{ .text = "test-lsp (the language server)\tlsp", .hits = true },
     Sample::{ .text = "debug tests\tdebug", .hits = true },
     Sample::{ .text = "The other suites (cli / config)\tconfig", .hits = true },
@@ -418,6 +418,23 @@ priv fn check_platform_table(arena: Arena$@)
         arena.text().s("give it a row, or a place in a row's list, in \"What each ")
         .s("platform runs\" in ").s(gates_doc).take())
 
+priv fn check_linux_suites_gated(arena: Arena$@) //<
+    //< Each suite out of `test-suites` (`LINUX_SUITES`) has a gate of its own
+    //<
+    //< **No half of the suites runs it**, so a name added to the list and not to the gates' table
+    //< runs on no platform, and every round stays green.
+    $gated: = List<|U8[]|>.new(arena)
+    for args in scan.find_all(harness.read_under_root(gates_src), args_mark, "\"", arena)
+        for w in args.split(' ', arena)
+            scan.push_unique(gated@, w)
+    $bad: = List<|U8[]|>.new(arena)
+    names: = htext.make_list(harness.read_under_root(suite_lists[0]), list_heads[1], arena)
+    for name in names
+        if !scan.has(gated@, arena.text().s("test-").s(name).take())
+            bad.push(name)
+    verdict.check_list("each suite out of `test-suites` has a gate of its own", names.len, "suites",
+        bad@, arena.text().s("give it a `Gate` in ").s(gates_src).take())
+
 priv const blas_home: U8[] = "ksai/" //<
     //< The one package `make test-blas` builds with `BLAS=1`
     //<
@@ -438,7 +455,7 @@ priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
 
 // Caution: **Keep one inside a string and one in a comment on the miss side**: a plain search hits
 // both.
-priv const blas_samples: Sample[5] = ::{
+priv const blas_samples: Sample[_] = ::{
     Sample::{ .text = "#cfg(blas)\nfn f()\n", .hits = true },
     Sample::{ .text = "    #cfg(!blas)\n    x = 1\n", .hits = true },
     Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\n#cfg(blas)\n\"\"\"\n", .hits = false },
@@ -462,5 +479,6 @@ fn run(arena: Arena$@) //< this section's entry point
     check_dispatch_switches(arena)
     check_ci_shards(arena)
     check_platform_table(arena)
+    check_linux_suites_gated(arena)
     check_blas_home(arena)
     check_lint_entries(arena)

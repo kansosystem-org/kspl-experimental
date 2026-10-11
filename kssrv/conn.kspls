@@ -6,6 +6,7 @@
 //< and the two buffers explicitly.
 import "kssrv/pilot"
 import "std/chars"
+import "std/fs"
 import "std/http"
 import "std/io"
 import "std/log" { Log }
@@ -128,7 +129,7 @@ struct Conn
     head_from: Sz //< where the search for the head's end resumes in `inbuf`
     // The peer's address as text, for the cap on connections from one address
     // (`max_conns_per_peer`).
-    peer: U8[64]
+    peer: U8[net.addr_text_max]
     peer_len: Sz
     // The file whose bytes still go out after `outbuf` (`queue_file`); its stream is null when
     // none. **Read a chunk at a time as the connection drains**, so a large file is never held
@@ -142,6 +143,20 @@ struct Conn_table //< the connection table
     //< element, which cannot be subscripted. Through the struct, `t.slots[i]` stays a place
     //< expression and overwriting a slot releases the old value.
     slots: Rc<|Conn|>[max_conns]
+
+impl Ctx
+    fn is_local(r: Self$@): Bool //< whether it serves one user on this machine (`--local`)
+        return r.token.len > 0
+
+fn regular_file_size(path: U8[]): Sz? //< a regular file's size, or none (absent, or a folder)
+    //<
+    //< Caution: **Check this before opening.** On some OSes `fopen` opens a folder, and the read's
+    //< result alone cannot tell that from "a broken file".
+    info: = fs.stat(path) catch _e
+        return .none
+    if info.is_dir
+        return .none
+    return .some(Sz::info.size)
 
 fn conn_new(stream: net.Tcp_stream$@, serial: I64): Rc<|Conn|>
     fresh: Conn = ::{
@@ -289,8 +304,7 @@ fn queue_stream_head(c: Conn$@) //<
     // `Content-Length: 0`, and a client that follows the protocol then reads not one byte of the
     // body.
     http.format_response_head(c.outbuf@, 200, head) catch _e
-        c.outbuf.clear()
-        c.close_after_send = true
+        unbuilt(c)
 
 fn queue_error(c: Conn$@, status: I32)
     $b: = Str_builder.new()

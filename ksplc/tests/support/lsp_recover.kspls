@@ -3,7 +3,7 @@
 //< Not a suite; part of `../suite/lsp_test.kspls`, whose client it uses (one of its own would start
 //< the language server a second time). **The editor reads the file a second time with the
 //< recovering branches enabled** ("Only the editor's parse recovers from a syntax error" in
-//< `../../docs/DESIGN.md`), so after a half-typed `pt.` the hover and the jump still answer.
+//< `../../docs/DESIGN-tools.md`), so after a half-typed `pt.` the hover and the jump still answer.
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
 import "std/chars"
@@ -14,8 +14,6 @@ import "std/mem" { Arena }
 import "std/str" // `find_str` and `equals`
 import "std/strfmt" as _strfmt
 import "std/verdict"
-
-priv const normal_ms: I32 = 15000
 
 // The `q: = pt.` line is broken. Everything above and below it is valid.
 priv const broken_src: U8[] =
@@ -45,8 +43,8 @@ priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
     line: = decl_line(broken_src, "  n: = area(pt);", arena)
     col: = col_in_line(broken_src, "  n: = area(pt);", "area", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(broken_uri, line, col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(broken_uri, line, col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a hover beside a broken line still answers", false, end_text(e))
         return
     text: = lsp_client.hover_text(got)
@@ -58,7 +56,7 @@ priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
     // above it.
     def_got: =
         c.request("textDocument/definition", lsp_client.at_pos(broken_uri, line, col, arena),
-        normal_ms, arena) catch e
+        lsp_client.read_ms, arena) catch e
         verdict.check("a jump beside a broken line still lands", false, end_text(e))
         return
     def_line: = def_got.get("result").get("range").get("start").get("line").as_int(-1)
@@ -78,7 +76,7 @@ priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
     $count: Sz = 0
     $came: = false
     for _k in Range.asc(12)
-        msg: = c.read_msg(normal_ms, arena) catch
+        msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
         if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
@@ -113,8 +111,8 @@ priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
     line: = decl_line(unclosed_src, "fn area(p: I32): I32 {", arena)
     col: = col_in_line(unclosed_src, "fn area(p: I32): I32 {", "area", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(unclosed_uri, line, col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(unclosed_uri, line, col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a block left unclosed does not take the file with it", false, end_text(e))
         return
     text: = lsp_client.hover_text(got)

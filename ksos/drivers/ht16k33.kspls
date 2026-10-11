@@ -10,6 +10,7 @@
 //   0xE0 | brightness  the brightness, 0 to 15
 //   0x00 + 16 bytes    write from the start of the display RAM (the address advances by itself)
 // ==========================================
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 import "std/bytes"
 
@@ -25,21 +26,19 @@ const cmd_brightness_base: U8 = 0xe0
 const max_brightness: U32 = 15
 const rows: Sz = 8
 
-priv fn send1(addr: U32, b: U8): Bool
+priv fn send1(addr: U32, b: U8): Void!mmio.Driver_error
     buf: U8[1] = ::{ b }
-    return i2c.write(addr, buf[0]@, 1)
+    i2c.write(addr, buf[0]@, 1)!
 
-fn init(addr: U32, brightness: U32): Bool //< wakes the oscillator and the display
+fn init(addr: U32, brightness: U32): Void!mmio.Driver_error //< wakes the oscillator and display
     //<
     //< Caution: **Send all three in this order.** Miss one and nothing lights.
-    if !send1(addr, cmd_oscillator_on)
-        return false
-    if !send1(addr, cmd_display_on)
-        return false
+    send1(addr, cmd_oscillator_on)!
+    send1(addr, cmd_display_on)!
     b: = max_brightness if brightness > max_brightness else brightness
-    return send1(addr, cmd_brightness_base | U8::b)
+    send1(addr, cmd_brightness_base | U8::b)!
 
-fn draw(addr: U32, pattern: U16@): Bool //< rewrites the whole display RAM
+fn draw(addr: U32, pattern: U16@): Void!mmio.Driver_error //< rewrites the whole display RAM
     //<
     //< pattern holds one 16-bit value per row (bit0 is column 0). It does no partial update:
     //< sending everything avoids leaving part of the previous picture on the display.
@@ -52,8 +51,8 @@ fn draw(addr: U32, pattern: U16@): Bool //< rewrites the whole display RAM
     for i in Range.asc(rows)
         // The HT16K33's display RAM is 2 bytes per row, little endian.
         view.put_u16_le(1 + i * 2, (pattern + i)$)
-    return i2c.write(addr, buf[0]@, 17)
+    i2c.write(addr, buf[0]@, 17)!
 
-fn clear(addr: U32): Bool //< turns every LED off
+fn clear(addr: U32): Void!mmio.Driver_error //< turns every LED off
     zero: U16[8] = ::{}
-    return draw(addr, zero[0]@)
+    draw(addr, zero[0]@)!

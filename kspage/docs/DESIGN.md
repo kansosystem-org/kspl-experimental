@@ -516,7 +516,7 @@ Two kinds of side text stay out of the document's flow. An aside belongs to a ho
 
 The document stores where a picture comes from and how large it is laid out, never the picture's bytes.
 
-**Do not put the picture itself into the document**: in a browser the arena is a static 1 MiB block, which one photograph fills. The document holds only where the picture comes from and how it is laid out. Reading and drawing it happen outside (the core cannot read a picture). In exchange, the document alone does not carry its pictures.
+**Do not put the picture itself into the document**: in a browser the whole heap is one static block, so the largest document it opens is about 1 MiB (`doc_limit` in `port/web/state.kspls`), which one photograph fills. The document holds only where the picture comes from and how it is laid out. Reading and drawing it happen outside (the core cannot read a picture). In exchange, the document alone does not carry its pictures.
 
 **The document holds the size too.** The core cannot measure a picture, and an entry point asking outside would make layout depend on how the reading went. With the size in the document, layout is the same whether or not the picture can be read. A picture with only a source is not laid out.
 
@@ -3124,7 +3124,7 @@ Note: The same sections run under both ([`../tests/browser/probe.js`](../tests/b
 
 **`kspage → kssrv` is not in the packages' reference direction.** Only the direction of import is allowed ([`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md)), and there is no import (HTTP joins them), so the only question is where the agreement lives.
 
-**It lives in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)**, for the reasons "13.10 A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md) gives.
+**It lives in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)**, for the reasons "A page asks the local machine through one protocol" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md) gives.
 
 ## How the page is checked
 

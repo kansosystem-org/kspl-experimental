@@ -140,7 +140,7 @@ priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
         //< Step 3: it builds the thunk body `{ return <impl>((T@)r, ...); }`
         //<
         //< A return of the trait itself is upcast. A Void one is a statement plus an empty return.
-    block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+    block: = Ast_node.build_block(loc)
 
     call_node: = Ast_node.new(.k_expr_postfix, "(", loc)
     call_node.type_id = target.ret_id if target.ret_id != 0 else req_m.type_id
@@ -149,7 +149,7 @@ priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
     call_node.add_child(ident_node)
     call_node.add_child(Ast_node.new(.k_literal, "(", loc))
 
-    args: = Ast_node.new(.k_expr_args, "args", loc)
+    args: = Ast_node.build_args(loc)
 
     ptr_target_id: = c.env.make_ptr(clean_t_id)
     cast_node: = Ast_node.new(.k_expr_postfix, "::", loc)
@@ -229,13 +229,9 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     case .none
         return
 
-    c.clear_scratch()
-    c.env.mangle_type_id_to(clean_t_id, c.scratch)
-    t_mangled: = base_core.arena.dup_str(c.scratch.slice())
+    t_mangled: = base_core.arena.dup_str(c.mangled_in_scratch(clean_t_id))
 
-    c.clear_scratch()
-    c.env.mangle_type_id_to(i_id, c.scratch)
-    i_mangled: = base_core.arena.dup_str(c.scratch.slice())
+    i_mangled: = base_core.arena.dup_str(c.mangled_in_scratch(i_id))
 
     vtable_init: = Ast_node.new(.k_struct_literal, "struct_literal", loc)
     vtable_type_name: = c.clear_scratch().s("kspl_vtable_").s(i_mangled).slice()
@@ -283,7 +279,7 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     perm_const_name: = base_core.arena.dup_str(const_name)
 
     vtable_const: = Ast_node.new(.k_decl_const, "const", loc)
-    vtable_const.add_child(Ast_node.new(.k_empty, "", loc))
+    vtable_const.add_child(Ast_node.build_empty(loc))
     vtable_const.add_child(Ast_node.new(.k_keyword, "const", loc))
     vtable_const.add_child(Ast_node.new(.k_identifier, perm_const_name, loc))
     vtable_const.add_child(Ast_node.build_type_expr(vtable_type_name, vtable_type_id, loc))

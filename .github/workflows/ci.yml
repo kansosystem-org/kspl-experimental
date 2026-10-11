@@ -38,8 +38,9 @@ concurrency:
 permissions:
   contents: read
 
-# Which check runs in which job is "What each platform runs" in docs/SPEC-gates.md; the procedure
-# is the Makefile's (`ci`, `ci-linux`, `ci-macos`), so the same target runs locally.
+# Which check runs in which job is "What each platform runs" in docs/SPEC-gates.md; the gates and
+# their order are `tools/ci_gates.kspls`'s table, run by a make target (`ci-linux`, `ci-macos`,
+# `ci-shard-*`), so the same target runs locally.
 jobs:
   # --- Linux: every gate, in the devcontainer image of .devcontainer/Dockerfile ---
   linux:
@@ -97,13 +98,15 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: log-linux-${{ matrix.target }}
-          path: out/log/ci/*.log
+          path: |
+            out/log/ci/*.log
+            out/log/extract/*.log
           if-no-files-found: warn
           retention-days: 14
 
   # --- macOS: every gate runnable on real hardware (Xcode's clang/make, brew's clang-format) ---
-  # What runs and what is excluded has its one origin in the Makefile's `ci-macos`. Its minute
-  # costs ten times Linux's ("Where CI's time goes" in docs/DESIGN.md).
+  # What runs and what is excluded has its one origin in `tools/ci_gates.kspls`'s table. Its
+  # minute costs ten times Linux's ("Where CI's time goes" in docs/DESIGN.md).
   # Caution: **There is no shape that thins it out of the scheduled rounds** (the caution at
   # `schedule:` above). To skip one, write the negation of that round's cron: a match stops the
   # job for good the day the text drifts (tests/support/conventions_ci.kspls).
@@ -185,6 +188,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: log-windows-ucrt64-${{ matrix.target }}
-          path: out/log/ci/*.log
+          path: |
+            out/log/ci/*.log
+            out/log/extract/*.log
           if-no-files-found: warn
           retention-days: 14

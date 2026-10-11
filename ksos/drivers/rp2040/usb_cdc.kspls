@@ -364,14 +364,13 @@ priv fn handle_setup()
 // The main part
 // ==========================================
 
-fn init(): Bool //< starts running as a USB device
+fn init(): Void!mmio.Driver_error //< starts running as a USB device
     //<
     //< Caution: Call it after clocks.init().
     // First of all, so the send queue has a buffer even after an early return.
     tx = ring.Ring<|tx_ring_size|>.new(tx_buf[0]@)
     started = false
-    if !resets.reset_then_unreset(hw.reset_usbctrl)
-        return false
+    resets.reset_then_unreset(hw.reset_usbctrl)!
 
     // Fill DPRAM with 0; leftovers that look like an endpoint control enumerate an unused endpoint.
     for $i: U32 = 0; i < 0x180; i += 4
@@ -397,7 +396,6 @@ fn init(): Bool //< starts running as a USB device
     sc: = mmio.read32(hw.regs_sie_ctrl)
     mmio.write32(hw.regs_sie_ctrl, sc | hw.sie_ctrl_pullup_en)
     started = true
-    return true
 
 fn poll_once() //< handles one round of pending work
     //<

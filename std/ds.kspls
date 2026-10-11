@@ -48,7 +48,7 @@ priv fn grow_slot(slot: Void$@$@, cap: Sz$@, len: Sz, initial: Sz, arena: Arena$
     //< no call. Only the unused tail is zeroed (the reason is at `alloc_zeroed`); the copy fills
     //< the front.
     new_cap: Sz = grow_cap(cap$, initial)
-    new_ptr: = alloc_in(arena, new_cap * elem_size)
+    new_ptr: = alloc_in(arena, checked_cap_bytes(new_cap, elem_size))
     used_bytes: = len * elem_size if cap$ > 0 else 0
     if cap$ > 0
         mem.copy(new_ptr, slot$, used_bytes)
@@ -92,12 +92,14 @@ impl I32: Hashable<|I32|> //< so an `I32` can be a `Map`'s key
     pub fn equals(r: Self@, other: I32): Bool //< whether the two are the same number
         return r$ == other
 
+priv fn spread_u64(h: U64): U32 //< an integer key's bits folded to 32 and spread over the buckets
+    return (U32::(h ^ (h >> 32))) * U32::2654435761
+
 impl I64: Hashable<|I64|> //< so an `I64` can be a `Map`'s key
     //<
     //< A primitive's method receives r as a pointer, so the value is r$
     pub fn hash(r: Self@): U32 //< the value spread over the buckets
-        h: = U64::r$
-        return (U32::(h ^ (h >> 32))) * U32::2654435761
+        return spread_u64(U64::r$)
     pub fn equals(r: Self@, other: I64): Bool //< whether the two are the same number
         return r$ == other
 
@@ -107,8 +109,7 @@ impl Sz: Hashable<|Sz|> //< so an `Sz` can be a `Map`'s key
     //< Caution: **Do not put an impl that makes a built-in type a key of std's containers in the
     //< compiler**, which would invert the layers; it goes here, next to the trait that requires it.
     pub fn hash(r: Self@): U32 //< the value spread over the buckets
-        h: = U64::r$
-        return (U32::(h ^ (h >> 32))) * U32::2654435761
+        return spread_u64(U64::r$)
     pub fn equals(r: Self@, other: Sz): Bool //< whether the two are the same number
         return r$ == other
 // ==========================================

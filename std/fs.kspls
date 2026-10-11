@@ -21,26 +21,26 @@ import "std/strfmt" // `:x` in the interpolation of the random name suffix
 import "std/sys"
 
 extern "C"
-    pub fn kspl_dir_open(path_ptr: U8@, path_len: Sz): I64
-    pub fn kspl_dir_read(handle: I64, buf: U8$@, cap: Sz): I32
-    pub fn kspl_dir_close(handle: I64)
-    pub fn kspl_stat(path_ptr: U8@, path_len: Sz, size_out: I64$@, is_dir_out: I32$@,
+    fn kspl_dir_open(path_ptr: U8@, path_len: Sz): I64
+    fn kspl_dir_read(handle: I64, buf: U8$@, cap: Sz): I32
+    fn kspl_dir_close(handle: I64)
+    fn kspl_stat(path_ptr: U8@, path_len: Sz, size_out: I64$@, is_dir_out: I32$@,
         mtime_out: I64$@): Bool
-    pub fn kspl_is_exec(path_ptr: U8@, path_len: Sz): Bool
-    pub fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //<
+    fn kspl_is_exec(path_ptr: U8@, path_len: Sz): Bool
+    fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //<
         //< 1=a link, 0=not a link, -1=cannot tell
         //<
         //< Caution: **Do not make it a Bool**: turning "cannot tell" into false lets an unreadable
         //< segment pass as "not a link" (has_link_on_path below).
-    pub fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
-    pub fn kspl_create_owned(path_ptr: U8@, path_len: Sz, data: U8@, len: Sz): I32 //<
+    fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
+    fn kspl_create_owned(path_ptr: U8@, path_len: Sz, data: U8@, len: Sz): I32 //<
         //< 0=written, 1=the name is taken, -1=refused
-    pub fn kspl_dir_trust(path_ptr: U8@, path_len: Sz): I32 //< `Dir_trust`'s order, from 0
-    pub fn kspl_remove_path(path_ptr: U8@, path_len: Sz): I32
-    pub fn kspl_lock_open(path_ptr: U8@, path_len: Sz): I64
-    pub fn kspl_lock_take(handle: I64, wait: I32): I32 //< 0=taken, 1=held elsewhere, -1=failed
-    pub fn kspl_lock_close(handle: I64)
-    pub fn kspl_rename_cstr(old_cstr: U8@, new_cstr: U8@): I32 //<
+    fn kspl_dir_trust(path_ptr: U8@, path_len: Sz): I32 //< `Dir_trust`'s order, from 0
+    fn kspl_remove_path(path_ptr: U8@, path_len: Sz): I32
+    fn kspl_lock_open(path_ptr: U8@, path_len: Sz): I64
+    fn kspl_lock_take(handle: I64, wait: I32): I32 //< 0=taken, 1=held elsewhere, -1=failed
+    fn kspl_lock_close(handle: I64)
+    fn kspl_rename_cstr(old_cstr: U8@, new_cstr: U8@): I32 //<
         //< Renames the NUL-terminated path old_cstr to new_cstr
         //<
         //< Caution: **Do not use `libc.rename`.** It is the narrow (ANSI) API, so on Windows a
@@ -185,18 +185,12 @@ pub fn rename_path( //< renames or moves a file or a directory
     check_path(old_path)!
     check_path(new_path)!
     // check_path refused a NUL already; to_cstr's `.none` is the same refusal.
-    $old_buf: U8$@ = null
-    switch old_path.to_cstr()
-    case .some(p)
-        old_buf = p
-    case .none
+    old_buf: = old_path.to_cstr().unwrap_or(null)
+    if old_buf == null
         throw .invalid_path
     defer dealloc(Void$@::old_buf)
-    $new_buf: U8$@ = null
-    switch new_path.to_cstr()
-    case .some(p)
-        new_buf = p
-    case .none
+    new_buf: = new_path.to_cstr().unwrap_or(null)
+    if new_buf == null
         throw .invalid_path
     defer dealloc(Void$@::new_buf)
     if kspl_rename_cstr(old_buf, new_buf) != 0
@@ -218,7 +212,7 @@ pub fn read_dir( //< one directory's entries, without descending
     defer kspl_dir_close(h)
     $out: = List<|U8[]|>.new(arena)
     for
-        $name_buf: U8[1024] = ::{}
+        $name_buf: U8[max_entry_name_len] = ::{}
         n: = kspl_dir_read(h, name_buf@, max_entry_name_len)
         if n == 0
             break
@@ -330,7 +324,7 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
 ): U8[]!Fs_error //< the absolute path; fails if the working directory cannot be read
     if path.len > 0 && sys.is_absolute(path)
         return arena.dup_str(path)
-    $buf: U8[4096] = ::{}
+    $buf: U8[max_path_len + 1] = ::{}
     here: = sys.cwd(U8$[]::buf)
     if here.len == 0
         throw .operation_failed
@@ -480,9 +474,7 @@ priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
     if depth >= max_walk_depth
         throw .too_deep
     entries: = read_dir(dir, arena)!
-    for name in entries
-        if name.equals(".") || name.equals("..")
-            continue
+    for name in entries // read_dir leaves out `.` and `..`
         full: = join(dir, name, arena)
         if !is_dir(full)
             if !want_dirs

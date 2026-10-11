@@ -41,14 +41,13 @@ fn pin_channel(pin: U32): U32 //< turns a GPIO number into the ADC's channel num
         return 0
     return pin - first_adc_gpio
 
-fn init(): Bool //< starts the ADC block
+fn init(): Void!mmio.Driver_error //< starts the ADC block
     //<
     //< Call it once after clocks.init() and before reading; gpio.init_analog is needed separately.
-    if !resets.unreset(reset_adc)
-        return false
+    resets.unreset(reset_adc)!
     mmio.write32(adc_cs, cs_en)
     // READY stays clear from power-on until the ADC is usable.
-    return mmio.poll(adc_cs, cs_ready, true)
+    mmio.wait(adc_cs, cs_ready, true)!
 
 struct Reading
     ok: Bool //< false means the conversion did not finish, or a conversion error (value is 0)
@@ -61,7 +60,7 @@ fn read_channel(ch: U32): Reading //< converts a channel once
     mmio.write32(adc_cs, (cur & ~cs_ainsel_bits) | ((ch & 0x7) << 12))
     started: = mmio.read32(adc_cs)
     mmio.write32(adc_cs, started | cs_start_once)
-    if !mmio.poll(adc_cs, cs_ready, true)
+    mmio.wait(adc_cs, cs_ready, true) catch
         return Reading::{ .ok = false, .value = 0 }
     st: = mmio.read32(adc_cs)
     if (st & cs_err) != 0

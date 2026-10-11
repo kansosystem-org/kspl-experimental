@@ -119,6 +119,36 @@ priv fn offers(copy: U8[], target: U8[]): Bool //< whether the copy's `Makefile`
     //< **make answers, with a dry run** ("No rule to make target" where it is absent).
     return harness.make(U8[][]::{ "-C", copy, "-n", target }).code == 0
 
+priv const tail_lines: Sz = 30 //< how much of a failed run's end is shown after its own FAIL lines
+priv const log_dir: U8[] = "out/log/extract" //< where a failed run's whole output is kept
+
+priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
+    //< A failed run's output cut to what explains it: its own `FAIL` lines, then its last lines
+    //<
+    //< **The whole output goes to a log** named at the end (CI keeps it): printed whole, the `FAIL`
+    //< that matters sits thousands of lines above the verdict.
+    lines: = out.lines(arena)
+    b: = arena.text()
+    for line in lines
+        if line.starts_with("FAIL ") || line.starts_with("RESULT:")
+            b.s(line).c('\n')
+    from: = lines.len - tail_lines if lines.len > tail_lines else 0
+    b.s("--- its last \{lines.len - from\} lines ---\n")
+    for i in Range.new(from, lines.len, 1)
+        b.s(lines.get(i)).c('\n')
+    dir: = fs.join(harness.root(), log_dir, arena)
+    path: = fs.join(dir, arena.text().s(what).s(".log").take(), arena)
+    fs.mkdir_all(dir) catch {}
+    io.write_file(path, out) catch
+        return b.s("(the whole output could not be written to ").s(path).s(")").take()
+    return b.s("the whole output: ").s(path).take()
+
+priv fn check_run(name: U8[], what: U8[], code: I32, out: U8[], arena: Arena$@): Bool //<
+    //< One run's check: on a failure the detail is its `digest`
+    if code == 0
+        return verdict.check(name, true, "")
+    return verdict.check(name, false, digest(what, out, arena))
+
 priv fn relay_skips(dir: U8[], out: U8[], arena: Arena$@) //<
     //< The checks a package's own tests skipped, reported again as this gate's own
     //<
@@ -160,13 +190,13 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
     // compiler it rebuilds is the one the checks then inspect.
     if offers(copy, "self-host")
         h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
-        verdict.check(arena.text().s("\{dir\} rebuilds itself from the copy").take(), h.code == 0,
-            h.out)
+        check_run(arena.text().s("\{dir\} rebuilds itself from the copy").take(),
+            arena.text().s("\{dir\}_self-host").take(), h.code, h.out, arena)
     // **The rest of `make test` goes first, then the suites side by side** (CI runs ksplc's suites
     // here, the longest wait otherwise), each its own run and check.
     jobs: = arena.text().s("-j\{verdict.jobs()\}").take()
     r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
-    if verdict.check(name, r.code == 0, r.out)
+    if check_run(name, arena.text().s("\{dir\}_test").take(), r.code, r.out, arena)
         relay_skips(dir, r.out, arena)
     suites: = suites_of(copy, arena)
     $items: = List<|subproc.Job|>.new(arena)
@@ -180,7 +210,8 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
     for i in Range.asc(outs.len)
         o: = outs.get(i)
         passed: = arena.text().s("\{dir\}'s suite \{suites.get(i)\} passes from the copy").take()
-        if verdict.check(passed, o.code == 0, o.out)
+        what: = arena.text().s("\{dir\}_\{suites.get(i)\}").take()
+        if check_run(passed, what, o.code, o.out, arena)
             relay_skips(dir, o.out, arena)
     // The seeds are the repository's files, as `make test-<name>-fuzz` passes them, so a finding
     // repeats from the same two numbers.
@@ -188,7 +219,7 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
         seeds: = arena.text().s("FUZZ_SEEDS=\{harness.root()\}").take()
         f: = make_in(copy, uses, "test-fuzz", U8[][]::{ seeds }, arena)
         fuzzed: = arena.text().s("\{dir\} scatters broken input from the copy").take()
-        if verdict.check(fuzzed, f.code == 0, f.out)
+        if check_run(fuzzed, arena.text().s("\{dir\}_fuzz").take(), f.code, f.out, arena)
             relay_skips(dir, f.out, arena)
     taken: = "lang.kspls" if is_std else "ksplc.cfg"
     proof: =

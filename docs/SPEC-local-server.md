@@ -4,7 +4,7 @@ A web page cannot open a file on your computer by its path. This document sets h
 
 **This is the protocol a page in a browser uses to ask the local machine for files.** By design, a browser lets a page open a file only through a window a person chooses, and a page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule (a browser lets a page freely call only the server the page came from) does not block them. **It starts no program**: a server that starts programs on a page's request is one whose every guard must hold, for what a page can ask for there is running code.
 
-**It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "13.10 A page asks the local machine through one protocol" in [`DESIGN.md`](DESIGN.md).
+**It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "A page asks the local machine through one protocol" in [`DESIGN.md`](DESIGN.md).
 
 **Both ends are built**: `kssrv --local` answers everything below, and the page asks from `kspage/port/web/local.js`.
 

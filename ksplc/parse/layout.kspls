@@ -6,6 +6,7 @@
 //< **Only blocks and terminators disappear** (what remains is `T::{ … }`, `import … { … }`, a
 //< string's interpolation, a block's braces where it fits on one line, and the `;` of a C-style
 //< loop heading, of a closure's captures, and between two statements on one line).
+import "ksplc/base/core" as _base_core // `is_one_of`
 import "ksplc/base/lines" as base_lines
 import "ksplc/parse/line_cont" { ends_in_catch, is_label_only, line_continues, starts_cont }
 import "ksplc/parse/source_fix" as parse_source_fix
@@ -181,7 +182,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
             if c == '\n'
                 done = true
                 continue
-            if c == '/' && i + 1 < src.len && src[i + 1] == '/'
+            if src.starts_with("//", i)
                 // A line comment; code_end does not move.
                 i = base_lines.line_end(src, i)
                 continue
@@ -365,7 +366,7 @@ fn next_line_comment(src: U8[], from: Sz): Sz //<
     $i: = from
     for i < src.len
         c: = src[i]
-        if c == '/' && i + 1 < src.len && src[i + 1] == '/'
+        if src.starts_with("//", i)
             return i
         if c == '"'
             $open_str: Sz = 0
@@ -395,10 +396,7 @@ priv const cont_words: U8[][3] = ::{ "as", "in", "catch" } //<
     //< indentation notation (`.kspls`)" in `../../docs/DESIGN.md`).
 
 priv fn ends_open_word(word: U8[]): Bool //< whether the word at the end of a line continues it
-    for w in cont_words
-        if word.equals(w)
-            return true
-    return false
+    return word.is_one_of(U8[][]::cont_words)
 
 priv const lead_cont_words: U8[][1] = ::{ "catch" } //<
     //< The words that continue the previous line when they start a line
@@ -456,9 +454,8 @@ priv fn continues(src: U8[], code_end: Sz, code_start: Sz, next_start: Sz): Bool
         starts_cont(src[next_start])
         return true
     lead: = next_word(src, next_start, src.len)
-    for w in lead_cont_words
-        if lead.equals(w)
-            return true
+    if lead.is_one_of(U8[][]::lead_cont_words)
+        return true
     $s: = code_end
     for s > code_start && src[s - 1].is_alnum()
         s -= 1
@@ -505,11 +502,8 @@ priv fn head_word(src: U8[], from: Sz, to: Sz): U8[] //< a logical line's leadin
         s = skip_spaces(src, e, to)
     return word
 
-priv fn skip_spaces(src: U8[], from: Sz, to: Sz): Sz
-    $s: = from
-    for s < to && (src[s] == ' ' || src[s] == tab_byte)
-        s += 1
-    return s
+priv fn skip_spaces(src: U8[], from: Sz, to: Sz): Sz //< base_lines.skip_blanks, stopping at `to`
+    return base_lines.skip_blanks(src.sub(0, to), from)
 
 priv fn next_word(src: U8[], from: Sz, to: Sz): U8[]
     s: = skip_spaces(src, from, to)
@@ -519,16 +513,10 @@ priv fn next_word(src: U8[], from: Sz, to: Sz): U8[]
     return src.sub(s, e - s)
 
 priv fn is_labelled_head(word: U8[]): Bool
-    for h in labelled_heads
-        if word.equals(h)
-            return true
-    return false
+    return word.is_one_of(U8[][]::labelled_heads)
 
 priv fn is_block_head(word: U8[]): Bool
-    for h in block_heads
-        if word.equals(h)
-            return true
-    return false
+    return word.is_one_of(U8[][]::block_heads)
 
 fn heads_a_block(code: U8[]): Bool //<
     //< Whether a line's leading word, after `pub` / `priv`, opens a block, or the line is a label

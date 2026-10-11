@@ -80,10 +80,8 @@ priv fn built(pkg: U8[], ksplc: U8[], arena: Arena$@): U8[]!fs.Fs_error //<
         argv: = U8[][]::{ ksplc, "--std-dir=std",
             arena.text().s("--emit-surface=").s(tsv).take(),
             arena.text().s("--surface-scope=").s(scope_pub).take(), src, obj }
-        r: = subproc.run_capture(argv, "", emit_timeout_ms, capture_cap, arena)
-        if r.spawn_failed || r.timed_out || r.exit_code != 0
-            io.err()
-                .s("\{sys.program_name()\}: could not write out \{src\}'s API\n\{r.stderr_data\}")
+        _printed: = subproc.run(argv, "", emit_timeout_ms, capture_cap, arena) catch e
+            e.describe(arena.text().s("writing out ").s(src).s("'s API").take(), ksplc)
             throw .operation_failed
         part: = io.read_file(tsv) catch
             throw .operation_failed
@@ -135,12 +133,11 @@ priv fn publishing(body: U8[], arena: Arena$@): List<|U8[]|>$@ //<
 priv fn render_to(ksplc: U8[], target: U8[], path: U8[], arena: Arena$@): Void!fs.Fs_error //<
     //< Writes what `ksplc doc <target>` prints to `path`
     argv: = U8[][]::{ ksplc, "--std-dir=std", "doc", target }
-    r: = subproc.run_capture(argv, "", emit_timeout_ms, page_cap, arena)
-    if r.spawn_failed || r.timed_out || r.exit_code != 0
-        io.err().s("\{sys.program_name()\}: `ksplc doc \{target\}` failed\n\{r.stderr_data\}")
+    printed: = subproc.run(argv, "", emit_timeout_ms, page_cap, arena) catch e
+        e.describe(arena.text().s("`ksplc doc ").s(target).s("`").take(), ksplc)
         throw .operation_failed
     fs.mkdir_all(sys.get_dir_name(path))!
-    io.write_file(path, r.stdout_data) catch
+    io.write_file(path, printed) catch
         throw .operation_failed
 
 priv fn do_pages(pkg: U8[], ksplc: U8[], arena: Arena$@): Void!fs.Fs_error //<
@@ -178,7 +175,10 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
     $d: = Str_builder.new()
     defer d.free()
     m: = rows.undocumented(now@, d@)
-    if n == 0 && m == 0
+    $t: = Str_builder.new()
+    defer t.free()
+    k: = rows.drifted_twins(now@, t@, arena)
+    if n == 0 && m == 0 && k == 0
         io.out().s("\{path\}: the API is as recorded, and every entry says what it is\n")
         return 0
     if n > 0
@@ -189,7 +189,10 @@ priv fn do_check(pkg: U8[], ksplc: U8[], arena: Arena$@): Sz!fs.Fs_error
             .s(d.slice())
             .s("Give each a `//<` on its own line (\"The documentation a declaration carries\" in ")
             .s("docs/DESIGN.md).\n")
-    return n + m
+    if k > 0
+        io.err().s("\{path\}: a name declared once per #cfg whose twins differ (\{k\})\n")
+            .s(t.slice()).s("Give the twins one signature.\n")
+    return n + m + k
 
 fn main(): I32 //< writes or checks the record of a package's published API
     arena: = Arena.new(64 * 1024 * 1024)

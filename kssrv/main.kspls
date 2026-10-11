@@ -54,7 +54,7 @@ priv const max_request_body: Sz = 64 * 1024 //< the cap allowed on one request's
 priv const max_local_body: Sz = 4 * 1024 * 1024
 
 priv fn body_limit(ctx: conn.Ctx$@): Sz //< the body cap for this mode
-    return max_local_body if ctx.token.len > 0 else max_request_body
+    return max_local_body if ctx.is_local() else max_request_body
 
 priv const io_chunk: Sz = 16 * 1024 //< how many bytes one read/write moves
 
@@ -223,7 +223,7 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     // Caution: **For local use, answer only a request that names this server.** A web page whose
     // name is re-pointed at 127.0.0.1 (DNS rebinding) reaches the port as its own origin, and
     // without this would read every file the page can, the page itself included.
-    if ctx.token.len > 0 && !names_this_server(req)
+    if ctx.is_local() && !names_this_server(req)
         if is_api
             api.queue_json_error(c, 403)
         else
@@ -263,16 +263,16 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     // handed over). Any other file comes from the origin that keeps the token, so served freely, an
     // HTML file in the root opened in the page's tab could read it, and any program on this machine
     // could read the root. The page reads its pictures through `/api/file`, with the token.
-    if ctx.token.len > 0 && !is_page && !api.authorized(req, ctx.token)
+    if ctx.is_local() && !is_page && !api.authorized(req, ctx.token)
         conn.queue_error(c, 401)
         return
     target_path: =
         ctx.page if ctx.page.len > 0 && is_page else fs.join(ctx.root, rel, c.arena)
 
-    info: = fs.stat(target_path) catch _e
-        conn.queue_error(c, 404)
-        return
-    if info.is_dir
+    $size: Sz = 0
+    if found: = conn.regular_file_size(target_path)
+        size = found
+    else
         conn.queue_error(c, 404)
         return
 
@@ -280,14 +280,14 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
     ctype: = content_type_for(target_path)
     if is_head
         // A HEAD's Content-Length names the real length; 0 would read as "an empty file".
-        conn.queue_to_head(c, 200, ctype, Sz::info.size, keep)
+        conn.queue_to_head(c, 200, ctype, size, keep)
         return
 
     // The stat found it, so an open that fails is the server's fault, not a missing name.
     file: = io.open(target_path, "rb") catch _e
         conn.queue_error(c, 500)
         return
-    conn.queue_file(c, ctype, file, Sz::info.size, keep)
+    conn.queue_file(c, ctype, file, size, keep)
 
 // ==========================================
 // How one connection is driven
@@ -558,7 +558,7 @@ priv fn accept_all(listener: net.Tcp_listener$@, t: conn.Conn_table$@, lg: Log$@
             lg.say(.error, "cannot set the accepted socket nonblocking")
             stream.free()
             continue
-        $host: U8[64] = ::{}
+        $host: U8[net.addr_text_max] = ::{}
         p: = stream.peer(U8$[]::host) catch net.Peer_addr::{ .host_len = 0, .port = 0 }
         peer: = U8[]::{ .ptr = host[0]@, .len = p.host_len }
         // Caution: **Count by address before taking a slot**, or one machine holding them all shuts
@@ -822,9 +822,12 @@ fn main(): I32
             if ln: = lg.at(.error)
                 ln.s("poll failed: \{e\}")
             continue
+        // Caution: **Accept last**, after this wakeup's closes and the sweep: accepted first, a
+        // connection already gone still counts against its address and the table's cap.
+        $accepting: = false
         for ev in ready
             if ev.token == listener_token
-                accept_all(listener, table@, lg@, ctx.token.len == 0)
+                accepting = true
                 continue
             if table.slots[ev.token].is_empty()
                 continue
@@ -842,3 +845,5 @@ fn main(): I32
                 conn.table_drop(table@, ev.token, lg@)
         ready.free()
         sweep_done(table@, ctx@)
+        if accepting
+            accept_all(listener, table@, lg@, !ctx.is_local())

@@ -92,7 +92,7 @@ pub struct Target //< a parse in progress: the source, how far it has read, and 
     pub fail: Fail_track$@ //< how far the parse got, and what could have been written there.
         //<
         //< Caution: **Do not put the fields back here** (the reason is at `Fail_track`).
-    pub is_syntax_mode: Bool //< inside an ordinary rule, where whitespace is skipped between parts
+    is_syntax_mode: Bool //< inside an ordinary rule, where whitespace is skipped between parts
     pub is_suppressed: Bool //< matching only to test: no node is built, no expectation recorded
     pub is_lenient: Bool //< whether the branches that absorb a broken run are enabled.
         //<
@@ -113,20 +113,20 @@ pub struct Target //< a parse in progress: the source, how far it has read, and 
         //< those counts, in the order the rules were first reached
 
     pub space_skipper: Space_skipper //< the whitespace skipper, if the grammar provides one
-    pub space_cache_pos: Sz //< the position the last skip started from.
+    space_cache_pos: Sz //< the position the last skip started from.
         //<
         //< A one-entry cache: after backtracking, each element of a choice or sequence skips again
         //< from the same start, and this jumps to the recorded end instead (the source,
         //< space_skipper and rule_space do not change during a scan).
-    pub space_cache_end: Sz //< where that skip ended, so the same start is not scanned twice
-    pub space_cache_valid: Bool //< whether the two fields above still match the current position
+    space_cache_end: Sz //< where that skip ended, so the same start is not scanned twice
+    space_cache_valid: Bool //< whether the two fields above still match the current position
 
-    pub checks_first_byte: Bool //< whether a rule that cannot begin with the next byte is skipped.
+    checks_first_byte: Bool //< whether a rule that cannot begin with the next byte is skipped.
         //<
         //< On by default; turned off only to compare against a parse that enters every rule. Either
         //< way the tree is the same, and so is a syntax error (parse_rule). The profile counts only
         //< the rules entered, and both runs where a syntax error makes it parse twice.
-    pub ran_twice: Bool //< whether the last parse_rule ran again without skipping.
+    ran_twice: Bool //< whether the last parse_rule ran again without skipping.
         //<
         //< Only a syntax error does. On input that parses, it says a rule was skipped where it
         //< could have matched: the answer is still right, from the second run, at twice the cost.
@@ -193,7 +193,7 @@ impl Target
         r.memo = src.memo
         r.borrows_grammar = true
 
-    pub fn load_rules( //< loads a grammar and resolves its references in one step
+    fn load_rules( //< loads a grammar and resolves its references in one step
         //<
         //< Builds the name table, resolves references to indices, looks up `_Space`/`_Boundary`
         //< ahead of time and makes the memo table every parse shares, all in one step: skip the
@@ -469,15 +469,16 @@ priv fn followed_by_boundary(ctx: Target$@, at: Sz): Bool!Kspeg_signal //<
     saved_pos: = ctx.pos
     prev_sup: = ctx.is_suppressed
     prev_syn: = ctx.is_syntax_mode
+    // Caution: **Restore it in a `defer`** (the reason is in handle_space_skipping).
+    defer
+        ctx.is_suppressed = prev_sup
+        ctx.is_syntax_mode = prev_syn
+        ctx.pos = saved_pos
     ctx.pos = at
     ctx.is_suppressed = true
     ctx.is_syntax_mode = false
     try_parse(boundary_rule, ctx, null)!
-    has_boundary: = ctx.pos != at
-    ctx.is_suppressed = prev_sup
-    ctx.is_syntax_mode = prev_syn
-    ctx.pos = saved_pos
-    return has_boundary
+    return ctx.pos != at
 
 priv fn parse_recover(ctx: Target$@, parent: Node$@, stops: U8[], start_pos: Sz):
     Bool!Kspeg_signal //<
@@ -557,12 +558,10 @@ impl Rule
         Bool!Kspeg_signal
         rule_entry: = ctx.rules.get(r_id)
         name: = rule_entry.name
-        is_void: = name.len > 0 && (name.ptr + 0)$ == '_'
-        is_upper: = name.len > 0 && (name.ptr + 0).is_upper()
         // Lexical tokens (upper case) and internal rules stay out of the profile: they are frequent
         // enough to weigh on it.
-        if !ctx.enable_profiling || is_void || is_upper
-            return r.parse_reference_impl(ctx, parent, r_id, start_pos, is_void, is_upper, null)
+        if !ctx.enable_profiling || rule_entry.transparent || rule_entry.token
+            return r.parse_reference_impl(ctx, parent, r_id, start_pos, null)
 
         prof: = ctx.prof_map.get(name) catch
             p: = ctx.arena.create(Rule_prof::{ .name = name })
@@ -571,15 +570,17 @@ impl Rule
             fallback p
 
         prof.calls += 1
-        return r.parse_reference_impl(ctx, parent, r_id, start_pos, is_void, is_upper, prof)
+        return r.parse_reference_impl(ctx, parent, r_id, start_pos, prof)
     priv fn parse_reference_impl(_r: Self$@, ctx: Target$@, parent: Node$@, r_id: I32,
-        start_pos: Sz, is_void: Bool, is_upper: Bool, prof: Rule_prof$@): Bool!Kspeg_signal //<
+        start_pos: Sz, prof: Rule_prof$@): Bool!Kspeg_signal //<
             //< Parses the rule r_id names, once parse_reference has counted the call
             //<
-            //< parse_reference has already worked out is_void and is_upper, so the name is not
-            //< scanned again on every reference.
+            //< The rule's kind comes from its entry, worked out once when the grammar was loaded,
+            //< so the name is not scanned again on every reference.
         rule_entry: = ctx.rules.get(r_id)
         name: = rule_entry.name
+        is_void: = rule_entry.transparent
+        is_upper: = rule_entry.token
         target: = rule_entry.rule
         start_mode: = ctx.is_syntax_mode
         start_sup: = ctx.is_suppressed

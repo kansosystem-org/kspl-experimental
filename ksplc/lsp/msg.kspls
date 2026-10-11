@@ -37,14 +37,14 @@ impl Json_builder
         return r.obj().set("start", r.position(sl, sc)).set("end", r.position(el, ec)).build()
 
     fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
-        $safe_uri: = uri.escape_json_path()
+        $safe_uri: = uri.with_forward_slashes()
         defer safe_uri.free()
 
         return r.obj().set("uri", r.str_val(safe_uri.slice()))
             .set("range", r.range(sl, sc, el, ec)).build()
 
 impl U8[]
-    fn escape_json_path(r: U8[]): Str_builder
+    fn with_forward_slashes(r: U8[]): Str_builder //< the path with each `\` turned into `/`
         $res: = Str_builder.new()
         for i in Range.asc(r.len)
             c: = (r.ptr + i)$
@@ -56,8 +56,7 @@ impl U8[]
         //<
         //< The internal line is 1-based; character is already in UTF-16 units from get_line_info.
         //< **Where the same source is used many times, build the line-start table once and pass it
-        //< in** (the reason is at get_line_info in base/core.kspls). A one-off call may build it
-        //< here.
+        //< in** (the reason is at get_line_info in base/core.kspls).
         info: = r.get_line_info(target_offset, starts)
         return Position::{ .line = info.line - 1, .character = info.char_idx }
     fn get_offset_from_pos(r: U8[], target_line: Sz, target_col: Sz): Sz //<
@@ -109,6 +108,24 @@ impl Str_builder
 // ==========================================
 // Reading a message, and writing one
 // ==========================================
+
+// The LSP's symbol kinds that are sent. The numbers are the protocol's (`SymbolKind`).
+const s_namespace: I32 = 3I32
+const s_method: I32 = 6I32
+const s_field: I32 = 8I32
+const s_enum: I32 = 10I32
+const s_interface: I32 = 11I32
+const s_function: I32 = 12I32
+const s_variable: I32 = 13I32
+const s_constant: I32 = 14I32
+const s_member: I32 = 22I32
+const s_struct: I32 = 23I32
+const s_type: I32 = 26I32
+
+// The LSP's diagnostic tags (`DiagnosticTag`), and the document sync it asks for (`Full`).
+const tag_unnecessary: I32 = 1I32
+const tag_deprecated: I32 = 2I32
+const sync_full: I32 = 1I32
 
 const max_content_length: I32 = 128 * 1024 * 1024 //<
     //< The limit on a Content-Length, which prevents memory exhaustion and digit overflow
@@ -231,20 +248,22 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
                 .set("message", b.str_val(d.msg))
 
             is_unnecessary: =
-                (sev == 4 &&
+                (d.severity == .hint &&
                 (d.msg.starts_with("[H") || d.msg.starts_with("Unused "))) ||
-                (sev == 2 &&
+                (d.severity == .warning &&
                 (d.msg.starts_with("[W0207]") || d.msg.starts_with("[W0208]")))
-            is_deprecated: = sev == 2 && d.msg.starts_with("[W0702]")
+            is_deprecated: = d.severity == .warning && d.msg.starts_with("[W0702]")
 
             if is_unnecessary
-                d_obj = d_obj.set("tags", b.arr().push(b.int_val(1)).build())
+                d_obj = d_obj.set("tags",
+                    b.arr().push(b.int_val(tag_unnecessary)).build())
             else if is_deprecated
-                d_obj = d_obj.set("tags", b.arr().push(b.int_val(2)).build())
+                d_obj = d_obj.set("tags",
+                    b.arr().push(b.int_val(tag_deprecated)).build())
 
             arr = arr.push(d_obj.build())
 
-    $safe_uri: = final_uri.slice().escape_json_path()
+    $safe_uri: = final_uri.slice().with_forward_slashes()
     defer safe_uri.free()
 
     params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr.build())
@@ -261,7 +280,7 @@ fn send_single_diagnostic(uri: U8[], severity: base_diag.Diagnostic_severity, li
         .set("severity", b.int_val(severity.to_lsp_severity()))
         .set("source", b.str_val("kspl")).set("message", b.str_val(msg)).build()
 
-    $safe_uri: = uri.escape_json_path()
+    $safe_uri: = uri.with_forward_slashes()
     defer safe_uri.free()
 
     arr: = b.arr().push(d_obj).build()

@@ -7,6 +7,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/core" as base_core
 import "ksplc/base/literal" as base_literal
+import "ksplc/base/mangle" as _base_mangle // `has_kspl_prefix`
 import "ksplc/gen/entry" as gen_entry
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
@@ -146,8 +147,12 @@ impl Genllvm_ctx
         r.emit.body_out.free()
 
     fn clear_scratch(r: Self$@): Str_builder$@
-        r.scratch.len = 0
-        return r.scratch@
+        return r.scratch.clear()
+    fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
+        //< A type's mangled name, written into scratch: valid until scratch is used again
+        r.clear_scratch()
+        r.env.mangle_type_id_to(type_id, r.scratch)
+        return r.scratch.slice()
     fn take_scratch(r: Self$@): U8$[] //<
         //< It copies scratch into the AST arena and returns the copy
         //<
@@ -281,9 +286,7 @@ impl Genllvm_ctx: Writer
         return r
     fn s_mangled(r: Self$@, type_id: I32): Genllvm_ctx$@ //<
         //< It mangles a type_id and appends it to the output (through scratch; chainable)
-        r.clear_scratch()
-        r.env.mangle_type_id_to(type_id, r.scratch)
-        return r.s(r.scratch.slice())
+        return r.s(r.mangled_in_scratch(type_id))
     fn c(r: Self$@, val: U8): Genllvm_ctx$@
         switch r.emit_buf()
         case .some(buf)
@@ -388,6 +391,6 @@ fn is_kspl_prefixed_or_ext(name: U8[], is_ext: Bool): Bool //<
     //< A symbol marked extern/export, or a name that already has a kspl_ / priv_ prefix, is used
     //< unchanged (otherwise the caller builds @kspl_<name>, avoiding a double prefix). Several
     //< places in decl.kspls / expr.kspls / expr_call.kspls share this answer.
-    return is_ext || name.starts_with("kspl_") || name.starts_with("priv_")
+    return is_ext || name.has_kspl_prefix() || name.starts_with("priv_")
 
 impl Genllvm_ctx: Owned {}

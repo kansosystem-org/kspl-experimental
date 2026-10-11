@@ -51,7 +51,7 @@ The foundation is split by the reason for reading it.
 | File | The reason to read it |
 |---|---|
 | `harness` | What knows the repository: finding the root, a suite's start on its paths, `make` from the root, a temporary folder under `out/tmp`, the files git knows |
-| `harness_text` | Looking at strings (one UTF-8 character, a word boundary, folding newlines to LF, searching for a string) |
+| `harness_text` | Looking at strings (one UTF-8 character, a word boundary, a text's words, a list written in a file, the line after a mark, whether a list holds a string) |
 
 The compiler's suites have their own foundation in ksplc's folder, including the build helper and the runner of `EXPECT:` fixtures ([ksplc](../ksplc/README.md)). **Its `harness` is the layer beneath this one**: `harness.begin` starts it on the repository's paths, and a suite here ends, starts a process and runs the compiler under test through it, imported as `ksplc_harness`.
 
@@ -72,7 +72,7 @@ These are checks that read one file or log `make` hands them, rather than the wh
 | Thing | How it is called |
 |---|---|
 | `tests/tools/llvm_ir_abi_check.kspls` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form of a compiled program). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
-| `tests/tools/perf_guard.kspls` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
+| `tests/tools/perf_guard.kspls` | `make perf-log` (a gate of `make ci-linux`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
 
 ## The fixture folders
 

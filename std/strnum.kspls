@@ -46,8 +46,6 @@ priv const f64_refine_steps: I32 = 128 //<
     //< Built 10^22 at a time, the approximation rounds at most 19 times and is off by a few dozen
     //< ulp at most; only a bug in the algorithm goes past that.
 priv const f64_inf_bits: U64 = 0x7FF0000000000000U64
-priv const f64_mantissa_mask: U64 = 0x000FFFFFFFFFFFFFU64
-priv const f64_hidden_bit: U64 = 0x0010000000000000U64
 priv const pow10_exact: F64[_] = ::{ 1.0, 1.0e1, 1.0e2, 1.0e3, 1.0e4, 1.0e5, 1.0e6, 1.0e7, 1.0e8,
     1.0e9, 1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15, 1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20,
     1.0e21, 1.0e22 }
@@ -120,6 +118,25 @@ impl U8[]
         // I64, so `-v` wraps. parse_int_core applies the sign as it accumulates.
         $is_neg: = false
         return body.parse_int_core(0, is_neg@)!
+
+    pub fn to_count( //< the whole string as digits alone (`1*DIGIT`), no larger than `limit`
+        //<
+        //< **No sign, space or other character is taken**: a protocol's length field (HTTP's and
+        //< JSON-RPC's `Content-Length`) is refused whole rather than read as what precedes it.
+        r: U8[],
+        limit: Sz, //< the largest value taken; the digits are checked before they could overflow
+    ): Sz? //< the value, or none
+        if r.len == 0
+            return .none
+        $n: Sz = 0
+        for d in r
+            if !d.is_digit()
+                return .none
+            v: = Sz::(d - '0')
+            if n > limit / 10 || n * 10 > limit - v
+                return .none
+            n = n * 10 + v
+        return .some(n)
 
     pub fn to_f64(r: U8[]): F64!Strnum_error //< the whole string as a floating-point number
         //<
@@ -323,15 +340,13 @@ priv fn refine_f64(body: U8[], approx: F64): F64 //<
     pow10.mul_pow10(abs_exp)
     $bits: = bignat.f64_to_bits(approx)
     for _step in Range.asc(f64_refine_steps)
-        exp_field: = bits >> 52U64
-        mant: = bits & f64_mantissa_mask
-        // The value is f x 2^k. A subnormal has no hidden 1, and its exponent is fixed at the
-        // minimum.
-        f: U64 = mant if exp_field == 0U64 else mant | f64_hidden_bit
-        k: I64 = -1074I64 if exp_field == 0U64 else I64::exp_field - 1075I64
-        // The midpoints are f +/- 1/2 ulp. Just above a power of 2 the gap below is half, so the
-        // lower midpoint is f - 1/4 ulp. Both can be written as integers in units of 2^(k-2).
-        at_power_of_two: = mant == 0U64 && exp_field > 1U64
+        // The value is f x 2^k. The midpoints are f +/- 1/2 ulp. Just above a power of 2 the gap
+        // below is half, so the lower midpoint is f - 1/4 ulp. Both can be written as integers in
+        // units of 2^(k-2).
+        bf: = bignat.decompose_f64(bits)
+        f: = bf.f
+        k: = I64::bf.e
+        at_power_of_two: = bf.unequal
         if bits != f64_inf_bits
             c_up: = cmp_scaled(d@, pow10@, 4U64 * f + 2U64, k - 2I64)
             if c_up > 0

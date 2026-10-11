@@ -81,7 +81,7 @@ fn synth_arc_stmt(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_n
         return .none
 
     void_id: = I32::sema_type_env.Builtin_type_id.void_type
-    args: = Ast_node.new(.k_expr_args, "args", loc)
+    args: = Ast_node.build_args(loc)
     call: = lower_expr.build_linked_method_call(recv, sym.node, args, void_id, loc)
     stmt: = Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call)
     return .some(stmt)
@@ -170,7 +170,7 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
     lctx.arc_helpers.set(base_core.arena.dup_str(key), helper)
     lctx.arc_helper_decls.push(helper)
 
-    body: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+    body: = Ast_node.build_block(loc)
     ops: = List<|Ast_node$@|>.create(base_core.arena)
     emit_arc_owned_positions(lctx, parts, real_id, method_name, ops, depth)
     for op in ops
@@ -220,7 +220,7 @@ priv fn emit_arc_owned_positions(lctx: Lowering_ctx$@, parts: Arc_helper_parts, 
         emit_managed_op(lctx, val, base_id, method_name, ok_ops, depth + 1)
         if ok_ops.len == 0
             return
-        ok_block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+        ok_block: = Ast_node.build_block(loc)
         for op in ok_ops
             ok_block.add_child(op)
         not_err: = Ast_node.build_unary_expr("!", is_err, bool_id, loc)
@@ -251,7 +251,7 @@ priv fn build_arc_helper_call(lctx: Lowering_ctx$@, helper: Ast_node$@, recv: As
     callee.def_node = helper
     call: = Ast_node.new(.k_expr_postfix, "(", loc).with_type(void_id).add_child(callee)
         .add_child(Ast_node.new(.k_literal, "(", loc))
-        .add_child(Ast_node.new(.k_expr_args, "args", loc).add_child(addr_of))
+        .add_child(Ast_node.build_args(loc).add_child(addr_of))
     return Ast_node.new(.k_stmt_expr, "expr", loc).add_child(call)
 
 priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
@@ -266,8 +266,7 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
     loc: = parts.helper_fn.loc
     enum_id: = lctx.sema.env.strip_ptr(parts.ptr_id)
     switch_node: = Ast_node.new(.k_stmt_switch, "switch", loc)
-        .add_child(Ast_node.new(.k_empty, "", loc))
-        .add_child(Ast_node.new(.k_empty, "", loc))
+        .add_child(Ast_node.build_empty(loc)).add_child(Ast_node.build_empty(loc))
     $case_count: = 0
     for v in def.variants_list
         pat: = Ast_node.new(.k_case_pattern, "pattern", loc)
@@ -289,7 +288,7 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
             emit_managed_op(lctx, ref_node, f.type_id, method_name, ops, depth + 1)
         if ops.len == 0
             continue
-        block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+        block: = Ast_node.build_block(loc)
         for op in ops
             block.add_child(op)
         switch_node.add_child(Ast_node.new(.k_keyword, "case", loc)).add_child(pat).add_child(block)
@@ -298,7 +297,7 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         return
     // The default covers the variants that need no operation; without it such a tag goes nowhere.
     switch_node.add_child(Ast_node.new(.k_keyword, "default", loc))
-        .add_child(Ast_node.new(.k_stmt_block, "stmt_block", loc))
+        .add_child(Ast_node.build_block(loc))
     deref: = Ast_node.new(.k_expr_postfix, "$", loc).with_type(enum_id)
         .add_child(parts.arc_param_ref(loc)).add_child(Ast_node.new(.k_literal, "$", loc))
     subject: = lctx.gen_tmp_name()
@@ -367,7 +366,7 @@ priv fn arc_release_if_live(lctx: Lowering_ctx$@, tmp_name: U8[], live_name: U8[
     bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
     stmts: = base_ast.new_ast_node_list()
     emit_managed_op(lctx, Ast_node.build_ident(tmp_name, type_id, loc), type_id, "release", stmts, 0)
-    block: = Ast_node.new(.k_stmt_block, "stmt_block", loc)
+    block: = Ast_node.build_block(loc)
     for s in stmts
         block.add_child(s)
     return Ast_node.build_if_stmt(Ast_node.build_ident(live_name, bool_id, loc), block, null, loc)
@@ -413,7 +412,7 @@ impl Ast_node
         tmp_name: = lctx.gen_tmp_name()
         live_name: = lctx.gen_tmp_name()
         r.lower(lctx)
-        empty: = Ast_node.new(.k_empty, "", loc)
+        empty: = Ast_node.build_empty(loc)
         slot_id: = lctx.sema.env.copy_value_type(type_id)
         lctx.stmt_decls.push(lctx.build_let_decl(tmp_name, slot_id, empty, loc))
         down: = Ast_node.build_bool_literal(false, loc)

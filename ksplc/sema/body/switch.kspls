@@ -30,11 +30,11 @@ priv struct Switch_ctx
     seen_values: Map<|I64, Ast_node$@|>$@ //< a non-enum switch's case values so far, by value
     success: Bool
 
-priv fn payload_type_at(c: Sema_ctx$@, variant_def: sema_type_def.Enum_variant$@, idx: Sz): I32 //<
+priv fn payload_type_at(variant_def: sema_type_def.Enum_variant$@, idx: Sz): I32 //<
     //< The type of the variant's payload field at idx, `I32` past the last
     if idx < variant_def.payload_fields.len
         return variant_def.payload_fields.get(idx).type_id
-    return c.env.get_or_add("I32")
+    return I32::sema_type_env.Builtin_type_id.i32_type
 
 priv fn check_or_binding(c: Sema_ctx$@, mctx: Switch_ctx$@, bind_var: Ast_node$@,
     expected_sym: Sema_symbol$@, actual_type_id: I32) //<
@@ -278,7 +278,7 @@ impl Ast_node
                     field_def: = variant_def.payload_fields.get(field_idx)
                     sym.type_id = field_def.type_id
                 else
-                    sym.type_id = c.env.get_or_add("I32")
+                    sym.type_id = I32::sema_type_env.Builtin_type_id.i32_type
                 // **The binding carries its type**, or the editor has none to show where it is
                 // written. Caution: **Not a `def_node` to itself**: the flow analysis reads that
                 // as a use, and an unread binding's [W0207] goes silent.
@@ -299,7 +299,7 @@ impl Ast_node
             bound_count += 1
             if field_idx < mctx.bound_vars.len
                 check_or_binding(c, mctx, bind_var, mctx.bound_vars.get(field_idx),
-                    payload_type_at(c, variant_def, field_idx))
+                    payload_type_at(variant_def, field_idx))
             field_idx += 1
         // An OR pattern's later arms may omit the names; then only the payload's count and types
         // are checked against the first arm's.

@@ -59,8 +59,8 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
     // so nothing leaks.
     // **The root is told only for local use**, to the holder of the token: facing outward, its
     // absolute path tells anyone who asks how this machine's folders are laid out.
-    val: = b.obj().set("root", b.str_val(ctx.root if ctx.token.len > 0 else ""))
-        .set("local", b.bool_val(ctx.token.len > 0))
+    val: = b.obj().set("root", b.str_val(ctx.root if ctx.is_local() else ""))
+        .set("local", b.bool_val(ctx.is_local()))
         .set("uptime_s", b.int_val(time.now() - conn.stats.started_s))
         .set("requests", b.int_val(conn.stats.requests))
         .set("commands", b.int_val(conn.stats.commands))
@@ -144,18 +144,16 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
     //<
     //< **The type is not guessed from the content**, since a receiver trusts a guessed type.
     //< Reading it as UTF-8 is the caller's job; the server does not guess the encoding.
-    // Caution: **Check the stat first.** On some OSes `fopen` opens a folder, and the read's result
-    // alone cannot tell that from "a broken file".
-    info: = fs.stat(path) catch _e
-        queue_json_error(c, 404)
-        return
-    if info.is_dir
+    $size: Sz = 0
+    if found: = conn.regular_file_size(path)
+        size = found
+    else
         queue_json_error(c, 404)
         return
     file: = io.open(path, "rb") catch _e
         queue_json_error(c, 500)
         return
-    conn.queue_file(c, "application/octet-stream", file, Sz::info.size, keep)
+    conn.queue_file(c, "application/octet-stream", file, size, keep)
 
 fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written
@@ -237,7 +235,7 @@ fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bo
     // as a default it would turn a broken request into a valid observation.
     dist: = doc.get("dist_mm").as_int64(-1I64)
     line: = doc.get("line").as_int64(-1I64)
-    if dist < 0I64 || line < 0I64 || line > 7I64
+    if dist < 0I64 || line < 0I64 || line >= I64::pilot.line_patterns
         queue_json_error(c, 400)
         return
     seq: = doc.get("seq").as_int64(0I64)
@@ -277,7 +275,7 @@ priv fn reaches(c: conn.Conn$@, ctx: conn.Ctx$@, r: Reach): Bool //<
     //< Whether the endpoint exists in this mode
     //<
     //< Where it does not, the 404 is already queued.
-    local: = ctx.token.len > 0
+    local: = ctx.is_local()
     $here: = true
     switch r
     case .both {}
@@ -359,7 +357,7 @@ priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that met
 fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@, keep: Bool)
     // **For local use, all of `/api/` needs a token**; decided per endpoint, a new one forgets it.
     // Only static serving, which passes the token on, needs none.
-    if ctx.token.len > 0 && !authorized(req, ctx.token)
+    if ctx.is_local() && !authorized(req, ctx.token)
         queue_json_error(c, 401)
         return
     for r in routes

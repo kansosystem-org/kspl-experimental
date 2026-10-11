@@ -20,14 +20,13 @@ import "ksai/model_file" as ai_file
 import "ksai/nn"
 import "ksai/safetensors" as st
 import "ksai/sampler"
-import "ksai/tensor" { Tensor }
+import "ksai/tensor" + { Tensor }
 import "ksai/tokenizer"
 import "std/chars" // `is_digit`
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
-import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 import "std/sys"
 
 priv struct Qwen_config
@@ -113,9 +112,8 @@ impl<|T|> Qwen_model<|T|>
         lora_set.Qkv_lora<|T|>$@!st.Safetensors_error //<
             //< Reads a set of externally fine-tuned LoRA adapters
             //<
-            //< They are named as in load_lora_set of ksai/examples/llama_engine/model.Mini_llama
-            //< ("blocks.{i}.attn.{q,v}.lora_{a,b,scale}"), so if the layer counts agree, the same
-            //< file reads unchanged.
+            //< They are named "blocks.{i}.attn.{q,v}.lora_{a,b,scale}" (`load_qkv_lora_set` in
+            //< ksai/model_file.kspls).
         return ai_file.load_qkv_lora_set<|T|>(path, r.cfg.n_layers, arena)
     priv fn forward(r: Self$@, token_id: I32, start_pos: Sz,
         adapters: lora_set.Qkv_lora<|T|>$@, ca: Arena$@): Tensor<|T|> //<
@@ -140,9 +138,8 @@ impl<|T|> Qwen_model<|T|>
 // Caution: The F32→Sz cast (fptosi) is poison (undefined behaviour) out of range (NaN, Inf, a
 // huge value, a negative), with neither saturation nor wrap-around, and a tampered "cfg" can hold
 // any of them; so the value is compared while still F32 (safe even against NaN or Inf).
-priv const max_cfg_dim: F32 = 100000000.0 // the same value as ksai/tensor.max_tensor_elems
-priv fn safe_cfg_dim(v: F32): Sz!st.Safetensors_error
-    if !(v >= 0.0 && v <= max_cfg_dim)
+priv fn safe_cfg_dim(v: F32): Sz!st.Safetensors_error //< a setting no tensor can outgrow
+    if !(v >= 0.0 && v <= F32::tensor.max_tensor_elems)
         throw .invalid_header
     return Sz::v
 
@@ -181,44 +178,26 @@ priv const max_seq: Sz = 4096 // the cap on the KV cache taken (a practical cap 
 priv const gen_max: Sz = 64 // the cap on generate mode's autoregressive steps (likewise)
 
 fn read_tokens(arena: Arena$@): List<|I32|>$@ //<
-    //< Reads whitespace-separated non-negative integers from standard input into an I32 list
+    //< Reads non-negative integers from standard input into an I32 list; any other byte separates
     //<
-    //< It is for mode 1.
+    //< It is for mode 1. An ID past I32 is dropped with a warning, not cut into another valid ID.
     list: = List<|I32|>.create(arena)
-    $cur: I32 = 0
-    $in_num: = false
-    $overflowed: = false
+    $word: = Str_builder.new()
+    defer word.free()
     for
         c: = io.getchar()
-        if c >= '0' && c <= '9'
-            // Prevents I32 overflow (it adds a digit only if the result still fits). On overflow it
-            // sets overflowed and drops the token later, instead of truncating it into another
-            // valid ID (silent data corruption).
-            if cur <= 214748363
-                cur = cur * 10 + (c - '0')
+        if c >= 0 && (U8::c).is_digit()
+            word.c(U8::c)
+            continue
+        if word.len > 0
+            if id: = tokenizer.parse_token_id(word.slice())
+                list.push(id)
             else
-                overflowed = true
-            in_num = true
-        else
-            if in_num
-                if overflowed
-                    io.err().s("[warn] token ID overflowed I32 range, skipping\n")
-                else
-                    list.push(cur)
-                cur = 0
-                in_num = false
-                overflowed = false
-            if c < 0
-                break
+                io.err().s("[warn] token ID overflowed I32 range, skipping\n")
+            word.clear()
+        if c < 0
+            break
     return list
-
-priv fn is_decimal(text: U8[]): Bool //< whether it is digits alone, at least one
-    if text.len == 0
-        return false
-    for c in text
-        if !c.is_digit()
-            return false
-    return true
 
 priv fn outside_vocab(ids: List<|I32|>$@, vocab: Sz): Bool //<
     //< Whether a token ID falls outside the model's table, said on standard error
@@ -288,10 +267,12 @@ fn cmd_generate(a: sys.Args, arena: Arena$@): Bool //<
     merges_path: = a[4]
     // Caution: **Refuse an eos_id that is no token ID.** Read as 0, a typo would stop the
     // generation at the first token 0 rather than at the end of the text.
-    if !is_decimal(a[5])
+    $eos_id: I32 = 0
+    if id: = tokenizer.parse_token_id(a[5])
+        eos_id = id
+    else
         io.err().s("[Error] eos_id is not a token ID: '\{a[5]\}'\n")
         return false
-    eos_id: = I32::(a[5].parse_size() catch 0)
 
     $m: = Qwen_model<|F32|>.load(model_path, max_seq, arena) catch
         io.err().s("[Error] model load failed: \{model_path\}\n")

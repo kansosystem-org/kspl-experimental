@@ -10,11 +10,12 @@
 // Caution: **Do not discard a broken frame silently**, or the sender learns only that "nothing
 // comes back".
 // ==========================================
-import "std/chars" // `find_str` / `sub_from` / `trim_start`
+import "std/chars" // `find_str` / `sub_from` / `trim_spaces`
 import "std/json" + { Json_builder }
 import "std/mem" { Arena, alloc, dealloc }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
+import "std/strnum" as _strnum // `to_count`
 import "std/subproc"
 import "std/sys"
 
@@ -52,16 +53,7 @@ pub fn content_length( //< the length the header declares, or none if it is abse
         at = end + 1
         if !line.sub(0, length_tag.len).equals_ignore_case(length_tag)
             continue
-        digits: = line.sub_from(length_tag.len).trim_spaces()
-        if digits.len == 0
-            return .none
-        $n: Sz = 0
-        for d in digits
-            v: = Sz::(d - '0')
-            if !d.is_digit() || n > limit / 10 || n * 10 > limit - v
-                return .none
-            n = n * 10 + v
-        return .some(n)
+        return line.sub_from(length_tag.len).trim_spaces().to_count(limit)
     return .none
 
 pub fn frame_into( //< writes the header and then the body to the destination
@@ -71,7 +63,7 @@ pub fn frame_into( //< writes the header and then the body to the destination
     out: Str_builder$@, //< where the framed message is written
     body: U8[], //< the JSON text to send
 )
-    out.s("Content-Length: \{body.len\}\r\n\r\n").s(body)
+    out.s(length_tag).c(' ').s("\{body.len\}").s(frame_sep).s(body)
 
 pub fn encode( //< assembles one JSON-RPC body
     method: U8[], //< the name of the method to call
@@ -215,7 +207,7 @@ impl Client
         id: = r.next_id
         r.next_id += 1
         // The write spends the same budget: the round trip's timeout bounds both halves.
-        deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        deadline: = sys.deadline_after_ms(timeout_ms)
         r.send_raw(encode(method, params, id, arena), timeout_ms)!
         for sys.mono_us() <= deadline
             left_ms: = (deadline - sys.mono_us()) / 1000I64 + 1I64
@@ -232,7 +224,7 @@ impl Client
         timeout_ms: I32, //< how long this one call may take
         arena: Arena$@, //< where the response is built
     ): json.Val!Rpc_end
-        deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+        deadline: = sys.deadline_after_ms(timeout_ms)
         for sys.mono_us() <= deadline
             r.drain_err()
             taken: = take_frame(r.acc@, max_body_bytes, arena)!

@@ -5,6 +5,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/expr_postfix" as gen_c_expr_postfix
@@ -14,7 +15,6 @@ import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
-import "std/chars"
 import "std/str" { Str_builder }
 
 impl Ast_node
@@ -170,10 +170,7 @@ impl Ast_node
         $mangled_name: = inst_name.mangle_c_identifier()
         defer mangled_name.free()
 
-        if !mangled_name.slice().starts_with("kspl_")
-            c.s("kspl_\{mangled_name.slice()\}")
-        else
-            c.s(mangled_name.slice())
+        mangled_name.slice().kspl_symbol_to(c$)
 
     priv fn emit_const_ref_inline(r: Ast_node$@, c: Genc_ctx$@): Bool //<
         //< It emits another constant's initializer instead of a reference to it; true if it did
@@ -367,7 +364,7 @@ impl Ast_node
         if op.equals("-") && c.env.is_pointer(r.get_binary_left().type_id)
             r.emit_binary_body(c)
             return
-        if takes_signed_div(c, op, r.type_id, r.get_binary_right())
+        if sema_body_binary.takes_signed_div(c.sema, op, r.type_id, r.get_binary_right())
             open_signed_div(c, op, r.type_id)
             r.get_binary_left().emit_expr(c)
             r.get_binary_right().close_signed_div(c)
@@ -397,7 +394,7 @@ impl Ast_node
         c.s("(\{twin\})(")
         left_node.emit_expr(c)
         c.s(") \{op\} ")
-        if is_shift_op(op)
+        if op.is_shift_op()
             r.get_binary_right().emit_shift_amount(c, left_node.type_id)
             return
         c.s("(\{twin\})(")
@@ -421,11 +418,11 @@ impl Ast_node
 
         c.s(" \{op\} ")
 
-        if is_shift_op(op) && c.env.is_integer(left_node.type_id)
+        if op.is_shift_op() && c.env.is_integer(left_node.type_id)
             right_node.emit_shift_amount(c, left_node.type_id)
             return
 
-        if is_div_op(op) && c.env.is_integer(left_node.type_id)
+        if op.is_div_op() && c.env.is_integer(left_node.type_id)
             right_node.emit_divisor(c, left_node.type_id)
             return
 
@@ -485,31 +482,11 @@ impl Ast_node
             is_first = false
 priv fn get_c_precedence(op: U8[]): I32
     return (10 if op.equals("*") || op.equals("/") || op.equals("%")
-        else 9 if op.equals("+") || op.equals("-")
-        else 8 if op.equals("<<") || op.equals(">>")
+        else 9 if op.is_additive_op() else 8 if op.is_shift_op()
         else 7
         if op.equals("<") || op.equals("<=") || op.equals(">") || op.equals(">=")
-        else 6 if op.equals("==") || op.equals("!=") else 5 if op.equals("&")
-        else 4 if op.equals("^") else 3 if op.equals("|") else 2 if op.equals("&&")
-        else 1 if op.equals("||") else 0)
-
-priv fn is_bitwise_op(op: U8[]): Bool
-    return op.equals("&") || op.equals("|") || op.equals("^")
-
-priv fn is_shift_op(op: U8[]): Bool
-    return op.equals("<<") || op.equals(">>")
-
-priv fn is_div_op(op: U8[]): Bool
-    return op.equals("/") || op.equals("%")
-
-fn takes_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32, divisor: Ast_node$@): Bool //<
-    //< Whether `/` or `%` on type_id goes through open_signed_div rather than a plain `/` `%`
-    //<
-    //< Caution: **Do not emit a division of a type's minimum value by `-1` as a plain `/` `%`.**
-    //< C makes it undefined (x86 stops with SIGFPE). A constant divisor other than `0` and `-1`
-    //< cannot overflow and keeps the plain instruction. `/=` `%=` ask here too.
-    return is_div_op(op) && is_signed_int(c, type_id) &&
-        !sema_body_binary.divisor_cannot_overflow(c.sema, divisor)
+        else 6 if op.is_equality_op() else 5 if op.equals("&") else 4 if op.equals("^")
+        else 3 if op.equals("|") else 2 if op.equals("&&") else 1 if op.equals("||") else 0)
 
 fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
     //< The only place that emits signed division and remainder: the dividend follows it
@@ -518,13 +495,10 @@ fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
     helper: = "kspl_sdiv" if op.equals("/") else "kspl_smod"
     c.s("(").t(c.env.strip_const_deep(type_id)).s(")\{helper\}((I64)(")
 
-priv fn is_additive_op(op: U8[]): Bool
-    return op.equals("+") || op.equals("-")
-
 priv fn can_exceed_width(op: U8[]): Bool //< whether an operation's result can exceed the width
     //<
     //< For `& | ^ / % >>`, if the operands fit the width, the result fits too.
-    return is_additive_op(op) || op.equals("*") || op.equals("<<")
+    return op.is_additive_op() || op.equals("*") || op.equals("<<")
 
 priv fn narrow_unsigned(c: Genc_ctx$@, type_id: I32): Bool //<
     //< Whether an operation's result on this type must be converted back to the declared type
@@ -565,13 +539,6 @@ priv fn signed_wrap_twin(c: Genc_ctx$@, type_id: I32): U8[] //<
         return "U32"
     return "U64" if bits == 64 else ""
 
-priv fn is_comparison_op(op: U8[]): Bool
-    return op.equals("<") || op.equals("<=") || op.equals(">") || op.equals(">=") ||
-        op.equals("==") || op.equals("!=")
-
-priv fn is_equality_op(op: U8[]): Bool
-    return op.equals("==") || op.equals("!=")
-
 priv fn needs_warning_silencing_parens(child_op: U8[], parent_op: U8[]): Bool //<
     //< Whether to keep parentheses that get_c_precedence omits but the C compiler warns about
     //<
@@ -580,15 +547,16 @@ priv fn needs_warning_silencing_parens(child_op: U8[], parent_op: U8[]): Bool //
     //< Caution: **Do not check with clang only.** gcc warns even about pairs clang accepts
     //< silently (an addition or a comparison as a bitwise operator's operand).
 
-    if is_bitwise_op(child_op) && is_bitwise_op(parent_op) && !child_op.equals(parent_op)
+    if child_op.is_bitwise_op() && parent_op.is_bitwise_op() && !child_op.equals(parent_op)
         return true
-    if (is_shift_op(child_op) && is_additive_op(parent_op)) ||
-        (is_additive_op(child_op) && is_shift_op(parent_op))
+    if (child_op.is_shift_op() && parent_op.is_additive_op()) ||
+        (child_op.is_additive_op() && parent_op.is_shift_op())
         return true
     // gcc: warnings like "'+' in operand of '&'" and "comparison in operand of '!='".
-    if is_additive_op(child_op) && is_bitwise_op(parent_op)
+    if child_op.is_additive_op() && parent_op.is_bitwise_op()
         return true
-    if is_comparison_op(child_op) && (is_bitwise_op(parent_op) || is_equality_op(parent_op))
+    if child_op.is_comparison_op() &&
+        (parent_op.is_bitwise_op() || parent_op.is_equality_op())
         return true
     return (child_op.equals("&&") && parent_op.equals("||")) ||
         (child_op.equals("||") && parent_op.equals("&&"))

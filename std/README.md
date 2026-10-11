@@ -27,7 +27,7 @@ fn main()
 
 ### Nothing to install
 
-**Every file builds with the toolchain alone**: the compiler and a C compiler, with no library to install. `std/net`, `std/http`, `std/reactor`, `std/subproc` and `std/fs` reach the operating system through the C runtime every program links, and no file binds a C library from outside the toolchain ("13.5 The standard library reaches only itself" in [`../docs/DESIGN.md`](../docs/DESIGN.md)).
+**Every file builds with the toolchain alone**: the compiler and a C compiler, with no library to install. `std/net`, `std/http`, `std/reactor`, `std/subproc` and `std/fs` reach the operating system through the C runtime every program links, and no file binds a C library from outside the toolchain ("The standard library reaches only itself" in [`../docs/DESIGN.md`](../docs/DESIGN.md)).
 
 ### How many files one import brings along
 
@@ -37,26 +37,27 @@ Importing one file of `std` also compiles the files it imports, and this section
 
 Above those two, the files form tiers by how many files one import compiles.
 
-Caution: **Do not add line counts to this table**: every edit changes them, and `make test-thin-use` reports them with their upper bounds.
+Caution: **Do not add line counts to this table**: every edit changes them, and `make test-thin-use` reports them with their upper bounds. The file counts are checked by the same suite, so an import added without its row fails there.
 
 | What is used | How many come along |
 | --- | ---: |
 | `lang` + `libc` alone | 2 |
-| `bytes` `math` `checked_int` `time` `mem` `buf` `reflect` `ring` `prng` `bignat` | 3 |
+| `bytes` `math` `checked_int` `time` `mem` `buf` `reflect` `ring` `prng` `bignat` `log` `stack_limit` | 3 |
 | `chars` | 3 (4 on a freestanding build, one with no operating system under it, where `mem` supplies `memcmp`) |
-| `strfmt` | 4 |
-| `strnum` | 5 |
-| `ds` (`List` / `Map`), `sha256` `base64` `rand` `thread` `net` | 4 |
-| `seq` `regex` | 5 |
-| `str` | 7 |
-| `io` | 8 |
-| `sys` `json` `fs` and the like, which use those above | 8+ |
+| `strfmt` `thread` | 4 |
+| `strnum` | 5 (6 on a freestanding build, through `chars`) |
+| `ds` (`List` / `Map`), `base64` `rand` `net` | 5 |
+| `seq` | 6 |
+| `sha256` | 7 (8 on a freestanding build, through `chars`) |
+| `str` `regex` | 8 |
+| `io` | 9 |
+| `sys` `json` `fs` and the like, which use those above | 9+ |
 
 Why the tiers hold, and what keeps them from collapsing, is "Why one import brings few files along" in [`std/docs/DESIGN.md`](docs/DESIGN.md).
 
 ### `std/tests/`
 
-std's own tests live here, in no listing above. Their entry point is `run_std` in `std/tests/all.kspls`, which `make debug` calls. Where a test goes is "13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md).
+std's own tests live here, in no listing above. Their entry point is `run_std` in `std/tests/all.kspls`, which `make debug` calls. Where a test goes is "A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md).
 
 **`make test` runs them from this folder** with nothing but a `ksplc`, against the `std` this folder holds, so a copy of the folder tests itself ([`std/Makefile`](Makefile)).
 

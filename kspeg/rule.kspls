@@ -29,7 +29,7 @@ pub const max_parse_depth: Sz = 3000 //< how deep the rule tree may be walked be
     //< (LLVM and MSVC use more than clang's C), so the walk also stops near the stack's end
     //< (`walk_limit` below). engine's Rule.parse and notation's parse_primary check both.
 
-pub fn walk_limit(): Stack_limit //<
+fn walk_limit(): Stack_limit //<
     //< where a walk on the current thread stops, short of the end of its stack
     //<
     //< **The second limit, next to the depth count**: a short stack fails with the same "nesting
@@ -38,12 +38,15 @@ pub fn walk_limit(): Stack_limit //<
     //< run below the point that checked.
     return Stack_limit.new(256 * 1024)
 
-pub struct Rule_entry //< one rule of the grammar: its name and its tree
-    pub name: U8[] //< the name the grammar gives it
-    pub rule: Rule$@ //< the tree that name stands for
+struct Rule_entry //< one rule of the grammar: its name and its tree
+    name: U8[] //< the name the grammar gives it
+    rule: Rule$@ //< the tree that name stands for
     memo_writes: I64 //< how many times the memo has been written for this rule
     first: First_bytes //< the bytes a match of it can begin with (`compute_first_bytes`)
     skips_space: Bool //< whether it reads in syntax mode, skipping whitespace before each part
+    transparent: Bool //<
+        //< whether its name starts with `_`, so it adds no node (`names_transparent`)
+    token: Bool //< whether its name is upper case, a lexical token (`names_token`)
     memo_answered: Bool //< whether the memo has ever answered for it
         //<
         //< **Together they turn the memo off for a rule it can never help**: a rule reached from
@@ -52,17 +55,17 @@ pub struct Rule_entry //< one rule of the grammar: its name and its tree
         //< file to file, so the decision holds for the whole build (`share_grammar_from` in
         //< `engine.kspls`).
 
-pub struct First_bytes //< the bytes a match can begin with, and whether it can match nothing
+struct First_bytes //< the bytes a match can begin with, and whether it can match nothing
     //<
     //< **A rule cannot match where the next byte is not among its bits**, unless it can match
     //< nothing; then the bits say nothing about it. engine skips such a rule without entering it.
     //< Caution: **Err only on the side of too many bits.** A missing one makes a rule that could
     //< match be skipped, and the parse goes another way with nothing to say so.
-    pub bits: U64[4] //< bit `c` of the 256 set where a match can begin with byte `c`
-    pub can_be_empty: Bool //< whether it can match without reading a byte
+    bits: U64[4] //< bit `c` of the 256 set where a match can begin with byte `c`
+    can_be_empty: Bool //< whether it can match without reading a byte
 
 impl First_bytes
-    pub fn allows(r: Self@, c: U8): Bool //< whether a match can begin with `c`
+    fn allows(r: Self@, c: U8): Bool //< whether a match can begin with `c`
         return ((r.bits[c / 64] >> (U64::c % 64U64)) & 1U64) != 0U64
 
     fn add(r: Self$@, c: U8) //< lets a match begin with `c`
@@ -82,14 +85,20 @@ impl First_bytes
                 return false
         return r.can_be_empty == other.can_be_empty
 
-pub fn reads_in_syntax_mode(name: U8[]): Bool //< whether a rule of this name skips whitespace
+fn reads_in_syntax_mode(name: U8[]): Bool //< whether a rule of this name skips whitespace
     //<
     //< A rule named with a lower-case initial reads in syntax mode. An upper-case one is a lexical
     //< token and a `_` one is transparent; neither skips ("A rule's name sets its mode" in
     //< `kspeg/docs/SPEC-notation.md`).
-    return name.len > 0 && (name.ptr + 0)$ != '_' && !(name.ptr + 0).is_upper()
+    return name.len > 0 && !names_transparent(name) && !names_token(name)
 
-pub fn char_class_matches( //< whether one byte is in a character class's ranges
+fn names_transparent(name: U8[]): Bool //< whether a rule of this name adds no node (`_X`)
+    return name.len > 0 && (name.ptr + 0)$ == '_'
+
+fn names_token(name: U8[]): Bool //< whether a rule of this name is a lexical token (`X`)
+    return name.len > 0 && (name.ptr + 0).is_upper()
+
+fn char_class_matches( //< whether one byte is in a character class's ranges
     //<
     //< Caution: Do not interpret a character class anywhere but here. If the code that re-reads
     //< `_Boundary` (keyword_set) disagreed, where a keyword ends would depend on where it is
@@ -115,7 +124,7 @@ priv fn push_keyword(keywords: List<|U8[]|>$@, text: U8[]) //<
             return
     keywords.push(text)
 
-pub fn keyword_set_boundary( //< the ranges to fold a keyword set on, or `.none` where it cannot
+fn keyword_set_boundary( //< the ranges to fold a keyword set on, or `.none` where it cannot
     //<
     //< It folds only where the boundary check means "the whole extracted word matches": `_Boundary`
     //< is one character class, and no keyword is empty or holds a byte outside it (`'->'`).
@@ -155,7 +164,7 @@ fn sub_rules( //< the rules directly inside this one, in the order the grammar w
         out.push(inner)
     default {}
 
-pub fn collect_keywords( //< every keyword the rule matches, in the order the grammar writes them
+fn collect_keywords( //< every keyword the rule matches, in the order the grammar writes them
     rule: Rule$@,
     keywords: List<|U8[]|>$@, //< where they are appended; one already in it is not added twice
 )
@@ -176,7 +185,7 @@ pub fn collect_keywords( //< every keyword the rule matches, in the order the gr
     for kid in kids
         collect_keywords(kid, keywords)
 
-pub fn collect_references( //< every place where this rule refers to another rule by name
+fn collect_references( //< every place where this rule refers to another rule by name
     //<
     //< `resolved_ref` is skipped: its name is already resolved.
     rule: Rule$@,
@@ -194,7 +203,7 @@ pub fn collect_references( //< every place where this rule refers to another rul
     for kid in kids
         collect_references(kid, names)
 
-pub fn keyword_set_rule( //< one rule matching any of these keywords with a single lookup
+fn keyword_set_rule( //< one rule matching any of these keywords with a single lookup
     //<
     //< Caution: **Call it only where keyword_set_boundary answered `ranges`.** Elsewhere the scan
     //< that cuts the word out does not stop where the keyword ends.
@@ -209,7 +218,7 @@ pub fn keyword_set_rule( //< one rule matching any of these keywords with a sing
         .create(Keyword_set::{ .words = words, .order = keywords, .boundary = ranges })
     return arena.create(Rule.keyword_set(set))
 
-pub fn fold_keyword_choices( //< turns each run of keywords inside a choice into one set lookup
+fn fold_keyword_choices( //< turns each run of keywords inside a choice into one set lookup
     //<
     //< A run of keywords in a choice folds wherever the set may (keyword_set_boundary): each
     //< matches only the whole run of boundary characters, so at most one can match at a position
@@ -321,7 +330,7 @@ fn first_bytes_of( //< what a match of this part can begin with, as far as the r
         f.can_be_empty = true
     return f
 
-pub fn compute_first_bytes( //< fills in each rule's `first`, once its references are resolved
+fn compute_first_bytes( //< fills in each rule's `first`, once its references are resolved
     //<
     //< **A fixed point**: a rule's bytes depend on the rules it begins with, which may refer back.
     //< Each round only adds bits and empties, so it ends after a few rounds over the grammar.
@@ -330,6 +339,8 @@ pub fn compute_first_bytes( //< fills in each rule's `first`, once its reference
     for e in entries
         e.first = First_bytes::{}
         e.skips_space = reads_in_syntax_mode(e.name)
+        e.transparent = names_transparent(e.name)
+        e.token = names_token(e.name)
     for
         $changed: = false
         for e in entries
@@ -363,7 +374,7 @@ fn left_refs( //< the rules this part can enter before reading a byte
         left_refs(inner, entries, skips, out)
     default {}
 
-pub fn left_recursive_rule( //< a rule that can enter itself before reading a byte, if any
+fn left_recursive_rule( //< a rule that can enter itself before reading a byte, if any
     //<
     //< Such a rule never matches: each entry enters it again at the same position, until the depth
     //< limit stops the parse. Call it after compute_first_bytes, which says what can be empty.

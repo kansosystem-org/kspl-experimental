@@ -50,16 +50,12 @@ impl Ast_node
         if r.is_path_or_ident()
             return true
         if r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
-            op_node: = r.get_postfix_op()
-            op_text: = op_node.text if op_node != null else r.text
+            op_text: = r.postfix_op_text()
             if op_text.equals(".") || op_text.equals("[") || op_text.equals("]") ||
                 op_text.equals("$")
                 return true
         if r.kind_id == .k_expr_primary && r.children.len > 0
-            first: = r.get_child(0)
-            if first.is_literal("(") && r.children.len >= 3
-                return r.get_child(1).is_place_expr()
-            return first.is_place_expr()
+            return r.get_primary_inner_expr().is_place_expr()
         return false
 
     fn is_unaddressable_value(r: Self$@): Bool //<
@@ -76,17 +72,13 @@ impl Ast_node
             return true
         default {}
         if r.kind_id == .k_expr_postfix || r.kind_id == .k_method_access
-            op_node: = r.get_postfix_op()
-            op_text: = op_node.text if op_node != null else r.text
+            op_text: = r.postfix_op_text()
             // A call's postfix is `(`; `f().x` is a place, so **the outermost** operator alone
             // counts.
             return op_text.equals("(")
         if r.kind_id == .k_expr_primary && r.children.len > 0
-            first: = r.get_child(0)
             // Parentheses alone change nothing; the answer is the inner expression's.
-            if first.is_literal("(") && r.children.len >= 3
-                return r.get_child(1).is_unaddressable_value()
-            return first.is_unaddressable_value()
+            return r.get_primary_inner_expr().is_unaddressable_value()
         return false
 
     fn receiver_needs_hoist(r: Self$@, is_ptr: Bool, is_slice: Bool): Bool //<

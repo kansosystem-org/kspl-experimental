@@ -131,10 +131,12 @@ impl Ast_node
             // (Resolving_state.registries in sema/session/state.kspls).
             c.resolving.registries.push(c.env.get_or_add(target_fqn))
             defer c.resolving.registries.len -= 1
+            // **Put the name back in a `defer`**: a `!` below leaves before the line after it.
+            outer_impl: = c.fn_ctx.impl_name
+            defer c.fn_ctx.impl_name = outer_impl
             c.fn_ctx.impl_name = target_fqn
             r.fill_struct_fields(c, struct_def)!
             r.lint_manual_owner_struct(c, struct_def, target_fqn)
-            c.fn_ctx.impl_name = ""
         default {}
 
     fn fill_struct_fields(r: Ast_node$@, c: Sema_ctx$@, struct_def: sema_type_def.Struct_def$@):
@@ -285,11 +287,13 @@ impl Ast_node
             if enum_def.pending_decl == null
                 return // already filled in
             enum_def.pending_decl = null
-            c.resolving.registries.push(c.env.get_or_add(target_fqn))
+            type_id: = c.env.get_or_add(target_fqn)
+            c.resolving.registries.push(type_id)
             defer c.resolving.registries.len -= 1
+            outer_impl: = c.fn_ctx.impl_name
+            defer c.fn_ctx.impl_name = outer_impl
             c.fn_ctx.impl_name = target_fqn
-            r.fill_enum_variants(c, enum_def, c.env.get_or_add(target_fqn), true)!
-            c.fn_ctx.impl_name = ""
+            r.fill_enum_variants(c, enum_def, type_id, true)!
         default {}
 
     fn fill_enum_variants(r: Ast_node$@, c: Sema_ctx$@, enum_def: sema_type_def.Enum_def$@,
@@ -299,7 +303,7 @@ impl Ast_node
             //< The counterpart of fill_struct_fields. `declare_syms` adds each variant to the name
             //< table as `Enum.variant`; a generic enum's instance passes false and is reached
             //< through its type.
-        $base_type_id: = c.env.get_or_add("I32")
+        $base_type_id: = I32::sema_type_env.Builtin_type_id.i32_type
         base_type_node: = r.get_decl_type_node()
         if base_type_node != null
             base_type_id = base_type_node.resolve_type(c)!

@@ -222,7 +222,7 @@ priv const heaviest: U8[] = "std/str" //< the heaviest unit
     //< **`std/io` is not in here.** Writer / Formattable are in std/lang, so string handling pays
     //< for no file I/O (io still brings str along).
 
-priv const core_max_lines: Sz = 4059 //<
+priv const core_max_lines: Sz = 3481 //<
     //< The cap on the line count of the chunk the heaviest unit reaches
     //<
     //< **An added line costs every program that uses strings**, such as a format's field padding
@@ -240,6 +240,21 @@ priv struct Edge //< an import's edge
     //< "The source's index" and "the target's name", avoiding nested generics.
     from: Sz
     to: U8[]
+    under: U8[] //< the `#cfg(...)` on the line above the import; empty where there is none
+
+priv enum Build //< which imports a walk follows
+    all //< every one, a `#cfg` one included (what the leaves and the cycles are judged by)
+    hosted //< all but those under `#cfg(freestanding)`
+    free //< all but those under `#cfg(!freestanding)`
+
+priv fn follows(e: Edge, build: Build): Bool //< whether a walk for `build` takes the edge
+    switch build
+    case .hosted
+        return !e.under.equals("#cfg(freestanding)")
+    case .free
+        return !e.under.equals("#cfg(!freestanding)")
+    default {}
+    return true
 
 priv fn index_of(files: List<|Std_file|>@, name: U8[]): I32
     for i in Range.asc(files.len)
@@ -284,14 +299,18 @@ priv fn collect_std(files: List<|Std_file|>$@, edges: List<|Edge|>$@, arena: Are
             .push(Std_file::{ .name = rel.strip_suffix(ext), .lines = text.count_str("\n"),
             .entry = entry })
         idx: = files.len - 1
+        $above: U8[] = ""
         for line in text.lines(arena)
             to: = imported_std_name(line)
             if to.len > 0
-                edges.push(Edge::{ .from = idx, .to = to })
+                edges.push(Edge::{ .from = idx, .to = to, .under = above })
+            t: = line.trim_spaces()
+            above = t if t.starts_with("#cfg(") else ""
+
     return files.len > 0
 
-priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], arena: Arena$@):
-    List<|U8[]|> //<
+priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], build: Build,
+    arena: Arena$@): List<|U8[]|> //<
         //< The names of the std files reached by walking imports from name (name and BASE too).
     $seen: = List<|U8[]|>.new(arena)
     $stack: = List<|U8[]|>.new(arena)
@@ -308,9 +327,85 @@ priv fn closure(files: List<|Std_file|>@, edges: List<|Edge|>@, name: U8[], aren
             continue
         seen.push(cur)
         for e in edges
-            if e.from == Sz::at
+            if e.from == Sz::at && follows(e, build)
                 stack.push(e.to)
     return seen
+
+priv const tier_head: U8[] = "| What is used |" //< the head of the tier table in std's README.md
+
+priv fn numbers_in(cell: U8[], arena: Arena$@): List<|Sz|> //< each run of digits, in order
+    $out: = List<|Sz|>.new(arena)
+    $cur: Sz = 0
+    $inside: = false
+    for ch in cell
+        if ch.is_digit()
+            cur = cur * 10 + Sz::(ch - '0')
+            inside = true
+        else if inside
+            out.push(cur)
+            cur = 0
+            inside = false
+    if inside
+        out.push(cur)
+    return out
+
+priv fn check_tier_table(files: List<|Std_file|>@, edges: List<|Edge|>@,
+    base_names: List<|U8[]|>@, arena: Arena$@) //<
+        //< Checks the table "How many files one import brings along" in std's README.md
+        //<
+        //< A row's number is a hosted build's; `(N on a freestanding build ...)` is that build's,
+        //< and `N+` is a floor. **Hand-kept, it drifted by a file or more** when an import was
+        //< added, and nothing failed.
+    path: = fs.join(harness.std_dir(), "README.md", arena)
+    doc: = io.read_file(path) catch ""
+    $bad: = List<|U8[]|>.new(arena)
+    $rows: Sz = 0
+    $inside: = false
+    for line in doc.lines(arena)
+        if !inside
+            inside = line.starts_with(tier_head)
+            continue
+        if !line.starts_with("|")
+            break
+        cells: = line.split('|', arena)
+        if cells.len < 3 || cells.get(2).trim_spaces().starts_with("--")
+            continue
+        rows += 1
+        want: = numbers_in(cells.get(2), arena)
+        floor: = cells.get(2).find_char('+').is_some()
+        free_given: =
+            want.len > 1 && cells.get(2).find_str("freestanding").is_some()
+        if want.len == 0
+            bad.push(arena.text().s("a row gives no count: ").s(line).take())
+            continue
+        for name in cells.get(1).split('`', arena)
+            if name.len == 0 || name.find_char(' ').is_some() || !name[0].is_lower()
+                continue
+            file: = arena.text().s("std/").s(name).take()
+            if has_name(base_names, file)
+                if want.get(0) != base_names.len
+                    bad
+                        .push(arena.text().s(name).s(": BASE is \{base_names.len\} files").take())
+                continue
+            if index_of(files, file) < 0
+                bad.push(arena.text().s(name).s(" is no file of std").take())
+                continue
+            hosted: = closure(files, edges, file, .hosted, arena).len
+            free: = closure(files, edges, file, .free, arena).len
+            want_free: = want.get(1) if free_given else want.get(0)
+            ok: =
+                hosted >= want.get(0) if floor else hosted == want.get(0) && free == want_free
+            if !ok
+                bad
+                    .push(arena.text().s(name).s(" brings \{hosted\} (freestanding \{free\}), ")
+                    .s("the row says ").s(cells.get(2).trim_spaces()).take())
+    detail: = arena.text().s(path).s(":")
+    for one in bad
+        detail.s("\n    ").s(one)
+    if rows == 0
+        detail.s(" no table was read")
+    verdict.check(arena.text().s("std's tier table counts the files one import brings (\{rows\} ")
+        .s("rows)").take(), rows > 0 && bad.len == 0, detail.take())
 
 priv fn sum_lines(files: List<|Std_file|>@, names: List<|U8[]|>@): Sz
     $total: Sz = 0
@@ -428,7 +523,7 @@ fn main(): I32
         name: = files.get(i).name
         if has_name(base_names@, name)
             continue
-        reach: = closure(files@, edges@, name, arena)
+        reach: = closure(files@, edges@, name, .all, arena)
         if reach.len == base_names.len + 1
             leaves.push(name)
     $extra: = ""
@@ -457,7 +552,7 @@ fn main(): I32
                 continue
             if has_name(base_names@, e.to)
                 continue
-            back: = closure(files@, edges@, e.to, arena)
+            back: = closure(files@, edges@, e.to, .all, arena)
             if has_name(back@, name)
                 looped = arena.text().s(name).s(" <-> ").s(e.to).take()
     verdict.check("std has no import cycle", looped.len == 0,
@@ -471,7 +566,9 @@ fn main(): I32
         if !f.entry && !f.name.equals("std/lang")
             solo_case(f.name, arena)
 
-    core_reach: = closure(files@, edges@, heaviest, arena)
+    check_tier_table(files@, edges@, base_names@, arena)
+
+    core_reach: = closure(files@, edges@, heaviest, .all, arena)
     core_lines: = sum_lines(files@, core_reach@)
     verdict.check(arena.text()
         .s("the chunk's amount is \{core_max_lines\} lines or under (now \{core_lines\} lines)")

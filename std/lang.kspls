@@ -34,9 +34,9 @@ priv const panic_magic: U32 = 0x4B505243 // ASCII "KPRC"
 priv struct _Panic_record
     magic: U32
     msg_len: Sz
-    msg: U8[128]
+    msg: U8[panic_msg_cap]
     sp: Sz
-    stack: Sz[16]
+    stack: Sz[panic_stack_words]
 #cfg(freestanding)
 #section(".noinit_panic")
 priv $_panic_rec: _Panic_record = ::{}
@@ -147,6 +147,37 @@ pub fn assert( //< stops the program unless the condition holds
     if !cond
         panic(msg, file, line)
 
+pub fn assert_eq( //< stops the program unless two integers are equal, saying both
+    //<
+    //< Any integer type widens to `I64` here. A failure reads `<msg>: got <got>, want <want>`.
+    got: I64, //< the value the code produced
+    want: I64, //< the value it must be
+    msg: U8$[], //< what was being checked
+    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+)
+    if got == want
+        return
+    $m: = Panic_msg.new()
+    panic(m.s(msg).s(": got ").n(got).s(", want ").n(want).slice(), file, line)
+
+pub fn assert_near( //< stops the program unless two numbers lie within `tol`, saying both
+    //<
+    //< A NaN on either side fails. The numbers are written with six decimals, truncated.
+    got: F64, //< the value the code produced
+    want: F64, //< the value it must be close to
+    tol: F64, //< the largest difference let through
+    msg: U8$[], //< what was being checked
+    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
+    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
+)
+    d: = got - want
+    if d <= tol && -d <= tol
+        return
+    $m: = Panic_msg.new()
+    panic(m.s(msg).s(": got ").f(got).s(", want ").f(want).s(" (tolerance ").f(tol).s(")").slice(),
+        file, line)
+
 pub struct Panic_msg //< a fixed-size buffer for a panic's message, which allocates nothing
     //<
     //< It needs no `io`; **string interpolation (`\{v\}`) cannot be used here.**
@@ -169,11 +200,10 @@ impl Panic_msg
             r.put(t[i])
         return r
 
-    pub fn n(r: Self$@, v: Sz): Self$@ //< writes a number as decimal, including the minimum
+    pub fn n(r: Self$@, v: I64): Self$@ //< writes a number as decimal, including the minimum
         //<
-        //< Caution: **Take the absolute value as unsigned.** `-v` as an `Sz` does not fit when `v`
-        //< is `Sz`'s minimum (the same reason as in `Range.new`); `U64::0 - U64::v` gives the
-        //< magnitude.
+        //< Caution: **Take the absolute value as unsigned.** `-v` does not fit when `v` is the
+        //< minimum (the same reason as in `Range.new`); `U64::0 - U64::v` gives the magnitude.
         $mag: U64 = U64::0 - U64::v if v < 0 else U64::v
         if v < 0
             r.put('-')
@@ -190,6 +220,28 @@ impl Panic_msg
             i += 1
         for j in Range.desc(i)
             r.put(tmp[j])
+        return r
+
+    pub fn f(r: Self$@, v: F64): Self$@ //< writes a number with six decimals, truncated
+        //<
+        //< Enough to tell two values apart in a message: `nan` and `inf` are written as words, and
+        //< a finite magnitude past 9e18 (too wide for the whole part) as `huge`.
+        if v != v
+            return r.s("nan")
+        $x: = v
+        if x < 0.0
+            r.put('-')
+            x = -x
+        if x > 9.0e18
+            return r.s("inf" if x - x != 0.0 else "huge")
+        whole: = I64::x
+        r.n(whole).put('.')
+        $frac: = x - F64::whole
+        for _i in Range.asc(6)
+            frac *= 10.0
+            digit: = I64::frac
+            r.put(U8::digit + '0')
+            frac -= F64::digit
         return r
 
     pub fn slice(r: Self$@): U8$[] //< what has been written, to pass to `panic`

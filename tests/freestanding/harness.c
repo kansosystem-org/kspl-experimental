@@ -152,6 +152,8 @@ static void check_ptr_format(void) {
     struct { void* p; const char* want; } cases[] = {
         { NULL, "0x0" }, { (void*)(size_t)0x1, "0x1" }, { (void*)(size_t)0xdeadbeef, "0xdeadbeef" },
         { (void*)(size_t)0x10, "0x10" },
+        // The top bit set: on a 32-bit target this address is negative as a signed size.
+        { (void*)(size_t)0x80000000u, "0x80000000" }, { (void*)(size_t)0xd0000000u, "0xd0000000" },
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         size_t n = probe_format_ptr(got, sizeof(got) - 1, cases[i].p);

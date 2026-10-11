@@ -113,21 +113,15 @@ priv fn fopen_checked(path: U8[], mode: U8[]): Void$@!Io_error //<
     //<
     //< Caution: **Do not use `libc.fopen`.** It is the narrow (ANSI) API, so on Windows a non-ASCII
     //< path is read in the current code page (see the top of `kspl_win_to_wide` in
-    //< `ksplc/gen/runtime/hosted.c`). `kspl_fopen_path` switches to the wide API per environment.
+    //< `ksplc/gen/runtime/hosted.c`). `kspl_fopen_cstr` switches to the wide API per environment.
     // The C side would use only the part of a path before a NUL, so such a path is not opened; the
     // call fails instead (see str.to_cstr).
-    $path_buf: U8$@ = null
-    switch path.to_cstr()
-    case .some(p)
-        path_buf = p
-    case .none
+    path_buf: = path.to_cstr().unwrap_or(null)
+    if path_buf == null
         throw open_error(path, mode)
     defer dealloc(Void$@::path_buf)
-    $mode_buf: U8$@ = null
-    switch mode.to_cstr()
-    case .some(m)
-        mode_buf = m
-    case .none
+    mode_buf: = mode.to_cstr().unwrap_or(null)
+    if mode_buf == null
         throw open_error(path, mode)
     defer dealloc(Void$@::mode_buf)
     // On POSIX a directory opens for reading and reads as nothing; Windows refuses it. It is

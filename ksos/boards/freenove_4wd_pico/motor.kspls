@@ -5,6 +5,7 @@
 //< freewheels. Each motor's pins are **the A/B channels of one PWM slice** (shared period,
 //< separate duty; ksos/drivers/rp2040/pwm.kspls).
 import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/pwm"
 import "ksos/drivers/rp2040/timer"
 
@@ -12,13 +13,12 @@ const speed_max: I32 = 100 //< the limit on a requested speed (as an absolute va
     //<
     //< The same scale as the duty percentage.
 
-fn init(): Bool //<
+fn init(): Void!mmio.Driver_error //<
     //< Initializes the PWM block, makes the eight motor pins PWM outputs and sets the period
     //<
-    //< false: taking it out of reset failed, and no command takes effect. Every wheel is left
-    //< stopped (the duty is written 0 here, since config_slice does not set it).
-    if !pwm.init()
-        return false
+    //< On a failure the PWM block did not leave reset, and no command takes effect. Every wheel is
+    //< left stopped (the duty is written 0 here, since config_slice does not set it).
+    pwm.init()!
     for w in Range.asc(board.wheel_count)
         a: = board.motor_pin_a[w]
         b: = board.motor_pin_b[w]
@@ -27,7 +27,6 @@ fn init(): Bool //<
         // The two pins share a slice; one period setting covers both.
         pwm.config_slice(pwm.slice_of(a), board.motor_pwm_div_int, 0, board.motor_pwm_top)
     stop()
-    return true
 
 fn set_wheel(w: Sz, speed: I32) //< turns wheel w at speed `speed` (-100 to 100)
     //<

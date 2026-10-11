@@ -16,8 +16,6 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000 //<
-    //< The read timeout (the same as the suite's `normal_ms`)
 priv const heavy_ms: I32 = 60000 //<
     //< Opening the prelude analyses its whole import tree, so it uses the suite's longer timeout
 
@@ -42,8 +40,8 @@ fn main(): I32 {
 }
 """
 
-priv const types_names: U8[][5] = ::{ "folders", "mutbuf", "table", "nested", "ptrs" }
-priv const types_want: U8[][5] = ::{ "std.ds.List<|U8[]|>", "std.ds.List<|U8$[]|>",
+priv const types_names: U8[][_] = ::{ "folders", "mutbuf", "table", "nested", "ptrs" }
+priv const types_want: U8[][_] = ::{ "std.ds.List<|U8[]|>", "std.ds.List<|U8$[]|>",
     "std.ds.Map<|U8[], I32|>", "std.ds.List<|std.ds.List<|U8[]|>|>",
     "std.ds.List<|std.str.Str_builder$@|>" }
 
@@ -58,8 +56,8 @@ fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
         line: =
             decl_line(types_src, arena.text().s("  \{var_name\}: =").take(), arena)
         got: =
-            c.request("textDocument/hover", lsp_client.at_pos(types_uri, line, 3, arena), normal_ms,
-            arena) catch e
+            c.request("textDocument/hover", lsp_client.at_pos(types_uri, line, 3, arena),
+            lsp_client.read_ms, arena) catch e
             d1: = end_text(e)
             label: = arena.text().s("a hover's type becomes the source's letter: ").s(var_name)
                 .take()
@@ -76,7 +74,7 @@ fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
     decl: = "  folders: ="
     fcol: = col_in_line(types_src, decl, ".new(", arena) + 2
     fpos: = lsp_client.at_pos(types_uri, decl_line(types_src, decl, arena), fcol, arena)
-    fgot: = c.request("textDocument/hover", fpos, normal_ms, arena) catch e
+    fgot: = c.request("textDocument/hover", fpos, lsp_client.read_ms, arena) catch e
         verdict.check(fname, false, end_text(e))
         return
     ftext: = lsp_client.hover_text(fgot)
@@ -114,10 +112,10 @@ fn use_it(j: subproc.Job): Sz {
 priv const away_uri: U8[] = "file:///away_probe.kspl"
 
 // The three shapes a slice is written in, each on a declaration in another file.
-priv const away_decls: U8[][3] = ::{ "  _x: = b.s(", "  n: = f.read(", "  return j.argv" }
-priv const away_marks: U8[][3] = ::{ ".s(", ".read(", ".argv" }
-priv const away_wants: U8[][3] = ::{ "s: U8[]", "buf: U8$[]", "argv: U8[][]" }
-priv const away_names: U8[][3] = ::{ "a parameter", "a mutable parameter", "a field" }
+priv const away_decls: U8[][_] = ::{ "  _x: = b.s(", "  n: = f.read(", "  return j.argv" }
+priv const away_marks: U8[][_] = ::{ ".s(", ".read(", ".argv" }
+priv const away_wants: U8[][_] = ::{ "s: U8[]", "buf: U8$[]", "argv: U8[][]" }
+priv const away_names: U8[][_] = ::{ "a parameter", "a mutable parameter", "a field" }
 
 fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(away_uri, away_src, arena),
@@ -129,7 +127,7 @@ fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
         pos: = lsp_client.at_pos(away_uri, decl_line(away_src, decl, arena), col, arena)
         label: = arena.text().s("declared in another file, ").s(away_names[i])
             .s(" is spelt as the source writes it").take()
-        got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+        got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
@@ -177,7 +175,7 @@ fn check_hover_self_param(c: jsonrpc.Client$@, arena: Arena$@)
     decl: = "  fn get(r: Self)"
     pos: = lsp_client.at_pos(self_uri, decl_line(self_src, decl, arena),
         col_in_line(self_src, decl, "r:", arena), arena)
-    got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+    got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
         verdict.check(label, false, end_text(e))
         return
     text: = lsp_client.hover_text(got)
@@ -227,11 +225,11 @@ impl<|T|> Cell<|T|> {
 
 priv const recv_uri: U8[] = "file:///recv_probe.kspl"
 
-priv const recv_decls: U8[][4] = ::{ "  fn bump(", "  fn peek(", "  fn store(", "  fn put(" }
-priv const recv_marks: U8[][4] = ::{ "bump", "peek", "(r", "put" }
-priv const recv_wants: U8[][4] = ::{ "bump(r: Self$@)", "peek(r: Self@)", "r: Self$@ (Cell<|T|>)",
+priv const recv_decls: U8[][_] = ::{ "  fn bump(", "  fn peek(", "  fn store(", "  fn put(" }
+priv const recv_marks: U8[][_] = ::{ "bump", "peek", "(r", "put" }
+priv const recv_wants: U8[][_] = ::{ "bump(r: Self$@)", "peek(r: Self@)", "r: Self$@ (Cell<|T|>)",
     "Cell.put(r: Self$@, v: T)" }
-priv const recv_names: U8[][4] = ::{ "a receiver written Self$@", "a receiver written Self@",
+priv const recv_names: U8[][_] = ::{ "a receiver written Self$@", "a receiver written Self@",
     "a generic's receiver written Self$@", "a generic method named as the prelude's `put`" }
 
 fn check_hover_receiver(c: jsonrpc.Client$@, arena: Arena$@)
@@ -243,7 +241,7 @@ fn check_hover_receiver(c: jsonrpc.Client$@, arena: Arena$@)
         pos: = lsp_client.at_pos(recv_uri, decl_line(recv_src, decl, arena),
             col_in_line(recv_src, decl, recv_marks[i], arena) + 1, arena)
         label: = arena.text().s(recv_names[i]).s(" shows in the hover as written").take()
-        got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+        got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
@@ -274,8 +272,8 @@ priv const label_src: U8[] =
 
 priv const label_uri: U8[] = "file:///label_probe.kspl"
 
-priv const label_lines: U8[][2] = ::{ "  outer: for {", "        break outer;" }
-priv const label_names: U8[][2] = ::{ "a label where it is written", "a label a break names" }
+priv const label_lines: U8[][_] = ::{ "  outer: for {", "        break outer;" }
+priv const label_names: U8[][_] = ::{ "a label where it is written", "a label a break names" }
 
 fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(label_uri, label_src, arena),
@@ -286,7 +284,7 @@ fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
         pos: = lsp_client.at_pos(label_uri, decl_line(label_src, line, arena),
             col_in_line(label_src, line, "outer", arena) + 1, arena)
         label: = arena.text().s(label_names[i]).s(" is shown as a label").take()
-        got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+        got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
@@ -297,7 +295,8 @@ fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
     jump: = "a jump from a break lands on the label it names"
     from: = lsp_client.at_pos(label_uri, decl_line(label_src, label_lines[1], arena),
         col_in_line(label_src, label_lines[1], "outer", arena) + 1, arena)
-    got: = c.request("textDocument/definition", from, normal_ms, arena) catch e
+    got: =
+        c.request("textDocument/definition", from, lsp_client.read_ms, arena) catch e
         verdict.check(jump, false, end_text(e))
         return
     landed: = got.get("result").get("range").get("start").get("line").as_int(-1)
@@ -365,15 +364,15 @@ fn count<|T|>(xs: List<|T|>$@, m: coll.Map<|U8[], T|>$@, cc: Cell3<|T|>@,
 
 priv const generic_uri: U8[] = "file:///generic_probe.kspl"
 
-priv const generic_lines: U8[][8] = ::{ "  _h: = m.remove(", "  _s: = xs.slice(",
+priv const generic_lines: U8[][_] = ::{ "  _h: = m.remove(", "  _s: = xs.slice(",
     "  _p: = cc.peek(", "    return r.pair.left.peek(", "    return r.pair.left.peek(",
     "  _q: = pp.left.peek(", "  _a: = t.peek(", "  _b: = w.left.peek(" }
-priv const generic_marks: U8[][8] = ::{ "remove", "slice", "peek", "peek", "left", "peek", "peek",
+priv const generic_marks: U8[][_] = ::{ "remove", "slice", "peek", "peek", "left", "peek", "peek",
     "peek" }
-priv const generic_wants: U8[][8] = ::{ "std.ds.Map.remove(", "std.ds.List.slice(r: Self$@)",
+priv const generic_wants: U8[][_] = ::{ "std.ds.Map.remove(", "std.ds.List.slice(r: Self$@)",
     "Cell3.peek(r: Self@)", "Cell3.peek(r: Self@)", "field left: ", "Cell3.peek(r: Self@)",
     "Cell3.peek(r: Self@)", "Cell3.peek(r: Self@)" }
-priv const generic_names: U8[][8] = ::{ "a call on a generic named by an alias names its method",
+priv const generic_names: U8[][_] = ::{ "a call on a generic named by an alias names its method",
     "a call on a generic named by a selective import names its method",
     "a call on this file's generic through a view names its method",
     "a call through `Self`'s fields (`r.pair.left.peek`) names its method",
@@ -391,7 +390,7 @@ fn check_hover_generic_body(c: jsonrpc.Client$@, arena: Arena$@)
         pos: = lsp_client.at_pos(generic_uri, decl_line(generic_src, line, arena),
             col_in_line(generic_src, line, generic_marks[i], arena) + 1, arena)
         label: = arena.text().s("in an uninstantiated generic, ").s(generic_names[i]).take()
-        got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+        got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
@@ -434,7 +433,7 @@ fn check_hover_default_arg(c: jsonrpc.Client$@, arena: Arena$@)
     call: = "  return bump(2);"
     pos: = lsp_client.at_pos(default_uri, decl_line(default_src, call, arena),
         col_in_line(default_src, call, "bump", arena), arena)
-    got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+    got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
         verdict.check(label, false, end_text(e))
         return
     text: = lsp_client.hover_text(got)
@@ -474,10 +473,10 @@ impl U8[] {
 
 priv const owner_uri: U8[] = "file:///owner_probe.kspl"
 
-priv const owner_marks: U8[][3] = ::{ "probe_named", "probe_count", "probe_width" }
-priv const owner_wants: U8[][3] = ::{ "fn std.io.Io_error.probe_named(",
+priv const owner_marks: U8[][_] = ::{ "probe_named", "probe_count", "probe_width" }
+priv const owner_wants: U8[][_] = ::{ "fn std.io.Io_error.probe_named(",
     "fn std.ds.List.probe_count(", "fn U8[].probe_width(" }
-priv const owner_kinds: U8[][3] = ::{ "a type of std's", "a generic nothing instantiates",
+priv const owner_kinds: U8[][_] = ::{ "a type of std's", "a generic nothing instantiates",
     "a built-in type" }
 
 fn check_hover_owner(c: jsonrpc.Client$@, arena: Arena$@)
@@ -490,7 +489,7 @@ fn check_hover_owner(c: jsonrpc.Client$@, arena: Arena$@)
             col_in_line(owner_src, decl, owner_marks[i], arena) + 1, arena)
         label: = arena.text().s("a method on ").s(owner_kinds[i])
             .s(" is named by its owner, not by its impl's file").take()
-        got: = c.request("textDocument/hover", pos, normal_ms, arena) catch e
+        got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
         text: = lsp_client.hover_text(got)
@@ -509,12 +508,12 @@ priv const lang_file: U8[] = "lang.kspls" //<
     //< template's position, so the declaration can show whichever instantiation came last.
     //< Caution: **Test the prelude, not a probe written here**: the prelude's declarations are what
     //< the instantiation in every document (`Slice<|U8|>`) is made from.
-priv const lang_decls: U8[][3] = ::{ "    fn free(r: Self)", "    fn add(r: Self, rhs: Rhs): Output",
+priv const lang_decls: U8[][_] = ::{ "    fn free(r: Self)", "    fn add(r: Self, rhs: Rhs): Output",
     "    pub fn at_ref(r: Self@" }
-priv const lang_marks: U8[][3] = ::{ "free", "add", "at_ref" }
-priv const lang_wants: U8[][3] = ::{ "std.lang.Owned.free(r: Self)",
+priv const lang_marks: U8[][_] = ::{ "free", "add", "at_ref" }
+priv const lang_wants: U8[][_] = ::{ "std.lang.Owned.free(r: Self)",
     "std.lang.Add.add(r: Self, rhs: Rhs)", "at_ref(r: Self@" }
-priv const lang_names: U8[][3] = ::{ "a trait's requirement", "a generic trait's requirement",
+priv const lang_names: U8[][_] = ::{ "a trait's requirement", "a generic trait's requirement",
     "a generic impl's method" }
 
 fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)

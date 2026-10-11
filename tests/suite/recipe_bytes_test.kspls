@@ -33,14 +33,14 @@ priv struct Hit //< one finding on a recipe line
     text: U8[]
 
 // The tools that swallow the earlier stage's failure when they are a pipe's later stage.
-priv const filters: U8[][11] = ::{ "tee", "head", "tail", "grep", "sort", "wc", "xargs", "awk",
+priv const filters: U8[][_] = ::{ "tee", "head", "tail", "grep", "sort", "wc", "xargs", "awk",
     "sed", "cut", "python3" }
 
-priv const safe_producers: U8[][2] = ::{ "echo", "printf" } //< commands that do not fail
+priv const safe_producers: U8[][_] = ::{ "echo", "printf" } //< commands that do not fail
     //<
     //< Adding pipefail where only these are the earlier stage changes nothing.
 
-priv const shell_words: U8[][6] = ::{ "if", "while", "until", "elif", "then", "else" } //<
+priv const shell_words: U8[][_] = ::{ "if", "while", "until", "elif", "then", "else" } //<
     //< The shell's syntax words (at the start of an earlier stage, not a command)
 
 priv fn make_files(arena: Arena$@): List<|U8[]|> //<
@@ -52,7 +52,8 @@ priv fn make_files(arena: Arena$@): List<|U8[]|> //<
     //< update this too.
     $out: = List<|U8[]|>.new(arena)
     out.push("Makefile")
-    text: = io.read_file(fs.join(harness.root(), "Makefile", arena)) catch
+    text: = harness.read_under_root("Makefile")
+    if text.len == 0
         return out
     for line in text.lines(arena)
         optional: = line.starts_with("-include ")
@@ -237,7 +238,8 @@ priv fn scan_first_dep(path: U8[], arena: Arena$@): List<|Hit|> //<
     //<
     //< Inside a `define` the rule is unknown, so it counts as 0 (write the file by name instead).
     $out: = List<|Hit|>.new(arena)
-    text: = io.read_file(fs.join(harness.root(), path, arena)) catch
+    text: = harness.read_under_root(path)
+    if text.len == 0
         return out
     $lines: = text.lines(arena)
     $deps: U8[] = ""
@@ -263,7 +265,8 @@ priv fn scan(path: U8[], kind: Sz, arena: Arena$@): List<|Hit|> //<
     //< A pipe is checked with continued lines joined, so a `set -o pipefail;` two lines above its
     //< pipe is not a false finding.
     $out: = List<|Hit|>.new(arena)
-    text: = io.read_file(fs.join(harness.root(), path, arena)) catch
+    text: = harness.read_under_root(path)
+    if text.len == 0
         return out
     lines: = text.lines(arena)
     $i: Sz = 0
@@ -312,24 +315,6 @@ priv fn report(path: U8[], kind: Sz, title: U8[], advice: U8[], arena: Arena$@)
 // Caution: **Check only bare names**; an imitated expansion goes stale first.
 // ==========================================
 
-priv fn words(line: U8[], arena: Arena$@): List<|U8[]|> //< the words cut on whitespace
-    //<
-    //< **Split on a tab too** — `.PHONY`'s continuation lines are tab-indented.
-    $out: = List<|U8[]|>.new(arena)
-    $from: Sz = 0
-    $in_word: = false
-    for i in Range.asc(line.len)
-        space: = line[i] == ' ' || line[i] == '\t'
-        if space && in_word
-            out.push(line.sub(from, i - from))
-            in_word = false
-        else if !space && !in_word
-            from = i
-            in_word = true
-    if in_word
-        out.push(line.sub_from(from))
-    return out
-
 priv fn plain_name(w: U8[]): Bool //<
     //< Whether it is a bare name (leaving out what is unknown without expanding)
     return w.len > 0 && w.find_char('$').is_none() && w.find_char('(').is_none() &&
@@ -367,7 +352,7 @@ priv struct Names //< the names gathered from every file
     have: List<|U8[]|>
     docs: List<|Doc|>
 
-priv const help_hidden: U8[][1] = ::{ "FORCE" } //<
+priv const help_hidden: U8[][_] = ::{ "FORCE" } //<
     //< **Targets left out of the list**: only names that mean nothing to run
     //<
     //< `FORCE` keeps the wrapper always running (the reason is `%: FORCE` in `Makefile`).
@@ -387,7 +372,7 @@ priv fn read_help_line(rest: U8[], path: U8[], start: Sz, arena: Arena$@): Doc? 
 
 priv fn push_phony(list: U8[], path: U8[], start: Sz, said: List<|Said|>$@, arena: Arena$@) //<
     //< Adds each bare name a `.PHONY:` line lists, with where the line is
-    for w in words(list, arena)
+    for w in harness_text.words(list, arena)
         if plain_name(w)
             said
                 .push(Said::{ .where = arena.text().s(path).s(":\{start + 1\}").take(), .name = w })
@@ -398,7 +383,8 @@ priv fn scan_names(arena: Arena$@): Names //<
     $have: = List<|U8[]|>.new(arena)
     $docs: = List<|Doc|>.new(arena)
     for path in make_files(arena)
-        text: = io.read_file(fs.join(harness.root(), path, arena)) catch
+        text: = harness.read_under_root(path)
+        if text.len == 0
             continue
         $lines: = text.lines(arena)
         $i: Sz = 0
@@ -419,7 +405,7 @@ priv fn scan_names(arena: Arena$@): Names //<
                 push_phony(body.sub_from(7), path, start, said@, arena)
                 continue
             if got: = rule_targets(one.text)
-                for w in words(got, arena)
+                for w in harness_text.words(got, arena)
                     have.push(w)
     return Names::{ .said = said, .have = have, .docs = docs }
 
@@ -476,17 +462,34 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
         names.docs.len, "lines", stale@,
         "mend the writing, or erase the explanation line (`make <writing>` then returns 0)")
 
+    // **A target `make help` explains is declared `.PHONY`**: a file of that name in the tree
+    // would otherwise make it "up to date" and skip its recipe in silence.
+    $not_phony: = List<|U8[]|>.new(arena)
+    for d in names.docs
+        if d.spec.ends_with("*") || said_by_name(names, d.spec)
+            continue
+        not_phony.push(arena.text().s(d.where).s(": ").s(d.spec).take())
+    verdict.check_list("a target `make help` explains is declared `.PHONY`", names.docs.len, "lines",
+        not_phony@, "add it to the `.PHONY` line of the file holding its rule")
+
+priv fn said_by_name(names: Names@, name: U8[]): Bool //< whether a `.PHONY` line declares it
+    for one in names.said
+        if one.name.equals(name)
+            return true
+    return false
+
 priv fn help_groups(arena: Arena$@): List<|U8[]|> //< the groups `mk/help.mk` lists
     //<
     //< **The canonical source is that one line** (no copy is kept). Unreadable, it returns empty
     //< and the caller fails with "not one could be read".
     $out: = List<|U8[]|>.new(arena)
-    text: = io.read_file(fs.join(harness.root(), help_file, arena)) catch
+    text: = harness.read_under_root(help_file)
+    if text.len == 0
         return out
     for line in text.lines(arena)
         if !line.starts_with(groups_head)
             continue
-        for w in words(line.sub_from(groups_head.len), arena)
+        for w in harness_text.words(line.sub_from(groups_head.len), arena)
             out.push(w)
         break
     return out
@@ -623,7 +626,8 @@ priv fn scan_fns(paths: List<|U8[]|>@, arena: Arena$@): List<|Fn_read|> //<
     //< Every function a run's files define: each `define`, each variable (a call may name either)
     $out: = List<|Fn_read|>.new(arena)
     for path in paths
-        text: = io.read_file(fs.join(harness.root(), path, arena)) catch
+        text: = harness.read_under_root(path)
+        if text.len == 0
             continue
         $lines: = text.lines(arena)
         $i: Sz = 0
@@ -668,7 +672,8 @@ priv fn check_run(paths: List<|U8[]|>@, finds: Call_finds$@, arena: Arena$@): Sz
     fns: = scan_fns(paths, arena)
     $seen: Sz = 0
     for path in paths
-        text: = io.read_file(fs.join(harness.root(), path, arena)) catch
+        text: = harness.read_under_root(path)
+        if text.len == 0
             continue
         $lines: = text.lines(arena)
         $i: Sz = 0
@@ -724,12 +729,12 @@ priv fn check_calls(arena: Arena$@) //<
 
 // What `args_passed` and `highest_read` must answer. **A nested comma and an escaped `$` are the
 // cases that pass unseen**, so both sides of each are included.
-priv const call_samples: U8[][5] = ::{ "$(call f)", "$(call f,a,b)", "$(call f,$(subst a,b,c),d)",
+priv const call_samples: U8[][_] = ::{ "$(call f)", "$(call f,a,b)", "$(call f,$(subst a,b,c),d)",
     "$(call f,,x)", "$(call f,a" }
-priv const call_want: I64[5] = ::{ 0, 2, 2, 2, -1 }
-priv const read_samples: U8[][6] = ::{ "echo $(1) $(3)", "echo $$(1)", "$$$(2)",
+priv const call_want: I64[_] = ::{ 0, 2, 2, 2, -1 }
+priv const read_samples: U8[][_] = ::{ "echo $(1) $(3)", "echo $$(1)", "$$$(2)",
     "awk '{print $$1}'", "$1 and ${2}", "$(12x) $(x)" }
-priv const read_want: Sz[6] = ::{ 3, 0, 2, 0, 2, 0 }
+priv const read_want: Sz[_] = ::{ 3, 0, 2, 0, 2, 0 }
 
 priv fn check_call_fires(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)

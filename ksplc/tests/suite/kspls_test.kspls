@@ -23,8 +23,6 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000
-
 // ---------------------------------------------------------
 // 1. The twins become the same program
 // ---------------------------------------------------------
@@ -60,7 +58,9 @@ priv fn same_program(name: U8[], a: U8[], b: U8[], stem: U8[], arena: Arena$@): 
             continue // a line carrying a position: only the source's name and line number differ
         bad.push(arena.text().s("line \{i + 1\}: ").s(l).take())
     return verdict.check_list(arena.text().s(name).s(": the C put out agrees").take(), n, "lines",
-        bad@, "")
+        bad@,
+        "the two notations must translate to the same C: the line shown is where the .kspls one \
+            parts")
 
 priv fn check_pair(work: U8[], stem: U8[], arena: Arena$@) //< it checks one pair of twins
     //<
@@ -146,7 +146,7 @@ priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
     $col: I64 = -1I64
     $count: Sz = 0
     for _k in Range.asc(8)
-        msg: = c.read_msg(normal_ms, arena) catch
+        msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
         if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
@@ -170,7 +170,8 @@ priv fn check_hover(c: jsonrpc.Client$@, arena: Arena$@) //< the hovers
     //< Caution: **Check the content**; with the position drifted, something still comes back.
     got: =
         c.request("textDocument/hover",
-        lsp_client.at_pos(probe_uri, bind_line_at, bind_col_at, arena), normal_ms, arena) catch
+        lsp_client.at_pos(probe_uri, bind_line_at, bind_col_at, arena), lsp_client.read_ms, arena)
+        catch
         fallback .null_val
     text: = got.get("result").get("contents").get("value").as_str()
     // Caution: **Check the name too.** The type alone passes with the position drifted to another
@@ -184,7 +185,8 @@ priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a d
     //< **The destination's line must be the indentation notation's line.**
     got: =
         c.request("textDocument/definition",
-        lsp_client.at_pos(probe_uri, bind_line_at, call_col_at, arena), normal_ms, arena) catch
+        lsp_client.at_pos(probe_uri, bind_line_at, call_col_at, arena), lsp_client.read_ms, arena)
+        catch
         fallback .null_val
     res: = got.get("result")
     $line: I64 = -1I64
@@ -852,7 +854,8 @@ fn main(): I32
         return harness.fatal("the language server cannot be started")
     defer c.free()
     init: =
-        c.request("initialize", lsp_client.at_doc(probe_uri, arena), normal_ms, arena) catch
+        c.request("initialize", lsp_client.at_doc(probe_uri, arena), lsp_client.read_ms, arena)
+        catch
         return harness.fatal("initialize does not return")
     if !verdict.check("the language server comes up",
         !lsp_read.is_missing(init.get("result")), lsp_client.dump(init, arena))

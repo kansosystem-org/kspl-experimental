@@ -29,19 +29,6 @@ priv const srcs_var: U8[] = "KSPL_SRCS := " //< the mark to look for when asking
     //<
     //< It is `:=`, so this line shows **the expanded value**.
 
-priv fn words(text: U8[], out: List<|U8[]|>$@) //<
-    //< Collects the words separated by whitespace
-    //<
-    //< A make variable's value and one line of deps have the same form.
-    $start: Sz = 0
-    for $i: Sz = 0; i <= text.len; i += 1
-        blank: = i == text.len || text[i] == ' ' || text[i] == '\t'
-        if !blank
-            continue
-        if i > start
-            out.push(text.sub(start, i - start))
-        start = i + 1
-
 priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_SRCS`'s value
     //<
     //< Caution: **Do not parse the Makefile yourself**; then an imitation of `$(shell find ...)`
@@ -52,7 +39,8 @@ priv fn kspl_srcs(arena: Arena$@): List<|U8[]|> //< asks make itself for `KSPL_S
     for line in r.out.lines(arena)
         if !line.starts_with(srcs_var)
             continue
-        words(line.sub(srcs_var.len, line.len - srcs_var.len), out@)
+        for w in harness_text.words(line.sub(srcs_var.len, line.len - srcs_var.len), arena)
+            out.push(w)
         break
     return out
 
@@ -80,7 +68,8 @@ priv fn deps_of_ksplc(work: U8[], arena: Arena$@): List<|U8[]|> //<
     // ksplc/docs/SPEC-tools.md).
     for line in ksplc_harness.read_generated(deps).lines(arena)
         $w: = List<|U8[]|>.new(arena)
-        words(line, w@)
+        for one in harness_text.words(line, arena)
+            w.push(one)
         // A line of dashes names a settings file looked for and not found (`write_deps_file` in
         // `ksplc/tools/run.kspls`): no source.
         if w.len == 2 && !w.get(0).starts_with("-")

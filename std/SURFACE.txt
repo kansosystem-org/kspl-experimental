@@ -46,17 +46,24 @@ std/bignat	Bignat.add	pub fn add(r: Self$@, o: Self@)	adds another value in plac
 std/bignat	Bignat.add_small	pub fn add_small(r: Self$@, v: U32)	adds, in place, a value that fits in one limb
 std/bignat	Bignat.cmp	pub fn cmp(r: Self@, o: Self@): I32	returns -1, 0 or 1 for less, equal or greater
 std/bignat	Bignat.from_u64	pub fn from_u64(v: U64): Bignat	the same value, widened
-std/bignat	Bignat.is_zero	pub fn is_zero(r: Self@): Bool	whether the value is 0
 std/bignat	Bignat.mul	pub fn mul(r: Self$@, o: Self@)	multiplies in place by another value of the same width. Long multiplication, from o's top limb down. The other value is `10^n`, which `std/strnum` keeps so it need not rebuild it on each call.
 std/bignat	Bignat.mul_pow10	pub fn mul_pow10(r: Self$@, n: Sz)	multiplies in place by 10 to the power of `n`. It multiplies by 10^9 at a time, the largest power of 10 that fits in a U32.
 std/bignat	Bignat.mul_small	pub fn mul_small(r: Self$@, m: U32)	multiplies in place by a value that fits in one limb
 std/bignat	Bignat.shl	pub fn shl(r: Self$@, bits: Sz)	shifts left in place, which multiplies by 2 to that power
 std/bignat	Bignat.sub	pub fn sub(r: Self$@, o: Self@)	subtracts another value in place. Caution: r >= o must hold, because a natural number never goes negative.
 std/bignat	Bignat.zero	pub fn zero(): Bignat	the value 0
+std/bignat	Binary_float	pub struct Binary_float	a floating-point value split into f × 2^e, without the sign. std/strfmt writes a number's digits from it, and std/strnum steps a parsed value by an ulp.
+std/bignat	Binary_float.e	pub e: I32	the power of two f is scaled by
+std/bignat	Binary_float.f	pub f: U64	the significand, the hidden 1 included where there is one
+std/bignat	Binary_float.unequal	pub unequal: Bool	an exact power of two, where the gap below is half the gap above
 std/bignat	bignat_limbs	pub const bignat_limbs: Sz = 120	how many 32-bit limbs one holds (3840 bits). `to_f64`'s correct rounding sets this size: with up to 768 decimal digits against the power of 2, the largest value is `2^56 x 10^1098 ~= 2^3704` (std/strnum's `cmp_scaled`).
+std/bignat	decompose_f64	pub fn decompose_f64(mag: U64): Binary_float	an F64's bits, without the sign, as f × 2^e. A subnormal has no hidden 1, and its exponent is fixed at the minimum.
 std/bignat	f32_from_bits	pub fn f32_from_bits(bits: U32): F32	the same bits read as a float; no numeric conversion
 std/bignat	f32_to_bits	pub fn f32_to_bits(v: F32): U32	the same bits read as an integer; no numeric conversion
 std/bignat	f64_from_bits	pub fn f64_from_bits(bits: U64): F64	the same bits read as a float; no numeric conversion
+std/bignat	f64_hidden_bit	pub const f64_hidden_bit: U64 = 0x0010000000000000U64	the 1 a normal F64 does not store
+std/bignat	f64_mantissa_mask	pub const f64_mantissa_mask: U64 = 0x000FFFFFFFFFFFFFU64	an F64's stored significand bits
+std/bignat	f64_sign_bit	pub const f64_sign_bit: U64 = 0x8000000000000000U64	an F64's sign, in its bits
 std/bignat	f64_to_bits	pub fn f64_to_bits(v: F64): U64	the same bits read as an integer; no numeric conversion
 std/buf	Buf_writer	pub struct Buf_writer	a destination that writes into memory the caller holds
 std/buf	Buf_writer.c	pub fn c(r: Self$@, val: U8): Self$@	writes one byte, dropping it if it does not fit
@@ -643,7 +650,8 @@ std/lang	Panic_info.msg	pub msg: U8$[]	the panic's message
 std/lang	Panic_info.sp	pub sp: Sz	the stack pointer when it happened
 std/lang	Panic_info.stack_len	pub stack_len: Sz	how many words of the stack were kept, read with `panic_stack_word`
 std/lang	Panic_msg	pub struct Panic_msg	a fixed-size buffer for a panic's message, which allocates nothing. It needs no `io`; **string interpolation (`\{v\}`) cannot be used here.** Caution: Anything that does not fit `panic_msg_cap` is silently dropped (failing again in the middle of a panic leaves nothing to do). Do not use it in place of `Str_builder`.
-std/lang	Panic_msg.n	pub fn n(r: Self$@, v: Sz): Self$@	writes a number as decimal, including the minimum. Caution: **Take the absolute value as unsigned.** `-v` as an `Sz` does not fit when `v` is `Sz`'s minimum (the same reason as in `Range.new`); `U64::0 - U64::v` gives the magnitude.
+std/lang	Panic_msg.f	pub fn f(r: Self$@, v: F64): Self$@	writes a number with six decimals, truncated. Enough to tell two values apart in a message: `nan` and `inf` are written as words, and a finite magnitude past 9e18 (too wide for the whole part) as `huge`.
+std/lang	Panic_msg.n	pub fn n(r: Self$@, v: I64): Self$@	writes a number as decimal, including the minimum. Caution: **Take the absolute value as unsigned.** `-v` does not fit when `v` is the minimum (the same reason as in `Range.new`); `U64::0 - U64::v` gives the magnitude.
 std/lang	Panic_msg.new	pub fn new(): Panic_msg	an empty buffer
 std/lang	Panic_msg.s	pub fn s(r: Self$@, t: U8[]): Self$@	writes text; anything that does not fit is dropped
 std/lang	Panic_msg.slice	pub fn slice(r: Self$@): U8$[]	what has been written, to pass to `panic`
@@ -674,6 +682,8 @@ std/lang	Writer.flush	fn flush(r: Self): Self	passes on what has accumulated, re
 std/lang	Writer.s	fn s(r: Self, val: U8[]): Self	writes a string and returns the destination
 std/lang	and_then	pub fn and_then<|T, U|>(o: T?, f: fn(x: T): U?): U?	chains a step that may itself return nothing
 std/lang	assert	pub fn assert(cond: Bool, msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless the condition holds
+std/lang	assert_eq	pub fn assert_eq(got: I64, want: I64, msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless two integers are equal, saying both. Any integer type widens to `I64` here. A failure reads `<msg>: got <got>, want <want>`.
+std/lang	assert_near	pub fn assert_near(got: F64, want: F64, tol: F64, msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program unless two numbers lie within `tol`, saying both. A NaN on either side fails. The numbers are written with six decimals, truncated.
 std/lang	bounds_panic #noinline	pub fn bounds_panic(func_name: U8$[], idx: Sz, len: Sz, file: U8[], line: Sz)	the one message every container stops with when an index is out of range. **Every container calls this**, so "out of range" reads the same everywhere and matches the built-in check ("Conditions that stop execution at run time" in `../docs/SPEC-language.md`). Caution: **Take the position from the caller.** With the default, this line (`std/lang`) is printed, and a user's mistake looks like a bug in std.
 std/lang	map	pub fn map<|T, U|>(o: T?, f: fn(x: T): U): U?	applies a function to the value, if there is one. **It is a free function, so write both type arguments** (`map<|I32, Sz|>(o, f)`). A method with its own type parameter (`fn map<|U|>`) would work as well, as `std/seq`'s `select` does ("A name on the impl that the receiver does not fix" in `../docs/DESIGN.md`).
 std/lang	panic #cfg(!freestanding) #noreturn	pub fn panic(msg: U8$[], file: U8[] = caller_file, line: Sz = caller_line)	stops the program at once, saying where and why
@@ -683,6 +693,25 @@ std/lang	put	pub fn put<|W: Writer, T: Formattable|>(w: W, v: T): W	writes one v
 std/lang	sub_count	pub fn sub_count(count: Sz, start: Sz, len: Sz): Sz	how many elements a sub-range really holds once clamped. Of `count` items, how many of the `len` items from `start` onward can actually be taken. **Check `start`'s lower bound too.** `Sz` is signed, so checking only the upper bound lets a negative `start` through and gives a view that points before the start. Caution: **Do not compare with `start + len`.** If `len` is huge, the addition itself wraps and slips past the clamp silently.
 std/lang	take_panic_record #cfg(freestanding)	pub fn take_panic_record(): Panic_info?	the panic the previous run left, if any
 std/libc	Signal_handler	pub typedef Signal_handler = fn(sig: I32): Void	what `signal()` takes and returns. An unnamed function-pointer type in an extern declaration produces no valid C type name (the same holds for Thread_entry in std/thread.kspls).
+std/libc	abort	pub fn abort(): Void	C's abort: ends the program at once, abnormally
+std/libc	cos	pub fn cos(x: F64): F64	C's cos: the cosine of x in radians
+std/libc	exit	pub fn exit(status: I32): Void	C's exit: ends the program with status, flushing C's streams
+std/libc	exp	pub fn exp(x: F64): F64	C's exp: e to the power x
+std/libc	fprintf	pub fn fprintf(stream: Void$@, fmt: Void@, ...): I32	C's fprintf: writes text formatted by fmt to stream. **Take the format as a `Void@`, not a `U8@`.** C's format is a plain `char*`, and KSPL's `U8` is unsigned ("Primitive types" in docs/SPEC-language.md). A `U8@` mismatches on hosted and freestanding targets and triggers -Wpointer-sign (Principle 2 in `docs/DESIGN.md`).
+std/libc	free	pub fn free(ptr: Void$@)	C's free: gives back what malloc handed out
+std/libc	getchar	pub fn getchar(): I32	C's getchar: the next byte of standard input, or -1 at its end
+std/libc	getenv	pub fn getenv(name: Void$@): Void$@	C's getenv: the value of the environment variable name, or null. Caution: **Do not use it to read characters on Windows** (same reason as `fopen`). Use `std/sys`'s `get_env` instead.
+std/libc	log	pub fn log(x: F64): F64	C's log: the natural logarithm
+std/libc	malloc	pub fn malloc(size: Sz): U8$@	C's malloc: size bytes from the heap, or null
+std/libc	memcmp	pub fn memcmp(buf1: Void$@, buf2: Void$@, n: Sz): I32	C's memcmp: compares n bytes, 0 if equal
+std/libc	memset	pub fn memset(dest: Void$@, c: I32, n: Sz): Void$@	C's memset: fills n bytes of dest with c
+std/libc	pow	pub fn pow(base: F64, exp: F64): F64	C's pow: base to the power exp
+std/libc	signal	pub fn signal(sig: I32, handler: Signal_handler): Signal_handler	C's signal: sets a handler
+std/libc	sin	pub fn sin(x: F64): F64	C's sin: the sine of x in radians
+std/libc	snprintf	pub fn snprintf(str: Void$@, size: Sz, format: Void@, ...): I32	C's snprintf: formats into str
+std/libc	sqrt	pub fn sqrt(x: F64): F64	C's sqrt: the non-negative square root
+std/libc	strtod	pub fn strtod(nptr: Void$@, endptr: Void$@): F64	C's strtod: the number a C string spells
+std/libc	tan	pub fn tan(x: F64): F64	C's tan: the tangent of x in radians
 std/log	Level	pub enum Level	how serious a line is, and so whether it is emitted at all. Most serious first. **These are the four words of the diagnostic ladder** (the ladder in `../docs/SPEC-language.md`), so the product uses one vocabulary for severity. **The meaning still differs**: here a level decides whether the line is emitted at all.
 std/log	Level.error	error	something did not work, and the run cannot continue as asked
 std/log	Level.hint	hint	detail wanted only while tracking down a problem
@@ -719,11 +748,11 @@ std/mem	Arena.default_chunk_size	pub default_chunk_size: Sz	the largest size a c
 std/mem	Arena.dup_str	pub fn dup_str(r: Self$@, src: U8[]): U8$[]	a copy of the text in this arena, NUL-terminated for C
 std/mem	Arena.free	pub fn free(r: Self$@)	frees every chunk, and the arena itself
 std/mem	Arena.from_buffer	pub fn from_buffer(buf: Void$@, size: Sz): Arena	an arena over memory the caller owns, which never grows. Neither the arena nor the chunk calls malloc, so a program runs unchanged on a microcontroller that has none. **buf's start need not be aligned** (align_pad aligns it and subtracts the bytes it skipped from `size`).
-std/mem	Arena.get_total_allocated	pub fn get_total_allocated(r: Self$@): Sz	every byte in the chunks, used or not
-std/mem	Arena.get_total_used	pub fn get_total_used(r: Self$@): Sz	every byte allocated so far
+std/mem	Arena.get_total_allocated	pub fn get_total_allocated(r: Self@): Sz	every byte in the chunks, used or not
+std/mem	Arena.get_total_used	pub fn get_total_used(r: Self@): Sz	every byte allocated so far
 std/mem	Arena.headroom	pub fn headroom(r: Self$@): Arena_headroom	how far away the next chunk is, and how big. Caution: **Do not confuse it with `remaining`**, the sum over every chunk; `alloc` uses only the first chunk. One byte past `free` adds a chunk of `step` bytes, so peak memory **jumps there** (`make perf-log`).
 std/mem	Arena.new	pub fn new(chunk_size: Sz): Arena$@	an arena on the global heap, growing chunk by chunk
-std/mem	Arena.remaining	pub fn remaining(r: Self$@): Sz	the unused bytes summed over every chunk. A fixed buffer that runs out panics, so a caller can check here first.
+std/mem	Arena.remaining	pub fn remaining(r: Self@): Sz	the unused bytes summed over every chunk. A fixed buffer that runs out panics, so a caller can check here first.
 std/mem	Arena.reset	pub fn reset(r: Self$@)	empties it, keeping the last round's usage as one chunk. **For a loop that refills it each round** (a training step, a request): rewinding to a mark saved while empty returns every chunk to the OS, and the next round allocates them again, page by page. One chunk the size of the last round's use holds a round of that size, even above the limit (Zig's `ArenaAllocator.reset(.retain_capacity)`).
 std/mem	Arena.restore	pub fn restore(r: Self$@, state: Arena_state)	rewinds to a mark, freeing everything allocated since then at once
 std/mem	Arena.save	pub fn save(r: Self$@): Arena_state	a mark to rewind to later
@@ -773,18 +802,18 @@ std/net	Tcp_listener	pub struct Tcp_listener	a socket that waits for incoming co
 std/net	Tcp_listener.accept	pub fn accept(r: Self$@): Tcp_stream$@!Net_error	accepts the next waiting connection. The stream it returns is blocking on every OS, whatever the listener's mode.
 std/net	Tcp_listener.bind	pub fn bind(host: U8[], port: I32): Tcp_listener$@!Net_error	starts listening on the address and port. "0.0.0.0" listens on every IPv4 interface, "::" on every IPv6 one. **"::" does not accept IPv4 clients**, whatever the system default ("Connecting by name tries the candidates overlapped" in std/docs/DESIGN.md); to accept both, open two listeners.
 std/net	Tcp_listener.free	pub fn free(r: Self$@)	closes the listener and frees it
-std/net	Tcp_listener.port	pub fn port(r: Self$@): I32!Net_error	the port it listens on, the OS's choice for a 0
-std/net	Tcp_listener.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket. Only for registering; send/recv/accept still go only through this type's methods.
+std/net	Tcp_listener.port	pub fn port(r: Self@): I32!Net_error	the port it listens on, the OS's choice for a 0
+std/net	Tcp_listener.raw_handle	pub fn raw_handle(r: Self@): I64	the raw handle, the only thing `std/reactor` uses to register the socket. Only for registering; send/recv/accept still go only through this type's methods.
 std/net	Tcp_listener.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void!Net_error	makes it non-blocking, for use with `std/reactor`
 std/net	Tcp_listener:Owned	impl Tcp_listener: Owned	it owns its resources and frees them with `free()`.
 std/net	Tcp_stream	pub struct Tcp_stream	one connection that can be written to and read from
 std/net	Tcp_stream.connect	pub fn connect(host: U8[], port: I32): Tcp_stream$@!Net_error	connects by name, trying the candidate addresses in overlapping attempts. The connection it returns is blocking. Why the attempts overlap is "Connecting by name tries the candidates overlapped" in `std/docs/DESIGN.md`.
 std/net	Tcp_stream.connect_nonblocking	pub fn connect_nonblocking(host: U8[], port: I32): Tcp_stream$@!Net_error	starts a connection and returns at once. The stream is not connected yet: wait until it is writable with std/reactor.kspls, then call is_connected(). **It uses only one candidate**: moving to the next one would mean waiting. To connect by name, use `connect`.
 std/net	Tcp_stream.free	pub fn free(r: Self$@)	closes the connection and frees it
-std/net	Tcp_stream.is_connected	pub fn is_connected(r: Self$@): Bool	whether the connection succeeded; if false, free it. Call it after the writable notification arrives.
+std/net	Tcp_stream.is_connected	pub fn is_connected(r: Self@): Bool	whether the connection succeeded; if false, free it. Call it after the writable notification arrives.
 std/net	Tcp_stream.peer	pub fn peer(r: Self$@, host_out: U8$[]): Peer_addr!Net_error	the address of the peer. For a stream that `accept` returned, it is the client; for one that connected, the server.
-std/net	Tcp_stream.raw_fd	pub fn raw_fd(r: Self$@): I32	the OS's socket number, for a C library that reads and writes the socket itself. Caution: **Do not also read or write through this type**: the bytes would interleave with that library's. `free()` still closes the socket.
-std/net	Tcp_stream.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
+std/net	Tcp_stream.raw_fd	pub fn raw_fd(r: Self@): I32	the OS's socket number, for a C library that reads and writes the socket itself. Caution: **Do not also read or write through this type**: the bytes would interleave with that library's. `free()` still closes the socket.
+std/net	Tcp_stream.raw_handle	pub fn raw_handle(r: Self@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
 std/net	Tcp_stream.read	pub fn read(r: Self$@, buf: U8$[]): Sz!Net_error	receives and returns how much arrived; 0 means the peer closed
 std/net	Tcp_stream.read_for	pub fn read_for(r: Self$@, buf: U8$[], timeout_ms: I32): Sz!Net_error	receives as `read` does, waiting at most `timeout_ms` for the first byte. For a blocking stream whose peer may go quiet: `read` would wait for it for good.
 std/net	Tcp_stream.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void!Net_error	makes it non-blocking, for use with `std/reactor`
@@ -799,8 +828,8 @@ std/net	Udp_recv_result.len	pub len: Sz	the payload size in bytes
 std/net	Udp_socket	pub struct Udp_socket	a socket that sends and receives datagrams
 std/net	Udp_socket.bind	pub fn bind(host: U8[], port: I32): Udp_socket$@!Net_error	opens a socket on the address and port. The host works as in `Tcp_listener.bind`.
 std/net	Udp_socket.free	pub fn free(r: Self$@)	closes the socket and frees it
-std/net	Udp_socket.port	pub fn port(r: Self$@): I32!Net_error	the port it is bound to, the OS's choice for a 0
-std/net	Udp_socket.raw_handle	pub fn raw_handle(r: Self$@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
+std/net	Udp_socket.port	pub fn port(r: Self@): I32!Net_error	the port it is bound to, the OS's choice for a 0
+std/net	Udp_socket.raw_handle	pub fn raw_handle(r: Self@): I64	the raw handle, the only thing `std/reactor` uses to register the socket
 std/net	Udp_socket.recv_from	pub fn recv_from(r: Self$@, buf: U8$[], from_host_out: U8$[]): Udp_recv_result!Net_error	receives one datagram and returns its size and who sent it. A datagram longer than `buf` fails as `datagram_too_long`, on every OS, rather than come back cut.
 std/net	Udp_socket.send_to	pub fn send_to(r: Self$@, buf: U8[], host: U8[], port: I32): Sz!Net_error	sends one datagram and returns how much was sent. The destination must be **an address string**; resolve a name once with `resolve_one`.
 std/net	Udp_socket.set_nonblocking	pub fn set_nonblocking(r: Self$@): Void!Net_error	makes it non-blocking, for use with `std/reactor`
@@ -931,6 +960,7 @@ std/regex_node	Rx_kind.start_anchor	start_anchor	`^`
 std/regex_node	Rx_kind.word_boundary	word_boundary	`\b`
 std/regex_node	Rx_node	pub struct Rx_node	one node of a compiled pattern; `kind` decides which fields mean something
 std/regex_node	Slots	pub struct Slots	what each capturing group caught; `-1` means it did not take part. **`-1` is not 0**: an empty match has `start == end`.
+std/regex_node	byte_count	pub const byte_count: Sz = 256	how many values one byte takes: a class's table has a slot each
 std/regex_node	free_rx_alts	pub fn free_rx_alts(alts: List<|List<|Rx_node$@|>|>$@)	frees a group's alternatives and every node under them. It frees the Lists too. Walk .alts only for the .group kind (for others it is uninitialized).
 std/regex_node	free_rx_node	pub fn free_rx_node(n: Rx_node$@)	frees one node and everything under it
 std/regex_node	max_groups	pub const max_groups: Sz = 9	how many capturing groups a pattern may have. Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
@@ -985,15 +1015,15 @@ std/seq	Seq_error	pub enum Seq_error	why a chain could return nothing
 std/seq	Seq_error.empty_sequence	empty_sequence	there was no element to pick from
 std/seq	Seq_error.no_match	no_match	every element was checked and none met the condition
 std/sha256	Sha256	pub struct Sha256	a running SHA-256, fed in pieces and closed at the end
-std/sha256	Sha256.finalize	pub fn finalize(r: Self$@): U8[32]	closes the hash and returns the digest
+std/sha256	Sha256.finalize	pub fn finalize(r: Self$@): U8[digest_size]	closes the hash and returns the digest
 std/sha256	Sha256.new	pub fn new(): Sha256	a new hash with nothing fed in yet
 std/sha256	Sha256.update	pub fn update(r: Self$@, data: U8[])	feeds in the next piece; pieces need not align with a block
 std/sha256	digest_size	pub const digest_size: Sz = 32	the digest is always this many bytes (256 bits)
-std/sha256	hash	pub fn hash(data: U8[]): U8[32]	the digest of all of `data`, in one call
+std/sha256	hash	pub fn hash(data: U8[]): U8[digest_size]	the digest of all of `data`, in one call
 std/sha256	hex_len	pub const hex_len: Sz = 64	the hex text is always this many characters. The caller provides an array of this size.
-std/sha256	hmac	pub fn hmac(key: U8[], data: U8[]): U8[32]	RFC 2104's HMAC-SHA256. A key longer than the block size (64 bytes) is hashed first, as RFC 2104 requires.
+std/sha256	hmac	pub fn hmac(key: U8[], data: U8[]): U8[digest_size]	RFC 2104's HMAC-SHA256. A key longer than the block size (64 bytes) is hashed first, as RFC 2104 requires.
 std/sha256	hmac_verify	pub fn hmac_verify(key: U8[], data: U8[], mac: U8[]): Bool	whether a MAC matches, in a time that does not reveal how much matched. Caution: **Do not compare with `hmac(..).equals(mac)`.** equals returns at the first byte that differs, so the time reveals how many leading bytes matched, and an attacker can forge a MAC one byte at a time. This loop takes the same time whichever byte differs; a different length may return early.
-std/sha256	write_hex	pub fn write_hex(digest: U8[32], out: U8$[])	writes the digest as lowercase hex, without allocating. Use it for log output and for comparisons in a test. Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole string and IO library, many times the size of this file.
+std/sha256	write_hex	pub fn write_hex(digest: U8[digest_size], out: U8$[])	writes the digest as lowercase hex, without allocating. Use it for log output and for comparisons in a test. Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole string and IO library, many times the size of this file.
 std/stack_limit	Stack_limit	pub struct Stack_limit	where a walk on the calling thread stops, a margin before the end of its stack. Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another thread's stack is somewhere else.
 std/stack_limit	Stack_limit.later	pub fn later(margin: Sz, deep: Sz): Stack_limit	a limit that asks the OS only once a walk gets deep. **For a walk run many times over mostly shallow input** (a regex per line of a file): asking costs far more than a shallow walk, which never needs the answer. Check it with `near_at`.
 std/stack_limit	Stack_limit.near	pub fn near(limit: Self@): Bool	whether the caller is within the margin of the stack's end. **Always false where the OS does not tell** (bare metal), so a walk also keeps its own depth count.
@@ -1098,7 +1128,7 @@ std/strfmt	U8.fmt_hex	pub fn fmt_hex(r: Self, width: Sz, zero: Bool, upper: Bool
 std/strfmt	U8.fmt_spec	pub fn fmt_spec(r: Self, width: Sz, zero: Bool, comma: Bool): Int_fmt	what a width, a zero pad or a comma in an interpolation desugars to
 std/strfmt	U8.to_hex_lower	pub fn to_hex_lower(r: Self): U8	one nibble as a hex digit, using `a`-`f`
 std/strfmt	U8.to_hex_upper	pub fn to_hex_upper(r: Self): U8	one nibble as a hex digit, using `A`-`F`
-std/strfmt	U8:Formattable	impl U8: Formattable	so it can be used inside an interpolation. Caution: **Do not copy an unsigned value into a narrower signed type**: `U32` to `I32`, or `U64` to `Sz`, turns a set high bit into `-1`. Types up to U32 widen implicitly into the I64 of `w.i`; `U64` does not fit and goes through write_uint. Do not pass `I64` through `Sz` either, which is 32-bit on some targets.
+std/strfmt	U8:Formattable	impl U8: Formattable	so it can be used inside an interpolation. Caution: **Do not copy an unsigned value into a narrower signed type**: `U32` to `I32`, or `U64` to `Sz`, turns a set high bit into `-1`. Types up to U32 widen implicitly into an I64 for write_int; `U64` does not fit and goes through write_uint. Do not pass `I64` through `Sz` either, which is 32-bit on some targets.
 std/strfmt	U8[].fmt	pub fn fmt(r: U8[], w: Writer): Writer	writes the value to w
 std/strfmt	U8[]:Formattable	impl U8[]: Formattable	so it can be used inside an interpolation
 std/strfmt	Uint_fmt	pub struct Uint_fmt	a `U64` with its width, fill and comma setting, kept apart from `I64`. Caution: **Do not build it on Int_fmt.** A value of 2^63 or more becomes a negative I64 as soon as it is copied and prints as `-1`. Every other unsigned integer widens to I64 correctly, so only U64 needs its own wrapper.
@@ -1116,6 +1146,7 @@ std/strnum	Strnum_error	pub enum Strnum_error	why a string could not be read as 
 std/strnum	Strnum_error.invalid_format	invalid_format	the text does not have the shape of a number
 std/strnum	Strnum_error.out_of_bounds	out_of_bounds	the shape is right but the value does not fit the type
 std/strnum	U8[].parse_size	pub fn parse_size(r: U8[], start: Sz = 0): Sz!Strnum_error	scans digits from a given position and stops at the first non-digit
+std/strnum	U8[].to_count	pub fn to_count(r: U8[], limit: Sz): Sz?	the whole string as digits alone (`1*DIGIT`), no larger than `limit`. **No sign, space or other character is taken**: a protocol's length field (HTTP's and JSON-RPC's `Content-Length`) is refused whole rather than read as what precedes it.
 std/strnum	U8[].to_f64	pub fn to_f64(r: U8[]): F64!Strnum_error	the whole string as a floating-point number. The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`**: freestanding has no libc, and the same value on both targets matters more than strtod's `inf`, `nan` and hex floating point, which are **not accepted** here.
 std/strnum	U8[].to_i64	pub fn to_i64(r: U8[]): I64!Strnum_error	the whole string as an integer, or a failure
 std/subproc	Child #cfg(!freestanding)	pub struct Child	a child kept running with its output going to files
@@ -1175,6 +1206,7 @@ std/sys	Env_error.refused #cfg(!freestanding)	refused	the OS did not take it (ou
 std/sys	args	pub fn args(): Args	the arguments this process was started with
 std/sys	cpu_count #cfg(!freestanding)	pub fn cpu_count(): Sz	how many CPUs this process may run on; 1 if unknown, never 0. It follows the affinity (`taskset`, a job object) where the OS has one; a container's CPU quota is not read.
 std/sys	cwd #cfg(!freestanding)	pub fn cwd(buf: U8$[]): U8[]	the working directory, or empty if it cannot be read or does not fit
+std/sys	deadline_after_ms	pub fn deadline_after_ms(ms: I64): I64	the `mono_us` reading `ms` milliseconds from now. **Each caller rounds what is left its own way** (a wait that must not end early rounds up).
 std/sys	exit #noreturn	pub fn exit(status: I32)	ends the process at once, without unwinding
 std/sys	get_dir_name	pub fn get_dir_name(path: U8[]): U8[]	the folder part, or empty if there is none. **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`), as Python, Go, Rust and C++ answer; the root itself is in nothing.
 std/sys	get_env #cfg(!freestanding)	pub fn get_env(name: U8[]): U8[]?	an environment variable, or nothing when unset
@@ -1183,6 +1215,8 @@ std/sys	install_shutdown_handler	pub fn install_shutdown_handler()	makes Ctrl+C 
 std/sys	is_absolute	pub fn is_absolute(path: U8[]): Bool	whether it starts from the root; on Windows `C:\` counts. Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to **that drive's current working directory**, not the root; skipping the separator creates a copy that answers differently in just that case. On POSIX `C:\x` is a relative name. A root that opens with a separator is from the root whatever follows (`\\server\share`).
 std/sys	is_path_sep	pub fn is_path_sep(c: U8): Bool	a path separator, `/` or `\`, on every OS; std/fs splits by it. Caution: Check both `/` and `\`. A path from Windows can be mixed (MSYS2 rewrites a `/tmp/...` it passes to a child process as `D:/a/_temp/...`).
 std/sys	is_windows	pub fn is_windows(): Bool	whether the OS running this is Windows. Lets a test or tool that relies on a POSIX-only path such as `/bin/echo` skip itself.
+std/sys	kspl_error_trace_depth	pub fn kspl_error_trace_depth(): I32	how many frames the error trace holds
+std/sys	kspl_get_trace_frame_info	pub fn kspl_get_trace_frame_info(index: I32, out_file: U8@$@, out_func: U8@$@, out_line: I32$@)	the file, function and line of the trace's frame at index
 std/sys	last_ext	pub fn last_ext(path: U8[]): U8[]	the last extension with its dot, or empty if none. **The leading `.` is included.** For a double extension, call it again yourself (`last_ext(strip_last_ext("a.tar.gz"))` gives `".tar"`). **Do not add a plural such as `suffixes` in advance** (Principle 1 in `docs/DESIGN.md`); adding one later only joins paths.
 std/sys	mono_us	pub fn mono_us(): I64	a clock that only goes forward, in microseconds. **Only a difference has meaning**; the origin is not defined. Caution: **Do not measure elapsed time with the wall clock (`time.now`).** NTP or the user can rewind it, so a difference can go negative. **It is not CPU time**: it advances while waiting.
 std/sys	print_trace	pub fn print_trace()	writes the route this thread's last failure took to standard error. Caution: **Do not use `io`.** Many files import `sys`, so importing `io` here would make all of them carry the file-I/O implementation (bare metal has no standard output). The text is built in a `Str_builder` and written with one libc `fwrite`, so it is less likely to mix with other output.

@@ -25,6 +25,8 @@ priv const big_bytes: Sz = 3 * 1024 * 1024 + 7 //< not a multiple of a chunk, so
 
 priv const readers: Sz = 4 //< how many readers hold the large file unread at once
 
+priv const alone_poll_ms: I32 = 10 //< how often `alone` asks again
+
 priv const per_peer: Sz = 16 //< `max_conns_per_peer` in `kssrv/conn.kspls`
     //<
     //< The server is driven from outside, so the figure is stated here; a change there fails the
@@ -101,6 +103,10 @@ priv fn trickle_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
 
 priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     //< One address holds at most `per_peer` connections; one closing makes room again
+    //<
+    //< Caution: **Start from none held**: one left from an earlier case takes a place among them.
+    verdict.check("the server holds nothing from earlier cases before the cap is filled",
+        alone(port, arena)!, "a connection from an earlier case stayed open")
     $held: = List<|client.Conn$@|>.new(arena)
     defer free_all(held@)
     for _i in Range.asc(per_peer)
@@ -121,6 +127,16 @@ priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
     again: = client.get(port, "/style.css", "", arena)!
     verdict.check("once one closes, a new connection from it is served", again.status == 200,
         client.shown(again, arena))
+
+priv fn alone(port: I32, arena: Arena$@): Bool!client.Http_end //<
+    //< Whether the server comes to hold only the connection asking, within the usual timeout
+    deadline: = sys.mono_us() + I64::client.default_timeout_ms * 1000I64
+    for sys.mono_us() < deadline
+        st: = client.get(port, "/api/status", "", arena)!
+        if client.doc_of(st, arena).get("connections_open").as_int64(-1I64) == 1I64
+            return true
+        sys.sleep_ms(alone_poll_ms)
+    return false
 
 priv fn heap_of(port: I32, arena: Arena$@): I64!client.Http_end //< the heap `/api/status` names
     st: = client.get(port, "/api/status", "", arena)!

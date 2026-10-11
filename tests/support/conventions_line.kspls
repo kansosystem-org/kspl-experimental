@@ -28,10 +28,10 @@ priv const mark_skip: U8[] = "SKIP"
 
 // Where a line is built, and the text each place must hold.
 // **One place per file** (this table itself keeps them from spreading).
-priv const line_files: U8[][5] = ::{ "kspage/tests/browser/probe.js", "kspage/tests/wasm/shell.mjs",
+priv const line_files: U8[][_] = ::{ "kspage/tests/browser/probe.js", "kspage/tests/wasm/shell.mjs",
     "kspage/Makefile", "tools/kspl_lldb.py", "std/verdict.kspls" }
 
-priv const line_readers: U8[][2] = ::{ "tools/ci.kspls", "tests/suite/pytools_test.kspls" } //<
+priv const line_readers: U8[][_] = ::{ "tools/ci.kspls", "tests/suite/pytools_test.kspls" } //<
     //< Where a mark is **read**
     //<
     //< **Updating only the writers is not enough**: a reader waiting for an old mark fails, the day
@@ -40,20 +40,20 @@ priv const line_readers: U8[][2] = ::{ "tools/ci.kspls", "tests/suite/pytools_te
 // Of those, the places that also have a failure path.
 // Caution: **A failure's mark must be `FAIL`** (the reason is in the header). `kspage/Makefile`
 // only prints the mark, so it is not listed here.
-priv const line_reporters: U8[][4] = ::{ "std/verdict.kspls", "kspage/tests/browser/probe.js",
+priv const line_reporters: U8[][_] = ::{ "std/verdict.kspls", "kspage/tests/browser/probe.js",
     "kspage/tests/wasm/shell.mjs", "tools/kspl_lldb.py" }
 
-priv const line_shapes: U8[][2] = ::{ "\"pass ", "'pass " } //<
+priv const line_shapes: U8[][_] = ::{ "\"pass ", "'pass " } //<
     //< The forms that build a pass mark, allowed only in the table above
     //<
     //< Caution: **Do not write this form inside a comment either**: the check reads the text, so a
     //< quoted example is hit (describe it in words). **Search for the form right after a quote
     //< mark**: the mark alone hits English words in prose and the forms in a per-gate list.
 
-priv const line_marks: U8[][3] = ::{ mark_ok, mark_bad, mark_skip } //<
+priv const line_marks: U8[][_] = ::{ mark_ok, mark_bad, mark_skip } //<
     //< The text every one of those places must hold
 
-priv const line_banned: U8[][5] = ::{ "\"NG ", "`NG ", "\"OK ", "'OK ", "`OK " } //<
+priv const line_banned: U8[][_] = ::{ "\"NG ", "`NG ", "\"OK ", "'OK ", "`OK " } //<
     //< The rejected marks
     //<
     //< Caution: **Do not bring back `NG` or `OK`.** `NG` is Japanese-made English that others do
@@ -150,7 +150,7 @@ priv fn check_readers(arena: Arena$@) //<
 // **In a combined log, a split line cannot be repaired afterwards.** Buffering flushes at 4KB even
 // mid-line, so where `ci` combines suites into one pipe a split line merges with another suite's.
 // The probes are not listed (each environment runs only one at a time).
-priv const flush_files: U8[][2] = ::{ "std/verdict.kspls", "tests/debug/parts.kspls" }
+priv const flush_files: U8[][_] = ::{ "std/verdict.kspls", "tests/debug/parts.kspls" }
 
 priv const flush_mark: U8[] = "set_line_buffered" //< the call that sets it, in `std/io`
 
@@ -166,13 +166,13 @@ priv fn check_line_flush(arena: Arena$@)
     verdict.check_list("a place putting a per-verdict line out sends it a line at a time", seen,
         "places", bad@, "buffering the whole parts a line in a bundled log (`set_line_buffered`)")
 
-priv const verdict_seen: Sz[4] = ::{ 800, 800, 0, 0 } //<
+priv const verdict_seen: Sz[_] = ::{ 800, 800, 0, 0 } //<
     //< A walk's verdict stands only where it walked something
     //<
     //< **The count seen is not only shown on screen; it is judged.** A really empty subject still
     //< walks files, so 0 means the reading broke, never "there was nothing to find".
-priv const verdict_bad: Sz[4] = ::{ 0, 3, 0, 3 }
-priv const verdict_want: Bool[4] = ::{ true, false, false, false } //<
+priv const verdict_bad: Sz[_] = ::{ 0, 3, 0, 3 }
+priv const verdict_want: Bool[_] = ::{ true, false, false, false } //<
     //< The expected verdict for each sample
     //<
     //< In order: walked 800 and found nothing (passes) / found 3 (fails) / walked nothing (fails) /
@@ -188,7 +188,7 @@ priv fn check_verdict_fires(arena: Arena$@)
                 .s("passing" if got else "failing").s(" (it should ")
                 .s("pass" if verdict_want[i] else "fail").c(')').take())
     verdict.check_list("a walk's verdict stands only where it walked something", verdict_seen.len,
-        "samples", bad@, "")
+        "samples", bad@, "the judgment misreads its own samples: mend the judgment, not the table")
 
 fn run(arena: Arena$@)
     check_verdict_fires(arena)

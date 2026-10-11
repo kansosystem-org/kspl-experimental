@@ -10,6 +10,7 @@
 //   [was it measurable, the normalized distance, left, centre, right]
 //     -> fc1 -> SiLU -> fc2 -> 10 logits
 // ==========================================
+import "ksai/examples/car_pilot/encoding"
 import "ksai/grad"
 import "ksai/nn"
 import "ksai/nn_grad"
@@ -23,9 +24,7 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/sys"
 
-const feature_count: Sz = 5 //<
-    //< How many features go into the net, and how many manoeuvres can be picked
-const action_count: Sz = 10
+const action_count: Sz = 10 //< how many manoeuvres can be picked
 priv const hidden: Sz = 24
 
 const act_stop: Sz = 0 //< a manoeuvre's number
@@ -96,14 +95,8 @@ priv const weight_seed: U64 = 4242U64
 priv const train_dist_seed: U64 = 31337U64 //< the seed for the random distances used in training
     //<
     //< The line has only 8 patterns, all used; only the distance is random.
-priv const line_patterns: Sz = 8
+const line_patterns: Sz = 8 //< every value the three line sensors give
 priv const train_dists: Sz = 96
-
-priv const export_format: U8[] = "2" //< the format version of the exported policy (`export`)
-    //<
-    //< Caution: **Raise it when the order of the features, the activation (SiLU), or the manoeuvre
-    //< table's meaning changes.** The shapes still fit, so an old reader silently uses new weights
-    //< with the old meaning.
 
 priv const eval_step_mm: I64 = 5 //<
     //< The step [mm] and the cap used when the agreement rate is measured
@@ -133,10 +126,10 @@ fn rule_action(o: Obs): Sz //< the rules the net learns from
         return act_back
     if o.dist_mm < avoid_mm
         // Dodges sideways (mecanum wheels need no turn), to the side with no line.
-        return act_strafe_left if (o.line & 1I64) != 0I64 else act_strafe_right
-    left: = (o.line & 4I64) != 0I64
-    mid: = (o.line & 2I64) != 0I64
-    right: = (o.line & 1I64) != 0I64
+        return act_strafe_left if (o.line & encoding.line_right) != 0I64 else act_strafe_right
+    left: = (o.line & encoding.line_left) != 0I64
+    mid: = (o.line & encoding.line_middle) != 0I64
+    right: = (o.line & encoding.line_right) != 0I64
     if left && mid && right
         return act_stop // all three black = a junction or the end; it cannot tell which, so it stops
     // The correction follows the drift: only an end sensor black means a large one, an end and the
@@ -158,21 +151,8 @@ fn rule_action(o: Obs): Sz //< the rules the net learns from
     // has no history, so no direction to recover in can be chosen.
     return act_creep
 
-priv fn features(o: Obs, arena: Arena$@): Tensor<|F32|> //<
-    //< Turns an observation into a feature vector
-    //<
-    //< Caution: **Use the same function for training and inference.** Written twice, fixing only
-    //< one shows up as "training works, yet the answers are wrong".
-    shape: Sz[2] = ::{ 1, feature_count }
-    x: = Tensor<|F32|>.new(Sz[]::shape, arena)
-    valid: = o.dist_mm > 0I64
-    clamped: = o.dist_mm if o.dist_mm < far_mm else far_mm
-    x[0] = 1.0 if valid else 0.0
-    x[1] = F32::(F64::clamped / F64::far_mm) if valid else 0.0
-    x[2] = 1.0 if (o.line & 4I64) != 0I64 else 0.0
-    x[3] = 1.0 if (o.line & 2I64) != 0I64 else 0.0
-    x[4] = 1.0 if (o.line & 1I64) != 0I64 else 0.0
-    return x
+priv fn features(o: Obs, arena: Arena$@): Tensor<|F32|> //< an observation as the net's input
+    return encoding.features(o.dist_mm, o.line, far_mm, arena)
 
 priv fn sample_dist(rng: prng.Prng$@, index: Sz): I64 //< picks one distance for training
     //<
@@ -180,7 +160,7 @@ priv fn sample_dist(rng: prng.Prng$@, index: Sz): I64 //< picks one distance for
     //< Caution: Randomize only the distance; a random line might never show some of its 8 patterns.
     if index == 0
         return 0I64 // the not-measurable case; at least one must be included
-    return I64::(rng.next_f64() * 3000.0) + 1I64
+    return I64::(rng.next_f64() * F64::eval_max_mm) + 1I64
 
 priv fn measure_agreement(p: Pilot$@, compute: Arena$@, out_seen: Sz$@): F64 //<
     //< Measures the share of points where the net agrees with the rules, from 0mm to eval_max_mm
@@ -232,7 +212,7 @@ fn build(compute: Arena$@): Pilot$@ //< makes one steering policy
     arena: = Arena.new(64 * 1024)
     p: = mem.alloc_as<|Pilot|>()
     p.arena = arena
-    p.mlp = nn.Mlp<|F32|>.new(feature_count, hidden, action_count, arena)
+    p.mlp = nn.Mlp<|F32|>.new(encoding.feature_count, hidden, action_count, arena)
     // Caution: Initialize them with uniform random values (the reason is at `Linear.init_uniform`
     // in `ksai/nn.kspls`).
     $rng: = prng.Prng.new(weight_seed)
@@ -241,7 +221,7 @@ fn build(compute: Arena$@): Pilot$@ //< makes one steering policy
     t0: = sys.mono_us()
     p.final_loss = train(p.mlp@, compute)
     p.train_ms = (sys.mono_us() - t0) / 1000I64
-    p.params = feature_count * hidden + hidden + hidden * action_count + action_count
+    p.params = encoding.feature_count * hidden + hidden + hidden * action_count + action_count
     p.samples = train_dists * line_patterns
     $checked: Sz = 0
     p.agreement = measure_agreement(p, compute, checked@)
@@ -265,11 +245,11 @@ priv fn maneuver_tensor(arena: Arena$@): Tensor<|F32|> //<
     //<
     //< **The integers are stored as F32**, the only dtype that can be written here; F32 holds these
     //< small integers exactly, and the reader converts them back.
-    shape: Sz[2] = ::{ action_count, 3 }
+    shape: Sz[2] = ::{ action_count, encoding.drive_fields }
     t: = Tensor<|F32|>.new(Sz[]::shape, arena)
     for a in Range.asc(action_count)
         m: = maneuvers[a]
-        row: = a * 3
+        row: = a * encoding.drive_fields
         t[row] = F32::m.lon
         t[row + 1] = F32::m.lat
         t[row + 2] = F32::m.rot
@@ -287,7 +267,7 @@ fn export(p: Pilot$@, arena: Arena$@): Str_builder //<
     w.add("fc2.weight", p.mlp.fc2.weights)
     w.add("fc2.bias", p.mlp.fc2.bias)
     w.add("maneuvers", maneuver_tensor(arena))
-    w.set_meta("kspl_pilot", export_format)
+    w.set_meta("kspl_pilot", encoding.format_version)
     $num: = Str_builder.new()
     defer num.free()
     w.set_meta("far_mm", num.s("\{far_mm\}").slice())

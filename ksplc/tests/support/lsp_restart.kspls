@@ -4,8 +4,8 @@
 //< the supervisor holds the documents it opens and no other.
 //< **The first answer after a recovery waits for its own document's analysis, not for every open
 //< one** ("The language server is split into two processes: the watcher and the analyser" in
-//< `../../docs/DESIGN.md`). The yardstick is what analysing every open document took when they
-//< were opened, measured in the same run, so a slow or loaded machine moves both alike.
+//< `../../docs/DESIGN-tools.md`). The yardstick is what analysing every open document took when
+//< they were opened, measured in the same run, so a slow or loaded machine moves both alike.
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line }
 import "std/chars"
@@ -18,7 +18,6 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000 //< the read timeout (the same as the suite's)
 priv const watchdog_ms: I64 = 10000 //<
     //< The supervisor's hang timeout (`worker_timeout_ms` in `../../lsp/server.kspls`)
     //<
@@ -82,7 +81,7 @@ priv fn recover(c: jsonrpc.Client$@, hook: U8[], open: Sz, id: I32, text: U8[], 
     c.send_raw(jsonrpc.encode("textDocument/hover", pos, id, arena), lsp_client.send_ms) catch {}
     for out.ms < 0 || out.published < open
         // The first answer after a hang comes once the watchdog has given up.
-        wait: = I32::(watchdog_ms + I64::normal_ms)
+        wait: = I32::(watchdog_ms + I64::lsp_client.read_ms)
         msg: = c.read_msg(wait, arena) catch
             break
         if msg.get("id").as_int(-1) == id
@@ -107,7 +106,7 @@ priv fn open_copies(c: jsonrpc.Client$@, from: Sz, to: Sz, text: U8[], arena: Ar
             catch {}
     $left: = to - from
     for left > 0
-        msg: = c.read_msg(normal_ms, arena) catch
+        msg: = c.read_msg(lsp_client.read_ms, arena) catch
             return false
         if msg.get("method").as_str().equals("textDocument/publishDiagnostics")
             left -= 1
@@ -128,7 +127,8 @@ fn check_first_answer(exe: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the client cannot be started")
         return
     defer c.free()
-    _init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch
+    _init: =
+        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch
         fallback .null_val
     if !verdict.check("the copy a recovery is measured on opens",
         open_copies(c@, 0, 1, text, arena), lsp_client.why(c@, "", arena))
@@ -172,13 +172,14 @@ fn check_first_answer(exe: U8[], arena: Arena$@) //<
 // ==========================================
 
 priv const kept_src: U8[] = "fn main(): I32 {\n  probe: I64 = 1;\n  return 0;\n}\n"
-priv const kept_uris: U8[][2] = ::{ "file:///kept_a.kspl", "file:///kept_b.kspl" }
+priv const kept_uris: U8[][_] = ::{ "file:///kept_a.kspl", "file:///kept_b.kspl" }
 priv const poison_uri: U8[] = "kspl-test-poison:///poison.kspl" //<
     //< A name whose analysis crashes the worker (`test_poison_scheme` in `../../lsp/worker.kspls`)
 
 priv fn probe_hover(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): json.Val
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena), normal_ms, arena) catch
+        c.request("textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena), lsp_client.read_ms,
+        arena) catch
         fallback .null_val
     return got
 
@@ -193,7 +194,8 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the client cannot be started")
         return
     defer c.free()
-    _init: = c.request("initialize", empty_obj(arena), normal_ms, arena) catch
+    _init: =
+        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch
         fallback .null_val
     for uri in kept_uris
         c.notify("textDocument/didOpen", lsp_client.did_open(uri, kept_src, arena),

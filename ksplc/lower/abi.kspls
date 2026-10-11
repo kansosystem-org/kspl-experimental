@@ -153,7 +153,7 @@ impl Ast_node
 
                 $args_node: = r.safe_get_child(2)
                 if args_node == null || args_node.kind_id != .k_expr_args
-                    args_node = Ast_node.new(.k_expr_args, "args", r.loc)
+                    args_node = Ast_node.build_args(r.loc)
                     if r.children.len > 2
                         r.set_child(2, args_node)
                     else
@@ -178,7 +178,7 @@ impl Ast_node
             get_c_identifier_for_sym_to(sym, func_part, w)
             c_name: = w.slice()
 
-            is_kspl: = (func_part.len >= 4 && func_part.starts_with("kspl_"))
+            is_kspl: = func_part.has_kspl_prefix()
             if is_kspl && sym == null
                 expr_node.flatten_to_identifier(func_part)
             else
@@ -246,7 +246,7 @@ impl Ast_node
             if r.type_id != 0
                 flat_name: = c.env.get_str(r.type_id)
                 w: = c.clear_scratch()
-                write_kspl_prefixed_to(flat_name, w)
+                flat_name.kspl_symbol_to(w)
                 r.flatten_to_identifier(w.slice())
                 return true
         return false
@@ -280,7 +280,7 @@ fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): 
     if sym.name.equals("main") || sym.name.equals("kspl_main")
         return w.s("kspl_main")
     if sym.node.is_generic_inst_node()
-        return write_kspl_prefixed_to(sym.name, w)
+        return sym.name.kspl_symbol_to(w)
 
     if is_method_name
         last_dot: = sym.name.rfind_char_out('.')
@@ -327,11 +327,6 @@ priv fn get_global_symbol_by_def(def_node: Ast_node$@): Sema_symbol$@? //<
         return .some(sym)
     // A local variable is not mangled.
     return .none
-
-priv fn write_kspl_prefixed_to(name: U8[], w: Writer): Writer
-    if name.starts_with("kspl_")
-        return w.s(name)
-    return w.s("kspl_\{name\}")
 
 priv fn write_priv_prefix_to(fname: U8[], w: Writer): Writer
     $res: = w.s("kspl_priv_")

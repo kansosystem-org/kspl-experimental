@@ -25,8 +25,9 @@ priv fn is_hex_bytes(text: U8[]): Bool //< whether it is whole bytes written as 
     return true
 
 priv const id_max: Sz = 2147483647 //< the largest ID an `I32` holds
+pub const unk_id: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
 
-priv fn token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
+pub fn parse_token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
     //<
     //< Caution: **Check every character is a digit.** `parse_size` stops at the first one that is
     //< not, so `12x` would read as 12.
@@ -42,7 +43,7 @@ priv fn token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
     return .some(I32::n)
 
 priv fn bare_line(line: U8[]): U8[] //< a line without the `\r` a CRLF file leaves on it
-    return line.sub(0, line.len - 1) if line.ends_with("\r") else line
+    return line.strip_suffix("\r")
 
 pub enum Load_error //< why `Tokenizer.load` refused a vocabulary or its merges
     io(err: io.Io_error) //< a file could not be read
@@ -54,6 +55,10 @@ pub enum Load_error //< why `Tokenizer.load` refused a vocabulary or its merges
 
 priv struct Bpe_key
     val: U64
+
+impl Bpe_key
+    priv fn of(a: I32, b: I32): Bpe_key //< the key of the pair (a, b), a in the high half
+        return Bpe_key::{ .val = ((U64::a) << 32) | (U64::b) }
 
 impl Bpe_key: ds.Hashable<|Bpe_key|> //< so a pair of token IDs can stand as a map's key
     //<
@@ -178,8 +183,7 @@ impl Tokenizer
         id2: I32, //< the right ID
         merged_id: I32, //< the ID the two merge into
     )
-        key_val: = ((U64::id1) << 32) | (U64::id2)
-        key: = Bpe_key::{ .val = key_val }
+        key: = Bpe_key.of(id1, id2)
         r.merges.set(key, merged_id)
         r.merge_rank.set(key, r.next_rank)
         r.next_rank += 1
@@ -224,7 +228,7 @@ impl Tokenizer
             case .none
                 throw .broken(name, i + 1)
             case .some(tab)
-                id: = token_id(line.sub(0, tab))
+                id: = parse_token_id(line.sub(0, tab))
                 hex: = line.sub_from(tab + 1)
                 if id.is_none() || !is_hex_bytes(hex)
                     throw .broken(name, i + 1)
@@ -244,9 +248,9 @@ impl Tokenizer
             if sp1: = line.find_char(' ')
                 rest: = line.sub_from(sp1 + 1)
                 if sp2: = rest.find_char(' ')
-                    id1: = token_id(line.sub(0, sp1))
-                    id2: = token_id(rest.sub(0, sp2))
-                    id3: = token_id(rest.sub_from(sp2 + 1))
+                    id1: = parse_token_id(line.sub(0, sp1))
+                    id2: = parse_token_id(rest.sub(0, sp2))
+                    id3: = parse_token_id(rest.sub_from(sp2 + 1))
                     if id1.is_none() || id2.is_none() || id3.is_none()
                         throw .broken(name, i + 1)
                     r.add_merge(id1.unwrap_or(0), id2.unwrap_or(0), id3.unwrap_or(0))
@@ -258,7 +262,7 @@ impl Tokenizer
         //< Splits into chunks (pretokenize) and within each chunk merges the pair of the smallest
         //< rank every time; no merge crosses a chunk, as during training.
         r: Self$@,
-        text: U8[], //< the text; any byte sequence works, since every byte has a token
+        text: U8[], //< the text; any byte sequence works, a byte the vocabulary lacks as `unk_id`
     ): List<|I32|>$@
         tokens: = List<|I32|>.create(r.arena)
         chunks: = pretokenize(text, r.arena)
@@ -281,22 +285,21 @@ impl Tokenizer
         ids: = List<|I32|>.create(r.arena)
         for i in Range.asc(chunk.len)
             b: = U8[]::{ .ptr = chunk.ptr + i, .len = 1 }
-            ids.push(r.vocab.get(b) catch 0)
+            ids.push(r.vocab.get(b) catch unk_id)
         for
             if ids.len < 2
                 break
             $best_rank: I32 = -1
             $best_i: Sz = 0
             for $i: Sz = 0; i < ids.len - 1; i += 1
-                key: = Bpe_key::{ .val = ((U64::ids[i]) << 32) | (U64::ids[i + 1]) }
+                key: = Bpe_key.of(ids[i], ids[i + 1])
                 rank: = r.merge_rank.get(key) catch -1
                 if rank != -1 && (best_rank == -1 || rank < best_rank)
                     best_rank = rank
                     best_i = i
             if best_rank == -1
                 break
-            key: = Bpe_key::{ .val =
-                ((U64::ids[best_i]) << 32) | (U64::ids[best_i + 1]) }
+            key: = Bpe_key.of(ids[best_i], ids[best_i + 1])
             merged_id: = r.merges.get(key) catch -1
             ids[best_i] = merged_id
             for $j: Sz = best_i + 1; j < ids.len - 1; j += 1

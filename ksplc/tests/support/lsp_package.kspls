@@ -15,16 +15,15 @@ import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000 //< the read timeout (the same as the suite's)
 priv const heavy_ms: I32 = 60000 //< the first answer analyses the prelude's import tree too
 
 priv const own_top: U8[] = "alone" //< the folder the server is started in, and the package's top
-priv const own_rels: U8[][4] = ::{ "alone/ksplc.cfg", "alone/lib.kspls", "alone/use/user.kspls",
+priv const own_rels: U8[][_] = ::{ "alone/ksplc.cfg", "alone/lib.kspls", "alone/use/user.kspls",
     "alone/gated.kspls" }
 priv const own_user: U8[] = "import \"mypkg/lib\"\n\npub fn use(): I32\n  return lib.hit()\n"
 priv const own_gated: U8[] = "#cfg(probe_flag)\npub fn gated(): I32\n  return 1\n" //<
     //< A declaration an unset flag leaves out, which a hover explains with the reason
-priv const own_bodies: U8[][4] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 1\n",
+priv const own_bodies: U8[][_] = ::{ "[package]\nname = mypkg\n", "pub fn hit(): I32\n  return 1\n",
     own_user, own_gated }
 priv const own_call: U8[] = "  return lib.hit()"
 
@@ -41,7 +40,7 @@ priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
     c.notify("textDocument/didOpen", lsp_client.did_open(uri, own_user, arena), lsp_client.send_ms,
         arena) catch {}
     for _k in Range.asc(12)
-        msg: = c.read_msg(normal_ms, arena) catch
+        msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
         if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
@@ -66,7 +65,8 @@ fn run(exe: U8[], arena: Arena$@)
         return
     defer c.free()
     $b: = Json_builder.new(arena)
-    _ready: = c.request("initialize", b.obj().build(), normal_ms, arena) catch e
+    _ready: =
+        c.request("initialize", b.obj().build(), lsp_client.read_ms, arena) catch e
         verdict.check(name, false, end_text(e))
         return
     // **Both spellings are tested** (the two a client names a document by, `lsp_client.kspls`).
@@ -104,8 +104,8 @@ fn run(exe: U8[], arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(gated, own_gated, arena),
         lsp_client.send_ms, arena) catch {}
     why: =
-        c.request("textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena), normal_ms, arena)
-        catch
+        c.request("textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena), lsp_client.read_ms,
+        arena) catch
         fallback .null_val
     said: = lsp_client.hover_text(why)
     verdict.check("what an unraised #cfg leaves out of it answers with the reason",

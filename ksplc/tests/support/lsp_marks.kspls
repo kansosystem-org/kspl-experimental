@@ -16,9 +16,6 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000 //<
-    //< The read timeout (the same as the suite's `normal_ms`)
-
 priv const marks_src: U8[] =
     """import "std/ds" { List }
 
@@ -43,7 +40,7 @@ priv struct Spot //< a position in the probe, and what a hover there should say
     name: U8[] //< what stands there, for the check's label
     want: U8[] //< a piece of the answer; empty where the answer is `null`
 
-priv const blank_spots: Spot[13] = ::{ //< the positions that name nothing
+priv const blank_spots: Spot[_] = ::{ //< the positions that name nothing
     Spot::{ .line = "    defer more.free", .needle = "()", .step = 1, .name = "the ')' of a call" },
     Spot::{ .line = "    defer more.free", .needle = "()", .step = 2,
         .name = "the end of a line closed by a call's ')'" },
@@ -63,7 +60,7 @@ priv const blank_spots: Spot[13] = ::{ //< the positions that name nothing
     Spot::{ .line = "fn sum", .needle = "fn", .step = 1, .name = "the keyword 'fn'" },
 }
 
-priv const named_spots: Spot[6] = ::{ //< the positions on a name, and a piece of its answer
+priv const named_spots: Spot[_] = ::{ //< the positions on a name, and a piece of its answer
     Spot::{ .line = "    $more: = List", .needle = "U8", .step = 1,
         .name = "a primitive type among type arguments", .want = "type U8" },
     Spot::{ .line = "fn sum", .needle = "x: U8", .step = 4,
@@ -82,7 +79,7 @@ priv fn hover_at(c: jsonrpc.Client$@, spot: Spot, arena: Arena$@): json.Val!json
     //< The hover at that spot
     col: = col_in_line(marks_src, spot.line, spot.needle, arena) + spot.step
     pos: = lsp_client.at_pos(marks_uri, decl_line(marks_src, spot.line, arena), col, arena)
-    return c.request("textDocument/hover", pos, normal_ms, arena)
+    return c.request("textDocument/hover", pos, lsp_client.read_ms, arena)
 
 fn check_hover_marks(c: jsonrpc.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(marks_uri, marks_src, arena),

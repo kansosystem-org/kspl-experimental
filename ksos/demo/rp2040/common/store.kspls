@@ -7,6 +7,7 @@
 //< **Every one of them is on the "keep running even if it cannot be saved" side.** When the
 //< record is full or a write fails, neither driving nor deciding stops (the caller shows in the
 //< report how many times it could save).
+import "ksdb/log" as ksdblog
 import "ksos/demo/common/car_model" as cmodel
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
@@ -66,16 +67,16 @@ fn save_policy(ln: con.Line$@, blob: U8[]) //< saves the downloaded policy
         return
     con.say(ln, "[car]", "policy stored on board")
 
-fn stored_policy(buf: U8$[]): U8[] //<
-    //< Reads the policy saved in the record into `buf`, and if it could be read returns its body
+fn stored_policy(buf: U8$[]): U8[]!ksdblog.Ksdb_error //<
+    //< Reads the policy saved in the record into `buf`, and returns its body
     //<
+    //< `not_found` where none is stored or the record is not open; **`too_small` where the one
+    //< stored is larger than `buf`**, which is not "none": it was saved, and cannot be read here.
     //< **The result is a slice pointing into `buf`.** The policy's weights point straight into it
     //< (see load in ksos/demo/common/pilot_policy.kspls), so leave `buf` alone while it runs.
     if !records.ok()
-        return ""
-    n: = records.read_last(kind_policy, buf)
-    if n == 0
-        return ""
+        throw .not_found
+    n: = records.handle().last(kind_policy, buf)!
     return U8[]::{ .ptr = buf.ptr, .len = n }
 
 fn save_model(buf: U8$[]) //< saves the learned weights in the record

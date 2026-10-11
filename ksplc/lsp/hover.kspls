@@ -19,6 +19,7 @@ import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue // the entry point t
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars"
@@ -445,7 +446,7 @@ priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     // Caution: **Borrow no type over one the declaration spelt.** The node around a field's name
     // in `Pair::{ .a = 1 }` is the struct literal, so `.a` read `field a: Pair`.
     if ctx.type_id == 0 && target_node.kind_id != .k_keyword && !spelt_from_def
-        walk_path_for_type(state, path, target_node, ctx)
+        walk_path_for_type(path, target_node, ctx)
 priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast_node$@,
     ctx: Hover_ctx$@) //<
         //< It decides the type and prefix from a definition node's kind (the first classification)
@@ -457,7 +458,7 @@ priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast
             ret_type: = sig.find_child(.k_type_expr)
             ctx.type_id =
                 (ret_type.type_id if ret_type != null && ret_type.type_id != 0
-                else state.sema.env.type_to_id.get("Void") catch 0)
+                else I32::sema_type_env.Builtin_type_id.void_type)
         ctx.prefix = "(Function) "
     case .k_struct_field, .k_enum_field
         ctx.type_id = d.type_id
@@ -523,7 +524,7 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
             target: = enclosing_impl_target(path)
             if target.len > 0
                 ctx.fallback_str.s(" (").s(target).c(')')
-        else if type_n != null && !type_n.text.equals("Unknown")
+        else if type_n != null && !type_n.text.equals(base_core.unknown_type_name)
             lsp_spell.write_type_of(c, type_n, 0, ctx.fallback_str@)
         else
             ctx.fallback_str.s("Unresolved")
@@ -600,9 +601,8 @@ priv fn is_field_def(d: Ast_node$@): Bool //<
     //< Whether the definition found is a field (a struct's or an enum payload's)
     return d != null && (d.kind_id == .k_struct_field || d.kind_id == .k_enum_field)
 
-priv fn walk_path_for_type(state: Doc_state$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@, ctx: Hover_ctx$@) //<
-        //< From the path's tail, the type and prefix of the first node with a type ID or definition
+priv fn walk_path_for_type(path: List<|Ast_node$@|>$@, target_node: Ast_node$@, ctx: Hover_ctx$@) //<
+    //< From the path's tail, the type and prefix of the first node with a type ID or definition
     for $idx: = path.len; idx > 0; idx -= 1
         p: = path.get(idx - 1)
         if p.type_id != 0
@@ -658,7 +658,7 @@ priv fn walk_path_for_type(state: Doc_state$@, path: List<|Ast_node$@|>$@,
                 ret_type: = sig.find_child(.k_type_expr)
                 ctx.type_id =
                     (ret_type.type_id if ret_type != null && ret_type.type_id != 0
-                    else state.sema.env.type_to_id.get("Void") catch 0)
+                    else I32::sema_type_env.Builtin_type_id.void_type)
             ctx.prefix = "(Function) "
             ctx.def_node = p
             break

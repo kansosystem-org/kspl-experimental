@@ -44,7 +44,7 @@ priv fn require_toplevel_type(c: Sema_ctx$@, name: U8[], loc: Ast_node$@): I32 /
         .s("top-level declaration '\{name\}' requires a type annotation (type inference is only \
             available for local variables)")
     c.err(loc, c.scratch.slice())
-    return c.env.get_or_add("Unknown")
+    return I32::sema_type_env.Builtin_type_id.unknown
 
 fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
     //< Collects the top-level declarations of every file, pass by pass
@@ -150,7 +150,7 @@ priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
             enum_reg: = child.register_type_sym(c, top_vis, .enum_def, .generic_enum)
             switch enum_reg
             case .ok(_n, _f, type_id)
-                i32_id: = c.env.get_or_add("I32")
+                i32_id: = I32::sema_type_env.Builtin_type_id.i32_type
                 enum_def: = sema_type_def.Enum_def.new(i32_id)
                 enum_def.pending_decl = null if is_generic_decl else child
                 c.env.id_to_type.get(type_id).info = .enum_type(enum_def)
@@ -225,7 +225,8 @@ priv fn register_value_symbols(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //
             sym.vis = top_vis
             // An embed is "a slice of immutable elements" (`U8[]`): make_const goes on the element,
             // not on the slice (that is "an immutable slice descriptor").
-            sym.type_id = c.slice_type_of(c.env.make_const(c.env.get_or_add("U8")))
+            sym.type_id = c
+                .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
             // Caution: **Set it on the declaration's node too.** genc needs it to write the
             // instance's C name: with `--slice-struct` on, it becomes `std/lang`'s `Slice<|U8|>`
             // instance, so hard-coding `kspl_Const_U8_Slice` disagrees with what the vtable expects
@@ -309,7 +310,7 @@ priv fn resolve_ret_type_or_void(type_node: Ast_node$@, c: Sema_ctx$@): I32!Sema
     //< Resolves the return-type node, or returns Void where unspecified
     if type_node != null
         return type_node.resolve_type(c)!
-    return c.env.get_or_add("Void")
+    return I32::sema_type_env.Builtin_type_id.void_type
 
 impl Sema_ctx
     fn report_unbound_impl_gen_param(r: Self$@, node: Ast_node$@, name: U8[], target: U8[]) //<

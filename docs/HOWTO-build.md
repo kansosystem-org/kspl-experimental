@@ -117,7 +117,7 @@ What the `windows-ucrt64` job verifies is in "What each platform runs" in [`SPEC
 
 **Install MSYS2, open its "MSYS2 UCRT64" shell, and do all the work below in it.** Install MSYS2 by the [official site](https://www.msys2.org/)'s procedure. Launch "MSYS2 UCRT64" from the Start menu (not "MSYS2 MSYS", "MSYS2 MINGW64" or "MSYS2 CLANG64"). This shell is a terminal window called mintty.
 
-**`echo $MSYSTEM` must display `UCRT64`.** Only UCRT64 is supported. The released Windows `ksplc.exe` is built with it, and UCRT is Windows 10's own C runtime, so what it builds needs no DLL from MSYS2 ("15.4 The Windows executable is built on UCRT64" in [`DESIGN.md`](DESIGN.md)).
+**`echo $MSYSTEM` must display `UCRT64`.** Only UCRT64 is supported. The released Windows `ksplc.exe` is built with it, and UCRT is Windows 10's own C runtime, so what it builds needs no DLL from MSYS2 ("The Windows executable is built on UCRT64" in [`DESIGN.md`](DESIGN.md)).
 
 **On Windows, the Makefile refuses to run outside the UCRT64 shell.** That includes MSYS2's tools run from PowerShell or cmd through the PATH (`MSYSTEM` is empty there). What breaks outside the shell is in the same section of [`DESIGN.md`](DESIGN.md).
 
@@ -134,7 +134,7 @@ Note: **`ksplc`'s own output (`--help`, diagnostics) does not depend on the term
 | No prefix (`git`, `make`, `python`) | `/usr/bin`, MSYS2's POSIX tools | Drives the build |
 | Starting `mingw-w64-ucrt-x86_64-` | `/ucrt64/bin`, native UCRT64 tools | Builds what ships |
 
-Why the two stay apart is "15.4 The Windows executable is built on UCRT64" in [`DESIGN.md`](DESIGN.md).
+Why the two stay apart is "The Windows executable is built on UCRT64" in [`DESIGN.md`](DESIGN.md).
 
 **`make` and `python` exist on both sides.** Once installed, the native versions win: UCRT64's PATH puts `/ucrt64/bin` before `/usr/bin`.
 
@@ -196,7 +196,7 @@ pacman -Fy                      # fetch the file DB (the first time only)
 pacman -F llvm-objcopy          # display the package providing this command
 ```
 
-The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain or the versioned name (`ld.lld-19` and so on, matching clang's version), so either may be installed.
+The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain or the versioned name (`ld.lld-22` and so on, matching clang's version), so either may be installed.
 
 ### 3. Run `make` / `make ci`
 

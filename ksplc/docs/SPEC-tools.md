@@ -2,7 +2,7 @@
 
 This document tells you how to use `ksplc`, the KSPL compiler, and the tools built into it: the formatter, the editor support and the checker for likely mistakes (the linter). **No other tool is needed.** The program that compiles your code also formats and checks it, so no two tools can disagree over how to read the grammar.
 
-It is a specification: each rule here is what the tools do, and the tests hold many of them to it. A term is explained where it first appears; the compiler's terms not explained here are in the glossary, [`DESIGN.md` §14](DESIGN.md#14-the-glossary).
+It is a specification: each rule here is what the tools do, and the tests hold many of them to it. A term is explained where it first appears; the compiler's terms not explained here are in the glossary, [`DESIGN.md` "The glossary"](DESIGN.md#the-glossary).
 
 ---
 
@@ -121,7 +121,7 @@ This table lists every option of a compile. Most have a section of their own, li
 
 | The option | Description |
 | :-- | :-- |
-| `--stats` | prints how long each stage of the compiler took, an estimate of the syntax tree's (AST nodes') memory, the parser's (KSPEG's) profile and more. How the report is laid out, and what reads it, is [`DESIGN.md` §1.7](DESIGN.md#17-measuring-the-compiler---stats-and-the-performance-guard). |
+| `--stats` | prints how long each stage of the compiler took, an estimate of the syntax tree's (AST nodes') memory, the parser's (KSPEG's) profile and more. How the report is laid out, and what reads it, is [`DESIGN.md` "Measuring the compiler: `--stats` and the performance guard"](DESIGN.md#measuring-the-compiler---stats-and-the-performance-guard). |
 | `--freestanding` | generates code for bare metal (a chip with no operating system), depending on neither an OS nor a standard library, and sets the `#cfg()` flag `freestanding`. |
 | `--machine=<triple>` | the machine the output is for, whose widths every size is laid out by; the default is the machine ksplc runs on ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). |
 | `--define=<flag>` | defines a flag for `#cfg()` conditional compilation, which keeps or drops code by flag (`ksplc --define=debug main.kspls main.c`); it can be repeated. |
@@ -254,7 +254,7 @@ The output path serves **only as the base for the names**, which are built from 
 
 Caution: **Keep the shared header in the same directory as the unit `.c` files**; they `#include` it by file name, not by path.
 
-**The guide for N is the core count** ([`DESIGN.md` §6.9](DESIGN.md#69-split-compilation-emitting-one-program-as-several-translation-units---split)). The cap of 256 stops a mistyped order of magnitude and is not a recommendation.
+**The guide for N is the core count** ([`DESIGN.md` "Split compilation: emitting one program as several translation units (`--split`)"](DESIGN.md#split-compilation-emitting-one-program-as-several-translation-units---split)). The cap of 256 stops a mistyped order of magnitude and is not a recommendation.
 
 **It cannot be combined with `--to=llvm`** (an error): the LLVM backend cannot split translation units. Nor with `--library`, whose functions the units would need to reach in each other ([§2.10.1](#2101-building-a-library---library)).
 
@@ -312,7 +312,7 @@ flowchart LR
 
 `import "std/io"` reads from the standard library's folder. ksplc picks that one folder from the list below, and never searches several.
 
-**An import beginning with `std/` is special**: it is read from the one folder that holds the standard library. A list of places tried in order would let a project's own `std/` folder hide the real one with no message, or the reverse ([`DESIGN.md` §13.3](DESIGN.md)). That folder is the first of these, strongest first:
+**An import beginning with `std/` is special**: it is read from the one folder that holds the standard library. A list of places tried in order would let a project's own `std/` folder hide the real one with no message, or the reverse ([`DESIGN.md` "The standard library is found beside the compiler"](DESIGN.md)). That folder is the first of these, strongest first:
 
 | # | Where it comes from | The use assumed |
 | :-- | :-- | :-- |
@@ -333,7 +333,7 @@ export KSPLC_STD_DIR=/home/me/kspl/std
 ksplc info std-dir                     # => /home/me/kspl/std
 ```
 
-**This setting does not go in `ksplc.cfg`, and `--std-dir=` is an error with the language server.** Set `KSPLC_STD_DIR` instead (the reasons for both are in [`DESIGN.md` §13.3](DESIGN.md)). The language server the VS Code extension carries has no `std/` beside it, so for a project with no `std/` of its own it reads the variable.
+**This setting does not go in `ksplc.cfg`, and `--std-dir=` is an error with the language server.** Set `KSPLC_STD_DIR` instead (the reasons for both are in [`DESIGN.md` "The standard library is found beside the compiler"](DESIGN.md)). The language server the VS Code extension carries has no `std/` beside it, so for a project with no `std/` of its own it reads the variable.
 
 #### 2.9.2 The source of a package other than `std` (`--pkg-src-dir=`)
 
@@ -353,7 +353,7 @@ ksplc run main.kspls                        # one's own project may be placed an
 
 **This setting does not go in `ksplc.cfg` either**, since a place belongs to the environment and the way of installing. A package's name does go there: a package that names itself ([§6.4](#64-a-package-that-names-itself-package)) finds its own files in its own folder, not in either place above, and names the packages it uses from them.
 
-**Paths in diagnostics**: inside the standard library, a diagnostic names the file by its logical name (`std/io.kspls`), not its actual place ([`DESIGN.md` §13.3](DESIGN.md)). A file that was not found, in `std` or in a package, is named by the path ksplc actually tried to open, as it cannot be fixed without knowing where ksplc looked.
+**Paths in diagnostics**: inside the standard library, a diagnostic names the file by its logical name (`std/io.kspls`), not its actual place ([`DESIGN.md` "The standard library is found beside the compiler"](DESIGN.md)). A file that was not found, in `std` or in a package, is named by the path ksplc actually tried to open, as it cannot be fixed without knowing where ksplc looked.
 
 #### 2.9.3 Writing out the list of sources read (`--emit-deps`)
 
@@ -393,6 +393,7 @@ The columns are separated by tabs, and the lines are sorted by key:
 
 * **The key is a declaration's identity**: `<the enclosing type>.<the name>`, or the name alone where nothing encloses it. An `impl`'s enclosing type is its target type as spelled (a `Box<|T|>` and a `Box<|I32|>` are different APIs), and a conformance to a trait is `<the target>:<the trait>`.
 * **The attributes are part of the key**: `#cfg` is the only way to write one name twice, and without it two entries would share a key.
+* **A `pub` item of an `extern "C"` block is a row like any other**: it reaches every package as a KSPL function does. Its key also carries the block's own attributes, as a method's carries its `impl`'s.
 * **The spelling is the source with its whitespace folded**: each run of whitespace becomes one, and line comments are dropped. **The inside of a string is not folded** (a default argument's literal is part of the spelling).
 * **The documentation, the fourth column, is left off where there is none.** It holds the declaration's `//<` run, its summary and the detail behind the parting mark, joined by spaces ("The documentation a declaration carries" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). A parameter's `//<`, and the one on the return's line, each get a row of their own. The record holds one entry per line, and a list packed into one column would need a separator that no description may contain.
   * Note: **The column is here so that drift shows.** Change what a `pub` does and leave its description standing, and `make test-surface` shows the row as changed in the same round as the signature.
@@ -547,7 +548,7 @@ clang prog.c @prog.libs $(ksplc info link-libs) -o prog
 ksplc emit-runtime [--freestanding] <output.c>
 ```
 
-It writes the C runtime's source to `<output.c>` as one translation unit and exits. **It analyses no source**, so it takes no `.kspls`. `--to=llvm`'s IR holds no runtime, and is linked beside this file; the design is in [`DESIGN.md` §6.4](DESIGN.md#64-embedding-the-runtime-and-what-a-library-keeps-to-itself).
+It writes the C runtime's source to `<output.c>` as one translation unit and exits. **It analyses no source**, so it takes no `.kspls`. `--to=llvm`'s IR holds no runtime, and is linked beside this file; the design is in [`DESIGN.md` "Embedding the runtime, and what a library keeps to itself"](DESIGN.md#embedding-the-runtime-and-what-a-library-keeps-to-itself).
 
 **`--freestanding` changes the contents**, so emit it with the same setting as the IR it is linked with.
 
@@ -660,7 +661,7 @@ ksplc fmt --to=kspls src/main.kspl      # the indentation notation to standard o
 * **A blank line *after* a `}` stays.**
 * **A file ends with exactly one newline**, added where missing and folded where doubled.
 
-Why each of these holds is [`DESIGN.md` §10.16](DESIGN.md#1016-blank-lines-and-the-line-terminator).
+Why each of these holds is [`DESIGN-tools.md` "Blank lines and the line terminator"](DESIGN-tools.md#blank-lines-and-the-line-terminator).
 
 **A description too long for its line moves below its mark, one step in.** `name //< a long description` becomes `name //<` with the description on the next line. That is the shape a description longer than one line already takes ("The documentation a declaration carries" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). The record's fourth column and the hover read the same words either way, as a run is joined into one line. Three shapes stay as they are:
 
@@ -706,7 +707,7 @@ Note: **Width is measured in the brace notation, in both notations**, so one pro
 
 `ksplc lsp` is what gives your editor types on hover, jumps to definitions and red underlines for errors. It serves types and errors to an editor over the Language Server Protocol (LSP), a standard way for an editor and a language tool to talk. **A person does not start it**; the editor's extension does.
 
-It runs as two processes: **the analysis runs in a separate process** (`lsp-worker`), watched by the front one. The front one restarts it after a crash or a hang and restores the documents that were open ([`DESIGN.md` §10.2](DESIGN.md#102-the-language-server-is-split-into-two-processes-the-watcher-and-the-analyser)). So a crash in the analysis does not take the editor's connection down.
+It runs as two processes: **the analysis runs in a separate process** (`lsp-worker`), watched by the front one. The front one restarts it after a crash or a hang and restores the documents that were open ([`DESIGN-tools.md` "The language server is split into two processes: the watcher and the analyser"](DESIGN-tools.md#the-language-server-is-split-into-two-processes-the-watcher-and-the-analyser)). So a crash in the analysis does not take the editor's connection down.
 
 What the editor sees after such a recovery:
 
@@ -732,9 +733,9 @@ flowchart LR
 * **Jump to definition**: from a use to its declaration, including a typedef or an enum variant in another file.
   * **Where the server finds nothing, nothing happens.** The VS Code extension does not search the text for a match instead: a search lands on another declaration of the same name, shown as surely as a real answer.
   * On a name where it is declared, it jumps to the definition of the variable's type.
-* **Finding references**: every place in the project that uses the name. It matches on the declaration a name points at, not on its spelling, so the same characters in a comment or a string do not match. The results are ordered by file name, line, then column. `context.includeDeclaration` is followed exactly as asked, and the declaration counts where the option is absent (the reason for both is §10.4 of [`DESIGN.md`](DESIGN.md)).
-* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns (the reason is §10.4 of [`DESIGN.md`](DESIGN.md)).
-* **The call hierarchy**: a function's callers and callees across files, as a tree, following the operators and the methods to what they desugar into (the plain calls the compiler rewrites them to). Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail` to tell it from a call (the reason is §10.6 of [`DESIGN.md`](DESIGN.md)).
+* **Finding references**: every place in the project that uses the name. It matches on the declaration a name points at, not on its spelling, so the same characters in a comment or a string do not match. The results are ordered by file name, line, then column. `context.includeDeclaration` is followed exactly as asked, and the declaration counts where the option is absent (the reason for both is "References and renaming are the same question, so they are gathered in one place" in [`DESIGN-tools.md`](DESIGN-tools.md)).
+* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns (the reason is "References and renaming are the same question, so they are gathered in one place" in [`DESIGN-tools.md`](DESIGN-tools.md)).
+* **The call hierarchy**: a function's callers and callees across files, as a tree, following the operators and the methods to what they desugar into (the plain calls the compiler rewrites them to). Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail` to tell it from a call (the reason is "The call hierarchy also counts passing a function as a pointer as an edge" in [`DESIGN-tools.md`](DESIGN.md)).
 * **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written: functions, types with their fields and variants, an `impl` and a trait with their functions (as methods), constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import; nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error, as the colouring does.
 * **Diagnostics**: the analysis runs as you type, and errors and warnings show as wavy underlines ([5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint)).
 * **Colouring by meaning**: it answers `textDocument/semanticTokens/full`, laid over the editor's own syntax colouring, not replacing it (in VS Code, the TextMate grammar in `.vscode/extensions/kspl`). It adds only what the syntax colouring can never tell ([§4.4](#44-colouring-by-meaning-semantictokens)).
@@ -840,15 +841,15 @@ Only warnings, information and hints carry a code: a fixed number such as `W0201
 
 **The class and the weight are independent axes**: class 07 holds a warning, an information and a hint, so neither can be read off the other.
 
-**The CI verdict counts all four weights**: the lint gate (the CI check that runs the linter) and the entry points it analyses are "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md). Why it counts hints is "A severity and a CI policy are different things" in [`DESIGN.md`](DESIGN.md). Why one entry point that alone instantiates some code must be listed is [`DESIGN.md` §11.6](DESIGN.md#116-a-gate-checks-that-a-diagnostic-fires-separately-from-the-passfail-verdict).
+**The CI verdict counts all four weights**: the lint gate (the CI check that runs the linter) and the entry points it analyses are "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md). Why it counts hints is "A severity and a CI policy are different things" in [`DESIGN.md`](DESIGN.md). Why one entry point that alone instantiates some code must be listed is [`DESIGN.md` "A gate checks that a diagnostic fires separately from the pass/fail verdict"](DESIGN.md#a-gate-checks-that-a-diagnostic-fires-separately-from-the-passfail-verdict).
 
-**Some advice is not reported inside a generic** (a function or type with a type parameter, such as `List<|T|>`). Where the answer changes with the type argument ([I0301]'s unneeded cast, [I0307]'s empty block), it is not reported while an instantiation is analysed (why, with a worked example: [`DESIGN.md` §11.4](DESIGN.md)). Outside a generic it is reported as usual.
+**Some advice is not reported inside a generic** (a function or type with a type parameter, such as `List<|T|>`). Where the answer changes with the type argument ([I0301]'s unneeded cast, [I0307]'s empty block), it is not reported while an instantiation is analysed (why, with a worked example: [`DESIGN.md` "While a generic is being instantiated, a diagnostic that depends on a type argument is not emitted"](DESIGN.md)). Outside a generic it is reported as usual.
 
 ### 5.3 Enabling, disabling or promoting a diagnostic to an error (`##lint` / `--lint` / `ksplc.cfg`)
 
 You can turn each coded diagnostic off, turn on one that is off by default, or make it an error. You set this per file, on the command line, or for a folder in `ksplc.cfg`.
 
-**Which diagnostics are needed depends on what is being built, sometimes in opposite directions.** An OS kernel wants to see every hidden reference count; a web server wants hand-made ownership flagged (the reasons are "8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) and [`DESIGN.md` §8.3, "The three-tier allocation strategy"](DESIGN.md#83-the-three-tier-allocation-strategy)).
+**Which diagnostics are needed depends on what is being built, sometimes in opposite directions.** An OS kernel wants to see every hidden reference count; a web server wants hand-made ownership flagged (the reasons are "8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) and [`DESIGN.md` "The three-tier allocation strategy", "The three-tier allocation strategy"](DESIGN.md#the-three-tier-allocation-strategy)).
 
 #### 5.3.1 The levels
 
@@ -858,7 +859,7 @@ You can turn each coded diagnostic off, turn on one that is off by default, or m
 | `on` | reported at its default severity (**this enables a code that is off by default**) |
 | `error` | promoted to an error, and checked and refused even on an ordinary build outside lint mode |
 
-**`error` works only toward more refusals**: an error has no code ("An error has no number" in [§5.2](#52-the-diagnostics-four-weights)), so this mechanism cannot turn a genuine defect `off` ([`DESIGN.md` §13.1](DESIGN.md)).
+**`error` works only toward more refusals**: an error has no code ("An error has no number" in [§5.2](#52-the-diagnostics-four-weights)), so this mechanism cannot turn a genuine defect `off` ([`DESIGN.md` "lint is configured per diagnostic code, not by a group name"](DESIGN.md)).
 
 #### 5.3.2 The three ways to set it
 
@@ -964,6 +965,7 @@ The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, over
 | H0802 | a wrap at a call inside an argument |
 | H0803 | a function exceeds 300 lines |
 | H0804 | a direct wrap of a multi-line call |
+| H0805 | a function nests blocks past 8 levels |
 
 ### 5.5 The list of warnings (W)
 
@@ -1247,6 +1249,10 @@ A function or method is longer than the guide of 300 lines per function that Pri
 The subject of a `switch` or `if` directly wraps a call whose argument list spans several lines (`switch x.foo(a, b,\n    c) case ...`). The wrapping tangles with the `switch`/`case` or the `if`'s condition and is hard to read. Out of scope: a chained call wrapping between the receiver and the method name (`x.method()\n    .chain()`), and a single struct literal as the argument.
 * **Fix**: assign the call to a temporary and make that the subject (`result: = x.foo(a, b, c); switch result case ...`); the call itself may still wrap.
 * It urges splitting for readability, not correctness, so it is a Hint, like H0802, which gives the same advice.
+
+#### [H0805] A function nests blocks past 8 levels
+A function's blocks nest deeper than the guide of 8 levels that Principle 3 lays down ("Development Principles" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). The function body is level 0, so each `if`, `for`, `switch` case or bare block inside it opens one more. It is reported once per function, at the function, with the depth it reached.
+* **Fix**: move the innermost part into a helper, or reject first and leave ([H0801]) so the rest needs no `else`.
 
 ## 6. The project settings file (ksplc.cfg)
 

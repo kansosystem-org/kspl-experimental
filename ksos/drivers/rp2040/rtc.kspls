@@ -53,20 +53,18 @@ fn unpack(setup0_bits: U32, setup1_bits: U32): Date_time
         .second = setup1_bits & 0x3F,
     }
 
-fn init(dt: Date_time, clkdiv_m1: U32): Bool //< starts the RTC with dt as the initial value
+fn init(dt: Date_time, clkdiv_m1: U32): Void!mmio.Driver_error //< starts the RTC at dt
     //<
     //< clkdiv_m1 is clk_rtc's frequency in Hz, minus 1.
     //< Caution: **Take it out of reset first.** A write to a register still in reset is silently
     //< discarded (and reads back as 0).
-    if !resets.reset_then_unreset(reset_rtc)
-        return false
+    resets.reset_then_unreset(reset_rtc)!
     mmio.write32(rtc_ctrl, 0U32) // stop it first, then configure it
     mmio.write32(rtc_clkdiv_m1, clkdiv_m1)
     mmio.write32(rtc_setup_0, pack_setup_0(dt))
     mmio.write32(rtc_setup_1, pack_setup_1(dt))
     mmio.write32(rtc_ctrl, ctrl_load) // load SETUP_0/1 into the counters
     mmio.write32(rtc_ctrl, ctrl_enable) // start it running
-    return true
 
 fn is_active(): Bool //< returns the RTC_ACTIVE bit (the status bit saying it is running)
     return (mmio.read32(rtc_ctrl) & ctrl_active) != 0

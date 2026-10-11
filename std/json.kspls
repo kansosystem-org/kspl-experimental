@@ -414,13 +414,6 @@ priv fn write_break(out: Str_builder$@, indent: Sz, depth: Sz) //< a newline wit
     for _i in Range.asc(indent * depth)
         out.c(' ')
 
-priv fn write_json_float(out: Str_builder$@, f: F64) //< writes a fraction
-    //<
-    //< **It writes the shortest form that round-trips** (a negative precision to `std/strfmt`'s
-    //< `write_float`). An integral value gets a `.0`, so it reads back as a float; below 10^-6 and
-    //< from 10^21 up it uses the `1e+21` form, which JSON allows (RFC 8259 §6).
-    strfmt.write_float(out, f, -1, 0, ' ', false)
-
 impl Val
     pub fn arr_list( //< an array's elements as a list; the one way to walk an array
         //<
@@ -479,7 +472,9 @@ impl Val
             if f - f != 0.0
                 out.s("null")
             else
-                write_json_float(out, f)
+                // The shortest form that round-trips; an integral value gets a `.0`, and below
+                // 10^-6 and from 10^21 up it is the `1e+21` form JSON allows (RFC 8259 §6).
+                f.fmt(out)
         case .str_val(s)
             out.c('"').escape_and_append(s).c('"')
         case .array_val
@@ -524,12 +519,8 @@ impl Val
         r: Self,
         key: U8[], //< the member's name
     ): Val
-        $m: = r.obj_head()
-        for m != null
-            if m.key.equals(key)
-                return m.val
-            m = m.next
-        return .null_val
+        m: = r.member(key)
+        return m.val if m != null else .null_val
     pub fn has_key( //< whether the member exists, even if it holds `null`
         //<
         //< Caution: **`get`'s result is no substitute**: it gives `Val.null_val` both for an absent
@@ -537,12 +528,15 @@ impl Val
         r: Self,
         key: U8[], //< the member's name
     ): Bool
+        return r.member(key) != null
+
+    priv fn member(r: Self, key: U8[]): Member$@ //< the first member of that name, or null
         $m: = r.obj_head()
         for m != null
             if m.key.equals(key)
-                return true
+                return m
             m = m.next
-        return false
+        return null
 
     pub fn get_at( //< an array's element, or `null_val` when the position is past the end
         r: Self,

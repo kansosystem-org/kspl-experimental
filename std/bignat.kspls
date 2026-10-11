@@ -28,9 +28,6 @@ impl Bignat
         r.trim()
         return r
 
-    pub fn is_zero(r: Self@): Bool //< whether the value is 0
-        return r.len == 0
-
     priv fn trim(r: Self$@)
         for r.len > 0 && r.limbs[r.len - 1] == 0
             r.len -= 1
@@ -154,6 +151,27 @@ impl Bignat
 priv fn copy_bytes(dst: U8$@, src: U8@, n: Sz)
     for i in Range.asc(n)
         (dst + i)$ = (src + i)$
+
+pub const f64_sign_bit: U64 = 0x8000000000000000U64 //< an F64's sign, in its bits
+pub const f64_mantissa_mask: U64 = 0x000FFFFFFFFFFFFFU64 //< an F64's stored significand bits
+pub const f64_hidden_bit: U64 = 0x0010000000000000U64 //< the 1 a normal F64 does not store
+
+pub struct Binary_float //< a floating-point value split into f × 2^e, without the sign
+    //<
+    //< std/strfmt writes a number's digits from it, and std/strnum steps a parsed value by an ulp.
+    pub f: U64 //< the significand, the hidden 1 included where there is one
+    pub e: I32 //< the power of two f is scaled by
+    pub unequal: Bool //< an exact power of two, where the gap below is half the gap above
+
+pub fn decompose_f64(mag: U64): Binary_float //< an F64's bits, without the sign, as f × 2^e
+    //<
+    //< A subnormal has no hidden 1, and its exponent is fixed at the minimum.
+    exp_field: = mag >> 52U64
+    mant: = mag & f64_mantissa_mask
+    if exp_field == 0U64
+        return Binary_float::{ .f = mant, .e = -1074, .unequal = false }
+    return Binary_float::{ .f = mant | f64_hidden_bit, .e = I32::exp_field - 1075,
+        .unequal = mant == 0U64 && exp_field > 1U64 }
 
 pub fn f64_to_bits(v: F64): U64 //< the same bits read as an integer; no numeric conversion
     $x: = v

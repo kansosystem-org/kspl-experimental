@@ -5,6 +5,7 @@
 //<   the second ... red just after a safety timeout issued a command. Dark otherwise.
 //<   if !status.init(board.ws2812_pin, board.ws2812_level) { … }
 //<   status.show(status.State.driving, false);   // every loop (it sends only on a change)
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/ws2812"
 
 enum State //< the car's states
@@ -107,12 +108,10 @@ priv $first: Bool = true
 priv $tick: U32 = 0
 priv $alert_left: U32 = 0
 
-fn init(pin: U32, brightness: U32): Bool //< makes the LEDs usable
+fn init(pin: U32, brightness: U32): Void!mmio.Driver_error //< makes the LEDs usable
     //<
-    //< **true once they are ready.** The caller passes the brightness (`board.ws2812_level`).
+    //< The caller passes the brightness (`board.ws2812_level`).
     ready = false
-    if !ws2812.init(pin)
-        return false
+    ws2812.init(pin)!
     level = brightness
     ready = true
-    return true

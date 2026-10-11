@@ -19,9 +19,6 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000 //<
-    //< The read timeout (the same as the suite's `normal_ms`)
-
 priv const values_src: U8[] =
     """import "std/ds" { List }
 
@@ -75,7 +72,7 @@ priv struct Ask //< a position in the probe, and what a hover there should show
     want: U8[] //< the whole line the answer shows; empty where the answer is `null`
     count: Sz //< for references, how many places the name has in the probe
 
-priv const literal_asks: Ask[10] = ::{ //< the literals, each with the type it took
+priv const literal_asks: Ask[_] = ::{ //< the literals, each with the type it took
     Ask::{ .line = "    size: Sz", .needle = "4", .name = "an integer given a type", .want = "Sz" },
     Ask::{ .line = "    for i in", .needle = "3)", .name = "an integer passed as an `Sz`",
         .want = "Sz" },
@@ -95,7 +92,7 @@ priv const literal_asks: Ask[10] = ::{ //< the literals, each with the type it t
         .name = "the 'in' of a for, beside its copied collection" },
 }
 
-priv const bound_asks: Ask[12] = ::{ //< the names where they are bound, and fields set by name
+priv const bound_asks: Ask[_] = ::{ //< the names where they are bound, and fields set by name
     Ask::{ .line = "    $words: =", .needle = "words", .step = 1,
         .name = "a declaration of a struct's type, inferred",
         .want = "words: std.ds.List<|U8[]|>" },
@@ -132,7 +129,7 @@ priv fn request_at(c: jsonrpc.Client$@, method: U8[], ask: Ask, arena: Arena$@):
         .set("character", b.int_val(col)).build()
     ctx: = b.obj().set("includeDeclaration", b.bool_val(true)).build()
     params: = b.obj().set("textDocument", doc).set("position", pos).set("context", ctx).build()
-    return c.request(method, params, normal_ms, arena)
+    return c.request(method, params, lsp_client.read_ms, arena)
 
 priv fn shown_line(text: U8[]): U8[] //< the answer's first line inside its code fence
     body: = text.strip_prefix("```kspl\n")
@@ -153,7 +150,7 @@ priv fn check_asks(c: jsonrpc.Client$@, asks: Ask[], arena: Arena$@) //<
         verdict.check(label, ok,
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
-priv const ref_asks: Ask[2] = ::{ //< the names whose references are listed, each with its count
+priv const ref_asks: Ask[_] = ::{ //< the names whose references are listed, each with its count
     Ask::{ .line = "    $words: =", .needle = "words", .step = 1, .name = "words", .count = 3 },
     Ask::{ .line = "    for w", .needle = "w ", .name = "w", .count = 2 },
 }

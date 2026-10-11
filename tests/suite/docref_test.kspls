@@ -32,7 +32,7 @@ priv const max_shown: Sz = 20 //< the cap on how many are listed in the report
 // `std` but not the reverse, and between `ksplc` and `ksos` there is no dependency.
 // `ksos` points at `ksdb` for its append-only record.
 // ==========================================
-priv const layer_from: U8[][13] = ::{ "docs", "root", "ksplc", "std", "ksai", "kspeg", "ksos",
+priv const layer_from: U8[][_] = ::{ "docs", "root", "ksplc", "std", "ksai", "kspeg", "ksos",
     "kssrv", "ksdb", "kspage", "ksbind", "tests", "tools" }
 
 // Caution: **A leaf's row must be "everything upward".** What the table says to a leaf is "upward
@@ -40,7 +40,7 @@ priv const layer_from: U8[][13] = ::{ "docs", "root", "ksplc", "std", "ksai", "k
 // `docs/SPEC-documents.md`).
 // `make test-conventions` matches only the implementations' directions against each other, so it
 // does not catch this.
-priv const layer_to: U8[][13] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind \
+priv const layer_to: U8[][_] = ::{ "docs root ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind \
     tests tools", "root docs ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind tests tools",
     "ksplc docs std kspeg root", "std docs root", "ksai docs std root", "kspeg docs std root",
     "ksos docs std ksai ksdb root", "kssrv docs std ksai root", "ksdb docs std root",
@@ -48,7 +48,7 @@ priv const layer_to: U8[][13] = ::{ "docs root ksplc std ksai kspeg ksos kssrv k
     "tests docs ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind tools root",
     "tools docs ksplc std ksai kspeg ksos kssrv ksdb kspage ksbind root" }
 
-priv const spec_may_reach_up: U8[][2] = ::{ "docs", "root" } //<
+priv const spec_may_reach_up: U8[][_] = ::{ "docs", "root" } //<
     //< The groups whose DESIGN/SPEC documents a specification may point at
     //<
     //< **A specification does not point at the DESIGN/SPEC of a folder below or beside it** (once
@@ -59,13 +59,13 @@ priv const spec_may_reach_up: U8[][2] = ::{ "docs", "root" } //<
 // The directions the code crosses (`import` and `embed`)
 // ==========================================
 
-priv const ref_heads: U8[][2] = ::{ "import \"", "embed \"" } //<
+priv const ref_heads: U8[][_] = ::{ "import \"", "embed \"" } //<
     //< The line starts that name another file
     //<
     //< Caution: **Check both the form that imports a name and the form that embeds a file** (both
     //< cross packages). **`find_doc_paths` does not catch it**: it picks up only `.md` names, so an
     //< `embed`'s target is invisible. **Existence is not checked.**
-priv const ref_names: U8[][2] = ::{ "import", "embed" }
+priv const ref_names: U8[][_] = ::{ "import", "embed" }
 
 priv fn group_of(rel: U8[]): U8[]
     if at: = rel.find_char('/')
@@ -77,6 +77,21 @@ priv fn group_of(rel: U8[]): U8[]
             if layer_from[i].equals(top)
                 return layer_from[i]
     return "root"
+
+priv fn unlisted_packages(arena: Arena$@): Finding //<
+    //< The package folders (a `ksplc.cfg` at the top of one) with no row in layer_from
+    //<
+    //< **A folder with no row is read as `root`**, which may point anywhere, so a new package's
+    //< references would pass every direction check in silence.
+    $f: = new_finding(arena)
+    for rel in harness.tracked_matching(U8[][]::{ "*/ksplc.cfg" })
+        if at: = rel.find_char('/')
+            if !rel.sub_from(at + 1).equals("ksplc.cfg")
+                continue
+            f.seen += 1
+            if group_of(rel).equals("root")
+                f.bad.push(rel.sub(0, at))
+    return f
 
 priv fn may_refer(from: U8[], to: U8[], arena: Arena$@): Bool //< whether from may refer to to
     for i in Range.asc(layer_from.len)
@@ -137,12 +152,6 @@ priv fn scanned_files(arena: Arena$@): List<|U8[]|> //< what is scanned
             out.push(f)
     return out
 
-priv fn read_at(rel: U8[], arena: Arena$@): U8[]
-    path: = fs.join(harness.root(), rel, arena)
-    body: = io.read_file(path) catch
-        return ""
-    return body
-
 priv fn exists_at(rel: U8[], arena: Arena$@): Bool
     return fs.exists(fs.join(harness.root(), rel, arena))
 
@@ -159,10 +168,10 @@ priv fn is_file_at(rel: U8[], arena: Arena$@): Bool //< whether a file is there
 // ==========================================
 
 priv fn heading_anchors(rel: U8[], arena: Arena$@): List<|U8[]|>
-    return scan.heading_anchors_of(read_at(rel, arena), arena)
+    return scan.heading_anchors_of(harness.read_under_root(rel), arena)
 
 priv fn heading_numbers(rel: U8[], arena: Arena$@): List<|U8[]|>
-    return scan.heading_numbers_of(read_at(rel, arena), arena)
+    return scan.heading_numbers_of(harness.read_under_root(rel), arena)
 
 // ==========================================
 // Resolving a name
@@ -199,7 +208,7 @@ priv fn generated_dirs(arena: Arena$@): List<|U8[]|> //< the build output folder
         if !f.ends_with(".gitignore")
             continue
         here: = f.sub(0, f.len - 10)
-        for line in read_at(f, arena).lines(arena)
+        for line in harness.read_under_root(f).lines(arena)
             t: = line.trim_spaces()
             if t.len > 1 && t.ends_with("/") && !t.starts_with("#")
                 out.push(arena.text().s("\{here\}\{t\}").take())
@@ -208,7 +217,7 @@ priv fn generated_dirs(arena: Arena$@): List<|U8[]|> //< the build output folder
 // A section number that names no document
 // ==========================================
 
-priv const bare_exempt: U8[][1] = ::{ "docs/SPEC-documents.md" } //<
+priv const bare_exempt: U8[][_] = ::{ "docs/SPEC-documents.md" } //<
     //< The documents exempt from the check for a bare section number
     //<
     //< Note: This suite itself is not exempt (write a sample number as `§N` and it is not a bare
@@ -218,7 +227,7 @@ priv const bare_exempt: U8[][1] = ::{ "docs/SPEC-documents.md" } //<
 // references come out as "not in its own document".
 // Caution: **Do not add a loose alias ("spec" and the like).** A loose word exempts paragraphs that
 // name no document at all, which narrows the check.
-priv const doc_names: U8[][17] = ::{ "README.md", "CONTRIBUTING.md", "DESIGN.md", "PLAN.md",
+priv const doc_names: U8[][_] = ::{ "README.md", "CONTRIBUTING.md", "DESIGN.md", "PLAN.md",
     "Principle", "board material", "RFC", "POSIX", "IEEE", "ISO", "Unicode", "AAPCS", "C99", "ELF",
     "DWARF", "UEFI", "CBOR" }
 
@@ -243,7 +252,7 @@ priv fn names_a_doc(block: U8[]): Bool //<
             i += 1
     return false
 
-priv const bare_leaders: U8[][4] = ::{ "section ", "sections ", "chapter ", "chapters " } //<
+priv const bare_leaders: U8[][_] = ::{ "section ", "sections ", "chapter ", "chapters " } //<
     //< The word that comes before a bare section number
     //<
     //< **The word comes first and the number after** (`section 1.2`), so a scan that looks only
@@ -349,7 +358,7 @@ priv fn symbol_ref_defects(rel: U8[], here: U8[], text: U8[], dirs: U8[][],
                 missing.bad.push(arena.text().s("\{rel\}: \{s.text\}").take())
             continue
         stray.seen += 1
-        body: = read_at(target, arena)
+        body: = harness.read_under_root(target)
         member: = scan.sym_member(s.extra)
         $absent: U8[] = ""
         if !has_word(body, base)
@@ -427,7 +436,7 @@ impl Doc_check
 
     fn check_file(d: Self$@, rel: U8[]) //< runs every check on one file
         arena: = d.arena
-        text: = read_at(rel, arena)
+        text: = harness.read_under_root(rel)
         here: = sys.get_dir_name(rel)
         is_md: = rel.ends_with(".md")
         // Caution: **Include `.kspls` too.** `.kspl` does not match the end of `.kspls`, so without
@@ -546,7 +555,9 @@ impl Doc_check
                     .push(arena.text().s(rel).s(" -> ").s(target).s("  (").s(g_from)
                     .s(" does not refer to ").s(g_to).s(")").take())
             base_to: = sys.get_file_name(target)
-            down: = base_to.equals("DESIGN.md") || base_to.starts_with("SPEC-")
+            down: =
+                base_to.equals("DESIGN.md") || base_to.starts_with("DESIGN-") ||
+                base_to.starts_with("SPEC-")
             $up: = false
             for u in spec_may_reach_up
                 if g_to.equals(u)
@@ -578,7 +589,7 @@ impl Doc_check
             // check is cited by its verdict line, which a source holds as a string, not as a
             // heading.
             needle: = quote_needle(q.extra, arena)
-            body: = read_at(target, arena)
+            body: = harness.read_under_root(target)
             is_doc: = target.ends_with(".md")
             found: =
                 (scan.holds_name(body, needle, arena) if is_doc
@@ -744,5 +755,8 @@ fn main(): I32
     report("a section number that names no document points at its own document", d.bare_sec.seen,
         d.bare_sec@, "for another document's section, name the document in the same paragraph",
         arena)
+    packages: = unlisted_packages(arena)
+    report("every package folder has a row in the reference directions", packages.seen, packages@,
+        "add it to `layer_from` and `layer_to`, as docs/SPEC-documents.md's table says", arena)
     check_picks_and_names(arena)
     return ksplc_harness.finish()

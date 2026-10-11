@@ -6,15 +6,19 @@
 //< silently: a retain without its release, or the reverse ("The rules for implementing ARC" in
 //< `ksplc/docs/DESIGN.md`). **A caller of these methods must import this file** (importing
 //< `sema/type/env` alone does not add them to Env).
+import "ksplc/base/core" as _base_core // `fqn_head` / `fqn_last`
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "std/chars" // testing and slicing single characters
 import "std/ds" { List, Map }
 import "std/io"
 import "std/str"
 import "std/sys"
 
-priv const max_structural_marker_depth: Sz = 1000 //<
+// A walk's memo holds, per type, one of these; a type it holds nothing for is not decided yet.
+priv const memo_no: I32 = 1 //< decided: it does not
+priv const memo_yes: I32 = 2 //< decided: it does
+
+priv const max_move_only_depth: Sz = 1000 //<
     //< The safety limit on the recursion depth of is_move_only's structural derivation
     //<
     //< Memoization collapses repeat visits, so the depth is the chain of *distinct* embedded types
@@ -35,18 +39,13 @@ fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< Returns empty if there are none. **Only these three are looked at**: a same-named operator
     //< trait errors on its own, but these three, matched by FQN, would silently stop working.
     known: U8[][3] = ::{ arc_trait_fqn, move_only_trait_fqn, owned_trait_fqn }
-    own_simple: = last_part(trait_fqn)
+    own_simple: = trait_fqn.fqn_last()
     for k in known
         if trait_fqn.equals(k)
             continue
-        if own_simple.equals(last_part(k))
+        if own_simple.equals(k.fqn_last())
             return k
     return ""
-
-priv fn last_part(fqn: U8[]): U8[] //< what follows the FQN's last dot, or all of it without one
-    if dot: = fqn.rfind_char('.')
-        return fqn.sub_from(dot + 1)
-    return fqn
 
 impl sema_type_env.Env
     fn is_arc_type(r: Self$@, type_id: I32): Bool //<
@@ -116,7 +115,7 @@ impl sema_type_env.Env
         resolving: List<|I32|>$@): Bool //<
             //< Whether type_id holds an ARC-managed type as a value field, at any depth
             //<
-            //< Caution: **Do not remove the memoization** (type_id -> 0=uncomputed/1=false/2=true)
+            //< Caution: **Do not remove the memoization** (type_id -> memo_no / memo_yes)
             //< — one type is referenced from several fields, so cycle detection alone leaves
             //< fanout^d time. **Nor add a depth limit**, which would take away calc_type_layout's
             //< diagnostic on a legitimate chain.
@@ -125,9 +124,9 @@ impl sema_type_env.Env
         // The immutable qualifier is stripped for the same reason as in is_arc_type.
         real_id: = r.get_clean_real_type(type_id)
         cached: = memo.get(real_id) catch 0
-        if cached == 1
+        if cached == memo_no
             return false
-        if cached == 2
+        if cached == memo_yes
             return true
         for seen_id in resolving
             if seen_id == real_id
@@ -142,7 +141,7 @@ impl sema_type_env.Env
                 found = true
                 break
         resolving.len -= 1
-        memo.set(real_id, 2 if found else 1)
+        memo.set(real_id, memo_yes if found else memo_no)
         return found
 
     priv fn owns_arc_content_impl(r: Self$@, type_id: I32, memo: Map<|I32, I32|>$@,
@@ -169,36 +168,36 @@ impl sema_type_env.Env
         //< Whether target_id is Move_only (implicit copying forbidden)
         //<
         //< True if there is an explicit impl for `std.lang.Move_only`. Where there is none it is
-        //< derived structurally (has_structural_marker below).
+        //< derived structurally (derives_move_only below).
         $memo: = Map<|I32, I32|>.new(null)
         defer memo.free()
         $resolving: = List<|I32|>.new(null)
         defer resolving.free()
-        return r.has_structural_marker(target_id, memo@, resolving@, 0)
+        return r.derives_move_only(target_id, memo@, resolving@, 0)
 
-    priv fn has_structural_marker(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
+    priv fn derives_move_only(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
         resolving: List<|I32|>$@, depth: Sz): Bool //<
-            //< Move_only's structural derivation.
+            //< Whether target_id is Move_only by what it owns, where it declares no impl
             //<
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
             //< `Move_only`" in docs/SPEC-language.md). **Keep the memo and break cycles with
             //< resolving**, as type_has_arc_content_impl does.
         cached: = memo.get(target_id) catch 0
-        if cached == 1
+        if cached == memo_no
             return false
-        if cached == 2
+        if cached == memo_yes
             return true
         // A pointer or a slice is a borrowed view; copying it adds no release duty.
         if r.is_pointer(target_id) || r.is_slice(target_id)
-            memo.set(target_id, 1)
+            memo.set(target_id, memo_no)
             return false
         if r.has_implemented_trait_fqn(target_id, move_only_trait_fqn)
-            memo.set(target_id, 2)
+            memo.set(target_id, memo_yes)
             return true
         for seen_id in resolving
             if seen_id == target_id
                 return false
-        if depth >= max_structural_marker_depth
+        if depth >= max_move_only_depth
             io.err()
                 .s("\nfatal: value nesting too deep while deriving a structural marker (possible \
                     unbounded recursive value-embedding chain).\n")
@@ -210,9 +209,9 @@ impl sema_type_env.Env
         defer parts.free()
         r.owned_parts(r.get_real_type(target_id), parts@)
         for part in parts
-            if r.has_structural_marker(part, memo, resolving, depth + 1)
+            if r.derives_move_only(part, memo, resolving, depth + 1)
                 derived = true
                 break
         resolving.len -= 1
-        memo.set(target_id, 2 if derived else 1)
+        memo.set(target_id, memo_yes if derived else memo_no)
         return derived

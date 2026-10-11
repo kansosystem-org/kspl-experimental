@@ -121,6 +121,26 @@ fn test_taking_a_row_apart(arena: Arena$@) //< a row becomes its four fields
     assert(b.doc.len == 0, "and says nothing of itself")
     verdict.pass("a row comes apart into its file, key, spelling and what it says.")
 
+fn test_a_drifted_twin_is_named(arena: Arena$@) //< twins per `#cfg` differing by more than a mark
+    //<
+    //< **Twins that differ only by a parameter's unused mark agree** (an argument is passed by
+    //< place); any other difference is named, once.
+    verdict.start("[tools/surface] a drifted #cfg twin is named test...")
+    $b: = Str_builder.new()
+    defer b.free()
+    same: =
+        "std/lang\tpanic #cfg(!freestanding)\tpub fn panic(msg: U8$[], file: U8[])\nstd/lang\tpanic \
+            #cfg(freestanding)\tpub fn panic(msg: U8$[], _file: U8[])\n"
+    $agree: = surface.rows_of(same, arena)
+    assert(surface.drifted_twins(agree@, b@, arena) == 0, "a mark alone is no difference")
+    apart: =
+        "std/math\tsqrt #cfg(!freestanding)\tpub fn sqrt(x: F64): F64\nstd/math\tsqrt \
+            #cfg(freestanding)\tpub fn sqrt(x: F32): F32\nstd/math\tother\tpub fn other()\n"
+    $drift: = surface.rows_of(apart, arena)
+    assert(surface.drifted_twins(drift@, b@, arena) == 1, "a changed type is named, once")
+    assert(b.slice().find_str("sqrt #cfg(freestanding)").is_some(), "by the twin that differs")
+    verdict.pass("only twins that really differ are named.")
+
 fn test_a_part_row_is_told_from_an_entry(arena: Arena$@) //<
     //< A parameter's row and the return value's are told apart from the declaration's
     //<

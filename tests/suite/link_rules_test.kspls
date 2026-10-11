@@ -6,6 +6,7 @@
 //< a copy. **A Windows disagreement shows nowhere else**: Linux and macOS take neither branch, and
 //< a stack too small dies only on a deep recursion. So both are asked as UCRT64 through a stand-in
 //< C compiler naming its target (both decide by `CC -dumpmachine`), and once as this host is.
+//< It also checks that a build without BLAS asks the link for no OpenBLAS (`check_blas_off`).
 //< Caution: **Do not parse the Makefile here**: make answers `LDLIBS` itself (`-p`).
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
@@ -26,7 +27,7 @@ priv const triple_var: U8[] = "KANSO_STAND_IN_TRIPLE" //< what the stand-in answ
 priv const windows_triple: U8[] = "x86_64-w64-windows-gnu"
 
 // What Windows and MSYS2's UCRT64 shell set, which the Makefile reads to take its Windows branch.
-priv const windows_env: U8[][2] = ::{ "OS=Windows_NT", "MSYSTEM=UCRT64" }
+priv const windows_env: U8[][_] = ::{ "OS=Windows_NT", "MSYSTEM=UCRT64" }
 
 priv const ldlibs_head: U8[] = "LDLIBS := " //< `LDLIBS`'s line in make's `-p`, its value expanded
 
@@ -37,17 +38,6 @@ priv const fix_hint: U8[] =
 // ==========================================
 // The comparison
 // ==========================================
-
-priv fn words(text: U8[], arena: Arena$@): List<|U8[]|> //< the words text holds, split at blanks
-    $out: = List<|U8[]|>.new(arena)
-    $start: Sz = 0
-    for $i: Sz = 0; i <= text.len; i += 1
-        if i < text.len && !text[i].is_space()
-            continue
-        if i > start
-            out.push(text.sub(start, i - start))
-        start = i + 1
-    return out
 
 priv fn sets_stack(word: U8[]): Bool //< whether a linker option sets the stack's size
     //<
@@ -65,9 +55,9 @@ priv fn disagreements(ldlibs: U8[], libs: U8[], flags: U8[], arena: Arena$@): Li
     //< A library must be on both sides, in any order. A linker option in `LDLIBS` must be one ksplc
     //< passes, and one ksplc passes for the stack must be in `LDLIBS`. ksplc's other options
     //< (removing unreferenced sections) the Makefile keeps in `CFLAGS`, so they are not compared.
-    m: = words(ldlibs, arena)
-    l: = words(libs, arena)
-    f: = words(flags, arena)
+    m: = harness_text.words(ldlibs, arena)
+    l: = harness_text.words(libs, arena)
+    f: = harness_text.words(flags, arena)
     $bad: = List<|U8[]|>.new(arena)
     for w in m
         if !harness_text.has(l@, w) && !harness_text.has(f@, w)
@@ -95,7 +85,7 @@ struct Answers //< one sample: `LDLIBS`, ksplc's two answers, and whether they d
 
 // The first two are today's answers on Linux and UCRT64 (on Linux, ksplc's section options are not
 // in LDLIBS), the third UCRT64's out of order.
-priv const samples: Answers[8] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs = "-lm -lpthread",
+priv const samples: Answers[_] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs = "-lm -lpthread",
     .flags = "-ffunction-sections -fdata-sections -Wl,--gc-sections", .fires = false },
     Answers::{ .ldlibs = "-lm -lws2_32 -lshell32 -Wl,--stack,8388608",
     .libs = "-lm -lws2_32 -lshell32", .flags = "-Wl,--stack,8388608", .fires = false },
@@ -151,9 +141,9 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
     argv.push(ksplc_harness.cc())
     argv.push("-std=c99")
     argv.push(c)
-    for w in words(libs.out, arena)
+    for w in harness_text.words(libs.out, arena)
         argv.push(w)
-    for w in words(flags.out, arena)
+    for w in harness_text.words(flags.out, arena)
         argv.push(w)
     argv.push("-o")
     argv.push(exe)
@@ -211,15 +201,39 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
         arena.text().s(libs.out).s(flags.out).take())
         return
     $bad: = disagreements(ldlibs, libs.out, flags.out, arena)
-    seen: = words(ldlibs, arena).len + words(libs.out, arena).len
+    seen: =
+        harness_text.words(ldlibs, arena).len + harness_text.words(libs.out, arena).len
     verdict.check_list(arena.text().s("\{name\}: the Makefile's LDLIBS agrees with ksplc").take(),
         seen, "words", bad@, fix_hint)
+
+priv const blas_entry: U8[] = "ksai/tests/main.kspls" //< the one package with a BLAS build
+
+priv fn check_blas_off(work: U8[], arena: Arena$@) //<
+    //< A build without BLAS asks the link for no OpenBLAS
+    //<
+    //< **Linux's image holds OpenBLAS**, so a stray `#link("openblas")` links there and fails only
+    //< on a machine without it (`#cfg` holds one declaration, so a block slipped below the first
+    //< loses it). `--emit-libs` is what the link is asked, the same on every machine.
+    libs: = fs.join(work, "blas_off.libs", arena)
+    r: = ksplc_harness.run_in(U8[][]::{ ksplc_harness.ksplc_exe(),
+        arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take(),
+        arena.text().s("--emit-libs=").s(libs).take(), blas_entry,
+        fs.join(work, "blas_off.c", arena) }, harness.root())
+    if r.code != 0
+        verdict.check("a build without BLAS asks the link for no OpenBLAS", false, r.out)
+        return
+    got: = io.read_file(libs) catch ""
+    verdict.check("a build without BLAS asks the link for no OpenBLAS",
+        got.find_str("openblas").is_none(),
+        arena.text().s(blas_entry).s(" asks for: ").s(got.trim_spaces())
+        .s(" (give each BLAS-only declaration its own #cfg(blas))").take())
 
 fn main(): I32
     arena: = harness.begin(16 * 1024 * 1024)
     check_fires(arena)
     work: = harness.sandbox("link-rules") catch
         return ksplc_harness.fatal("cannot make a working directory")
+    check_blas_off(work, arena)
     host_cc: = ksplc_harness.cc()
     compare("this host", host_cc, "", U8[][]::{ .ptr = null, .len = 0 }, arena)
     stand_in: = build_stand_in(work, arena)

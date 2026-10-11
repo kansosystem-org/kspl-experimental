@@ -53,9 +53,14 @@ fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
     neg_ms: = (sys.mono_us() - t_neg) / 1000I64
     idle.kill()
     assert(timed_out, "a write to a child that reads nothing fails as timed_out")
-    assert(took_ms < 15000I64, "the write returns near its timeout, not when the child ends")
+    $m: = Panic_msg.new()
+    assert(took_ms < 15000I64,
+        m.s("the write returns near its timeout, not when the child ends (took ").n(took_ms)
+        .s(" ms)").slice())
+    $n: = Panic_msg.new()
     assert(read_up && write_up && neg_ms < 5000I64,
-        "a negative wait looks once and returns timed_out, on a read and a write")
+        n.s("a negative wait looks once and returns timed_out, on a read and a write (took ")
+        .n(neg_ms).s(" ms)").slice())
 
     $gone: =
         subproc.spawn_piped(sys_test.child_argv(ksplc, "exit_three", exit_three_src, arena), "")
@@ -77,7 +82,10 @@ fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
             1024, arena)
         waited_ms: = (sys.mono_us() - t1) / 1000I64
         assert(r.timed_out, "a child that closed its outputs and runs on times out")
-        assert(waited_ms < 15000I64, "run_capture returns near its timeout after the pipes close")
+        $said: = Panic_msg.new()
+        assert(waited_ms < 15000I64,
+            said.s("run_capture returns near its timeout after the pipes close (took ").n(waited_ms)
+            .s(" ms)").slice())
     verdict.pass("Each wait ended at its timeout, and a write to an ended child failed as closed.")
 
 priv const naming_src: U8[] = //< a child that says its name and the script it runs from

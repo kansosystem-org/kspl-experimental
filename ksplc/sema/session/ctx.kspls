@@ -277,8 +277,12 @@ impl Sema_ctx
         return base_core.line_for_offset(r.line_starts_for(loc.file(), src), at)
 
     fn clear_scratch(r: Self$@): Str_builder$@
-        r.scratch.clear()
-        return r.scratch@
+        return r.scratch.clear()
+    fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
+        //< A type's mangled name, written into scratch: valid until scratch is used again
+        r.clear_scratch()
+        r.env.mangle_type_id_to(type_id, r.scratch)
+        return r.scratch.slice()
 
     fn has_error(r: Self$@): Bool
         return r.diags.counts.errors > 0
@@ -291,9 +295,9 @@ impl Sema_ctx
         //< **One wording for a function and a trait's prototype** (`infer_fn`, `trait_check`). An
         //< omitted type resolves as "Unknown": normalisation writes the empty type in.
         name: = param.find_text(.k_identifier)
-        if t_id == r.env.get_or_add("Unknown")
+        if t_id == I32::sema_type_env.Builtin_type_id.unknown
             r.clear_scratch().s("parameter '\{name\}' has no type: write '\{name\}: <type>'")
-        else if t_id == r.env.get_or_add("Void")
+        else if t_id == I32::sema_type_env.Builtin_type_id.void_type
             r.clear_scratch().s("parameter '\{name\}' cannot be Void, which holds no value")
         else
             return
@@ -315,7 +319,8 @@ impl Sema_ctx
         //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`:
         //< there, ctx would have to import resolve and be pulled into the declarations' mutual
         //< recursion, a large tangle since many files use ctx.
-        if r.file_name.len > 0 && !name.equals("Unknown") && !name.equals("Void")
+        if r.file_name.len > 0 && !name.equals(base_core.unknown_type_name) &&
+            !name.equals("Void")
             return r.build_mod_fqn(r.file_name, name)
         return base_core.pools.name_text(name)
 
@@ -541,7 +546,7 @@ impl Sema_ctx
     fn report_undefined_symbol(r: Self$@, node: Ast_node$@, name: U8[])
         r.clear_scratch().s("undefined path or identifier '\{name\}'")
         if !r.append_anon_fn_capture_note(name)
-            head: = name.sub(0, name.find_char('.').unwrap_or(name.len))
+            head: = name.fqn_head()
             r.append_withheld_alias_note(head)
         r.err(node, r.scratch.slice())
 

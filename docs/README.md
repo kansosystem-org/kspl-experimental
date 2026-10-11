@@ -11,6 +11,9 @@
 | [`SECURITY.md`](SECURITY.md) | Where to report a vulnerability, and what counts as one. | Whoever has found a way to make an input take over execution or writing |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Where to start changing Kanso: which document to read for what, naming yourself, AI-written work. | Whoever is about to change Kanso for the first time |
 | [`HOWTO-build.md`](HOWTO-build.md) | Building from source, the compiler rebuilding itself, the formatter, linter and tests, and the Windows environment without Docker. | Whoever changes Kanso, and whoever writes KSPL with no prebuilt `ksplc` for their system; both need a C compiler and Make |
+| [`HOWTO-add-a-package.md`](HOWTO-add-a-package.md) | The steps to add a top-level package: its folder, the checks that must learn its name, and what nothing checks. | Whoever adds a package; needs a clone that builds |
+| [`HOWTO-add-a-gate.md`](HOWTO-add-a-gate.md) | The steps to add a CI gate or a suite, and the message each forgotten place prints. | Whoever adds a check; needs a clone that builds |
+| [`HOWTO-release.md`](HOWTO-release.md) | Publishing a release: the checks before the tag, the tag, and what the workflow builds. | Whoever publishes a release; needs push access |
 | [`SPEC-gates.md`](SPEC-gates.md) | What CI (the automatic build-and-test run) runs on each platform, the verdict line, the per-item pass/fail line, and what the convention checks count. | Whoever changes Kanso |
 | [`DESIGN.md`](DESIGN.md) | The Development Principles, then why Kanso is as it is, in four bands: the language, the notation, the project, the aim. | Whoever changes Kanso |
 | [`SPEC-documents.md`](SPEC-documents.md) | What every document must satisfy: the terms of art, the six kinds, wording and formatting, reference direction. | Whoever adds or changes a document |

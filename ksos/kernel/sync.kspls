@@ -89,6 +89,21 @@ impl<|T|> Queue<|T|>
         r.cap = cap
         r.head = 0
         r.count = 0
+    priv fn push_locked(r: Self$@, v: T) //< writes v after the last element, waking a receiver
+        //<
+        //< Caution: **Call it with interrupts off and room checked** (each `send` does both).
+        tail: = (r.head + r.count) % r.cap
+        (r.buf + tail)$ = v
+        r.count += 1
+        task.wake(Void$@::r.count@, false) // wake a receiver waiting for data
+    priv fn pop_locked(r: Self$@): T //< takes the first element, waking a sender waiting for room
+        //<
+        //< Caution: **Call it with interrupts off and an element there** (each `recv` does both).
+        v: = (r.buf + r.head)$
+        r.head = (r.head + 1) % r.cap
+        r.count -= 1
+        task.wake(Void$@::r.cap@, false) // wake a sender waiting for room
+        return v
     fn send(r: Self$@, v: T) //< blocks while it is full, until there is room
         //<
         //< Writes into the free slot and wakes a receiver waiting for data.
@@ -97,10 +112,7 @@ impl<|T|> Queue<|T|>
         for r.count >= r.cap
             _cur: = task.require_current()
             st = task.block_and_rearm(Void$@::r.cap@, st) // full -> waiting for room
-        tail: = (r.head + r.count) % r.cap
-        (r.buf + tail)$ = v
-        r.count += 1
-        task.wake(Void$@::r.count@, false) // wake a receiver waiting for data
+        r.push_locked(v)
     fn recv(r: Self$@): T //< blocks while it is empty, until data arrives
         //<
         //< Takes the first element and wakes a sender waiting for room.
@@ -109,11 +121,7 @@ impl<|T|> Queue<|T|>
         for r.count == 0
             _cur: = task.require_current()
             st = task.block_and_rearm(Void$@::r.count@, st) // empty -> waiting for data
-        v: = (r.buf + r.head)$
-        r.head = (r.head + 1) % r.cap
-        r.count -= 1
-        task.wake(Void$@::r.cap@, false) // wake a sender waiting for room
-        return v
+        return r.pop_locked()
     fn send_for(r: Self$@, v: T, ticks: U64): Bool //< send with a timeout
         //<
         //< true if room appeared and it wrote, false if it stayed full until the timeout.
@@ -127,10 +135,7 @@ impl<|T|> Queue<|T|>
             if task.current_tick() >= deadline
                 return false
             st = task.block_and_rearm_until(Void$@::r.cap@, deadline, st)
-        tail: = (r.head + r.count) % r.cap
-        (r.buf + tail)$ = v
-        r.count += 1
-        task.wake(Void$@::r.count@, false)
+        r.push_locked(v)
         return true
     fn recv_for(r: Self$@, ticks: U64): T? //< recv with a timeout
         //<
@@ -145,11 +150,7 @@ impl<|T|> Queue<|T|>
             if task.current_tick() >= deadline
                 return .none
             st = task.block_and_rearm_until(Void$@::r.count@, deadline, st)
-        v: = (r.buf + r.head)$
-        r.head = (r.head + 1) % r.cap
-        r.count -= 1
-        task.wake(Void$@::r.cap@, false)
-        return .some(v)
+        return .some(r.pop_locked())
     fn try_send(r: Self$@, v: T): Bool //< send's non-blocking version
         //<
         //< If it is full it returns false at once. An ISR cannot block, so an ISR always sends with
@@ -158,10 +159,7 @@ impl<|T|> Queue<|T|>
         defer task.irq_restore(st)
         if r.count >= r.cap
             return false
-        tail: = (r.head + r.count) % r.cap
-        (r.buf + tail)$ = v
-        r.count += 1
-        task.wake(Void$@::r.count@, false)
+        r.push_locked(v)
         return true
     fn try_recv(r: Self$@): T? //< recv's non-blocking version
         //<
@@ -170,13 +168,10 @@ impl<|T|> Queue<|T|>
         defer task.irq_restore(st)
         if r.count == 0
             return .none
-        v: = (r.buf + r.head)$
-        r.head = (r.head + 1) % r.cap
-        r.count -= 1
-        task.wake(Void$@::r.cap@, false)
-        return .some(v)
+        return .some(r.pop_locked())
 
 // ============================ The priority-inheriting mutex ============================
+
 struct Mutex //<
     //< A mutex with single-stage priority inheritance
     //<

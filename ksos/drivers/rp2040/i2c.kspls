@@ -56,19 +56,12 @@ const funcsel_i2c: U32 = 3
 // Why the latest transfer failed. **Reading TX_ABRT_SOURCE clears it**, so it is copied here;
 // otherwise the caller cannot tell "no device" from a NACK.
 $last_abort_src: U32 = 0
-$last_timed_out: Bool = false
 
 fn last_abort(): U32 //< the TX_ABRT_SOURCE captured on the latest transfer
     //<
     //< 0 means no abort. bit0 = no device at the address, bit3 = the data was NACKed (the device is
     //< there but does not accept it).
     return last_abort_src
-
-fn last_was_timeout(): Bool //<
-    //< Whether the latest transfer ended in **a timeout** rather than an abort
-    //<
-    //< A timeout happens when the device still holds the clock, for example.
-    return last_timed_out
 
 const timeout_us: U32 = 10000 //<
     //< The limit on one wait, so it does not hang forever when no device is there
@@ -79,11 +72,10 @@ const scl_hz: U32 = 100000 //< the SCL's target frequency
     //<
     //< Standard mode: it tolerates rough wiring better than 400kHz.
 
-fn init(sda: U32, scl: U32): Bool //< starts I2C0 and connects the sda / scl pins to it
+fn init(sda: U32, scl: U32): Void!mmio.Driver_error //< starts I2C0 on the sda / scl pins
     //<
     //< Caution: Call it after gpio.init() and clocks.init().
-    if !resets.reset_then_unreset(reset_i2c0)
-        return false
+    resets.reset_then_unreset(reset_i2c0)!
 
     // The settings are written **with ENABLE cleared**. Written while it runs, they have no effect.
     mmio.write32(reg_enable, 0U32)
@@ -110,7 +102,6 @@ fn init(sda: U32, scl: U32): Bool //< starts I2C0 and connects the sda / scl pin
     gpio.set_pull(scl, true, false)
 
     mmio.write32(reg_enable, 1U32)
-    return true
 
 priv fn set_target(addr7: U32) //< selects a new target device
     //<
@@ -126,23 +117,21 @@ priv fn begin_transfer() //< clears what the previous transfer left before a new
     _a: = mmio.read32(reg_clr_tx_abrt)
     _s: = mmio.read32(reg_clr_stop_det)
     last_abort_src = 0
-    last_timed_out = false
 
-priv fn finish(): Bool //< completes a transfer
+priv fn finish(): Void!mmio.Driver_error //< completes a transfer
     //<
-    //< It waits for STOP to be sent, and returns true if no abort happened.
+    //< It waits for STOP to be sent: `timed_out` if it never is (a device holding the clock),
+    //< `no_answer` on an abort (no device, or a NACK; `last_abort` tells which).
     start: = timer.now_us()
     for (mmio.read32(reg_raw_intr_stat) & intr_stop_det) == 0
         if timer.elapsed_us(start) > timeout_us
-            last_timed_out = true
-            return false
+            throw .timed_out
     _ignored: = mmio.read32(reg_clr_stop_det)
     abrt: = mmio.read32(reg_tx_abrt_source)
     if abrt != 0
         last_abort_src = abrt // record it before it is cleared
         _cleared: = mmio.read32(reg_clr_tx_abrt)
-        return false
-    return true
+        throw .no_answer
 
 priv fn wait_status(mask: U32): Bool //< waits until a status bit is set
     //<
@@ -153,24 +142,23 @@ priv fn wait_status(mask: U32): Bool //< waits until a status bit is set
             return false
     return true
 
-fn write(addr7: U32, data: U8@, len: U32): Bool //<
+fn write(addr7: U32, data: U8@, len: U32): Void!mmio.Driver_error //<
     //< Writes len bytes to addr7, sending STOP after the last byte
     //<
-    //< **false if the device returns no ACK.** With broken wiring it does not hang; it reports it
-    //< here.
+    //< **`no_answer` if the device returns no ACK.** With broken wiring it does not hang; it
+    //< reports it here.
     if len == 0
-        return false // 0 bytes cannot be expressed in DATA_CMD (use scan)
+        throw .out_of_range // 0 bytes cannot be expressed in DATA_CMD (use scan)
     set_target(addr7)
     begin_transfer()
     for $i: U32 = 0; i < len; i += 1
         if !wait_status(status_tfnf)
-            last_timed_out = true
-            return false
+            throw .timed_out
         $v: U32 = (data + Sz::i)$
         if i == len - 1
             v |= cmd_stop
         mmio.write32(reg_data_cmd, v)
-    return finish()
+    finish()!
 
 fn present(addr7: U32): Bool //<
     //< Whether a device answers at addr7
@@ -180,7 +168,6 @@ fn present(addr7: U32): Bool //<
     set_target(addr7)
     begin_transfer()
     if !wait_status(status_tfnf)
-        last_timed_out = true
         return false
     mmio.write32(reg_data_cmd, cmd_read | cmd_stop)
     // Caution: **Wait for both the reception and the abort.** With no device there RFNE is never
@@ -196,4 +183,6 @@ fn present(addr7: U32): Bool //<
             break
         if timer.elapsed_us(start) > timeout_us
             break
-    return finish()
+    finish() catch
+        return false
+    return true

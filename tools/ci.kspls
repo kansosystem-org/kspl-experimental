@@ -117,12 +117,13 @@ priv fn run_gate(g: Gate, make: U8[], jobs: I64, platform: U8[], arena: Arena$@)
         subproc.spawn_wait(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, "") catch
         fallback 127
     sec: = (sys.mono_us() - t0) / 1000000I64
+    said: = read_held(log, arena)
     $why: U8[] = ""
-    if rc == 0 && g.verdict && !said_verdict(log, arena)
+    if rc == 0 && g.verdict && !said_verdict(said, arena)
         rc = 1
         why = "no RESULT line"
     if rc == 0 && platform.len > 0
-        if odd: = unexpected_skip(log, platform, arena)
+        if odd: = unexpected_skip(said, platform, arena)
             rc = 1
             why = odd
             io.out().s("# \{g.log\}: a SKIP no row of `expected_skips` holds for \{platform\}: ")
@@ -132,38 +133,37 @@ priv fn run_gate(g: Gate, make: U8[], jobs: I64, platform: U8[], arena: Arena$@)
     end.s("\{rc\} \{sec\}\n")
     io.write_file(ci_gates.end_path(g.log, arena), end.slice()) catch {}
     if rc != 0
-        annotate(g.log, log, rc, why, arena)
+        annotate(g.log, said, rc, why, arena)
     return rc == 0
 
-priv fn unexpected_skip(log: U8[], platform: U8[], arena: Arena$@): U8[]? //<
-    //< The log's first SKIP line `ci_gates.expected_skips` does not hold for the platform, if any
-    text: = io.read_file(log) catch
-        return .none
+priv fn read_held(path: U8[], arena: Arena$@): U8[] //< a log's text on the arena, empty if unread
+    text: = io.read_file(path) catch
+        return ""
     held: = arena.dup_str(text)
     dealloc(Void$@::text.ptr)
-    for line in ci_gates.skip_lines(held, arena)
+    return held
+
+priv fn unexpected_skip(text: U8[], platform: U8[], arena: Arena$@): U8[]? //<
+    //< The log's first SKIP line `ci_gates.expected_skips` does not hold for the platform, if any
+    for line in ci_gates.skip_lines(text, arena)
         if !ci_gates.is_expected_skip(line, platform)
             return .some(line)
     return .none
 
-priv fn said_verdict(log: U8[], arena: Arena$@): Bool //<
+priv fn said_verdict(text: U8[], arena: Arena$@): Bool //<
     //< Whether the log holds the line a passing gate prints
-    text: = io.read_file(log) catch
-        return false
-    defer dealloc(Void$@::text.ptr)
     for line in text.lines(arena)
         if line.starts_with(verdict_line)
             return true
     return false
 
-priv fn annotate(name: U8[], log: U8[], rc: I32, why: U8[], arena: Arena$@) //<
+priv fn annotate(name: U8[], text: U8[], rc: I32, why: U8[], arena: Arena$@) //<
     //< One error mark per fallen gate on GitHub's page (a step keeps ten)
     //<
     //< The reason is the given one, else the log's first `FAIL ` line, else make's `*** [`.
     if !sys.get_env("GITHUB_ACTIONS").is_some()
         return
     $reason: = why
-    text: = io.read_file(log) catch ""
     if reason.len == 0
         for line in text.lines(arena)
             if line.starts_with("FAIL ")
@@ -174,8 +174,6 @@ priv fn annotate(name: U8[], log: U8[], rc: I32, why: U8[], arena: Arena$@) //<
             if line.find_str("*** [").is_some()
                 reason = arena.dup_str(line)
                 break
-    if text.len > 0
-        dealloc(Void$@::text.ptr)
     if reason.len == 0
         reason = arena.text().s("exit \{rc\}").take()
     io.out().s("::error title=").s(name).s("::").s(reason).c('\n')

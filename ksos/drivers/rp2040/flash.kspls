@@ -10,6 +10,7 @@
 // are in "Writing Flash (`flash.kspls`)" in ksos/docs/DESIGN.md.
 // ==========================================
 
+import "ksos/drivers/mmio"
 import "ksos/kernel/task"
 import "std/bytes"
 import "std/chars" // tests on one character, and slicing
@@ -79,9 +80,9 @@ priv fn rom_func(c1: U8, c2: U8): U32 //< looks up a function in the ROM's funct
     lookup: = Rom_lookup::lookup_at
     return lookup(table, U32::c1 | (U32::c2 << 8))
 
-fn init(): Bool //< looks up the ROM functions' addresses
+fn init(): Void!mmio.Driver_error //< looks up the ROM functions' addresses
     //<
-    //< **true once all six are found**; with one missing the window has no way back.
+    //< **`not_found` unless all six are found**; with one missing the window has no way back.
     at_connect = rom_func('I', 'F')
     at_exit_xip = rom_func('E', 'X')
     at_erase = rom_func('R', 'E')
@@ -91,7 +92,8 @@ fn init(): Bool //< looks up the ROM functions' addresses
     ready =
         at_connect != 0 && at_exit_xip != 0 && at_erase != 0 && at_program != 0 && at_flush != 0 &&
         at_enter_xip != 0
-    return ready
+    if !ready
+        throw .not_found
 
 // The window with XIP stopped. **Only this function is placed in RAM.** Call no function in
 // flash from here (only a ROM function through a function pointer can be called).

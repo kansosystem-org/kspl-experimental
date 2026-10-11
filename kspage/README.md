@@ -110,7 +110,7 @@ flowchart BT
 
 **`kspage/content/` sits just below `kspage/port/web/` rather than at the bottom**, because only `kspage/port/web` imports it. Its own files import `model` alone. **Do not import it from the other five**, or the core would know the manual's wording.
 
-**`kspage/tests/` sits inside the package**, so the tests reach its inside without making it `pub` (visible to every package; why is "13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md)). `kspage/tests/main.kspls` gives them a `main` of their own, so this folder's `make test` runs them alone.
+**`kspage/tests/` sits inside the package**, so the tests reach its inside without making it `pub` (visible to every package; why is "A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md)). `kspage/tests/main.kspls` gives them a `main` of their own, so this folder's `make test` runs them alone.
 
 Only what the repository's `tests/` calls is `pub`:
 

@@ -25,18 +25,18 @@ priv const spec_tools: U8[] = "ksplc/docs/SPEC-tools.md" //<
 // ==========================================
 priv const main_file: U8[] = "ksplc/main.kspls"
 
-priv const argp_builtin: U8[][1] = ::{ "--help" } //< the entry point argp provides by itself
+priv const argp_builtin: U8[][_] = ::{ "--help" } //< the entry point argp provides by itself
     //<
     //< There is no declaration in `main.kspls`, but the documents' table lists them.
 
-priv const undocumented_ok: U8[][1] = ::{ "lsp-worker" } //<
+priv const undocumented_ok: U8[][_] = ::{ "lsp-worker" } //<
     //< What may be in the implementation and not in the documents
     //<
     //< Caution: Do not add one whose reason cannot be written: this is the only record of "it is
     //< not written in the documents". `lsp-worker` is the inner process that lsp's supervisor
     //< starts.
 
-priv const cli_doc_placeholder: U8[][4] = ::{ "--name", "--foo", "--gc-sections", "--out-implib" } //<
+priv const cli_doc_placeholder: U8[][_] = ::{ "--name", "--foo", "--gc-sections", "--out-implib" } //<
     //< The forms that appear in the documents and are not ksplc's entry points
     //<
     //< This is not the place to silence a typo.
@@ -119,7 +119,9 @@ priv fn check_cli(arena: Arena$@)
                     .push(arena.text().s("in ").s(spec_tools).s("'s table and no declaration in ")
                     .s(main_file).s(": ").s(opt).take())
     verdict.check_list("the CLI's entry points agree between the implementation and the spec",
-        impl_cli.len, "entry points", bad@, "")
+        impl_cli.len, "entry points", bad@,
+        "each subcommand needs its row and section in ksplc/docs/SPEC-tools.md, and the spec names \
+            none main.kspls lacks")
 
     // The above checks only the specification's table. **An entry point written in a design
     // document must be usable too** (Principle 5 turned round). Only `ksplc/*.md` is checked;
@@ -143,7 +145,9 @@ priv fn check_cli(arena: Arena$@)
             if !ok
                 doc_bad.push(arena.text().s(rel).s(": ").s(w).take())
     verdict.check_list("every `--option` ksplc/'s documents write stands in the implementation",
-        doc_seen, "shapes", doc_bad@, "")
+        doc_seen, "shapes", doc_bad@,
+        "the option is written in a document but not declared in main.kspls: mend the document, or \
+            declare it")
 
 priv fn cut_at_any(s: U8[], seps: U8[]): U8[] //<
     //< The text before the first separator (the trailing spaces are dropped)
@@ -168,11 +172,11 @@ priv const style_src: U8[] = "ksplc/fmt/style.kspls" //<
     //< here would check only one of the two.
 priv const read_src: U8[] = "ksplc/fmt/printer.kspls"
 
-priv const style_keys: U8[][3] = ::{ "IndentWidth", "ColumnLimit", "AllowShortBlocks" } //<
+priv const style_keys: U8[][_] = ::{ "IndentWidth", "ColumnLimit", "AllowShortBlocks" } //<
     //< The table's key name -> the field the formatter reads
     //<
     //< Caution: Add a field and add it in here too.
-priv const style_fields: U8[][3] = ::{ "indent_width", "column_limit", "allow_short_blocks" }
+priv const style_fields: U8[][_] = ::{ "indent_width", "column_limit", "allow_short_blocks" }
 
 priv fn check_style(arena: Arena$@)
     spec: = harness.read_under_root(spec_tools)
@@ -198,7 +202,8 @@ priv fn check_style(arena: Arena$@)
                 .push(arena.text().s(style_keys[i]).s(" is accepted and ").s(read_src)
                 .s(" does not read `").s(want).s("`").take())
     verdict.check_list("`--style`'s keys agree across the spec, the code and the reader",
-        style_keys.len, "keys", bad@, "")
+        style_keys.len, "keys", bad@,
+        "a `--style` key must stand in SPEC-tools.md, the formatter's table and its reader alike")
 
 // ==========================================
 // ksos's make targets can be walked to from the documents
@@ -234,7 +239,7 @@ priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@
 // Caution: **When you add a family, add it here too**, or the gate stops seeing that family's
 // targets (a `make <target>` named in the documents still fails as "in the .md and not in
 // ksos/Makefile").
-priv const ksos_families: U8[][2][4] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
+priv const ksos_families: U8[][2][_] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
     ::{ "KSOS_POSIX_PANIC", "ksos-" }, ::{ "KSOS_CM_DEMOS", "ksos-cm-" },
     ::{ "KSOS_RP2040_DEMOS", "ksos-rp2040-" } }
 
@@ -279,7 +284,7 @@ priv fn check_ksos_targets(arena: Arena$@)
     scan.diff_into(targets@, runnable@, ksos_mk, "a document in the `make ...` shape", bad@, arena)
     scan.diff_into(runnable@, targets@, ".md", ksos_mk, bad@, arena)
     verdict.check_list("ksos's make targets agree with the documents", targets.len, "targets", bad@,
-        "")
+        "a make target the documents name must exist in ksos/Makefile, and the reverse")
 
 // ==========================================
 // std's list of files agrees with what is really there
@@ -309,7 +314,8 @@ priv fn check_std_list(arena: Arena$@)
     scan.diff_into(files@, recorded@, "what is really there", std_record, bad@, arena)
     scan.diff_into(recorded@, files@, std_record, "what is really there", bad@, arena)
     verdict.check_list("every std file publishes something, and the record names no other",
-        files.len, "files", bad@, "")
+        files.len, "files", bad@,
+        "remake the record with `make surface`, or give the file something `pub`")
 
 // ==========================================
 // The Flash region reserved for the record agrees between the driver and the linker script

@@ -12,6 +12,7 @@
 // ==========================================
 import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/drivers/ht16k33" as matrix
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 import "ksos/drivers/rp2040/timer"
 
@@ -149,22 +150,20 @@ priv $look: Look = .off
 priv $frame: Sz = 0
 priv $next_us: U32 = 0
 
-fn init(): Bool //< starts I2C and the matrix
+fn init(): Void!mmio.Driver_error //< starts I2C and the matrix
     //<
-    //< **true once they are running.**
-    //< Caution: **The caller must keep working on false too** (only the face is missing).
-    if !i2c.init(board.i2c_sda, board.i2c_scl)
-        return false
+    //< `not_found` where no matrix answers on the bus.
+    //< Caution: **The caller must keep working on a failure too** (only the face is missing).
+    i2c.init(board.i2c_sda, board.i2c_scl)!
     addr = 0
     for $a: U32 = addr_first; a <= addr_last; a += 1
         if addr == 0 && i2c.present(a)
             addr = a
     if addr == 0
-        return false
-    ready = matrix.init(addr, brightness)
-    if ready
-        _ok: = matrix.clear(addr)
-    return ready
+        throw .not_found
+    matrix.init(addr, brightness)!
+    matrix.clear(addr)!
+    ready = true
 
 fn available(): Bool
     return ready

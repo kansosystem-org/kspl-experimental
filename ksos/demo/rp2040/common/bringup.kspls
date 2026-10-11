@@ -18,6 +18,7 @@
 // ==========================================
 import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/demo/rp2040/common/buzzer"
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/clocks"
 import "ksos/drivers/rp2040/gpio"
 import "ksos/drivers/rp2040/timer"
@@ -40,24 +41,21 @@ fn beep(times: U32) //< beeps times times
         buzzer.tone(buzzer.beep_hz, buzzer.beep_ms)
         pump(200)
 
-fn clocks_and_gpio(): Bool //<
+fn clocks_and_gpio(): Void!mmio.Driver_error //<
     //< Starts the clocks and GPIO, and gets ready to sound the buzzer
     //<
-    //< false means not even the buzzer can sound at this point (the silence tells you).
+    //< A failure means not even the buzzer can sound at this point (the silence tells you).
     // Set up the clocks before anything else. USB needs 48MHz on clk_usb and the ADC on clk_adc,
     // and the TIMER's tick comes from here too (continue after a failure here and delay_us never
     // returns).
-    if !clocks.init()
-        return false
-    if !gpio.init()
-        return false
+    clocks.init()!
+    gpio.init()!
     gpio.init_out(board.buzzer_pin)
-    return true
 
 fn usb_up(): Bool //< starts USB and beeps once
     //<
     //< false means it has beeped nine times.
-    if !usb.init()
+    usb.init() catch
         beep(9)
         return false
     beep(1)

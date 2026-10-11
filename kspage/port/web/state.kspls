@@ -6,13 +6,14 @@
 //< Caution: **Do not keep two states.** The document, the cursor and the arena are this one set
 //< (imported by name with `import "kspage/port/web/state" { doc, sheet, … }`).
 import "kspage/content/sample"
-import "kspage/lay/page" { Page }
+import "kspage/lay/page" { Box, Page }
 import "kspage/model/collect" + { Collect }
 import "kspage/model/day"
 import "kspage/model/doc" { Block, Doc, Rect }
 import "kspage/model/filter"
 import "kspage/model/font" { Font, Vmetrics, Font_source }
 import "kspage/model/over"
+import "kspage/model/paint"
 import "kspage/model/style" + { Sheet }
 import "kspage/model/style_when"
 import "kspage/write/edit" + { Editor }
@@ -164,7 +165,7 @@ fn ensure()
     // Caution: **It must be set up** (before or after the arena), or the page freezes when the
     // arena runs out (the header of `kspage_js_gave_up` above).
     panic_hook = give_up
-    fresh: = Arena.new(64 * 1024)
+    fresh: = Arena.new(fresh_chunk)
     made: = sample.build(fresh)
     show(fresh, made.doc, made.sheet)
 
@@ -202,7 +203,7 @@ fn blank() //< replaces the document shown now with a blank one, open for editin
     //< **It must be blank**: "New" uses it, so a sample here would put the sample's paragraphs in
     //< front of someone who started from a blank page.
     read_only = false
-    fresh: = Arena.new(64 * 1024)
+    fresh: = Arena.new(fresh_chunk)
     made: = sample.blank(fresh)
     adopt(fresh, made.doc, made.sheet)
 
@@ -243,6 +244,28 @@ $in_ptr: U8@ = null
 
 // ---- The shape values are passed in at the boundary ----
 // Two files of entry points share it, so it is here rather than copied.
+
+const fresh_chunk: Sz = 64 * 1024 //< the first chunk of an arena the web port starts afresh
+
+fn rect_into(out: F32$@, r: Rect) //< a rectangle as four values: x, y, width, height
+    out$ = r.x
+    (out + 1)$ = r.y
+    (out + 2)$ = r.w
+    (out + 3)$ = r.h
+
+fn box_into(out: F32$@, b: Box$@) //< a laid-out box as the 15 values `kspage_web_box` lists
+    rect_into(out, b.rect)
+    (out + 4)$ = b.font.size_px
+    (out + 5)$ = F32::b.font.weight
+    (out + 6)$ = 1.0 if b.font.italic else 0.0
+    (out + 7)$ = 1.0 if b.composing else 0.0
+    color_into(out + 8, b.ink.color)
+    color_into(out + 10, b.ink.background)
+    (out + 12)$ = 1.0 if paint.drawn(b.ink.underline) else 0.0
+    (out + 13)$ = 1.0 if paint.drawn(b.ink.strike) else 0.0
+    // Caution: **The drawing code must add this too** (the justification's letter spacing);
+    // without it, the text is packed tight while hit tests shift right.
+    (out + 14)$ = b.spacing
 
 fn color_into(out: F32$@, v: U32?) //<
     //< Writes one color as two values: "whether it is set" and the value

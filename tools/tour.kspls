@@ -35,12 +35,12 @@ priv fn built(ksplc: U8[], arena: Arena$@): U8[]!Tour_error //<
         throw .unreadable
     braced: = io.read_file(braced_src) catch
         throw .unreadable
-    r: = subproc.run_capture(U8[][]::{ ksplc, "run", laid_src }, "", run_timeout_ms, capture_cap,
-        arena)
-    if r.spawn_failed || r.timed_out || r.exit_code != 0
-        io.err().s("\{sys.program_name()\}: \{laid_src\} did not run to the end\n\{r.stderr_data\}")
+    printed: =
+        subproc.run(U8[][]::{ ksplc, "run", laid_src }, "", run_timeout_ms, capture_cap, arena)
+        catch e
+        e.describe(arena.text().s("running ").s(laid_src).take(), ksplc)
         throw .did_not_run
-    return page.render(laid, braced, arena.dup_str(r.stdout_data), arena)
+    return page.render(laid, braced, arena.dup_str(printed), arena)
 
 priv fn do_write(ksplc: U8[], arena: Arena$@): Void!Tour_error
     text: = built(ksplc, arena)!

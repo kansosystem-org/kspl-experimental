@@ -67,6 +67,10 @@ test-fmt-tree: $(SEED_EXE)
 	fi; \
 	echo "RESULT: ALL PASS ($$(printf '%s\n' $$files | wc -l) files already formatted)"
 
+# **A tool is an entry point by its `fn main`**, so a new one cannot leak out of the gate; a file of
+# tools/ without one is a library, linted through the tools that import it.
+TOOL_MAINS := $(shell grep -l '^fn main' tools/*.kspls)
+
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
 # Every ksplc suite stands on its harness, which the root's suites call too.
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspls)
@@ -83,10 +87,7 @@ LINT_TARGETS := ksplc/main.kspls tests/debug/main.kspls ksai/examples/llama_engi
 	tools/ai_assist/build_corpus.kspls tools/ai_assist/eval_fim.kspls tools/ai_assist/make_fim.kspls \
 	tools/ai_assist/train_bpe.kspls \
 	ksos/port/rp2040/pad_checksum.kspls ksos/port/rp2040/elf2uf2.kspls \
-	tools/kspage_open.kspls tools/kspage_aim.kspls \
-	tools/surface.kspls tools/ci.kspls \
-	tools/tour.kspls \
-	tools/kspage_doc.kspls \
+	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/kspage_aim.kspls \
 	ksai/benches/run_bench.kspls \
 	kspage/port/web/bundle.kspls kspage/tests/open_prog.kspls ksai/tests/read_prog.kspls \
 	std/tests/read_prog.kspls $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspls)) \

@@ -15,7 +15,7 @@ Two requirements decide nearly all of its shape.
 
 The bindings live in their own package, not in the standard library. A program that wants them imports `ksbind/tls` or `ksbind/db`.
 
-**`std` is plain KSPL over the runtime every program carries, and builds anywhere with nothing installed. A binding to an outside C library stands here** (as `std` states it, "13.5 The standard library reaches only itself" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+**`std` is plain KSPL over the runtime every program carries, and builds anywhere with nothing installed. A binding to an outside C library stands here** (as `std` states it, "The standard library reaches only itself" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 
 **Inside `std`, a binding would need a switch.** There are only two ways to have one, and both are bad:
 
@@ -38,7 +38,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 **What it gives up**:
 
-* **The bindings do not ship with `ksplc`.** A release carries `ksplc` and `std`; a program using `ksbind` is told where the folder stands, as any package is (`--pkg-src-dir`, "13.3 Outside parts are not fetched; only their location is stated" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+* **The bindings do not ship with `ksplc`.** A release carries `ksplc` and `std`; a program using `ksbind` is told where the folder stands, as any package is (`--pkg-src-dir`, "Outside parts are not fetched; only their location is stated" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 * **A program's import names the package** (`ksbind/tls`, not `std/tls`), and its `ksplc.cfg` lists `ksbind` under `uses` where the program is a package.
 
 ### A binding calls its library directly, with no C of its own
@@ -63,7 +63,7 @@ Each binding declares the C functions it calls inside its own `.kspls` file. No 
 
 * **OpenSSL before 1.1.0 is not bound**: `TLS_client_method` and `SSL_set1_host` begin there.
 * **A future OpenSSL renumbering a command would go unnoticed until a run.** The tests drive both `ctrl` calls on every connection, and a refused one fails the connection as `ctx_failed`, so a run notices; the compile does not.
-* **The MSVC toolchain does not link `ksbind/tls`**: it names OpenSSL's libraries `libssl` and `libcrypto`, and no `#cfg` names the toolchain ("7.3 The library an `extern` block needs is named on the block" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+* **The MSVC toolchain does not link `ksbind/tls`**: it names OpenSSL's libraries `libssl` and `libcrypto`, and no `#cfg` names the toolchain ("The library an `extern` block needs is named on the block" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 
 ### What each binding guards against
 

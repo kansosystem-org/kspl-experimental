@@ -6,6 +6,7 @@
 //< nothing. It also checks that a top-level initializer is a static one.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as _base_core // the operator classes (`is_shift_op` ...)
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/name" as sema_decl_name
@@ -128,7 +129,7 @@ priv fn fit_result(v: I64, bits: I32, is_uns: Bool): I64 //< fits a result into 
         return v
     return I64::(U64::v & ((U64::1 << U64::bits) - 1))
 
-fn int_suffix_type_id(c: Sema_ctx$@, txt: U8[]): I32 //<
+fn int_suffix_type_id(txt: U8[]): I32 //<
     //< The type a numeric literal's suffix (the `U8` of `300U8`) names, or unknown
     //<
     //< It is unknown where there is no suffix.
@@ -140,17 +141,17 @@ fn int_suffix_type_id(c: Sema_ctx$@, txt: U8[]): I32 //<
     if txt.ends_with("U8")
         return I32::sema_type_env.Builtin_type_id.u8_type
     if txt.ends_with("I8")
-        return c.env.get_or_add("I8")
+        return I32::sema_type_env.Builtin_type_id.i8_type
     if txt.ends_with("U16")
-        return c.env.get_or_add("U16")
+        return I32::sema_type_env.Builtin_type_id.u16_type
     if txt.ends_with("I16")
-        return c.env.get_or_add("I16")
+        return I32::sema_type_env.Builtin_type_id.i16_type
     if txt.ends_with("U32")
-        return c.env.get_or_add("U32")
+        return I32::sema_type_env.Builtin_type_id.u32_type
     if txt.ends_with("I32")
         return I32::sema_type_env.Builtin_type_id.i32_type
     if txt.ends_with("U64")
-        return c.env.get_or_add("U64")
+        return I32::sema_type_env.Builtin_type_id.u64_type
     if txt.ends_with("I64")
         return I32::sema_type_env.Builtin_type_id.i64_type
     return I32::sema_type_env.Builtin_type_id.unknown
@@ -322,7 +323,7 @@ impl Ast_node
             // Caution: Take the width and the sign from **the operands' types** (fold_type),
             // promoted to the wider: a comparison's own type is Bool, and a shift's width is the
             // left side's.
-            is_shift: = op.equals("<<") || op.equals(">>")
+            is_shift: = op.is_shift_op()
             left_id: = r.get_binary_left().fold_type(c, depth + 1)
             $op_base: = left_id
             if !is_shift
@@ -335,7 +336,7 @@ impl Ast_node
             ul: = U64::left
             ur: = U64::right
 
-            if op.equals("/") || op.equals("%")
+            if op.is_div_op()
                 if right == 0
                     if !c.suppress_errors
                         c.err(r, "division or modulo by zero in constant expression")
@@ -568,10 +569,12 @@ impl Ast_node
         //<
         //< An integer keeps T's low bits (`U8::300` is 44, `I8::200` is -56). A pointer's or a
         //< float's cast is left to what reads it, and nothing but a `Bool` casts to `Bool`.
+        //< Caution: **Wrap at the machine's width, not the portable one.** The LLVM backend emits
+        //< the folded value, so `Sz::` at 32 bits made a 64-bit target's `Sz` constant wrong.
         target: = c.env.scalar_repr_id(r.fold_type(c, depth + 1))
         if !c.env.is_integer(target)
             return v
-        return wrap_to(v, c.env.get_portable_bit_size(target), c.env.is_unsigned(target))
+        return wrap_to(v, c.env.get_primitive_bit_size(target), c.env.is_unsigned(target))
 
     fn fold_type(r: Self$@, c: Sema_ctx$@, depth: I32): I32 //<
         //< The type a constant subexpression folds at, unknown where nothing says (a bare literal)
@@ -587,7 +590,7 @@ impl Ast_node
             return r.type_id
         switch r.kind_id
         case .k_integer
-            return int_suffix_type_id(c, r.text)
+            return int_suffix_type_id(r.text)
         case .k_char
             return I32::sema_type_env.Builtin_type_id.u8_type
         case .k_bool
@@ -604,7 +607,7 @@ impl Ast_node
                 op.equals("<=") || op.equals(">=") || op.equals("&&") || op.equals("||")
                 return I32::sema_type_env.Builtin_type_id.bool_type
             left: = r.get_binary_left().fold_type(c, depth + 1)
-            if op.equals("<<") || op.equals(">>")
+            if op.is_shift_op()
                 return left
             return c.promoted_fold_type(left, r.get_binary_right().fold_type(c, depth + 1))
         case .k_expr_postfix

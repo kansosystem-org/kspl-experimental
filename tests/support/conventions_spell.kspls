@@ -67,10 +67,10 @@ priv fn check_empty_case_payload(arena: Arena$@) //<
 // Caution: **Check the count picked up**: a yes or no cannot notice one of two clauses missed.
 // **Include a clause with a body, and cases in a comment and a string** (the side that must not
 // hit).
-priv const payload_samples: U8[][7] = ::{ "    case .add(a, b) {}", "    case .add {}",
+priv const payload_samples: U8[][_] = ::{ "    case .add(a, b) {}", "    case .add {}",
     "    case .add(a) { work(); }", "    case .add(a) {} case .sub(b) {}",
     "    // do not write case .add(a) {}", "    s: = \"case .add(a) {}\";", "    default {}" }
-priv const payload_want: Sz[7] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
+priv const payload_want: Sz[_] = ::{ 1, 0, 0, 2, 0, 0, 0 } //<
     //< The expected count for each sample
     //<
     //< In order: 1 / 0 (no payload) / 0 (it has a body) / 2 / 0 (a comment) / 0 (a string) / 0
@@ -85,7 +85,7 @@ priv fn check_payload_fires(arena: Arena$@)
                 .push(arena.text().s("took \{got\} out of \"").s(payload_samples[i])
                 .s("\" (it should be \{payload_want[i]\})").take())
     verdict.check_list("the judgment of an empty case can fire", payload_samples.len, "samples",
-        bad@, "")
+        bad@, "the judgment misreads its own samples: mend the judgment, not the table")
 
 // ==========================================
 // A function of one enum is a method in that enum's impl ("A function of one enum is its method"
@@ -187,11 +187,11 @@ priv fn check_enum_functions(arena: Arena$@) //<
 // The samples for `enum_taken_first`, with `State` as the file's one enum.
 // Caution: **Include the side that must not hit**: a method, a pointer, a qualified name, an
 // enum taken second, a comment.
-priv const enum_samples: U8[][10] = ::{ "fn text(s: State): U8[]", "pub fn show(s: State, on: Bool)",
+priv const enum_samples: U8[][_] = ::{ "fn text(s: State): U8[]", "pub fn show(s: State, on: Bool)",
     "priv fn color(s: State): U32", "fn text(s: State): U8[] {", "  fn text(s: Self): U8[]",
     "fn at(s: State@): U8[]", "fn from(s: other.State)", "fn pair(n: I32, s: State)",
     "fn other(s: Mode)", "// fn text(s: State)" }
-priv const enum_want: Bool[10] = ::{ true, true, true, true, false, false, false, false, false,
+priv const enum_want: Bool[_] = ::{ true, true, true, true, false, false, false, false, false,
     false }
 
 priv fn check_enum_functions_fire(arena: Arena$@)
@@ -205,10 +205,10 @@ priv fn check_enum_functions_fire(arena: Arena$@)
                 .push(arena.text().s("\"").s(enum_samples[i]).s("\" was read as ")
                 .s("a function of the enum" if got else "fine").take())
     verdict.check_list("the judgment of a function of one enum can fire", enum_samples.len,
-        "samples", bad@, "")
+        "samples", bad@, "the judgment misreads its own samples: mend the judgment, not the table")
 
 // ==========================================
-// An arena parameter carries no default ("9.3 A default argument is allowed only for a foldable
+// An arena parameter carries no default ("A default argument is allowed only for a foldable
 // constant" in `../../docs/DESIGN.md`)
 // ==========================================
 
@@ -282,12 +282,12 @@ priv fn check_arena_default(arena: Arena$@) //<
                 bad
                     .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
     verdict.check_list("no arena parameter carries a default", seen, "lines", bad@,
-        "drop the `= null`, and have each heap caller write `null` (docs/DESIGN.md's 9.3)")
+        "drop the `= null`, and have each heap caller write `null` (why: this section's head)")
 
 // The samples for `defaults_an_arena`.
 // Caution: **Include the side that must not hit**: a variable's initializer (top-level, local,
 // mutable), a comparison, a default on another type, a function type taking an arena, a string.
-priv const arena_default_samples: Sample[12] = ::{
+priv const arena_default_samples: Sample[_] = ::{
     Sample::{ .text = "    arena: Arena$@ = null, //< where the elements go", .hits = true },
     Sample::{ .text = "fn new(loc: Loc, arena: Arena$@ = null): Node$@", .hits = true },
     Sample::{ .text = "fn grow(n: Sz, a: mem.Arena$@ = null) {", .hits = true },
@@ -307,7 +307,77 @@ priv fn check_arena_default_fires(arena: Arena$@)
     scan.check_samples("the judgment of an arena's default can fire",
         Sample[]::arena_default_samples, "arena_default_samples", defaults_an_arena, arena)
 
+priv const list_call: U8[] = "verdict.check_list(" //< the call whose last argument is the fix
+
+priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
+    //< Whether a source calls `verdict.check_list` with an empty fix, outside a `\"\"\"` string
+    //<
+    //< **A failing walk then names what is wrong but not what to do**, and the reader has to find
+    //< the check's source to learn it. The fix is the call's last argument.
+    $code: = Str_builder.new()
+    defer code.free()
+    $raw: = false
+    for line in src.lines(arena)
+        if !raw
+            code.s(line)
+        code.c('\n')
+        raw = scan.flip_raw(line, raw)
+    text: = code.slice()
+    $rest: U8[] = text
+    for rest.len > 0
+        if at: = rest.find_str(list_call)
+            $i: = at + list_call.len
+            $depth: Sz = 1
+            for i < rest.len && depth > 0
+                if rest[i] == '('
+                    depth += 1
+                else if rest[i] == ')'
+                    depth -= 1
+                i += 1
+            // The call without its closing bracket: an empty fix leaves `""` standing alone at its
+            // end, after a space or a comma (a hint ending in an escaped quote ends `\""`).
+            call: = rest.sub(at, i - at - 1).trim_end()
+            if call.ends_with("\"\"") && call.len > 2 &&
+                (call[call.len - 3] == ' ' || call[call.len - 3] == ',' ||
+                call[call.len - 3] == '\n')
+                return true
+            rest = rest.sub_from(i)
+        else
+            return false
+    return false
+
+// The samples for `has_hintless_list`.
+// Caution: **Keep a call spread over lines and one inside a `\"\"\"` string**: the first is the
+// usual shape, and the second is a test's material, not a call.
+priv const hintless_samples: Sample[_] = ::{
+    Sample::{ .text = "    verdict.check_list(\"x\", n, \"files\", bad@, \"\")\n", .hits = true },
+    Sample::{ .text = "    verdict.check_list(\"x (y)\", n, \"files\",\n        bad@, \"\")\n",
+        .hits = true },
+    Sample::{ .text = "    verdict.check_list(\"x\", n, \"files\", bad@, \"mend it\")\n",
+        .hits = false },
+    Sample::{ .text = "    verdict.check_list(\"x\", n, \"f\", bad@, \"say \\\"so\\\"\")\n",
+        .hits = false },
+    Sample::{ .text =
+        "priv const s: U8[] =\n    \"\"\"\n  verdict.check_list(\"x\", 1, \"f\", b@, \
+            \"\")\n\"\"\"\n", .hits = false },
+}
+
+priv fn check_hintless_lists(arena: Arena$@) //<
+    //< Every walk's verdict says how to fix what it finds
+    $bad: = scan.misjudged(Sample[]::hintless_samples, has_hintless_list, arena)
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+        src: = harness.read_under_root(rel)
+        if src.find_str(list_call).is_none()
+            continue
+        seen += 1
+        if has_hintless_list(src, arena)
+            bad.push(rel)
+    verdict.check_list("every walk's verdict says how to fix what it finds", seen, "files", bad@,
+        "give the `verdict.check_list` call a last argument saying what to do")
+
 fn run(arena: Arena$@)
+    check_hintless_lists(arena)
     check_empty_case_payload(arena)
     check_payload_fires(arena)
     check_enum_functions(arena)

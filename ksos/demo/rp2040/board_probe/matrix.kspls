@@ -14,6 +14,7 @@ import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/demo/rp2040/common/bringup" as boot
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/drivers/ht16k33" as matrix
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/i2c"
 
 const frame_interval_ms: U32 = 500
@@ -29,13 +30,16 @@ priv $target: U32 = 0
 priv $scan_found: U32 = 0
 priv $ok_init: Bool = false
 priv $fails: U32 = 0
+priv $last_error: mmio.Driver_error? = .none //< the latest draw's failure, for the report line
 priv $phase: U32 = 0
 
 fn init(): Bool //< starts it
     //<
     //< Caution: Call it after `clocks.init()`. false means the I2C block did not start.
-    ready = i2c.init(board.i2c_sda, board.i2c_scl)
-    return ready
+    i2c.init(board.i2c_sda, board.i2c_scl) catch
+        return false
+    ready = true
+    return true
 
 priv fn scan_bus(ln: con.Line$@): U32 //<
     //< Scans the bus and prints the addresses found together on one line
@@ -57,17 +61,18 @@ priv fn scan_bus(ln: con.Line$@): U32 //<
     _sent: = ln.flush()
     return found
 
-priv fn append_i2c_reason(ln: con.Line$@) //< appends the reason for the latest I2C failure
+priv fn append_i2c_reason(ln: con.Line$@, err: mmio.Driver_error?) //< appends why I2C failed
     //<
     //< "It could not write" alone tells nothing apart, so it shows whether the device is absent, or
-    //< present but not accepting.
-    if i2c.last_was_timeout()
-        ln.str("timeout")
-        return
-    a: = i2c.last_abort()
-    if a == 0
+    //< present but not accepting. None means nothing has failed yet.
+    if e: = err
+        if e == .timed_out
+            ln.str("timeout")
+            return
+    else
         ln.str("none")
         return
+    a: = i2c.last_abort()
     ln.str("0x")
     ln.hex2(a & 0xff)
     if (a & 1U32) != 0
@@ -97,12 +102,15 @@ priv fn attach(ln: con.Line$@, want: U32) //<
         ln.str(" (nothing answered; trying anyway)")
     _u: = ln.flush()
 
-    ok_init = matrix.init(target, 8)
     ln.reset()
     ln.str("[i2c] matrix init: ")
-    ln.str("ok" if ok_init else "NG why=")
-    if !ok_init
-        append_i2c_reason(ln)
+    ok_init = true
+    matrix.init(target, 8) catch e
+        ok_init = false
+        ln.str("NG why=")
+        append_i2c_reason(ln, .some(e))
+    if ok_init
+        ln.str("ok")
     _i: = ln.flush()
 
 fn run(ln: con.Line$@)
@@ -117,8 +125,9 @@ fn run(ln: con.Line$@)
     for _i in Range.asc(Sz::frames_per_run)
         $frame: U16[8] = ::{}
         make_frame(frame[0]@, phase)
-        if !matrix.draw(target, frame[0]@)
+        matrix.draw(target, frame[0]@) catch e
             fails += 1
+            last_error = .some(e)
         ln.reset()
         ln.str("[i2c] frame ")
         ln.u32_pad(phase, 4)
@@ -135,7 +144,7 @@ fn run(ln: con.Line$@)
         ln.str(" fails=")
         ln.u32(fails)
         ln.str(" why=")
-        append_i2c_reason(ln)
+        append_i2c_reason(ln, last_error)
         _s: = ln.flush()
         phase += 1
         boot.pump(frame_interval_ms)

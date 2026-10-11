@@ -125,7 +125,7 @@ priv fn labels_of(tasks: json.Val, arena: Arena$@): List<|U8[]|>
 priv fn arg_text(a: json.Val): U8[] //< one argument's text, written bare or quoted (`value`)
     return a.as_str() if !is_obj(a) else a.get("value").as_str()
 
-priv const suite_lists: U8[][2] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
+priv const suite_lists: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
     //< The files whose `SUITES` / `LINUX_SUITES` name what `make test-<name>` runs
 
 priv fn typable(arena: Arena$@): List<|U8[]|> //<
@@ -340,7 +340,7 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
     for one in pkg.get("contributes").get("snippets").arr_list(arena)
         note_missing(missing@, dir, one.get("path").as_str(), arena)
     verdict.check_list("extension: the files package.json points at really exist", langs.len,
-        "files", missing@, "")
+        "files", missing@, "package.json names a file that is not there: add it, or mend the path")
 
     // Caution: **Separate the ids.** `extension.js` sends languageId `kspl` to the language server;
     // with one id for both, opening a file it cannot read shows syntax errors on every line.
@@ -373,7 +373,8 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
         if !htext.has(braced@, x)
             gap.push(arena.text().s("not on the braced side: \{x\}").take())
     verdict.check_list("extension: the templates' line-up agrees across the two notations",
-        braced.len, "templates", gap@, "")
+        braced.len, "templates", gap@,
+        "a template stands in one notation only: give the other notation's file the same entry")
     check_templates(dir, arena)
 
 priv enum Place //< where the check puts a template: where an editor inserts it
@@ -392,7 +393,7 @@ priv struct Template_use //< one template, the place it is read in, and what its
         //< statement in a body, a method in an `impl`, nothing in a `struct`. The indentation
         //< notation drops its last `;`.
 
-priv const templates: Template_use[16] = ::{
+priv const templates: Template_use[_] = ::{
     ::{ .name = "Main Function", .place = .file, .line = "f();" },
     ::{ .name = "Function Definition", .place = .file, .line = "f();" },
     ::{ .name = "Method Definition", .place = .file, .line = "f();" },
@@ -560,7 +561,8 @@ priv fn check_templates(dir: U8[], arena: Arena$@) //<
                 bad
                     .push(arena.text().s("\{file\}: \{use.name\}:\n\{src\}\{r.out\}").take())
     verdict.check_list("extension: each template reads where it is inserted", templates.len * 2,
-        "templates", bad@, "")
+        "templates", bad@,
+        "a template must read back as written where it is inserted: mend its body")
 
 priv fn note_missing(missing: List<|U8[]|>$@, dir: U8[], rel: U8[], arena: Arena$@)
     if rel.len == 0

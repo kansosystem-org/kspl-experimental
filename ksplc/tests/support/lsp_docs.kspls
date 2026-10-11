@@ -16,8 +16,6 @@ import "std/str" // `find_str` and `equals`
 import "std/strfmt" as _strfmt
 import "std/verdict"
 
-priv const normal_ms: I32 = 15000
-
 // ==========================================
 // A hover shows the documentation the declaration carries
 // ==========================================
@@ -88,8 +86,8 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
     line: = decl_line(doc_src, "pub struct Row {", arena)
     col: = col_in_line(doc_src, "pub struct Row {", "Row", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a hover carries the documentation the declaration holds", false,
             end_text(e))
         return
@@ -108,8 +106,8 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
     w_line: = decl_line(doc_src, "  w2: = wrapped(1,", arena)
     w_col: = col_in_line(doc_src, "  w2: = wrapped(1,", "wrapped", arena)
     w2_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, w_line, w_col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, w_line, w_col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a head closing on a later line carries its run", false, end_text(e))
         return
     w2_text: = lsp_client.hover_text(w2_got)
@@ -128,8 +126,8 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
     f_line: = decl_line(doc_src, "  pub text: U8[];", arena)
     f_col: = col_in_line(doc_src, "  pub text: U8[];", "text", arena)
     f_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, f_line, f_col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, f_line, f_col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a hover over a field carries that field's own sentence", false,
             end_text(e))
         return
@@ -153,8 +151,8 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
     line: = decl_line(doc_src, "  n: = r.put(1, 2);", arena)
     col: = col_in_line(doc_src, "  n: = r.put(1, 2);", "put", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a hover lists the parameters that carry a description", false, end_text(e))
         return
     text: = lsp_client.hover_text(got)
@@ -176,8 +174,8 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
     w_line: = decl_line(doc_src, "  w: = wide(3, 4);", arena)
     w_col: = col_in_line(doc_src, "  w: = wide(3, 4);", "wide", arena)
     w_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, w_line, w_col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, w_line, w_col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a one-line signature gives its summary to no parameter", false,
             end_text(e))
         return
@@ -195,8 +193,8 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
     m_line: = decl_line(doc_src, "fn many(a1: Sz,", arena)
     m_col: = col_in_line(doc_src, "fn many(a1: Sz,", "many", arena)
     m_got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, m_line, m_col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, m_line, m_col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a signature past the cap says how many were left out", false, end_text(e))
         return
     m_text: = lsp_client.hover_text(m_got)
@@ -220,8 +218,8 @@ priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
     line: = decl_line(doc_src, "fn pointing(): Sz {", arena)
     col: = col_in_line(doc_src, "fn pointing(): Sz {", "pointing", arena)
     got: =
-        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena), normal_ms,
-        arena) catch e
+        c.request("textDocument/hover", lsp_client.at_pos(doc_uri, line, col, arena),
+        lsp_client.read_ms, arena) catch e
         verdict.check("a name the description points at becomes a link", false, end_text(e))
         return
     text: = lsp_client.hover_text(got)
@@ -236,7 +234,7 @@ priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
     q_line: = decl_line(doc_src, "fn quiet(io: Sz): Sz {", arena)
     q_col: = col_in_line(doc_src, "fn quiet(io: Sz): Sz {", "quiet", arena)
     q_at: = lsp_client.at_pos(doc_uri, q_line, q_col, arena)
-    got_q: = c.request("textDocument/hover", q_at, normal_ms, arena) catch e
+    got_q: = c.request("textDocument/hover", q_at, lsp_client.read_ms, arena) catch e
         verdict.check("a parameter hides the module's name in its function", false, end_text(e))
         return
     quiet: = lsp_client.hover_text(got_q)

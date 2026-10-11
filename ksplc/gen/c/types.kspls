@@ -6,6 +6,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/decl" as gen_c_decl
@@ -101,7 +102,7 @@ impl Ast_node
         p_name: = r.get_decl_id_text()
         t_node: = r.get_decl_type_node()
         if pi > 0 && t_node != null && t_node.kind_id != .k_empty &&
-            !t_node.text.equals("Unknown")
+            !t_node.text.equals(base_core.unknown_type_name)
             t_node.emit_resolved_type(cg, false)
             cg.s(" ").nm(p_name)
             return
@@ -167,9 +168,7 @@ impl Ast_node
 
         old_impl: = cg.current_impl_name
         if t_id != 0
-            cg.clear_scratch()
-            cg.env.mangle_type_id_to(t_id, cg.scratch)
-            cg.current_impl_name = cg.scratch.slice()
+            cg.current_impl_name = cg.mangled_in_scratch(t_id)
 
         for child in r.children
             if child.kind_id == .k_decl_fn && child.is_emittable()

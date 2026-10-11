@@ -97,11 +97,13 @@ priv fn collect_spots(ws_state: Doc_state$@, def_node: Ast_node$@, style: base_l
         //< generic.
     $out: = List<|Spot|>.new(arena)
     seen: = arena.create(Map<|U8[], I32|>.new(arena))
+    $w: = Walk::{ .target_def = def_node, .c = ws_state.sema, .style = style, .seen = seen,
+        .out = out@, .arena = arena }
     if ws_state.root_file != null
-        walk_node(ws_state.root_file, def_node, ws_state.sema, style, seen, out@, arena, 0)
+        w.node(ws_state.root_file, 0)
     if ws_state.sema != null
         for entry in ws_state.sema.generics.templates.items()
-            walk_node(entry.value, def_node, ws_state.sema, style, seen, out@, arena, 0)
+            w.node(entry.value, 0)
     seen.free()
     return out.order_by(fn(a: Spot, b: Spot; ): I32 {
         return spot_order(a, b);
@@ -192,55 +194,63 @@ priv fn is_the_decl(n: Ast_node$@, target_def: Ast_node$@): Bool //<
     //< `includeDeclaration` is false.
     return n == target_def || n == target_def.find_child(.k_identifier)
 
-priv fn walk_node(node: Ast_node$@, target_def: Ast_node$@, c: Sema_ctx$@,
-    style: base_locate.Uri_style, seen: Map<|U8[], I32|>$@, out: List<|Spot|>$@, arena: Arena$@,
-    depth: Sz)
-    // **Nodes the compiler generated are not uses** (`made_by_compiler` in
-    // `../base/ast_ext.kspls`).
-    if node == null || target_def == null || depth > lsp_position.max_walk_depth ||
-        node.made_by_compiler()
-        return
-    // An import's or embed's name belongs to its file alone; unrelated imports elsewhere stay as
-    // is.
-    if target_def.kind_id == .k_decl_import || target_def.kind_id == .k_decl_embed
-        if node.loc.file().len > 0 && target_def.loc.file().len > 0 &&
-            !node.loc.file().equals(target_def.loc.file())
+priv struct Walk //< what one search for a definition's uses carries down the tree
+    target_def: Ast_node$@ //< the definition whose uses are wanted
+    c: Sema_ctx$@
+    style: base_locate.Uri_style
+    seen: Map<|U8[], I32|>$@ //< `<file>:<offset>` of each place added
+    out: List<|Spot|>$@ //< the places found
+    arena: Arena$@
+
+impl Walk
+    priv fn node(w: Self$@, node: Ast_node$@, depth: Sz) //< the uses at node and under it
+        target_def: = w.target_def
+        // **Nodes the compiler generated are not uses** (`made_by_compiler` in
+        // `../base/ast_ext.kspls`).
+        if node == null || target_def == null || depth > lsp_position.max_walk_depth ||
+            node.made_by_compiler()
             return
+        // An import's or embed's name belongs to its file alone; unrelated imports elsewhere stay
+        // as is.
+        if target_def.kind_id == .k_decl_import || target_def.kind_id == .k_decl_embed
+            if node.loc.file().len > 0 && target_def.loc.file().len > 0 &&
+                !node.loc.file().equals(target_def.loc.file())
+                return
 
-    $hit: Ast_node$@ = null
-    if node.kind_id == .k_identifier &&
-        (is_def_match(node.def_node, target_def) || is_def_match(node, target_def))
-        hit = node
-    if hit != null && hit.loc.file().len > 0
-        add_spot(hit, target_def, c, style, seen, out, arena)
+        $hit: Ast_node$@ = null
+        if node.kind_id == .k_identifier &&
+            (is_def_match(node.def_node, target_def) || is_def_match(node, target_def))
+            hit = node
+        if hit != null && hit.loc.file().len > 0
+            w.add_spot(hit)
 
-    for child in node.children
-        if child != hit
-            walk_node(child, target_def, c, style, seen, out, arena, depth + 1)
+        for child in node.children
+            if child != hit
+                w.node(child, depth + 1)
 
-priv fn add_spot(hit: Ast_node$@, target_def: Ast_node$@, c: Sema_ctx$@,
-    style: base_locate.Uri_style, seen: Map<|U8[], I32|>$@, out: List<|Spot|>$@, arena: Arena$@) //<
+    priv fn add_spot(w: Self$@, hit: Ast_node$@) //<
         //< It adds one place, dropping a duplicate by `<file>:<offset>`
         //<
         //< The duplicates come from root_file's walk and a template's.
         //< Caution: **Get the line-start table from `line_starts_for`**, which builds it once per
         //< file. Built per place, a name used a thousand times in one file walks that file a
         //< thousand times.
-    src: = base_core.source_of(c.source_map, hit.loc.file())
-    if src.len == 0
-        return
-    offset: = src.clamp_offset(hit.loc.offset)
-    $key: = Str_builder.new()
-    defer key.free()
-    key.s(hit.loc.file()).c(':').s("\{offset\}")
-    if (seen.get(key.slice()) catch 0) != 0
-        return
-    seen.set(arena.dup_str(key.slice()), 1)
+        src: = base_core.source_of(w.c.source_map, hit.loc.file())
+        if src.len == 0
+            return
+        offset: = src.clamp_offset(hit.loc.offset)
+        $key: = Str_builder.new()
+        defer key.free()
+        key.s(hit.loc.file()).c(':').s("\{offset\}")
+        if (w.seen.get(key.slice()) catch 0) != 0
+            return
+        w.seen.set(w.arena.dup_str(key.slice()), 1)
 
-    pos: = src.get_line_char(offset, c.line_starts_for(hit.loc.file(), src))
-    $safe: = hit.loc.file().escape_json_path()
-    defer safe.free()
-    uri: = style.spell(safe.slice())
-    out
-        .push(Spot::{ .uri = arena.dup_str(uri), .line = pos.line, .character = pos.character,
-        .len = hit.text.get_generic_base_name().len, .is_decl = is_the_decl(hit, target_def) })
+        pos: = src.get_line_char(offset, w.c.line_starts_for(hit.loc.file(), src))
+        $safe: = hit.loc.file().with_forward_slashes()
+        defer safe.free()
+        uri: = w.style.spell(safe.slice())
+        w.out
+            .push(Spot::{ .uri = w.arena.dup_str(uri), .line = pos.line,
+            .character = pos.character, .len = hit.text.get_generic_base_name().len,
+            .is_decl = is_the_decl(hit, w.target_def) })

@@ -181,6 +181,17 @@ const ip_proto_icmp: U8 = 1
 const icmp_echo_request: U8 = 8
 const icmp_echo_reply: U8 = 0
 
+priv fn put_arp_header(out: U8$[], op: U16, sender_mac: Mac, sender_ip: U32) //<
+    //< Bytes 12 to 31 of an ARP frame: its EtherType, then the fields up to the sender's address
+    out.put_u16_be(12, ethertype_arp)
+    out.put_u16_be(14, arp_hw_ethernet)
+    out.put_u16_be(16, ethertype_ipv4) // ARP's proto field is the protocol's EtherType
+    out[18] = 6 // hwlen
+    out[19] = 4 // protolen
+    out.put_u16_be(20, op)
+    put_mac(out, 22, sender_mac)
+    out.put_u32_be(28, sender_ip)
+
 fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): Sz //<
     //< Answers an ARP request. 0 if it is not asking about our_ip.
     if len < arp_frame_len || !fits(out, arp_frame_len)
@@ -198,14 +209,7 @@ fn build_arp_reply(out: U8$[], req: U8[], len: Sz, our_ip: U32, our_mac: Mac): S
     out.copy_from(0, req.sub(6, 6)) // the destination = the requester
     out.copy_from(32, req.sub(22, 6)) // target MAC = the requester
     put_mac(out, 6, our_mac)
-    out.put_u16_be(12, ethertype_arp)
-    out.put_u16_be(14, 1) // htype: Ethernet
-    out.put_u16_be(16, ethertype_ipv4) // ptype
-    out[18] = 6
-    out[19] = 4
-    out.put_u16_be(20, 2) // oper: a reply
-    put_mac(out, 22, our_mac)
-    out.put_u32_be(28, our_ip)
+    put_arp_header(out, arp_op_reply, our_mac, our_ip)
     out.copy_from(38, req.sub(28, 4)) // target IP = the requester
     return pad_to_min(out, arp_frame_len)
 
@@ -253,15 +257,7 @@ fn build_arp_request(buf: U8$[], sender_mac: Mac, sender_ip: U32, target_ip: U32
     bcast: = buf.sub_mut(0, 6)
     bcast.fill(0xFF) // the destination = the broadcast
     put_mac(buf, 6, sender_mac)
-    buf.put_u16_be(12, ethertype_arp)
-
-    buf.put_u16_be(14, arp_hw_ethernet)
-    buf.put_u16_be(16, ethertype_ipv4) // ARP's proto field is the protocol's EtherType
-    buf[18] = 6 // hwlen
-    buf[19] = 4 // protolen
-    buf.put_u16_be(20, arp_op_request)
-    put_mac(buf, 22, sender_mac)
-    buf.put_u32_be(28, sender_ip)
+    put_arp_header(buf, arp_op_request, sender_mac, sender_ip)
     target_mac: = buf.sub_mut(32, 6)
     target_mac.fill(0) // target MAC (unknown on a request, so 0)
     buf.put_u32_be(38, target_ip)

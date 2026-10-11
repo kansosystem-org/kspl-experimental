@@ -283,7 +283,7 @@ impl Ast_node
             if is_export
                 c.check_ffi_safety(c.fn_ctx.ret_id, type_node)
         else
-            c.fn_ctx.ret_id = c.env.get_or_add("Void")
+            c.fn_ctx.ret_id = I32::sema_type_env.Builtin_type_id.void_type
         c.check_type_vis_leak(type_node, c.fn_ctx.effective_vis, "return type", "function")
 
         c.symtab.enter_scope()
@@ -298,6 +298,7 @@ impl Ast_node
         block: = r.find_child(.k_stmt_block)
         if base_core.config.run_lint_checks && block != null
             r.lint_fn_length(c)
+            r.lint_nesting(block, c)
         if block != null && !r.infer_body(c, block)
             throw .analysis_failed
 
@@ -310,7 +311,7 @@ impl Ast_node
         // by-value receiver (`r: Self`) is rejected by enforce_mutability walking the `.`.
         if !r.has_mut_binding_marker()
             sym.flags.is_mut = false
-        $t_id: = c.env.get_or_add("Void")
+        $t_id: = I32::sema_type_env.Builtin_type_id.void_type
         t_node: = r.find_child(.k_type_expr)
         if t_node != null
             t_id = t_node.resolve_type(c)!
@@ -416,6 +417,31 @@ impl Ast_node
                 .s("[H0803] This function spans \{line_count\} lines, over the \
                     ~\{max_fn_lines\}-line guideline (Principle 3 in docs/DESIGN.md). Consider \
                     splitting it into smaller, focused helpers.")
+            c.hint(r, c.scratch.slice())
+
+    priv fn deepest_block(r: Self$@, depth: Sz): Sz //<
+        //< How many blocks deep the subtree's deepest block sits, r's own counted as `depth`
+        $best: = depth
+        for ch in r.children
+            d: = ch.deepest_block(depth + 1 if ch.kind_id == .k_stmt_block else depth)
+            if d > best
+                best = d
+        return best
+
+    priv fn lint_nesting(r: Self$@, body: Ast_node$@, c: Sema_ctx$@) //<
+        //< [H0805] Reports a function whose blocks nest past the guideline of 8 levels
+        //<
+        //< The body's own block is level 0, so an `if` in it opens level 1. The guideline is
+        //< Principle 3 of docs/DESIGN.md; as a guideline, it is a Hint, as [H0803] is.
+        if c.is_code_off(r, "H0805")
+            return
+        depth: = body.deepest_block(0)
+        max_depth: Sz = 8
+        if depth > max_depth
+            c.clear_scratch()
+                .s("[H0805] This function nests blocks \{depth\} levels deep, past the \
+                    \{max_depth\}-level guideline (Principle 3 in docs/DESIGN.md). Move the inner \
+                    part into a helper, or leave early to flatten it.")
             c.hint(r, c.scratch.slice())
 
     priv fn infer_impl_decl(r: Self$@, c: Sema_ctx$@): Void!Sema_error

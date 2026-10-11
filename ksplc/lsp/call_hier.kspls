@@ -72,7 +72,7 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
     t_len: = id_n.text.len if id_n != null else 1
     r_val: = span_range(src_res, t_off, t_len, starts, b)
 
-    $safe_uri: = target.loc.file().escape_json_path()
+    $safe_uri: = target.loc.file().with_forward_slashes()
     defer safe_uri.free()
     full_uri: = style.spell(safe_uri.slice())
 
@@ -87,8 +87,8 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
     if is_ref_only
         file_name.s(" (as fn pointer)")
 
-    return b.obj().set("name", b.str_val(name)).set("kind", b.int_val(12)) // Function
-    .set("detail", b.str_val(file_name.slice())).set("uri", b.str_val(full_uri))
+    return b.obj().set("name", b.str_val(name)).set("kind", b.int_val(lsp_msg.s_function))
+        .set("detail", b.str_val(file_name.slice())).set("uri", b.str_val(full_uri))
         .set("range", r_val).set("selectionRange", r_val).set("data", b.str_val(fqn_slice)).build()
 
 // The LSP range of `len` bytes from `off` in `src`.
@@ -260,9 +260,13 @@ priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>$@): Bool //
     node_loc_key(node, key@)
     return (callee_ids.get(key.slice()) catch 0) == 0
 
-priv fn find_incoming_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[],
-    caller_def: Ast_node$@, callee_ids: Map<|U8[], I32|>$@,
-    map: Map<|U8[], Call_hier_entry$@|>$@, depth: Sz)
+priv struct Call_search //< what both directions of a search carry down the tree unchanged
+    idx: Fqn_lookup_idx$@
+    callee_ids: Map<|U8[], I32|>$@ //< the calls' callees, which are not function-pointer uses
+    map: Map<|U8[], Call_hier_entry$@|>$@ //< the edges found, by the other end's FQN
+
+priv fn find_incoming_calls(s: Call_search, node: Ast_node$@, target_fqn: U8[],
+    caller_def: Ast_node$@, depth: Sz)
     if node == null || depth > lsp_position.max_walk_depth
         return
 
@@ -272,33 +276,32 @@ priv fn find_incoming_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn:
 
     info: = node.extract_call_target()
     if info.target_def != null && current_caller != null
-        called_fqn: = compute_def_fqn(idx, info.target_def)
+        called_fqn: = compute_def_fqn(s.idx, info.target_def)
         if called_fqn.equals(target_fqn)
-            add_call_entry(idx, current_caller, null, info.range_node, false, map)
-    else if current_caller != null && is_fn_ref_use(node, callee_ids)
-        ref_fqn: = compute_def_fqn(idx, node.def_node)
+            add_call_entry(s.idx, current_caller, null, info.range_node, false, s.map)
+    else if current_caller != null && is_fn_ref_use(node, s.callee_ids)
+        ref_fqn: = compute_def_fqn(s.idx, node.def_node)
         if ref_fqn.equals(target_fqn)
-            add_call_entry(idx, current_caller, null, node, true, map)
+            add_call_entry(s.idx, current_caller, null, node, true, s.map)
 
     for child in node.children
-        find_incoming_calls(child, idx, target_fqn, current_caller, callee_ids, map, depth + 1)
+        find_incoming_calls(s, child, target_fqn, current_caller, depth + 1)
 
-priv fn find_outgoing_calls(node: Ast_node$@, idx: Fqn_lookup_idx$@, caller_def: Ast_node$@,
-    callee_ids: Map<|U8[], I32|>$@, map: Map<|U8[], Call_hier_entry$@|>$@, depth: Sz) //<
-        //< Unlike find_incoming_calls' current_caller, caller_def never changes in the recursion.
+priv fn find_outgoing_calls(s: Call_search, node: Ast_node$@, depth: Sz) //<
+    //< The calls and function-pointer uses under node, the caller's body
     if node == null || depth > lsp_position.max_walk_depth
         return
 
     info: = node.extract_call_target()
     if is_fn_or_impl_decl(info.target_def)
-        add_call_entry(idx, null, info.target_def, info.range_node, false, map)
-    else if is_fn_ref_use(node, callee_ids)
+        add_call_entry(s.idx, null, info.target_def, info.range_node, false, s.map)
+    else if is_fn_ref_use(node, s.callee_ids)
         // The reverse direction is recorded for the same reason: without the edge, someone tracing
         // a task entry point has no lead.
-        add_call_entry(idx, null, node.def_node, node, true, map)
+        add_call_entry(s.idx, null, node.def_node, node, true, s.map)
 
     for child in node.children
-        find_outgoing_calls(child, idx, caller_def, callee_ids, map, depth + 1)
+        find_outgoing_calls(s, child, depth + 1)
 priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[]): Ast_node$@? //<
     //< It looks for the definition node matching target_fqn in the whole AST
     //<
@@ -421,13 +424,14 @@ fn handle_calls(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, is_in
     idx: = build_fqn_lookup_idx(ws_state.sema)
     // The exclusion table is built from **the whole tree**; from the target alone a call's callee
     // would also be listed as passing a function pointer.
-    callee_ids: = build_callee_id_set(ws_state.root_file)
+    search: = Call_search::{ .idx = idx, .callee_ids = build_callee_id_set(ws_state.root_file),
+        .map = calls_map }
     if is_incoming
-        find_incoming_calls(ws_state.root_file, idx, target_fqn, null, callee_ids, calls_map, 0)
+        find_incoming_calls(search, ws_state.root_file, target_fqn, null, 0)
     else
         target_def: =
             resolve_def_by_fqn(ws_state.root_file, ws_state.sema, idx, target_fqn)
         if target_def != null
-            find_outgoing_calls(target_def, idx, target_def, callee_ids, calls_map, 0)
+            find_outgoing_calls(search, target_def, 0)
     respond_with_call_hier_entries(calls_map, ws_state.sema, idx, is_incoming,
         base_locate.uri_style_of(ws_state.uri_perm), Json_builder.new(arena), id_val, arena)

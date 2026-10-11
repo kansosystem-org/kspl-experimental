@@ -53,7 +53,7 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
 // self-host builds stage2, which perf-log measures again). **Formatting comes before lint**: a
 // file that is not formatted fails the formatter's check with the reason, where lint would only
 // name a line.
-const gates: Gate[33] = ::{
+const gates: Gate[_] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
         .shard = .core, .macos = true, .stops = true },
     // **Only macOS runs every package's tests in one program**: Linux and Windows run each
@@ -162,7 +162,7 @@ enum Set //< a set of gates one command runs, named as `make` names it
     ci_shard_core //< `make ci-shard-core`
     ci_shard_rest //< `make ci-shard-rest`
 
-const set_order: Set[6] = ::{ Set.ci, Set.ci_linux, Set.ci_linux_only, Set.ci_macos,
+const set_order: Set[_] = ::{ Set.ci, Set.ci_linux, Set.ci_linux_only, Set.ci_macos,
     Set.ci_shard_core, Set.ci_shard_rest } //< every set, so a name can be read back
 
 fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
@@ -193,82 +193,57 @@ impl Set
 
 // ==========================================
 // The SKIP lines a round expects. **A SKIP no row holds fails its gate**: a tool gone missing from
-// a runner would otherwise pass in silence. A row names the platform as make's `PLATFORM` spells
-// it, and a piece of the reason's line (the reasons: "Some gates need a tool or a library that not
-// every machine has" in `docs/SPEC-gates.md`). **Linux's rows are the fewest**: its image holds
-// every tool but the Windows cross-compiler and Wine.
+// a runner would otherwise pass in silence. A row names its platforms as make's `PLATFORM` spells
+// them, and a piece of the reason's line ("Some gates need a tool or a library that not every
+// machine has" in `docs/SPEC-gates.md`). **Linux is named least**: its image holds every tool but
+// the Windows cross-compiler and Wine.
 // ==========================================
 struct Expected_skip //< one SKIP a platform's round may print
-    on: U8[] //< the platform: `linux`, `darwin` or `win32`
+    on: U8[] //< the platforms it is expected on, space-separated: `linux`, `darwin`, `win32`
     says: U8[] //< a piece of the line that tells its reason apart
 
-const expected_skips: Expected_skip[68] = ::{
-    Expected_skip::{ .on = "linux", .says = "this machine has no IPv6 loopback" },
-    Expected_skip::{ .on = "linux", .says = "x86_64-w64-mingw32-gcc is not installed" },
-    Expected_skip::{ .on = "linux", .says = "Wine is not installed" },
-    Expected_skip::{ .on = "win32", .says = "this machine has no IPv6 loopback" },
+const expected_skips: Expected_skip[_] = ::{
+    Expected_skip::{ .on = "linux win32 darwin", .says = "this machine has no IPv6 loopback" },
+    Expected_skip::{ .on = "linux win32 darwin",
+        .says = "x86_64-w64-mingw32-gcc is not installed" },
+    Expected_skip::{ .on = "linux win32 darwin", .says = "Wine is not installed" },
     Expected_skip::{ .on = "win32", .says = "so none goes silent" },
     Expected_skip::{ .on = "win32", .says = "which Windows does not have" },
-    Expected_skip::{ .on = "win32", .says = "taskset is not installed" },
-    Expected_skip::{ .on = "win32", .says = "cannot grow a file past 2 GiB" },
-    Expected_skip::{ .on = "win32", .says = "no tool that marks a file read-only" },
-    Expected_skip::{ .on = "win32", .says = "which only Linux has" },
+    Expected_skip::{ .on = "win32 darwin", .says = "taskset is not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "cannot grow a file past 2 GiB" },
+    Expected_skip::{ .on = "win32 darwin", .says = "no tool that marks a file read-only" },
+    Expected_skip::{ .on = "win32 darwin", .says = "which only Linux has" },
     Expected_skip::{ .on = "win32", .says = "marks every new file executable" },
-    Expected_skip::{ .on = "win32", .says = "native Windows is out of scope" },
     Expected_skip::{ .on = "win32", .says = "POSIX-specific executable paths" },
     Expected_skip::{ .on = "win32", .says = "no POSIX mode" },
-    Expected_skip::{ .on = "win32", .says = "holds no sanitizer runtime" },
+    Expected_skip::{ .on = "win32 darwin", .says = "holds no sanitizer runtime" },
     Expected_skip::{ .on = "win32", .says = "cannot be made with `ln -s`" },
-    Expected_skip::{ .on = "win32", .says = "do not link here" },
-    Expected_skip::{ .on = "win32", .says = "the libraries ksbind binds are not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "do not link here" },
+    Expected_skip::{ .on = "win32 darwin", .says = "the libraries ksbind binds are not installed" },
     Expected_skip::{ .on = "win32", .says = "test-ksos-link" },
     Expected_skip::{ .on = "win32", .says = "no ARM toolchain" },
     Expected_skip::{ .on = "win32", .says = "Windows has no SIGPIPE" },
-    Expected_skip::{ .on = "win32", .says = "/proc/self/status" },
-    Expected_skip::{ .on = "win32", .says = "nm is not installed" },
-    Expected_skip::{ .on = "win32", .says = "only one of the two C compilers is installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "/proc/self/status" },
+    Expected_skip::{ .on = "win32 darwin", .says = "nm is not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "only one of the two C compilers is installed" },
     Expected_skip::{ .on = "win32", .says = "Windows's permissions are an ACL" },
     Expected_skip::{ .on = "win32", .says = "cannot open the folder to everyone" },
-    Expected_skip::{ .on = "win32", .says = "can hand a folder to another user" },
-    Expected_skip::{ .on = "win32", .says = "wasm-ld is not installed" },
-    Expected_skip::{ .on = "win32", .says = "node is not installed" },
-    Expected_skip::{ .on = "win32", .says = "x86_64-w64-mingw32-gcc is not installed" },
-    Expected_skip::{ .on = "win32", .says = "Wine is not installed" },
-    Expected_skip::{ .on = "win32", .says = "does not take --target" },
+    Expected_skip::{ .on = "win32 darwin", .says = "can hand a folder to another user" },
+    Expected_skip::{ .on = "win32 darwin", .says = "wasm-ld is not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "node is not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "does not take --target" },
     Expected_skip::{ .on = "win32", .says = "a drive is a root on Windows" },
     Expected_skip::{ .on = "win32", .says = "Windows's executable path resolves no link" },
-    Expected_skip::{ .on = "win32", .says = "the section-cutting option is not handed here" },
-    Expected_skip::{ .on = "win32", .says = "numpy is absent" },
-    Expected_skip::{ .on = "win32", .says = "it is Linux only" },
+    Expected_skip::{ .on = "win32 darwin",
+        .says = "the section-cutting option is not handed here" },
+    Expected_skip::{ .on = "win32 darwin", .says = "numpy is absent" },
+    Expected_skip::{ .on = "win32 darwin", .says = "it is Linux only" },
     Expected_skip::{ .on = "win32", .says = "the hook cannot be" },
     Expected_skip::{ .on = "win32", .says = "cannot build with ThreadSanitizer" },
-    Expected_skip::{ .on = "win32", .says = "the real-time clock is degraded" },
-    Expected_skip::{ .on = "win32", .says = "clock cannot measure a silence" },
-    Expected_skip::{ .on = "win32", .says = "it is not split" },
-    Expected_skip::{ .on = "darwin", .says = "this machine has no IPv6 loopback" },
-    Expected_skip::{ .on = "darwin", .says = "taskset is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "cannot grow a file past 2 GiB" },
-    Expected_skip::{ .on = "darwin", .says = "no tool that marks a file read-only" },
-    Expected_skip::{ .on = "darwin", .says = "which only Linux has" },
+    Expected_skip::{ .on = "win32 darwin", .says = "the real-time clock is degraded" },
+    Expected_skip::{ .on = "win32 darwin", .says = "clock cannot measure a silence" },
+    Expected_skip::{ .on = "win32 darwin", .says = "it is not split" },
     Expected_skip::{ .on = "darwin", .says = "neither Windows's sharing check nor /proc" },
-    Expected_skip::{ .on = "darwin", .says = "it is Linux only" },
-    Expected_skip::{ .on = "darwin", .says = "/proc/self/status" },
-    Expected_skip::{ .on = "darwin", .says = "only one of the two C compilers is installed" },
-    Expected_skip::{ .on = "darwin", .says = "does not take --target" },
-    Expected_skip::{ .on = "darwin", .says = "the real-time clock is degraded" },
-    Expected_skip::{ .on = "darwin", .says = "clock cannot measure a silence" },
-    Expected_skip::{ .on = "darwin", .says = "it is not split" },
-    Expected_skip::{ .on = "darwin", .says = "wasm-ld is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "node is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "nm is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "the section-cutting option is not handed here" },
-    Expected_skip::{ .on = "darwin", .says = "holds no sanitizer runtime" },
-    Expected_skip::{ .on = "darwin", .says = "can hand a folder to another user" },
-    Expected_skip::{ .on = "darwin", .says = "do not link here" },
-    Expected_skip::{ .on = "darwin", .says = "the libraries ksbind binds are not installed" },
-    Expected_skip::{ .on = "darwin", .says = "numpy is absent" },
-    Expected_skip::{ .on = "darwin", .says = "x86_64-w64-mingw32-gcc is not installed" },
-    Expected_skip::{ .on = "darwin", .says = "Wine is not installed" },
     Expected_skip::{ .on = "darwin", .says = "no browser" },
     Expected_skip::{ .on = "darwin", .says = "desktop-file-validate is not installed" },
 }
@@ -282,8 +257,19 @@ fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that c
 
 fn is_expected_skip(line: U8[], platform: U8[]): Bool //< whether a row holds this SKIP line
     for e in expected_skips
-        if e.on.equals(platform) && line.find_str(e.says).is_some()
+        if lists(e.on, platform) && line.find_str(e.says).is_some()
             return true
+    return false
+
+priv fn lists(words: U8[], word: U8[]): Bool //< whether a space-separated list holds the word
+    $at: Sz = 0
+    for at < words.len
+        $end: = at
+        for end < words.len && words[end] != ' '
+            end += 1
+        if words.sub(at, end - at).equals(word)
+            return true
+        at = end + 1
     return false
 
 // ==========================================
@@ -293,6 +279,7 @@ fn is_expected_skip(line: U8[], platform: U8[]): Bool //< whether a row holds th
 // ==========================================
 
 const log_dir: U8[] = "out/log/ci" //< where the gates' logs go
+const suite_log_dir: U8[] = "out/log/suite" //< where each suite's own log goes (`SUITE_LOG_DIR`)
 const end_ext: U8[] = ".end" //< the file beside a log holding `<exit code> <seconds>`
 
 struct Outcome //< what one gate left
@@ -392,7 +379,7 @@ fn reset_logs(arena: Arena$@): Bool //<
     //< Caution: **Stop the round on a file that stays.** An old log left in place reads as this
     //< round's PASS for a gate that never ran. A folder that is not there holds nothing to remove.
     $all_gone: = true
-    for dir in U8[][]::{ log_dir, "out/log/suite" }
+    for dir in U8[][]::{ log_dir, suite_log_dir }
         names: = fs.read_dir(dir, arena) catch
             continue
         for name in names

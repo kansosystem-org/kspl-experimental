@@ -39,7 +39,7 @@ KSPL has one kind of comment: `//` to the end of the line. A comment opening wit
 
 | Written | What it is |
 | :-- | :-- |
-| `// text` | **Line comment**: from `//` to the end of the line, and the only kind of comment. There is no block comment `/* */` (the reason is in [`docs/DESIGN.md` §9.1](DESIGN.md)) |
+| `// text` | **Line comment**: from `//` to the end of the line, and the only kind of comment. There is no block comment `/* */` (the reason is in [`docs/DESIGN.md` "Notations not carried"](DESIGN.md)) |
 | `//< text` | **Documentation comment** (below) |
 | `///` or `//!` | **Not a documentation comment.** The compiler warns about a comment opening with either, and does not read it (`ksplc explain W0212`) |
 | `////` (four or more slashes) | An ordinary comment |
@@ -210,7 +210,7 @@ An escape sequence is a `\` followed by a code that stands for one byte, such as
 | `\0` | 0 (NUL) | `\{` / `\}` | 123 / 125 (`{` / `}`) |
 | `\uXXXX` | The 1 to 3 bytes representing code point U+XXXX in UTF-8 | | |
 
-**A notation absent from the table is a compile error** (`"\b"` / `"\x41"` / `"\101"`; the reason is in [`DESIGN.md` §9.1](DESIGN.md)). For the character itself, write no backslash; for the backslash itself, write `\\`. There is no octal or hex notation: a byte written as a number is `0x41U8`.
+**A notation absent from the table is a compile error** (`"\b"` / `"\x41"` / `"\101"`; the reason is in [`DESIGN.md` "Notations not carried"](DESIGN.md)). For the character itself, write no backslash; for the backslash itself, write `\\`. There is no octal or hex notation: a byte written as a number is `0x41U8`.
 
 **In a string, `\{` and `\}` open and close interpolation** (§3.6); only in a character literal do they denote `{` and `}` (`'\{'`). A bare `{` or `}` is written directly in a string, with no doubling.
 
@@ -463,7 +463,7 @@ pub struct Matrix<|T, const rows: Sz, const cols: Sz|>
 
 **A member's visibility cannot be written wider than its enclosing declaration's** (a compile error). This covers a struct's fields, and the methods of an `impl` and a `trait`. Code that cannot name the type cannot reach its members either, so the `pub` in `priv struct S { pub x: I32; }` would widen nothing (Principle 5 in [`DESIGN.md`](DESIGN.md)). Narrower is accepted (a `priv` field inside a `pub struct`).
 
-**A generic type's function without a receiver** (a `new` that builds a value, say) is called as `Type<|type arguments|>.function_name(...)`: `List<|I32|>.new(null)`, `Map<|U8[], V|>.new(arena)`. The type arguments are written on the type, and the call's arguments do not supply them: `List.new(null)` is a compile error that says what to write ([`docs/DESIGN.md` §2.5](DESIGN.md)).
+**A generic type's function without a receiver** (a `new` that builds a value, say) is called as `Type<|type arguments|>.function_name(...)`: `List<|I32|>.new(null)`, `Map<|U8[], V|>.new(arena)`. The type arguments are written on the type, and the call's arguments do not supply them: `List.new(null)` is a compile error that says what to write ([`docs/DESIGN.md` "Inferring a generic's type arguments from the actual arguments is kept"](DESIGN.md)).
 
 **Type arguments after a type that declares none are a compile error**, in a type position and before a member alike (`p: Plain<|I32|>`, `Plain<|I32|>.mk(3)`): they would bind nothing, as after a function that declares none ([8.1](#81-definitions)).
 
@@ -755,9 +755,9 @@ A name is given in two ways: a variable, whose value goes in at run time, and a 
 
 Declaring a variable needs no keyword such as `var`. The `:` right after the name marks a declaration (the same `name: Type` as a struct's field or a function's parameter), and the `=` marks the initial value. They are separate marks, hence the gap in `x: = 1;`.
 
-Several variables can be declared at once, separated by `,`, each with its own initializer or type (`a: = 1, b: U8 = 2;` / `x: I32, y: I32;`). A C-style loop's first field uses the same shape (`for $i: = 0, $j: = 100; …`; the grounds are in [`docs/DESIGN.md` chapter 9](DESIGN.md)).
+Several variables can be declared at once, separated by `,`, each with its own initializer or type (`a: = 1, b: U8 = 2;` / `x: I32, y: I32;`). A C-style loop's first field uses the same shape (`for $i: = 0, $j: = 100; …`; the grounds are in [`docs/DESIGN.md` "One notation per purpose"](DESIGN.md)).
 
-**The type annotation can be omitted only on a local variable and a local `const` inside a function.** The compiler then infers the type from the value. On a top-level declaration (`const` / a variable / an `extern` variable) it is mandatory. Omitting it is the compile error `top-level declaration '<name>' requires a type annotation` (the grounds are in [`docs/DESIGN.md` §2.1](DESIGN.md)).
+**The type annotation can be omitted only on a local variable and a local `const` inside a function.** The compiler then infers the type from the value. On a top-level declaration (`const` / a variable / an `extern` variable) it is mandatory. Omitting it is the compile error `top-level declaration '<name>' requires a type annotation` (the grounds are in [`docs/DESIGN.md` "Why type inference is limited to local variables"](DESIGN.md)).
 
 ```kspls
 import "std/io"
@@ -1101,7 +1101,7 @@ embed "./assets/icon.png" as icon
 embed "mylib/data/table.bin" as table
 ```
 
-**The file is found the way an import's is**: by the three rules of [9.1](#91-import-syntax-and-path-resolution), and within the same `uses` limit (a reach past it is a compile error at the `embed`). The one difference is that nothing is added to the name, since an embedded file spells its own extension. It is never the folder the compiler runs in (the grounds are in [`docs/DESIGN.md` §13.4](DESIGN.md)).
+**The file is found the way an import's is**: by the three rules of [9.1](#91-import-syntax-and-path-resolution), and within the same `uses` limit (a reach past it is a compile error at the `embed`). The one difference is that nothing is added to the name, since an embedded file spells its own extension. It is never the folder the compiler runs in (the grounds are in [`docs/DESIGN.md` "A package names itself, and names what it uses"](DESIGN.md)).
 
 ---
 
@@ -1125,7 +1125,7 @@ A trait lists the methods a type must have: each one's name, parameter types and
 
 A method whose first parameter is a receiver is called on a value. A method with no receiver is called on the type itself. No parameter's type can be left out, the receiver's included.
 
-**The receiver is written as a bare `Self`. `Self@` / `Self$@` are compile errors** (§5.3; the grounds are in [`docs/DESIGN.md` §3.1](DESIGN.md)). `Self` stands for whichever type implements the trait; that implementation decides whether it receives a copy or a pointer (§5.3). To return one's own type so that calls can be chained, use `Self` as the return type (`std/io`'s `Writer` has this shape).
+**The receiver is written as a bare `Self`. `Self@` / `Self$@` are compile errors** (§5.3; the grounds are in [`docs/DESIGN.md` "Why a trait's receiver is fixed to a bare `Self`"](DESIGN.md)). `Self` stands for whichever type implements the trait; that implementation decides whether it receives a copy or a pointer (§5.3). To return one's own type so that calls can be chained, use `Self` as the return type (`std/io`'s `Writer` has this shape).
 
 ```kspls
 trait Drawable
@@ -1246,7 +1246,7 @@ For `impl Type: Trait`, the compiler checks that the type has every method the t
 
 **When the return is `Self`, the implementation returns a pointer** (`Self$@`; a compile error otherwise), as every implementation of `std/io`'s `Writer` does. A call through a trait value goes through a *thunk*: a small intermediary function the compiler inserts between the trait value and the implementation. The thunk repacks the return into a trait value, and a trait value needs an address that stays valid. A returned value would leave it pointing at a temporary, and keeping the value in a lasting place would cost a hidden allocation, which the language rules out. To return one's own type by value, express it with a type argument instead of `Self` (the shape of `trait Cast<|Output|>`).
 
-**The trait still writes a bare `Self`** (`Self@` / `Self$@` cannot be written), because the caller receives a trait value (`Writer`), not a pointer. Receiving it as a concrete type's pointer is a type error. The grounds are those for the receiver ([`docs/DESIGN.md` §3.1](DESIGN.md)).
+**The trait still writes a bare `Self`** (`Self@` / `Self$@` cannot be written), because the caller receives a trait value (`Writer`), not a pointer. Receiving it as a concrete type's pointer is a type error. The grounds are those for the receiver ([`docs/DESIGN.md` "Why a trait's receiver is fixed to a bare `Self`"](DESIGN.md)).
 
 **The implementation can receive the receiver in any shape**, though the trait writes a bare `Self` ([5.1](#51-traits-trait)). A method declared `r: Self` may be implemented with `r: Self$@` and rewrite the receiver. The change reaches the caller's object, because the thunk converts between value and pointer when the method is called through the trait.
 
@@ -1272,7 +1272,7 @@ impl C: Bumpable
         r.n += 1 // if the implementation rewrites, it reaches the original
 ```
 
-To guarantee by type that nothing is written, call the concrete type's method directly, with the receiver `r: Self@`, instead of going through the trait (why, and how other languages handle it: [`docs/DESIGN.md` §3.1](DESIGN.md)).
+To guarantee by type that nothing is written, call the concrete type's method directly, with the receiver `r: Self@`, instead of going through the trait (why, and how other languages handle it: [`docs/DESIGN.md` "Why a trait's receiver is fixed to a bare `Self`"](DESIGN.md)).
 
 On a generic trait (such as `Add<|Rhs, Output|>`), a type argument not yet fixed at this check is left out of the comparison, so nothing is wrongly called non-conforming.
 
@@ -1323,13 +1323,13 @@ Only `std.Move_only` **itself** is derived structurally. A trait of the same nam
 * code passing a type that holds a raw pointer to another thread;
 * code rewriting a top-level variable (a global) from several threads.
 
-Such a *data race* (two threads touching the same memory at once, at least one of them writing) is undefined ([14.2](#142-undefined---no-answer-is-fixed)). There is no marker like Rust's `Send` / `Sync`, which mark the types allowed to cross threads; the means of preventing races, and the grounds, are in `docs/DESIGN.md` §5.1.
+Such a *data race* (two threads touching the same memory at once, at least one of them writing) is undefined ([14.2](#142-undefined---no-answer-is-fixed)). There is no marker like Rust's `Send` / `Sync`, which mark the types allowed to cross threads; the means of preventing races, and the grounds, are in `docs/DESIGN.md` "Why data races are not prevented by the type system".
 
 ### 5.5 Worked example: synthesizing a field table with `Reflectable`
 
 Declare that a type conforms to `std/reflect`'s `Reflectable` with an **empty body**, and the compiler writes a description of the type's fields for you. Code such as a JSON reader can then walk the fields by name at run time.
 
-The compiler builds two things from the type's declaration: a field table (a `const` of `Field_info`: each field's name, offset and kind) and the body of `fields()`. `std/json`'s `from_struct` / `into_struct` and `ksbind/db`'s `bind_row` / `read_row` walk it ([`docs/DESIGN.md` §3.2.5](DESIGN.md)).
+The compiler builds two things from the type's declaration: a field table (a `const` of `Field_info`: each field's name, offset and kind) and the body of `fields()`. `std/json`'s `from_struct` / `into_struct` and `ksbind/db`'s `bind_row` / `read_row` walk it ([`docs/DESIGN.md` "Why the round trip between a container and an external form is a trait returning a table"](DESIGN.md)).
 
 ```kspls
 import "std/ds" { List }
@@ -1356,7 +1356,7 @@ impl Baseline: reflect.Reflectable {} // the compiler assembles the table and fi
 
   * A type holding any other field **is a compile error naming that field**; the field is never silently dropped from the table. Nested and contained types alike are checked: a container of containers (`List<|List<|T|>|>`), an option whose contents are a container or an option, a non-`struct` type and a generic type are all refused.
 * **Nothing is synthesized on an `impl` with a body written**: write `fields()` yourself to change the key mapping or to hold a type not covered (the same treatment as `variant_name`; [3.4](#34-enums-enum)).
-* **Conformance is matched by fully qualified name** (the trait's full path, `std.reflect.Reflectable`): a `trait Reflectable` declared in your own file does not make derivation work (the same reason as `Ref_counted`; [`docs/DESIGN.md` §3.2.4](DESIGN.md)).
+* **Conformance is matched by fully qualified name** (the trait's full path, `std.reflect.Reflectable`): a `trait Reflectable` declared in your own file does not make derivation work (the same reason as `Ref_counted`; [`docs/DESIGN.md` "Why compiler-known traits are confined to `std/lang`"](DESIGN.md)).
 ## 6. Expressions and operators
 
 An expression is anything that produces a value, such as `a + b` or `f(x)`. This chapter fixes the operators and how strongly they bind ([6.1](#61-the-operator-list-and-precedence)), pointers ([6.2](#62-pointer-arithmetic-and-implicit-dereferencing)), type conversion ([6.4](#64-type-conversion--and-implicit-casts)), how a value is assembled ([6.6](#66-initialization-and-construction)) and what integer arithmetic answers ([6.8](#68-integer-arithmetic-folding-overflow-division-shifts)). Assignment is a statement, not an expression, so it is not in the precedence table ([6.5](#65-assignment-and-compound-assignment)).
@@ -1732,7 +1732,7 @@ comp2: Component = ::{ 200, .tags = ::{ "Enemy", "Boss" } } // id=200, active ta
         return t // refused: `t` was set from `s`, which was set from `U8[]::a`
     ```
 
-    The check follows names only. A copy made any other way passes unchecked, and is the writer's to get right: a slice stored into a struct's field after the struct is built (`h.s = U8[]::a`), one passed through a call (`return id(s)`), or one reached through a pointer (the line is in [`docs/DESIGN.md` §4.3](DESIGN.md)). To return a slice, point it at arena or heap memory, or have the caller pass in the memory to write to. A run for a mutable slice (`T$[]`) cannot be written: writable memory needs a binding's `$`, and this array has no name ([4.2](#42-the-two-axes-of-mutability)).
+    The check follows names only. A copy made any other way passes unchecked, and is the writer's to get right: a slice stored into a struct's field after the struct is built (`h.s = U8[]::a`), one passed through a call (`return id(s)`), or one reached through a pointer (the line is in [`docs/DESIGN.md` "Why dangling is stopped only on the paths that create an invisible pointer"](DESIGN.md)). To return a slice, point it at arena or heap memory, or have the caller pass in the memory to write to. A run for a mutable slice (`T$[]`) cannot be written: writable memory needs a binding's `$`, and this array has no name ([4.2](#42-the-two-axes-of-mutability)).
 
 #### 6.6.2 Where the type may be omitted
 
@@ -1811,7 +1811,7 @@ fn main()
 
 * **`offsetof(Type, field)`**: the byte offset at which `field` starts within `Type`, as a compile-time `Sz`. The first argument is limited to a type, unlike `sizeof`: it asks about the declaration's layout, not a value, and a value's name there (`offsetof(twice, a)`) is a compile error. The second is the field name itself, not an expression (a local variable of the same name has no influence).
 
-**It differs from adding up the fields' sizes.** A field is placed at a position rounded up to its own alignment (the address multiple its type needs), so unused bytes (*padding*) can go between it and the field before. `#packed` stops the padding, and `#align(N)` changes the struct's alignment. So ask for a position with `offsetof` instead of counting it ([`docs/DESIGN.md` §3.2.5](DESIGN.md)).
+**It differs from adding up the fields' sizes.** A field is placed at a position rounded up to its own alignment (the address multiple its type needs), so unused bytes (*padding*) can go between it and the field before. `#packed` stops the padding, and `#align(N)` changes the struct's alignment. So ask for a position with `offsetof` instead of counting it ([`docs/DESIGN.md` "Why the round trip between a container and an external form is a trait returning a table"](DESIGN.md)).
 
 **It can be written only on a `struct`.** An enum's variants are values, not places, so `offsetof(E, a)` is a compile error, as is a name absent from the target type's fields.
 
@@ -2100,18 +2100,18 @@ fn process_item<|T: Drawable + Serializable|>(item: T)
     item.draw()
 ```
 
-* **A generic function used as a value is one specialization, named by its type arguments**: `f: fn(x: I32): I32 = same<|I32|>` holds the `I32` copy of `fn same<|T|>(x: T): T`, and it is checked against the expected function type as any function's name is. The bare name (`f: fn(x: I32): I32 = same`, or `pass(same)` to a generic parameter) is a compile error: a value has no actual arguments to infer `T` from, and the expected type does not supply it ([`docs/DESIGN.md` §2.5.1](DESIGN.md)).
+* **A generic function used as a value is one specialization, named by its type arguments**: `f: fn(x: I32): I32 = same<|I32|>` holds the `I32` copy of `fn same<|T|>(x: T): T`, and it is checked against the expected function type as any function's name is. The bare name (`f: fn(x: I32): I32 = same`, or `pass(same)` to a generic parameter) is a compile error: a value has no actual arguments to infer `T` from, and the expected type does not supply it ([`docs/DESIGN.md` "A generic function used as a value names its specialization"](DESIGN.md)).
 * **Type arguments after a function that declares none are a compile error**, at a call and on a value alike (`twice<|I32|>(2)`, `f: Op = twice<|I32|>`). A method declaring none is the same (`Meter.twice<|I32|>`).
-* **A method used as a value is named through its type**, and is the function whose first parameter is the receiver as the method declares it ([5.2](#52-implementations-impl-and-receivers)): `f: fn(r: Meter@): I32 = Meter.read`. A generic type's type arguments go on the type and a generic method's own after the method (`Keeper<|I32|>.pair<|U8|>`), and leaving out either is a compile error. Two other shapes are compile errors ([`docs/DESIGN.md` §2.5.2](DESIGN.md)):
+* **A method used as a value is named through its type**, and is the function whose first parameter is the receiver as the method declares it ([5.2](#52-implementations-impl-and-receivers)): `f: fn(r: Meter@): I32 = Meter.read`. A generic type's type arguments go on the type and a generic method's own after the method (`Keeper<|I32|>.pair<|U8|>`), and leaving out either is a compile error. Two other shapes are compile errors ([`docs/DESIGN.md` "A method used as a value is named through its type"](DESIGN.md)):
   * through a value, not called (`p.read`): a function value holds no receiver. Call it, or name it through its type and pass the receiver as the first argument;
   * through a trait (`Shape.area`): each conforming type has its own function. Name one type's.
-* **A function's name takes its type from where it is written.** Each of these stands for one function: a non-generic function's name (`twice`), a written specialization (`same<|I32|>`), a method named through its type (`Meter.read`) and an anonymous function ([8.1.2](#812-anonymous-functions)). Used as a value ([`docs/DESIGN.md` §2.5.1](DESIGN.md)):
+* **A function's name takes its type from where it is written.** Each of these stands for one function: a non-generic function's name (`twice`), a written specialization (`same<|I32|>`), a method named through its type (`Meter.read`) and an anonymous function ([8.1.2](#812-anonymous-functions)). Used as a value ([`docs/DESIGN.md` "A generic function used as a value names its specialization"](DESIGN.md)):
   * where a function type is expected (a typed variable, an argument, a field, a returned value, the other side of `==`), it is checked against that type;
   * passed to a parameter whose type is a type parameter of the called generic (`fn pass<|F|>(f: F): F`), it gives that type parameter the function type of the function it names, as any actual argument gives its own: `pass(same<|I32|>)` binds `F` to `fn(x: I32): I32`, and `pass(Meter.read)` to `fn(r: Meter@): I32`. A variadic function is a compile error there, since no function type holds its `...`; write the type argument;
   * bound to a declaration with no type, it gives the declaration the function type of the function it names in the same way: `f: = twice` makes `f` a `fn(x: I32): I32`, `f: = same<|I32|>` the same, and `f: = Meter.read` a `fn(r: Meter@): I32`. A variadic function is a compile error there too, and so is a bare generic name (`f: = same`), which names no one function;
   * anywhere else nothing gives it a type, and it is a compile error: two names compared with each other, and `sizeof` (below).
-* **A function's name compared with `==` or `!=` takes the other side's function type**, on whichever side it is written: `twice == f` and `f == twice` are one comparison, and the name is checked against `f`'s type as any function's name is. Two names (`twice == thrice`) give neither a type and are a compile error: bind one side to a variable of a function type first ([`docs/DESIGN.md` §8.5](DESIGN.md)).
-* **A function's name is not a type, and has no size**: `x: twice` and `sizeof(twice)` are compile errors. A pointer to a function has a function type (`fn(x: I32): I32`), and `sizeof` of that type gives its size ([6.7](#67-built-in-operators), [`docs/DESIGN.md` §8.6](DESIGN.md)).
+* **A function's name compared with `==` or `!=` takes the other side's function type**, on whichever side it is written: `twice == f` and `f == twice` are one comparison, and the name is checked against `f`'s type as any function's name is. Two names (`twice == thrice`) give neither a type and are a compile error: bind one side to a variable of a function type first ([`docs/DESIGN.md` "A function's name in a comparison takes the other side's type"](DESIGN.md)).
+* **A function's name is not a type, and has no size**: `x: twice` and `sizeof(twice)` are compile errors. A pointer to a function has a function type (`fn(x: I32): I32`), and `sizeof` of that type gives its size ([6.7](#67-built-in-operators), [`docs/DESIGN.md` "A function's name has no size"](DESIGN.md)).
 * **A function value takes `==` and `!=` alone.** Ordering (`<`), arithmetic, a unary operator (`-f`, `!f`) and a compound assignment (`f += g`) on it are compile errors; a null check is `f == null`.
 
 * **Variadic arguments**: `...` at the end of the argument list receives a variable number of arguments as C does, for interoperating with C.
@@ -2133,7 +2133,7 @@ s.starts_with(head)    // offset is 0
 s.starts_with(head, 3) // the written value wins
 ```
 
-A default value is **a single literal** only (a number, `true` / `false`, a character, a string, `null`). An expression cannot be written (both `= 1 + 1` and `= max_depth` are refused), so that no allocation or side effect happens without showing in the call ([`docs/DESIGN.md` §9.3](DESIGN.md)).
+A default value is **a single literal** only (a number, `true` / `false`, a character, a string, `null`). An expression cannot be written (both `= 1 + 1` and `= max_depth` are refused), so that no allocation or side effect happens without showing in the call ([`docs/DESIGN.md` "A default argument is allowed only for a foldable constant"](DESIGN.md)).
 
 Each of these placements is a compile error:
 
@@ -2239,7 +2239,7 @@ The two kinds of nameless function differ as follows; the rules after the table 
 | The enclosing type parameters (`T`) | Cannot be written | Can be written |
 | Bound to a variable | The type must be written | Needs no type written |
 
-**The `;` fixes the type.** Without it the function is a function pointer ("Anonymous functions" above). With it, the function is a `Callable1<|argument, return|>` / `Callable2<|argument1, argument2, return|>` (as the receiving function writes it), which carries the place of its captured values along with the function ([`docs/DESIGN.md` §8.1](DESIGN.md)). Even with zero captures, the `;` makes it a `Callable`, for an API that takes no function pointer, such as `std/seq`'s:
+**The `;` fixes the type.** Without it the function is a function pointer ("Anonymous functions" above). With it, the function is a `Callable1<|argument, return|>` / `Callable2<|argument1, argument2, return|>` (as the receiving function writes it), which carries the place of its captured values along with the function ([`docs/DESIGN.md` "Why capture is made explicit and escape is forbidden"](DESIGN.md)). Even with zero captures, the `;` makes it a `Callable`, for an API that takes no function pointer, such as `std/seq`'s:
 
 ```kspls
 big: = xs.where(fn(x: I32; ): Bool {
@@ -2334,7 +2334,7 @@ A function that may fail says so in its return type, `T!E`. It returns with `ret
 **No exception leaves a function without appearing in its return type**, so whether a call can fail is read from the type, and the caller cannot overlook it. (In Python or JavaScript, by contrast, an exception can escape a function whose signature does not mention it.)
 
 * **The `T!E` type** holds either the success value, `T`, or the failure value, `E`.
-* **The error type cannot be omitted**: there is no short form `T!`, which would be a second spelling of one type ([`docs/DESIGN.md` §9.1](DESIGN.md)). For a type compatible with C's `int`, write `T!I32`.
+* **The error type cannot be omitted**: there is no short form `T!`, which would be a second spelling of one type ([`docs/DESIGN.md` "Notations not carried"](DESIGN.md)). For a type compatible with C's `int`, write `T!I32`.
 * **`E` can be any type** (a number, an enum, a struct), and need not be an error: it can be any token returned to the caller, as `kspeg/`'s parser uses it. When it is a struct, decide yourself who frees its contents and when.
 * **The fields inside cannot be touched**: `.val` / `.is_err` / `.error_code` are compile errors, since they would let the success value be read despite a failure. Only `!` and `catch` take the contents out.
 
@@ -2439,7 +2439,7 @@ There is no garbage collector (a run-time system that finds and frees unused mem
 * **Syntax**: `defer statement`. One statement goes bare (`defer buf.free()`); several go in a block (`defer { … }`, or a deeper level in the indentation notation). `ksplc fmt` writes a one-statement block the bare way, so one cleanup has one spelling.
 * **When it runs**: at the end of the scope, or on leaving it with `return`, `throw`, `break`, `continue` and the like, in reverse order of registration (the last one registered runs first).
 * **Nothing escapes from inside a `defer`**: cleanup must run to its end. So `return` / `throw` / `fallback` inside it, a `break` / `continue` aimed at an outer scope, and a `!` that may fail are compile errors.
-* **Values are read when it runs, not when it is registered.** An outer variable the block names takes its value at the moment of leaving. So `defer f(x)` reads `x` again then, where Go's evaluates `x` at registration. A closure's capture reads at the call by the same rule ("Closures" in [8.1](#81-definitions)). The grounds are in [`docs/DESIGN.md` §4.2](DESIGN.md).
+* **Values are read when it runs, not when it is registered.** An outer variable the block names takes its value at the moment of leaving. So `defer f(x)` reads `x` again then, where Go's evaluates `x` at registration. A closure's capture reads at the call by the same rule ("Closures" in [8.1](#81-definitions)). The grounds are in [`docs/DESIGN.md` "Why `defer` has no capture list"](DESIGN.md).
   * **To use the value at registration, copy it yourself**; the language keeps no such value.
 
     ```kspls
@@ -2669,7 +2669,7 @@ flowchart TD
 
 **An absolute path is none of the three, and a compile error** at that line, for an `import` and an `embed` alike. An absolute path begins with `/` or `\` (`"//host/share/x"` included) or with a drive (`"C:/x"`). It is refused before anything is opened: on Windows, opening a path on another machine already offers that machine the user's credentials.
 
-**Every spelling of a file's path gives one logical name**, so one file never becomes two modules. A logical name is the name the compiler gives a file inside the program. Three steps make it (the grounds are in [`docs/DESIGN.md` §13.7](DESIGN.md)):
+**Every spelling of a file's path gives one logical name**, so one file never becomes two modules. A logical name is the name the compiler gives a file inside the program. Three steps make it (the grounds are in [`docs/DESIGN.md` "A path's `..` is resolved by its spelling"](DESIGN.md)):
 
 | Step | Written | Logical name |
 | :-- | :-- | :-- |
@@ -2705,7 +2705,7 @@ After an import, you reach the file's names through its alias (`math.sin()`). Or
 **Bringing in selected names (`{ }`)**: `import "path" { name (as alias)?, ... }` makes only the selected names usable, with nothing in front, since the `import` line already says where they came from.
 
 * **Anything the file publishes can be selected**: a type (`struct` / `enum` / `trait` / `typedef`), a function, or a constant. An enum's variants (`Checked_error.overflow`) can then be written with nothing in front too.
-* **Visibility does not change.** What is not visible (a `priv`, or an unmarked declaration seen from another package) cannot be selected: that `import` line is a compile error (`cannot access symbol`, [`docs/DESIGN.md` §6.5](DESIGN.md)).
+* **Visibility does not change.** What is not visible (a `priv`, or an unmarked declaration seen from another package) cannot be selected: that `import` line is a compile error (`cannot access symbol`, [`docs/DESIGN.md` "A name the file cannot see is refused where it is selected"](DESIGN.md)).
 * **Generics get the same type too.** A type written with a selected name and one written with the alias in front (`Map<|U8[], I32|>` and `ds.Map<|U8[], I32|>`) are the same type. An `impl`'s matching and a trait's constraint check give the same result for both. Otherwise a second instantiation (the compiler's copy of a generic for one set of type arguments) could lose a slice's default immutability (`U8[]` immutable, `U8$[]` mutable), and a type implementing `Hashable<|U8[]|>` would be rejected as not implementing it.
 * **Selecting a name that does not exist makes that `import` line a compile error** (`file 'p' has no symbol named 'X'`), so a misspelling is caught even if the name is never used.
 * **A selected name colliding with another declaration in the same file** (an ordinary `struct`/`typedef` and so on) or with another selective import is always a compile error, as an ordinary redefinition is. No first-wins or last-wins precedence applies.
@@ -2736,7 +2736,7 @@ fn main()
 ```
 
 * **A built-in type counts as `std/lang`'s.** A type no declaration names (a scalar, a slice, a fixed-length array, a `Result`) is taken as declared in the file every file imports. The methods `std/lang` adds to it need nothing. One that another file adds (`impl U8[]` in `std/str`, `impl I32` in `std/strfmt`) needs that file imported. So `s.equals(...)` needs `import "std/str"`, and a format specifier needs `import "std/strfmt"` ([3.6.2](#362-format-specifiers)).
-* **It does not matter whether another file brought the definer into the program** (the grounds are in [`docs/DESIGN.md` §6.4](DESIGN.md)). An import that makes such a call valid counts as used, so [I0401] names only an import nothing needs.
+* **It does not matter whether another file brought the definer into the program** (the grounds are in [`docs/DESIGN.md` "Why a method on a built-in type needs its file imported"](DESIGN.md)). An import that makes such a call valid counts as used, so [I0401] names only an import nothing needs.
 * **Any form of import satisfies it**: the whole file (`import "m"` / `import "m" as _m`) or a selective import (`import "m" { X }`), which state the origin equally.
 * It applies to every `impl` on a type defined in another file, including a generic method (`pub fn m<|T|>(...)`) and an `impl` on a generic type (`impl<|T|> m.Box<|T|>`). Visibility (`priv` / unmarked) applies as usual.
 * **Not inside a generic's instantiation**, where the receiver can be the type argument's: `put<|W, T: Formattable|>` reaches each type's `fmt` wherever its `impl` stands. A conformance (`impl I32: Formattable`) holds wherever its file is part of the program. A file imported only so that its conformances hold is used by nothing written, so it takes a `_` alias (`import "std/strfmt" as _strfmt`).
@@ -2780,7 +2780,7 @@ From narrowest to widest, the levels are `priv`, unmarked, `pub`.
 
 * What is compared is the position's effective visibility. For a method, that is the narrower of the function and the `impl`'s target type; for a field, the narrower of the field and the `struct`. An unmarked method of a `priv struct S` cannot be called from code that cannot name `S`, so it is effectively `priv`; a `pub` there is refused by [3.3](#33-structs-struct).
 * Every named type in the position's type expression is checked, generic type arguments included.
-* **Not covered** are a function's argument positions and non-`pub` fields: neither lets the type leak outside ([`docs/DESIGN.md` §6.1](DESIGN.md)).
+* **Not covered** are a function's argument positions and non-`pub` fields: neither lets the type leak outside ([`docs/DESIGN.md` "Why a narrow type may not sit in a position with wide visibility"](DESIGN.md)).
 
 ```kspls
 priv struct Hidden
@@ -2832,7 +2832,7 @@ There are two kinds, told apart only by the number of `#`s. Both are written bef
 | Written as | Two `#`: `##error(…)` | One `#`: `#inline`, `#cfg(debug)` |
 | Acts on | What encloses it: the file | What comes next: one declaration or statement |
 
-**The `#` or `##` must touch the name** (they are one token), so `# cfg` is a syntax error. The grounds for telling the two apart by the count and not by `!`, and for the adjacency, are "1.2.1 Why directives are `##` and attributes are `#`" in [`DESIGN.md`](DESIGN.md).
+**The `#` or `##` must touch the name** (they are one token), so `# cfg` is a syntax error. The grounds for telling the two apart by the count and not by `!`, and for the adjacency, are "Why directives are `##` and attributes are `#`" in [`DESIGN.md`](DESIGN.md).
 
 **A directive (`##`)** instructs the compiler itself and stands alone as one statement. Its notation overlaps a shebang's (the `#!` first line that lets a Unix shell run a script directly), so only a line where `/` follows the `#!` is a shebang (`#!/usr/bin/env -S ksplc run`).
 
@@ -2895,7 +2895,7 @@ error: attribute '#inline' does nothing here; it applies to functions
 
 **A `struct` inside an `extern` block takes no attribute but `#cfg`** (a compile error otherwise). The generated C emits only its forward declaration (`typedef struct X X;`), so neither a layout attribute nor a mark on the name has anywhere to go. Its layout belongs to the C header, so hold it by pointer (`@`). A C type held by value is declared outside the block, with its fields ([3.3](#33-structs-struct)).
 
-**No attribute keeps ARC-managed types off a real-time path**: raise lint [W0601] to `error` instead (`--lint=W0601=error` or `ksplc.cfg`; `docs/DESIGN.md` §3.2.3).
+**No attribute keeps ARC-managed types off a real-time path**: raise lint [W0601] to `error` instead (`--lint=W0601=error` or `ksplc.cfg`; `docs/DESIGN.md` "Markers not carried").
 
 ```kspls
 // a size check (a compile error when it fails)
@@ -3177,8 +3177,8 @@ At the root are simplicity and language design by subtraction. **The test is not
 | **Named actual arguments** (`f(offset = 0)`) | Take the settings as a struct, written `::{ .name = value }` (an omitted field is 0). | One call would have two spellings (`f(0)` and `f(offset = 0)`), and **parameter names would become published API** (Python offers the positional-only `/` to keep them out of it). Through a function-pointer type, the names in the type and in the definition may disagree. |
 | **Function overloading** (several functions with one name, told apart by their parameters) | Make it generic, or give each its own name. | No tracing which of several same-named candidates is called. |
 | **A distinct type made from another** (Go's `type Id int`, Haskell's `newtype`), or another language's spelling of another name for a type (`type Id = I32` in Rust, Go and Python; `typealias` in Swift and Kotlin; `using Id = I32;` in C++; `alias` in D; C's own order, `typedef I32 Id;`) | For a distinct type, a struct with one field (`struct User_id { v: I32 }`). For another name, `typedef Id = I32` ([3.5](#35-typedefs-typedef)): C's word, the new name first, the type after `=`. Each of those other spellings is a syntax error whose note writes this line. A `typedef` is only another name, indistinguishable from its type ([3.5.2](#352-a-typedef-is-only-another-name)). | One word, one meaning, one spelling. `typedef` stays a name, as in C, Rust and Swift, and a type kept apart is declared as one, so a mix-up is an error at no run-time cost. The order keeps the new name at the head of the line. C puts it after the type, or inside it for a function pointer (`typedef I32 (*Op)(I32);`). |
-| **`?` for a result** (Rust's `f()?`, and `T?E` for its type) | `f()!` passes the failure on and `T!E` is the type ([8.3](#83-error-handling)). `T?` is an optional ([3.2](#32-derived-types)); a `?` after a value, or a name after `T?`, is a syntax error whose note names the `!` form. | `!` marks the place a function may stop and hand a failure back, and `?` marks absence, as other languages spell an optional value ([`DESIGN.md`](DESIGN.md), "9.2.2 Failure"). |
-| **Another language's word for a loop or a branch** (`while` in C, Java, Python and Swift; Rust's `loop`; `match` in Rust, Python and Scala) | `for` with a condition alone (`for x > 0`) in place of `while`; a bare `for`, which repeats until a `break` leaves it, in place of `loop`; `switch x case ...` in place of `match` ([7.1](#71-branching), [7.2](#72-loops)). Each is a syntax error whose note writes the KSPL head. The three words stay usable as names. | One word for each job, spelled as C spells it, so a keyword takes no name a writer would use ([`DESIGN.md`](DESIGN.md), "11.2 The spelling of reserved words is taken from C"). |
+| **`?` for a result** (Rust's `f()?`, and `T?E` for its type) | `f()!` passes the failure on and `T!E` is the type ([8.3](#83-error-handling)). `T?` is an optional ([3.2](#32-derived-types)); a `?` after a value, or a name after `T?`, is a syntax error whose note names the `!` form. | `!` marks the place a function may stop and hand a failure back, and `?` marks absence, as other languages spell an optional value ([`DESIGN.md`](DESIGN.md), "Failure"). |
+| **Another language's word for a loop or a branch** (`while` in C, Java, Python and Swift; Rust's `loop`; `match` in Rust, Python and Scala) | `for` with a condition alone (`for x > 0`) in place of `while`; a bare `for`, which repeats until a `break` leaves it, in place of `loop`; `switch x case ...` in place of `match` ([7.1](#71-branching), [7.2](#72-loops)). Each is a syntax error whose note writes the KSPL head. The three words stay usable as names. | One word for each job, spelled as C spells it, so a keyword takes no name a writer would use ([`DESIGN.md`](DESIGN.md), "The spelling of reserved words is taken from C"). |
 | **`::` as a path separator** (`Arena::new(1024)`, `io::out()`, `Shade::dark`) | `.`, which reaches a module's member, a type's own and a value's alike: `Arena.new(1024)`, `io.out()`, `Shade.dark`. `::` is the cast (`I32::n`) and a literal's type (`T::{ … }`); written as a path, it is an error naming the `.` spelling. | A second mark would give a member two spellings, and `::` already has a job: `json::Val` would read like `Sz::n`. A local named like an imported module hides it, and gets a warning at its declaration ([4.5](#45-scope-and-shadowing)). |
 | **Range syntax (`a..b`)** | `for x in` over `std/lang`'s `Range` (`Range.asc(n)` / `Range.desc(n)` / `Range.new(start, stop, step)`). | A call already writes it, so an operator would be a second notation. `a..b` does not show whether its bound is exclusive; `Range.new`'s argument names do (`stop` is exclusive). |
 | **`a[i..j]` for cutting out a slice** | `s.sub(start, len)` / `s.sub_from(start)` from `std/chars`, which the calling file imports: a view, not a copy (the writable one is `sub_mut`). | Keeps the language small. It cuts any element type alike ([3.2](#32-derived-types)); `std/seq`'s `take` / `skip` are another entry point, copying into a `List`. |

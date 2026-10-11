@@ -11,15 +11,14 @@ import "ksos/drivers/mmio"
 const resets_reset: U32 = 0x4000c000
 const resets_reset_done: U32 = 0x4000c008
 
-fn unreset(bits: U32): Bool //< takes bits out of reset and waits for them to come up
+fn unreset(bits: U32): Void!mmio.Driver_error //< takes bits out of reset, waiting for them
     //<
-    //< true once they are out.
-    //< **The wait has a timeout** (the policy of `poll` in `ksos/drivers/mmio.kspls`).
+    //< **The wait has a timeout** (the policy of `wait` in `ksos/drivers/mmio.kspls`).
     cur: = mmio.read32(resets_reset)
     mmio.write32(resets_reset, cur & ~bits)
-    return mmio.poll(resets_reset_done, bits, true)
+    mmio.wait(resets_reset_done, bits, true)!
 
-fn reset_then_unreset(bits: U32): Bool //< puts bits **into reset once**, then takes them out
+fn reset_then_unreset(bits: U32): Void!mmio.Driver_error //< puts bits into reset once, then out
     //<
     //< **Which of the two to call is decided per peripheral.**
     //< **Do not copy either one into a driver**: the reasons for choosing would scatter across the
@@ -28,4 +27,4 @@ fn reset_then_unreset(bits: U32): Bool //< puts bits **into reset once**, then t
     mmio.write32(resets_reset, cur | bits)
     cur2: = mmio.read32(resets_reset)
     mmio.write32(resets_reset, cur2 & ~bits)
-    return mmio.poll(resets_reset_done, bits, true)
+    mmio.wait(resets_reset_done, bits, true)!

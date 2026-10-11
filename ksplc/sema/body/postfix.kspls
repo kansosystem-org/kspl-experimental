@@ -34,8 +34,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
         ((left.was_parenthesized() && left.is_postfix_safe_kind() &&
         !left.is_prefix_cast_result()) || left.has_redundant_extra_parens())
         c.hint(node, "[H0301] Unnecessary parentheses around receiver expression.")
-    op_node: = node.get_postfix_op()
-    $op: = op_node.text if op_node != null else node.text
+    $op: = node.postfix_op_text()
     if op.equals("method_access") || op.equals("generic_method")
         op = "."
     else if op.equals("enum_init_call") || op.equals("enum_init")
@@ -52,7 +51,7 @@ fn infer(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
         as_type_node: = node.get_postfix_member()
         // Caution: Check this before resolving the type. Resolving `io` as a type reports it
         // undefined.
-        if read_as_path(c, node, left, as_type_node, op_node)
+        if read_as_path(c, node, left, as_type_node, node.get_postfix_op())
             return infer(node, c, expected_id)!
         as_target_id = as_type_node.resolve_type(c)!
         as_type_node.type_id = as_target_id

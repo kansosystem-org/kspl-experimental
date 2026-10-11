@@ -14,7 +14,6 @@ import "kspage/lay/find"
 import "kspage/lay/flow"
 import "kspage/model/doc" { Block, Rect }
 import "kspage/model/filter"
-import "kspage/model/paint"
 // **Without an import from here the style entry points are not in the wasm** — the generated C
 // holds only what is reachable from the entry point; `#export` alone is not enough.
 import "kspage/port/web/face" as _face
@@ -74,7 +73,7 @@ fn kspage_web_layout(width: F32): Sz
         sheet.over.kept_row = held
     if page_arena != null
         page_arena.free()
-    page_arena = Arena.new(64 * 1024)
+    page_arena = Arena.new(state.fresh_chunk)
     // Pass the borrowing interface — otherwise a window shows only its target (the text is passed
     // in; the core does not open files).
     page = flow.layout(doc, sheet, source(), width, page_arena)
@@ -126,22 +125,7 @@ fn kspage_web_box(i: Sz, out: F32$@)
     state.clear_out(out, 15)
     if !state.has_box(i)
         return
-    b: = page.boxes.get(i)
-    out$ = b.rect.x
-    (out + 1)$ = b.rect.y
-    (out + 2)$ = b.rect.w
-    (out + 3)$ = b.rect.h
-    (out + 4)$ = b.font.size_px
-    (out + 5)$ = F32::b.font.weight
-    (out + 6)$ = 1.0 if b.font.italic else 0.0
-    (out + 7)$ = 1.0 if b.composing else 0.0
-    state.color_into(out + 8, b.ink.color)
-    state.color_into(out + 10, b.ink.background)
-    (out + 12)$ = 1.0 if paint.drawn(b.ink.underline) else 0.0
-    (out + 13)$ = 1.0 if paint.drawn(b.ink.strike) else 0.0
-    // Caution: **The drawing code must add this too** (the justification's letter spacing); without
-    // it, the text is packed tight while hit tests shift right.
-    (out + 14)$ = b.spacing
+    state.box_into(out, page.boxes.get(i))
 
 #export
 fn kspage_web_box_text(i: Sz): U8@
@@ -309,10 +293,7 @@ fn kspage_web_selection_rect(i: Sz, out: F32$@)
     if !state.has_selection(i)
         return
     r: = sel.get(i)
-    out$ = r.x
-    (out + 1)$ = r.y
-    (out + 2)$ = r.w
-    (out + 3)$ = r.h
+    state.rect_into(out, r)
 
 // Writes three values into out, "the line, the byte offset in it, whether it exists": **what back
 // and forward navigation remembers** (`api.js`'s `spotNow`). Stable numbers are assigned only on
@@ -579,10 +560,7 @@ fn kspage_web_panel(i: Sz, out: F32$@)
     if page == null || i < 0 || i >= page.panels.len
         return
     one: = page.panels.get(i)
-    out$ = one.rect.x
-    (out + 1)$ = one.rect.y
-    (out + 2)$ = one.rect.w
-    (out + 3)$ = one.rect.h
+    state.rect_into(out, one.rect)
     (out + 4)$ = one.width
     (out + 5)$ = F32::one.color
     state.color_into(out + 6, one.fill)
@@ -608,10 +586,7 @@ fn kspage_web_region(i: Sz, out: F32$@)
         r: = page.regions.get(i)
         spot = r.rect
         kind = state.arrange_no(r.kind)
-    out$ = spot.x
-    (out + 1)$ = spot.y
-    (out + 2)$ = spot.w
-    (out + 3)$ = spot.h
+    state.rect_into(out, spot)
     (out + 4)$ = kind
 
 // ---- The heading rows the window keeps in view ----
@@ -635,10 +610,7 @@ fn kspage_web_head(i: Sz, out: F32$@)
     got: = ask.head_band_at(page, i)
     if !got.found
         return
-    out$ = got.table.x
-    (out + 1)$ = got.table.y
-    (out + 2)$ = got.table.w
-    (out + 3)$ = got.table.h
+    state.rect_into(out, got.table)
     (out + 4)$ = got.row.x
     (out + 5)$ = got.row.y
     (out + 6)$ = got.row.w
@@ -664,10 +636,7 @@ fn kspage_web_head_cell(i: Sz, c: Sz, out: F32$@)
     got: = ask.head_cell_at(page, i, c)
     if !got.found
         return
-    out$ = got.rect.x
-    (out + 1)$ = got.rect.y
-    (out + 2)$ = got.rect.w
-    (out + 3)$ = got.rect.h
+    state.rect_into(out, got.rect)
     (out + 4)$ = F32::got.column
     (out + 5)$ =
         1.0 if filter.column_narrowed(sheet.over.filters, got.table, got.column) else 0.0
@@ -705,10 +674,7 @@ fn kspage_web_surface(i: Sz, out: F32$@)
     $spot: = Rect::{ .x = 0.0, .y = 0.0, .w = 0.0, .h = 0.0 }
     if page != null && i >= 0 && i < page.surfaces.len
         spot = page.surfaces.get(i).rect
-    out$ = spot.x
-    (out + 1)$ = spot.y
-    (out + 2)$ = spot.w
-    (out + 3)$ = spot.h
+    state.rect_into(out, spot)
 
 // Moves slide `from` to slide `to`'s position; 1 if moved. **The order is only the document's
 // order** (the slide list is a layout result), so the slide index becomes the block index first.
@@ -753,10 +719,7 @@ fn kspage_web_cell_frame(out: F32$@)
     if page == null
         return
     if r: = caret.cell_frame(page, ed.caret)
-        out$ = r.x
-        (out + 1)$ = r.y
-        (out + 2)$ = r.w
-        (out + 3)$ = r.h
+        state.rect_into(out, r)
         (out + 4)$ = 1.0
 
 // Writes four values into out for the cursor's position (x / y / height / whether it was found).

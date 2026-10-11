@@ -77,12 +77,15 @@ priv fn is_root_dir(dir: U8[], arena: Arena$@): Bool //<
     return fs.exists(fs.join(dir, "Makefile", arena)) &&
         fs.is_dir(fs.join(dir, "ksplc", arena))
 
+priv const stage1_rel: U8[] = "out/ksplc_stage1.exe" //<
+    //< the compiler make builds first, from the root
+
 priv fn compiler_under_test(top: U8[], arena: Arena$@): U8[] //<
     //< `out/ksplc_stage1.exe`, which CI replaces with `KANSO_CC_EXE`
     explicit: = sys.get_env("KANSO_CC_EXE").unwrap_or("")
     if explicit.len > 0
         return arena.dup_str(explicit)
-    return fs.join(top, "out/ksplc_stage1.exe", arena)
+    return fs.join(top, stage1_rel, arena)
 
 fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the published copy
     //<
@@ -118,7 +121,7 @@ fn make_argv(args: U8[][]): U8[][] //<
     $argv: = List<|U8[]|>.new(arena)
     argv.push(arena.dup_str(sys.get_env("KANSO_MAKE").unwrap_or("make")))
     argv.push("-o")
-    argv.push(fs.join("out", "ksplc_stage1.exe", arena))
+    argv.push(arena.dup_str(stage1_rel))
     for a in args
         argv.push(a)
     return argv.slice()

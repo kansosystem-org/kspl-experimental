@@ -13,9 +13,11 @@
 //   the remote → choose a driving mode (line tracking, light chasing) → from then on the car drives
 //                itself
 // ==========================================
+import "ksdb/log" as ksdblog
 import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/boards/freenove_4wd_pico/cap" as ccap
 import "ksos/boards/freenove_4wd_pico/face"
+import "ksos/boards/freenove_4wd_pico/head"
 import "ksos/boards/freenove_4wd_pico/motor"
 import "ksos/boards/freenove_4wd_pico/track"
 import "ksos/demo/common/pilot_policy" as policy
@@ -23,11 +25,11 @@ import "ksos/demo/rp2040/common/buzzer"
 import "ksos/demo/rp2040/common/console" as con
 import "ksos/demo/rp2040/common/records"
 import "ksos/demo/rp2040/common/store"
+import "ksos/drivers/mmio"
 import "ksos/drivers/rp2040/adc"
 import "ksos/drivers/rp2040/clocks"
 import "ksos/drivers/rp2040/gpio"
 import "ksos/drivers/rp2040/ir_nec" as ir
-import "ksos/drivers/rp2040/servo"
 import "ksos/drivers/rp2040/timer"
 import "ksos/drivers/rp2040/usb_cdc" as usb
 import "ksos/drivers/rp2040/ws2812"
@@ -237,11 +239,11 @@ priv fn mode_of_ws2812(): Ws2812_mode
 priv fn look_at(angle: I32) //< points the head
     //<
     //< Caution: **After pointing it, wait for the movement to settle**, or it measures mid-swing.
-    a: = I32::servo.clamp_angle(angle)
+    a: = head.clamp_angle(angle)
     if a == servo_angle
         return
     servo_angle = a
-    servo.set_angle(board.servo_head_pin, servo_angle)
+    head.set_angle(servo_angle)
     timer.delay_ms(100)
 
 // ---------------------------------------------------------
@@ -449,27 +451,31 @@ priv fn report(ln: con.Line$@)
     ln.u32(usb.tx_dropped())
     _sent: = ln.flush()
 
-priv fn bring_up() //< starts the peripherals
+priv fn bring_up(): Void!mmio.Driver_error //< starts the peripherals
     //<
+    //< A failure means the clocks or GPIO did not start: nothing else can run, or say so.
     //< Caution: **Call it inside the task.** `ksos_main` only starts the scheduler, and before this
     //< there is no running context.
-    clocks.init()
-    _ok: = gpio.init()
+    clocks.init()!
+    gpio.init()!
     gpio.init_out(board.buzzer_pin)
     gpio.clear(board.buzzer_pin)
     gpio.init_analog(board.light_sensor_left)
     gpio.init_analog(board.light_sensor_right)
-    _adc: = adc.init()
-    _mot: = motor.init()
-    servo.init(board.servo_head_pin)
+    // The rest are parts the car runs without: a failure leaves that part out, and the report line
+    // shows which (a still face, no LEDs, no console).
+    adc.init() catch {}
+    motor.init() catch {}
+    head.init()
     track.init()
     ir.init(board.ir_receiver)
-    _ws: = ws2812.init(board.ws2812_pin)
-    _face: = face.init()
-    _usb: = usb.init()
+    ws2812.init(board.ws2812_pin) catch {}
+    face.init() catch {}
+    usb.init() catch {}
 
 fn car_task(_arg: Void$@): Void
-    bring_up()
+    bring_up() catch
+        return
     $ln: = con.Line.new()
     abuf: = U8$[]::arena_buf
     $arena: = Arena.from_buffer(Void$@::abuf.ptr, abuf.len)
@@ -490,7 +496,12 @@ fn car_task(_arg: Void$@): Void
         ln.str("[car] records unavailable - line mode will refuse")
         _sent: = ln.flush()
     else
-        kept: = store.stored_policy(U8$[]::policy_buf)
+        kept: = store.stored_policy(U8$[]::policy_buf) catch e
+            if e == ksdblog.Ksdb_error.too_small
+                ln.reset()
+                ln.str("[car] stored policy is larger than its buffer - line mode will refuse")
+                _sent: = ln.flush()
+            fallback ""
         if kept.len > 0
             pol = policy.load(kept, arena@) catch
                 ln.reset()
@@ -510,7 +521,7 @@ fn car_task(_arg: Void$@): Void
         ln.str(" - nothing answered on 0x70-0x77, face keys will refuse")
     _said2: = ln.flush()
 
-    servo.set_angle(board.servo_head_pin, servo_angle)
+    head.set_angle(servo_angle)
     timer.delay_ms(100)
 
     for

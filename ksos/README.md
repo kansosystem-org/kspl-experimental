@@ -88,6 +88,8 @@ The table maps each RTOS word to everyday words and to the name in the code.
 | `ksos/tests/` | The unit tests, the USB descriptors read as text, elf2uf2 and the UART checks |
 | [`ksos/docs/`](docs/) | The design, the board's facts, the bring-up and the plan ("Further reading" below) |
 
+**A folder imports only those below it**: `kernel` < `drivers` < `boards` < `demo`, with `net` beside `drivers` (it needs neither the kernel nor a register) and used only by `demo`. A driver that imports a board builds, but then serves that board alone. `make test-conventions` holds the order.
+
 ## Reading order
 
 Read from the bottom of the dependencies up, so each file's prerequisites come first.

@@ -111,7 +111,9 @@ priv fn decl_of(item: Ast_node$@): Ast_node$@ //<
     //<
     //< Not `unwrap_top_level`, which on a raw tree reads `visibility` as the declaration.
     $cur: = item
-    for cur != null && (cur.kind_id == .k_top_level_item || cur.kind_id == .k_decl_top)
+    for cur != null &&
+        (cur.kind_id == .k_top_level_item || cur.kind_id == .k_decl_top ||
+        cur.kind_id == .k_decl_extern)
         $next: Ast_node$@ = null
         for c in cur.children
             if c.kind_id != .k_keyword && c.kind_id != .k_literal && c.kind_id != .k_attribute &&
@@ -318,6 +320,26 @@ priv fn add_impl(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //
             doc_of(src, n.loc.offset, body_brace(src, n)))
     methods_into(lines, owner, n, src, true, held.attrs)
 
+priv fn add_extern(lines: List<|Line|>$@, outer: U8[], n: Ast_node$@, src: U8[]) //<
+    //< The published items of an `extern "C"` block
+    //<
+    //< **A `pub` C function reaches every package** like any other `pub`, so the record holds it.
+    //< The block's own attributes (outer) go into each key, as an `impl`'s do (`methods_into`).
+    for e in n.children
+        if e.kind_id != .k_decl_extern
+            continue
+        d: = decl_of(e)
+        vis: = vis_of(e, src)
+        if d == null || !published(vis)
+            continue
+        attrs: = joined(outer, attrs_of(e, src))
+        if d.kind_id == .k_decl_fn_proto
+            add_fn(lines, "", Held::{ .attrs = attrs, .vis = vis }, d, src)
+        else
+            add(lines, key_of("", name_of(d), attrs),
+                joined(vis, flat(src, d.loc.offset, end_of(d))),
+                doc_of(src, d.loc.offset, body_brace(src, d)))
+
 priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@) //<
     //< It adds one top-level entry to the record
     n: = decl_of(item)
@@ -326,6 +348,9 @@ priv fn collect_item(item: Ast_node$@, src: U8[], lines: List<|Line|>$@) //<
     held: = Held::{ .attrs = attrs_of(item, src), .vis = vis_of(item, src) }
     if n.kind_id == .k_decl_impl
         add_impl(lines, held, n, src)
+        return
+    if n.kind_id == .k_decl_extern_block
+        add_extern(lines, held.attrs, n, src)
         return
     if !published(held.vis)
         return

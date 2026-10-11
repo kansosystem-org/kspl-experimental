@@ -307,25 +307,24 @@ impl U8[]
                     cp: = r.hex4(i + 1)
                     if cp < 0
                         throw .invalid_format
-                    if cp >= 0
-                        $code: I32 = cp
-                        $adv: I32 = 5
-                        // Only a low surrogate right after a high one combines into one code point.
-                        if code >= 0xD800 && code <= 0xDBFF && i + 6 < r.len &&
-                            (r.ptr + i + 5)$ == '\\' && (r.ptr + i + 6)$ == 'u'
-                            lo: = r.hex4(i + 7)
-                            if lo >= 0xDC00 && lo <= 0xDFFF
-                                code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
-                                adv = 11
-                        // Caution: **Do not let an unpaired surrogate through.** Copied to UTF-8 it
-                        // makes an invalid three-byte sequence that looks readable and fails only
-                        // at a later check or in another language's string type. It is treated the
-                        // same as a broken `\u`.
-                        if code >= 0xD800 && code <= 0xDFFF
-                            throw .invalid_format
-                        w += write_utf8(buf_ptr + w, code)
-                        i += adv
-                        continue
+                    $code: I32 = cp
+                    $adv: I32 = 5
+                    // Only a low surrogate right after a high one combines into one code point.
+                    if code >= 0xD800 && code <= 0xDBFF && i + 6 < r.len &&
+                        (r.ptr + i + 5)$ == '\\' && (r.ptr + i + 6)$ == 'u'
+                        lo: = r.hex4(i + 7)
+                        if lo >= 0xDC00 && lo <= 0xDFFF
+                            code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
+                            adv = 11
+                    // Caution: **Do not let an unpaired surrogate through.** Copied to UTF-8 it
+                    // makes an invalid three-byte sequence that looks readable and fails only
+                    // at a later check or in another language's string type. It is treated the
+                    // same as a broken `\u`.
+                    if code >= 0xD800 && code <= 0xDFFF
+                        throw .invalid_format
+                    w += write_utf8(buf_ptr + w, code)
+                    i += adv
+                    continue
                 if ec.is_alnum() && ec != 'n' && ec != 'r' && ec != 't' && ec != 'b' && ec != 'f'
                     throw .invalid_format
                 (buf_ptr + w)$ =

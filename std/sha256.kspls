@@ -3,15 +3,16 @@
 //< It uses only bit operations and no OS-dependent library. Input is fed in pieces through
 //< `update` and closed at the end, so a file larger than memory needs no buffer of its own.
 import "std/bytes"
-import "std/chars" // classifying one character
+import "std/chars" // `sub`
 import "std/strfmt" // the hex string (`to_hex_lower`)
 
 priv const block_size: Sz = 64 // 512bit
 pub const digest_size: Sz = 32 //< the digest is always this many bytes (256 bits)
+priv const length_at: Sz = block_size - 8 // the last block's tail holds the message's bit length
 
 pub struct Sha256 //< a running SHA-256, fed in pieces and closed at the end
     priv h: U32[8]
-    priv buf: U8[64] //< holds the trailing bytes that do not yet fill a block
+    priv buf: U8[block_size] //< holds the trailing bytes that do not yet fill a block
     priv buf_len: Sz //< how many bytes in buf are valid (0..63)
     priv total_len: U64 //< every byte update() has taken so far (for the padding's length field)
 
@@ -126,35 +127,35 @@ impl Sha256
             r.buf_len += 1
             pos += 1
 
-    pub fn finalize(r: Self$@): U8[32] //< closes the hash and returns the digest
+    pub fn finalize(r: Self$@): U8[digest_size] //< closes the hash and returns the digest
         bit_len: = r.total_len * 8U64
 
         r.buf[r.buf_len] = 0x80U8
         r.buf_len += 1
 
         // If no room is left for the 8-byte length field, zero-fill and compress this block first
-        if r.buf_len > 56
+        if r.buf_len > length_at
             for r.buf_len < block_size
                 r.buf[r.buf_len] = 0U8
                 r.buf_len += 1
             r.compress(U8$[]::r.buf)
             r.buf_len = 0
-        for r.buf_len < 56
+        for r.buf_len < length_at
             r.buf[r.buf_len] = 0U8
             r.buf_len += 1
 
         // Write the whole input's length in bits into the last 8 bytes, big endian
         buf_slice: = U8$[]::r.buf
-        buf_slice.put_u64_be(56, bit_len)
+        buf_slice.put_u64_be(length_at, bit_len)
         r.compress(U8$[]::r.buf)
 
-        out: U8[32] = ::{}
+        out: U8[digest_size] = ::{}
         out_slice: = U8$[]::out
         for i in Range.asc(8)
             out_slice.put_u32_be(i * 4, r.h[i])
         return out
 
-pub fn hash(data: U8[]): U8[32] //< the digest of all of `data`, in one call
+pub fn hash(data: U8[]): U8[digest_size] //< the digest of all of `data`, in one call
     $hasher: = Sha256.new()
     hasher.update(data)
     return hasher.finalize()
@@ -164,8 +165,8 @@ pub fn hmac( //< RFC 2104's HMAC-SHA256
     //< A key longer than the block size (64 bytes) is hashed first, as RFC 2104 requires.
     key: U8[], //< the shared secret, of any length
     data: U8[], //< the message to sign
-): U8[32] //< the 32-byte MAC, by value
-    $key_block: U8[64] = ::{}
+): U8[digest_size] //< the 32-byte MAC, by value
+    $key_block: U8[block_size] = ::{}
     if key.len > block_size
         digest: = hash(key)
         for i in Range.asc(digest_size)
@@ -174,8 +175,8 @@ pub fn hmac( //< RFC 2104's HMAC-SHA256
         for i in Range.asc(key.len)
             key_block[i] = key[i]
 
-    $ipad: U8[64] = ::{}
-    $opad: U8[64] = ::{}
+    $ipad: U8[block_size] = ::{}
+    $opad: U8[block_size] = ::{}
     for i in Range.asc(block_size)
         ipad[i] = key_block[i] ^ 0x36U8
         opad[i] = key_block[i] ^ 0x5cU8
@@ -217,7 +218,7 @@ pub fn write_hex( //< writes the digest as lowercase hex, without allocating
     //< Use it for log output and for comparisons in a test.
     //< Caution: **Do not take a `Writer`.** Importing `io` would make one digest pay for the whole
     //< string and IO library, many times the size of this file.
-    digest: U8[32], //< what `finalize` or `hash` returned
+    digest: U8[digest_size], //< what `finalize` or `hash` returned
     out: U8$[], //< the destination, whose leading `hex_len` bytes are written
 )
     assert(out.len >= hex_len, "sha256.write_hex: out is shorter than hex_len")

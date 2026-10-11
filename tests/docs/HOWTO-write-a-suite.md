@@ -27,7 +27,7 @@ Put a test next to what it checks. A test that looks inside one package lives in
 | Only the compiler, from outside | ksplc's folder ([ksplc](../../ksplc/README.md)) | `make test-<name>` |
 | More than one package | `tests/suite/` | `make test-<name>` |
 
-"13.1 A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../../docs/DESIGN.md) lists the packages and why.
+"A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../../docs/DESIGN.md) lists the packages and why.
 
 Caution: **After adding a test, add its import and call to that package's `<package>/tests/all.kspls`.** `make debug` cannot see a file no entry point calls, so forgetting this stays green.
 
@@ -35,12 +35,18 @@ Caution: **After adding a test, add its import and call to that package's `<pack
 
 ## Adding a suite, step by step
 
-These steps add a suite under `tests/suite/`.
+These steps add a suite under `tests/suite/`. A suite of the compiler's own goes under `ksplc/tests/suite/` instead, registered in `ksplc/Makefile`; its steps are "A suite" in [`docs/HOWTO-add-a-gate.md`](../../docs/HOWTO-add-a-gate.md).
 
-1. **Write the suite** as `tests/suite/<name>_test.kspls`, starting from the program in "The manners for writing a suite" below.
-2. **Register it in [`mk/test.mk`](../../mk/test.mk)**: add a line `suite_<name> := suite/<name>_test.kspls`, and add `<name>` to `SUITES`, where the comment above it says (longest first). `make` stops at start-up when the two disagree.
-3. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
-4. **Run it**: `make test-<name>`. You should see one line per check and a closing verdict:
+1. **Write the suite** as `tests/suite/<stem>_test.kspls`, starting from the program in "The manners for writing a suite" below. A suite name with a `-` takes `_` in the file name (`lsp-tree` is `lsp_tree_test.kspls`).
+2. **Register it in [`mk/test.mk`](../../mk/test.mk)**: add a line `suite_<name> := suite/<stem>_test.kspls`, and add `<name>` to one list:
+   * `SUITES`, longest CPU time first (`make test-suites` prints each suite's time), for most suites;
+   * `LINUX_SUITES`, for a suite whose tool only Linux's image holds; it then needs a gate of its own ("A gate" in [`docs/HOWTO-add-a-gate.md`](../../docs/HOWTO-add-a-gate.md)).
+
+   A name in `SUITES` may also go into `SUITES_TEXT`, when its answer cannot differ by platform (it then runs on Linux alone), or `SUITES_B`, to balance CI's two halves. `make` stops at start-up, saying which, when a suite file has no `suite_<name>`, a name stands in no list, or a list names an unknown suite.
+3. **Name it in the platform table**, "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md), usually in a row's bracketed list. `make test-conventions` fails with "the platform table names every gate and suite CI runs" until it is there.
+4. **A new module of the conventions suite** (`tests/support/conventions_<x>.kspls`) is called from `main` in `tests/suite/conventions_test.kspls`, or from a module it already calls; one nothing calls checks nothing.
+5. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
+6. **Run it**: `make test-<name>`, then `make test-conventions`. You should see one line per check and a closing verdict:
 
    ```
    pass keywords: there is no unexpected line
@@ -75,7 +81,7 @@ Each row below is one manner: what to use, and what goes wrong without it.
 | :-- | :-- | :-- |
 | End the suite | `return ksplc_harness.finish()` at the end of `main` | **The exit code carries the verdict.** The `RESULT:` line is for people and the log; the Makefile greps it as a marker for some targets only |
 | Report a case that could not be confirmed | `verdict.skip_check()` | Written as `check(.., true, ..)`, a case that confirmed nothing prints the same line as one that confirmed something, and the log cannot tell them apart |
-| Get a folder to write in | `harness.sandbox("<suite name>")` | It empties `out/tmp/<suite name>` and returns it, so the last run's leftovers do not mix into this run's verdict |
+| Get a folder to write in | `harness.sandbox("<suite name>")` | It deletes the last runs' `out/tmp/<suite name>_…` folders and returns a fresh one, so their leftovers do not mix into this run's verdict |
 | Read a file the compiler generated | `ksplc_harness.read_generated` | ksplc writes in text mode, so on Windows the newlines become `\r\n` |
 | Read a file the repository holds | `harness.read_under_root` | `.gitattributes` pins the repository's files to LF, so nothing needs converting |
 | Take one line out of a child's output | `htext.line_after()` | A line cut at `'\n'` keeps a trailing `\r` on Windows (below) |

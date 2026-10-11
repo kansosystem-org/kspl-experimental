@@ -29,9 +29,11 @@ fn slice_ident(): U8[] //< the last word of `slice_fqn` (`Slice`)
     //< **This is the identifier put into the AST.**
     //< Caution: **Do not write the bare name directly.** That breaks "keep it in one place" above:
     //< after a rename, the desugaring would still insert the old name.
-    if at: = slice_fqn.rfind_char('.')
-        return slice_fqn.sub_from(at + 1)
-    return slice_fqn
+    return slice_fqn.fqn_last()
+
+const unknown_type_name: U8[] = "Unknown" //< the name of a type not yet known
+    //<
+    //< The parser writes it for an omitted type; Env registers it at `Builtin_type_id.unknown`.
 
 const option_fqn: U8[] = "std.lang.Option" //<
     //< The FQN of a value that may be absent (`T?`, the enum `Option` in `std/lang`)
@@ -41,9 +43,7 @@ const option_fqn: U8[] = "std.lang.Option" //<
 
 fn option_ident(): U8[] //<
     //< the last word of `option_fqn` (`Option`), the identifier put into the AST
-    if at: = option_fqn.rfind_char('.')
-        return option_fqn.sub_from(at + 1)
-    return option_fqn
+    return option_fqn.fqn_last()
 
 const fmt_method_char: U8[] = "fmt_char" //<
     //< The method names that the format spec `\{value:SPEC\}` desugars to
@@ -128,16 +128,19 @@ struct Compiler_config
     run_lint_checks: Bool //<
         //< Whether to run the lint analysis
         //<
-        //< It is true under `is_lint`, or under any `##lint(CODE = error)` or `--lint=CODE=error`.
-        //< Tied to `is_lint` only, a check raised to an error that returns early on `!is_lint`
-        //< never runs in an ordinary build (docs/DESIGN.md Principle 5). report_diagnostic decides
-        //< what is shown, from `is_lint` and the per-code level.
+        //< True under `is_lint` or any `##lint(CODE = error)` / `--lint=CODE=error`, so a check
+        //< raised to an error runs in an ordinary build too (docs/DESIGN.md Principle 5).
+        //< Caution: **Each analysis starts it again** from `is_lint` and `cli_raises_lint`
+        //< (`pipeline.kspls`): the editor's long-lived worker would otherwise keep one document's
+        //< `##lint(CODE = error)` for every document after it.
+    cli_raises_lint: Bool //<
+        //< whether the command line raised a code to an error (`--lint=CODE=error`)
     recover_syntax: Bool //<
         //< Whether a file that fails to parse is read again with the recovery rules enabled.
         //<
         //< **Only the editor sets it.** Set on a compile, input that should be rejected would be
         //< accepted (the grounds are "Only the editor's parse recovers from a syntax error" in
-        //< `../docs/DESIGN.md`).
+        //< `../docs/DESIGN-tools.md`).
     is_freestanding: Bool
     machine: U8[] //<
         //< The machine `--machine=` named; empty is the one ksplc runs on
@@ -425,6 +428,36 @@ impl U8[]
         //< also answers where it says nothing, and they differ on exactly the case that matters
         //< (`std/io`).
         return !r.ends_with(source_ext)
+    fn fqn_head(r: U8[]): U8[] //< what comes before a dotted name's first dot, or all of it
+        return r.sub(0, r.find_char('.').unwrap_or(r.len))
+
+    fn fqn_last(r: U8[]): U8[] //< what follows a dotted name's last dot, or all of it
+        if dot: = r.rfind_char('.')
+            return r.sub_from(dot + 1)
+        return r
+
+    // An operator's class, by its text. **Every layer asks here** (sema, the constant folder, both
+    // backends), so a class never means two sets of operators.
+    fn is_comparison_op(r: U8[]): Bool //< `==` `!=` `<` `<=` `>` `>=`
+        return r.is_equality_op() || r.equals("<") || r.equals("<=") || r.equals(">") ||
+            r.equals(">=")
+    fn is_equality_op(r: U8[]): Bool //< `==` `!=`
+        return r.equals("==") || r.equals("!=")
+    fn is_shift_op(r: U8[]): Bool //< `<<` `>>`
+        return r.equals("<<") || r.equals(">>")
+    fn is_div_op(r: U8[]): Bool //< `/` `%`
+        return r.equals("/") || r.equals("%")
+    fn is_bitwise_op(r: U8[]): Bool //< `&` `|` `^`
+        return r.equals("&") || r.equals("|") || r.equals("^")
+    fn is_additive_op(r: U8[]): Bool //< `+` `-`
+        return r.equals("+") || r.equals("-")
+
+    fn is_one_of(r: U8[], words: U8[][]): Bool //< whether it equals one of `words`
+        for w in words
+            if r.equals(w)
+                return true
+        return false
+
     fn strip_file_uri(r: U8[]): U8[] //<
         //< A `file://` URI as a local path (the LSP's document URI; anything else unchanged)
         return r.strip_prefix(file_uri_scheme)

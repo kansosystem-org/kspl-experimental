@@ -14,7 +14,7 @@ import "std/chars"
 import "std/mem" { Arena }
 import "std/net"
 import "std/str" { Str_builder }
-import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/strnum" // `parse_size`
 import "std/sys"
 
 pub enum Http_error //< why a message could not be read, or cannot be trusted
@@ -80,18 +80,15 @@ priv fn check_version(v: U8[]): Void!Http_error //<
     if !v[5].is_digit() || v[6] != '.' || !v[7].is_digit()
         throw .unsupported_version
 
-priv fn parse_digits(s: U8[]): Sz!Http_error //< it accepts only `1*DIGIT`
+priv const sz_max: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the largest `Sz`
+
+priv fn parse_digits(s: U8[]): Sz!Http_error //< it accepts only `1*DIGIT`, up to what `Sz` holds
     //<
-    //< Caution: **Do not pass it directly to parse_size**, which reads `5abc` as 5 and accepts
-    //< `+5`; accepting what the proxy in front refuses makes the body boundaries disagree.
-    if s.len == 0
-        throw .invalid_header
-    for i in Range.asc(s.len)
-        if !s[i].is_digit()
-            throw .invalid_header
-    // parse_size refuses 19 or more digits as an overflow, and what this target's `Sz` cannot hold.
-    return s.parse_size() catch
-        throw .invalid_header
+    //< Caution: **Do not use parse_size**, which reads `5abc` as 5 and accepts `+5`; accepting what
+    //< the proxy in front refuses makes the body boundaries disagree.
+    if n: = s.to_count(sz_max)
+        return n
+    throw .invalid_header
 
 // ---------------------------------------------------------
 // The headers (a linked list with case-insensitive names; the order is kept, and several headers
@@ -115,10 +112,7 @@ impl Header
         return .none
 
     priv fn has(r: Self$@, name: U8[]): Bool
-        $found: = false
-        if _v: = r.find(name)
-            found = true
-        return found
+        return r.find(name).is_some()
 
 priv fn get_content_length(head: Header$@): Sz?!Http_error //<
     //< Parses the Content-Length header's value; none where it is absent
@@ -470,7 +464,7 @@ pub fn read_request( //< reads one whole request from a connection and splits it
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
     timeout_ms: I32, //< how long the whole request may take to arrive; past it `.io(.timed_out)`
 ): Request$@!Http_error //< the request, held in `arena`; fails if the connection closes first
-    deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+    deadline: = sys.deadline_after_ms(timeout_ms)
     $b: = Str_builder.new()
     defer b.free()
     h: = read_head(stream, b@, arena, max_body, deadline)!
@@ -485,7 +479,7 @@ pub fn read_response( //< reads one whole response from a connection and splits 
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
     timeout_ms: I32, //< how long the whole response may take to arrive; past it `.io(.timed_out)`
 ): Response$@!Http_error //< the response, held in `arena`; fails if the connection closes first
-    deadline: = sys.mono_us() + I64::timeout_ms * 1000I64
+    deadline: = sys.deadline_after_ms(timeout_ms)
     $b: = Str_builder.new()
     defer b.free()
     h: = read_head(stream, b@, arena, max_body, deadline)!
@@ -681,10 +675,9 @@ pub fn format_response_head( //< builds only a response's head, for a body sent 
     b.s("\r\n")
 
 priv fn closing(head: Header$@): Bool //< whether it says `Connection: close`
-    $said: = false
     if v: = head.find("Connection")
-        said = v.equals_ignore_case("close")
-    return said
+        return v.equals_ignore_case("close")
+    return false
 
 pub fn write_response( //< builds one whole response and sends every byte of it
     stream: net.Tcp_stream$@, //< the connection to write to, which blocks

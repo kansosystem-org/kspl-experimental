@@ -1,3 +1,4 @@
+import "ksdb/log" as ksdblog
 import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/boards/freenove_4wd_pico/motor"
 import "ksos/boards/freenove_4wd_pico/range"
@@ -43,13 +44,13 @@ const fetch_tries: U32 = 8
 $heap_buf: U8[4096] // used by Str_builder (building the request)
 $resp_buf: U8[4096] // the whole downloaded response (the header plus the policy)
 
-fn stored_policy(): U8[] //< reads the policy saved in the record
+fn stored_policy(): U8[]!ksdblog.Ksdb_error //< reads the policy saved in the record
     //<
-    //< If it could be read, it returns its body.
+    //< It returns its body, or fails as store.stored_policy does.
     //< **The result points into resp_buf**, which the weights point into (see policy.load): leave
     //< it alone while it runs. The policy comes from the link **or** the record, never both, so the
     //< buffer is shared.
-    return store.stored_policy(U8$[]::resp_buf)
+    return store.stored_policy(U8$[]::resp_buf)!
 
 fn fetch_policy(ln: con.Line$@, arena: Arena$@): U8[] //< requests the policy once
     //<
@@ -100,24 +101,24 @@ fn fetch_policy(ln: con.Line$@, arena: Arena$@): U8[] //< requests the policy on
 fn bring_up(): Bool //< starts everything from the clocks to the motors
     //<
     //< If anything fails to start, it reports it by the number of beeps and returns false.
-    if !boot.clocks_and_gpio()
+    boot.clocks_and_gpio() catch
         return false // silent; see `boot.clocks_and_gpio`
     track.init()
     range.init()
     // IR is permanently fitted, but it still has to be set up as an input.
     ir.init(board.ir_receiver)
     gpio.init_analog(board.battery_pin)
-    if !adc.init()
+    adc.init() catch
         boot.beep(4)
         return false
     // Caution: **The motor's initialization must succeed**, or every command is ignored ("connected
     // but does not move"). init leaves the wheels stopped.
-    if !motor.init()
+    motor.init() catch
         boot.beep(5)
         return false
     // **The LED is set up after the motors and before USB**: on battery alone it is the only
     // window. It carries on without it.
-    if !status.init(board.ws2812_pin, board.ws2812_level)
+    status.init(board.ws2812_pin, board.ws2812_level) catch
         boot.beep(6)
     heap.heap_init(U8$[]::heap_buf)
     return boot.usb_up()

@@ -39,8 +39,8 @@ extern "C"
 priv $heap_current: Sz = 0
 priv $heap_peak: Sz = 0
 priv $heap_total: Sz = 0
-const alloc_header_size: Sz = 16 //< the header size, which keeps C's 16-byte alignment
-const max_align: Sz = 8 //< the alignment of every address returned
+priv const alloc_header_size: Sz = 16 //< the header size, which keeps C's 16-byte alignment
+priv const max_align: Sz = 8 //< the alignment of every address returned
     //<
     //< 8 meets the requirements of `Sz`, a pointer and F64 on both 32-bit and 64-bit.
 
@@ -51,7 +51,7 @@ priv fn align_pad(ptr: U8$@): Sz //<
     //< receiver aligns the start of a buffer it is given").
     rem: = (Sz::ptr) % max_align
     return 0 if rem == 0 else max_align - rem
-const alloc_owner_offset: Sz = sizeof(Sz) //<
+priv const alloc_owner_offset: Sz = sizeof(Sz) //<
     //< The offset in the header where the block records its own address
     //<
     //< **`dealloc` accepts only the exact pointer `alloc` returned.** The address sits in the
@@ -459,7 +459,8 @@ pub struct Arena //< a bump allocator: everything it allocated is freed at once
         //<
         //< from_buffer() sets 0: running out panics without calling malloc, and free() does nothing
         //< (the chunk and the Arena are the caller's memory).
-const arena_initial_chunk: Sz = 256 * 1024 //< the first chunk's capacity; later ones grow from it
+priv const arena_initial_chunk: Sz = 256 * 1024 //<
+    //< the first chunk's capacity; later ones grow from it
     //<
     //< A smaller default_chunk_size takes precedence.
 
@@ -468,6 +469,19 @@ pub struct Arena_headroom //< how far away the next chunk is, and how big it wil
     //< Caution: **Do not return the two separately.** One alone does not determine the step.
     pub free: Sz //< how many bytes fit before a new chunk is allocated
     pub step: Sz //< how many bytes that new chunk will have
+
+priv fn free_chunks(from: Arena_chunk$@, until: Arena_chunk$@): Sz //<
+    //< Frees the chunks from `from` up to `until` (not freed), and returns the bytes they used
+    //<
+    //< Each chunk is one allocation, its header included.
+    $used: Sz = 0
+    $curr: = from
+    for curr != until && curr != null
+        next_chunk: = curr.next
+        used += curr.used
+        dealloc(Void$@::curr)
+        curr = next_chunk
+    return used
 
 pub struct Arena_state //< a mark to rewind the arena to
     priv chunk: Arena_chunk$@
@@ -518,8 +532,7 @@ impl Arena
     ): Void$@
         if size < 0
             panic("Arena alloc size must be non-negative")
-        // Round up to a multiple of 8 bytes
-        alloc_size: = ((size + 7) / 8) * 8
+        alloc_size: = ((size + max_align - 1) / max_align) * max_align
         // Caution: **Refuse a size the rounding wrapped.** Negative, it passes the room check below
         // and moves `used` backwards, so the block handed out overlaps live ones (`Sz` is 32 bits
         // on some targets, where a size computed from input reaches it).
@@ -556,12 +569,8 @@ impl Arena
         r: Self$@,
         state: Arena_state, //< what `save()` returned
     )
-        $curr: = r.head
         // Free the chunks allocated after the save point
-        for curr != state.chunk && curr != null
-            next_chunk: = curr.next
-            dealloc(Void$@::curr)
-            curr = next_chunk
+        _freed: = free_chunks(r.head, state.chunk)
         r.head = state.chunk
         if r.head != null
             r.head.used = state.used
@@ -576,13 +585,7 @@ impl Arena
             if r.head != null
                 r.head.used = 0 // a fixed buffer stops here; its one chunk belongs to the caller
             return
-        $need: Sz = 0
-        $curr: = r.head
-        for curr != null
-            next_chunk: = curr.next
-            need += curr.used
-            dealloc(Void$@::curr)
-            curr = next_chunk
+        need: = free_chunks(r.head, null)
         one: = Arena_chunk$@::alloc(arena_chunk_header_size + need)
         one.cap = need
         one.used = 0
@@ -598,7 +601,7 @@ impl Arena
         (ptr + src.len)$ = 0U8
         return U8$[]::{ .ptr = ptr, .len = src.len }
 
-    pub fn get_total_allocated(r: Self$@): Sz //< every byte in the chunks, used or not
+    pub fn get_total_allocated(r: Self@): Sz //< every byte in the chunks, used or not
         $total: Sz = 0
         $curr: = r.head
         for curr != null
@@ -606,7 +609,7 @@ impl Arena
             curr = curr.next
         return total
 
-    pub fn get_total_used(r: Self$@): Sz //< every byte allocated so far
+    pub fn get_total_used(r: Self@): Sz //< every byte allocated so far
         $total: Sz = 0
         $curr: = r.head
         for curr != null
@@ -617,14 +620,9 @@ impl Arena
     pub fn free(r: Self$@) //< frees every chunk, and the arena itself
         if r.default_chunk_size == 0
             return // from_buffer(): both the chunk and the Arena itself are the caller's static memory
-        $curr: = r.head
-        for curr != null
-            next_chunk: = curr.next
-            // One allocation per chunk
-            dealloc(Void$@::curr)
-            curr = next_chunk
+        _freed: = free_chunks(r.head, null)
         dealloc(Void$@::r)
-    pub fn remaining(r: Self$@): Sz //< the unused bytes summed over every chunk
+    pub fn remaining(r: Self@): Sz //< the unused bytes summed over every chunk
         //<
         //< A fixed buffer that runs out panics, so a caller can check here first.
         return r.get_total_allocated() - r.get_total_used()

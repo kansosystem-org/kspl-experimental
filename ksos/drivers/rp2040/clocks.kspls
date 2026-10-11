@@ -91,7 +91,8 @@ const watchdog_tick_enable: U32 = 1U32 << 9
 // Caution: Keep the order. Set the dividers before powering the VCO, and power the postdiv up
 // after the lock.
 // ==========================================
-priv fn pll_start(base: U32, refdiv: U32, fbdiv: U32, postdiv1: U32, postdiv2: U32): Bool
+priv fn pll_start(base: U32, refdiv: U32, fbdiv: U32, postdiv1: U32, postdiv2: U32):
+    Void!mmio.Driver_error
     cs_addr: = base
     pwr_addr: = base + 0x04
     fbdiv_addr: = base + 0x08
@@ -103,31 +104,30 @@ priv fn pll_start(base: U32, refdiv: U32, fbdiv: U32, postdiv1: U32, postdiv2: U
     // Power up the PLL and the VCO (PD/VCOPD are "power down" bits, so write 0).
     pwr: = mmio.read32(pwr_addr)
     mmio.write32(pwr_addr, pwr & ~(pll_pwr_pd | pll_pwr_vcopd))
-    if !mmio.poll(cs_addr, pll_cs_lock, true)
-        return false
+    mmio.wait(cs_addr, pll_cs_lock, true)!
 
     mmio.write32(prim_addr, (postdiv1 << 16) | (postdiv2 << 12))
     pwr2: = mmio.read32(pwr_addr)
     mmio.write32(pwr_addr, pwr2 & ~pll_pwr_postdivpd)
-    return true
 
-priv fn switch_glitchless(ctrl: U32, selected: U32, div: U32, src: U32, auxsrc: U32): Bool //<
-    //< Switches a clock that has a glitchless mux (clk_ref / clk_sys)
-    //<
-    //< Caution: When moving to the aux source, **set SRC to 0 first** and then write AUXSRC, so the
-    //< aux mux's switching glitch does not reach downstream. SELECTED (one-hot) shows it finished.
+priv fn switch_glitchless(ctrl: U32, selected: U32, div: U32, src: U32, auxsrc: U32):
+    Void!mmio.Driver_error //<
+        //< Switches a clock that has a glitchless mux (clk_ref / clk_sys)
+        //<
+        //< Caution: When moving to the aux source, **set SRC to 0 first** and then write AUXSRC, so
+        //< the aux mux's switching glitch does not reach downstream. SELECTED (one-hot) shows it
+        //< finished.
     mmio.write32(div, div_by_one)
 
     cur: = mmio.read32(ctrl)
     mmio.write32(ctrl, cur & ~ctrl_src_bits)
-    if !mmio.poll(selected, 1U32, true)
-        return false
+    mmio.wait(selected, 1U32, true)!
 
     c1: = mmio.read32(ctrl)
     mmio.write32(ctrl, (c1 & ~ctrl_auxsrc_bits) | (auxsrc << 5))
     c2: = mmio.read32(ctrl)
     mmio.write32(ctrl, (c2 & ~ctrl_src_bits) | src)
-    return mmio.poll(selected, 1U32 << src, true)
+    mmio.wait(selected, 1U32 << src, true)!
 
 priv fn switch_aux_only(ctrl: U32, div: U32, divisor: U32, auxsrc: U32) //<
     //< Switches a clock that has no glitchless mux (clk_peri / clk_usb / clk_adc / clk_rtc)
@@ -149,7 +149,7 @@ priv fn switch_aux_only(ctrl: U32, div: U32, divisor: U32, auxsrc: U32) //<
 // start-up, before any other driver**.
 // It is not idempotent: called twice, clk_sys drops to clk_ref (12MHz) for a while.
 // ==========================================
-fn init(): Bool
+fn init(): Void!mmio.Driver_error //< runs clk_sys at 125MHz, and clk_usb / clk_adc at 48MHz
     // Stop the recovery mechanism (resus), or it takes clk_sys's switch for a fault and returns to
     // the ROSC.
     mmio.write32(clk_sys_resus_ctrl, 0U32)
@@ -159,35 +159,27 @@ fn init(): Bool
     mmio.write32(xosc_startup, xosc_startup_delay)
     ctrl: = mmio.read32(xosc_ctrl)
     mmio.write32(xosc_ctrl, ctrl | xosc_enable)
-    if !mmio.poll(xosc_status, xosc_stable, true)
-        return false
+    mmio.wait(xosc_status, xosc_stable, true)!
 
     // --- before touching the PLLs, move both clocks to a source that does not depend on them ---
     // Resetting a PLL while clk_sys still runs from PLL_SYS stops the CPU's clock.
     s: = mmio.read32(clk_sys_ctrl)
     mmio.write32(clk_sys_ctrl, s & ~ctrl_src_bits) // clk_sys ← clk_ref
-    if !mmio.poll(clk_sys_selected, 1U32, true)
-        return false
+    mmio.wait(clk_sys_selected, 1U32, true)!
     r: = mmio.read32(clk_ref_ctrl)
     mmio.write32(clk_ref_ctrl, r & ~ctrl_src_bits) // clk_ref ← ROSC
-    if !mmio.poll(clk_ref_selected, 1U32, true)
-        return false
+    mmio.wait(clk_ref_selected, 1U32, true)!
 
     // --- the two PLLs ---
     // 12MHz * 125 = 1500MHz, /6/2 = 125MHz. 12MHz * 100 = 1200MHz, /5/5 = 48MHz.
-    if !resets.reset_then_unreset(reset_pll_sys | reset_pll_usb)
-        return false
-    if !pll_start(pll_sys_base, 1, 125, 6, 2)
-        return false
-    if !pll_start(pll_usb_base, 1, 100, 5, 5)
-        return false
+    resets.reset_then_unreset(reset_pll_sys | reset_pll_usb)!
+    pll_start(pll_sys_base, 1, 125, 6, 2)!
+    pll_start(pll_usb_base, 1, 100, 5, 5)!
 
     // --- each clock to its final source ---
-    if !switch_glitchless(clk_ref_ctrl, clk_ref_selected, clk_ref_div, clk_ref_src_xosc, 0)
-        return false
-    if !switch_glitchless(clk_sys_ctrl, clk_sys_selected, clk_sys_div, clk_sys_src_aux,
-        clk_sys_auxsrc_pll_sys)
-        return false
+    switch_glitchless(clk_ref_ctrl, clk_ref_selected, clk_ref_div, clk_ref_src_xosc, 0)!
+    switch_glitchless(clk_sys_ctrl, clk_sys_selected, clk_sys_div, clk_sys_src_aux,
+        clk_sys_auxsrc_pll_sys)!
     switch_aux_only(clk_usb_ctrl, clk_usb_div, 1, clk_usb_auxsrc_pll_usb)
     // The ADC runs on clk_adc. Without it READY is never set while the registers still read
     // (nothing looks broken, yet only 0 comes back).
@@ -200,4 +192,3 @@ fn init(): Bool
     // TIMER takes its 1µs pulse from **the watchdog's tick generator**; without it TIMER silently
     // stands still. clk_ref's frequency in MHz goes into CYCLES.
     mmio.write32(watchdog_tick, (ref_hz / 1000000) | watchdog_tick_enable)
-    return true

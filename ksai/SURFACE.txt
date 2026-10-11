@@ -40,12 +40,19 @@ ksai/block_train	nn.Transformer_block<|T|>.backward_grads	pub fn backward_grads(
 ksai/block_train	nn.Transformer_block<|T|>.backward_lora	pub fn backward_lora(r: Self$@, c: Block_train<|T|>$@, dout: Tensor<|T|>, lr: F64, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Tensor<|T|>	one step on the adapters only; every base weight stays frozen. The base is frozen (a backward with lr=0 returns only the gradient). The returned gradient sums every path.
 ksai/block_train	nn.Transformer_block<|T|>.train_forward	pub fn train_forward(r: Self$@, x: Tensor<|T|>): Block_train<|T|>	runs the whole sequence at once, keeping what the backward pass needs
 ksai/block_train	nn.Transformer_block<|T|>.train_forward_lora	pub fn train_forward_lora(r: Self$@, x: Tensor<|T|>, q_lora: lora.Lora<|T|>$@, v_lora: lora.Lora<|T|>$@, fc1_lora: lora.Lora<|T|>$@, fc2_lora: lora.Lora<|T|>$@): Block_train<|T|>	the same as `train_forward`, with the adapters' delta added. It does not update the base (attention_norm, wq/wk/wv/wo, ffn_norm, fc1/fc2) at all, and folds only the adapters' deltas into the block's forward pass.
+ksai/examples/car_pilot/encoding	drive_fields	pub const drive_fields: Sz = 3	how many values one manoeuvre holds (lon, lat, rot)
+ksai/examples/car_pilot/encoding	feature_count	pub const feature_count: Sz = 5	[measured or not, the normalized distance, left, middle, right]
+ksai/examples/car_pilot/encoding	features	pub fn features(dist_mm: I64, line: I64, far_mm: I64, arena: Arena$@): Tensor<|F32|>	an observation as the feature vector the policy takes
+ksai/examples/car_pilot/encoding	format_version	pub const format_version: U8[] = "2"	the version written in the policy, and the one read. Caution: **Raise it when the features' order, the activation (SiLU) or the manoeuvre table's meaning changes.** The shapes still fit, so an old reader silently uses new weights with the old meaning.
+ksai/examples/car_pilot/encoding	line_left	pub const line_left: I64 = 4	the left line sensor's bit in an observation's `line`
+ksai/examples/car_pilot/encoding	line_middle	pub const line_middle: I64 = 2	the middle sensor's bit
+ksai/examples/car_pilot/encoding	line_right	pub const line_right: I64 = 1	the right sensor's bit
 ksai/grad	Tensor<|T|>.accumulate	pub fn accumulate(r: Self$@, grad: Tensor<|T|>)	adds another gradient into this one, in place. self += grad. **The caller decides the order of the additions**: floating-point addition is not associative, so a sum that must match on every run has to be taken in one fixed order.
 ksai/grad	Tensor<|T|>.cross_entropy_loss	pub fn cross_entropy_loss(r: Self$@, target: I32): F64	how wrong the last position's prediction was, in nats. Self's final dimension is the vocabulary; L = logsumexp(logits) - logits[target]. Of several rows it takes only the last (one step of teacher forcing); for every row, use `cross_entropy_loss_seq`.
 ksai/grad	Tensor<|T|>.cross_entropy_loss_seq	pub fn cross_entropy_loss_seq(r: Self$@, targets: I32$[]): F64	how wrong every position's prediction was, averaged, in nats. Every row's loss: next-token prediction, what a language model is trained on.
 ksai/grad	Tensor<|T|>.grad_matmul_input_into	pub fn grad_matmul_input_into(r: Self$@, w: Tensor<|T|>, out: Tensor<|T|>)	the gradient for a matrix product's input, into `out`
 ksai/grad	Tensor<|T|>.grad_matmul_weight	pub fn grad_matmul_weight(r: Self$@, dy: Tensor<|T|>): Tensor<|T|>	the same, but allocated on `r.arena` instead of into `out`
-ksai/grad	Tensor<|T|>.grad_matmul_weight_into #cfg(!blas)	pub fn grad_matmul_weight_into(r: Self$@, dy: Tensor<|T|>, $out: Tensor<|T|>)	the gradient for a matrix product's weights, into `out`
+ksai/grad	Tensor<|T|>.grad_matmul_weight_into #cfg(!blas)	pub fn grad_matmul_weight_into(r: Self$@, dy: Tensor<|T|>, out: Tensor<|T|>)	the gradient for a matrix product's weights, into `out`
 ksai/grad	Tensor<|T|>.grad_matmul_weight_into #cfg(blas)	pub fn grad_matmul_weight_into(r: Self$@, dy: Tensor<|T|>, out: Tensor<|T|>)	the gradient for a matrix product's weights, into `out`
 ksai/grad	Tensor<|T|>.grad_softmax_cross_entropy	pub fn grad_softmax_cross_entropy(r: Self$@, target: I32): Tensor<|T|>	the gradient of the last position's scores. It is softmax(logits) with 1 subtracted at [target].
 ksai/grad	Tensor<|T|>.grad_softmax_cross_entropy_seq	pub fn grad_softmax_cross_entropy_seq(r: Self$@, targets: I32$[]): Tensor<|T|>	the gradient of every position's scores. Each row is averaged by 1/rows.
@@ -237,7 +244,7 @@ ksai/tensor	Tensor<|T|>.checked_add	pub fn checked_add(r: Self$@, rhs: Tensor<|T
 ksai/tensor	Tensor<|T|>.checked_mul	pub fn checked_mul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	element-wise product; rejects shapes that do not match
 ksai/tensor	Tensor<|T|>.checked_sub	pub fn checked_sub(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	element-wise difference; rejects shapes that do not match
 ksai/tensor	Tensor<|T|>.dup	pub fn dup(r: Self$@, arena: Arena$@): Tensor<|T|>	a copy in another arena, flattened to one dimension. It is for keeping a value alive after the caller's arena is gone.
-ksai/tensor	Tensor<|T|>.fill	pub fn fill(r: Self$@, val: T)	writes the same value into every element
+ksai/tensor	Tensor<|T|>.fill	pub fn fill(r: Self@, val: T)	writes the same value into every element
 ksai/tensor	Tensor<|T|>.fill_uniform	pub fn fill_uniform(r: Self$@, rng: prng.Prng$@, scale: F64)	writes uniform random values into every element. **A constant start makes every unit symmetric and training impossible** (every token would get the same embedding), so training from scratch begins here.
 ksai/tensor	Tensor<|T|>.free	pub fn free(r: Self$@)	frees the elements and the shape
 ksai/tensor	Tensor<|T|>.matmul	pub fn matmul(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error	the matrix product, in a newly allocated tensor
@@ -276,3 +283,5 @@ ksai/tokenizer	Tokenizer.load_text	pub fn load_text(r: Self$@, vocab: U8[], merg
 ksai/tokenizer	Tokenizer.new	pub fn new(arena: Arena$@): Tokenizer	an empty tokenizer, to be filled by `load` or by `add_token` / `add_merge`
 ksai/tokenizer	Tokenizer.next_rank	pub next_rank: I32	the rank the next `add_merge` gets; the call order is the rank
 ksai/tokenizer	Tokenizer.vocab	pub vocab: Map<|U8[], I32|>$@	each word's byte sequence, mapped to its ID
+ksai/tokenizer	parse_token_id	pub fn parse_token_id(text: U8[]): I32?	a decimal ID that fits an `I32`, or none. Caution: **Check every character is a digit.** `parse_size` stops at the first one that is not, so `12x` would read as 12.
+ksai/tokenizer	unk_id	pub const unk_id: I32 = 0	`<unk>`, the ID a byte the vocabulary lacks is encoded as

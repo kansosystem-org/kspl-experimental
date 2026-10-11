@@ -271,15 +271,13 @@ impl Ast_node
         left_type_id: = r.get_binary_left().type_id
         left_reg: = r.get_binary_left().emit_llvm_expr(cg)
 
-        if takes_signed_div(cg, op, left_type_id, r.get_binary_right())
+        if sema_body_binary.takes_signed_div(cg.sema, op, left_type_id, r.get_binary_right())
             return emit_llvm_signed_div(cg, op, left_reg, left_type_id, r.get_binary_right(),
                 r.loc)
 
         right_reg: =
-            (r.get_binary_right().emit_llvm_shift_amount(cg, left_type_id)
-            if op.equals("<<") || op.equals(">>")
-            else r.get_binary_right().emit_llvm_divisor(cg, left_type_id)
-            if op.equals("/") || op.equals("%")
+            (r.get_binary_right().emit_llvm_shift_amount(cg, left_type_id) if op.is_shift_op()
+            else r.get_binary_right().emit_llvm_divisor(cg, left_type_id) if op.is_div_op()
             else r.get_binary_right().emit_llvm_expr(cg))
 
         is_float: = cg.env.is_float(left_type_id)
@@ -287,9 +285,7 @@ impl Ast_node
         is_ptr: =
             cg.env.is_pointer(r.get_binary_left().type_id) ||
             cg.env.is_fn_ptr(r.get_binary_left().type_id)
-        is_cmp: =
-            op.equals("==") || op.equals("!=") || op.equals("<") || op.equals(">") ||
-            op.equals("<=") || op.equals(">=")
+        is_cmp: = op.is_comparison_op()
 
         if is_cmp
             // SSA register numbers must match emission order, so allocate each register immediately
@@ -328,7 +324,7 @@ impl Ast_node
         left_is_ptr: = cg.env.is_pointer(left_type)
         right_is_ptr: = cg.env.is_pointer(right_type)
 
-        if left_is_ptr && !right_is_ptr && (op.equals("+") || op.equals("-"))
+        if left_is_ptr && !right_is_ptr && op.is_additive_op()
             return emit_llvm_ptr_step(cg, left_type, left_reg, right_type, right_reg,
                 op.equals("-"))
         if left_is_ptr && right_is_ptr && op.equals("-")
@@ -544,15 +540,6 @@ priv fn emit_recv_base_ptr(recv: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         cg.op_load(next_reg, cur_id, recv_ptr)
         recv_ptr = cg.reg_str(next_reg)
     return recv_ptr
-
-fn takes_signed_div(cg: Genllvm_ctx$@, op: U8[], type_id: I32, divisor: Ast_node$@): Bool //<
-    //< Whether `/` or `%` on type_id goes through emit_llvm_signed_div rather than an instruction
-    //<
-    //< A signed minimum divided by `-1` is poison too, so signed division goes to @kspl_sdiv /
-    //< @kspl_smod, which also check 0 (so emit_llvm_divisor is skipped). `/=` `%=` ask here too.
-    return (op.equals("/") || op.equals("%")) && cg.env.is_integer(type_id) &&
-        !cg.env.is_unsigned(type_id) &&
-        !sema_body_binary.divisor_cannot_overflow(cg.sema, divisor)
 
 fn emit_llvm_signed_div(cg: Genllvm_ctx$@, op: U8[], left_reg: U8$[], value_type_id: I32,
     right_node: Ast_node$@, loc: Loc): U8$[] //<

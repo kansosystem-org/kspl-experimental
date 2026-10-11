@@ -19,17 +19,18 @@ $rx_ready: Bool = false
 $rx_byte: U8 = 0
 $rx_isr_count: U32 = 0
 
-fn init() //< enables TX and RX, enables the RX interrupt, and enables NVIC IRQ0
+fn init() //< sets the baud rate, enables TX and RX, the RX interrupt, and NVIC IRQ0
+    uart.init() // the baud divisor: QEMU ignores it, a real board does not
     mmio.write32(uart.uart0_ctrl, uart.ctrl_tx_enable | uart.ctrl_rx_enable | ctrl_rx_inten)
     scs.enable_irq(uart0_rx_irq)
 
-fn putc(c: U8): Bool //< sends one byte (sending still polls); false on a timeout
+fn putc(c: U8): Void!mmio.Driver_error //< sends one byte (sending still polls)
     //<
     //< Only RX is interrupt-driven. It reuses the polling version in ksos/drivers/mps2/uart.
-    return uart.putc(c)
+    uart.putc(c)!
 
-fn puts(s: U8[]): Bool
-    return uart.puts(s)
+fn puts(s: U8[]): Void!mmio.Driver_error
+    uart.puts(s)!
 
 // The NVIC IRQ0 (UART0 RX) interrupt handler. The vector table in ksos/port/cortex_m/startup.S
 // calls it directly (#export keeps the symbol name C sees unchanged).

@@ -13,38 +13,38 @@ import "std/chars" // classifying and converting single characters
 import "std/mem" + { dealloc }
 
 extern "C"
-    pub fn kspl_tcp_listen(host_ptr: U8@, host_len: Sz, port: I32, backlog: I32): I64
-    pub fn kspl_tcp_accept(handle: I64): I64
-    pub fn kspl_tcp_peer(handle: I64, host_out: U8$@, host_cap: Sz, host_len_out: Sz$@,
+    fn kspl_tcp_listen(host_ptr: U8@, host_len: Sz, port: I32, backlog: I32): I64
+    fn kspl_tcp_accept(handle: I64): I64
+    fn kspl_tcp_peer(handle: I64, host_out: U8$@, host_cap: Sz, host_len_out: Sz$@,
         port_out: I32$@): I32
-    pub fn kspl_tcp_send(handle: I64, buf: U8@, len: Sz): I32
-    pub fn kspl_tcp_recv(handle: I64, buf: U8$@, cap: Sz): I32
-    pub fn kspl_tcp_close(handle: I64) //< closes a socket, TCP or UDP alike
+    fn kspl_tcp_send(handle: I64, buf: U8@, len: Sz): I32
+    fn kspl_tcp_recv(handle: I64, buf: U8$@, cap: Sz): I32
+    fn kspl_tcp_close(handle: I64) //< closes a socket, TCP or UDP alike
     fn kspl_net_local_port(handle: I64): I32 //< the port a socket is bound to, or -1
 
-    pub fn kspl_udp_open(host_ptr: U8@, host_len: Sz, port: I32): I64
-    pub fn kspl_udp_send_to(handle: I64, buf: U8@, len: Sz, host_ptr: U8@, host_len: Sz, port: I32):
+    fn kspl_udp_open(host_ptr: U8@, host_len: Sz, port: I32): I64
+    fn kspl_udp_send_to(handle: I64, buf: U8@, len: Sz, host_ptr: U8@, host_len: Sz, port: I32):
         I32
-    pub fn kspl_udp_recv_from(handle: I64, buf: U8$@, cap: Sz, from_host_out: U8$@,
-        from_host_cap: Sz, from_host_len_out: Sz$@, from_port_out: I32$@): I32
+    fn kspl_udp_recv_from(handle: I64, buf: U8$@, cap: Sz, from_host_out: U8$@, from_host_cap: Sz,
+        from_host_len_out: Sz$@, from_port_out: I32$@): I32
 
-    pub fn kspl_net_set_nonblocking(handle: I64): Bool //<
+    fn kspl_net_set_nonblocking(handle: I64): Bool //<
         //< Makes handle non-blocking, for std/reactor.kspls
         //<
         //< The definition and details are in the section on asynchronous-I/O reactor primitives in
         //< ksplc/gen/runtime/hosted_net.c.
-    pub fn kspl_net_set_blocking(handle: I64): Bool //< puts handle back to blocking
-    pub fn kspl_net_would_block(): Bool
-    pub fn kspl_tcp_connect_nonblocking(host_ptr: U8@, host_len: Sz, port: I32): I64
-    pub fn kspl_net_connect_result(handle: I64): I32
-    pub fn kspl_net_shutdown_write(handle: I64): I32
+    fn kspl_net_set_blocking(handle: I64): Bool //< puts handle back to blocking
+    fn kspl_net_would_block(): Bool
+    fn kspl_tcp_connect_nonblocking(host_ptr: U8@, host_len: Sz, port: I32): I64
+    fn kspl_net_connect_result(handle: I64): I32
+    fn kspl_net_shutdown_write(handle: I64): I32
     fn kspl_net_raw_fd(handle: I64): I32 //< the OS's socket number inside a handle, or -1 for none
 
     // Resolves a name to one address string; returns 0 on success.
-    pub fn kspl_net_resolve(host_ptr: U8@, host_len: Sz, host_out: U8$@, host_cap: Sz,
+    fn kspl_net_resolve(host_ptr: U8@, host_len: Sz, host_out: U8$@, host_cap: Sz,
         host_len_out: Sz$@): I32
     // Resolves a name to every candidate as address text; the count, -1 unresolved, -2 short.
-    pub fn kspl_net_resolve_all(host_ptr: U8@, host_len: Sz, texts: U8$@, stride: Sz, lens: Sz$@,
+    fn kspl_net_resolve_all(host_ptr: U8@, host_len: Sz, texts: U8$@, stride: Sz, lens: Sz$@,
         cap: Sz): I32
     // The same declaration as std/reactor's, held here so a connect does not bring the reactor in.
     fn kspl_net_poll(handles: I64$@, interest: U8$@, n: Sz, timeout_ms: I32, revents_out: U8$@): I32
@@ -129,6 +129,14 @@ priv fn handle_set_nonblocking(handle: I64): Void!Net_error //< makes a handle n
 pub struct Tcp_listener //< a socket that waits for incoming connections
     priv handle: I64
 
+priv fn opened(h: I64, zero_means: Net_error): I64!Net_error //<
+    //< A raw handle the runtime returned, or its failure: negative is a name that did not resolve
+    if h < 0
+        throw .resolve_failed
+    if h == 0
+        throw zero_means
+    return h
+
 impl Tcp_listener
     pub fn bind( //< starts listening on the address and port
         //<
@@ -139,11 +147,8 @@ impl Tcp_listener
         port: I32, //< the port to listen on; 0 lets the OS choose a free one (see `port`)
     ): Tcp_listener$@!Net_error
         checked_port(port)!
-        h: = kspl_tcp_listen(host.ptr, host.len, port, default_backlog)
-        if h < 0
-            throw .resolve_failed
-        if h == 0
-            throw .bind_failed
+        h: =
+            opened(kspl_tcp_listen(host.ptr, host.len, port, default_backlog), .bind_failed)!
         l: = mem.alloc_as<|Tcp_listener|>()
         l.handle = h
         return l
@@ -158,14 +163,14 @@ impl Tcp_listener
         s.handle = h
         return s
 
-    pub fn port(r: Self$@): I32!Net_error //< the port it listens on, the OS's choice for a 0
+    pub fn port(r: Self@): I32!Net_error //< the port it listens on, the OS's choice for a 0
         return bound_port(r.handle)!
 
     pub fn free(r: Self$@) //< closes the listener and frees it
         kspl_tcp_close(r.handle)
         dealloc(Void$@::r)
 
-    pub fn raw_handle(r: Self$@): I64 //<
+    pub fn raw_handle(r: Self@): I64 //<
         //< the raw handle, the only thing `std/reactor` uses to register the socket
         //<
         //< Only for registering; send/recv/accept still go only through this type's methods.
@@ -293,12 +298,8 @@ impl Tcp_stream
         //< Wraps the raw handle that a connect returned (0 means failure) in a Tcp_stream
         //<
         //< accept does not use this: it checks would_block only on failure.
-        if h < 0
-            throw .resolve_failed
-        if h == 0
-            throw .connect_failed
         s: = mem.alloc_as<|Tcp_stream|>()
-        s.handle = h
+        s.handle = opened(h, .connect_failed)!
         return s
 
     pub fn connect( //< connects by name, trying the candidate addresses in overlapping attempts
@@ -336,7 +337,7 @@ impl Tcp_stream
         return Tcp_stream
             .connected_stream(kspl_tcp_connect_nonblocking(host.ptr, host.len, port))
 
-    pub fn is_connected(r: Self$@): Bool //< whether the connection succeeded; if false, free it
+    pub fn is_connected(r: Self@): Bool //< whether the connection succeeded; if false, free it
         //<
         //< Call it after the writable notification arrives.
         return kspl_net_connect_result(r.handle) == 1
@@ -409,11 +410,11 @@ impl Tcp_stream
         kspl_tcp_close(r.handle)
         dealloc(Void$@::r)
 
-    pub fn raw_handle(r: Self$@): I64 //<
+    pub fn raw_handle(r: Self@): I64 //<
         //< the raw handle, the only thing `std/reactor` uses to register the socket
         return r.handle
 
-    pub fn raw_fd(r: Self$@): I32 //<
+    pub fn raw_fd(r: Self@): I32 //<
         //< the OS's socket number, for a C library that reads and writes the socket itself
         //<
         //< Caution: **Do not also read or write through this type**: the bytes would interleave
@@ -450,11 +451,7 @@ impl Udp_socket
         port: I32, //< the port; 0 lets the OS choose a free one (see `port`)
     ): Udp_socket$@!Net_error
         checked_port(port)!
-        h: = kspl_udp_open(host.ptr, host.len, port)
-        if h < 0
-            throw .resolve_failed
-        if h == 0
-            throw .bind_failed
+        h: = opened(kspl_udp_open(host.ptr, host.len, port), .bind_failed)!
         u: = mem.alloc_as<|Udp_socket|>()
         u.handle = h
         return u
@@ -498,14 +495,14 @@ impl Udp_socket
             .from_port = from_port,
         }
 
-    pub fn port(r: Self$@): I32!Net_error //< the port it is bound to, the OS's choice for a 0
+    pub fn port(r: Self@): I32!Net_error //< the port it is bound to, the OS's choice for a 0
         return bound_port(r.handle)!
 
     pub fn free(r: Self$@) //< closes the socket and frees it
         kspl_tcp_close(r.handle)
         dealloc(Void$@::r)
 
-    pub fn raw_handle(r: Self$@): I64 //<
+    pub fn raw_handle(r: Self@): I64 //<
         //< the raw handle, the only thing `std/reactor` uses to register the socket
         return r.handle
 

@@ -362,6 +362,23 @@ impl Ast_node
             r.kind_id = new_kind
     // --- Fluent Builders ---
 
+    fn build_block(loc: Loc): Ast_node$@ //< an empty statement block, to be filled
+        return Ast_node.new(.k_stmt_block, "stmt_block", loc)
+
+    fn build_args(loc: Loc): Ast_node$@ //< an empty argument list, to be filled
+        return Ast_node.new(.k_expr_args, "args", loc)
+
+    fn build_empty(loc: Loc): Ast_node$@ //< a node standing for nothing, such as an absent part
+        return Ast_node.new(.k_empty, "", loc)
+
+    fn as_args(args: Ast_node$@, loc: Loc): Ast_node$@ //<
+        //< `args` as an argument list: itself if it is one, wrapped if it is one argument
+        if args == null
+            return Ast_node.build_args(loc)
+        if args.kind_id == .k_expr_args
+            return args
+        return Ast_node.build_args(loc).add_child(args)
+
     fn build_ident(name: U8[], type_id: I32, loc: Loc): Ast_node$@
         return Ast_node.new(.k_identifier, name, loc).with_type(type_id)
 
@@ -371,7 +388,7 @@ impl Ast_node
 
     fn build_var_decl(var_name: U8[], type_name: U8[], type_id: I32, loc: Loc): Ast_node$@
         return Ast_node.new(.k_decl_var, "var", loc).with_type(type_id)
-            .add_child(Ast_node.new(.k_empty, "", loc))
+            .add_child(Ast_node.build_empty(loc))
             .add_child(Ast_node.new(.k_keyword, "var", loc))
             .add_child(Ast_node.build_ident(var_name, type_id, loc))
             .add_child(Ast_node.build_type_expr(type_name, type_id, loc))
@@ -426,10 +443,9 @@ impl Ast_node
 
     fn build_if_stmt(cond: Ast_node$@, then_block: Ast_node$@, else_block: Ast_node$@, loc: Loc):
         Ast_node$@
-        if_node: = Ast_node.new(.k_stmt_if, "if", loc)
-            .add_child(Ast_node.new(.k_empty, "", loc)).add_child(cond).add_child(then_block)
-        if_node
-            .add_child(else_block if else_block != null else Ast_node.new(.k_empty, "", loc))
+        if_node: = Ast_node.new(.k_stmt_if, "if", loc).add_child(Ast_node.build_empty(loc))
+            .add_child(cond).add_child(then_block)
+        if_node.add_child(else_block if else_block != null else Ast_node.build_empty(loc))
         return if_node
 
     fn build_method_call(recv: Ast_node$@, method_name: U8[], args: Ast_node$@, res_type_id: I32,
@@ -439,11 +455,7 @@ impl Ast_node
             m_acc.add_child(recv)
         m_acc.add_child(Ast_node.new(.k_identifier, method_name, loc))
 
-        safe_args: =
-            (Ast_node.new(.k_expr_args, "args", loc) if args == null
-            else (args if args.kind_id == .k_expr_args
-            else Ast_node.new(.k_expr_args, "args", loc).add_child(args)))
-
+        safe_args: = Ast_node.as_args(args, loc)
         return Ast_node.new(.k_expr_postfix, "(", loc).with_type(res_type_id).add_child(m_acc)
             .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(safe_args)
 
@@ -451,11 +463,7 @@ impl Ast_node
         //< It builds a free function call node of the shape `name(args…)`
         //<
         //< It is build_method_call without a receiver (how desugaring calls a std/lang function).
-        safe_args: =
-            (Ast_node.new(.k_expr_args, "args", loc) if args == null
-            else (args if args.kind_id == .k_expr_args
-            else Ast_node.new(.k_expr_args, "args", loc).add_child(args)))
-
+        safe_args: = Ast_node.as_args(args, loc)
         return Ast_node.new(.k_expr_postfix, "(", loc)
             .add_child(Ast_node.new(.k_identifier, callee_name, loc))
             .add_child(Ast_node.new(.k_literal, "(", loc)).add_child(safe_args)
@@ -486,10 +494,9 @@ impl Ast_node
         //< "var_synth", neither "var" nor "let".
         //< **`name` is the identifier itself**, so a name the user wrote (a `for … in`'s item)
         //< keeps the position it was written at, where the editor and a diagnostic find it.
-        return Ast_node.new(.k_decl_var, "var_synth", loc)
-            .add_child(Ast_node.new(.k_empty, "", loc))
+        return Ast_node.new(.k_decl_var, "var_synth", loc).add_child(Ast_node.build_empty(loc))
             .add_child(Ast_node.new(.k_keyword, "var", loc)).add_child(name)
-            .add_child(Ast_node.new(.k_empty, "", loc)).add_child(init_expr)
+            .add_child(Ast_node.build_empty(loc)).add_child(init_expr)
     // --- Core Operations ---
 
     fn clone(r: Self$@): Ast_node$@
@@ -660,9 +667,10 @@ impl Ast_node
             r.ice_panic(msg)
 
     // Caution: **Return the result; do not end the run here.** A language server must go on
-    // serving the other files ("The supervisor is the last resort" in `../docs/DESIGN.md`); the
-    // caller fails that file. **Take the source text and the file name**, or the depth error has no
-    // position to report. `src` is what `loc.offset` points into, a synthesized source included.
+    // serving the other files ("The supervisor is the last resort" in `../docs/DESIGN-tools.md`);
+    // the caller fails that file. **Take the source text and the file name**, or the depth error
+    // has no position to report. `src` is what `loc.offset` points into, a synthesized source
+    // included.
     fn validate_layout(r: Self$@, src: U8[], file: U8[]): Bool //< false where it is too deep
         return r.validate_layout_impl(src, file, 0)
 

@@ -39,8 +39,7 @@ priv fn llvm_prim_name(base_str: U8[]): U8[] //<
 
 impl Genllvm_ctx
     fn reg_str(r: Self$@, reg: I32): U8$[]
-        r.scratch.len = 0
-        r.scratch.s("%\{reg\}")
+        r.clear_scratch().s("%\{reg\}")
         return r.take_scratch()
 
     fn emit_numeric_to_i32(r: Self$@, val_reg: U8[], src_type_id: I32): U8$[] //<
@@ -107,8 +106,7 @@ impl Genllvm_ctx
     fn get_or_alloc_tmp_slot(r: Self$@, node: Void$@, type_id: I32): U8$[]
         is_existing: = r.has_local_var_id(node)
         m_id: = r.get_or_add_local_var_id(node)
-        r.scratch.len = 0
-        r.scratch.s("%v_tmp_ast_\{m_id\}")
+        r.clear_scratch().s("%v_tmp_ast_\{m_id\}")
         ptr_str: = r.take_scratch()
         if !is_existing
             r.emit_alloca(ptr_str, type_id)
@@ -134,8 +132,7 @@ impl Genllvm_ctx
         //< start, since an alloca in a loop grows the stack per iteration.
         m_id: = r.var_counter
         r.var_counter += 1
-        r.scratch.len = 0
-        r.scratch.s("%v_tmp_abi_\{m_id\}")
+        r.clear_scratch().s("%v_tmp_abi_\{m_id\}")
         ptr_str: = r.take_scratch()
         r.emit_alloca(ptr_str, type_id)
         return ptr_str
@@ -429,15 +426,13 @@ fn emit_complex_types(cg: Genllvm_ctx$@)
     $seen: = sema_type_env.Mangle_seen.new(cg.env)
     defer seen.free()
 
+    // **A type is admitted only once it is to be emitted** (`Mangle_seen.admit`).
     for type_id in cg.env.complex_types
-        info: = cg.env.get_info(type_id)
-        cg.clear_scratch()
-        cg.env.mangle_type_id_to(type_id, cg.scratch)
-        m_slice: = cg.scratch.slice()
-        if !seen.admit(type_id)
-            continue
-        switch info
+        switch cg.env.get_info(type_id)
         case .result(base_id, err_id)
+            if !seen.admit(type_id)
+                continue
+            m_slice: = cg.mangled_in_scratch(type_id)
             // A Result is the struct { is_err (i8), error_code, val }.
             if cg.is_laid(type_id, 0)
                 emit_laid_result(cg, m_slice, type_id, base_id, err_id)
@@ -501,9 +496,7 @@ impl Ast_node
         //< The caller skips a type that returns "".
         if r.type_id == 0
             return ""
-        cg.clear_scratch()
-        cg.env.mangle_type_id_to(r.type_id, cg.scratch)
-        return cg.take_scratch()
+        return base_core.arena.dup_str(cg.mangled_in_scratch(r.type_id))
 
     priv fn emit_llvm_struct(r: Ast_node$@, cg: Genllvm_ctx$@)
         m_name: = r.mangled_type_name(cg)

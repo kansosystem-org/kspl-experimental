@@ -14,6 +14,7 @@
 
 // How to use it: `make ksos-rp2040-car-pilot` → copy the UF2 with BOOTSEL → Serial Monitor
 // (115200).
+import "ksdb/log" as ksdblog
 import "ksos/boards/freenove_4wd_pico/board"
 import "ksos/boards/freenove_4wd_pico/cap" as ccap
 import "ksos/boards/freenove_4wd_pico/motor"
@@ -492,7 +493,11 @@ fn car_task(_arg: Void$@): Void
     // With no fresh policy it starts with the saved one: **the point of the record**, deciding with
     // no link or kssrv.
     if !ready && !halted
-        kept: = pilot_boot.stored_policy()
+        // One stored but larger than the buffer is a bad stored policy, not "no policy".
+        kept: = pilot_boot.stored_policy() catch e
+            if e == ksdblog.Ksdb_error.too_small
+                halt(.bad_stored_policy)
+            fallback ""
         if kept.len > 0
             ready = take_policy(p@, kept, .bad_stored_policy, arena@)
             if ready

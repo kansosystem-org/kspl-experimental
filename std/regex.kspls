@@ -14,8 +14,8 @@
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" + { dealloc, Arena }
-import "std/regex_node" { max_groups, max_repeat_count, Slots, reset_slots, Rx_kind, Rx_node,
-    new_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts }
+import "std/regex_node" { byte_count, max_groups, max_repeat_count, Slots, reset_slots, Rx_kind,
+    Rx_node, new_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts }
 import "std/stack_limit" { Stack_limit }
 
 pub enum Regex_error //< why a pattern could not be compiled, or matched nothing
@@ -84,7 +84,7 @@ priv fn class_from_escape(c: U8): Rx_node$@ //<
     if n.neg
         lower = c + ('a' - 'A')
     // **From the same predicates the matcher uses**, so `\w` and `\b` cannot disagree.
-    for i in Range.asc(256)
+    for i in Range.asc(byte_count)
         b: = U8::i
         n.set[i] =
             (b.is_digit() if lower == 'd' else is_word_byte(b) if lower == 'w' else b.is_space())
@@ -96,7 +96,7 @@ priv fn add_class_escape(n: Rx_node$@, c: U8) //<
     //< **A negated form adds the complement**; it does not negate the whole class. Touching `n.neg`
     //< would invert `[^\D]`.
     sub: = class_from_escape(c)
-    for i in Range.asc(256)
+    for i in Range.asc(byte_count)
         if sub.set[i] != sub.neg
             n.set[i] = true
     free_rx_node(sub)
@@ -176,11 +176,11 @@ impl Compiler
         //< itself: `\.`, `\*` and `\[` must not be refused.
         e: = r.advance()
         if e == 't'
-            return 9U8
+            return '\t'
         if e == 'n'
-            return 10U8
+            return '\n'
         if e == 'r'
-            return 13U8
+            return '\r'
         if e.is_alnum()
             r.fail(.invalid_escape)
             return 0U8
@@ -576,7 +576,7 @@ impl Match_run
                 return true
         return false
 
-fn atom_matches(atom: Rx_node$@, c: U8): Bool
+priv fn atom_matches(atom: Rx_node$@, c: U8): Bool
     switch atom.kind
     case .lit
         return c == atom.ch

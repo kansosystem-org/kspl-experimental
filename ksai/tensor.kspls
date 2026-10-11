@@ -104,7 +104,7 @@ impl<|T|> Tensor<|T|>
             (out.data + i)$ = (r.data + i)$
         return out
 
-    pub fn fill(r: Self$@, val: T) //< writes the same value into every element
+    pub fn fill(r: Self@, val: T) //< writes the same value into every element
         for i in Range.asc(r.size)
             (r.data + i)$ = val
     pub fn fill_uniform( //< writes uniform random values into every element
@@ -449,7 +449,7 @@ fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
 
 #cfg(blas)
 fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
-    blas_gemm<|T|>(111, 111, m, n, k, a, k, b, n, c, n) // NoTrans, NoTrans: C = A@B
+    blas_gemm<|T|>(cblas_no_trans, cblas_no_trans, m, n, k, a, k, b, n, c, n) // C = A@B
 
 // C = A @ B^T (A:[m,k], B:[n,k] -> C:[m,n]): each output an inner product of two rows.
 #cfg(!blas)
@@ -494,13 +494,24 @@ fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
 
 #cfg(blas)
 fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
-    blas_gemm<|T|>(111, 112, m, n, k, a, k, b, k, c, n) // NoTrans, Trans: C = A@B^T
+    blas_gemm<|T|>(cblas_no_trans, cblas_trans, m, n, k, a, k, b, k, c, n) // C = A@B^T
 
 // ---------------------------------------------------------
 // An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI; by default cfg(blas)
 // discards these and matmul_kernel's BLAS version, so the generated C never mentions cblas. The
 // library is declared with the block, so no build file names it.
+// Caution: **`#cfg` holds only the one declaration after it**: give each its own, or the ones
+// after the first are kept in every build (the block's `#link` then asks every link for BLAS).
 // ---------------------------------------------------------
+
+// CBLAS's enum values, as `cblas.h` numbers them.
+#cfg(blas)
+const cblas_row_major: I32 = 101 //< CBLAS_ORDER: rows stored one after another
+#cfg(blas)
+const cblas_no_trans: I32 = 111 //< CBLAS_TRANSPOSE: the matrix as it is
+#cfg(blas)
+const cblas_trans: I32 = 112 //< CBLAS_TRANSPOSE: the matrix transposed
+
 #cfg(blas)
 #link("openblas")
 extern "C"
@@ -514,9 +525,9 @@ fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@
     ldc: Sz) //<
         //< cfg(blas): the shared dispatch to BLAS gemm, C = op(A)@op(B) with alpha=1 and beta=0
         //<
-        //< It is RowMajor (101) and transposes by ta/tb (111=NoTrans, 112=Trans); it picks sgemm or
-        //< dgemm by the element size (F32 or F64 only). matmul and grad.kspls's backward gemm share
-        //< it.
+        //< It is RowMajor and transposes by ta/tb (`cblas_no_trans` / `cblas_trans`); it picks
+        //< sgemm or dgemm by the element size (F32 or F64 only). matmul and grad.kspls's backward
+        //< gemm share it.
     mi: = I32::m
     ni: = I32::n
     ki: = I32::k
@@ -524,11 +535,11 @@ fn blas_gemm<|T|>(ta: I32, tb: I32, m: Sz, n: Sz, k: Sz, a: T$@, lda: Sz, b: T$@
     ldb_i: = I32::ldb
     ldc_i: = I32::ldc
     if sizeof(T) == 4
-        cblas_sgemm(101, ta, tb, mi, ni, ki, F32::1.0, F32$@::a, lda_i, F32$@::b, ldb_i, F32::0.0,
-            F32$@::c, ldc_i)
+        cblas_sgemm(cblas_row_major, ta, tb, mi, ni, ki, F32::1.0, F32$@::a, lda_i, F32$@::b, ldb_i,
+            F32::0.0, F32$@::c, ldc_i)
     else
-        cblas_dgemm(101, ta, tb, mi, ni, ki, F64::1.0, F64$@::a, lda_i, F64$@::b, ldb_i, F64::0.0,
-            F64$@::c, ldc_i)
+        cblas_dgemm(cblas_row_major, ta, tb, mi, ni, ki, F64::1.0, F64$@::a, lda_i, F64$@::b, ldb_i,
+            F64::0.0, F64$@::c, ldc_i)
 
 // Without this impl the use-after-free check does not work (`Owned` in std/lang.kspls; [W0107]
 // says so).

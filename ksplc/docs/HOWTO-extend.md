@@ -1,0 +1,72 @@
+# Extending the compiler
+
+**This guide gives the steps for the six changes to `ksplc` that touch several places at once**: a diagnostic code, an AST node kind, a primitive type, a subcommand, a target machine, and the seed. Each step names the file, the command to run, and what fails if the step is left out. You need a clone that builds (`make` passes, [`docs/HOWTO-build.md`](../../docs/HOWTO-build.md)), and you should have read "The compiler as a whole" in [`DESIGN.md`](DESIGN.md).
+
+**Every change here ends with the seed.** The compiler is built from `ksplc/seed.c`, so a change under `ksplc/` reaches the tools only after "Updating the seed" below.
+
+## A diagnostic code (a `W`, `I` or `H` code)
+
+1. **Emit it from sema** with its code at the head of the message: `c.warn(node, "[W0xxx] ...")`, `c.information(...)` or `c.hint(...)` (`ksplc/sema/session/ctx.kspls`; `[W0203]` in `ksplc/sema/body/stmt.kspls` is an example). Ask `c.is_code_off(node, code)` before costly work. An information or a hint prints only under `ksplc lint`.
+2. **Register it** in `codes` in [`../base/lint_codes.kspls`](../base/lint_codes.kspls), and raise the array's length. A code off by default also goes into `off_by_default`. Left out, `make test-conventions` fails with "every code the compiler writes is registered".
+3. **Write its section**, `#### [W0xxx] <title>`, in [`SPEC-tools.md`](SPEC-tools.md) under "5.5 The list of warnings (W)", "5.6 The list of information diagnostics (I)" or "5.7 The list of hints (H)". Left out, `make test-conventions` fails with "the diagnostic codes agree between the implementation and the spec".
+4. **Remake the table of codes**:
+
+   ```sh
+   make code-table
+   ```
+
+   Skipped, `make test-conventions` fails with "the table of codes is what the code sections give".
+5. **Add material that fires it**: a file under `ksplc/tests/lint/` with a `// EXPECT: [W0xxx] ...` line, plus `// ARGS: --lint=W0xxx=on` for a code off by default. Without one, `make test-conventions` fails with "every diagnostic code has material holding it"; `make test-lint` runs the material.
+6. **Rebuild and check `ksplc explain`**: it prints the section from the `SPEC-tools.md` built into the compiler, and `make test-cli` checks every registered code prints its own section.
+7. **Run `make lint`.** A code on by default that fires on the repository's own sources fails it with `LINT FAILED`; fix those sources in the same change.
+
+## An AST node kind
+
+1. **Add the rule** to [`../kspl.kspeg`](../kspl.kspeg). A rule that opens, ends or keeps a block also joins the role lists in the grammar's header (`[opens]`, `[ends]`); `make test-kspls` counts them.
+2. **Add `k_<rule>`** to `Ast_kind` in [`../base/ast_kinds.kspls`](../base/ast_kinds.kspls), before `k_max`. A capitalised token rule also needs its case in `builtin_name`. Left out, stage1 stops at start-up with `Grammar sync error: Rule '<rule>' is defined in kspl.kspeg but missing from Ast_kind enum.`
+3. **Give it one shape** in `normalize` (`ksplc/parse/normalize*.kspls`), then handle it in each stage that meets it. Why every layer may rely on one shape is "Keeping the grammar and the AST node kinds in step" in [`DESIGN.md`](DESIGN.md).
+4. **Run `make test-conventions`**: "there is no remnant in Ast_kind" fails for a kind no grammar rule makes and no code tests.
+5. **Update the seed before writing the new syntax anywhere** (below). `make fmt` and `make test-fmt-tree` run the seed, so they refuse the syntax until then.
+
+## A primitive type
+
+1. **The grammar**: `Primitive_type` in [`../kspl.kspeg`](../kspl.kspeg).
+2. **Sema**: `Builtin_type_id` and the `register(...)` calls in `ksplc/sema/type/env.kspls` (`is_builtin` takes `f64_type` as its last id, so a new id past it moves that bound); `is_integer`, `is_unsigned`, `is_float` and `get_primitive_bit_size` in `ksplc/sema/type/query.kspls`; the literal suffixes in `ksplc/sema/body/literal.kspls` and `ksplc/sema/decl/eval.kspls`.
+3. **The backends**: `prims` in `ksplc/gen/c/ctx.kspls`, `llvm_prim_name` in `ksplc/gen/llvm/types.kspls`, `c_scalar` in `ksplc/tools/interface.kspls`, and a `typedef` in `ksplc/gen/runtime/core.h`.
+4. **The editor's colouring**: the primitive types' match in `.vscode/extensions/kspl/tmLanguage.json`. Left out, `make test-conventions` fails with "a keyword of ksplc's the grammar does not colour".
+5. **The language specification**: the table in "3.1 Primitive types" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md). Nothing checks this row, so read it against the code once.
+6. **Update the seed** (below): the grammar and the runtime are both built into the compiler.
+
+## A subcommand
+
+1. **`ksplc/main.kspls`**: a `Mode` variant, `p.subcommand("<name>", ...)` in `declare_options`, its branch in `read_mode`, and its case in `dispatch`.
+2. **`ksplc/usage.kspls`**: a `Face` in `faces` (raise the array's length), and the subcommand's name in the `flag_faces` row of each option it takes; one that lays values out also joins `machine_faces`.
+3. **[`SPEC-tools.md`](SPEC-tools.md)**: a row in the table of commands and a section of its own. Left out, `make test-conventions` fails with "the CLI's entry points agree"; the only name let through is `undocumented_ok` in `tests/support/conventions_iface.kspls`.
+4. **Run `make test-cli`**: `case_help_matches_behavior` tries every subcommand and option `--help` lists.
+5. **Update the seed** (below).
+
+## A target machine
+
+1. **Add a row** to `machines` in [`../base/target.kspls`](../base/target.kspls) and raise the array's length. Leave `llvm_triple` empty for a machine with 4-byte pointers: the LLVM backend lays out 8-byte pointers only.
+2. **A machine ksplc can run on** must be named as `kspl_host_machine` builds the name, `KSPL_HOST_ARCH "-" KSPL_HOST_OS` in `ksplc/gen/runtime/hosted.c`; add an `#elif` there if needed. Left out, `make test-conventions` fails with "every hosted machine in the table is a name the runtime can build".
+3. **Run `make test-layout-targets`**: it compiles a probe for every row and checks clang lays each value out the same. `unlisted_host` in `ksplc/tests/suite/layout_targets_test.kspls` must stay a machine with no row; move it if you add that one.
+4. **Update the seed** (below): `hosted.c` is built into the compiler.
+
+## Updating the seed
+
+1. **Prove the stages reproduce each other**:
+
+   ```sh
+   make self-host            # last line: RESULT: ALL PASS (self-hosting, c backend)
+   ```
+
+   Where the change alters the C the compiler writes, this stays red until the seed is re-baked: run `make commit-seed`, then `make self-host` again. Still red, restore the seed with `git checkout ksplc/seed.c` and look for the cause.
+2. **Re-bake it**:
+
+   ```sh
+   make commit-seed          # last line: Seed updated successfully.
+   ```
+
+3. **A new C runtime function that `std/` calls takes two re-bakes**, in the order "The bootstrap, and keeping the seed in step" in [`DESIGN.md`](DESIGN.md) gives: first without the call, then with it. A changed signature cannot go this way; add the function under a new name.
+4. **A language change that a suite or `make fmt` must use goes into the seed first**: both run the seed, so they know only what it knows.
+5. **Run the gates**: `make ci-linux` runs every one on Linux ([`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)).
