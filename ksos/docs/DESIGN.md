@@ -34,9 +34,7 @@ flowchart TD
 
 ## ⚙️ What sets the scheduler apart
 
-Ksos offers what FreeRTOS (a widely used RTOS) offers, as KSPL methods. Where FreeRTOS lets a mistake pass without a word, ksos stops at once or makes the mistake impossible to write.
-
-**The API takes FreeRTOS as its reference**: a portable kernel core apart from a port layer, both static and heap allocation, a priority-inheriting mutex, and lazy freeing on the idle task. It is redesigned as methods in KSPL's manner (`Task.suspend()`, `Sem.take()`), not the free-function C API carried over. The names correspond like this; the grounds for each difference are in the subsections below.
+**Ksos offers what FreeRTOS (a widely used RTOS) offers, taking its API as the reference**: a portable kernel core apart from a port layer, both static and heap allocation, a priority-inheriting mutex, and lazy freeing on the idle task. It is redesigned as methods in KSPL's manner (`Task.suspend()`, `Sem.take()`), not the free-function C API carried over. Where FreeRTOS lets a mistake pass without a word, ksos stops at once or makes the mistake impossible to write. The names correspond like this; the grounds for each difference are in the subsections below.
 
 | kind | FreeRTOS | ksos |
 |---|---|---|
@@ -109,9 +107,7 @@ Every primitive waits and wakes through the same two functions. A woken task alw
 
 ### The priority-inheriting mutex
 
-While a high-priority task waits for a lock, the task holding the lock runs at the waiter's priority. So a task in the middle cannot keep the holder, and through it the waiter, off the CPU.
-
-**A task locking a held mutex lends the holder its priority, then blocks.** This prevents *priority inversion*: a mid-priority task keeps preempting the low-priority holder, and the high-priority requester waits forever (`make ksos-cm-pi`).
+**While a high-priority task waits for a lock, the task holding the lock runs at the waiter's priority: a task locking a held mutex lends the holder its priority, then blocks.** This prevents *priority inversion*: a mid-priority task keeps preempting the low-priority holder, and the high-priority requester waits forever (`make ksos-cm-pi`).
 
 **The holder runs at the highest of its own priority and every priority waiting on any mutex it holds**, recomputed on every release from the mutexes it still holds. So mutexes held together may be released in any order, and only the last release returns the task to its own priority (`make ksos-mutex-nested`). This is what happens with two mutexes:
 
@@ -158,7 +154,7 @@ Ksos counts time in *ticks*, a logical counter. When nothing can run, it jumps t
 
 * **Tickless idle**: where no task is runnable, the kernel moves the logical time forward to the nearest `delay` expiry instead of waiting in real time. The aim is determinism: `Task.delay` works with no timer, and a test ends in the same order every time without waiting. In a cooperative arrangement (no `enable_preemption`, so tasks switch only when they yield or wait) this is the only path that advances `g_tick`, so without it a `delay` never wakes.
   * **So `Task.delay(n)` counts logical ticks, not real time.** It never wakes before the expiry (`g_tick` always advances `n` first). But where no other task runs, it returns in zero real time, even with a real timer running: moving the time forward ignores the timer and reads no elapsed time. It matches real time only while another task is runnable. So `cortex_m_control_ai_probe`'s `max_jitter` is in logical ticks under that condition, not real-time jitter against an independent clock.
-  * Caution: **Where the real board needs a real-time period, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `ksos/drivers/rp2040/timer.kspls`, which the peripheral probes use. Power-saving tickless idle is in [`ksos/docs/PLAN.md`](PLAN.md).
+  * Caution: **Where the real board needs a real-time period, use a hardware timer rather than `Task.delay`.** On the RP2040 that is `delay_us`/`delay_ms` in `ksos/drivers/rp2040/timer.kspls`, which the peripheral probes use. Power-saving tickless idle is in the "ksos" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 * **A timeout on a wait**: a blocking call is written three ways.
 
   | Form | Example | What it does |
@@ -174,9 +170,7 @@ Ksos counts time in *ticks*, a logical counter. When nothing can run, it jumps t
 
 ### Interrupt handlers
 
-An interrupt handler (ISR, interrupt service routine) may give, set or try, but never wait. ksos stops a handler that tries to wait.
-
-**Waiting inside an ISR by mistake is stopped.** An interrupt handler has nothing to switch to, so `take` or `Task.delay` inside one would block the interrupted task, silently stopping an unrelated task. `require_current` and `Task.delay` check the port's `ksos_port_in_isr` and panic on the spot.
+**An interrupt handler (ISR, interrupt service routine) never waits: ksos stops one that tries to.** An interrupt handler has nothing to switch to, so `take` or `Task.delay` inside one would block the interrupted task, silently stopping an unrelated task. `require_current` and `Task.delay` check the port's `ksos_port_in_isr` and panic on the spot.
 
 **Only what does not wait may be called from an ISR** (`give` / `set` / `try_*`, `Queue<|T|>.try_send`/`.try_recv` among them). Those need no dedicated version, because `irq_save` nests (`make ksos-isr`).
 
@@ -409,15 +403,14 @@ The port layer (`port/`) is something else: the boot and the C/asm glue (startup
 
 ### UART (`uart.kspls` / `uart_irq.kspls`)
 
-`drivers/mps2/uart.kspls` drives the ARM CMSDK APB UART0 of QEMU's `mps2-an385` (at `0x40004000`, wired to a serial console chardev). A real board with the same IP runs it unchanged. Three demos check it:
+`drivers/mps2/uart.kspls` drives the ARM CMSDK APB UART0 of QEMU's `mps2-an385` (at `0x40004000`, wired to a serial console chardev). A real board with the same IP runs it unchanged. Two demos check it:
 
 | Demo | What it proves |
 | :-- | :-- |
-| `make ksos-cm-uart-probe` | **it is genuine memory-mapped I/O, not ARM semihosting** (`ksos/demo/common/semihost_console.kspls`, the `BKPT` trap). With QEMU's `serial0` redirected to a file apart from the console, only UART0's output appears in that file. |
-| `make ksos-cm-uart-echo` | the receive path, polled (`getc`). `ksos/tests/uart_echo_test.py` sends bytes over a Unix domain socket and matches the echo (`RESULT: ALL PASS`). |
+| `make ksos-cm-uart-echo` | both directions, polled (`getc` / `putc`). `ksos/tests/uart_probe.py polled` sends bytes over a Unix domain socket and matches the echo (`RESULT: ALL PASS`). The bytes travel through QEMU's serial chardev, so **it is genuine memory-mapped I/O, not ARM semihosting** (`ksos/demo/common/semihost_console.kspls`, the `BKPT` trap). |
 | `make ksos-cm-uart-irq-echo` | the receive path **driven by an interrupt** (below) |
 
-`uart_irq.kspls` turns on CTRL's RX_INTEN and NVIC IRQ0 (UART0's RX in QEMU's board definition; the NVIC is the Cortex-M's interrupt controller). The ISR `uart0_irq0_handler`, joined to the shared vector table through a weak symbol, raises a flag the caller watches while resting on `WFI` (an instruction that sleeps until an interrupt). `WFI` has no other way out, so wrong NVIC or ISR wiring hangs it. An echo from `ksos/tests/uart_irq_echo_test.py` is direct evidence that a real interrupt woke the CPU.
+`uart_irq.kspls` turns on CTRL's RX_INTEN and NVIC IRQ0 (UART0's RX in QEMU's board definition; the NVIC is the Cortex-M's interrupt controller). The ISR `uart0_irq0_handler`, joined to the shared vector table through a weak symbol, raises a flag the caller watches while resting on `WFI` (an instruction that sleeps until an interrupt). `WFI` has no other way out, so wrong NVIC or ISR wiring hangs it. An echo from `ksos/tests/uart_probe.py irq` is direct evidence that a real interrupt woke the CPU.
 
 **The kernel's blocking primitives are not used.** With no other task runnable, they return the scheduler to the main context, so the task stays `.running` and the scheduler never sees it.
 
@@ -675,6 +668,8 @@ link: = netlink.Link::{
 conn: = tcpconn.make(link, ...)
 ```
 
+**Only a link that moves raw 802.3 frames fills `Link`.** A chip that runs TCP/IP itself and offers sockets or AT commands would stand in place of `ksos/net`, not beneath it, so none of the upper layers would be used.
+
 **`net/mini_ipv4.kspls` holds not one import** (it only assembles and parses bytes). Only the three calls through `Link` in `net/tcp_conn.kspls` touch the hardware, so all of `ksos/net` is independent of the NIC (the network hardware).
 
 **`Link` takes the shape of ksdb's `Store`**: a struct of function pointers rather than an interface, with no context pointer ("The place is swapped through a struct of function pointers" in [`ksdb/docs/DESIGN.md`](../../ksdb/docs/DESIGN.md)). It is also how ksos passes mbedTLS its bio callbacks. Every link layer is a per-file singleton (one per file, with no second instance), so add a context pointer only when something like two NICs of the same kind comes up (Principle 5).
@@ -694,13 +689,12 @@ Caution: Do not make the reverse reference (pointing at a demo from here). Once 
 | File | What it holds |
 | :-- | :-- |
 | `board.kspls` | The pin assignment. Which GPIO has what attached |
-| `motor.kspls` | The four wheels' driving control (composing a mecanum's motion) |
+| `motor.kspls` | The four wheels' driving control (composing a mecanum's motion), and the speed cap the instruction is brought within |
 | `track.kspls` | The three reflective sensors for line tracking |
 | `range.kspls` | The sense of the distance ahead (an HC-SR04) |
 | `face.kspls` | The face (an 8×16 LED matrix) |
 | `head.kspls` | The servo swinging the ultrasonic's head, held to its range of motion |
 | `status.kspls` | The states' names and how they are shown (the report's line, and WS2812) |
-| `cap.kspls` | Bringing the instruction sent to the wheels within the speed cap |
 
 **What differs from unit to unit is a table of constants that is always read**, in `board.kspls`. The vendor's sample keeps each motor's direction as a commented-out `#define`, and reading one does not tell off from on (Principle 5). So `wheel_polarity` holds each wheel's direction, and `line_sensor_swapped` corrects a unit whose outer line sensors are mounted swapped ("The direction of rotation differs from unit to unit" and "Line tracking" in [`SPEC-board.md`](SPEC-board.md)).
 
@@ -827,9 +821,9 @@ The car runs a small neural net with no operating system and no `malloc`. It als
 
 ## 🚫 What is out of scope, and why
 
-**It assumes a single core (core0).** The atomics already hold between cores, so starting core1 needs no fix to the runtime. What it does need is in [`ksos/docs/PLAN.md`](PLAN.md).
+**It assumes a single core (core0).** The atomics already hold between cores, so starting core1 needs no fix to the runtime. What it does need is in the "ksos" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
-**Hardware checks cover only the RP2040**, which QEMU does not model. The bare metal seen under QEMU is `mps2-an385` (Cortex-M3) alone. There is no port or driver for a real Cortex-M33 chip (a Renesas RA6M4, or a Raspberry Pi Pico 2 W / RP2350); one is in [`ksos/docs/PLAN.md`](PLAN.md).
+**Hardware checks cover only the RP2040**, which QEMU does not model. The bare metal seen under QEMU is `mps2-an385` (Cortex-M3) alone. There is no port or driver for a real Cortex-M33 chip (a Renesas RA6M4, or a Raspberry Pi Pico 2 W / RP2350); one is in the "ksos" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 ### TLS
 
@@ -858,44 +852,3 @@ The car runs a small neural net with no operating system and no `malloc`. It als
   | **cyw43-driver** | **Non-commercial only, or RP2040 only** | **A restriction on the use and the hardware** |
 
   Delegating over FFI instead of vendoring keeps the repository MIT, but **what a user builds is a combined work under those restrictions**. No existing dependency carries such an obligation. It would also break the root README.md's statement that the repository is "free to modify, redistribute and use commercially alike". Taking it on would have to be said plainly.
-
-#### The candidates for a link layer — how to connect wireless (what the research found)
-
-**This is the comparison for whoever adds a wireless link.** Only something that puts raw 802.3 frames in and out works with `Link`. A scheme with TCP/IP on the other chip (ESP-AT's AT commands, WiFiNINA / ESP32SPI's socket API) communicates once connected, but leaves `ksos/net` without a role, so it is not a candidate.
-
-| the candidate | the license | the bus | GPIO needed | measured throughput | PIO |
-|---|---|---|---|---|---|
-| USB Ethernet (the CDC-NCM part of `rp2040/usb_cdc`) | — (our own) | USB | none added | 6–8 Mbps effective | not needed |
-| the CYW43439 (built into a Pico W) plus `cyw43-driver` | **non-commercial only / RP2040 only** | half-duplex SPI | built in | — | **needed** |
-| ESP-Hosted-MCU plus an ESP32 (standard SPI) | Apache-2.0 | full-duplex SPI | **6 plus Reset** | udp 24 / tcp 22 Mbps | not needed |
-| ESP-Hosted-MCU plus an ESP32 (UART) | Apache-2.0 | UART | **2 plus Reset** | udp 0.68 / tcp 0.67 Mbps | not needed |
-
-The GPIO counts and throughputs are Espressif's own, from the transport comparison table in the [esp-hosted-mcu README](https://github.com/espressif/esp-hosted-mcu).
-
-Note: USB Ethernet fills `Link` with **zero extra parts and zero extra GPIO**. So it is the base for running the upper layers all the way through on real hardware before any wireless (stage 6 in [`HOWTO-bring-up.md`](HOWTO-bring-up.md)). Being a cable, it is not a running car's final form.
-
-**ESP-Hosted is a candidate for two reasons.** Its license is Apache-2.0, the same "attribution only" as mbedTLS's and OpenSSL's, restricting neither use nor hardware. And its data path stays 802.3 (TCP/IP stays on the host and only frames cross the bus), so it fits `Link`'s three function pointers unchanged.
-
-**Three things stand in the way:**
-
-* The only host-side port is for an ESP chip plus FreeRTOS (the seam is `host/esp_hosted_os_abstraction.h`, with no worked example on another MCU).
-* The coprocessor's firmware must be built from ESP-IDF (no binary is distributed).
-* The control path (scan, connect and the rest) is protobuf-c RPC. That leaves FFI to protobuf-c, encoding the few messages by hand, or writing the credentials into the slave and only bridging frames.
-
-**What ksos would need, whichever path**: an `rp2040_spi` or `rp2040_uart` driver (about the size of `rp2040/i2c`), ESP-Hosted's transport layer (the fixed 1600-byte transactions, the payload header, waiting on Handshake / Data Ready), and a thin connection to `Link`.
-
-#### The ESP32 coprocessor idea does not fit onto this car over SPI
-
-ESP-Hosted (an ESP32 as a communications coprocessor, Apache-2.0) avoids the CYW43439's license and fits `Link` ("The candidates for a link layer" above). But **this car's free GPIO are only 17 and 22**, which the RP2040's pin multiplexing allows to be only `SPI0_SS_N` and `SPI0_SCLK`. Standard SPI asks for seven lines (MISO/MOSI/SCLK/CS plus Handshake, Data Ready and Reset), so one of the motors, the servos, the WS2812 or the IR would have to come off. The UART version fits in TX/RX (GPIO 0/1) plus Reset, but tops out at 0.68 Mbps. Where speed is needed, a bare Pico plus an ESP32 development board is simpler than the car.
-
-**Over UART, the data lines are on P7, not P6.** The `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins 17/22 (GP13/GP17) ([`SPEC-board.md`](SPEC-board.md)). GP22 has no UART function (only SPI0 SCK / I2C1 SDA / PWM), and GP17 can only become UART0 RX. So P6 alone cannot give TX.
-
-| What is used | GPIO | The terminal |
-|---|---|---|
-| UART0 TX / RX | 0 / 1 | **P7** (`NC / GND / [1] / [0]`. The official table's "serial port") |
-| The module's RESET | 17 or 22 | **P6** |
-| Power | VCC / GND | **P6** |
-
-**Measure P6's VCC (its voltage and its current capacity) before using it.** An ESP32 uses some hundreds of mA while transmitting.
-
-Caution: **Do not write the SSID and the password into the source.** The Arduino sample writes them in directly (`char ssid_Router[] = "..."`). Copying that puts credentials into the repository, where they cannot be removed from the history. Use a separate file that is `.gitignore`d, or pass them with `--define` at build time.

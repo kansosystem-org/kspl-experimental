@@ -1,9 +1,8 @@
-//< TCP and UDP sockets that connect by name or by address, over both IPv4 and IPv6
+//< TCP sockets that connect by name or by address, over both IPv4 and IPv6
 //<
 //< **A client tries the candidate addresses in overlapping attempts; a server binds only one.**
-//< How a name that resolves to both IPv4 and IPv6 is handled, and why one function does not take
-//< a name as the destination, are in "Connecting by name tries the candidates overlapped" in
-//< `std/docs/DESIGN.md`.
+//< How a name that resolves to both IPv4 and IPv6 is handled is in "Connecting by name tries the
+//< candidates overlapped" in `std/docs/DESIGN.md`.
 
 // ==========================================
 // The socket calls are the POSIX (socket(2)) and Windows (Winsock2) code in
@@ -19,14 +18,8 @@ extern "C"
         port_out: I32$@): I32
     fn kspl_tcp_send(handle: I64, buf: U8@, len: Sz): I32
     fn kspl_tcp_recv(handle: I64, buf: U8$@, cap: Sz): I32
-    fn kspl_tcp_close(handle: I64) //< closes a socket, TCP or UDP alike
+    fn kspl_tcp_close(handle: I64) //< closes a socket
     fn kspl_net_local_port(handle: I64): I32 //< the port a socket is bound to, or -1
-
-    fn kspl_udp_open(host_ptr: U8@, host_len: Sz, port: I32): I64
-    fn kspl_udp_send_to(handle: I64, buf: U8@, len: Sz, host_ptr: U8@, host_len: Sz, port: I32):
-        I32
-    fn kspl_udp_recv_from(handle: I64, buf: U8$@, cap: Sz, from_host_out: U8$@, from_host_cap: Sz,
-        from_host_len_out: Sz$@, from_port_out: I32$@): I32
 
     fn kspl_net_set_nonblocking(handle: I64): Bool //<
         //< Makes handle non-blocking, for std/reactor.kspls
@@ -40,9 +33,6 @@ extern "C"
     fn kspl_net_shutdown_write(handle: I64): I32
     fn kspl_net_raw_fd(handle: I64): I32 //< the OS's socket number inside a handle, or -1 for none
 
-    // Resolves a name to one address string; returns 0 on success.
-    fn kspl_net_resolve(host_ptr: U8@, host_len: Sz, host_out: U8$@, host_cap: Sz,
-        host_len_out: Sz$@): I32
     // Resolves a name to every candidate as address text; the count, -1 unresolved, -2 short.
     fn kspl_net_resolve_all(host_ptr: U8@, host_len: Sz, texts: U8$@, stride: Sz, lens: Sz$@,
         cap: Sz): I32
@@ -66,10 +56,8 @@ pub enum Net_error //< why a socket operation failed
         //<
         //< **Keep "it did not resolve" apart from "it did not connect"**: otherwise a wrong name
         //< and a missing peer look the same, and nobody can tell which to fix.
-    addr_not_numeric //< a name was given where an address string is required
     addr_buffer_too_small //< the buffer for the address is shorter than `addr_text_max`
     bad_port //< the port is outside 0 to 65535, which a socket address cannot hold
-    datagram_too_long //< the datagram was longer than the buffer; it is consumed, its rest lost
     timed_out //<
         //< the peer did not answer within the wait (`read_for`, a connect past `connect_wait_ms`)
 
@@ -98,29 +86,15 @@ priv fn bound_port(handle: I64): I32!Net_error //< the port a socket is bound to
 priv fn transferred(n: I32): Sz!Net_error //<
     //< Turns the return value of a C send or receive (negative on failure) into a byte count
     //<
-    //< send/recv/send_to/recv_from all use this one check.
+    //< write and read both use this one check.
     if n < 0
         throw Net_error.io_failed.would_block_or()
     return Sz::n
 
-pub fn resolve_one( //< resolves a name to one address string and returns its length
-    //<
-    //< **You do not need to call it before connecting**: `Tcp_stream.connect` resolves by itself,
-    //< and this narrows the candidates to one. It returns the resolver's first candidate.
-    host: U8[], //< the name to resolve
-    out: U8$[], //< where the address text goes; at least `addr_text_max` long
-): Sz!Net_error //< the length of the address in `out`; fails on a short `out` or an unknown name
-    if out.len < addr_text_max
-        throw .addr_buffer_too_small
-    $n: Sz = 0
-    if kspl_net_resolve(host.ptr, host.len, out.ptr, out.len, n@) != 0
-        throw .resolve_failed
-    return n
-
 // ============================ Tcp_listener ============================
 priv fn handle_set_nonblocking(handle: I64): Void!Net_error //< makes a handle non-blocking
     //<
-    //< All three socket types use it. **It can fail, so it returns `!Net_error`**: a discarded
+    //< Both socket types use it. **It can fail, so it returns `!Net_error`**: a discarded
     //< `Bool` would not trigger [W0701], and the failure would pass unnoticed
     //< ("A failure is returned as `T!E`" in std/docs/DESIGN.md).
     if !kspl_net_set_nonblocking(handle)
@@ -324,24 +298,6 @@ impl Tcp_stream
             candidates[i] = U8[]::{ .ptr = hold.ptr + i * candidate_text_max, .len = lens[i] }
         return connect_over((U8[][]::candidates).sub(0, got), port, connect_wait_ms)
 
-    pub fn connect_nonblocking( //< starts a connection and returns at once
-        //<
-        //< The stream is not connected yet: wait until it is writable with std/reactor.kspls, then
-        //< call is_connected().
-        //< **It uses only one candidate**: moving to the next one would mean waiting. To connect by
-        //< name, use `connect`.
-        host: U8[], //< the address to connect to; only one candidate is tried
-        port: I32, //< the port on that host
-    ): Tcp_stream$@!Net_error
-        checked_port(port)!
-        return Tcp_stream
-            .connected_stream(kspl_tcp_connect_nonblocking(host.ptr, host.len, port))
-
-    pub fn is_connected(r: Self@): Bool //< whether the connection succeeded; if false, free it
-        //<
-        //< Call it after the writable notification arrives.
-        return kspl_net_connect_result(r.handle) == 1
-
     pub fn write( //< sends and returns how much was sent; a partial send is normal
         //<
         //< To send everything, use `write_all` (a separate name, as in Rust, because a missing loop
@@ -434,82 +390,5 @@ impl Tcp_stream
         if kspl_net_shutdown_write(r.handle) != 0
             throw .io_failed // the peer is already gone, or the socket is already closed
 
-// ============================ Udp_socket ============================
-pub struct Udp_recv_result //< one received datagram, and who sent it
-    pub len: Sz //< the payload size in bytes
-    pub from_host_len: Sz //< how many bytes of address text were written into the caller's buffer
-    pub from_port: I32 //< the sender's port
-
-pub struct Udp_socket //< a socket that sends and receives datagrams
-    priv handle: I64
-
-impl Udp_socket
-    pub fn bind( //< opens a socket on the address and port
-        //<
-        //< The host works as in `Tcp_listener.bind`.
-        host: U8[], //< the address to bind to; empty means `"0.0.0.0"`
-        port: I32, //< the port; 0 lets the OS choose a free one (see `port`)
-    ): Udp_socket$@!Net_error
-        checked_port(port)!
-        h: = opened(kspl_udp_open(host.ptr, host.len, port), .bind_failed)!
-        u: = mem.alloc_as<|Udp_socket|>()
-        u.handle = h
-        return u
-
-    pub fn send_to( //< sends one datagram and returns how much was sent
-        //<
-        //< The destination must be **an address string**; resolve a name once with `resolve_one`.
-        r: Self$@,
-        buf: U8[], //< the payload
-        host: U8[], //< the destination as an **address string**, not a name
-        port: I32, //< the destination's port
-    ): Sz!Net_error
-        checked_port(port)!
-        raw: =
-            kspl_udp_send_to(r.handle, buf.ptr, buf.len, host.ptr, host.len, port)
-        if raw == -2
-            throw .addr_not_numeric
-        return transferred(raw)
-
-    pub fn recv_from( //< receives one datagram and returns its size and who sent it
-        //<
-        //< A datagram longer than `buf` fails as `datagram_too_long`, on every OS, rather than come
-        //< back cut.
-        r: Self$@,
-        buf: U8$[], //< where the payload goes
-        from_host_out: U8$[], //< where the sender's address text goes; at least `addr_text_max` long
-    ): Udp_recv_result!Net_error
-        if from_host_out.len < addr_text_max
-            throw .addr_buffer_too_small
-        $from_host_len: Sz = 0
-        $from_port: I32 = 0
-        raw: =
-            kspl_udp_recv_from(r.handle, buf.ptr, buf.len, from_host_out.ptr, from_host_out.len,
-            from_host_len@, from_port@)
-        if raw == -3
-            throw .datagram_too_long
-        n: = transferred(raw)!
-        return Udp_recv_result::{
-            .len = n,
-            .from_host_len = from_host_len,
-            .from_port = from_port,
-        }
-
-    pub fn port(r: Self@): I32!Net_error //< the port it is bound to, the OS's choice for a 0
-        return bound_port(r.handle)!
-
-    pub fn free(r: Self$@) //< closes the socket and frees it
-        kspl_tcp_close(r.handle)
-        dealloc(Void$@::r)
-
-    pub fn raw_handle(r: Self@): I64 //<
-        //< the raw handle, the only thing `std/reactor` uses to register the socket
-        return r.handle
-
-    pub fn set_nonblocking(r: Self$@): Void!Net_error //<
-        //< makes it non-blocking, for use with `std/reactor`
-        handle_set_nonblocking(r.handle)!
-
 impl Tcp_listener: Owned {} //< it owns its resources and frees them with `free()`.
 impl Tcp_stream: Owned {} //< it owns its socket and memory and frees them with `free()`
-impl Udp_socket: Owned {} //< it owns its socket and memory and frees them with `free()`

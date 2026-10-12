@@ -1,7 +1,7 @@
 // ==========================================
 // kspage's JS side — the entry points for styling: colors on text, paragraph and inline styles,
 // the marker, the border and the fill, shapes, and the list of a slide's contents. **They are
-// added to the same `app` as [`api.js`](api.js)** (`api.js` / `api_io.js` / `api_look.js` /
+// added to the same `app` as [`api.js`](api.js)** (`api.js` / `api_look.js` /
 // `api_show.js` are one `app`). Split off for the 1000-line-per-file cap, and follows the same
 // boundary rules.
 //
@@ -264,10 +264,6 @@ function kspageApiLook(ks) {
     // nowhere for it).
     pickObject(i) {
       return acted(w.kspage_web_pick_object(i));
-    },
-    // Moves the selected frame by (dx, dy).
-    moveFrames(dx, dy) {
-      return acted(w.kspage_web_move_frames(dx, dy));
     },
     // Moves the selected frame one place in the stacking order. **False at either end.**
     raiseObject(up) {

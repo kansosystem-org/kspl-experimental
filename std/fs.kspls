@@ -1,8 +1,8 @@
 //< The file tree itself: listing a directory, metadata, deleting, renaming, creating
 //<
 //< `std/io` handles a file's contents; this module handles the tree around them. `read_dir` returns
-//< one level in the filesystem's order, while `walk_files` and `walk_dirs` descend and sort, so
-//< two walks over the same tree give the same result.
+//< one level in the filesystem's order, while `walk_files` descends and sorts, so two walks over
+//< the same tree give the same result.
 
 // ==========================================
 // Listing a directory and reading metadata (kspl_dir_*/kspl_stat/kspl_mkdir) use entirely
@@ -432,17 +432,11 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
     arena: Arena$@, //< where the paths are allocated
 ): List<|U8[]|>!Fs_error //< the file paths in sorted order; fails if a directory cannot be read
-    return walk_collect(path, skip_dir, arena, false)
-
-pub fn walk_dirs( //< every directory under a path, in one flat list
-    //<
-    //< The order, the prefix and `skip_dir` work as in `walk_files`, and `path` itself is **not
-    //< included** (it is a list of what is inside).
-    path: U8[], //< where the walk starts
-    skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
-    arena: Arena$@, //< where the paths are allocated
-): List<|U8[]|>!Fs_error //< the directory paths in sorted order; fails if one cannot be read
-    return walk_collect(path, skip_dir, arena, true)
+    $out: = List<|U8[]|>.new(arena)
+    walk_into(path, skip_dir, arena, out@, 0)!
+    return out.order_by(fn(a: U8[], b: U8[]; ): I32 {
+        return a.compare(b);
+    }, arena)
 
 pub fn skip_none(_name: U8[]): Bool //< a `skip_dir` that enters every directory
     return false
@@ -457,37 +451,23 @@ priv const max_walk_depth: Sz = 512 //< the maximum number of levels a walk desc
     //< Each level is one native stack frame, so a deep tree (or a link cycle) would exhaust the
     //< stack; `too_deep` lets the caller report the cause.
 
-priv fn walk_collect(path: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@, want_dirs: Bool):
-    List<|U8[]|>!Fs_error
-    $out: = List<|U8[]|>.new(arena)
-    walk_into(path, skip_dir, arena, out@, want_dirs, 0)!
-    return out.order_by(fn(a: U8[], b: U8[]; ): I32 {
-        return a.compare(b);
-    }, arena)
-
 priv fn walk_into(dir: U8[], skip_dir: fn(name: U8[]): Bool, arena: Arena$@,
-    out: List<|U8[]|>$@, want_dirs: Bool, depth: Sz): Void!Fs_error //<
-        //< Collects the files, or the directories, below dir into out
-        //<
-        //< With want_dirs it collects only directories, otherwise only files; one function keeps
-        //< the pruning rule in one place.
+    out: List<|U8[]|>$@, depth: Sz): Void!Fs_error //<
+        //< Collects the files below dir into out
     if depth >= max_walk_depth
         throw .too_deep
     entries: = read_dir(dir, arena)!
     for name in entries // read_dir leaves out `.` and `..`
         full: = join(dir, name, arena)
         if !is_dir(full)
-            if !want_dirs
-                out.push(full)
+            out.push(full)
             continue
         // Caution: **Do not enter a link to a directory** (Python's `os.walk` default). Followed,
         // two links to `.` make a walk visit 2^depth directories before `max_walk_depth` stops it,
         // and a link out of the tree hands `copy_tree` files from elsewhere (a link to `~/.ssh`).
         if skip_dir(name) || is_link(full)
             continue
-        if want_dirs
-            out.push(full)
-        walk_into(full, skip_dir, arena, out, want_dirs, depth + 1)!
+        walk_into(full, skip_dir, arena, out, depth + 1)!
 
 // ==========================================
 // Making a scratch directory, and writing and copying a tree

@@ -170,9 +170,7 @@ Caution: **Do not append an empty record to a kind read with `catch 0`.** There 
 
 ### Power cuts are tested at every point, not at chosen ones
 
-The tests cut the power at every write the log makes, and check after each cut that nothing finished was lost.
-
-**"The records finished before it must always read back" is this package's promise**, and a hand-picked cut point tests only where it was picked. `tests/ksdb_test.kspls` cuts each write in turn, after 0, 1 and 4 bytes of it. Each time it does three things:
+**The tests cut the power at every write the log makes, and check after each cut that nothing finished was lost: "the records finished before it must always read back" is this package's promise**, and a hand-picked cut point tests only where it was picked. `tests/ksdb_test.kspls` cuts each write in turn, after 0, 1 and 4 bytes of it. Each time it does three things:
 
 1. it reopens the log;
 2. it checks that the finished records read back in order;

@@ -1,14 +1,21 @@
 //< A name reaches the same declaration on every route it is written in
 //<
-//< A typedef of another file's type names that type's static method in a call as in a value ("A
-//< typedef is only another name" in docs/SPEC-language.md). Read by the call's own lookup,
-//< `Nr_text.new` would be taken for another file's function written without its import alias.
+//< Through a typedef of another file's type, through both notations `import … + { … }` brings in,
+//< and through another file's alias of an opaque C struct: were two declarations reached, the calls
+//< and comparisons below would be refused or would disagree.
+import "ksplc/tests/extern_path/handle"
+import "std/mem" + { Arena, alloc, dealloc }
 import "std/str"
 import "std/verdict"
 
+// ==========================================
+// A typedef of another file's type names that type's static method in a call as in a value ("A
+// typedef is only another name" in docs/SPEC-language.md). Read by the call's own lookup,
+// `Nr_text.new` would be taken for another file's function written without its import alias.
+// ==========================================
 priv typedef Nr_text = str.Str_builder
 
-fn run()
+fn test_typedef_reaches_static_method()
     verdict.start("[names] a name reaches one declaration on every route test...")
     $called: = Nr_text.new()
     defer called.free()
@@ -20,3 +27,47 @@ fn run()
     made.s("abc")
     assert(made.slice().len == 3, "and names it as a value, the same function")
     verdict.pass("")
+
+// ==========================================
+// `import "p" + { A };` brings in the qualified name and the bare name **at the same time**.
+// **Translating cleanly is not enough**: a name never written stays unresolved and still green, so
+// both notations must reach the same definition and give the same answer.
+// ==========================================
+fn test_plus_brings_the_alias_and_the_bare_names() //<
+    //< Checks that the bare name and the qualified name point at the same type and function
+    //<
+    //< **Do not write only one of them** (the note above the test).
+    verdict.start("[import] `+` brings in the qualified name and the bare name at once test...")
+    bare: = Arena.new(4096)
+    defer bare.free()
+    qualified: = mem.Arena.new(4096)
+    defer qualified.free()
+    assert(bare.default_chunk_size == qualified.default_chunk_size,
+        "the two notations point at the same type")
+
+    // A function resolves by both notations too.
+    // Caution: **Mix the notations between the allocation and the release** — if they resolved to
+    // separate definitions, the release would not match here.
+    p: = alloc(64)
+    assert(p != null, "the bare name can allocate")
+    mem.dealloc(p)
+    q: = mem.alloc(64)
+    assert(q != null, "the qualified name can allocate")
+    dealloc(q)
+    verdict
+        .pass("`+` brings in both the qualified name and the bare name, and both point at the same \
+            definition.")
+
+// ==========================================
+// An opaque C struct named from another file is the same type as in its own file.
+// ==========================================
+fn test_extern_struct_through_an_alias() //<
+    //< That `handle.Kspl_test_handle` here is the type `extern_path/handle.kspls` declares
+    //<
+    //< **Compiling is the check**: were they two types, the call and the comparison would be
+    //< refused.
+    verdict.start("[extern] an opaque C struct named through another file's alias test...")
+    h: handle.Kspl_test_handle$@ = null
+    back: handle.Kspl_test_handle$@ = handle.same_handle(h)
+    assert(back == h, "the handle comes back as it went")
+    verdict.pass("The name through the alias and the bare name are one type.")

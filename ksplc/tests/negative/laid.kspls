@@ -1,0 +1,329 @@
+//< The indentation notation: layout, colons and the top level
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case colons_as_generic_path
+//< `::` after a generic type suggests the `.` spelling, with the type arguments as written
+//<
+//< **The instance's registered name must not reach the message** (`std_ds_List_I32`); it
+//< names nothing the writer wrote.
+// EXPECT: colons_as_generic_path.kspls:15:21: error: '::' is not a path separator in KSPL
+// EXPECT: write 'List<|I32|>.new'
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: std_ds_List
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+fn main(): I32
+  arena: = Arena.new(1024)
+  defer arena.free()
+  $xs: = List<|I32|>::new(arena)
+  xs.push(1)
+  return I32::xs.len
+// ==== case colons_as_module_path
+//< `::` used as a path through a module suggests the `.` spelling, in one error
+//<
+//< **A module is never a cast's type**, so `io::out()` can only be a path. Read as a cast, the type
+//< check calls `io` an undefined type and the operand an undefined name, and neither names the fix.
+// EXPECT: colons_as_module_path.kspls:13:5: error: '::' is not a path separator in KSPL
+// EXPECT: write 'io.out'
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: undefined type
+// EXPECT-NOT: undefined path
+import "std/io"
+
+fn main(): I32
+  io::out().s("x\n")
+  return 0
+// ==== case colons_as_type_path
+//< `::` used as a path through a type suggests the `.` spelling, in one error
+//<
+//< **A writer from Rust or C++ reaches for `Type::member`**, and in KSPL `::` is the cast. Read as
+//< one, `new` is undefined and the cast fails, and the value it yields breaks the `defer` below:
+//< three errors, none naming the fix. Read as the member, the mistake is the one error.
+// EXPECT: colons_as_type_path.kspls:15:17: error: '::' is not a path separator in KSPL
+// EXPECT: write 'Arena.new'
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: undefined path
+// EXPECT-NOT: cannot cast
+// EXPECT-NOT: read-only
+import "std/mem" { Arena }
+
+fn main(): I32
+  arena: = Arena::new(1024)
+  defer arena.free()
+  return 0
+// ==== case laid_block_without_body
+//< A block with no content cannot be written with indentation alone
+//<
+//< Only a deeper line opens a step, so an empty block, **or one holding a comment alone**, has
+//< nothing to open it. The fix keeps the braces ("The indentation notation (`.kspls`)" in
+//< `../../../docs/DESIGN.md`); without that Note the error reads as a ternary `if` not being level.
+// EXPECT: a block with no body cannot be written by indentation alone
+import "std/io"
+
+fn main(): I32
+  if 1 < 0
+    // the content is a comment alone
+  io.out().s("C\n")
+  return 0
+// ==== case laid_bracket_never_closed
+//< An unclosed `(`: the Note names where it opened
+//<
+//< The lines after an open bracket read as its contents, so the failure lands on the next line,
+//< where the `)` was expected. The Note sends the writer back to the bracket.
+// EXPECT: laid_bracket_never_closed.kspls:14:3: error: expected ')'
+// EXPECT: the '(' at line 13, column 11 is never closed, so what follows it was read
+import "std/io"
+
+priv fn add(a: I32, b: I32): I32
+  return a + b
+
+fn main(): I32
+  x: = add(1, 2
+  y: = 3
+  io.out().s("\{x + y\}").c('\n')
+  return 0
+// ==== case laid_choice_split_after_else
+//< A conditional value broken after its `else`, outside parentheses
+//<
+//< **Breaking behind the `else` is not a continuation either.** A line ending in `else` is where a
+//< statement's `else` opens its level, so only a bracket carries a value on.
+// EXPECT: a conditional value split across lines goes in parentheses
+fn pick(c: Bool): I32
+  x: = 100000 + 200000 if c else
+    2
+  return x
+
+fn main(): I32
+  return pick(true)
+// ==== case laid_choice_split_before_else
+//< A conditional value broken before its `else`, outside parentheses
+//<
+//< **The `else` is there, one line down**, so "a postfix condition has no `else`" must
+//< not be what is said.
+// EXPECT: a conditional value split across lines goes in parentheses
+// EXPECT-NOT: KSPL has no postfix condition
+fn pick(c: Bool): I32
+  x: = 100000 + 200000 if c
+    else 2
+  return x
+
+fn main(): I32
+  return pick(true)
+// ==== case laid_choice_split_before_if
+//< A conditional value broken before its `if`, outside parentheses
+//<
+//< **A line starting with `if` is a statement's heading**, so the value's first half stands alone
+//< and the reader opens a level behind it. The Note names the parentheses that let a value break.
+// EXPECT: a conditional value split across lines goes in parentheses
+fn pick(c: Bool): I32
+  x: = 100000 + 200000
+    if c else 2
+  return x
+
+fn main(): I32
+  return pick(true)
+// ==== case laid_comma_missing_in_closed_call
+//< A `,` missing inside a call whose bracket is closed further on
+//<
+//< **"Never closed" is settled over the rest of the text.** Here the `)` comes two lines down, so
+//< the mistake is inside the bracket: the Note names the `,` between two items, not the bracket.
+// EXPECT: laid_comma_missing_in_closed_call.kspls:13:7: error: expected ')'
+// EXPECT: a ',' may be missing before '3'
+// EXPECT-NOT: is never closed
+priv fn add(a: I32, b: I32, c: I32): I32
+  return a + b + c
+
+fn main(): I32
+  x: = add(1,
+    2 3,
+    4)
+  return x
+// ==== case laid_defer_behind_a_declaration
+//< A `defer` written behind a declaration on the same line
+//<
+//< A `defer` is a statement of its own. The Note gives the line to write, the declared name put in
+//< front of the call, so the fix need not be worked out from the grammar's expectations.
+// EXPECT: a 'defer' is a statement of its own and cannot trail another
+// EXPECT: Put 'defer xs.free()' on the next line
+import "std/ds" { List }
+
+fn main(): I32
+  $xs: = List<|I32|>.new(null) defer .free()
+  xs.push(1)
+  return 0
+// ==== case laid_defer_on_its_own_line
+//< `defer .free()` on a line of its own: a cleanup that names nothing
+//<
+//< A `defer` takes the statement to run, and a method called on nothing has no receiver. The
+//< leading `.` would otherwise be read as an enum's value, and "no type to infer it from" sends
+//< the writer looking at enums.
+// EXPECT: a 'defer' names what it cleans up, and '.free()' has nothing in front of it
+// EXPECT: Write the variable: 'defer x.free()'
+// EXPECT-NOT: cannot infer enum type
+import "std/ds" { List }
+
+fn main(): I32
+  $xs: = List<|I32|>.new(null)
+  defer .free()
+  xs.push(1)
+  return 0
+// ==== case laid_group_holds_one_value
+//< Two values side by side inside grouping parentheses
+//<
+//< **Grouping parentheses hold one value**, so a `,` there would be as wrong as the gap; the Note
+//< that names a missing `,` stays for a list's brackets.
+// EXPECT: expected ')'
+// EXPECT-NOT: may be missing
+fn main(): I32
+  x: = (1 2)
+  return x
+// ==== case laid_ideographic_space
+//< Some characters look like indentation on screen but do not count as indentation
+//<
+//< **Easiest to tread on with Japanese input: the ideographic space (U+3000).** Only the half-width
+//< space counts, so the line sits at column 0, leaves the step, and the syntax error says nothing
+//< of the cause; a Note names the character (as Python's `invalid non-printable character U+00A0`).
+// EXPECT: an ideographic space (U+3000)
+import "std/io"
+
+fn main(): I32
+  io.out().s("A\n")
+　io.out().s("B\n")
+  return 0
+// ==== case laid_ragged_sibling
+//< In the indentation notation, siblings in one block whose columns do not line up are rejected
+//<
+//< A piled step keeps only the heading's column (`Frame` in `../../parse/layout.kspls`), so the
+//< `4 columns` line reads as outside the `if` yet is inside it: two readings, two programs, which
+//< Principle 8 in `../../../docs/DESIGN.md` refuses. **It carries no code**, so none can switch it.
+// EXPECT: but its siblings sit
+// EXPECT-NOT: [W0105]
+import "std/io"
+
+fn main(): I32
+  if 1 < 0
+      io.out().s("6 columns\n")
+    io.out().s("4 columns — not level with the sibling\n")
+  io.out().s("2 columns\n")
+  return 0
+// ==== case laid_switch_case_indented
+//< A `case` indented under its `switch`, the way Python's `match` lays its arms out
+//<
+//< **A `switch` opens no block**, so a deeper line opens one the grammar does not have. The Note
+//< says where the arms go: at the `switch`'s column, the first on the line below.
+// EXPECT: laid_switch_case_indented.kspls:9:12: error: expected 'case'
+// EXPECT: Note: a 'switch' opens no block of its own; each 'case' and 'default' opens one. Put them in the column of 'switch', the first 'case' on the line below it.
+fn main(): I32
+  e: = 1
+  switch e
+    case 1
+      return 1
+    default
+      return 2
+// ==== case laid_switch_case_shallower
+//< A `case` shallower than its `switch`
+//<
+//< **The head takes its first arm only at its own column**: a shallower line belongs to the level
+//< outside, so the head is left ended, the error lands at its line's end, and no Note claims a
+//< block.
+// EXPECT: laid_switch_case_shallower.kspls:11:13: error: expected 'case'
+// EXPECT-NOT: opens no block of its own
+fn main(): I32
+  e: = 1
+  if e > 0
+    switch e
+  case 1
+    return 1
+  return 2
+// ==== case laid_trailing_closure_absent
+//< A closure written after a call's `)`, as Swift and Kotlin allow
+//<
+//< KSPL has none ("Appendix A: Features not carried, and what to write instead" in
+//< `../../../docs/SPEC-language.md`). Alone, the expectation set asks for a `;`, so a Note names
+//< it and two forms instead (`forbidden_spelling_hint` in `../../parse/syntax_msg.kspls`).
+// EXPECT: KSPL has no trailing closure
+// EXPECT: bind it to a name first
+priv fn count_over(xs: I32[], pred: Callable1<|I32, Bool|>): Sz
+  $n: Sz = 0
+  for x in xs
+    if pred.call(x)
+      n += 1
+  return n
+
+fn main(): I32
+  xs: = I32[]::{ 3, 9, 6 }
+  floor: = 4
+  big: = count_over(xs) fn(x: I32; floor: I32): Bool
+    return x > floor
+  return I32::big
+// ==== case laid_value_below_return
+//< A value on the line below a lone `return`
+//<
+//< **A `return` alone is a bare return**, so the deeper line below it cannot be its value as well.
+//< The Note says where the value starts, and that parentheses split a long one.
+// EXPECT: a 'return' takes its value on the same line
+fn message(): U8[]
+  return
+    "a message long enough that someone moved it below the return"
+
+fn main(): I32
+  return I32::message().len - 61
+// ==== case toplevel_init_call
+//< A call in a top-level variable's initialiser is rejected, since C needs a constant there
+//<
+//< The initialiser becomes the generated C's file-scope initialiser, and a call is run-time work;
+//< unrefused, only the C compiler's `initializer element is not constant` surfaces, with no
+//< diagnostic at KSPL's layer.
+// EXPECT: top-level variable initializer is not a compile-time constant
+fn side(): I32
+  return 7
+$g: I32 = side()
+fn main()
+  if g == 0
+    return
+// ==== case toplevel_init_var_read
+//< Reading another top-level variable is not a constant either
+//<
+//< In C too, `int b = a;` is not a constant expression at file scope.
+//< A const reference, an enum variant and an address-taking `a@` are legitimate as constants, so
+//< what is refused is only "reading a variable's value".
+// EXPECT: top-level variable initializer is not a compile-time constant
+$a: I32 = 1
+$b: I32 = a
+fn main()
+  if b == 0
+    return
+// ==== case toplevel_type_required
+//< A top-level declaration must carry a type annotation, and is rejected without one
+//<
+//< Made omittable, the declaration quietly becomes an `I32` and `g: = 2.5` truncates to 2 with no
+//< diagnostic. Inference is for locals alone: the top level is a file's interface, so its type is
+//< stated (docs/SPEC-language.md §4.1 "The range of type inference").
+// EXPECT: top-level declaration 'g_f' requires a type annotation
+// EXPECT: top-level declaration 'c_n' requires a type annotation
+
+g_f: = 2.5
+const c_n = 8
+
+fn main()
+  _x: = g_f
+  _y: = c_n
+// ==== case toplevel_type_required_ok
+//< The counterpart of the case above
+//<
+//< A local and a local const may omit the annotation: the rule is the top level's alone, not a
+//< stop on inference. An undefined symbol fails it on purpose, and the EXPECT-NOT pins that no
+//< annotation diagnostic joins it.
+// EXPECT: undefined path or identifier 'no_such_fn'
+// EXPECT-NOT: requires a type annotation
+
+g_f: F64 = 2.5
+const c_n: Sz = 8
+
+fn main()
+  local_f: = 2.5
+  const local_n = 8
+  _x: = local_f + g_f
+  _y: = local_n + c_n
+  no_such_fn()

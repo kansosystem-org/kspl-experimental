@@ -445,7 +445,6 @@ impl Editor
         for $i: Sz = 0; i < blocks.len; i += 1
             field.do_set_block_style(r, r.step(), blocks.get(i), face)
         r.break_group()
-        r.again = .block_style(face)
         return .done
 
     fn frame_at(r: Self$@): Block$@? //< the current frame
@@ -509,24 +508,42 @@ impl Editor
             return true
         return false
 
-    fn aside_at(r: Self$@, page: Page$@): U8[] //< the memo beside the cursor's container
+    priv fn slide_at(r: Self$@, page: Page$@): Block$@? //< the slide the cursor is in
         //<
-        //< Empty when not inside a container.
-        //< Caution: **Call it after layout** (whether it is inside a cell cannot be told before).
-        if b: = r.holder_at(page)
+        //< The nearest block around the cursor that layout laid out as a slide (`Page.surfaces`):
+        //< whether a block is a slide is its style's to say, so only layout knows.
+        own: = r.doc.owner_of(r.caret.inline)
+        if !own.found
+            return .none
+        $b: Block$@ = own.block
+        for b != null
+            for $i: Sz = 0; i < page.surfaces.len; i += 1
+                if page.surfaces.get(i).block == b
+                    return .some(b)
+            nest: = r.doc.parent_of(b)
+            if !nest.found
+                return .none
+            b = nest.block
+        return .none
+
+    fn aside_at(r: Self$@, page: Page$@): U8[] //< the presenter's note on the cursor's slide
+        //<
+        //< Empty when not inside a slide.
+        //< Caution: **Call it after layout** (whether a block is a slide cannot be told before).
+        if b: = r.slide_at(page)
             return b.aside
         return ""
 
     fn set_aside(r: Self$@, page: Page$@, text: U8[]): Bool //<
-        //< Puts a memo beside the cursor's container
+        //< Puts the presenter's note on the cursor's slide
         //<
-        //< An empty text removes it. **A memo does not appear in the flow** — no layout, printing
-        //< or export reads it (beside a presentation slide it is the speaker's note). Only inside a
-        //< container: beside an ordinary paragraph nothing on the screen would show it.
+        //< An empty text removes it. **It does not appear in the flow** — no layout, printing or
+        //< export reads it; the show puts it out. Only on a slide: nothing else is shown to an
+        //< audience, so a note anywhere else would be read by nobody.
         if r.shut()
             return false
         $held: Block$@ = null
-        switch r.holder_at(page)
+        switch r.slide_at(page)
         case .some(b)
             held = b
         case .none

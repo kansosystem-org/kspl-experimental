@@ -37,12 +37,12 @@ Caution: **After adding a test, add its import and call to that package's `<pack
 
 These steps add a suite under `tests/suite/`. A suite of the compiler's own goes under `ksplc/tests/suite/` instead, registered in `ksplc/Makefile`; its steps are "A suite" in [`docs/HOWTO-add-a-gate.md`](../../docs/HOWTO-add-a-gate.md).
 
-1. **Write the suite** as `tests/suite/<stem>_test.kspls`, starting from the program in "The manners for writing a suite" below. A suite name with a `-` takes `_` in the file name (`lsp-tree` is `lsp_tree_test.kspls`).
-2. **Register it in [`mk/test.mk`](../../mk/test.mk)**: add a line `suite_<name> := suite/<stem>_test.kspls`, and add `<name>` to one list:
+1. **Write the suite** as `tests/suite/<stem>_test.kspls`, starting from the program in "The manners for writing a suite" below. Its name is the stem with `-` for `_` (`lsp_tree_test.kspls` is `lsp-tree`).
+2. **List it in [`mk/test.mk`](../../mk/test.mk)**, in one of:
    * `SUITES`, longest CPU time first (`make test-suites` prints each suite's time), for most suites;
    * `LINUX_SUITES`, for a suite whose tool only Linux's image holds; it then needs a gate of its own ("A gate" in [`docs/HOWTO-add-a-gate.md`](../../docs/HOWTO-add-a-gate.md)).
 
-   A name in `SUITES` may also go into `SUITES_TEXT`, when its answer cannot differ by platform (it then runs on Linux alone), or `SUITES_B`, to balance CI's two halves. `make` stops at start-up, saying which, when a suite file has no `suite_<name>`, a name stands in no list, or a list names an unknown suite.
+   A name in `SUITES` may also go into `SUITES_TEXT`, when its answer cannot differ by platform (it then runs on Linux alone), or `SUITES_B`, to balance CI's two halves. `make` stops at start-up, saying which, when a suite file stands in no list, or a list names a suite with no file.
 3. **Name it in the platform table**, "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md), usually in a row's bracketed list. `make test-conventions` fails with "the platform table names every gate and suite CI runs" until it is there.
 4. **A new module of the conventions suite** (`tests/support/conventions_<x>.kspls`) is called from `main` in `tests/suite/conventions_test.kspls`, or from a module it already calls; one nothing calls checks nothing.
 5. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
@@ -142,9 +142,9 @@ Each row is a symptom you may meet, what causes it, and where the fix is describ
 
 | Symptom | Cause | Fix |
 | :-- | :-- | :-- |
-| `make` stops at start-up, before any suite runs | `suite_<name>` and `SUITES` in `mk/test.mk` disagree | Step 2 of "Adding a suite, step by step" |
+| `make` stops at start-up, before any suite runs | The files under `tests/suite/` and the lists in `mk/test.mk` disagree | Step 2 of "Adding a suite, step by step" |
 | A new package test never runs, and everything stays green | Its file is not imported and called from `<package>/tests/all.kspls` | "Where a new test goes" |
-| The suite passes on the stage1 just built, but `make test-<name>` alone fails | The suite uses a notation the seed does not know yet | Re-bake the seed (step 3) |
+| The suite passes on the stage1 just built, but `make test-<name>` alone fails | The suite uses a notation the seed does not know yet | Re-bake the seed (step 5) |
 | A check fails only on Windows, as "the head does not match" or "a blank line is not found" | A generated file read raw, so it holds `\r\n` | `ksplc_harness.read_generated` |
 | A header or token holds a stray `\r` on Windows, or `make test-conventions` reports "a test does not cut a child's output into lines by hand" | A child's output cut into lines at `'\n'` by hand | `htext.line_after()` |
 | Two suites fail together, each seeing the other's files | They share a workspace name | Give each suite its own name in `harness.sandbox` |

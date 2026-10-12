@@ -1,14 +1,18 @@
+//<
 import "kspage/expr/calc"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
-import "kspage/model/doc" { Doc, Block }
+import "kspage/model/doc" { Block, Doc }
 import "kspage/model/fixed_font" as fixed
 import "kspage/tests/base"
 import "kspage/write/block"
 import "kspage/write/edit"
 import "kspage/write/typing"
+import "std/chars"
+import "std/io"
 import "std/mem" { Arena }
 import "std/str"
+import "std/strfmt" as _strfmt
 import "std/verdict"
 
 // ==========================================
@@ -39,88 +43,183 @@ fn one_row(d: Doc$@, a: U8[], b: U8[]): Block$@ //< a table with one row
     add_cell(r, b)
     return t
 
-fn test_a_formula_shows_its_value(arena: Arena$@)
-    verdict.start("[kspage/calc] a formula becoming its value test...")
-    d: = Doc.new(arena)
-    t: = one_row(d, "=1+2*3", "=(1+2)*3")
+// ---- what a formula shows ----
 
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 0).equals("7"), "the multiplication acts first")
-    assert(cell_text(t, 0, 1).equals("9"), "the brackets change what comes first")
-    verdict.pass("a formula is solved, and the text seen turns into the value.")
+priv struct Case //< one table solved, and what one of its cells shows
+    cells: U8[] //< the table, its rows split by a newline and a row's cells by a tab
+    row: Sz
+    column: Sz
+    want: U8[] //< the text that cell shows once solved
+    why: U8[] //< what the case is about, named where it fails
 
-fn test_a_reference_reads_another_cell(arena: Arena$@)
-    verdict.start("[kspage/calc] a reference reading another cell test...")
-    d: = Doc.new(arena)
-    t: = one_row(d, "2", "=A1*3")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 0).equals("2"), "a plain text is not rewritten")
-    assert(cell_text(t, 0, 1).equals("6"), "the value referred to goes in")
-    verdict.pass("a formula can read another cell of the same table.")
-
-fn test_dependencies_resolve_regardless_of_order(arena: Arena$@) //<
-    //< Resolved in dependency order, not row order (a row may depend on one after it)
-    verdict.start("[kspage/calc] the dependencies solving whatever the order test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    add_cell(add_row(t), "=A2+1")
-    add_cell(add_row(t), "=A3+1")
-    add_cell(add_row(t), "1")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 2, 0).equals("1"), "the value it comes from")
-    assert(cell_text(t, 1, 0).equals("2"), "the one above it")
-    assert(cell_text(t, 0, 0).equals("3"), "a cell that comes first is solved too")
-    verdict.pass("the order it solves is the order of the dependencies, not the order written.")
-
-fn test_a_cycle_is_reported(arena: Arena$@)
-    verdict.start("[kspage/calc] going round in circles coming out as a mark test...")
-    d: = Doc.new(arena)
-    t: = one_row(d, "=B1", "=A1")
-
+priv const cases: Case[_] = ::{
+    Case::{ .cells = "=1+2*3", .row = 0, .column = 0, .want = "7",
+        .why = "the multiplication acts first" },
+    Case::{ .cells = "=(1+2)*3", .row = 0, .column = 0, .want = "9",
+        .why = "the brackets change what comes first" },
+    Case::{ .cells = "=1/4", .row = 0, .column = 0, .want = "0.25",
+        .why = "a fraction is left (the trailing 0 is dropped)" },
+    Case::{ .cells = "=-(1+2)*3", .row = 0, .column = 0, .want = "-9",
+        .why = "the one-sided minus and the brackets act" },
+    Case::{ .cells = "2\t=A1*3", .row = 0, .column = 0, .want = "2",
+        .why = "a plain text is not rewritten" },
+    Case::{ .cells = "2\t=A1*3", .row = 0, .column = 1, .want = "6",
+        .why = "the value referred to goes in" },
+    // Solved in dependency order, not row order: a row may depend on one after it.
+    Case::{ .cells = "=A2+1\n=A3+1\n1", .row = 1, .column = 0, .want = "2",
+        .why = "a cell is solved after the one it reads" },
+    Case::{ .cells = "=A2+1\n=A3+1\n1", .row = 0, .column = 0, .want = "3",
+        .why = "a cell that comes first is solved too" },
     // If it looped here, the test itself would never end.
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 0).equals("#CYCLE!"),
-        "a reference that comes back to itself becomes a mark")
-    verdict
-        .pass("a reference that goes round back to itself comes out as a mark instead of circling.")
+    Case::{ .cells = "=B1\t=A1", .row = 0, .column = 0, .want = "#CYCLE!",
+        .why = "a reference that comes back to itself becomes a mark" },
+    Case::{ .cells = "x\t=A1", .row = 0, .column = 1, .want = "#VALUE!",
+        .why = "point at a cell that is no number and it is #VALUE!" },
+    Case::{ .cells = "=Z9", .row = 0, .column = 0, .want = "#REF!",
+        .why = "point at a cell that is not there and it is #REF!" },
+    Case::{ .cells = "=1+", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a formula that cannot be read through is #SYNTAX!" },
+    Case::{ .cells = "=1/0", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "divide by 0 and it is #VALUE!" },
+    // Read partway and let through, a typo would pass silently.
+    Case::{ .cells = "=1 2", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a formula with something left unread is #SYNTAX! too" },
+    // Folding a range.
+    Case::{ .cells = "1\n2\n=A1:A2.sum()", .row = 2, .column = 0, .want = "3",
+        .why = "the numbers inside the range are added" },
+    Case::{ .cells = "head\n\n5\n=A1:A3.sum()", .row = 3, .column = 0, .want = "5",
+        .why = "only the numbers in a range are added" },
+    Case::{ .cells = "head\n\n5\n=A1:A3.count()", .row = 3, .column = 0, .want = "1",
+        .why = "only the numbers in a range are counted" },
+    // Skipped, a total alone would look right.
+    Case::{ .cells = "1\n=A2\n=A1:A2.sum()", .row = 2, .column = 0, .want = "#CYCLE!",
+        .why = "a broken cell's mark carries as far as the total" },
+    Case::{ .cells = "4\n1\n7\n=A1:A3.min()", .row = 3, .column = 0, .want = "1",
+        .why = "the smallest value" },
+    Case::{ .cells = "4\n1\n7\n=A1:A3.max()", .row = 3, .column = 0, .want = "7",
+        .why = "the largest value" },
+    Case::{ .cells = "4\n1\n7\n=A1:A3.count()", .row = 3, .column = 0, .want = "3",
+        .why = "the count of numbers" },
+    Case::{ .cells = "x\n=A1:A1.sum()", .row = 1, .column = 0, .want = "0",
+        .why = "with nothing added the total is 0" },
+    Case::{ .cells = "x\n=A1:A1.min()", .row = 1, .column = 0, .want = "#VALUE!",
+        .why = "with no number the smallest value is none" },
+    // A sum of separate parts is written with `+` (a formula's own form is not a function).
+    Case::{ .cells = "1\t2\n=A1:B1.sum() + 10 + A1*3", .row = 1, .column = 0, .want = "16",
+        .why = "an addition carries on from a range's sum" },
+    Case::{ .cells = "1\t2\n=A1:B1.sum(10)", .row = 1, .column = 0, .want = "#SYNTAX!",
+        .why = "no argument goes to anything that folds" },
+    Case::{ .cells = "1\n2\n=A2:A1.sum()", .row = 2, .column = 0, .want = "3",
+        .why = "written bottom to top it is the same range" },
+    Case::{ .cells = "1\n=A1:Z9.sum()", .row = 1, .column = 0, .want = "#REF!",
+        .why = "a range sticking out past the cells is #REF!" },
+    Case::{ .cells = "1\n=A1.nope()", .row = 1, .column = 0, .want = "#NAME!",
+        .why = "a method name it does not know is #NAME!" },
+    // A name that is no fold is refused, so it does not mix with a value's methods.
+    Case::{ .cells = "1\n2\n=A1:A2.nope()", .row = 2, .column = 0, .want = "#NAME!",
+        .why = "a fold a range does not have is #NAME!" },
+    Case::{ .cells = "1\n=A1.sum()", .row = 1, .column = 0, .want = "#NAME!",
+        .why = "a fold cannot be written on a value" },
+    // An address too large: nothing caps its digits, so plain arithmetic would overflow.
+    // 2^64 + 1: wrapped around, it would point at A1 (= 7).
+    Case::{ .cells = "7\t=A18446744073709551617", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a row number that overflows is no cell" },
+    Case::{ .cells = "7\t=ZZZZZZZZZZZZZZZZ1", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a column number that overflows is no cell" },
+    // The same mistake must not become another mark with the number's size.
+    Case::{ .cells = "7\t=A999", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a number merely large gives the same mark" },
+    Case::{ .cells = "7\t=A1:A18446744073709551617.sum()", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a range whose end overflows" },
+    // Comparing, choosing and rounding. A comparison gives 1 (true) or 0 (false).
+    Case::{ .cells = "3\t=A1>2", .row = 0, .column = 1, .want = "1", .why = "larger, it is 1" },
+    Case::{ .cells = "3\t=A1<2", .row = 0, .column = 1, .want = "0",
+        .why = "not smaller, it is 0" },
+    Case::{ .cells = "3\t=A1>=3", .row = 0, .column = 1, .want = "1",
+        .why = "at least can be compared" },
+    Case::{ .cells = "3\t=A1<=2", .row = 0, .column = 1, .want = "0",
+        .why = "at most can be compared" },
+    Case::{ .cells = "3\t=A1<>3", .row = 0, .column = 1, .want = "0",
+        .why = "not equal can be compared" },
+    Case::{ .cells = "3\t=A1=3", .row = 0, .column = 1, .want = "1",
+        .why = "equal can be compared" },
+    Case::{ .cells = "1\t=1<2<3", .row = 0, .column = 1, .want = "#SYNTAX!",
+        .why = "comparisons written in a chain cannot be read" },
+    Case::{ .cells = "0\t=10 if A1>0 else 20", .row = 0, .column = 1, .want = "20",
+        .why = "false, it is the third value" },
+    Case::{ .cells = "0\t=0 if A1=0 else 1/A1", .row = 0, .column = 1, .want = "0",
+        .why = "the error on the side not picked does not come out" },
+    Case::{ .cells = "0\t=1 if Z9=1 else 2", .row = 0, .column = 1, .want = "#REF!",
+        .why = "an error in the condition comes out as it stands" },
+    // Without `else`, the value for a false condition would be undefined.
+    Case::{ .cells = "0\t=1 if A1>0", .row = 0, .column = 1, .want = "#SYNTAX!",
+        .why = "with no `else` it is refused" },
+    // The same syntax as KSPL's: one form to remember.
+    Case::{ .cells = "2\t=10 if A1 < 1 else 20 if A1 < 5 else 30", .row = 0, .column = 1,
+        .want = "20", .why = "the second condition can pick" },
+    Case::{ .cells = "2\t=10 if A1 < 1 else 20 if A1 > 5 else 30", .row = 0, .column = 1,
+        .want = "30", .why = "none matching, the last value" },
+    Case::{ .cells = "1.4\t1.6\n=A1:B1.sum().round(0)", .row = 1, .column = 0, .want = "3",
+        .why = "a rounding carries on from a fold" },
+    // Taking a part of a day is a method too; the value holds a day count.
+    Case::{ .cells = "=Day.of(2026, 8, 18).year()", .row = 0, .column = 0, .want = "2026",
+        .why = "the year of a day made from the type" },
+    Case::{ .cells = "=Day.of(2026, 8, 18).month()", .row = 0, .column = 0, .want = "8",
+        .why = "the month of a day" },
+    Case::{ .cells = "=Day.of(2026, 8, 18).day()", .row = 0, .column = 0, .want = "18",
+        .why = "the day of a day" },
+    // `round` rounds the value itself, a half away from 0.
+    Case::{ .cells = "=1.2345.round(2)", .row = 0, .column = 0, .want = "1.23",
+        .why = "it rounds at the decimal place" },
+    Case::{ .cells = "=2.5.round(0)", .row = 0, .column = 0, .want = "3",
+        .why = "a half goes to the side further from 0" },
+    Case::{ .cells = "=-2.5.round(0)", .row = 0, .column = 0, .want = "-3",
+        .why = "the negative side goes further from 0 too" },
+    // Unlike the digits shown, a rounded value reaches the formulas that read it.
+    Case::{ .cells = "=1.4.round(0)*10", .row = 0, .column = 0, .want = "10",
+        .why = "the value rounded goes on into the reckoning" },
+    Case::{ .cells = "=1.0.round(10)", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a place it cannot hold is refused" },
+    // With no places set, a number is written rounded at its last digit; truncated, F64's 1.23
+    // would show as `1.229999`.
+    Case::{ .cells = "=123/100", .row = 0, .column = 0, .want = "1.23",
+        .why = "the answer of a division reads as it stands" },
+    Case::{ .cells = "=0.1+0.2", .row = 0, .column = 0, .want = "0.3",
+        .why = "no stray fraction comes out of an addition" },
+    Case::{ .cells = "=1/3", .row = 0, .column = 0, .want = "0.333333",
+        .why = "a number that does not divide out runs to the last place" },
+    Case::{ .cells = "=42/1", .row = 0, .column = 0, .want = "42",
+        .why = "a whole number gets no decimal point" },
+}
 
-fn test_unreadable_things_are_reported(arena: Arena$@)
-    verdict.start("[kspage/calc] what cannot be solved coming out as a mark test...")
-    d: = Doc.new(arena)
+priv fn table_of(d: Doc$@, cells: U8[]): Block$@ //< the table `cells` spells, added to `d`
     t: = d.add_block("table")
-    r0: = add_row(t)
-    add_cell(r0, "x")
-    add_cell(r0, "=A1")
-    add_cell(r0, "=Z9")
-    r1: = add_row(t)
-    add_cell(r1, "=1+")
-    add_cell(r1, "=1/0")
-    add_cell(r1, "=1 2")
+    $row: Block$@ = add_row(t)
+    $from: Sz = 0
+    for $i: Sz = 0; i <= cells.len; i += 1
+        if i == cells.len || cells[i] == '\n' || cells[i] == '\t'
+            add_cell(row, cells.sub(from, i - from))
+            if i < cells.len && cells[i] == '\n'
+                row = add_row(t)
+            from = i + 1
+    return t
 
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("#VALUE!"),
-        "point at a cell that is no number and it is #VALUE!")
-    assert(cell_text(t, 0, 2).equals("#REF!"), "point at a cell that is not there and it is #REF!")
-    assert(cell_text(t, 1, 0).equals("#SYNTAX!"),
-        "a formula that cannot be read through is #SYNTAX!")
-    assert(cell_text(t, 1, 1).equals("#VALUE!"), "divide by 0 and it is #VALUE!")
-    // A formula read partway is refused too; let through, a typo would pass silently.
-    assert(cell_text(t, 1, 2).equals("#SYNTAX!"),
-        "a formula with something left unread is #SYNTAX! too")
-    verdict.pass("what cannot be solved comes out as a mark that says how to fix it.")
-
-fn test_a_fraction_keeps_its_digits(arena: Arena$@)
-    verdict.start("[kspage/calc] the fraction not being lost test...")
-    d: = Doc.new(arena)
-    t: = one_row(d, "=1/4", "=-(1+2)*3")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    // The trailing 0 is dropped, but the fraction itself is not.
-    assert(cell_text(t, 0, 0).equals("0.25"), "the fraction is left")
-    assert(cell_text(t, 0, 1).equals("-9"), "the one-sided minus and the brackets act")
-    verdict.pass("a whole number comes out whole, and a fraction comes out a fraction.")
+fn test_each_formula_shows_what_it_should(arena: Arena$@) //<
+    //< Each case's table, solved, shows its text in the cell named, or a mark saying how to fix it
+    verdict.start("[kspage/calc] what each formula shows test...")
+    $wrong: Sz = 0
+    for one in cases
+        d: = Doc.new(arena)
+        t: = table_of(d, one.cells)
+        calc.recalc(d, base.grid_sheet(arena))
+        got: = cell_text(t, one.row, one.column)
+        if !got.equals(one.want)
+            io.out().s("calc: ").s(one.why).s(": \"").s(one.cells).s("\" shows \"").s(got)
+                .s("\", not \"").s(one.want).s("\"\n")
+            wrong += 1
+    assert(wrong == 0, "every case shows what it should (the lines above name each that does not)")
+    verdict
+        .pass(arena.text().s("all \{cases.len\} cases show what they should.").take())
 
 fn test_a_nested_table_calculates_on_its_own(arena: Arena$@)
     verdict.start("[kspage/calc] a table inside a cell being solved on its own test...")
@@ -199,127 +298,6 @@ fn test_undo_brings_the_formula_back(arena: Arena$@)
     calc.recalc(d, sheet)
     assert(cell_text(t, 0, 1).equals("6"), "the formula comes back and is worked out again")
     verdict.pass("put back what was typed and the formula comes back with it.")
-
-// ---- the operations that aggregate a range ----
-
-priv fn one_column(d: Doc$@, a: U8[], b: U8[], c: U8[]): Block$@ //<
-    //< A table with one column (the texts go in from the top down)
-    t: = d.add_block("table")
-    add_cell(add_row(t), a)
-    add_cell(add_row(t), b)
-    add_cell(add_row(t), c)
-    return t
-
-fn test_sum_adds_up_a_range(arena: Arena$@)
-    verdict.start("[kspage/calc] a range being added up test...")
-    d: = Doc.new(arena)
-    t: = one_column(d, "1", "2", "=A1:A2.sum()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 2, 0).equals("3"), "the numbers inside the range are added")
-    verdict.pass("a range is folded into one number.")
-
-fn test_a_range_skips_what_is_not_a_number(arena: Arena$@) //<
-    //< What a range points at is "the numbers in here"
-    verdict.start("[kspage/calc] a range skipping a cell that is no number test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    add_cell(add_row(t), "head")
-    add_cell(add_row(t), "")
-    add_cell(add_row(t), "5")
-    r: = add_row(t)
-    add_cell(r, "=A1:A3.sum()")
-    add_cell(r, "=A1:A3.count()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 3, 0).equals("5"), "only the numbers are added")
-    assert(cell_text(t, 3, 1).equals("1"), "only the numbers are counted too")
-    verdict.pass("neither an empty cell nor a cell of words is counted inside a range.")
-
-fn test_a_broken_cell_in_a_range_is_carried_out(arena: Arena$@) //<
-    //< a broken formula's mark is passed through
-    //<
-    //< Skipped, the total alone would look right.
-    verdict.start("[kspage/calc] a broken formula inside a range carrying out test...")
-    d: = Doc.new(arena)
-    t: = one_column(d, "1", "=A2", "=A1:A2.sum()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 1, 0).equals("#CYCLE!"), "a cell that points at itself becomes a mark")
-    assert(cell_text(t, 2, 0).equals("#CYCLE!"), "that mark carries as far as the total")
-    verdict.pass("a broken formula comes out through the range.")
-
-fn test_the_smallest_the_largest_and_the_count(arena: Arena$@)
-    verdict.start("[kspage/calc] the smallest, the largest and the count test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    add_cell(add_row(t), "4")
-    add_cell(add_row(t), "1")
-    add_cell(add_row(t), "7")
-    r: = add_row(t)
-    add_cell(r, "=A1:A3.min()")
-    add_cell(r, "=A1:A3.max()")
-    add_cell(r, "=A1:A3.count()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 3, 0).equals("1"), "the smallest value")
-    assert(cell_text(t, 3, 1).equals("7"), "the largest value")
-    assert(cell_text(t, 3, 2).equals("3"), "the count of numbers")
-    verdict.pass("there are four the operations that fold a range.")
-
-fn test_folding_nothing(arena: Arena$@) //< the result when there is no number differs per case
-    verdict.start("[kspage/calc] folding a range holding no number test...")
-    d: = Doc.new(arena)
-    t: = one_column(d, "x", "=A1:A1.sum()", "=A1:A1.min()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 1, 0).equals("0"), "with nothing added it is 0")
-    assert(cell_text(t, 2, 0).equals("#VALUE!"), "the smallest value is none")
-    verdict.pass("the total is 0, but the smallest value is none.")
-
-fn test_a_fold_takes_one_range_and_no_arguments(arena: Arena$@) //<
-    //< an aggregate takes one range, no arguments
-    verdict.start("[kspage/calc] a fold taking one range alone test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    r0: = add_row(t)
-    add_cell(r0, "1")
-    add_cell(r0, "2")
-    r1: = add_row(t)
-    // A sum of separate parts is written with `+` (a formula's own form is not a function).
-    add_cell(r1, "=A1:B1.sum() + 10 + A1*3")
-    add_cell(r1, "=A1:B1.sum(10)")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 1, 0).equals("16"), "an addition can carry on from a range's sum")
-    assert(cell_text(t, 1, 1).equals("#SYNTAX!"), "no argument can be handed to anything that folds")
-    verdict.pass("a fold takes one range alone, and the rest is written as an addition.")
-
-fn test_a_range_may_be_given_backwards(arena: Arena$@) //< the order of the ends does not matter
-    verdict.start("[kspage/calc] a range being written backwards test...")
-    d: = Doc.new(arena)
-    t: = one_column(d, "1", "2", "=A2:A1.sum()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 2, 0).equals("3"), "written bottom to top it is the same range")
-    verdict.pass("a range's ends may be written from either side.")
-
-fn test_a_bad_range_or_name_is_reported(arena: Arena$@)
-    verdict.start("[kspage/calc] a wrong range or name coming out as a mark test...")
-    d: = Doc.new(arena)
-    t: = one_column(d, "1", "=A1:Z9.sum()", "=A1.nope()")
-    // A name that is no aggregate is refused too (it does not mix with a value's methods).
-    add_cell(add_row(t), "=A1:A2.nope()")
-    // An aggregate on a single value is refused too.
-    add_cell(add_row(t), "=A1.sum()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 1, 0).equals("#REF!"), "a range sticking out past the cells is #REF!")
-    assert(cell_text(t, 2, 0).equals("#NAME!"), "a method name it does not know is #NAME!")
-    assert(cell_text(t, 3, 0).equals("#NAME!"),
-        "a folding function a range does not have is #NAME! too")
-    assert(cell_text(t, 4, 0).equals("#NAME!"), "a folding function cannot be written on a value")
-    verdict.pass("both a range that sticks out and a name it does not know are refused there.")
 
 fn test_the_source_of_a_cell_is_its_formula(arena: Arena$@) //<
     //< The value is what shows, but the typed text (the formula) can be read as it is
@@ -584,187 +562,138 @@ fn test_a_second_run_in_a_cell_is_prose(arena: Arena$@) //<
     assert(cell.inlines.get(0).text().equals("5"), "the cell's text does not move")
     assert(second.showing().equals("15"), "the second run is solved as prose too")
     verdict.pass("a cell is its first inline alone, and the rest is prose.")
-// ---- an address that is too large ----
 
-fn test_an_overlong_address_does_not_wrap_onto_a_cell(arena: Arena$@) //<
-    //< An address's number accumulates digits from the formula's text
+// ==========================================
+// kspage: a computation deeper than one pass holds (`max_depth` and `max_nest` in
+// `kspage/expr/calc.kspls`). Each level is a call, so without the bounds a few kilobytes of
+// document ran the stack out, and on wasm wrote over the page's memory.
+// ==========================================
+
+priv const long_chain: Sz = 3000 //< rows in a running total, far past one pass's depth
+
+fn test_a_long_running_total_computes(arena: Arena$@) //<
+    //< A chain of thousands of cells (`=A2+1`, `=A3+1`, …) computes, not refused
+    verdict.start("[kspage/calc] a running total thousands of rows long test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(long_chain - 1)
+        add_cell(add_row(t), arena.text().s("=A\{i + 2\}+1").take())
+    add_cell(add_row(t), "1")
+    calc.recalc(d, base.grid_sheet(arena))
+    want: = arena.text().s("\{long_chain\}").take()
+    assert(cell_text(t, 0, 0).equals(want), "the first row adds up the whole chain")
+    assert(cell_text(t, long_chain / 2, 0)
+        .equals(arena.text().s("\{long_chain - long_chain / 2\}").take()),
+        "a row partway holds its own sum")
+    verdict.pass("a chain far deeper than one pass is settled from its end and comes out whole.")
+
+fn test_a_long_cycle_is_reported(arena: Arena$@) //<
+    //< A cycle longer than one pass (`=A2`, …, `=A1`) still reads as a cycle, and ends
+    verdict.start("[kspage/calc] a cycle longer than one pass coming out as a mark test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(long_chain - 1)
+        add_cell(add_row(t), arena.text().s("=A\{i + 2\}").take())
+    add_cell(add_row(t), "=A1")
+    // If it set the chain aside for ever, the test itself would never end.
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("#CYCLE!"), "the start of the cycle is a cycle")
+    assert(cell_text(t, long_chain - 1, 0).equals("#CYCLE!"), "so is its end")
+    verdict.pass("a cycle too long for one pass is found, not chased for ever.")
+
+priv fn nested(open: Sz, arena: Arena$@): U8[] //< `=` and `open` parentheses around a 1
+    b: = arena.text().c('=')
+    for _i in Range.asc(open)
+        b.c('(')
+    b.c('1')
+    for _i in Range.asc(open)
+        b.c(')')
+    return b.take()
+
+fn test_nesting_past_the_cap_is_refused(arena: Arena$@) //<
+    //< A formula nested 64 deep computes; past it, it reads as a syntax error rather than recursing
+    verdict.start("[kspage/calc] a formula nested past the cap test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    r: = add_row(t)
+    // `parse_pick` counts one level itself, so 63 parentheses inside it make 64.
+    add_cell(r, nested(63, arena))
+    add_cell(r, nested(2000, arena))
+    minus: = arena.text().c('=')
+    for _i in Range.asc(100000)
+        minus.c('-')
+    add_cell(r, minus.c('1').take())
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("1"), "64 levels are read")
+    assert(cell_text(t, 0, 1).equals("#SYNTAX!"), "2000 parentheses are refused")
+    assert(cell_text(t, 0, 2).equals("#SYNTAX!"), "100000 minus signs are refused")
+    verdict.pass("nesting is read to Excel's depth of 64, and refused past it.")
+
+// ==========================================
+// kspage: checks that a formula's error shows as a mark **inside an argument** too.
+// A function and a method pass an argument's error straight through; silently turned into a
+// number, a typo would become a value (`Day.of(x, 1, 1)` becoming some date).
+// ==========================================
+
+fn test_a_missing_paren_or_comma_is_a_syntax_error(arena: Arena$@) //<
+    //< The closing `)` and the separating `,` cannot be left out
     //<
-    //< There is no limit on the digit count, so a plain multiplication would overflow.
-    verdict.start("[kspage/calc] an address too large not wrapping onto a cell test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    r: = add_row(t)
-    add_cell(r, "7")
-    // 2^64 + 1. Wrapped around it would become 1, and point at A1 (= 7).
-    add_cell(r, "=A18446744073709551617")
-    add_cell(r, "=ZZZZZZZZZZZZZZZZ1")
-    add_cell(r, "=A999")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("#REF!"), "a row number that overflows becomes no cell")
-    assert(cell_text(t, 0, 2).equals("#REF!"),
-        "a column number that overflows becomes no cell either")
-    // The same mistake must not become a different mark depending on how large the number is.
-    assert(cell_text(t, 0, 3).equals("#REF!"),
-        "it is the same mark as a number that is merely large")
-    verdict.pass("an address too large comes out as no cell rather than wrapping round.")
-
-fn test_an_overlong_span_endpoint_is_reported(arena: Arena$@) //<
-    //< Even where a range's end is too large, no aggregate result is given
-    verdict.start("[kspage/calc] a range endpoint too large test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    r: = add_row(t)
-    add_cell(r, "7")
-    add_cell(r, "=A1:A18446744073709551617.sum()")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("#REF!"), "a range whose end overflows cannot be folded")
-    verdict.pass("where a range's end is too large it comes out as no cell too.")
-// ---- comparing, choosing and rounding ----
-
-fn test_a_comparison_answers_one_or_zero(arena: Arena$@) //<
-    //< a comparison gives 1 (true) or 0 (false)
-    verdict.start("[kspage/calc] the answer of a comparison test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    r: = add_row(t)
-    add_cell(r, "3")
-    add_cell(r, "=A1>2")
-    add_cell(r, "=A1<2")
-    add_cell(r, "=A1>=3")
-    add_cell(r, "=A1<=2")
-    add_cell(r, "=A1<>3")
-    add_cell(r, "=A1=3")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("1"), "larger, it is 1")
-    assert(cell_text(t, 0, 2).equals("0"), "not smaller, it is 0")
-    assert(cell_text(t, 0, 3).equals("1"), "at least can be compared too")
-    assert(cell_text(t, 0, 4).equals("0"), "at most can be compared too")
-    assert(cell_text(t, 0, 5).equals("0"), "not equal can be compared too")
-    assert(cell_text(t, 0, 6).equals("1"), "equal can be compared too")
-    verdict.pass("the answer of a comparison is 1 or 0.")
-
-fn test_comparisons_do_not_chain(arena: Arena$@) //< a comparison takes one operator only
-    //<
-    //< Written as a chain, it is refused as something left unread.
-    verdict.start("[kspage/calc] comparisons not being written in a chain test...")
-    d: = Doc.new(arena)
-    t: = one_row(d, "1", "=1<2<3")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("#SYNTAX!"),
-        "a formula that compares in a chain cannot be read")
-    verdict.pass("a comparison is one only, and written in a chain it is refused.")
-
-fn test_if_picks_a_side_and_drops_the_other_error(arena: Arena$@) //<
-    //< The conditional form gives the value of the chosen side
-    //<
-    //< It drops the error on the side not chosen.
-    verdict.start("[kspage/calc] the three-part form picking a side test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    r: = add_row(t)
-    add_cell(r, "0")
-    add_cell(r, "=10 if A1>0 else 20")
-    // The side dividing by 0 is not chosen, so its error does not appear.
-    add_cell(r, "=0 if A1=0 else 1/A1")
-    // Where the condition itself is an error, that error appears.
-    add_cell(r, "=1 if Z9=1 else 2")
-    // **`else` cannot be left out**: without it the value for a false condition would be undefined.
-    add_cell(r, "=1 if A1>0")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("20"), "false, it comes out the third value")
-    assert(cell_text(t, 0, 2).equals("0"), "the error on the side not picked does not come out")
-    assert(cell_text(t, 0, 3).equals("#REF!"), "an error in the condition comes out as it stands")
-    assert(cell_text(t, 0, 4).equals("#SYNTAX!"), "with no `else` it is refused")
+    //< Left out, a formula read partway would pass with another meaning.
     verdict
-        .pass("the three-part form comes out the value of the branch picked, and drops the other \
-            branch's error.")
-
-fn test_picks_chain_to_the_right(arena: Arena$@) //< the conditional form chains to the right
-    //<
-    //< **The same syntax as KSPL's: one form to remember.**
-    verdict.start("[kspage/calc] the three-part form chaining test...")
+        .start("[kspage/calc] leaving out the closing bracket and the parting mark being refused \
+            test...")
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r: = add_row(t)
-    add_cell(r, "2")
-    add_cell(r, "=10 if A1 < 1 else 20 if A1 < 5 else 30")
-    add_cell(r, "=10 if A1 < 1 else 20 if A1 > 5 else 30")
+    add_cell(r, "=1.5.round(1")
+    add_cell(r, "=Day.of(2026, 8 18)")
+    add_cell(r, "=Day.of(2026, 8, 18")
 
     calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 1).equals("20"), "the second condition can pick")
-    assert(cell_text(t, 0, 2).equals("30"), "with none matching it comes out the last value")
+    assert(cell_text(t, 0, 0).equals("#SYNTAX!"), "leaving out a method's `)` gives #SYNTAX!")
+    assert(cell_text(t, 0, 1).equals("#SYNTAX!"), "leaving out an argument's `,` gives #SYNTAX!")
+    assert(cell_text(t, 0, 2).equals("#SYNTAX!"), "leaving out a function's `)` gives #SYNTAX!")
     verdict
-        .pass("the three-part form chains to the right, and comes out the value where it matched.")
+        .pass("neither the bracket nor the parting mark can be left out, and a formula that leaves \
+            one out becomes #SYNTAX!.")
 
-fn test_methods_chain_on_a_value(arena: Arena$@) //< methods can be chained
-    //<
-    //< **It continues from an aggregated value too.**
-    verdict.start("[kspage/calc] the methods chaining test...")
+fn test_a_broken_argument_of_day_of_is_carried_out(arena: Arena$@) //<
+    //< Whichever of `Day.of`'s three arguments holds the error, that error comes out
+    verdict.start("[kspage/calc] a mistake in Day.of's argument coming straight out test...")
     d: = Doc.new(arena)
     t: = d.add_block("table")
     r0: = add_row(t)
-    add_cell(r0, "1.4")
-    add_cell(r0, "1.6")
+    add_cell(r0, "text")
     r1: = add_row(t)
-    add_cell(r1, "=A1:B1.sum().round(0)")
-    // Extracting a part of a day is a method too; the value holds a day count.
-    add_cell(r1, "=Day.of(2026, 8, 18).year()")
-    add_cell(r1, "=Day.of(2026, 8, 18).month()")
-    add_cell(r1, "=Day.of(2026, 8, 18).day()")
+    add_cell(r1, "=Day.of(A1, 1, 1)")
+    add_cell(r1, "=Day.of(2026, Z9, 1)")
+    add_cell(r1, "=Day.of(2026, 1, Z9)")
 
     calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 1, 0).equals("3"), "a rounding can carry on from a folded value")
-    assert(cell_text(t, 1, 1).equals("2026"), "the year of a day made from the type comes out")
-    assert(cell_text(t, 1, 2).equals("8"), "the month comes out too")
-    assert(cell_text(t, 1, 3).equals("18"), "the day comes out too")
-    verdict.pass("a method can carry on from a value any number of times.")
+    assert(cell_text(t, 1, 0).equals("#VALUE!"), "a year that is no number gives #VALUE!")
+    assert(cell_text(t, 1, 1).equals("#REF!"),
+        "a month pointing at a cell that is not there gives #REF!")
+    assert(cell_text(t, 1, 2).equals("#REF!"),
+        "a day pointing at a cell that is not there gives #REF!")
+    verdict.pass("Day.of does not make a mistaken argument a date; it puts that mistake out.")
 
-fn test_round_changes_the_value_itself(arena: Arena$@) //< rounding changes the value itself
+fn test_a_method_on_a_broken_value_is_carried_out(arena: Arena$@) //<
+    //< A method on a value that holds an error returns that error
     //<
-    //< A half rounds away from 0.
-    verdict.start("[kspage/calc] a rounding changing the value itself test...")
+    //< This covers both rounding and the operations that read a part out of a date.
+    verdict.start("[kspage/calc] a method on a mistaken value putting that mistake out test...")
     d: = Doc.new(arena)
     t: = d.add_block("table")
-    r: = add_row(t)
-    add_cell(r, "=1.2345.round(2)")
-    add_cell(r, "=2.5.round(0)")
-    add_cell(r, "=-2.5.round(0)")
-    // A rounded value reaches the formulas that refer to it too (unlike the displayed digits).
-    add_cell(r, "=1.4.round(0)*10")
-    add_cell(r, "=1.0.round(10)")
+    r0: = add_row(t)
+    add_cell(r0, "text")
+    r1: = add_row(t)
+    add_cell(r1, "=A1.round(0)")
+    add_cell(r1, "=A1.year()")
+    add_cell(r1, "=Z9.month()")
 
     calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 0).equals("1.23"), "it rounds at the decimal place")
-    assert(cell_text(t, 0, 1).equals("3"), "a half goes to the side further from 0")
-    assert(cell_text(t, 0, 2).equals("-3"), "the negative side goes further from 0 too")
-    assert(cell_text(t, 0, 3).equals("10"),
-        "the value rounded goes into the next reckoning as it stands")
-    assert(cell_text(t, 0, 4).equals("#VALUE!"), "a place it cannot hold is refused")
-    verdict.pass("`round` rounds the value itself.")
-
-fn test_a_plain_number_rounds_at_its_last_digit(arena: Arena$@) //<
-    //< A number with no decimal places set is written rounded at its last digit
-    //<
-    //< Truncated, 1.23 would show as `1.229999` (F64's 1.23 is a little below 1.23).
-    verdict.start("[kspage/calc] the text of a number with no places set test...")
-    d: = Doc.new(arena)
-    t: = d.add_block("table")
-    r: = add_row(t)
-    add_cell(r, "=123/100")
-    add_cell(r, "=0.1+0.2")
-    add_cell(r, "=1/3")
-    add_cell(r, "=42/1")
-
-    calc.recalc(d, base.grid_sheet(arena))
-    assert(cell_text(t, 0, 0).equals("1.23"), "the answer of a division reads as it stands")
-    assert(cell_text(t, 0, 1).equals("0.3"), "no stray fraction comes out of an addition")
-    third: = cell_text(t, 0, 2)
-    assert(third.equals("0.333333"),
-        "a number that does not divide out comes out to the end of the places")
-    assert(cell_text(t, 0, 3).equals("42"), "a number with no decimal gets no decimal point")
-    verdict.pass("a number with no places set is written rounded at its last place.")
+    assert(cell_text(t, 1, 0).equals("#VALUE!"), "rounding a value that is no number gives #VALUE!")
+    assert(cell_text(t, 1, 1).equals("#VALUE!"),
+        "the year of a value that is no number gives #VALUE!")
+    assert(cell_text(t, 1, 2).equals("#REF!"), "the month of a cell that is not there gives #REF!")
+    verdict.pass("a method does not make a mistaken value a number; it puts that mistake out.")

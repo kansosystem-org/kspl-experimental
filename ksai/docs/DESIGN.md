@@ -38,9 +38,7 @@ A whole model moves through one `Updater` (SGD, or Adam with a state per weight)
 
 ## A batch is spread over threads, and the weights come out the same for any count
 
-Training on several CPU threads gives exactly the same weights, byte for byte, as training on one. The thread count only changes the speed.
-
-**`fim_coder train --batch=B` moves the weights by the sum of B sequences' gradients, and `--threads` only splits the batch.** The diagram shows one training step with a batch of four on two threads.
+**Training on several CPU threads gives exactly the same weights, byte for byte, as training on one: `fim_coder train --batch=B` moves the weights by the sum of B sequences' gradients, and `--threads` only splits the batch**, so the thread count only changes the speed. The diagram shows one training step with a batch of four on two threads.
 
 ```mermaid
 flowchart LR
@@ -111,13 +109,11 @@ Caution: **Do not enumerate the weight tensors one by one from outside.** A laye
 
 **The normalization's weights are not spread** (they start training at 1.0).
 
-**A test checks that `init_uniform` misses none of them** ([`tests/nn_test.kspls`](../tests/nn_test.kspls)). It checks only the weights listed there, so add a new weight to that list in the same commit (Principle 8).
+**A test checks that `init_uniform` misses none of them** ([`tests/grad_test.kspls`](../tests/grad_test.kspls)). It checks only the weights listed there, so add a new weight to that list in the same commit (Principle 8).
 
 ## The weights' gradients are matched against numerical differentiation too
 
-A test checks each weight's gradient against a slow but simple estimate, because a wrong gradient still lets training "work", only worse.
-
-**A mistake in the backward pass passes the tests and only makes training worse.** A roughly right gradient still makes the loss fall, so a test watching the loss fall lets a wrong gradient through. So [`tests/param_grad_test.kspls`](../tests/param_grad_test.kspls) matches each trained weight against a central difference.
+**A mistake in the backward pass (a wrong gradient) passes the tests and only makes training worse, so a test checks each weight's gradient against a slow but simple estimate.** A roughly right gradient still makes the loss fall, so a test watching the loss fall lets a wrong gradient through. [`tests/param_grad_test.kspls`](../tests/param_grad_test.kspls) matches each trained weight against a central difference.
 
 A *central difference* estimates a gradient without the backward pass: nudge one weight up a little, then down a little, and divide the change in the loss by the size of the nudge. It is slow, but it is hard to get wrong.
 
@@ -129,9 +125,7 @@ A *central difference* estimates a gradient without the backward pass: nudge one
 
 ## The matrix backend is chosen where it is deployed
 
-Matrix multiplication is plain KSPL unless you ask for OpenBLAS (a fast C library for matrix math). Pick by where the program runs.
-
-**`matmul` is pure KSPL by default, and OpenBLAS only on request** (`make BLAS=1`, or `--define=blas`). Through OpenBLAS it comes within a few percent of C calling the same library. Pure KSPL is about an order of magnitude slower. The measurement, and the command that repeats it, are in [`ksai/benches/README.md`](../benches/README.md).
+**Matrix multiplication (`matmul`) is plain KSPL by default, and OpenBLAS (a fast C library for matrix math) only on request** (`make BLAS=1`, or `--define=blas`). Through OpenBLAS it comes within a few percent of C calling the same library. Pure KSPL is about an order of magnitude slower. The measurement, and the command that repeats it, are in [`ksai/benches/README.md`](../benches/README.md). Pick by where the program runs.
 
 | Where it runs | Backend | Why |
 | :-- | :-- | :-- |

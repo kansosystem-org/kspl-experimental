@@ -11,6 +11,7 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
+import "tests/support/harness_text" as htext
 
 // ==========================================
 // The machine table names the hosts as the runtime spells them `kspl_host_machine` (the runtime)
@@ -34,7 +35,7 @@ priv fn check_host_spellings(arena: Arena$@)
             tail: = arena.text().c('-').s(os).take()
             if name.ends_with(tail) && !os.equals("unknown")
                 seen += 1
-                if !scan.has(archs@, name.sub(0, name.len - tail.len))
+                if !htext.has(archs@, name.sub(0, name.len - tail.len))
                     bad.push(name)
     verdict.check_list("every hosted machine in the table is a name the runtime can build", seen,
         "machines", bad@,
@@ -155,7 +156,7 @@ priv fn push_unheld(put_out: List<|U8[]|>@, verb: U8[], std_declared: List<|U8[]
         //<
         //< It lists only a name the table does not leave to it.
     for n in put_out
-        if scan.has(std_declared, n) && !scan.has(by_hand, n)
+        if htext.has(std_declared, n) && !htext.has(by_hand, n)
             bad
                 .push(arena.text().s(n).s(": ").s(llvm_module).s(" ").s(verb).s(" it by hand and ")
                 .s(llvm_ctx).s("'s preamble_fns does not hold it without a .ret").take())
@@ -194,7 +195,7 @@ priv fn check_facade(arena: Arena$@)
     push_unheld(defined@, "defines", std_declared@, by_hand@, bad2@, arena)
     push_unheld(declared@, "declares", std_declared@, by_hand@, bad2@, arena)
     for n in by_hand
-        if !scan.has(defined@, n) && !scan.has(declared@, n)
+        if !htext.has(defined@, n) && !htext.has(declared@, n)
             bad2
                 .push(arena.text().s(n).s(": ").s(llvm_ctx).s("'s preamble_fns leaves it to ")
                 .s(llvm_module).s(", which does not put it out (it becomes an unresolved symbol)")
@@ -342,7 +343,7 @@ priv fn status_tables_disagree(text: U8[], arena: Arena$@): Bool //<
         if c.len == 0 || c.len != doc.len
             return true
         for i in Range.asc(c.len)
-            if !scan.has(doc@, c.get(i))
+            if !htext.has(doc@, c.get(i))
                 return true
         return false
 

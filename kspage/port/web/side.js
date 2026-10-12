@@ -196,7 +196,7 @@ function kspageSide(ui) {
       const row = document.createElement("button");
       row.type = "button";
       // Caution: **Keep the `edge` class.** It is what tells these two items from the heading
-      // items, and `kspage/tests/browser/outline.js` relies on it — going by the label instead, a
+      // items, and `kspage/tests/browser/keep.js` relies on it — going by the label instead, a
       // renamed label would make the check click an edge item as a heading. No rule styles it
       // (`--edge` in `page.css` is a color role, not this).
       row.className = "item who edge";

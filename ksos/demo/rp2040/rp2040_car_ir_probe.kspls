@@ -15,7 +15,6 @@
 // ==========================================
 import "ksdb/log" as ksdblog
 import "ksos/boards/freenove_4wd_pico/board"
-import "ksos/boards/freenove_4wd_pico/cap" as ccap
 import "ksos/boards/freenove_4wd_pico/face"
 import "ksos/boards/freenove_4wd_pico/head"
 import "ksos/boards/freenove_4wd_pico/motor"
@@ -161,10 +160,10 @@ priv fn apply(lon: I32, lat: I32, rot: I32) //<
     //< Fits it within the speed cap, then sends it to the wheels
     //<
     //< Caution: **Do not clamp each component separately** (the reason is at `cap`).
-    d: = ccap.divisor(lon, lat, rot)
-    last_lon = lon * ccap.cap / d
-    last_lat = lat * ccap.cap / d
-    last_rot = rot * ccap.cap / d
+    d: = motor.divisor(lon, lat, rot)
+    last_lon = lon * motor.cap / d
+    last_lat = lat * motor.cap / d
+    last_rot = rot * motor.cap / d
     motor.drive(last_lon, last_lat, last_rot)
 
 priv fn drive_lr(left: I32, right: I32) //<
@@ -276,7 +275,7 @@ priv fn run_light() //< light chasing
         return
     diff: = (I32::right.value - I32::left.value) / light_diff_div
     // **Steer towards the brighter side** (a brighter right slows the right wheels).
-    drive_lr(ccap.cap + diff, ccap.cap - diff)
+    drive_lr(motor.cap + diff, motor.cap - diff)
 
 // ---------------------------------------------------------
 // The remote
@@ -305,13 +304,13 @@ priv fn handle_key(ln: con.Line$@, cmd: U32)
     keys += 1
     switch cmd
     case key_forward
-        manual_hold(ccap.cap, 0)
+        manual_hold(motor.cap, 0)
     case key_back
-        manual_hold(0 - ccap.cap, 0)
+        manual_hold(0 - motor.cap, 0)
     case key_left
-        manual_hold(0, 0 - ccap.cap)
+        manual_hold(0, 0 - motor.cap)
     case key_right
-        manual_hold(0, ccap.cap)
+        manual_hold(0, motor.cap)
     case key_stop
         // **Acting the same as `9` (to manual) is on purpose**: two keys to reach for, one path
         // (`set_mode`).

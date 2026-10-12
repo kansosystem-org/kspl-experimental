@@ -1,7 +1,8 @@
-//< Tests of creating a scratch folder, and of writing and copying a tree (`std/fs`)
+//< Tests of writing, copying and walking a tree in a scratch folder (`std/fs`)
 //<
 //< **Each check works in a folder that `mkdir_unique` creates for it**, so a run never sees what
-//< an earlier run left. The check removes the folder best-effort at the end.
+//< an earlier run left. The check removes the folder best-effort at the end. The walk past links
+//< makes them with `ln -s`, and skips where there is none.
 import "std/chars"
 import "std/fs"
 import "std/io"
@@ -59,7 +60,8 @@ fn test_fs_write_unique()
     verdict.start("[Fs] writing a file nobody took, for its owner alone test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "owned_", arena) catch panic("mkdir_unique should make a directory")
+    dir: = fs.mkdir_unique(base, "owned_", arena)
+        catch panic("mkdir_unique should make a directory")
     a: = fs.write_unique(dir, "page_", ".html", "one", arena) catch
         panic("write_unique should write a file")
     b: = fs.write_unique(dir, "page_", ".html", "two", arena) catch
@@ -87,9 +89,11 @@ fn test_fs_write_tree()
     verdict.start("[Fs] writing a tree of files test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "write_", arena) catch panic("mkdir_unique should make a directory")
+    dir: = fs.mkdir_unique(base, "write_", arena)
+        catch panic("mkdir_unique should make a directory")
     rels: = U8[][]::{ "top.txt", "a/b/deep.txt" }
-    fs.write_tree(dir, rels, U8[][]::{ "top", "deep" }, arena) catch panic("write_tree should write")
+    fs.write_tree(dir, rels, U8[][]::{ "top", "deep" }, arena)
+        catch panic("write_tree should write")
     assert(holds(fs.join(dir, "top.txt", arena), "top"), "top.txt must hold what was written")
     assert(holds(fs.join(dir, "a/b/deep.txt", arena), "deep"),
         "the levels on the way must be made, and the file written")
@@ -145,7 +149,8 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others may write from one th
     verdict.start("[Fs] dir_trust: a folder's owner alone, everyone, and nothing there test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    dir: = fs.mkdir_unique(base, "trust_", arena) catch panic("mkdir_unique should make a directory")
+    dir: = fs.mkdir_unique(base, "trust_", arena)
+        catch panic("mkdir_unique should make a directory")
     assert(fs.dir_trust(fs.join(dir, "absent", arena)) == fs.Dir_trust.missing,
         "a folder that is not there is missing")
     if sys.is_windows()
@@ -160,3 +165,51 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others may write from one th
     verdict
         .pass("A folder its owner alone writes is own, one everyone writes is shared, and one not \
             there is missing.")
+
+// ==========================================
+// Tests of `std/fs`'s walks past links, made with `ln -s` (where there is none, the test skips)
+// ==========================================
+priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
+    //< `ln -s`; false where none is made
+    r: = subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena)
+    return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
+
+fn test_fs_walk_links() //<
+    //< A walk does not enter a link to a directory
+    //<
+    //< Two links to `.` would make it visit 2^depth directories, and a link out of the tree would
+    //< hand `copy_tree` files from elsewhere.
+    verdict.start("[Fs] a walk past links to directories...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    root: = fs.mkdir_unique("out/tmp", "kspl_test_walk_links_", arena) catch
+        panic("the place for the walk cannot be made")
+    io.write_file(fs.join(root, "a.txt", arena), "a\n") catch panic("a.txt cannot be written")
+    outside: = fs.mkdir_unique("out/tmp", "kspl_test_walk_outside_", arena) catch
+        panic("the place outside cannot be made")
+    io.write_file(fs.join(outside, "secret.txt", arena), "s\n") catch
+        panic("secret.txt cannot be written")
+    // Absolute targets, so they resolve wherever the walk runs from.
+    here: = fs.absolute(root, arena) catch panic("the root has no absolute path")
+    away: = fs.absolute(outside, arena) catch panic("the outside has no absolute path")
+    made: =
+        made_link(here, fs.join(root, "self1", arena), arena) &&
+        made_link(here, fs.join(root, "self2", arena), arena) &&
+        made_link(away, fs.join(root, "away", arena), arena)
+    if !made
+        verdict.skip("a link cannot be made with `ln -s` in this environment")
+        return
+    files: = fs.walk_files(root, fs.skip_none, arena) catch
+        panic("a walk past links must succeed, not stop at too_deep")
+    assert(files.len == 1, "only the file in the tree is found, once")
+    copy: = fs.join(fs.join("out/tmp", "kspl_test_walk_copy", arena), sys_suffix(root), arena)
+    fs.copy_tree(root, copy, fs.skip_none, arena) catch panic("the tree must copy")
+    assert(!fs.exists(fs.join(copy, "away/secret.txt", arena)),
+        "a copy takes nothing from outside the tree")
+    verdict.pass("a walk and a copy stay inside the tree, and two links to `.` end at once.")
+
+priv fn sys_suffix(path: U8[]): U8[] //< the last name of a path, to keep the copy's place apart
+    $at: = path.len
+    for at > 0 && path[at - 1] != '/' && path[at - 1] != '\\'
+        at -= 1
+    return path.sub_from(at)

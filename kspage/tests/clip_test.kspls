@@ -1,17 +1,23 @@
+//<
+import "kspage/lay/ask"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
 import "kspage/lay/page" { Page }
-import "kspage/model/doc" { Doc }
+import "kspage/model/doc" + { Block, Doc }
+import "kspage/model/filter"
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/run"
-import "kspage/model/style" { Sheet }
+import "kspage/model/style" as _style + { Sheet }
 import "kspage/tests/base"
 import "kspage/write/block"
+import "kspage/write/cells"
+import "kspage/write/csv"
 import "kspage/write/edit"
 import "kspage/write/shape"
 import "kspage/write/typing"
+import "std/ds" { List }
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" + { Str_builder }
 import "std/verdict"
 
 // ==========================================
@@ -318,3 +324,174 @@ fn test_a_formula_cell_is_not_replaced(arena: Arena$@) //<
     ed.caret = caret.at(plain, 0)
     assert(!ed.find_next("12"), "the value worked out is not looked for")
     verdict.pass("both the looking and the typing over are on the text as it was typed.")
+
+// ==========================================
+// kspage: checks converting between a table and CSV text (a golden test): one quoting rule for
+// reading and writing, rows of equal length, and an insertion undone in one step.
+// ==========================================
+
+priv fn cell_text(t: Block$@, r: Sz, c: Sz): U8[]
+    return t.children.get(r).children.get(c).inlines.get(0).text()
+
+fn test_a_field_with_commas_and_quotes_survives_the_round_trip(arena: Arena$@) //<
+    //< The quoting rule is shared by the reader and the writer
+    //<
+    //< With two rules, it could not read what it wrote itself.
+    verdict.start("[kspage/csv] a fenced field going round test...")
+    src: = "a,\"b,c\",\"d\"\"e\"\n1,2,3\n"
+    $made: Block$@ = null
+    if got: = csv.read_table(src, "table", arena)
+        made = got
+    assert(made != null, "the table builds")
+    assert(made.children.len == 2, "there are two rows")
+    assert(cell_text(made, 0, 1).equals("b,c"), "the parting mark inside a fence is text")
+    assert(cell_text(made, 0, 2).equals("d\"e"), "doubled quotes become one")
+
+    $out: = Str_builder.new()
+    defer out.free()
+    csv.write_table(made, out@, arena)
+    assert(out.slice().equals(src), "written out it goes back to the original text")
+    verdict.pass("a fenced field goes round under the same quoting.")
+
+fn test_short_rows_are_padded_to_the_widest(arena: Arena$@) //<
+    //< the rows come out as long as the longest row
+    //<
+    //< Not padded, the cell count differs row by row and the column count is undefined.
+    verdict.start("[kspage/csv] short rows coming out even test...")
+    $made: Block$@ = null
+    if got: = csv.read_table("a\nb,c,d\ne,f\n", "table", arena)
+        made = got
+    assert(made != null, "the table builds")
+    assert(made.children.get(0).children.len == 3,
+        "a short row too comes out the length of the longest")
+    assert(cell_text(made, 0, 2).len == 0, "the cells wanting are empty")
+    assert(cell_text(made, 2, 1).equals("f"), "the text of the row behind stays as it was")
+    verdict.pass("the rows come out the length of the longest row.")
+
+fn test_an_empty_source_makes_no_table(arena: Arena$@) //< an empty text makes no table
+    //<
+    //< A table with no rows has no column count.
+    verdict.start("[kspage/csv] an empty text making no table test...")
+    if _got: = csv.read_table("", "table", arena)
+        assert(false, "no table is built from an empty text")
+    verdict.pass("no table is built from an empty text.")
+
+fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
+    //< It inserts after the paragraph the cursor is in
+    verdict.start("[kspage/csv] inserting a table from CSV test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("here")
+    sheet: = base.grid_sheet(arena)
+    page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+    assert(ed.insert_csv(page, sheet, "table", "x,y\n1,2\n"), "it inserts")
+    assert(d.blocks.len == 2, "the table goes in behind the paragraph")
+    made: = d.blocks.get(1)
+    assert(made.style.equals("table"), "the grid style is laid on")
+    assert(cell_text(made, 1, 1).equals("2"), "the cells' text goes in")
+    // The cursor is in the first cell (typing can continue right away).
+    head: = made.children.get(0).children.get(0).inlines.get(0)
+    assert(ed.caret.inline == head, "the cursor stands in the first cell")
+    assert(ed.undo(), "it goes back in one")
+    assert(d.blocks.len == 1, "the table comes off whole")
+    verdict.pass("a table inserted from CSV comes off in one undo.")
+
+// ==========================================
+// kspage: checks what one column offers to filter by — the values it shows, their order, and a
+// filter to a chosen set of them.
+// **A person reads down the list in the column's sort order**, so it is checked here, not in the
+// page. The effect on layout is [`grid_test.kspls`](grid_test.kspls); the panel is
+// `kspage/tests/browser/find.js`.
+// ==========================================
+
+priv fn one_column(d: Doc$@): doc.Block$@ //<
+    //< A table whose one column holds a number, a text, the same text in another case, and a blank
+    //<
+    //< **The heading is not a value**; its word would sort first if counted.
+    table: = d.add_block("table")
+    h: = table.add_child("row")
+    h.add_child("cell").add_text("Aname")
+    texts: = U8[][]::{ "twenty", "10", "TWENTY", "", "10" }
+    for $i: Sz = 0; i < texts.len; i += 1
+        table.add_child("row").add_child("cell").add_text(texts[i])
+    return table
+
+fn test_a_columns_values_come_in_the_order_it_sorts_in(arena: Arena$@) //<
+    //< The values offered are the distinct ones, in the column's sort order, without the heading
+    //<
+    //< **A number compares as a number** (10 before "twenty"). **Spellings that differ only by case
+    //< are one value**: the filter ignores case, so two entries would answer to one checkbox.
+    verdict.start("[kspage/narrow] the values one column offers test...")
+    d: = Doc.new(arena)
+    table: = one_column(d)
+    seen: = List<|U8[]|>.create(arena)
+    got: = cells.column_values(table, 0, arena, seen)
+    assert(seen.len == 2, "the two distinct values come out, the heading and the blank left out")
+    assert(seen.get(0).equals("10"), "a number stands first")
+    assert(seen.get(1).equals("twenty"), "and the spelling met first is the one kept")
+    assert(got.blank, "the blank cell is said apart")
+    assert(!got.cut, "nothing was cut, so it does not say it was")
+    verdict.pass("a column offers its distinct values in the order it sorts in, blanks said apart.")
+
+fn test_a_chosen_set_keeps_the_rows_showing_one_of_them(arena: Arena$@) //<
+    //< A set filter keeps exactly the rows whose cell shows one of the checked values
+    verdict.start("[kspage/narrow] narrowing to a chosen set test...")
+    d: = Doc.new(arena)
+    table: = one_column(d)
+    sheet: = base.grid_sheet(arena)
+    sheet.over.filters = List<|filter.Filter|>.create(arena)
+    // **Each value is followed by a line break**, so an empty value is the break alone.
+    sheet.over.filters.push(filter.make_filter(table, 0, .one_of, "10\n"))
+    assert(shown_rows(d, sheet, arena) == 2, "the two rows showing 10 stay")
+    // Case is ignored, so one checkbox takes both spellings.
+    sheet.over.filters.len = 0
+    sheet.over.filters.push(filter.make_filter(table, 0, .one_of, "twenty\n"))
+    assert(shown_rows(d, sheet, arena) == 2, "one tick takes both spellings of the same value")
+    // The blank cells are the empty value.
+    sheet.over.filters.len = 0
+    sheet.over.filters.push(filter.make_filter(table, 0, .one_of, "\n"))
+    assert(shown_rows(d, sheet, arena) == 1, "the empty value keeps the blank cell alone")
+    // **Nothing checked keeps nothing** (unlike checking the blanks).
+    sheet.over.filters.len = 0
+    sheet.over.filters.push(filter.make_filter(table, 0, .one_of, ""))
+    assert(shown_rows(d, sheet, arena) == 0, "nothing ticked leaves no row under the heading")
+    verdict.pass("a chosen set keeps the rows showing one of its values, blanks and case included.")
+
+priv fn shown_rows(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Sz //<
+    //< How many rows under the heading the layout shows
+    page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+    $n: Sz = 0
+    for $i: Sz = 0; i < page.cells.len; i += 1
+        c: = page.cells.get(i)
+        if c.column == 0 && c.row > 0
+            n += 1
+    return n
+
+fn test_the_heading_cells_come_out_with_their_column_numbers(arena: Arena$@) //<
+    //< The heading row's cells come out in layout order, each with its column index
+    //<
+    //< **The filter arrow attaches to these**, so the page needs no notion of where columns are.
+    verdict.start("[kspage/narrow] the heading cells a narrowing hangs off test...")
+    d: = Doc.new(arena)
+    table: = d.add_block("table")
+    h: = table.add_child("row")
+    h.add_child("cell").add_text("one")
+    h.add_child("cell").add_text("two")
+    body: = table.add_child("row")
+    body.add_child("cell").add_text("1")
+    body.add_child("cell").add_text("2")
+    sheet: = base.grid_sheet(arena)
+    page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+    assert(ask.head_band_count(page) == 1, "the one table is counted")
+    assert(ask.head_cell_count(page, 0) == 2, "its heading row shows two cells")
+    first: = ask.head_cell_at(page, 0, 0)
+    second: = ask.head_cell_at(page, 0, 1)
+    assert(first.found && second.found, "both come out")
+    assert(first.column == 0 && second.column == 1, "each carries its own column's number")
+    assert(first.table == table && second.table == table, "and the table they belong to")
+    assert(second.rect.x > first.rect.x, "they come left to right")
+    assert(!ask.head_cell_at(page, 0, 2).found, "past the row's end nothing comes out")
+    assert(ask.head_cell_count(page, 1) == 0, "and there is no second table")
+    verdict.pass("a heading row's cells come out in order, each naming its column and its table.")

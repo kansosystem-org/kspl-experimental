@@ -94,7 +94,7 @@ priv fn check_cli(arena: Arena$@)
         scan.push_unique(mentioned@, w)
     $bad: = List<|U8[]|>.new(arena)
     for w in impl_cli
-        if scan.has(mentioned@, w)
+        if htext.has(mentioned@, w)
             continue
         $ok: = false
         for u in undocumented_ok
@@ -110,7 +110,7 @@ priv fn check_cli(arena: Arena$@)
             opt: = cut_at_any(w, "=<\"")
             if opt.len == 0 || !opt.starts_with("-")
                 continue
-            $known: = scan.has(impl_cli@, opt)
+            $known: = htext.has(impl_cli@, opt)
             for b in argp_builtin
                 if opt.equals(b)
                     known = true
@@ -133,7 +133,7 @@ priv fn check_cli(arena: Arena$@)
         collect_dash_words(harness.read_under_root(rel), words@)
         for w in words
             doc_seen += 1
-            if !w.starts_with("--") || scan.has(impl_cli@, w)
+            if !w.starts_with("--") || htext.has(impl_cli@, w)
                 continue
             $ok: = false
             for b in argp_builtin
@@ -183,14 +183,14 @@ priv fn check_style(arena: Arena$@)
     src: = harness.read_under_root(style_src)
     read: = harness.read_under_root(read_src)
     $spec_keys: = scan.find_all(spec, "| **`", "`** |", arena)
-    $impl_keys: = scan.find_all(src, "key.equals(\"", "\")", arena)
+    $impl_keys: = scan.find_all(src, "_key: U8[] = \"", "\"", arena)
     $bad: = List<|U8[]|>.new(arena)
     scan.diff_into(spec_keys@, impl_keys@,
         arena.text().s("\{spec_tools\}'s table").take(), style_src, bad@, arena)
     scan.diff_into(impl_keys@, spec_keys@, style_src,
         arena.text().s("\{spec_tools\}'s table").take(), bad@, arena)
     for i in Range.asc(3)
-        if !scan.has(impl_keys@, style_keys[i])
+        if !htext.has(impl_keys@, style_keys[i])
             bad
                 .push(arena.text().s(style_keys[i]).s(": in this test's pairing table and not in ")
                 .s(style_src).s("'s list").take())

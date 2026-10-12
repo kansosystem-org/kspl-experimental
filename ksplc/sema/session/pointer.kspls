@@ -44,20 +44,6 @@ priv const file_exts: U8[][12] = ::{ "kspls", "kspl", "md", "c", "h", "txt", "cf
         //< So `edit.kspls` behind an import named `edit` reads as a file.
         //< **Only a name that resolves to nothing is read this way** (`File_stream.c` is a method).
 
-priv fn starts_word(ch: U8): Bool
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
-
-priv fn is_word(ch: U8): Bool
-    return starts_word(ch) || (ch >= '0' && ch <= '9')
-
-priv fn closing_tick(text: U8[], from: Sz): I64 //< the next backtick at or past `from`, or -1
-    $i: = from
-    for i < text.len
-        if text[i] == '`'
-            return i
-        i += 1
-    return -1I64
-
 priv fn skip_spaces(text: U8[], from: Sz): Sz
     $i: = from
     for i < text.len && text[i] == ' '
@@ -67,14 +53,15 @@ priv fn skip_spaces(text: U8[], from: Sz): Sz
 priv fn read_name(text: U8[], from: Sz, close: Sz): Sz //<
     //< How long the dotted name filling `[from, close)` is, or 0 where the span holds anything else
     //<
-    //< **Call brackets may close it** (`io.out()`, `mem.dealloc(text.ptr)`), and then they have to
-    //< run to the span's end: `io.out().s("x")` is a fragment of code, not a name.
+    //< It is the form `[W0211]` reads: at least two parts. **Call brackets may close it**
+    //< (`io.out()`, `mem.dealloc(text.ptr)`), and then they have to run to the span's end:
+    //< `io.out().s("x")` is a fragment of code, not a name.
     $i: = from
     $parts: Sz = 0
     for
-        if i >= close || !starts_word(text[i])
+        if i >= close || !text[i].is_alpha()
             return 0
-        for i < close && is_word(text[i])
+        for i < close && text[i].is_alnum()
             i += 1
         parts += 1
         if i < close && text[i] == '.'
@@ -106,9 +93,9 @@ priv fn is_foreign(text: U8[], open: Sz): Bool //<
     if open < 4 || text[open - 1] != ' ' || text[open - 2] != 's' || text[open - 3] != '\''
         return false
     $w: = open - 3
-    for w > 0 && (is_word(text[w - 1]) || text[w - 1] == '+' || text[w - 1] == '#')
+    for w > 0 && (text[w - 1].is_alnum() || text[w - 1] == '+' || text[w - 1] == '#')
         w -= 1
-    return w < open - 3 && text[w] >= 'A' && text[w] <= 'Z'
+    return w < open - 3 && text[w].is_upper()
 
 priv fn tied_to_file(text: U8[], after: Sz): Bool //<
     //< Whether the name is followed by its file, a list of names too (`` `a` / `b` in `file` ``)
@@ -122,10 +109,10 @@ priv fn tied_to_file(text: U8[], after: Sz): Bool //<
         k: = skip_spaces(text, j + 1)
         if k >= text.len || text[k] != '`'
             break
-        shut: = closing_tick(text, k + 1)
-        if shut < 0I64
+        shut: = k + 1 + text.sub_from(k + 1).find_char('`').unwrap_or(text.len)
+        if shut >= text.len
             return false
-        i = Sz::shut + 1
+        i = shut + 1
     if i + 1 < text.len && text[i] == '(' && text[i + 1] == '`'
         return true
     j2: = skip_spaces(text, i)
@@ -141,16 +128,27 @@ fn next_pointer(text: U8[], from: Sz): Pointer //<
     //< spellings are skipped**: a name introduced as another product's, and a name tied to its
     //< file, which the document check reads (`make test-docref`).
     $i: = from
+    for
+        p: = next_dotted(text, i)
+        if p.len == 0 || (!is_foreign(text, p.open) && !tied_to_file(text, p.end))
+            return p
+        i = p.end
+
+fn next_dotted(text: U8[], from: Sz): Pointer //<
+    //< The next dotted name in backticks at or past `from`, whatever surrounds it
+    //<
+    //< `len` is 0 where there is none. `ksplc doc` links what this finds (`linked` in
+    //< `../../tools/doc.kspls`), so the two read one form.
+    $i: = from
     for i < text.len
         if text[i] != '`'
             i += 1
             continue
-        shut: = closing_tick(text, i + 1)
-        if shut < 0I64
+        close: = i + 1 + text.sub_from(i + 1).find_char('`').unwrap_or(text.len)
+        if close >= text.len
             break
-        close: = Sz::shut
         got: = read_name(text, i + 1, close)
-        if got > 0 && !is_foreign(text, i) && !tied_to_file(text, close + 1)
+        if got > 0
             return Pointer::{ .open = i, .at = i + 1, .len = got, .end = close + 1 }
         i = close + 1
     return Pointer::{ .open = text.len, .at = text.len, .len = 0, .end = text.len }
@@ -221,7 +219,7 @@ priv fn names_at(text: U8[], at: Sz, name: U8[]): Bool //< whether `name` is a w
     if !text.starts_with(name, at)
         return false
     after: = at + name.len
-    return after >= text.len || !is_word(text[after])
+    return after >= text.len || !text[after].is_alnum()
 
 priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
     //< Whether some line of `text` declares `name`

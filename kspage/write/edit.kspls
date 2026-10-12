@@ -16,8 +16,8 @@ import "kspage/lay/caret" + { Caret }
 import "kspage/model/doc" { Axis, Block, Doc }
 import "kspage/model/run" + { Inline }
 import "kspage/write/field"
-import "kspage/write/record" { Again, Block_op, Line_op, Op, Run_op, Size_op, Step, last_moved,
-    new_step, push_op }
+import "kspage/write/record" { Block_op, Line_op, Op, Run_op, Size_op, Step, last_moved, new_step,
+    push_op }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -35,12 +35,6 @@ struct Editor //< the editing state
         //< The cursor cannot point at a shape (it holds no text), so the handles, the numbers and
         //< deletion act on this (`frame_at` in `block.kspls`). One at a time (`../docs/DESIGN.md`,
         //< "One frame is selected at a time").
-    again: Again //<
-        //< The last command that can be repeated ("do it again", F4).
-        //<
-        //< The command itself sets it when it succeeds; it is not worked out from the record
-        //< afterwards (`Again` in [`record.kspls`](record.kspls) says why).
-        //< It is not stored in the document (like the cursor).
     read_only: Bool //<
         //< Whether it was opened read-only.
         //<
@@ -62,7 +56,6 @@ fn new_editor(d: Doc$@): Editor$@ //<
         .doc = d,
         .caret = caret.nowhere(),
         .pick = null,
-        .again = .none,
         .read_only = false,
         .undone = List<|Step$@|>.create(arena),
         .redone = List<|Step$@|>.create(arena),
@@ -335,7 +328,7 @@ impl Editor
     fn shut(r: Self$@): Bool //< whether a change is refused
         //<
         //< Every function in this folder that opens a step must check this before doing anything,
-        //< so read-only is enforced in one place (`../tests/read_only_test.kspls` tries the paths
+        //< so read-only is enforced in one place (`../tests/edit_test.kspls` tries the paths
         //< and expects the saved text unchanged).
         //< Caution: **Do not enforce it in the `do_*` functions.** If they quietly did nothing, a
         //< caller that "repeats until it acts" (`join_here` in `block.kspls`) would never end.

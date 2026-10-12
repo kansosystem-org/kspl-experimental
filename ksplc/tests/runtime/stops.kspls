@@ -1,0 +1,207 @@
+//< The programs that must stop at run time, each case built and run alone on both backends
+//<
+//< Each case is compiled as the file its head names, outside any package, so a stop's position
+//< reads `at <case>:<line>`.
+// ==== case array_index_constant_out_of_bounds
+//< Even with an index known at translation time, **out of range must stop at run time**
+//<
+//< The generated message has a container's shape, `in <what>` ("Conditions that stop execution
+//< at run time" in `../../../docs/SPEC-language.md`).
+//< Caution: **Check the position too.** Wrapped wrongly, the LLVM pool's file name loses both ends.
+// EXPECT: panic: index out of bounds in array (idx: 7, len: 4)
+// EXPECT: at array_index_constant_out_of_bounds:
+// EXPECT-NOT: reached the read
+import "std/io"
+
+fn main(): I32
+    a: I32[4] = ::{ 10, 20, 30, 40 }
+    bad: = a[7]
+    io.out().s("reached the read: \{I64::bad\}\n").flush()
+    return 0
+// ==== case dealloc_arena_pointer
+//< Passing a pointer an arena allocated to `mem.dealloc` must stop before touching the heap
+//<
+//< **Neither the type nor translation tells them apart** (both `alloc_as<|T|>()` return `T$@`), so
+//< only the start of `dealloc` can stop it. Libc cannot be relied on: glibc can let it pass, and on
+//< freestanding a fake header joins the free list: **the heap breaks with nobody reporting it**.
+// EXPECT: mem.dealloc: this pointer did not come from mem.alloc
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/mem" + { Arena }
+
+fn main(): I32
+    arena: = Arena.new(4096)
+    defer arena.free()
+    p: = arena.alloc_as<|I32|>()
+    p$ = 7
+    io.out().s("arena=\{p$\}\n").flush()
+    mem.dealloc(Void$@::p)
+    io.out().s("must not get here\n").flush()
+    return 0
+// ==== case dealloc_interior_pointer
+//< Passing a pointer to the **inside** of an allocation to `mem.dealloc` must stop
+//<
+//< `dealloc` may receive only the exact pointer `mem.alloc` returned. `Rc.get()` points inside the
+//< control block, so 16 bytes back is not malloc's address; a field's or element's is alike.
+//< ARC itself is out of reach (`Rc` has no `free()`; `ctrl`, `retain` and `release` are `priv`).
+// EXPECT: mem.dealloc: this pointer did not come from mem.alloc
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/mem"
+import "std/refcount" { Rc }
+
+fn main(): I32
+    $r: = Rc<|I32|>.new(5)
+    inner: = r.get()
+    io.out().s("inner=\{inner$\}\n").flush()
+    mem.dealloc(Void$@::inner)
+    io.out().s("must not get here\n").flush()
+    return 0
+// ==== case divide_by_zero
+//< When a divisor known only at run time is 0, the program must stop instead of dividing
+//<
+//< Sema rejects a divisor known to be 0 (the case divide_by_zero in tests/negative/numbers.kspls),
+//< which cannot notice a run-time zero getting through.
+//< Caution: The divisor must be **decided at run time**, or the test never reaches its check.
+// EXPECT: panic: division by zero
+// EXPECT: at divide_by_zero:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+fn main(): I32
+    // The only argument is the executable's name, so this is 0.
+    d: = I32::sys.args().len - 1
+    io.out().s("about to divide by \{I64::d\}\n")
+    q: I32 = 7 / d
+    io.out().s("must not get here: \{q\}\n")
+    return 0
+// ==== case index_place_write_out_of_bounds
+//< Even an index that returns a place and **writes** must stop when out of range
+//<
+//< A type of its own (`Index_place.at`) handles the index, and the stop names the user's line.
+//< Caution: **Do not write `$` on the receiver.** The `at` below declares `Self@`, so a value
+//< received by value can be written to as well ("Indexing" in `../../../docs/SPEC-language.md`).
+// EXPECT: panic: index out of bounds in Cells.at (idx: 9, len: 2)
+// EXPECT: at index_place_write_out_of_bounds:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/mem" { alloc_in, Arena }
+
+struct Cells //< a few I32s, indexed the way a container outside std indexes its elements
+    data: I32$@
+    size: Sz
+
+impl Cells: Index_place<|Sz, I32|> //< so `c[i]` reads and writes one cell
+    fn at(r: Self@, index: Sz, file: U8[], line: Sz): I32$@ //< one cell's place
+        if index < 0 || index >= r.size
+            bounds_panic("Cells.at", index, r.size, file, line)
+        return r.data + index
+
+fn main(): I32
+    ar: = Arena.new(1024)
+    defer ar.free()
+    c: = Cells::{ .data = I32$@::alloc_in(ar, 2 * sizeof(I32)), .size = 2 }
+    io.out().s("about to write at 9\n")
+    c[9] = 1
+    io.out().s("must not get here: \{c[0]\}\n")
+    return 0
+// ==== case list_get_out_of_bounds
+//< When List.get's index is out of range, it must stop instead of reading
+//<
+//< Tested apart from a slice's index: both call `std/lang`'s bounds_panic, but the callers differ
+//< (`List.get` returns a value, `Slice.at_ref` a place), so either check can vanish alone.
+//< The case index_place_write_out_of_bounds covers **writing** through a method that returns a
+//< place.
+// EXPECT: index out of bounds in List.get
+// EXPECT-NOT: must not get here
+import "std/ds" { List }
+import "std/io"
+import "std/sys"
+
+fn main(): I32
+    $l: = List<|I32|>.new(null)
+    defer l.free()
+    l.push(7)
+    i: = l.len + sys.args().len - 1 // = 1 = the first index out of range
+    io.out().s("about to get at \{i\}\n")
+    v: = l.get(i)
+    io.out().s("must not get here: \{v\}\n")
+    return 0
+// ==== case shift_amount_out_of_range
+//< A run-time shift amount outside the width must stop the program instead of shifting
+//<
+//< Sema rejects a constant shift amount (the case shift_count_out_of_range in
+//< tests/negative/numbers.kspls); this is the run-time path, whose message the code generator
+//< writes.
+//< Caution: The shift amount must be **decided at run time** (why: the case divide_by_zero).
+// EXPECT: panic: shift amount out of range (amount: 32, width: 32)
+// EXPECT: at shift_amount_out_of_range:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+fn main(): I32
+    // The only argument is the executable's name, so this is exactly U32's width = the first
+    // amount out of range.
+    n: = U32::(31 + sys.args().len)
+    io.out().s("about to shift by \{n\}\n")
+    shifted: U32 = 1U32 << n
+    io.out().s("must not get here: \{shifted\}\n")
+    return 0
+// ==== case shift_amount_wider_than_width
+//< A shift amount of a wider type is checked whole, before it meets the shifted value's width
+//<
+//< **Narrowed first, the amount wraps into range**: a `U64` amount of 2^32 becomes 0 at an `I32`'s
+//< width, and `1 << m` gives 1 with no stop, on both backends.
+//< Caution: The shift amount must be **decided at run time** (why: the case divide_by_zero).
+// EXPECT: panic: shift amount out of range (amount: 4294967296, width: 32)
+// EXPECT: at shift_amount_wider_than_width:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+fn main(): I32
+    // The only argument is the executable's name, so this is exactly 2^32.
+    m: = U64::sys.args().len + 4294967295
+    x: I32 = 1
+    shifted: = x << m
+    io.out().s("must not get here: \{shifted\}\n")
+    return 0
+// ==== case slice_index_out_of_bounds
+//< When a slice's index is out of range, it must stop instead of reading
+//<
+//< Caution: The index must be **decided at run time**, or a reader takes it for a constant's test.
+//< A slice is `Slice<|$T|>` ("`T[]` is sugar for `Slice<|$T|>`" in `../../../docs/DESIGN.md`), so
+//< `bounds_panic` in `std/lang` stops it and reports the user's line, not one inside std.
+// EXPECT: panic: index out of bounds in Slice.at_ref (idx: 4, len: 4)
+// EXPECT: at slice_index_out_of_bounds:
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/sys"
+
+fn main(): I32
+    data: U8[4] = ::{ 1, 2, 3, 4 }
+    s: = U8[]::data
+    // The only argument is the executable's name, so this equals s.len = the first index out of
+    // range.
+    i: = s.len + sys.args().len - 1
+    io.out().s("about to read at \{i\}\n")
+    b: = s[i]
+    io.out().s("must not get here: \{I32::b\}\n")
+    return 0
+// ==== case slice_struct_out_of_bounds
+//< Out of range on a slice held in a struct
+//<
+//< **Report the place of use.** The code generator embeds the position for the built-in slice; the
+//< struct version's `Index_ref.at_ref` takes the caller's position as a default argument ("Default
+//< arguments" in `docs/SPEC-language.md`) and `std/lang`'s bounds_panic writes the message.
+// EXPECT: panic: index out of bounds in Slice.at_ref (idx: 9, len: 2)
+import "std/io"
+
+$buf: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+    s: I32[] = ::{ .ptr = buf[0]@, .len = 2 }
+    io.out().s("\{s[9]\}\n")
+    return 0

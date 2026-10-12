@@ -110,7 +110,7 @@ function kspageApiShow(ks) {
       return acted(w.kspage_web_move_surface(from, to));
     },
     // The speaker's notes on slide `i` (**empty if none**). **It is separate from `aside`**, which
-    // reads the cursor's container; while presenting, the cursor need not be in that slide.
+    // reads the cursor's slide; while presenting, the cursor need not be in that slide.
     surfaceAside(i) {
       const len = i < 0 ? 0 : w.kspage_web_surface_aside(i);
       return outText(len);

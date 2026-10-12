@@ -66,6 +66,6 @@ Idle, it uses no CPU. **What it holds on its heap comes back to the same figure*
 | :-- | :-- | :-- |
 | [`kssrv/docs/SPEC-api.md`](docs/SPEC-api.md) | What each request returns, the JSON API under `/api/`, and the limits a caller writes against. | Whoever calls the server from their own code, with a running `kssrv` to try the calls against |
 | [`kssrv/docs/DESIGN.md`](docs/DESIGN.md) | Why it is shaped this way — one thread serving every connection, the fixed-size connection table, one block of memory (an arena) reused for each request — and what pins each decision. | Whoever changes kssrv |
-| [`kssrv/docs/PLAN.md`](docs/PLAN.md) | What is left, and what marks each stage as done. | Whoever changes kssrv |
+| The "kssrv" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left, and what marks each stage as done. | Whoever changes kssrv |
 | [std](../std/README.md) | The `net` / `reactor` / `http` / `json` it is built on; `ksplc doc std` lists every file std publishes. | Whoever changes kssrv |
 | [ksai](../ksai/README.md) | What the car's steering policy is built on: `tensor`, `nn`, `safetensors` and the rest. | Whoever changes kssrv |

@@ -1,0 +1,33 @@
+//< Lines the indentation reader once misread, each a syntax error on the line after it
+//<
+//< The reader decides where a `;` goes; **each shape below once got none**, so the next line did
+//< not parse (`../../parse/layout.kspls`).
+import "std/io";
+
+// A string written inside an interpolation, raw or plain, is a string of its own. **Read as the
+// end of the string around it**, the quote left a raw string seemingly open (`skip_interp`).
+fn interp_nested_string() {
+    io.out().s("\{"""ab""".len\} \{"c\"d".len\}\n");
+}
+
+// A binding typed with a written function type, set from an anonymous function on the same line.
+// **A name, a `:` and `fn` read as a label before a block**, so the block got no `;` after it.
+// Only `for`, `switch` and `if` follow a label (`labelled_heads`).
+fn fn_type_binding() {
+    p: fn(x: I32): Bool = fn(x: I32): Bool {
+        return x > 2;
+    };
+    outer: for $i: = 0; i < 3; i += 1 {
+        if p(i) {
+            break outer;
+        }
+    }
+    io.out().s("\{p(3)\}\n");
+}
+
+fn main(): I32 {
+    interp_nested_string();
+    fn_type_binding();
+    io.out().s("done\n");
+    return 0;
+}

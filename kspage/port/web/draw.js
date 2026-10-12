@@ -591,7 +591,7 @@ function kspageDraw(ks) {
       hideCaret();
     }
     // **After following the cursor** — it may have scrolled the window, which decides the kept
-    // heading (`pin.js`).
+    // heading (`narrow.js`).
     if (ks.paintPinned) ks.paintPinned();
     ks.paintThumbs(count, dpr);
     // Reports the redraw; the page's chrome (the formula field) updates from it.
@@ -662,7 +662,7 @@ function kspageDraw(ks) {
     return Math.max(ks.api.headRoom ? ks.api.headRoom() : 0, caretMargin);
   }
   // The boxes the last layout made; **the kept heading paints from them without a layout**
-  // (`pin.js`).
+  // (`narrow.js`).
   let boxCount = 0;
 
   // Puts the jump target at the window's top. **It is separate from following**, which moves the
@@ -686,7 +686,7 @@ function kspageDraw(ks) {
     let top = rect.top + y;
     const room = window.innerHeight;
     let above = headRoom();
-    // **The kept heading covers the window's top too** (`pin.js`): in a body row of that table the
+    // **The kept heading covers the window's top too** (`narrow.js`): in a body row of that table the
     // cursor stays below the band; in the heading row the whole row goes under the tools and the
     // band disappears.
     const band = ks.pinnedBand ? ks.pinnedBand() : null;

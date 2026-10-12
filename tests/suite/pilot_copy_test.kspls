@@ -20,8 +20,7 @@ priv const copy_rel: U8[] = "ksos/demo/cortex_m/pilot_policy.safetensors" //<
 
 fn main(): I32
     arena: = harness.begin(4 * 1024 * 1024)
-    work: = harness.sandbox("pilot_copy") catch
-        return ksplc_harness.fatal("cannot make a working directory")
+    work: = harness.sandbox("pilot_copy")
     // Caution: **Pass kssrv's make paths relative to its folder.** A path from the root would carry
     // the repository's location, which on Windows can hold characters the C linker garbles.
     top: = arena.text().s(harness.root()).c('/').take()
@@ -30,10 +29,10 @@ fn main(): I32
             .fatal(arena.text().s("the working directory is not under the root: \{work\}").take())
     out: = arena.text().s("../").s(work.sub_from(top.len)).take()
     copy: = arena.text().s("../").s(copy_rel).take()
-    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir()) catch panic("KSPLC_STD_DIR could not be \
-        set")
-    sys.set_env("KSPLC_PKG_SRC_DIR", harness.root()) catch panic("KSPLC_PKG_SRC_DIR could not be \
-        set")
+    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir())
+        catch panic("KSPLC_STD_DIR could not be set")
+    sys.set_env("KSPLC_PKG_SRC_DIR", harness.root())
+        catch panic("KSPLC_PKG_SRC_DIR could not be set")
     r: = harness
         .make(U8[][]::{ "-C", fs.join(harness.root(), "kssrv", arena), "check-pilot-copy",
         arena.text().s("KSPLC=\{ksplc_harness.ksplc_exe()\}").take(),

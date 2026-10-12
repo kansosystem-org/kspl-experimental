@@ -16,7 +16,7 @@ make ci-linux    # every gate on Linux: run it before you propose a change
 | Write code and documents this repository's way | [`DESIGN.md`](DESIGN.md) |
 | Add or change a document (its name is its kind) | [`SPEC-documents.md`](SPEC-documents.md) |
 | Find a package; each carries its own `README.md` | ["Repository layout" in `../README.md`](../README.md#-repository-layout) |
-| See what is left, across packages and in each | [`PLAN.md`](PLAN.md) |
+| See what is left, package by package | [`PLAN.md`](PLAN.md) |
 | Change the compiler | [`../ksplc/README.md`](../ksplc/README.md), then [`../ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md) |
 | Propose a change, as an issue or a pull request | "How a change gets in" below |
 | Report a security problem | [`SECURITY.md`](SECURITY.md) |

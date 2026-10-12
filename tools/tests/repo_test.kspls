@@ -1,0 +1,197 @@
+//<
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" + { Str_builder }
+import "std/verdict"
+import "tools/ci_gates" + { Outcome }
+import "tools/repo_stat_path" as path_kind + { Opening }
+
+// ==========================================
+// Tests the functions that classify files by their path alone (`tools/repo_stat_path.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a wrong skip, generated-file
+// test or comment mark each gives a plausible number, and nothing shows the misreading.
+// Caution: Test each case that matches together with one that does not. With only one side,
+// "always true" and "always false" both pass.
+// ==========================================
+
+fn test_the_files_listed(arena: Arena$@) //< git's two lists become one sorted list
+    verdict.start("[tools/repo_stat] the files to count test...")
+    got: = path_kind.listed("README.md\nksplc/main.kspls\nstd/io.kspls\n", "ksplc/usage.kspls\n\n",
+        arena)
+    assert(got.len == 4, "every listed path, and no empty line")
+    // Caution: **An untracked file falls among its folder's files**, or its folder's subtotal is
+    // written twice.
+    assert(got.get(0).equals("README.md") && got.get(1).equals("ksplc/main.kspls") &&
+        got.get(2).equals("ksplc/usage.kspls") && got.get(3).equals("std/io.kspls"), "sorted as one")
+    assert(path_kind.listed("", "", arena).len == 0, "nothing listed counts nothing")
+    verdict.pass("the tracked and the untracked are counted, sorted together.")
+
+fn test_which_file_is_generated() //< the seed is the generated one
+    verdict.start("[tools/repo_stat] telling a generated file apart test...")
+    assert(path_kind.is_generated("ksplc/seed.c"), "the seed is generated")
+    // Caution: **Do not catch hand-written C.** Judged by the extension or a partial match, the
+    // hand-written `.c` files drop out of the count.
+    assert(!path_kind.is_generated("ksplc/gen/c/root.kspls"),
+        "hand-written code inside ksplc is not generated")
+    assert(!path_kind.is_generated("ksplc/gen/runtime/core.c"), "another .c is not generated")
+    assert(!path_kind.is_generated("seed.c"), "the same name in a different place is not generated")
+    verdict.pass("the one thing taken for generated is `ksplc/seed.c`.")
+
+fn test_the_comment_marker() //< the mark is per extension, empty where that one has none
+    verdict.start("[tools/repo_stat] the line-comment mark test...")
+    assert(path_kind.comment_marker("a/b.kspl").equals("//"), ".kspl is //")
+    assert(path_kind.comment_marker("a/b.kspls").equals("//"), ".kspls is //")
+    assert(path_kind.comment_marker("a/b.c").equals("//"), ".c is //")
+    assert(path_kind.comment_marker("a/b.mjs").equals("//"), ".mjs is //")
+    assert(path_kind.comment_marker("a/b.py").equals("#"), ".py is #")
+    assert(path_kind.comment_marker("mk/test.mk").equals("#"), ".mk is #")
+    assert(path_kind.comment_marker("Makefile").equals("#"), "Makefile is #")
+    // Caution: **`.kspl` is not on the `#` side** (the reason is at `path_kind.comment_marker`).
+    assert(!path_kind.comment_marker("a/b.kspl").equals("#"), ".kspl is not #")
+    // An extension without a line mark gets an empty one (`.md` has no comments, `.ld` only `/*
+    // */`).
+    assert(path_kind.comment_marker("README.md").len == 0, ".md holds no mark")
+    assert(path_kind.comment_marker("ksos/port/cortex_m/link.ld").len == 0, ".ld holds no mark")
+    verdict.pass("the mark is chosen per extension, and one with none returns empty.")
+
+fn test_the_block_marks() //< a block comment's ends are per extension, empty where it has none
+    verdict.start("[tools/repo_stat] the block-comment ends test...")
+    c: = path_kind.block_marks("a/b.c")
+    assert(c.open.equals("/*") && c.close.equals("*/"), ".c's block is /* */")
+    css: = path_kind.block_marks("kspage/port/web/page.css")
+    assert(css.open.equals("/*") && css.close.equals("*/"), ".css's block is /* */")
+    html: = path_kind.block_marks("kspage/port/web/page.html")
+    assert(html.open.equals("<!--") && html.close.equals("-->"), ".html's block is <!-- -->")
+    // **KSPL has no block comment** ("Comments" in `../../docs/SPEC-language.md`).
+    assert(path_kind.block_marks("a/b.kspls").open.len == 0, ".kspls holds no block")
+    assert(path_kind.block_marks("Makefile").open.len == 0, "Makefile holds no block")
+    verdict.pass("the block's ends are chosen per extension, and one with none returns empty.")
+
+priv fn opened(path: U8[], line: U8[], open: Bool): Opening //< one line read by path's marks
+    return path_kind.opening(line, path_kind.comment_marker(path), path_kind.block_marks(path), open)
+
+fn test_where_a_comment_opens() //< where a line's comment text starts, per kind of file
+    verdict.start("[tools/repo_stat] where a comment opens test...")
+    // **A mark inside a string and a language's own use of the sign (`#cfg`) are the cases that
+    // slip through**, so each is tested both ways.
+    assert(opened("a.kspls", "  x = 1 // y", false).at == 10, "a comment's text follows its mark")
+    assert(opened("a.kspls", ".s(\"// heading\")", false).at == -1,
+        "a mark in a string is no comment")
+    assert(opened("a.kspls", "#cfg(llvm)", false).at == -1, "KSPL's # is an attribute's sign")
+    assert(opened("Makefile", "\t@# y", false).at == 3, "a recipe's shell comment opens at its #")
+    assert(opened("a.mk", "X := 1 ## y", false).at == 9, "a doubled mark is passed whole")
+    assert(opened("a.yml", "  run: echo '#' # y", false).at == 17, "a quoted # opens nothing")
+    css: = opened("a.css", "/* y", false)
+    assert(css.at == 2 && css.block && css.open, "a block left open runs on")
+    shut: = opened("a.css", "   y */", true)
+    assert(shut.at == 0 && !shut.open, "a block carried on from above shuts at its close")
+    assert(opened("a.html", "<!-- y -->", false).at == 4, "an HTML comment's text follows <!--")
+    c: = opened("a.c", "f(); /* y", false)
+    assert(c.at == 7 && c.open, "a block opened after code runs on too")
+    assert(opened("a.js", "g('**/out/**')", false).at == -1, "a glob in a string opens no block")
+    verdict.pass("each kind's comment is read by its own marks, past what a string holds.")
+
+fn test_the_extension_and_the_top_folder() //< the extension, and the top tier's folder name
+    verdict.start("[tools/repo_stat] the extension and the top tier test...")
+    assert(path_kind.ext_of("ksplc/base/core.kspls").equals(".kspls"),
+        "the extension is from the dot on")
+    assert(path_kind.ext_of("Makefile").equals("Makefile"), "with no dot it is the name itself")
+    assert(path_kind.ext_of("a/b/Makefile").equals("Makefile"), "the same under a folder")
+    // **Do not pick up a dot in a folder's name** (only after the last separator).
+    assert(path_kind.ext_of("a.b/c").equals("c"), "a dot on the folder's side is not picked up")
+    assert(path_kind.ext_of(".gitignore").equals(".gitignore"),
+        "a leading dot is not made an extension")
+    assert(path_kind.top_of("ksplc/base/core.kspls").equals("ksplc"),
+        "the top tier is up to the first separator")
+    assert(path_kind.top_of("Makefile").len == 0, "a file directly under the root is empty")
+    verdict
+        .pass("the extension is the dot after the last separator; the top tier runs to the first.")
+
+// ==========================================
+// Tests how the CI's sets are named and dealt out, and the summary read back from a round
+// (`tools/ci_gates.kspls`).
+//
+// It is tested because **a mistake here goes green**: a gate a set leaves out is never run, and
+// the summary is the only place a fallen or skipping gate is listed.
+// ==========================================
+
+priv fn named(name: U8[], arena: Arena$@): U8[] //< the set a name reads back as, or empty
+    switch ci_gates.set_from(name, arena)
+    case .some(s)
+        return s.variant_name()
+    case .none
+        return ""
+
+fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and nothing else
+    verdict.start("[tools/ci_gates] how a set is named test...")
+    assert(named("ci-shard-core", arena).equals("ci_shard_core"), "a shard reads back")
+    assert(named("ci", arena).equals("ci"), "a name with no dash reads back")
+    // The variant's own spelling is not a target's, so it must not run a set.
+    assert(named("ci_shard_core", arena).len == 0, "the variant's spelling is refused")
+    assert(named("ci-shard-linux", arena).len == 0, "a shard no job runs as a set is refused")
+    for s in ci_gates.set_order
+        back: = named(s.variant_name().replace("_", "-", arena), arena)
+        assert(back.equals(s.variant_name()), "every set reads back from its own name")
+    verdict.pass("a set is named as make names it, and only so.")
+
+fn test_the_shards_part_ci() //< each gate of `ci` is in one shard, and `ci-linux` adds Linux's
+    verdict.start("[tools/ci_gates] how the gates are dealt out test...")
+    for g in ci_gates.gates
+        core: = ci_gates.Set.ci_shard_core.runs(g)
+        rest: = ci_gates.Set.ci_shard_rest.runs(g)
+        // Caution: **In both shards, a gate runs twice; in neither, `ci`'s jobs never run it.**
+        assert(ci_gates.Set.ci.runs(g) == (core || rest), "a gate of ci is in a shard")
+        assert(!(core && rest), "no gate is in both shards")
+        linux: = ci_gates.Set.ci_linux.runs(g)
+        assert(linux == (ci_gates.Set.ci.runs(g) || ci_gates.Set.ci_linux_only.runs(g)),
+            "ci-linux is ci and what Linux alone runs")
+    verdict.pass("the two shards part ci between them, and ci-linux adds Linux's.")
+
+priv fn outcome(log: U8[], ok: Bool, sec: I64, skip: U8[], arena: Arena$@): Outcome
+    $skips: = List<|U8[]|>.new(arena)
+    if skip.len > 0
+        skips.push(skip)
+    return Outcome::{ .log = log, .ok = ok, .sec = sec, .skips = skips }
+
+fn test_the_summary_lists_what_needs_attention(arena: Arena$@) //<
+    //< a fall and a skip both stand out
+    verdict.start("[tools/ci_gates] the summary test...")
+    $outs: = List<|Outcome|>.new(arena)
+    outs.push(outcome("selfhost", true, 30I64, "", arena))
+    outs.push(outcome("link_abi", true, 5I64, "RESULT: SKIPPED (no ARM toolchain)", arena))
+    outs.push(outcome("debug", false, 7I64, "", arena))
+    $plain: = Str_builder.new()
+    defer plain.free()
+    ci_gates.digest_plain(outs@, 4I64, plain@)
+    p: = plain.slice()
+    assert(p.find_str("debug          FAIL 7s").is_some(),
+        "a fallen gate is marked FAIL with its time")
+    assert(p.find_str("#     RESULT: SKIPPED").is_some(),
+        "a skipping gate's line is shown under it")
+    closing: = "gates invoked: 3 (1 FAIL, SKIP lines in 1), gate seconds: 42, -j4"
+    assert(p.find_str(closing).is_some(), "the closing line counts them")
+    $md: = Str_builder.new()
+    defer md.free()
+    ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)
+    m: = md.slice()
+    assert(m.starts_with("## linux ci-shard-core - 2 PASS / 1 FAIL   (42s, -j4)"),
+        "the heading counts them")
+    assert(m.find_str("| debug | **FAIL** | 7 |").is_some(), "a fallen gate is in bold")
+    assert(m.find_str("\nSKIP:\n\n* `link_abi`\n").is_some(), "a skipping gate is listed by name")
+    // Caution: **No log line goes in** (the reason is at `digest_md`).
+    assert(m.find_str("no ARM toolchain").is_none(), "the page holds no line of a log")
+    verdict.pass("the summary marks a fall and lists a skip, on the screen and on the page.")
+
+fn test_a_skip_is_held_by_its_platform_alone() //<
+    //< A SKIP a platform's rows hold passes there, and fails where no row holds it
+    verdict.start("[tools/ci_gates] the lines a platform may skip on test...")
+    arm: = "RESULT: SKIPPED (no ARM toolchain)"
+    assert(ci_gates.is_expected_skip(arm, "win32"), "Windows holds no ARM toolchain")
+    assert(!ci_gates.is_expected_skip(arm, "linux"), "Linux's image holds one, so it may not skip")
+    v6: = "SKIP Net: connecting over the IPv6 loopback: this machine has no IPv6 loopback"
+    for p in U8[][]::{ "linux", "darwin", "win32" }
+        assert(ci_gates.is_expected_skip(v6, p), "a runner may lack an IPv6 loopback anywhere")
+    assert(!ci_gates.is_expected_skip(v6, "solaris"), "a platform with no rows holds no SKIP")
+    verdict.pass("each platform holds its own reasons to skip, and nothing else passes in silence.")

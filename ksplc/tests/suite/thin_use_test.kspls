@@ -420,9 +420,7 @@ priv fn thin_case(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
     //<
     //< cwd is the working directory and std is given by `--std-dir=` (as `harness.ksplc` does);
     //< from the repository root the default "std" would match.
-    dir: = harness.sandbox(arena.text().s("thin_\{slot\}").take()) catch
-        verdict.check(name, false, "cannot make a working directory")
-        return
+    dir: = harness.sandbox(arena.text().s("thin_\{slot\}").take())
     io.write_file(fs.join(dir, "thin.kspl", arena), src) catch
         verdict.check(name, false, "cannot write the material")
         return
@@ -442,9 +440,7 @@ priv fn solo_case(name: U8[], arena: Arena$@) //<
     //< **The stage table does not check this**: it measures the closure of the written `import`s,
     //< but an extension method on a built-in type (`s.sub()` / `c.is_digit()`) makes **a dependency
     //< in no import**. It checks only "is it complete with that one file" (an empty `main`).
-    dir: = harness.sandbox("solo") catch
-        verdict.check(name, false, "cannot make a working directory")
-        return
+    dir: = harness.sandbox("solo")
     src: = arena.text().s("import \"").s(name).s("\";\n\nfn main(): I32 {\n  return 0;\n}\n").take()
     io.write_file(fs.join(dir, "solo.kspl", arena), src) catch
         verdict.check(name, false, "cannot write the material")
@@ -486,8 +482,7 @@ fn main(): I32
     // `ksplc/lower/prune.kspls` drops what no root reaches.
     small_name: = arena.text()
         .s("a small program's generated C is within \{small_c_max_lines\} lines").take()
-    dir: = harness.sandbox("thin_small") catch
-        return harness.fatal("cannot make a working directory")
+    dir: = harness.sandbox("thin_small")
     io.write_file(fs.join(dir, "small.kspl", arena), case_read_dir) catch
         return harness.fatal("cannot write the material")
     r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "small.kspl", "small.c" }), dir)

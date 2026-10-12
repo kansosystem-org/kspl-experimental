@@ -36,6 +36,14 @@ impl Json_builder
     fn range(r: Self$@, sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
         return r.obj().set("start", r.position(sl, sc)).set("end", r.position(el, ec)).build()
 
+    fn range_in(r: Self$@, src: U8[], off: Sz, len: Sz, starts: List<|Sz|>$@): json.Val //<
+        //< The LSP range of `len` bytes at `off` in `src`, cut short at its end
+        at: = off if off <= src.len else src.len
+        end: = at + len if at + len <= src.len else src.len
+        s: = src.get_line_char(at, starts)
+        e: = src.get_line_char(end, starts)
+        return r.range(s.line, s.character, e.line, e.character)
+
     fn location(r: Self$@, uri: U8[], sl: Sz, sc: Sz, el: Sz, ec: Sz): json.Val
         $safe_uri: = uri.with_forward_slashes()
         defer safe_uri.free()
@@ -268,23 +276,6 @@ fn send_diagnostics_list(uri: U8[], diags: List<|base_diag.Lsp_diagnostic|>$@)
 
     params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr.build())
         .build()
-    send_publish_diagnostics(b, params)
-
-fn send_single_diagnostic(uri: U8[], severity: base_diag.Diagnostic_severity, line: Sz, col: Sz,
-    len: Sz, msg: U8$[])
-    arena: = Arena.new(1024 * 1024)
-    defer arena.free()
-    $b: = Json_builder.new(arena)
-
-    d_obj: = b.obj().set("range", b.range(line, col, line, col + len))
-        .set("severity", b.int_val(severity.to_lsp_severity()))
-        .set("source", b.str_val("kspl")).set("message", b.str_val(msg)).build()
-
-    $safe_uri: = uri.with_forward_slashes()
-    defer safe_uri.free()
-
-    arr: = b.arr().push(d_obj).build()
-    params: = b.obj().set("uri", b.str_val(safe_uri.slice())).set("diagnostics", arr).build()
     send_publish_diagnostics(b, params)
 // ==========================================
 // Private API

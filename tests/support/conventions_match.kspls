@@ -21,13 +21,13 @@ import "tests/support/conventions_runtime" as cruntime
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
-import "tools/code_rows"
 
 // ==========================================
 // The diagnostic codes' list, and the material that holds them
 // ==========================================
-priv const registry: U8[] = code_rows.registry_path
-priv const spec_tools: U8[] = code_rows.spec_path
+priv const registry: U8[] = "ksplc/base/lint_codes.kspls" //< the codes' canonical source
+priv const spec_tools: U8[] = "ksplc/docs/SPEC-tools.md" //<
+    //< the document holding each code's section
 
 priv fn is_code(s: U8[], _arena: Arena$@): Bool //< whether it is one of `EWIH` plus four digits
     //<
@@ -85,11 +85,6 @@ priv fn check_codes(arena: Arena$@): List<|U8[]|>
         codes.len, "codes", gaps@,
         "give each registered code its `#### [CODE]` section in ksplc/docs/SPEC-tools.md, and \
             register each section's code")
-    // The table lists the sections, so with the sections matching the registry it matches too.
-    verdict.check("the table of codes is what the code sections give",
-        code_rows.with_table(spec, reg, arena).equals(spec),
-        arena.text().s(spec_tools).s("'s table differs from its sections: run `make code-table`")
-        .take())
     return codes
 
 priv fn check_emitted_codes(codes: List<|U8[]|>@, arena: Arena$@) //<
@@ -104,7 +99,7 @@ priv fn check_emitted_codes(codes: List<|U8[]|>@, arena: Arena$@) //<
             if !is_code(word, arena)
                 continue
             seen += 1
-            if !scan.has(codes, word)
+            if !htext.has(codes, word)
                 scan.push_unique(bad@,
                     arena.text().s(rel).s(": ").s(word).take())
     verdict.check_list("every code the compiler writes is registered", seen, "codes written", bad@,
@@ -311,7 +306,7 @@ priv fn check_ast_kinds(arena: Arena$@)
             continue
         at: = find_sig_name(kinds@, k)
         spelled: = k.sub_from(2) if at == 0 else names.get(at - 1)
-        if spelled.len > 0 && scan.has(rules@, spelled)
+        if spelled.len > 0 && htext.has(rules@, spelled)
             continue
         if mentions_kind(all, k)
             continue

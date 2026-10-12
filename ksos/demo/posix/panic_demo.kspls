@@ -1,0 +1,94 @@
+//< The kernel's stops: each misuse panics instead of going on silently, one chosen per run
+//<
+//< `panic_demo <which>` runs one: `stack-overflow`, `mutex-relock`, `mutex-foreign-unlock` or
+//< `timeout-zero`. **Success is the panic**, so `ksos-<which>` greps the output for the kernel's
+//< own message (`ksos_posix_panic_needle_<which>` in `../../Makefile`). One run is one stop: a
+//< panic ends the process, so the scenarios cannot share a run.
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+import "std/str"
+import "std/sys"
+
+$g_mutex: sync.Mutex
+$g_sem: sync.Sem
+$tcb: Task
+$tcb_other: Task
+$stack: U8[65536]
+$stack_other: U8[65536]
+
+// ==========================================
+// stack-overflow: the canary that task_create plants. The demo does not overflow by deep
+// recursion: how many bytes one call uses depends on the optimization level, the ABI and the
+// debug information, and recursing can step into unmapped memory and cause a real SEGV instead.
+// ==========================================
+fn overflow_task(_arg: Void$@): Void
+    io.out().s("=== Kanso OS (POSIX) stack-overflow canary guard ===\n")
+    io.out().s("[overflow] clobbering this task's stack-guard canary...\n")
+    // Overwrite the canary that task_create wrote into stack[0..stack_guard_bytes) directly (the
+    // same state a real overflow leaves when it reaches there).
+    stack[0] = 0x00
+    Task.yield() // schedule() checks this task's canary here and panics
+    io.out().s("[overflow] UNEXPECTED: returned without triggering the guard\n")
+
+// ==========================================
+// mutex-relock: when the holder locks the mutex again, the kernel panics instead of waiting
+// forever. Waiting silently, the task would wait for itself to let go: a hang with no diagnosis.
+// ==========================================
+fn relocker(_arg: Void$@): Void
+    io.out().s("=== Kanso OS (POSIX) mutex re-lock by the holder ===\n")
+    g_mutex.lock()
+    io.out().s("[relock] holding; locking again must stop here\n")
+    g_mutex.lock()
+    io.out().s("[relock] returned from the second lock without a panic\n")
+
+// ==========================================
+// mutex-foreign-unlock: when a task that does not hold the mutex unlocks it, the kernel panics.
+// Ignored, the caller would go on believing it had released the lock, and a stretch of code with
+// no mutual exclusion would go undiagnosed.
+// ==========================================
+fn owner(_arg: Void$@): Void
+    io.out().s("=== Kanso OS (POSIX) mutex unlock by a non-holder ===\n")
+    g_mutex.lock()
+    io.out().s("[owner] holding; handing the CPU to the other task\n")
+    Task.yield()
+    g_mutex.unlock()
+
+fn other(_arg: Void$@): Void
+    io.out().s("[other] unlocking a mutex I do not hold; this must stop here\n")
+    g_mutex.unlock()
+    io.out().s("[other] returned from unlock without a panic\n")
+
+// ==========================================
+// timeout-zero: a timeout of 0 panics instead of silently meaning `try_`. If 0 meant "do not
+// wait", the same thing could be written two ways, `try_take` and `take_for(0)`.
+// ==========================================
+fn zero_waiter(_arg: Void$@): Void
+    io.out().s("=== Kanso OS (POSIX) take_for with a zero deadline ===\n")
+    io.out().s("[zero] take_for(0) must stop here\n")
+    got: = g_sem.take_for(0)
+    io.out().s("[zero] returned \{got\} from take_for(0) without a panic\n")
+
+fn main(): I32
+    argv: = sys.args()
+    which: = argv.get(1) if argv.len == 2 else ""
+    if which.equals("stack-overflow")
+        tcb.create(U8$[]::stack, overflow_task, null, 1, "overflow")
+    else if which.equals("mutex-relock")
+        g_mutex.init()
+        tcb.create(U8$[]::stack, relocker, null, 1, "relock")
+    else if which.equals("mutex-foreign-unlock")
+        g_mutex.init()
+        tcb.create(U8$[]::stack, owner, null, 1, "owner")
+        tcb_other.create(U8$[]::stack_other, other, null, 1, "other")
+    else if which.equals("timeout-zero")
+        g_sem.init(0)
+        tcb.create(U8$[]::stack, zero_waiter, null, 1, "zero")
+    else
+        // **An unknown name must not pass**: it prints no needle, so its gate fails.
+        io.err()
+            .s("usage: panic_demo stack-overflow|mutex-relock|mutex-foreign-unlock|timeout-zero\n")
+        return 2
+    task.start_scheduler()
+    io.out().s("[panic_demo] UNEXPECTED: scheduler returned without a panic\n")
+    return 1

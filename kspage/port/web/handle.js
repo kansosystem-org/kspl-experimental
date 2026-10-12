@@ -36,10 +36,9 @@ function kspageHandles() {
         return;
       }
       // Caution: **Check that it exists before creating it** (creating it again fails the upgrade
-      // with `ConstraintError`); a record in an older shape is dropped, not read as a tab's.
-      ask.onupgradeneeded = (e) => {
+      // with `ConstraintError`).
+      ask.onupgradeneeded = () => {
         const db = ask.result;
-        if (e.oldVersion < 3 && db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
         if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
         if (!db.objectStoreNames.contains(DRAFTS)) {
           db.createObjectStore(DRAFTS, { keyPath: "at" });

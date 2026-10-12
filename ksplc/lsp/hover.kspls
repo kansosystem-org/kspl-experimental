@@ -450,7 +450,38 @@ priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
 priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast_node$@,
     ctx: Hover_ctx$@) //<
         //< It decides the type and prefix from a definition node's kind (the first classification)
+    if classify_decl(d, ctx)
+        return
     $parent_enum: = parent_enum_in
+    switch d.kind_id
+    case .k_enum_variant
+        if d.sym_ptr != null
+            sym: = Sema_symbol$@::d.sym_ptr
+            ctx.type_id = sym.type_id
+        else if parent_enum == null
+            if pe: = lsp_nav.find_parent_enum(state.root_file, d)
+                parent_enum = pe
+        if ctx.type_id == 0 && parent_enum != null && parent_enum.type_id != 0
+            ctx.type_id = parent_enum.type_id
+        else if ctx.type_id == 0
+            ctx.type_id = d.type_id
+        ctx.prefix = "(Enum Variant) "
+    case .k_identifier
+        // **A name that is its own declaration is a binding** (`catch e`, `.some(v)`, the `v` of
+        // `if v: = opt`); left to the default, `e` read `type e`.
+        ctx.type_id = d.type_id
+        ctx.prefix = "(Variable) "
+    case .k_decl_import
+        ctx.type_id = 0
+        ctx.prefix = "(File) "
+    default
+        if d.type_id != 0
+            ctx.type_id = d.type_id
+priv fn classify_decl(d: Ast_node$@, ctx: Hover_ctx$@): Bool //<
+    //< The type and prefix of a declaration whose kind alone decides them; false for another kind
+    //<
+    //< **A method is in the symbol table only as `Foo.bar`**, so its declaration's own name reaches
+    //< here through the path walk too (`walk_path_for_type`), not through the symbol table.
     switch d.kind_id
     case .k_decl_fn, .k_decl_fn_proto
         sig: = d.find_child(.k_type_fn_sig)
@@ -466,35 +497,15 @@ priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast
     case .k_fn_param
         ctx.type_id = d.type_id
         ctx.prefix = "(Parameter) "
-    case .k_enum_variant
-        if d.sym_ptr != null
-            sym: = Sema_symbol$@::d.sym_ptr
-            ctx.type_id = sym.type_id
-        else if parent_enum == null
-            if pe: = lsp_nav.find_parent_enum(state.root_file, d)
-                parent_enum = pe
-        if ctx.type_id == 0 && parent_enum != null && parent_enum.type_id != 0
-            ctx.type_id = parent_enum.type_id
-        else if ctx.type_id == 0
-            ctx.type_id = d.type_id
-        ctx.prefix = "(Enum Variant) "
     case .k_decl_var, .k_decl_var_item
         ctx.type_id = d.type_id
         ctx.prefix = "(Variable) "
     case .k_decl_const
         ctx.type_id = d.type_id
         ctx.prefix = "(Constant) "
-    case .k_identifier
-        // **A name that is its own declaration is a binding** (`catch e`, `.some(v)`, the `v` of
-        // `if v: = opt`); left to the default, `e` read `type e`.
-        ctx.type_id = d.type_id
-        ctx.prefix = "(Variable) "
-    case .k_decl_import
-        ctx.type_id = 0
-        ctx.prefix = "(File) "
     default
-        if d.type_id != 0
-            ctx.type_id = d.type_id
+        return false
+    return true
 priv fn set_ident_fallback(d: Ast_node$@, ctx: Hover_ctx$@) //<
     //< It takes the identifier's name (else the node's text) as the fallback string
     id_n: = d.find_child(.k_identifier)
@@ -620,52 +631,18 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>$@, target_node: Ast_node$@, 
         if !is_target
             continue
 
-        switch p.kind_id
-        case .k_decl_var, .k_decl_var_item
-            ctx.type_id = p.type_id
-            ctx.prefix = "(Variable) "
-            ctx.def_node = p
-            break
-        case .k_decl_const
-            ctx.type_id = p.type_id
-            ctx.prefix = "(Constant) "
-            ctx.def_node = p
-            break
-        case .k_struct_field, .k_enum_field
-            ctx.type_id = p.type_id
-            ctx.prefix = "(Field) "
-            ctx.def_node = p
-            break
-        case .k_fn_param
-            ctx.type_id = p.type_id
-            ctx.prefix = "(Parameter) "
-            ctx.def_node = p
-            break
-        case .k_type_gen_param
-            ctx.prefix = "(Type Parameter) "
-            ctx.def_node = p
-            break
-        case .k_enum_variant
-            ctx.type_id = p.type_id
-            ctx.prefix = "(Enum Variant) "
-            ctx.def_node = p
-            break
-        case .k_decl_fn, .k_decl_fn_proto
-            // As classify_def_node's function branch: a method is in the symbol table only as
-            // "Foo.bar", so its declaration's own name cannot go through symtab.resolve / def_node.
-            sig: = p.find_child(.k_type_fn_sig)
-            if sig != null
-                ret_type: = sig.find_child(.k_type_expr)
-                ctx.type_id =
-                    (ret_type.type_id if ret_type != null && ret_type.type_id != 0
-                    else I32::sema_type_env.Builtin_type_id.void_type)
-            ctx.prefix = "(Function) "
-            ctx.def_node = p
-            break
-        case .k_decl_impl
-            ctx.def_node = p
-            break
-        default {}
+        if !classify_decl(p, ctx)
+            switch p.kind_id
+            case .k_type_gen_param
+                ctx.prefix = "(Type Parameter) "
+            case .k_enum_variant
+                ctx.type_id = p.type_id
+                ctx.prefix = "(Enum Variant) "
+            case .k_decl_impl {}
+            default
+                continue
+        ctx.def_node = p
+        break
 
 priv fn build_hover_def_code(state: Doc_state$@, ctx: Hover_ctx$@, def_code: Str_builder$@)
     if ctx.def_node == null

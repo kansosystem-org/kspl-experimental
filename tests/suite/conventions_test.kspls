@@ -13,22 +13,18 @@ import "std/strfmt" as _strfmt
 import "std/strnum"
 import "std/verdict"
 import "tests/support/conventions_bound" as cbound
+import "tests/support/conventions_doc" as cdoc
 import "tests/support/conventions_hand" as chand
 import "tests/support/conventions_iface" as ciface
-import "tests/support/conventions_kind" as ckind
 import "tests/support/conventions_line" as cline
-import "tests/support/conventions_manual" as cmanual
 import "tests/support/conventions_match" as cmatch
 import "tests/support/conventions_merge" as cmerge
 import "tests/support/conventions_notice" as cnotice
-import "tests/support/conventions_prose" as prose
-import "tests/support/conventions_rule" as crule
 import "tests/support/conventions_scan" as scan + { Sample }
 import "tests/support/conventions_size" as csize
 import "tests/support/conventions_spell" as cspell
 import "tests/support/conventions_theme" as ctheme
 import "tests/support/conventions_win" as cwin
-import "tests/support/conventions_zip" as czip
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
 
@@ -126,6 +122,8 @@ priv fn check_comment_runs(rel: U8[], lines: List<|U8[]|>, bad: List<|U8[]|>$@, 
         run.len = 0
         if !closed && i < lines.len && text.len > 0 && !is_header_lead(lines.get(i))
             seen_decl = true
+        if closed && scan.is_case_head(text.sub_from(2))
+            seen_decl = false
 
 priv fn check_summary_inside(arena: Arena$@) //<
     //< A declaration that carries braces keeps its description inside them
@@ -223,8 +221,8 @@ priv fn check_lang_prefix(arena: Arena$@)
 // Only a hand-built descriptor over a whole array at its declared length is reported (the form
 // stays for reinterpreting bytes).
 priv const descriptor_exempt: U8[][_] = ::{ "ksplc/tests/negative/deep_const_weakening.kspls",
-    "ksplc/tests/negative/write_elem_through_const_ptr.kspls",
-    "ksplc/tests/win64_arg_abi_test.kspls", "ksplc/tests/prog/equiv.kspls" }
+    "ksplc/tests/negative/pointer.kspls", "ksplc/tests/win64_arg_abi_test.kspls",
+    "ksplc/tests/prog/equiv.kspls" }
 
 priv fn array_sizes(src: U8[], names: List<|U8[]|>$@, sizes: List<|Sz|>$@, arena: Arena$@) //<
     //< From a `name: type[count]` declaration, collects the size per name
@@ -800,7 +798,7 @@ priv fn check_folder_names(arena: Arena$@) //<
                 at += cut + 1
                 seen += 1
                 where: = rel.sub(0, at - 1)
-                if !names_a_kind(part) || scan.has(said@, where)
+                if !names_a_kind(part) || htext.has(said@, where)
                     continue
                 said.push(arena.dup_str(where))
                 bad
@@ -881,16 +879,16 @@ fn main(): I32
     check_compiler_named_std(arena)
     csize.run(arena)
     ctheme.run(arena)
-    cmanual.run(arena)
+    cdoc.run_manual(arena)
     check_comments(arena)
     check_summary_inside(arena)
     check_file_summary_first(arena)
     check_folder_names(arena)
     check_tests_registered(arena)
-    cnotice.run(arena)
+    cnotice.run_notices(arena)
     cline.run(arena)
-    crule.run(arena)
-    ckind.run(arena)
+    cdoc.run_rule(arena)
+    cdoc.run_kind(arena)
     cmatch.run(arena)
     cbound.run(arena)
     chand.run(arena)
@@ -898,9 +896,9 @@ fn main(): I32
     check_lang_prefix(arena)
     check_descriptors(arena)
     check_descriptor_fires(arena)
-    prose.run(arena)
+    cdoc.run_prose(arena)
     check_map_at_boundary(arena)
     cmerge.run(arena)
     cwin.run(arena)
-    czip.run(arena)
+    cnotice.run_zip(arena)
     return ksplc_harness.finish()

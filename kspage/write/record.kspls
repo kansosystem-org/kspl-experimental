@@ -184,35 +184,6 @@ enum Op //< the operation that undoes one change
     aside(a: Aside_op$@)
     step(s: Step_op$@)
 
-enum Again //< the last command that can be repeated ("do it again", F4)
-    //<
-    //< The command is remembered, not read back from the record. Working a command back out of its
-    //< edits is guesswork, the source of "it does not repeat what I did".
-    //< Caution: **Keep what the command needs, not where it acted.** Repeating acts where the
-    //< cursor is now, so an axis and a name are kept and a row number is not.
-    none
-    add_line(axis: Axis) //< insert a row (or column)
-    drop_line(axis: Axis) //< remove a row (or column)
-    style(name: U8[]) //< apply a character style
-    block_style(name: U8[]) //< apply a paragraph style
-
-impl Again
-    fn again_word(a: Self): U8[] //< what repeating would do, for the status bar
-        //<
-        //< Caution: **Say the name of what would happen** (a key that silently does nothing draws
-        //< the most complaints).
-        switch a
-        case .none
-            return ""
-        case .add_line(axis)
-            return line_word(axis, false)
-        case .drop_line(axis)
-            return line_word(axis, true)
-        case .style(_n)
-            return "Laid a style on"
-        case .block_style(_n)
-            return "Changed a paragraph style"
-
 struct Step //< the unit one undo takes back
     ops: List<|Op|>$@
     before: Caret
@@ -233,14 +204,6 @@ fn push_op(into: Step$@, arena: Arena$@, n: Inline$@, at: Sz, put_back: Bool, le
         buf.push((gone.ptr + i)$)
     op: = Text_op::{ .inline = n, .at = at, .put_back = put_back, .text = buf, .len = len }
     into.ops.push(.text(arena.create(op)))
-
-fn line_word(axis: Axis, put_back: Bool): U8[] //<
-    //< What adding or removing a row (or column) is called
-    switch axis
-    case .row
-        return "Deleted a row" if put_back else "Put a row in"
-    case .column
-        return "Deleted a column" if put_back else "Put a column in"
 
 fn last_moved(into: Step$@, table: Block$@, axis: Axis, index: Sz): Bool //<
     //< Whether the step ends with a move of the same position in the same table

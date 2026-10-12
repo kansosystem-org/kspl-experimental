@@ -145,75 +145,71 @@ fn test_checked_int()
     verdict.start("[Checked_int] the Swift-style overflow-detecting integer types test...")
 
     // I8: an addition with no overflow through the ordinary operator (`+`)
-    sum8: = checked_int.Ci8.new(10) + checked_int.Ci8.new(20)
+    sum8: = checked_int.Ci8::10I8 + checked_int.Ci8::20I8
     assert(sum8.val == 30, "Ci8: 10 + 20 must equal 30 via operator sugar")
 
     // I8: checked_add throws a Checked_error on overflow, and catch can continue
     $i8_caught: = false
-    _bad8: =
-        checked_int.Ci8.new(100).checked_add(checked_int.Ci8.new(50)) catch
+    _bad8: = (checked_int.Ci8::100I8).checked_add(checked_int.Ci8::50I8) catch
         i8_caught = true
-        fallback checked_int.Ci8.new(0)
+        fallback checked_int.Ci8::0I8
     assert(i8_caught, "Ci8: 100 + 50 must overflow I8 range and be catchable")
 
     // U8: an unsigned subtraction's underflow is detected as a Checked_error too
     $u8_caught: = false
-    _bad_u8: =
-        checked_int.Cu8.new(5).checked_sub(checked_int.Cu8.new(10)) catch
+    _bad_u8: = (checked_int.Cu8::5U8).checked_sub(checked_int.Cu8::10U8) catch
         u8_caught = true
-        fallback checked_int.Cu8.new(0)
+        fallback checked_int.Cu8::0U8
     assert(u8_caught, "Cu8: 5 - 10 must underflow and be catchable")
 
     // I32: a multiplication overflow (100000 * 100000 exceeds I32's range)
     $i32_caught: = false
     _bad32: =
-        checked_int.Ci32.new(100000).checked_mul(checked_int.Ci32.new(100000)) catch
+        (checked_int.Ci32::100000).checked_mul(checked_int.Ci32::100000) catch
         i32_caught = true
-        fallback checked_int.Ci32.new(0)
+        fallback checked_int.Ci32::0
     assert(i32_caught, "Ci32: 100000 * 100000 must overflow I32 range")
 
     // I32: a unary minus on I32::MIN overflows (the sign cannot be flipped)
     $neg_caught: = false
-    _bad_neg: = checked_int.Ci32.new(-2147483647 - 1).checked_neg() catch
+    _bad_neg: = (checked_int.Ci32::(-2147483647 - 1)).checked_neg() catch
         neg_caught = true
-        fallback checked_int.Ci32.new(0)
+        fallback checked_int.Ci32::0
     assert(neg_caught, "Ci32: negating I32::MIN must overflow")
 
     // I32: division by zero is detected as div_by_zero
     $div_caught: = false
-    _bad_div: =
-        checked_int.Ci32.new(5).checked_div(checked_int.Ci32.new(0)) catch
+    _bad_div: = (checked_int.Ci32::5).checked_div(checked_int.Ci32::0) catch
         div_caught = true
-        fallback checked_int.Ci32.new(0)
+        fallback checked_int.Ci32::0
     assert(div_caught, "Ci32: division by zero must be catchable")
 
     // I64/U64: the path that compares against the boundary values (there is no 128-bit width)
     $i64_caught: = false
     _bad64: =
-        checked_int.Ci64.new(4000000000).checked_mul(checked_int.Ci64.new(4000000000)) catch
+        (checked_int.Ci64::4000000000I64).checked_mul(checked_int.Ci64::4000000000I64) catch
         i64_caught = true
-        fallback checked_int.Ci64.new(0)
+        fallback checked_int.Ci64::0I64
     assert(i64_caught, "Ci64: 4e9 * 4e9 must overflow I64 range")
 
     sum64: =
-        checked_int.Ci64.new(1000000000000).checked_add(checked_int.Ci64.new(1)) catch panic("Ci64: \
-            this addition must not overflow")
+        (checked_int.Ci64::1000000000000I64).checked_add(checked_int.Ci64::1I64)
+        catch panic("Ci64: this addition must not overflow")
     assert(sum64.val == 1000000000001, "Ci64: non-overflowing add must compute exactly")
 
     $u64_caught: = false
     _bad_u64: =
-        checked_int.Cu64.new(18446744073709551615).checked_add(checked_int.Cu64.new(1)) catch
+        (checked_int.Cu64::18446744073709551615U64).checked_add(checked_int.Cu64::1U64) catch
         u64_caught = true
-        fallback checked_int.Cu64.new(0)
+        fallback checked_int.Cu64::0U64
     assert(u64_caught, "Cu64: U64::MAX + 1 must overflow")
 
     // U32: a subtraction with no overflow through the ordinary operator (`-`)
-    diff32: = checked_int.Cu32.new(100) - checked_int.Cu32.new(30)
+    diff32: = checked_int.Cu32::100U32 - checked_int.Cu32::30U32
     assert(diff32.val == 70, "Cu32: 100 - 30 must equal 70 via operator sugar")
 
-    // The native integer types implement operator.Cast, so `Dest::src` builds a Ci* / Cu* (sugar
-    // for Ci32.new(v); see ksplc/sema/body/postfix.kspls), from a literal, a variable and an
-    // expression.
+    // The native integer types implement operator.Cast, so `Dest::src` builds a Ci* / Cu* (see
+    // ksplc/sema/body/postfix.kspls), from a literal, a variable and an expression.
     cast_lit: = checked_int.Ci32::123
     assert(cast_lit.val == 123, "Ci32::123 (literal receiver) must produce val=123")
 
@@ -238,12 +234,12 @@ fn test_selective_import()
     verdict.start("[Import] the selective import (namespace-free, renaming) test...")
 
     // Built with the bare Ci32 and passed to a function taking checked_int.Ci32: the same type.
-    bare: = Ci32.new(41)
-    qualified: checked_int.Ci32 = bare + checked_int.Ci32.new(1)
+    bare: = Ci32::41
+    qualified: checked_int.Ci32 = bare + checked_int.Ci32::1
     assert(qualified.val == 42, "Ci32 (namespace-free) must be the same type as checked_int.Ci32")
 
     // It works the same through the renaming (`as`) too.
-    renamed: My_cu32 = My_cu32.new(100) - My_cu32.new(58)
+    renamed: My_cu32 = My_cu32::100U32 - My_cu32::58U32
     assert(renamed.val == 42, "the renaming import Cu32 as My_cu32 must work correctly")
 
     // Caution: **Kinds other than a type must resolve too.** If one kind does not, the import line
@@ -716,7 +712,7 @@ fn test_negative_const_type_arg()
 // ==========================================
 // A non-returning call (`#noreturn`) can be placed as `catch`'s alternative value.
 // **Test the case that does not stop**; the case that stops panics (the rejected shape is
-// `tests/negative/noreturn_outside_fallback.kspls`).
+// the case `noreturn_outside_fallback` in `tests/negative/fn.kspls`).
 // ==========================================
 priv enum Nr_error
     bad
@@ -843,7 +839,7 @@ fn test_if_bind_in_else_if()
 // ==========================================
 // A `for` with no condition that no `break` leaves never ends, so a function can end on it
 // ("Loops" in `../../docs/SPEC-language.md`). The shapes that still need a `return` after the loop
-// are in `tests/negative/endless_for_*.kspls`.
+// are the cases `endless_for_*` in `tests/negative/control.kspls`.
 // ==========================================
 priv fn first_square_above(n: I32): I32 //< the first i whose square exceeds n
     $i: I32 = 0

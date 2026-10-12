@@ -137,11 +137,11 @@ function kspagePaper(ui) {
 
   // Presenting one at a time: **advancing and what is shown are the core's entry points** (keys,
   // the clicked place); this file only hides the chrome and redraws to the window's size.
+  // Caution: **Give the keys back to the editor on success too**: the keys that send on and Esc
+  // are read by its hidden input, so left on the button the show could be neither sent on nor left.
   document.getElementById("present").addEventListener("click", () => {
-    if (app.present(0) < 0) {
-      deny("This document has no slides");
-      app.focus();
-    }
+    if (app.present(0) < 0) deny("This document has no slides");
+    app.focus();
   });
   // **Keep showing and hiding the chrome in step with the redraw** (Esc and a click also trigger
   // it). The speaker's notes show **only while held down** (the audience sees one screen).

@@ -128,7 +128,8 @@ fn test_regex_match()
     // Catastrophic backtracking (ReDoS) is cut off as `too_complex`, neither hanging nor answering
     // "no": the budget ran out before the whole text was tried.
     r3: =
-        regex.Regex.compile("a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?b") catch panic("regex compile failed")
+        regex.Regex.compile("a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?b")
+        catch panic("regex compile failed")
     $r3_cut: = false
     _r3: = r3.is_match("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") catch e
         switch e
@@ -150,13 +151,19 @@ priv fn group_of(pattern: U8[], text: U8[], n: Sz): U8[] //<
         return "!"
     return "-" if !m.has_group(n) else m.group(n, text)
 
-priv fn group_count_of(pattern: U8[], text: U8[]): Sz
+priv fn group_count_of(pattern: U8[], text: U8[]): Sz //<
+    //< How many groups, from number 1 on, took part in one match
+    //<
+    //< Where every group takes part, that is the pattern's group count.
     r: = regex.Regex.compile(pattern) catch
         return -1
     defer r.free()
     m: = r.find(text) catch
         return -1
-    return m.group_count()
+    $n: Sz = 0
+    for m.has_group(n + 1)
+        n += 1
+    return n
 
 // ==========================================
 // std/regex: capture groups.

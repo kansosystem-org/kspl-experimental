@@ -100,8 +100,12 @@ uint32_t ksos_port_in_isr(void) {
     return ipsr != 0u;
 }
 
+// The kernel's tick handling. **It is weak**: `ksos/kernel/task.kspls` exports the real one, and
+// a probe that runs no scheduler links this empty one instead of writing its own.
+void __attribute__((weak)) ksos_tick(void) {
+}
+
 // The SysTick interrupt, delegating to the kernel's tick handling.
-extern void ksos_tick(void);
 void SysTick_Handler(void) {
     ksos_tick();
 }

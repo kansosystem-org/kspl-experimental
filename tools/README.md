@@ -19,7 +19,6 @@ Most tools come in pairs: the program you run, which holds `main`, and a second 
 | **Documents generated from the source** | |
 | `surface.kspls` / `surface_rows.kspls` | Writes and checks a package's API record (`<package>/SURFACE.txt`), the list of every name the package publishes. `pages` writes `ksplc doc`'s reference under `out/docs/` for browsing. `make surface` regenerates the record and the pages; `make test-surface` fails on a drifted record (one that no longer matches the source). Why only the record is committed is in "Why the record and the reference are two renderings" in [`tools/docs/DESIGN.md`](docs/DESIGN.md). |
 | `tour.kspls` / `tour_page.kspls` | The tour of the language (`docs/TOUR.md`), generated from its program: `make tour` regenerates it, `make test-docs` fails on a drift. |
-| `code_table.kspls` / `code_rows.kspls` | The table of diagnostic codes in `ksplc/docs/SPEC-tools.md`, generated from the code sections below it: `make code-table` regenerates it, `make test-conventions` fails on a drift. |
 | **The repository and its CI** | |
 | `repo_stat.kspls` / `repo_stat_path.kspls` | Writes the repository's size as one page of text, counting the files git lists: the tracked, and the untracked that are not ignored. |
 | `ci.kspls` / `ci_gates.kspls` | The CI's gates (the checks that can fail a build): one table of what each asks `make` for and which job runs it, and the runner `make ci` and its siblings call with their own name. `make ci-summary` asks it for the job's summary page. How the gates are read is in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md). |
@@ -29,7 +28,7 @@ Most tools come in pairs: the program you run, which holds `main`, and a second 
 | **Folders** | |
 | `ai_assist/` | The coding assistant's data, evaluation and training pipeline, with its own tests ([its guide](ai_assist/README.md)). |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
-| `tests/` | One test file per tool: `surface_test.kspls`, `tour_page_test.kspls`, `code_rows_test.kspls`, `repo_stat_test.kspls`, `aim_test.kspls` (the URL that opens kspage), and `ci_gates_test.kspls` (how the CI's sets are dealt out, and the summary). `all.kspls` runs them, and `ai_assist/tests/` too (`make debug-tools`). |
+| `tests/` | The tools' tests, two files by subject: `page_test.kspls` (the URL that opens kspage, the surface listing and the tour page) and `repo_test.kspls` (the repository's file statistics, and how the CI's sets are dealt out and summed up). `all.kspls` runs them, and `ai_assist/tests/` too; `main.kspls` gives them a `main` for `make debug-tools`. |
 | `docs/` | This folder's documents: the design and what is left ("Further reading" below). |
 
 ## Files near the limit and how they split
@@ -43,6 +42,6 @@ Every document here is for whoever changes Kanso's own tools.
 | Document | What it holds |
 | :-- | :-- |
 | [`tools/docs/DESIGN.md`](docs/DESIGN.md) | Why the tools are built the way they are: the API record, the coding assistant, the desktop opener. |
-| [`tools/docs/PLAN.md`](docs/PLAN.md) | What is left of the coding assistant. |
+| The "tools" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left of the coding assistant. |
 | [`tools/ai_assist/README.md`](ai_assist/README.md) | The coding assistant's files, and how to run its pipeline. |
 | [`../docs/DESIGN.md`](../docs/DESIGN.md) | The Development Principles, and why a leaf (a folder such as `tools/` that only points upward at the packages) points only upward. |

@@ -99,7 +99,7 @@ flowchart LR
 
 **"Tuning line following", after stage 12, is not a stage**: it holds what stages 7, 9, 11 and 12 share when the car follows a line.
 
-**Wireless (CYW43439 / ESP-Hosted) is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN.md`](DESIGN.md)).
+**Wireless is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN.md`](DESIGN.md)).
 
 **`make ksos-rp2040-board` is one firmware for stages 2b, 4, 5c, 6d, 8 and 10.** It prints lines tagged `[tag]` for each stage in turn, one lap in about 20 seconds (how to read them: the heading of [`demo/rp2040/rp2040_board_probe.kspls`](../demo/rp2040/rp2040_board_probe.kspls)). `make ksos-rp2040-net` is one firmware for 6a, 6b and 6c.
 
@@ -737,7 +737,7 @@ car t=700 ... n=599 ... run=1 rec=95
 car t=710 ... n=609 ... run=11 rec=95        <- n is growing
 ```
 
-**The speed cap rewrites the policy's output**, so the report line and the record show the instruction really sent. It is set in one place, `cap` in `ksos/boards/freenove_4wd_pico/cap.kspls`, and applies to the close-range reverse too.
+**The speed cap rewrites the policy's output**, so the report line and the record show the instruction really sent. It is set in one place, `cap` in `ksos/boards/freenove_4wd_pico/motor.kspls`, and applies to the close-range reverse too.
 
 ### Seeing the state as light while it drives itself
 
@@ -1035,7 +1035,7 @@ Stage 7's firmware (`rp2040_car_pilot_probe`) **stops on any button** because it
 
 ### The speed is slower than the tutorial's
 
-The tutorial drives at 50 to 80%. `cap.cap` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `cap.kspls`.
+The tutorial drives at 50 to 80%. `motor.cap` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `motor.kspls`.
 
 ## Tuning line following
 

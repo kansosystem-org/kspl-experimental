@@ -60,7 +60,6 @@ typedef ptrdiff_t Sz;
 typedef float F32;
 typedef double F64;
 typedef bool Bool;
-typedef unsigned char Char;
 
 /* What is recorded is the `?` propagation route one error followed, **one route per thread**
  * (the storage is core.c's, as each target spells KSPL_PER_THREAD). std/sys.kspls reads it back.

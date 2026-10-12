@@ -371,15 +371,16 @@ function kspageForm(ui) {
     syncStyles();
     for (const one of flies) one.sync();
   }
-  // The memo on the current container. **It is not in the flow**, so this field is its only sign.
+  // The presenter's note on the current slide. **It is not in the flow**, so this field is its only
+  // sign.
   const asideBox = document.getElementById("aside");
   document.getElementById("aside-apply").addEventListener("click", () => {
-    tell(app.setAside(asideBox.value), "Added the note", "A note can be added after clicking inside a slide or a table");
+    tell(app.setAside(asideBox.value), "Added the note", "A note can be added after clicking inside a slide");
     app.focus();
   });
   document.getElementById("aside-clear").addEventListener("click", () => {
     asideBox.value = "";
-    tell(app.setAside(""), "Deleted the note", "A note can be deleted after clicking inside a slide or a table");
+    tell(app.setAside(""), "Deleted the note", "A note can be deleted after clicking inside a slide");
     app.focus();
   });
 

@@ -3,7 +3,7 @@
 //< Not a suite; part of `../suite/fmt_test.kspls`.
 //< **A text the formatter leaves as it is gets recorded, and the next run takes the record instead
 //< of formatting** (`Fixed_points` in `../../fmt/file.kspls`). A record that outlives a change of
-//< style, notation or text would leave a file unformatted while `make test-fmt-tree` passes, so
+//< style, notation or text would leave a file unformatted while the check of the tree passes, so
 //< each case here shows one part of the key at work, read from `--stats`'s `[Fmt Cache]` line.
 //< **It uses a cache folder of its own** (`KSPLC_CACHE_DIR`).
 import "ksplc/tests/support/harness"
@@ -59,12 +59,10 @@ priv fn put_back(name: U8[], was: U8[]) //< sets name back to was, or unsets it 
         sys.set_env(name, was) catch panic("an environment variable could not be put back")
 
 fn run(arena: Arena$@) //< every case, in a cache folder made fresh for them
-    dir: = harness.sandbox("fmt_cache") catch
-        verdict.check("the formatter's cache can be given a folder", false, "")
-        return
+    dir: = harness.sandbox("fmt_cache")
     was: = sys.get_env("KSPLC_CACHE_DIR").unwrap_or("")
-    sys.set_env("KSPLC_CACHE_DIR", fs.join(dir, "cache", arena)) catch panic("KSPLC_CACHE_DIR could \
-        not be set")
+    sys.set_env("KSPLC_CACHE_DIR", fs.join(dir, "cache", arena))
+        catch panic("KSPLC_CACHE_DIR could not be set")
     defer put_back("KSPLC_CACHE_DIR", was)
     a: = place(dir, "a.kspls", formatted, arena)
     b: = place(dir, "b.kspls", unformatted, arena)
@@ -95,7 +93,7 @@ fn run(arena: Arena$@) //< every case, in a cache folder made fresh for them
         "0 hit / 1 miss / 0 stored", arena)
     expect("a change of notation neither looks nor records",
         fmt_counts(a, U8[][]::{ "--to=kspl" }, arena), "0 hit / 0 miss / 0 stored", arena)
-    cleaned: = harness.ksplc_bare(U8[][]::{ "clean", "cache" })
-    verdict.check("ksplc clean cache runs", cleaned.code == 0, cleaned.out)
-    expect("ksplc clean cache removes the records", fmt_counts(a, in_place, arena),
+    cleaned: = harness.ksplc_bare(U8[][]::{ "clean" })
+    verdict.check("ksplc clean runs", cleaned.code == 0, cleaned.out)
+    expect("ksplc clean removes the records", fmt_counts(a, in_place, arena),
         "0 hit / 1 miss / 1 stored", arena)

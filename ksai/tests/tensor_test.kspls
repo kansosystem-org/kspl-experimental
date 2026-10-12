@@ -254,14 +254,14 @@ fn test_safetensors_roundtrip(arena: Arena$@)
 
     $writer: = ai_st.Safetensors_writer.new()
     writer.add("w", w)
-    ai_file.save_safetensors(writer@, path) catch panic("save_safetensors should succeed for a \
-        writable out/ path")
+    ai_file.save_safetensors(writer@, path)
+        catch panic("save_safetensors should succeed for a writable out/ path")
 
-    $loaded: = ai_file.load_safetensors(path, arena) catch panic("load_safetensors should read back \
-        the file just written")
+    $loaded: = ai_file.load_safetensors(path, arena)
+        catch panic("load_safetensors should read back the file just written")
     defer loaded.free()
-    got: = loaded.get_tensor<|F32|>("w", arena) catch panic("get_tensor should find the tensor that \
-        was added before save")
+    got: = loaded.get_tensor<|F32|>("w", arena)
+        catch panic("get_tensor should find the tensor that was added before save")
     assert(got.size == w.size, "safetensors roundtrip must preserve the element count")
     for i in Range.asc(w.size)
         assert((got.data + i)$ == (w.data + i)$,
@@ -363,10 +363,10 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     src.fill(F32::1.0)
     $writer: = ai_st.Safetensors_writer.new()
     writer.add("w", src)
-    ai_file.save_safetensors(writer@, path) catch panic("save_safetensors should succeed for a \
-        writable out/ path")
-    $loaded: = ai_file.load_safetensors(path, arena) catch panic("load_safetensors should read back \
-        the file just written")
+    ai_file.save_safetensors(writer@, path)
+        catch panic("save_safetensors should succeed for a writable out/ path")
+    $loaded: = ai_file.load_safetensors(path, arena)
+        catch panic("load_safetensors should read back the file just written")
     defer loaded.free()
 
     // A shape other than the expected one is rejected. **Do not modify `dst` when rejecting**
@@ -382,8 +382,8 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
 
     // The same shape gets through (so the rejection above is not "it always rejects").
     $ok_dst: = Tensor<|F32|>.new(Sz[]::src_shape, arena)
-    loaded.map_into<|F32|>("w", ok_dst@, arena) catch panic("map_into must accept a tensor whose \
-        shape matches the destination")
+    loaded.map_into<|F32|>("w", ok_dst@, arena)
+        catch panic("map_into must accept a tensor whose shape matches the destination")
     assert((ok_dst.data + 0)$ == F32::1.0, "an accepted mapping must point at the file's data")
 
     // Reading it as an element type of another width is rejected.
@@ -392,8 +392,8 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     // not fail. Safetensors_writer writes F32 only, so this one is built by hand.
     blob: =
         blob_of("{\"w\":{\"dtype\":\"F64\",\"shape\":[2],\"data_offsets\":[0,16]}}", 16, arena)
-    $f64_file: = ai_st.Safetensors.load_from_bytes(blob, arena) catch panic("the hand-built \
-        safetensors blob must parse")
+    $f64_file: = ai_st.Safetensors.load_from_bytes(blob, arena)
+        catch panic("the hand-built safetensors blob must parse")
     $narrow: = false
     f64_file.get_tensor<|F32|>("w", arena) catch
         narrow = true
@@ -408,8 +408,8 @@ fn test_safetensors_refuses_a_mismatch(arena: Arena$@) //<
     bad_blob: =
         blob_of("{\"a\":{\"dtype\":\"F32\",\"shape\":[4],\"data_offsets\":[0,8]},\"b\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[8,16]}}",
         0, arena, neighbor_bytes)
-    $inconsistent: = ai_st.Safetensors.load_from_bytes(bad_blob, arena) catch panic("the hand-built \
-        safetensors blob must parse")
+    $inconsistent: = ai_st.Safetensors.load_from_bytes(bad_blob, arena)
+        catch panic("the hand-built safetensors blob must parse")
     $refused_span: = false
     inconsistent.get_tensor<|F32|>("a", arena) catch
         refused_span = true

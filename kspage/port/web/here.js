@@ -1,6 +1,6 @@
 // ==========================================
 // kspage's page — the context menu (right-click): "the menu for the place just clicked", not back
-// and forward navigation (`api.js`'s `spotNow` / `markSpot`).
+// and forward navigation (`api.js`'s `markJump`).
 // **It replaces the browser's menu only over the body** (elsewhere, spell check, opening a link,
 // translating and looking up would vanish; on the canvas the browser offers only "save as image").
 // Caution: **Do not make a command that exists only here** (Apple HIG): an item **names a button in

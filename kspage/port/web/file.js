@@ -45,12 +45,7 @@ function kspageFile(ui) {
   // place**, or the format opened and the format written back differ per path (Principle 4). **An
   // unknown extension is plain text** (`.md` included: Markdown is edited as the text it is); the
   // core decides whether it is text (`../../share/text.kspls`'s `texty`).
-  // Caution: **Read `.json` as kspage's format too** — older documents use it, and read as text
-  // their tables, formulas and styling collapse into one paragraph. Only `bodyExt` decides writing.
-  const kindOf = (name) => {
-    const low = (name || "").toLowerCase();
-    return low.endsWith(".kspage") || low.endsWith(".json") ? KIND_JSON : KIND_TEXT;
-  };
+  const kindOf = (name) => ((name || "").toLowerCase().endsWith(".kspage") ? KIND_JSON : KIND_TEXT);
   // The language the name declares (the extension itself); **no list here** — any name passes, and
   // the core only names the style after it (`sheet_for` in `../../share/text.kspls`).
   const spokenOf = (name) => {
@@ -92,9 +87,8 @@ function kspageFile(ui) {
   // user activation** (otherwise it does not open), so the text is built before any await.
   const canBind = typeof window.showSaveFilePicker === "function"
     && typeof window.showOpenFilePicker === "function";
-  // **List `.json` too** (else an older document cannot be chosen); the first is what is saved.
   const BODY_KIND = { description: "A kspage document",
-    accept: { "application/json": [".kspage", ".json"] } };
+    accept: { "application/json": [".kspage"] } };
   // **No full list of extensions**: plain text can have any name, and the picker always offers
   // "all files" (`kindOf` decides how it is read). `.md` is named beside `.txt`, the text people
   // open most, so a browser without the picker does not hide it behind "all files".
@@ -186,7 +180,10 @@ function kspageFile(ui) {
   // `kf.seen`** (elsewhere, the status or the tab's record would keep the older path).
   const remember = (path, body) => {
     kf.seen = { path: path, body: body };
-    if (ui.showPlace) ui.showPlace();
+    // **Redraw the whole status bar, not the place alone**: its "Unsaved" compares against
+    // `kf.seen`, and after a save no redraw of the document follows to clear it.
+    if (ui.restatus) ui.restatus();
+    else if (ui.showPlace) ui.showPlace();
     keepWhere();
     // Caution: **Update the draft when what it compares against changes** — the one place the file
     // and the text meet, so out of step the draft would stay after saving (it asks `draftNow`).
@@ -212,6 +209,7 @@ function kspageFile(ui) {
   const settleIn = (out, kind, where, read) => {
     kf.openKind = kind;
     kf.docId = mintDoc();
+    app.forgetPlaces();
     if (kf.bodyAt !== where.bodyAt) bindBody(where.bodyAt);
     pathBox.value = where.path;
     remember(where.path, where.path.length > 0 ? read : bodyText());
@@ -244,10 +242,6 @@ function kspageFile(ui) {
     // Caution: **Report it apart from "cannot be read"** (an image needs another tool, not edits).
     if (why === "not_text") {
       return "This is not a text file (content that is not text is in it)";
-    }
-    if (why === "withdrawn") {
-      return "This document holds a window onto source code or a line joining two frames, which "
-        + "kspage no longer shows. It was not opened, so nothing in it is lost";
     }
     return why === "too_big"
       ? `This document is too large to lay down (${kb(size)} / the cap that can be opened is `
@@ -396,7 +390,7 @@ function kspageFile(ui) {
   who.addEventListener("input", () => { app.author = who.value; });
 
   return {
-    // **The download function and the name are one each** ([`report.js`](report.js) borrows them).
+    // **The download function and the name are one each** (the debug log in [`inout.js`](inout.js) borrows them).
     download: download,
     nameOf: nameOf,
     pathBox: pathBox,

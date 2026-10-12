@@ -70,13 +70,13 @@ sequenceDiagram
 
 Caution: **The editor must not keep a deadline of its own.** Liveness is judged here, counting *silence*, while the marker keeps a slow but healthy answer alive. A client timer counts elapsed time and cannot tell slow from hung. Set below what a legitimate workspace call hierarchy takes, it throws away every correct but slow answer as "no results". `.vscode/extensions/kspl/extension.js` holds none. A request ends with an answer, the process going away (both death paths empty the table), or the reader cancelling.
 
-Process creation, IO and kill come from `Piped_child` in `std/subproc`, over the OS primitives `kspl_proc_start` / `kspl_proc_read` / `kspl_proc_send` / `kspl_proc_kill`. They hide both POSIX `fork` and Windows `CreateProcess`. `tests/suite/lsp_test.kspls` checks the recovery on every CI run through the test hooks `$/ksplTestCrash` / `$/ksplTestHang`, and a document named under the `kspl-test-poison:` scheme, whose analysis crashes every worker (no editor names a document so). `tests/support/lsp_restart.kspls` holds the first answer after a recovery to a budget measured in the same run, and the `windows-ucrt64` job runs the same suite on Windows' process-separation path.
+Process creation, IO and kill come from `Piped_child` in `std/subproc`, over the OS primitives `kspl_proc_start` / `kspl_proc_read` / `kspl_proc_send` / `kspl_proc_kill`. They hide both POSIX `fork` and Windows `CreateProcess`. `tests/suite/lsp_test.kspls` checks the recovery on every CI run through the test hooks `$/ksplTestCrash` / `$/ksplTestHang`, and a document named under the `kspl-test-poison:` scheme, whose analysis crashes every worker (no editor names a document so). `tests/support/lsp_recover.kspls` holds the first answer after a recovery to a budget measured in the same run, and the `windows-ucrt64` job runs the same suite on Windows' process-separation path.
 
 **The JSON-RPC frame's strings (`Content-Length`) are not held here.** (JSON-RPC is the message format the LSP uses: each message is a `Content-Length` header and a JSON body.) Writing uses `frame_into` / `encode` in `std/jsonrpc`. A sender writing its own frame fails as "nothing comes back at all" (the reason is "The frame is kept apart from the transport, and a broken frame is returned as a value too" in [`../../std/docs/DESIGN.md`](../../std/docs/DESIGN.md)). Only taking the header off stdin is the server's own (`read_content_length` in `ksplc/lsp/msg.kspls`), which must advance stdin one character at a time. It passes each header line to `content_length` in `std/jsonrpc` with the server's own ceiling. A header with no readable length within that ceiling is `Lsp_error.format_error`.
 
 ## The server finds the workspace's files without asking the client
 
-The server lists the project's source files itself by walking the folder tree. **The language server walks the root itself** (`ksplc/lsp/workspace.kspls`). Renaming and the call hierarchy must see the callers, which are files not reachable through the open document's imports. So the server must know every source in the workspace, in either notation.
+**The language server lists the project's source files itself by walking the folder tree from the root** (`ksplc/lsp/workspace.kspls`). Renaming and the call hierarchy must see the callers, which are files not reachable through the open document's imports. So the server must know every source in the workspace, in either notation.
 
 **Do not have the client send the list.** A page in a browser cannot walk folders, so a local server would need a tree-walking endpoint just for that. Besides, every editor would write its own exclusions, and hundreds of names would cross the stdio per request. Other language servers find the files themselves too, but from a manifest (rust-analyzer from `Cargo.toml`). KSPL has no manifest (an import resolves by a path from the root), so it walks.
 
@@ -98,7 +98,7 @@ Caution: **Do not list names to exclude in the source.** Each project names the 
 
 ### One bad file does not poison the workspace
 
-A file that cannot be compiled does not stop the server from answering about all the other files. The walk reaches whatever is there, including files that cannot be built: fixtures written to be refused, and `tests/negative` alone holds hundreds. **The analysis is one pass over all files joined together**, so if one desugaring failure ended it, every workspace query would answer nothing.
+A file that cannot be compiled does not stop the server from answering about all the other files. The walk reaches whatever is there, including files that cannot be built: fixtures written to be refused, of which `tests/negative` alone holds hundreds, many cases to a file. **The analysis is one pass over all files joined together**, so if one desugaring failure ended it, every workspace query would answer nothing.
 
 **A desugaring failure ends the run only where diagnostics are shown.** Stopping exists because a half-desugared tree turns the fault into a distant complaint about a synthesized name. With diagnostics suppressed, as the workspace pass asks, that reason is absent and stopping buys nothing.
 
@@ -122,9 +122,7 @@ Caution: **Measure with the cache an ordinary session would have.** ksplc's own 
 
 ## References and renaming are the same question, so they are gathered in one place
 
-"Find all references" and "rename" use one list of uses, so they can never disagree. "Where is this name used" (`textDocument/references`) and "where must it be rewritten" (`textDocument/rename`) are one question answered two ways. **Gathered in two places, the day only one is fixed, a use appears in the references that the renaming leaves unchanged.**
-
-**One walk of the tree makes one list of uses, rebuilt into `Location`s for the references and into `changes` for the renaming** (`ksplc/lsp/uses.kspls`).
+**"Find all references" and "rename" use one list of uses, so they can never disagree: one walk of the tree makes it, rebuilt into `Location`s for the references and into `changes` for the renaming** (`ksplc/lsp/uses.kspls`). "Where is this name used" (`textDocument/references`) and "where must it be rewritten" (`textDocument/rename`) are one question answered two ways. **Gathered in two places, the day only one is fixed, a use appears in the references that the renaming leaves unchanged.**
 
 Caution: **Match on the definition, not the spelling**: the same spelling appears in comments, strings and other names.
 
@@ -148,7 +146,7 @@ A method's `sym.name` already holds its owner's path, and the owner need not sta
 
 ## The call hierarchy also counts passing a function as a pointer as an edge
 
-When a function is handed over as a pointer (for example as a task's entry function), the call hierarchy still lists the place that hands it over, marked as a hand-over. `callHierarchy/incomingCalls` is a hierarchy of calls, and passing a function pointer is not a call. Neither clangd nor rust-analyzer makes an edge of it. **It is made an edge here all the same.** This repository has a lot of code reachable only through function pointers, such as ksos's task entry functions, passed to `run_single_task`. Without the edge they show "no callers", look unused, and are mistaken for removable.
+**When a function is handed over as a pointer (for example as a task's entry function), the call hierarchy still lists the place that hands it over as an edge, marked as a hand-over.** `callHierarchy/incomingCalls` is a hierarchy of calls, and passing a function pointer is not a call. Neither clangd nor rust-analyzer makes an edge of it. This repository has a lot of code reachable only through function pointers, such as ksos's task entry functions, passed to `run_single_task`. Without the edge they show "no callers", look unused, and are mistaken for removable.
 
 **It must not look like a call, though**: a pointer may be registered and never called. The LSP has no field for an edge's kind, so `CallHierarchyItem.detail` carries `(as fn pointer)`, meaning the edge is a hand-over only. A function may both call and register one target, so `has_call` / `has_ref` are held separately.
 
@@ -163,7 +161,7 @@ Note: Everything needed is in `def_node`. The renaming walk ("References and ren
 
 ## Completion re-analyses the text as if one name were missing
 
-To suggest completions while you type, the server pretends the half-typed word is one placeholder name and analyses that text. **Analyse the text with the half-typed word replaced by one synthesized name.**
+**To suggest completions while you type, the server analyses the text with the half-typed word replaced by one synthesized (placeholder) name.**
 
 **Completion is needed while the text is half written**, when the syntax does not pass and the analysis stops at `parse/syntax_error` ("Only the editor's parse recovers from a syntax error"). So `latest_state` then holds neither a tree nor a symbol table.
 
@@ -209,11 +207,11 @@ Caution: **Do not take a function's type from its symbol.** The symbol's `type_i
 
 ## Only the editor's parse recovers from a syntax error
 
-When a file has a syntax error, the compiler stops at the first one, but the editor gets a second, forgiving parse so that hover and the like still work on the rest of the file. The grammar is a PEG (`kspl.kspeg`; a *PEG*, parsing expression grammar, tries each alternative in order) and stops at `parse/syntax_error` on the first error. **Only where the editor is the reader is the file read a second time, with the recovering branches alive, and a tree returned.** So half-written code (`p.`, say) still answers hover, jump to definition, references, renaming and the call hierarchy with one diagnostic, instead of five `null`s. Completion is a different case, solved by one synthesized name ("Completion re-analyses the text as if one name were missing").
+**When a file has a syntax error, the compiler stops at the first one, but where the editor is the reader the file is read a second time, with the recovering (forgiving) branches alive, and a tree returned.** The grammar is a PEG (`kspl.kspeg`; a *PEG*, parsing expression grammar, tries each alternative in order) and stops at `parse/syntax_error` on the first error. So half-written code (`p.`, say) still answers hover, jump to definition, references, renaming and the call hierarchy with one diagnostic, instead of five `null`s. Completion is a different case, solved by one synthesized name ("Completion re-analyses the text as if one name were missing").
 
 ### Why signature help is not offered
 
-The editor's "parameter hints while you type a call" panel is not offered; the parameter descriptions are on the hover instead. **`textDocument/signatureHelp` is not offered.** While a call is being written the file does not parse. The recovered tree holds the half-written call only as swallowed text ("What a broken node holds"), so the name before the bracket is not resolved and the panel would answer `null`. A fallback by name cannot tell one `new` from another, and would describe the wrong function with confidence. The parameter descriptions are on the hover instead, each on its own parameter's line (`format_fn_sig` in `lsp/spell.kspls`).
+**The editor's "parameter hints while you type a call" panel (`textDocument/signatureHelp`) is not offered.** While a call is being written the file does not parse. The recovered tree holds the half-written call only as swallowed text ("What a broken node holds"), so the name before the bracket is not resolved and the panel would answer `null`. A fallback by name cannot tell one `new` from another, and would describe the wrong function with confidence. The parameter descriptions are on the hover instead, each on its own parameter's line (`format_fn_sig` in `lsp/spell.kspls`).
 
 ### Two runs: the strict one for everybody, the lenient one for the editor alone
 
@@ -256,9 +254,7 @@ Caution: **Do not give a recovered tree `has_load_error`.** That flag means "the
 
 ### One operator in kspeg: skip up to the stopping character (`~"…"`)
 
-The grammar engine has one special operator for the lenient run: "skip text until one of these characters". **The notation has no negated character class**, and `( !";" !"}" . )+` makes a node per byte, so swallowing needs an operator in the engine.
-
-**Kspeg has one operator for "swallow up to a stopping byte", and it doubles as the mark of the lenient run.** It is spelt `~"…"`, and the bytes between the quotes are those that end the swallow (`kspeg/docs/SPEC-notation.md`).
+**The grammar engine, Kspeg, has one special operator for the lenient run, "skip (swallow) text up to a stopping byte", and it doubles as the mark of the lenient run.** The notation has no negated character class, and `( !";" !"}" . )+` makes a node per byte, so swallowing needs an operator in the engine. It is spelt `~"…"`, and the bytes between the quotes are those that end the swallow (`kspeg/docs/SPEC-notation.md`).
 
 Caution: **Do not split it into two.** A swallowing operator held apart from the mark that enables it allows a run where the mark alone is raised. As one, the operator is always off in the compiler's run, which is not lenient, so the compiler's grammar is unchanged.
 
@@ -286,7 +282,7 @@ These checks make sure the forgiving parse stays inside the editor and does what
 
 ### A bracket left open
 
-A bracket you have opened but not yet closed must not turn the whole rest of the file into garbage. **A bracket never closed must not take the rest of the file with it.** The two notations lose it on different brackets, and neither fix needs a change to the language.
+**A bracket you have opened but not yet closed must not take the rest of the file with it.** The two notations lose it on different brackets, and neither fix needs a change to the language.
 
 **In the brace notation, the top-level swallow stops at `;` and the line end, not at `}`.** No top-level item begins with a `}`. So the `}` left over when a declaration's block is not closed is swallowed like any other unreadable run, instead of stopping the swallow dead.
 
@@ -298,9 +294,9 @@ A bracket you have opened but not yet closed must not turn the whole rest of the
 
 ## A `didOpen` checks one document's bodies
 
-When you open a file, the server type-checks the function bodies of that file only, not of every file it imports, so the first answer comes quickly. **A `didOpen` that checks the bodies of every file reachable from the document stands between the reader and every answer after it.** For a file in the middle of the tree that is a great many files, thrown away and redone on every keystroke.
+**When you open a file, the server type-checks the function bodies of that file only, not of every file it imports, so the first answer comes quickly.** A `didOpen` that checks the bodies of every file reachable from the document stands between the reader and every answer after it. For a file in the middle of the tree that is a great many files, thrown away and redone on every keystroke.
 
-**The document view checks `main_file`'s bodies and no others** (`Bodies.main_file`, the `bodies` on `Sema_ctx` that `run_semantic_analysis` is handed). Every file's declarations are still collected and every `const` initializer still inferred: those are facts about declarations that other files read. Only other files' function and impl bodies go unchecked.
+So the document view checks `main_file`'s bodies and no others (`Bodies.main_file`, the `bodies` on `Sema_ctx` that `run_semantic_analysis` is handed). Every file's declarations are still collected and every `const` initializer still inferred: those are facts about declarations that other files read. Only other files' function and impl bodies go unchecked.
 
 | View | Bodies checked | Serves |
 | :-- | :-- | :-- |
@@ -317,7 +313,7 @@ The narrowing also keeps one bad file from poisoning a good one. A failing body 
 
 ## Typing names the document view does not analyse
 
-The document view skips other files' bodies ("A `didOpen` checks one document's bodies"), so when you hover a name whose type would normally come from that skipped analysis, the server works the type out from the declarations instead. **The document view leaves other files' bodies unanalysed ("A `didOpen` checks one document's bodies"), so a name the editor asks about there is typed another way.** Each rule below is one such name and how the view reads it, held to what the declarations say.
+**The document view leaves other files' bodies unanalysed ("A `didOpen` checks one document's bodies"), so when you hover a name whose type would normally come from that skipped analysis, the server works the type out from the declarations instead.** Each rule below is one such name and how the view reads it, held to what the declarations say.
 
 | The name | How the view types it |
 | :-- | :-- |
@@ -377,15 +373,15 @@ Only a bare name takes the module of the file that declares it (`write_full_name
 
 **A label is shown as a label, and a jump to it lands on it.** Classified like a value, `with_setup:` in `main.kspls` reads `with_setup: with_setup` (a variable typed by its own name), and a jump from `break outer` finds nothing. The hover says `label <name>` wherever a name stands in a label's place: where it is written, or where a `break` / `continue` names it (`is_label_name` in `lsp/hover.kspls`). The label a jump leaves is recorded by the one search that decides it, sema's, on the jump's own name (`name_node` on `Jump_label` in `sema/session/ctx.kspls`). So the editor matches no name a second way.
 
-**A position answers for the name it touches, and a mark names nothing.** The walk by position (`Pick_walk.visit` in `lsp/position.kspls`) counts a position at a name's end as on it, since an editor asks at the caret just past a name. A mark (a bracket, a comma, an operator: the grammar's fixed spellings) is no target. Answered from the node around it, the `)` of `words.free()` would read `fn )()`, a function by that name, and the `,` after `words@` read `fn @()`. Two kinds of node span marks besides their names, so each is held to its names. A path whose names are nodes of their own is not a target itself, or `List<|U8[]|>.new` answers on its `<|` and `|>` with the whole path as the name. A declaration, the last resort for its dropped `:`, reaches only to where its type or value begins (`declarator_span`), not over the marks inside its value. A keyword answers only through what it stands for, the `const` of a declaration that declaration; the walk that borrows an enclosing node's type (`walk_path_for_type` in `lsp/hover.kspls`) would label that type with the keyword's spelling (`type priv`). A `)` answering for its call was weighed and not taken: the call's name a few characters to the left already answers it. `check_hover_marks` in `tests/support/lsp_marks.kspls` asks at each kind of mark, then at the names beside them.
+**A position answers for the name it touches, and a mark names nothing.** The walk by position (`Pick_walk.visit` in `lsp/position.kspls`) counts a position at a name's end as on it, since an editor asks at the caret just past a name. A mark (a bracket, a comma, an operator: the grammar's fixed spellings) is no target. Answered from the node around it, the `)` of `words.free()` would read `fn )()`, a function by that name, and the `,` after `words@` read `fn @()`. Two kinds of node span marks besides their names, so each is held to its names. A path whose names are nodes of their own is not a target itself, or `List<|U8[]|>.new` answers on its `<|` and `|>` with the whole path as the name. A declaration, the last resort for its dropped `:`, reaches only to where its type or value begins (`declarator_span`), not over the marks inside its value. A keyword answers only through what it stands for, the `const` of a declaration that declaration; the walk that borrows an enclosing node's type (`walk_path_for_type` in `lsp/hover.kspls`) would label that type with the keyword's spelling (`type priv`). A `)` answering for its call was weighed and not taken: the call's name a few characters to the left already answers it. `check_hover_marks` in `tests/support/lsp_hover.kspls` asks at each kind of mark, then at the names beside them.
 
 **A literal shows the type it took, and nothing else.** `4` in `size: Sz = 4` is an `Sz`, passed to `Range.asc` it is an `Sz`, and in `Pair::{ .a = 1 }` it is the field's `I32`, so the hover reads the type the analysis left on that literal's node (`send_literal_type` in `lsp/hover.kspls`). Guessed from the spelling, every integer would read `I32`. And labelled like a declaration, the literal would read as one named after itself (`type 4`, `type "str"`, `type null`). The value is not repeated: it is the text under the caret. Where nothing was analysed (an array's length, an enum's tag value, an import's path) the hover is empty rather than guessed.
 
-**A name where it is bound reads as it does where it is used.** `$words: = List<|U8[]|>.new(arena)` shows `words: std.ds.List<|U8[]|>` on both lines. Every request asks the one question "which declaration does this name stand for" (`get_definition_node` in `lsp/nav.kspls`), and on a declared name it answered with the declared type's declaration, which the jump wants ("4.1 The features supported" in [`SPEC-tools.md`](SPEC-tools.md)). The hover then showed the struct, and references and renaming listed and renamed `List`. That step now belongs to the jump alone (`handle_definition`). **A binding the compiler builds keeps the name as written**, at its own position: the item of `for w in words` and the `v` of `if v: = opt` were rebuilt at the statement's position, so the hover found the `_for_coll` copy instead, or nothing, and references, matched by position, took the copy's places for the item's. A pattern's binding carries its type on its node, as a `catch e` does, so the place it is written has one to show. `check_hover_values` in `tests/support/lsp_values.kspls` asks at each kind of literal and of binding.
+**A name where it is bound reads as it does where it is used.** `$words: = List<|U8[]|>.new(arena)` shows `words: std.ds.List<|U8[]|>` on both lines. Every request asks the one question "which declaration does this name stand for" (`get_definition_node` in `lsp/nav.kspls`), and on a declared name it answered with the declared type's declaration, which the jump wants ("4.1 The features supported" in [`SPEC-tools.md`](SPEC-tools.md)). The hover then showed the struct, and references and renaming listed and renamed `List`. That step now belongs to the jump alone (`handle_definition`). **A binding the compiler builds keeps the name as written**, at its own position: the item of `for w in words` and the `v` of `if v: = opt` were rebuilt at the statement's position, so the hover found the `_for_coll` copy instead, or nothing, and references, matched by position, took the copy's places for the item's. A pattern's binding carries its type on its node, as a `catch e` does, so the place it is written has one to show. `check_hover_values` in `tests/support/lsp_hover.kspls` asks at each kind of literal and of binding.
 
 ## A document URI is converted to the logical name on the way in, and back to the editor's spelling on the way out
 
-The editor names files by URI (`file:///home/me/proj/std/lang.kspls`), while the compiler names them by a short project-relative name (`std/lang`). The server converts at the door, both ways. **Inside the compiler a file has one identity: its logical name, relative to the project root** (`to_project_relative` in `base/locate.kspls`; why relative is "The standard library is found beside the compiler" in [`DESIGN.md`](DESIGN.md)). The editor names the same file by a URI, so the LSP's boundary converts both ways.
+**The editor names files by URI (`file:///home/me/proj/std/lang.kspls`), while inside the compiler a file has one identity, its short logical name relative to the project root (`std/lang`), so the server converts at the LSP's boundary, both ways** (`to_project_relative` in `base/locate.kspls`; why relative is "The standard library is found beside the compiler" in [`DESIGN.md`](DESIGN.md)).
 
 ```mermaid
 flowchart LR
@@ -407,7 +403,7 @@ Caution: **`base_locate.is_same_file` is not the pattern to copy.** It matches a
 
 ## The formatter reorders the `import`s as text, before the printer
 
-The formatter sorts the `import` lines first, as plain text, and only then lays out the file. **The `import`s are reordered in a stage before the printer, on the original text rather than the tree** (`ksplc/fmt/import.kspls`).
+**The formatter sorts the `import` lines first, in a stage before the printer, on the original text rather than the tree, and only then lays out the file** (`ksplc/fmt/import.kspls`).
 
 Caution: **Do not reorder nodes inside the printer.** `fmt_printer` advances monotonically through the original text's offsets, and `catch_up_trivia` does nothing when `target_offset <= last_offset`, so going backwards drops the comments. Rearrange the text first and analyse it again only where it changed; imports already in order are left alone, so normally there is none.
 
@@ -419,7 +415,7 @@ Caution: **Do not reorder nodes inside the printer.** `fmt_printer` advances mon
 
 ## The formatter folds nothing by default (`AllowShortBlocks` / `AllowShortFunctions`)
 
-By default the formatter never squeezes a short block or a short function onto one line. **By default even a block of one statement takes three lines** (`AllowShortBlocks` is `false`). Folding exists but is off, for two reasons.
+**By default the formatter never squeezes a short block or a short function onto one line: even a block of one statement takes three lines** (`AllowShortBlocks` is `false`). Folding exists but is off, for two reasons.
 
 ```kspl
 // with AllowShortBlocks: true
@@ -447,7 +443,7 @@ if n > 0 {
 
 ## One level is four spaces (`IndentWidth`)
 
-Each indentation level is four spaces by default, and it can be changed. **By default `ksplc fmt` indents a level by four spaces.** In the indentation notation the column is the block structure itself: no `}` closes a level, so where a body ends is read from how far the next line stands out. Two spaces leave that step narrow enough to misread at a glance, worst a few levels down, where several levels end on one line. Four make each level a step the eye takes without counting columns. The brace notation is formatted at the same width, so a file reads the same in both.
+**By default `ksplc fmt` indents each level by four spaces, and it can be changed.** In the indentation notation the column is the block structure itself: no `}` closes a level, so where a body ends is read from how far the next line stands out. Two spaces leave that step narrow enough to misread at a glance, worst a few levels down, where several levels end on one line. Four make each level a step the eye takes without counting columns. The brace notation is formatted at the same width, so a file reads the same in both.
 
 | Default | Who uses it |
 | :-- | :-- |
@@ -474,21 +470,21 @@ Each indentation level is four spaces by default, and it can be changed. **By de
 
 ## Where the formatter's time goes, and the record of formatted texts
 
-Most of the formatter's time is spent parsing, so it remembers which files are already formatted and skips them. **Formatting a file is mostly parsing it.** The KSPEG parse and the conversion to the tree take about two thirds of a file's time, the printer about a quarter, and the mending of the indentation notation and the import sort the rest (valgrind's callgrind over one batch of `make fmt` shows the split). Starting the process and building the grammar are a small share, so the batches `mk/lint.mk` hands one process already take what fewer starts could give.
+**Formatting a file is mostly parsing it, so the formatter remembers which files are already formatted and skips them.** The KSPEG parse and the conversion to the tree take about two thirds of a file's time, the printer about a quarter, and the mending of the indentation notation and the import sort the rest (valgrind's callgrind over one batch of `make fmt` shows the split). Starting the process and building the grammar are a small share, so the batches `mk/lint.mk` hands one process already take what fewer starts could give.
 
-**A text formatting leaves unchanged is recorded, and not formatted again** (`Fixed_points` in [`../fmt/file.kspls`](../fmt/file.kspls); what a user sees is "3.3 Skipping what is already formatted" in [`SPEC-tools.md`](SPEC-tools.md)). Over a formatted tree a run then reads and hashes each file and formats only the changed ones, about a tenth of the work. A *fixed point* is a text that formatting leaves exactly as it is.
+So a text formatting leaves unchanged is recorded, and not formatted again (`Fixed_points` in [`../fmt/file.kspls`](../fmt/file.kspls); what a user sees is "3.3 Skipping what is already formatted" in [`SPEC-tools.md`](SPEC-tools.md)). Over a formatted tree a run then reads and hashes each file and formats only the changed ones, about a tenth of the work. A *fixed point* is a text that formatting leaves exactly as it is.
 
-* **The key holds every input the output depends on**: the bytes, the notation, each style field (`Config.append_key` in [`../fmt/style.kspls`](../fmt/style.kspls)) and ksplc's identity. A formatter cache fails where an input is missing from its key: a record made under one option answers for another, and the file stays unformatted while the check passes. **The path is not in it**, since the formatter reads only the text, so the copy `make test-fmt-tree` formats in a folder of its own finds the same records.
+* **The key holds every input the output depends on**: the bytes, the notation, each style field (`Config.append_key` in [`../fmt/style.kspls`](../fmt/style.kspls)) and ksplc's identity. A formatter cache fails where an input is missing from its key: a record made under one option answers for another, and the file stays unformatted while the check passes. **The path is not in it**, since the formatter reads only the text, so a copy formatted in a folder of its own (`make test-kspls-trip`'s) finds the same records.
 * **Only a fixed point is recorded**, an output equal to its input, so a hit answers what formatting would. Recording the output of a run that changed the file would trust that formatting twice moves nothing, which the rounds of inserted parentheses do not promise.
 * **The bytes, not the file's time.** A time-keyed record misses after a checkout rewrites every time, and hits where a tool changed the content and kept the time.
 * **A change of notation (`--to`) is neither looked up nor recorded**: its output is never its input.
 * **A hit's cost is the hash.** `std/sha256.kspls` writes its rotations' shift amounts as literals, since an amount passed in is checked on every shift and the seed is built `-O0`.
 
-**Not taken: an optimized ksplc for the tree-wide runs.** `make fmt` and `make test-fmt-tree` run the seed, which needs no Stage1 and builds in seconds at `-O0 -g` ("The bootstrap, and keeping the seed in step" in [`DESIGN.md`](DESIGN.md)). An `-O2` build formats about three times faster. But it takes several times longer to build than the runs it shortens, and is rebuilt with every seed change; with the record in place only a cold run would gain.
+**Not taken: an optimized ksplc for the tree-wide runs.** `make fmt` runs the seed, which needs no Stage1 and builds in seconds at `-O0 -g` ("The bootstrap, and keeping the seed in step" in [`DESIGN.md`](DESIGN.md)). An `-O2` build formats about three times faster. But it takes several times longer to build than the runs it shortens, and is rebuilt with every seed change; with the record in place only a cold run would gain.
 
 ## `ksplc run` builds a script one run at a time, and runs it outside the lock
 
-If you start the same script twice at once, the second run waits while the first builds it, then both run side by side. **Runs of one script share its slot, and the build in it is one at a time.** The build writes working names that belong to the slot (`prog.new.c`, `prog.new.exe`, `deps.new`) and sweeps the objects it does not use. So two builds at once would take each other's files away: a run would fail with "cannot update the cache", or find its program gone when it starts. `hold_slot` in `tools/run.kspls` takes the slot's lock before the freshness check, so a run that waited finds the build done and starts the program.
+**If you start the same script twice at once, the second run waits while the first builds it, then both run side by side: runs of one script share its slot, and the build in it is one at a time.** The build writes working names that belong to the slot (`prog.new.c`, `prog.new.exe`, `deps.new`) and sweeps the objects it does not use. So two builds at once would take each other's files away: a run would fail with "cannot update the cache", or find its program gone when it starts. `hold_slot` in `tools/run.kspls` takes the slot's lock before the freshness check, so a run that waited finds the build done and starts the program.
 
 ```mermaid
 sequenceDiagram
@@ -515,7 +511,7 @@ sequenceDiagram
 
 ## A comment line is cut only where it crosses the column limit
 
-**The formatter cuts a comment line that crosses `ColumnLimit` at its last space that fits, and carries the words cut off to the start of the paragraph's next line** (`fmt/comment.kspls`, applied in `fmt/trivia.kspls`). Where no line of the same paragraph follows, they take a line of their own. A line within the limit stays as written, so a rename rewraps only the comment it widened, and `make test-fmt-tree` holds every comment to the width as it holds the code.
+**The formatter cuts a comment line that crosses `ColumnLimit` at its last space that fits, and carries the words cut off to the start of the paragraph's next line** (`fmt/comment.kspls`, applied in `fmt/trivia.kspls`). Where no line of the same paragraph follows, they take a line of their own. A line within the limit stays as written, so a rename rewraps only the comment it widened, and `make test-kspls-trip` holds every comment to the width as it holds the code.
 
 * **Not a full reflow.** Reflowing every paragraph would rejoin lines the writer broke on purpose and turn each edit into a diff over the whole comment; the formatters that do it by default draw that complaint.
 * **A line whose layout carries meaning is never cut, and carried words never join it**: an aligned sub-line, a table row, a divider, a marker a gate reads a line at a time (`EXPECT:`), and a list item. A line opening with `Caution:` or `Note:` starts a paragraph of its own and takes no carried words. These are where cutting does damage, so they are left whole.

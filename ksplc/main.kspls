@@ -64,7 +64,7 @@ priv enum Mode //< what the tool was asked to do
     info(topic: usage.Info_topic) //<
         //< a query (`ksplc info <subject>`). It prints the answer and exits
     clean //<
-        //< The cleanup (`ksplc clean cache`)
+        //< The cleanup (`ksplc clean`): it empties the disk cache
         //<
         //< It is kept apart from the query: on the same subcommand as a subject that only reads, a
         //< typo could become a deletion.
@@ -102,7 +102,7 @@ priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcom
     p.subcommand_trailing("run", "build a script and run it", o.script_args)
     p.subcommand("build", "build an executable from a program")
     p.subcommand("info", usage.help_with_topics("answer a query", usage.info_topics()))
-    p.subcommand("clean", usage.help_with_topics("remove what was made", usage.clean_topics))
+    p.subcommand("clean", "empty the disk cache")
     p.subcommand("emit-runtime", "write the C runtime's source out as one translation unit")
     p.subcommand("explain", "print what a diagnostic code means and what to do about it")
     p.subcommand("doc", "print what a file, one entry or a folder publishes, from its source")
@@ -156,7 +156,6 @@ priv fn refuse_command_line(e: argp.Argp_error) //<
         // Caution: Never treat an unknown option as an input file name: a typo would be
         // ignored, and a path cut by the shell's word splitting would fail as file names,
         // cause unseen.
-        usage.refuse_retired_option(n)
         io.err().s("Error: unknown option: \{n\}\n")
         usage.usage_exit()
     case .multiple_commands(_n)
@@ -189,7 +188,6 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
     // `info` asks only on its `machine` subject, once the subject is read (below).
     if !mode_name.equals("info")
         check_machine(mode_name)
-    base_core.config.unit_count = 1
     if o.split_units.len > 0
         n: = o.split_units.to_i64() catch 0
         if n < 1 || n > I64::max_split_units
@@ -223,6 +221,12 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
     if o.pkg_src_dir.len > 0
         base_core.config.pkg_src_dir = o.pkg_src_dir
 
+priv fn only_input(in_files: List<|U8[]|>$@, refusal: U8[]): U8[] //<
+    //< The one input a subcommand takes; any other count exits with `refusal`, its usage
+    if in_files.len != 1
+        usage.error_exit(refusal)
+    return in_files.get(0)
+
 priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o: Cli$@): Mode //<
     //< The mode the subcommand names, with its inputs checked
     $mode: Mode
@@ -237,13 +241,11 @@ priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o
     else if mode_name.equals("lsp-worker")
         mode = .lsp_worker
     else if mode_name.equals("lint")
-        if in_files.len != 1
-            usage.error_exit(usage.usage_of("lint"))
-        mode = .lint(in_files.get(0))
+        mode = .lint(only_input(in_files, usage.usage_of("lint")))
     else if mode_name.equals("info")
-        if in_files.len != 1
-            usage.error_exit(usage.usage_for_topics("info", usage.info_topics()))
-        topic: = usage.parse_info_topic(in_files.get(0))
+        subject: =
+            only_input(in_files, usage.usage_for_topics("info", usage.info_topics()))
+        topic: = usage.parse_info_topic(subject)
         usage.refuse_unread_std_dir(p, topic)
         switch topic
         case .machine
@@ -251,29 +253,26 @@ priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o
         default {}
         mode = .info(topic)
     else if mode_name.equals("clean")
-        if in_files.len != 1 || !in_files.get(0).equals("cache")
-            usage.error_exit(usage.usage_for_topics("clean", usage.clean_topics))
+        // **It takes no subject**: there is one thing to clean, and a word after it would change
+        // nothing.
+        if in_files.len != 0
+            usage.error_exit(usage.usage_of("clean"))
         mode = .clean
     else if mode_name.equals("emit-runtime")
-        if in_files.len != 1
-            usage.error_exit(usage.usage_of("emit-runtime"))
-        mode = .emit_runtime(in_files.get(0))
+        mode = .emit_runtime(only_input(in_files, usage.usage_of("emit-runtime")))
     else if mode_name.equals("explain")
-        if in_files.len != 1
-            usage.error_exit(usage.usage_of("explain"))
-        code: = tools_explain.canonical_code(in_files.get(0), base_core.arena)
+        asked: = only_input(in_files, usage.usage_of("explain"))
+        code: = tools_explain.canonical_code(asked, base_core.arena)
         // An error has no code, so a message the reader wants explained may well have none.
         if !base_lint_codes.is_known(code)
-            msg: = base_core.arena.text().s("ksplc explain: '").s(in_files.get(0))
+            msg: = base_core.arena.text().s("ksplc explain: '").s(asked)
                 .s("' is not a diagnostic code. Only a warning, an information or a hint carries \
                     one (the table is 5.4 in ksplc/docs/SPEC-tools.md); an error's message is its \
                     own explanation.\n").take()
             usage.error_exit(msg)
         mode = .explain(code)
     else if mode_name.equals("doc")
-        if in_files.len != 1
-            usage.error_exit(usage.usage_of("doc"))
-        mode = .doc(in_files.get(0))
+        mode = .doc(only_input(in_files, usage.usage_of("doc")))
     else if mode_name.equals("run")
         if in_files.len == 0
             usage.error_exit(usage.usage_of("run"))
@@ -552,7 +551,6 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
 
     t0: = sys.mono_us()
     base_stats.reset_bytes()
-    parse_load.prof.init()
     compiler: = pipeline.Compiler.new(parser)
     defer compiler.free()
     compiler.parse_file(mod_name, "", false)!
@@ -609,7 +607,8 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         main_src: = compiler.source_map.get(compiler.sema.main_file) catch ""
         base_diag.ice_assert(main_src.len > 0, "--emit-surface: the main file's source is not held")
         raw_root: =
-            parse_load.parse_raw_ast(main_src, compiler.sema.main_file, compiler.base_parser) catch null
+            parse_load.parse_raw_ast(main_src, compiler.sema.main_file, compiler.base_parser)
+            catch null
         base_diag.ice_assert(raw_root != null,
             "--emit-surface: the main file parsed once and not again")
         surface_text = tools_surface.render_surface(raw_root, main_src, compiler.sema.main_file)

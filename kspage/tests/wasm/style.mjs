@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para, group, grid } from "./material.mjs";
+import { check, near, material, para, group, grid } from "./shell.mjs";
 
 export const subject =
   "A style's fields (the name, the way of showing, the drawing over, the colour, the line's "
@@ -525,13 +524,12 @@ export function run(ks) {
     const before = w.kspage_web_heading_count();
     check(before > 0, `there are headings (${before})`);
     // It counts the headings the contents on the page point at.
-    // Caution: **Draw them from the line's height** (the contents' box points at no text).
+    // Caution: **Draw them from the line's height** (the contents' box points at no text), down
+    // the whole page, as a press can land anywhere.
     const listedInContents = () => {
       w.kspage_web_layout(300);
-      const top = w.kspage_web_contents_top();
-      if (top < 0) return [];
       const seen = [];
-      for (let y = Math.floor(top); y < top + 4000; y += 2) {
+      for (let y = 0; y < w.kspage_web_height(); y += 2) {
         const h = w.kspage_web_contents_hit(y);
         if (h >= 0 && seen.indexOf(h) < 0) seen.push(h);
       }

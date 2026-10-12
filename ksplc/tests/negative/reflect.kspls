@@ -1,0 +1,275 @@
+//< Reflection, sizes and embedded files
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case embed_absolute_path
+//< An absolute `embed` path is refused as an import's is, before anything is opened
+//<
+//< The rule is `refused_written` in `ksplc/base/package.kspls`; a drive letter counts as well.
+// EXPECT: 'C:/secret.bin' is an absolute path
+// EXPECT-NOT: cannot read embed file
+embed "C:/secret.bin" as blob
+fn main(): I32
+  return I32::blob.len
+// ==== case embed_missing
+//< An embed of a missing file becomes a clean error in the gen layer
+//<
+//< An embed is materialised by the backend only once referred to, so it is used from main to keep
+//< it alive.
+// EXPECT: cannot read embed file
+embed "ksplc/no/such/file_xyz.bin" as blob
+fn main(): I32
+  return I32::blob.len
+// ==== case offsetof
+//< One subject, with one function for each of its shapes
+//<
+//< The marks are every function's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: 'offsetof' names a field that
+// EXPECT: 'offsetof' needs a struct type
+// EXPECT: 'offsetof' needs a struct type
+
+// A spelling mistake is not let through in silence. Mistake one position and a read or write
+// lands on the neighbouring field.
+priv struct S
+  a: U8
+  b: I64
+
+fn case_offsetof_no_field(): I32
+  return I32::offsetof(S, bb)
+
+// Only a struct holds named fields.
+fn case_offsetof_not_struct(): I32
+  return I32::offsetof(I32, x)
+
+// An enum's variants hold no position (they are tag values, not places).
+priv enum E
+  a
+  b
+
+fn case_offsetof_on_enum(): I32
+  return I32::offsetof(E, a)
+
+fn main()
+  case_offsetof_no_field()
+  case_offsetof_not_struct()
+  case_offsetof_on_enum()
+// ==== case reflect_derive_bad_field
+//< A field of a type that cannot be synthesised is rejected, with its name
+//<
+//< Dropped in silence, there is no noticing that a field absent from the table fell out of the
+//< round trip.
+// EXPECT: which 'Reflectable' cannot derive a table entry for
+
+import "std/reflect"
+
+priv struct Bad
+  a: I64
+  p: I64$@
+
+impl Bad: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_generic
+//< The table is one constant per concrete type, so it cannot be built from a generic type
+// EXPECT: a generic type cannot derive 'Reflectable'
+
+import "std/reflect"
+
+priv struct Box<|T|>
+  v: T
+
+impl<|T|> Box<|T|>: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_list_bad_elem
+//< A container whose element type cannot be covered is rejected, naming the container's field
+//<
+//< Do not name the insides of an instantiated `List`
+//< (`ptr` / `len` / `cap` / `arena`) — they are names the user did not write.
+// EXPECT: whose element 'Reflectable' cannot derive a table entry for
+
+import "std/ds" { List }
+import "std/reflect"
+
+priv struct Bag
+  ps: List<|I64$@|>
+
+impl Bag: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_list_of_list
+//< A container of containers cannot be walked
+//<
+//< The shape where an element's kind can point at itself is `Field_kind`'s payload, and
+//< `--to=llvm` cannot lower that (Field_info's in std/reflect).
+// EXPECT: does not cover a list whose element is itself a list
+
+import "std/ds" { List }
+import "std/reflect"
+
+priv struct Deep
+  rows: List<|List<|I64|>|>
+
+impl Deep: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_nested_bad
+//< A nested type holding a field that cannot be synthesised is rejected by name
+//<
+//< Look at the outside alone and let it through, and a table results with one nested field silently
+//< dropped.
+// EXPECT: which 'Reflectable' cannot derive a table entry for
+
+import "std/reflect"
+
+priv struct Inner
+  a: I64
+  p: I64$@
+
+priv struct Outer
+  h: I64
+  inner: Inner
+
+impl Outer: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_on_enum
+//< Only a struct has named fields at fixed positions
+// EXPECT: only a struct can derive 'Reflectable'
+
+import "std/reflect"
+
+priv enum E
+  a
+  b
+
+impl E: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_opt_bad_inner
+//< An option whose content type cannot be covered is rejected, naming the field
+//<
+//< Do not name the insides of an `Option` (the tag and the payload) — they are names
+//< the user did not write.
+// EXPECT: whose content 'Reflectable' cannot derive a table entry for
+
+import "std/reflect"
+
+priv struct Holder
+  p: I64$@?
+
+impl Holder: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case reflect_derive_opt_of_list
+//< An optional field whose content is a container or an option cannot be walked
+//<
+//< The shape where the content's kind can point at itself is wanted, and that is `Field_kind`'s
+//< payload (Field_info's in std/reflect).
+// EXPECT: does not cover an option whose content is itself a list or an option
+
+import "std/ds" { List }
+import "std/reflect"
+
+priv struct Wrapped
+  xs: List<|I64|>?
+
+impl Wrapped: reflect.Reflectable {}
+
+fn main(): I32
+  return 0
+// ==== case sizeof_cycle
+//< A `sizeof` whose size depends on itself is rejected
+//<
+//< Caution: **Put one item out alone:** the fold failure follows from the cycle, so the array-size
+//< error is not piled on it (the array-length branch of sema/decl/resolve.kspls checks
+//< `registry_cycle_at`). Keep the passing side: drawing from before the declaration must pass.
+// EXPECT: sizes depend on each other
+// EXPECT-NOT: array size must be a positive
+import "std/io"
+
+// The stopping side: each other's size is used as an array length.
+priv struct Ring_a
+  priv room: U8[sizeof(Ring_b)]
+
+priv struct Ring_b
+  priv room: U8[sizeof(Ring_a)]
+
+// The passing side: it can be drawn from before the declaration, as long as it does not cycle.
+priv $early: U8[sizeof(Fine)] = ::{}
+
+priv struct Fine
+  priv a: I64
+  priv b: I64
+
+fn main(): I32
+  a: Ring_a = ::{}
+  b: Ring_b = ::{}
+  io.out().s("\{early.len\}/\{a.room.len\}/\{b.room.len\}\n")
+  return 0
+// ==== case sizeof_function_name
+//< `sizeof` of a function's name is refused: a function's size has no one meaning
+//<
+//< Read as a type, the name took the function's return type (`sizeof(twice)` gave an `I32`'s 4,
+//< where a pointer to it is 8), and a written specialization or a method named through its type
+//< reached C as an undeclared name. `offsetof` reads its first argument as a type the same way.
+//< Caution: Keep the passing side: `sizeof` of a function type and of a variable holding one.
+// EXPECT: 'sizeof' cannot take the function 'twice': a function's size has no one meaning
+// EXPECT: 'sizeof' cannot take the function 'twice'
+// EXPECT: such as 'sizeof(fn(x: I32): I32)'
+// EXPECT: 'sizeof' cannot take the function 'same<|I32|>'
+// EXPECT: 'sizeof' cannot take 'Holder<|I32|>.keep': a member named through its type is neither a type nor a value
+// EXPECT: 'sizeof' cannot take 'Plain.v'
+// EXPECT: 'twice' is a function, not a type
+// EXPECT-NOT: undeclared identifier
+// EXPECT-NOT: 'I32' is not one
+priv typedef Op = fn(x: I32): I32
+
+priv fn twice(x: I32): I32
+    return x * 2
+
+priv fn same<|T|>(x: T): T
+    return x
+
+priv struct Holder<|T|>
+    v: T
+
+impl<|T|> Holder<|T|>
+    fn keep(x: T): T
+        return x
+
+priv struct Plain
+    v: I32
+
+// A constant's context folds it apart from a body's.
+priv by_name: U8[sizeof(twice)] = ::{}
+
+fn case_plain(): Sz
+    return sizeof(twice)
+
+fn case_specialization(): Sz
+    return sizeof(same<|I32|>)
+
+fn case_method(): Sz
+    return sizeof(Holder<|I32|>.keep)
+
+fn case_field_through_type(): Sz
+    return sizeof(Plain.v)
+
+fn case_offsetof(): Sz
+    return offsetof(twice, v)
+
+fn case_passing(): Sz
+    f: Op = twice
+    return sizeof(fn(x: I32): I32) + sizeof(f) + sizeof(Op)
+
+fn main()
+    _s: = case_plain() + case_specialization() + case_method() + case_field_through_type() +
+        case_offsetof() + case_passing() + by_name.len

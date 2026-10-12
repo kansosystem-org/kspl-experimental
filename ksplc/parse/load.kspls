@@ -370,6 +370,13 @@ priv fn print_at_import(why: U8[], decl: Ast_node$@, importer: U8[], importer_sr
     starts: = importer_src.line_starts(base_core.arena)
     base_diag.print_diagnostic(importer, importer_src, info.offset, info.span, why, .error, starts)
 
+priv fn refuse_at_import(why: U8[], decl: Ast_node$@, importer: U8[], importer_src: U8[]):
+    Void!Parse_error //<
+        //< It reports `why` at the import and stops; nothing where `why` is empty
+    if why.len > 0
+        print_at_import(why, decl, importer, importer_src)
+        throw .syntax_error
+
 priv fn read_source(file_path: U8[]): U8[]!Parse_error //< it reads one file
     //<
     //< **The name already identifies the file**: one without an extension went through
@@ -495,20 +502,15 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         if path_opt.is_none()
             continue
         next_path: = path_opt.unwrap_or("")
-        written_refusal: = base_package.refused_written(next_path)
-        if written_refusal.len > 0
-            print_at_import(written_refusal, decl, import_path, perm_src)
-            throw .syntax_error
+        refuse_at_import(base_package.refused_written(next_path), decl, import_path, perm_src)!
         $resolved_str: = import_path.resolve_import_path(next_path)
         defer resolved_str.free()
         perm_slice: = base_core.arena.dup_str(resolved_str.slice())
         // **A package that declares its name declares what it uses**; an import outside that list
         // is rejected where written, before its file is read (`refused_use` in
         // `../base/package.kspls`).
-        refusal: = base_package.refused_use(import_path, perm_slice)
-        if refusal.len > 0
-            print_at_import(refusal, decl, import_path, perm_src)
-            throw .syntax_error
+        refuse_at_import(base_package.refused_use(import_path, perm_slice), decl, import_path,
+            perm_src)!
         load_and_parse_file(perm_slice, loaded_files, root_file, parser, source_map, import_stack,
             false) catch e
             if e.report_bad_import(decl, next_path, import_path, perm_src)
@@ -525,15 +527,10 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         if path_node == null || path_node.text.len < 2
             continue
         written: = path_node.text.literal_value(base_core.arena)
-        written_refusal: = base_package.refused_written(written)
-        if written_refusal.len > 0
-            print_at_import(written_refusal, decl, import_path, perm_src)
-            throw .syntax_error
-        refusal: = base_package.refused_use(import_path,
-            import_path.resolve_embed_path(written))
-        if refusal.len > 0
-            print_at_import(refusal, decl, import_path, perm_src)
-            throw .syntax_error
+        refuse_at_import(base_package.refused_written(written), decl, import_path, perm_src)!
+        embedded: = import_path.resolve_embed_path(written)
+        refuse_at_import(base_package.refused_use(import_path, embedded), decl, import_path,
+            perm_src)!
 
     for decl in decls
         root_file.add_child(decl)

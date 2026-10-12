@@ -32,9 +32,9 @@
 
 ## Optional, and checked by nothing
 
-9. **macOS's one run of it**: macOS runs no `test-extract`, so a package reaches its gates only through `make debug` (`tests/debug/parts.kspls` and `tests/debug/main.kspls`). Add it there unless macOS should not run it.
+9. **macOS's one run of it**: macOS runs no `test-extract`, so a package reaches its gates only through `make debug` (`tests/debug/main.kspls`). Add it there unless macOS should not run it.
 10. **The LLVM backend**: `make LLVM=1 debug` reaches what `make debug` does; a package outside it joins `test-llvm-pkgs` in `mk/test.mk`.
-11. **The prose that counts packages**: the root [`README.md`](../README.md)'s layout table, and the counts in [`DESIGN.md`](DESIGN.md) and `tests/debug/parts.kspls`.
+11. **The prose that counts packages**: the root [`README.md`](../README.md)'s layout table, and the counts in [`DESIGN.md`](DESIGN.md).
 
 ## Run it
 

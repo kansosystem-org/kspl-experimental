@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para, group, grid } from "./material.mjs";
+import { check, near, material, para, group, grid } from "./shell.mjs";
 
 export const subject = "Shapes, columns and charts.";
 

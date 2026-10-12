@@ -15,24 +15,6 @@ priv const max_generic_key_depth: Sz = 8 //< expand_generic_key_to's recursion l
     //<
     //< It also stops a key that reads back as containing itself.
 
-priv fn find_generic_close(key: U8[], open_at: Sz): Sz //<
-    //< Returns, from a `<|`'s position, the position of the matching `|>` (key.len if none)
-    $depth: I32 = 0
-    $i: = open_at
-    for i + 1 < key.len
-        if key.starts_with("<|", i)
-            depth += 1
-            i += 2
-            continue
-        if key.starts_with("|>", i)
-            depth -= 1
-            if depth == 0
-                return i
-            i += 2
-            continue
-        i += 1
-    return key.len
-
 impl sema_type_env.Env
     fn original_generic_name(r: Self$@, type_str: U8[]): U8[] //<
         //< Reads an internal type name from monomorphization back to its registration key
@@ -58,18 +40,20 @@ impl sema_type_env.Env
         $i: Sz = 0
         for i < key.len
             if key.starts_with("<|", i)
-                close: = find_generic_close(key, i)
-                if close >= key.len
+                switch key.sub_from(i).find_generic_bounds()
+                case .found(_start, _inner, inner_end, _end)
+                    close: = i + inner_end
+                    res = res.s("<|")
+                    // The variance list is looked up by the base's name before the `<|`, **not by
+                    // the name as written**, where `/` has become `.`.
+                    mask: = r.variance_masks.get(key.sub(0, i)) catch 0
+                    res = r.display_generic_args_to(key.sub(i + 2, close - (i + 2)), mask, depth,
+                        res)
+                    res = res.s("|>")
+                    i = close + 2
+                case .not_found
                     res = res.c((key.ptr + i)$) // a broken key with no close; copied as characters
                     i += 1
-                    continue
-                res = res.s("<|")
-                // The variance list is looked up by the base's name before the `<|`, **not by the
-                // name as written**, where `/` has become `.`.
-                mask: = r.variance_masks.get(key.sub(0, i)) catch 0
-                res = r.display_generic_args_to(key.sub(i + 2, close - (i + 2)), mask, depth, res)
-                res = res.s("|>")
-                i = close + 2
                 continue
             c: = (key.ptr + i)$
             res = res.c('.' if c == '/' || c == '\\' else c)

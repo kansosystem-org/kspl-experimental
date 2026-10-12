@@ -622,16 +622,11 @@ impl Arena
             return // from_buffer(): both the chunk and the Arena itself are the caller's static memory
         _freed: = free_chunks(r.head, null)
         dealloc(Void$@::r)
-    pub fn remaining(r: Self@): Sz //< the unused bytes summed over every chunk
-        //<
-        //< A fixed buffer that runs out panics, so a caller can check here first.
-        return r.get_total_allocated() - r.get_total_used()
-
     pub fn headroom(r: Self$@): Arena_headroom //< how far away the next chunk is, and how big
         //<
-        //< Caution: **Do not confuse it with `remaining`**, the sum over every chunk; `alloc` uses
-        //< only the first chunk. One byte past `free` adds a chunk of `step` bytes, so peak memory
-        //< **jumps there** (`make perf-log`).
+        //< **`free` is the first chunk's room alone**, the only one `alloc` uses: room left in the
+        //< other chunks does not count. One byte past `free` adds a chunk of `step` bytes, so peak
+        //< memory **jumps there** (`make perf-log`). A fixed buffer adds none and panics instead.
         free: = r.head.cap - r.head.used if r.head != null else 0
         return Arena_headroom::{ .free = free, .step = r.next_chunk_cap(0) }
 

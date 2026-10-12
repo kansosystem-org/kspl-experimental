@@ -35,18 +35,15 @@ fn find_all(text: U8[], head: U8[], tail: U8[], arena: Arena$@): List<|U8[]|> //
         i += head.len
     return out
 
-fn has(xs: List<|U8[]|>@, want: U8[]): Bool //< whether `want` is one of `xs` (`harness_text.has`)
-    return harness_text.has(xs, want)
-
 fn push_unique(out: List<|U8[]|>$@, want: U8[])
-    if !has(out, want)
+    if !harness_text.has(out, want)
         out.push(want)
 
 fn diff_into(a: List<|U8[]|>@, b: List<|U8[]|>@, a_name: U8[], b_name: U8[],
     out: List<|U8[]|>$@, arena: Arena$@) //<
         //< Lists what is in a and not in b.
     for i in Range.asc(a.len)
-        if !has(b, a.get(i))
+        if !harness_text.has(b, a.get(i))
             out
                 .push(arena.text().s(a.get(i)).s(": in ").s(a_name).s(" and not in ").s(b_name)
                 .take())
@@ -151,6 +148,13 @@ fn is_divider(body: U8[]): Bool //<
     return t.len >= 3 &&
         (t[0] == '-' && t[1] == '-' && t[2] == '-' ||
         t[0] == '=' && t[1] == '=' && t[2] == '=')
+
+fn is_case_head(body: U8[]): Bool //<
+    //< A divider that opens one case of a fixture file holding several (`==== case <name>`)
+    //<
+    //< **What follows it is a file of its own**, compiled alone, so its opening comment is a
+    //< file's header (`case_head` in `ksplc/tests/support/harness_expect.kspls`).
+    return body.trim_spaces().starts_with("==== case ")
 
 // Whether the line after this one is inside a `"""` string. **Two on one line cancel out.**
 // Caution: **A `"""` inside a comment opens nothing**; if counted, a comment naming the fence

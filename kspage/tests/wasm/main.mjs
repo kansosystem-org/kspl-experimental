@@ -5,7 +5,7 @@
 // behind, a failure cannot tell whether the decision took effect or the document differed. **So do
 // not let the order carry meaning.**
 // Caution: **Do not use the document at startup as material** (the reason is at the head of
-// `material.mjs`, which assembles it). **A part names its own document, so forgetting to name is
+// the material in `shell.mjs`, which assembles it). **A part names its own document, so forgetting to name is
 // felled here** (a decision merely written down is not kept).
 // Usage: node tests/wasm/main.mjs <kspage.wasm> (`make test-wasm` in `kspage/Makefile`)
 import fs from "fs";

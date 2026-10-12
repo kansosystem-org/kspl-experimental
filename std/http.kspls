@@ -294,7 +294,7 @@ priv fn parse_status_line(line: U8[]): Status_line!Http_error
 
 priv fn build_request(arena: Arena$@, line: Request_line, head: Header$@, body: U8[], consumed: Sz):
     Request$@ //<
-        //< Shared by parse_request/read_request.
+        //< parse_request's result, its parts copied into the arena
     req: Request = ::{
         .method = arena.dup_str(line.method),
         .target = arena.dup_str(line.target),
@@ -457,21 +457,6 @@ priv fn read_body(stream: net.Tcp_stream$@, b: Str_builder$@, h: Head_parts, bod
     for b.len - h.head_end < body_len
         read_chunk_into(stream, b, U8$[]::chunk, deadline_us)!
     return b.slice().sub(h.head_end, body_len)
-
-pub fn read_request( //< reads one whole request from a connection and splits it into its parts
-    stream: net.Tcp_stream$@, //< the connection to read from, which blocks
-    arena: Arena$@, //< where the parts are allocated
-    max_body: Sz, //< the largest body accepted; a larger one is refused, not read
-    timeout_ms: I32, //< how long the whole request may take to arrive; past it `.io(.timed_out)`
-): Request$@!Http_error //< the request, held in `arena`; fails if the connection closes first
-    deadline: = sys.deadline_after_ms(timeout_ms)
-    $b: = Str_builder.new()
-    defer b.free()
-    h: = read_head(stream, b@, arena, max_body, deadline)!
-    req_line: = parse_request_line(h.first_line)!
-    body_len: = request_body_len(h)
-    body: = read_body(stream, b@, h, body_len, deadline)!
-    return build_request(arena, req_line, h.head, body, h.head_end + body_len)
 
 pub fn read_response( //< reads one whole response from a connection and splits it into its parts
     stream: net.Tcp_stream$@, //< the connection to read from, which blocks
@@ -678,15 +663,3 @@ priv fn closing(head: Header$@): Bool //< whether it says `Connection: close`
     if v: = head.find("Connection")
         return v.equals_ignore_case("close")
     return false
-
-pub fn write_response( //< builds one whole response and sends every byte of it
-    stream: net.Tcp_stream$@, //< the connection to write to, which blocks
-    status: I32, //< the status number; its phrase is `reason_phrase`'s
-    head: Header$@, //< the headers, or null
-    body: U8[]): Void!Http_error
-    $b: = Str_builder.new()
-    defer b.free()
-    format_response(b@, status, head, body)!
-    // Caution: write_all, not write (the reason is in write_request).
-    stream.write_all(b.slice()) catch e
-        throw .io(e)

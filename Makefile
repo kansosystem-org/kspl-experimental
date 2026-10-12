@@ -203,7 +203,7 @@ endif
 # `surface`); each `.PHONY` names the rules in its own file.
 .PHONY: all \
 	stage1 self-host self-host-ship commit-seed \
-	fmt test-fmt-tree lint lint-cfg debug debug-file \
+	fmt lint lint-cfg debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install \
 	run fim-corpus fim-model fim-eval qwen kssrv perf-log
 
@@ -359,7 +359,6 @@ include mk/install.mk
 define kspl_build
 	@mkdir -p $(GEN_DIR) $(dir $(or $(5),$(OUT_DIR)/$(2).exe))
 	./$(STAGE1_EXE) $(KSPL_FLAGS) $(3) --emit-libs=$(GEN_DIR)/$(2).libs $(1) $(GEN_DIR)/$(2).c
-	@$(C_FMT) $(GEN_DIR)/$(2).c
 	$(CC) $(CFLAGS) -O3 $(GEN_DIR)/$(2).c @$(GEN_DIR)/$(2).libs $(4) $(LDLIBS) \
 	  -o $(or $(5),$(OUT_DIR)/$(2).exe)
 endef
@@ -430,7 +429,7 @@ kssrv: $(STAGE1_EXE)
 # That file stands alone (a copy of the folder is tested by it), so what the root adds is only
 # where things go and which ksplc builds them.
 # Caution: **Relative paths only**: the repository's place may hold what Windows's linker garbles.
-ksos_make = $(call pkg_make,ksos) OUT=../$(OUT_DIR) C_FMT='$(C_FMT)' TEST_JOBS=$(TEST_JOBS)
+ksos_make = $(call pkg_make,ksos) OUT=../$(OUT_DIR) TEST_JOBS=$(TEST_JOBS)
 
 ## Run|ksos|Run Kanso OS on a POSIX host
 ## Run|ksos-cm|Build for Cortex-M

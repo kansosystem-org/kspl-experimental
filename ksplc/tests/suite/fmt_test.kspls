@@ -28,8 +28,7 @@ priv fn fmt(path: U8[], style: U8[] = ""): verdict.Run_out //< the formatting's 
 
 priv fn write_src(slot: U8[], name: U8[], body: U8[], arena: Arena$@): U8[] //<
     //< It returns the path of the working directory holding one input file, or empty on failure
-    dir: = harness.sandbox(arena.text().s("fmt_\{slot\}").take()) catch
-        return ""
+    dir: = harness.sandbox(arena.text().s("fmt_\{slot\}").take())
     path: = fs.join(dir, name, arena)
     io.write_file(path, body) catch
         return ""
@@ -194,6 +193,9 @@ fn main(): I32
     case_stable("closurel", "a.kspls", "a closure's `;` stays on its signature's line (indentation)",
         fmt_material.src_closure_sep_layout, arena)
     case_carried_string(arena)
+    case_becomes("catchwide", "a.kspls",
+        "`catch <value>` that would pass the limit goes to the next line whole, and one that fits \
+            stays", fmt_material.src_catch_wide_in, fmt_material.src_catch_wide_out, arena)
     case_becomes("commentcut", "a.kspls",
         "a comment line past the limit is cut, its rest joining the paragraph's next line",
         fmt_material.src_comment_cut_in, fmt_material.src_comment_cut_out, arena)
@@ -230,7 +232,8 @@ fn main(): I32
     // declaration's own.
     case_becomes("below", "a.kspl", "a description too long for its line stands below the mark",
         fmt_material.src_summary_in, fmt_material.src_summary_out, arena)
-    // Idempotent either way, so `test-fmt-tree` does not catch it: the expected value is here.
+    // Idempotent either way, so the tree's round trip does not catch it: the expected value is
+    // here.
     case_stable("innercmt", "a.kspl",
         "a comment inside the braces is put out unbroken at the right level",
         fmt_material.src_inner_comment_in, arena)

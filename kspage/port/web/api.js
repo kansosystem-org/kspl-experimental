@@ -8,15 +8,15 @@
 // ==========================================
 function kspageApi(ks) {
   // The back and forward history, **two stacks** (one list with a position needs truncating where
-  // it branches). **The place is remembered, the text and cursor included** (scroll alone cannot go
-  // back after jumping to another file, so going back may reopen a file).
+  // it branches). **What is remembered is the window's scroll**, a place in the open document only,
+  // so swapping the document clears both (`forgetPlaces`).
   const back = [];
   const ahead = [];
-  const hop = async (from, to, api) => {
+  const hop = (from, to) => {
     if (from.length === 0) return false;
-    const spot = from.pop();
-    to.push(api.spotNow());
-    return await api.goSpot(spot);
+    to.push(window.scrollY);
+    window.scrollTo(0, from.pop());
+    return true;
   };
 
   const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, acted, stage,
@@ -27,7 +27,7 @@ function kspageApi(ks) {
   // Caution: **Always clean up** — the chunk being built is referenced by nobody, and unfreed the
   // arena shrinks **forever** (`bridge.kspls`'s `kspage_web_recover`); **do not swallow it** either
   // (unreported, clicks do nothing). It returns the call's result, or `null`; **it lives on `ks`**
-  // so [`api_io.js`](api_io.js) uses the same net (with two, one forgets cleanup).
+  // so the text side below uses the same net (with two, one forgets cleanup).
   ks.cramps = (run) => {
     try {
       return run();
@@ -109,17 +109,6 @@ function kspageApi(ks) {
       const len = w.kspage_web_caret_report();
       return outText(len);
     },
-    // Repeats the last repeatable command where the cursor is (F4), **not a redo** (a redo restores
-    // an undone action); empty if it acted, else **the reason**.
-    // Caution: **Do not let it refuse silently** (Excel's F4 silently does nothing where it cannot
-    // repeat), so "nothing done yet" and "does not apply here" are told apart.
-    again() {
-      if (w.kspage_web_again() !== 0) { armGroupBreak(); draw(); return ""; }
-      const len = w.kspage_web_again_says();
-      const what = outText(len);
-      if (what === "") return "Nothing has been done yet that can be done again";
-      return what + " cannot be done where the cursor is";
-    },
     // Writes the reloadable text.
     save() {
       const len = w.kspage_web_save();
@@ -171,8 +160,6 @@ function kspageApi(ks) {
       }
       return list;
     },
-    // The height of the table of contents' top. **-1 without a table of contents.**
-    contentsTop() { return w.kspage_web_contents_top(); },
     // Scrolls to height `y` in the document, **remembering the position first** (otherwise there is
     // no going back). A place with no text, such as a table of contents, is reached by height.
     goHeight(y) {
@@ -183,38 +170,17 @@ function kspageApi(ks) {
       return true;
     },
     // **What is remembered is the viewed place** (not the cursor), like a browser's back and
-    // forward; stable numbers exist only on save, so it cannot go by number.
+    // forward. Caution: **Record the current place before moving** (after, it records the target).
     markJump() {
-      this.markSpot(this.spotNow());
-    },
-    // Caution: **Record the current place before moving** (after, it records the target).
-    markSpot(spot) {
-      back.push(spot);
+      back.push(window.scrollY);
       // **A new jump clears the forward history** (kept, it would disagree with the path taken).
       ahead.length = 0;
     },
-    // Caution: **The current place includes the text too** (the way back after jumping to another
-    // file); the page passes it (`pathNow`).
-    spotNow() {
-      const at = this.caretSpot();
-      return {
-        scroll: window.scrollY,
-        path: this.pathNow ? this.pathNow() : "",
-        line: at === null ? -1 : at.line,
-        at: at === null ? 0 : at.at,
-      };
-    },
-    // Goes back to the remembered place, **reopening another file** (a window holds one).
-    async goSpot(spot) {
-      if (!spot) return false;
-      const here = this.pathNow ? this.pathNow() : "";
-      if (spot.path.length > 0 && spot.path !== here) {
-        // **No draft is discarded** (`file.js`'s `planOpen` saves one), so nothing refuses.
-        if (!this.openDoc || !(await this.openDoc(spot.path))) return false;
-        if (spot.line >= 0) this.goTo(spot.line, spot.at);
-      }
-      window.scrollTo(0, spot.scroll);
-      return true;
+    // Forgets both histories, **called where a document is swapped in** (`file.js`'s `settleIn`):
+    // a place in the document gone says nothing about the one now open.
+    forgetPlaces() {
+      back.length = 0;
+      ahead.length = 0;
     },
     // Caution: **Remember the position before jumping to the document's edge**; **the cursor does
     // not move** (as from a contents row), so typing continues where you came back to.
@@ -229,11 +195,8 @@ function kspageApi(ks) {
       window.scrollTo(0, document.documentElement.scrollHeight);
       return true;
     },
-    // **It returns a promise** (going back to another file reopens it); the caller awaits it.
-    jumpBack() { return hop(back, ahead, this); },
-    jumpAhead() { return hop(ahead, back, this); },
-    canJumpBack() { return back.length > 0; },
-    canJumpAhead() { return ahead.length > 0; },
+    jumpBack() { return hop(back, ahead); },
+    jumpAhead() { return hop(ahead, back); },
     // Caution: **Put the heading jumped to at the window's top** (left to following, one reached
     // from below would stick to the bottom).
     headingGo(i) {
@@ -248,8 +211,6 @@ function kspageApi(ks) {
     },
     // The note's own height for the clicked notes-list row (-1 if none; a mark sits mid-inline).
     notesHit(y) { return w.kspage_web_notes_hit(y); },
-    // The heading the table-of-contents row at the clicked height points at (-1 if none).
-    contentsHit(y) { return w.kspage_web_contents_hit(y); },
     // Opens the manual (true if it did); **the current document is not kept** (no arena needed).
     loadManual() {
       if (w.kspage_web_load_manual() === 0) return false;
@@ -342,12 +303,12 @@ function kspageApi(ks) {
     dropFrame() {
       return acted(w.kspage_web_drop_frame());
     },
-    // The memo on the cursor's container (**empty outside one**; on a slide, the speaker's notes).
+    // The speaker's notes on the cursor's slide (**empty outside one**).
     aside() {
       const len = w.kspage_web_aside();
       return outText(len);
     },
-    // Attaches a memo to the cursor's container; empty removes it.
+    // Attaches the speaker's notes to the cursor's slide; empty removes them.
     setAside(text) {
       const len = text.length > 0 ? stage(text) : 0;
       if (len < 0) return false;
@@ -607,4 +568,68 @@ function kspageApi(ks) {
   // so a missing one breaks quietly as "no redraw notification arrives". **The entry points for
   // styling are not here** ([`api_look.js`](api_look.js) adds them to the same `app`).
   ks.api = api;
+}
+
+// ==========================================
+// kspage's JS side — turning the document into text and text into a document (the same `app` as
+// [`api.js`](api.js)): the saved form (JSON), exports (Markdown), text form (`.txt` and
+// source) and reading them back.
+// Caution: **Do not merge the reasons for refusing into one** — each has a different fix, so the
+// core's answer is passed on as it is. **Read memory only after getting the arena** (wasm memory
+// can grow there, leaving an earlier array on the old ArrayBuffer).
+// ==========================================
+function kspageApiIo(ks) {
+  // **`cramps` is `api.js`'s, on `ks`** (one handler for full memory; with two, one skips cleanup).
+  const { w, enc, outText, draw, cramps, handOver } = ks;
+  Object.assign(ks.api, {
+    // Makes Markdown of the current document. **It cannot be reloaded.**
+    markdown() {
+      const len = w.kspage_web_markdown();
+      return outText(len);
+    },
+    // The current document as a text form; **it round-trips byte for byte** (`loadPlainText`).
+    plainText() {
+      const len = w.kspage_web_plain_text();
+      return outText(len);
+    },
+    // Reads a document back from text: empty if read, otherwise **the reason for refusing** (the
+    // current document stays either way).
+    // Caution: **Return a reason, not a boolean, and never guess it from the size** — "cannot be
+    // read" and "too large to lay out" have opposite fixes (change the text, split the document).
+    load(text) {
+      const bytes = enc.encode(text);
+      if (!handOver(bytes)) return "too_big";
+      const got = cramps(() => w.kspage_web_load(bytes.length));
+      if (got === null) return "cramped";
+      if (got === 0) return "broken";
+      if (got < 0) return "too_big";
+      draw();
+      return "";
+    },
+    // Replaces the document with a blank one (**keeping what was there is the page's**: `file.js`
+    // sets a draft aside first).
+    loadBlank() {
+      w.kspage_web_load_blank();
+      draw();
+    },
+    // A new document from a text form (`.txt`, a program's source), answering as `load` does with a
+    // fourth reason: **it is not text** (it holds a NUL; open it with another tool).
+    // Caution: **The declaration goes before the text in the one arena**, split by length (a text
+    // can hold any character, so no separator can be used). Read memory after getting the arena.
+    loadPlainText(text, spoken) {
+      const head = enc.encode(spoken || "");
+      const body = enc.encode(text);
+      const bytes = new Uint8Array(head.length + body.length);
+      bytes.set(head, 0);
+      bytes.set(body, head.length);
+      if (!handOver(bytes)) return "too_big";
+      const got = cramps(() => w.kspage_web_load_plain_text(bytes.length, head.length));
+      if (got === null) return "cramped";
+      if (got === 0) return "broken";
+      if (got === -2) return "not_text";
+      if (got < 0) return "too_big";
+      draw();
+      return "";
+    },
+  });
 }

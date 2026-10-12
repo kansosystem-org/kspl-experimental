@@ -157,13 +157,15 @@ struct Built //< whether it built, and the result of running it
     code: I32
     out: U8[]
 
-fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Bool = false): Built //<
-    //< Turns a source into an executable and runs it
-    //<
-    //< Set `llvm` and it builds with `--to=llvm`.
-    //< Caution: **The stop message must be the same on both** backends, which keep the wording in
-    //< separate places. **stdout at run time is a pipe (full buffering)**, as in CI's logs, so a
-    //< process that crashed part way leaves not one byte.
+fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Bool = false,
+    cwd: U8[] = ""): Built //<
+        //< Turns a source into an executable and runs it
+        //<
+        //< Set `llvm` and it builds with `--to=llvm`; set `cwd` and the compiler runs there, so a
+        //< source outside any package is named as `src` is written from it.
+        //< Caution: **The stop message must be the same on both** backends, which keep the wording
+        //< in separate places. **stdout at run time is a pipe (full buffering)**, as in CI's logs,
+        //< so a process that crashed part way leaves not one byte.
     arena: = harness.arena()
     gen: = fs.join(dir,
         arena.text().s("\{stem\}").s(".ll" if llvm else ".c").take(), arena)
@@ -175,7 +177,9 @@ fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Boo
         args.push(a)
     args.push(src)
     args.push(gen)
-    r: = harness.ksplc(args.slice())
+    r: =
+        (harness.ksplc(args.slice()) if cwd.len == 0
+        else harness.run_in(harness.ksplc_argv(args.slice()), cwd))
     if r.code != 0
         return Built::{ .built = false, .code = -1, .out = r.out }
     b: =

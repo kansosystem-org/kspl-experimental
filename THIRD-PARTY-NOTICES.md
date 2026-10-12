@@ -71,7 +71,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 | File | What it originates from | Origin |
 | :-- | :-- | :-- |
-| `std/time.kspls` | `civil_from_days`, the conversion from a day count to a date (Howard Hinnant) | `https://howardhinnant.github.io/date_algorithms.html` |
 | `std/ds.kspls` | `fmix32`, MurmurHash3's finalizer (Austin Appleby) | `https://github.com/aappleby/smhasher` |
 
 ## What is not bundled

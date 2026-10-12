@@ -89,8 +89,8 @@ KSPL_LINK Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is
 /* Whether the owner's execute bit is up (for std/fs.kspls's is_executable).
  * The owner's bit, not access(X_OK), which is nearly always true under root.
  * Caution: It must not be shaped as adding an output argument to kspl_stat. kspl_stat is declared
- * in both the preamble (hosted.c) and std/fs.kspls, and disagreeing with the seed's old one breaks
- * the bootstrap's link. An addition is always a separate function. */
+ * in both std/io.kspls and std/fs.kspls, and disagreeing with the seed's old one breaks the
+ * bootstrap's link. An addition is always a separate function. */
 KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;

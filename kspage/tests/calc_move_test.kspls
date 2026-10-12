@@ -402,7 +402,7 @@ fn test_sorting_moves_the_rows_and_their_formulas(arena: Arena$@) //<
     ed: = edit.new_editor(d)
     // From the row after the heading downwards, sorted on column A.
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+    assert(ed.sort_rows(place(d, sheet, arena), false) == cells.Sort_end.done, "it sorted")
     assert(book.cell_text(t, 0, 0).equals("score"), "the heading row does not move")
     assert(book.cell_text(t, 1, 0).equals("10"), "the smaller value comes first")
     assert(book.cell_text(t, 2, 0).equals("20"), "the next larger value carries on")
@@ -425,7 +425,7 @@ fn test_undoing_a_sort_restores_the_original_order(arena: Arena$@) //< one sort 
 
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+    assert(ed.sort_rows(place(d, sheet, arena), false) == cells.Sort_end.done, "it sorted")
     assert(ed.undo(), "it can be put back in one")
     assert(book.cell_text(t, 1, 0).equals("30"), "it comes home to the order before")
     assert(book.cell_text(t, 3, 0).equals("20"), "the last row is as it was too")
@@ -452,14 +452,15 @@ fn test_sorting_puts_numbers_first_and_blanks_last(arena: Arena$@) //<
 
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+    assert(ed.sort_rows(place(d, sheet, arena), false) == cells.Sort_end.done, "it sorted")
     assert(book.cell_text(t, 1, 0).equals("5"), "the numbers come first")
     assert(book.cell_text(t, 2, 0).equals("40"), "numbers are compared as numbers")
     assert(book.cell_text(t, 3, 0).equals("xyz"), "a text comes behind the numbers")
     assert(book.cell_text(t, 4, 0).len == 0, "an empty is last")
 
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), true).sorted(), "it could be sorted in reverse too")
+    assert(ed.sort_rows(place(d, sheet, arena), true) == cells.Sort_end.done,
+        "it could be sorted in reverse too")
     assert(book.cell_text(t, 1, 0).equals("xyz"), "in reverse a text comes first")
     assert(book.cell_text(t, 2, 0).equals("40"), "the larger number comes first")
     assert(book.cell_text(t, 4, 0).len == 0, "an empty is last in reverse too")
@@ -479,7 +480,8 @@ fn test_sorting_never_moves_the_heading_row(arena: Arena$@) //<
     ed: = edit.new_editor(d)
     // The cursor in the heading itself, as an Excel user would put it.
     caret_at(ed, t, 0, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorts from the heading too")
+    assert(ed.sort_rows(place(d, sheet, arena), false) == cells.Sort_end.done,
+        "it sorts from the heading too")
     assert(book.cell_text(t, 0, 0).equals("score"), "the heading stays at the head")
     assert(book.cell_text(t, 1, 0).equals("10"), "and the rows under it are in order")
     assert(book.cell_text(t, 3, 0).equals("30"), "down to the last")
@@ -487,7 +489,8 @@ fn test_sorting_never_moves_the_heading_row(arena: Arena$@) //<
     // The cursor partway down: the rows above it are sorted too (the whole table under the
     // heading).
     caret_at(ed, t, 3, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), true).sorted(), "it sorts from partway down too")
+    assert(ed.sort_rows(place(d, sheet, arena), true) == cells.Sort_end.done,
+        "it sorts from partway down too")
     assert(book.cell_text(t, 1, 0).equals("30"), "the whole table under the heading is in order")
     assert(book.cell_text(t, 3, 0).equals("10"), "the smallest is last in reverse")
     verdict.pass("the heading never moves, and the cursor only chooses the column.")
@@ -503,13 +506,13 @@ fn test_sorting_orders_text_without_regard_to_case(arena: Arena$@) //<
     sheet: = base.grid_sheet(arena)
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+    assert(ed.sort_rows(place(d, sheet, arena), false) == cells.Sort_end.done, "it sorted")
     assert(book.cell_text(t, 1, 0).equals("apple"), "a small letter is not behind every capital")
     assert(book.cell_text(t, 2, 0).equals("Apple"), "the same word in another case keeps its place")
     assert(book.cell_text(t, 3, 0).equals("banana"), "b after a")
     assert(book.cell_text(t, 4, 0).equals("Zebra"), "z last, capital or not")
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), true).sorted(), "reversed too")
+    assert(ed.sort_rows(place(d, sheet, arena), true) == cells.Sort_end.done, "reversed too")
     assert(book.cell_text(t, 1, 0).equals("Zebra"), "z first in reverse")
     assert(book.cell_text(t, 3, 0).equals("apple") &&
         book.cell_text(t, 4, 0).equals("Apple"), "the two spellings keep their order in reverse too")
@@ -525,7 +528,7 @@ fn test_sorting_reads_dates_as_dates(arena: Arena$@) //<
     sheet: = base.grid_sheet(arena)
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(place(d, sheet, arena), false).sorted(), "it sorted")
+    assert(ed.sort_rows(place(d, sheet, arena), false) == cells.Sort_end.done, "it sorted")
     assert(book.cell_text(t, 1, 0).equals("2025-12-31"), "the earliest day comes first")
     assert(book.cell_text(t, 2, 0).equals("2026-01-05"), "then the next")
     assert(book.cell_text(t, 3, 0).equals("18 August 2026"),
@@ -547,7 +550,7 @@ fn test_a_refused_sort_says_why(arena: Arena$@) //< each refusal carries its own
     ed.caret = caret.at(head, 0)
     assert(ed.sort_rows(laid, false).variant_name().equals("outside"), "outside a table it says so")
     caret_at(ed, t, 1, 0)
-    assert(ed.sort_rows(laid, false).sorted(), "it sorts once")
+    assert(ed.sort_rows(laid, false) == cells.Sort_end.done, "it sorts once")
     assert(ed.sort_rows(laid, false).variant_name().equals("in_order"),
         "sorted again the same way, it says the rows are already in order")
     assert(ed.undo(), "the one sort goes back")
@@ -568,7 +571,9 @@ fn test_sorting_refuses_across_a_vertical_merge(arena: Arena$@) //<
 
     ed: = edit.new_editor(d)
     caret_at(ed, t, 1, 1)
-    assert(ed.merge_cell(place(d, sheet, arena), .row), "it could be merged downwards")
+    ed.caret.anchor = t.children.get(2).children.get(1).inlines.get(0)
+    assert(ed.merge_range(place(d, sheet, arena)) == cells.Merge_end.done,
+        "it could be merged downwards")
     caret_at(ed, t, 1, 0)
     assert(ed.sort_rows(place(d, sheet, arena), false).variant_name().equals("merged"),
         "where a merge is there it does not sort, and says the merge is why")

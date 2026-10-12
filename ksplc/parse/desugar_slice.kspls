@@ -5,7 +5,7 @@
 //< instance built here and the code that looks it up directly end in the same instantiation
 //< ("`T[]` is sugar for `Slice<|$T|>`" in `../../docs/DESIGN.md`).
 import "ksplc/base/ast" as base_ast + { Ast_node }
-import "ksplc/base/ast_ext" // `mark_sugar_made`
+import "ksplc/base/ast_ext" // `mark_sugar_made`, `is_sugar_made`
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "std/chars"
@@ -88,6 +88,51 @@ fn spell_type_expr(node: Ast_node$@): U8[] //< a type expression's name
         else
             b.s(c.text)
     return b.take()
+
+fn spell_as_written(node: Ast_node$@): U8[] //< a type expression with its folds spelled as sugar
+    //<
+    //< **Source the compiler writes from a folded type uses this**: the long form
+    //< (`Slice<|U8|>`, `Option<|I32|>`) is refused as a type wherever it is parsed
+    //< (check_spelled_out_sugar in `../sema/decl/type_check.kspls`), so a fold is written back as
+    //< `U8[]`, `U8$[]` or `I32?`, a result or a function type grouped first (`(I32!E)?`).
+    if node == null
+        return ""
+    if node.kind_id == .k_type_atom && node.children.len > 0 &&
+        node.get_child(0).is_sugar_made()
+        path: = node.get_child(0)
+        arg: = path.get_child(1).get_child(0)
+        is_mut: = arg.kind_id == .k_type_arg
+        inner: = arg.get_child(1) if is_mut else arg
+        b: = base_core.arena.text()
+        if needs_group(inner)
+            b.c('(').s(spell_as_written(inner)).c(')')
+        else
+            b.s(spell_as_written(inner))
+        if path.get_child(0).text.equals(base_core.option_ident())
+            b.c('?')
+        else
+            b.s("$[]" if is_mut else "[]")
+        return b.take()
+    if node.kind_id == .k_type_expr
+        b: = base_core.arena.text()
+        for c in node.children
+            if c.kind_id == .k_type_atom || c.kind_id == .k_type_expr
+                b.s(spell_as_written(c))
+            else
+                b.s(c.text)
+        return b.take()
+    return node.text if node.text.len > 0 else spell_atom(node)
+
+priv fn needs_group(inner: Ast_node$@): Bool //< whether a sugar's argument is put in brackets
+    //<
+    //< A result (`I32!E`) or a function type takes the postfix itself unless grouped.
+    if inner.kind_id != .k_type_expr
+        return inner.kind_id == .k_type_fn_sig
+    for c in inner.children
+        if c.kind_id == .k_type_fn_sig ||
+            (c.kind_id == .k_type_postfix && c.text.starts_with("!"))
+            return true
+    return false
 
 fn spell_atom(node: Ast_node$@): U8[] //< a `type_atom`'s name
     //<

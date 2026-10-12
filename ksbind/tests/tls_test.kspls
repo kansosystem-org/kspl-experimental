@@ -172,8 +172,8 @@ impl Test_ca
         //< variable, so the test runs the code a program runs.
         key: = new_key()
         cert: = new_cert(key, "Kanso test CA", 1, null, key)
-        dir: = fs.mkdir_unique(ca_base, "ca_", arena) catch panic("the scratch folder should be \
-            made")
+        dir: = fs.mkdir_unique(ca_base, "ca_", arena)
+            catch panic("the scratch folder should be made")
         file: = fs.join(dir, "ca.pem", arena)
         $c_file: U8$@ = null
         switch file.to_cstr()
@@ -251,16 +251,17 @@ impl Peer_act
         defer listener.free()
         port: = listener.port() catch panic("a bound socket knows its port")
         $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = r }
-        t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
-        s: = tls.Tls_stream.connect("localhost", port) catch panic("a certificate the trusted CA \
-            issued for this host should connect")
+        t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@)
+            catch panic("thread spawn failed")
+        s: = tls.Tls_stream.connect("localhost", port)
+            catch panic("a certificate the trusted CA issued for this host should connect")
         sent: = s.write(ping) catch panic("the client's write should succeed")
         assert(sent == 4, "the client's ping should go out whole")
         $got: U8[4] = ::{}
         $have: Sz = 0
         for have < 4
-            n: = s.read((U8$[]::got).sub_mut(have, 4 - have)) catch panic("the client should read \
-                the pong")
+            n: = s.read((U8$[]::got).sub_mut(have, 4 - have))
+                catch panic("the client should read the pong")
             assert(n > 0, "the pong should arrive before the end")
             have += n
         assert((U8$[]::got).equals(pong), "the client should read pong")

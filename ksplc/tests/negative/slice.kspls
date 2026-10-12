@@ -1,0 +1,304 @@
+//< Slices, arrays and indexing
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case agg_literal_fieldless
+//< A `::{ ... }` for a type that has no fields
+//<
+//< A number, a boolean, an enum, and Result itself are such. **Let it through and the diagnostic
+//< comes from the C compiler** (Principle 2 in `../../../docs/DESIGN.md`), or, for `::{ 1, 2 }`,
+//< only a warning while the second value vanishes. An empty `::{}` means zero-filling and passes.
+// ==========================================
+// EXPECT: 'I32' has no fields to fill, so it cannot be built with '::{ ... }'. Write the value
+// itself EXPECT: 'Bool' has no fields to fill
+// EXPECT: has no fields to fill
+// EXPECT: A Result is built by returning a value or throwing an error, and read with '!' or 'catch'
+// ==========================================
+pub enum Oops: U8
+  bad = 3
+
+fn main(): I32
+  n: I32 = ::{ 1, 2 }
+  b: Bool = ::{ .x = true }
+  e: Oops = ::{ .bad = 1 }
+  r: I32!Oops = ::{ .is_err = true, .error_code = Oops.bad }
+  return n + (I32)::(r catch 0)
+// ==== case array_elem_mut_marker
+//< A fixed-length array's element mutability is set by the **`$` in front of the name**
+//<
+//< The same as a struct's: `$[N]` on the type side cannot be written, and a binding without `$`
+//< has read-only elements. A slice is the reverse: `T$[]` holds it, the descriptor and the elements
+//< being separate substances (`docs/SPEC-language.md` §4.2).
+// EXPECT: a fixed-size array cannot carry '$' on its element type
+// EXPECT: cannot write to an element of a read-only slice or array
+
+buf_bad: U8$[4] = ::{ 1, 2, 3, 4 }
+
+fn main(): I32
+  imm: U8[4] = ::{ 1, 2, 3, 4 }
+  imm[0] = 9 // not '$imm', so it cannot be written
+  $ok: U8[4] = ::{ 1, 2, 3, 4 }
+  ok[0] = 9 // this one passes
+  return I32::imm[0] + I32::ok[0] + I32::buf_bad[0]
+// ==== case index_place_by_value_receiver
+//< An `Index_place` implementation with a by-value receiver is rejected through a read-only slot
+//<
+//< **Let it through and the pointer returned points at a copy.** Only an `at(r: Self@, …)`, which
+//< merely reads the descriptor, may cut the permission path short (index_stops_permission_walk in
+//< `ksplc/sema/decl/access.kspls`); the passing side is `ksplc/tests/slice_test.kspls`.
+// EXPECT: cannot write through a read-only pointer
+import "std/io"
+
+priv struct By_val
+  ptr: I32$@
+  len: Sz
+
+// The receiver is by value. `r` being a copy, `r.ptr` is the pointer inside the copy.
+impl By_val: Index_place<|Sz, I32|>
+  fn at(r: Self, index: Sz, _file: U8[], _line: Sz): I32$@
+    return r.ptr + index
+
+priv struct Frame
+  v: By_val
+
+priv fn poke(f: Frame@)
+  f.v[0] = 99
+
+$store: I32[1] = ::{ 0 }
+
+fn main(): I32
+  f: Frame = ::{ .v = By_val::{ .ptr = store[0]@, .len = 1 } }
+  poke(f@)
+  io.out().s("\{store[0]\}\n")
+  return 0
+// ==== case index_place_const_output
+//< A container whose elements are immutable cannot implement `Index_place`
+//<
+//< Immutability riding on a type argument (6.1 of `docs/SPEC-language.md`) is invisible in the
+//< declaration, so unchecked per substance it passes and the C **holds a write** with a "discards
+//< const" warning (Principle 2). Put `$` on the target (`ksplc/tests/slice_test.kspls`).
+// EXPECT: cannot implement 'Index_place'
+// EXPECT-NOT: discards qualifiers
+import "std/io"
+
+priv struct Ro<|$T|>
+  p: T$@
+  len: Sz
+
+impl<|T|> Ro<|T|>: Index_place<|Sz, T|>
+  fn at(r: Self@, index: Sz, _f: U8[], _l: Sz): T$@
+    return r.p + index
+
+$buf: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+  s: Ro<|I32|> = ::{ .p = buf[0]@, .len = 2 }
+  s[0] = 9
+  io.out().s("\{buf[0]\}\n")
+  return 0
+// ==== case index_raw_pointer
+//< An index on a pointer that carries no length
+//<
+//< The range cannot be checked, so `[]` is allowed only where the target holds its own length (as
+//< Go allows an index on `*[N]T` alone); a pointer to a slice passes. The diagnostic must not give
+//< the forbidden and the recommended form the same characters, or the advice cannot be followed.
+// EXPECT: cannot index 'I32$@'
+import "std/mem" { alloc }
+
+fn main()
+  raw: = I32$@::alloc(4)
+  _v: = raw[0]
+// ==== case index_readonly_receiver
+//< An index on a read-only receiver "can be read but not written"
+//<
+//< Caution: Keep the non-firing side alongside: the **reads** of `for x in xs` and `xs[i]` pass,
+//< and so does `xs[i]@` (the read-only place `at_ref` returns). What stops is taking that as an
+//< `I32$@`, refused for its mutability rather than as "the address of a copy".
+// EXPECT: cannot assign through a read-only location
+// EXPECT: expected 'I32$@', but got 'I32@'
+// EXPECT-NOT: discards qualifiers
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+// The passing side: a read-only receiver is read by for in and by an index.
+priv fn total(xs: List<|I32|>@): I32
+  $s: = 0
+  for x in xs
+    s += x
+  return s + xs[0]
+
+// The stopping side: writing to a read-only receiver.
+priv fn bad_write(xs: List<|I32|>@)
+  xs[0] = 5
+
+// The stopping side: taking a **writable** pointer from a read-only receiver.
+priv fn bad_addr(xs: List<|I32|>@): I32$@
+  return xs[0]@
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $src: = List<|I32|>.new(arena)
+  src.push(7)
+  src.push(9)
+  bad_write(src@)
+  io.out().s("\{total(src@)\}/\{bad_addr(src@)$\}\n")
+  return 0
+// ==== case index_ref_addr_write
+//< A mutable pointer cannot be taken from a read-only place
+//<
+//< Let this through and the assignment's check can be dodged by `xs[0]@` to write into an immutable
+//< element (Principle 2).
+// EXPECT: expected 'I32$@'
+
+priv struct Ro<|T|>
+  ptr: T@
+  len: Sz
+
+impl<|T|> Ro<|T|>: Index_ref<|Sz, T|>
+  fn at_ref(r: Self, index: Sz, _file: U8[], _line: Sz): T@
+    return r.ptr + index
+
+priv const backing: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+  $v: Ro<|I32|> = ::{ .ptr = backing[0]@, .len = 2 }
+  p: I32$@ = v[0]@
+  p$ = 9
+  return 0
+// ==== case index_ref_write
+//< An index returning a read-only place (`Index_ref`) cannot be written to
+//<
+//< Let through, the C writes across the `Output@` `at_ref` returns, discarding const (Principle 2).
+//< Caution: **Do not talk about `Index_mut`.** Its elements immutable (`ptr: T@`), this type cannot
+//< implement it; a type that does (`List<|T|>@`) is `index_readonly_receiver.kspls`'s case.
+// EXPECT: this type only provides read-only places
+
+priv struct Ro<|T|>
+  ptr: T@
+  len: Sz
+
+impl<|T|> Ro<|T|>: Index_ref<|Sz, T|>
+  fn at_ref(r: Self, index: Sz, _file: U8[], _line: Sz): T@
+    return r.ptr + index
+
+priv const backing: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+  $v: Ro<|I32|> = ::{ .ptr = backing[0]@, .len = 2 }
+  v[0] = 9
+  return 0
+// ==== case slice_binary_op
+//< Checks that ksplc rejects a binary operation on a slice with a diagnostic
+//<
+//< Unstopped (infer_binary in ksplc/sema/body/expr.kspls), the C compiler's error on two
+//< descriptors reaches the user instead (the same shape as "Failing fast through an exception or an ICE" in ksplc/docs/DESIGN.md), and `ksplc`
+//< alone lets it through. A slice has no arithmetic or order; content comparison is `equals`.
+// EXPECT: cannot be applied to slice type 'U8[]'
+// EXPECT-NOT: slice_binary_op.kspls:1:1
+pub fn main(): I32
+  a: U8[] = "ab"
+  b: U8[] = "cd"
+  c: = a + b
+  return I32::c.len
+// ==== case slice_cast_elem_size
+//< A cast to a slice that changes the element size is rejected
+//<
+//< Caution: **Place the shapes that should pass too.** A same-size reread (`U8[]` ↔ `I8[]`,
+//< `U32[]` ↔ `I32[]`, equal-size structs) keeps the element count, so it is allowed. For a byte
+//< run, assemble the descriptor yourself (docs/SPEC-language.md 6.2.1).
+// EXPECT: the element size changes (1 -> 4 bytes)
+// EXPECT: the element size changes (4 -> 1 bytes)
+// EXPECT: the element size changes (8 -> 1 bytes)
+import "std/io"
+
+priv struct Pair
+  pub a: I32
+  pub b: I32
+
+priv struct Wide
+  pub v: I64
+
+fn main(): I32
+  small: U8[8] = ::{ 1, 2, 3, 4, 5, 6, 7, 8 }
+  w32: I32[4] = ::{ 1, 2, 3, 4 }
+  pairs: Pair[2] = ::{}
+  // It should be refused: the element size changes.
+  grow: = I32[]::small
+  shrink: = U8[]::w32
+  flatten: = U8[]::pairs
+  // It should pass: the size is the same.
+  same_1: = I8[]::small
+  same_4: = U32[]::w32
+  same_8: = Wide[]::pairs
+  same_id: = U8[]::small
+  io.out()
+    .s("\{grow.len\}\{shrink.len\}\{flatten.len\}\{same_1.len\}\{same_4.len\}\{same_8.len\}\{same_id.len\}\n")
+  return 0
+// ==== case slice_descriptor_field_type
+//< Type checking applies to a slice descriptor literal's fields too
+//<
+//< **The check easily slips out here:** the literal's shape is drawn from a type peeled one step,
+//< which for a single-step slice (`U8$[]`) is a scalar (`U8`); missed, `.ptr`/`.len` get no
+//< expected type (infer_struct_literal_expr in sema/body/expr.kspls).
+// EXPECT: expected 'Sz', but got 'U8@'
+fn main()
+  s: U8[] = "abc"
+  bad: U8[] = U8[]::{ .ptr = s.ptr, .len = s.ptr }
+// ==== case slice_over_frame_escapes
+//< A slice descriptor built from a stack frame's memory must not escape it
+//<
+//< A cast from a fixed-length array or a run of elements synthesises a pointer into the frame with
+//< not one `@` in the source, so it dangles after return. Only that invisible pointer is stopped: a
+//< written `@` is the writer's responsibility (docs/DESIGN.md "Why dangling is stopped only on the
+//< paths that create an invisible pointer"); a call's result passes.
+// EXPECT: cannot return a slice built from local storage
+// EXPECT-NOT: cannot throw a slice built from local storage
+import "std/io"
+import "std/str" { Str_builder }
+
+priv struct Holder
+  pub s: U8[]
+
+priv fn from_local_array(): U8[]
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  return U8[]::a // this one stops
+
+priv fn from_elem_list(): U8[][]
+  return U8[][]::{ "a", "b" } // this stops too (the array a run of elements makes is temporary)
+
+priv fn wrapped_in_struct(): Holder
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  return Holder::{ .s = U8[]::a } // the same when carried on a struct
+
+// A shape with an `@` written passes (the lifetime is the writer's responsibility).
+priv fn explicit_addr(): U8[]
+  $a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  return U8[]::{ .ptr = a[1]@, .len = 2 }
+
+// A call's result passes (the memory is on the heap and the compiler does not know its target).
+priv fn from_builder(): U8[]
+  $b: = Str_builder.new()
+  b.s("abc")
+  return b.slice()
+
+pub fn main(): I32
+  io.out()
+    .s("\{from_local_array()\}\{from_elem_list().len\}\{wrapped_in_struct().s\}\{explicit_addr()\}\{from_builder()\}\n")
+  return 0
+// ==== case slice_struct_readonly_write
+//< Assigning to an element of an immutable slice (`T[]`, `Slice<|T|>` in `std/lang`) is rejected
+//<
+//< **Talk about the elements:** "implement `Index_mut`" cannot be followed, since the elements'
+//< immutability rides on a type argument. **Use the sugar's words:** the fix is `$[]`.
+//< `List<|T|>@` is `index_readonly_receiver.kspls`'s case.
+// EXPECT: cannot write to an element of a read-only slice or array
+import "std/io"
+
+$buf: I32[2] = ::{ 1, 2 }
+
+fn main(): I32
+  s: I32[] = ::{ .ptr = buf[0]@, .len = 2 }
+  s[0] = 9
+  io.out().s("\{s[0]\}\n")
+  return 0

@@ -263,45 +263,42 @@ priv fn methods_into(lines: List<|Line|>$@, owner: U8[], n: Ast_node$@, src: U8[
                     Held::{ .attrs = joined(outer, held.attrs), .vis = held.vis }, m, src)
             held = Held::{ .attrs = "", .vis = "" }
 
-priv fn add_struct(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< a `struct`
-    //<
-    //< The heading on one line, each `pub` field on one line; **a field that is not `pub` is not
-    //< API**. A field takes no attribute, so the key carries only the `struct`'s.
+priv fn add_heading(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]): U8[] //<
+    //< A type's heading on one line, keyed by its name, which it returns
     name: = name_of(n)
     add(lines, key_of("", name, held.attrs),
         joined(held.vis, flat(src, n.loc.offset, brace_at(n))),
         doc_of(src, n.loc.offset, body_brace(src, n)))
+    return name
+
+priv fn add_member(lines: List<|Line|>$@, owner: U8[], attrs: U8[], m: Ast_node$@, src: U8[]) //<
+    //< One field or variant on one line, keyed under its type with the type's attributes
+    add(lines, key_of(owner, name_of(m), attrs), flat(src, m.loc.offset, end_of(m)),
+        doc_of(src, m.loc.offset, body_brace(src, m)))
+
+priv fn add_struct(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< a `struct`
+    //<
+    //< The heading on one line, each `pub` field on one line; **a field that is not `pub` is not
+    //< API**. A field takes no attribute, so the key carries only the `struct`'s.
+    name: = add_heading(lines, held, n, src)
     for f in n.children
-        if f.kind_id != .k_struct_field || !published(vis_of(f, src))
-            continue
-        add(lines, key_of(name, name_of(f), held.attrs),
-            flat(src, f.loc.offset, end_of(f)),
-            doc_of(src, f.loc.offset, body_brace(src, f)))
+        if f.kind_id == .k_struct_field && published(vis_of(f, src))
+            add_member(lines, name, held.attrs, f, src)
 
 priv fn add_enum(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< an `enum`
     //<
     //< **Every variant is recorded**: a `switch` takes an `enum` apart, so the variants and tag
     //< values are API. A variant takes no attribute either.
-    name: = name_of(n)
-    add(lines, key_of("", name, held.attrs),
-        joined(held.vis, flat(src, n.loc.offset, brace_at(n))),
-        doc_of(src, n.loc.offset, body_brace(src, n)))
+    name: = add_heading(lines, held, n, src)
     for v in n.children
-        if v.kind_id != .k_enum_variant
-            continue
-        add(lines, key_of(name, name_of(v), held.attrs),
-            flat(src, v.loc.offset, end_of(v)),
-            doc_of(src, v.loc.offset, body_brace(src, v)))
+        if v.kind_id == .k_enum_variant
+            add_member(lines, name, held.attrs, v, src)
 
 priv fn add_trait(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< a `trait`
     //<
     //< **A `priv` requirement is recorded too.** It cannot be called, but the conforming side must
     //< have that method, so removing it breaks the other side.
-    name: = name_of(n)
-    add(lines, key_of("", name, held.attrs),
-        joined(held.vis, flat(src, n.loc.offset, brace_at(n))),
-        doc_of(src, n.loc.offset, body_brace(src, n)))
-    methods_into(lines, name, n, src, false, held.attrs)
+    methods_into(lines, add_heading(lines, held, n, src), n, src, false, held.attrs)
 
 priv fn add_impl(lines: List<|Line|>$@, held: Held, n: Ast_node$@, src: U8[]) //< an `impl`
     //<

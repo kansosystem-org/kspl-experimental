@@ -1,5 +1,5 @@
 #!/usr/bin/env -S ksplc run
-//< It **builds and runs** `tests/runtime/*.kspls` and checks each one stops at run time
+//< It **builds and runs** each case in `tests/runtime/` and checks each one stops at run time
 //<
 //< Some safety properties are guarded by **stopping at run time**, with nothing reported at
 //< translation time (a slice's index, `List.get`, a `Tensor`'s shape product).
@@ -11,6 +11,7 @@
 // ==========================================
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_build"
+import "ksplc/tests/support/harness_expect"
 import "ksplc/tests/support/harness_markers"
 import "std/chars" // single-character checks and extraction
 import "std/ds" as _ds // what makes `fixtures.len` available
@@ -32,7 +33,10 @@ priv fn run_side(path: U8[], work: U8[], stem: U8[], name: U8[], m: harness_mark
     llvm: Bool) //<
         //< It builds and runs on one of the backends and prints one verdict line
     // The artifacts are kept apart per fixture, lest they overwrite each other.
-    b: = harness_build.build_and_run(path, work, stem, m.args.slice(), llvm)
+    // **Compile it from its own folder, by its file name**: a case lies outside any package, and
+    // its stop names it as written (`at <case>:<line>`), which the marks match.
+    b: = harness_build.build_and_run(sys.get_file_name(path), work, stem, m.args.slice(), llvm,
+        sys.get_dir_name(path))
     if !b.built
         verdict.check(name, false, b.out)
         return
@@ -44,23 +48,18 @@ priv fn run_side(path: U8[], work: U8[], stem: U8[], name: U8[], m: harness_mark
         return
     harness_markers.check(name, m.expect.slice(), m.deny.slice(), b.out)
 
-priv fn run_one(path: U8[], work: U8[]) //<
-    //< It builds and runs one fixture on both backends
-    file: = sys.get_file_name(path)
-    name: = harness.arena().text().s("runtime/\{file\}").take()
-    body: = io.read_file(path) catch
-        verdict.check(name, false, "cannot read the fixture")
-        return
-    $m: = harness_markers.markers(body)
+priv fn run_one(f: harness_expect.Fixture, work: U8[]) //<
+    //< It builds and runs one case on both backends
+    name: = f.label
+    $m: = harness_markers.markers(f.body)
     // Caution: Do not accept a fixture with no mark (the reason is in harness_expect.kspls).
     if m.expect.len == 0 && m.deny.len == 0
         verdict.check(name, false, "there is no EXPECT / EXPECT-NOT mark")
         return
-    stem: = file.strip_suffix(fixture_ext)
-    run_side(path, work, stem, name, m@, false)
+    run_side(f.path, work, f.stem, name, m@, false)
     llvm_name: = harness.arena().text().s("\{name\} (llvm)").take()
-    llvm_stem: = harness.arena().text().s("\{stem\}_llvm").take()
-    run_side(path, work, llvm_stem, llvm_name, m@, true)
+    llvm_stem: = harness.arena().text().s("\{f.stem\}_llvm").take()
+    run_side(f.path, work, llvm_stem, llvm_name, m@, true)
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
@@ -68,20 +67,20 @@ fn main(): I32
         return harness.fatal("the working directory cannot be read")
     files: = fs.walk_files(dir, fs.skip_none, arena) catch
         return harness.fatal("cannot read tests/runtime/")
-    fixtures: = files.where(fn(f: U8[]; ): Bool {
+    $fixtures: = files.where(fn(f: U8[]; ): Bool {
         return f.ends_with(fixture_ext);
     }).to_list(arena)
     // No items means "the check tests nothing", so it fails.
     if fixtures.len == 0
         return harness.fatal("there is no fixture in tests/runtime/")
-    work: = harness.sandbox("runtime") catch
-        return harness.fatal("cannot make a working directory")
+    work: = harness.sandbox("runtime")
+    $cases: = harness_expect.gather_files("runtime", fixtures.slice(), work, arena)
     // Caution: **Run the LLVM backend too.** Each backend keeps the stop message in a different
     // place (`ksplc/gen/runtime/hosted.h` for C, `ksplc/gen/llvm/module.kspls` for LLVM), and
     // fixing only one makes the same program print a different message per target.
     // The same EXPECT is applied to both, so a disagreement not only in the wording but in the
     // **position** (`at <file>:<line>`) shows here too.
-    io.out().s("# runtime: \{fixtures.len\}\n")
-    for path in fixtures
-        run_one(path, work)
+    io.out().s("# runtime: \{cases.len\}\n")
+    for f in cases.slice()
+        run_one(f, work)
     return harness.finish()

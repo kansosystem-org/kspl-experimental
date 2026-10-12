@@ -1,0 +1,194 @@
+//< Redundancy: casts, booleans, control flow and aliases with no effect
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case const_weakening_cast
+//< A cast that only drops the write permission (`$`) is a finding
+//<
+//< The weakening from `U8$[]` to `U8[]` is done implicitly by the language ("6.4 Type conversion
+//< (`::`) and implicit casts" in `docs/SPEC-language.md`), so writing it does nothing.
+// EXPECT: [I0301]
+import "std/io"
+import "std/mem" { Arena }
+
+priv fn len_of(s: U8[]): Sz
+  return s.len
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  buf: U8$[] = arena.dup_str("kanso")
+  io.out().s("\{len_of(U8[]::buf)\}").c('\n')
+  return 0
+// ==== case const_weakening_cast_binding
+//< On a binding with no type annotation it is not a finding
+//<
+//< The cast here settles the binding's own type, and taking it away makes `b` a `U8$[]` — the
+//< declaration that said "it is not rewritten" vanishes.
+// EXPECT-NOT: [I0301]
+import "std/io"
+import "std/mem" { Arena }
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  b: = U8[]::arena.dup_str("kanso")
+  io.out().s("\{b.len\}").c('\n')
+  return 0
+// ==== case directive_warning
+//< `##warning(cond, msg)` reports a warning where cond is false, and the analysis goes on
+//<
+//< The wording is the user's own, so it is given no diagnostic code — if `##lint` could silence it,
+//< the assertion would have no point.
+// EXPECT: warning: Sz must be 2 bytes
+// EXPECT-NOT: this must stay quiet
+##warning(sizeof(Sz) == 2, "Sz must be 2 bytes")
+##warning(sizeof(Sz) >= 4, "this must stay quiet")
+
+fn main(): I32
+  return 0
+// ==== case generic_cast_instantiation
+//< Two forms that look like findings under a generic instantiation, but are not
+//<
+//< Following either would stop the build (ksplc/docs/DESIGN.md "While a generic is being
+//< instantiated, a diagnostic that depends on a type argument is not emitted" / is_instantiating in
+//< ksplc/sema/session/ctx.kspls): `F32$@::a` is an identity cast at T=F32 but a real pointer
+//< conversion at T=F64, and the `if sizeof(T) == 4` branch only looks empty once constant-folded.
+// EXPECT-NOT: [I0301]
+// EXPECT-NOT: [I0307]
+import "std/io"
+
+priv fn pick<|T|>(a: T$@): F64
+  // It takes the value into a variable once rather than returning in the branch because, in
+  // an instantiation where the condition is constant-folded, the dead branch's content is dropped
+  // entirely, so putting a `return` in the branch becomes a different error, "there is a road that
+  // does not return".
+  $v: F64 = 0.0
+  if sizeof(T) == 4
+    v = F64::(F32$@::a)$
+  else
+    v = (F64$@::a)$
+  return v
+
+fn main(): I32
+  v32: F32 = F32::2.5
+  v64: F64 = 2.5
+  io.out().s("\{I32::(pick(v32@) + pick(v64@))\}").c('\n')
+  return 0
+// ==== case lint_levels
+//< A per-file `##lint(CODE = level)` takes effect
+//<
+//< off suppresses a code, and on enables a code that is off by default ([W0601] of the old
+//< deterministic profile is one such).
+// EXPECT-NOT: [I0305]
+// EXPECT: [W0601]
+##lint(I0305 = off, W0601 = on)
+import "std/refcount" { Rc }
+
+priv fn ends_with_return(): Void
+  return
+
+fn main()
+  r: = Rc<|I32|>.new(1)
+  _x: = r
+  ends_with_return()
+// ==== case plain_cast_still_reported
+//< A "really redundant cast" outside a generic is still a finding
+//<
+//< It pins down that only being inside a generic instantiation was taken out of scope, and that
+//< [I0301] itself was not weakened.
+// EXPECT: [I0301]
+import "std/io"
+
+fn main(): I32
+  n: Sz = 3
+  m: Sz = Sz::n
+  io.out().s("\{m\}").c('\n')
+  return 0
+// ==== case redundant_boolean
+//< Redundant spellings around booleans
+//<
+//< The meaning does not change so they pass in silence, but the reader is left hunting for "was
+//< something meant by this".
+// EXPECT: [I0302] Unnecessary boolean comparison
+// EXPECT: [I0303] Redundant logical operation with a boolean literal
+// EXPECT: [I0308] Redundant if-return for boolean
+pub fn compares(b: Bool): Bool
+  return b == true
+
+pub fn ands(b: Bool): Bool
+  return b && true
+
+pub fn if_returns(n: I32): Bool
+  if n > 0
+    return true
+  else
+    return false
+// ==== case redundant_control_flow
+//< Control-flow spellings that mean nothing
+// EXPECT: [I0304] Redundant 'default' case
+// EXPECT: [I0701] Redundant error propagation
+// EXPECT: [I0306] Redundant 'continue' at the end of a loop block
+import "std/io"
+
+pub enum Color
+  red
+  green
+
+pub enum Probe_error
+  failed
+
+priv fn may_fail(): I32!Probe_error
+  return 1
+
+pub fn all_covered(c: Color): I32
+  switch c case .red
+    return 1
+  case .green
+    return 2
+  default
+    return 0
+
+pub fn rethrows(): I32!Probe_error
+  v: = may_fail() catch e
+    throw e
+  return v
+
+pub fn loops(n: Sz): Sz
+  $total: Sz = 0
+  for i in Range.asc(n)
+    total += i
+    continue
+  return total
+// ==== case redundant_deref
+//< `.` follows a pointer automatically, so an explicit `$` is unnecessary
+// EXPECT: [I0309] Unnecessary explicit '$' dereference
+import "std/io"
+import "std/mem" { Arena }
+
+struct Cell
+  v: I32
+
+pub fn probe(arena: Arena$@): I32
+  c: = arena.create(Cell::{ .v = 3 })
+  return c$.v
+// ==== case redundant_import_alias
+//< An `as` naming the path's own tail adds nothing, since an unmarked import derives that alias
+//<
+//< It lets the same thing be written two ways, so [I0310] reports it.
+//< Caution: **Do not make a derived alias a finding.** An unmarked import goes onto the ledger
+//< under the same name too, so the name alone says "remove the `as`" where there is no `as`.
+// EXPECT: [I0310] Redundant 'as io'
+// EXPECT-NOT: [I0310] Redundant 'as base_fmt'
+// EXPECT-NOT: [I0310] Redundant 'as _seq'
+import "std/io" as io
+import "std/seq" as _seq
+import "std/strfmt" as base_fmt
+
+pub fn probe(): Sz
+  $n: Sz = 0
+  for i in Range.asc(3)
+    n += i
+  // Hex_fmt is a thin wrapper only for placing into an interpolation; it neither
+  // allocates nor frees.
+  io.out().s("n=\{n\} h=\{base_fmt.hex(255, 2)\}").c('\n')
+  return n + "abc".len

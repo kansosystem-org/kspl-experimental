@@ -1,24 +1,52 @@
-import "tests/debug/parts"
+import "ksai/tests/all" as ksai_all
+import "ksdb/tests/all" as ksdb_all
+import "ksos/tests/all" as ksos_all
+import "kspage/tests/all" as kspage_all
+import "kspeg/tests/all" as kspeg_all
+import "ksplc/tests/all" as ksplc_all
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/tests/all" as std_all
+import "std/verdict"
+import "tools/tests/all" as tools_all
 
 // ==========================================
-// The entry point for `make debug`. **This file only sets the order.**
-// How each package is called is in [`parts.kspls`](parts.kspls). The entry points that run one
-// package alone are in [`pkg/`](pkg) (`make debug-<name>`).
+// The entry point for `make debug`: every package's tests but kssrv's and ksbind's, in one
+// program. **This is the only place that calls more than one package's `tests/all`**; each
+// package's own `<package>/tests/main.kspls` calls its own, for `make debug-<name>`.
+// Caution: **Do not move the individual tests here**: they would need `pub` to inspect the inside
+// of their unit.
 // ==========================================
-fn main(): I32
-    arena: = parts.begin()
+
+priv const stage1: U8[] = "out/ksplc_stage1.exe" //< the ksplc passed to tests that start one
+    //<
+    //< Note: `make debug` depends on $(STAGE1_EXE), so it is there by the time they run.
+
+fn main(): I32 //< the exit code is the checks' verdict (`verdict.finish`)
+    // Line-buffered: in CI stdout is a fully buffered pipe, so a crash would lose the unflushed
+    // output and the log's last line would not show where it crashed.
+    io.set_line_buffered()
+    // Caution: **Do not add a `mkdir` on the CI side instead**, or a second place knows out/'s
+    // layout. **Do not stop on failure either**; the test that writes there reports it by name.
+    fs.mkdir_all("out/tmp") catch {}
+    arena: = Arena.new(1024 * 1024)
     defer arena.free()
 
     // Caution: **Put ksplc first.** Where its ABI check ("The gate checks the IR" in
     // [`../../ksplc/docs/DESIGN.md`](../../ksplc/docs/DESIGN.md)) disagrees, other tests' values
     // break silently, so it proves soundness before anything else.
-    parts.ksplc(arena)
-    parts.std(arena)
-    parts.ksai(arena)
-    parts.ksdb(arena)
-    parts.kspeg(arena)
-    parts.kspage(arena)
-    parts.ksos(arena)
-    parts.tools(arena)
+    ksplc_all.run_ksplc(arena)
+    std_all.run_std(stage1, arena)
+    ksai_all.run_ksai()
+    ksdb_all.run_ksdb()
+    kspeg_all.run_kspeg()
+    kspage_all.run_kspage()
+    ksos_all.run_ksos()
+    tools_all.run_tools(arena)
 
-    return parts.done()
+    // **The verdict is the checks' own**: a fixed `ALL PASS` would read green over a `FAIL` line,
+    // and the gate reads only this line ("How a run is read" in
+    // [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)).
+    io.out().s("\n=========================================\n")
+    return verdict.finish()

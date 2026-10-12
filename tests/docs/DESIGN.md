@@ -38,9 +38,7 @@ Caution: **Do not build the suites with the compiler under inspection.** A broke
 
 ## What stays in the root tests folder
 
-A suite stays in the root `tests/` only when it reads more than one package. A suite about one package lives inside that package.
-
-**What stays here reads more than one package.** A suite here checks the compiler against something outside its folder, or it gates the repository itself. "Outside its folder" means, for example:
+**A suite stays in the root `tests/` only when it reads more than one package; a suite about one package lives inside that package.** A suite here checks the compiler against something outside its folder, or it gates the repository itself. "Outside its folder" means, for example:
 
 * the language specification;
 * kspage's highlighter and the editor's grammar;

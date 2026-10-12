@@ -5,7 +5,7 @@
 // characters at all.
 
 function kspageProbeInput(ks) {
-  const { check, app, canvas, ime, press, keyIn, undoKey, openMenu } = ks;
+  const { check, app, canvas, ime, press, keyIn, typeIn, undoKey, openMenu } = ks;
 
   // 1. The focus. Landed on the canvas, an IME does not rouse.
   check(document.activeElement === ime, "at start-up the focus is on the input field");
@@ -151,8 +151,6 @@ function kspageProbeInput(ks) {
   // **This can be seen nowhere else**: breaking off shows only as `compositionend` with an empty
   // `data`. Let an empty one through as a settlement and the step breaks there, so what was typed
   // before and after comes back separately ("it comes back a keystroke at a time").
-  const typeIn = (t) => ime.dispatchEvent(new InputEvent("input",
-    { data: t, inputType: "insertText", bubbles: true }));
   const kept = app.text();
   typeIn("X");
   ime.dispatchEvent(new CompositionEvent("compositionstart", { data: "", bubbles: true }));

@@ -1,0 +1,234 @@
+//< Slices: the struct a slice is, and a generic impl over it
+//<
+//< **`T[]` is sugar for `Slice<|$T|>` in `std/lang`** ("`T[]` is sugar for `Slice<|$T|>`" in
+//< `../../docs/DESIGN.md`), and the only spelling of it as a type, so an impl over `T$[]` is an
+//< ordinary generic impl.
+import "std/chars"
+import "std/ds"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// A slice held as an ordinary struct. The case `mutable_slice_from_readonly` in
+// `tests/negative/pointer.kspls` pins its wording in a diagnostic, root `c-warnings` that no
+// built-in slice type comes back in the C, and the case `slice_struct_out_of_bounds` in
+// `tests/runtime/stops.kspls` an out-of-range access (which stops).
+// ==========================================
+$store: I32[4] = ::{ 10, 20, 30, 40 }
+
+priv fn total(s: I32[]): I32 //< takes only the immutable version
+    $t: I32 = 0
+    for x in s
+        t += x
+    return t
+
+priv struct Frame
+    s: I32$[]
+
+priv fn poke_through_frame(f: Frame@) //<
+    //< It writes to an element through a read-only frame
+    //<
+    //< `at` takes its receiver as `Self@`, so the returned pointer's type carries the permission
+    //< ("Where permission lives changes with whether it is owned" in `docs/DESIGN.md`).
+    f.s[0] = 77
+
+fn test_slice_struct_places()
+    verdict.start("[Slice] a slice held as a struct test...")
+    store = ::{ 10, 20, 30, 40 }
+    m: I32$[] = ::{ .ptr = store[0]@, .len = 4 }
+
+    m[1] = 99
+    m[2] += 5
+    p: I32$@ = m[3]@
+    p$ = 7
+    assert(store[1] == 99, "slice struct: an assignment reaches the original area")
+    assert(store[2] == 35, "slice struct: a compound assignment reaches it")
+    assert(store[3] == 7, "slice struct: a mutable address can be taken")
+
+    // **The binding needs no `$`**, because `at` takes `Self@`; `Self$@` would make this fail.
+    assert(total(m) == 10 + 99 + 35 + 7,
+        "slice struct: the mutable version passes to an immutable parameter")
+
+    ro: I32[] = ::{ .ptr = store[0]@, .len = 4 }
+    assert(ro[1] == 99, "slice struct: an element reads through the immutable version too")
+    assert(ro.len == 4, "slice struct: len reads")
+    verdict
+        .pass("with a struct slice, reading, assignment, compound assignment, taking an address and \
+            for in all go through.")
+
+fn test_slice_struct_in_readonly_frame()
+    verdict.start("[Slice] a slice put in a read-only frame test...")
+    store = ::{ 1, 2, 3, 4 }
+    f: Frame = ::{ .s = I32$[]::store }
+    poke_through_frame(f@)
+    assert(store[0] == 77,
+        "slice struct: an element is writable through a read-only frame (the shape the built-in \
+            refuses)")
+    verdict
+        .pass("what speaks of an element's permission is the returned pointer's type, not the \
+            frame's mutability.")
+
+// ==========================================
+// A generic impl targeting a slice as a whole (`impl<|T|> T$[]`), monomorphized per element type.
+// **A different element type is a different instance** (collapsed into one, both would pass with
+// one's type argument baked into the other).
+// ==========================================
+impl<|T|> T$[]
+    fn nth(r: Self, i: Sz): T
+        return r[i]
+
+    fn first_or(r: Self, d: T): T
+        return d if r.len == 0 else r[0]
+
+fn test_generic_impl_over_slices()
+    verdict.start("[Slice] a generic impl targeting a slice as a whole test...")
+    $ints: I32[3] = ::{ 7, 8, 9 }
+    si: = I32$[]::ints
+    assert(si.nth(1) == 8, "generic slice impl: the method is called on the I32 instance")
+
+    $bytes: U8[2] = ::{ 65, 66 }
+    sb: = U8$[]::bytes
+    assert(sb.first_or(0) == 65, "generic slice impl: the U8 instance is monomorphized separately")
+
+    empty: U8$[] = ::{ .ptr = null, .len = 0 }
+    assert(empty.first_or(9) == 9, "generic slice impl: length 0 falls back to the default too")
+    verdict.pass("`impl<|T|> T$[]` is an ordinary generic impl, monomorphized per element type.")
+
+fn test_subsequence_over_slices() //<
+    //< It checks a subsequence (`sub` / `sub_from` / `sub_mut`) works for any element type
+    //<
+    //< The three are in `std/chars`.
+    //< Caution: **Test it with more than `U8[]`**, or a return to `impl U8[]` goes unnoticed.
+    //< **Always include a slice from `List.slice()`**: `U8[]$[]` resolves differently from
+    //< `U8[][]`.
+    verdict.start("[Slice] a subsequence not minding the element type test...")
+    ints: I32[5] = ::{ 1, 2, 3, 4, 5 }
+    v: = I32[]::ints
+    mid: = v.sub(1, 3)
+    assert(mid.len == 3 && mid[0] == 2 && mid[2] == 4, "sub: a subsequence cuts out of an I32[]")
+    assert(v.sub_from(3).len == 2, "sub_from: to an I32[]'s end")
+    // Out of range is empty rather than a panic (`sub_count`'s convention).
+    assert(v.sub(9, 2).len == 0 && v.sub_from(0 - 1).len == 0, "sub: out of range returns empty")
+
+    words: = U8[][]::{ "a", "b", "c" }
+    assert(words.sub_from(1).len == 2, "sub_from: it cuts out of a slice of slices too")
+
+    s: U8[] = "kanso"
+    assert(s.sub(1, 3).equals("ans") && s.sub_from(2).equals("nso"), "sub: U8[] is as it was")
+
+    $room: I32[4] = ::{ 0, 0, 0, 0 }
+    mv: = I32$[]::room
+    win: = mv.sub_mut(1, 2)
+    win[0] = 42
+    assert(room[1] == 42, "sub_mut: what was cut out is writable")
+    verdict.pass("a subsequence is one function that works for any element type.")
+
+// ==========================================
+// Which of the four indexing methods a subscript resolves to, and its write permission
+// The four are `Index.get` / `Index_mut.set` / `Index_place.at` / `Index_ref.at_ref`. **No copy
+// is made.**
+// ==========================================
+priv struct Ro_view<|T|>
+    ptr: T@
+    len: Sz
+
+// What it points at is immutable, so it cannot implement `Index_place` (`at` promises to return
+// `Output$@`).
+impl<|T|> Ro_view<|T|>: Index_ref<|Sz, T|>
+    fn at_ref(r: Self, index: Sz, _file: U8[], _line: Sz): T@
+        return r.ptr + index
+
+priv struct Wide
+    a: I64
+    b: I64
+    c: I64
+    d: I64
+
+priv fn wide_at_ro(xs: ds.List<|Wide|>@, i: Sz): Wide@ //<
+    //< Taken by a read-only pointer (std's usual way to take one)
+    return xs[i]@
+
+fn test_index_ref_returns_a_place()
+    verdict.start("[Index] a subscript returning a read-only place test...")
+    $store: Wide[2] = ::{::{ .a = 1, .b = 2, .c = 3, .d = 4 },
+        ::{ .a = 5, .b = 6, .c = 7, .d = 8 } }
+    v: Ro_view<|Wide|> = ::{ .ptr = store[0]@, .len = 2 }
+
+    assert(v[1].c == 7I64, "index_ref: an element's field reads")
+
+    // **This is the real check.** A copy would give a temporary's address and would not match.
+    want: Wide@ = store[1]@
+    got: Wide@ = v[1]@
+    assert(got == want,
+        "index_ref: the element's address points at the original container (not a copy)")
+
+    // `List` is both `Index_place` and `Index_ref`; a read-only receiver uses the latter, which is
+    // still a place.
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    $l: = ds.List<|Wide|>.new(arena)
+    l.push(::{ .a = 9, .b = 8, .c = 7, .d = 6 })
+    l.push(::{ .a = 5, .b = 4, .c = 3, .d = 2 })
+    via_mut: Wide$@ = l.at(1)
+    via_ro: Wide@ = wide_at_ro(l@, 1)
+    same_place: = (Wide@)::via_mut == via_ro
+    assert(same_place,
+        "index_ref: a List through a read-only pointer points at the same element's place")
+    verdict
+        .pass("a subscript returning a read-only place points at the element's place without \
+            copying it.")
+
+// ==========================================
+// An `Index_place` implementation's receiver shape decides writing through a read-only frame.
+// **A borrowed view and an owned container are right to give different answers.**
+// Note: the case `index_readonly_receiver` in `tests/negative/slice.kspls` pins the rejected shape.
+// ==========================================
+priv struct Rw_view
+    ptr: I32$@
+    len: Sz
+
+// The receiver is `Self@`: the descriptor is only read, returning the mutable pointer inside.
+impl Rw_view: Index_place<|Sz, I32|>
+    fn at(r: Self@, index: Sz, _file: U8[], _line: Sz): I32$@
+        return r.ptr + index
+
+priv struct View_frame
+    v: Rw_view
+
+priv fn poke(f: View_frame@) //< takes the frame **read-only**
+    f.v[0] = 99
+    f.v[1] += 5
+    p: I32$@ = f.v[2]@
+    p$ = 77
+
+fn test_view_receiver_decides_write_permission()
+    verdict
+        .start("[Index] the receiver shape the implementation declares decides the permission \
+            test...")
+    $store: I32[3] = ::{ 0, 10, 0 }
+    f: View_frame = ::{ .v = Rw_view::{ .ptr = store[0]@, .len = 3 } }
+
+    // Caution: **All three must pass.** Two places apply the rule; with only one tested, an
+    // assignment that passes while `f.v[2]@` is rejected goes unnoticed.
+    poke(f@)
+    assert(store[0] == 99, "view: it assigns through a read-only frame")
+    assert(store[1] == 15, "view: it compound-assigns through a read-only frame")
+    assert(store[2] == 77, "view: a mutable address can be taken through a read-only frame")
+    verdict
+        .pass("a view giving `at(r: Self@, …)` can write to an element through a read-only frame \
+            too.")
+
+fn test_slice_made_in_the_statement() //< a slice made in the indexing statement is a slice
+    //<
+    //< Caution: **Use an element type nothing else in the file slices.** Its instance is still
+    //< queued when the subscript is read; read as implementing nothing, the subscript took the
+    //< built-in array route and stopped the C generation (`I32[]::{ 1, 2 }[i]`, `(I64[]::a)[i]`).
+    verdict.start("[Index] a slice made in the indexing statement test...")
+    i: Sz = 1
+    from_literal: = I16[]::{ 10, 20, 30 }[i]
+    arr: U16[3] = ::{ 4, 5, 6 }
+    from_cast: = (U16[]::arr)[i]
+    assert(from_literal == 20I16 && from_cast == 5U16,
+        "the element at the index comes back from a literal and from a cast alike")
+    verdict.pass("A slice made in the indexing statement is indexed as any slice.")

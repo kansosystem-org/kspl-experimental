@@ -11,7 +11,7 @@ function kspageKeys(ks) {
   nudgeFrame, ARROW_STEPS, scratch, nums } = ks;
 
   // The non-character keys pressed, newest last and **capped**, for the debug log (the history
-  // holds only changes, so Enter, an arrow that did not move and F4 leave no trace).
+  // holds only changes, so Enter and an arrow that did not move leave no trace).
   // Caution: **A character key is not recorded** (it is the document's contents, which the log
   // never carries); a longer key name, or a key held with Ctrl, Alt or Meta, is.
   const pressed = [];
@@ -344,15 +344,6 @@ function kspageKeys(ks) {
     else if (mod && (e.key === "y" || e.key === "Y")) {
       e.preventDefault();
       ks.api.redo();
-      return;
-    }
-    // **F4 repeats the last command** at the cursor (Excel's second key, free in a page);
-    // **redo keeps Ctrl+Y** (Excel and Word put both on one key, so which one runs is unclear).
-    // Caution: **Say why when it refuses** (a key that silently works only sometimes annoys).
-    else if (e.key === "F4" && !mod) {
-      e.preventDefault();
-      if (ks.api.words) ks.api.words(ks.api.again());
-      else ks.api.again();
       return;
     }
     // **Ctrl+K opens the link field** (as in Word, Excel and PowerPoint), the selection as the

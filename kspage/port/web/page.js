@@ -36,8 +36,6 @@
     app.headRoom = () => chrome.getBoundingClientRect().bottom;
     // Ctrl+K and the ribbon reach a panel's field here (the key handler knows only the document).
     app.reach = (at, to) => ui.reach(at, to);
-    // Shows a key's refusal with its reason (F4) in the status bar; empty text clears the line.
-    app.words = (why) => { if (why) { ui.deny(why); } else { ui.say(""); } };
     // Caution: **The right panel's top is the tools' bottom, passed as a CSS variable** (it moves).
     const headRoomVar = () => {
       document.documentElement.style.setProperty("--head",
@@ -327,6 +325,10 @@
     app.onNote = () => {
       tell(ui.flipNote(), "", "This slide has no note");
     };
+    // Redraws the status bar alone, for a change no redraw of the document follows (an armed
+    // tool, a save that makes the text the file's again).
+    ui.restatus = () =>
+      ui.showStatus(app.surfaceCount(), app.cellFrame() !== null, app.frameRect());
     // Marks the armed tool, **and unmarks it once it is used**.
     app.onArm = (tool) => {
       // **Mark the collapsed list's knob too** (`group`, named by the shape), or it hides.
@@ -335,7 +337,7 @@
           && (key.id === tool.id || key.id === tool.group);
         key.classList.toggle("on", armed);
       }
-      ui.showStatus(app.surfaceCount(), app.cellFrame() !== null, app.frameRect());
+      ui.restatus();
     };
     // **Apply the chrome once** — the first redraw came before the notification was wired.
     app.onRedraw();
@@ -344,7 +346,7 @@
     // The one handle for driving it from outside; it opens a document from text too (as `?doc=…`).
     // Caution: **The check does not start the page with a URL**, or every section would change.
     app.openDoc = ui.openDoc;
-    // Which text is open now, **for back and forward** ("which file, and where").
+    // Which file the text open now lives in (empty: none), **read by the check**.
     app.pathNow = ui.pathNow;
     // Saving and restoring a draft: **the check calls the ones a person uses**, and `keepSync` by
     // name so as not to wait out the throttle (it would break the day the delay changes).

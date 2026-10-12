@@ -2,7 +2,8 @@
 //<
 //< The fixtures in [`../negative`](../negative) and [`../lint`](../lint) are one mechanism: a
 //< source whose opening comment holds `// EXPECT:` / `// EXPECT-NOT:` / `// ARGS:`, compiled once
-//< and its output matched.
+//< and its output matched. A file may hold several such sources, each opened by a line
+//< `// ==== case <name>` (`case_head`).
 //< Caution: **Do not use one entry point split by argument.** Only the input and ksplc decide
 //< `ksplc run`'s directory, so the same script run **at the same time** with other arguments
 //< contends for it (as `make -j test-suites` does).
@@ -27,14 +28,101 @@ priv const fixture_exts: U8[][_] = ::{ ".kspls", ".kspl" } //< the fixtures' ext
     //< `.kspls` (the misaligned column, in `../../pipeline.kspls`) would go silent unnoticed. The
     //< longer one comes first (the reason is at `strip_fixture_ext`).
 
-priv fn strip_fixture_ext(name: U8[]): U8[] //< drops a fixture's extension from a name
+priv fn fixture_ext(name: U8[]): U8[] //< a fixture's extension, empty for any other name
     //<
-    //< Caution: **Try the longer one first** — strip `.kspl` from a `.kspls` and the trailing `s`
+    //< Caution: **Try the longer one first** — read `.kspl` off a `.kspls` and the trailing `s`
     //< is left.
     for ext in fixture_exts
         if name.ends_with(ext)
-            return name.strip_suffix(ext)
-    return name
+            return ext
+    return ""
+
+priv fn strip_fixture_ext(name: U8[]): U8[] //< drops a fixture's extension from a name
+    return name.strip_suffix(fixture_ext(name))
+
+priv const case_head: U8[] = "// ==== case " //< opens one case, at the start of its line
+    //<
+    //< **A case is the text from the line after its head to the next head**, so it reads as the
+    //< file it would be alone: a line number in a mark counts from its head. Its name names the
+    //< file it is compiled as, in the suite's working directory.
+
+struct Fixture //< one source as it is compiled
+    label: U8[] //< its name in the verdict: the file, then the case if the file holds several
+    path: U8[] //< the source handed to the compiler
+    stem: U8[] //< the source's name without the extension, which names its generated C too
+    body: U8[]
+
+priv fn case_starts(body: U8[], arena: Arena$@): List<|Sz|> //< where each case's head begins
+    $at: = List<|Sz|>.new(arena)
+    $p: Sz = 0
+    for p < body.len
+        if body.sub_from(p).starts_with(case_head)
+            at.push(p)
+        switch body.sub_from(p).find_char('\n')
+        case .some(nl)
+            p += nl + 1
+        case .none
+            break
+    return at
+
+priv fn is_case_name(name: U8[]): Bool //< lower case letters, digits and `_`, at least one
+    for c in name
+        if !(c.is_lower() || c.is_digit() || c == '_')
+            return false
+    return name.len > 0
+
+priv fn take_name(stem: U8[], taken: List<|U8[]|>$@): Bool //< claims a name; false if taken
+    //<
+    //< **A name is one file in `work`**, the source and its generated C: a second case under it
+    //< would overwrite the first, and one case's result would be read as the other's.
+    if taken.any(fn(t: U8[]; stem: U8[]): Bool {
+        return t.equals(stem);
+    })
+        return false
+    taken.push(stem)
+    return true
+
+priv fn gather(name: U8[], path: U8[], body: U8[], work: U8[], into: List<|Fixture|>$@,
+    taken: List<|U8[]|>$@, arena: Arena$@): U8[] //<
+        //< Adds a file's cases, and returns why it cannot where it cannot
+        //<
+        //< **A file with no case head is one case, compiled where it stands.** Each case of the
+        //< others is written into `work` under its own name and compiled there.
+        //< Caution: **Refuse a mark before the first head**: it belongs to no case, so it would
+        //< check nothing.
+    file: = sys.get_file_name(path)
+    starts: = case_starts(body, arena)
+    if starts.len == 0
+        if !take_name(strip_fixture_ext(file), taken)
+            return "another fixture of this suite has the same name"
+        into
+            .push(Fixture::{ .label = arena.text().s("\{name\}/\{file\}").take(), .path = path,
+            .stem = strip_fixture_ext(file), .body = body })
+        return ""
+    lead: = harness_markers.markers(body.sub(0, starts.get(0)))
+    if lead.expect.len + lead.deny.len + lead.args.len > 0
+        return "a mark stands before the first case, where it belongs to none"
+    for i in Range.asc(starts.len)
+        head: = body.sub_from(starts.get(i))
+        nl: = head.find_char('\n').unwrap_or(head.len)
+        stem: = head.sub(case_head.len, nl - case_head.len).trim_spaces()
+        if !is_case_name(stem)
+            return arena.text()
+                .s("the case head '\{head.sub(0, nl)\}' names no case (lower case letters, digits \
+                    and `_`)").take()
+        if !take_name(stem, taken)
+            return arena.text().s("another fixture of this suite is named \{stem\} too").take()
+        end: = starts.get(i + 1) if i + 1 < starts.len else body.len
+        from: = starts.get(i) + nl + 1 if nl < head.len else body.len
+        text: = body.sub(from, end - from) if from < end else ""
+        written: = fs.join(work,
+            arena.text().s(stem).s(fixture_ext(file)).take(), arena)
+        io.write_file(written, text) catch
+            return arena.text().s("the case \{stem\} cannot be written to \{written\}").take()
+        into
+            .push(Fixture::{ .label = arena.text().s("\{name\}/\{file\}: \{stem\}").take(),
+            .path = written, .stem = stem, .body = text })
+    return ""
 
 priv fn fixtures(subdir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Gathers the sources under a folder of this package, in lexicographic order
@@ -50,7 +138,7 @@ priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
     //< Searches for a diagnostic whose "expected" and "got" strings are the same
     //<
     //< **Such a diagnostic tells the reader nothing.** It appears where the types differ at a level
-    //< with no written notation (a type's outermost immutability and the like). A per-fixture
+    //< with no written notation (a type's outermost immutability and the like). A case's
     //< EXPECT cannot catch it, so every case is checked.
     head: = "expected '"
     mid: = "', but got '"
@@ -95,6 +183,23 @@ priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, are
         list.push(out_c)
     return harness.ksplc_argv(list.slice())
 
+fn gather_files(name: U8[], files: U8[][], work: U8[], arena: Arena$@): List<|Fixture|> //<
+    //< Every case of the files, each where it is compiled
+    //<
+    //< A file that cannot be read or split is reported as a failure under its own name and left
+    //< out, so its cases are never counted as passing.
+    $all: = List<|Fixture|>.new(arena)
+    $taken: = List<|U8[]|>.new(arena)
+    for path in files
+        label: = arena.text().s("\{name\}/\{sys.get_file_name(path)\}").take()
+        body: = io.read_file(path) catch
+            verdict.check(label, false, "the fixture cannot be read")
+            continue
+        why: = gather(name, path, body, work, all@, taken@, arena)
+        if why.len > 0
+            verdict.check(label, false, why)
+    return all
+
 fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow: Bool,
     arena: Arena$@) //<
         //< Runs one suite, the generated C kept apart per fixture
@@ -107,9 +212,7 @@ fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow
         verdict.check(arena.text().s("there are fixtures in \{subdir\}").take(), false,
             "there is not one")
         return
-    work: = harness.sandbox(arena.text().s("expect_\{name\}").take()) catch
-        verdict.check(name, false, "the workspace cannot be made")
-        return
+    work: = harness.sandbox(arena.text().s("expect_\{name\}").take())
     if grow
         $made: = harness_grow.write_all(work, arena)
         if !verdict.check(arena.text().s("\{name\}: the depth material can be assembled").take(),
@@ -118,26 +221,22 @@ fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow
             return
         for path in made.slice()
             files.push(path)
-    io.out().s("# \{name\}: \{files.len\} items (parallelism \{verdict.jobs()\})\n")
+    $all: = gather_files(name, files.slice(), work, arena)
+    io.out().s("# \{name\}: \{all.len\} items (parallelism \{verdict.jobs()\})\n")
     $cases: = List<|U8[]|>.new(arena)
     $marks: = List<|harness_markers.Markers|>.new(arena)
     $jobs: = List<|subproc.Job|>.new(arena)
-    for path in files
-        body: = io.read_file(path) catch
-            verdict.check(arena.text().s("\{name\}/\{sys.get_file_name(path)\}").take(), false,
-                "the fixture cannot be read")
-            continue
-        $m: = harness_markers.markers(body)
-        stem: = strip_fixture_ext(sys.get_file_name(path))
-        out_c: = fs.join(work, arena.text().s("\{stem\}.c").take(), arena)
+    for f in all.slice()
+        $m: = harness_markers.markers(f.body)
+        out_c: = fs.join(work, arena.text().s("\{f.stem\}.c").take(), arena)
         jobs
             .push(subproc.Job::{ .argv =
-            fixture_argv(path, out_c, m.args.slice(), lint_mode, arena), .cwd = work })
-        cases.push(path)
+            fixture_argv(f.path, out_c, m.args.slice(), lint_mode, arena), .cwd = work })
+        cases.push(f.label)
         marks.push(m)
     outs: = harness.run_all(jobs.slice(), name)
     for i in Range.asc(cases.len)
-        case_name: = arena.text().s("\{name\}/\{sys.get_file_name(cases.get(i))\}").take()
+        case_name: = cases.get(i)
         r: = outs.get(i)
         $m: = marks.get(i)
         // Caution: Do not accept a fixture with no mark. A case matching nothing becomes a green

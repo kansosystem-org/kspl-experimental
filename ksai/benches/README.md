@@ -1,8 +1,6 @@
 # ksai/benches
 
-This folder times one training step of ksai's simplest layer, written four ways, so you can see how fast KSPL's matrix code is beside C and numpy on your own machine. Once `make` has built the compiler, one command runs it from the repository's root: `ksplc run ksai/benches/run_bench.kspls 1`.
-
-**The speed bench for one training step of a Linear layer** (a layer that multiplies its input by a weight matrix). That step is three matrix products: forward `Y=X@W`, and backward `dW=Xᵀ@dY` and `dX=dY@Wᵀ` (`ᵀ` is the transpose, the matrix flipped over its diagonal). It runs pure KSPL, KSPL passing `matmul` to OpenBLAS, a C reference and numpy on exactly the same work, at the same sizes, in float32. It is an indirect check of "training faster means finishing the same work on less energy".
+**This folder times one training step of ksai's simplest layer, a Linear layer (one that multiplies its input by a weight matrix), written four ways, so you can see how fast KSPL's matrix code is beside C and numpy on your own machine.** That step is three matrix products: forward `Y=X@W`, and backward `dW=Xᵀ@dY` and `dX=dY@Wᵀ` (`ᵀ` is the transpose, the matrix flipped over its diagonal). It runs pure KSPL, KSPL passing `matmul` to OpenBLAS, a C reference and numpy on exactly the same work, at the same sizes, in float32. It is an indirect check of "training faster means finishing the same work on less energy". Once `make` has built the compiler, one command runs it from the repository's root: `ksplc run ksai/benches/run_bench.kspls 1`.
 
 ## Run it
 

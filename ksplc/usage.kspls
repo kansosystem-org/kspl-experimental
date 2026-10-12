@@ -11,7 +11,6 @@ import "std/argp"
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/sys"
 
@@ -97,8 +96,6 @@ fn refuse_unread_std_dir(p: argp.Parser$@, topic: Info_topic) //<
             answer (only std-dir's)\n").take()
     error_exit(msg)
 
-const clean_topics: U8[] = "cache"
-
 fn flag_faces(flag: U8[]): U8[] //< the subcommands an option applies to
     //<
     //< **The table is here and nowhere else, and every option has a row**: empty is refused at
@@ -138,19 +135,6 @@ fn flag_faces(flag: U8[]): U8[] //< the subcommands an option applies to
         flag.equals("--emit-surface") || flag.equals("--library")
         return "compile"
     return ""
-
-fn refuse_retired_option(arg: U8[]) //<
-    //< It refuses `--target` and `--emit-interface`, naming what to write instead
-    //<
-    //< **No second spelling stays** (Principle 6 in docs/DESIGN.md). `--target` reads as the
-    //< machine as readily as the output's language; a library's interface is named by `--library=`.
-    if arg.equals("--target") || arg.starts_with("--target=")
-        error_exit("Error: '--target' is not an option: write '--to=c|llvm' for the language the \
-            output is written in, or '--machine=<triple>' for the machine it is for\n")
-    if arg.equals("--emit-interface") || arg.starts_with("--emit-interface=")
-        error_exit("Error: '--emit-interface' is not an option: '--library=<FILE>' builds the \
-            library and writes its interface to FILE (repeat it for a second form, as \
-            '--library=greet.h --library=greet_api.kspls')\n")
 
 const machine_faces: U8[] = "compile lint lsp lsp-worker run build info" //<
     //< The subcommands that lay values out, and so need a machine ksplc has widths for
@@ -205,12 +189,7 @@ fn check_flag_faces(p: argp.Parser$@, face: U8[]) //<
     //< It rejects an option that does not apply to this subcommand
     //<
     //< The error names the subcommands the option applies to.
-    arena: = Arena.new(4096)
-    defer arena.free()
-    $names: = List<|U8[]|>.new(arena)
-    defer names.free()
-    p.append_names(names@)
-    for name in names
+    for name in option_names(p)
         faces: = flag_faces(name)
         // Caution: **Refuse an option with no row, given or not.** Read as "it applies everywhere",
         // a row left out lets the option be written where it does nothing.
@@ -228,17 +207,17 @@ fn check_flag_faces(p: argp.Parser$@, face: U8[]) //<
                 on: \{faces\})\n")
         error_exit(m.slice())
 
+priv fn option_names(p: argp.Parser$@): List<|U8[]|> //< every option the parser declares
+    $names: = List<|U8[]|>.new(base_core.arena)
+    p.append_names(names@)
+    return names
+
 fn refuse_empty_values(p: argp.Parser$@) //<
     //< It rejects an option given with nothing after its `=` (`--emit-deps=`)
     //<
     //< **No option of ksplc means anything by an empty value**: taken, it would read as the default
     //< or be ignored, and the writer would believe it took effect.
-    arena: = Arena.new(4096)
-    defer arena.free()
-    $names: = List<|U8[]|>.new(arena)
-    defer names.free()
-    p.append_names(names@)
-    for name in names
+    for name in option_names(p)
         if p.saw_empty(name)
             error_exit(base_core.arena.text().s("Error: \{argp.Argp_error.missing_value(name)\}\n")
                 .take())
@@ -281,7 +260,7 @@ priv const faces: Face[11] = ::{ Face::{ .name = "compile",
     Face::{ .name = "lint", .form = "ksplc lint [options...] <input.kspl>" },
     Face::{ .name = "lsp", .form = "ksplc lsp" },
     Face::{ .name = "info", .form = "ksplc info <subject>" },
-    Face::{ .name = "clean", .form = "ksplc clean <subject>" },
+    Face::{ .name = "clean", .form = "ksplc clean" },
     Face::{ .name = "emit-runtime", .form = "ksplc emit-runtime [options...] <output.c>" },
     Face::{ .name = "explain", .form = "ksplc explain <code>" },
     Face::{ .name = "doc", .form = "ksplc doc <file>[.<name>] | <folder>" } } //<
@@ -318,25 +297,17 @@ fn print_usage(out: Writer) //<
         .dedent()
     defer usage.free()
     out.s(usage.slice())
-    print_topics(out, "info", info_topics())
-    print_topics(out, "clean", clean_topics)
+    out.s("\ninfo's subjects: ").s(info_topics()).c('\n')
     if cli != null
         print_faces_and_flags(out, cli)
         out.c('\n')
         cli.print_options(out)
 
-fn print_topics(out: Writer, face: U8[], topics: U8[])
-    out.s("\n").s(face).s("'s subjects: ").s(topics).c('\n')
-
 fn print_faces_and_flags(out: Writer, p: argp.Parser$@) //<
     //< It lists the options that apply, per subcommand
     //<
     //< Caution: **Build the list from `flag_faces`**; a list written by hand drifts silently.
-    arena: = Arena.new(4096)
-    defer arena.free()
-    $names: = List<|U8[]|>.new(arena)
-    defer names.free()
-    p.append_names(names@)
+    names: = option_names(p)
     out
         .s("\nThe options that take effect per subcommand (an option not here is an error on that \
             subcommand):\n")

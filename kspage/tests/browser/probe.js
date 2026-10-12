@@ -150,7 +150,7 @@
   // **while a wait is in flight it waits again**, and it **says what is left by name**.
   // Caution: **Where nothing is left, say nothing** (a passing round's mark would land behind the
   // answer). Only a `waitFor` section uses it: a wait on an event is not on the count, so it reads
-  // 0 once armed (`outside.js` is that shape and keeps its length by hand).
+  // 0 once armed (`open.js`'s pictures are that shape and keeps its length by hand).
   function netFor(what, left, free) {
     const look = () => {
       if (left().length === 0) {
@@ -289,6 +289,10 @@
       ime.dispatchEvent(ev);
       return ev;
     };
+    // **Type by the same way as a person**: an `input` event, the one settlement `keys.js` takes
+    // characters from (a key event alone is no typing).
+    const typeIn = (t) => ime.dispatchEvent(new InputEvent("input",
+      { data: t, inputType: "insertText", bubbles: true }));
     // Caution: **Undo by the key** (called directly, a key not wired to the body walks past); it
     // returns the event, as `keyIn` does.
     const undoKey = () => keyIn("z", { ctrlKey: true });
@@ -406,7 +410,7 @@
       notAPath: notAPath,
       local: localHere,
       check: check, waiting: waiting, report: report, app: app, canvas: canvas, ime: ime,
-      spot: spot, press: press, pressAt: pressAt, keyIn: keyIn, undoKey: undoKey,
+      spot: spot, press: press, pressAt: pressAt, keyIn: keyIn, typeIn: typeIn, undoKey: undoKey,
       menuOf: menuOf, openMenu: openMenu, findCell: findCell, findBlock: findBlock,
       flyLabels: flyLabels, flyNow: flyNow, flyTick: flyTick, flyPick: flyPick,
       savedBlocks: savedBlocks, tableCount: tableCount, rowCount: rowCount, cellCount: cellCount,

@@ -1,3 +1,4 @@
+//< Training: gradients, the layers' first weights, the optimizers' pairing and their steps
 import "ksai/attention_train" as ai_attn_train
 import "ksai/block_train" as ai_block_train
 import "ksai/grad" as ai_grad
@@ -6,10 +7,19 @@ import "ksai/nn_grad" as ai_nn_grad
 import "ksai/optim" as ai_optim
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
-import "ksai/tests/common_test"
 import "std/mem" { Arena }
+import "std/prng"
 import "std/str"
 import "std/verdict"
+
+// ==========================================
+// The sum of a tensor's elements, as the loss the gradient checks differentiate.
+// ==========================================
+fn tsum_f64(t: Tensor<|F64|>): F64
+    $s: = 0.0
+    for i in Range.asc(t.size)
+        s += (t.data + i)$
+    return s
 
 priv fn make_logits(a: F32, b: F32, c: F32, d: F32, arena: Arena$@): Tensor<|F32|>
     shape: Sz[1] = ::{ 4 }
@@ -250,10 +260,10 @@ fn test_attention_grad(arena: Arena$@)
         saved: = (x.data + k)$
         (x.data + k)$ = saved + eps
         cp: = att.train_forward(x)
-        l_plus: = common_test.tsum_f64(cp.out)
+        l_plus: = tsum_f64(cp.out)
         (x.data + k)$ = saved - eps
         cm: = att.train_forward(x)
-        l_minus: = common_test.tsum_f64(cm.out)
+        l_minus: = tsum_f64(cm.out)
         (x.data + k)$ = saved
         numeric: = (l_plus - l_minus) / (2.0 * eps)
         analytic: = (dx.data + k)$
@@ -261,13 +271,13 @@ fn test_attention_grad(arena: Arena$@)
         ad: = -diff if diff < 0.0 else diff
         assert(ad < 1.0e-4, "Attn: dX must match finite difference")
     // L=Σout decreases under gradient descent (backward pass and update together)
-    before: = common_test.tsum_f64(att.train_forward(x).out)
+    before: = tsum_f64(att.train_forward(x).out)
     for _step in Range.asc(20)
         $cc: = att.train_forward(x)
         d1: = Tensor<|F64|>.new(cc.out.shape, arena)
         d1.fill(1.0)
         att.backward(cc@, d1, 0.01)
-    after: = common_test.tsum_f64(att.train_forward(x).out)
+    after: = tsum_f64(att.train_forward(x).out)
     assert(after < before, "Attn: SGD must reduce the sum-of-outputs loss")
     verdict
         .pass(arena.text()
@@ -297,9 +307,9 @@ fn test_block_grad(arena: Arena$@)
     for k in Range.asc(x.size)
         saved: = (x.data + k)$
         (x.data + k)$ = saved + eps
-        l_plus: = common_test.tsum_f64(blk.train_forward(x).out)
+        l_plus: = tsum_f64(blk.train_forward(x).out)
         (x.data + k)$ = saved - eps
-        l_minus: = common_test.tsum_f64(blk.train_forward(x).out)
+        l_minus: = tsum_f64(blk.train_forward(x).out)
         (x.data + k)$ = saved
         numeric: = (l_plus - l_minus) / (2.0 * eps)
         analytic: = (dx.data + k)$
@@ -307,15 +317,117 @@ fn test_block_grad(arena: Arena$@)
         ad: = -diff if diff < 0.0 else diff
         assert(ad < 1.0e-3, "Block: dX must match finite difference")
     // Σout decreases under gradient descent (the whole block's training)
-    before: = common_test.tsum_f64(blk.train_forward(x).out)
+    before: = tsum_f64(blk.train_forward(x).out)
     for _step in Range.asc(20)
         $cc: = blk.train_forward(x)
         d1: = Tensor<|F64|>.new(cc.out.shape, arena)
         d1.fill(1.0)
         blk.backward(cc@, d1, 0.01)
-    after: = common_test.tsum_f64(blk.train_forward(x).out)
+    after: = tsum_f64(blk.train_forward(x).out)
     assert(after < before, "Block: SGD must reduce the sum-of-outputs loss")
     verdict
         .pass(arena.text()
         .s("Transformer_block's backward pass matches numerical differentiation (F64) ")
         .s("(Σout \{before\} -> \{after\})").take())
+
+// ==========================================
+// Initializing a layer. **`nn.*.new`'s default is one value in every element**; trained from
+// there, every unit gets the same gradient and the units stay identical, while **the loss still
+// goes down**. So the test holds `init_uniform` to **randomize every weight in the layer**, for
+// the weights listed below (Principle 8).
+// Caution: **A weight added to a layer is listed here in the same commit as in `init_uniform`.**
+// ==========================================
+
+priv fn all_same(t: Tensor<|F64|>): Bool //< is every element the same value?
+    if t.size == 0
+        return true
+    first: = (t.data + 0)$
+    for i in Range.asc(t.size)
+        if (t.data + i)$ != first
+            return false
+    return true
+
+fn test_init_breaks_symmetry()
+    verdict.start("[NN] init_uniform spreads every last weight in a layer...")
+    work: = Arena.new(1024 * 1024)
+    defer work.free()
+    $blk: = ai_nn.Transformer_block<|F64|>.new(4, 8, 2, 1.0e-5, work)
+    // First pins that the default is one repeated value. If that breaks, the checks below pass
+    // without proving anything.
+    assert(all_same(blk.attention.wq.weights),
+        "NN: new's default has to be the same value in every element")
+    assert(all_same(blk.ffn.fc1.weights),
+        "NN: new's default has to be the same value in every element")
+
+    $rng: = prng.Prng.new(7U64)
+    blk.init_uniform(rng@, 0.1)
+    assert(!all_same(blk.attention.wq.weights), "NN: init_uniform has to spread wq")
+    assert(!all_same(blk.attention.wk.weights), "NN: init_uniform has to spread wk")
+    assert(!all_same(blk.attention.wv.weights), "NN: init_uniform has to spread wv")
+    assert(!all_same(blk.attention.wo.weights), "NN: init_uniform has to spread wo")
+    assert(!all_same(blk.ffn.fc1.weights), "NN: init_uniform has to spread fc1")
+    assert(!all_same(blk.ffn.fc2.weights), "NN: init_uniform has to spread fc2")
+    // **Do not randomize the normalization's weights.** Their initial value for training is 1.0
+    // (randomizing them makes the scale right after normalizing vary from unit to unit).
+    assert(all_same(blk.attention_norm.weight) &&
+        (blk.attention_norm.weight.data + 0)$ == 1.0,
+        "NN: init_uniform must not touch the normalization's weights")
+    assert(all_same(blk.ffn_norm.weight) && (blk.ffn_norm.weight.data + 0)$ == 1.0,
+        "NN: init_uniform must not touch the normalization's weights")
+
+    $emb: = ai_nn.Embedding<|F64|>.new(6, 4, work)
+    assert(all_same(emb.weight), "NN: Embedding's default is the same value in every element too")
+    emb.init_uniform(rng@, 0.1)
+    assert(!all_same(emb.weight), "NN: init_uniform has to spread the embedding")
+    verdict.pass("")
+
+// ==========================================
+// The `Updater` against the optimizers it gives each weight. **What is tested is the pairing**:
+// under Adam, the n-th weight passed in a step keeps the n-th state across steps, so the weights
+// end up where one `Adam` per weight would move them.
+// ==========================================
+priv fn filled(n: Sz, v: F32, arena: Arena$@): Tensor<|F32|> //< a vector of n, every element v
+    shape: Sz[1] = ::{ n }
+    t: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    t.fill(v)
+    return t
+
+priv fn same(a: Tensor<|F32|>, b: Tensor<|F32|>): Bool //< element for element, bit for bit
+    for i in Range.asc(a.size)
+        if (a.data + i)$ != (b.data + i)$
+            return false
+    return true
+
+fn test_updater_pairs_states(arena: Arena$@) //<
+    //< Two weights of different sizes, three steps, gradients differing by step and weight
+    //<
+    //< Caution: **Keep the gradients differing**: with one gradient for all, a weight moved by
+    //< another's state still comes out right.
+    verdict.start("[Optim] the Updater keeps each weight's own Adam state across steps")
+    a: = filled(3, 1.0, arena)
+    b: = filled(5, -1.0, arena)
+    a_ref: = filled(3, 1.0, arena)
+    b_ref: = filled(5, -1.0, arena)
+    $u: = ai_optim.Updater<|F32|>.adam(0.1)
+    defer u.free()
+    $adam_a: = ai_optim.Adam<|F32|>.new_default(a_ref, 0.1)
+    $adam_b: = ai_optim.Adam<|F32|>.new_default(b_ref, 0.1)
+    for step in Range.asc(3)
+        ga: = filled(3, F32::(F64::(step + 1) * 0.5), arena)
+        gb: = filled(5, F32::(F64::(step + 1) * -0.25), arena)
+        u.begin_step()
+        u.update(a, ga)
+        u.update(b, gb)
+        adam_a.step(a_ref, ga)
+        adam_b.step(b_ref, gb)
+    assert(same(a, a_ref) && same(b, b_ref), "the Updater's Adam must move each weight as its own")
+    s: = filled(3, 1.0, arena)
+    $s_ref: = filled(3, 1.0, arena)
+    $sgd: = ai_optim.Updater<|F32|>.sgd(0.1)
+    defer sgd.free()
+    g: = filled(3, 0.5, arena)
+    sgd.begin_step()
+    sgd.update(s, g)
+    s_ref.sgd_step(g, 0.1)
+    assert(same(s, s_ref), "the Updater's SGD must be sgd_step")
+    verdict.pass("each weight keeps its own Adam state across steps, and SGD is sgd_step")

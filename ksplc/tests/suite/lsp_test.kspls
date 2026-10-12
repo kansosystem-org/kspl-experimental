@@ -7,21 +7,15 @@
 //< makes the queries only the whole tree can answer (a word read across every package, callers in
 //< another package's demos), on the same client.
 import "ksplc/tests/support/harness"
-import "ksplc/tests/support/lsp_bound"
-import "ksplc/tests/support/lsp_calls" { heavy_ms, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_client"
-import "ksplc/tests/support/lsp_docs"
-import "ksplc/tests/support/lsp_marks"
-import "ksplc/tests/support/lsp_outline"
-import "ksplc/tests/support/lsp_package"
+import "ksplc/tests/support/lsp_hover"
+import "ksplc/tests/support/lsp_outline" + { heavy_ms, incoming, off_words, prepare_fn,
+    read_tokens }
 import "ksplc/tests/support/lsp_pick"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, has_name,
     is_missing }
 import "ksplc/tests/support/lsp_recover"
-import "ksplc/tests/support/lsp_restart"
-import "ksplc/tests/support/lsp_semtok" { off_words, read_tokens }
 import "ksplc/tests/support/lsp_spell"
-import "ksplc/tests/support/lsp_values"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -389,13 +383,13 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
         return
     defer c.free()
     _init: =
-        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
         fallback .null_val
     for uri in U8[][]::{ closed_uri, open_uri }
         c.notify("textDocument/didOpen", lsp_client.did_open(uri, close_src, arena),
             lsp_client.send_ms, arena) catch {}
     lsp_client.close(c@, closed_uri, arena)
-    c.notify("$/ksplTestCrash", empty_obj(arena), lsp_client.send_ms, arena) catch {}
+    c.notify("$/ksplTestCrash", lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
     stays: = probe_hover(c@, open_uri, arena)
     verdict.check("the crash hook ends the worker before the restore is checked",
         gave_up(c@, crash_log, arena), lsp_client.why(c@, "", arena))
@@ -407,10 +401,6 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
     ok10: = gone.find_str("I64").is_none()
     verdict.check("a document that was didClose is not restored after the worker is remade", ok10,
         d5)
-
-priv fn empty_obj(arena: Arena$@): json.Val
-    $b: = Json_builder.new(arena)
-    return b.obj().build()
 
 priv fn check_cfg(c: jsonrpc.Client$@, exe: U8[], arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena),
@@ -437,7 +427,7 @@ priv fn check_cfg(c: jsonrpc.Client$@, exe: U8[], arena: Arena$@)
         return
     defer c2.free()
     _init: =
-        c2.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch
+        c2.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
         fallback .null_val
     c2.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena),
         lsp_client.send_ms, arena) catch {}
@@ -497,10 +487,7 @@ priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Val //<
         fallback .null_val
 
 priv fn check_walk(exe: U8[], arena: Arena$@)
-    dir: = harness.sandbox("lsp_walk") catch
-        verdict.check("it reaches the caller with no file list passed in", false,
-            "cannot make a working directory")
-        return
+    dir: = harness.sandbox("lsp_walk")
     fs.write_tree(dir, U8[][]::walk_rels, U8[][]::walk_bodies, arena) catch
         verdict.check("it reaches the caller with no file list passed in", false,
             "it cannot be placed in the working directory")
@@ -539,9 +526,7 @@ priv fn dropped_reason(c: jsonrpc.Client$@, arena: Arena$@): U8[] //<
 
 priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
     name: = "what sits under an unraised #cfg keeps its reason after a references request"
-    dir: = harness.sandbox("lsp_cfg_walk") catch
-        verdict.check(name, false, "cannot make a working directory")
-        return
+    dir: = harness.sandbox("lsp_cfg_walk")
     fs.write_tree(dir, U8[][]::{ "cfg_walk.kspls" }, U8[][]::{ cfg_walk_src }, arena) catch
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
@@ -551,7 +536,7 @@ priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
         return
     defer c.free()
     _init: =
-        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
         fallback .null_val
     c.notify("textDocument/didOpen",
         lsp_client.did_open("cfg_walk.kspls", cfg_walk_src, arena), lsp_client.send_ms, arena) catch {}
@@ -581,9 +566,7 @@ priv const relay_bodies: U8[][3] = ::{ "fn hit(): I32\n    return 0\n",
 
 priv fn check_generic_caller(exe: U8[], arena: Arena$@)
     name: = "a caller inside a generic is found though its instance is made by a body not naming it"
-    dir: = harness.sandbox("lsp_relay") catch
-        verdict.check(name, false, "cannot make a working directory")
-        return
+    dir: = harness.sandbox("lsp_relay")
     fs.write_tree(dir, U8[][]::relay_rels, U8[][]::relay_bodies, arena) catch
         verdict.check(name, false, "it cannot be placed in the working directory")
         return
@@ -593,7 +576,7 @@ priv fn check_generic_caller(exe: U8[], arena: Arena$@)
         return
     defer c.free()
     _ready: =
-        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
         verdict.check(name, false, "initialize does not return")
         return
     prep: = prepare_fn(c@, relay_rels[0], relay_bodies[0], "fn hit", arena)
@@ -658,7 +641,7 @@ fn main(): I32
     defer c.free()
 
     init: =
-        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch e
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch e
         return harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     d15: = lsp_client.dump(init, arena)
@@ -703,7 +686,7 @@ fn main(): I32
     verdict.check("every token covers one whole name as written",
         off_words(sem_data, semtok_src, arena) == 0, d_sem)
     lsp_client.close(c@, semtok_uri, arena)
-    lsp_outline.run(c@, init.get("result").get("capabilities"), arena)
+    lsp_outline.run_outline(c@, init.get("result").get("capabilities"), arena)
 
     // **A document that fails to parse is coloured as far as it parsed**: the editor reads it a
     // second time ("Only the editor's parse recovers from a syntax error" in
@@ -735,7 +718,7 @@ fn main(): I32
         verdict.check("incomingCalls returns the callers (the whole workspace)", calls.len > 0, d17)
     lsp_client.close(c@, ch_file, arena)
     check_generic_caller(exe, arena)
-    lsp_bound.check_template_bound(c@, arena)
+    lsp_recover.check_template_bound(c@, arena)
     check_shebang(c@, top, arena)
     check_ragged_reaches(c@, arena)
     lsp_spell.check_hover_types(c@, arena)
@@ -747,15 +730,15 @@ fn main(): I32
     lsp_spell.check_hover_generic_body(c@, arena)
     lsp_spell.check_hover_default_arg(c@, arena)
     lsp_spell.check_hover_owner(c@, arena)
-    lsp_marks.check_hover_marks(c@, arena)
-    lsp_values.check_hover_values(c@, arena)
+    lsp_hover.check_hover_marks(c@, arena)
+    lsp_hover.check_hover_values(c@, arena)
     lsp_spell.check_uri_spelling(c@, top, arena)
     check_hover_builtin_member(c@, arena)
     check_variant_through_alias(c@, arena)
-    lsp_docs.run(c@, arena)
-    lsp_recover.run(c@, arena)
+    lsp_hover.run_docs(c@, arena)
+    lsp_recover.run_recover(c@, arena)
 
-    c.notify("$/ksplTestCrash", empty_obj(arena), lsp_client.send_ms, arena) catch {}
+    c.notify("$/ksplTestCrash", lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
     after_crash: =
         c.request("textDocument/hover", probe_pos, lsp_client.read_ms, arena) catch
         fallback .null_val
@@ -766,7 +749,7 @@ fn main(): I32
     ok2: = !is_missing(after_crash)
     verdict.check("hover answers after a crash too (the supervisor remakes the worker)", ok2, d19)
 
-    c.notify("$/ksplTestHang", empty_obj(arena), lsp_client.send_ms, arena) catch {}
+    c.notify("$/ksplTestHang", lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
     after_hang: =
         c.request("textDocument/hover", probe_pos, after_hang_ms, arena) catch
         fallback .null_val
@@ -777,11 +760,11 @@ fn main(): I32
 
     check_cfg(c@, exe, arena)
     check_didclose(exe, arena)
-    lsp_restart.run(exe, arena)
+    lsp_recover.run_restart(exe, arena)
     check_worker_alive(exe, top, ch_text, arena)
     check_walk(exe, arena)
     check_cfg_after_walk(exe, arena)
-    lsp_package.run(exe, arena)
+    lsp_recover.run_package(exe, arena)
     lsp_pick.check_completion(c@, arena)
     lsp_pick.check_completion_generic(c@, arena)
     return harness.finish()

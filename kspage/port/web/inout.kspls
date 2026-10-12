@@ -90,12 +90,6 @@ const too_big: I32 = -1 //<
     //< Caution: **Keep it separate from "cannot be read"** (the fixes are opposite), **as a value
     //< neither 0 nor 1** — callers read "1 means read", so 0 would say "it is broken".
 
-const withdrawn: I32 = -3 //<
-    //< The result when a saved document holds what is no longer carried (`Store_error.withdrawn`)
-    //<
-    //< Caution: **Keep it separate from "cannot be read"**: the text is well formed, and the fix is
-    //< to remove the window in an older build, not to repair the file.
-
 const not_text: I32 = -2 //<
     //< The result when a file opened as a text form is not text (it holds a NUL)
     //<
@@ -119,13 +113,9 @@ fn kspage_web_load(len: Sz): I32
     // The arena is global (`state.load_arena`) so it can be freed when things stop partway; as a
     // local, unwinding would leave nothing pointing at it and the arena would leak **forever**.
     load_arena = Arena.new(state.fresh_chunk)
-    got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, load_arena) catch e
+    got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, load_arena) catch
         state.drop_load()
-        switch e
-        case .withdrawn
-            return withdrawn
-        default
-            return 0
+        return 0
     // Caution: **Check that it can be laid out and written back before replacing** — a readable
     // document can still exhaust the arena at layout, and after the replacement **the currently
     // open document is lost with it**. So that refusal is a separate result from "cannot be read".

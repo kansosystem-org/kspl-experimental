@@ -25,10 +25,11 @@ fn test_db_crud_roundtrip()
         fallback null
     assert(cut, "a path holding a NUL is refused rather than cut at the NUL")
 
-    conn.exec("CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)") catch panic("create table should not fail")
+    conn.exec("CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+        catch panic("create table should not fail")
 
-    ins: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)") catch panic("prepare insert \
-        should not fail")
+    ins: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)")
+        catch panic("prepare insert should not fail")
     ins.bind_text(1, "Alice") catch panic("bind_text failed")
     ins.bind_i64(2, 30) catch panic("bind_i64 failed")
     ins.step() catch panic("insert step failed")
@@ -36,22 +37,22 @@ fn test_db_crud_roundtrip()
     rowid: = conn.last_insert_rowid()
     assert(rowid == 1, "rowid should be 1 for the first insert")
 
-    ins2: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)") catch panic("prepare \
-        insert2 should not fail")
+    ins2: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)")
+        catch panic("prepare insert2 should not fail")
     ins2.bind_text(1, "Bob") catch panic("bind_text failed")
     ins2.bind_i64(2, 25) catch panic("bind_i64 failed")
     ins2.step() catch panic("insert2 step failed")
     ins2.free()
 
     // A NULL bound is read back as a NULL, not as 0 or empty text.
-    ins3: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)") catch panic("prepare \
-        insert3 should not fail")
+    ins3: = conn.prepare("INSERT INTO person (name, age) VALUES (?, ?)")
+        catch panic("prepare insert3 should not fail")
     ins3.bind_text(1, "Carol") catch panic("bind_text failed")
     ins3.bind_null(2) catch panic("bind_null failed")
     ins3.step() catch panic("insert3 step failed")
     ins3.free()
-    nul: = conn.prepare("SELECT age FROM person WHERE name = 'Carol'") catch panic("prepare select \
-        null should not fail")
+    nul: = conn.prepare("SELECT age FROM person WHERE name = 'Carol'")
+        catch panic("prepare select null should not fail")
     nul_row: = nul.step() catch panic("select null step failed")
     $saw_null: = false
     switch nul_row
@@ -65,7 +66,8 @@ fn test_db_crud_roundtrip()
     assert(saw_null, "a bound NULL reads back as null_value")
 
     sel: =
-        conn.prepare("SELECT name, age FROM person WHERE age IS NOT NULL ORDER BY age ASC") catch panic("prepare select should not fail")
+        conn.prepare("SELECT name, age FROM person WHERE age IS NOT NULL ORDER BY age ASC")
+        catch panic("prepare select should not fail")
     $count: Sz = 0
     $buf: U8[64] = ::{}
     for
@@ -107,7 +109,8 @@ fn test_db_row_roundtrip()
     defer arena.free()
 
     conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
-    conn.exec("CREATE TABLE p (name TEXT, age INTEGER, height REAL, active INTEGER)") catch panic("create table should not fail")
+    conn.exec("CREATE TABLE p (name TEXT, age INTEGER, height REAL, active INTEGER)")
+        catch panic("create table should not fail")
 
     // It binds by named parameters; no position is written.
     ins: =
@@ -120,8 +123,8 @@ fn test_db_row_roundtrip()
     ins.free()
 
     // **The columns are in a different order from the declaration**; they are matched by name.
-    sel: = conn.prepare("SELECT active, height, age, name FROM p") catch panic("prepare select \
-        should not fail")
+    sel: = conn.prepare("SELECT active, height, age, name FROM p")
+        catch panic("prepare select should not fail")
     sel.step() catch panic("step select failed")
     $back: Person = ::{}
     sel.read_row(back@, arena) catch panic("read_row failed")
@@ -132,8 +135,8 @@ fn test_db_row_roundtrip()
 
     // If the table has no column for a field, it is refused with the field's name (not filled in
     // with a default).
-    thin: = conn.prepare("SELECT name, age FROM p") catch panic("prepare thin select should not \
-        fail")
+    thin: = conn.prepare("SELECT name, age FROM p")
+        catch panic("prepare thin select should not fail")
     thin.step() catch panic("step thin select failed")
     $partial: Person = ::{}
     $missing: U8[] = ""
@@ -173,8 +176,8 @@ fn test_db_one_statement_at_a_time()
     assert(none_ran, "a refused SQL runs none of its statements")
 
     // What follows the one statement may be blank: spaces, semicolons and comments.
-    conn.exec("CREATE TABLE v (n INTEGER);  -- the table\n/* done */ ;\n") catch panic("a statement \
-        followed only by semicolons and comments should run")
+    conn.exec("CREATE TABLE v (n INTEGER);  -- the table\n/* done */ ;\n")
+        catch panic("a statement followed only by semicolons and comments should run")
     conn.exec("INSERT INTO v (n) VALUES (1)") catch panic("the table it made should exist")
     conn.free()
     verdict.pass("A second statement is refused before anything runs, and a blank tail is not one.")
@@ -236,8 +239,8 @@ fn test_db_row_out_of_range()
     // **Writing refuses too** a `U64` past SQLite's signed 64-bit integer, which would be stored as
     // a negative number.
     conn.exec("CREATE TABLE w (big INTEGER)") catch panic("create table should not fail")
-    ins: = conn.prepare("INSERT INTO w (big) VALUES (:big)") catch panic("prepare insert should not \
-        fail")
+    ins: = conn.prepare("INSERT INTO w (big) VALUES (:big)")
+        catch panic("prepare insert should not fail")
     huge: Unsigned_wide = ::{ .big = 0xFFFFFFFFFFFFFFFF }
     $unwritten: U8[] = ""
     ins.bind_row(huge@) catch e

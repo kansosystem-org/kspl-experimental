@@ -44,9 +44,7 @@ So a program using kspeg needs no generator, neither installed nor run in its bu
 
 ## A grammar is checked when it is read
 
-Mistakes in a grammar are reported as soon as it is loaded, not later when some input happens to reach them.
-
-**Every reference is checked once, as soon as the grammar is read.** A grammar is read once and reused, so this one walk costs nothing per parse.
+**Every reference in a grammar is checked once, as soon as the grammar is loaded, so a mistake is reported then.** A grammar is read once and reused, so this one walk costs nothing per parse.
 
 **The check is not put off until parsing.** A name is looked up when its rule is applied, so an undefined name would show only on a run that reached that branch. A reference in an unmatched alternative, an optional or a repetition may never run: the parse succeeds, and the grammar's author believes the rule takes effect.
 
@@ -115,9 +113,7 @@ For example, if `number` can only begin with `0`–`9`, the engine never enters 
 
 ## Indentation becomes markers before the parse
 
-Kspeg cannot read indentation itself. For a language like Python, the caller first replaces each change of indentation with a one-byte marker at a line's end, and the grammar matches those markers like ordinary text.
-
-**The engine sees bytes, not columns.** To read indentation itself, it would need four things it lacks.
+**Kspeg sees bytes, not columns, so it cannot read indentation itself**: for a language like Python, the caller first replaces each change of indentation with a one-byte marker at a line's end, and the grammar matches those markers like ordinary text. To read indentation itself, the engine would need four things it lacks.
 
 | What is missing | Why it is needed |
 | :-- | :-- |
@@ -153,9 +149,7 @@ Reading the clock at each of a parse's million rule references would add work an
 
 ## How the engine is split across files
 
-The engine's files import in one direction only, and the choice of whether to record a failure stays inside the engine.
-
-**The imports run one way** (`engine` → `expected` and `engine` → `memo`), and each split keeps them so.
+**The engine's files import in one direction only** (`engine` → `expected` and `engine` → `memo`), and each split keeps them so.
 
 ```mermaid
 flowchart LR

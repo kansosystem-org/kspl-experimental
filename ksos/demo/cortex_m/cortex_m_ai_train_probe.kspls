@@ -3,11 +3,11 @@
 //< The path is `attention_train` / LoRA.
 //< It follows cortex_m_ai_probe.kspls (inference) and likewise avoids malloc with
 //< Arena.from_buffer and uses the cfg(freestanding) panic/std.math. It runs the same check as
-//< test_attention_lora_grad in ksai/tests/lora_test.kspls (the host version) — the base weights
-//< frozen, only LoRA learning, the loss falling — on real hardware (in software floating point).
-//< It also checks that saving the learned LoRA adapters to a static byte buffer (a mock flash)
-//< with save_raw and rebuilding them into another instance with load_raw keeps what was learned
-//< (persisting a result learned on the device).
+//< test_attention_lora_grad in ksai/tests/param_grad_test.kspls (the host version) — the base
+//< weights frozen, only LoRA learning, the loss falling — on real hardware (in software floating
+//< point). It also checks that saving the learned LoRA adapters to a static byte buffer (a mock
+//< flash) with save_raw and rebuilding them into another instance with load_raw keeps what was
+//< learned (persisting a result learned on the device).
 import "ksai/attention_train" as attn_train // adds train_forward_lora/backward_lora to
 // Self_attention
 import "ksai/block_train" // adds train_forward_lora/backward_lora to Transformer_block
@@ -20,10 +20,6 @@ import "std/prng"
 
 $storage: Sz[8192] = ::{}
 $flash_sim: U8[256] = ::{} // a static byte buffer standing in for "flash/NVRAM" (for persistence)
-
-// SysTick_Handler (port.o) calls it. This probe does not use the scheduler, so it is empty.
-#export
-fn ksos_tick() {}
 
 fn tsum(t: Tensor<|F32|>): F32
     $s: = F32::0.0

@@ -1,6 +1,6 @@
 # ai_assist — the coding assistant
 
-This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code, and measures how often the compiler accepts what it writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN.md`](../docs/DESIGN.md); what is left is in [`tools/docs/PLAN.md`](../docs/PLAN.md).
+This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code, and measures how often the compiler accepts what it writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN.md`](../docs/DESIGN.md); what is left is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 Note: If how an AI works is new to you, read [`../../ksai/README.md`](../../ksai/README.md) (the introduction to the KSPL-native AI engine) first.
 
@@ -46,7 +46,7 @@ flowchart LR
 | `export_qwen_to_kspl.py` / `export_qwen_tokenizer.py` | Convert Hugging Face Qwen's weights and tokenizer into the files `ksai` reads. |
 | `qwen_logit_parity.py` | Prints Hugging Face's logits (the scores for each next token) for the same input, to compare with KSPL's. |
 | `safetensors_io.py` | Writes safetensors, for `export_qwen_to_kspl.py` and `lora_finetune_external.py`. |
-| `tests/` | `corpus_count_test.kspls` and `oracle_test.kspls`, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
+| `tests/` | `ai_assist_test.kspls`: counting the corpus, and the oracle, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
 
 **`corpus/` and `tokenizer/` are generated and reproducible**, and git ignores them; the scripts and the tools are the product.
 
@@ -63,9 +63,7 @@ pip install numpy torch transformers peft safetensors
 
 ### How borrowed models are handled
 
-You bring the borrowed model's weights yourself, and its own license goes with whatever you make from them.
-
-**The models' weights are not in this repository.** `export_qwen_to_kspl.py` converts weights you obtain yourself (`--base-model Qwen/Qwen2.5-Coder-0.5B`). Only the conversion procedure is distributed here, so the [MIT](../../LICENSE.md) notice does not cover the model.
+**You bring the borrowed model's weights yourself: they are not in this repository.** `export_qwen_to_kspl.py` converts the weights you obtain (`--base-model Qwen/Qwen2.5-Coder-0.5B`). Only the conversion procedure is distributed here, so the [MIT](../../LICENSE.md) notice does not cover the model.
 
 **The converted safetensors inherit the original model's license.** To distribute them, meet its conditions (the Qwen2.5 family is Apache-2.0, which requires attribution).
 
@@ -105,6 +103,6 @@ Decoding is greedy (it always takes the top-scoring token), with no repetition p
 ## Further reading
 
 * [`tools/docs/DESIGN.md`](../docs/DESIGN.md) — why the assistant is built this way: what is KSPL and what is borrowed, how a completion is scored, why it runs outside the language server.
-* [`tools/docs/PLAN.md`](../docs/PLAN.md) — what is left of the coding assistant.
+* The "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md) — what is left of the coding assistant.
 * [ksai](../../ksai/README.md) — the engine the assistant's tools feed, with the examples that load what it makes.
 * [`../README.md`](../README.md) — the other tools, and the one test file per tool they keep in `tools/tests/`.

@@ -152,14 +152,14 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/posix_preempt_demo.kspls` | `make ksos-preempt` | timer-driven preemption |
 | `ksos/demo/posix/delay_until_demo.kspls` | `make ksos-delay-until` | a period with no drift, via `Task.delay_until` |
 | `ksos/demo/posix/lifecycle_demo.kspls` | `make ksos-lifecycle` | `Task.suspend`/`Task.resume`/`Task.delete` |
-| `ksos/demo/posix/stack_overflow_demo.kspls` | `make ksos-stack-overflow` | the canary catching a stack overflow |
+| `ksos/demo/posix/panic_demo.kspls stack-overflow` | `make ksos-stack-overflow` | the canary catching a stack overflow |
 | `ksos/demo/posix/isr_signal_demo.kspls` | `make ksos-isr` | `Queue<\|T\|>.try_send` from an ISR (SIGUSR1 stands in for the interrupt) |
 | `ksos/demo/posix/task_manager_demo.kspls` | `make ksos-task-manager` | tasks and queues on the heap (`dynamic.kspls`), and the task manager's CPU use per task (`Task.cpu_percent` in `ksos/kernel/task.kspls`) |
 | `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order and the longest waiter among equals, suspend/delete while blocked, a `delay_until` into the past, the cap on seats |
-| `ksos/demo/posix/mutex_relock_demo.kspls` | `make ksos-mutex-relock` | the holder relocking stops rather than waiting forever (the panic is the pass) |
-| `ksos/demo/posix/mutex_foreign_unlock_demo.kspls` | `make ksos-mutex-foreign-unlock` | a non-holder's unlock stops rather than being silently ignored (panic = pass) |
+| `ksos/demo/posix/panic_demo.kspls mutex-relock` | `make ksos-mutex-relock` | the holder relocking stops rather than waiting forever (the panic is the pass) |
+| `ksos/demo/posix/panic_demo.kspls mutex-foreign-unlock` | `make ksos-mutex-foreign-unlock` | a non-holder's unlock stops rather than being silently ignored (panic = pass) |
 | `ksos/demo/posix/timeout_demo.kspls` | `make ksos-timeout` | timeouts (`take_for`/`recv_for`/`send_for`/`lock_for`/`wait_for`), `try_take`/`try_lock`, and `ms_to_ticks` rounding up |
-| `ksos/demo/posix/timeout_zero_demo.kspls` | `make ksos-timeout-zero` | a timeout of 0 stops rather than meaning `try_` (panic = pass) |
+| `ksos/demo/posix/panic_demo.kspls timeout-zero` | `make ksos-timeout-zero` | a timeout of 0 stops rather than meaning `try_` (panic = pass) |
 | `ksos/demo/posix/tick_mid_switch_demo.kspls` | `make ksos-tick-mid-switch` | a tick held over a switch into a task that has never run arrives after the switch, and the task still runs its code |
 
 The Cortex-M demos need a cross compiler and QEMU (both in the development container), and `make test-ksos-qemu` runs them all. `make ksos-cm` builds `cortex_m_min.kspls` and checks its vector table and PendSV with objdump. `make ksos-cm-run` runs that ELF under QEMU (`mps2-an385`). Every other target builds and runs in one.
@@ -176,7 +176,6 @@ The Cortex-M demos need a cross compiler and QEMU (both in the development conta
 | `ksos/demo/cortex_m/cortex_m_isr_give.kspls` | `make ksos-cm-isr-give` | tasks woken by an interrupt handler's `give`s run as it returns, highest first, before the interrupted task's next line |
 | `ksos/demo/cortex_m/cortex_m_heap_probe.kspls` | `make ksos-cm-heap-probe` | the freestanding heap (`mem.init_freestanding_heap`) and `Arc<T>`, with no OS or `malloc` |
 | `ksos/demo/cortex_m/cortex_m_panic_probe.kspls` | `make ksos-cm-panic-probe` | a panic's crash record read back across a real soft reset |
-| `ksos/demo/cortex_m/cortex_m_uart_probe.kspls` | `make ksos-cm-uart-probe` | reading and writing a real UART0 (a CMSDK APB UART) directly |
 | `ksos/demo/cortex_m/cortex_m_uart_echo.kspls` | `make ksos-cm-uart-echo` | UART0's receive path, judged by an outside echo test |
 | `ksos/demo/cortex_m/cortex_m_uart_irq_echo.kspls` | `make ksos-cm-uart-irq-echo` | the same receive path driven by an interrupt (NVIC IRQ0 plus `WFI`: the interrupt controller's line 0, and the instruction that sleeps until an interrupt) |
 | `ksos/demo/cortex_m/cortex_m_ai_probe.kspls` | `make ksos-cm-ai-probe` | `ksai` inference (a whole `Transformer_block`) on bare metal, matching the host's numbers |
@@ -254,9 +253,7 @@ These are the traps the next person is likely to hit.
 
 ## What has been checked on real hardware
 
-Each row is one part of the real car, and whether someone has seen it work on the car itself.
-
-**This table is the canonical source for what was confirmed on the real board.** ✅ means confirmed on this unit's real chip, a Freenove 4WD car carrying a Raspberry Pi Pico W ([`ksos/docs/SPEC-board.md`](docs/SPEC-board.md)). The AI cannot add a ✅; only whoever has the hardware can. A stage named below is one of [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md)'s.
+**Each row is one part of the real car, and whether someone has seen it work on the car itself: this table is the canonical source for what was confirmed on the real board.** ✅ means confirmed on this unit's real chip, a Freenove 4WD car carrying a Raspberry Pi Pico W ([`ksos/docs/SPEC-board.md`](docs/SPEC-board.md)). The AI cannot add a ✅; only whoever has the hardware can. A stage named below is one of [`ksos/docs/HOWTO-bring-up.md`](docs/HOWTO-bring-up.md)'s.
 
 | Item | State |
 |---|---|
@@ -317,4 +314,4 @@ Each row is one part of the real car, and whether someone has seen it work on th
 | [std](../std/README.md) | The standard library it stands on; every file it publishes is listed by `ksplc doc std` | Whoever changes ksos |
 | [ksai](../ksai/README.md) | The inference that runs beside the control loop, with no malloc | Whoever changes ksos |
 | [ksdb](../ksdb/README.md) | The append-only record kept inside the device | Whoever changes ksos |
-| [`ksos/docs/PLAN.md`](docs/PLAN.md) | What is left, and what marks each stage as done | Whoever changes ksos |
+| The "ksos" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left, and what marks each stage as done | Whoever changes ksos |

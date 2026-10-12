@@ -145,16 +145,6 @@ enum Sort_end //< the result of sorting a table's rows
     too_few //< there are not two rows under the heading to sort
     in_order //< the rows are already in that order
 
-impl Sort_end
-    fn sorted(e: Self): Bool //< whether the rows were sorted
-        //<
-        //< It answers only yes or no (where the reason is wanted, switch on the result).
-        switch e
-        case .done
-            return true
-        default
-            return false
-
 enum Merge_end //< the result of merging the selected cells
     //<
     //< Caution: **Do not merge the refusals into one** (the same rule as `Sort_end`); each is fixed
@@ -241,12 +231,7 @@ impl Editor
         spot: = ask.cell_of(page, r.caret)
         if !spot.found
             return false
-        if !r.add_line_at(spot.table, axis, index_on(spot, axis) + 1)
-            return false
-        // The command itself declares that it can be repeated, rather than the key working it out
-        // from the record (`Again` in `record.kspls`).
-        r.again = .add_line(axis)
-        return true
+        return r.add_line_at(spot.table, axis, index_on(spot, axis) + 1)
 
     priv fn add_line_at(r: Self$@, table: Block$@, axis: Axis, at: Sz): Bool //<
         //< Adds one empty row (or column) to `table` at `at`, in one step
@@ -403,44 +388,6 @@ impl Editor
             was: = order.get(k)
             if k != was
                 r.shift_row(st, rows.get(was), k - was)
-
-    fn merge_cell(r: Self$@, page: Page$@, axis: Axis): Bool //<
-        //< Merges the current cell with the neighbouring cell
-        //<
-        //< The absorbed cell is removed; one undo restores it.
-        //< Caution: **Call it after layout** (the same reason as `add_line`).
-        if r.shut()
-            return false
-        spot: = ask.cell_of(page, r.caret)
-        if !spot.found
-            return false
-        tiles: = spot.table.tiles_of(r.arena)
-        mine: = tile_at(tiles, spot.row, spot.column)
-        if mine.block == null
-            return false
-        $next: Tile = tile_at(tiles, spot.row, spot.column + mine.cols)
-        $rows: Sz = mine.rows
-        $cols: Sz = mine.cols
-        switch axis
-        case .column
-            if next.block == null || next.rows != mine.rows
-                return false
-            cols += next.cols
-        case .row
-            next = tile_at(tiles, spot.row + mine.rows, spot.column)
-            if next.block == null || next.cols != mine.cols
-                return false
-            rows += next.rows
-        row: = spot.table.children.get(next.row)
-        at: = index_in(row, next.block)
-        if at < 0
-            return false
-        r.break_group()
-        st: = r.step()
-        field.do_set_span(r, st, mine.block, rows, cols)
-        edit.do_block(r, st, row, at, false, null)
-        r.break_group()
-        return true
 
     fn merge_range(r: Self$@, page: Page$@): Merge_end //<
         //< Merges every cell the selection covers into its top-left cell
@@ -642,6 +589,5 @@ impl Editor
         edit.shift_formulas(r, st, spot.table, axis, at, -1)
         // What the cursor pointed at is gone. Do not use it until it is placed again.
         r.caret = caret.nowhere()
-        r.again = .drop_line(axis)
         r.break_group()
         return true

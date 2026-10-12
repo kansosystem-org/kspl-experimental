@@ -569,32 +569,27 @@ impl Ast_node
         //< The call is an expr_postfix of the "(" shape. A parameter that is a borrowed pointer is
         //< excluded.
         //< It pairs with the callee's release (register_arc_params), balancing the count across the
-        //< call (Swift's +1 transfer). On a method call parameter[0] is the receiver (offset 1).
+        //< call (Swift's +1 transfer). On a method call parameter[0] is the receiver, skipped.
         recv: = r.safe_get_child(0)
         if recv == null
             return
-        $offset: = 0
         $callee: Ast_node$@ = recv.def_node
-        if recv.kind_id == .k_method_access
-            offset = 1
         if callee == null
             callee = r.def_node
         if callee == null
             return
-        params: = callee.get_fn_params()
         args: = r.safe_get_child(2)
-        if params == null || args == null || args.kind_id != .k_expr_args
+        if args == null || args.kind_id != .k_expr_args
             return
-        for i in Range.asc(args.children.len)
-            pidx: = offset + i
-            if pidx >= params.children.len
+        $params: = base_ast_ext.Param_cursor
+            .new(callee.get_fn_params(), recv.kind_id == .k_method_access)
+        for arg in args.children
+            switch params.next()
+            case .some(p)
+                if lctx.sema.env.type_is_managed(p.param_type_id())
+                    arc_retain_copied_value(arg, lctx)
+            case .none
                 break
-            p: = params.get_child(pidx)
-            if p.kind_id != .k_fn_param
-                continue
-            if !lctx.sema.env.type_is_managed(p.param_type_id())
-                continue
-            arc_retain_copied_value(args.get_child(i), lctx)
 
     fn lower_arc_var_decl(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It lowers the decl_var, adding retain and release where its type is ARC-managed

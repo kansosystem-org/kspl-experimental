@@ -40,12 +40,6 @@ enum Store_error
         //< A number outside the allowed range is written (`kspage/model/limit`).
         //<
         //< Reject it rather than round it, or the file and the screen disagree.
-    withdrawn //<
-        //< The text holds what kspage no longer carries
-        //<
-        //< A window onto source code, or a line tied between two frames.
-        //< **Refuse the whole text** rather than drop it: writing it back would lose it, as for an
-        //< unknown version.
 
 struct Loaded //< the document and the styles read back
     //<
@@ -160,21 +154,20 @@ priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_b
 priv fn read_when(v: Val): When //<
     //< Builds the rule that changes the look by the value from the text
     //<
-    //< There is only one way of comparing, read in a fixed order, so a text holding two does not
-    //< give an answer that depends on the writer's order.
+    //< There is only one way of comparing, read in a fixed order (`style_when.comparisons`), so a
+    //< text holding two does not give an answer that depends on the writer's order.
     $out: When = style_when.no_when()
-    if present(v.get("when_above"))
-        out.how = .above
-        out.than = as_f32(v.get("when_above"), 0.0)
-    else if present(v.get("when_below"))
-        out.how = .below
-        out.than = as_f32(v.get("when_below"), 0.0)
-    else if present(v.get("when_equal"))
-        out.how = .equal
-        out.than = as_f32(v.get("when_equal"), 0.0)
-    else
-        return out
-    out.then = v.get("when_then").as_str()
+    $sb: = Str_builder.new()
+    defer sb.free()
+    for how in style_when.comparisons
+        sb.clear()
+        sb.s("when_").s(how.variant_name())
+        than: = v.get(sb.slice())
+        if present(than)
+            out.how = how
+            out.than = as_f32(than, 0.0)
+            out.then = v.get("when_then").as_str()
+            return out
     return out
 
 fn style_val(b: Json_builder$@, s: Style$@): Val //< writes one style as text
@@ -397,8 +390,8 @@ fn block_val(b: Json_builder$@, blk: Block$@): Val //< writes one block and its 
     // The range shown as a chart. The contents are not written (they are built at layout time).
     if blk.chart.len > 0
         ob = ob.set("chart", b.str_val(blk.chart))
-    // The memo beside the block. It is not laid out in the flow, but it is saved (if lost, only its
-    // writer could notice).
+    // The presenter's note. It is not laid out in the flow, but it is saved (if lost, only the
+    // presenter could notice).
     if blk.aside.len > 0
         ob = ob.set("aside", b.str_val(blk.aside))
     if blk.inlines.len > 0
@@ -539,8 +532,6 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
         s.collect = .bars
     else if v.get("lines").as_bool(false)
         s.collect = .lines
-    if v.get("source").as_bool(false) || v.get("imports").as_bool(false)
-        throw .withdrawn
     s.when = read_when(v)
     s.rule_width = checked_f32(v.get("rule_width"), s.rule_width, limit.length_fits)!
     if present(v.get("rule_color"))
@@ -635,8 +626,6 @@ priv fn read_block_at(v: Val, arena: Arena$@, depth: Sz): Block$@!Store_error //
     blk.image_w = checked_f32(v.get("image_w"), 0.0, limit.length_fits)!
     blk.image_h = checked_f32(v.get("image_h"), 0.0, limit.length_fits)!
     blk.chart = v.get("chart").as_str()
-    if present(v.get("aim")) || present(v.get("tie_from")) || present(v.get("tie_to"))
-        throw .withdrawn
     blk.aside = v.get("aside").as_str()
     // Absent, it is 0 (it appears at every step).
     blk.step = v.get("step").as_int(0)
@@ -668,8 +657,6 @@ fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<
     said: = root.get("kspage").as_int64(0)
     if said != version
         throw .unknown_version
-    // Caution: **An `origin` key from an older text is not read** (the saved versions it divided
-    // are gone); the text opens without it, and the next save drops it.
     d: = Doc.new(arena)
     blocks: = root.get("blocks").arr_list(arena)
     for $i: Sz = 0; i < blocks.len; i += 1

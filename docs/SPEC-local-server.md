@@ -1,8 +1,6 @@
 # The local server's protocol
 
-A web page cannot open a file on your computer by its path. This document sets how such a page asks a small program on the same machine, the *local server*, to read and write files for it, and what that program must refuse.
-
-**This is the protocol a page in a browser uses to ask the local machine for files.** By design, a browser lets a page open a file only through a window a person chooses, and a page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule (a browser lets a page freely call only the server the page came from) does not block them. **It starts no program**: a server that starts programs on a page's request is one whose every guard must hold, for what a page can ask for there is running code.
+**This document sets the protocol a page in a browser uses to ask a small program on the same machine, the *local server*, to read and write files for it, and what that program must refuse.** By design, a browser lets a page open a file only through a window a person chooses, and a page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule (a browser lets a page freely call only the server the page came from) does not block them. **It starts no program**: a server that starts programs on a page's request is one whose every guard must hold, for what a page can ask for there is running code.
 
 **It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "A page asks the local machine through one protocol" in [`DESIGN.md`](DESIGN.md).
 
@@ -60,9 +58,7 @@ Caution: **Do not inspect only the last level**: a link on a folder would pass u
 
 ### How the token gets across
 
-The token reaches the page once, inside the URL a person opens, and the page then sends it with every request.
-
-**The server prints one line, `http://127.0.0.1:<number>/#t=<token>`, and a person opens it once.** Then:
+**The token reaches the page once, inside the URL a person opens: the server prints one line, `http://127.0.0.1:<number>/#t=<token>`, and a person opens it once.** Then:
 
 1. The page moves the token from the fragment (the part of the URL after `#`) into `sessionStorage`, the browser's storage for one tab.
 2. It at once removes the token from the URL with `history.replaceState`, so the browser history keeps no token.

@@ -10,6 +10,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/parse/desugar" { Desugar_ctx, closure_empty_field, next_anon_serial, build_temp_name,
     serial_str, build_path_ref }
+import "ksplc/parse/desugar_slice" { spell_as_written }
 import "ksplc/parse/load" as parse_load
 import "std/ds" { List }
 import "std/str" { Str_builder }
@@ -104,7 +105,7 @@ impl Ast_node
             //< reason is at parse_synth_decls in parse/load.kspls).
         loc: = r.loc
         params: = sig.find_child(.k_param_list)
-        arity: = count_fn_params(params)
+        arity: = base_ast_ext.Param_cursor.count(params)
         if arity != 1 && arity != 2
             r.desugar_err(ctx,
                 "a closure with captures must take exactly 1 or 2 parameters (it conforms to \
@@ -184,7 +185,7 @@ impl Ast_node
             //<
             //< False when it refused the closure (the diagnostic is already reported).
         params: = sig.find_child(.k_param_list)
-        arity: = count_fn_params(params)
+        arity: = base_ast_ext.Param_cursor.count(params)
         env_name: = build_anon_env_name(serial)
         ctor_name: = build_anon_env_ctor_name(serial)
         // The environment struct. The captures are held by pointer.
@@ -194,35 +195,32 @@ impl Ast_node
         // (Principle 2: not one warning from the generated C either).
         if captures == null
             src.s("  priv \{closure_empty_field\}: U8;\n")
-        if captures != null
-            for cap in base_ast_ext.Param_cursor.new(captures, false)
-                if !r.append_capture_field(ctx, cap, src)
-                    return false
+        for cap in base_ast_ext.Param_cursor.new(captures, false)
+            if !r.append_capture_field(ctx, cap, src)
+                return false
         src.s("}\n")
 
         // The function that builds the environment, so the use position builds one kind of node, a
         // call, rather than a struct literal by hand.
         src.s("priv fn \{ctor_name\}\{gen_args\}(")
         $first: = true
-        if captures != null
-            for cap in base_ast_ext.Param_cursor.new(captures, false)
-                c_name: = cap.find_text(.k_identifier)
-                c_ty: = written_type_text(cap.get_decl_type_node())
-                if !first
-                    src.s(", ")
-                src.s("\{c_name\}: \{c_ty\}@")
-                first = false
+        for cap in base_ast_ext.Param_cursor.new(captures, false)
+            c_name: = cap.find_text(.k_identifier)
+            c_ty: = written_type_text(cap.get_decl_type_node())
+            if !first
+                src.s(", ")
+            src.s("\{c_name\}: \{c_ty\}@")
+            first = false
         src.s("): \{env_name\}\{gen_args\} {\n  return \{env_name\}\{gen_args\}::{")
         first = true
         if captures == null
             src.s(" .\{closure_empty_field\} = 0")
             first = false
-        if captures != null
-            for cap in base_ast_ext.Param_cursor.new(captures, false)
-                c_name: = cap.find_text(.k_identifier)
-                src.s(" " if first else ", ")
-                src.s(".\{c_name\} = \{c_name\}")
-                first = false
+        for cap in base_ast_ext.Param_cursor.new(captures, false)
+            c_name: = cap.find_text(.k_identifier)
+            src.s(" " if first else ", ")
+            src.s(".\{c_name\} = \{c_name\}")
+            first = false
         src.s("};\n}\n" if first else " };\n}\n")
 
         // The impl of Callable; the written argument and return types become its type arguments.
@@ -248,10 +246,9 @@ impl Ast_node
         src.s("): \{ret_ty\} {\n")
         // It rebinds the captured names, so **the body needs no rewriting**: `n` resolves as an
         // ordinary local, and since it is immutable, the mutability check stops a write to it.
-        if captures != null
-            for cap in base_ast_ext.Param_cursor.new(captures, false)
-                c_name: = cap.find_text(.k_identifier)
-                src.s("    \{c_name\}: = r.\{c_name\}$;\n")
+        for cap in base_ast_ext.Param_cursor.new(captures, false)
+            c_name: = cap.find_text(.k_identifier)
+            src.s("    \{c_name\}: = r.\{c_name\}$;\n")
         src.s("  }\n}\n")
         return true
 
@@ -300,16 +297,11 @@ fn written_type_text(r: Ast_node$@): U8[] //<
     //<
     //< Caution: **Do not use `extract_type_name()`**: it drops the mutability marker `$` (`U8$[]`
     //< -> `U8[]`, `P$@` -> `P@`), so the impl implements a `Callable` with another type argument
-    //< and the caller gets "does not explicitly implement interface". Normalization folds the
-    //< postfix levels into `type_expr.text` (normalize_by_kind in parse/normalize.kspls), `$`
-    //< included.
+    //< and the caller gets "does not explicitly implement interface". **Nor the folded text**
+    //< (`type_expr.text` reads `Slice<|U8|>` once `U8[]` is folded), which is refused as a type.
     if r == null
         return ""
-    if r.text.len > 0
-        return r.text
-    $b: = r.extract_type_name()
-    defer b.free()
-    return base_core.arena.dup_str(b.slice())
+    return spell_as_written(r)
 
 fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
     //<
@@ -370,8 +362,6 @@ fn build_generic_path_ref(name: U8[], names: List<|U8[]|>$@, loc: base_ast.Loc):
 fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
     //< The arguments `name@`, one per capture (passed to the constructor)
     args: = Ast_node.build_args(loc)
-    if captures == null
-        return args
     for cap in base_ast_ext.Param_cursor.new(captures, false)
         id_node: = cap.find_child(.k_identifier)
         if id_node == null
@@ -381,16 +371,6 @@ fn build_capture_args(captures: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
             .add_child(Ast_node.new(.k_literal, "@", loc))
         args.add_child(addr_of)
     return args
-
-fn count_fn_params(params: Ast_node$@): Sz //<
-    //< The number of parameters in a `param_list` (a `...` is not counted)
-    if params == null
-        return 0
-    $n: Sz = 0
-    for p in params.children
-        if p.kind_id == .k_fn_param
-            n += 1
-    return n
 
 fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@,
     out: Str_builder$@) //<
@@ -405,8 +385,5 @@ fn signature_type_text(sig: Ast_node$@, params: Ast_node$@, captures: Ast_node$@
 
 fn append_param_type_text(list: Ast_node$@, out: Str_builder$@) //<
     //< It adds the parameter type names in a `param_list` / `capture_list`, separated by spaces
-    if list == null
-        return
-    for p in list.children
-        if p.kind_id == .k_fn_param
-            out.s(written_type_text(p.get_decl_type_node())).s(" ")
+    for p in base_ast_ext.Param_cursor.new(list, false)
+        out.s(written_type_text(p.get_decl_type_node())).s(" ")

@@ -58,7 +58,7 @@ priv struct Bad //<
     body: U8[]
     msg: U8[]
 
-priv const bad_cfgs: Bad[7] = ::{
+priv const bad_cfgs: Bad[_] = ::{
     ::{ .slot = "sec", .label = "an unknown section", .body = "[typo]\nI0307 = off\n",
         .msg = "unknown configuration section" },
     ::{ .slot = "code", .label = "an unknown code", .body = "[lint]\nI9999 = off\n",
@@ -71,8 +71,6 @@ priv const bad_cfgs: Bad[7] = ::{
         .msg = "expected 'key = value'" },
     ::{ .slot = "unterm", .label = "an unclosed section heading", .body = "[lint\nI0307 = off\n",
         .msg = "unterminated section header" },
-    ::{ .slot = "retired", .label = "an already withdrawn spelling",
-        .body = "[lint]\nprofile = managed\n", .msg = "unknown diagnostic code" },
 }
 
 priv fn lint_case(slot: U8[], name: U8[], rels: U8[][], bodies: U8[][], entry: U8[],
@@ -84,9 +82,7 @@ priv fn lint_case(slot: U8[], name: U8[], rels: U8[][], bodies: U8[][], entry: U
         //< directory holding a `:`, which cannot be made on Windows. A case that is not want_fail
         //< demands exit code 0: lint ends with 0 even with diagnostics, so a failure means reading
         //< the settings file is broken.
-    dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take()) catch
-        verdict.check(name, false, "cannot make a working directory")
-        return
+    dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take())
     fs.write_tree(dir, rels, bodies, arena) catch
         verdict.check(name, false, "cannot place the material")
         return
@@ -113,9 +109,7 @@ priv fn build_case(slot: U8[], name: U8[], cfg: U8[], arena: Arena$@) //<
     //< **The file's `error` has to switch the check on**, as `##lint(… = error)` and
     //< `--lint=…=error` do ("The levels" in `ksplc/docs/SPEC-tools.md`): outside lint mode the
     //< empty-block check returns early.
-    dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take()) catch
-        verdict.check(name, false, "cannot make a working directory")
-        return
+    dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take())
     fs.write_tree(dir, U8[][]::{ "a.kspl", "ksplc.cfg" }, U8[][]::{ src, cfg }, arena) catch
         verdict.check(name, false, "cannot place the material")
         return

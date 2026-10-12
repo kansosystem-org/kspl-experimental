@@ -4,6 +4,7 @@ import "kspage/lay/flow"
 import "kspage/model/doc" + { Block, Doc, Rect }
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
+import "kspage/model/run" { Inline }
 import "kspage/model/style" { Sheet }
 import "kspage/tests/base"
 import "kspage/write/block"
@@ -445,7 +446,8 @@ fn test_a_surface_is_inserted_after_the_caret(arena: Arena$@) //<
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
 
-    assert(ed.insert_surface(page, sheet, "slide", .whole).surfaced(), "it can be inserted")
+    assert(ed.insert_surface(page, sheet, "slide", .whole) == insert.Surface_end.done,
+        "it can be inserted")
     assert(d.blocks.len == 2, "one grows behind the paragraph")
     made: = d.blocks.get(1)
     assert(made.children.len == 1, "the frame inside is one")
@@ -511,7 +513,8 @@ fn test_a_refused_slide_says_why(arena: Arena$@) //< each refusal carries its ow
     assert(ed.insert_surface(page, sheet, "slide", .whole).variant_name().equals("nowhere"),
         "with the cursor in no paragraph it says so")
     ed.caret = caret.at(head, 0)
-    assert(ed.insert_surface(page, sheet, "slide", .whole).surfaced(), "in the body it goes in")
+    assert(ed.insert_surface(page, sheet, "slide", .whole) == insert.Surface_end.done,
+        "in the body it goes in")
     verdict.pass("a refused slide names its reason.")
 
 priv fn frame_of(b: Block$@): Rect //< a frame's position
@@ -537,7 +540,7 @@ fn test_a_sketch_lays_out_the_frames_of_a_new_surface(arena: Arena$@) //<
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
 
-    assert(ed.insert_surface(page, sheet, "slide", .titled).surfaced(),
+    assert(ed.insert_surface(page, sheet, "slide", .titled) == insert.Surface_end.done,
         "it can be inserted as a title and a body")
     titled: = d.blocks.get(1)
     assert(titled.children.len == 2, "the frames are two")
@@ -557,7 +560,7 @@ fn test_a_sketch_lays_out_the_frames_of_a_new_surface(arena: Arena$@) //<
     assert(ed.caret.inline == first, "the cursor goes into the first frame")
     assert(ed.undo(), "it can be put back in one")
 
-    assert(ed.insert_surface(page, sheet, "slide", .halved).surfaced(),
+    assert(ed.insert_surface(page, sheet, "slide", .halved) == insert.Surface_end.done,
         "it can be inserted as a title and two columns")
     halved: = d.blocks.get(1)
     assert(halved.children.len == 3, "the frames are three")
@@ -582,7 +585,7 @@ fn test_one_frame_is_dropped_from_the_surface(arena: Arena$@) //<
     ed: = edit.new_editor(d)
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
-    assert(ed.insert_surface(page, sheet, "slide", .halved).surfaced(),
+    assert(ed.insert_surface(page, sheet, "slide", .halved) == insert.Surface_end.done,
         "it can be inserted as a title and two columns")
     made: = d.blocks.get(1)
 
@@ -633,8 +636,8 @@ fn test_dropping_a_frame_from_inside_a_table_drops_the_whole_frame(arena: Arena$
             whole.")
 // ---- the memo beside a slide (the speaker's notes) ----
 
-fn test_an_aside_sticks_to_the_holder_and_undoes_as_one_step(arena: Arena$@) //<
-    //< a memo goes beside a container
+fn test_an_aside_sticks_to_the_slide_and_undoes_as_one_step(arena: Arena$@) //<
+    //< the presenter's note goes on the slide the cursor is in
     verdict.start("[kspage/shape] putting an aside beside a slide test...")
     d: = Doc.new(arena)
     sheet: = slide_sheet("slide", arena)
@@ -654,22 +657,31 @@ fn test_an_aside_sticks_to_the_holder_and_undoes_as_one_step(arena: Arena$@) //<
     assert(after.boxes.len == before, "putting an aside beside grows no box")
     assert(ed.undo(), "it can be put back in one")
     assert(made.aside.len == 0, "the aside comes off")
-    verdict.pass("an aside goes beside the holder, and does not come out in the flow.")
+    verdict.pass("an aside goes beside the slide, and does not come out in the flow.")
 
-fn test_an_aside_needs_a_holder(arena: Arena$@) //< it cannot be added outside a container
+fn test_an_aside_goes_on_a_slide_alone(arena: Arena$@) //<
+    //< Neither a paragraph, a table nor a picture takes one
     //<
-    //< There is no way to show on screen which paragraph it belongs to, so nobody could notice it
-    //< was there.
-    verdict.start("[kspage/shape] not putting an aside beside outside a holder test...")
+    //< The show is the one place a note is read; anywhere else nobody would see it was there.
+    verdict.start("[kspage/shape] putting an aside on a slide and nowhere else test...")
     d: = Doc.new(arena)
-    n: = d.add_block("body").add_text("body")
-    page: = flow.layout(d, slide_sheet("slide", arena), fixed.make(), 200.0, arena)
+    sheet: = slide_sheet("slide", arena)
+    base.table_style(sheet)
+    words: = d.add_block("body").add_text("body")
+    cell: = base.two_by_two(d).children.get(0).children.get(0).inlines.get(0)
+    shot: = d.add_block("body")
+    shot.image = "picture.png"
+    shot.image_w = 40.0
+    shot.image_h = 20.0
+    picture: = shot.add_text("")
+    page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
 
     ed: = edit.new_editor(d)
-    ed.caret = caret.at(n, 0)
-    assert(!ed.set_aside(page, "wanted"), "nothing can be put beside an ordinary paragraph")
-    assert(ed.aside_at(page).len == 0, "read, it is empty")
-    verdict.pass("an aside is put beside inside a holder and nowhere else.")
+    for n in Inline$@[3]::{ words, cell, picture }
+        ed.caret = caret.at(n, 0)
+        assert(!ed.set_aside(page, "wanted"), "nothing is put beside outside a slide")
+        assert(ed.aside_at(page).len == 0, "read, it is empty")
+    verdict.pass("an aside goes on a slide and nowhere else.")
 
 fn test_a_shape_lands_in_the_slide_and_undoes_as_one_step(arena: Arena$@) //<
     //< A shape goes into the slide's middle, and appears as a band of the frame's size
@@ -683,7 +695,8 @@ fn test_a_shape_lands_in_the_slide_and_undoes_as_one_step(arena: Arena$@) //<
     ed: = edit.new_editor(d)
     page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
     ed.caret = caret.at(head, 0)
-    assert(ed.insert_surface(page, sheet, "slide", .whole).surfaced(), "the slide can be inserted")
+    assert(ed.insert_surface(page, sheet, "slide", .whole) == insert.Surface_end.done,
+        "the slide can be inserted")
     slide: = d.blocks.get(1)
     placed: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
 

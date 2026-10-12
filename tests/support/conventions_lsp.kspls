@@ -15,6 +15,7 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
+import "tests/support/harness_text" as htext
 
 priv const caps_file: U8[] = "ksplc/lsp/worker.kspls"
 priv const vscode_client: U8[] = ".vscode/extensions/kspl/extension.js"
@@ -113,7 +114,7 @@ priv fn check_caps(arena: Arena$@) //<
                 .push(arena.text().s(name).s(": there is no declaration in ").s(caps_file)
                 .s(" (either the reading place broke, or the declaration was deleted)").take())
             continue
-        answers: = scan.has(can@, method)
+        answers: = htext.has(can@, method)
         if told && !answers
             bad
                 .push(arena.text().s(name).s(": it declares true and there is no place handling `")
@@ -124,7 +125,7 @@ priv fn check_caps(arena: Arena$@) //<
                 .s("` anyway").take())
         // Caution: **A declaration nobody asks for is the half-built feature.** Where no client
         // sends the name, the entry point is dead on the screen while every check above goes green.
-        if told && !scan.has(asked@, method)
+        if told && !htext.has(asked@, method)
             bad
                 .push(arena.text().s(name).s(": it declares true and no client sends `").s(method)
                 .s("` (").s(vscode_client).s(")").take())
@@ -175,7 +176,7 @@ priv fn check_sent(arena: Arena$@) //< ② The server can handle the names a cli
     vs: =
         sent_by(vscode_client, U8[][]::{ "sendRequest(\"", "sendNotification(\"" }, arena)
     for i in Range.asc(vs.len)
-        if !ignorable(vs.get(i)) && !scan.has(can@, vs.get(i))
+        if !ignorable(vs.get(i)) && !htext.has(can@, vs.get(i))
             bad
                 .push(arena.text().s(vs.get(i)).s(": ").s(vscode_client)
                 .s(" sends it, and the language server has no place handling it").take())
@@ -285,7 +286,7 @@ priv fn check_exclude(arena: Arena$@)
             rest: = got.sub_from(at + 6)
             if end: = rest.find_str("/**'")
                 name: = rest.sub(0, end)
-                if !scan.has(told@, name)
+                if !htext.has(told@, name)
                     bad
                         .push(arena.text().s(vscode_client).s(": it leaves `").s(name)
                         .s("` out, and ").s(ignore_file).s(" does not name that folder").take())
@@ -471,11 +472,11 @@ priv fn check_wind_back(arena: Arena$@)
             bad
                 .push(arena.text().s(row_head(on_arena[i])).s(": `wind_back` does not hold `")
                 .s(row_tail(on_arena[i])).c('`').take())
-        if !scan.has(seen@, row_head(on_arena[i]))
+        if !htext.has(seen@, row_head(on_arena[i]))
             bad
                 .push(arena.text().s(on_arena[i]).s(": no such global is declared").take())
     for i in Range.asc(off_arena.len)
-        if !scan.has(seen@, row_head(off_arena[i]))
+        if !htext.has(seen@, row_head(off_arena[i]))
             bad
                 .push(arena.text().s(off_arena[i]).s(": no such global is declared").take())
         if row_tail(off_arena[i]).len == 0
@@ -556,7 +557,7 @@ priv fn check_keywords(arena: Arena$@)
     $told: = grammar_keywords(src, arena)
     $bad: = List<|U8[]|>.new(arena)
     for w in told.slice()
-        if !scan.has(mine@, w)
+        if !htext.has(mine@, w)
             bad
                 .push(arena.text().s(w).s(": the grammar colours it, and ksplc has no such word")
                 .take())

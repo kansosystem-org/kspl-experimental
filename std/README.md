@@ -101,7 +101,7 @@ Where the arena goes among the parameters, and when a function takes one, is "A 
 
 ## Files near the limit and how they split
 
-One file here is close to the line limit for a file, and this section says what moves out of it and where. How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md). What follows is std's plan and the constraints of std alone.
+One file here has its split planned before it reaches the line limit for a file, and this section says what moves out of it and where. How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md). What follows is std's plan and the constraints of std alone.
 
 * [`std/strfmt.kspls`](strfmt.kspls): **the exact assembly of decimal digits from a binary value** moves to a new `strfmt_digits.kspls` under `std/`. That is `Binary_float` and the decomposition, the loop that runs `Bignat` and emits one digit at a time, the carry, and fixing the digit count.
   * The cut lies between making the digits and writing them out. `write_float` / `write_float32` stay, since moving them too would make both files need `Writer`.

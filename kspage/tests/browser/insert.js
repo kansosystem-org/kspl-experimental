@@ -1,3 +1,52 @@
+// The keys while one sheet at a time is being shown, and Enter splitting a paragraph.
+
+function kspageProbeShow(ks) {
+  const { check, app, canvas, ime, pressAt } = ks;
+
+  // 14. While one sheet at a time is shown, a key goes to sending rather than editing (only a real
+  // keystroke shows whether what types is shut: the hidden input field takes the keys).
+  if (app.surfaceCount() > 0) {
+    const key = (k) => ime.dispatchEvent(new KeyboardEvent("keydown",
+      { key: k, bubbles: true, cancelable: true }));
+    const before = app.text();
+    check(app.present(0) === 0, "the first sheet can be shown");
+    check(app.showing() === 0, "the number of the slide being shown comes back");
+    // **While it is being shown the canvas is the window's size** (the page folds the adornment).
+    check(canvas.clientWidth > 0 && canvas.clientHeight > 0, "the canvas has a size");
+    // In a sample with one slide alone, sending stays put (it does not cross the edge).
+    key("ArrowRight");
+    check(app.showing() === 0, "it does not go past the last slide");
+    key("ArrowLeft");
+    check(app.showing() === 0, "it does not go back before the first sheet either");
+    // **What types must be shut.** Open, the document is rewritten while it is shown.
+    ime.dispatchEvent(new InputEvent("input", { data: "X", bubbles: true }));
+    key("Backspace");
+    check(app.text() === before,
+      "while it is shown the document changes on neither a type nor an delete");
+    key("Escape");
+    check(app.showing() === -1, "Esc goes back to the editing screen");
+    check(app.text() === before, "back there, the document is as it was");
+  }
+
+  // 15. Enter is wired to what splits a paragraph (**untaken, a line break goes into the hidden
+  // input field**), seen by the count of blocks in the document.
+  const blocks = () => ks.savedBlocks().length;
+  // Caution: **Lay it over the body before pressing.** Inside a table's cell it does not split, so
+  // "it does not grow on a press" would be the correct answer.
+  pressAt(8);
+  const wasBlocks = blocks();
+  const split = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  ime.dispatchEvent(split);
+  check(split.defaultPrevented, "Enter is taken over");
+  check(blocks() === wasBlocks + 1,
+    "one paragraph grows (" + wasBlocks + " -> " + blocks() + ")");
+  check(ime.value === "", "no line break goes into the hidden input field");
+  // Delete at the split head and it goes back.
+  ime.dispatchEvent(new KeyboardEvent("keydown",
+    { key: "Backspace", bubbles: true, cancelable: true }));
+  check(blocks() === wasBlocks, "a Backspace at the head puts the paragraph count back");
+}
+
 // Inserting tables and slides, and a region's frame and colours.
 
 function kspageProbeInsert(ks) {
@@ -193,4 +242,55 @@ function kspageProbeInsert(ks) {
   check(reds > 0, "the characters' red comes out on the canvas (" + reds + " pixels)");
   undoKey();
   check(app.styleLook(h1At).color === null, "one undo deletes the colour settled");
+}
+
+// The table heading kept in view while its table passes under the tools.
+
+function kspageProbePin(ks) {
+  const { check, app, canvas, pressAt, undoKey } = ks;
+
+  // **The band is a sheet of its own**, laid under the tools. Nothing is pressed or saved for it:
+  // a table taller than the window is enough.
+  const pin = document.getElementById("pinned-head");
+  check(pin !== null, "the sheet the heading is kept on is there");
+  const wasY = window.scrollY;
+  pressAt(8);
+  check(app.insertTable("table", 40, 2), "a table of forty rows goes in after the paragraph");
+  const frame = app.cellFrame();
+  check(frame !== null, "the cursor stands in the fresh table's first cell");
+  // The canvas's place in the document (the window scrolls the document, not the canvas).
+  const canvasTop = canvas.getBoundingClientRect().top + window.scrollY;
+  check(app.pinnedHead() === null, "with the heading on the screen nothing is kept");
+
+  // Send the heading past the top, with most of the table still below.
+  window.scrollTo(0, canvasTop + frame[1] + frame[3] * 6);
+  const kept = app.pinnedHead();
+  check(kept !== null, "with the heading gone past the top, it is kept in view");
+  check(kept !== null && Math.abs(kept[4] - frame[3]) < 0.5, "the band is the first row's height");
+  check(kept !== null && Math.abs(kept[1] - frame[0]) < 0.5, "and starts at the first cell's edge");
+  check(getComputedStyle(pin).display === "block", "the sheet is shown");
+  const room = app.headRoom();
+  check(Math.abs(pin.getBoundingClientRect().top - room) < 1.5, "it stands just under the tools");
+  check(pin.width > 0 && pin.height > 0, "and holds a painting");
+
+  // **A press on the band is a press on the heading**: the cursor goes into that cell and the
+  // window follows it up, so the real heading shows and nothing is kept.
+  const at = pin.getBoundingClientRect();
+  pin.dispatchEvent(new PointerEvent("pointerdown", { clientX: at.left + 4, clientY: at.top + 4,
+    button: 0, bubbles: true, cancelable: true }));
+  const back = app.cellFrame();
+  check(back !== null && Math.abs(back[1] - frame[1]) < 0.5,
+    "a press on the band stands the cursor in the heading row");
+  check(app.pinnedHead() === null, "and the window follows up to the real heading");
+
+  // Send the whole table past the top: nothing is kept (the band leaves with the last row).
+  window.scrollTo(0, canvasTop + frame[1] + frame[3] * 45);
+  check(app.pinnedHead() === null, "once the table has passed, nothing is kept");
+  window.scrollTo(0, 0);
+  check(app.pinnedHead() === null && getComputedStyle(pin).display === "none",
+    "at the head of the document the sheet is hidden");
+
+  undoKey();
+  check(app.cellFrame() === null, "one undo takes the table back");
+  window.scrollTo(0, wasY);
 }

@@ -1,4 +1,4 @@
-//< Tests of `std/sys`, `std/time` and `std/subproc`: the environment, signals, dates, children
+//< Tests of `std/sys`, `std/time` and `std/subproc`: the environment, the clocks, children
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -13,21 +13,13 @@ import "std/time"
 import "std/verdict"
 
 // ==========================================
-// std/sys: reading an environment variable, and the shutdown flag set by a signal handler.
+// std/sys: reading an environment variable that is not set.
 // ==========================================
-fn test_env_and_signal()
-    verdict.start("[Sys] reading an environment variable plus the signal handler...")
-
+fn test_env_unset()
+    verdict.start("[Sys] reading an environment variable that is not set...")
     if _v: = sys.get_env("KSPL_TEST_ENV_DOES_NOT_EXIST_XYZ")
         panic("get_env should return none for an unset variable")
-
-    sys.install_shutdown_handler()
-    assert(!sys.shutdown_requested(), "shutdown_requested must be false before any signal")
-    sys.raise_signal(sys.sigint)
-    assert(sys.shutdown_requested(), "SIGINT must flip shutdown_requested to true")
-
-    verdict
-        .pass("get_env returned none for an unset variable, and SIGINT raised shutdown_requested.")
+    verdict.pass("get_env returned none for an unset variable.")
 
 // ==========================================
 // std/sys: setting and deleting an environment variable. **An empty value cannot be set** (the
@@ -86,11 +78,6 @@ fn test_env_set_unset()
     verdict
         .pass("an empty value was refused and nothing changed, and unset_env is the only route for \
             deleting.")
-
-// ==========================================
-// std/time: epoch seconds to a calendar date-time and the RFC 1123 / ISO 8601 formats, for a known
-// date-time and for one before 1970.
-// ==========================================
 
 // Caution: **Do not rely on the absolute value** of the monotonic clock; it has no fixed origin.
 // The test reads only "it does not go back" and "it advances once work is done". **Handle an
@@ -259,70 +246,12 @@ fn test_path_ext()
         .pass("a name's leading dot and a dot inside a directory name are not extensions, and it \
             round-trips.")
 
-fn test_time_conversion()
-    verdict.start("[Time] the epoch-second to calendar date-time conversion plus the formats...")
-
-    // 1994-11-15 08:12:31 UTC (a Tuesday), RFC 2616's Date header example.
-    dt: = time.from_epoch(784887151)
-    assert(dt.year == 1994 && dt.month == 11 && dt.day == 15, "from_epoch: date mismatch")
-    assert(dt.hour == 8 && dt.minute == 12 && dt.second == 31, "from_epoch: time-of-day mismatch")
-    assert(dt.weekday == 2, "from_epoch: weekday must be Tuesday(2)")
-
-    rfc: U8[time.rfc1123_len] = ::{}
-    time.write_rfc1123(dt, U8$[]::rfc) catch panic("write_rfc1123: a 4-digit year must be writable")
-    rfc1123_ok: = (U8$[]::rfc).equals("Tue, 15 Nov 1994 08:12:31 GMT")
-    assert(rfc1123_ok, "write_rfc1123 must match the well-known reference string")
-
-    iso: U8[time.iso8601_len] = ::{}
-    time.write_iso8601(dt, U8$[]::iso) catch panic("write_iso8601: a 4-digit year must be writable")
-    iso8601_ok: = (U8$[]::iso).equals("1994-11-15T08:12:31Z")
-    assert(iso8601_ok, "write_iso8601 must match the well-known reference string")
-
-    // A year not fitting the format's digits is refused with a value.
-    // Caution: **Test both ends.** The year 10000 would read back as 0000, and a negative year
-    // produces bytes that are not digits; neither fits a 4-digit year.
-    y10000: = time.from_epoch(253402300800)
-    assert(y10000.year == 10000, "from_epoch: 253402300800 is 10000-01-01T00:00:00Z")
-    $refused: = false
-    time.write_iso8601(y10000, U8$[]::iso) catch
-        refused = true
-    assert(refused, "write_iso8601 must refuse a 5-digit year")
-    bce: = time.from_epoch(-62167219201)
-    assert(bce.year == -1, "from_epoch: one second before year 0 is year -1")
-    refused = false
-    time.write_rfc1123(bce, U8$[]::rfc) catch
-        refused = true
-    assert(refused, "write_rfc1123 must refuse a negative year")
-    // Caution: **Test a year past `I32` too**: 2^32 + 2000, which narrowed would read as 2000.
-    far: = time.from_epoch(135536077748188800)
-    assert(far.year == 4294969296I64 && far.month == 1 && far.day == 1,
-        "from_epoch: a year past I32 is kept whole")
-    refused = false
-    time.write_iso8601(far, U8$[]::iso) catch
-        refused = true
-    assert(refused, "write_iso8601 must refuse a year past I32, not write its low bits")
-    // Between the ends it can be written (the years 0000 and 9999 are within RFC 3339's range).
-    time.write_iso8601(time.from_epoch(253402300799), U8$[]::iso) catch panic("write_iso8601: the \
-        last second of year 9999 must be writable")
-    assert((U8$[]::iso).equals("9999-12-31T23:59:59Z"),
-        "write_iso8601: the last second of year 9999")
-    time.write_iso8601(time.from_epoch(-62167219200), U8$[]::iso) catch panic("write_iso8601: the \
-        first second of year 0 must be writable")
-    assert((U8$[]::iso).equals("0000-01-01T00:00:00Z"), "write_iso8601: year 0 fits the 4 digits")
-
-    // 1969-12-31 23:59:59 UTC = epoch -1 (floor division and remainder on a negative number)
-    before_epoch: = time.from_epoch(-1)
-    assert(before_epoch.year == 1969 && before_epoch.month == 12 && before_epoch.day == 31 &&
-        before_epoch.hour == 23 && before_epoch.minute == 59 && before_epoch.second == 59,
-        "from_epoch must handle negative (pre-1970) values correctly")
-
-    // now() is checked only for plausibility.
-    now_dt: = time.from_epoch(time.now())
-    assert(now_dt.year >= 2020 && now_dt.year < 2100, "now() should return a plausible year")
-
-    verdict
-        .pass("a known date-time's formats matched, a negative epoch second converted correctly, \
-            and a year not fitting 4 digits was refused.")
+fn test_wall_clock()
+    verdict.start("[Time] the wall clock reads a plausible epoch second...")
+    // Only plausibility can be checked: 2020-01-01 to 2100-01-01.
+    t: = time.now()
+    assert(t >= 1577836800I64 && t < 4102444800I64, "now() should return a plausible epoch second")
+    verdict.pass("the wall clock read a second between 2020 and 2100.")
 
 fn test_io_read_edges() //< a directory is refused; a file under-reporting its size is read whole
     verdict.start("[Io] read_file / open on a directory, and on a file that says it is empty...")
@@ -382,7 +311,8 @@ fn test_io_read_past_2gib(arena: Arena$@) //<
         fs.remove_path(path) catch {}
         verdict.skip("this machine cannot grow a file past 2 GiB without writing it")
         return
-    head: = io.read_file_capped(path, 4, arena) catch panic("a file past 2 GiB should open and read")
+    head: = io.read_file_capped(path, 4, arena)
+        catch panic("a file past 2 GiB should open and read")
     fs.remove_path(path) catch {}
     assert(head.equals("head"), "a file past 2 GiB reads from its head")
     verdict.pass("A file past 2 GiB reads from its head.")
@@ -874,8 +804,8 @@ fn test_child_holds_no_file(ksplc: U8[], arena: Arena$@) //<
     $file: = io.open(path, "wb") catch panic("the file must open for writing")
     if sys.is_windows()
         // The CRT opens a file without FILE_SHARE_DELETE, so a handle the child held refuses this.
-        $child: = subproc.spawn_piped(U8[][]::{ ksplc, "lsp" }, "") catch panic("the child must \
-            start")
+        $child: = subproc.spawn_piped(U8[][]::{ ksplc, "lsp" }, "")
+            catch panic("the child must start")
         file.free()
         $removed: = true
         fs.remove_path(path) catch

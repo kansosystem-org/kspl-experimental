@@ -147,37 +147,6 @@ pub fn assert( //< stops the program unless the condition holds
     if !cond
         panic(msg, file, line)
 
-pub fn assert_eq( //< stops the program unless two integers are equal, saying both
-    //<
-    //< Any integer type widens to `I64` here. A failure reads `<msg>: got <got>, want <want>`.
-    got: I64, //< the value the code produced
-    want: I64, //< the value it must be
-    msg: U8$[], //< what was being checked
-    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
-    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
-)
-    if got == want
-        return
-    $m: = Panic_msg.new()
-    panic(m.s(msg).s(": got ").n(got).s(", want ").n(want).slice(), file, line)
-
-pub fn assert_near( //< stops the program unless two numbers lie within `tol`, saying both
-    //<
-    //< A NaN on either side fails. The numbers are written with six decimals, truncated.
-    got: F64, //< the value the code produced
-    want: F64, //< the value it must be close to
-    tol: F64, //< the largest difference let through
-    msg: U8$[], //< what was being checked
-    file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
-    line: Sz = caller_line, //< keep the default unless this is called from a wrapper
-)
-    d: = got - want
-    if d <= tol && -d <= tol
-        return
-    $m: = Panic_msg.new()
-    panic(m.s(msg).s(": got ").f(got).s(", want ").f(want).s(" (tolerance ").f(tol).s(")").slice(),
-        file, line)
-
 pub struct Panic_msg //< a fixed-size buffer for a panic's message, which allocates nothing
     //<
     //< It needs no `io`; **string interpolation (`\{v\}`) cannot be used here.**
@@ -222,28 +191,6 @@ impl Panic_msg
             r.put(tmp[j])
         return r
 
-    pub fn f(r: Self$@, v: F64): Self$@ //< writes a number with six decimals, truncated
-        //<
-        //< Enough to tell two values apart in a message: `nan` and `inf` are written as words, and
-        //< a finite magnitude past 9e18 (too wide for the whole part) as `huge`.
-        if v != v
-            return r.s("nan")
-        $x: = v
-        if x < 0.0
-            r.put('-')
-            x = -x
-        if x > 9.0e18
-            return r.s("inf" if x - x != 0.0 else "huge")
-        whole: = I64::x
-        r.n(whole).put('.')
-        $frac: = x - F64::whole
-        for _i in Range.asc(6)
-            frac *= 10.0
-            digit: = I64::frac
-            r.put(U8::digit + '0')
-            frac -= F64::digit
-        return r
-
     pub fn slice(r: Self$@): U8$[] //< what has been written, to pass to `panic`
         return U8$[]::{ .ptr = r.buf[0]@, .len = r.len }
 
@@ -271,7 +218,7 @@ pub enum Option<|T|> //< a value that may be absent; the `switch` forces the abs
     some(value: T) //< there is a value
     none //< there is no value
 
-impl<|T|> Option<|T|>
+impl<|T|> T?
     pub fn is_some(r: Self): Bool //< whether there is a value
         switch r
         case .some(_)
@@ -482,14 +429,14 @@ pub fn bounds_panic( //< the one message every container stops with when an inde
 
 pub struct Slice<|$T|> //< a borrowed sequence: a pointer and a length, owning nothing
     //<
-    //< The type argument carries the elements' mutability: `Slice<|$U8|>` is mutable, `Slice<|U8|>`
-    //< is not. **One level of weakening is allowed**, so the mutable version can be passed to an
-    //< immutable parameter. `ptr` and `len` are `pub` so a slice can be built from a raw pointer
-    //< (`Slice<|$U8|>::{ .ptr = p, .len = n }`).
+    //< The type argument carries the elements' mutability: `U8$[]` (the `$` on `T`) is mutable,
+    //< `U8[]` is not. **One level of weakening is allowed**, so the mutable version can be passed
+    //< to an immutable parameter. `ptr` and `len` are `pub` so a slice can be built from a raw
+    //< pointer (`U8$[]::{ .ptr = p, .len = n }`).
     pub ptr: T$@ //< where the sequence begins
     pub len: Sz //< how many elements it holds
 
-impl<|T|> Slice<|$T|>: Index_place<|Sz, T|> //< so an element of a writable slice can be written
+impl<|T|> T$[]: Index_place<|Sz, T|> //< so an element of a writable slice can be written
     //<
     //< **Only for the mutable version** (the `$` on the implementing type).
     //< **The receiver is a `Self@`**: it only reads the descriptor (`../docs/SPEC-language.md`'s
@@ -501,7 +448,7 @@ impl<|T|> Slice<|$T|>: Index_place<|Sz, T|> //< so an element of a writable slic
             bounds_panic("Slice.at", index, r.len, file, line)
         return r.ptr + index
 
-impl<|T|> Slice<|T|>: Index_ref<|Sz, T|> //< so an element can be read without copying
+impl<|T|> T[]: Index_ref<|Sz, T|> //< so an element can be read without copying
     //<
     //< **For both versions** (no `$` on the implementing type): the mutable one needs it too.
     #inline

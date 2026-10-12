@@ -6,8 +6,8 @@
 //< The rest is in ksplc's own `lsp` suite; this one drives the same client
 //< (`ksplc/tests/support/lsp_client.kspls`) with the repository's root as the workspace.
 import "ksplc/tests/support/harness" as ksplc_harness
-import "ksplc/tests/support/lsp_calls" { Prepared, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_outline" { Prepared, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_read" { end_text, from_names, has_name, is_missing }
 import "std/chars"
 import "std/ds" { List }
@@ -246,17 +246,13 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
     d: = arena.text().s("\{seen\} marks").take()
     verdict.check(shown, worst_ms < worst_gap_max_ms, d)
 
-priv fn empty_obj(arena: Arena$@): json.Val
-    $b: = Json_builder.new(arena)
-    return b.obj().build()
-
 fn main(): I32
     arena: = harness.begin(512 * 1024 * 1024)
     exe: = ksplc_harness.ksplc_exe()
     root: = harness.root()
     // Start it with the server left standing (the reason is `lsp_client.kspls`'s opening header).
-    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir()) catch panic("KSPLC_STD_DIR could not be \
-        set")
+    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir())
+        catch panic("KSPLC_STD_DIR could not be set")
     // **Call it before the other queries.** The silence is measured with nothing read yet; placed
     // after them, the files are already read and a lighter path is measured.
     check_worker_alive_workspace(exe, root, arena)
@@ -265,7 +261,7 @@ fn main(): I32
         return ksplc_harness.fatal("the language server cannot be started")
     defer c.free()
     init: =
-        c.request("initialize", empty_obj(arena), lsp_client.read_ms, arena) catch e
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch e
         return ksplc_harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     if !verdict.check("the language server comes up over the whole tree",

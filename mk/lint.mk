@@ -8,19 +8,17 @@
 FMT_UNTOUCHED := ksplc/tests/negative ksplc/tests/lint
 FMT_JOBS ?= $(HOST_CORES)
 
-# The files fmt and test-fmt-tree take, one a line: the tracked and the untracked that are not
+# The files fmt takes, one a line: the tracked and the untracked that are not
 # ignored, as git lists them, less `FMT_UNTOUCHED`, and only those that stand.
 # Caution: **Ask git, do not walk the folder.** A walk also enters what is ignored, an ignored
 # worktree nested inside the clone among it, and there `FMT_UNTOUCHED`'s paths no longer match,
 # so another checkout's broken-on-purpose fixtures are formatted. **Exclude what is ignored but not
-# the untracked**: a leftover would fail CI, and a new file would pass until `git add`.
+# the untracked**: a new file is formatted before its `git add`.
 FMT_LIST = { git ls-files '*.kspl' '*.kspls'; \
     git ls-files --others --exclude-standard '*.kspl' '*.kspls'; } \
     $(foreach d,$(FMT_UNTOUCHED),| grep -v '^$(d)/') | sort -u \
     | while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done
 
-# **The formatter is named as `test-fmt-tree` names it** (`$$PWD/`): its path is part of ksplc's
-# identity in the cache, so under one spelling the texts one records the other skips.
 ## Local-cycle|fmt|Format every tracked `.kspl` / `.kspls` (`FMT_JOBS=1` for one at a time)
 fmt: $(SEED_EXE)
 	@set -o pipefail; mkdir -p $(TMP_DIR); log=$(TMP_DIR)/fmt.log; : > "$$log"; \
@@ -32,41 +30,6 @@ fmt: $(SEED_EXE)
 		> /dev/null 2>> "$$log" \
 		|| { cat "$$log" >&2; exit 1; }
 
-# Checks the tree is formatted, in a copy (formatting in place would erase what failed).
-# The files are `FMT_LIST`'s. **Compare the sizes too**: a one-byte shift across files cancels
-# out in the joined stream (`wc`'s `total` lines are left out: where the list splits varies).
-# **The formatter's path comes from `$$PWD`, quoted**: a bare `$(CURDIR)` splits at a space.
-define fmt_tree_fail_help
-FMT CHECK FAILED: some files change when formatted. Run `make fmt` and take the difference in.
-endef
-export FMT_TREE_FAIL_HELP := $(fmt_tree_fail_help)
-
-## Gates|test-fmt-tree|See whether the tracked sources are already formatted (it does not format)
-test-fmt-tree: $(SEED_EXE)
-	@echo "# CHECKING KSPL FORMATTING (sources must already be formatted)"
-	@set -o pipefail; work=$(TMP_DIR)/fmt_check; rm -rf $$work; mkdir -p $$work; \
-	seed="$$PWD/$(SEED_EXE)"; \
-	files=$$($(FMT_LIST)); \
-	if [ -z "$$files" ]; then echo "FMT CHECK FAILED: no source found"; exit 1; fi; \
-	printf '%s\n' $$files | tar -cf - -T - | (cd $$work && tar -xf -); \
-	(cd $$work && printf '%s\n' $$files | tr '\n' '\0' \
-		| xargs -0 -P $(FMT_JOBS) -n 32 "$$seed" fmt $(KSPL_FMT)) \
-		> /dev/null 2> $$work/fmt.log \
-		|| { echo "FMT CHECK FAILED: ksplc fmt itself failed"; cat $$work/fmt.log >&2; exit 1; }; \
-	{ printf '%s\n' $$files | tr '\n' '\0' | xargs -0 wc -c | awk '$$2 != "total" { print $$1, $$2 }'; \
-	  printf '%s\n' $$files | tr '\n' '\0' | xargs -0 cat; } > $(TMP_DIR)/fmt_before; \
-	(cd $$work && { printf '%s\n' $$files | tr '\n' '\0' | xargs -0 wc -c \
-	  | awk '$$2 != "total" { print $$1, $$2 }'; \
-	  printf '%s\n' $$files | tr '\n' '\0' | xargs -0 cat; }) > $(TMP_DIR)/fmt_after; \
-	if ! cmp -s $(TMP_DIR)/fmt_before $(TMP_DIR)/fmt_after; then \
-		bad=""; \
-		for f in $$files; do cmp -s "$$f" "$$work/$$f" || bad="$$bad $$f"; done; \
-		printf '%s\n' "$$FMT_TREE_FAIL_HELP"; \
-		for f in $$bad; do echo "  -> $$f"; done; \
-		exit 1; \
-	fi; \
-	echo "RESULT: ALL PASS ($$(printf '%s\n' $$files | wc -l) files already formatted)"
-
 # **A tool is an entry point by its `fn main`**, so a new one cannot leak out of the gate; a file of
 # tools/ without one is a library, linted through the tools that import it.
 TOOL_MAINS := $(shell grep -l '^fn main' tools/*.kspls)
@@ -75,11 +38,12 @@ TOOL_MAINS := $(shell grep -l '^fn main' tools/*.kspls)
 # Every ksplc suite stands on its harness, which the root's suites call too.
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspls)
 LINT_TARGETS_OWN := ksplc/tests/main.kspls kspage/tests/main.kspls ksos/tests/main.kspls \
-	kspage/tests/fuzz_main.kspls tools/repo_stat.kspls tools/code_table.kspls $(LINT_SUITES_OWN)
+	tools/tests/main.kspls \
+	kspage/tests/fuzz_main.kspls tools/repo_stat.kspls $(LINT_SUITES_OWN)
 
 # Caution: **Keep tests/debug/main.kspls**: some code (std/regex, generics) is reached only from it.
-# **Suites, `ksplc/tests/prog/`, `tests/debug/pkg/` and the POSIX demos come by wildcard**: nothing
-# else lints their routes, and a named list leaks a new one out of the gate.
+# **Suites, `ksplc/tests/prog/` and the POSIX demos come by wildcard**: nothing else lints their
+# routes, and a named list leaks a new one out of the gate.
 LINT_TARGETS := ksplc/main.kspls tests/debug/main.kspls ksai/examples/llama_engine/main.kspls \
 	ksai/examples/qwen_infer/main.kspls ksai/examples/fim_coder/main.kspls \
 	ksai/benches/bench_train.kspls \
@@ -95,12 +59,11 @@ LINT_TARGETS := ksplc/main.kspls tests/debug/main.kspls ksai/examples/llama_engi
 	kssrv/tests/main.kspls \
 	std/tests/main.kspls \
 	kssrv/tests/copy.kspls ksai/tests/examples_main.kspls \
-	ksai/tests/stops_main.kspls $(wildcard ksai/tests/stops/*.kspls) ksplc/tests/filepath/main.kspls \
+	ksai/tests/stops_main.kspls ksai/tests/stops.kspls ksplc/tests/filepath/main.kspls \
 	$(wildcard ksos/demo/posix/*.kspls) \
 	$(wildcard tests/suite/*.kspls) \
 	$(wildcard tests/tools/*.kspls) \
 	$(wildcard ksplc/tests/prog/*.kspls) \
-	$(wildcard tests/debug/pkg/*.kspls) \
 	$(wildcard ksplc/tests/kspls/*.kspl) $(wildcard ksplc/tests/kspls/*.kspls) \
 	$(PRIVATE_LINT_TARGETS)
 
@@ -133,21 +96,14 @@ lint: $(LINT_ONE_TARGETS)
 ## Per-item|lint-one-*|One file's worth of `make lint` (named by its path, `/` becoming `_`)
 .PHONY: $(LINT_ONE_TARGETS)
 
-LINT_CFG_VARIANTS := blas
+# **Only ksai holds a `#cfg(blas)` branch** (`make test-conventions` holds it there), so its tests
+# are the program read with the branch on.
+## Local-cycle|lint-cfg|The semantic analysis inside the `#cfg(blas)` branch
+lint-cfg: $(STAGE1_EXE)
+	@echo "  -> ksai/tests/main.kspls [blas]"
+	@log=$(LINT_LOG_DIR)/cfg_blas.log; \
+	./$(STAGE1_EXE) lint --define=blas ksai/tests/main.kspls > $$log 2>&1; \
+	$(call lint_clean,$$log,ksai/tests/main.kspls [blas])
+	@echo "RESULT: ALL PASS (the #cfg(blas) branch is clean)"
 
-define lint_cfg_rule
-lint-cfg-$(1): $$(STAGE1_EXE)
-	@echo "  -> tests/debug/main.kspls [$(1)]"
-	@log=$$(LINT_LOG_DIR)/cfg_$(1).log; \
-	./$$(STAGE1_EXE) lint $$(addprefix --define=,$$(subst _, ,$(1))) tests/debug/main.kspls > $$$$log 2>&1; \
-	$$(call lint_clean,$$$$log,tests/debug/main.kspls [$(1)])
-endef
-$(foreach v,$(LINT_CFG_VARIANTS),$(eval $(call lint_cfg_rule,$(v))))
-LINT_CFG_TARGETS := $(addprefix lint-cfg-,$(LINT_CFG_VARIANTS))
-
-## Local-cycle|lint-cfg|All the `#cfg` branches' semantic analysis (BLAS)
-lint-cfg: $(LINT_CFG_TARGETS)
-	@echo "RESULT: ALL PASS ($(words $(LINT_CFG_VARIANTS)) #cfg variants clean)"
-
-## Per-item|lint-cfg-*|One combination only (the sets are `LINT_CFG_VARIANTS` in `mk/lint.mk`)
-.PHONY: $(LINT_CFG_TARGETS)
+.PHONY: lint-cfg

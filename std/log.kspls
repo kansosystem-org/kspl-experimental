@@ -91,11 +91,6 @@ impl Log
         return Log::{ .dest = dest, .least = least, .tag = tag, .sep = sep, .place = place,
             .open = false, .hurry = false }
 
-    pub fn wants(r: Self@, lv: Level): Bool //< whether a line at that level would be emitted
-        //<
-        //< `at` checks it itself; a caller uses it to skip a whole gathering step.
-        return lv.rank() <= r.least.rank()
-
     // **Write any line that carries a value through this function**: interpolation streams into a
     // writer, so `"conn #\{n\}"` goes here, and the body does not run when the level is off ("A
     // line that is not emitted is not built" in `std/docs/DESIGN.md`).
@@ -106,7 +101,7 @@ impl Log
         file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
         line: Sz = caller_line, //< keep the default unless this is called from a wrapper
     ): Writer?
-        if !r.wants(lv)
+        if lv.rank() > r.least.rank()
             return .none
         r.open_line(lv, file, line)
         return .some(r.dest)

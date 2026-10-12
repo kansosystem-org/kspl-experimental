@@ -1,0 +1,222 @@
+//< Traits: a default body copied to an implementation, and a method reached only through a value
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/verdict"
+
+// ==========================================
+// A trait's default body is copied to an implementation that did not write it. The copy is made
+// by `ksplc/sema/decl/trait_default.kspls`, **into the impl's block**, where `Self` and the impl's
+// type arguments take effect as they are.
+// ==========================================
+priv trait Seqish<|E|>
+    fn head(r: Self): E?
+
+    fn head_or(r: Self, alt: E): E //< the default body
+        //<
+        //< It calls a declaration-only method (`head`), which must resolve to the receiver's
+        //< implementation.
+        if v: = r.head()
+            return v
+        return alt
+
+priv struct One<|A|>
+    priv v: A
+
+impl<|A|> One<|A|>: Seqish<|A|>
+    priv fn head(r: Self): A?
+        return .some(r.v)
+
+priv struct Pair<|X, Y|> //< the trait's `E` is `Y` in the impl
+    priv a: X
+    priv b: Y
+
+impl<|X, Y|> Pair<|X, Y|>: Seqish<|Y|>
+    priv fn head(r: Self): Y?
+        return .some(r.b)
+
+priv struct Blank //< an implementation that overrides the default with its own
+    priv unused: I32
+
+impl Blank: Seqish<|I32|>
+    priv fn head(_r: Self): I32?
+        return .none
+
+    priv fn head_or(_r: Self, _alt: I32): I32
+        return -1
+
+priv trait Bagish<|E|> //<
+    //< A generic trait whose type argument an impl fills with a built-in name
+    //<
+    //< The `E` inside the copied body is replaced by the name the impl gave, so a name **built in
+    //< yet with a large id**, such as `Sz` / `I64` / `F64`, goes there.
+    //<
+    //< The built-in range must not be a written number (is_builtin in `ksplc/sema/type/env.kspls`).
+    fn one(r: Self): E
+
+    fn pair(r: Self, arena: Arena$@): List<|E|>
+        $out: = List<|E|>.new(arena)
+        out.push(r.one())
+        out.push(r.one())
+        return out
+
+priv struct Counted
+    priv v: Sz
+
+impl Counted: Bagish<|Sz|>
+    priv fn one(r: Self): Sz
+        return r.v
+
+priv struct Weighed
+    priv v: F64
+
+impl Weighed: Bagish<|F64|>
+    priv fn one(r: Self): F64
+        return r.v
+
+fn test_trait_default_body()
+    verdict.start("[Trait] the default body is copied to the implementing side test...")
+    assert(One<|I32|>::{ .v = 7 }.head_or(0) == 7, "it is copied to a generic implementation")
+    // The `E` → `Y` replacement; if wrong, it is `X` (U8[]) and the types disagree.
+    assert(Pair<|U8[], I64|>::{ .a = "x", .b = 9 }.head_or(0) == 9,
+        "the declaration's type argument turns into the actual argument")
+    assert(Blank::{ .unused = 0 }.head_or(5) == -1, "the side that wrote its own wins")
+    arena: = Arena.new(4096)
+    defer arena.free()
+    szs: = Counted::{ .v = 3 }.pair(arena)
+    assert(szs.len == 2 && szs.get(0) == 3, "the built-in `Sz` is copied as a type argument too")
+    ws: = Weighed::{ .v = 1.5 }.pair(arena)
+    assert(ws.len == 2 && ws.get(1) == 1.5, "the built-in `F64` is copied as a type argument too")
+    verdict
+        .pass("a default body is copied to the implementations that did not write one, and no \
+            further.")
+
+// ==========================================
+// Where a generic's instantiation crosses a vtable, **a method called only through a trait value
+// must have a definition too**. It is never called by name, so "built when used" would leave a
+// hole in the vtable with no diagnostic (`ksplc/lower/vtable.kspls`).
+// Caution: **Make the body depend on the type argument** (`sizeof(T)`), or definitions collapsed
+// into one pass unseen.
+// ==========================================
+priv trait Sized_say
+    fn say(r: Self): Sz
+
+priv struct Say_box<|T|>
+    v: T
+
+impl<|T|> Say_box<|T|>: Sized_say
+    priv fn say(_r: Self): Sz //< this name is never written as `b.say()` directly from anywhere
+        return sizeof(T)
+
+fn test_generic_vtable_only_method()
+    verdict.start("[Generic] a method called only through a trait value is generated test...")
+    small: = Say_box<|U8|>::{ .v = 1 }
+    wide: = Say_box<|I64|>::{ .v = 1 }
+    s1: Sized_say = small
+    s2: Sized_say = wide
+    assert(s1.say() == 1, "the U8 instantiation returns 1")
+    assert(s2.say() == 8, "the I64 instantiation returns 8")
+    assert(s1.say() != s2.say(), "each instantiation is a separate function (not merged into one)")
+    verdict
+        .pass("a generic method called only through a trait value is generated per instantiation.")
+
+// ==========================================
+// The two shapes of a `for x in` loop: by subscript, or by an `Iter`'s `next()`
+// The type being looped over decides which (`ksplc/sema/body/for_in.kspls`).
+// **The subscript shape is the default**: most loops are over an array, a slice or a `List`, and
+// `next()` would add an `Option` for every element. **An `Iter` has neither a length nor a
+// position** (a filtered or converted run), so it cannot be subscripted.
+// ==========================================
+priv struct Countdown
+    priv n: I32
+
+impl Countdown: Iter<|I32|>
+    priv fn next(r: Self$@): I32? //<
+        //< The receiver may be `Self$@` (the trait writes `Self`)
+        if r.n <= 0
+            return .none
+        r.n -= 1
+        return .some(r.n)
+
+fn test_loop_in_over_iter()
+    verdict.start("[Iter] for x in turns in next()'s shape too test...")
+    $total: = 0
+    for v in Countdown::{ .n = 4 }
+        total += v
+    assert(total == 6, "3+2+1+0 = 6")
+    // **The default body must reach a `priv` type too.** Left where the trait is, the copy is "in
+    // another file" and neither this call nor its `next` resolves (adopt_as_impl_method in
+    // `ksplc/sema/decl/trait_default.kspls`).
+    assert(Countdown::{ .n = 4 }.count() == 4, "`Iter`'s default body reaches a priv type too")
+    verdict.pass("a type that gives itself as `Iter` can be turned with for x in.")
+
+fn test_loop_in_over_indexed(arena: Arena$@)
+    verdict.start("[Iter] the side turning by subscript has not changed test...")
+    xs: = List<|I32|>.create(arena)
+    xs.push(1)
+    xs.push(2)
+    xs.push(3)
+    $total: = 0
+    for v in xs
+        total += v
+    assert(total == 6, "1+2+3 = 6")
+    // An array and a slice take the same path.
+    arr: I32[3] = ::{ 4, 5, 6 }
+    $sum2: = 0
+    for v in arr
+        sum2 += v
+    assert(sum2 == 15, "4+5+6 = 15")
+    verdict.pass("a partner holding `.len` and a subscript turns by subscript as it always did.")
+priv fn total_of<|C|>(c: C): I32 //< a `for x in` inside a generic's body
+    //<
+    //< **The shape is decided per instantiation**; the template does not know the type yet.
+    $sum: = 0
+    for v in c
+        sum += v
+    return sum
+
+fn test_loop_in_inside_generic(arena: Arena$@)
+    verdict.start("[Iter] the shape is decided per instantiation inside a generic body too test...")
+    xs: = List<|I32|>.create(arena)
+    xs.push(1)
+    xs.push(2)
+    xs.push(3)
+    assert(total_of<|List<|I32|>$@|>(xs) == 6, "the subscript side: 1+2+3 = 6")
+    assert(total_of<|Countdown|>(Countdown::{ .n = 4 }) == 6, "the next() side: 3+2+1+0 = 6")
+    verdict.pass("one template expands into a different shape per instantiation.")
+priv struct Both_shapes //< a type with `.len` and a subscript that also conforms to `Iter`
+    priv len: Sz
+    priv pos: I32
+
+impl Both_shapes: Index<|Sz, I32|>
+    priv fn get(_r: Self@, i: Sz): I32
+        return 100 + I32::i
+
+impl Both_shapes: Iter<|I32|>
+    priv fn next(r: Self$@): I32?
+        if r.pos >= 3
+            return .none
+        r.pos += 1
+        return .some(r.pos)
+
+fn test_iter_wins_over_index()
+    verdict.start("[Iter] Iter wins for a type satisfying both test...")
+    $sum: = 0
+    for v in Both_shapes::{ .len = 3, .pos = 0 }
+        sum += v
+    // By subscript it would be 100+101+102 = 303, by `next()` it is 1+2+3 = 6.
+    assert(sum == 6, "the next() side is chosen")
+    assert(Both_shapes::{ .len = 3, .pos = 0 }.count() == 3,
+        "the default body counts on the next() side too")
+    // Caution: **It must work as a trait value too.** `Iter`'s default body (`count`) has no vtable
+    // slot; if the code that fills the vtable and the code that emits it disagree, the C breaks
+    // **with no KSPL diagnostic** (has_vtable_slot in `ksplc/base/ast_ext.kspls`).
+    $shapes: = Both_shapes::{ .len = 3, .pos = 0 }
+    as_iter: Iter<|I32|> = shapes@
+    $via: = 0
+    for
+        if v: = as_iter.next()
+            via += v
+        else
+            break
+    assert(via == 6, "it turns by next() through a trait value too")
+    verdict.pass("an `Iter` given explicitly does not lose to a match on structure alone.")

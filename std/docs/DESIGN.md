@@ -89,8 +89,7 @@ Each row is a bug or attack that other libraries are known for, and what the `st
 | File | The problem | Seen in | What `std` does |
 | :-- | :-- | :-- | :-- |
 | `net` | **A write may send only part of the data** (a *short write*), yet callers keep discarding the count it returns. That is why Go and Rust hold a separate "write everything" API | POSIX `send(2)`, Go's `io.Writer`, Rust's `Write` | Both `write` (returns how much it sent) and `write_all` (sends it all), so the name states the intent. `std/http` uses `write_all` |
-| `net` | **A port out of range wraps around.** The field holds 16 bits, so 83659 binds 18123 and -1 binds 65535, with no error. Rust and Swift make the type 16 bits; Python, Java and Go refuse it at run time | C's `sockaddr_in` and `htons` | Every entry taking a port (`bind`, `connect`, `connect_nonblocking`, `send_to`) refuses one outside 0 to 65535 as `Net_error.bad_port`. The runtime refuses it too, as a backstop |
-| `net` | **A datagram longer than the buffer** (a datagram is one UDP message): POSIX returns the cut part as a success, Windows fails with `WSAEMSGSIZE`, and Rust, Python and Go pass that difference on | BSD sockets' `recvfrom`, Winsock's | `recv_from` fails as `Net_error.datagram_too_long` on every OS (on POSIX it reads `MSG_TRUNC` from `recvmsg`). The datagram is consumed either way, so the next one arrives whole |
+| `net` | **A port out of range wraps around.** The field holds 16 bits, so 83659 binds 18123 and -1 binds 65535, with no error. Rust and Swift make the type 16 bits; Python, Java and Go refuse it at run time | C's `sockaddr_in` and `htons` | Every entry taking a port (`bind`, `connect`) refuses one outside 0 to 65535 as `Net_error.bad_port`. The runtime refuses it too, as a backstop |
 | `net` | **An accepted socket's mode depends on the OS.** A *non-blocking* socket returns "not ready" where a blocking one would wait. From a non-blocking listener, Linux returns a blocking socket, while Windows, macOS and the BSDs copy the non-blocking mode. So the same read waits on one OS and returns "not ready" on another. Python made `accept` return blocking for this reason | BSD sockets' `accept` | `accept` returns a blocking stream on every OS. A reactor's caller makes it non-blocking by asking, as for any other stream |
 | `http` | **Request smuggling**: two programs on the way (a proxy and a server) see a different end for the same request, so a second request hides inside the first. The causes: `Content-Length` and `Transfer-Encoding` read differently, or `Content-Length` given twice | HTTP/1.1 implementations in general | Refuses any `Transfer-Encoding`, and a duplicated `Content-Length` whose values disagree |
 | `http` | **Response splitting**: a line break (CRLF) injected into a header value starts a header or a response of its own | The same | Refuses at write time a CRLF in a header name or value, the method, the target or the reason phrase |
@@ -226,9 +225,7 @@ So **the receiver** aligns it (`align_pad` in `std/mem.kspls`), rather than aski
 
 ### String functions are split by whether they allocate
 
-`std/chars` only looks at text and never allocates memory; `std/str` builds new text and may allocate. So a file that cannot afford the whole string set can still test characters and cut slices.
-
-**The split is by whether a function allocates, not by line count.** A file such as `std/base64` or `std/sha256` can still use single-character tests and slicing, since `chars` needs neither `std/mem` nor `std/ds`.
+**`std/chars` only looks at text and never allocates memory, and `std/str` builds new text and may allocate: the split is by whether a function allocates, not by line count.** So a file that cannot afford the whole string set, such as `std/base64` or `std/sha256`, can still test characters and cut slices, since `chars` needs neither `std/mem` nor `std/ds`.
 
 | File | What it does | Allocates? |
 | :-- | :-- | :-- |
@@ -414,7 +411,7 @@ The rule is `docs/SPEC-language.md` 7.2, the reasoning `docs/DESIGN.md` 9.2.
 
 | | Functions | Driven by |
 | :-- | :-- | :-- |
-| Eager: returns a `List` | `str.split` / `json.Val.arr_list` / `fs.read_dir`, and each `std/seq` operation needing the whole (`order_by` / `reversed` / `distinct`) | Nothing: the work is done on return |
+| Eager: returns a `List` | `str.split` / `json.Val.arr_list` / `fs.read_dir`, and each `std/seq` operation needing the whole (`order_by` / `distinct`) | Nothing: the work is done on return |
 | Lazy: a chain | Only `where` / `select` | `for x in`, `to_list(arena)` or `count()` |
 
 **A function returning elements in order that may allocate them all is eager, returning a `List`.** A `List` carries `.len` and an index, so `for x in` walks it by index; it is not given `Iter`, which would win over the index. The eager side allocates more, so only code tolerating a slowdown (tools, example code) may rely on it. Where it may not, `std/` itself included, is for `docs/DESIGN.md` 8.3 to say.
@@ -457,15 +454,15 @@ Only `where` (keep the elements that pass a test) and `select` (turn each elemen
 | Kind of operation | Examples | Where it lives |
 | :-- | :-- | :-- |
 | A stage of the chain | `where`, `select` | The chain |
-| Needs the whole list | `order_by` / `reversed` / `distinct` | `List<\|T\|>` |
-| Returns one answer | `first` / `any` / `all` / `min_by` | `List<\|T\|>` |
+| Needs the whole list | `order_by` / `distinct` | `List<\|T\|>` |
+| Returns one answer | `first` / `any` / `all` | `List<\|T\|>` |
 | A sum | None: write the `for` loop | — |
 
 There is no `sum`: without overloading it would be one method per numeric type, each the same three-line loop a `for` writes directly. **Only `where` and `select` ride on the chain**, because the stages' types nest. Each new kind of stage multiplies the code that keeps every operation callable from every stage, since the ones returning a stage cannot become a trait's methods (the section above).
 
 A predicate (a test returning `Bool`), selector or comparator is taken as `Callable1` / `Callable2`, so a caller passes a closure as it is. A *closure* is a function value that carries variables from the place where it was made (its *captures*).
 
-Caution: **Do not turn it back into a function pointer.** `where` / `any` / `all` / `first_where` are useless unless the predicate can be given what is searched for: "does it contain this node" could not be written, and a plain `for` would replace them. A function value with a capture carries the function and its environment, which one function pointer cannot hold ([`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) 8.1, "Closures").
+Caution: **Do not turn it back into a function pointer.** `where` / `any` / `all` are useless unless the predicate can be given what is searched for: "does it contain this node" could not be written, and a plain `for` would replace them. A function value with a capture carries the function and its environment, which one function pointer cannot hold ([`../../docs/SPEC-language.md`](../../docs/SPEC-language.md) 8.1, "Closures").
 
 **Whether a callback is a function pointer or a `Callable` depends on whether it needs a capture** (the rule is "Whether a callback is received as a function pointer or as a `Callable`" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). `std/fs`'s `skip_dir` makes do with a constant set of names, so it takes a function pointer. `std/thread`'s `spawn` has no choice, since its `entry` crosses the C boundary. Do not reason "it is a predicate, so a `Callable`": taking a `Callable` where no capture is needed stops one named predicate from being passed to several functions.
 
@@ -607,7 +604,7 @@ Passing `","` as `new`'s `sep` (by default `": "`) gives rows a spreadsheet filt
 
 **The body is written exactly as the caller wrote it, on purpose.** Nothing quotes it, so a caller that needs columns of its own writes them: `say(.error, "row 1 value,row 2 value")` makes three columns, not one. Quoting would take that away and make every line pay for doubling quotes whether or not anything reads the log as a table.
 
-Caution: **So the caller owns the row's shape past the fields written here.** A body holding a newline breaks the row, and one holding a quote is not what a strict reader expects: the logger separates fields, it does not escape them. The check is `test_log_parts_its_fields_with_the_separator_given` in [`tests/log_test.kspls`](../tests/log_test.kspls).
+Caution: **So the caller owns the row's shape past the fields written here.** A body holding a newline breaks the row, and one holding a quote is not what a strict reader expects: the logger separates fields, it does not escape them. The check is `test_log_parts_its_fields_with_the_separator_given` in [`tests/verdict_test.kspls`](../tests/verdict_test.kspls).
 
 ### No time is stamped here
 
@@ -885,16 +882,6 @@ Every wait std takes in milliseconds (a child's pipe, a socket, `std/reactor`'s 
 
 Caution: **Read the sign in one place, the runtime's entry** (`kspl_wait_ms`). Read where each OS call takes it, `-1` waited for good in POSIX `poll()`, 49 days through Windows' unsigned tick comparison, and not at all on POSIX's write deadline: one number, three behaviours, and a program that worked on one OS hung on another.
 
-### A date-time that does not fit a fixed-length date-time format is refused as a value
-
-`write_rfc1123` / `write_iso8601` refuse a year they cannot write in exactly four digits, rather than write a wrong one.
-
-`std/time`'s `write_rfc1123` / `write_iso8601` write into the caller's fixed-length array (why they take no `Writer` is "Why one import brings few files along" below). RFC 1123 and RFC 3339 fix the year at 4 digits (`date-fullyear = 4DIGIT`). So the year 10000 and dates BC **cannot be written in these formats**, and are refused with a `Time_error`.
-
-Caution: **Do not silently write the low 4 digits.** The year 10000 written as `0000` reads back as the year 0, and a negative year makes the per-digit remainder negative and writes non-digit bytes: both change the value with no diagnostic (Principle 5).
-
-**Nor is the format extended** (ISO 8601's extended notation `+10000-01-01`): a variable-length format does not fit a fixed-length array.
-
 ## Files and paths
 
 ### Paths are held in UTF-8, and converted to the wide API on Windows
@@ -939,9 +926,7 @@ Note: One difference remains. POSIX renames a directory over an empty one, while
 
 ### A long path is handed to Windows in the extended form
 
-On Windows, a path of 248 UTF-16 units or more is handed over with the `\\?\` prefix, which lifts Windows's usual limit of 260. KSPL code never sees the prefix.
-
-**A path of 248 UTF-16 units or more goes to the OS as `\\?\C:\…`, or as `\\?\UNC\server\…` on a share.** Passed as it is, every file function stops at 260 (`CreateDirectoryW` at 248), the limit Windows keeps unless both the machine and the program opt out. A build cache inside a OneDrive folder easily puts files past that depth. clang and lld widen a path themselves and write them, but without the extended form `std/fs` can neither see, reuse nor delete them. Nothing on Linux or on CI's shorter checkout can show it.
+**On Windows, a path of 248 UTF-16 units or more goes to the OS with the `\\?\` prefix (`\\?\C:\…`, or `\\?\UNC\server\…` on a share), which lifts Windows's usual limit of 260; KSPL code never sees the prefix.** Passed as it is, every file function stops at 260 (`CreateDirectoryW` at 248), the limit Windows keeps unless both the machine and the program opt out. A build cache inside a OneDrive folder easily puts files past that depth. clang and lld widen a path themselves and write them, but without the extended form `std/fs` can neither see, reuse nor delete them. Nothing on Linux or on CI's shorter checkout can show it.
 
 **The OS's switch is not relied on**: it needs `LongPathsEnabled` for the whole machine, which takes an administrator, and a manifest in every program, so a program relying on it breaks on most machines, far from the cause.
 
@@ -993,9 +978,7 @@ Caution: **Do not substitute `stat`.** It follows a link, answering "a directory
 
 ### Making a directory refuses an existing name, and removing a tree is not offered
 
-`std/fs` makes a new directory or file by trying to create it, never by checking first and creating afterwards. It offers no function that deletes a whole tree.
-
-**`mkdir_unique` decides "new" by making, not by looking first**: between a look and the making, another process could slip a link in. A taken name is retried with another random tail, as Python's `mkdtemp` and Go's `os.MkdirTemp` do. `write_tree` refuses a name that climbs out before writing anything, so a list of names taken from outside cannot write beside the tree.
+**`std/fs` makes a new directory or file by trying to create it, never by checking first and creating afterwards**: between a look and the making, another process could slip a link in. `mkdir_unique` retries a taken name with another random tail, as Python's `mkdtemp` and Go's `os.MkdirTemp` do. `write_tree` refuses a name that climbs out before writing anything, so a list of names taken from outside cannot write beside the tree.
 
 **`write_unique` gives a file its owner-only mode as it creates it**, for a file holding what others on the machine must not read. Creating with 0600 decides the mode from the first byte; a `chmod` after creating leaves a moment in which another user can open the file and keep reading it. Creating decides that the name is new, as for `mkdir_unique`, so a link planted at the name is not followed. Python's `mkstemp` does the same. **On Windows no ACL is set**: the file takes its folder's, as `dir_trust` reads none there. Setting one means building a security descriptor for the current user, which no caller has needed yet.
 
@@ -1011,9 +994,7 @@ Caution: **Do not substitute `stat`.** It follows a link, answering "a directory
 
 ### A cache folder that others can write is refused
 
-A build cache in a folder that another user could write is refused.
-
-**What a build cache holds is built into the user's programs**, so a folder another user could write is a way to run code as the user. `std/fs`'s `dir_trust` says who besides the current user could have put something in a directory:
+**A build cache in a folder that another user could write is refused: what the cache holds is built into the user's programs, so such a folder is a way to run code as the user.** `std/fs`'s `dir_trust` says who besides the current user could have put something in a directory:
 
 | Answer | Meaning |
 | :-- | :-- |
@@ -1136,7 +1117,7 @@ Caution: **Do not wait for one candidate's reply before trying the next.** Where
 
 **Do not decide a connection's failure by `poll`'s reply**: Windows's `WSAPoll` does not report a failed connection (curl does not rely on it either), so an empty wait cannot be told from a refusal. The socket's own answer decides a failure (`SO_ERROR`), checked every round; the wait is taken in slices, never given an infinite timeout.
 
-**A success needs both answers**: the wait reported the socket writable, and `getpeername` succeeds on it. The socket's answer alone is not enough on Windows, where an attempt still in flight can pass it, and the first such attempt in the order would win over the one that connected. `Tcp_stream.is_connected` asks only the socket, because its caller calls it after the reactor reported the stream writable.
+**A success needs both answers**: the wait reported the socket writable, and `getpeername` succeeds on it. The socket's answer alone is not enough on Windows, where an attempt still in flight can pass it, and the first such attempt in the order would win over the one that connected.
 
 **Failures are split into "the name does not resolve" and "it resolved but does not connect"**; only the per-candidate reasons are folded (a fixed number of entries, allocating no buffer).
 
@@ -1157,7 +1138,7 @@ Caution: **Do not fold across that line.** It decides whether the caller fixes t
 
 **Do not pass the same option everywhere for uniform code**: it would share the socket on one OS only. The exclusive option sometimes cannot rebind until the accepted connections have fully closed, and is taken even so: waiting is visible and fixable, whereas a shared socket breaks as only half the incoming connections arriving, with the cause invisible.
 
-**`Udp_socket.send_to` alone takes no name, only an address string**: a name is resolved once with `resolve_one` and the result carried, so no datagram hides a lookup. KSPL caches no resolver answers; Java caches in the language, and then misses a party whose address changes. An address buffer shorter than `addr_text_max` is refused rather than truncated: a truncated `2001:db8::1` looks like another address, `2001:db8:`.
+**KSPL caches no resolver answers**: each `connect` resolves its name again. Java caches in the language, and then misses a party whose address changes. An address buffer shorter than `addr_text_max` is refused rather than truncated: a truncated `2001:db8::1` looks like another address, `2001:db8:`.
 
 ### The frame is kept apart from the transport, and a broken frame is returned as a value too
 
@@ -1182,10 +1163,12 @@ What is bounded, and by what:
 | What could run forever | Bounded by |
 | :-- | :-- |
 | Waiting out one frame's declared body | A size limit |
-| Skipping notifications while waiting for one request's response | A count |
+| Waiting for one request's response, past the notifications before it | `Client.request`'s deadline, in real time |
 | Waiting for a whole frame to arrive | `read_msg`'s timeout, in real time |
 
-**Why limits stand in two places**: one is one frame's body, since waiting out a declared length as it stands lets a peer merely declaring 4GB start an endless wait. The other is the number of notifications skipped for one request: on a round whose response was dropped, it would read notifications forever, since the timeout applies per `read_msg` call and they keep coming. In both, "there is a timeout, so it is fine" does not hold, and each must be bound by a count apart from the timeout.
+**Why a frame's body is bound by a size**: waiting out a declared length as it stands lets a peer merely declaring 4GB start an endless wait, however short each read's timeout. "There is a timeout, so it is fine" does not hold for it.
+
+**Why a request's wait is bound by its deadline, not a count of skipped messages**: a server may send any number of notifications before the response (a language server sends one per open document), so a cap on them turns a valid burst into `broken`. One deadline for the whole round trip still ends the wait for a response that was lost, however many notifications keep coming.
 
 **Why the wait for a whole frame is bound by a timeout rather than a count**: `std/subproc`'s timeout is per read, so a peer streaming one byte at a time keeps the reads going without the frame completing. Bounding the number of reads would make the real time to the limit vary with the peer's speed. `read_msg`'s timeout bounds the real time of one call: past the time the caller passed, it returns `timed_out`, however the peer streams, so no count limit is held beside it (Principle 6).
 
@@ -1298,9 +1281,7 @@ A pattern whose every alternative starts with `^` does not move the start positi
 
 ### After `\`, an alphanumeric is accepted only in a defined escape
 
-After a backslash, a letter or digit must be one of the escapes listed below, or the pattern is refused. A symbol after a backslash is the symbol itself.
-
-**Do not leave a branch that swallows it as a literal.** Under "if it is not a known notation, then the character itself", `\t` becomes the character `t` and `\b` the character `b`. The pattern compiles, only the match fails, and all the writer sees is "somehow it does not match". So an alphanumeric always lands in one of four cases.
+**After a backslash, a letter or digit must be one of the escapes listed below, or the pattern is refused; no branch swallows it as a literal.** Under "if it is not a known notation, then the character itself", `\t` becomes the character `t` and `\b` the character `b`. The pattern compiles, only the match fails, and all the writer sees is "somehow it does not match". So an alphanumeric always lands in one of four cases. A symbol after a backslash is the symbol itself.
 
 | The notation | How it is handled |
 | :-- | :-- |
@@ -1363,7 +1344,7 @@ The cause is often small: one error type in a signature brings its whole file al
 | :-- | :-- |
 | `str` | `strfmt`, which it imports for `to_hex_lower` and as the anchor bringing `\{x\}`'s conformances into every program using `str` |
 | `str` | Not `io`: the `Writer` / `Formattable` contract is in `std/lang`, so string-only code is spared file I/O. The reverse, `io` bringing `str` along, remains |
-| `ds`, `sha256`, `time` | Stay outside the lump, because they take no `Writer`: `ds` builds its message with `Panic_msg`, and `sha256` / `time` write straight into the caller's array |
+| `ds`, `sha256` | Stay outside the lump, because they take no `Writer`: `ds` builds its message with `Panic_msg`, and `sha256` writes straight into the caller's array |
 
 **Do not add a function taking a `Writer` for convenience**: it brings the whole lump along.
 

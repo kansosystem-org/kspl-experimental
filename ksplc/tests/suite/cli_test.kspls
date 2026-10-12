@@ -6,7 +6,7 @@
 // ==========================================
 // The properties pinned down:
 //   * `ksplc info <subject>` answers one line, and rejects a wrong subject, naming the valid ones
-//   * `ksplc clean cache` answers with the directory it erased; `ksplc build`, a runnable program
+//   * `ksplc clean` answers with the directory it erased; `ksplc build`, a runnable program
 //   * `ksplc explain <code>` prints only that code's section, and rejects an unknown code
 //   * **an option that has no effect on that subcommand is an error** — silently ignored, it
 //     cannot be told from having worked (Principle 5 in docs/DESIGN.md) — and the error names the
@@ -16,7 +16,7 @@
 // ==========================================
 
 // Caution: **Do not copy the per-subcommand list into here.** Its source is flag_faces in
-// ksplc/main.kspls, which `--help` prints; the test checks that ksplc behaves as those lines say.
+// ksplc/usage.kspls, which `--help` prints; the test checks that ksplc behaves as those lines say.
 import "ksplc/tests/support/harness"
 import "std/chars"
 import "std/ds" { List }
@@ -38,7 +38,7 @@ priv const cache_env: U8[] = "KSPLC_CACHE_DIR" //<
 
 priv fn cache_root(arena: Arena$@): U8[] //< the cache directory for this suite only
     //<
-    //< `info cache-dir` and `clean cache` point here.
+    //< `info cache-dir` and `clean` point here.
     return fs.join(harness.tmp_dir(), "cli_cache", arena)
 
 priv fn cli(args: U8[][]): verdict.Run_out //< it runs ksplc once
@@ -196,9 +196,10 @@ priv fn case_info(arena: Arena$@)
             U8[][]::{ "--std-dir=std", "info", subject }, "does not change this subject's answer")
 
 priv fn case_clean(arena: Arena$@)
-    ok_case("clean cache", U8[][]::{ "clean", "cache" }, cache_root(arena))
-    ng_case("clean: with no subject it turns it away", U8[][]::{ "clean" }, "cache")
-    ng_case("clean: an unknown subject is turned away", U8[][]::{ "clean", "caches" }, "cache")
+    ok_case("clean", U8[][]::{ "clean" }, cache_root(arena))
+    // A word after it would change nothing, so it is refused (Principle 5 in docs/DESIGN.md).
+    ng_case("clean: a subject after it is turned away", U8[][]::{ "clean", "cache" },
+        "usage: ksplc clean\n")
 
 // Names the cleaning takes as its own (64 hexadecimal digits, a `ksplc run` slot's).
 priv const planted_name: U8[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -211,14 +212,12 @@ priv fn plant_link(at: U8[], target: U8[], arena: Arena$@): Bool //< false where
     return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
 
 priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
-    //< `clean cache` removes a link planted in the cache, never what it points at
+    //< `clean` removes a link planted in the cache, never what it points at
     //<
     //< Whoever can write a shared cache folder could otherwise plant `run/<hex>`, or `obj` inside a
     //< slot, pointing at a home folder, and the next cleaning would empty it.
-    name: = "clean cache: a link in the cache leaves its target alone"
-    victim: = harness.sandbox("cli_victim") catch
-        verdict.check(name, false, "the working directory cannot be made")
-        return
+    name: = "clean: a link in the cache leaves its target alone"
+    victim: = harness.sandbox("cli_victim")
     kept: = fs.join(victim, "kept.txt", arena)
     io.write_file(kept, "kept\n") catch
         verdict.check(name, false, "the victim's file cannot be written")
@@ -232,7 +231,7 @@ priv fn case_clean_keeps_link_targets(arena: Arena$@) //<
         !plant_link(fs.join(slot, "obj", arena), victim, arena)
         verdict.skip_check(name, "a link cannot be made with `ln -s` in this environment")
         return
-    r: = cli(U8[][]::{ "clean", "cache" })
+    r: = cli(U8[][]::{ "clean" })
     survived: = fs.exists(kept)
     removed: = !fs.exists(slot)
     why: = arena.text()
@@ -259,9 +258,7 @@ priv fn case_cache_others_can_write(arena: Arena$@) //<
     if sys.is_windows()
         verdict.skip_check(name_run, "Windows's permissions are an ACL, which ksplc does not read")
         return
-    dir: = harness.sandbox("cli_shared") catch
-        verdict.check(name_run, false, "the working directory cannot be made")
-        return
+    dir: = harness.sandbox("cli_shared")
     shared: = fs.join(dir, "cache", arena)
     fs.mkdir(shared) catch
         verdict.check(name_run, false, "the cache folder cannot be made")
@@ -284,8 +281,8 @@ priv fn case_cache_others_can_write(arena: Arena$@) //<
     handed: = hand_over(foreign)
     $theirs: = verdict.Run_out::{ .code = 0, .out = "" }
     if handed
-        sys.set_env(cache_env, foreign) catch panic("the cache cannot be pointed at the other \
-            folder")
+        sys.set_env(cache_env, foreign)
+            catch panic("the cache cannot be pointed at the other folder")
         theirs = harness.ksplc(U8[][]::{ "run", src })
     // Caution: **Point it back before checking**, or every case after this one runs refused.
     sys.set_env(cache_env, cache_root(arena)) catch panic("the cache cannot be pointed back")
@@ -306,9 +303,7 @@ priv fn case_cache_others_can_write(arena: Arena$@) //<
         theirs.code != 0 && theirs.out.find_str("belongs to another user").is_some(), theirs.out)
 
 priv fn case_emit_runtime(arena: Arena$@)
-    dir: = harness.sandbox("cli") catch
-        verdict.check("emit-runtime", false, "the working directory cannot be made")
-        return
+    dir: = harness.sandbox("cli")
     gen: = fs.join(dir, "rt.c", arena)
     ok_case("emit-runtime: it can write taking no input", U8[][]::{ "emit-runtime", gen }, "")
     body: = io.read_file(gen) catch
@@ -403,9 +398,7 @@ priv fn case_build(arena: Arena$@) //<
     //<
     //< **`--cflags` is shown to reach the C compiler by a flag it refuses**: one it accepts would
     //< pass whether it reached it or not.
-    dir: = harness.sandbox("cli_build") catch
-        verdict.check("build", false, "the working directory cannot be made")
-        return
+    dir: = harness.sandbox("cli_build")
     src: = fs.join(dir, "prog.kspls", arena)
     io.write_file(src,
         "import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"built\\n\")\n  return 3\n") catch
@@ -428,13 +421,8 @@ priv fn case_build(arena: Arena$@) //<
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
 
 priv fn case_output_language(arena: Arena$@) //<
-    //< `--to` names what a compile writes, and `--target` is turned away naming it
-    //<
-    //< **The refusal is shown to name the replacement**: an unknown option alone would leave the
-    //< reader of an old script to guess which option took its place.
-    dir: = harness.sandbox("cli_to") catch
-        verdict.check("--to", false, "the working directory cannot be made")
-        return
+    //< `--to` names what a compile writes, C or LLVM IR
+    dir: = harness.sandbox("cli_to")
     src: = fs.join(dir, "prog.kspls", arena)
     io.write_file(src, "fn main(): I32\n  return 3\n") catch
         verdict.check("--to: the program can be written", false, "")
@@ -447,10 +435,6 @@ priv fn case_output_language(arena: Arena$@) //<
         U8[][]::{ std_flag(arena), "--to=c", src, fs.join(dir, "prog.c", arena) }, "")
     ng_case("--to on a compile names c or llvm",
         U8[][]::{ std_flag(arena), "--to=kspl", src, fs.join(dir, "x.c", arena) }, "'c' or 'llvm'")
-    ng_case("--target=llvm is refused, naming --to",
-        U8[][]::{ std_flag(arena), "--target=llvm", src, ll }, "'--target' is not an option")
-    ng_case("--target is refused whatever its value, naming --to",
-        U8[][]::{ std_flag(arena), "--target=c", src, ll }, "'--to=c|llvm'")
 
 priv fn lib_opt(path: U8[], arena: Arena$@): U8[] //< `--library=<path>`
     return arena.text().s("--library=").s(path).take()
@@ -458,11 +442,8 @@ priv fn lib_opt(path: U8[], arena: Arena$@): U8[] //< `--library=<path>`
 priv fn case_library(arena: Arena$@) //<
     //< `--library=` builds a library and writes each interface it names, from one compile
     //<
-    //< **The retired `--emit-interface` is shown to name its replacement**, and a value that
-    //< names no form, or one path twice, is refused rather than written.
-    dir: = harness.sandbox("cli_library") catch
-        verdict.check("--library", false, "the working directory cannot be made")
-        return
+    //< A value that names no form, or one path twice, is refused rather than written.
+    dir: = harness.sandbox("cli_library")
     src: = fs.join(dir, "lib.kspls", arena)
     io.write_file(src, "#export\npub fn lib_twice(n: I32): I32\n  return n * 2\n") catch
         verdict.check("--library: the library can be written", false, "")
@@ -474,8 +455,6 @@ priv fn case_library(arena: Arena$@) //<
         U8[][]::{ std_flag(arena), lib_opt(h, arena), lib_opt(api, arena), src, out_c }, "")
     verdict.check("both interfaces are written",
         fs.exists(h) && fs.exists(api) && fs.exists(out_c), dir)
-    ng_case("--emit-interface is refused, naming --library",
-        U8[][]::{ std_flag(arena), "--emit-interface=x.h", src, out_c }, "'--library=<FILE>'")
     ng_case("--library needs the interface it writes",
         U8[][]::{ std_flag(arena), "--library", src, out_c }, "'--library=<value>'")
     ng_case("--library= refuses a name of neither form",
@@ -489,9 +468,7 @@ priv fn case_machine(arena: Arena$@) //<
     //<
     //< **A name the table lacks is refused with the list**, never guessed: a guess folds sizes the
     //< C compiler then disagrees with. `info machine` answers the default, which compiles.
-    dir: = harness.sandbox("cli_machine") catch
-        verdict.check("--machine", false, "the working directory cannot be made")
-        return
+    dir: = harness.sandbox("cli_machine")
     src: = fs.join(dir, "prog.kspls", arena)
     io.write_file(src, "fn main(): I32\n  return 3 if sizeof(Sz) == sizeof(U8@) else 4\n") catch
         verdict.check("--machine: the program can be written", false, "")
@@ -531,8 +508,8 @@ priv fn case_refusals()
         "fmt compile")
     ng_case("--to does not take effect on lint", U8[][]::{ "lint", "--to=llvm", "a.kspl" },
         "fmt compile")
-    ng_case("--std-dir does not take effect on clean",
-        U8[][]::{ "clean", "--std-dir=std", "cache" }, "compile run build lint info")
+    ng_case("--std-dir does not take effect on clean", U8[][]::{ "clean", "--std-dir=std" },
+        "compile run build lint info")
     ng_case("--cflags does not take effect on compile",
         U8[][]::{ "--cflags=-O0", "a.kspl", "a.c" }, "build")
     ng_case("--pkg-src-dir does not take effect on info",
@@ -877,7 +854,7 @@ priv fn case_refusal_stream(arena: Arena$@) //<
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     io.out().s("# ksplc's command line\n")
-    // Caution: **Point the cache at your own directory before starting.** `clean cache` really
+    // Caution: **Point the cache at your own directory before starting.** `clean` really
     // erases: left on the shared cache it erases what suites running in parallel are building (a
     // `ksplc run` loses a file mid-build).
     sys.set_env(cache_env, cache_root(arena)) catch

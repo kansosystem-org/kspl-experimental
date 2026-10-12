@@ -5,9 +5,10 @@
 //< **It is not a suite of its own**, since one would start the language server a second time
 //< ("Files near the limit and how they split" in `../../README.md`).
 import "ksplc/tests/support/lsp_client"
-import "ksplc/tests/support/lsp_read" { is_missing }
+import "ksplc/tests/support/lsp_read" { decl_line, end_text, is_missing }
+import "std/chars" // the single-character checks
 import "std/ds" { List }
-import "std/json"
+import "std/json" + { Json_builder }
 import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" // `equals`
@@ -89,7 +90,7 @@ priv fn ask(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val
     lsp_client.close(c, uri, arena)
     return got
 
-fn run(c: jsonrpc.Client$@, caps: json.Val, arena: Arena$@) //<
+fn run_outline(c: jsonrpc.Client$@, caps: json.Val, arena: Arena$@) //<
     //< Checks the outline of a source that parses and of one that does not
     verdict.check("it names documentSymbol among its capabilities",
         caps.get("documentSymbolProvider").as_bool(false), lsp_client.dump(caps, arena))
@@ -126,3 +127,146 @@ fn run(c: jsonrpc.Client$@, caps: json.Val, arena: Arena$@) //<
     verdict.check("a source that does not parse still lists what parsed",
         !is_missing(bad.get("result")) && found(bad_seen@, "Kept", 23I32, 0),
         lsp_client.dump(bad, arena))
+
+// ==========================================
+// Reads the answer of `semanticTokens/full`, kept apart from the suite that asks for it
+// Note: It is kept apart from `../suite/lsp_test.kspls` and uses nothing else there: it decodes
+// five-number rows and knows no JSON-RPC. The reference goes one way, from the suite into here
+// ("Files near the limit and how they split" in `../../README.md`).
+// ==========================================
+struct Toks //< it decodes `semanticTokens/full`'s answer
+    //<
+    //< **Five numbers make one token** (the line delta, the column delta, the length, the kind, the
+    //< modifiers). **They are deltas, absolute only once summed**, or the colour lands off the
+    //< text.
+    count: Sz
+    // Whether a kind number beyond the declared kinds appeared.
+    over: Bool
+    // Whether a position was not ascending.
+    back: Bool
+    // Whether there was one whose length was 0 or under.
+    empty: Bool
+
+fn read_tokens(data: json.Val, types: Sz, arena: Arena$@): Toks
+    // A JSON array is a linked list, copied into a list to index (`arr_list` in `std/json`).
+    nums: = data.arr_list(arena)
+    n: = nums.len
+    $got: = Toks::{ .count = 0, .over = false, .back = false, .empty = false }
+    if n == 0 || n % 5 != 0
+        return got
+    $line: I32 = 0I32
+    $char: I32 = 0I32
+    $first: = true
+    for $i: Sz = 0; i + 4 < n; i += 5
+        d_line: = nums.get(i).as_int(-1I32)
+        d_char: = nums.get(i + 1).as_int(-1I32)
+        wide: = nums.get(i + 2).as_int(0I32)
+        kind: = nums.get(i + 3).as_int(-1I32)
+        if d_line < 0I32 || d_char < 0I32
+            got.back = true
+        if wide <= 0I32
+            got.empty = true
+        if kind < 0I32 || kind >= I32::types
+            got.over = true
+        // **If the line changes, the column counts from the line's start**, else it is added.
+        if d_line > 0I32 || first
+            line += d_line
+            char = d_char
+        else
+            char += d_char
+        first = false
+        got.count += 1
+    return got
+
+fn off_words(data: json.Val, src: U8[], arena: Arena$@): Sz //<
+    //< How many tokens do not cover one whole name as written
+    //<
+    //< **A colour on anything but a name is a token nobody wrote there** (one the compiler made,
+    //< read at its own string's positions, lands on a string or inside a keyword). The column is
+    //< taken as the byte, so give it an ASCII source.
+    nums: = data.arr_list(arena)
+    $line: I32 = 0I32
+    $char: I32 = 0I32
+    $head: Sz = 0 // where the token's line starts
+    $at_line: I32 = 0I32 // the line `head` is for
+    $bad: Sz = 0
+    for $i: Sz = 0; i + 4 < nums.len; i += 5
+        d_line: = nums.get(i).as_int(-1I32)
+        d_char: = nums.get(i + 1).as_int(-1I32)
+        wide: = nums.get(i + 2).as_int(0I32)
+        if d_line > 0I32 || i == 0
+            line += d_line
+            char = d_char
+        else
+            char += d_char
+        for at_line < line && head < src.len
+            if src[head] == '\n'
+                at_line += 1
+            head += 1
+        from: = head + Sz::char
+        to: = from + Sz::wide
+        if !is_word(src, from, to)
+            bad += 1
+    return bad
+
+priv fn is_word(src: U8[], from: Sz, to: Sz): Bool //< whether [from, to) is one whole name
+    if from >= to || to > src.len
+        return false
+    for $k: Sz = from; k < to; k += 1
+        if !is_name_char(src[k])
+            return false
+    return (from == 0 || !is_name_char(src[from - 1])) &&
+        (to == src.len || !is_name_char(src[to]))
+
+priv fn is_name_char(ch: U8): Bool
+    return ch.is_alnum() || ch == '_'
+
+// ==========================================
+// The call hierarchy from the language server: a starting point, then its callers
+// Not a suite; ksplc's `lsp` suite uses it on a file in its own folder, and the root's `lsp-tree`
+// on the repository's whole tree, so what `lsp-tree` calls is `pub`.
+// ==========================================
+const heavy_ms: I32 = 60000 //< the default (15 seconds) is not enough
+    //<
+    //< A didOpen analyses the document's whole import tree, as many files as a workspace query; at
+    //< the default a slow disk misses, and "no answer" cannot be told from "the timeout expired".
+
+pub struct Prepared //<
+    //< What prepareCallHierarchy gave: the first item and the raw response
+    pub found: Bool
+    pub item: json.Val
+    pub raw: U8[]
+
+pub fn prepare_fn(c: jsonrpc.Client$@, rel: U8[], text: U8[], decl: U8[], arena: Arena$@): Prepared //<
+    //< It opens `text` as the document `rel` and sends prepareCallHierarchy at `decl`'s name
+    //<
+    //< Caution: **Return the raw response too**: with no item, only it tells "the worker has no
+    //< answer" from "the timeout expired".
+    c.notify("textDocument/didOpen", lsp_client.did_open(rel, text, arena), lsp_client.send_ms,
+        arena) catch {}
+    line: = decl_line(text, decl, arena)
+    pos: = lsp_client.at_pos(rel, line, decl.len - 1, arena)
+    msg: = c.request("textDocument/prepareCallHierarchy", pos, heavy_ms, arena) catch e
+        return Prepared::{ .found = false, .item = .null_val, .raw = end_text(e) }
+    items: = msg.get("result")
+    list: = items.arr_list(arena)
+    if list.len == 0
+        return Prepared::{ .found = false, .item = .null_val,
+            .raw = lsp_client.dump(msg, arena) }
+    return Prepared::{ .found = true, .item = list.get(0),
+        .raw = lsp_client.dump(msg, arena) }
+
+pub struct Incoming //< the result of incomingCalls: the array of callers
+    //<
+    //< Caution: **Do not discard why it came back empty.** "It does not have it", "the timeout
+    //< expired" and "the supervisor killed the worker" are each fixed in a different place.
+    pub calls: List<|json.Val|> //< the incoming calls, empty where none came
+    pub timed_out: Bool //< whether the timeout expired before an answer
+
+pub fn incoming(c: jsonrpc.Client$@, item: json.Val, arena: Arena$@): Incoming //<
+    //< who calls `item`
+    $b: = Json_builder.new(arena)
+    params: = b.obj().set("item", item).build()
+    msg: = c.request("callHierarchy/incomingCalls", params, heavy_ms, arena) catch
+        return Incoming::{ .calls = List<|json.Val|>.new(arena), .timed_out = true }
+    return Incoming::{ .calls = msg.get("result").arr_list(arena), .timed_out = false }

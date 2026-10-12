@@ -17,7 +17,7 @@
 | [`SPEC-gates.md`](SPEC-gates.md) | What CI (the automatic build-and-test run) runs on each platform, the verdict line, the per-item pass/fail line, and what the convention checks count. | Whoever changes Kanso |
 | [`DESIGN.md`](DESIGN.md) | The Development Principles, then why Kanso is as it is, in four bands: the language, the notation, the project, the aim. | Whoever changes Kanso |
 | [`SPEC-documents.md`](SPEC-documents.md) | What every document must satisfy: the terms of art, the six kinds, wording and formatting, reference direction. | Whoever adds or changes a document |
-| [`PLAN.md`](PLAN.md) | What is left that spans packages, and links to each package's own plan. | Whoever changes Kanso and looks for the next step |
+| [`PLAN.md`](PLAN.md) | What is left, a section per package with work left. | Whoever changes Kanso and looks for the next step |
 
 ## Further reading
 

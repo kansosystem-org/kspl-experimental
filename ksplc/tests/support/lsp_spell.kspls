@@ -512,7 +512,7 @@ priv const lang_decls: U8[][_] = ::{ "    fn free(r: Self)", "    fn add(r: Self
     "    pub fn at_ref(r: Self@" }
 priv const lang_marks: U8[][_] = ::{ "free", "add", "at_ref" }
 priv const lang_wants: U8[][_] = ::{ "std.lang.Owned.free(r: Self)",
-    "std.lang.Add.add(r: Self, rhs: Rhs)", "at_ref(r: Self@" }
+    "std.lang.Add.add(r: Self, rhs: Rhs)", "fn T[].at_ref(r: Self@" }
 priv const lang_names: U8[][_] = ::{ "a trait's requirement", "a generic trait's requirement",
     "a generic impl's method" }
 
@@ -527,7 +527,8 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
     defer lsp_client.close(c, uri, arena)
     // **Opened by its path, it is still std's file**, named as its imports name it (`name_entry` in
     // `ksplc/base/package.kspls`); named by the path, every owner carries `.home.me.std.lang.…` and
-    // one file is loaded twice.
+    // one file is loaded twice. An owner written as sugar (`T[]`) names no module, so only the
+    // owners std/lang names (`std.lang.…` in `lang_wants`) are held to it.
     $named_as_std: = true
     $seen: U8[] = ""
     for i in Range.asc(lang_decls.len)
@@ -546,7 +547,8 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
             text.find_str(lang_wants[i]).is_some() && text.find_str("std_lang_").is_none()
         verdict.check(label, ok,
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
-        if text.find_str("fn std.lang.").is_none()
+        if lang_wants[i].starts_with("std.lang.") &&
+            text.find_str("fn std.lang.").is_none()
             named_as_std = false
             seen = text
     verdict.check("a file of std's opened by its own path is named as its imports name it",

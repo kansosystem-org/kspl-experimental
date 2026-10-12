@@ -13,9 +13,7 @@ Two requirements decide nearly all of its shape.
 
 ### The bindings stand apart from `std`
 
-The bindings live in their own package, not in the standard library. A program that wants them imports `ksbind/tls` or `ksbind/db`.
-
-**`std` is plain KSPL over the runtime every program carries, and builds anywhere with nothing installed. A binding to an outside C library stands here** (as `std` states it, "The standard library reaches only itself" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
+**The bindings to outside C libraries live in their own package, not in the standard library: `std` is plain KSPL over the runtime every program carries, and builds anywhere with nothing installed** (as `std` states it, "The standard library reaches only itself" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). A program that wants them imports `ksbind/tls` or `ksbind/db`.
 
 **Inside `std`, a binding would need a switch.** There are only two ways to have one, and both are bad:
 
@@ -43,9 +41,7 @@ The second leaves a call that compiles everywhere and does nothing until a build
 
 ### A binding calls its library directly, with no C of its own
 
-Each binding declares the C functions it calls inside its own `.kspls` file. No C header and no build file are involved.
-
-**Each `extern` block names its libraries with `#link`** (`ssl` and `crypto`, `sqlite3`). An `extern` block is where KSPL declares functions written in C. `#link` names the library to link, so `ksplc run` links it and no build file carries the names. No header of either library is in any translation unit (the C file a compiler turns into one object file): the declarations in the `.kspls` are the only ones C sees.
+**Each binding declares the C functions it calls inside its own `.kspls` file, and each `extern` block names its libraries with `#link`** (`ssl` and `crypto`, `sqlite3`). An `extern` block is where KSPL declares functions written in C. `#link` names the library to link, so `ksplc run` links it and no build file carries the names. No header of either library is in any translation unit (the C file a compiler turns into one object file): the declarations in the `.kspls` are the only ones C sees.
 
 **A macro is reached through what it expands to.** A C macro is text the C preprocessor replaces before compiling, so it is not a function KSPL can call. OpenSSL spells several settings as macros over two functions, `SSL_CTX_ctrl` and `SSL_ctrl`, each taking a command number:
 
@@ -100,9 +96,7 @@ Each binding closes off one well-known way that code using the library directly 
 
 ### The tests run only through this package's own `make test`
 
-The tests need OpenSSL and SQLite installed, so they run from this folder's own `make test`, not from the `make debug` every machine runs.
-
-**They link OpenSSL and SQLite, so `make debug`, which every environment runs, leaves them out.** `make test` in this folder runs them, and `make test-extract` runs it from a copy of the folder.
+**The tests link OpenSSL and SQLite, so they run from this folder's own `make test`, not from the `make debug` every environment runs**, and `make test-extract` runs that `make test` from a copy of the folder.
 
 **Where the libraries do not link, the run skips and says so; on Linux it fails instead** (`KSBIND_REQUIRE_LIBS`), since the image the gates run in holds both.
 

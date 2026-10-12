@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para, grid } from "./material.mjs";
+import { check, near, material, para, grid } from "./shell.mjs";
 
 export const subject = "Placing, pressing, typing, choosing, and going back.";
 

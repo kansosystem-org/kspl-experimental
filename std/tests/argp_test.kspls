@@ -40,12 +40,10 @@ priv fn check_defaults_and_joined(arena: Arena$@) //<
     //< A default is the variable's initial value itself, and a value is joined with `=`
     $out: U8[] = "default.jsonl"
     $count: I64 = 10
-    $ratio: F64 = 0.5
     $verbose: = false
     p: = argp.Parser.create("t", "", arena)
     p.str_opt("--out", out@, "where to write")
     p.int_opt("--count", count@, "how many")
-    p.f64_opt("--ratio", ratio@, "the ratio")
     p.flag("--verbose", verbose@, "in detail")
 
     p.parse_list(argv_of(U8[][]::{}, arena)) catch panic("argp: an empty argument list failed")
@@ -53,19 +51,17 @@ priv fn check_defaults_and_joined(arena: Arena$@) //<
     assert(kept_defaults, "argp: the default stays when nothing is handed over")
 
     // A value is joined with `=`.
-    joined: =
-        argv_of(U8[][]::{ "--out=a.txt", "--count=3", "--ratio=0.25", "--verbose" }, arena)
+    joined: = argv_of(U8[][]::{ "--out=a.txt", "--count=3", "--verbose" }, arena)
     p.parse_list(joined) catch panic("argp: the --name=value shape failed")
     assert(out.equals("a.txt") && count == 3 && verbose, "argp: --name=value")
-    assert(ratio > 0.24 && ratio < 0.26, "argp: taking an F64")
 
     $out2: U8[] = ""
     $count2: I64 = 0
     q: = argp.Parser.create("t", "", arena)
     q.str_opt("--out", out2@, "")
     q.int_opt("--count", count2@, "")
-    q.parse_list(argv_of(U8[][]::{ "--out=b.txt", "--count=-7" }, arena)) catch panic("argp: the \
-        --name=value shape failed")
+    q.parse_list(argv_of(U8[][]::{ "--out=b.txt", "--count=-7" }, arena))
+        catch panic("argp: the --name=value shape failed")
     assert(out2.equals("b.txt") && count2 == -7, "argp: --name=value (a negative number reads too)")
 
 priv fn check_rest(arena: Arena$@) //< an argument that is not an option goes into rest, in order
@@ -73,8 +69,8 @@ priv fn check_rest(arena: Arena$@) //< an argument that is not an option goes in
     rp: = argp.Parser.create("t", "", arena)
     rp.positional("<file>...")
     rp.flag("--v", dummy@, "")
-    rp.parse_list(argv_of(U8[][]::{ "one", "--v", "two" }, arena)) catch panic("argp: collecting \
-        rest failed")
+    rp.parse_list(argv_of(U8[][]::{ "one", "--v", "two" }, arena))
+        catch panic("argp: collecting rest failed")
     rest_ok: =
         rp.rest.len == 2 && rp.rest.get(0).equals("one") && rp.rest.get(1).equals("two")
     assert(rest_ok, "argp: an argument that is not an option goes to rest, in order")
@@ -127,8 +123,8 @@ priv fn check_rest(arena: Arena$@) //< an argument that is not an option goes in
     $neg: U8[] = ""
     dashv: = argp.Parser.create("t", "", arena)
     dashv.str_opt("--out", neg@, "")
-    dashv.parse_list(argv_of(U8[][]::{ "--out=-weird" }, arena)) catch panic("argp: under `=`, a \
-        value starting with `-` goes through")
+    dashv.parse_list(argv_of(U8[][]::{ "--out=-weird" }, arena))
+        catch panic("argp: under `=`, a value starting with `-` goes through")
     assert(neg.equals("-weird"),
         "argp: in the `=` shape, a value starting with `-` can be handed over too")
 
@@ -218,8 +214,8 @@ priv fn check_required_and_help(arena: Arena$@) //< what is required, and --help
             saw_required = n.equals("--must")
         default {}
     assert(saw_required, "argp: what is required, not handed over, is refused")
-    reqp.parse_list(argv_of(U8[][]::{ "--must=x" }, arena)) catch panic("argp: it failed although \
-        what is required was handed over")
+    reqp.parse_list(argv_of(U8[][]::{ "--must=x" }, arena))
+        catch panic("argp: it failed although what is required was handed over")
     assert(req.equals("x"), "argp: taking what is required")
 
     $saw_help: = false
@@ -282,8 +278,8 @@ priv fn test_repeatable(arena: Arena$@)
     items: = List<|U8[]|>.create(arena)
     p: = argp.Parser.create("t", "", arena)
     p.str_list_opt("--lint", items, "")
-    p.parse_list(argv_of(U8[][]::{ "--lint=A=off", "--lint=B=error" }, arena)) catch panic("argp: \
-        parsing a repetition failed")
+    p.parse_list(argv_of(U8[][]::{ "--lint=A=off", "--lint=B=error" }, arena))
+        catch panic("argp: parsing a repetition failed")
     // Both must stay; if overwritten, only the last setting would take effect (unlike str_opt).
     accumulated: =
         items.len == 2 && items.get(0).equals("A=off") && items.get(1).equals("B=error")
@@ -299,8 +295,8 @@ priv fn test_commands(arena: Arena$@)
     p.subcommand("fmt", "")
     p.subcommand("lint", "")
     p.command_flag("--version", "")
-    p.parse_list(argv_of(U8[][]::{ "fmt", "a.kspl" }, arena)) catch panic("argp: parsing a command \
-        failed")
+    p.parse_list(argv_of(U8[][]::{ "fmt", "a.kspl" }, arena))
+        catch panic("argp: parsing a command failed")
     assert(p.command.equals("fmt"), "argp: a command is chosen by a positional's name")
     // Do not put a command's name into rest, or the input file count goes up by one.
     cmd_not_in_rest: = p.rest.len == 1 && p.rest.get(0).equals("a.kspl")
@@ -310,14 +306,14 @@ priv fn test_commands(arena: Arena$@)
     np: = argp.Parser.create("t", "", arena)
     np.positional("<file>")
     np.subcommand("fmt", "")
-    np.parse_list(argv_of(U8[][]::{ "a.kspl" }, arena)) catch panic("argp: it failed with no \
-        command")
+    np.parse_list(argv_of(U8[][]::{ "a.kspl" }, arena))
+        catch panic("argp: it failed with no command")
     assert(np.command.len == 0, "argp: command is empty when none is handed over")
 
     fp: = argp.Parser.create("t", "", arena)
     fp.command_flag("--version", "")
-    fp.parse_list(argv_of(U8[][]::{ "--version" }, arena)) catch panic("argp: a command named as an \
-        option failed")
+    fp.parse_list(argv_of(U8[][]::{ "--version" }, arena))
+        catch panic("argp: a command named as an option failed")
     chose_by_flag: = fp.command.equals("--version")
     assert(chose_by_flag, "argp: a command is chosen by an option's name too")
 

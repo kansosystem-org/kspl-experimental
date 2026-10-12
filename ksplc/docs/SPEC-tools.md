@@ -31,9 +31,9 @@ flowchart LR
 | `ksplc lsp` | the language server, normally started by the editor | [4. The language server](#4-the-language-server-ksplc-lsp) |
 | `ksplc lint <input.kspls>` | static analysis (checking the code without running it): it stops after semantic analysis, before Lower, and prints only the diagnostics | [5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint) |
 | `ksplc info <subject>` | prints one answer ksplc holds (where the standard library is, the link conditions, where the cache is, the reserved words) | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
-| `ksplc clean <subject>` | removes what ksplc made (the disk cache) | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
+| `ksplc clean` | empties the disk cache ksplc made | [7. Querying and tidying up](#7-querying-and-tidying-up-ksplc-info--ksplc-clean) |
 | `ksplc emit-runtime <output.c>` | writes only the C runtime's source, as one translation unit, for LLVM IR to link | [2.10.5 Writing the runtime for LLVM IR](#2105-writing-the-runtime-for-llvm-ir-ksplc-emit-runtime) |
-| `ksplc explain <code>` | prints what a diagnostic code means and what to do about it: that code's section of this specification | [5.4 The list of diagnostic codes](#54-the-list-of-diagnostic-codes) |
+| `ksplc explain <code>` | prints what a diagnostic code means and what to do about it: that code's section of this specification | [5.4 Diagnostic codes, and the errors that have none](#54-diagnostic-codes-and-the-errors-that-have-none) |
 | `ksplc doc <file>[.<name>]` | prints what a file, one entry or a folder publishes, rendered from the source | [7.5 ksplc doc](#75-ksplc-doc-what-a-file-publishes-as-a-reference-to-read) |
 
 The words in the table: *semantic analysis* is the stage that works out every type and name, and *Lower* is the stage after it, which prepares the code for output. A *diagnostic* is a message about your code: an error, a warning, an information or a hint ([§5.2](#52-the-diagnostics-four-weights)). A *translation unit* is one `.c` file as the C compiler reads it.
@@ -221,9 +221,9 @@ It is passed in the environment variable `KSPL_SCRIPT` (`script_env_name` in `st
 | 3 | `%LOCALAPPDATA%/ksplc/cache` (Windows) |
 | 4 | `$HOME/.cache/ksplc` |
 
-`ksplc info cache-dir` prints it and `ksplc clean cache` removes it.
+`ksplc info cache-dir` prints it and `ksplc clean` removes it.
 
-**A cache folder another user could write is refused** (on POSIX; Windows's permissions are an ACL, which is not read). What it holds is built into your programs, so whoever could plant a file there could run code as you. `ksplc run` and `ksplc clean cache` stop and name the fix (`chmod go-w <folder>`, or `KSPLC_CACHE_DIR` set to a folder of your own). A compile, whose cache only saves time, says `not using the cache` once and goes on without it. Group write counts too, since a group may hold other users. A folder ksplc made itself never trips this.
+**A cache folder another user could write is refused** (on POSIX; Windows's permissions are an ACL, which is not read). What it holds is built into your programs, so whoever could plant a file there could run code as you. `ksplc run` and `ksplc clean` stop and name the fix (`chmod go-w <folder>`, or `KSPLC_CACHE_DIR` set to a folder of your own). A compile, whose cache only saves time, says `not using the cache` once and goes on without it. Group write counts too, since a group may hold other users. A folder ksplc made itself never trips this.
 
 **The size**: each script has one slot (the executable, the shared header, the objects). A slot's key holds the script's path from the root, so one name typed in two folders is two scripts. The key also holds `ksplc`'s identity, so rebuilding `ksplc` wastes every slot at once. Making a new slot keeps the 64 most recently used and every slot used within the last hour (another run may still be building it), and removes the rest. A burst of new scripts (a test run) leaves more than 64 until it is an hour old.
 
@@ -310,9 +310,7 @@ flowchart LR
 
 #### 2.9.1 Locating the standard library (`--std-dir=`)
 
-`import "std/io"` reads from the standard library's folder. ksplc picks that one folder from the list below, and never searches several.
-
-**An import beginning with `std/` is special**: it is read from the one folder that holds the standard library. A list of places tried in order would let a project's own `std/` folder hide the real one with no message, or the reverse ([`DESIGN.md` "The standard library is found beside the compiler"](DESIGN.md)). That folder is the first of these, strongest first:
+**An import beginning with `std/` (`import "std/io"`) is read from the one folder that holds the standard library, and ksplc never searches several.** A list of places tried in order would let a project's own `std/` folder hide the real one with no message, or the reverse ([`DESIGN.md` "The standard library is found beside the compiler"](DESIGN.md)). That folder is the first of these, strongest first:
 
 | # | Where it comes from | The use assumed |
 | :-- | :-- | :-- |
@@ -418,9 +416,7 @@ Note: How a package's records are joined into its `SURFACE.txt`, and the gate th
 
 ### 2.10 Binaries crossing the boundary: a library shipped through its C interface
 
-You can hand someone a library built from KSPL without its source, as C libraries are handed over: the compiled library file plus a description of how to call it (its *interface*). This section shows how to build one, write its interface, and use it from C or KSPL.
-
-**A library built from KSPL ships as C does: its object or shared library, and its interface.** Its callers reach it through its `#export` functions alone. KSPL's own types (a slice, a `Result`, a trait value, a generic, a method) do not cross a binary, and travel as source ([§2.9](#29-source-crossing-the-boundary-where-it-is-read-from-and-what-is-recorded)). The grounds are "A library built from KSPL crosses as C, holding its own runtime" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
+**You can hand someone a library built from KSPL without its source, as C libraries are handed over: its object or shared library, plus its interface (a description of how to call it).** Its callers reach it through its `#export` functions alone. KSPL's own types (a slice, a `Result`, a trait value, a generic, a method) do not cross a binary, and travel as source ([§2.9](#29-source-crossing-the-boundary-where-it-is-read-from-and-what-is-recorded)). The grounds are "A library built from KSPL crosses as C, holding its own runtime" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md).
 
 #### 2.10.1 Building a library (`--library`)
 
@@ -694,11 +690,11 @@ Note: **Width is measured in the brace notation, in both notations**, so one pro
 
 ### 3.3 Skipping what is already formatted
 
-`ksplc fmt` remembers the files it found already formatted, and skips them next time. **A file formatting leaves unchanged is recorded, and the next `ksplc fmt` of the same bytes skips it.** Over a tree where most files are already formatted, only the changed ones are formatted again.
+**`ksplc fmt` records each file that formatting leaves unchanged, and the next `ksplc fmt` of the same bytes skips it.** Over a tree where most files are already formatted, only the changed ones are formatted again.
 
 * **The record's key** is the file's bytes, the notation, every `--style` setting and `ksplc`'s identity, so rebuilding `ksplc` or changing the style formats everything again.
 * **Only a text that came out unchanged is recorded.** A file that changed is formatted again next time, and is recorded once formatting leaves it alone. A change of notation (`--to`) is never recorded, nor looked up.
-* **It lives** where `ksplc run`'s cache does ([§2.5](#25-running-as-a-script-ksplc-run)), as one empty file per text, named by the key, under `fmt/`. Each rebuilt `ksplc` starts a generation of its own, and the 8 newest are kept. `ksplc clean cache` removes it ([§7.2](#72-ksplc-clean-removing-what-was-built)); where no cache folder can be used, every file is formatted.
+* **It lives** where `ksplc run`'s cache does ([§2.5](#25-running-as-a-script-ksplc-run)), as one empty file per text, named by the key, under `fmt/`. Each rebuilt `ksplc` starts a generation of its own, and the 8 newest are kept. `ksplc clean` removes it ([§7.2](#72-ksplc-clean-removing-what-was-built)); where no cache folder can be used, every file is formatted.
 * **`--stats` prints `[Fmt Cache] N hit / M miss / K stored`** on standard error, so the formatted text on standard output stays as it is.
 
 ---
@@ -768,9 +764,7 @@ The `.vscode/extensions/kspl` extension provides these settings.
 
 ### 4.3 How code covered by `#cfg()` is handled
 
-Code under a `#cfg(flag)` the editor has not been told about is not analysed, so hover, jumps and the call hierarchy find nothing there. Tell the editor the flag with `kspl.defines`.
-
-**A declaration under a flag that is not raised is dropped before the analysis**, as in the compiler (`--define`, [§2.3](#23-the-other-compiler-options)), so no type or symbol exists there. To edit code under `#cfg(blas)`, add that flag to `kspl.defines`.
+**Code under a `#cfg(flag)` the editor has not been told about is dropped before the analysis**, as in the compiler (`--define`, [§2.3](#23-the-other-compiler-options)), so no type or symbol exists there, and hover, jumps and the call hierarchy find nothing. To edit code under `#cfg(blas)`, tell the editor the flag: add it to `kspl.defines`.
 
 **Hover inside a dropped range gives the reason** (`#cfg(blas) is not satisfied, so this declaration is not analyzed`), naming the flag to raise.
 
@@ -890,9 +884,9 @@ A code off by default is advice that matters only for one kind of system, and is
 
 **A code on by default is useful whatever is being built**: [H0701]'s `T?` is an enum resolved at compile time, so it serves either kind of system without touching run-time timing.
 
-### 5.4 The list of diagnostic codes
+### 5.4 Diagnostic codes, and the errors that have none
 
-This is the quick-reference table of every diagnostic code. The letter gives the weight ([§5.2](#52-the-diagnostics-four-weights)), and each code is explained in [5.5](#55-the-list-of-warnings-w) / [5.6](#56-the-list-of-information-diagnostics-i) / [5.7](#57-the-list-of-hints-h).
+A diagnostic code's letter gives the weight ([§5.2](#52-the-diagnostics-four-weights)), and each code is explained in [5.5](#55-the-list-of-warnings-w) / [5.6](#56-the-list-of-information-diagnostics-i) / [5.7](#57-the-list-of-hints-h).
 
 **`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
 
@@ -907,65 +901,6 @@ This is the quick-reference table of every diagnostic code. The letter gives the
 | an `#export` on a `priv` | written but does nothing: `priv` makes the generated C `static`, so the exported name still links to nothing outside (the attribute-combination check refuses it) |
 
 The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md), and for `#export`, "11.3 Exposing a KSPL function to C (`#export`)" in the same document.
-
-**The table is generated from the code sections below it**, one row per section heading: `make code-table` rewrites it, and `make test-conventions` refuses a table that differs. Rename a code's section, not its row.
-
-| The code | The name |
-| :-- | :-- |
-| W0101 | an out-of-bounds array access |
-| W0102 | a side effect discarded by the compile-time evaluation of an array length |
-| W0103 | a digit-accumulating loop with no ceiling check |
-| W0104 | a pointer the arena handed out is being handed to a free |
-| W0105 | a borrow used outside the lock |
-| W0106 | a lock taken and not released |
-| W0107 | a method that frees outside `Owned`'s contract |
-| W0108 | a bit operation's operand is compared without brackets |
-| W0109 | an early exit before the `defer` that frees an `Owned` value |
-| W0201 | unreachable code |
-| W0202 | an unused expression with no side effect |
-| W0203 | a meaningless self-assignment |
-| W0204 | a meaningless comparison |
-| W0205 | a constant condition |
-| W0206 | an unused private symbol |
-| W0207 | a local variable or parameter nobody reads |
-| W0208 | a variable assigned but never read |
-| W0209 | a `//<` continuation that continues nothing |
-| W0210 | a `//<` anchor with nothing continuing it |
-| W0211 | a name a comment points at leads nowhere |
-| W0212 | a comment opening with `///` or `//!`, which is not read |
-| W0213 | a `//<` summary longer than one line, or opening with a label |
-| W0501 | conformance to a declaration named the same as a trait the compiler knows |
-| W0502 | a local or a parameter that hides an imported module |
-| W0601 | the use of an ARC-managed type (off by default) |
-| W0701 | an unhandled Result type |
-| W0702 | the use of a deprecated symbol |
-| I0301 | an unnecessary `::` cast |
-| I0302 | a redundant boolean comparison |
-| I0303 | a redundant logical operation |
-| I0304 | a redundant default case |
-| I0305 | a redundant `return;` |
-| I0306 | a redundant continue |
-| I0307 | a meaningless empty block |
-| I0308 | a redundant if-return |
-| I0309 | an unnecessary explicit `$` |
-| I0310 | an `as` that changes no name is put on an import |
-| I0401 | an unused import |
-| I0402 | a `pub` used only from inside its package (off by default) |
-| I0501 | shadowing |
-| I0502 | a naming-convention violation |
-| I0601 | an unnecessary mutability marker |
-| I0602 | detecting a hand-made ownership struct (off by default) |
-| I0701 | error propagation using '!' is recommended |
-| I0801 | a comment a round trip through the indentation notation moves |
-| H0301 | unnecessary brackets |
-| H0302 | a type written twice |
-| H0303 | an optional spelled out as `Option<\|T\|>` |
-| H0701 | a proposal to adopt `T?` for a raw-pointer return value that can return null |
-| H0801 | a guard clause is recommended |
-| H0802 | a wrap at a call inside an argument |
-| H0803 | a function exceeds 300 lines |
-| H0804 | a direct wrap of a multi-line call |
-| H0805 | a function nests blocks past 8 levels |
 
 ### 5.5 The list of warnings (W)
 
@@ -1223,11 +1158,6 @@ A type written where the line, or the place the value goes, already says it. It 
 * **Not reported**: an annotation doing work, such as a literal taking its type from it (`$i: Sz = 0`), a conversion it drives (`wide: I64 = small`) or a right side typed by it (`::{ … }`, `.small`); and another name for the type (`spot: Spot = Point::{ … }`, `Spot` a typedef). A cast [I0301] calls unnecessary is left to [I0301]: deleting both would leave the value's own type. Inside a generic, a call through a type is not reported (`b: Box<|T|> = Box<|T|>.make(v)`). The compiler checks a generic's body once per instantiation (once per set of type arguments it is used with), and an `impl` written for one instantiation alone (`impl Box<|I32|>`) can give `make` another return type there. So the annotation can repeat the type for one instantiation and be needed for another, while the advice is about the one line both share. The other shapes name their type in the text, which is the same for every instantiation, so they are reported, once per line however many instantiations check it.
 * **Not reported at a variant**: a declaration whose annotation is reported (`k: Kind = Kind.small` loses the annotation, so the line has one fix), and every place outside the nine, where the name stays: an inferred declaration (`k: = Kind.small`), an argument a generic infers its type from (`same(Kind.small)`), a comparison (`mode == Mode.on`), either side of an `if … else` standing outside the nine and a compound assignment such as `+=`. A struct literal keeps its type at these places too (`return Point::{ … }`).
 
-#### [H0303] An optional spelled out as `Option<|T|>`
-A type writes an optional in the long form (`Option<|I32|>`) where `I32?` says the same. The two are one type ("`T?` is sugar for `Option<|T|>`" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)), so one spelling keeps a reader from wondering whether they differ. It applies wherever a type is written: an annotation, a parameter, a return type, a field, a `typedef`'s right side and a type argument (`List<|Option<|F32|>|>`, even in an expression such as `List<|Option<|F32|>|>.create(arena)`).
-* **Fix**: write `T?` (`I32?`, `List<|F32?|>`). A result or a function type is grouped first: `(I32!Io_error)?`, `(fn(n: I32): I32)?`.
-* **Not reported**: an expression whose head is `Option` itself (`Option<|I32|>.none`, `Option<|I32|>.some(n)`), where `?` cannot stand; an `impl` target (`impl<|T|> Option<|T|>`); and another name for the type (a `typedef` of it).
-
 #### [H0701] A proposal to adopt `T?` for a raw-pointer return value that can return null
 A function returning a raw pointer (`T@`) does `return null;` on some path, so a caller can forget to check for null. It is on by default, whatever is being built ([§5.3](#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Out of scope: anything under `std/` (the foundational primitives), and a function with `#export` (the FFI boundary with C, where `T?` is not ABI-compatible: C cannot read its memory layout).
 * **Fix**: return `T?` instead, as `.some(value)` / `.none`. The `switch`'s exhaustiveness check then stops callers from forgetting to handle the absent value.
@@ -1260,7 +1190,7 @@ A function's blocks nest deeper than the guide of 8 levels that Principle 3 lays
 
 ### 6.1 How to write it
 
-The format is INI, the plain `[section]` and `key = value` format many tools use. **There is no dedicated settings language.**
+**The format is INI, the plain `[section]` and `key = value` format many tools use, not a dedicated settings language.**
 
 ```
 # a comment runs from '#' to the end of the line
@@ -1367,10 +1297,10 @@ usage: ksplc info <std-dir|link-libs|exe-flags|cache-dir|keywords|machine|packag
 ### 7.2 ksplc clean: removing what was built
 
 ```bash
-ksplc clean cache
+ksplc clean
 ```
 
-It empties the disk cache and prints the location it emptied. It is safe at any time (the cache is made afresh next time). It removes only the hex-named directories ksplc made; anything else in `KSPLC_CACHE_DIR` is left alone.
+It empties the disk cache and prints the location it emptied. **It takes no subject**: the cache is the one thing it removes, and a word after it is refused with the usage, as it would change nothing. It is safe at any time (the cache is made afresh next time). It removes only the hex-named directories ksplc made; anything else in `KSPLC_CACHE_DIR` is left alone.
 
 ### 7.3 ksplc info keywords: the list of reserved words
 

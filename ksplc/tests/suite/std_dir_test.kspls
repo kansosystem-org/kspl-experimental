@@ -71,17 +71,13 @@ priv fn run_exe(exe: U8[], args: U8[][], cwd: U8[], env_std: U8[], env_unit: U8[
 priv fn case_dir(name: U8[], slot: U8[], rels: U8[][], bodies: U8[][]): U8[] //<
     //< It makes the working directory holding the given files
     //<
-    //< An empty string means it could not be made, which it reports as check `name` failing.
-    dir: =
-        harness.sandbox(harness.arena().text().s("std_dir_\{slot\}").take()) catch
-        fallback ""
-    if dir.len > 0
-        fs.write_tree(dir, rels, bodies, harness.arena()) catch
-            verdict.check(name, false, "cannot make a working directory")
-            return ""
-        return dir
-    verdict.check(name, false, "cannot make a working directory")
-    return ""
+    //< An empty string means the files could not be written, which it reports as check `name`
+    //< failing.
+    dir: = harness.sandbox(harness.arena().text().s("std_dir_\{slot\}").take())
+    fs.write_tree(dir, rels, bodies, harness.arena()) catch
+        verdict.check(name, false, "cannot write the material")
+        return ""
+    return dir
 
 priv fn case_default(arena: Arena$@) //<
     //< It checks that where std/ is not visible, the build fails and shows the path it tried

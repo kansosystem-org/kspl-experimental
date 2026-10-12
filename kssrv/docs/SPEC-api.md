@@ -1,8 +1,6 @@
 # kssrv — what a client can ask for
 
-This document lists every request the kssrv server answers, and what each answer holds. A *client* is any program that sends the server HTTP requests: a browser, `curl`, your own code, or the small robot car described under "Steering the car".
-
-**The agreement between the server and whoever calls it over HTTP**: what each request returns, what the JSON API under `/api/` holds, and the limits a caller has to write against. A client is written against this document, so a change here is a change to what somebody else's code depends on.
+**This document is the agreement between the kssrv server and whoever calls it over HTTP: every request the server answers and what each answer holds, what the JSON API under `/api/` holds, and the limits a caller has to write against.** A *client* is any program that sends the server HTTP requests: a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
 
 How to start it is in [`kssrv/README.md`](../README.md), and why the server is shaped this way is in [`DESIGN.md`](DESIGN.md). The five endpoints a page opened in a browser may use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
 

@@ -181,8 +181,7 @@ kspage_err_summary = mine=$$(grep -c '$(KSPAGE_SAID): ' "$(1)" || true); \
 
 # Caution: **Hold the checks' sources by name.** Bound as a folder, one added falls into an order
 # settled by its name, unnoticed until it fails. `probe.js` turns the sections.
-KSPAGE_PROBE := probe input store menu cell show insert pin filter find paint paper link note keys \
-	ribbon fresh drag outside local keep outline
+KSPAGE_PROBE := probe input store menu insert find paint paper note ribbon open local keep
 KSPAGE_PROBE_JS := $(patsubst %,tests/browser/%.js,$(KSPAGE_PROBE))
 
 # Caution: **Both checks are to use this page with the checks pasted in**: built apart, the

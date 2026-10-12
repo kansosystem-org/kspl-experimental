@@ -31,7 +31,7 @@ flowchart LR
 | `tests/suite/` | One suite that runs with no arguments. `make test-<name>` calls it |
 | `tests/support/` | The code a suite reads. Not what it runs against |
 | `tests/tools/` | A tool `make` calls directly, passing its subject as an argument (a file or log to inspect) |
-| `tests/debug/` | `make debug`'s entry point: `main.kspls` sets the order, `parts.kspls` calls each package's `tests/all` in turn, and `pkg/` holds the entry points that run one package (`make debug-<name>`) |
+| `tests/debug/` | `make debug`'s entry point, `main.kspls`: it calls each package's `tests/all` in turn. One package alone is `make debug-<name>`, through that package's own `<package>/tests/main.kspls` |
 | `tests/freestanding/` | Fixtures for one check, `make test-freestanding-math`. A *fixture* is a fixed input a check runs against. Here `probe.kspls` exports std/math's functions as built for a target with no operating system, and `harness.c`, a C program, calls them and compares each answer with the C library's |
 | `tests/docs/` | This folder's documents (["Further reading"](#further-reading) below) |
 
@@ -86,7 +86,7 @@ These folders hold material that a package's own checks run against; this table 
 
 ## Files near the limit and how they split
 
-Two files here are close to the line limit for one file; the table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md). A package's tests live in its `tests/`, so how they split is in that package's README.
+Two files here have their split planned before they reach the line limit for one file; the table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md). A package's tests live in its `tests/`, so how they split is in that package's README.
 
 | File | What to split out | Destination | Why it parts there |
 | :-- | :-- | :-- | :-- |

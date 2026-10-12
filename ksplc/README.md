@@ -196,7 +196,7 @@ The design is "The arena is rewound after each request (a worked example)" to "A
 make fmt    # every tracked .kspl / .kspls, each in its own notation
 ```
 
-What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md), "3. The formatter (ksplc fmt)". The formatter's own decisions (the `import`s reordered as text before the printer, nothing folded by default, four spaces a level, blank lines and the line terminator) are §10.13 to "Blank lines and the line terminator" in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN.md).
+What `ksplc fmt` and `--style` promise is [`ksplc/docs/SPEC-tools.md`](docs/SPEC-tools.md), "3. The formatter (ksplc fmt)". The formatter's own decisions (the `import`s reordered as text before the printer, nothing folded by default, four spaces a level, blank lines and the line terminator) are in [`ksplc/docs/DESIGN-tools.md`](docs/DESIGN-tools.md), from "The formatter reorders the `import`s as text, before the printer" to "Blank lines and the line terminator".
 
 ### tools/ — the tools that work on the pipeline's artifact
 
@@ -235,13 +235,13 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 | `UNDER` | The compiler under inspection | Its Stage1 (the compiler the seed built) |
 | `SCRATCH` | Where a suite writes its files | A place of its own |
 
-`make test-<name>` runs one suite, here or from the repository's root. The names are `SUITES` in [`ksplc/Makefile`](Makefile), and what each suite checks is its opening comment, in the file its `suite_<name>` line names.
+`make test-<name>` runs one suite, here or from the repository's root. The names are `SUITES` in [`ksplc/Makefile`](Makefile), and what each suite checks is its opening comment, in `tests/suite/<name>_test.kspls` (`-` written `_`).
 
 | Folder | What lives there |
 |---|---|
 | [`tests/suite/`](tests/suite/) | One suite, `<name>_test.kspls`, run by `make test-<name>` |
 | [`tests/support/`](tests/support/) | Code the suites read: `harness*`, shared by every suite, and `<suite name>_<subject>`, one suite's own piece |
-| [`tests/negative/`](tests/negative/) [`tests/lint/`](tests/lint/) [`tests/runtime/`](tests/runtime/) | The fixtures `test-negative`, `test-lint` and `test-runtime` read, one case (or a few) per file |
+| [`tests/negative/`](tests/negative/) [`tests/lint/`](tests/lint/) [`tests/runtime/`](tests/runtime/) | The fixtures `test-negative`, `test-lint` and `test-runtime` read: many cases to a file by subject |
 | [`tests/prog/`](tests/prog/) | A program under inspection, which a suite builds on both backends or reads a line-number landmark from: one file, or `equiv.kspls` with the shapes C leaves open in the `equiv_shapes.kspls` it imports |
 | [`tests/filepath/`](tests/filepath/) | `test-file-path`'s material. **It takes two files**: with one, the unspecified-visibility path is never taken |
 | [`tests/kspls/`](tests/kspls/) | `test-kspls`'s twins: one source in both notations, which must give the same C. The language tour is written from one of them |
@@ -249,7 +249,7 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 
 **The shared foundation is split by the reason for reading it**: `harness`, `harness_build` (the only caller of the C compiler and the linker), `harness_expect`, `harness_markers` and `harness_grow`, each saying in its opening comment what it holds.
 
-**A fixture is one small source file with its expected result written in its opening comment.** The three fixture folders share the marks (read by `harness_markers.markers()`):
+**A fixture is one small source with its expected result written in its opening comment.** The three fixture folders share the marks (read by `harness_markers.markers()`):
 
 ```kspls
 //< Write in 1 to 4 lines what is being pinned down (why it breaks if it is otherwise).
@@ -272,17 +272,19 @@ What each folder runs, and what exit code it demands:
 Rules for `tests/runtime/`:
 
 * **Write the subscript and the like so that it is decided at run time.** A constant subscript inside the range emits no check (`index_is_static_in_range` in `sema/body/postfix.kspls`), so the test would never take the run-time path.
-* The exception is a fixture pinning down "the boundary that may be omitted" (`tests/runtime/array_index_constant_out_of_bounds.kspls`).
-* Caution: **Put the position (`at <file>:`) in `EXPECT` too.** Matching the sentence alone lets a wrongly spelt file name slip past (LLVM puts it in the string pool, where its head and tail drop if the wrapping is wrong). A fixture here is this package's, so the position names it by its logical name (`ksplc/tests/runtime/<name>`).
+* The exception is a fixture pinning down "the boundary that may be omitted" (the case `array_index_constant_out_of_bounds` in `tests/runtime/stops.kspls`).
+* Caution: **Put the position (`at <file>:`) in `EXPECT` too.** Matching the sentence alone lets a wrongly spelt file name slip past (LLVM puts it in the string pool, where its head and tail drop if the wrapping is wrong). A case is compiled from its own folder by its file name, outside any package, so the position names the case (`at <name>:`).
 * Each fixture is built and run twice, once by the C backend and once by the LLVM backend, and the same marks are matched against both outputs. So write marks that **hold on both**. Write in full what both print the same way every run, such as `panic: index out of bounds in array (idx: 7, len: 4)`: then one mark also catches the two backends printing it differently. Leave out a part that changes from run to run, such as an address.
-* **A fixture imports nothing beyond what this package uses.** It is compiled as part of package `ksplc`, so a stop only another package's code can reach is that package's to pin.
+* **A fixture imports nothing beyond what this package uses**: a stop only another package's code can reach is that package's to pin.
 
 Rules for every fixture folder:
 
 * Do not repeat an `EXPECT-NOT:` string in the same file's comments: a diagnostic quotes the source line, so the comment appears in the output and fails its own check.
-* A file may hold several cases (`tests/negative/readonly_write.kspls`, `offsetof.kspls`, …): each case is one function, `fn case_<name>()`, with every case's marks together at the head. The same `EXPECT:` line written N times must match N places in the output.
-* **Only checks raised inside a function body may share a file**, and only where the compile really reports every case. Some checks stop at the first problem they find and say nothing of the rest; a cycle check is one. Such a check stays one per file: merged, the cases after the first are lost silently and the gate stays green.
-* Prove a merge by the marks. List every `EXPECT` line in `tests/negative/` before and after the merge, keeping duplicates (`grep -h '^// EXPECT' tests/negative/*.kspls | sort`, run in this folder). The two lists must be the same, line for line: each case then still demands its own error.
+* **In each fixture folder, a file holds the cases of one subject**, each opened by a line `// ==== case <name>` (the name in lower case letters, digits and `_`). The case is the text from the line after its head to the next head, and it is **compiled alone**, as the file `<name>.kspls` (or `.kspl`, the group file's notation) in the suite's scratch. So a case reads as the file it would be alone: its marks are its own, a position in a mark counts lines from the line after its head, and nothing one case declares reaches another. A mark above the first head, or two cases with one name in a folder, fails the suite.
+* **A case that only compiles where it stands stays a file of its own**, with no head: such a file is compiled in place. That is a case whose message carries its module's full name or that imports this package's code, both of which change outside it, the `deep_*` material of a limit, and a source another gate also compiles by its path (`tests/runtime/main_result_without_sys.kspls`). Each says why in its opening comment.
+* Add a case to the file of its subject; a new file only for a new subject or a new notation. Keep a file under about 600 lines, so a reader can still find a case in it.
+* A case may show several shapes of one subject, one function each (`fn case_<name>()`), with every shape's marks together at its head. The same `EXPECT:` line written N times must match N places in the output. **Only checks raised inside a function body may share a case this way**, and only where the compile really reports every shape. Some checks stop at the first problem they find and say nothing of the rest; a cycle check is one. Such a check takes a case of its own: merged, the shapes after the first are lost silently and the gate stays green.
+* Prove a move between files by the marks. List every `EXPECT` line in the folder before and after, keeping duplicates (`grep -h '^// EXPECT' tests/negative/* | sort`, run in this folder). The two lists must be the same, line for line: each case then still demands its own error.
 
 ## Files near the limit and how they split
 
@@ -294,7 +296,7 @@ Rules for every fixture folder:
 
 **How to choose the cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md).** This package adds two constraints of its own:
 
-* **`make fmt` and `make test-fmt-tree` use the seed**, so in a split that touches the grammar, run `make commit-seed` first (why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN.md`](docs/DESIGN.md)).
+* **`make fmt` uses the seed**, so in a split that touches the grammar, run `make commit-seed` first (why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN.md`](docs/DESIGN.md)).
 * **A suite splits where what it reads splits.** What only the repository's whole tree can show (a common word read across every package, a rename reaching another package's files) is not asked here, since a copy of this folder has no such tree; the queries this folder can answer for itself stay in `lsp`, with this folder as the workspace.
 
 ## Further reading

@@ -33,7 +33,7 @@ fn workspace_kspl(arena: Arena$@): List<|U8[]|> //<
     //< not in `.gitignore` either.
     $out: = List<|U8[]|>.new(arena)
     $skip: = read_ignored_dirs(arena)
-    walk("", skip@, 0, out@, arena)
+    walk("", skip.slice(), 0, out@, arena)
     return out
 
 priv fn read_ignored_dirs(arena: Arena$@): List<|U8[]|> //<
@@ -67,13 +67,7 @@ priv fn ignored_dir(line: U8[]): U8[]? //< the folder the line names, if it name
         return .none
     return .some(s)
 
-priv fn named_in(names: List<|U8[]|>@, want: U8[]): Bool
-    for i in Range.asc(names.len)
-        if names.get(i).equals(want)
-            return true
-    return false
-
-priv fn walk(rel: U8[], skip: List<|U8[]|>@, depth: Sz, out: List<|U8[]|>$@, arena: Arena$@) //<
+priv fn walk(rel: U8[], skip: U8[][], depth: Sz, out: List<|U8[]|>$@, arena: Arena$@) //<
     //< It walks one level under `rel`
     //<
     //< **Do not stop on a folder that cannot be read** (vanished or forbidden); skip only that one.
@@ -96,7 +90,7 @@ priv fn walk(rel: U8[], skip: List<|U8[]|>@, depth: Sz, out: List<|U8[]|>$@, are
         // Caution: **Do not descend through a link to a folder.** Two links to `.` make the walk
         // visit 2^depth folders, and a link out of the workspace reads files nobody opened.
         if info.is_dir
-            if !named_in(skip, name) && !fs.is_link(child)
+            if !name.is_one_of(skip) && !fs.is_link(child)
                 walk(child, skip, depth + 1, out, arena)
         else if child.has_kspl_ext()
             out.push(child)

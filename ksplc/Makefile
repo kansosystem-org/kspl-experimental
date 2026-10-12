@@ -32,77 +32,46 @@ test-answers:
 RUNNER ?= $(KSPLC)
 UNDER ?= $(OUT)/ksplc_stage1.exe
 SCRATCH ?= $(or $(TMPDIR),/tmp)/ksplc-suites
-# A suite's name, and the file under `tests/suite/` it stands in (`<file>_test.kspls`).
-suite_run := run
-suite_thin-use := thin_use
-suite_negative := negative
-suite_runtime := runtime
-suite_std-dir := std_dir
-suite_emit-runtime := emit_runtime
-suite_property := property
+# A suite's name is its file's stem under `tests/suite/` with `-` for `_` (`std_dir_test.kspls` is
+# `std-dir`).
+suite_file = tests/suite/$(subst -,_,$(1))_test.kspls
+suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
+  $(wildcard tests/suite/*_test.kspls))))
 # `--n=N` / `--seed=N` replace the draw's count and its start (`make fuzz-long` hands a fresh seed).
 PROPERTY_ARGS ?=
 suite_args_property = --n=60 $(PROPERTY_ARGS)
-suite_limits := limits
-suite_lint := lint
-suite_split := split
-suite_equiv := backend_equiv
-suite_broken-pipe := broken_pipe
-suite_config := config
-suite_output-flush := output_flush
-suite_ext-import := ext_method_import
-suite_debug-line := debug_line
-suite_decl-macros := decl_macros
-suite_spawn := spawn
-suite_one-main := one_main
-suite_write-perm := write_perm
-suite_cli := cli
-suite_file-path := file_path
-suite_place := place
-suite_visibility := visibility
-suite_fmt := fmt
-suite_lsp := lsp
-suite_kspls := kspls
-suite_ast-cache := ast_cache
-suite_doc := doc
-suite_ship := ship
-suite_generic-matrix := generic_matrix
-suite_layout-targets := layout_targets
 # **List them by how long they take, the longest first**: `make -j` starts them in this order.
 # Caution: **Keep `make test SUITES=` the whole rest of `make test`.** A check that runs each suite
 # apart, under a time limit of its own, runs that first and then `make test-<name>` per name here.
-SUITES := lsp run generic-matrix thin-use negative runtime write-perm std-dir emit-runtime ship \
-  property limits lint cli kspls split equiv ast-cache broken-pipe config output-flush ext-import \
-  debug-line decl-macros spawn one-main file-path place visibility fmt doc \
+SUITES := lsp run generic-matrix thin-use negative runtime std-dir emit-runtime ship \
+  property limits lint cli kspls split equiv ast-cache broken-pipe config ext-import \
+  debug-line decl-macros spawn file-path place visibility fmt doc \
   layout-targets
 # The scattering is a suite too, run apart (`make test-fuzz`) and handed, after the two places, the
 # folder its seeds come from besides `std` (this one unless named) and `--trials=N` / `--seed=N`.
-suite_fuzz := fuzz
 FUZZ_SEEDS ?= .
 FUZZ_ARGS ?=
 suite_args_fuzz = "$(FUZZ_SEEDS)" $(FUZZ_ARGS)
-# A suite file no name above runs, or a name left out of SUITES, would never run in `make test`,
-# and nothing would say so. **Only the list written here is held to it**: `make test SUITES=` names
-# a part on purpose.
-suite_names := $(filter-out args_%,$(patsubst suite_%,%,$(filter suite_%,$(.VARIABLES))))
+# A suite file left out of SUITES, or a name with no file, would never run in `make test`, and
+# nothing would say so. **Only the list written here is held to it**: `make test SUITES=` names a
+# part on purpose.
 ifneq ($(origin SUITES),command line)
-suite_unlisted := $(filter-out $(SUITES) fuzz,$(suite_names))
+suite_unlisted := $(filter-out $(SUITES) fuzz,$(suite_found))
 ifneq ($(suite_unlisted),)
-$(error there are suites missing from SUITES: $(suite_unlisted))
+$(error there are suite files missing from SUITES: $(suite_unlisted))
 endif
+suite_missing := $(filter-out $(suite_found),$(SUITES))
+ifneq ($(suite_missing),)
+$(error there are names in SUITES with no tests/suite/<name>_test.kspls: $(suite_missing))
 endif
-suite_orphans := $(filter-out $(foreach s,$(suite_names),tests/suite/$(suite_$(s))_test.kspls), \
-  $(wildcard tests/suite/*_test.kspls))
-ifneq ($(suite_orphans),)
-$(error there are suite files no suite_<name> names: $(suite_orphans))
 endif
 
 test-suites: $(addprefix test-,$(SUITES))
 
 test-%: $(UNDER)
-	$(if $(suite_$*),,$(error no suite is named $*; the names are SUITES in this file))
+	$(if $(filter $*,$(suite_found)),,$(error no suite is named $*; the names are SUITES in this file))
 	@rm -rf "$(SCRATCH)/$*" || true
-	KANSO_SUITE=$* "$(RUNNER)" run tests/suite/$(suite_$*)_test.kspls "$(UNDER)" "$(SCRATCH)/$*" \
+	KANSO_SUITE=$* "$(RUNNER)" run $(call suite_file,$*) "$(UNDER)" "$(SCRATCH)/$*" \
 		$(suite_args_$*)
 
 # --- Rebuilding the compiler (`make self-host`) ---

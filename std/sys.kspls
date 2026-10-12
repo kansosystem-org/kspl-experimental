@@ -258,28 +258,8 @@ pub fn program_name(): U8[] //< this program's name for messages, without folder
     return strip_last_ext(get_file_name(a.get(0)))
 
 // ==========================================
-// Handling signals
+// Raising a signal
 // ==========================================
-pub const sigint: I32 = 2 //< Ctrl+C, shared by POSIX and Windows
-pub const sigterm: I32 = 15 //< a request to exit cleanly; it can be registered on Windows too
-
-// A signal handler may only do async-signal-safe work (no allocation, no lock, few KSPL calls), so
-// it sets a flag with one volatile write; the code polling shutdown_requested() cleans up.
-priv $shutdown_flag: U32 = 0
-
-priv fn handle_shutdown_signal(_sig: I32)
-    __kspl_write_volatile(shutdown_flag@, 1U32)
-
-pub fn install_shutdown_handler() //< makes Ctrl+C and a stop request set a flag, not kill
-    //<
-    //< Call this, then poll `shutdown_requested()` in the loop. For finer control, use
-    //< `libc.signal()`.
-    libc.signal(sigint, handle_shutdown_signal)
-    libc.signal(sigterm, handle_shutdown_signal)
-
-pub fn shutdown_requested(): Bool //< whether a stop was requested since the handler was installed
-    return __kspl_read_volatile(shutdown_flag@) != 0U32
-
 pub fn raise_signal(sig: I32) //< sends a signal to this process itself
     //<
     //< For a test, or to resend a signal for its default behaviour after your own clean-up.

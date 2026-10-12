@@ -31,12 +31,12 @@
 
 ## A suite
 
-1. **The file**: `tests/suite/<stem>_test.kspls` for a suite of the repository, or `ksplc/tests/suite/<stem>_test.kspls` for one of the compiler's. A suite name with a `-` takes `_` in the file (`lsp-tree` is `lsp_tree_test.kspls`).
-2. **Register it.**
-   * A repository suite: `suite_<name> := suite/<stem>_test.kspls` in `mk/test.mk`, and the name in `SUITES`, longest CPU time first (`make test-suites` prints the times). A suite needing a tool only Linux's image holds goes into `LINUX_SUITES` instead, and then needs a gate of its own (above). `SUITES_TEXT` holds the suites whose answer cannot differ by platform; `SUITES_B` balances the two halves CI splits the rest into.
-   * A compiler suite: `suite_<name> := <stem>` in `ksplc/Makefile`, and the name in its `SUITES`. It runs through `make test-extract-ksplc`; macOS runs it only with a gate row of its own.
+**A suite of the repository** (`tests/suite/`) is added by "Adding a suite, step by step" in [`tests/docs/HOWTO-write-a-suite.md`](../tests/docs/HOWTO-write-a-suite.md).
 
-   A suite file no `suite_<name>` names, a name in no list, or a list naming an unknown suite stops make at once with a message saying which.
+**A suite of the compiler's own** goes under `ksplc/tests/suite/`:
+
+1. **The file**: `ksplc/tests/suite/<stem>_test.kspls`. Its name is the stem with `-` for `_` (`std_dir_test.kspls` is `std-dir`).
+2. **List it** in `SUITES` in `ksplc/Makefile`. It runs through `make test-extract-ksplc`; macOS runs it only with a gate row of its own. A suite file in no list, or a name with no file, stops make at once with a message saying which.
 3. **Name it in the platform table** (step 4 of the gate): the suites usually join a bracketed list such as "The other suites (…)".
 4. **Run it**:
 

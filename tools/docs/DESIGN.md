@@ -10,17 +10,13 @@ The list is the package's *API record*, `SURFACE.txt`: one line per published fu
 
 ### Why the record and the reference are two renderings
 
-Both come from one walk over the published names, so they cannot disagree. Only the record goes into git.
-
-Both render the lines of one walk (`surface_lines` in `ksplc/tools/surface.kspls`).
+**Both render the lines of one walk** (`surface_lines` in `ksplc/tools/surface.kspls`), so they cannot disagree. Only the record goes into git; why is "The reference is rendered when asked, not committed" in [`docs/DESIGN.md`](../../docs/DESIGN.md).
 
 | | The record (`SURFACE.txt`) | The reference (`out/docs/`) |
 | :-- | :-- | :-- |
 | Committed to git? | yes | no |
 | What it holds | each published name and its signature, with no formatting | the same names, plus the descriptions of each parameter and return value |
 | What a diff of it means | "the API changed", and nothing else | nothing to diff: it is rebuilt when asked |
-
-**Only the record is committed.** It holds no formatting, so its diff means "the API changed" and nothing else: adding one function changes one line. If the reference were committed too, a change to the page layout would rewrite every page without publishing anything new. A copy of every description would also sit beside its source. Go splits it the same way: its `api/go1.txt` sits beside godoc rather than inside it. Why the reference is not committed at all is in "The reference is rendered when asked, not committed" in [`docs/DESIGN.md`](../../docs/DESIGN.md).
 
 **The reference holds more than the record.** The rows written with `//<` for a parameter and a return value are the half of a reference a reader most needs. `SURFACE.txt` leaves them out ("Writing out the published API" in [`ksplc/docs/SPEC-tools.md`](../../ksplc/docs/SPEC-tools.md)). That is the one place where the two need different content, not only a different shape. The split is the same: share the walk, not the output.
 
@@ -32,7 +28,7 @@ Both render the lines of one walk (`surface_lines` in `ksplc/tools/surface.kspls
 
 `tools/ai_assist/` builds an AI that fills in missing KSPL code, and the KSPL compiler decides whether each answer is good.
 
-The folder makes the training data, scores the completions and trains the model. What each file does is in [`tools/ai_assist/README.md`](../ai_assist/README.md); what is left to build is in [`tools/docs/PLAN.md`](PLAN.md).
+The folder makes the training data, scores the completions and trains the model. What each file does is in [`tools/ai_assist/README.md`](../ai_assist/README.md); what is left to build is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 The task is *fill-in-the-middle* (FIM): the model sees the code before and after a gap (a *hole*) and writes what goes in the gap.
 
@@ -56,9 +52,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 ### How a completion is scored
 
-A hole is only counted where the compiler would notice it is empty, and several answers are tried per hole.
-
-**A hole counts only where removing its line breaks compilation** (`eval_fim.kspls`). So the original line (the oracle) scores 100% and an empty completion 0%, by construction. A comment or a blank line compiles when empty, and counting it would let "nothing" pass.
+**A hole counts only where the compiler would notice it is empty, that is, where removing its line breaks compilation** (`eval_fim.kspls`). So the original line (the oracle) scores 100% and an empty completion 0%, by construction. A comment or a blank line compiles when empty, and counting it would let "nothing" pass.
 
 **`fim_coder complete` returns several candidates, and the compiler chooses among them.** This scores clearly higher than the model's single most likely answer (the *greedy* candidate). So `eval_fim --model=native` reports both:
 
@@ -158,9 +152,7 @@ Why that one named page file gives the client no more reach, and why it is never
 
 ### The browser is handed a page, never the URL
 
-The URL contains the token, so the opener never puts it on the browser's command line. It writes a tiny HTML page holding the URL and starts the browser on that page's file path instead.
-
-**The browser is started on the path of a small page, which moves on to the URL at once** (`page_text` in [`../kspage_aim.kspls`](../kspage_aim.kspls)). The URL carries the token. The command line that starts a browser is open to every user while the starter runs, and a browser started that way keeps it among its own arguments for as long as it runs.
+**The URL carries the token, so the opener never puts it on the browser's command line: the browser is started on the path of a small page, which moves on to the URL at once** (`page_text` in [`../kspage_aim.kspls`](../kspage_aim.kspls)). The command line that starts a browser is open to every user while the starter runs, and a browser started that way keeps it among its own arguments for as long as it runs.
 
 The page moves on with a `refresh` (an HTML instruction to load another address). The fragment (the part after `#`) travels with it, so the page reads the token as from a URL typed by hand. The page offers the link too, for a browser that does not follow a `refresh`.
 
@@ -174,9 +166,7 @@ The page moves on with a `refresh` (an HTML instruction to load another address)
 
 ### Listing and stopping the servers it left
 
-The server stays running after an opening, so the opener can also list those servers and stop them.
-
-**`--list` prints each running server's URL and the folder it serves, one per line; `--stop=<folder>` stops the one serving that folder, and `--stop-all` every one** (`tend` in [`../kspage_open.kspls`](../kspage_open.kspls)). Without these, the only way to end a server before its idle time is to find its process and kill it.
+**The server stays running after an opening, so the opener can also list those servers and stop them.** `--list` prints each running server's URL and the folder it serves, one per line; `--stop=<folder>` stops the one serving that folder, and `--stop-all` every one (`tend` in [`../kspage_open.kspls`](../kspage_open.kspls)). Without these, the only way to end a server before its idle time is to find its process and kill it.
 
 **A server counts as running only when it answers with its token**, the test the reuse already makes. A record whose server does not answer is dropped from the record and never listed. Do not judge by a process number instead: a number outlives its process and is handed to the next one. A dead server would then be listed as running, and a stop would end an unrelated program.
 
@@ -190,9 +180,7 @@ The server stays running after an opening, so the opener can also list those ser
 
 ### The opener opens no console, yet prints to the one it was started from
 
-On Windows, double-clicking the opener shows no black console window. Typed in a terminal, it still prints to that terminal.
-
-**The opener is built for the windowing subsystem, and attaches to the console it was started from when there is one.** (Windows marks each executable as a console program or a windowing program; a console program always gets a console window.) Opened from a document, it shows no window. Typed in a terminal, it still prints the line saying which address to open. The generated entry point attaches to the parent's console before anything is written (`kspl_io_attach_console` in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c)).
+**On Windows the opener is built for the windowing subsystem, and attaches to the console it was started from when there is one.** (Windows marks each executable as a console program or a windowing program; a console program always gets a console window.) Double-clicked or opened from a document, it shows no black console window. Typed in a terminal, it still prints, to that terminal, the line saying which address to open. The generated entry point attaches to the parent's console before anything is written (`kspl_io_attach_console` in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c)).
 
 **Two executables are ruled out**, because the choice would be made twice: once by whoever types the name, and once by the file association, which is set once and never looked at again. The price is that the prompt returns before the last line, since a command processor does not wait for a windowing program. The opener prints a line or two and finishes.
 

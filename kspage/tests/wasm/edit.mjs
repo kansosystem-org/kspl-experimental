@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para, grid } from "./material.mjs";
+import { check, near, material, para, grid } from "./shell.mjs";
 
 export const subject =
   "The ways of typing (CSV, sorting, paragraphs, copying, hunting, inserting, contents, notes, "

@@ -129,7 +129,7 @@ function kspageProbeLocal(ks) {
     // **Match as far as the extension, not the closing bracket** (a document with a history
     // declares that arena along with it). The default is `.kspage` (the settlement is
     // `kspage/docs/DESIGN.md`'s "The extension is kspage's own, and does not name the format
-    // inside"); the `.json` typed below watches **that an extension saved earlier still opens**.
+    // inside").
     ks.check(await untilSays("Saved (firstsave.kspage"),
       "with the path empty it writes directly under the folder by the menu bar's name");
     // After writing, it is in the field, so it goes to the same place from then on, visibly.
@@ -147,7 +147,7 @@ function kspageProbeLocal(ks) {
       "the refusal says where the field is");
 
     // It saves. **This field is where it saves** (the press stays one).
-    box.value = "probe/saved.json";
+    box.value = "probe/saved.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
     clear();
     document.getElementById("save").click();
@@ -156,14 +156,14 @@ function kspageProbeLocal(ks) {
       "a save into a folder that is not there refuses with a reason");
 
     // It saves directly under the root.
-    box.value = "saved.json";
+    box.value = "saved.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
     const want = ks.app.save();
     clear();
     document.getElementById("save").click();
     ks.check(await untilSays("Saved ("), "it can save to the path");
     // It reads back with its own `fetch` (not through the page's wrapper).
-    const back = await fetch(at("saved.json"), { headers: head });
+    const back = await fetch(at("saved.kspage"), { headers: head });
     const got = back.ok ? await back.text() : "";
     ks.check(back.ok, "the place saved can be read from the server");
     ks.check(got === want, "the text written comes back as a byte row");
@@ -213,7 +213,7 @@ function kspageProbeLocal(ks) {
     };
     window.showOpenFilePicker = async () => [fake];
     try {
-      box.value = "saved.json";
+      box.value = "saved.kspage";
       box.dispatchEvent(new Event("change", { bubbles: true }));
       clear();
       document.getElementById("open").click();
@@ -258,15 +258,15 @@ function kspageProbeLocal(ks) {
     // section would run on a different document; `openDoc` calls the same way with one text.
     // **Point at a text no other section holds open.** One already open is shown where it is
     // ("Showed it"), which is not the reading.
-    await fetch(at("pointed.json"), { method: "PUT", headers: head,
+    await fetch(at("pointed.kspage"), { method: "PUT", headers: head,
       body: "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
         + "\"inlines\":[{\"text\":\"a document pointed at by text\"}]}]}" });
     clear();
-    ks.check(await ks.app.openDoc("pointed.json"),
+    ks.check(await ks.app.openDoc("pointed.kspage"),
       "a document pointed at by text can be opened");
-    ks.check(await untilSays("Loaded it (pointed.json)"),
+    ks.check(await untilSays("Loaded it (pointed.kspage)"),
       "it names the text opened when it tells");
-    ks.check(box.value === "pointed.json",
+    ks.check(box.value === "pointed.kspage",
       "where it read becomes where it writes back too");
     // Caution: **Take a relative path of the same origin alone.** Unrefused, **one link handed over
     // makes this page read anywhere it likes and show the content.**
@@ -280,7 +280,7 @@ function kspageProbeLocal(ks) {
     // **A text that is not there must be refused with a reason** (not "nothing happens on the
     // press").
     clear();
-    ks.check(!(await ks.app.openDoc("nosuch.json")),
+    ks.check(!(await ks.app.openDoc("nosuch.kspage")),
       "a text that is not there is not opened");
     // Served locally it is read through the API, whose reason names what is wrong.
     ks.check(await untilSays("There is no such name"),
@@ -292,7 +292,7 @@ function kspageProbeLocal(ks) {
     // **still embedded**, as on the side with none. One press does one thing whether a server
     // runs or not.
     // Caution: **See that nothing is laid next to the document** — "it went in" passes either way.
-    box.value = "saved.json";
+    box.value = "saved.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
     ks.pressAt(8);
     clear();
@@ -312,7 +312,7 @@ function kspageProbeLocal(ks) {
     // Caution: **Do not wait for a tiding** — this section overlaps the later ones, so the wait
     // lands inside a later section's tiding. **Whether it wrote back is told by reading the file
     // back.**
-    box.value = "saved.json";
+    box.value = "saved.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
     clear();
     document.getElementById("save").click();
@@ -322,7 +322,7 @@ function kspageProbeLocal(ks) {
     // Caution: **Change the content and the length** (so a length-only check is caught too).
     const byOther = "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
       + "\"inlines\":[{\"text\":\"a text another window wrote\"}]}]}";
-    const put2 = await fetch(at("saved.json"),
+    const put2 = await fetch(at("saved.kspage"),
       { method: "PUT", headers: head, body: byOther });
     ks.check(put2.ok, "it can be rewritten from outside");
     // Caution: **Do not overwrite silently** — what the other window wrote would be gone. It is
@@ -330,27 +330,27 @@ function kspageProbeLocal(ks) {
     clear();
     document.getElementById("save").click();
     await new Promise((go) => setTimeout(go, 600));
-    const after = await fetch(at("saved.json"), { headers: head });
+    const after = await fetch(at("saved.kspage"), { headers: head });
     const nowOnDisk = after.ok ? await after.text() : "";
     ks.check(nowOnDisk !== mine,
       "where it changed outside it does not overwrite");
     ks.check(nowOnDisk === byOther, "the outside text stays as it is");
     // **Change the name and it must be writable**, or a draft has nowhere to go (the refusal's text
     // names this way).
-    box.value = "mine.json";
+    box.value = "mine.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
     clear();
     document.getElementById("save").click();
-    ks.check(await untilSays("Saved (mine.json"),
+    ks.check(await untilSays("Saved (mine.kspage"),
       "changing the name lets it write");
     // **Do not refuse where nothing changed** — the most complaints against other products,
     // comparing time and size (compared by text, nothing is refused by mistake). It presses twice
     // and looks at the second writing too.
     clear();
     document.getElementById("save").click();
-    ks.check(await untilSays("Saved (mine.json"),
+    ks.check(await untilSays("Saved (mine.kspage"),
       "pressing again in a row does not refuse");
-    const twice = await fetch(at("mine.json"), { headers: head });
+    const twice = await fetch(at("mine.kspage"), { headers: head });
     ks.check(twice.ok && (await twice.text()) === ks.app.save(),
       "the second time too the text now is written");
 
@@ -359,7 +359,7 @@ function kspageProbeLocal(ks) {
     // Caution: **A question that failed is not "it is not there"**: read so, the check above is
     // skipped and the save overwrites. This check's stand-in answers every `/api/stat` with 500.
     const keep = ks.app.save();
-    const put3 = await fetch(at("mine.json"),
+    const put3 = await fetch(at("mine.kspage"),
       { method: "PUT", headers: head, body: byOther });
     ks.check(put3.ok, "it can be rewritten from outside again");
     const realFetch = window.fetch;
@@ -373,11 +373,11 @@ function kspageProbeLocal(ks) {
     } finally {
       window.fetch = realFetch;
     }
-    const unasked = await fetch(at("mine.json"), { headers: head });
+    const unasked = await fetch(at("mine.kspage"), { headers: head });
     ks.check(unasked.ok && (await unasked.text()) === byOther,
       "where the server cannot say whether it changed, it does not overwrite");
     // Put back what the page last saved, so the sections below start from a file it wrote.
-    await fetch(at("mine.json"), { method: "PUT", headers: head, body: keep });
+    await fetch(at("mine.kspage"), { method: "PUT", headers: head, body: keep });
 
     // ---- Opening a different document in a different window ----
     //
@@ -420,11 +420,11 @@ function kspageProbeLocal(ks) {
     const soloDoc = "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
       + "\"inlines\":[{\"text\":\"" + soloMark + "\"}]}]}";
     // **Lay it down with its own `fetch`** (the reason is in the header).
-    const wrote = await fetch(at("solo.json"),
+    const wrote = await fetch(at("solo.kspage"),
       { method: "PUT", headers: head, body: soloDoc });
     ks.check(wrote.ok, "the other document can be laid down");
     const here = ks.app.text();
-    const child = window.open(location.href + "?doc=solo.json", "kspage-solo");
+    const child = window.open(location.href + "?doc=solo.kspage", "kspage-solo");
     ks.check(child !== null, "the other document's window can be opened");
     if (child !== null) {
       const said = await soloText(child, soloMark);
@@ -659,7 +659,7 @@ function kspageProbeLocal(ks) {
 
     // Caution: **Take the path off once the name is typed afresh**, or it keeps writing to the old
     // place.
-    box.value = "saved.json";
+    box.value = "saved.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
     name.value = "another";
     name.dispatchEvent(new Event("change", { bubbles: true }));

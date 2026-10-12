@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para } from "./material.mjs";
+import { check, near, material, para } from "./shell.mjs";
 
 export const subject = "The decoration laid on what is chosen, and the link and the line.";
 

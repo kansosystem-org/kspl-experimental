@@ -278,15 +278,19 @@ impl Ast_node
         //<
         //< The reason is at parse_int_literal.
         if wide > I64::2147483647 || wide < I64::(-2147483647 - 1)
-            if !c.suppress_errors
-                c.err(r, "integer overflow in compile-time constant expression")
-            throw .invalid_argument
+            return I32::r.report_overflow(c)!
         return I32::wide
 
     priv fn report_overflow(r: Self$@, c: Sema_ctx$@): I64!Sema_error //<
         //< The single place that reports overflow (called from each arithmetic branch)
         if !c.suppress_errors
             c.err(r, "integer overflow in compile-time constant expression")
+        throw .invalid_argument
+
+    priv fn report_bad_shift(r: Self$@, c: Sema_ctx$@): I64!Sema_error //<
+        //< The single place that reports a shift amount out of the operand's width
+        if !c.suppress_errors
+            c.err(r, "shift amount is out of range in compile-time constant expression")
         throw .invalid_argument
 
     fn eval_bool(r: Self$@, _c: Sema_ctx$@, _depth: I32): I64!Sema_error
@@ -376,18 +380,14 @@ impl Ast_node
             // or lets a narrow type shift by its width (undefined behaviour in C).
             if op.equals("<<")
                 if right < 0 || right >= I64::bits
-                    if !c.suppress_errors
-                        c.err(r, "shift amount is out of range in compile-time constant expression")
-                    throw .invalid_argument
+                    return r.report_bad_shift(c)!
                 if !is_uns && left != 0 &&
                     (left > (i64_max_val >> right) || left < (i64_min_val >> right))
                     return r.report_overflow(c)!
                 return fit_result(I64::(ul << ur) if is_uns else left << right, bits, is_uns)
             if op.equals(">>")
                 if right < 0 || right >= I64::bits
-                    if !c.suppress_errors
-                        c.err(r, "shift amount is out of range in compile-time constant expression")
-                    throw .invalid_argument
+                    return r.report_bad_shift(c)!
                 return I64::(ul >> ur) if is_uns else left >> right
             if op.equals("|")
                 return left | right
@@ -749,7 +749,7 @@ impl Ast_node
         defer seen.free()
         // Caution: **Use clean only inside this one walk.** Across declarations it would remember
         // "clean" before `def_node` is linked and let a cycle by
-        // (tests/negative/const_cycle.kspls).
+        // (the case const_cycle in tests/negative/const.kspls).
         $clean: = Map<|Sz, Bool|>.new(null)
         defer clean.free()
         if bad: = r.find_bad_init_expr(seen@, clean@)

@@ -105,3 +105,22 @@ def echo_probe(elf, sock_name, payload, pass_note):
             proc.wait()
         # **Delete the temporary place too** (left behind, they grow every turn).
         shutil.rmtree(hold, ignore_errors=True)
+
+
+# The two demonstrations, by the name `ksos/Makefile` passes: the socket's name, the bytes sent and
+# the sentence reported.
+# **One byte is enough for `irq`**: the demo receives it only once NVIC IRQ0 (the UART0 RX
+# interrupt) wakes it from WFI, so the round trip is itself the proof of interrupt-driven I/O.
+DEMOS = {
+    "polled": ("uart_echo_test.sock", b"hello-uart\n",
+               "UART0 RX echoed back exactly what was sent"),
+    "irq": ("uart_irq_echo_test.sock", b"Q",
+            "UART0 RX byte echoed back via a genuine NVIC interrupt + WFI wakeup"),
+}
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3 or sys.argv[1] not in DEMOS:
+        print("usage: uart_probe.py polled|irq <the demo's ELF>", file=sys.stderr)
+        sys.exit(2)
+    sock_name, payload, pass_note = DEMOS[sys.argv[1]]
+    sys.exit(echo_probe(sys.argv[2], sock_name, payload, pass_note))

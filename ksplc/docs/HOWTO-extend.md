@@ -9,16 +9,9 @@
 1. **Emit it from sema** with its code at the head of the message: `c.warn(node, "[W0xxx] ...")`, `c.information(...)` or `c.hint(...)` (`ksplc/sema/session/ctx.kspls`; `[W0203]` in `ksplc/sema/body/stmt.kspls` is an example). Ask `c.is_code_off(node, code)` before costly work. An information or a hint prints only under `ksplc lint`.
 2. **Register it** in `codes` in [`../base/lint_codes.kspls`](../base/lint_codes.kspls), and raise the array's length. A code off by default also goes into `off_by_default`. Left out, `make test-conventions` fails with "every code the compiler writes is registered".
 3. **Write its section**, `#### [W0xxx] <title>`, in [`SPEC-tools.md`](SPEC-tools.md) under "5.5 The list of warnings (W)", "5.6 The list of information diagnostics (I)" or "5.7 The list of hints (H)". Left out, `make test-conventions` fails with "the diagnostic codes agree between the implementation and the spec".
-4. **Remake the table of codes**:
-
-   ```sh
-   make code-table
-   ```
-
-   Skipped, `make test-conventions` fails with "the table of codes is what the code sections give".
-5. **Add material that fires it**: a file under `ksplc/tests/lint/` with a `// EXPECT: [W0xxx] ...` line, plus `// ARGS: --lint=W0xxx=on` for a code off by default. Without one, `make test-conventions` fails with "every diagnostic code has material holding it"; `make test-lint` runs the material.
-6. **Rebuild and check `ksplc explain`**: it prints the section from the `SPEC-tools.md` built into the compiler, and `make test-cli` checks every registered code prints its own section.
-7. **Run `make lint`.** A code on by default that fires on the repository's own sources fails it with `LINT FAILED`; fix those sources in the same change.
+4. **Add material that fires it**: a case in its subject's file under `ksplc/tests/lint/` (opened by `// ==== case <name>`, as "The suites' folders, and adding a fixture" in `ksplc/README.md` says) with a `// EXPECT: [W0xxx] ...` line, plus `// ARGS: --lint=W0xxx=on` for a code off by default. Without one, `make test-conventions` fails with "every diagnostic code has material holding it"; `make test-lint` runs the material.
+5. **Rebuild and check `ksplc explain`**: it prints the section from the `SPEC-tools.md` built into the compiler, and `make test-cli` checks every registered code prints its own section.
+6. **Run `make lint`.** A code on by default that fires on the repository's own sources fails it with `LINT FAILED`; fix those sources in the same change.
 
 ## An AST node kind
 
@@ -26,7 +19,7 @@
 2. **Add `k_<rule>`** to `Ast_kind` in [`../base/ast_kinds.kspls`](../base/ast_kinds.kspls), before `k_max`. A capitalised token rule also needs its case in `builtin_name`. Left out, stage1 stops at start-up with `Grammar sync error: Rule '<rule>' is defined in kspl.kspeg but missing from Ast_kind enum.`
 3. **Give it one shape** in `normalize` (`ksplc/parse/normalize*.kspls`), then handle it in each stage that meets it. Why every layer may rely on one shape is "Keeping the grammar and the AST node kinds in step" in [`DESIGN.md`](DESIGN.md).
 4. **Run `make test-conventions`**: "there is no remnant in Ast_kind" fails for a kind no grammar rule makes and no code tests.
-5. **Update the seed before writing the new syntax anywhere** (below). `make fmt` and `make test-fmt-tree` run the seed, so they refuse the syntax until then.
+5. **Update the seed before writing the new syntax anywhere** (below). `make fmt` runs the seed, so it refuses the syntax until then.
 
 ## A primitive type
 

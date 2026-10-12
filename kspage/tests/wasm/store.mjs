@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para, grid } from "./material.mjs";
+import { check, near, material, para, grid } from "./shell.mjs";
 
 export const subject = "Taking a document in and out, and writing it out as Markdown.";
 
@@ -35,7 +34,7 @@ export function run(ks) {
 
   // --- A blank document ---
   //
-  // Caution: **It has to be seen where there is no browser too** (`../browser/fresh.js` walks past
+  // Caution: **It has to be seen where there is no browser too** (`../browser/open.js` walks past
   // without one). **Look at one box coming out** — with a block and no run, **a blank cannot be
   // typed on**. **Look at the table of styles too** (else tables and slides pile up as
   // paragraphs).

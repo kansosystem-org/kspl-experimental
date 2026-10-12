@@ -1,6 +1,6 @@
 # kssrv — the design
 
-kssrv (Kanso Server) is an HTTP server written in KSPL on `std` and `ksai`. It is where `ksplc` and `std` meet a real run: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), what a client can ask for in [`SPEC-api.md`](SPEC-api.md), and what is left in [`PLAN.md`](PLAN.md).
+kssrv (Kanso Server) is an HTTP server written in KSPL on `std` and `ksai`. It is where `ksplc` and `std` meet a real run: a program that stays up and answers requests without end. This document holds its decisions and their grounds. Starting it is in [kssrv](../README.md), what a client can ask for in [`SPEC-api.md`](SPEC-api.md), and what is left in the "kssrv" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 ## The command line and the two modes
 
@@ -34,7 +34,7 @@ The one flag `--local` sets four things together, and the body cap follows it, s
 
 How the token is made, passed on and compared is in the agreement ("How the token gets across" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)).
 
-**The body cap is checked as soon as the head names the length, but the token only once the whole request has arrived.** So a client without a token can make the server hold the connection cap × the body cap (over 500MB for local use). Checking the token earlier needs `std/http` to pass on a head whose body has not arrived. That cost is not paid in advance, since local use listens on the loopback alone. The stage is in [`PLAN.md`](PLAN.md).
+**The body cap is checked as soon as the head names the length, but the token only once the whole request has arrived.** So a client without a token can make the server hold the connection cap × the body cap (over 500MB for local use). Checking the token earlier needs `std/http` to pass on a head whose body has not arrived. That cost is not paid in advance, since local use listens on the loopback alone. The stage is in the "kssrv" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 ## One thread, many connections
 
@@ -82,7 +82,7 @@ Kssrv prefers reference-counted memory to memory it frees by hand, because a lea
 
 A *non-blocking* socket returns at once when it has nothing to give, instead of making the program wait. `std/reactor` watches whether each of them is ready (readable or writable), all together; this is *multiplexing*.
 
-**The blocking `http.read_request` / `http.write_response` cannot be used**: waiting partway through one connection would stop every other. Instead:
+**A blocking read or write cannot be used**: waiting partway through one connection would stop every other. Instead:
 
 * **Receiving** applies `http.parse_request` to the part-read buffer each time more arrives. `Http_error.incomplete` means "wait for more".
 * **Sending** builds the bytes with `http.format_response`, and `Conn` holds how far it has sent.
@@ -175,9 +175,7 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### `read` returning 0 does not mean the connection is over
 
-A TCP connection has two directions. When `read` returns 0, the client has only stopped sending; it may still be waiting to receive the answer.
-
-**`read`'s 0 only means the peer closed its sending side** (a *half-close*). It may still be waiting for the response, with its receiving half open: a client may close its sending side once it has nothing more to send. Closing the connection there would lose the part of the answer still unsent, and the client would wait forever on a request that never completes.
+**A TCP connection has two directions, and `read`'s 0 only means the client closed its sending side** (a *half-close*). It may still be waiting for the response, with its receiving half open: a client may close its sending side once it has nothing more to send. Closing the connection there would lose the part of the answer still unsent, and the client would wait forever on a request that never completes.
 
 **A half-closed connection is kept until nothing is left to send.**
 
@@ -191,9 +189,7 @@ Note: The check is in `keepalive_cases` in `kssrv/tests/main.kspls` (it closes o
 
 ### A connection that closes after its answer reads what the peer still sends
 
-Before closing, kssrv keeps reading and discarding what the client still sends, for up to 5 seconds. Otherwise Windows would destroy the answer the client has not read yet.
-
-**After the last answer on a connection that closes, the sending side is closed, and what the peer still sends is read and thrown away**, until the peer closes or `linger_us` (5 seconds) passes (`lingering_since_us` in `kssrv/conn.kspls`, `conn_linger` and `sweep_done` in `kssrv/main.kspls`).
+**Before closing a connection after its last answer, kssrv closes its sending side and keeps reading and throwing away what the client still sends**, until the client closes or `linger_us` (5 seconds) passes (`lingering_since_us` in `kssrv/conn.kspls`, `conn_linger` and `sweep_done` in `kssrv/main.kspls`).
 
 **Closing the socket with the peer's bytes unread makes the OS answer with a reset** (a TCP RST, which aborts the connection). The usual case is a client still sending a body past the cap, refused with a 413 as soon as the head names its length. On Windows a reset throws away what the client has received and not yet read, so the client sees a broken connection in place of the 413. On Linux the 413 survives, so the loss shows on Windows alone. nginx and Apache read on after their last answer for the same reason.
 
@@ -222,11 +218,9 @@ Kssrv serves files from under its root and answers JSON under `/api/`. Every pat
 
 ### The path is checked after the decode
 
-The path part of the request target is *percent-decoded* (`%2e` becomes `.`), once, by `url.decode_component`. Only then does `fs.stays_under` check that it stays under the root.
+**The path part of the request target is *percent-decoded* (`%2e` becomes `.`) once, by `url.decode_component`, and only then does `fs.stays_under` check that it stays under the root: the order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`, returning a file outside the root. A test with a raw `..` alone would not notice, so the regression in `kssrv/tests/main.kspls` sends encoded strings too.
 
-**The order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`, returning a file outside the root. A test with a raw `..` alone would not notice, so the regression in `kssrv/tests/main.kspls` sends encoded strings too.
-
-Caution: **Use `decode_component`, not `decode_form`.** `+` means a space only in a query or a form. In a URI's path it is just a `+`, and mistaking one for the other makes a file with `+` in its name unreachable.
+Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only in a query or a form (`parse_query` reads it so). In a URI's path it is just a `+`, and mistaking one for the other makes a file with `+` in its name unreachable.
 
 **A refused path returns 403, not 404.** What was refused is the path's shape; whether a file of that name exists was never checked. `fs.is_safe_relative` also refuses spellings the OS reads specially, Windows device names among them. A read or write of `COM1` never returns when nothing is attached, so one request would stop this single-loop server.
 

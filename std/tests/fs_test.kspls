@@ -31,8 +31,8 @@ fn test_fs_ops()
     assert(fs.exists(tmp_dir) && fs.is_dir(tmp_dir), "tmp_dir should exist as a directory")
 
     f1: = "out/tmp/kspl_test_debug_fs_dir/a.txt"
-    io.write_file(f1, "hello") catch panic("write_file should succeed inside a freshly created \
-        directory")
+    io.write_file(f1, "hello")
+        catch panic("write_file should succeed inside a freshly created directory")
     info: = fs.stat(f1) catch panic("stat should succeed for an existing file")
     assert(info.size == 5 && !info.is_dir, "a.txt metadata should report size=5, is_dir=false")
 
@@ -45,10 +45,10 @@ fn test_fs_ops()
     // both use it).
     // Caution: **Do not treat an existing destination as a failure**: if it cannot replace, every
     // save after the first silently writes nothing.
-    io.write_file(f1, "again") catch panic("write_file should succeed for the source of a replacing \
-        rename")
-    fs.rename_path(f1, f2) catch panic("rename_path should replace an existing destination, not \
-        fail")
+    io.write_file(f1, "again")
+        catch panic("write_file should succeed for the source of a replacing rename")
+    fs.rename_path(f1, f2)
+        catch panic("rename_path should replace an existing destination, not fail")
     assert(!fs.exists(f1), "the source should be gone after a replacing rename")
     replaced: = io.read_file(f2) catch panic("the replaced destination should be readable")
     assert(replaced.equals("again"), "the destination should hold the new bytes")
@@ -56,8 +56,8 @@ fn test_fs_ops()
 
     dir_arena: = Arena.new(4096)
     defer dir_arena.free()
-    entries: = fs.read_dir(tmp_dir, dir_arena) catch panic("read_dir should succeed for an existing \
-        directory")
+    entries: = fs.read_dir(tmp_dir, dir_arena)
+        catch panic("read_dir should succeed for an existing directory")
     assert(entries.len == 1, "directory should contain exactly one entry")
     for name in entries
         assert(name.equals("b.txt"), "the only directory entry should be b.txt")
@@ -110,8 +110,8 @@ fn test_fs_wide_path() //<
     for name in entries
         assert(name.equals("直した.txt"),
             "the entry name should come back as the bytes that were written")
-        got: = io.read_file(fs.join(deep, name, arena)) catch panic("the file should be readable \
-            through the path rebuilt from the listed name")
+        got: = io.read_file(fs.join(deep, name, arena))
+            catch panic("the file should be readable through the path rebuilt from the listed name")
         assert(got.equals("かんそ"), "the rebuilt path should reach the same bytes")
         dealloc(Void$@::got.ptr)
 
@@ -171,15 +171,16 @@ fn test_fs_past_max_path() //<
     assert(entries.len == 1, "the long directory should contain exactly one entry")
     for name in entries
         assert(name.equals("moved.txt"), "the entry should come back by the name it was moved to")
-        got: = io.read_file(fs.join(deep, name, arena)) catch panic("the file should be readable \
-            through the long path rebuilt from the listed name")
+        got: = io.read_file(fs.join(deep, name, arena))
+            catch panic("the file should be readable through the long path rebuilt from the listed \
+                name")
         assert(got.equals("past"), "the rebuilt long path should reach the same bytes")
         dealloc(Void$@::got.ptr)
 
     fs.remove_path(two) catch panic("remove_path must succeed for a file under a long path")
     for $i: = levels.len; i > 0; i -= 1
-        fs.remove_path(levels.get(i - 1)) catch panic("remove_path must succeed for an empty long \
-            directory")
+        fs.remove_path(levels.get(i - 1))
+            catch panic("remove_path must succeed for an empty long directory")
     fs.remove_path(root) catch panic("remove_path must succeed for the long probe root")
     assert(!fs.exists(root), "the long-path probe tree should be gone after cleanup")
 
@@ -193,44 +194,36 @@ fn skip_skipme(name: U8[]): Bool //< a `skip_dir` that leaves out the folders na
 priv const walk_root: U8[] = "out/tmp/kspl_test_debug_walk"
 
 // ==========================================
-// std/fs: walk_files / walk_dirs return a tree flat and in lexicographic order, and skip_dir drops
-// a whole branch.
+// std/fs: walk_files returns a tree flat and in lexicographic order, and skip_dir drops a whole
+// branch.
 // ==========================================
 fn test_fs_walk()
-    verdict.start("[Fs] mkdir_all/walk_files/walk_dirs...")
+    verdict.start("[Fs] mkdir_all/walk_files...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     remove_walk_tree()
 
-    fs.mkdir_all("out/tmp/kspl_test_debug_walk/z/deep") catch panic("mkdir_all should create every \
-        missing level")
-    fs.mkdir_all("out/tmp/kspl_test_debug_walk/a") catch panic("mkdir_all should create a sibling \
-        directory")
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/z/deep")
+        catch panic("mkdir_all should create every missing level")
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/a")
+        catch panic("mkdir_all should create a sibling directory")
     // mkdir_all on an existing path is a success, so the caller needs no existence check.
-    fs.mkdir_all("out/tmp/kspl_test_debug_walk/a") catch panic("mkdir_all must treat an existing \
-        directory as success")
-    fs.mkdir_all("out/tmp/kspl_test_debug_walk/skipme") catch panic("mkdir_all should create the \
-        directory to be pruned")
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/a")
+        catch panic("mkdir_all must treat an existing directory as success")
+    fs.mkdir_all("out/tmp/kspl_test_debug_walk/skipme")
+        catch panic("mkdir_all should create the directory to be pruned")
     write_probe_file("out/tmp/kspl_test_debug_walk/b.txt")
     write_probe_file("out/tmp/kspl_test_debug_walk/a/a2.txt")
     write_probe_file("out/tmp/kspl_test_debug_walk/z/deep/d.txt")
     write_probe_file("out/tmp/kspl_test_debug_walk/skipme/x.txt")
 
-    $files: = fs.walk_files(walk_root, skip_skipme, arena) catch panic("walk_files should succeed \
-        for an existing directory")
+    $files: = fs.walk_files(walk_root, skip_skipme, arena)
+        catch panic("walk_files should succeed for an existing directory")
     assert(files.len == 3, "walk_files should return 3 files with skipme pruned")
     assert(entry_is(files@, 0, "out/tmp/kspl_test_debug_walk/a/a2.txt"), "walk_files[0] mismatch")
     assert(entry_is(files@, 1, "out/tmp/kspl_test_debug_walk/b.txt"), "walk_files[1] mismatch")
     assert(entry_is(files@, 2, "out/tmp/kspl_test_debug_walk/z/deep/d.txt"),
         "walk_files[2] mismatch")
-
-    $dirs: = fs.walk_dirs(walk_root, skip_skipme, arena) catch panic("walk_dirs should succeed for \
-        an existing directory")
-    // The starting point itself is not included. Nor is the pruned skipme.
-    assert(dirs.len == 3, "walk_dirs should return 3 directories excluding the root and skipme")
-    assert(entry_is(dirs@, 0, "out/tmp/kspl_test_debug_walk/a"), "walk_dirs[0] mismatch")
-    assert(entry_is(dirs@, 1, "out/tmp/kspl_test_debug_walk/z"), "walk_dirs[1] mismatch")
-    assert(entry_is(dirs@, 2, "out/tmp/kspl_test_debug_walk/z/deep"), "walk_dirs[2] mismatch")
 
     joined: U8[] = fs.join("out/tmp/kspl_test_debug_walk/", "/b.txt", arena)
     join_ok: = joined.equals("out/tmp/kspl_test_debug_walk/b.txt")
@@ -252,8 +245,8 @@ fn test_fs_walk()
     remove_walk_tree()
     assert(!fs.exists(walk_root), "the probe tree should be gone after cleanup")
     verdict
-        .pass("mkdir_all created every level, walk_files/walk_dirs returned in lexicographic order, \
-            and skip_dir dropped a whole branch.")
+        .pass("mkdir_all created every level, walk_files returned in lexicographic order, and \
+            skip_dir dropped a whole branch.")
 
 priv const race_dirs: Sz = 16 //< how many threads create the same tree at once
     //<
@@ -310,19 +303,20 @@ fn test_fs_mkdir_all_race()
 
 fn clear_tree_best_effort(root: U8[], arena: Arena$@) //< deletes a test's scratch tree
     //<
-    //< It does not report a failed delete (clean-up must not hide the result under test).
-    files: = fs.walk_files(root, fs.skip_none, arena) catch
+    //< It does not report a failed delete (clean-up must not hide the result under test). A link
+    //< is removed, never entered.
+    entries: = fs.read_dir(root, arena) catch
         return
-    for f in files
-        fs.remove_path(f) catch {}
-    dirs: = fs.walk_dirs(root, fs.skip_none, arena) catch
-        return
-    for $i: = I32::dirs.len - 1; i >= 0; i -= 1
-        fs.remove_path(dirs.get(i)) catch {}
+    for name in entries
+        full: = fs.join(root, name, arena)
+        if fs.is_dir(full) && !fs.is_link(full)
+            clear_tree_best_effort(full, arena)
+        else
+            fs.remove_path(full) catch {}
     fs.remove_path(root) catch {}
 
 // ==========================================
-// std/fs: path safety decided by the text alone (is_safe_relative), and walk_*'s depth limit.
+// std/fs: path safety decided by the text alone (is_safe_relative), and walk_files's depth limit.
 // ==========================================
 fn test_fs_path_guard()
     verdict.start("[Fs] is_safe_relative and walk's depth limit...")
@@ -376,8 +370,8 @@ fn test_fs_path_guard()
     assert(!fs.stays_under(".", ""), "empty does not stay under (in step with is_safe_relative)")
     // Caution: **Create the file it checks.** A repository file exists only when run from the root;
     // from std's own folder this line would pass as the absent case above.
-    fs.mkdir_all("out/tmp/kspl_test_path_guard") catch panic("mkdir_all should succeed under \
-        out/tmp")
+    fs.mkdir_all("out/tmp/kspl_test_path_guard")
+        catch panic("mkdir_all should succeed under out/tmp")
     write_probe_file("out/tmp/kspl_test_path_guard/present.txt")
     assert(fs.stays_under(".", "out/tmp/kspl_test_path_guard/present.txt"),
         "an existing ordinary file stays under")
@@ -502,8 +496,8 @@ priv fn entry_is(list: List<|U8[]|>$@, at: Sz, want: U8[]): Bool
     return got.equals(want)
 
 priv fn write_probe_file(path: U8[])
-    io.write_file(path, "x") catch panic("write_file should succeed inside a freshly created \
-        directory")
+    io.write_file(path, "x")
+        catch panic("write_file should succeed inside a freshly created directory")
 
 priv fn remove_walk_tree() //< deletes the tree from the leaves in order
     fs.remove_path("out/tmp/kspl_test_debug_walk/skipme/x.txt") catch {}

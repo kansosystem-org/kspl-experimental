@@ -300,7 +300,7 @@ function dispatchMessage(msg) {
             4: vsc.DiagnosticSeverity.Hint
         };
         const diags = msg.params.diagnostics.map(d => {
-            const range = new vsc.Range(d.range.start.line, d.range.start.character, d.range.end.line, d.range.end.character);
+            const range = toRange(d.range);
             const severity = severityMap[d.severity] || vsc.DiagnosticSeverity.Error;
             const diag = new vsc.Diagnostic(range, d.message, severity);
             if (d.tags && d.tags.includes(1)) {
@@ -482,11 +482,7 @@ exports.activate = function (context) {
                     } else {
                         defUri = vsc.Uri.parse(result.uri);
                     }
-                    const range = new vsc.Range(
-                        result.range.start.line, result.range.start.character,
-                        result.range.end.line, result.range.end.character
-                    );
-                    return new vsc.Location(defUri, range);
+                    return new vsc.Location(defUri, toRange(result.range));
                 }
                 // **No guess where the server knows none**: a text search lands on another thing of
                 // the same name, shown with the same confidence as a real answer.
@@ -572,10 +568,7 @@ exports.activate = function (context) {
                     context: { includeDeclaration: context.includeDeclaration !== false }
                 }, token);
                 if (!Array.isArray(result)) return null;
-                return result.map(one => new vsc.Location(
-                    resolveUri(one.uri),
-                    new vsc.Range(one.range.start.line, one.range.start.character,
-                        one.range.end.line, one.range.end.character)));
+                return result.map(one => new vsc.Location(resolveUri(one.uri), toRange(one.range)));
             }
         })),
 
@@ -586,62 +579,17 @@ exports.activate = function (context) {
                     position: { line: position.line, character: position.character }
                 }, token);
                 if (result && Array.isArray(result) && result.length > 0) {
-                    return result.map(r => {
-                        let uri = resolveUri(r.uri);
-                        let range = new vsc.Range(r.range.start.line, r.range.start.character, r.range.end.line, r.range.end.character);
-                        let sRange = new vsc.Range(r.selectionRange.start.line, r.selectionRange.start.character, r.selectionRange.end.line, r.selectionRange.end.character);
-                        let item = new vsc.CallHierarchyItem(vscodeKind(r.kind), r.name, r.detail || "", uri, range, sRange);
-                        item.data = r.data;
-                        return item;
-                    });
+                    return result.map(toCallItem);
                 }
                 return null;
             },
-            async provideCallHierarchyIncomingCalls(item, token) {
-                const result = await sendRequest("callHierarchy/incomingCalls", {
-                    item: {
-                        name: item.name,
-                        kind: item.kind,
-                        uri: getRelativeUri(item.uri),
-                        data: item.data
-                    }
-                }, token);
-                if (result && Array.isArray(result)) {
-                    return result.map(inc => {
-                        let r = inc.from;
-                        let uri = resolveUri(r.uri);
-                        let range = new vsc.Range(r.range.start.line, r.range.start.character, r.range.end.line, r.range.end.character);
-                        let sRange = new vsc.Range(r.selectionRange.start.line, r.selectionRange.start.character, r.selectionRange.end.line, r.selectionRange.end.character);
-                        let callerItem = new vsc.CallHierarchyItem(vscodeKind(r.kind), r.name, r.detail || "", uri, range, sRange);
-                        callerItem.data = r.data;
-                        let fromRanges = inc.fromRanges.map(fr => new vsc.Range(fr.start.line, fr.start.character, fr.end.line, fr.end.character));
-                        return new vsc.CallHierarchyIncomingCall(callerItem, fromRanges);
-                    });
-                }
-                return [];
+            provideCallHierarchyIncomingCalls(item, token) {
+                return callsOf("callHierarchy/incomingCalls", item, "from", vsc.CallHierarchyIncomingCall,
+                    token);
             },
-            async provideCallHierarchyOutgoingCalls(item, token) {
-                const result = await sendRequest("callHierarchy/outgoingCalls", {
-                    item: {
-                        name: item.name,
-                        kind: item.kind,
-                        uri: getRelativeUri(item.uri),
-                        data: item.data
-                    }
-                }, token);
-                if (result && Array.isArray(result)) {
-                    return result.map(out => {
-                        let r = out.to;
-                        let uri = resolveUri(r.uri);
-                        let range = new vsc.Range(r.range.start.line, r.range.start.character, r.range.end.line, r.range.end.character);
-                        let sRange = new vsc.Range(r.selectionRange.start.line, r.selectionRange.start.character, r.selectionRange.end.line, r.selectionRange.end.character);
-                        let calleeItem = new vsc.CallHierarchyItem(vscodeKind(r.kind), r.name, r.detail || "", uri, range, sRange);
-                        calleeItem.data = r.data;
-                        let fromRanges = out.fromRanges.map(fr => new vsc.Range(fr.start.line, fr.start.character, fr.end.line, fr.end.character));
-                        return new vsc.CallHierarchyOutgoingCall(calleeItem, fromRanges);
-                    });
-                }
-                return [];
+            provideCallHierarchyOutgoingCalls(item, token) {
+                return callsOf("callHierarchy/outgoingCalls", item, "to", vsc.CallHierarchyOutgoingCall,
+                    token);
             }
         })),
 
@@ -671,19 +619,9 @@ exports.activate = function (context) {
                         } catch (e) {}
 
                         for (const edit of result.changes[uriStr]) {
-                            if (targetDoc) {
-                                const startPos = new vsc.Position(edit.range.start.line, edit.range.start.character);
-                                const wordRange = targetDoc.getWordRangeAtPosition(startPos, /[a-zA-Z_]\w*/);
-                                if (wordRange) {
-                                    workspaceEdit.replace(fileUri, wordRange, edit.newText);
-                                } else {
-                                    const r = new vsc.Range(edit.range.start.line, edit.range.start.character, edit.range.end.line, edit.range.end.character);
-                                    workspaceEdit.replace(fileUri, r, edit.newText);
-                                }
-                            } else {
-                                const r = new vsc.Range(edit.range.start.line, edit.range.start.character, edit.range.end.line, edit.range.end.character);
-                                workspaceEdit.replace(fileUri, r, edit.newText);
-                            }
+                            const at = new vsc.Position(edit.range.start.line, edit.range.start.character);
+                            const word = targetDoc && targetDoc.getWordRangeAtPosition(at, /[a-zA-Z_]\w*/);
+                            workspaceEdit.replace(fileUri, word || toRange(edit.range), edit.newText);
                         }
                     }
                     return workspaceEdit;
@@ -708,11 +646,34 @@ function vscodeKind(kind) {
     return kind ? kind - 1 : vsc.SymbolKind.Function;
 }
 
+// A range of the server's answer as VS Code holds it.
+function toRange(r) {
+    return new vsc.Range(r.start.line, r.start.character, r.end.line, r.end.character);
+}
+
+// One `CallHierarchyItem` of the server's answer. **It keeps the server's `data`**, which the
+// next request about it sends back.
+function toCallItem(said) {
+    const item = new vsc.CallHierarchyItem(vscodeKind(said.kind), said.name, said.detail || "",
+        resolveUri(said.uri), toRange(said.range), toRange(said.selectionRange));
+    item.data = said.data;
+    return item;
+}
+
+// The callers or the callees of `item`: `end` names the side of each answer that is the other
+// function, and `Call` is the VS Code type each answer becomes.
+async function callsOf(method, item, end, Call, token) {
+    const result = await sendRequest(method, {
+        item: { name: item.name, kind: item.kind, uri: getRelativeUri(item.uri), data: item.data }
+    }, token);
+    if (!Array.isArray(result)) return [];
+    return result.map(c => new Call(toCallItem(c[end]), c.fromRanges.map(toRange)));
+}
+
 // One `DocumentSymbol` of the server's answer, its children turned likewise.
 function toDocumentSymbol(said) {
-    const range = (r) => new vsc.Range(r.start.line, r.start.character, r.end.line, r.end.character);
-    const symbol = new vsc.DocumentSymbol(said.name, "", vscodeKind(said.kind), range(said.range),
-        range(said.selectionRange));
+    const symbol = new vsc.DocumentSymbol(said.name, "", vscodeKind(said.kind), toRange(said.range),
+        toRange(said.selectionRange));
     symbol.children = (said.children || []).map(toDocumentSymbol);
     return symbol;
 }

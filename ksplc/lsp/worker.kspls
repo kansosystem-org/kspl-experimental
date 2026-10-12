@@ -248,11 +248,13 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
         // the file names neither the cause nor where to look (an import that cannot be read, say,
         // is reported only on the compiler's own output).
         if !compiler.is_valid && base_diag.lsp_diags.list.len == 0
-            lsp_msg.send_single_diagnostic(uri, .error, 0, 0, 0,
+            base_diag.lsp_diags.list
+                .push(base_diag.Lsp_diagnostic::{ .file = ptr.uri_perm, .severity = .error,
+                .line = 0, .col = 0, .len = 0,
+                .msg =
                 "This file could not be analysed, and no diagnostic says why: run `ksplc lint` on \
-                    it to see the compiler's own report")
-        else
-            lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
+                    it to see the compiler's own report" })
+        lsp_msg.send_diagnostics_list(uri, base_diag.lsp_diags.list@)
 
     ptr.root_file = compiler.root_file
     ptr.sema = compiler.sema

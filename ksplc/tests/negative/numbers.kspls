@@ -1,0 +1,281 @@
+//< Numbers: integer and float operands, shifts, division and casts
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case cast_struct_to_number
+//< A struct does not cast to a number
+//<
+//< **Let it through and C refuses it** ("aggregate value used where an integer was expected"),
+//< far from the KSPL source.
+// EXPECT: to 'I32': only a number, a Bool, a scalar enum or a pointer converts
+struct S
+  a: I32
+
+fn main(): I32
+  s: = S::{ .a = 1 }
+  return I32::s
+// ==== case cast_to_bool
+//< A number does not cast to `Bool`; the comparison that is meant is written instead
+//<
+//< **Let it through and the backends disagree**: C's `_Bool` makes `Bool::2` true, LLVM's `trunc`
+//< false, so one source would give two answers.
+// EXPECT: cannot cast 'I32' to 'Bool'
+// EXPECT: cannot cast 'F64' to 'Bool'
+fn of(x: I32): Bool
+  return Bool::x
+
+fn of_float(x: F64): Bool
+  return Bool::x
+
+fn main(): I32
+  return I32::of(2) + I32::of_float(0.5)
+// ==== case compound_assign_operands
+//< That ksplc gives a compound assignment the operand checks `a = a op b` gets
+//<
+//< Unstopped, `t /= f` on a `Bool` **falls on SIGFPE** where `f` is false, and `+=` on a slice or a
+//< struct reaches the C compiler as `invalid operands to binary expression`. `&=` on a `Bool`
+//< stays, as `t & f` does.
+// EXPECT: Operator '/=' cannot be applied to 'Bool'
+// EXPECT: Operator '+=' cannot be applied to slice type 'U8[]'
+// EXPECT: compound assignment '+=' applies to numbers and 'Bool', not to
+// EXPECT: write 'a = a + b'
+// EXPECT-NOT: compound_assign_operands.kspls:18:
+struct V
+  x: I32
+
+pub fn main(): I32
+  $t: = true
+  f: = false
+  t /= f
+  t &= f
+  $s: U8[] = "ab"
+  s += "cd"
+  $v: = V::{ .x = 1 }
+  v += V::{ .x = 2 }
+  return v.x
+// ==== case divide_by_zero
+//< A divisor known to be 0 at translation time is rejected
+//<
+//< **An error, not a lint**: C and LLVM leave it undefined, so no project setting may silence it
+//< (the opening of ksplc/base/lint_codes.kspls).
+//< Caution: **Not the literal `0` alone**: a `const`, a fold and `/=` count, unsigned too.
+
+// EXPECT: division or modulo by zero
+// EXPECT-NOT: [W0
+import "std/io"
+
+const zero: I32 = 0
+
+fn main(): I32
+  by_literal: I32 = 7 / 0
+  by_const: I32 = 7 / zero
+  by_folded: I32 = 7 % (3 - 3)
+  $compound: I32 = 7
+  compound /= 0
+  compound %= zero
+  // A divisor that folds to 0 unsigned. Read as signed it is 1 / -1 = -1 and does not look like
+  // 0.
+  by_unsigned: U32 = 7U32 / (1U32 / (0U32 - 1U32))
+  // A non-zero divisor passes (that the errors do not grow here is pinned down at the same
+  // time).
+  ok_div: I32 = 7 / 2
+  ok_mod: I32 = 7 % 2
+  // A divisor that is not 0 unsigned. Read as signed it is -292 / 649 = 0 and is wrongly
+  // refused.
+  ok_unsigned: U32 = 100U32 / ((0U32 - 292U32) / 649U32)
+  // Floating point is outside this rule.
+  ok_float: F64 = 1.0 / 0.0
+  io.out()
+    .s("\{I64::by_literal\}\{I64::by_const\}\{I64::by_folded\}\{I64::compound\}\{I64::by_unsigned\}\{I64::ok_div\}\{I64::ok_mod\}\{I64::ok_unsigned\}\{ok_float\}\n")
+  return 0
+// ==== case fixed_array_arg_as_slice
+//< A fixed-length array passed where a slice is expected suggests the cast
+// EXPECT: expected 'U8$[]', but got 'U8$[8]'
+// EXPECT: becomes a slice only by an explicit cast: 'U8$[]::(...)'
+fn fill(b: U8$[]): Sz
+  return b.len
+
+fn main(): I32
+  $buf: U8[8] = ::{}
+  return I32::fill(buf)
+// ==== case fixed_array_method_as_slice
+//< A slice method called on a fixed-length array suggests the cast, not an import
+//<
+//< An array is not a slice, and Rust and C convert one implicitly, so a reader from either writes
+//< `buf.sub(...)`. The note on importing an extension method points the wrong way there.
+// EXPECT: a fixed-length array is not a slice
+// EXPECT: 'U8$[]::(...)'
+// EXPECT-NOT: an extension method is visible only where
+fn main(): I32
+  $buf: U8[8] = ::{}
+  n: = buf.sub(0, 4).len
+  return I32::n
+// ==== case float_remainder
+//< `%` and `%=` do not apply to a floating-point operand
+//<
+//< **Let it through and the backends part**: C refuses `%` on a `double`, while LLVM's `frem`
+//< answers. A float remainder's sign has two readings, so the one meant is written out.
+// EXPECT: operator '%' does not apply to 'F64'
+// EXPECT: operator '%=' does not apply to 'F64'
+fn rem(a: F64, b: F64): F64
+  return a % b
+
+fn main(): I32
+  $x: F64 = 7.5
+  x %= 2.0
+  return I32::(rem(7.5, 2.0) + x)
+// ==== case int_literal_too_wide
+//< ksplc rejects an integer literal with more digits than any integer type holds
+//<
+//< The backend puts the characters straight into C / LLVM IR, so letting it through has the C
+//< compiler say `integer literal is too large to be represented in any integer type` (and to the
+//< user both the position and the cause become far from the KSPL source).
+// EXPECT: is too large to be represented in any integer type
+fn main()
+  _x: U64 = 18446744073709551616
+// ==== case integer_leading_zero
+//< A decimal integer does not start with `0`: KSPL has no octal literal
+//<
+//< **Let `0755` through and it means one number on each backend**: C reads it as octal (493),
+//< while the LLVM backend and the constant folder read 755. A `09` stops the C compiler instead.
+//< So the spelling is refused, and the note gives both values it might have meant.
+// EXPECT: a decimal integer does not start with 0
+// EXPECT: Write '755' for the decimal value, or '0x1ed'
+fn main(): I32
+  mode: = 0755
+  return mode
+// ==== case integer_leading_zero_in_type
+//< A leading `0` is refused in a type's array length too, where no expression is inferred
+//<
+//< The grammar refuses the spelling, so every place a literal can stand refuses it alike; a check
+//< in the analysis would have to be repeated wherever a constant is folded.
+// EXPECT: a decimal integer does not start with 0, and KSPL has no octal literal, so '09'
+// EXPECT-NOT: or '0x
+priv const table: U8[09] = ::{}
+
+fn main(): I32
+  return I32::table.len
+// ==== case numeric_integer_with_float
+//< An integer and a float never meet implicitly, an integer literal included
+//<
+//< **Let them through and a value changes in silence**: `F32 0.5 + I64 16777217` gave 16777216.0,
+//< since an integer beyond 24 bits does not fit an `F32`. An integer literal given a float type
+//< (`f: F64 = 2`) passed on C and gave LLVM `store double 2`, which does not build; `2.0` is the
+//< one spelling of that value.
+// EXPECT: between 'F32' and 'I64' is forbidden to prevent data loss: neither holds every value of the other, so '+' has
+// EXPECT: between 'F64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '*' has
+// EXPECT: between 'F64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '-' has no type to compute in. Use explicit '::' cast, or write the integer literal as a float
+// EXPECT: between 'I32' and 'F32' is forbidden to prevent data loss: neither holds every value of the other, so '<' has no type to compute in. Use explicit '::' cast, or write the integer literal as a float
+// EXPECT: implicit conversion between 'I32' and 'F64' is forbidden to prevent data loss. Use explicit '::' cast, or write the integer literal as a float
+// EXPECT: ternary operator branches have incompatible types: 'F64' and 'I32'
+// EXPECT-NOT: error: expected
+priv fn half(x: F64): F64
+  return x / 2.0
+
+fn main(): I32
+  a: F32 = 0.5
+  b: I64 = 16777217
+  c: F64 = 1.5
+  i: I32 = 3
+  r1: = a + b
+  r2: = c * i
+  r3: = c - 1
+  r4: = 2 < a
+  r5: F64 = 2
+  r6: = c if i > 0 else i
+  return I32::(F64::r1 + r2 + r3 + r5 + r6 + half(2.0)) + I32::r4
+// ==== case numeric_operands_no_common_type
+//< Two numeric operands neither of which holds every value of the other have no type to compute in
+//<
+//< **Let them through and a value changes in silence**: `I32 -1 < U32 1` was false (an unsigned
+//< compare) while `I64 -1 < U64 1` was true, `I8 -1 == U8 255` was true, `-6 / U32 2` gave
+//< 2147483645, and `U16 1 + I8 -2` gave 65535. A constant folded too: C and LLVM disagreed on it.
+//< The rule is one relation, `is_lossless_numeric` in `ksplc/sema/type/query.kspls`.
+// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '<' has
+// EXPECT: between 'I64' and 'U64' is forbidden to prevent data loss: neither holds every value of the other, so '<' has
+// EXPECT: between 'I8' and 'U8' is forbidden to prevent data loss: neither holds every value of the other, so '==' has
+// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '/' has
+// EXPECT: between 'U16' and 'I8' is forbidden to prevent data loss: neither holds every value of the other, so '+' has
+// EXPECT: between 'U64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '-' has
+// EXPECT: between 'Sz' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '*' has
+// EXPECT: between 'Sz' and 'U64' is forbidden to prevent data loss: neither holds every value of the other, so '>' has
+// EXPECT: ternary operator branches have incompatible types: 'I16' and 'U16'
+// EXPECT: numeric_operands_no_common_type.kspls:20:27:
+// EXPECT-NOT: error: expected
+const ca: I32 = -1
+const cb: U32 = 1
+const folded: I64 = I64::(ca / cb)
+
+fn main(): I32
+  a: I32 = -1
+  b: U32 = 1
+  c: I64 = -1
+  d: U64 = 1
+  e: I8 = -1
+  f: U8 = 255
+  g: U16 = 1
+  h: I8 = -2
+  n: Sz = 3
+  s: I16 = 2
+  t: U16 = 2
+  r1: = a < b
+  r2: = c < d
+  r3: = e == f
+  r4: = a / b
+  r5: = g + h
+  r6: = d - a
+  r7: = n * b
+  r8: = n > d
+  r9: = s if r1 else t
+  return I32::r4 + I32::r5 + I32::r6 + I32::r7 + I32::r9 + I32::(r2 || r3 || r8) + I32::folded
+// ==== case shift_count_out_of_range
+//< A shift amount that is negative, or at least the left-hand side's type width, is rejected
+//<
+//< **An error, not a lint**: it is undefined behaviour in the generated C, so nothing silences it
+//< (ksplc/base/lint_codes.kspls); run-time case: shift_amount_out_of_range in tests/runtime/stops.kspls.
+//< Caution: **Keep the compound assignments and the amount wrapping to unsigned in.**
+
+// EXPECT: shift count 40 is out of range for the left-hand side type 'I32' (must be 0..31)
+// EXPECT: shift count 32 is out of range for the left-hand side type 'U32' (must be 0..31)
+// EXPECT: shift count 64 is out of range for the left-hand side type 'U64' (must be 0..63)
+// EXPECT: shift count -1 is out of range for the left-hand side type 'I32' (must be 0..31)
+// EXPECT: shift count 40 is out of range for the left-hand side type 'Sz' (must be 0..31)
+// EXPECT: shift count 33 is out of range for the left-hand side type 'U32' (must be 0..31)
+
+// EXPECT: shift count 34 is out of range for the left-hand side type 'U32' (must be 0..31)
+// EXPECT-NOT: [W0
+import "std/io"
+
+fn main(): I32
+  too_wide_i32: I32 = 1 << 40
+  too_wide_u32: U32 = 1U32 << 32
+  too_wide_u64: U64 = 1U64 << 64
+  negative_count: I32 = 1 << -1
+  // Sz is 64 bits on a host, but 32 or more cannot be written because 32-bit targets exist.
+  too_wide_sz: Sz = 1Sz << 40
+  // An amount that folds to 32 unsigned. Read as signed it does not fit an I32 and does not
+  // reach the width decision.
+  wrapped_count: U32 = 1U32 << (0U32 - 4294967264U32)
+  // Inside the width it passes (that the errors do not grow here is pinned down at the same
+  // time).
+  ok_i32: I32 = 1 << 31
+  ok_u64: U64 = 1U64 << 63
+  ok_sz: Sz = 1Sz << 31
+  $compound: U32 = 1U32
+  compound <<= 33
+  compound >>= 34
+  compound <<= 31 // inside the width, so it passes
+  io.out()
+    .s("\{I64::too_wide_i32\}\{I64::too_wide_u32\}\{I64::too_wide_u64\}\{I64::negative_count\}\{I64::too_wide_sz\}\{I64::wrapped_count\}\{I64::ok_i32\}\{I64::ok_u64\}\{I64::ok_sz\}\{I64::compound\}\n")
+  return 0
+// ==== case zero_init_braces
+//< Checks that ksplc rejects a type whose zero-initialiser braces nest too deeply
+//<
+//< Past max_zero_init_braces (ksplc/gen/c/ctx.kspls) the C compiler's nesting cap, not KSPL's
+//< positioned diagnostic, would reach the user ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN.md). **Count with an array**:
+//< its C `{ T data[N]; }` uses two brace pairs per step, reaching the cap at half a struct's depth.
+// EXPECT: type nests too deep to zero-initialize in the C backend
+// EXPECT-NOT: zero_init_braces.kspls:1:1
+pub fn main(): I32
+  a: I32[1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1][1]
+    = ::{}
+  return I32::a.len - 1

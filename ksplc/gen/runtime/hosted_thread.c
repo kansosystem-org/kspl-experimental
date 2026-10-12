@@ -117,11 +117,6 @@ KSPL_LINK void kspl_cond_signal(I64 handle) {
     pthread_cond_signal((pthread_cond_t *)(intptr_t)handle);
 }
 
-KSPL_LINK void kspl_cond_broadcast(I64 handle) {
-    if (handle == 0) return;
-    pthread_cond_broadcast((pthread_cond_t *)(intptr_t)handle);
-}
-
 KSPL_LINK void kspl_cond_destroy(I64 handle) {
     if (handle == 0) return;
     pthread_cond_t *c = (pthread_cond_t *)(intptr_t)handle;
@@ -224,11 +219,6 @@ KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
 KSPL_LINK void kspl_cond_signal(I64 handle) {
     if (handle == 0) return;
     WakeConditionVariable((CONDITION_VARIABLE *)(intptr_t)handle);
-}
-
-KSPL_LINK void kspl_cond_broadcast(I64 handle) {
-    if (handle == 0) return;
-    WakeAllConditionVariable((CONDITION_VARIABLE *)(intptr_t)handle);
 }
 
 /* A CONDITION_VARIABLE has no destroy function; free() is all. */

@@ -1,5 +1,4 @@
-import { check, near } from "./shell.mjs";
-import { material, para, group, grid } from "./material.mjs";
+import { check, near, material, para, group, grid } from "./shell.mjs";
 
 export const subject = "Parting into pages, the bands above and below, the regions, the slides.";
 

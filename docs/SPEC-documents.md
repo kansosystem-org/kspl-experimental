@@ -22,7 +22,7 @@ Caution: **Do not reach for a synonym.** If one thing has two names, the reader 
 | **literal text** | The characters as written, as opposed to what they mean. A check that reads literal text misses every form it does not spell out |
 | **declare** | What a file or a type does when it states what it is, so the reader need not guess |
 | **block** | A region marked off by indentation or by braces. **Not a stage and not a table column** (see the next row) |
-| **stage** | One step of a `PLAN.md`, numbered inside that plan. Every plan counts from 1 again, and a stage that branches gets a letter (`stage 6a`) |
+| **stage** | One step of a plan in `PLAN.md`, numbered inside its section. Every section counts from 1 again, and a stage that branches gets a letter (`stage 6a`) |
 | **phase** | One step of the project's status in the root [`../README.md`](../README.md) (`Phase N`), and nothing else. A `PLAN.md`'s stage 2 and the README's Phase 2 are different things |
 | **entry point** | Where control enters: a `main`, a folder's `README.md`, the first file a tool reads |
 | **interface** | The way one part is reached from another. Narrowing access to one interface is a design decision, so it gets a name |
@@ -71,7 +71,7 @@ The rules for visibility and `import` are in [`SPEC-language.md`](SPEC-language.
 | `HOWTO-<task>.md` | **Do.** Carry out one task | Varies with the task, so its first sentence says what you must already have | The steps in order, each with its command line and what it prints | Why a step is what it is, past the one sentence that stops the reader skipping it |
 | `SPEC-<subject>.md` | **Look up.** Rely on an agreement | Whoever relies on the subject and cannot change it — the language, a tool's options, a board's wiring | The rules others can rely on, which change only with care | The reason a rule was chosen; anything that does not exist yet |
 | `DESIGN.md`, `DESIGN-<subject>.md` | **Understand.** Change it without breaking what it protects | Whoever changes Kanso | Decisions, their grounds, and what each gives up, in the present tense | A rule's statement, a roadmap, a history |
-| `PLAN.md` | **See what is left.** Know what is not done, and in what order | Whoever changes Kanso | The stages ahead, what marks each as done, and what is still undecided. **One per package, in its `docs/`**, and [`PLAN.md`](PLAN.md) here for what spans packages | Anything done — a done stage is deleted, and its result goes into the document of its kind |
+| `PLAN.md` | **See what is left.** Know what is not done, and in what order | Whoever changes Kanso | The stages ahead, what marks each as done, and what is still undecided. **One for the repository**, [`PLAN.md`](PLAN.md) here: a section per package with work left, and one for what spans packages | Anything done — a done stage is deleted, and its result goes into the document of its kind |
 
 **The name is written in capitals. A subject follows the kind only where one folder can hold several documents of that kind** (`SPEC-language.md`, `HOWTO-bring-up.md`). **A `DESIGN.md` too long to read through splits its largest self-contained chapters into `DESIGN-<subject>.md` beside it**; the `DESIGN.md` stays the entry, keeps the chapter's heading with one paragraph saying where it went, and the package's `README.md` lists each file. The subject may be any number of words. Choose the form the reader will understand ([`SPEC-local-server.md`](SPEC-local-server.md)): a name that does not say what the document is fails as an entry point, however short it is.
 
@@ -79,7 +79,7 @@ The rules for visibility and `import` are in [`SPEC-language.md`](SPEC-language.
 
 **Do not move a kind into a differently named document.** Putting the grounds in a `RATIONALE.md`, or the entry point in an `OVERVIEW.md`, makes two documents of one kind, and nothing decides which one is canonical. The six names are a closed list.
 
-**A package with nothing left to do carries no `PLAN.md`.** An empty plan is one more name for the reader to skip, and the package also leaves the table in the root [`PLAN.md`](PLAN.md).
+**A package with nothing left to do has no section in [`PLAN.md`](PLAN.md).** An empty section is one more heading for the reader to skip.
 
 ### Where documents sit
 

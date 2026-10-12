@@ -200,8 +200,9 @@ fn test_torn_payload_still_appends() //<
     skipped_sector: = reopened.used() >= sector
     assert(skipped_sector,
         "the sector holding a half-written part is given up and it writes from the next")
-    reopened.append(kind_sample, "after-crash") catch panic("appending has to work after a power \
-        cut (fail here and the record never grows again)")
+    reopened.append(kind_sample, "after-crash")
+        catch panic("appending has to work after a power cut (fail here and the record never grows \
+            again)")
 
     // Records from before the cut and records appended after it must both be readable.
     $seen: Sz = 0
@@ -432,8 +433,8 @@ fn test_keeps_appending_after_a_power_loss() //<
 
     // The policy read is the new one, written after the cut.
     $dst: U8[32] = ::{}
-    n: = reopened.last(kind_policy, U8$[]::dst) catch panic("last should find the policy written \
-        after the loss")
+    n: = reopened.last(kind_policy, U8$[]::dst)
+        catch panic("last should find the policy written after the loss")
     policy: = U8[]::{ .ptr = dst[0]@, .len = n }
     assert(policy.equals("fresh-policy"), "the policy written after the power cut is the one read")
     verdict
@@ -513,8 +514,8 @@ fn test_every_power_cut_keeps_what_was_written()
             // Caution: **Do not stop at one record.** With the half-written record in a sector
             // beyond `tail`'s, the next record still fits; the one after it runs into it.
             for $k: Sz = 0; k < 3; k += 1
-                again.append(kind_policy, "after") catch panic("appending has to go on after a \
-                    power cut")
+                again.append(kind_policy, "after")
+                    catch panic("appending has to go on after a power cut")
             checked += 1
     // Caution: **Compare the number of cases seen with the count**, or a run that saw none passes
     // (Principle 8).
@@ -550,8 +551,8 @@ fn test_a_scrambled_store_is_survivable()
         store: = ram.make(U8$[]::store_buf, sector)
         $lg: = ksdblog.Log.open(store)
         for p in scramble_payloads
-            lg.append(kind_sample, p) catch panic("scramble: append should succeed on an empty \
-                store")
+            lg.append(kind_sample, p)
+                catch panic("scramble: append should succeed on an empty store")
         // Garbles somewhere in the medium.
         // Caution: **Also hit a sector's start and its end**, where the scan jumps sectors.
         width: = 1 + Sz::(rng.next_u64() % U64::noise.len)

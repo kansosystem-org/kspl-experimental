@@ -27,8 +27,6 @@ CC := clang
 endif
 export CC
 KSOS_CFLAGS := -std=c99 -Wall -g -O0
-# What tidies a demo's generated C: nothing (`:`) unless a caller hands a formatter in.
-C_FMT ?= :
 # The compiler as a path: the tests have it run a tool of this package, never looking at PATH.
 KSPLC_EXE = $(shell command -v "$(KSPLC)")
 # How many demos a gate turns at once.
@@ -145,7 +143,6 @@ POSIX_OUT := $(OUT)/ksos_posix
 define posix_link
 	@mkdir -p $(POSIX_OUT)
 	"$(KSPLC)" $(1) $(POSIX_OUT)/$(2).c
-	@$(C_FMT) $(POSIX_OUT)/$(2).c
 	"$(CC)" $(KSOS_CFLAGS) $(POSIX_OUT)/$(2).c $(POSIX_PORT_SRC) $$("$(KSPLC)" info link-libs) \
 		-o $(POSIX_OUT)/$(2).exe
 endef
@@ -179,30 +176,30 @@ ksos-$(1):
 endef
 $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
 
-# **The demos whose mark of success is a panic**: a row is `<suffix>:<input>`, and
-# `ksos_posix_panic_needle_<suffix>` the line the run must print. **The needle is the kernel-side
-# panic's spelling itself**; change both in one commit. `ksos_families` in
+# **The demos whose mark of success is a panic**: one program, `demo/posix/panic_demo.kspls`,
+# given the stop's name as its argument (a panic ends the process, so one run is one stop).
+# `ksos_posix_panic_needle_<suffix>` is the line the run must print. **The needle is the
+# kernel-side panic's spelling itself**; change both in one commit. `ksos_families` in
 # `tests/support/conventions_iface.kspls` reads the run.
-KSOS_POSIX_PANIC := stack-overflow:stack_overflow_demo mutex-relock:mutex_relock_demo \
-    mutex-foreign-unlock:mutex_foreign_unlock_demo timeout-zero:timeout_zero_demo
+KSOS_POSIX_PANIC := stack-overflow mutex-relock mutex-foreign-unlock timeout-zero
 
 ksos_posix_panic_needle_stack-overflow := ksos: stack overflow detected
 ksos_posix_panic_needle_mutex-relock := Mutex.lock by the holder itself
 ksos_posix_panic_needle_mutex-foreign-unlock := Mutex.unlock by a task that is not the holder
 ksos_posix_panic_needle_timeout-zero := ticks must be greater than 0
 
-ksos_posix_panic_missing := $(strip $(call rows_missing,$(KSOS_POSIX_PANIC),2) \
-    $(foreach d,$(call row_keys,$(KSOS_POSIX_PANIC)),$(if $(ksos_posix_panic_needle_$(d)),,$(d))))
+ksos_posix_panic_missing := $(strip \
+    $(foreach d,$(KSOS_POSIX_PANIC),$(if $(ksos_posix_panic_needle_$(d)),,$(d))))
 ifneq ($(ksos_posix_panic_missing),)
-$(error a panic demo has no input or no ksos_posix_panic_needle_: $(ksos_posix_panic_missing))
+$(error a panic demo has no ksos_posix_panic_needle_: $(ksos_posix_panic_missing))
 endif
 
-# $(call ksos_posix_panic_rule,<suffix>,<input>)
+# $(call ksos_posix_panic_rule,<suffix>)
 define ksos_posix_panic_rule
 ksos-$(1):
-	@echo "# BUILDING KANSO OS (POSIX demo/posix/$(2).kspls, which must panic)"
-	$$(call posix_link,demo/posix/$(2).kspls,ksos_$(subst -,_,$(1)))
-	@$$(call ksos_capped,./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe >$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out 2>&1); \
+	@echo "# BUILDING KANSO OS (POSIX demo/posix/panic_demo.kspls $(1), which must panic)"
+	$$(call posix_link,demo/posix/panic_demo.kspls,ksos_$(subst -,_,$(1)))
+	@$$(call ksos_capped,./$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).exe $(1) >$$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out 2>&1); \
 	cat $$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out >&2; \
 	if grep -q "$(ksos_posix_panic_needle_$(1))" $$(POSIX_OUT)/ksos_$(subst -,_,$(1)).out; then \
 		echo "RESULT: ALL PASS (ksos-$(1): the kernel stopped with the expected message)"; \
@@ -210,7 +207,7 @@ ksos-$(1):
 		echo "RESULT: SOME FAILED (1) -> ksos-$(1): expected message not found"; exit 1; \
 	fi
 endef
-$(foreach r,$(KSOS_POSIX_PANIC),$(eval $(call ksos_posix_panic_rule,$(call row_field,$(r),1),$(call row_field,$(r),2))))
+$(foreach r,$(KSOS_POSIX_PANIC),$(eval $(call ksos_posix_panic_rule,$(r))))
 
 CM_DIR  := port/cortex_m
 CM_OUT  := $(OUT)/ksos_cm
@@ -235,7 +232,6 @@ $(CM_OUT)/startup.o: $(CM_DIR)/startup.S | $(CM_OUT)
 define bare_link
 	$(call require_arm_toolchain,$(5))
 	"$(KSPLC)" --freestanding --machine=$(9) $(6) $(2)/$(or $(8),$(basename $(notdir $(7)))).c
-	@$(C_FMT) $(2)/$(or $(8),$(basename $(notdir $(7)))).c
 	$(1) -c $(2)/$(or $(8),$(basename $(notdir $(7)))).c -o $(2)/$(or $(8),$(basename $(notdir $(7)))).o
 	$(LLD_LINK) --gc-sections -T $(3) -o $(7) $(4) $(2)/$(or $(8),$(basename $(notdir $(7)))).o $(5)
 endef
@@ -271,22 +267,22 @@ ksos-cm-run: ksos-cm
 # A row is `<suffix>`: `ksos-cm-<suffix>` builds `ksos/demo/cortex_m/cortex_m_<suffix>.kspls` into
 # `$(CM_OUT)/ksos_cm_<suffix>.elf` (`-` becomes `_`) and runs it. A demo with a peer process or
 # objdump is written by hand.
-KSOS_CM_DEMOS := uart-probe heap-probe panic-probe ai-probe ai-train-probe car-model-probe \
+KSOS_CM_DEMOS := heap-probe panic-probe ai-probe ai-train-probe car-model-probe \
     ai-weights-probe pilot-probe preempt control-ai-probe mq pi event timeout isr-block isr-give
 
-# UART0's RX path: QEMU's chardev on a Unix socket, and `tests/uart_echo_test.py` checks the echo.
+# UART0's RX path: QEMU's chardev on a Unix socket, and `tests/uart_probe.py polled` checks the echo.
 ksos-cm-uart-echo: $(CM_OBJS)
 	@echo "# BUILDING+RUNNING UART0(RX) echo probe on Cortex-M (thumbv7m) bare metal"
 	$(call cm_link,demo/cortex_m/cortex_m_uart_echo.kspls,$(CM_OUT)/ksos_cm_uart_echo.elf)
 	@rm -f $(CM_OUT)/uart_echo_test.sock
-	$(call ksos_capped_run,python3 tests/uart_echo_test.py $(CM_OUT)/ksos_cm_uart_echo.elf)
+	$(call ksos_capped_run,python3 tests/uart_probe.py polled $(CM_OUT)/ksos_cm_uart_echo.elf)
 
-# UART0's RX driven by NVIC IRQ0, the CPU resting on WFI; `tests/uart_irq_echo_test.py` checks it.
+# UART0's RX driven by NVIC IRQ0, the CPU resting on WFI; `tests/uart_probe.py irq` checks it.
 ksos-cm-uart-irq-echo: $(CM_OBJS)
 	@echo "# BUILDING+RUNNING UART0(RX, interrupt-driven NVIC IRQ0 + WFI) echo probe on Cortex-M (thumbv7m) bare metal"
 	$(call cm_link,demo/cortex_m/cortex_m_uart_irq_echo.kspls,$(CM_OUT)/ksos_cm_uart_irq_echo.elf)
 	@rm -f $(CM_OUT)/uart_irq_echo_test.sock
-	$(call ksos_capped_run,python3 tests/uart_irq_echo_test.py $(CM_OUT)/ksos_cm_uart_irq_echo.elf)
+	$(call ksos_capped_run,python3 tests/uart_probe.py irq $(CM_OUT)/ksos_cm_uart_irq_echo.elf)
 
 # $(call ksos_cm_demo_rule,<suffix>)
 define ksos_cm_demo_rule

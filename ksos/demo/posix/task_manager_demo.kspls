@@ -3,8 +3,11 @@
 //< It shows each task's CPU share, priority and state, and the heap in use (`Task.cpu_percent`
 //< in ksos/kernel/task.kspls), and the idle task reaping deleted Tasks and stacks
 //< (enable_idle_task in ksos/kernel/task.kspls, install_idle_reap in ksos/kernel/dynamic.kspls).
+//< Before the scheduler starts, it creates and destroys each synchronization primitive on the heap
+//< (`init_dyn` / `destroy_dyn` in ksos/kernel/dynamic.kspls) and checks every byte comes back.
 import "ksos/kernel/dynamic" as dyn
 import "ksos/kernel/heap"
+import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
 import "std/mem"
@@ -81,7 +84,21 @@ fn monitor_task(_arg: Void$@): Void //<
     // heavy/light never end, so after max_refresh refreshes the process ends explicitly.
     sys.exit(0)
 
+priv fn check_sync_dyn() //< creates and destroys each primitive on the heap; nothing may stay
+    before: = mem.heap_used_bytes()
+    s: = sync.Sem.init_dyn(1)
+    m: = sync.Mutex.init_dyn()
+    e: = sync.Event.init_dyn()
+    q: = sync.Queue<|I32|>.init_dyn(8)
+    q.destroy_dyn()
+    e.destroy_dyn()
+    m.destroy_dyn()
+    s.destroy_dyn()
+    if mem.heap_used_bytes() != before
+        panic("task-manager: a synchronization primitive's init_dyn / destroy_dyn leaked heap bytes")
+
 fn main()
+    check_sync_dyn()
     // All three at priority 1, round-robined by the SIGALRM time slice; a higher heavy would starve
     // the others and hang.
     tcb_heavy.create(U8$[]::stack_heavy, heavy_task, null, 1, "heavy")

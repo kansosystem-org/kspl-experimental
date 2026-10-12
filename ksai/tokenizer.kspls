@@ -8,7 +8,7 @@ import "std/ds" + { List, Map }
 import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
-import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/strnum" // `to_count`
 
 priv fn hex_byte(hi: U8, lo: U8): U8 //< two hex digits -> one byte
     //<
@@ -28,26 +28,16 @@ priv const id_max: Sz = 2147483647 //< the largest ID an `I32` holds
 pub const unk_id: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
 
 pub fn parse_token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
-    //<
-    //< Caution: **Check every character is a digit.** `parse_size` stops at the first one that is
-    //< not, so `12x` would read as 12.
-    if text.len == 0
-        return .none
-    for c in text
-        if !c.is_digit()
-            return .none
-    n: = text.parse_size() catch
-        return .none
-    if n < 0 || n > id_max
-        return .none
-    return .some(I32::n)
+    if n: = text.to_count(id_max)
+        return .some(I32::n)
+    return .none
 
 priv fn bare_line(line: U8[]): U8[] //< a line without the `\r` a CRLF file leaves on it
     return line.strip_suffix("\r")
 
 pub enum Load_error //< why `Tokenizer.load` refused a vocabulary or its merges
     io(err: io.Io_error) //< a file could not be read
-    broken(path: U8[], line: Sz) //< a line is not one `train_bpe.py` writes; the file and the
+    broken(path: U8[], line: Sz) //< a line is not one `train_bpe.kspls` writes; the file and the
         //<
         //< line's number from 1 (`load_text` names `vocabulary` or `merges` for the file).
         //< **Refused, not skipped**: a word or a rule dropped in silence makes every text it
@@ -177,7 +167,7 @@ impl Tokenizer
     pub fn add_merge( //< adds one merge rule: this pair, when adjacent, becomes that one word
         //<
         //< Caution: **The call order is the rank**, so the rules must arrive in priority order
-        //< (`load()` and `train_bpe.py`'s merges.txt already do).
+        //< (`load()` and `train_bpe.kspls`'s merges.txt already do).
         r: Self$@,
         id1: I32, //< the left ID
         id2: I32, //< the right ID
@@ -192,7 +182,7 @@ impl Tokenizer
     // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and
     // merges.txt "<id1> <id2> <merged_id>", loaded through `add_token`/`add_merge` into
     // encode/decode's representation (a 1-byte base + merges). An empty line is skipped.
-    pub fn load( //< loads the vocabulary and merge rules that `train_bpe.py` wrote
+    pub fn load( //< loads the vocabulary and merge rules that `train_bpe.kspls` wrote
         r: Self$@,
         vocab_path: U8[], //< the vocabulary file, one word per line
         merges_path: U8[], //< the merge rules, in priority order

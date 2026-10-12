@@ -99,6 +99,7 @@ How kspage feels to use is based on the existing office suites, but they are not
 | **A circular formula is not iterated to a solution** | a cycle is reported and stopped | The answer would change with the number of rounds, so the same document would look different at every opening |
 | **There is one way to point at a cell** (`A1`) | no other notation gives the row and column as numbers | If one cell could be written two ways, whatever reads formulas would have to handle both |
 | **It does not compete on the number of functions** | only what cannot be written with what exists is added | A function for a formula that can already be written makes two ways of saying one thing |
+| **No key repeats the last command** | a command is run again from its own button, menu row or key | A repeat key keeps a second record of commands beside the undo record, for a press the command's own way already gives (Principle 6) |
 | **There is no time axis** | no slide transitions, no moving elements | Below |
 
 **Why there is no time axis.** A slide is a block that holds a place, not a separate type (["How a grid and absolute coordinates are laid out"](#how-a-grid-and-absolute-coordinates-are-laid-out)). A time axis would put into the document what cannot be carried into the printed page, the exported Markdown or a diff: paper cannot say "this paragraph appears 0.4 seconds later". Nor can an effect live on the screen alone. An effect that cannot be written into the document is lost on saving, so what was written would silently disappear. kspage's worth is being writable as one document, not winning as a presentation program.
@@ -137,7 +138,7 @@ To edit it, run `make kspage-serve KSPAGE_DOC=kspage/content/manual.kspage`, cha
 | The rule | Why |
 | :-- | :-- |
 | **Do not build it in code.** | Written as calls that add blocks, each sentence sits inside a string literal, and the manual cannot be read until it is built. The page it explains would never be the tool used to write it. As a document, it is written with the machinery it explains, so a fault met while writing it is a fault a user would meet |
-| **Keep it in the form kspage writes.** | A check saves it again and expects the same bytes ([`../tests/manual_test.kspls`](../tests/manual_test.kspls)). So a hand edit in another shape is refused before it turns every later save into a diff of the whole file |
+| **Keep it in the form kspage writes.** | A check saves it again and expects the same bytes ([`../tests/store_test.kspls`](../tests/store_test.kspls)). So a hand edit in another shape is refused before it turns every later save into a diff of the whole file |
 | **Do not write a chapter number, the table of contents or a note number as text** | Layout counts them all (the style's `outline` and `Collect` produce them). A manual writing them out would not use the machinery it explains |
 | **Write in the reader's words, which are the screen's words too** | The manual and the screen give each thing one word ("The vocabulary is one" below), so a label the manual quotes is the label the reader finds. A gate checks the navigation's tab names and the rejected words (`make test-conventions`). Every other quoted label is kept right by reading it against the screen |
 | **Keep each level of heading to one grammatical shape** | A chapter heading is a noun phrase. A section heading is an `-ing` verb phrase for a task, and a noun phrase for an explanation. Otherwise a glance down the contents cannot tell tasks from explanations |
@@ -212,9 +213,7 @@ JS passes the width and takes the boxes back. It holds neither line breaking, no
 
 ### Why the browser is the main target
 
-Connecting to each OS's input method is most of the work of porting, and a browser gives it for free. So the browser comes first.
-
-**Each OS designs its native IME differently** (Windows: IMM32 / TSF; Linux: IBus / Fcitx; macOS: `NSTextInputClient`), and that is where most of the porting work lies. In a browser, three composition events (start / update / end) are enough.
+**Connecting to each OS's input method (IME) is most of the work of porting, and a browser gives it for free, so the browser comes first.** Each OS designs its native IME differently (Windows: IMM32 / TSF; Linux: IBus / Fcitx; macOS: `NSTextInputClient`). In a browser, three composition events (start / update / end) are enough.
 
 Caution: **Handle the three composition events as a set.** With only the update handled, committed text stays marked as still being composed.
 
@@ -232,9 +231,7 @@ Caution: **Do not bring layout decisions into it.** The thicker it grows, the mo
 
 ### Where memory runs short it refuses rather than crashing
 
-kspage refuses to open a document that would not fit in its memory, and it refuses before the open document is touched. Running out of memory partway would freeze the page and lose unsaved work.
-
-**A failed allocation stops the whole wasm**: the screen freezes, and reloading the page loses unsaved work. So kspage refuses where the text first comes in ([`port/web/inout.kspls`](../port/web/inout.kspls)'s `kspage_web_load_buffer`), before the open document is touched.
+**kspage refuses to open a document that would not fit in its memory, before the open document is touched**: a failed allocation stops the whole wasm, the screen freezes, and reloading the page loses unsaved work. So the refusal stands where the text first comes in ([`port/web/inout.kspls`](../port/web/inout.kspls)'s `kspage_web_load_buffer`).
 
 **Derive the cap from the arena** (`port/web/state.kspls`'s `doc_limit`). Written as a number in two places, the refusal and its report get out of step the day the arena is widened. Widening alone changes nothing: four times the arena moves the limit four times further, and past it the page still dies. Whoever widens it first looks at how many instances the wasm gate starts and at the load gate's peak, since both grow with the arena.
 
@@ -260,7 +257,7 @@ kspage refuses to open a document that would not fit in its memory, and it refus
 
 **After a refusal, the half-built arena is freed** (`kspage_web_recover`). Otherwise refusing loses half its point: after the unwinding nothing points at the half-built chunks, so the arena shrinks by that much for good, until even saving fails. Keep the reading's arena in a global: a local one is lost in the unwinding, leaving nothing to free it through. Do not touch the document. It is swapped only after reading, so a refused read leaves it unharmed.
 
-**Report "too large" apart from "cannot be read".** The fixes are opposite: change the text, or split the document or widen the memory (`port/web/file.js`'s `whyNotRead`). Do not guess the reason from the size. The cap is not a count of bytes, so the core's reason is passed on unchanged (`port/web/api_io.js`'s `load` returns the reason, not true or false). The debug log shows the memory left, which its reader most needs just before a failure.
+**Report "too large" apart from "cannot be read".** The fixes are opposite: change the text, or split the document or widen the memory (`port/web/file.js`'s `whyNotRead`). Do not guess the reason from the size. The cap is not a count of bytes, so the core's reason is passed on unchanged (`port/web/api.js`'s `load` returns the reason, not true or false). The debug log shows the memory left, which its reader most needs just before a failure.
 
 ### Whether an entry point takes an arena depends on what it returns
 
@@ -279,9 +276,7 @@ A function that adds to an existing tree uses that tree's arena. A function that
 
 ## The boundary between the core and the browser
 
-JS calls the core only through functions marked `#export`, and the core calls JS only through a fixed list of names. Both lists are checked, so neither side can quietly call something the other lacks.
-
-**The entry points JS calls in wasm are the `#export` functions under `port/web/`**, from the row in [`port/web/bridge.kspls`](../port/web/bridge.kspls) and the files beside it. The comment above each says what it takes and returns. The names wasm borrows from JS (`extern "C"`) are those [`port/web/imports.txt`](../port/web/imports.txt) lists.
+**JS calls the core only through the `#export` functions under `port/web/`, and the core calls JS only through the names [`port/web/imports.txt`](../port/web/imports.txt) lists** (`extern "C"`). The entry points start from the row in [`port/web/bridge.kspls`](../port/web/bridge.kspls) and the files beside it, and the comment above each says what it takes and returns. Both lists are checked, so neither side can quietly call something the other lacks.
 
 **Do not list the entry points on the linking side.** The `#export` in the source decides what is exported, and the generated C marks it so the linker's `--gc-sections` (which drops unused code) keeps it. A hand-kept list silently misses each new entry point, and "there is no such function" shows up only when the button is pressed.
 
@@ -331,6 +326,7 @@ What the page does take from the browser, and why:
 | The undo key | **Yes** | Otherwise the hidden input field runs its own undo: the field's text goes back and the body does not |
 | Copy, cut, paste | **Yes, on the `copy` / `cut` / `paste` events**, which carry `clipboardData` | The hidden field is empty, so by default a copy takes nothing that can be pasted, and a paste goes into the field and never reaches the body |
 | Ctrl+F, Ctrl+S, Home, End, Ctrl+A | **Yes** | The body is inside the canvas, so the browser's own versions act on the page instead (below) |
+| Tab outside a table | **No** | Taken, it would hold the keyboard inside the body. Focus moves to the next field, and no tab character goes in |
 
 **JS puts in the undo separator** after a pause in typing (`kspage_web_break_undo_group()`). Without it, one undo takes back everything typed.
 
@@ -366,6 +362,8 @@ The page's side paints the boxes and bands layout produced, in a fixed order, an
 
 **Pictures are read and drawn by the page's side.** Read each source once (otherwise every redraw fetches it). Redraw once it has loaded: loading is asynchronous, and drawing without waiting leaves a blank. Until then, draw the frame alone (drawing nothing makes the inserted picture look lost).
 
+**The cursor is a layer of its own over the canvas**, so a blink repaints no document and the cursor shows on neither a printed page nor a thumbnail. The window scrolls to it only when it leaves the view: scrolling every time would pull back, at every keystroke, a window moved to read.
+
 **Only a press with Ctrl (⌘) held follows a link**, since on the editing screen a press on text places the cursor. Do not move the cursor when following it (the person could not go on typing on return). A link looks like one because of its decorating style, so drawing needs no special case.
 
 **Draw the page's header and footer after cropping**: they sit in the margins, outside the frame that crops the contents. Their coordinates are from the page's top left, so do not shift them again (with the margin added again, they land off the page). Lay them out again for every page, since the numbers change.
@@ -388,9 +386,7 @@ Caution: **Set the colour again for every box.** Left overwritten, the caller's 
 
 ### The page's scripts share one scope
 
-All the page's JS files run as one script. So two files must never declare the same name, and they share only two named objects.
-
-**The JS runs concatenated into one `<script>`** ([`port/web/bundle.kspls`](../port/web/bundle.kspls) binds it, in the order [`port/web/page.html`](../port/web/page.html) names).
+**All the page's JS files run as one script, concatenated into one `<script>`** ([`port/web/bundle.kspls`](../port/web/bundle.kspls) binds it, in the order [`port/web/page.html`](../port/web/page.html) names). So two files must never declare the same name, and they share only two named objects.
 
 Caution: **Do not declare one name with `let` / `const` / `class` in two files**: the whole block is then never evaluated, so each file passes alone and nothing happens on the screen. `make test-js-syntax` checks each file and the concatenation, but only their syntax, so a mistyped name gets through.
 
@@ -478,9 +474,7 @@ Caution: **A misspelt name passes silently.** Check first with `Sheet.find` that
 
 ### Styles are told apart by role, not by name
 
-To find "the heading style" or "the code style", kspage looks at what a style does, never at what it is called. A document may name its styles anything.
-
-**Where the core, the page, a theme or a reader needs "the heading style" or "the code style", it looks for a role in the table below**, never for a name.
+**To find "the heading style" or "the code style", the core, the page, a theme or a reader looks at what a style does (its role in the table below), never at what it is called**: a document may name its styles anything.
 
 Caution: **Neither the core nor the page may list styles by name and remember them.** A remembered list breaks silently the day a document renames a style: that one style alone keeps the previous theme's colour. What is looked at is the role.
 
@@ -500,23 +494,23 @@ Caution: **A theme must cover the styles a person made too.** Chosen by name, th
 
 ### Asides and annotations are held beside the text, outside the flow
 
-Two kinds of side text stay out of the document's flow. An aside belongs to a holder (a table, a slide, a picture); an annotation (a remark on some text) belongs to a run.
+Two kinds of side text stay out of the document's flow. An aside belongs to a slide; an annotation (a remark on some text) belongs to a run.
 
 | | An aside | An annotation |
 | :-- | :-- | :-- |
-| **Held on** | the holder's block (`Block.aside`) | its run (`Inline.remark` and `Inline.remark_by`) |
-| **What it is** | on a slide, the presenter's note | what somebody said about the text, not part of the document |
-| **Who sees it** | only its writer: no output includes it | it stays out of the flow too |
-| **Where it is attached** | only with the cursor inside a holder (a table, a slide, a picture); beside an ordinary paragraph the screen could not show where it is | on a range of text |
+| **Held on** | the slide's block (`Block.aside`) | its run (`Inline.remark` and `Inline.remark_by`) |
+| **What it is** | the presenter's note | what somebody said about the text, not part of the document |
+| **Who sees it** | the presenter, during the show: no output includes it | it stays out of the flow too |
+| **Where it is attached** | only with the cursor inside a slide; the show is the one place a note is read, so on a table, a picture or a paragraph nobody would see it was there | on a range of text |
 | **Undo** | it is saved, and one undo removes it | one undo removes both the words and the author |
+
+**An aside a saved text holds on another block is kept as it stands.** The reader takes a block's fields whatever its style, so such an aside is read and written back unchanged, and nothing shows it. Whether a block is a slide is its style's to say, and only layout reads the style; a reader that dropped the field would lose what the text held, and a style changed into a slide's would bring the note back.
 
 **An annotation covers a range**, so splitting the run leaves it on both halves (like a link, unlike a note's mark, which is a point). Runs with different annotations are not joined, or one remark would cover both. The core does not decide who wrote it (it holds no user name); the name comes from outside when it is added.
 
 ### A picture: the document holds only its source and size
 
-The document stores where a picture comes from and how large it is laid out, never the picture's bytes.
-
-**Do not put the picture itself into the document**: in a browser the whole heap is one static block, so the largest document it opens is about 1 MiB (`doc_limit` in `port/web/state.kspls`), which one photograph fills. The document holds only where the picture comes from and how it is laid out. Reading and drawing it happen outside (the core cannot read a picture). In exchange, the document alone does not carry its pictures.
+**The document stores where a picture comes from and how large it is laid out, never the picture's bytes**: in a browser the whole heap is one static block, so the largest document it opens is about 1 MiB (`doc_limit` in `port/web/state.kspls`), which one photograph fills. Reading and drawing it happen outside (the core cannot read a picture). In exchange, the document alone does not carry its pictures.
 
 **The document holds the size too.** The core cannot measure a picture, and an entry point asking outside would make layout depend on how the reading went. With the size in the document, layout is the same whether or not the picture can be read. A picture with only a source is not laid out.
 
@@ -564,9 +558,7 @@ flowchart TD
 
 ### Text that has not changed is not measured again
 
-Each run remembers the widths it has measured, so a keystroke measures only the run typed into. Layout itself (boxes and lines) is never remembered.
-
-**Measuring calls across the boundary** (in a browser it asks the real typeface), so measuring the whole document at every keystroke would slow typing as the document grows. Unchanged text has an unchanged width, so a run caches what it measured ([`model/run.kspls`](../model/run.kspls)'s `wide`).
+**Each run remembers the widths it has measured, so a keystroke measures only the run typed into.** Measuring calls across the boundary (in a browser it asks the real typeface), so measuring the whole document at every keystroke would slow typing as the document grows, and unchanged text has an unchanged width ([`model/run.kspls`](../model/run.kspls)'s `wide`). Layout itself (boxes and lines) is never remembered.
 
 The strongest answer, laying out only what is in view (as VS Code does), is closed to kspage because it paginates: the page count and the page breaks need what is out of view. kspage also stays in step with the typing rather than catching up later, a common complaint.
 
@@ -599,9 +591,7 @@ Note: The same input always gives the same count, so the gate checks **the count
 
 ### A style is looked up by name once
 
-Layout remembers the last style it found, so the ten or so lookups one block makes cost about one.
-
-**Laying out one block looks up the same style name about ten times** (collecting headings, notes, running numbers, a fence's breaks, the arrangement, the box, the fill). The lookup scans the table from its end, so the further back a document's style sits in the table, the heavier each keystroke. Remembering the last style found removes the gap between the table's head and its end.
+**Layout remembers the last style it found, so the ten or so lookups one block makes cost about one.** Laying out one block looks up the same style name about ten times (collecting headings, notes, running numbers, a fence's breaks, the arrangement, the box, the fill). The lookup scans the table from its end, so the further back a document's style sits in the table, the heavier each keystroke; remembering the last style found removes that gap between the table's head and its end.
 
 **The other products do not look styles up here**: Word and Writer store a reference to the style itself in a paragraph's attributes. kspage stores a name. A style is shared by name, and what is saved is a name too (saved by number, an old text would point at another style the day a style is added). So the lookup is made faster without changing what is stored.
 
@@ -683,9 +673,7 @@ Caution: Dropped instead, a child with no position would make written content si
 
 ## How the arrangements nest
 
-Each block's style says its arrangement, and layout switches arrangement at that block. So a table can sit in prose, a list in a table's cell, and a table on a slide, all laid out the same way.
-
-**Each block's arrangement is set by its style** ([`model/style.kspls`](../model/style.kspls)'s `Arrange`). Flow hands over to the grid only at a block whose style is `Arrange.grid`, and a cell's content returns to flow. So a table inside a table, or a list inside a table, is laid out the same way.
+**Each block's style says its arrangement** ([`model/style.kspls`](../model/style.kspls)'s `Arrange`), **and layout switches arrangement at that block.** Flow hands over to the grid only at a block whose style is `Arrange.grid`, and a cell's content returns to flow. So a table can sit in prose, a list in a table's cell, a table inside a table, and a table on a slide, all laid out the same way.
 
 Caution: **Do not let the document hold it**: with "this is a table" written into the tree, the tree could no longer be laid out by another arrangement. The arrangement is not inherited either, or even a paragraph in a table's cell would become a table.
 
@@ -787,9 +775,7 @@ The table cell the cursor is in gets an outline ([`lay/caret.kspls`](../lay/care
 
 ### The selection is two points
 
-A selection is "where it started" and "where it is now". Which of the two comes first is worked out from document order, not stored.
-
-**The direction it was extended is not stored**: document order decides which point comes first (`Doc.index_of`), so a stored direction would say the same thing twice.
+**A selection is "where it started" and "where it is now", and the direction it was extended is not stored**: document order decides which of the two comes first (`Doc.index_of`), so a stored direction would say the same thing twice.
 
 Caution: **Always collapse the selection when the text moves.** If only the current point moves, the editor treats text as selected when nothing is, and whatever is typed next deletes that range.
 
@@ -856,9 +842,7 @@ sequenceDiagram
 
 ### Undo is held as inverse operations
 
-Undo keeps no copies of the document. Each edit records its opposite (deleting for an insertion, inserting again for a deletion), and undo applies those.
-
-**No copy of the document is taken**, since the cursor points at the `Inline` itself and a swapped-in copy would leave it dangling.
+**Undo keeps no copies of the document**, since the cursor points at the `Inline` itself and a swapped-in copy would leave it dangling. Each edit records its opposite (deleting for an insertion, inserting again for a deletion), and undo applies those.
 
 Caution: **Copy the text before deleting it**; afterwards it cannot be read.
 
@@ -872,9 +856,7 @@ Caution: **Copy the text before deleting it**; afterwards it cannot be read.
 
 ### Where a step ends is decided outside the core
 
-What one undo takes back is a *step*. Continuous typing is one step, and the browser side cuts a step after a pause in typing.
-
-**Do not make each keystroke a step**, or undoing one sentence would take dozens of presses. Continuous typing is one step, cut when the cursor moves and when a composition is committed.
+**What one undo takes back is a *step*, and continuous typing is one step, not one per keystroke**: otherwise undoing one sentence would take dozens of presses. A step is cut when the cursor moves and when a composition is committed.
 
 **A pause between keystrokes does not cut a step**: the core has no clock, so a caller that needs a cut at a pause calls `break_group`, as the browser side does after a pause in typing.
 
@@ -898,16 +880,6 @@ Caution: **Do not split them into separate records.** The undo order would split
 | **The paper settings are saved whole** | all fields at once (the same reason as a style's look) | In the paper, 0 means "no pagination" (height), "the container's width" (width) and "no limit" (body width). Saved field by field, "not set" and "was 0" would look the same |
 
 **Replacing a setting with the same value adds no step**: the screen sends all seven fields whichever one is touched, so steps whose undo restores nothing would otherwise pile up. The text sent is compared whole (field by field, a field added later would be forgotten).
-
-### Doing the last command again is its own key
-
-**`F4` repeats the last command where the cursor now is, and redo keeps `Ctrl+Y`.** Each job has one key, so what a press will do is known beforehand.
-
-Excel and Word put both on `Ctrl+Y` (redo if there is something to redo, else repeat), so which one a press will do cannot be told beforehand. `F4` is Excel's own second key for repeat, and a browser page does not take it, so each job keeps one key.
-
-**The command is remembered, not inferred from the record** (`Again` in [`write/record.kspls`](../write/record.kspls)); inferring would be guesswork. Each repeatable command registers itself when it succeeds, so the list is readable in one place. What is kept is what the command needs (an axis, a style name), not where it acted, since repeating acts where the cursor is.
-
-**Answer the key either way**: done, the status bar clears; refused, it names the command it was holding.
 
 ### Splitting a paragraph adds a block
 
@@ -968,6 +940,8 @@ Replace **selects and then types over** (`Editor.replace_next`); typing deletes 
 **"Replace all" does not wrap around at the end**; it would find the replacement text again and loop forever (replacing "a" with "aa" does exactly that). Skip a match that cannot be replaced and carry on (stopping would leave everything after it unreplaced).
 
 **The visible text of a formula cell is not typed over**, since the next recalculation would write it back. Search still finds it, since being led to where a value is beats not finding it.
+
+**The find field shows the count found as it is typed**, so how many places "Replace all" will touch is in view before the press. 0 is shown too, since a blank could not tell "not counted" from 0. What is counted is places found, so with a formula cell among them fewer are replaced. Matches do not overlap, since replacing goes on from the end of what it found, so the count and the outcome agree. It counts again at every redraw.
 
 ### Compound operations are split into files by purpose
 
@@ -1062,9 +1036,7 @@ So the run holds the target, and the look is applied as a direct-formatting styl
 
 ### Colour is inherited with the font but stays out of `Font`
 
-The text and background colours belong to the style (`Style.ink`) and are inherited like the font. They stay out of `Font`, which holds only what measuring needs.
-
-**Do not put them in `Font`**: `Font` is the key for measuring, and a colour changes neither the width nor the height. Mixed in, two fonts differing only in colour would be measured twice. So layout carries a `Look`, the font and the colour bound together, as the inherited value.
+**The text and background colours belong to the style (`Style.ink`) and are inherited like the font, but stay out of `Font`**: `Font` holds only what measuring needs (it is the key for measuring), and a colour changes neither the width nor the height. Mixed in, two fonts differing only in colour would be measured twice. So layout carries a `Look`, the font and the colour bound together, as the inherited value.
 
 **The background is inherited like the text colour.** Otherwise a background set on a paragraph's style would appear nowhere, since boxes exist only where there is text and a paragraph has no box of its own. Only the boxes are painted, like a highlighter (the fill band, below, paints a whole paragraph or cell).
 
@@ -1176,9 +1148,7 @@ So "type 1200 and see 1,200" first needs **a cell to hold a value separately fro
 
 ## What layout recomputes every time
 
-Numbers that can be counted from the document are counted again at every layout and never stored: a note's number, the table of contents, chapter and caption numbers, list markers, a graph's bars, a page number and a conditional style.
-
-**What layout can count is counted at every layout and never stored.** The grounds are the same for each:
+**Numbers that can be counted from the document are counted again at every layout and never stored**: a note's number, the table of contents, chapter and caption numbers, list markers, a graph's bars, a page number and a conditional style. The grounds are the same for each:
 
 | The ground | What it gives |
 | :-- | :-- |
@@ -1273,6 +1243,8 @@ A list's bullet or number belongs to the style (`Style.marker`), and layout draw
 Caution: **Do not add a drawing primitive.** A bar is a painted band (`Panel`), a line is a band's diagonal, and a value's text is a box (`Box`): all shapes layout already produces. A new primitive would be needed at once by the canvas and page export.
 
 **Values are collected before layout starts** (`chart.collect_figures`), since the range finds its table by name anywhere in the document.
+
+**Each way of gathering brings one style, named `chart-<the way of gathering>`** (`chart-bars`), found by name at the next insertion as a shape's is.
 
 **The style sets the height** (`Style.height`): the core cannot derive one from the content (however many values there are, the height does not follow, as with a picture), so with no height set the graph is not laid out.
 
@@ -1370,9 +1342,7 @@ A column fitted to its content is as wide as the content plus the cell's padding
 
 ### The cell holds its merge, and covered cells are removed
 
-The merged cell holds its span (`Block.span_rows` / `span_cols`), not its style ("Only the block holds its position" above). The cells it covers are removed from the table.
-
-**Do not leave a covered cell in the row**: merging removes it, since, left standing, its text would be in the document yet nowhere on screen. Unmerging puts an empty cell back; restoring its text is the undo's job.
+**The merged cell holds its span (`Block.span_rows` / `span_cols`), not its style ("Only the block holds its position" above), and the cells it covers are removed from the row**: left standing, a covered cell's text would be in the document yet nowhere on screen. Unmerging puts an empty cell back; restoring its text is the undo's job.
 
 **Where each cell stands is counted in one place only** (`Block.tiles_of`): layout, formula addresses and Markdown export all need it, and with copies one table could take three shapes. A covered position has no cell, so the next cell moves right.
 
@@ -1400,9 +1370,7 @@ Caution: **Put the cursor in the cell that remains.** The selection reached into
 
 ### A table or a slide is inserted only after the cursor's paragraph
 
-A table or a slide goes **after** the cursor's paragraph (`Editor.insert_table` / `Editor.insert_surface`), never inside a table cell. That is the direction rows and columns are added in, so nobody has to remember which way each operation grows.
-
-**It is not inserted inside a table cell**, for the reason a paragraph is not split there. A table inside a table is for code that builds documents, not the screen: it could go "beside" or "inside" the cell, and a click cannot decide which.
+**A table or a slide goes after the cursor's paragraph (`Editor.insert_table` / `Editor.insert_surface`), never inside a table cell.** After is the direction rows and columns are added in, so nobody has to remember which way each operation grows. Not inside a cell, for the reason a paragraph is not split there. A table inside a table is for code that builds documents, not the screen: it could go "beside" or "inside" the cell, and a click cannot decide which.
 
 **The style says the arrangement**: the document does not say "table", so insertion looks at the style, making one that says grid where none exists. An existing style's arrangement is never changed (every block with that name would change arrangement). So it is set only when a style is added (`Editor.add_style`), and insertion refuses a name whose arrangement does not match.
 
@@ -1412,9 +1380,7 @@ A table or a slide goes **after** the cursor's paragraph (`Editor.insert_table` 
 
 ### A fresh table takes the size pressed, and its cells take the cell style
 
-The Insert menu picks a new table's size on a grid of up to 10 × 8; the ribbon's button inserts at the size last picked. The new cells take the document's cell style, which is made if it is missing.
-
-**The Insert menu chooses the size on a 10 × 8 grid, and the button inserts at the size last chosen (2 × 2 at first).** This is Word's cap, and a larger table grows with "Insert a row", as there. Every other office suite uses this form. The ribbon's Table button inserts at that size rather than opening the grid: the ribbon is a row of shortcuts that act, and a menu opened there would not stay open. Columns come first ("4 × 3" is four across), as in all three products. The cap is the menu's: the core refuses only a size with no cell (a table in a saved document can be any size).
+**The Insert menu picks a new table's size on a grid of up to 10 × 8, and the ribbon's button inserts at the size last picked (2 × 2 at first).** This is Word's cap, and a larger table grows with "Insert a row", as there. Every other office suite uses this form. The ribbon's Table button inserts at that size rather than opening the grid: the ribbon is a row of shortcuts that act, and a menu opened there would not stay open. Columns come first ("4 × 3" is four across), as in all three products. The cap is the menu's: the core refuses only a size with no cell (a table in a saved document can be any size).
 
 **The cells take the cell style, found by its role, and created through the record where the document has none.** One predicate identifies a cell style: `cell_like` in [`model/style.kspls`](../model/style.kspls), a flow paragraph with inner space and no marker, so every table inserted into one document shares one style. A missing one is made inside the insertion's step (`Editor.styled`), its look written in one place (`dress_cell` in [`write/insert.kspls`](../write/insert.kspls)). Each cell gets an empty run, without which it could not be clicked into.
 
@@ -1438,9 +1404,7 @@ The Insert menu picks a new table's size on a grid of up to 10 × 8; the ribbon'
 
 ### Sorting keeps the first row, orders letters without regard to case, and says why it refused
 
-A sort never moves the first row (the heading). It orders text alphabetically, ignoring case, and when it refuses, it says why.
-
-**The first row is the heading and never moves in a sort, whichever row the cursor is in; the cursor only picks the column.** Letting the cursor decide is a trap for hands trained on Excel: they put the cursor in the heading to sort by its column, and the heading is sorted into the data without warning. The heading is the first row by position ("Tables" above), so the sort asks nothing, as the products with no such complaint do. What is given up is sorting part of a table (the rows from partway down): no product offers it from the cursor alone, only a two-row heading needs it, and the manual says so.
+**A sort never moves the first row (the heading), whichever row the cursor is in; the cursor only picks the column.** Letting the cursor decide is a trap for hands trained on Excel: they put the cursor in the heading to sort by its column, and the heading is sorted into the data without warning. The heading is the first row by position ("Tables" above), so the sort asks nothing, as the products with no such complaint do. What is given up is sorting part of a table (the rows from partway down): no product offers it from the cursor alone, only a two-row heading needs it, and the manual says so.
 
 **Text sorts alphabetically ignoring case, and texts differing only in case are one key**, as in Excel's and Calc's default; Sheets puts every capital first. The folding is ASCII only (beyond it, code points are compared as they are), so an accented capital is not folded onto its lower case. The spreadsheets use the locale's collation there (the alphabetical order of the reader's language), at the cost of a collation table in the core, which is not paid here (the comparison names the gap). A date is read by the reader the formulas use (`day.day_of`), so exactly the spellings that count as dates sort as dates, and no second notion of "what is a date" arises.
 
@@ -1467,9 +1431,7 @@ Rules and fills come with the copy. The web's sticky heading (CSS's `position: s
 
 ### A filter is a way of looking: the rows leave the layout and the document stays whole
 
-A filter hides a table's rows in this window only. The document does not change, nothing is saved, and undo does not see it.
-
-**A table's rows are narrowed by a condition held with the window, not the document.** The condition (one per column: is, is not, contains, above, below, empty, not empty) lives in `Over.filters` ([`model/over.kspls`](../model/over.kspls), [`model/filter.kspls`](../model/filter.kspls)), beside the text size and whether marks are revealed. These are the reader's own settings, which never reach the text, an export or the record. Nothing is saved, no other window is touched, the undo does not see it, and "Show all rows" is the way back. Other suites use this shape, answering the complaint "my filter hid rows for everyone". Written out as Markdown, a filtered document carries every row.
+**A filter hides a table's rows in this window only: its condition is held with the window, not the document.** The condition (one per column: is, is not, contains, above, below, empty, not empty) lives in `Over.filters` ([`model/over.kspls`](../model/over.kspls), [`model/filter.kspls`](../model/filter.kspls)), beside the step a slide shows now (`reveal`). These are the reader's own settings, which never reach the text, an export or the record. Nothing is saved, no other window is touched, the undo does not see it, and "Show all rows" is the way back. Other suites use this shape, answering the complaint "my filter hid rows for everyone". Written out as Markdown, a filtered document carries every row.
 
 **Layout asks one question; the document is left alone.** `grid.place_rows` asks `filter.row_shown` for each row. A row left out takes no height but keeps its number, so formulas still point at it and merged cells are fixed up by number.
 
@@ -1595,9 +1557,7 @@ So cells are solved **in dependency order, not in the order written**, and an ea
 
 ### The methods that fold a range
 
-A range such as `A1:A3` must be folded into one number by a method (`.sum()`, `.min()`, `.max()`, `.count()`). Cells in the range that are not numbers are skipped.
-
-**`A1:A3` is not a value**: it cannot be added or multiplied. Only a range with a folding method chained on is one (`A1:A3.sum()`); `A1:A3` alone is `#SYNTAX!`.
+**A range such as `A1:A3` is not a value until a method folds it into one number (`.sum()`, `.min()`, `.max()`, `.count()`)**: alone it cannot be added or multiplied, and `A1:A3` alone is `#SYNTAX!`.
 
 **A folding method takes no argument**: an argument list would let what a formula already says be said again inside a function, giving two ways for one thing.
 
@@ -1677,9 +1637,7 @@ Caution: **Solve the body after the tables.** Solved first, a body formula would
 
 ### Once a row or a column is moved the formulas are rewritten
 
-Adding or deleting a row or a column rewrites the formulas in the whole document, so each reference keeps pointing at the same cell.
-
-**A place is absolute**: `A2` keeps pointing at the same cell when a row is added, and what changes is its number. So adding or deleting a row or a column rewrites every formula in the document ([`expr/shift.kspls`](../expr/shift.kspls)'s `plan_shift`), because a named table can be pointed at from another table or from the body. A reference with no name belongs to its formula's own table, so an `A2` inside another table does not move. For example, a row added above row 2:
+**Adding or deleting a row or a column rewrites the formulas in the whole document, so each reference keeps pointing at the same cell (a place is absolute)**: `A2` keeps pointing at the same cell when a row is added, and what changes is its number. Every formula is rewritten ([`expr/shift.kspls`](../expr/shift.kspls)'s `plan_shift`) because a named table can be pointed at from another table or from the body. A reference with no name belongs to its formula's own table, so an `A2` inside another table does not move. For example, a row added above row 2:
 
 | The formula before | After |
 | :-- | :-- |
@@ -1694,9 +1652,7 @@ Caution: **A formula pointing at the deleted row itself becomes `#REF!`**; closi
 
 ### `$` acts only when copying
 
-The `$` in `$A$1` is easily read as "a reference that never moves", but it holds still **only when copied**. When rows or columns are added or deleted, every reference moves with its cell.
-
-**When a row or a column is added or deleted, the reference moves, `$` or not**: the cell itself moves, so a reference left in place would point at another cell. (The mark says what copying does, not which cell is meant.) So one module reads and writes references (`kspage/addr`), and only the two ways of moving them differ (`kspage/shift`).
+**When a row or a column is added or deleted, every reference moves with its cell, `$` or not**: a reference left in place would point at another cell. The `$` in `$A$1` is easily read as "a reference that never moves", but it holds still only when copied: the mark says what copying does, not which cell is meant. So one module reads and writes references (`kspage/addr`), and only the two ways of moving them differ (`kspage/shift`).
 
 Caution: **Do not split the reading of the text in two**, or the same formula would be read differently depending on the reader.
 
@@ -1716,9 +1672,7 @@ In the document model, a slide is a block whose children are laid out at absolut
 
 ### Showing frames in turn is an order, not a timeline
 
-Each frame on a slide can carry a step number. During a slideshow the frames appear in step order, one press at a time. There are no timings and no animations.
-
-**The document holds only the step at which each frame appears** (`Block.step`):
+**Each frame on a slide can carry a step number, and the document holds only that step** (`Block.step`). During a slideshow the frames appear in step order, one press at a time; there are no timings and no animations. What each `step` means:
 
 | `step` | When the frame is shown |
 | :-- | :-- |
@@ -1736,6 +1690,8 @@ There is no time axis ("What it does not hold" above), only an order. An order f
 **One action advances the show** (`port/web/api_show.js`'s `stepAhead`). It goes to the next step if one is left on the slide, and otherwise to the next slide. With two actions, the presenter would have to remember which one to press.
 
 **Reordering slides means moving blocks in the document.** The order of the slides is a result of layout, so only the document holds it.
+
+**In the "Slides" tab a thumbnail is dragged to reorder, and it lands where it is dropped.** Moving it while dragging would shift it by however many it passed. A dotted frame shows where it will go, and the move is one undo, since the order is the document's.
 
 Caution: **Move only the outermost block** (a slide inside a frame cannot be moved).
 
@@ -1802,8 +1758,6 @@ One command deletes a frame, and another deletes the whole slide or table (the *
 
 **There is no connector: a line that joins two frames and follows them when they move.** PowerPoint's connector is easy to use because it snaps to a shape and follows it. Joining frames by typing their names would carry the whole cost of the feature without that ease. A line is drawn as a shape like any other.
 
-**A saved document holding such a line is refused whole** (`Store_error.withdrawn` in [`share/store.kspls`](../share/store.kspls), as for a window onto source). If it opened without the line, the next save would drop the line without a word.
-
 ### How a shape is drawn
 
 Pick a shape tool, then drag on the slide where the shape should go. The shape belongs to whatever was under the press.
@@ -1823,6 +1777,8 @@ The steps, and why each is so:
 A shape does not go into a block that lays out no children. A grid's children are its rows and cells, and a gathering block's children (a table of contents, say) are not laid out, so a shape there would appear nowhere. A shape drawn over a table belongs to the cell. Shapes are placed after the contents, so they show on top of the text, stacked in the document's order.
 
 The forms are few, and **adding one never renumbers the others**. PowerPoint holds 160 kinds, so the one needed has to be searched for (hence its recently used forms at the top). kspage holds the rectangle, the rounded rectangle, the ellipse, the triangle, the diamond, the line and the arrow (along a diagonal). Saving writes the form's name, while the boundary between the core and the page passes a number: the variant's position in `Shape` ([`model/style.kspls`](../model/style.kspls)). So a new form goes at the end only; renumbering would make an old text read as another form.
+
+**Each form drawn brings one style, named `figure-<the form>`**, so the next shape of that form finds it by name ("Styles are told apart by role, not by name" above says why inserting looks a name up first).
 
 ### How a form is chosen
 
@@ -1897,7 +1853,7 @@ Only layout knows a block's height, which is why it is laid out, measured, then 
 
 **Do not count by the height used**, which includes the space after the last block (`space_after`). A document filling exactly one page would count as two, and a blank last page with no box at all would print. Only the last block's space is left out; space between blocks is content.
 
-**Do not put the counting in the bridge** (`port/web/`, which joins the core to the browser), where `make debug` does not reach it. The check is `tests/print_test.kspls`'s "the count of sheets of a document that fits exactly".
+**Do not put the counting in the bridge** (`port/web/`, which joins the core to the browser), where `make debug` does not reach it. The check is `tests/join_test.kspls`'s "the count of sheets of a document that fits exactly".
 
 **Printing draws one canvas per page** (one long canvas cannot cross pages). It clips and scales with the same code as the one-slide view.
 
@@ -1919,9 +1875,7 @@ Caution: **Do not put them in a style.** With two page shapes in one document, n
 
 ### Headers and footers have no place in the document's coordinates
 
-The header and footer are whole-document settings (`Doc.header` / `Doc.footer`), laid out once per page, apart from the body.
-
-**Do not put them in `blocks`** (the document's list of blocks). A band appears once per page, so it has no place in one continuous run of coordinates. It is laid out separately (`flow.layout_chrome`), with coordinates relative to the page's top-left corner. Printing clips and insets the content by the margins, and draws the band as it is.
+**The header and footer are whole-document settings (`Doc.header` / `Doc.footer`), not part of `blocks` (the document's list of blocks).** A band appears once per page, so it has no place in one continuous run of coordinates. It is laid out once per page, apart from the body (`flow.layout_chrome`), with coordinates relative to the page's top-left corner. Printing clips and insets the content by the margins, and draws the band as it is.
 
 **With no paper size and no top and bottom margins, the band is not laid out.** It sits inside the margin, and with no fixed bottom edge the footer has nowhere to go. Nor is an empty band laid out, which would make the margin look narrower.
 
@@ -1931,17 +1885,13 @@ The page number is counted at layout ("What layout recomputes every time" above)
 
 ### The printing fits the page into the printable region
 
-The printed page is shrunk to fit the printer's printable area, so the left and right margins stay equal.
-
-**Do not count on `@page { margin: 0 }`** (the CSS rule that asks for no printer margin). Margins chosen in the print dialog win. A canvas drawn at the paper's width is then wider than the printable region, and its right side is cut off, so only the left margin shows. `max-width: 100%` shrinks the page to fit and keeps both margins equal.
+**The printed page is shrunk to fit the printer's printable area (`max-width: 100%`), so the left and right margins stay equal; do not count on `@page { margin: 0 }`** (the CSS rule that asks for no printer margin). Margins chosen in the print dialog win. A canvas drawn at the paper's width is then wider than the printable region, and its right side is cut off, so only the left margin shows.
 
 Do not fix it by shifting the page's inner margins left: left and right are equal (57px each on A4), so shifting them makes it wrong.
 
 ### A document with no paper size borrows one only for printing
 
-A document with no paper size (height 0) is one long run on screen. When it is printed, it borrows the default paper and margins for that one print.
-
-**A height of 0 means "one continuous run on the screen", not "no pages in print either".** A plain-text document (a program's source), Markdown and a new document all set no paper. Printed unchanged, they become one long canvas, and the browser breaks the pages where it likes.
+**A document with no paper size (height 0) is one long run on screen, but not "no pages in print either": when it is printed, it borrows the default paper and margins for that one print.** A plain-text document (a program's source), Markdown and a new document all set no paper. Printed unchanged, they become one long canvas, and the browser breaks the pages where it likes.
 
 **The size and the margins are borrowed together** (`paintPages` in `port/web/api_show.js`):
 
@@ -1956,9 +1906,7 @@ What is borrowed is the default paper of the bundled documents (`a4_portrait` in
 
 ## Saving and loading the document
 
-A document is saved as one JSON text that holds both the content and the styles ([`share/store.kspls`](../share/store.kspls)). Only this text reads back into kspage; Markdown and CSV are one-way exports.
-
-**The document and its styles are saved together.** Saved apart, one could travel without the other, and the look would drift.
+**A document is saved as one JSON text that holds both the content and the styles** ([`share/store.kspls`](../share/store.kspls)). Saved apart, one could travel without the other, and the look would drift. Only this text reads back into kspage; Markdown and CSV are one-way exports.
 
 **An unset field is not written.** A style's font fields can be unset, which means "inherited from the parent", so writing the default in would break the inheritance there. The reader leaves an absent field alone too. Only `Sheet.add` fills in defaults; with two places doing it, one could change alone.
 
@@ -1966,9 +1914,7 @@ A document is saved as one JSON text that holds both the content and the styles 
 
 ### A name the core looks up belongs to the format version
 
-A few names in the saved text are ones the core looks for by name. Renaming one of them changes the format, so it needs a new version number.
-
-**The saved text holds names the core looks up**: the header and footer marks `{page}` / `{pages}` (`page_mark` in [`lay/chrome.kspls`](../lay/chrome.kspls)), and the header and footer styles (`header` / `footer` in [`model/doc.kspls`](../model/doc.kspls)).
+**The saved text holds a few names the core looks for by name**: the header and footer marks `{page}` / `{pages}` (`page_mark` in [`lay/chrome.kspls`](../lay/chrome.kspls)), and the header and footer styles (`header` / `footer` in [`model/doc.kspls`](../model/doc.kspls)).
 
 Caution: **Changing a name the core looks up raises the version in [`share/store.kspls`](../share/store.kspls).** Without the raise, an old file's mark is not read as a mark and is printed as written. One raise covers the whole vocabulary, not one per name.
 
@@ -1976,9 +1922,7 @@ Caution: **Changing a name the core looks up raises the version in [`share/store
 
 ### An earlier name is not read
 
-The version field is named after the product, `kspage`. Only that one name is read, so renaming the product would make every older document unreadable. That price is accepted.
-
-**The field that names the version is `kspage`, the product's own name, and no earlier name is read.** So renaming the product makes every document saved before it unreadable, although the rename changes not one byte of the format.
+**The version field is named after the product, `kspage`, and no earlier name is read.** So renaming the product makes every document saved before it unreadable, although the rename changes not one byte of the format.
 
 **That price is accepted rather than paid with a reader per name.** A reader for an old name never retires: it must be carried, tested and explained as long as the format lives. What is written and what is read are one name. The version check is not relaxed either: a document under that name with a different number is still refused ("A text of a different version is not read even in part" above). The guard is [`tests/store_test.kspls`](../tests/store_test.kspls)'s `test_only_the_one_name_opens`.
 
@@ -2010,21 +1954,15 @@ Opening a saved text replaces the whole document, and everything that pointed in
 
 ## A document's past lives in its files
 
-Kspage keeps no history of changes and no saved versions of its own. To keep an earlier state, save a copy, or keep the file in git.
-
-**kspage keeps no change history and no saved versions of its own.** A document's past is the files it was saved as. A copy saved under another name is a version anyone can open. A document kept in git has git's history and its diff of the saved text ("The saved text is laid out to read well in a diff" below). A history of kspage's own would be a second thing to carry beside the document and keep in step with it. It would be readable only in kspage, and held where the page keeps it (one browser on one machine), so it would not travel with the document.
+**kspage keeps no change history and no saved versions of its own: to keep an earlier state, save a copy, or keep the file in git.** A document's past is the files it was saved as. A copy saved under another name is a version anyone can open. A document kept in git has git's history and its diff of the saved text ("The saved text is laid out to read well in a diff" below). A history of kspage's own would be a second thing to carry beside the document and keep in step with it. It would be readable only in kspage, and held where the page keeps it (one browser on one machine), so it would not travel with the document.
 
 **Nothing sets two versions against each other.** Showing what changed between two texts needs a number on every block that never changes, a matching in several steps, a list narrowed by view, and pixels drawn twice. That is a large part of the page for a step taken now and then, and git's diff of the saved text already does it. So a person brings two versions together by opening both, each in its own window.
 
 **What this gives up**: a record of who changed what and when, earlier states kept by a press, and a list of what changed inside kspage. The person keeps copies, or keeps the file where its history is kept.
 
-An `origin` key, which earlier texts carry to keep one document's versions together, is read past and not written again ([`share/store.kspls`](../share/store.kspls)'s `load`), so those texts open as they were.
-
 ## A style name holds no whitespace
 
-A name a person types for a new style may not hold whitespace (a space, a tab, a line break). kspage's own names already join words with a hyphen (`column-body`).
-
-**A code style's name is the language its Markdown fence declares**, and a fence's declaration ends at whitespace ("Rules the Markdown writer keeps" below). A style named `my code` would be written out as a fence of language `my`.
+**A name a person types for a new style may not hold whitespace (a space, a tab, a line break)**: a code style's name is the language its Markdown fence declares, and a fence's declaration ends at whitespace ("Rules the Markdown writer keeps" below). A style named `my code` would be written out as a fence of language `my`. kspage's own names already join words with a hyphen (`column-body`).
 
 **The entry point where a person names a style refuses such a name** ([`write/shape.kspls`](../write/shape.kspls)'s `add_style`; the reason reaches the screen as its own code in [`port/web/face_edit.kspls`](../port/web/face_edit.kspls)). `make test-conventions` checks the names the product writes.
 
@@ -2032,9 +1970,7 @@ A name a person types for a new style may not hold whitespace (a space, a tab, a
 
 ## The wording on the screen
 
-The screen uses the words other office products already use, as long as the word also says what the feature does.
-
-**Text on the screen uses the wording the other products share.** A name is what people search by, so a feature called something else looks as if it is missing.
+**Text on the screen uses the words other office products already use, as long as the word also says what the feature does.** A name is what people search by, so a feature called something else looks as if it is missing.
 
 **Do not stop at "make it the same".** Established or not, a name that does not say what is inside is not taken. Mailings is one example: the feature brings in an outside list to make one document per person, and the name does not say so.
 
@@ -2042,9 +1978,7 @@ The screen uses the words other office products already use, as long as the word
 
 ### The established term stays the term
 
-Where every other tool uses the same term, kspage uses it too, rather than inventing a "plainer" word.
-
-**Do not coin a plain word of our own for a term other tools already share**; no product does. Call a server "the answering side" or a cursor "an insertion bar", and the reader cannot tell it is the same thing.
+**Where every other tool uses the same term, kspage uses it too, and coins no "plainer" word of its own**; no product does. Call a server "the answering side" or a cursor "an insertion bar", and the reader cannot tell it is the same thing.
 
 **Nor is a word right merely for being the industry's.** The US Federal Plain Language Guidelines ask for the common word over jargon the reader does not share.
 
@@ -2054,9 +1988,7 @@ The complaints come from both directions at once, and this test answers both.
 
 ### The register follows where the text appears
 
-Each kind of text on the screen has one grammatical form (the *register*): a menu is a noun, a button is a command, a report is a full sentence.
-
-**Do not mix registers on one screen.** The register follows where the text appears, and the office suites kspage is compared with (Microsoft 365, Google Docs, LibreOffice) agree on this.
+**Each kind of text on the screen has one grammatical form (the *register*), and registers are not mixed on one screen**: a menu is a noun, a button is a command, a report is a full sentence. The register follows where the text appears, and the office suites kspage is compared with (Microsoft 365, Google Docs, LibreOffice) agree on this.
 
 | Where it appears | The register | Example |
 | :-- | :-- | :-- |
@@ -2076,9 +2008,7 @@ Caution: **Do not put Title Case on a tab.** Microsoft and Google put Title Case
 
 ### The vocabulary is one
 
-One thing has one word, and that word is the same on the screen, in the code, in comments and in the manual.
-
-**Do not use different words on the screen, in the code and in the comments.** With two vocabularies, the day someone forgets to update the mapping between them, the screen and the code seem to mean different things. So the wordings turned away appear nowhere in this package: not in the source, a comment, a document or a gate. Identifiers are no exception: whoever comes next reads them.
+**One thing has one word, and that word is the same on the screen, in the code, in comments and in the manual.** With two vocabularies, the day someone forgets to update the mapping between them, the screen and the code seem to mean different things. So the wordings turned away appear nowhere in this package: not in the source, a comment, a document or a gate. Identifiers are no exception: whoever comes next reads them.
 
 **The words turned away are named in the table of fixed words below, and no gate refuses them**: a reviewer catches one that comes back with the next screen added.
 
@@ -2146,11 +2076,13 @@ The screen has five parts. The names below are the ones these sections use:
 
 ### A ribbon, or a toolbar that does not move
 
-**The ribbon has no tabs.** With tabs, finding a command means first knowing which tab holds it. Commands sit in named groups, and a contextual group (one shown only while you work on its thing, such as a table) appears on the same row, so no tab has to be searched. What cannot act is not shown, so nothing pressable does nothing. No icon stands without its name. Deep settings stay in the menus ("The tools and the look" below).
+**The ribbon has no tabs.** With tabs, finding a command means first knowing which tab holds it. Commands sit in named groups, and a contextual group (one shown only while you work on its thing, such as a table) appears on the same row, so no tab has to be searched. What cannot act is not shown, so nothing pressable does nothing. No icon stands without its name. Deep settings stay in the menus ("Groups in a menu are submenus, and a panel is only for what is used over and over" below).
 
 ### How much of the window's height is handed to the tools
 
-**Two levels, the menu bar (the band) and the ribbon, and no more.** The manual sits inside the "?", the find field at the band's right, and the formula field appears only when it can be used. Every level takes room from the body, so the checks in `kspage/tests/browser/` watch the cap.
+**Two levels, the menu bar (the band) and the ribbon, and no more.** The manual sits inside the "?", the find field at the band's right, and the formula field appears only when it can be used. Every level takes room from the body, so the checks hold the two rows under a cap (`chromeCap` in [`../tests/browser/ribbon.js`](../tests/browser/ribbon.js)).
+
+**The tools stay put while the body scrolls.** The band and the ribbon stay at the window's top (`#chrome`) and the body passes under them. So following the cursor stops at the tools' bottom edge (`headRoom`); otherwise the line being typed would hide behind the tools.
 
 **A tool's name sits to the right of its icon.** Stacked under it, they would take twice the height. Names always show, since a name shown only on pointing cannot be read on a touch screen. A group's name takes no level: a dividing line shows the group, and its name shows on pointing.
 
@@ -2188,9 +2120,7 @@ Caution: **Do not copy its contents.** The choices and what runs on one live onc
 
 ### The ribbon's first level opens on a press
 
-A group on the ribbon opens when you press it, not when the pointer passes over it. Inside an open menu, a group opens on pointing too.
-
-**It depends on where the group sits.** The ribbon's first-level groups open on a press; groups inside an open menu open on pointing and on focus alike. Do not open the first level on pointing, or passing over the row would open panel after panel. (Inside a menu the groups run down the page, so the path to a choice crosses no others.) Nor on `:focus-within`, or tabbing through would open it. A press can come from a key, so the keyboard keeps working.
+**A group on the ribbon opens when you press it, not when the pointer passes over it; a group inside an open menu opens on pointing and on focus alike.** Do not open the first level on pointing, or passing over the row would open panel after panel. (Inside a menu the groups run down the page, so the path to a choice crosses no others.) Nor on `:focus-within`, or tabbing through would open it. A press can come from a key, so the keyboard keeps working.
 
 **Three ways close it, all through one place**: another press, a press outside, and Esc (`shutTools` in [`port/web/page.js`](../port/web/page.js)). A panel that opens on pointing closes when the pointer leaves, so opening on a press needs ways to close. Do not write the closing in several places. Split, a press outside would close the band's menu and leave the ribbon's panel open.
 
@@ -2250,9 +2180,7 @@ A submenu works inside a panel because the panel is a `details`. A bare submenu 
 
 ### A submenu is not put into a box that scrolls
 
-A menu level that holds further submenus must never scroll, or the deeper levels are clipped out of sight.
-
-**A box with `overflow` clips its absolutely positioned descendants.** So `overflow` must not go on a level (a submenu) that holds another submenu. The next level would hide inside the box, a horizontal scroll bar would appear, and the deeper levels could not be reached.
+**A menu level that holds further submenus must never scroll, or the deeper levels are clipped out of sight**: a box with `overflow` clips its absolutely positioned descendants, so `overflow` must not go on such a level. The next level would hide inside the box, a horizontal scroll bar would appear, and the deeper levels could not be reached.
 
 What may scroll is **a leaf level** (one that lists only choices). A swatch list or style names can run long, so it scrolls vertically. `port/web/fly.js` marks the levels that hold submenus (`fly-nest`).
 
@@ -2324,9 +2252,7 @@ Note: The page holds the labels and texts in one place (`port/web/command.js`), 
 
 ### The debug log is kept apart from the document
 
-"Download the debug log" saves a text file for reporting a fault. It holds the styles and settings, never the document's text, and it is never written into the document.
-
-**Do not write it into the document.** A document goes to whoever receives it; a log belongs to one machine at one time. What decides is whether a save comes in between. Written into the document, reporting a fault would mean saving first, yet what broke did so before the save.
+**"Download the debug log" saves a text file for reporting a fault, and never writes it into the document.** A document goes to whoever receives it; a log belongs to one machine at one time. What decides is whether a save comes in between. Written into the document, reporting a fault would mean saving first, yet what broke did so before the save.
 
 **The log downloads as a text file.** The document's text does not go in, or reporting a fault would mean handing over what was written; a gate checks this. In go the styles' list and the names listed in the fields, the styles applied now, the numbering and page settings, the messages and refusals shown, and the keys that carried a command (not the characters typed). A mismatch shows here: the faults reported from use are slips between "the document's styles" and "the styles listed in the field".
 
@@ -2372,6 +2298,8 @@ For a file chosen in the browser, the browser passes no path, so only the name i
 
 **It sits on the band and is renamed in place.** It is not on the ribbon's row, where folding the ribbon would hide it. It is not the document's contents: the core keeps no name in a document, so this is "the file name when this page saves". Opening a file replaces it with that file's name.
 
+**Renaming it forgets where the document writes back**, so the next save asks for the destination. That is "save as", and it has no button of its own, since one thing is not done two ways (Principle 6).
+
 ### The headings and the placed objects share one panel
 
 One side panel ("Navigation") has three tabs, Headings, Slides and Placed. Each tab shows a count, and the panel never switches tab by itself.
@@ -2413,7 +2341,9 @@ What the panel lists is **the document's text** (headings, shapes' names), so th
 
 ### A remembered position goes stale
 
-**Do not have a list row remember its target's height.** The list on the right is rebuilt only from the text and the depth, so that it is not rebuilt at every keystroke. So it is not rebuilt at a relayout either, where a remembered height goes stale. Asking at the moment of the press is enough (`app.contentsTop()`).
+**Do not have a list row remember its target's height.** The list on the right is rebuilt only from the text and the depth, so that it is not rebuilt at every keystroke. So it is not rebuilt at a relayout either, where a remembered height goes stale. Asking the layout at the moment of the press is enough (`kspage_web_contents_hit` in `port/web/keys.js`).
+
+**Back and Forward move inside the open document only.** What they remember is the window's scroll, and swapping the document clears both (`forgetPlaces` in [`port/web/api.js`](../port/web/api.js), called where `port/web/file.js` settles a document in). A place in the document gone names nothing in the one now open. Going back across documents would make a navigation tool open a file, with all that opening brings: a draft set aside, a refusal, a permission asked.
 
 **Only kspage scrolls the window.** The typing field sits over the cursor, so focusing it makes the browser scroll there on its own judgement. Giving focus back right after a jump can then pull the window from the target back to the cursor. So focus is given with `focus({ preventScroll: true })`, and only `followCaret` and `jumpToCaret` scroll. They allow for the height hidden behind the tools (`headRoom`); the browser's scrolling does not.
 
@@ -2421,9 +2351,7 @@ What the panel lists is **the document's text** (headings, shapes' names), so th
 
 ### Whether the browser or the page holds the zoom
 
-Kspage has no zoom of its own. The browser's zoom (Ctrl and + or −) is the one way to make the document bigger.
-
-**The zoom is the browser's; the page keeps none.** A desktop program holds a zoom of its own because no browser stands around it, and the OS's magnifier enlarges the whole screen. In a browser the zoom is already there, so a second one would be two means for one purpose (Principle 6). A page-side zoom does to the document exactly what the browser's does: both divide the laid-out width and rewrap, with the canvas staying at the window's width. They differ only in whether the tools grow too.
+**Kspage has no zoom of its own: the browser's zoom (Ctrl and + or −) is the one way to make the document bigger.** A desktop program holds a zoom of its own because no browser stands around it, and the OS's magnifier enlarges the whole screen. In a browser the zoom is already there, so a second one would be two means for one purpose (Principle 6). A page-side zoom does to the document exactly what the browser's does: both divide the laid-out width and rewrap, with the canvas staying at the window's width. They differ only in whether the tools grow too.
 
 **What is lost**: the browser's zoom enlarges the ribbon and the menus too, so "enlarge only the document" is impossible. On a narrow screen the groups that do not fit drop into `…` ("What is done with the tools that do not fit" above).
 
@@ -2465,7 +2393,7 @@ A viewer can change how a document looks on their own screen (for example, the c
 
 * **A per-viewer override that no document holds brings two complaints**: a "change how it looks" that changes the contents too (darkened pictures, dropped tables), and a choice made again every time.
 
-**The overrides are a layer** (`Sheet.over` in [`model/style.kspls`](../model/style.kspls)). The document does not change: they reach neither the saved text nor an export. They do not act when printing, since a page per viewer would make printouts disagree. The list's thumbnails are pages too, so they show the document's colours.
+**The overrides are a layer**: what changes the layout is `Sheet.over` ([`model/over.kspls`](../model/over.kspls)), and the colours and outside pictures are the page's (`over` / `setOver` in [`port/web/api.js`](../port/web/api.js)). The document does not change: they reach neither the saved text nor an export. They do not act when printing, since a page per viewer would make printouts disagree. The list's thumbnails are pages too, so they show the document's colours.
 
 **They survive reading the document again and go with the viewer** (`carried` in [`model/over.kspls`](../model/over.kspls)). The exception is the filters, which point at the old document's tables. Kept per document, the overrides would be chosen again every time.
 
@@ -2479,9 +2407,7 @@ A viewer can change how a document looks on their own screen (for example, the c
 
 ### What a theme holds
 
-A theme is a set of colours and typefaces applied to the document's styles in one step. It holds nothing that changes sizes or spacing.
-
-**A theme holds only colours and typefaces.** It holds no sizes, spacing or alignment: changing those would change the page count per theme, and the printed page and the screen would drift apart. So a theme holds no body width either (the width is a paper setting).
+**A theme is a set of colours and typefaces applied to the document's styles in one step, and it holds nothing else.** It holds no sizes, spacing or alignment: changing those would change the page count per theme, and the printed page and the screen would drift apart. So a theme holds no body width either (the width is a paper setting).
 
 **The colours and the typefaces come as one set** (one list).
 
@@ -2497,9 +2423,7 @@ Caution: **Do not split them into two lists.** Separate lists let their combinat
 
 ### The page's look is a few roles, following the screen
 
-The page's own colours (not the document's) follow the system's light or dark mode. Every colour comes from a short list of named roles in one CSS block.
-
-**There is one look, and it follows the screen's light or dark**: the roles take the system's colours (`Canvas`, `CanvasText`, `Highlight` in the `:root` of [`port/web/page.css`](../port/web/page.css)). No other palette is offered. Each one is a set of colours every new part has to be given and measured in, while the system's colours already answer light and dark, and a high-contrast mode, with nothing done by the page.
+**The page's own colours (not the document's) have one look, and it follows the system's light or dark mode**: the roles take the system's colours (`Canvas`, `CanvasText`, `Highlight` in the `:root` of [`port/web/page.css`](../port/web/page.css)). No other palette is offered. Each one is a set of colours every new part has to be given and measured in, while the system's colours already answer light and dark, and a high-contrast mode, with nothing done by the page.
 
 **The colours and the measurements are held as a few roles.** There are two for text (`ink` / `ink-dim`), three for the ground (`field` / `panel` / `raised`), and the border, the accent, the refusal, the page, the rounding, the typeface and the shadow. No field exists per part of the screen, since from then on a part added is a part some colour forgets. One accent colour only: with two, nobody could read which marks the current state.
 
@@ -2521,7 +2445,7 @@ Caution: **Do not mix the two.** Mixed, the same document would show other colou
 
 **The panel (⚙) holds the look's two overrides and what is remembered**, under headings. The ribbon has no place in it ("What is done with the tools that do not fit" above).
 
-* **What is remembered is written down.** Unseen, nobody can tell how to fix it.
+* **What is remembered is written down.** Unseen, nobody can tell how to fix it. It remembers the colours fitted to the screen, whether the ribbon is folded, the shape last used and the document's name (`localStorage`), and says that the document's own settings (the body's width, the pages, the margins, the styles) are under "File" and saved with it.
 * **The panel does not scroll.** A submenu inside a scrolling box would hide in it ("A submenu is not put into a box that scrolls" above).
 
 ## What a document received is trusted with
@@ -2530,9 +2454,7 @@ A document may come from someone else, so kspage does not trust what is inside i
 
 ### The numbers inside a document are refused rather than rounded where they are outside the range
 
-Some numbers in a document decide how much work layout does. Each has a fixed range, and a document holding a number outside it is refused, not quietly corrected.
-
-**Size is not the only thing a cap must guard.** In some fields one number sets how much work there is. A merge loops once per column it spans, a column set lays out once per column, and a heading's depth sets how many places its chapter number stacks up. A cap on the file's size does not stop this. A 190-byte document with two billion in `span_cols` never returns from layout, and with three blocks it passes every size gate.
+**Some numbers in a document decide how much work layout does, so size is not the only thing a cap must guard: each has a fixed range, and a document holding a number outside it is refused, not quietly corrected.** A merge loops once per column it spans, a column set lays out once per column, and a heading's depth sets how many places its chapter number stacks up. A cap on the file's size does not stop this. A 190-byte document with two billion in `span_cols` never returns from layout, and with three blocks it passes every size gate.
 
 **The ranges live in one place, [`model/limit.kspls`](../model/limit.kspls), and a value outside its range is refused where it is read.**
 
@@ -2568,9 +2490,7 @@ Note: **A gate watches this.** It feeds deliberately broken documents ([`../test
 
 ### Text from a received document is checked where it is used
 
-Kspage runs no macros, but text inside a document can still do harm: a link can run code, a picture address can tell another server you opened the file. So every place that uses such text lets through only a short list of known-safe forms.
-
-**Holding no macros closes only that one hole.** Every entry point that uses the document's text as it stands is the same hole. Even with no code to run, what was received decides a link's scheme, a picture's source and the text written out.
+**Kspage runs no macros, but that closes only one hole: text inside a document can still do harm**, as a link can run code and a picture address can tell another server you opened the file. Every entry point that uses the document's text as it stands is the same hole. Even with no code to run, what was received decides a link's scheme, a picture's source and the text written out. So every place that uses such text lets through only a short list of known-safe forms.
 
 **Each entry point decides whom it trusts and which schemes it lets through, as listed below.** (A *scheme* is the part of an address before the `:`, such as `https` or `javascript`.)
 
@@ -2610,6 +2530,8 @@ Two ways of reaching a file recur in these sections:
 | **The browser's file window** ("Open") | the browser's own dialog for picking a file (`showOpenFilePicker`, desktop Chromium only) | a *handle* (`FileSystemFileHandle`): the browser's permission to read and write that one file again, without knowing its path |
 | **The local server** (`kssrv --local`) | a small program the person starts, which serves one folder to the page and reads and writes files in it by path ("The local server reaches files, and nothing else" below) | a *path* inside the served folder |
 
+**Only desktop Chromium can write a file back through the window** (`showSaveFilePicker` / `showOpenFilePicker`). In Firefox, Safari and on a phone a save downloads a copy, and the page says so rather than switching silently.
+
 ### A document is written back where it was opened
 
 **A document is written back where it was opened from, and "Open" is the browser's own window whether or not the server is running.** Every way of opening ends in the one place that decides where Save writes (`settleIn` in [`port/web/file.js`](../port/web/file.js)):
@@ -2630,9 +2552,7 @@ Two ways of reaching a file recur in these sections:
 
 ### A save has one destination, and asks nothing it already knows
 
-With the local server running, a document opened by path is saved inside the served folder, without a file window. A new file is never allowed to overwrite one that exists.
-
-**While the server runs, a document opened by path does not choose its destination in the browser's window.** If it could, it could be saved outside the served folder, making a document that cannot be reopened by path. The same press would also do two different things.
+**While the local server runs, a document opened by path is saved inside the served folder, without choosing its destination in the browser's file window.** If it could choose, it could be saved outside the served folder, making a document that cannot be reopened by path. The same press would also do two different things.
 
 **Nor does it ask instead.** The folder is the one the person chose when starting `kssrv`, and the name is in the menu bar's field; asking for what is already known only adds a press. So with the path field empty, it writes directly under the folder by that name and puts the path written into the field. Later saves then go to the same place, and the workings are visible.
 
@@ -2686,9 +2606,7 @@ sequenceDiagram
 
 ### The save destination is remembered, and permission is asked at the first save
 
-After a reload, the tab comes back on the document it had open, read fresh from its file, and Save still writes there. Each tab remembers its own document.
-
-**A reloaded page comes up on the document it had open, read again from where it lives, together with where it writes back.** Otherwise every reload asks for the destination, and a wrong choice grows a copy beside the original. What is remembered is the document's path or its handle (`FileSystemFileHandle`). At start-up the document is read from there and laid in, as Enter in the path field and the window do (`reopen` in [`port/web/save.js`](../port/web/save.js)).
+**After a reload, the tab comes back on the document it had open, read fresh from where it lives, and Save still writes there.** Otherwise every reload asks for the destination, and a wrong choice grows a copy beside the original. Each tab remembers its own document's path or its handle (`FileSystemFileHandle`). At start-up the document is read from there and laid in, as Enter in the path field and the window do (`reopen` in [`port/web/save.js`](../port/web/save.js)).
 
 What the page does at start-up:
 
@@ -2723,9 +2641,7 @@ flowchart TD
 
 ### Drafts are held aside, and a draft is never called a save
 
-While you type, kspage keeps a copy of the unsaved text inside the browser, so a crash loses little. That copy is called a *draft*. It is never written to the file, and the screen never calls it "saved".
-
-**Without drafts, unsaved work is lost.** The file is written only on a press, so a crashed tab loses the whole day's typing. Every other editor keeps a draft.
+**While you type, kspage keeps a copy of the unsaved text inside the browser, a *draft*, so a crash loses little.** The file is written only on a press, so without drafts a crashed tab loses the whole day's typing; every other editor keeps one. A draft is never written to the file, and the screen never calls it "saved".
 
 What happens to a draft, and when:
 
@@ -2761,9 +2677,7 @@ The pruning happens in one place, at start-up. Elsewhere, drafts would pile up w
 
 ### A document is replaced by another only when nothing would be lost
 
-Opening another document never throws away unsaved work. The unsaved text is set aside as a draft first, with no dialog asking, and the page says where it went.
-
-**When another document is opened over it, what a document has unsaved is set aside as a draft first**, and "Bring the draft back" lists it at once (`keepAside` in [`port/web/keep.js`](../port/web/keep.js)). Every way of replacing the document goes through it: "Open", a path, a link, a drop, the manual, "New" and a draft brought back (`settleIn` in [`port/web/file.js`](../port/web/file.js)).
+**Opening another document never throws away unsaved work: what the document has unsaved is set aside as a draft first, with no dialog asking**, and the page says where it went: "Bring the draft back" lists it at once (`keepAside` in [`port/web/keep.js`](../port/web/keep.js)). Every way of replacing the document goes through it: "Open", a path, a link, a drop, the manual, "New" and a draft brought back (`settleIn` in [`port/web/file.js`](../port/web/file.js)).
 
 Caution: **Do not silently discard unsaved work.** Writing lost to one keypress cannot be undone.
 
@@ -2795,11 +2709,7 @@ flowchart TD
 
 The other products do the same: Word names its zip `.docx`, not `.zip`.
 
-**`.json` stays readable.** Older documents are `.json`. Made unreadable, one would open as plain text, its tables, formulas and decorations collapsed into one paragraph, and saving would overwrite it in that shape.
-
-**This does not make two formats for writing.** One function writes (`port/web/file.js`'s `bodyExt`), and `kindOf` only reads files that already exist. This is the same reason a version is kept ([`share/store.kspls`](../share/store.kspls)'s version).
-
-**Write a document back in the form it was opened in.** Do not move a document opened from `.json` to `.kspage`, or two files would stand side by side with nothing to say which is newer (the same reason a Markdown export is a copy, not a second home: "A `.md` opens as plain text"). Whoever wants to move it can use "save as".
+**Only `.kspage` opens as a kspage document**; any other name opens as plain text (`port/web/file.js`'s `kindOf`). One function decides the extension written (`bodyExt`).
 
 ### The saved text is laid out to read well in a diff
 
@@ -2811,9 +2721,7 @@ The other products do the same: Word names its zip `.docx`, not `.zip`.
 
 ### Pointing at a document by URL and opening it
 
-A link such as `page.html?doc=notes.kspage` opens the page on that document; adding `&read=1` opens it read-only. This is how a README or an issue links to a document.
-
-**`?doc=<path>` starts with that document open, and `&read=1` makes it read-only.** A path typed into the field by hand cannot be passed on as one link.
+**A link such as `page.html?doc=notes.kspage` opens the page on that document, and adding `&read=1` opens it read-only.** This is how a README or an issue links to a document: a path typed into the field by hand cannot be passed on as one link.
 
 Caution: **Accept only a relative path on the same origin.** A scheme (`https:` / `data:`), a path starting with `//` and one climbing with `..` are refused. Accepted, one shared link could make this page read any location and show its contents.
 
@@ -2872,9 +2780,7 @@ One window shows one document. To see two documents, or two places in one, open 
 
 ### Editing together
 
-Kspage has no live co-editing. Two people, or two windows, cannot edit one document at the same time; work is merged afterwards by hand.
-
-**Two people do not edit one document at once, and two windows on one machine are not joined to edit it together either.**
+**Kspage has no live co-editing: two people do not edit one document at once, and two windows on one machine are not joined to edit it together either.** Work is merged afterwards by hand.
 
 **Why windows are not joined.** Simultaneous edits need an agreed order, and with no server only each window's own count can give one. That fails with a third window and across a network. So two windows in one browser are a different problem, not a small case of two people in two places. A join held as paths into the document's tree also breaks in ordinary use. Adding or deleting a row or a column, or applying a new style, cuts the paths, and those are the very operations a table needs.
 
@@ -3070,13 +2976,9 @@ Note: The check is [`tests/text_test.kspls`](../tests/text_test.kspls)'s "there 
 
 ### A source opens as plain text, and nothing more
 
-Kspage is not a code editor. Source code opens as plain text: no colouring, no symbol windows, no import graphs.
-
-**A program's source opens as any plain text does**: no colour, no window onto a symbol, no figure of the imports, and nothing built from a table into code. All four serve a place for writing code, which is not the aim ("What it is aimed at" above). Colouring by lexeme (by keyword, string, number and so on) needs a copy of each language's keywords that drifts silently from the compiler's. A window and a figure need the editor to read and cut source at every layout, rebuilding what the compiler holds. The editor beside the document already shows all of it.
+**Kspage is not a code editor: a program's source opens as any plain text does**, with no colour, no window onto a symbol, no figure of the imports, and nothing built from a table into code. All four serve a place for writing code, which is not the aim ("What it is aimed at" above). Colouring by lexeme (by keyword, string, number and so on) needs a copy of each language's keywords that drifts silently from the compiler's. A window and a figure need the editor to read and cut source at every layout, rebuilding what the compiler holds. The editor beside the document already shows all of it.
 
 **A link to a file is an ordinary link** (a relative path), which opens what the browser opens. The document points at the source by name, as every document here does ("Linking documents to source" in [`../../docs/SPEC-documents.md`](../../docs/SPEC-documents.md)), and `make test-docref` checks a Markdown document's pointers.
-
-**A text holding a window onto source is refused whole** (`Store_error.withdrawn` in [`share/store.kspls`](../share/store.kspls), which refuses a line joining two frames the same way): a block with an `aim`, or a style collecting `source` or `imports`. Opened without the window, the next save would drop what it held without a word. Raising the format version instead would lock out every document, not only the ones holding a window. The page says why it did not open, and that nothing in the file was lost.
 
 ## The local server reaches files, and nothing else
 
@@ -3140,14 +3042,12 @@ Caution: **A check on the page must not count on the document shown at startup, 
 
 | Folder | What it holds | How it keeps them apart |
 | :-- | :-- | :-- |
-| `kspage/tests/wasm/` | `make test-wasm`'s per-section code; `kspage/tests/wasm/shell.mjs` hands the entry points over, and `kspage/tests/wasm/material.mjs` assembles the documents | **Each section declares its own document** with `opens`, and the driver reads it before passing it on, so **a forgotten declaration fails the run** (a rule merely written down is not kept) |
+| `kspage/tests/wasm/` | `make test-wasm`'s per-section code; `kspage/tests/wasm/shell.mjs` hands the entry points over and assembles the documents | **Each section declares its own document** with `opens`, and the driver reads it before passing it on, so **a forgotten declaration fails the run** (a rule merely written down is not kept) |
 | `kspage/tests/browser/` | `make test-browser` and `make test-served`, run on the assembled page in a real browser; `kspage/tests/browser/probe.js` runs the sections in the order of `KSPAGE_PROBE` in [`Makefile`](../Makefile) | The sections share one page, and **those holding asynchrony overlap**, so the document cannot be swapped: they **search for the place to press and to peek** instead (`findBlock` / `findCell` in `kspage/tests/browser/probe.js`) |
 
 ### A cut-off test round says how far it got
 
-If the test browser hangs and has to be killed, the gate still reports the last step the page reached, because the page also prints every step to the console.
-
-**The page also writes every mark to `console`, and the gate reads them back from the browser's standard error when no DOM arrives.** The `file://` page dumps its DOM only at the end, so a browser killed before then would leave only "it did not reach the marker". With the marks, the last one read is how far the round got.
+**If the test browser hangs and has to be killed, the gate still reports the last step the page reached: the page also writes every mark to `console`, and the gate reads them back from the browser's standard error when no DOM arrives.** The `file://` page dumps its DOM only at the end, so a browser killed before then would leave only "it did not reach the marker". With the marks, the last one read is how far the round got.
 
 **The hang itself is Chrome's.** `--virtual-time-budget`'s own description says "virtual time does not advance while network fetches are pending". `--timeout` does not cover that wait, since it races only the page's load. So a fetch that never settles pins the clock and nothing is dumped. Killing from outside is the only way out.
 
@@ -3157,63 +3057,13 @@ If the test browser hangs and has to be killed, the gate still reports the last 
 
 ### A check starts when the page says it has stood up
 
-The browser checks begin only once the page itself says its start-up is done, however long that takes, and a start that fails is marked with its reason.
-
-**The page publishes one promise, `window.kspageReady`** ([`port/web/page.js`](../port/web/page.js)). It resolves once the core runs, the local server has been asked and the document the page comes up on is in. It rejects with the reason where the start failed, and the page then shows that reason in the status bar, so a person is not left before a blank page. Every waiter takes this promise, and none looks for `window.kspage` on a timer.
+**The browser checks begin only once the page itself says its start-up is done, through one promise, `window.kspageReady`** ([`port/web/page.js`](../port/web/page.js)), however long that takes. It resolves once the core runs, the local server has been asked and the document the page comes up on is in. It rejects with the reason where the start failed, and the page then shows that reason in the status bar, so a person is not left before a blank page. Every waiter takes this promise, and none looks for `window.kspage` on a timer.
 
 **A wait on a clock cannot be right here.** The `file://` round runs on Chrome's virtual clock (`--virtual-time-budget`), which jumps to the next timer whenever the page's thread has nothing to run. It does not see work done off that thread: compiling the wasm, IndexedDB, reading a `Blob`. On a busy machine, a cap of a few seconds on that clock runs out in a fraction of a real second while the wasm is still compiling, and the round fails as if the page were broken. With no timer at all it is worse: the clock jumps to the end of the budget and the DOM is dumped before the answer.
 
 **So a wait on such work keeps the page's thread fed** (`fed` in `kspage/tests/browser/probe.js`): one message after another, and the virtual clock stands still until the answer comes. Chrome holds that clock for pending network loads alone, so nothing else would. Real time is capped outside, by the gate's `timeout`, and a round cut there names the wait as its last line.
 
 **Every round starts late on purpose** (`kspage/tests/browser/late.js`). Before the page's start goes on, the wasm is compiled again off the page's thread a number of times. A wait counted on the clock then fails every round, not only on a busy machine.
-
-## The screen and its controls
-
-How to use the screen is the manual's to explain ([`content/manual.kspage`](../content/manual.kspage)). This chapter holds only what the page itself fixes that no chapter above says: where a control sits, what a key does, and the numbers the page holds.
-
-### Where the controls sit, and the keys
-
-* **The commands sit in six menus** (File, Style, Table, Insert, Share, Review), one open at a time. The frequent ones line up as icon shortcuts on the ribbon (`RIBBON` in `port/web/ribbon.js`). A shortcut presses the menu's own button, and so does its entry under `…`, so nothing is implemented twice.
-* **Opening by path is the path field under "File".** The note on the holder the cursor is in (a slide, a table, a picture) is under "Share" too. "Review" holds the comment, and the name a comment is written under. A table exports as `kspage.csv`. A slide is inserted from the template beside the button (one frame, a title and a body, a title and two columns). Each shape drawn brings one style named `figure-<the shape>`, and each chart one named `chart-<the way of gathering>`.
-* **The right-click menu on the body** carries a comment, a link and the style, and in a table cell the rows and columns.
-* **Typing in the find field shows the count found at once.** "Replace all" touches the whole document, so how many will change is in view before the press. 0 is shown too, since a blank could not tell "not counted" from 0. What is counted is places found; a formula's run is found but not replaced, so fewer may be replaced. Overlaps are not counted, and it counts again on every redraw (about a tenth of a layout).
-* **In the "Slides" tab a thumbnail is dragged to reorder**, placed by where it is dropped; moving it while dragging would shift it by however many it passed. A dotted frame shows where it will go, and it is one undo, since the order is the document's.
-
-**The keys while editing** (Command in place of Ctrl on a Mac):
-
-| Keys | What they do |
-| :-- | :-- |
-| Ctrl+S | saves |
-| Ctrl+Z | undoes |
-| Ctrl+Shift+Z or Ctrl+Y | redoes |
-| Ctrl+F | opens the find field (Esc folds it) |
-| Ctrl+K | opens the link field |
-| Ctrl+B / I / U | toggle bold, italic and underline, with the same rows as the menu's (`ACCENT_KEYS` in `port/web/keys.js` and `keys` in `port/web/form.js` are one list) |
-| A press with Ctrl (⌘) held | follows a link |
-| `Alt`+arrow | moves the chosen frame; with `Shift` it resizes it, and with `Ctrl` it moves 10px at a time |
-| Delete or Backspace | deletes a chosen shape (in a frame holding text, one character) |
-| Tab outside a table | not taken: focus moves to the next field, and no tab character goes in |
-
-**During a slideshow**:
-
-| Keys | What they do |
-| :-- | :-- |
-| → ↓ and Space | the next step or slide |
-| ← ↑ | the previous step or slide |
-| Esc | returns to editing (typing is shut off during the show) |
-| Holding `N` | shows the slide's note at the bottom |
-
-There is one screen, so nothing can be shown to the presenter alone, and an empty note shows no band (a black band alone looks like a mistake). In a document with no slides nothing happens.
-
-### The tools and the look
-
-**The tools stay put while the body scrolls.** The menus, fields and ribbon stay at the window's top (`#chrome`) and the body passes under them. So scrolling to follow the cursor stops at the tools' bottom edge (`app.headRoom`); otherwise the place being typed would hide behind the tools. The checks hold the two rows under a cap (`chromeCap` in [`../tests/browser/ribbon.js`](../tests/browser/ribbon.js)).
-
-**The cursor is a layer over the canvas**, so a blink repaints no document and shows on neither the page nor a thumbnail. The window scrolls to it only when it leaves the view. Scrolling every time would pull back, on every keystroke, a window moved to read. Right after a move, the cursor is always in view.
-
-**⚙ remembers** fitting the colours to the screen, whether the ribbon is folded, the shape last used and the document's name (`localStorage`). It also says the document's own settings (the body's width, the pages, the margins, the styles) are under "File" and saved with it. The page's look follows the screen's light or dark. The document's themes are `Standard`, `Indigo`, `Vermilion` and `Serif`, at the top of the "Style" menu, and those names are the core's ([`write/theme.kspls`](../write/theme.kspls)).
-
-**Only desktop Chromium can write a file back** (`showSaveFilePicker` / `showOpenFilePicker`). In Firefox, Safari and on a phone a copy is downloaded, and the page says so rather than switching silently. Retyping the document's name forgets where it writes back. That is "save as", and it has no button, since one thing is not done two ways.
 
 ## Accepted limits (what is decided not to change)
 
@@ -3238,7 +3088,7 @@ Every keystroke, and every cursor move, recomputes the position of everything in
 | **No document can make it too slow** | The heaviest document that can be opened takes about a third of the 16.7ms budget of one frame at 60 frames per second. What is hit first is **the size cap**, where the document is refused rather than the page crashing ("Where memory runs short it refuses rather than crashing" above) |
 | **No hotspot can be pulled out on its own** | (the breakdown above) so nothing but narrowing what is walked can speed it up |
 | **Narrowing it means changing the model's invariants** | It needs "from where it changed", and guessing that from the text's contents does not work (a length or a fingerprint misses `ab` → `ba`). A version number per block drops nothing, but it cannot be made complete with `Block` as it stands: its fields are all `pub`, and rewriting also happens outside `write/`. Nor is the part before the change safe. Where the table of contents, the footnote list, a chart or a reference from the body stands earlier, it has to be laid out whole again |
-| **Its way of failing is the worst of all** | A version number not raised "breaks quietly while staying fast", showing an old state. Putting it in first needs a check that relayout gives the same result as a whole layout ([`tests/relayout_test.kspls`](../tests/relayout_test.kspls)) |
+| **Its way of failing is the worst of all** | A version number not raised "breaks quietly while staying fast", showing an old state. Putting it in first needs a check that relayout gives the same result as a whole layout ([`tests/columns_test.kspls`](../tests/columns_test.kspls)) |
 
 **What a narrower reach would stand on is there already.** The layout is a row of boxes piled fresh onto the arena, not a tree rewritten in place. So nothing is marked, and forgetting to mark a change cannot break it, whereas other editors lay out again from what they mark as changed. A box comes from only four inputs:
 

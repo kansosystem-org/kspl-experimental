@@ -36,32 +36,27 @@ debug-file: $(STAGE1_EXE)
 	echo "# BUILT $$exe"
 
 # --- One package's worth of tests (`make debug-<name>`) ---
-DEBUG_PKGS := $(sort $(patsubst tests/debug/pkg/%.kspls,%,$(wildcard tests/debug/pkg/*.kspls)))
-
-# The $(error) keeps `tests/debug/pkg/` level with the packages holding `tests/all`: a forgotten
-# entry point would only say "no such target". A package with its own `Makefile` holds none.
-# Both notations are looked at: without the `.kspl` arm a braces package drops out unseen.
+# A package with its own `Makefile` runs its `make test` (below). `tools/` is the one folder of
+# tests with none, so its rule is written here; the $(error) catches a second such folder, which
+# would otherwise only say "no such target". Both notations are looked at.
 OWN_MAKE_PKGS := $(sort $(patsubst %/Makefile,%,$(wildcard */Makefile)))
-DEBUG_TESTED := $(filter-out $(OWN_MAKE_PKGS), \
-                  $(sort $(patsubst %/tests/all.kspls,%,$(wildcard */tests/all.kspls)) \
-                         $(patsubst %/tests/all.kspl,%,$(wildcard */tests/all.kspl))))
-ifneq ($(DEBUG_PKGS),$(DEBUG_TESTED))
-$(error the entry points in tests/debug/pkg/ and the packages holding test/all disagree: entry point only=$(filter-out $(DEBUG_TESTED),$(DEBUG_PKGS)) / no entry point=$(filter-out $(DEBUG_PKGS),$(DEBUG_TESTED)))
+NO_MAKE_TESTED := $(filter-out $(OWN_MAKE_PKGS), \
+                    $(sort $(patsubst %/tests/all.kspls,%,$(wildcard */tests/all.kspls)) \
+                           $(patsubst %/tests/all.kspl,%,$(wildcard */tests/all.kspl))))
+ifneq ($(NO_MAKE_TESTED),tools)
+$(error a folder holding tests/all has no Makefile: $(filter-out tools,$(NO_MAKE_TESTED)) (give it one, as ksdb/Makefile does))
 endif
 
 # Nobody reads this target's C, so it is not tidied: **`C_FMT=:`**, as an empty one would run the C.
 C_FMT_OFF := C_FMT=:
 
-# Caution: **Not `out/<package name>.exe`**: tools look names up in `out/` (kssrv would start the
-# tests as `out/ksplc.exe`, its language server) and fail with nothing said. Hence `debug_`.
-## Local-cycle|debug-*|Run only that package's tests (the name is the notation of `tests/debug/pkg/`)
-define debug_pkg_rule
-debug-$(1): $$(STAGE1_EXE)
-	@$$(MAKE) --no-print-directory debug-file SRC_KSPL=tests/debug/pkg/$(1).kspls \
-		OUT_STEM=debug_$(1) $$(C_FMT_OFF)
-	./$$(OUT_DIR)/debug_$(1).exe
-endef
-$(foreach p,$(DEBUG_PKGS),$(eval $(call debug_pkg_rule,$(p))))
+# Caution: **Not `out/tools.exe`**: tools look names up in `out/` and would start the wrong program
+# with nothing said. Hence `debug_`.
+## Local-cycle|debug-*|Run only that package's tests (`debug-tools` for `tools/`)
+debug-tools: $(STAGE1_EXE)
+	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tools/tests/main.kspls OUT_STEM=debug_tools \
+		$(C_FMT_OFF)
+	./$(OUT_DIR)/debug_tools.exe
 
 # --- kssrv and ksbind through the LLVM backend ---
 # **`make LLVM=1 debug` holds neither** (they run only as their own `make test`), so genllvm broken
@@ -70,15 +65,14 @@ $(foreach p,$(DEBUG_PKGS),$(eval $(call debug_pkg_rule,$(p))))
 # libraries, where elsewhere ksbind's own tests skip.
 ## Gates|test-llvm-pkgs|Build kssrv and ksbind's tests through the LLVM backend, and run kssrv's and ksbind's tests on them
 test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
-	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=kssrv/main.kspls OUT_STEM=kssrv_llvm \
-		$(C_FMT_OFF)
+	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=kssrv/main.kspls OUT_STEM=kssrv_llvm
 	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
 	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
 		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspls)" \
 		"$(abspath $(OUT_DIR))/kssrv_llvm.exe" \
 		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
 	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=ksbind/tests/main.kspls \
-		OUT_STEM=ksbind_llvm $(C_FMT_OFF)
+		OUT_STEM=ksbind_llvm
 	./$(OUT_DIR)/ksbind_llvm.exe
 
 .PHONY: test-llvm-pkgs
@@ -97,35 +91,20 @@ debug-$(1): $$(STAGE1_EXE) $$(SEED_EXE)
 endef
 $(foreach p,$(OWN_MAKE_PKGS),$(eval $(call own_make_rule,$(p))))
 
-.PHONY: $(addprefix debug-,$(DEBUG_PKGS) $(OWN_MAKE_PKGS))
+.PHONY: debug-tools $(addprefix debug-,$(OWN_MAKE_PKGS))
 
 # --- The test suites ---
-# **The compiler's copy runs apart from the others**: it rebuilds itself and runs its suites, the
-# longest copy by far, so CI can start it beside them (`test-extract` below is both).
-suite_extract-ksplc := suite/extract_ksplc_test.kspls
-suite_extract-rest := suite/extract_rest_test.kspls
-suite_vscode       := suite/vscode_test.kspls
-suite_docref       := suite/docref_test.kspls
-suite_conventions  := suite/conventions_test.kspls
-suite_docsnippet   := suite/docsnippet_test.kspls
-suite_textrip      := suite/textrip_test.kspls
-suite_lsp-tree     := suite/lsp_tree_test.kspls
-suite_pytools      := suite/pytools_test.kspls
-suite_c-warnings   := suite/c_warnings_test.kspls
-suite_pilot-copy   := suite/pilot_copy_test.kspls
-suite_recipe-bytes := suite/recipe_bytes_test.kspls
-suite_deps         := suite/deps_test.kspls
-suite_link-rules   := suite/link_rules_test.kspls
-suite_js-syntax    := suite/js_syntax_test.kspls
-suite_race         := suite/race_test.kspls
-suite_spec-claims  := suite/spec_claims_test.kspls
-suite_kspls-trip   := suite/kspls_trip_test.kspls
-suite_lint-gate    := suite/lint_gate_test.kspls
+# A suite's name is its file's stem with `-` for `_` (`suite/lsp_tree_test.kspls` is `lsp-tree`).
+suite_file = suite/$(subst -,_,$(1))_test.kspls
+suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
+  $(wildcard tests/suite/*_test.kspls))))
 
 # Caution: **Longest first, by CPU time** (not wall clock, a cold-cache round or Windows's 0.0x):
 # `make -j` starts them in this order, and a heavy one at the back runs alone; `make test-suites`
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
-# `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`).
+# `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`). **The compiler's copy
+# (`extract-ksplc`) runs apart from the other packages'**: it rebuilds itself and runs its suites,
+# the longest copy by far, so CI can start it beside them (`test-extract` below is both).
 SUITES := lsp-tree extract-ksplc extract-rest kspls-trip docref c-warnings docsnippet pilot-copy \
   conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate \
   $(PRIVATE_SUITES)
@@ -136,20 +115,14 @@ LINUX_SUITES := js-syntax race
 
 ALL_SUITES := $(SUITES) $(LINUX_SUITES)
 
-suite_declared := $(sort $(patsubst suite_%,%,$(filter suite_%,$(.VARIABLES))))
-suite_unlisted := $(filter-out $(ALL_SUITES),$(suite_declared))
+# A suite file in no list would never run, and nothing would say so.
+suite_unlisted := $(filter-out $(ALL_SUITES),$(suite_found))
 ifneq ($(suite_unlisted),)
-$(error there are suites listed in neither SUITES nor LINUX_SUITES: $(suite_unlisted))
+$(error there are suite files listed in neither SUITES nor LINUX_SUITES: $(suite_unlisted))
 endif
-suite_undeclared := $(filter-out $(suite_declared),$(ALL_SUITES))
-ifneq ($(suite_undeclared),)
-$(error there are names listed with no suite_<name>: $(suite_undeclared))
-endif
-# A file under tests/suite/ that no suite_<name> names would never run, and nothing would say so.
-suite_orphans := $(filter-out $(addprefix tests/,$(foreach s,$(suite_declared),$(suite_$(s)))), \
-  $(wildcard tests/suite/*_test.kspls))
-ifneq ($(suite_orphans),)
-$(error there are suite files no suite_<name> names: $(suite_orphans))
+suite_missing := $(filter-out $(suite_found),$(ALL_SUITES))
+ifneq ($(suite_missing),)
+$(error there are names listed with no tests/suite/<name>_test.kspls: $(suite_missing))
 endif
 
 suite_cmd = ./$(SEED_EXE) run tests/$(1)
@@ -163,7 +136,7 @@ suite_times = $(SUITE_LOG_DIR)/$(1).times
 define suite_rule
 test-$(1): $$(STAGE1_EXE) $$(SEED_EXE)
 	@KANSO_ROOT="$$(CURDIR)" KANSO_MAKE="$$(MAKE)" KANSO_SUITE="$(1)" \
-	  $$(call suite_cmd,$$(suite_$(1))); r=$$$$?; \
+	  $$(call suite_cmd,$$(call suite_file,$(1))); r=$$$$?; \
 	  times > $$(call suite_times,$(1)); exit $$$$r
 endef
 $(foreach s,$(ALL_SUITES),$(eval $(call suite_rule,$(s))))
@@ -363,11 +336,3 @@ test-docs: $(STAGE1_EXE)
 	@echo "RESULT: ALL PASS (the tour matches its program)"
 
 .PHONY: tour test-docs
-
-# --- The table of diagnostic codes in ksplc/docs/SPEC-tools.md ---
-# `make test-conventions` refuses a table that differs from the sections it lists.
-## Measure-and-inspect|code-table|Rewrite the table of diagnostic codes in `ksplc/docs/SPEC-tools.md` from the sections below it
-code-table: $(STAGE1_EXE)
-	./$(STAGE1_EXE) run tools/code_table.kspls
-
-.PHONY: code-table

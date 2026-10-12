@@ -7,7 +7,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/literal" as base_literal
 import "ksplc/fmt/kinds" as fmt_kinds
 import "ksplc/fmt/source" { skip_space_from }
-import "ksplc/fmt/space" { join_string_lines }
+import "ksplc/fmt/space" { Fmt_flags, calc_spacing_requirement, join_string_lines }
 import "std/chars" // the one-character checks and cuts
 import "std/str" { Str_builder } // and `equals`
 
@@ -56,6 +56,44 @@ impl Ast_node
             if child.contains_multiline_block()
                 return true
         return false
+
+    fn printed_width(r: Ast_node$@, src: U8[]): Sz //<
+        //< How wide the node is written on one line
+        //<
+        //< Its tokens are counted, with a space only where the printer puts one.
+        //< Caution: **Use it where a decision sits at the limit.** `calc_text_len` counts a space
+        //< between every two children: safe for "plainly too wide", but it moves a line that fits.
+        $last: = Str_builder.new()
+        defer last.free()
+        return r.add_printed_width(src, last@, 0)
+
+    priv fn add_printed_width(r: Ast_node$@, src: U8[], last: Str_builder$@, width: Sz): Sz //<
+        //< width with this node's tokens added; `last` holds the token written before them
+        kind: = r.kind_id
+        if kind == .k_empty || kind == .k_underscore
+            return width
+        is_string: = kind == .k_string_interp || kind == .k_string
+        if !is_string && r.children.len > 0
+            $acc: = width
+            for child in r.children
+                acc = child.add_printed_width(src, last, acc)
+            return acc
+        $text: = r.text.trim_spaces()
+        $w: = text.len
+        if is_string
+            text = "\"\""
+            w = r.get_string_width(src)
+        else if kind == .k_assign_op || (kind == .k_literal && r.text.equals("assign_op"))
+            text = "="
+            w = r.get_assign_op_len(src)
+        if w == 0
+            return width
+        flags: = Fmt_flags::{ .is_line_start = false, .wrap_indent = false,
+            .last_was_unary_minus = false, .force_next_nl = false, .last_was_no_space = false,
+            .in_type_expr = false, .last_was_postfix_mark = false }
+        space: Sz = 1 if calc_spacing_requirement(last.slice(), text, flags, false) else 0
+        last.clear().s(text)
+        return width + space + w
 
     fn get_string_span(r: Ast_node$@, src: U8[]): Sz //<
         //< How far the string or character literal the node opens runs in src

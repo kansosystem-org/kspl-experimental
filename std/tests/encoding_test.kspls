@@ -1,4 +1,4 @@
-//< Tests of the encodings: SHA-256 and HMAC, Base64, and reading and writing JSON
+//< Tests of the encodings: SHA-256, Base64, and reading and writing JSON
 import "std/base64"
 import "std/chars"
 import "std/json" + { Json_builder }
@@ -9,10 +9,10 @@ import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 import "std/verdict"
 
 // ==========================================
-// std/sha256: SHA-256 (one block and several) and HMAC-SHA256 against sha256sum / openssl values.
+// std/sha256: SHA-256 (one block and several) against sha256sum's values.
 // ==========================================
-fn test_sha256_hmac()
-    verdict.start("[Sha256] SHA-256 + HMAC-SHA256 test (agreement with known test vectors)...")
+fn test_sha256()
+    verdict.start("[Sha256] SHA-256 test (agreement with known test vectors)...")
 
     hex: U8[sha256.hex_len] = ::{}
 
@@ -55,44 +55,10 @@ fn test_sha256_hmac()
     pieces_ok: = (U8$[]::hex)
         .equals("bb0149e6eae4e21bb464612ea6c7afaf313baee0cb648230b0c68a81a2b91107")
     assert(pieces_ok, "SHA-256 fed in pieces must match the digest of one call")
-
-    d4: = sha256.hmac("key", "The quick brown fox jumps over the lazy dog")
-    sha256.write_hex(d4, U8$[]::hex)
-    hmac_ok: = (U8$[]::hex)
-        .equals("f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")
-    assert(hmac_ok, "HMAC-SHA256(\"key\", ...) must match openssl's independently computed digest")
-
-    // The comparison goes through hmac_verify (equals' early return leaks how many leading bytes
-    // agreed). Only the answer is tested here; the constant time is checked by eye.
-    msg: = "The quick brown fox jumps over the lazy dog"
-    good: = sha256.hmac("key", msg)
-    ok_same: = sha256.hmac_verify("key", msg, U8[]::good)
-    assert(ok_same, "hmac_verify must accept the MAC that hmac produced for the same key and data")
-    ok_wrong_key: = sha256.hmac_verify("kex", msg, U8[]::good)
-    assert(!ok_wrong_key, "hmac_verify must reject a MAC computed under a different key")
-    ok_wrong_data: = sha256.hmac_verify("key", "the quick brown fox", U8[]::good)
-    assert(!ok_wrong_data, "hmac_verify must reject a MAC computed over different data")
-
-    // Caution: Do not accept a MAC that agrees only in its first bytes; a MAC off in the first byte
-    // and one off in the last are both refused.
-    $tweaked: U8[32] = good
-    tweaked[31] = tweaked[31] ^ 0x01U8
-    ok_last_byte: = sha256.hmac_verify("key", msg, U8[]::tweaked)
-    assert(!ok_last_byte, "a MAC differing only in its last byte must be rejected")
-    tweaked[31] = tweaked[31] ^ 0x01U8
-    tweaked[0] = tweaked[0] ^ 0x80U8
-    ok_first_byte: = sha256.hmac_verify("key", msg, U8[]::tweaked)
-    assert(!ok_first_byte, "a MAC differing only in its first byte must be rejected")
-
-    // A different length may return early (it is no secret), but must not be accepted.
-    short_mac: = (U8[]::good).sub(0, 31)
-    ok_short: = sha256.hmac_verify("key", msg, short_mac)
-    assert(!ok_short, "a MAC that is not 32 bytes long must be rejected")
-
     verdict
-        .pass("Single- and multi-block SHA-256, one call or fed in pieces, and HMAC-SHA256 agree \
-            with the known values, and hmac_verify dropped a wrong key, wrong data, one byte off \
-            and a wrong length.")
+        .pass("Single- and multi-block SHA-256, one call or fed in pieces, agree with the known \
+            values.")
+
 // ==========================================
 // std/base64: the vectors of Wikipedia's base64 article, 1 and 2 bytes of padding, the round trip,
 // and the error on an invalid length.
@@ -105,8 +71,8 @@ priv fn check_base64_encode(input: U8[], expected: U8[])
 priv fn check_base64_roundtrip(input: U8[])
     enc: = base64.encode(input, null)
     defer dealloc(Void$@::enc.ptr)
-    dec: = base64.decode(enc, null) catch panic("base64.decode should succeed for freshly encoded \
-        data")
+    dec: = base64.decode(enc, null)
+        catch panic("base64.decode should succeed for freshly encoded data")
     defer dealloc(Void$@::dec.ptr)
     assert(dec.equals(input), "base64 round-trip must reproduce the original bytes")
 
@@ -346,7 +312,8 @@ fn test_json_numbers(arena: Arena$@)
     assert(nums.get_at(0).as_f64(-1.0) == 2.0, "json: as_f64 must accept an integer variant")
     assert(nums.get_at(1).as_f64(-1.0) == 2.5, "json: as_f64 must return the float value")
     assert(nums.get_at(0).as_int(-1) == 2, "json: as_int must still read integers")
-    wide: = json.parse("[4294967297, 3000000000, 2147483647, -2147483648]", arena) catch panic("json: an array of numbers must parse")
+    wide: = json.parse("[4294967297, 3000000000, 2147483647, -2147483648]", arena)
+        catch panic("json: an array of numbers must parse")
     past_i32: =
         wide.get_at(0).as_int(-1) == -1 && wide.get_at(1).as_int(-1) == -1
     assert(past_i32, "json: as_int gives the default for an integer past I32, not its low bytes")
@@ -375,8 +342,8 @@ fn test_json_string_escapes(arena: Arena$@) //<
     expect_str("{\"t\":\"\\n\\t\\\\\"}", "\n\t\\", arena)
 
     // `\b` and `\f` have no visible character, so they are checked as bytes.
-    ctrl: = json.parse("{\"t\":\"a\\bb\\fc\"}", arena) catch panic("json: the control-escape \
-        fixture must parse")
+    ctrl: = json.parse("{\"t\":\"a\\bb\\fc\"}", arena)
+        catch panic("json: the control-escape fixture must parse")
     cs: = ctrl.get("t").as_str()
     assert(cs.len == 5, "json: backspace and formfeed must each decode to one byte")
     assert(cs[1] == 0x08U8 && cs[3] == 0x0cU8,
@@ -504,8 +471,8 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
     verdict.start("[Json] a duplicated key test...")
     $out: = Str_builder.new()
     defer out.free()
-    dup: = json.parse("{\"a\":1,\"a\":2}", arena) catch panic("json: duplicate keys must still \
-        parse")
+    dup: = json.parse("{\"a\":1,\"a\":2}", arena)
+        catch panic("json: duplicate keys must still parse")
     assert(dup.get("a").as_int(-1) == 1, "json: a duplicated key must read as the first one")
     // The duplicate is kept, so a document passed on stays the same.
     assert(dumped(dup, out@).equals("{\"a\":1,\"a\":2}"), "json: dumping must keep both members")

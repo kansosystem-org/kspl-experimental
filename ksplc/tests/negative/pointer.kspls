@@ -1,0 +1,335 @@
+//< Pointers and permissions: `@`, read-only places and writes
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case addr_of_const_element
+//< `@` on a read-only element must not pass it where a mutable pointer is expected
+//<
+//< **The notation is right and only the permission drops**: handed straight to a `U8$@`, the
+//< expected type descends into `ro[0]`, and the `const_of(U8)` -> `U8` conversion, fit for a copy,
+//< must not retype the place. The type of `x@` is settled by `x` alone, or a ROM write is lost.
+// EXPECT: expected 'U8$@', but got 'U8@'
+// EXPECT: expected 'U8$[]', but got 'U8[]'
+
+const ro: U8[4] = ::{ 1, 2, 3, 4 }
+const lit: U8[] = "abc"
+
+priv fn writes_through(p: U8$@)
+  p$ = 9
+
+priv fn writes_elem(s: U8$[])
+  s[0] = 9
+
+fn main(): I32
+  writes_through(ro[0]@)
+  writes_elem(lit)
+  return 0
+// ==== case addr_of_immutable_binding
+//< Taking an immutable binding's address must not let an out parameter rewrite it
+//<
+//< Whether `x@` becomes a **mutable** pointer is settled by the binding, or the callee rewrites an
+//< immutable `x`. **A slice and a pointer are no exception**, though their type settles whether an
+//< element is writable through them. `p@` points at the variable `p` **itself**, not at its target.
+// EXPECT: expected 'Sz$@', but got 'Sz@'
+// EXPECT: expected 'U8[]$@', but got 'U8[]@'
+// EXPECT: expected 'Sz$@$@', but got 'Sz$@@'
+
+priv fn writes_out(p: Sz$@)
+  p$ = 9
+
+priv fn writes_slice(p: U8[]$@)
+  p$ = "overwritten"
+
+priv fn writes_ptr(p: Sz$@$@)
+  p$ = null
+
+fn main(): I32
+  n: Sz = 0 // an immutable binding
+  writes_out(n@)
+  s: U8[] = "kept" // an immutable binding. an axis apart from element mutability (`U8$[]`)
+  writes_slice(s@)
+  p: Sz$@ = null // an immutable binding. an axis apart from the target being mutable
+  writes_ptr(p@)
+  return I32::n
+// ==== case arc_assign_through_call
+//< An assignment into an ARC-managed place must release the value it overwrites
+//<
+//< With a call in the left-hand side's subexpression, the release's receiver cannot be made (the
+//< expression being a clone, the call would run twice). Omitting the release in silence leaks the
+//< original value, so the spelling is refused instead.
+// EXPECT: cannot assign to an ARC-managed location whose left side contains a call
+import "std/refcount" { Rc }
+
+priv struct Holder
+  rc: Rc<|I32|>
+
+fn main(): I32
+  $b: = Rc<|Holder|>.new(Holder::{ .rc = Rc<|I32|>.new(1) })
+  empty: Rc<|I32|>[1] = ::{}
+  b.get().rc = empty[0]
+  return 0
+// ==== case arc_protocol_not_callable
+//< ARC's retain/release are an internal protocol only the compiler calls; a user cannot
+//<
+//< Called by hand they double up with the inserted ones, and the automatic release writes into
+//< memory an explicit one freed (use-after-free). The conforming impl's methods are priv, so a
+//< direct call is refused (`case_trait_method_priv_upcast` in trait_shape.kspls covers an upcast).
+// EXPECT: cannot access symbol
+import "std/refcount" { Rc }
+
+fn main()
+  $a: = Rc<|I32|>.new(1)
+  a.retain()
+// ==== case mut_method_on_immut_array_elem
+//< A `Self$@` method is rejected on an element of an immutable fixed-length array
+//<
+//< Caution: **Pin the element-receiver road (`a[i].m()`) down separately.** With a scalar (`x.m()`)
+//< and a field (`s.f.m()`) rejected, the decision can still slip at the `[` step: reading
+//< `strip_ptr(x) != x` as "x is a pointer" skips the check whole for a `U8 immut` element.
+// EXPECT: cannot call a method that takes a writable receiver
+// EXPECT: cannot call a method that takes a writable receiver
+
+impl U8
+  fn bump_byte(r: Self$@)
+    r$ = 99
+
+struct Holder
+  buf: U8[4]
+
+fn main(): I32
+  arr: U8[4] = ::{ 1, 2, 3, 4 } // an immutable binding (no $)
+  arr[0].bump_byte()
+  h: Holder = ::{ .buf = ::{ 1, 2, 3, 4 } }
+  h.buf[0].bump_byte()
+  return I32::arr[0]
+// ==== case mut_method_on_struct_rvalue
+//< A `Self$@` method cannot be called directly on a call's result
+//<
+//< It rewrites its own memory, and a receiver's address is taken implicitly. Out of scope: `Self@`
+//< methods, which write no memory of their own (with `Self` a `U8$[]` too, as `make test-place`
+//< holds), and a chain returning a pointer (`b.s("x").c('!')`), which is handed over as it stands.
+// EXPECT: cannot call a method that writes its receiver
+// EXPECT: Bind it first
+priv struct Point
+  n: I32
+
+impl Point
+  fn new(n: I32): Point
+    return Point::{ .n = n }
+  fn set_n(r: Self$@, v: I32)
+    r.n = v
+
+fn main(): I32
+  Point.new(1).set_n(5)
+  return 0
+// ==== case mutable_slice_from_readonly
+//< A mutable slice must not be made from read-only memory
+//<
+//< The descriptor holds a mutable pointer, so a write makes the C rewrite `.rodata`: silent in
+//< KSPL, it falls at run time on a host and writes to ROM on freestanding. Only read-only memory
+//< is in scope: a cast to an immutable slice, or from a `$` binding's own memory, must pass.
+// EXPECT: cannot cast a 'const' declaration to the mutable slice type 'U8$[]'
+// EXPECT: cannot cast a string literal to the mutable slice type 'U8$[]'
+// EXPECT-NOT: cannot cast a 'const' declaration to the mutable slice type 'U8[]'
+import "std/io"
+
+const ro: U8[4] = ::{ 1U8, 2U8, 3U8, 4U8 }
+
+pub fn main(): I32
+  bad_const: = U8$[]::ro // this one stops
+  bad_literal: = U8$[]::"abc" // this one stops too
+  ok_immutable: = U8[]::ro // an immutable slice passes
+  $buf: U8[4] = ::{}
+  ok_owned: = U8$[]::buf // memory one holds oneself passes
+  io.out().s("\{bad_const.len\}\{bad_literal.len\}\{ok_immutable.len\}\{ok_owned.len\}\n")
+  return 0
+// ==== case pointer_forms
+//< One subject, with one function for each of its shapes
+//<
+//< The marks are every function's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: operator '+' cannot be applied to 'Sz' and 'I32@'
+// EXPECT: operator '-' cannot be applied to 'Sz' and 'I32@'
+// EXPECT: operator '+' cannot be applied to 'I32@' and 'I32@'
+// EXPECT: operator '*' cannot be applied to 'I32@' and 'I32'
+// EXPECT: operator '*=' cannot be applied to the pointer type 'I32@'
+// EXPECT: the step of '+=' on the pointer type 'I32@' must be an integer
+// EXPECT: cannot subtract 'U8@' from 'I32@'
+// EXPECT: point to the same type
+// EXPECT: cannot take the address of a call result, literal, or computed value
+// EXPECT: Bind it first
+// EXPECT: cannot take a pointer to a fixed-size array
+
+// The shapes it does not hold, among the arithmetic taking a pointer as an operand.
+// The three shapes that can be written are in "6.2 Pointer arithmetic and implicit
+// dereferencing" in `../../../docs/SPEC-language.md`.
+priv fn op(n: Sz): Sz
+  return n
+
+fn case_ptr_arith_bad_forms(): I32
+  a: I32[4] = ::{ 1, 2, 3, 4 }
+  $p: = a[0]@
+  q: = a[2]@
+  x1: Sz = op(1) + p
+  x2: Sz = op(1) - p
+  x3: Sz = Sz::(p + q)
+  x4: Sz = Sz::(p * 2)
+  p *= 2
+  p += q
+  return (I32)::(x1 + x2 + x3 + x4)
+
+// A subtraction between pointers whose target types differ.
+// **The answer being "how many elements", it cannot subtract unless the element size is settled
+// to one** ("6.2 Pointer arithmetic and implicit dereferencing" in
+// `../../../docs/SPEC-language.md`). Let it through without refusing and KSPL's diagnostics are
+// zero, with only the C compiler's `invalid operands to binary expression` coming out.
+fn case_ptr_diff_mismatched(): I32
+  a: I32 = 1
+  b: U8 = 2
+  d: = a@ - b@
+  return (I32)::d
+
+// Put `@` on an expression that is not a place (a function's return value) and the generated C
+// becomes `&a temporary`. Without refusing here, what reaches the user is a raw C compiler error
+// rather than KSPL's diagnostic.
+import "std/ds" { List }
+import "std/mem" { Arena }
+
+fn take(l: List<|U8[]|>$@): Sz
+  return l.len
+
+fn make(arena: Arena$@): List<|U8[]|>
+  return List<|U8[]|>.new(arena)
+
+fn case_addr_of_rvalue(): I32
+  a: = Arena.new(4096)
+  defer a.free()
+  return I32::take(make(a)@)
+
+// A pointer to a fixed-length array. It can be written as a type, but no expression making that
+// value exists (`a@` decays to a pointer to the first element, as in C). So as not to leave a
+// type that can be declared while only an assignment cannot, it is refused at the type-checking
+// step (docs/DESIGN.md Principle 5).
+fn case_pointer_to_fixed_array()
+  $a: I32[3] = ::{ 1, 2, 3 }
+  _p: I32[3]@ = a@
+
+fn main()
+  case_ptr_arith_bad_forms()
+  case_ptr_diff_mismatched()
+  case_addr_of_rvalue()
+  case_pointer_to_fixed_array()
+// ==== case readonly_write
+//< One subject, with one function for each of its shapes
+//<
+//< The marks are every function's marks gathered at the head. The same mark written N times
+//< must match N places.
+// EXPECT: cannot write through a read-only pointer
+// EXPECT: cannot write through a read-only pointer
+// EXPECT: cannot write through a read-only pointer
+// EXPECT: cannot write to an element of a read-only slice or array
+
+// The shape writing through a read-only pointer (`T@`) by way of a `$` (an explicit dereference).
+// It is a verification paired with const_ptr_field_write.kspls (by way of a `.`), confirming that
+// the `$` side's road is shut too (both are shapes that easily pass through).
+fn case_const_ptr_deref_write()
+  x: I32 = 1
+  p: I32@ = I32@::x@
+  p$ = 5
+
+// A derivation of the above (const_ptr_in_struct_field_write.kspls), for writing into a "field" at
+// the target. `s.p.n = v` holds two pointer crossings on its road (`s` and `s.p`), and the latter
+// is immutable.
+// Having seen the first crossing (`s` being a mutable pointer) it cut short at "a pointer was
+// crossed, so the binding's mutability is not asked about", and did not look at `s.p` midway
+// being immutable.
+struct Inner
+  n: I32
+
+struct S
+  p: Inner@
+
+fn write_through_field(s: S$@)
+  s.p.n = 1
+
+fn case_const_ptr_in_struct_field_member_write(): I32
+  $i: Inner = Inner::{ .n = 0 }
+  s: = S::{ .p = i@ }
+  s@.write_through_field()
+  return i.n
+
+// The shape taking an element out by an index (a read-only pointer `I32@`) and writing into its
+// target. The array itself and the element's slot are mutable (`I32@[2]`), but what the element
+// points at is immutable, so it is refused.
+// The regression: the same fail-open as const_ptr_nested_deref_write.kspls. write_target_type
+// returned unknown on a `[` (an index) too, so the check was given up and on the LLVM backend the
+// write held.
+$g: I32 = 1
+
+fn case_const_ptr_via_subscript_write()
+  $arr: I32@[2] = ::{ g@, g@ }
+  arr[0]$ = 99 // invalid: what the element points at is read-only
+
+// A write to an element of a read-only slice. Even with the bounds check passing, it can foul
+// read-only data such as a string literal directly and segfault, so it should be refused.
+fn case_const_slice_write()
+  s: U8[] = "hello"
+  s[0] = U8::'X'
+
+fn main()
+  case_const_ptr_deref_write()
+  case_const_ptr_in_struct_field_member_write()
+  case_const_ptr_via_subscript_write()
+  case_const_slice_write()
+// ==== case write_elem_through_const_ptr
+//< Elements must not be rewritable through a pointer to a read-only slice
+//<
+//< `p[0] = v` on a `p: U8[]@` auto-dereferences (`docs/SPEC-language.md` §6.2.1), so the elements'
+//< check must peel the pointer step off. A `U8$[]@` (an immutable pointer to a **mutable** slice)
+//< has writable elements: the descriptor's (ptr+len) mutability is a different step.
+// EXPECT: cannot write to an element of a read-only slice or array
+
+fn main(): I32
+  $buf: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  imm: U8[] = U8[]::{ .ptr = buf[0]@, .len = 4 }
+  p: U8[]@ = imm@ // both the elements and the descriptor are read-only
+  p[0] = 'Z'
+  return I32::buf[0]
+// ==== case write_elem_through_const_recv
+//< A method with a read-only receiver cannot write an element of an array field
+//<
+//< `U8[4]`'s step holds the elements' mutability, but **the road reaching it** crosses `r: Self@`,
+//< so the index goes through enforce_mutability. Without it the C backend rejects it only by the
+//< generated C's const (the diagnostic points at the artifact) and the LLVM backend writes 99.
+// EXPECT: cannot write through a read-only pointer
+
+struct Holder
+  buf: U8[4]
+
+impl Holder
+  fn ro_write(r: Self@): U8
+    r.buf[0] = 99
+    return r.buf[0]
+
+fn main(): I32
+  $h: Holder = ::{ .buf = ::{ 1, 2, 3, 4 } }
+  return I32::h.ro_write()
+// ==== case write_through_ptr_arith
+//< A write through pointer arithmetic on a read-only pointer is rejected
+//<
+//< `p + 1` keeps `p`'s pointer type, but a road check (write_target_type) walking only `.` / `$` /
+//< `[` returns unknown on a binary operation and gives up (fail-open). The gap hides because
+//< **handing it as an argument** (`wants_mut(p + 1)`) is refused while a direct write slips by.
+// EXPECT: cannot write through a read-only pointer
+// EXPECT: cannot write through a read-only pointer
+
+const ro: U8[4] = ::{ 1, 2, 3, 4 }
+
+// p: U8@ is the promise "I do not write to the target".
+priv fn breaks_promise(p: U8@)
+  (p + 1)$ = 9
+
+fn main(): I32
+  q: = ro@ // U8@
+  (q + 1)$ = 9
+  breaks_promise(ro@)
+  return I32::ro[1]

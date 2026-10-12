@@ -127,9 +127,9 @@ function kspageRibbon(ui) {
     // the way home after a jump.
     { name: "Move", items: [
       { id: "tool-back", mark: "←", label: "Back", tip: "To the position before moving",
-        run: async () => tell(await app.jumpBack(), "", "There is no further back") },
+        run: () => tell(app.jumpBack(), "", "There is no further back") },
       { id: "tool-ahead", mark: "→", label: "Forward", tip: "To the position before \"Back\" moved",
-        run: async () => tell(await app.jumpAhead(), "", "There is no further forward") },
+        run: () => tell(app.jumpAhead(), "", "There is no further forward") },
     ] },
   ];
   const ribbon = document.getElementById("ribbon");

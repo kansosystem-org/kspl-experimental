@@ -70,7 +70,7 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
     $b: Json_builder): json.Val
     t_off: = id_n.loc.offset if id_n != null else target.loc.offset
     t_len: = id_n.text.len if id_n != null else 1
-    r_val: = span_range(src_res, t_off, t_len, starts, b)
+    r_val: = b.range_in(src_res, t_off, t_len, starts)
 
     $safe_uri: = target.loc.file().with_forward_slashes()
     defer safe_uri.free()
@@ -91,12 +91,6 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
         .set("detail", b.str_val(file_name.slice())).set("uri", b.str_val(full_uri))
         .set("range", r_val).set("selectionRange", r_val).set("data", b.str_val(fqn_slice)).build()
 
-// The LSP range of `len` bytes from `off` in `src`.
-priv fn span_range(src: U8[], off: Sz, len: Sz, starts: List<|Sz|>$@, $b: Json_builder): json.Val
-    s_pos: = src.get_line_char(off, starts)
-    e_pos: = src.get_line_char(off + len, starts)
-    return b.range(s_pos.line, s_pos.character, e_pos.line, e_pos.character)
-
 priv fn build_call_hier_json(c: Sema_ctx$@, idx: Fqn_lookup_idx$@, entry: Call_hier_entry$@,
     is_incoming: Bool, style: base_locate.Uri_style, $b: Json_builder): json.Val
     target: = entry.caller_def if is_incoming else entry.callee_def
@@ -116,9 +110,8 @@ priv fn build_call_hier_json(c: Sema_ctx$@, idx: Fqn_lookup_idx$@, entry: Call_h
 
     $ranges_arr: = b.arr()
     for r_node in entry.ranges
-        range_obj: =
-            span_range(src_res, r_node.loc.offset, r_node.text.len, starts_res, b)
-        ranges_arr = ranges_arr.push(range_obj)
+        ranges_arr = ranges_arr
+            .push(b.range_in(src_res, r_node.loc.offset, r_node.text.len, starts_res))
 
     return b.obj().set("from" if is_incoming else "to", item)
         .set("fromRanges", ranges_arr.build()).build()

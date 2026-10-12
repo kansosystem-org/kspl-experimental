@@ -1,0 +1,147 @@
+//< A function's name used as a value: bound with no type, passed to a generic parameter, compared
+//<
+//< A non-generic function, a written specialization, a method named through its type (receiver
+//< first) and an anonymous function each name one function, and each use takes that function's
+//< type, on both backends.
+//< Caution: **Keep each paired with the case in `tests/negative/fn.kspls` its section names**,
+//< which holds what is refused.
+import "std/verdict"
+
+// ==========================================
+// A declaration with no type takes the function type of the function a name names. The variadic
+// function, the one name with no function type, is the case `fn_value_variadic_binding`.
+// ==========================================
+priv fn vb_twice(x: I32): I32
+    return x * 2
+
+priv fn vb_thrice(x: I32): I32
+    return x * 3
+
+priv fn vb_same<|T|>(x: T): T
+    return x
+
+priv struct Vb_box<|T|>
+    v: T
+
+impl<|T|> Vb_box<|T|>
+    fn get(r: Self@): T
+        return r.v
+
+priv typedef Vb_op = fn(x: I32): I32
+
+fn test_binding_takes_the_fn_type()
+    verdict.start("[fn-ptr] a declaration with no type takes a function's own type test...")
+    plain: = vb_twice
+    assert(plain(21) == 42, "a non-generic function's name gives its type")
+    spec: = vb_same<|I32|>
+    assert(spec(7) == 7, "a written specialization gives the instance's type")
+    b: = Vb_box<|I32|>::{ .v = 8 }
+    get: = Vb_box<|I32|>.get
+    assert(get(b@) == 8, "a method named through its type gives its type, the receiver first")
+    anon: = fn(x: I32): I32
+        return x + 1
+    assert(anon(1) == 2, "an anonymous function gives its written type")
+    $swap: = vb_twice
+    swap = vb_thrice
+    assert(swap(2) == 6, "the binding holds another function of the same type")
+    typed: Vb_op = plain
+    assert(typed == vb_twice && plain != spec, "it is the function type written out")
+    verdict.pass("")
+
+// ==========================================
+// A function's name passed to a generic parameter binds `F` of `fn pass<|F|>(f: F)` to its type.
+// Without it, `pass(gf<|U16|>)` was refused as giving no type. A bare generic name and a variadic
+// function are refused: the case `fn_name_to_generic_parameter`.
+// ==========================================
+priv fn gp_size<|T|>(_x: T): Sz
+    return 100 + sizeof(T)
+
+priv fn gp_pass<|F|>(f: F): F
+    return f
+
+priv fn gp_twice(x: I32): I32
+    return x * 2
+
+priv struct Gp_box<|T|>
+    v: T
+
+impl<|T|> Gp_box<|T|>
+    fn get(r: Self@): T
+        return r.v
+    fn pair<|U|>(_x: T, _y: U): Sz
+        return 300 + sizeof(T) * 10 + sizeof(U)
+
+fn test_name_to_generic_parameter()
+    verdict.start("[fn-ptr] a function's name passed to a generic parameter test...")
+    narrow: = gp_pass(gp_size<|U16|>)
+    wide: = gp_pass(gp_size<|I64|>)
+    assert(narrow(2) == 102, "the written specialization is the one passed")
+    assert(wide(2) == 108, "another type argument passes another specialization")
+    as_op: fn(x: U16): Sz = narrow
+    assert(as_op == gp_size<|U16|>, "the parameter's type is the specialization's function type")
+    plain: = gp_pass(gp_twice)
+    assert(plain(21) == 42, "a non-generic function passes its own type")
+    b: = Gp_box<|I32|>::{ .v = 8 }
+    get: = gp_pass(Gp_box<|I32|>.get)
+    assert(get(b@) == 8, "a method named through its type passes, its receiver first")
+    pair: = gp_pass(Gp_box<|I32|>.pair<|U8|>)
+    assert(pair(1, 2) == 341, "a generic method's specialization passes, both type arguments kept")
+    anon: = gp_pass(fn(x: I32): I32 {
+        return x + 1;
+    })
+    assert(anon(1) == 2, "an anonymous function passes its written type")
+    verdict.pass("")
+
+// ==========================================
+// A function's name compared with `==` or `!=` takes the other side's function type, either order.
+// Written on the left, the name was typed as its return type, and the LLVM IR compared an `i32`
+// with a function's address. Two names and every other operator are refused: the case
+// `fn_value_operators`.
+// ==========================================
+priv typedef Cmp_op = fn(x: I32): I32
+
+priv fn cmp_twice(x: I32): I32
+    return x * 2
+
+priv fn cmp_thrice(x: I32): I32
+    return x * 3
+
+priv fn cmp_same<|T|>(x: T): T
+    return x
+
+priv struct Cmp_box<|T|>
+    v: T
+
+impl<|T|> Cmp_box<|T|>
+    fn keep(x: T): T
+        return x
+
+priv struct Cmp_plain
+    v: I32
+
+impl Cmp_plain
+    fn cmp_twice(x: I32): I32
+        return x * 2
+
+priv fn cmp_pick_wide(): fn(x: I64): I64
+    return cmp_same<|I64|>
+
+priv fn cmp_pick_thrice(): Cmp_op
+    return cmp_thrice
+
+fn test_name_compared_either_side()
+    verdict.start("[fn-ptr] a function's name on either side of '==' test...")
+    f: Cmp_op = cmp_twice
+    assert(cmp_twice == f && f == cmp_twice, "a name compares in either order")
+    assert(cmp_thrice != f && f != cmp_thrice, "'!=' too")
+    g: Cmp_op = cmp_same<|I32|>
+    assert(cmp_same<|I32|> == g && cmp_same<|I64|> == cmp_pick_wide(),
+        "a specialization on the left")
+    keep: Cmp_op = Cmp_box<|I32|>.keep
+    assert(Cmp_box<|I32|>.keep == keep && Cmp_plain.cmp_twice != keep,
+        "a method named through its type")
+    k: = keep(1) == 1
+    assert((cmp_thrice if k else cmp_twice) == cmp_pick_thrice(), "a choice between two names")
+    n: Cmp_op = null
+    assert(n == null && null != f, "a null check is unchanged")
+    verdict.pass("")

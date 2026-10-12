@@ -1,4 +1,4 @@
-//< SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104), in pure KSPL
+//< SHA-256 (FIPS 180-4), in pure KSPL
 //<
 //< It uses only bit operations and no OS-dependent library. Input is fed in pieces through
 //< `update` and closed at the end, so a file larger than memory needs no buffer of its own.
@@ -159,55 +159,6 @@ pub fn hash(data: U8[]): U8[digest_size] //< the digest of all of `data`, in one
     $hasher: = Sha256.new()
     hasher.update(data)
     return hasher.finalize()
-
-pub fn hmac( //< RFC 2104's HMAC-SHA256
-    //<
-    //< A key longer than the block size (64 bytes) is hashed first, as RFC 2104 requires.
-    key: U8[], //< the shared secret, of any length
-    data: U8[], //< the message to sign
-): U8[digest_size] //< the 32-byte MAC, by value
-    $key_block: U8[block_size] = ::{}
-    if key.len > block_size
-        digest: = hash(key)
-        for i in Range.asc(digest_size)
-            key_block[i] = digest[i]
-    else
-        for i in Range.asc(key.len)
-            key_block[i] = key[i]
-
-    $ipad: U8[block_size] = ::{}
-    $opad: U8[block_size] = ::{}
-    for i in Range.asc(block_size)
-        ipad[i] = key_block[i] ^ 0x36U8
-        opad[i] = key_block[i] ^ 0x5cU8
-
-    $inner: = Sha256.new()
-    inner.update(U8$[]::ipad)
-    inner.update(data)
-    inner_digest: = inner.finalize()
-
-    $outer: = Sha256.new()
-    outer.update(U8$[]::opad)
-    outer.update(U8$[]::inner_digest)
-    return outer.finalize()
-
-pub fn hmac_verify( //< whether a MAC matches, in a time that does not reveal how much matched
-    //<
-    //< Caution: **Do not compare with `hmac(..).equals(mac)`.** equals returns at the first byte
-    //< that differs, so the time reveals how many leading bytes matched, and an attacker can forge
-    //< a MAC one byte at a time. This loop takes the same time whichever byte differs; a different
-    //< length may return early.
-    key: U8[], //< the shared secret
-    data: U8[], //< the message the MAC claims to cover
-    mac: U8[], //< the MAC received, which may come from anyone
-): Bool //< true when it matches; a wrong length returns false at once
-    if mac.len != digest_size
-        return false
-    expected: = hmac(key, data)
-    $diff: U8 = 0
-    for i in Range.asc(digest_size)
-        diff |= expected[i] ^ mac[i]
-    return diff == 0U8
 
 pub const hex_len: Sz = 64 //< the hex text is always this many characters.
     //<

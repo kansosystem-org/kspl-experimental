@@ -1,0 +1,163 @@
+//< Enums: the tag each variant holds, a variant written short, and `Option`'s sugar
+import "std/str" // `equals`
+import "std/verdict"
+
+// ==========================================
+// An enum's tags are the values written, whatever expression writes them.
+// Caution: Check the value itself — the two backends agreeing (tests/prog/equiv.kspls) passes when
+// both take the counter's value instead of the written one.
+// ==========================================
+priv const tag_five: I32 = 5
+
+priv enum Tagged
+    by_name = tag_five
+    by_cast = I32::7
+    by_char = 'A'
+    by_size = sizeof(I64)
+    by_sum = tag_five * 2 + 1
+    counted //< one past the last written tag
+
+priv enum Wide_tag: U32 //< a tag past I32, held in its base type
+    top = 0x80000000
+    next
+
+priv enum Long_tag: I64
+    big = 5000000000I64
+    after
+
+priv enum Byte_tag: U8 //< carried as one byte, as sema lays it out
+    lo = 1
+    hi = 255
+
+priv struct Byte_tags
+    priv a: Byte_tag
+    priv b: Byte_tag
+
+fn test_enum_tags_are_the_written_values()
+    verdict.start("[enum] each tag is the value its expression folds to test...")
+    assert(I32::Tagged.by_name == 5, "a constant's name as a tag")
+    assert(I32::Tagged.by_cast == 7, "a cast as a tag")
+    assert(I32::Tagged.by_char == 65, "a character as a tag")
+    assert(I32::Tagged.by_size == 8, "a sizeof as a tag")
+    assert(I32::Tagged.by_sum == 11, "arithmetic as a tag")
+    assert(I32::Tagged.counted == 12, "the counter goes on from the last written tag")
+    w: = Wide_tag.next
+    assert(U32::Wide_tag.top == 2147483648U32, "a U32 tag past I32's range")
+    assert(U32::w == 2147483649U32, "the counter after a U32 tag past I32's range")
+    assert(I64::Long_tag.big == 5000000000I64, "an I64 tag past 32 bits")
+    assert(I64::Long_tag.after == 5000000001I64, "the counter after an I64 tag")
+    assert(sizeof(Byte_tags) == 2, "a U8 enum is one byte in a struct")
+    switch w
+    case .top
+        assert(false, "a switch on a wide tag picks its own case")
+    case .next {}
+    verdict.pass("")
+
+// ==========================================
+// An enum's `.variant` written as an array literal's element takes the element's type. The element
+// expects the immutable form of its type (`Kind immut`), which names no enum, so the variant is
+// looked up past that mark and past an alias. Each shape is read back by value.
+// ==========================================
+priv enum Kind
+    small
+    big(n: I32)
+
+priv typedef Sort = Kind
+
+priv const fixed: Kind[2] = ::{ .big(7), .small }
+
+priv enum Size //< a plain enum, whose short variant in a const folds to its tag
+    tiny
+    large
+
+priv const sizes: Size[2] = ::{ .large, .tiny }
+
+impl Kind
+    priv fn size(r: Self): I32 //< the payload, or 0 for `small`
+        switch r
+        case .big(n)
+            return n
+        case .small
+            return 0
+
+fn test_variant_in_array()
+    verdict.start("[enum] a variant written short in an array literal test...")
+    $local: Kind[2] = ::{ .small, .big(3) }
+    typed: = Kind[2]::{ .big(4), .small }
+    slice: = Kind[]::{ .big(5) }
+    aliased: Sort[1] = ::{ .big(6) }
+    held: Kind?[2] = ::{ .some(.big(8)), .none }
+    local[0] = .big(1)
+    assert(local[0].size() == 1 && local[1].size() == 3, "a local's written type")
+    assert(typed[0].size() == 4 && typed[1].size() == 0, "the literal's own type")
+    assert(slice[0].size() == 5, "a slice literal")
+    assert(aliased[0].size() == 6, "an alias of the enum")
+    assert(fixed[0].size() == 7 && fixed[1].size() == 0, "a top-level const")
+    assert(sizes[0] == Size.large && sizes[1] == Size.tiny, "a plain enum's top-level const")
+    $inner: = 0
+    switch held[0]
+    case .some(k)
+        inner = k.size()
+    case .none {}
+    assert(inner == 8 && held[1].is_none(), "a payload inside an element")
+    verdict.pass("")
+
+// ==========================================
+// `T?` is `Option<|T|>`: the two spellings are one type
+// The marks apply from the left as `[]` and `@` do ("`T?` is sugar for `Option<|T|>`" in
+// `../../docs/DESIGN.md`).
+// ==========================================
+priv enum Lookup_error
+    bad
+
+priv fn first(xs: I32[]): I32?
+    if xs.len == 0
+        return .none
+    return .some(xs[0])
+
+priv fn same(x: I32?): I32? //< hands an optional back, to show what passes for `I32?`
+    return x
+
+priv fn find(n: I32): I32?!Lookup_error //< a result whose value may be absent
+    if n < 0
+        throw .bad
+    if n == 0
+        return .none
+    return .some(n)
+
+priv fn optional_result(n: I32): (I32!Lookup_error)? //< an optional result, in brackets
+    if n == 0
+        return .none
+    return .some(n)
+
+fn test_option_sugar()
+    verdict.start("[Option] `T?` written for `Option<|T|>` test...")
+    xs: = I32[]::{ 4, 5 }
+    $got: I32 = -1
+    if v: = same(first(xs))
+        got = v
+    assert(got == 4, "an optional the short form names passes")
+    held: = Option<|I32|>.some(5)
+    assert(same(held).unwrap_or(0) == 5, "a value the long form builds passes for `I32?`")
+    bytes: = U8?[]::{ .some(1), .none }
+    assert(bytes.len == 2, "`U8?[]` is a slice of optional bytes")
+    $words: U8[]? = .none
+    words = .some("hi")
+    $word: U8[] = ""
+    if w: = words
+        word = w
+    assert(word.equals("hi"), "`U8[]?` is an optional slice")
+    found: = find(3) catch
+        fallback .none
+    $n: I32 = 0
+    if f: = found
+        n = f
+    assert(n == 3, "`I32?!E` is a result whose value may be absent")
+    absent: = find(0) catch
+        fallback .some(9)
+    assert(!absent.is_some(), "an absent value is not a failure")
+    $r: I32 = 0
+    if res: = optional_result(2)
+        r = res catch -1
+    assert(r == 2, "`(I32!E)?` is an optional result")
+    verdict.pass("`T?` and `Option<|T|>` are one type, and the marks apply from the left.")

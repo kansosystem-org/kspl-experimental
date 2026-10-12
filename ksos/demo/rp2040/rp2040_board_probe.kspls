@@ -2,6 +2,18 @@
 //<
 //< It goes through the peripherals in turn and prints one line for each, so fixing one of them
 //< and breaking another shows on the same screen.
+import "ksos/boards/freenove_4wd_pico/board"
+import "ksos/demo/rp2040/board_probe/heap" as st_heap
+import "ksos/demo/rp2040/board_probe/matrix" as st_matrix
+import "ksos/demo/rp2040/board_probe/records" as st_records
+import "ksos/demo/rp2040/board_probe/sensor" as st_sensor
+import "ksos/demo/rp2040/common/bringup" as boot
+import "ksos/demo/rp2040/common/console" as con
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/rtc"
+import "ksos/drivers/rp2040/usb_cdc" as usb
+import "ksos/drivers/rp2040/ws2812"
+import "ksos/kernel/task" + { Task }
 
 // ==========================================
 // What is printed, in order:
@@ -14,17 +26,6 @@
 //   [i2c]  scan / frame   the bus scan and the LED matrix
 //   [led]  …              WS2812's colours
 // ==========================================
-import "ksos/demo/rp2040/board_probe/console" as st_console
-import "ksos/demo/rp2040/board_probe/heap" as st_heap
-import "ksos/demo/rp2040/board_probe/leds" as st_leds
-import "ksos/demo/rp2040/board_probe/matrix" as st_matrix
-import "ksos/demo/rp2040/board_probe/records" as st_records
-import "ksos/demo/rp2040/board_probe/rtc" as st_rtc
-import "ksos/demo/rp2040/board_probe/sensor" as st_sensor
-import "ksos/demo/rp2040/common/bringup" as boot
-import "ksos/demo/rp2040/common/console" as con
-import "ksos/drivers/rp2040/usb_cdc" as usb
-import "ksos/kernel/task" + { Task }
 
 $tcb: Task
 // The one task that calls the stages in order. The single-stage firmware managed with 2048, so
@@ -43,10 +44,10 @@ priv fn init_stages() //< sets up the stages
     //< **Call it after the clocks and before USB** (the ADC, I2C and the RTC need the clocks). A
     //< stage that did not start reports it on its own line, so the return values are not checked
     //< here.
-    _rtc: = st_rtc.init()
+    _rtc: = rtc_stage_init()
     _sensor: = st_sensor.init()
     _matrix: = st_matrix.init()
-    _leds: = st_leds.init()
+    _leds: = leds_stage_init()
 
 priv fn round_head(round: U32)
     if !usb.is_configured()
@@ -73,13 +74,13 @@ fn probe_task(_arg: Void$@): Void
     for
         round += 1
         round_head(round)
-        st_console.run()
-        st_rtc.run(ln@)
+        console_stage()
+        rtc_stage(ln@)
         st_heap.run(ln@, round)
         st_records.run(ln@)
         st_sensor.run(ln@)
         st_matrix.run(ln@)
-        st_leds.run(ln@)
+        leds_stage(ln@)
 
 // The on_idle for `task.run_single_task`: semihosting's exit is not available, so it does nothing.
 priv fn park() {}
@@ -87,3 +88,161 @@ priv fn park() {}
 #export
 fn ksos_main()
     task.run_single_task(tcb@, U8$[]::stack, probe_task, "board", park)
+
+// ==========================================
+// USB CDC's send queue (stage 2b in ksos/docs/HOWTO-bring-up.md). **Queue all three lines, then
+// send them**; the output **keeps flowing** as the sign of life.
+//   [1][3] … short lines that fit one packet; it checks that the order holds
+//   [2]    … a line over 64 bytes, sent split; reaching the `<END` at its end shows that the split
+//            and the PID alternation are right. Lines 2 and 3 are queued while line 1 is sent.
+// ==========================================
+const line_interval_ms: U32 = 500 //<
+    //< The interval between lines, and how many times they are sent
+    //<
+    //< Any faster and the Serial Monitor cannot be read.
+const repeats: U32 = 4
+
+fn console_stage()
+    for _i in Range.asc(Sz::repeats)
+        // write only queues; poll_once inside pump does the actual sending, one packet at a time.
+        // It returns false when the queue is full, but a dropped line is simply written again next
+        // round, so nothing is resent here (not flooding the queue comes first).
+        _a: = usb.write("ksos: [1] hello from RP2040 over USB CDC\r\n")
+        _b: = usb
+            .write("ksos: [2] \
+                START>0123456789012345678901234567890123456789012345678901234567890123456789<END\r\n")
+        _c: = usb.write("ksos: [3] hello from RP2040 over USB CDC\r\n")
+        boot.pump(line_interval_ms)
+
+// ==========================================
+// Checks whether the calendar RTC (ksos/drivers/rp2040/rtc) keeps ticking, from 2026-07-24
+// 12:00:00 (a Friday). **The check is that the reading differs from the previous round's**: one
+// reading matching the value set only reads SETUP back. A line looks like `[rtc] 2026-07-24
+// 12:00:21 dotw=5 active=1 ticking=yes`; `ticking=first` is the first round, and `ticking=NO`
+// the same reading as last round (stopped).
+// ==========================================
+priv $rtc_ready: Bool = false
+priv $have_last: Bool = false
+priv $last: rtc.Date_time
+
+fn rtc_stage_init(): Bool //< starts it
+    //<
+    //< Caution: Call it after `clocks.init()` (clk_rtc is supplied there).
+    initial: = rtc.Date_time::{ .year = 2026, .month = 7, .day = 24, .dotw = 5, .hour = 12,
+        .minute = 0, .second = 0 }
+    rtc.init(initial, clocks.rtc_hz - 1) catch
+        return false
+    rtc_ready = true
+    return true
+
+priv fn rtc_same(a: rtc.Date_time, b: rtc.Date_time): Bool
+    return a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour &&
+        a.minute == b.minute && a.second == b.second
+
+priv fn rtc_two(ln: con.Line$@, v: U32) //< appends v as two digits (`07`)
+    //<
+    //< It follows the convention for dates and times.
+    if v < 10
+        ln.byte('0')
+    ln.u32(v)
+
+fn rtc_stage(ln: con.Line$@)
+    ln.reset()
+    if !rtc_ready
+        ln.str("[rtc] not started (the block did not leave reset)")
+        _e: = ln.flush()
+        return
+    now: = rtc.read()
+    ln.str("[rtc] ")
+    ln.u32(now.year)
+    ln.byte('-')
+    rtc_two(ln, now.month)
+    ln.byte('-')
+    rtc_two(ln, now.day)
+    ln.byte(' ')
+    rtc_two(ln, now.hour)
+    ln.byte(':')
+    rtc_two(ln, now.minute)
+    ln.byte(':')
+    rtc_two(ln, now.second)
+    ln.str(" dotw=")
+    ln.u32(now.dotw)
+    ln.str(" active=")
+    ln.u32(1 if rtc.is_active() else 0)
+    ln.str(" ticking=")
+    if !have_last
+        ln.str("first")
+    else
+        ln.str("NO" if rtc_same(now, last) else "yes")
+    last = now
+    have_last = true
+    _s: = ln.flush()
+
+// ==========================================
+// WS2812 ×8 (stage 10 in ksos/docs/HOWTO-bring-up.md)
+// **The check is "does the colour seen by eye match the sequence".** In order: 1. all eight red →
+// green → blue … whether all three colours land on the right bits; 2. one white, the rest off,
+// walking … whether the boundary between LEDs (every 24 bits) is right
+// ==========================================
+// ==========================================
+//   3. all off … whether it returns to Low (the latch)
+// ==========================================
+
+const step_ms: U32 = 1000 //< how long one step is shown [ms]
+    //<
+    //< Make it long enough for the eye to follow (too fast and it ends at "I think it lit").
+
+priv $leds_ready: Bool = false
+$px: U32[board.ws2812_count] = ::{}
+
+fn leds_stage_init(): Bool //< starts it
+    //<
+    //< false means the data line's PWM could not be set up.
+    ws2812.init(board.ws2812_pin) catch
+        return false
+    leds_ready = true
+    return true
+
+priv fn leds_dim(r: Bool, g: Bool, b: Bool): U32 //< the colour to send
+    //<
+    //< **The brightness comes from the limit in board** (do not write 0xff here).
+    lv: = board.ws2812_level
+    $c: U32 = 0
+    if r
+        c |= lv << 16
+    if g
+        c |= lv << 8
+    if b
+        c |= lv
+    return c
+
+priv fn leds_fill(c: U32) //< sets all eight LEDs to the same colour
+    v: = U32$[]::px
+    for $i: Sz = 0; i < v.len; i += 1
+        v[i] = c
+
+priv fn leds_show(ln: con.Line$@, what: U8[], hold_ms: U32)
+    con.say(ln, "[led]", what)
+    _r: = ws2812.send(U32[]::px)
+    boot.pump(hold_ms)
+
+fn leds_stage(ln: con.Line$@)
+    if !leds_ready
+        con.say(ln, "[led]", "FAILED to set up pwm for the data line")
+        return
+    leds_fill(leds_dim(true, false, false))
+    leds_show(ln, "all red", step_ms)
+    leds_fill(leds_dim(false, true, false))
+    leds_show(ln, "all green", step_ms)
+    leds_fill(leds_dim(false, false, true))
+    leds_show(ln, "all blue", step_ms)
+
+    con.say(ln, "[led]", "one white, walking")
+    for $i: Sz = 0; i < px.len; i += 1
+        leds_fill(0)
+        px[i] = leds_dim(true, true, true)
+        _w: = ws2812.send(U32[]::px)
+        boot.pump(200)
+
+    leds_fill(0)
+    leds_show(ln, "all off", step_ms)

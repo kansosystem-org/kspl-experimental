@@ -3,9 +3,10 @@
 //< The default is immutable, so the marker goes on **the mutable version**: at a declared position
 //< (`struct Box<|$T|>`), `Box<|I32|>` points at an immutable value and `Box<|$I32|>` at a mutable
 //< one. **A marker written at an undeclared position is rejected**
-//< (`tests/negative/type_arg_mut_not_named.kspls`). **One level of weakening is allowed only at a
-//< declared position** (`Box<|$I32|>` → `Box<|I32|>`). The strengthening direction is rejected
-//< (`tests/negative/type_arg_weaken_wrong_way.kspls`).
+//< (the case `type_arg_mut_not_named` in `tests/negative/type.kspls`). **One level of weakening is
+//< allowed only at a declared position** (`Box<|$I32|>` → `Box<|I32|>`). The strengthening
+//< direction is rejected (the case `type_arg_weaken_wrong_way` in `tests/negative/type.kspls`).
+import "std/mem" { Arena }
 import "std/verdict"
 
 priv struct Box<|$T|>
@@ -45,7 +46,8 @@ fn test_type_arg_mut_mark()
             unmarked means immutable.")
 
 // A method usable on both instances. **The body is instantiated per instance**, so a write in it
-// is rejected for the immutable one (`tests/negative/type_arg_mut_method_body.kspls`).
+// is rejected for the immutable one (the case `type_arg_mut_method_body` in
+// `tests/negative/type.kspls`).
 impl<|T|> Box<|T|>
     fn read(r: Self): T
         return r.p$
@@ -90,7 +92,8 @@ fn test_readonly_instance_alone()
 
 // A method on only the mutable version: **write `$` on the target's type argument**
 // (`Box<|$T|>`). On `impl<|T|> Box<|T|>` a writing method fails in the immutable body. From the
-// immutable version it is "no such method" (`tests/negative/type_arg_mut_only_method.kspls`).
+// immutable version it is "no such method" (the case `type_arg_mut_only_method` in
+// `tests/negative/type.kspls`).
 impl<|T|> Box<|$T|>
     fn poke(r: Self, v: T)
         r.p$ = v
@@ -159,3 +162,129 @@ fn test_impl_on_one_instantiation()
     verdict
         .pass("with an impl's target a concrete type alone, the methods attach to that one instance \
             (and the side one step of weakening reaches).")
+
+// ==========================================
+// A method declaring **its own** type arguments, the only ones a call site may write. With `$` the
+// body writes the pointee, without it that is rejected (the reverse of the case
+// `type_arg_mut_not_named` in `tests/negative/type.kspls`).
+// Caution: **Do not confuse them with the enclosing `impl`'s**, which the receiver's type decides
+// (the case `method_type_args_from_impl` in `tests/negative/trait.kspls`).
+// ==========================================
+priv struct Holder
+    n: I32
+
+impl Holder
+    fn poke<|$T|>(_r: Self, p: T$@, v: T): T
+        p$ = v
+        return p$
+
+fn test_method_own_type_args()
+    verdict.start("[Generic] a method's own type arguments test...")
+    h: Holder = ::{ .n = 0 }
+    $slot: I32 = 0
+    got: = h.poke<|$I32|>(slot@, 42)
+    assert(got == 42,
+        "method type args: a type argument declared by the method is writable from the call \
+            position")
+    assert(slot == 42, "method type args: what an actual argument marked `$` points at is writable")
+    verdict
+        .pass("a type argument a method declared itself is writable from the call position, and the \
+            mutability mark takes effect there.")
+// ==========================================
+// A generic method called through its type, not a value: the type's type arguments go on the type
+// and the method's own after the method, or are inferred from the arguments, as through a value.
+// Without this, `Call_box<|U8|>.echo<|U16|>(w)` reached C naming no function (both groups read as
+// one), `Call_box<|I64|>.width(b)` silently took the type's `I64` for the method's own (8, not 1),
+// and `Call_plain.width(b)` and `Self.width(…)` said "undefined path".
+// ==========================================
+priv struct Call_box<|T|>
+    v: T
+
+impl<|T|> Call_box<|T|>
+    fn echo<|U|>(x: U): U
+        return x
+    fn width<|U|>(_x: U): Sz
+        return sizeof(U)
+    fn widths<|U|>(_r: Self@, _x: U): Sz //< T's width in tens, U's in ones
+        return sizeof(T) * 10 + sizeof(U)
+    fn own_width(): Sz
+        return Self.width<|U16|>(1) + Self.width(I64::1)
+
+priv struct Call_plain
+    v: I32
+
+impl Call_plain
+    fn width<|T|>(_x: T): Sz
+        return sizeof(T)
+    fn own_width(): Sz
+        return Self.width<|U16|>(1) + Self.width(I64::1)
+
+priv typedef Call_bytes = Call_box<|U8|>
+
+fn test_generic_method_called_through_type()
+    verdict.start("[Generic] a generic method called through its type test...")
+    w: U16 = 300
+    b: U8 = 200
+    assert(Call_box<|U8|>.echo<|U16|>(w) == 300,
+        "the type's type arguments and the method's own are both written")
+    assert(Call_box<|U8|>.echo(w) == 300,
+        "the method's own is inferred from the argument, not taken from the type's")
+    assert(Call_box<|I64|>.width(b) == 1 && Call_box<|I64|>.width(w) == 2,
+        "each argument's type names its own specialization")
+    c: = Call_box<|I64|>::{ .v = 1 }
+    assert(Call_box<|I64|>.widths(c@, b) == 81, "a method taking a receiver takes it first")
+    assert(Call_bytes.width(w) == 2 && Call_box<|I32|>.own_width() == 10,
+        "a typedef naming an instance, and 'Self' inside the impl, name the type")
+    assert(Call_plain.width(b) == 1 && Call_plain.width<|I64|>(1) == 8 &&
+        Call_plain.own_width() == 10, "a non-generic type's generic method is called the same way")
+    a: = Arena.new(4096)
+    defer a.free()
+    p: = Arena.create(a, w)
+    assert(p$ == 300, "another file's generic method is inferred through its type too")
+    verdict.pass("")
+
+// ==========================================
+// A method reached through an instance is the instance's, as through a value: of an `impl` of one
+// instance, through a typedef, `Self` in its signature. Without this, `Inst_box<|I64|>.made()`
+// read `<|I64|>` as the method's own, `fn made(): Self` returned a type named `Self`, and
+// `Inst_ints.get(i@)` or a `fn(r: Inst_ints@)` value stopped at lower's check or was refused: a
+// typedef is only another name, inside a pointer or a function type too.
+// ==========================================
+priv struct Inst_box<|T|>
+    v: T
+
+impl<|T|> Inst_box<|T|>
+    fn get(r: Self@): Sz
+        return sizeof(T) * 100 + Sz::r.v
+
+impl Inst_box<|I64|>
+    fn made(): Self
+        return Self::{ .v = 7 }
+    fn twice(x: Self): I64
+        return x.v * 2
+
+priv typedef Inst_ints = Inst_box<|I64|>
+
+priv struct Inst_plain
+    v: I32
+
+impl Inst_plain
+    fn get(r: Self@): I32
+        return r.v
+
+priv typedef Inst_alias = Inst_plain
+
+fn test_method_reached_through_instance()
+    verdict.start("[Generic] a method reached through an instance test...")
+    b: = Inst_box<|I64|>.made()
+    assert(b.v == 7 && Inst_box<|I64|>.twice(b) == 14,
+        "a method of an impl of one instance, called through it, 'Self' in its signature")
+    i: Inst_ints = ::{ .v = 3 }
+    assert(Inst_ints.get(i@) == 803 && Inst_box<|I64|>.get(i@) == 803,
+        "a typedef of the instance names its methods, the receiver through the typedef")
+    f: fn(r: Inst_ints@): Sz = Inst_box<|I64|>.get
+    assert(f(i@) == 803, "a function type naming the typedef is the instance's")
+    p: Inst_alias = ::{ .v = 5 }
+    g: fn(r: Inst_alias@): I32 = Inst_plain.get
+    assert(g(p@) == 5 && Inst_alias.get(p@) == 5, "so it is for a typedef of a plain type")
+    verdict.pass("")

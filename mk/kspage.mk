@@ -93,7 +93,7 @@ test-kspage-desktop: | $(OUT_DIR)
 		'Name=kspage' 'Comment=Open this file with kspage in a browser' \
 		"Exec=$$here/$(KSPAGE_OPEN_EXE) %f" \
 		"Path=$$here" 'Terminal=false' 'NoDisplay=true' \
-		'MimeType=application/x-kspage;text/plain;text/csv;application/json;' \
+		'MimeType=application/x-kspage;text/plain;text/csv;' \
 		> $(KSPAGE_DESKTOP)
 	@if command -v desktop-file-validate >/dev/null 2>&1; then \
 		desktop-file-validate $(KSPAGE_DESKTOP) || exit 1; \

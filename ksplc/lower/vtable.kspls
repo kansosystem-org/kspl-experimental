@@ -90,19 +90,13 @@ priv fn build_thunk_signature(c: Sema_ctx$@, req_m: Sema_symbol$@, perm_thunk_na
     p0: = Ast_node.build_synth_param("r", c.env.get_str(void_ptr_id), void_ptr_id, loc)
     params.add_child(p0)
 
-    req_params: = req_m.node.get_fn_params()
     p_nodes: = List<|Ast_node$@|>.create(base_core.arena)
-    if req_params != null
-        $param_idx: = 0
-        for rp in req_params.children
-            if rp.kind_id == .k_fn_param
-                if param_idx > 0
-                    params.add_child(Ast_node.new(.k_literal, ",", loc))
-                    p_node: = Ast_node.build_synth_param(rp.get_decl_id_text(),
-                        c.env.get_str(rp.type_id), rp.type_id, loc)
-                    params.add_child(p_node)
-                    p_nodes.push(p_node)
-                param_idx += 1
+    for rp in base_ast_ext.Param_cursor.new(req_m.node.get_fn_params(), true)
+        params.add_child(Ast_node.new(.k_literal, ",", loc))
+        p_node: = Ast_node.build_synth_param(rp.get_decl_id_text(),
+            c.env.get_str(rp.type_id), rp.type_id, loc)
+        params.add_child(p_node)
+        p_nodes.push(p_node)
     thunk_fn: = Ast_node.build_synth_fn(perm_thunk_name, params,
         c.env.get_str(req_m.type_id), req_m.type_id, loc)
     return Thunk_parts::{ .thunk_fn = thunk_fn, .p0 = p0, .p_nodes = p_nodes }
@@ -172,18 +166,13 @@ priv fn build_thunk_body(c: Sema_ctx$@, parts: Thunk_parts, target: Impl_target,
         final_arg0 = deref_node
     args.add_child(final_arg0)
 
-    req_params: = req_m.node.get_fn_params()
-    if req_params != null
-        $param_idx: = 0
-        for rp in req_params.children
-            if rp.kind_id == .k_fn_param
-                if param_idx > 0
-                    args.add_child(Ast_node.new(.k_literal, ",", loc))
-                    ref_p: = Ast_node.new(.k_identifier, rp.get_decl_id_text(), loc)
-                        .with_type(rp.type_id)
-                    ref_p.def_node = parts.p_nodes.get(param_idx - 1) // as for ref_r above
-                    args.add_child(ref_p)
-                param_idx += 1
+    $param_idx: Sz = 0
+    for rp in base_ast_ext.Param_cursor.new(req_m.node.get_fn_params(), true)
+        args.add_child(Ast_node.new(.k_literal, ",", loc))
+        ref_p: = Ast_node.new(.k_identifier, rp.get_decl_id_text(), loc).with_type(rp.type_id)
+        ref_p.def_node = parts.p_nodes.get(param_idx) // as for ref_r above
+        args.add_child(ref_p)
+        param_idx += 1
     call_node.add_child(args)
 
     is_void: = sema_type_env.is_void(req_m.type_id)

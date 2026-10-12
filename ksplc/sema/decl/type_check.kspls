@@ -195,14 +195,14 @@ impl Ast_node
                 c.err(d,
                     "a parameter whose type mentions a type parameter cannot have a default value")
 
-    fn lint_spelled_out_options(r: Ast_node$@, c: Sema_ctx$@) //<
-        //< [H0303] Reports each type under r that spells an optional out as `Option<|T|>`
+    fn check_spelled_out_sugar(r: Ast_node$@, c: Sema_ctx$@) //<
+        //< Refuses each type under r that spells a slice or an optional out (`Slice<|T|>`)
         //<
-        //< **Read once, from the tree as written**: an instance's copy holds its type arguments
-        //< substituted and would repeat the advice, and a generic never instantiated would get
-        //< none. An expression keeps the long form (`Option<|I32|>.none`), as `?` cannot stand
-        //< there, and so does an `impl`'s target, which names the generic itself. A declaration the
-        //< compiler made (`variant_name`) is no one's to rewrite.
+        //< **One spelling per type** (Principle 6 in docs/DESIGN.md): `T[]` / `T$[]` and `T?` stand
+        //< everywhere a type does, an `impl`'s target included. An expression keeps the long form
+        //< (`Option<|I32|>.none`), as no postfix can stand there. **Read from the tree as
+        //< written**, once: an instance's copy would repeat it. A declaration the compiler made is
+        //< skipped.
         if r == null || r.made_by_compiler()
             return
         if r.kind_id == .k_type_atom && r.children.len > 0
@@ -210,14 +210,18 @@ impl Ast_node
             if (path.kind_id == .k_expr_path || path.kind_id == .k_type_path) &&
                 !path.is_sugar_made()
                 w: = c.read_written_type(path)
-                if w.args != null && w.member == null && w.fqn.equals(base_core.option_fqn)
-                    c.hint(r,
-                        "[H0303] An optional is written with '?': 'T?' rather than 'Option<|T|>' (a \
-                            result or a function type is put in parentheses first: '(T!E)?').")
-        target: = r.get_decl_type_node() if r.kind_id == .k_decl_impl else null
+                if w.args != null && w.member == null
+                    if w.fqn.equals(base_core.option_fqn)
+                        c.err(r,
+                            "an optional type is written 'T?', not 'Option<|T|>' (a result or a \
+                                function type is put in parentheses first: '(T!E)?'); the long form \
+                                stands only in an expression, as in 'Option<|I32|>.none'")
+                    else if w.fqn.equals(base_core.slice_fqn)
+                        c.err(r,
+                            "a slice type is written 'T[]', or 'T$[]' for writable elements, not \
+                                'Slice<|T|>' / 'Slice<|$T|>'")
         for child in r.children
-            if child != target
-                child.lint_spelled_out_options(c)
+            child.check_spelled_out_sugar(c)
 
     priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|U8[]|>$@): Bool //<
         //< Whether the type's name names one of the type parameters currently in scope

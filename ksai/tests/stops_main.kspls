@@ -1,26 +1,24 @@
 //< ksai's checks that stop a program on purpose (`make test`)
 //<
 //< **A check that stops the program cannot run in the tests' own process**, since it would end
-//< it: each program under [`stops`](stops) runs as a child (`ksplc run`), and must exit non-zero,
-//< say why, and never reach the line after the stop. The stops the compiler inserts (a bounds
-//< check, a division by zero) are tested with the compiler; these are ksai's own.
-//< Usage: `ksplc run tests/stops_main.kspls <ksplc>`, from this folder.
+//< it: each stop in [`stops.kspls`](stops.kspls) runs as a child (`ksplc run`, the stop's name its
+//< argument), and must exit non-zero, say why, and never reach the line after the stop. The stops
+//< the compiler inserts (a bounds check, a division by zero) are tested with the compiler; these
+//< are ksai's own. Usage: `ksplc run tests/stops_main.kspls <ksplc>`, from this folder.
 import "std/chars"
 import "std/mem" { Arena }
 import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
-priv struct Stop //< one program, and the reason it must give for stopping
-    file: U8[]
+priv struct Stop //< one stop's name, and the reason it must give for stopping
+    name: U8[]
     says: U8[]
 
 priv const stops: Stop[3] = ::{
-    Stop::{ .file = "tests/stops/argmax_empty_logits.kspls",
-        .says = "argmax: logits' final dimension is 0" },
-    Stop::{ .file = "tests/stops/tensor_shape_product_overflow.kspls",
-        .says = "Tensor shape product overflow" },
-    Stop::{ .file = "tests/stops/updater_weight_count.kspls",
+    Stop::{ .name = "argmax-empty-logits", .says = "argmax: logits' final dimension is 0" },
+    Stop::{ .name = "tensor-shape-product-overflow", .says = "Tensor shape product overflow" },
+    Stop::{ .name = "updater-weight-count",
         .says = "a step handed over another number of weights" },
 }
 
@@ -34,10 +32,11 @@ fn main(): I32
     arena: = Arena.new(1024 * 1024)
     defer arena.free()
     for s in stops
-        r: = subproc.run_capture(U8[][]::{ args.get(1), "run", s.file }, "", 300000, 1 << 20, arena)
+        r: = subproc.run_capture(U8[][]::{ args.get(1), "run", "tests/stops.kspls", s.name }, "",
+            300000, 1 << 20, arena)
         out: = r.text(arena)
         stopped: = !r.spawn_failed && !r.timed_out && r.exit_code != 0
-        verdict.check(s.file,
+        verdict.check(s.name,
             stopped && out.find_str(s.says).is_some() &&
             out.find_str(past_the_stop).is_none(), out)
     return verdict.finish()

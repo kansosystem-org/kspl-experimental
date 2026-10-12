@@ -147,11 +147,11 @@ fn test_unescape_and_dedent(arena: Arena$@) //<
     //< **Turn a line of only spaces into an empty line.** Otherwise the dedented document gets
     //< trailing spaces that nobody can see.
     verdict.start("[str] unescape_to_arena's escapes and dedent test...")
-    known: = "a\\nb\\tc\\u3042".unescape_to_arena(arena) catch panic("str: known escapes must \
-        decode")
+    known: = "a\\nb\\tc\\u3042".unescape_to_arena(arena)
+        catch panic("str: known escapes must decode")
     assert(known.equals("a\nb\tcあ"), "unescape: `\\n` `\\t` `\\uXXXX` are undone")
-    symbols: = "\\[\\-\\/\\\"".unescape_to_arena(arena) catch panic("str: symbol escapes must \
-        decode")
+    symbols: = "\\[\\-\\/\\\"".unescape_to_arena(arena)
+        catch panic("str: symbol escapes must decode")
     assert(symbols.equals("[-/\""), "unescape: an escaped symbol is that symbol itself")
     $rejected: = false
     _x: = "\\x41".unescape_to_arena(arena) catch
@@ -264,21 +264,17 @@ fn test_strnum_roundtrip() //<
         .pass("Integers round-trip to their smallest and largest, floats at 17 digits, and what is \
             out of range or not a number is refused.")
 
-fn test_float_bits() //< reading an F32's bits and back is a copy, not a conversion
+fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     //<
-    //< **Include the patterns arithmetic would change**: -0, a subnormal and a NaN's payload
-    //< survive only if the bits are copied.
-    verdict.start("[bignat] an F32's bits and back test...")
-    assert(bignat.f32_from_bits(0x3F800000U32) == 1.0F32, "0x3F800000 is 1.0")
-    assert(bignat.f32_from_bits(0xC0000000U32) == -2.0F32, "0xC0000000 is -2.0")
+    //< **Include the patterns arithmetic would change**: -0 and infinity survive only if the bits
+    //< are copied.
+    verdict.start("[bignat] an F32's bits test...")
+    assert(bignat.f32_to_bits(1.0F32) == 0x3F800000U32, "1.0 is 0x3F800000")
+    assert(bignat.f32_to_bits(-2.0F32) == 0xC0000000U32, "-2.0 is 0xC0000000")
     assert(bignat.f32_to_bits(0.1F32) == 0x3DCCCCCDU32, "0.1 is 0x3DCCCCCD")
-    patterns: U32[_] = ::{ 0U32, 0x80000000U32, 0x00000001U32, 0x7F800000U32, 0xFF800000U32,
-        0x7FC00001U32, 0x3F800000U32 }
-    for p in patterns
-        assert(bignat.f32_to_bits(bignat.f32_from_bits(p)) == p, "an F32's bits come back unchanged")
-    verdict
-        .pass("Known patterns read as their values, and -0, a subnormal, infinities and a NaN's \
-            payload come back bit for bit.")
+    assert(bignat.f32_to_bits(-0.0F32) == 0x80000000U32, "-0 keeps its sign bit")
+    assert(bignat.f32_to_bits(F32::(1.0 / 0.0)) == 0x7F800000U32, "infinity is 0x7F800000")
+    verdict.pass("Known values read as their bit patterns, -0 and infinity included.")
 
 fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the result
     //<

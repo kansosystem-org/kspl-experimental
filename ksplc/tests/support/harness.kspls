@@ -197,11 +197,16 @@ pub fn tmp_dir(): U8[] //< this run's scratch directory
     //< `begin`'s is a fresh folder inside the place it was given; `begin_at`'s is the place itself.
     return scratch
 
-pub fn sandbox(name: U8[]): U8[]!fs.Fs_error //< a directory of its own for one case, made fresh
+pub fn sandbox(name: U8[]): U8[] //< a directory of its own for one case, made fresh
     //<
-    //< Nothing here removes it: whoever hands over the scratch place empties it (for `begin`, the
-    //< Makefile, before the next run).
-    return fs.mkdir_unique(scratch, suite_arena.text().s(name).c('_').take(), suite_arena)
+    //< **A suite that cannot make one stops** (`fatal`): the scratch place is broken, so every case
+    //< after it would fail for the same reason. Nothing here removes it: whoever hands over the
+    //< scratch place empties it (for `begin`, the Makefile, before the next run).
+    prefix: = suite_arena.text().s(name).c('_').take()
+    dir: = fs.mkdir_unique(scratch, prefix, suite_arena) catch
+        why: = suite_arena.text().s("cannot make a working directory in \{scratch\}").take()
+        sys.exit(fatal(why))
+    return dir
 
 // ==========================================
 // Starting a process: `std/verdict`'s runs, in the suite's arena

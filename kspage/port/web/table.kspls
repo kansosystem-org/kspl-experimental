@@ -1,7 +1,7 @@
 //< The entry points that move a table's cells
 //<
 //< Adding and removing rows and columns, merging and splitting cells, copying from the current
-//< cell onward, sorting rows, CSV import and export, and the memo on a container.
+//< cell onward, sorting rows, CSV import and export.
 //< Caution: **Call all of them after layout** — which cell the cursor is in is unknown until it is
 //< laid out.
 //< The boundary follows [`bridge.kspls`](bridge.kspls)'s rules ("The boundary between the core
@@ -10,7 +10,6 @@ import "kspage/lay/ask"
 import "kspage/model/doc" { Axis, Block }
 import "kspage/model/filter" + { Filter }
 import "kspage/port/web/state" + { doc_arena, ed, ensure, in_ptr, input, input_cap, page, sheet }
-import "kspage/write/block"
 import "kspage/write/cells"
 import "kspage/write/csv"
 import "kspage/write/edit" as _edit
@@ -122,21 +121,6 @@ fn kspage_web_insert_csv(text_len: Sz, name_len: Sz): I32
     name: = U8[]::{ .ptr = input@, .len = name_len }
     src: = U8[]::{ .ptr = in_ptr, .len = text_len }
     return 1 if ed.insert_csv(page, sheet, name, src) else 0
-// Writes the memo on the cursor's container and returns the length.
-#export
-fn kspage_web_aside(): Sz
-    ensure()
-    return state.say(ed.aside_at(page) if page != null else "")
-
-// Makes the `len` bytes in the typing arena the memo on the cursor's container. 1 if set.
-// **A memo does not appear in the flow** (only its writer sees it). Empty removes it.
-#export
-fn kspage_web_set_aside(len: Sz): I32
-    ensure()
-    if page == null || len < 0 || len > input_cap
-        return 0
-    return 1 if ed.set_aside(page, U8[]::{ .ptr = input@, .len = len }) else 0
-
 // ---- A column's width and a row's height ----
 
 priv fn room_of(spot: ask.Cell_at, axis: Axis): F32 //<

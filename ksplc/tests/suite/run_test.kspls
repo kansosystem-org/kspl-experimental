@@ -6,9 +6,7 @@
 //< one at a time. The cache directory is always the working directory.
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_build"
-import "ksplc/tests/support/run_cache"
 import "ksplc/tests/support/run_case"
-import "ksplc/tests/support/run_cc"
 import "ksplc/tests/support/run_progs"
 import "std/chars" // `find_str`
 import "std/ds" { List }
@@ -152,12 +150,12 @@ priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.
     first: = first_round(work, arena)
     if first.state != run_case.state_ok
         return first
-    before: = run_cache.obj_state(work, 0I64, arena)
+    before: = run_case.obj_state(work, 0I64, arena)
     if before.count == 0
         return run_case.failed("not one object has been made")
     if before.count == 1
         return run_case.skipped("it is not split (an environment with one core)")
-    tick: = run_cache.wait_for_mtime_tick(fs.join(work, "tick", arena), before.newest)
+    tick: = run_case.wait_for_mtime_tick(fs.join(work, "tick", arena), before.newest)
     if tick == 0I64
         return run_case.failed("the file's time does not advance")
     io.write_file(fs.join(work, "helper.kspl", arena), run_case.helper_src(42, arena)) catch
@@ -166,7 +164,7 @@ priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.
         "the change is not reflected", arena)
     if again.state != run_case.state_ok
         return again
-    after: = run_cache.obj_state(work, tick, arena)
+    after: = run_case.obj_state(work, tick, arena)
     if after.fresh > 1
         return run_case
             .failed(arena.text()
@@ -181,7 +179,7 @@ priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Result
         return run_case.failed("cannot place the material")
     s: = fs.join(work, "s.kspl", arena)
     run_case.run_script(s, arena)
-    first: = run_cache.obj_state(work, 0I64, arena).count
+    first: = run_case.obj_state(work, 0I64, arena).count
     for n in Range.new(2, 6, 1)
         io.write_file(fs.join(work, "helper.kspl", arena), run_case.helper_src(n, arena)) catch
             return run_case.failed("the import's target cannot be rewritten")
@@ -190,7 +188,7 @@ priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Result
             arena.text().s("round \{n\} failed").take(), arena)
         if r.state != run_case.state_ok
             return r
-    last: = run_cache.obj_state(work, 0I64, arena).count
+    last: = run_case.obj_state(work, 0I64, arena).count
     if last != first
         return run_case
             .failed(arena.text().s("the objects are growing: \{first\} -> \{last\}").take())
@@ -208,7 +206,7 @@ priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@)
         return first
     root: = run_case.run_root(work, arena)
     for i in Range.asc(max_run_slots + 5)
-        if !run_cache.place_fake_slot(root, i, used_at, arena)
+        if !run_case.place_fake_slot(root, i, used_at, arena)
             return run_case.failed("a false slot cannot be made")
     before$ = run_case.slots(work, arena).len
     io.write_file(fs.join(work, "other.kspl", arena), run_progs.script_src) catch
@@ -275,7 +273,7 @@ priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Result /
     for line in r.out.lines(arena)
         if line.trim_spaces().len > 0
             said = line.trim_spaces()
-    if !run_cache.same_place(said, cache, arena)
+    if !run_case.same_place(said, cache, arena)
         return run_case
             .failed(arena.text().s("it does not return the same place as \{cache\}\n\{r.out\}")
             .take())
@@ -295,15 +293,15 @@ priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Result /
     mine: = fs.join(cache, "mine.txt", arena)
     io.write_file(mine, "keep") catch
         return run_case.failed("the mark cannot be placed")
-    r: = harness.ksplc_bare(U8[][]::{ "clean", "cache" })
-    // Compared as a location rather than a path string here too (run_cache.same_place); a partial
+    r: = harness.ksplc_bare(U8[][]::{ "clean" })
+    // Compared as a location rather than a path string here too (run_case.same_place); a partial
     // match passes a rewritten path that contains the original.
     marker: = "cleared "
     $said: U8[] = ""
     for line in r.out.lines(arena)
         if at: = line.find_str(marker)
             said = line.sub_from(at + marker.len).trim_spaces()
-    if r.code != 0 || !run_cache.same_place(said, cache, arena)
+    if r.code != 0 || !run_case.same_place(said, cache, arena)
         return run_case
             .failed(arena.text().s("it does not report the place erased (\{said\})\n\{r.out\}")
             .take())
@@ -553,7 +551,7 @@ priv fn run_with_cc_probe(work: U8[], body: U8[], arena: Arena$@, before: U8[] =
     //< Caution: **Always restore CC** (or the cases after this are affected).
     //< **The record is written to a file**: ksplc captures `-dumpmachine`'s answer, so on standard
     //< output alone **that start is invisible** and looks like "not started".
-    probe: = run_cc.build_probe(work, arena)
+    probe: = run_case.build_probe(work, arena)
     if probe.len == 0
         return ""
     saved: = sys.get_env("CC").unwrap_or("")
@@ -590,7 +588,7 @@ priv fn case_cc_is_asked_once(work: U8[], arena: Arena$@): run_case.Result //<
     log: = run_with_cc_probe(work, run_progs.script_src, arena)
     if log.len == 0
         return run_case.failed("it cannot be run with the stand-in cc")
-    seen: = run_cc.read_log(log, arena)
+    seen: = run_case.read_log(log, arena)
     if seen.dumpmachine == 0
         return run_case.broke("the target's name was never asked (the stand-in is not taking \
             effect)", log, arena)
@@ -609,7 +607,7 @@ priv fn case_no_duplicate_objects(work: U8[], arena: Arena$@): run_case.Result /
     log: = run_with_cc_probe(work, run_progs.empty_src, arena)
     if log.len == 0
         return run_case.failed("it cannot be run with the stand-in cc")
-    seen: = run_cc.read_log(log, arena)
+    seen: = run_case.read_log(log, arena)
     if seen.objects == 0
         return run_case.broke("the objects handed to cc are not being read", log, arena)
     if seen.dup_objects > 0
@@ -626,7 +624,7 @@ priv fn case_cc_gets_relative_paths(work: U8[], arena: Arena$@): run_case.Result
     log: = run_with_cc_probe(work, run_progs.script_src, arena)
     if log.len == 0
         return run_case.failed("it cannot be run with the stand-in cc")
-    seen: = run_cc.read_log(log, arena)
+    seen: = run_case.read_log(log, arena)
     if seen.absolute.len > 0
         return run_case.broke(arena.text().s("an absolute path was handed to cc (")
             .s(seen.absolute).s(")").take(), log, arena)
@@ -647,7 +645,7 @@ priv fn case_named_library_is_linked(work: U8[], arena: Arena$@): run_case.Resul
     log: = run_with_cc_probe(work, run_progs.link_src, arena)
     if log.len == 0
         return run_case.failed("it cannot be run with the stand-in cc")
-    args: = run_cc.link_call(log, arena)
+    args: = run_case.link_call(log, arena)
     if args.len == 0
         return run_case.broke("no link was started", log, arena)
     $last_obj: Sz = 0
@@ -674,9 +672,9 @@ priv fn case_library_change_relinks(work: U8[], arena: Arena$@): run_case.Result
     log: = run_with_cc_probe(work, changed, arena, run_progs.link_src)
     if log.len == 0
         return run_case.failed("it cannot be run with the stand-in cc")
-    if run_cc.read_log(log, arena).c_files > 0
+    if run_case.read_log(log, arena).c_files > 0
         return run_case.broke("the second round compiled again, so it tells nothing", log, arena)
-    args: = run_cc.link_call(log, arena)
+    args: = run_case.link_call(log, arena)
     if args.len == 0
         return run_case.broke("changing the library alone did not link again", log, arena)
     for a in args

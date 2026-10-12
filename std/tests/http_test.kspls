@@ -1,6 +1,10 @@
 //< Tests of `std/url`'s percent-encoding, and of `std/http` reading and writing a message
 import "std/chars"
+import "std/fs"
 import "std/http"
+import "std/io"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
 import "std/mem" + { Arena, dealloc }
 import "std/net"
 import "std/str" { Str_builder }
@@ -19,20 +23,15 @@ fn test_url_codec()
     enc_ok: = enc.equals("hello%20world%2F%3F%23")
     assert(enc_ok, "encode must percent-escape reserved characters")
 
-    dec: = url.decode_component(enc, null) catch panic("decode of freshly encoded data should \
-        succeed")
+    dec: = url.decode_component(enc, null)
+        catch panic("decode of freshly encoded data should succeed")
     defer dealloc(Void$@::dec.ptr)
     assert(dec.equals("hello world/?#"), "decode must round-trip encode's output")
 
-    dec_plus: = url.decode_form("a+b", null) catch panic("decode_form should succeed for \
-        '+'-as-space input")
-    defer dealloc(Void$@::dec_plus.ptr)
-    plus_ok: = dec_plus.equals("a b")
-    assert(plus_ok, "'+' must decode to a space (application/x-www-form-urlencoded convention)")
-
     // In a path, "+" is just a "+" (a space written as "+" is a form convention); otherwise a file
     // whose name contains "+" cannot be reached.
-    path_plus: = url.decode_component("a+b%20c", null) catch panic("decode_component should succeed")
+    path_plus: = url.decode_component("a+b%20c", null)
+        catch panic("decode_component should succeed")
     defer dealloc(Void$@::path_plus.ptr)
     path_plus_ok: = path_plus.equals("a+b c")
     assert(path_plus_ok, "decode_component must leave '+' alone and still decode '%20'")
@@ -44,8 +43,8 @@ fn test_url_codec()
 
     arena: = Arena.new(4096)
     defer arena.free()
-    params: = url.parse_query("?a=1&b=hello%20world&c", arena) catch panic("parse_query should \
-        succeed for well-formed input")
+    params: = url.parse_query("?a=1&b=hello%20world&c", arena)
+        catch panic("parse_query should succeed for well-formed input")
     p0_ok: = params != null && params.name.equals("a") && params.value.equals("1")
     assert(p0_ok, "first param must be a=1")
     p1_ok: =
@@ -57,16 +56,20 @@ fn test_url_codec()
         params.next.next.value.equals("")
     assert(p2_ok, "value-less param must have an empty value")
     assert(params.next.next.next == null, "there must be exactly 3 params")
+    plus: = url.parse_query("a+b=c+d", arena)
+        catch panic("parse_query should succeed for '+'-as-space input")
+    plus_ok: = plus != null && plus.name.equals("a b") && plus.value.equals("c d")
+    assert(plus_ok, "'+' must decode to a space (application/x-www-form-urlencoded convention)")
 
     // The result is the same with or without a leading '?'.
-    bare: = url.parse_query("a=1&b=2", arena) catch panic("parse_query should accept a query string \
-        without the leading '?'")
+    bare: = url.parse_query("a=1&b=2", arena)
+        catch panic("parse_query should accept a query string without the leading '?'")
     bare_ok: = bare != null && bare.name.equals("a") && bare.value.equals("1")
     assert(bare_ok, "parse_query must not require the leading '?'")
     bare1_ok: = bare.next != null && bare.next.name.equals("b")
     assert(bare1_ok, "parse_query without '?' must keep splitting on '&'")
 
-    // **Do not leak while refusing a malformed query.** decode_form returns a heap buffer, so if
+    // **Do not leak while refusing a malformed query.** Decoding returns a heap buffer, so if
     // decoding the value fails after the name is decoded, the name's buffer is never freed. Anyone
     // outside can send malformed queries without limit (to a server's `?path=`, for example), so
     // one leak per request makes resident memory grow without end. That breaks "resident memory
@@ -92,8 +95,8 @@ fn test_http_parse_buffered()
 
     req: =
         http.parse_request("POST /echo?x=1 HTTP/1.1\r\nHost: example.com\r\nContent-Length: \
-            5\r\n\r\nhello", http.default_max_body_bytes, arena) catch panic("parse_request should \
-                succeed for a well-formed request")
+            5\r\n\r\nhello", http.default_max_body_bytes, arena)
+        catch panic("parse_request should succeed for a well-formed request")
     assert(req.method.equals("POST"), "method must be parsed correctly")
     assert(req.target.equals("/echo?x=1"), "target must include the raw query string")
     assert(req.version.equals("HTTP/1.1"), "version must be parsed correctly")
@@ -106,7 +109,8 @@ fn test_http_parse_buffered()
         panic("Host header should be found")
 
     resp: =
-        http.parse_response("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", arena) catch panic("parse_response should succeed for a well-formed response")
+        http.parse_response("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", arena)
+        catch panic("parse_response should succeed for a well-formed response")
     reason_ok: = resp.reason.equals("Not Found")
     assert(resp.status == 404 && reason_ok, "status/reason must be parsed correctly")
     assert(resp.body.len == 0, "body must be empty when Content-Length is 0")
@@ -138,20 +142,21 @@ fn test_http_parse_buffered()
 
     // consumed is "the number of bytes this message used", and what follows is the next message.
     two: = "GET /a HTTP/1.1\r\n\r\nGET /b HTTP/1.1\r\n\r\n"
-    first: = http.parse_request(two, http.default_max_body_bytes, arena) catch panic("the first of \
-        two pipelined requests must parse")
+    first: = http.parse_request(two, http.default_max_body_bytes, arena)
+        catch panic("the first of two pipelined requests must parse")
     assert(first.target.equals("/a"), "the first message must be the one parsed")
     assert(first.consumed == 19, "consumed must cover exactly the first message")
     second: =
-        http.parse_request(two.sub_from(first.consumed), http.default_max_body_bytes, arena) catch panic("the remainder after consumed must be the next request")
+        http.parse_request(two.sub_from(first.consumed), http.default_max_body_bytes, arena)
+        catch panic("the remainder after consumed must be the next request")
     assert(second.target.equals("/b"), "consumed must land on the start of the next message")
 
-    // format_response builds the same bytes as write_response, leaving the sending to the caller.
+    // format_response builds the whole message, leaving the sending to the caller.
     $out: = Str_builder.new()
     defer out.free()
     head: = http.headers(arena).add("Content-Type", "text/plain").build()
-    http.format_response(out@, 200, head, "hi") catch panic("format_response should succeed for \
-        well-formed arguments")
+    http.format_response(out@, 200, head, "hi")
+        catch panic("format_response should succeed for well-formed arguments")
     formatted_ok: = out.slice()
         .equals("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nhi")
     assert(formatted_ok,
@@ -281,8 +286,8 @@ fn test_http_write_length()
     // **1xx, 204 and 304 name no length** (RFC 9110 §8.6), and carry no body.
     no_content: = built(204, null, "", arena)
     assert(no_content.equals("HTTP/1.1 204 No Content\r\n\r\n"), "a 204 names no length")
-    back: = http.parse_response(no_content, arena) catch panic("the reader must read the 204 the \
-        builder wrote")
+    back: = http.parse_response(no_content, arena)
+        catch panic("the reader must read the 204 the builder wrote")
     assert(back.consumed == no_content.len, "the reader ends the 204 where the builder ended it")
     assert(build_error(204, null, "x", arena).equals("length_mismatch"),
         "a body on a 204 must be refused")
@@ -293,8 +298,8 @@ fn test_http_write_length()
     // **The answer to a HEAD names the length of a body it does not carry**, its own way in.
     $out: = Str_builder.new()
     defer out.free()
-    http.format_response_to_head(out@, 200, null, 10) catch panic("format_response_to_head should \
-        succeed for a 200")
+    http.format_response_to_head(out@, 200, null, 10)
+        catch panic("format_response_to_head should succeed for a 200")
     assert(out.slice().equals("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n"),
         "the answer to a HEAD names the length and carries no body")
     out.clear()
@@ -312,7 +317,8 @@ priv fn built(status: I32, head: http.Header$@, body: U8[], arena: Arena$@): U8[
     //< The bytes `format_response` builds, or a panic where it refuses
     $out: = Str_builder.new()
     defer out.free()
-    http.format_response(out@, status, head, body) catch panic("format_response should succeed here")
+    http.format_response(out@, status, head, body)
+        catch panic("format_response should succeed here")
     return arena.dup_str(out.slice())
 
 priv fn build_error(status: I32, head: http.Header$@, body: U8[], arena: Arena$@): U8[] //<
@@ -342,19 +348,19 @@ fn test_http_response_length()
     $streamed: = Str_builder.new()
     defer streamed.free()
     http.format_response_head(streamed@, 200,
-        http.headers(arena).add("Connection", "close").build()) catch panic("format_response_head \
-            should succeed with Connection: close")
+        http.headers(arena).add("Connection", "close").build())
+        catch panic("format_response_head should succeed with Connection: close")
     streamed.s("hello world")
     assert(response_error(streamed.slice(), arena).equals("unsupported_close_delimited"),
         "a response that may have a body but names no length must be refused")
 
     // A status that never has a body ends at the head, whatever the head says of a length.
-    none: = http.parse_response("HTTP/1.1 204 No Content\r\n\r\n", arena) catch panic("a 204 with \
-        no length must parse")
+    none: = http.parse_response("HTTP/1.1 204 No Content\r\n\r\n", arena)
+        catch panic("a 204 with no length must parse")
     assert(none.body.len == 0 && none.consumed == 27, "a 204 has no body")
     two: = "HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\n\r\nHTTP/1.1 200 OK\r\n"
-    not_mod: = http.parse_response(two, arena) catch panic("a 304 naming its representation's \
-        length must parse")
+    not_mod: = http.parse_response(two, arena)
+        catch panic("a 304 naming its representation's length must parse")
     assert(not_mod.body.len == 0 && not_mod.consumed == 48,
         "a 304's Content-Length names the representation, not a body that follows")
     verdict
@@ -381,33 +387,50 @@ fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     server_arena: = Arena.new(64 * 1024)
     defer server_arena.free()
     conn: = listener.accept() catch panic("accept should succeed once the client connects")
-    req: =
-        http.read_request(conn, server_arena, http.default_max_body_bytes, 60000) catch panic("server read_request should succeed")
+    // A server parses what has arrived so far, and reads more while the request is incomplete.
+    $got: = Str_builder.new()
+    defer got.free()
+    $req: http.Request$@ = null
+    for req == null
+        $chunk: U8[256] = ::{}
+        n: = conn.read(U8$[]::chunk) catch panic("server read should succeed")
+        assert(n > 0, "the client must not close before its request is whole")
+        got.s(U8[]::{ .ptr = chunk[0]@, .len = n })
+        req =
+            http.parse_request(got.slice(), http.default_max_body_bytes, server_arena) catch e
+            switch e
+            case .incomplete {}
+            default
+                panic("server parse_request should succeed once the request is whole")
+            fallback null
     req_ok: =
         req.method.equals("POST") && req.target.equals("/echo") && req.body.equals("ping")
     assert(req_ok, "server must parse the client's request correctly")
 
     resp_headers: = http.headers(server_arena).add("Content-Type", "text/plain").build()
-    http.write_response(conn, 200, resp_headers, "pong") catch panic("server write_response should \
-        succeed")
+    $out: = Str_builder.new()
+    defer out.free()
+    http.format_response(out@, 200, resp_headers, "pong")
+        catch panic("server format_response should succeed")
+    conn.write_all(out.slice()) catch panic("server write_all should succeed")
     conn.free()
     return null
 
 fn test_http_socket_roundtrip()
     verdict
-        .start("[Http] read_request/write_response/write_request/read_response test (real loopback \
-            traffic)...")
+        .start("[Http] parse_request/format_response/write_request/read_response test (real \
+            loopback traffic)...")
 
     arena: = Arena.new(64 * 1024)
     defer arena.free()
-    listener: = net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free \
-        port")
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
+        catch panic("bind should succeed on a free port")
     port: = listener.port() catch panic("a bound socket knows its port")
-    t: = thread.Thread.spawn<|net.Tcp_listener|>(http_echo_server, listener) catch panic("thread \
-        spawn failed")
+    t: = thread.Thread.spawn<|net.Tcp_listener|>(http_echo_server, listener)
+        catch panic("thread spawn failed")
 
-    client: = net.Tcp_stream.connect("127.0.0.1", port) catch panic("connect should succeed once \
-        the listener is bound")
+    client: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("connect should succeed once the listener is bound")
     // A tab splits the request line for a lenient server as a space does, so it is refused before
     // anything is written; the round trip below then shows the connection was left clean.
     for bad in U8[][]::{ "/a b", "/a\tb" }
@@ -428,11 +451,11 @@ fn test_http_socket_roundtrip()
         default {}
     assert(mismatch, "write_request must refuse a Content-Length that is not the body's")
     req_headers: = http.headers(arena).add("Host", "example.com").build()
-    http.write_request(client, "POST", "/echo", req_headers, "ping") catch panic("client \
-        write_request should succeed")
+    http.write_request(client, "POST", "/echo", req_headers, "ping")
+        catch panic("client write_request should succeed")
     resp: =
-        http.read_response(client, arena, http.default_max_body_bytes, 60000) catch panic("client \
-            read_response should succeed")
+        http.read_response(client, arena, http.default_max_body_bytes, 60000)
+        catch panic("client read_response should succeed")
     resp_ok: =
         resp.status == 200 && resp.reason.equals("OK") && resp.body.equals("pong")
     assert(resp_ok, "client must parse the server's response correctly")
@@ -446,3 +469,232 @@ fn test_http_socket_roundtrip()
     t.join_and_free()
     listener.free()
     verdict.pass("The HTTP request/response round trip over a real socket is confirmed.")
+
+// ==========================================
+// Tests of extracting a JSON-RPC frame from a stream and of building one (`std/jsonrpc`)
+// Caution: **Always include a case where a read's boundary and a frame's boundary differ**, or
+// the tests pass without ever extracting from a backlog. **Check that the next frame is still
+// readable after a broken header**; a broken header that is not discarded fails forever.
+// ==========================================
+priv fn taken_or(acc: Str_builder$@, arena: Arena$@): U8[]
+    got: = jsonrpc.take_frame(acc, jsonrpc.max_body_bytes, arena) catch
+        return "(broken)"
+    switch got
+    case .some(body)
+        return body
+    case .none
+        return "(none)"
+
+priv fn length_or(head: U8[]): Sz //< the length `head` declares under a limit of 100, or -1
+    return jsonrpc.content_length(head, 100).unwrap_or(-1)
+
+fn test_jsonrpc_take_frame()
+    verdict.start("[Jsonrpc] cutting a frame out test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    $acc: = Str_builder.new()
+    defer acc.free()
+
+    // With only the header in, no frame can be extracted.
+    acc.s("Content-Length: 5\r\n\r\n")
+    assert(taken_or(acc@, arena).equals("(none)"), "head only must not yield a frame")
+    // No frame can be extracted while the body is still short either.
+    acc.s("ab")
+    assert(taken_or(acc@, arena).equals("(none)"), "short body must not yield a frame")
+    // A frame is returned as soon as all of it is in.
+    acc.s("cde")
+    assert(taken_or(acc@, arena).equals("abcde"), "complete frame must be returned")
+    assert(taken_or(acc@, arena).equals("(none)"), "the frame must be consumed")
+
+    // One read brings two frames: the second must remain.
+    acc.s("Content-Length: 2\r\n\r\nhiContent-Length: 3\r\n\r\nbye")
+    assert(taken_or(acc@, arena).equals("hi"), "first of two frames")
+    assert(taken_or(acc@, arena).equals("bye"), "second of two frames")
+    assert(taken_or(acc@, arena).equals("(none)"), "both frames must be consumed")
+
+    // The length can be read even with other headers mixed in.
+    acc.s("Content-Type: application/json\r\nContent-Length: 2\r\n\r\nok")
+    assert(taken_or(acc@, arena).equals("ok"), "length must be found among other headers")
+    assert(length_or("Content-Length:  7\r\n") == 7, "spaces before the digits")
+    assert(length_or("Content-Type: x\r\n") == -1, "no length is none")
+    assert(length_or("Content-Type: x\r\ncontent-length: 3") == 3, "the name in any case")
+    assert(length_or("X-Content-Length: 3") == -1, "the name only at a line's start")
+    assert(length_or("Content-Length: 1x") == -1, "digits alone")
+    assert(length_or("Content-Length: 100") == 100, "the limit itself")
+    assert(length_or("Content-Length: 101") == -1, "past the limit")
+    verdict
+        .pass("A frame that crosses a read's boundary, and two frames from one read, are both cut \
+            out in order.")
+
+fn test_jsonrpc_broken_frame()
+    verdict.start("[Jsonrpc] a broken frame test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    $acc: = Str_builder.new()
+    defer acc.free()
+
+    // A header that gives no length is broken; the next frame must still be readable.
+    acc.s("Content-Type: application/json\r\n\r\nContent-Length: 4\r\n\r\nnext")
+    assert(taken_or(acc@, arena).equals("(broken)"), "a head without a length is broken")
+    assert(taken_or(acc@, arena).equals("next"), "the next frame must still be readable")
+
+    // A length above the cap is broken.
+    $huge: = Str_builder.new()
+    defer huge.free()
+    huge.s("Content-Length: \{jsonrpc.max_body_bytes + 1\}\r\n\r\n")
+    acc.s(huge.slice())
+    assert(taken_or(acc@, arena).equals("(broken)"), "a length above the cap is broken")
+
+    // **A head that never ends is broken too**, and dropped: kept, it grew for good.
+    acc.len = 0
+    for _i in Range.asc(jsonrpc.max_head_bytes / 8 + 1)
+        acc.s("X: aaaa ")
+    assert(taken_or(acc@, arena).equals("(broken)"), "a head past its cap without an end is broken")
+    assert(acc.len == 0, "the head past its cap is dropped")
+    acc.s("Content-Length: 2\r\n\r\nok")
+    assert(taken_or(acc@, arena).equals("ok"), "the next frame must still be readable")
+
+    // **The reader's own limit decides**: a body past the default, under a reader's larger limit,
+    // is taken whole, and the frame after it is read where it starts.
+    $wide: = Str_builder.new()
+    defer wide.free()
+    wide.s("Content-Length: 150\r\n\r\n")
+    for _i in Range.asc(150)
+        wide.c('x')
+    wide.s("Content-Length: 4\r\n\r\nnext")
+    big: = jsonrpc.take_frame(wide@, 200, arena)
+        catch panic("a body under the reader's limit is read")
+    assert(big.unwrap_or("").len == 150, "the body is taken whole")
+    after: = jsonrpc.take_frame(wide@, 200, arena) catch panic("the frame after it is read")
+    assert(after.unwrap_or("").equals("next"), "the frame after it starts where it should")
+    verdict
+        .pass("A head that names no length, a length above the cap and a head that never ends come \
+            back as broken, and reading carries on after; a reader's own limit is the one kept.")
+
+fn test_jsonrpc_encode()
+    verdict.start("[Jsonrpc] building a body test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    $b: = Json_builder.new(arena)
+    params: = b.obj().set("n", b.int_val(7I64)).build()
+
+    // With an id (a request).
+    req: = jsonrpc.encode("ping", params, 3, arena)
+    assert(req.find_str("\"id\":3").is_some(), "a request must carry its id")
+    assert(req.find_str("\"jsonrpc\":\"2.0\"").is_some(), "the version must be named")
+    assert(req.find_str("\"method\":\"ping\"").is_some(), "the method must be named")
+
+    // Without an id (a notification). A negative id means "do not write one".
+    note: = jsonrpc.encode("ping", params, -1, arena)
+    assert(note.find_str("\"id\"").is_none(), "a notification must not carry an id")
+
+    // A built frame can be extracted again (the round trip).
+    $out: = Str_builder.new()
+    defer out.free()
+    jsonrpc.frame_into(out@, req)
+    body: = jsonrpc.take_frame(out@, jsonrpc.max_body_bytes, arena)
+        catch panic("a freshly framed body must be takeable")
+    switch body
+    case .some(text)
+        doc: = json.parse(text, arena) catch panic("the framed body must parse as JSON")
+        assert(doc.get("id").as_int(-1) == 3, "the id must survive the round trip")
+        assert(doc.get("params").get("n").as_int(0) == 7, "the params must survive the round trip")
+    case .none
+        panic("a complete frame must be returned")
+    verdict
+        .pass("A notification and a round trip are written apart by whether there is an id, and a \
+            body goes into a frame and back.")
+
+priv const flood_lines: Sz = 3000 //< how many lines the peer writes
+    //<
+    //< Multiplied by one line's length, it decides how far past the pipe's buffer the output goes.
+
+priv const flood_line: U8[] = //< the line the peer writes
+    "flooding stderr so the pipe buffer fills while the reader waits on stdout\n"
+
+fn test_jsonrpc_stderr_flood(ksplc: U8[]) //<
+    //< Checks that a round trip works while the peer writes a lot to standard error
+    //<
+    //< ksplc is the peer (`run_std` passes it). **This is the only gate for `drain_err`.**
+    //< Caution: **Make sure the output exceeds the pipe's buffer (64KB on Linux)**, or the peer
+    //< never stalls and draining is never tested (ksplc's diagnostics stop at the first one).
+    verdict.start("[Jsonrpc] a round trip with a peer that floods standard error test...")
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    dir: = "out/tmp/kspl_test_debug_jsonrpc"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    src: = "out/tmp/kspl_test_debug_jsonrpc/flood.kspl"
+    script: = arena.text().s("import \"std/io\";\n\nfn main(): I32 {\n")
+        .s("  for _k in Range.asc(\{flood_lines\}) {\n    io.err().s(\"")
+        .s(flood_line.trim_end()).s("\\n\");\n  }\n  return 0;\n}\n").take()
+    io.write_file(src, script) catch panic("the flooding script must be writable")
+    assert(flood_lines * flood_line.len > 64 * 1024,
+        "the flood must exceed the pipe buffer, or the child never stalls")
+
+    $c: = jsonrpc.spawn(U8[][]::{ ksplc, "run", src }, "") catch
+        panic("the flooding child must start")
+    defer c.free()
+    // No frame comes. **The test checks that it ends with "closed"**; without draining, the peer
+    // stalls on standard error and the timeout expires.
+    _frame: = c.read_msg(60000, arena) catch e
+        switch e
+        case .closed
+            kept: = c.err_tail().len
+            assert(kept > 0, "the child's output on stderr must be kept")
+            // Caution: **Check what is held, not only what is handed out**: the flood is far longer
+            // than the tail, and holding all of it grows with the server's run.
+            assert(c.err.len == kept && kept < flood_lines * flood_line.len,
+                "only the tail of stderr is held")
+            verdict
+                .pass("A side writing more to standard error than the buffer holds still runs to \
+                    the end, and what it had to say is kept.")
+            return
+        case .timed_out
+            panic("the child stalled: stderr was not drained while waiting on stdout")
+        case .broken
+            panic("the child's output could not be read")
+    panic("a non-JSON-RPC child must not yield a frame")
+
+priv const notes_before_answer: Sz = 100 //<
+    //< How many notifications the peer sends before the answer
+    //<
+    //< **It stands for "one per open document"**, which a language server sends on reanalysis. The
+    //< point is that no count breaks it.
+
+fn test_jsonrpc_notification_burst(ksplc: U8[]) //<
+    //< Checks that a request still finds its answer behind a long run of notifications
+    //<
+    //< ksplc is the peer (`run_std` passes it).
+    //< **This is the gate for `request` being bounded by time, not count.** A limit on how many
+    //< are skipped breaks at "however many documents happen to be open", with no source change.
+    verdict.start("[Jsonrpc] a request behind a run of notifications test...")
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    dir: = "out/tmp/kspl_test_debug_jsonrpc"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    src: = "out/tmp/kspl_test_debug_jsonrpc/burst.kspl"
+    script: = arena.text()
+        .s("import \"std/io\";\nimport \"std/jsonrpc\";\nimport \"std/str\" { Str_builder };\n\n")
+        .s("priv fn put_frame(body: U8[]) {\n  $f: = Str_builder.new();\n  defer f.free();\n")
+        .s("  jsonrpc.frame_into(f@, body);\n  io.out().s(f.slice());\n}\n\n")
+        .s("fn main(): I32 {\n  for _k in Range.asc(\{notes_before_answer\}) {\n")
+        .s("    put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"note\\\"}\");\n  }\n")
+        .s("  \
+            put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"result\\\":{\\\"ok\\\":1}}\");\n")
+        .s("  _f: = io.out().flush();\n  return 0;\n}\n").take()
+    io.write_file(src, script) catch panic("the burst script must be writable")
+
+    $c: = jsonrpc.spawn(U8[][]::{ ksplc, "run", src }, "") catch
+        panic("the burst child must start")
+    defer c.free()
+    $b: = Json_builder.new(arena)
+    got: = c.request("probe", b.obj().build(), 60000, arena) catch e
+        switch e
+        case .broken
+            panic("the answer was given up on behind the notifications")
+        case .timed_out
+            panic("the answer did not arrive in time")
+        case .closed
+            panic("the peer closed before answering")
+    assert(got.get("result").get("ok").as_int(0) == 1I64, "the answer's own body must come back")
+    verdict.pass("A request finds its answer however many notifications stand in front of it.")

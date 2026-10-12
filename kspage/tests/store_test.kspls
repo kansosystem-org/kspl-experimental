@@ -1,41 +1,67 @@
+//<
+import "kspage/lay/caret"
 import "kspage/lay/flow"
-import "kspage/model/collect" { Collect }
+import "kspage/model/collect" + { Collect }
+import "kspage/model/day"
 import "kspage/model/doc" + { Doc, Rect }
+import "kspage/model/filter"
 import "kspage/model/fixed_font" as fixed
 import "kspage/model/paint"
-import "kspage/model/style" { Sheet }
+import "kspage/model/style" + { Sheet }
+import "kspage/model/style_when"
 import "kspage/share/store"
 import "kspage/tests/base"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "kspage/write/typing"
 import "std/chars"
+import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
-import "std/str" { Str_builder }
+import "std/str" + { Str_builder }
 import "std/verdict"
 
 // ==========================================
 // kspage: checks saving and loading a document and its styles (a golden test).
-// The round trip keeps every field: written, read and written again, the text does not differ.
+// **One sample sets every field the text holds**, so written, read and written again, a field the
+// reader drops or misreads changes the text; a check holds the sample to every field.
 // **The result of laying it out again is checked separately**, since the reader could put the
-// same text in another place.
-// **The Japanese left in this file is test vocabulary, not prose.**
+// same text in another place. The other tests are about meaning: what is not written comes back
+// unwritten, and what layout counts is not saved.
 // ==========================================
 
+embed "kspage/share/store.kspls" as store_source //<
+    //< the writer and the reader, for their field names
+
 priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
-    //< A sheet with one of each thing that could be lost in saving and loading
+    //< A sheet setting every field of a style and of the paper away from its default
+    //<
+    //< A field that holds one choice (a marker, a way of collecting) gets a style per choice.
     sheet: = Sheet.new(base.root_font(), arena)
 
     $big: paint.Font_spec = paint.inherit_all()
     big.size_px = .some(28.0)
     big.weight = .some(700U16)
     h1: = sheet.add("h1", big)
+    h1.space_before = 4.0
     h1.space_after = 8.0
-    // The heading's depth and the contents setting.
     h1.outline = 1
-    // The style the next paragraph continues in. **Lost, Enter at a heading's end would make a
-    // second heading and the outline would fill with empty entries.**
     h1.next = "body"
-    toc: = sheet.add("toc", paint.inherit_all())
-    toc.collect = .contents
+    h1.break_before = true
+    h1.ink.color = .some(0x102030U32)
+    h1.ink.background = .some(0xfffffeU32)
+    // **`false` is written too**: dropped, a line the parent draws could not be taken off.
+    h1.ink.underline = .some(false)
+    h1.ink.strike = .some(true)
+    h1.rule_width = 2.0
+    h1.rule_color = 0xccccccU32
+    h1.fill = .some(0xeeeeeeU32)
+    h1.shape = .round_box
+    h1.line_spacing = 1.5
+    h1.pad = 3.0
+    h1.align = .center
+    h1.in_chapters = false
+    h1.marker = .outline(".", ". ")
 
     body: = sheet.add("body", paint.inherit_all())
     body.space_after = 12.0
@@ -47,66 +73,93 @@ priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
 
     item: = sheet.add("item", paint.inherit_all())
     item.indent = 24.0
+    item.marker = .bullet("• ")
+    sheet.add("step", paint.inherit_all()).marker = .number(")")
+    sheet.add("caption", paint.inherit_all()).marker = .serial("Figure ", ". ")
 
-    // Not wrapping. Lost, a code block would wrap and lose the whitespace at the break.
     code: = sheet.add("code", paint.inherit_all())
     code.wrap = false
+    two: = sheet.add("two", paint.inherit_all())
+    two.columns = 2
+    two.column_gap = 10.0
+
+    money: = sheet.add("money", paint.inherit_all())
+    money.number.places = .some(2)
+    money.number.grouped = true
+    money.number.prefix = "$"
+    money.number.suffix = " USD"
+    money.when.how = .above
+    money.when.than = 100.0
+    money.when.then = "h1"
+    share: = sheet.add("share", paint.inherit_all())
+    share.number.percent = true
+    share.number.dated = .long
+
+    ways: = Collect[4]::{ Collect.contents, Collect.notes, Collect.bars, Collect.lines }
+    for way in ways
+        sheet.add(way.variant_name(), paint.inherit_all()).collect = way
 
     t: = base.table_style(sheet)
     t.space_before = 6.0
-    // The paper settings. Lost, it would stop splitting into pages.
+    slide: = sheet.add("slide", paint.inherit_all())
+    slide.arrange = .absolute
+    slide.width = 320.0
+    slide.height = 240.0
     sheet.paper.width = 794.0
     sheet.paper.height = 1123.0
     sheet.paper.left = 76.0
+    sheet.paper.top = 30.0
+    sheet.paper.right = 50.0
     sheet.paper.bottom = 40.0
-    // The body's width. Lost, the body would spread across the whole window.
     sheet.paper.reading = 620.0
     return sheet
 
 priv fn sample_doc(arena: Arena$@): Doc$@ //<
-    //< A document with a heading, a style per inline, nesting, a table and a frame
+    //< A document setting every field of a block and of a run away from its default
     d: = Doc.new(arena)
     d.add_block("h1").add_text("title")
 
     p: = d.add_block("body")
     p.add_text("ordinary characters and ")
-    // The link's target.
     slanted: = p.add_text("slanted characters", "em")
     slanted.href = "https://example.com/"
-    // The note (its number is not stored).
     slanted.note = "the note's text"
+    slanted.remark = "words about it"
+    slanted.remark_by = "Alice"
+    p.add_text("see ").refers = "detail"
 
     list: = d.add_block("body")
     list.add_child("item").add_text("an item")
 
     t: = d.add_block("table")
-    // The name survives the round trip separately from the style's name.
     t.name = "detail"
-    // An empty column is kept in the list too; dropped, every column after it would shift forward.
+    // **An unset column is kept in the list too**; dropped, every column after it would shift.
     t.set_size(.column, 0, .some(40.0))
     t.set_size(.column, 1, .none)
-    // A row's height.
     t.set_size(.row, 0, .some(30.0))
     r: = t.add_child("")
     r.add_child("").add_text("a")
-    // A formula cell holds the typed text, not the computed value.
     r.add_child("").add_text("=A1&1")
-    // The merge.
     wide: = t.add_child("")
     merged: = wide.add_child("")
     merged.add_text("c")
     merged.span_cols = 2
+    merged.span_rows = 2
 
-    // A picture, by its source and size (the picture itself is not in the document).
     shot: = d.add_block("body")
     shot.image = "picture.png"
     shot.image_w = 80.0
     shot.image_h = 40.0
     shot.add_text("")
 
-    slide: = d.add_block("body")
+    d.add_block("bars").chart = "detail!A1:A2"
+
+    slide: = d.add_block("slide")
+    slide.aside = "pause here"
     at: = Rect::{ .x = 10.0, .y = 20.0, .w = 100.0, .h = 50.0 }
-    doc.add_framed_child(slide, "frame", at).add_text("a frame")
+    framed: = doc.add_framed_child(slide, "frame", at)
+    framed.add_text("a frame")
+    framed.step = 1
 
     // The page's header and footer, which walking `blocks` does not reach.
     d.header.inlines.get(0).insert(0, "confidential")
@@ -130,6 +183,67 @@ fn test_a_document_survives_the_round_trip(arena: Arena$@)
     same: = first.slice().equals(again.slice())
     assert(same, "written, read and written again it comes out the same text")
     verdict.pass("over a round trip the text does not change by one character.")
+
+priv fn field_names(src: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< Every field name the store writes or reads by its spelling (`set("…"` and `get("…"`)
+    //<
+    //< A name made at run time (a way of comparing) is not among them; the names test pins those.
+    $out: = List<|U8[]|>.new(arena)
+    for mark in U8[][2]::{ "set(\"", "get(\"" }
+        $i: Sz = 0
+        for i < src.len
+            if at: = src.sub_from(i).find_str(mark)
+                from: = i + at + mark.len
+                $end: Sz = from
+                for end < src.len && (src[end].is_lower() || src[end] == '_')
+                    end += 1
+                if end < src.len && src[end] == '"' && end > from
+                    name: = src.sub(from, end - from)
+                    if !held(out@, name)
+                        out.push(name)
+                i = end
+            else
+                break
+    return out
+
+priv fn held(names: List<|U8[]|>@, name: U8[]): Bool //< whether `names` holds that name already
+    for i in Range.asc(names.len)
+        if names.get(i).equals(name)
+            return true
+    return false
+
+priv fn unwritten(names: List<|U8[]|>@, saved: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The names among `names` the saved text holds no field of
+    $out: = List<|U8[]|>.new(arena)
+    for i in Range.asc(names.len)
+        key: = arena.text().s("\"").s(names.get(i)).s("\":").take()
+        if saved.find_str(key).is_none()
+            out.push(names.get(i))
+    return out
+
+fn test_the_sample_sets_every_field(arena: Arena$@) //<
+    //< The round trip's sample writes every field the store knows
+    //<
+    //< **A field left at its default is not written**, so the round trip could not see it lost.
+    verdict.start("[kspage/store] the round trip's sample setting every field test...")
+    // It can fire: a name in the source the text lacks is reported, and only that one.
+    probe: = field_names("ob.set(\"alpha\", x).get(\"beta_two\") get(\"Not\")", arena)
+    assert(probe.len == 2, "both spellings are read, and nothing else")
+    missing_probe: = unwritten(probe@, "{\"alpha\": 1}", arena)
+    assert(missing_probe.len == 1 && missing_probe.get(0).equals("beta_two"),
+        "a field the text lacks is named")
+
+    names: = field_names(store_source, arena)
+    assert(names.len > 40, "the store's field names are read")
+    $sb: = Str_builder.new()
+    defer sb.free()
+    store.save(sample_doc(arena), sample_sheet(arena), sb@)
+    missing: = unwritten(names@, sb.slice(), arena)
+    for i in Range.asc(missing.len)
+        io.out().s("the sample leaves this field unwritten: ").s(missing.get(i)).s("\n")
+    assert(missing.len == 0, "the sample writes every field the store writes or reads")
+    verdict
+        .pass(arena.text().s("the sample writes all \{names.len\} fields the store knows.").take())
 
 fn test_the_reloaded_document_lays_out_the_same(arena: Arena$@)
     verdict.start("[kspage/store] being laid in the same places after a reading back test...")
@@ -162,133 +276,10 @@ priv fn family_is_unset(sheet: Sheet$@, name: U8[]): Bool //<
             return false
     return false
 
-fn test_colors_survive_the_round_trip(arena: Arena$@) //< a color survives the round trip
+fn test_unset_fields_stay_unset(arena: Arena$@) //<
+    //< What was not written comes back not written, not filled with the current value
     //<
-    //< **Lost, the color would disappear every time it is saved and opened.**
-    verdict.start("[kspage/store] the colours going round the trip test...")
-    sheet: = sample_sheet(arena)
-    h1: = sheet.find("h1").unwrap_or(null)
-    h1.ink.color = .some(0x102030U32)
-    h1.ink.background = .some(0xfffffeU32)
-    back: = base.round_trip(sample_doc(arena), sheet, arena)
-
-    got: = back.sheet.find("h1").unwrap_or(null)
-    assert(got != null, "the style comes back")
-    switch got.ink.color
-    case .some(v)
-        assert(v == 0x102030U32, "the text colour comes back")
-    case .none
-        assert(false, "the writing of the text colour comes back")
-    switch got.ink.background
-    case .some(v)
-        assert(v == 0xfffffeU32, "the ground's colour comes back too")
-    case .none
-        assert(false, "the writing of the ground's colour comes back too")
-    // The number format. Lost, the currency symbol would disappear.
-    h1.number.grouped = true
-    h1.number.places = .some(2)
-    h1.number.prefix = "$"
-    h1.number.suffix = " USD"
-    again: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    assert(again.number.grouped, "the grouping of figures comes back")
-    affix: = again.number.prefix.equals("$") && again.number.suffix.equals(" USD")
-    assert(affix, "the texts put before and behind come back too")
-    switch again.number.places
-    case .some(v)
-        assert(v == 2, "the decimal places come back too")
-    case .none
-        assert(false, "the writing of the decimal places comes back")
-    // The line and the fill. Lost, a table's grid would disappear.
-    h1.rule_width = 2.0
-    h1.rule_color = 0xccccccU32
-    h1.fill = .some(0xeeeeeeU32)
-    edged: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    assert(base.near(edged.rule_width, 2.0), "the line's thickness comes back")
-    assert(edged.rule_color == 0xccccccU32, "the line's colour comes back too")
-    switch edged.fill
-    case .some(v)
-        assert(v == 0xeeeeeeU32, "the fill's colour comes back too")
-    case .none
-        assert(false, "the writing of the fill comes back")
-    // The paper settings. **An unset field comes back as 0** (not filled with the current value).
-    paper_back: = base.round_trip(sample_doc(arena), sheet, arena).sheet
-    assert(base.near(paper_back.paper.width, 794.0), "the paper's width comes back")
-    assert(base.near(paper_back.paper.height, 1123.0), "the page's height comes back too")
-    assert(base.near(paper_back.paper.left, 76.0), "the left margin comes back")
-    assert(base.near(paper_back.paper.bottom, 40.0), "the bottom margin comes back too")
-    assert(base.near(paper_back.paper.top, 0.0), "a margin not written stays 0")
-    assert(base.near(paper_back.paper.reading, 620.0), "the body's width comes back too")
-    // The merge.
-    span_back: = base.round_trip(sample_doc(arena), sheet, arena).doc
-    $tables: Sz = 0
-    for $i: Sz = 0; i < span_back.blocks.len; i += 1
-        b: = span_back.blocks.get(i)
-        if b.name.equals("detail")
-            tables += 1
-            wide_back: = b.children.get(1).children.get(0).span_cols
-            assert(wide_back == 2, "the merge's reach comes back")
-            plain_back: = b.children.get(0).children.get(0).span_cols
-            assert(plain_back == 1, "a cell that is not merged is 1")
-    assert(tables == 1, "the table comes back")
-    // The line settings. **`false` comes back too** (lost, a line would reappear where the parent's
-    // was removed).
-    h1.ink.underline = .some(false)
-    h1.ink.strike = .some(true)
-    lined: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    switch lined.ink.underline
-    case .some(v)
-        assert(!v, "`do not draw the underline` comes back")
-    case .none
-        assert(false, "the writing of the underline comes back")
-    assert(paint.drawn(lined.ink.strike), "the strike-through comes back too")
-    // The marker: **both the kind and the text** (the text alone would mix up a bullet and a
-    // number).
-    h1.marker = .number(")")
-    marked: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    switch marked.marker
-    case .number(after)
-        assert(after.equals(")"), "the text put behind the number comes back")
-    case .bullet(_g)
-        assert(false, "it comes back as a number, not as a mark")
-    case .serial(_b, _a)
-        assert(false, "it comes back as a number counted among the siblings")
-    case .outline(_s, _a)
-        assert(false,
-            "it comes back as a number counted among the siblings, not as a chapter number")
-    case .none
-        assert(false, "the writing of the mark comes back")
-    // A running number keeps **both the text before it and after** (in `Figure 1.` the `Figure `
-    // and the `.` are one setting).
-    h1.marker = .serial("Figure ", ". ")
-    serial: = base.round_trip(sample_doc(arena), sheet, arena).sheet.find("h1").unwrap_or(null)
-    switch serial.marker
-    case .serial(before, after)
-        assert(before.equals("Figure ") && after.equals(". "),
-            "the texts before and behind a running number come back")
-    case .number(_a)
-        assert(false, "it comes back as a running number")
-    case .bullet(_g)
-        assert(false, "it comes back as a running number, not as a mark")
-    case .outline(_s, _a)
-        assert(false, "it comes back as a running number, not as a chapter number")
-    case .none
-        assert(false, "the writing of the mark comes back")
-    // A style with nothing set comes back unset (it is not filled with the current value).
-    plain: = back.sheet.find("body").unwrap_or(null)
-    if plain != null
-        switch plain.ink.color
-        case .none {}
-        case .some(_v)
-            assert(false, "a style with nothing written keeps its colour unwritten")
-        switch plain.fill
-        case .none {}
-        case .some(_v)
-            assert(false, "a style with nothing written keeps its fill unwritten too")
-    verdict
-        .pass("the colour, the line and the fill all go round the trip, and what was unwritten \
-            comes back unwritten.")
-
-fn test_unset_font_fields_stay_unset(arena: Arena$@)
+    //< **Filled in, the inheritance from the parent would be cut.**
     verdict.start("[kspage/store] what was unwritten coming back unwritten test...")
     sheet: = sample_sheet(arena)
     back: = base.round_trip(sample_doc(arena), sheet, arena)
@@ -298,111 +289,26 @@ fn test_unset_font_fields_stay_unset(arena: Arena$@)
     assert(family_is_unset(back.sheet, "h1"), "read back it is unwritten still")
     // em sets the typeface, so that one is kept.
     assert(!family_is_unset(back.sheet, "em"), "a field that was written stays written")
+    plain: = back.sheet.find("body").unwrap_or(null)
+    assert(plain != null, "the style comes back")
+    if _v: = plain.ink.color
+        assert(false, "a style with nothing written keeps its colour unwritten")
+    if _v: = plain.fill
+        assert(false, "a style with nothing written keeps its fill unwritten too")
+    // **A style that names none writes nothing**, so it comes back naming none, not itself.
+    assert(plain.next.len == 0, "a style that names no next style carries none back")
     verdict
         .pass("what was unwritten is not filled with what stands, and the inheritance comes back \
             alive.")
 
-fn test_frames_survive_the_round_trip(arena: Arena$@)
-    verdict.start("[kspage/store] a frame's place being left over the round trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    // The last block's child is the frame that has a position.
-    last: = back.doc.blocks.get(back.doc.blocks.len - 1)
-    framed: = last.children.get(0)
-    switch framed.frame
-    case .some(f)
-        assert(base.near(f.x, 10.0) && base.near(f.y, 20.0), "the top left is left")
-        assert(base.near(f.w, 100.0) && base.near(f.h, 50.0), "the size is left too")
-    case .none
-        panic("the frame's place has fallen away")
-    // A block with no position comes back with none.
-    if _f: = back.doc.blocks.get(0).frame
-        panic("a place has grown on a block that has none")
-    verdict.pass("a frame's place is left where it was there, and does not grow where it was not.")
-
-fn test_column_widths_survive_the_round_trip(arena: Arena$@)
-    verdict.start("[kspage/store] a column's width being left over the round trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    // The table is the block whose style is named `table`.
-    $table: doc.Block$@ = null
-    for $i: Sz = 0; i < back.doc.blocks.len; i += 1
-        blk: = back.doc.blocks.get(i)
-        if blk.style.equals("table")
-            table = blk
-    assert(table != null, "the table has come back")
-    // The name is a field separate from the style's name.
-    assert(table.name.equals("detail"), "the table's name is left")
-    assert(back.doc.blocks.get(0).name.len == 0, "no name grows on a block that has none")
-    assert(table.column_widths.len == 2, "the row of columns is left, length and all")
-    assert(table.row_heights.len == 1, "the row of rows is left too")
-    switch table.size_of(.row, 0)
-    case .some(v)
-        assert(base.near(v, 30.0), "the row's height as written is left")
-    case .none
-        panic("the row's height has fallen away")
-    switch table.size_of(.column, 0)
-    case .some(v)
-        assert(base.near(v, 40.0), "the width as written is left")
-    case .none
-        panic("the width written has fallen away")
-    // No width appears on a column with nothing set.
-    if _v: = table.size_of(.column, 1)
-        panic("a width has grown on a column with nothing written")
-    verdict.pass("a column's width is left with its row, columns with nothing written and all.")
-
-fn test_the_bands_survive_the_round_trip(arena: Arena$@)
-    verdict
-        .start("[kspage/store] the page's header and footer being left over the round trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    assert(back.doc.header.inlines.get(0).text().equals("confidential"), "the header's text is left")
-    // The page mark is kept as text (page layout is what replaces it).
-    mark: = back.doc.footer.inlines.get(0).text()
-    assert(mark.equals("{page}/{pages}"), "the footer's mark stays a text too")
-    assert(back.doc.header.style.equals("header"), "the band's style name is left too")
-
-    // A band with no text is not written, but reads back as a shape that can be typed into.
+fn test_an_empty_band_comes_back_ready_to_type_into(arena: Arena$@) //<
+    //< A band with no text is not written, but reads back as a shape that can be typed into
+    verdict.start("[kspage/store] an empty header and footer coming back test...")
     plain: = base.round_trip(Doc.new(arena), sample_sheet(arena), arena)
     assert(plain.doc.header.inlines.len == 1, "an empty band holds one text too")
     assert(plain.doc.footer.inlines.get(0).text().len == 0, "an empty band comes back empty")
-    verdict
-        .pass("a band's text goes round the trip as the mark, and an empty band comes back ready to \
-            type into.")
-
-fn test_the_arrangement_survives_the_round_trip(arena: Arena$@)
-    verdict.start("[kspage/store] the arrangement being left over the round trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    page: = flow.layout(back.doc, back.sheet, fixed.make(), 200.0, arena)
-    // The table's two cells sit side by side in one row.
-    $left: Sz = -1
-    for $i: Sz = 0; i < page.boxes.len; i += 1
-        if page.boxes.get(i).text.equals("a")
-            left = i
-    assert(left >= 0, "the table's cells are laid")
-    a: = page.boxes.get(left).rect
-    b: = page.boxes.get(left + 1).rect
-    assert(base.near(a.y, b.y), "they stand on the same row")
-    // The first column is set 40px wide; if lost, the contents' width (8px) would appear.
-    assert(base.near(b.x, 40.0),
-        "the second column starts right by the first column's width as written")
-    verdict.pass("the arrangement the style says is left in the text too.")
-
-fn test_every_way_of_collecting_survives_the_round_trip(arena: Arena$@) //<
-    //< each `Collect` reads back as saved
-    verdict.start("[kspage/store] every way of collecting being left over the round trip test...")
-    ways: = Collect[4]::{ Collect.contents, Collect.notes, Collect.bars, Collect.lines }
-    sheet: = Sheet.new(base.root_font(), arena)
-    for way in ways
-        sheet.add(way.variant_name(), paint.inherit_all()).collect = way
-    back: = base.round_trip(Doc.new(arena), sheet, arena).sheet
-    for way in ways
-        name: = way.variant_name()
-        got: = back.find(name).unwrap_or(null)
-        assert(got != null, "the style is read back")
-        assert(got.collect.same_collect(way), "the way of collecting is read back as saved")
-    verdict.pass("every way of collecting comes back as it was saved.")
+    assert(plain.doc.header.style.equals("header"), "the band's style name is there too")
+    verdict.pass("an empty band comes back ready to type into.")
 
 fn test_a_formula_survives_the_round_trip(arena: Arena$@) //<
     //< Only the typed text is stored, nothing else
@@ -436,7 +342,7 @@ fn test_broken_text_is_rejected(arena: Arena$@)
     store.load("{ this is not JSON", arena) catch e
         switch e
         case .broken {}
-        case .unknown_version, .out_of_range, .withdrawn
+        case .unknown_version, .out_of_range
             panic("a broken text is to be refused as broken")
         verdict.pass("a text that cannot be solved as JSON is not read.")
         return
@@ -448,7 +354,7 @@ fn test_an_unknown_version_is_rejected(arena: Arena$@)
     store.load("{\"kspage\":99,\"sheet\":{},\"blocks\":[]}", arena) catch e
         switch e
         case .unknown_version {}
-        case .broken, .out_of_range, .withdrawn
+        case .broken, .out_of_range
             panic("a version that differs is to be refused as unknown_version")
         verdict.pass("a text of a version it does not know is not even read in part.")
         return
@@ -473,7 +379,7 @@ fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field o
     store.load("{\"kswrite\":6,\"sheet\":{},\"blocks\":[]}", arena) catch e
         switch e
         case .unknown_version {}
-        case .broken, .out_of_range, .withdrawn
+        case .broken, .out_of_range
             panic("a version under another field name is to be refused as unknown_version")
         verdict.pass("the one version field reads, and a version under another name is refused.")
         return
@@ -548,118 +454,13 @@ priv fn refused(arena: Arena$@, text: U8[], what: U8[]) //<
     store.load(text, arena) catch e
         switch e
         case .out_of_range {}
-        case .broken, .unknown_version, .withdrawn
+        case .broken, .unknown_version
             io.out().s("the refusal differs: ").s(what).s("\n")
             panic("a number outside the range is to be refused as out_of_range")
         return
     io.out().s("it was read after all: ").s(what).s("\n")
     panic("a number outside the range must not be readable")
 
-fn test_a_window_onto_source_is_refused(arena: Arena$@) //<
-    //< a text holding a window onto source is refused whole
-    //<
-    //< **Dropping the window would lose what it held at the next save**, so the text is not opened.
-    verdict.start("[kspage/store] a window onto source code being refused test...")
-    withdrawn(arena,
-        "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"aim\":{\"path\":\"a.kspl\"}}]}",
-        "a block pointing at source")
-    withdrawn(arena,
-        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"code\",\"source\":true}]},\"blocks\":[]}",
-        "a style collecting source")
-    withdrawn(arena,
-        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"uses\",\"imports\":true}]},\"blocks\":[]}",
-        "a style collecting imports")
-    verdict.pass("a text holding a window onto source is refused rather than opened without it.")
-
-fn test_an_old_origin_mark_is_left_behind(arena: Arena$@) //<
-    //< a text from before carrying `origin` still opens
-    //<
-    //< The mark divided the saved versions, which are gone: the text opens as it was, and the next
-    //< save no longer writes it.
-    verdict.start("[kspage/store] an old origin mark being left behind test...")
-    old: = "{\"kspage\":6,\"sheet\":{},\"origin\":\"m1\",\"blocks\":[{\"style\":\"body\"}]}"
-    got: = store.load(old, arena) catch _e
-        panic("a text carrying an old origin mark is to open")
-    assert(got.doc.blocks.len == 1 && got.doc.blocks.get(0).style.equals("body"),
-        "the body is read as it was")
-    $again: = Str_builder.new()
-    defer again.free()
-    store.save(got.doc, got.sheet, again@)
-    assert(again.slice().find_str("origin").is_none(), "the next save does not write the mark")
-    verdict.pass("an old text's origin mark is read past, and not written again.")
-
-fn test_a_tied_line_is_refused(arena: Arena$@) //<
-    //< a text holding a line tied between two frames is refused
-    //<
-    //< **Dropping the line would lose it at the next save**, so the text is not opened, as with a
-    //< window onto source.
-    verdict.start("[kspage/store] a line tied between two frames being refused test...")
-    tied: = arena.text().s("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"slide\",")
-        .s("\"children\":[{\"style\":\"line\",\"tie_from\":\"a\",\"tie_to\":\"b\"}]}]}").take()
-    withdrawn(arena, tied, "a line tied between two frames")
-    withdrawn(arena, "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"x\",\"tie_to\":\"b\"}]}",
-        "a line with one end")
-    verdict.pass("a text holding a tied line is refused rather than opened without it.")
-
-priv fn withdrawn(arena: Arena$@, text: U8[], what: U8[]) //<
-    //< Checks that it refused, and refused with `withdrawn`
-    store.load(text, arena) catch e
-        switch e
-        case .withdrawn {}
-        case .broken, .unknown_version, .out_of_range
-            io.out().s("the refusal differs: ").s(what).s("\n")
-            panic("what is no longer carried is to be refused as withdrawn")
-        return
-    io.out().s("it was read after all: ").s(what).s("\n")
-    panic("what is no longer carried must not be readable")
-fn test_a_link_survives_the_round_trip(arena: Arena$@) //<
-    //< a link's target survives the round trip too
-    //<
-    //< **Lost, the link would disappear every time it is opened.**
-    verdict.start("[kspage/store] a link's destination being left over the round trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    // The body is `ordinary characters and ` and `slanted characters`; the second is the link.
-    body: = back.doc.blocks.get(1)
-    assert(body.inlines.get(1).href.equals("https://example.com/"), "the destination is left")
-    assert(body.inlines.get(0).href.len == 0, "no destination grows on a run that has none")
-    verdict.pass("a link's destination does not change over the round trip.")
-fn test_a_picture_survives_the_round_trip(arena: Arena$@) //<
-    //< a picture's source and size survive too
-    //<
-    //< **Lost, the picture would disappear or get no space reserved.**
-    verdict.start("[kspage/store] a picture being left over the round trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    $shot: doc.Block$@ = null
-    for $i: Sz = 0; i < back.doc.blocks.len; i += 1
-        blk: = back.doc.blocks.get(i)
-        if blk.image.len > 0
-            shot = blk
-    assert(shot != null, "the picture's block comes back")
-    assert(shot.image.equals("picture.png"), "the source is left")
-    assert(base.near(shot.image_w, 80.0) && base.near(shot.image_h, 40.0), "the size is left too")
-    // No picture appears on a block that has none.
-    assert(back.doc.blocks.get(0).image.len == 0, "a block with no picture is left as it was")
-    verdict.pass("a picture goes round the trip with its source and its size.")
-fn test_the_outline_survives_the_round_trip(arena: Arena$@) //<
-    //< The heading's depth and the contents setting survive the round trip too
-    //<
-    //< **Lost, the table of contents would come up empty.**
-    verdict.start("[kspage/store] the heading and the contents mark going round the trip test...")
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-
-    head: = back.sheet.find("h1").unwrap_or(null)
-    assert(head != null && head.outline == 1, "the heading's depth is left")
-    assert(head.collect.same_collect(.none), "a heading is no table of contents")
-    toc: = back.sheet.find("toc").unwrap_or(null)
-    gathers: = toc != null && toc.collect.same_collect(.contents)
-    assert(gathers, "the contents mark is left")
-    assert(toc.outline == 0, "a table of contents is no heading")
-    assert(head.next.equals("body"), "the style named as what follows is left")
-    // **A style that names none writes nothing**, so it comes back naming none, not itself.
-    assert(toc.next.len == 0, "a style that names none carries none back")
-    verdict.pass("the heading's depth, the contents mark and what follows all go round the trip.")
 fn test_the_saved_text_reads_as_a_diff(arena: Arena$@) //<
     //< The saved text is split into lines, so two versions one word apart differ by one line too
     //<
@@ -721,24 +522,347 @@ priv fn line_end(text: U8[], at: Sz): Sz //<
         i += 1
     return i
 
-fn test_a_note_survives_the_round_trip(arena: Arena$@) //<
-    //< a note's text survives the round trip too
+fn test_a_note_number_is_not_saved(arena: Arena$@) //<
+    //< A note's text is saved, and its number is not
     //<
-    //< **The number is not stored** (it is counted where notes are listed).
-    verdict.start("[kspage/store] a note being left over the round trip test...")
+    //< **The number is counted where notes are listed**; written, one added note would leave every
+    //< number after it stale.
+    verdict.start("[kspage/store] a note's number staying out of the text test...")
     $sb: = Str_builder.new()
     defer sb.free()
     store.save(sample_doc(arena), sample_sheet(arena), sb@)
     written: = sb.slice()
-    // **The text's packing is not copied** (`spacing` in `share/store.kspls`): only that the key
-    // and the value are there. The round trip below checks that the value comes back right.
-    assert(written.find_str("\"note\"").is_some() &&
-        written.find_str("\"the note's text\"").is_some(), "the note's text is written out")
-    // The number is not written; written, one added note would leave every number after it stale.
+    // **The text's packing is not copied** (`spacing` in `share/store.kspls`).
+    assert(written.find_str("\"the note's text\"").is_some(), "the note's text is written out")
     assert(written.find_str("\"note_number\"").is_none(), "the number is not written out")
+    verdict.pass("a note's text goes into the text, and its number does not.")
 
-    back: = base.round_trip(sample_doc(arena), sample_sheet(arena), arena)
-    body: = back.doc.blocks.get(1)
-    assert(body.inlines.get(1).note.equals("the note's text"), "the note is left")
-    assert(body.inlines.get(0).note.len == 0, "no note grows on a run that has none")
-    verdict.pass("a note's text goes round the trip, and the number does not go into the text.")
+// ==========================================
+// kspage: pins the names a saved text, or the page, reads an enum's value by (a golden test).
+// **Each name is the variant's own** (`variant_name`), so a renamed variant would change what is
+// saved and what the page reads, in silence; here it fails instead.
+// Caution: **List a new variant's name here with the variant**, spelled as it is saved.
+// ==========================================
+
+priv const arranges: U8[][3] = ::{ "flow", "grid", "absolute" }
+priv const shapes: U8[][11] = ::{ "box", "round_box", "ellipse", "triangle", "diamond", "fall_line",
+    "rise_line", "fall_arrow", "rise_arrow", "fall_arrow_back", "rise_arrow_back" }
+priv const aligns: U8[][4] = ::{ "left", "center", "right", "justify" }
+priv const collects: U8[][5] = ::{ "none", "contents", "notes", "bars", "lines" }
+priv const compares: U8[][4] = ::{ "none", "above", "below", "equal" }
+priv const datings: U8[][3] = ::{ "none", "plain", "long" }
+priv const keeps: U8[][8] = ::{ "is", "is_not", "holds", "above", "below", "blank", "filled",
+    "one_of" }
+priv const sketches: U8[][3] = ::{ "whole", "titled", "halved" }
+
+priv fn arrange_back(name: U8[]): U8[]
+    return style.arrange_from(name).variant_name()
+
+priv fn shape_back(name: U8[]): U8[]
+    return style.shape_from(name).variant_name()
+
+priv fn align_back(name: U8[]): U8[]
+    return style.align_from(name).variant_name()
+
+priv fn collect_back(name: U8[]): U8[]
+    return collect.collect_from(name).variant_name()
+
+priv fn compare_back(name: U8[]): U8[] //<
+    //< The way of comparing `read_when` finds by that name (`none` where it finds none)
+    for how in style_when.comparisons
+        if how.variant_name().equals(name)
+            return how.variant_name()
+    return "none"
+
+priv fn dating_back(name: U8[]): U8[]
+    return day.dating_from(name).variant_name()
+
+priv fn keep_back(name: U8[]): U8[]
+    return filter.keep_from(name).variant_name()
+
+priv fn sketch_back(name: U8[]): U8[]
+    return insert.sketch_from(name).variant_name()
+
+priv fn read_back(what: U8[], names: U8[][], back: fn(name: U8[]): U8[]): Bool //<
+    //< Whether every name reads back as the variant of that very name, saying which does not
+    $all: = true
+    for name in names
+        got: = back(name)
+        if !got.equals(name)
+            io.out().s(what).s(": \"").s(name).s("\" reads back as \"").s(got).s("\"\n")
+            all = false
+    return all
+
+fn test_every_saved_name_reads_back_as_its_variant() //<
+    //< Each name a saved text or the page holds reads back as the variant spelled the same
+    //<
+    //< **Both sides are checked at once**: the reader (`*_from`) and the writer (`variant_name`).
+    verdict.start("[kspage/names] every saved name reading back as its own variant test...")
+    assert(read_back("Arrange", U8[][]::arranges, arrange_back), "a way of laying out reads back")
+    assert(read_back("Shape", U8[][]::shapes, shape_back), "a shape reads back")
+    assert(read_back("Align", U8[][]::aligns, align_back), "an alignment reads back")
+    assert(read_back("Collect", U8[][]::collects, collect_back), "a way of collecting reads back")
+    assert(read_back("Compare", U8[][]::compares, compare_back), "a way of comparing reads back")
+    assert(read_back("Dating", U8[][]::datings, dating_back), "a way of showing a date reads back")
+    assert(read_back("Keep", U8[][]::keeps, keep_back), "a filter's kind reads back")
+    assert(read_back("Sketch", U8[][]::sketches, sketch_back), "a slide's sketch reads back")
+    verdict.pass("each name read back is the variant spelled the same.")
+
+// ==========================================
+// Checks the manual that ships with kspage (`content/manual.kspage`)
+// **It is an ordinary saved document**, so the checks are the ones any document passes: it reads,
+// it lays out, and it is in the form kspage writes.
+// ==========================================
+embed "kspage/content/manual.kspage" as manual_text //< the same file the page opens
+
+fn test_the_manual_opens_and_lays_out(arena: Arena$@) //<
+    //< the manual reads, and lays out with its chapters
+    verdict.start("[kspage/manual] the manual opening and being laid out test...")
+    got: = store.load(manual_text, arena) catch _e
+        panic("the manual does not read")
+    page: = flow.layout(got.doc, got.sheet, fixed.make(), 600.0, arena)
+    assert(page.boxes.len > 0, "the manual lays out")
+    // **The chapters are counted by layout**, so a heading lost on the way shows here.
+    assert(page.headings.len >= 10, "the manual's headings come out")
+    verdict.pass("the manual opens and lays out with its headings.")
+
+fn test_the_manual_is_in_the_saved_form(arena: Arena$@) //<
+    //< saving the manual again changes not one byte
+    //<
+    //< **Edited in kspage, it stays the same file**: a hand edit in another shape would turn every
+    //< later save into a diff over the whole file.
+    verdict.start("[kspage/manual] the manual being in the form kspage writes test...")
+    got: = store.load(manual_text, arena) catch _e
+        panic("the manual does not read")
+    $again: = Str_builder.new()
+    defer again.free()
+    store.save(got.doc, got.sheet, again@)
+    assert(again.slice().equals(manual_text), "written again, the manual is the same bytes")
+    verdict.pass("the manual is in the form kspage writes.")
+
+// ==========================================
+// kspage: checks undo and redo (a golden test).
+// **What is checked is "what one undo takes back".** Continuous typing undoes as one; a move, a
+// committed composition and a released drag end the step.
+// Note: Typing, moving and selecting are in [`edit_test.kspls`](edit_test.kspls).
+// ==========================================
+
+// ---- undoing ----
+
+fn test_undo_puts_typed_text_back(arena: Arena$@)
+    verdict.start("[kspage/edit] what was typed going back test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("ab")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 2)
+
+    ed.insert("XY")
+    assert(n.text().equals("abXY"), "typing puts it in")
+    assert(ed.undo(), "it can be put back")
+    assert(n.text().equals("ab"), "it goes back to before the typing")
+    assert(ed.caret.offset == 2, "the cursor goes back to before the typing too")
+    verdict.pass("what was typed goes back, and the cursor comes home too.")
+
+fn test_undo_puts_deleted_text_back(arena: Arena$@)
+    verdict.start("[kspage/edit] what was deleted going back test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("ab")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 2)
+
+    ed.backspace()
+    assert(n.text().equals("a"), "it is deleted")
+    assert(ed.undo(), "it can be put back")
+    // Without the deleted text saved, this would come back empty.
+    assert(n.text().equals("ab"), "the text deleted comes back")
+    verdict.pass("the text deleted comes back as it was.")
+
+fn test_redo_reapplies_what_was_undone(arena: Arena$@)
+    verdict.start("[kspage/edit] a redo acting test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("ab")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 2)
+
+    ed.insert("Z")
+    ed.undo()
+    assert(n.text().equals("ab"), "it went back")
+    assert(ed.redo(), "it can be redone")
+    assert(n.text().equals("abZ"), "redone it goes forward again")
+    assert(!ed.redo(), "there is nothing left to redo")
+    verdict.pass("what was put back can be redone.")
+
+fn test_typing_in_a_row_undoes_as_one_step(arena: Arena$@) //<
+    //< continuous typing undoes as one step
+    verdict.start("[kspage/edit] what was typed on going back in one test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+
+    ed.insert("a")
+    ed.insert("b")
+    ed.insert("c")
+    assert(n.text().equals("abc"), "three characters go in")
+    assert(ed.undo(), "it can be put back")
+    assert(n.text().equals(""), "the three characters go back together")
+    verdict.pass("what was typed on goes back in one.")
+
+fn test_moving_breaks_the_undo_group(arena: Arena$@) //< a move ends the step
+    //<
+    //< Otherwise typing at two separate places would undo as one.
+    verdict.start("[kspage/edit] a move breaking the undo's step test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("..")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+
+    ed.insert("a")
+    ed.move_right(false)
+    ed.insert("b")
+    assert(n.text().equals("a.b."), "it goes in at two places")
+    ed.undo()
+    assert(n.text().equals("a.."), "the first time only what came later goes back")
+    ed.undo()
+    assert(n.text().equals(".."), "the second time what came earlier goes back too")
+    verdict.pass("the step breaks where it moved, and they go back apart.")
+
+fn test_undo_restores_a_selection_delete_across_blocks(arena: Arena$@) //<
+    //< A deleted selection comes back as one too (across paragraphs as well)
+    verdict.start("[kspage/edit] an deleting across paragraphs going back test...")
+    d: = Doc.new(arena)
+    head: = d.add_block("body").add_text("abc")
+    middle: = d.add_block("body").add_text("XYZ")
+    tail: = d.add_block("body").add_text("def")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(head, 1)
+    ed.caret.inline = tail
+    ed.caret.offset = 2
+
+    ed.delete_selection()
+    assert(middle.text().equals(""), "the middle is deleted whole")
+    assert(ed.undo(), "it can be put back")
+    assert(head.text().equals("abc"), "the first comes back")
+    assert(middle.text().equals("XYZ"), "the middle comes back too")
+    assert(tail.text().equals("def"), "the last comes back too")
+    verdict.pass("an deleting across paragraphs goes back together too.")
+
+fn test_committing_a_composition_breaks_the_group(arena: Arena$@) //<
+    //< committing a composition ends the step
+    verdict.start("[kspage/edit] committing a composing breaking the step test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+
+    ed.set_preedit("ab")
+    ed.commit_preedit()
+    ed.insert("X")
+    assert(n.text().equals("abX"), "it can be typed after committing")
+    ed.undo()
+    assert(n.text().equals("ab"), "the first time only what was typed goes back")
+    ed.undo()
+    assert(n.text().equals(""), "the second time what was composed goes back too")
+    verdict.pass("committing a composing breaks the step, and they go back apart.")
+
+fn test_undo_on_an_empty_history_does_nothing(arena: Arena$@) //<
+    //< Where there is nothing to undo, nothing happens
+    verdict.start("[kspage/edit] nothing happening where there is nowhere to go back to test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("ab")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+    assert(!ed.undo(), "there is nowhere to go back to")
+    assert(!ed.redo(), "there is nowhere to redo to either")
+    assert(n.text().equals("ab"), "the text does not change")
+    verdict.pass("where there is nowhere to go back to, nothing happens.")
+
+fn test_writing_after_undo_drops_the_redo(arena: Arena$@) //<
+    //< Writing something else after an undo discards what could be redone
+    verdict.start("[kspage/edit] writing after going back leaving nothing to redo test...")
+    d: = Doc.new(arena)
+    n: = d.add_block("body").add_text("")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+
+    ed.insert("a")
+    ed.undo()
+    ed.insert("b")
+    // Kept, redo would jump to a text that does not match.
+    assert(!ed.redo(), "what could be redone is thrown away")
+    assert(n.text().equals("b"), "only what was written is left")
+    verdict.pass("write after going back and what could be redone is thrown away.")
+
+fn test_the_caret_moves_to_the_edges_of_the_placed_line(arena: Arena$@) //<
+    //< it moves to a line's start and end
+    //<
+    //< **On a wrapped line it is that line's edge** (not the paragraph's).
+    verdict.start("[kspage/edit] moving to a row's edges test...")
+    sheet: = Sheet.new(base.root_font(), arena)
+    d_doc: = Doc.new(arena)
+    // ASCII is 8px, so 12 characters fit in 100px; the last break within that is byte 10's space.
+    n: = d_doc.add_block("body").add_text("aaaa bbbb cccc dddd")
+    page: = flow.layout(d_doc, sheet, fixed.make(), 100.0, arena)
+    ed: = edit.new_editor(d_doc)
+
+    // From the fourth character of the first line.
+    ed.caret = caret.at(n, 3)
+    ed.move_to_edge(page, 1)
+    assert(ed.caret.offset == 10, "the row's end is where it wrapped")
+    ed.move_to_edge(page, -1)
+    assert(ed.caret.offset == 0, "the row's head is the paragraph's head")
+    // On the second line. The wrap belongs to both lines and is read as the next line's start.
+    ed.caret = caret.at(n, 14)
+    ed.move_to_edge(page, 1)
+    assert(ed.caret.offset == 19, "the second row's end is the paragraph's end")
+    ed.move_to_edge(page, -1)
+    assert(ed.caret.offset == 10, "the second row's head is where it wrapped")
+    // The selection can be extended; the anchor does not move.
+    ed.caret = caret.at(n, 14)
+    ed.move_to_edge(page, 1, true)
+    assert(ed.caret.anchor_offset == 14, "the starting point is left")
+    assert(ed.caret.offset == 19, "only the end moves")
+    verdict.pass("a row's edge is the edge of the row laid.")
+
+fn test_a_line_edge_stays_inside_the_cell(arena: Arena$@) //<
+    //< in a cell, a line's edge is in the cell too
+    //<
+    //< **It does not move into the neighbouring cell.**
+    verdict.start("[kspage/edit] a row's edge not leaving a cell test...")
+    sheet: = Sheet.new(base.root_font(), arena)
+    base.table_style(sheet)
+    d_doc: = Doc.new(arena)
+    t: = d_doc.add_block("table")
+    row: = t.add_child("")
+    left: = row.add_child("").add_text("ab")
+    row.add_child("").add_text("cd")
+    page: = flow.layout(d_doc, sheet, fixed.make(), 200.0, arena)
+    ed: = edit.new_editor(d_doc)
+
+    ed.caret = caret.at(left, 1)
+    ed.move_to_edge(page, 1)
+    assert(ed.caret.inline == left, "moved to the end it is the same cell")
+    assert(ed.caret.offset == 2, "it is the end of that cell's text")
+    verdict.pass("a row's edge stops inside the cell.")
+
+fn test_select_all_spans_the_whole_document(arena: Arena$@) //< the whole document can be selected
+    //<
+    //< **The start is the document's start and the end its end.**
+    verdict.start("[kspage/edit] selecting the whole document test...")
+    d_doc: = Doc.new(arena)
+    head: = d_doc.add_block("body").add_text("a")
+    // A block with no text (an image) is skipped.
+    pic: = d_doc.add_block("body")
+    pic.image = "x.png"
+    pic.image_w = 10.0
+    pic.image_h = 10.0
+    tail: = d_doc.add_block("body").add_text("cd")
+    ed: = edit.new_editor(d_doc)
+    ed.caret = caret.at(head, 0)
+
+    assert(ed.select_all(), "it could be selected")
+    assert(ed.caret.anchor == head && ed.caret.anchor_offset == 0,
+        "the starting point is the document's head")
+    assert(ed.caret.inline == tail, "the end is the document's last text")
+    assert(ed.caret.offset == 2, "it selects to that text's end")
+    verdict.pass("the whole document is selected, from head to end.")

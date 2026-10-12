@@ -1,7 +1,7 @@
 // Putting in and out, and the arena that remembers where a tab's document lives.
 
 function kspageProbeStore(ks) {
-  const { check, app } = ks;
+  const { check, app, typeIn } = ks;
 
   // 8. Putting in and out. **The window that chooses a file cannot open headless**, so putting text
   // in and out, and the focus going back to the input field, are looked at.
@@ -10,7 +10,7 @@ function kspageProbeStore(ks) {
   // Caution: **Do not hunt in a packed shape** (the save's shape is one value per line, with one
   // space after the key. `kspage/share/store.kspls`'s `spacing`).
   check(written.indexOf("\"kspage\": 6") >= 0, "the version goes into the text written out");
-  // **The answer is the reason rather than a true or false** (`api_io.js`'s `load`): an empty
+  // **The answer is the reason rather than a true or false** (`api.js`'s `load`): an empty
   // text is "it could be read", and a refusal names its reason, as "it cannot be read" and "too
   // large to lay down" are fixed in opposite ways.
   check(app.load("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\"," +
@@ -33,7 +33,7 @@ function kspageProbeStore(ks) {
   // **The file field shows what "Open" opens** (a browser without the picker chooses through it,
   // and an extension left off hides the file until "all files" is picked).
   const accepts = document.getElementById("file").accept.split(",");
-  const hidden = [".kspage", ".json", ".md", ".txt"].filter((ext) => accepts.indexOf(ext) < 0);
+  const hidden = [".kspage", ".md", ".txt"].filter((ext) => accepts.indexOf(ext) < 0);
   check(hidden.length === 0, "the file field offers every kind \"Open\" opens (" + hidden + ")");
 
   // Read only. **This can be seen nowhere else**: folding the tools and stopping the shortcut keys
@@ -41,10 +41,6 @@ function kspageProbeStore(ks) {
   //
   // Caution: **Do not look at a press not acting alone.** What is looked at is that **the text
   // saved does not change by one byte** (a changed document, however it came in, shows here).
-  // **Type by the same way as a person** (an `input` event, `command.js`; a key event alone is no
-  // typing).
-  const typeIn = (t) => ks.ime.dispatchEvent(new InputEvent("input",
-    { data: t, inputType: "insertText", bubbles: true }));
   ks.pressAt(8);
   const wasRead = app.save();
   // Caution: **Switch by the same way as a person.** The core's entry point called directly skips
@@ -130,10 +126,10 @@ function kspageProbeStore(ks) {
   const nowhere = { path: "", bodyAt: null, pastAt: null };
   (async function () {
     const dir = await navigator.storage.getDirectory();
-    const live = await dir.getFileHandle("kspage-probe.json", { create: true });
+    const live = await dir.getFileHandle("kspage-probe.kspage", { create: true });
     await store.keepWhere(TAB, { path: "", bodyAt: live, pastAt: null });
     let was = await store.takeWhere(TAB);
-    check(was !== null && was.bodyAt !== null && was.bodyAt.name === "kspage-probe.json",
+    check(was !== null && was.bodyAt !== null && was.bodyAt.name === "kspage-probe.kspage",
       "a tab's record comes back with its handle ("
         + (was === null || was.bodyAt === null ? "none" : was.bodyAt.name) + ")");
     const place = ks.notAPath + "/kept.kspage";
@@ -162,7 +158,7 @@ function kspageProbeStore(ks) {
     check((await store.takeWhere("probe-cap-" + (many - 1))) !== null,
       "the tab laid down last is the one that stays");
     for (let i = 0; i < many; i += 1) await store.keepWhere("probe-cap-" + i, null);
-    await dir.removeEntry("kspage-probe.json");
+    await dir.removeEntry("kspage-probe.kspage");
     await again(dir);
   })().then(done, (e) => {
     check(false, "the handles' arena answers (" + String((e && e.stack) || e) + ")");
@@ -214,7 +210,7 @@ function kspageProbeStore(ks) {
     const saidThere = (child, want) =>
       (child.document.getElementById("note").textContent || "").indexOf(want) >= 0;
     const placeMark = "the place read again";
-    check((await lay("again.json", docOf(placeMark))).ok, "the document to read again is laid down");
+    check((await lay("again.kspage", docOf(placeMark))).ok, "the document to read again is laid down");
     const child = window.open(location.pathname, "kspage-again");
     check(child !== null, "the window to read again can be opened");
     if (child === null) return;
@@ -228,21 +224,21 @@ function kspageProbeStore(ks) {
         && child.document.getElementById("local-path").value === "",
       "a window arrived at afresh comes up on the sample, carrying no place");
       const field = child.document.getElementById("local-path");
-      field.value = "again.json";
+      field.value = "again.kspage";
       field.dispatchEvent(new child.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       check(await until(() => child.kspage.text().indexOf(placeMark) >= 0, "the place to open"),
         "the other window opens the place");
       check(await readAgain(child), "the other window is read again");
       check(await until(() => child.kspage.text().indexOf(placeMark) >= 0, "the place reopened"),
         "a page read again comes up on the document it had open (" + child.kspage.text() + ")");
-      check(child.document.getElementById("local-path").value === "again.json",
+      check(child.document.getElementById("local-path").value === "again.kspage",
         "its path field names where that document lives ("
           + child.document.getElementById("local-path").value + ")");
       const shown = child.kspage.save();
       child.document.getElementById("save").click();
-      check(await until(() => saidThere(child, "Saved (again.json"), "the save after reading again"),
+      check(await until(() => saidThere(child, "Saved (again.kspage"), "the save after reading again"),
         "a save after reading again writes back to that place");
-      const kept = await readBack("again.json");
+      const kept = await readBack("again.kspage");
       check(kept === shown && kept.indexOf(placeMark) >= 0,
         "what it writes is the document it came up on, not the sample");
 
@@ -311,7 +307,7 @@ function kspageProbeStore(ks) {
         return until(() => saidThere(child, "Saved (" + path), "the held save");
       };
       const blank = () => child.document.getElementById("doc-new").click();
-      const stayed = await heldSave("race-away.json", blank);
+      const stayed = await heldSave("race-away.kspage", blank);
       check(stayed && child.kspage.pathNow() === "" && pathField().value === "",
         "a document that came into view while it was written does not take the file ("
           + child.kspage.pathNow() + ")");

@@ -3,7 +3,7 @@
  * joins behind hosted.c (the preamble) to make one translation unit. The joining order is held by
  * write_impl in ksplc/gen/runtime.kspls. */
 /* ============================================================
- * The TCP/UDP socket and asynchronous-I/O reactor primitives (for std/net.kspls and
+ * The TCP socket and asynchronous-I/O reactor primitives (for std/net.kspls and
  * std/reactor.kspls). Names and address letters both go through `getaddrinfo`, IPv4 and IPv6
  * alike. Like kspl_proc_*, a handle is opaque in an I64 (a raw fd could be 0, which means failure).
  *
@@ -18,9 +18,6 @@
  * ============================================================ */
 
 /* --- The rephrasings per environment. From here down only one body is written. --- */
-/* What a receive returns for a datagram longer than the buffer, its rest lost. */
-#define KSPL_DGRAM_TOO_LONG (-3)
-
 #ifndef _WIN32
 /* Caution: **Include what is used here.** Leaning on the joining order breaks with "an unknown
  * type" once a file placed before it is taken out (including a header twice is harmless). */
@@ -92,30 +89,6 @@ static I32 kspl_net_send(kspl_fd_t fd, const U8 *buf, Sz len) {
 
 static I32 kspl_net_recv(kspl_fd_t fd, U8 *buf, Sz cap) {
     return (I32)recv(fd, buf, (size_t)cap, 0);
-}
-
-static I32 kspl_net_sendto(kspl_fd_t fd, const U8 *buf, Sz len, struct sockaddr *addr,
-    kspl_socklen_t addr_len) {
-    return (I32)sendto(fd, buf, (size_t)len, KSPL_SEND_FLAGS, addr, addr_len);
-}
-
-/* Receives one datagram; KSPL_DGRAM_TOO_LONG where it was longer than cap.
- * Caution: **Ask recvmsg, not recvfrom.** recvfrom returns the cut length as a success, while
- * Windows refuses the same datagram; only MSG_TRUNC tells that the rest was lost. */
-static I32 kspl_net_recvfrom(kspl_fd_t fd, U8 *buf, Sz cap, struct sockaddr_storage *from) {
-    struct iovec iov;
-    struct msghdr msg;
-    ssize_t n;
-    iov.iov_base = buf;
-    iov.iov_len = (size_t)cap;
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_name = from;
-    msg.msg_namelen = sizeof(*from);
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    n = recvmsg(fd, &msg, 0);
-    if (n >= 0 && (msg.msg_flags & MSG_TRUNC) != 0) return KSPL_DGRAM_TOO_LONG;
-    return (I32)n;
 }
 
 /* Opens a socket, and accepts a connection, that no child inherits (hosted.c's "Nothing the
@@ -234,17 +207,6 @@ static void kspl_net_claim_addr(kspl_fd_t fd) {
     setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&yes, sizeof(yes));
 }
 
-static I32 kspl_net_sendto(kspl_fd_t fd, const U8 *buf, Sz len, struct sockaddr *addr,
-    kspl_socklen_t addr_len) {
-    return (I32)sendto(fd, (const char *)buf, (int)len, 0, addr, addr_len);
-}
-
-static I32 kspl_net_recvfrom(kspl_fd_t fd, U8 *buf, Sz cap, struct sockaddr_storage *from) {
-    kspl_socklen_t from_len = sizeof(*from);
-    int n = recvfrom(fd, (char *)buf, (int)cap, 0, (struct sockaddr *)from, &from_len);
-    if (n == SOCKET_ERROR && WSAGetLastError() == WSAEMSGSIZE) return KSPL_DGRAM_TOO_LONG;
-    return (I32)n;
-}
 #endif
 
 /* --- From here down is the one body that does not mind the environment. --- */
@@ -440,8 +402,7 @@ KSPL_LINK I64 kspl_tcp_accept(I64 handle) {
     return kspl_socket_wrap(fd);
 }
 
-/* The connection partner's address. The output shape is the same as kspl_udp_recv_from's
- * from_host_out (the address as text + the port in host order). 0 on success, negative on
+/* The connection partner's address: the address as text, and the port in host order. 0 on success, negative on
  * failure. */
 KSPL_LINK I32 kspl_tcp_peer(I64 handle, U8 *host_out, Sz host_cap, Sz *host_len_out, I32 *port_out) {
     struct sockaddr_storage peer;
@@ -454,7 +415,7 @@ KSPL_LINK I32 kspl_tcp_peer(I64 handle, U8 *host_out, Sz host_cap, Sz *host_len_
     return kspl_write_addr(&peer, host_out, host_cap, host_len_out, port_out);
 }
 
-/* The port a socket is bound to, in host order, TCP or UDP alike; -1 on failure. It is how a
+/* The port a socket is bound to, in host order; -1 on failure. It is how a
  * socket bound to port 0 learns the port the OS chose. */
 KSPL_LINK I32 kspl_net_local_port(I64 handle) {
     struct sockaddr_storage self;
@@ -500,16 +461,6 @@ KSPL_LINK I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, S
     return (I32)n;
 }
 
-/* Solves a name into just one address string (the candidate the resolver placed first).
- * 0 = solved, -1 = it does not. */
-KSPL_LINK I32 kspl_net_resolve(const U8 *host_ptr, Sz host_len, U8 *host_out, Sz host_cap,
-    Sz *host_len_out) {
-    kspl_cand_t cands[KSPL_ADDR_MAX];
-    I32 port = 0;
-    if (kspl_resolve(host_ptr, host_len, 0, SOCK_STREAM, 0, cands) == 0) return -1;
-    return kspl_write_addr(&cands[0].sa, host_out, host_cap, host_len_out, &port);
-}
-
 KSPL_LINK I32 kspl_tcp_send(I64 handle, const U8 *buf, Sz len) {
     if (handle == 0) return -1;
     return kspl_net_send(kspl_socket_of(handle)->fd, buf, len);
@@ -520,7 +471,7 @@ KSPL_LINK I32 kspl_tcp_recv(I64 handle, U8 *buf, Sz cap) {
     return kspl_net_recv(kspl_socket_of(handle)->fd, buf, cap);
 }
 
-/* Closes a socket of either kind: TCP and UDP share kspl_socket_t. */
+/* Closes a socket. */
 KSPL_LINK void kspl_tcp_close(I64 handle) {
     if (handle == 0) return;
     kspl_socket_t *s = kspl_socket_of(handle);
@@ -528,54 +479,10 @@ KSPL_LINK void kspl_tcp_close(I64 handle) {
     free(s);
 }
 
-/* The return value's meaning is the same as kspl_tcp_listen's (waiting, the candidate is one). */
-KSPL_LINK I64 kspl_udp_open(const U8 *host_ptr, Sz host_len, I32 port) {
-    kspl_cand_t cands[KSPL_ADDR_MAX];
-    kspl_fd_t fd;
-    if (kspl_resolve(host_ptr, host_len, port, SOCK_DGRAM, AI_PASSIVE, cands) == 0) return -1;
-    fd = kspl_socket_for(&cands[0], SOCK_DGRAM);
-    if (kspl_fd_bad(fd)) return 0;
-    if (bind(fd, (struct sockaddr *)&cands[0].sa, cands[0].sa_len) != 0) {
-        kspl_net_closefd(fd);
-        return 0;
-    }
-    return kspl_socket_wrap(fd);
-}
-
-/* Caution: **The destination takes an address string alone** (`AI_NUMERICHOST`); a name would be
- * looked up per datagram at a cost the caller cannot see. Solve it once with `kspl_net_resolve`.
- * The return value: the bytes sent, -1 = it cannot send, -2 = not an address string. */
-KSPL_LINK I32 kspl_udp_send_to(I64 handle, const U8 *buf, Sz len, const U8 *host_ptr, Sz host_len,
-    I32 port) {
-    kspl_cand_t cands[KSPL_ADDR_MAX];
-    if (handle == 0) return -1;
-    if (kspl_resolve(host_ptr, host_len, port, SOCK_DGRAM, AI_NUMERICHOST, cands) == 0) return -2;
-    return kspl_net_sendto(kspl_socket_of(handle)->fd, buf, len,
-        (struct sockaddr *)&cands[0].sa, cands[0].sa_len);
-}
-
-/* The return value: the bytes received, -1 = it cannot receive, -3 = the datagram was longer than
- * cap (KSPL_DGRAM_TOO_LONG; it is consumed, the same on every OS). */
-KSPL_LINK I32 kspl_udp_recv_from(I64 handle, U8 *buf, Sz cap, U8 *from_host_out, Sz from_host_cap,
-    Sz *from_host_len_out, I32 *from_port_out) {
-    struct sockaddr_storage from;
-    I32 n;
-    if (handle == 0) return -1;
-    memset(&from, 0, sizeof(from));
-    n = kspl_net_recvfrom(kspl_socket_of(handle)->fd, buf, cap, &from);
-    if (n == KSPL_DGRAM_TOO_LONG) return n;
-    if (n < 0) return -1;
-    if (kspl_write_addr(&from, from_host_out, from_host_cap, from_host_len_out,
-        from_port_out) != 0) {
-        return -1;
-    }
-    return n;
-}
-
 /* ============================================================
- * The asynchronous-I/O reactor primitives (for std/reactor.kspls). TCP and UDP sockets share
- * kspl_socket_t{fd}, so non-blocking mode and polling work across both kinds. Opt-in; the
- * blocking API of std/net.kspls stays as it is.
+ * The asynchronous-I/O reactor primitives (for std/reactor.kspls). Every socket is a
+ * kspl_socket_t{fd}, so non-blocking mode and polling work on any of them. Opt-in; the blocking
+ * API of std/net.kspls stays as it is.
  * ============================================================ */
 
 KSPL_LINK Bool kspl_net_set_nonblocking(I64 handle) {

@@ -40,19 +40,12 @@ pub fn encode( //< percent-encodes a piece of text so it can go inside a URL
 pub fn decode_component( //< percent-decodes a path piece, leaving `+` as a `+`
     //<
     //< **"+" does not become a space.** Only application/x-www-form-urlencoded writes a space as
-    //< "+"; in a URI path a "+" is just a "+" (RFC 3986). For a form, use decode_form.
+    //< "+"; in a URI path a "+" is just a "+" (RFC 3986). `parse_query` reads a query's "+" as a
+    //< space.
     s: U8[], //< the escaped text as it arrived
     arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
 ): U8[]!Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
     return decode_impl(s, false, arena)
-
-pub fn decode_form( //< percent-decodes as a form does, turning `+` into a space
-    //<
-    //< Use it for the names and values of a query string, and for a form body.
-    s: U8[], //< the escaped text as it arrived
-    arena: Arena$@, //< where the result goes; null means the heap, freed with `dealloc`
-): U8[]!Url_error //< the decoded text; a broken `%XX` fails, having allocated nothing
-    return decode_impl(s, true, arena)
 
 priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_error //<
     //< Checks every `%XX` and counts the bytes first, so a failure has nothing to free
@@ -90,7 +83,8 @@ pub struct Query_param //< one `name=value` pair of a query string
 
 pub fn parse_query( //< splits a query string into a linked list of pairs
     //<
-    //< Each name and value is decoded with `decode_form()` and copied into the arena, in order.
+    //< Each name and value is percent-decoded, a `+` read as a space as a form writes it, and
+    //< copied into the arena, in order.
     query: U8[], //< the text after the `?`; a leading `?` is dropped
     arena: Arena$@, //< where the decoded names and values are copied
 ): Query_param$@!Url_error //< the first pair, or null for an empty query; a broken `%XX` fails
@@ -109,8 +103,8 @@ pub fn parse_query( //< splits a query string into a linked list of pairs
             if eq: = pair.find_char('=')
                 raw_name = pair.sub(0, eq)
                 raw_value = pair.sub_from(eq + 1)
-            param: Query_param = ::{ .name = U8$[]::decode_form(raw_name, arena)!,
-                .value = U8$[]::decode_form(raw_value, arena)!, .next = null }
+            param: Query_param = ::{ .name = U8$[]::decode_impl(raw_name, true, arena)!,
+                .value = U8$[]::decode_impl(raw_value, true, arena)!, .next = null }
             node: = arena.create(param)
             if head == null
                 head = node

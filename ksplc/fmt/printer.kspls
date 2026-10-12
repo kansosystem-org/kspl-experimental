@@ -40,7 +40,8 @@ struct Formatter
         //< `out` can end in a trailing comment, and `line_continues` in `../parse/line_cont.kspls`
         //< needs the code alone. Only `set_last_text` moves it.
     suppress_nl_depth: Sz
-    pending_seg_len: Sz
+    pending_seg_len: Sz //<
+        //< the width of the unit the next token starts: `.m(args)`, `catch <value>`
     pending_dot_break_ok: Bool //<
         //< Whether the `.` of pending_seg_len's chain may be a wrapping point
         //<
@@ -142,7 +143,7 @@ priv struct Body_scan //< the children of a node, counted in one pass
     //<
     //< `body_count` is the number of real members **after** the opening brace. The braces'
     //< positions let `has_comment_in` look in the original for a comment inside. **A compound
-    //< literal's sigil counts as the opening brace** (`::{` / `.{`).
+    //< literal's sigil counts as the opening brace** (`::{`).
     content_count: Sz
     body_count: Sz
     body_inner: Ast_node$@
@@ -467,6 +468,8 @@ impl Formatter
         if text.equals(".") && r.pending_seg_len > 0
             text_len = r.pending_seg_len
             dot_break_ok = r.pending_dot_break_ok
+        else if text.equals("catch") && r.pending_seg_len > 0
+            text_len = r.pending_seg_len
         r.pending_seg_len = 0
         r.pending_dot_break_ok = false
 
@@ -619,7 +622,7 @@ impl Formatter
             //< Caution: **(1) and (3) both require no comment inside.** If folded, only the
             //< comment's first line moves onto the `{` line and the rest splits across the brace
             //< (and loses a level of indentation). The split shape is **idempotent**, so
-            //< `test-fmt-tree` does not catch it.
+            //< the tree's round trip does not catch it.
         kind_id: = node.kind_id
         has_inner_comment: = fmt_source.has_comment_in(r.src, body.open_brace_off,
             body.close_brace_off)
@@ -792,6 +795,11 @@ impl Formatter
                 r.pending_dot_break_ok =
                     node.has_multi_dot_chain(r.src) ||
                     !node.chain_segment_has_comma(i, r.src)
+            // **`catch <value>` is measured whole on its `catch`**: a line cannot end in `catch`
+            // (`check_line_wrap`), so the break goes before it. A block goes below on its own.
+            if kind_id == .k_expr_catch && child.is_keyword("catch") &&
+                node.find_child(.k_stmt_block) == null
+                r.pending_seg_len = node.printed_width(r.src)
 
             // **One attribute per line.** Joined (`#export #cfg(x)`), they cannot be read one at a
             // time, and adding one changes the whole line in a diff.

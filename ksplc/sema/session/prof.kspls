@@ -23,7 +23,7 @@ struct Body_prof_entry //< the tally for one declaration
     name: U8[]
     file: U8[]
     offset: Sz
-    self_us: I64 //< its own time with the nested time subtracted (see `nested_us` below)
+    self_us: I64 //< its own time
     calls: I64
 
 struct Sema_prof
@@ -33,14 +33,6 @@ struct Sema_prof
     layouts_us: I64
     priv by_pos: Map<|U8[], Body_prof_entry$@|>
     priv bodies: List<|Body_prof_entry$@|>
-    priv nested_us: I64 //<
-        //< The total time of the bodies nested inside the one being measured
-        //<
-        //< **Subtracting it keeps a body started inside another from counting twice.** No body
-        //< nests in the analysis as it stands: the drain between statements
-        //< (`drain_pending_instances` in `../decl/mono_queue.kspls`) builds method tables and
-        //< infers no body, and the template bodies run one after another after the main walk.
-        //< Without it, a nested body would put the body that called it at the top.
     body_count: I64
 
 $prof: Sema_prof = ::{}
@@ -57,7 +49,6 @@ impl Sema_prof
         r.infer_us = 0
         r.constraints_us = 0
         r.layouts_us = 0
-        r.nested_us = 0
         r.body_count = 0
         // Caution: **Recreate both buffers; do not just reset a length to 0.** They live in
         // `base_core.arena`, which the LSP rewinds per request (`wind_back` in
@@ -68,8 +59,7 @@ impl Sema_prof
 
     fn body_begin(r: Self$@): I64 //< starts timing one body
         //<
-        //< Pass what it and nested_save return to `body_end` unchanged. Without `--stats` it
-        //< returns 0.
+        //< Pass what it returns to `body_end` unchanged. Without `--stats` it returns 0.
         // The count is kept separate from the clock (see timing_on).
         if !base_core.config.enable_stats
             return 0
@@ -78,20 +68,10 @@ impl Sema_prof
             return 0
         return sys.mono_us()
 
-    fn nested_save(r: Self$@): I64 //< saves the outer nested time
-        //<
-        //< Caution: **Always call it together with `body_begin`** (the body's own time needs it).
-        saved: = r.nested_us
-        r.nested_us = 0
-        return saved
-
-    fn body_end(r: Self$@, name: U8[], loc: base_ast.Loc, started_us: I64, saved_nested: I64)
+    fn body_end(r: Self$@, name: U8[], loc: base_ast.Loc, started_us: I64)
         if !timing_on()
             return
-        elapsed: = sys.mono_us() - started_us
-        self_us: = elapsed - r.nested_us
-        // Seen from outside, all of this body counts as "nested".
-        r.nested_us = saved_nested + elapsed
+        self_us: = sys.mono_us() - started_us
         if name.len == 0
             return
         key: = base_core.arena.text().s(loc.file()).c(':').s("\{loc.offset\}").take()

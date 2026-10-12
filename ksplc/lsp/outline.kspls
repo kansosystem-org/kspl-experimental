@@ -101,13 +101,6 @@ priv fn end_of(c: Ctx$@, node: Ast_node$@): Sz //<
             far = got
     return far
 
-priv fn range_of(c: Ctx$@, off: Sz, len: Sz): json.Val //< the LSP range of `len` bytes at `off`
-    at: = off if off <= c.src.len else c.src.len
-    end: = at + len if at + len <= c.src.len else c.src.len
-    s: = c.src.get_line_char(at, c.starts)
-    e: = c.src.get_line_char(end, c.starts)
-    return c.b.range(s.line, s.character, e.line, e.character)
-
 priv fn symbol(c: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Val? //<
     //< One declaration as a `DocumentSymbol`, its members nested, or none where it has no name
     $name: U8[] = ""
@@ -130,8 +123,9 @@ priv fn symbol(c: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Val? 
             kids = members(c, ch, inner, kids)
     // **The whole declaration is the range, the name the selection** (the editor puts the cursor
     // on the selection and highlights the range); the selection must lie inside the range.
-    whole: = range_of(c, node.loc.offset, end_of(c, node) - node.loc.offset)
-    sel: = range_of(c, sel_off, sel_len)
+    whole: = c.b
+        .range_in(c.src, node.loc.offset, end_of(c, node) - node.loc.offset, c.starts)
+    sel: = c.b.range_in(c.src, sel_off, sel_len, c.starts)
     return .some(c.b.obj().set("name", c.b.str_val(name)).set("kind", c.b.int_val(kind))
         .set("range", whole).set("selectionRange", sel).set("children", kids.build()).build())
 

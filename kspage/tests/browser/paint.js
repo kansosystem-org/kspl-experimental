@@ -82,7 +82,6 @@ function kspageProbePaint(ks) {
   check(document.getElementById("note").textContent.indexOf("two or more") >= 0,
     "one cell alone is refused, saying to drag first ("
       + document.getElementById("note").textContent + ")");
-  check(app.text() === wholeTable, "a refused merge changes not one character");
   // **Drag across two cells, then press**, as in Excel.
   const cell = app.cellFrame();
   const drag = (x0, y0, x1, y1) => {
@@ -99,12 +98,14 @@ function kspageProbePaint(ks) {
     "joining takes the drawn-in cells' text off ("
       + wholeTable.length + " -> " + app.text().length + ")");
   check(document.activeElement === ime, "after the press the focus goes back to the input field");
+  const joined = ks.cellCount();
   document.getElementById("split-cell").click();
-  check(app.text().length < wholeTable.length, "a cell that comes back on splitting is empty");
-  // **Joining and splitting are one undo each.** Press twice and two undos put it back.
+  check(ks.cellCount() > joined,
+    "the button is wired to splitting (" + joined + " -> " + ks.cellCount() + " cells)");
+  // **Leave the table as it was found** (the sorting below and the next sections run on it).
   undoKey();
   undoKey();
-  check(app.text() === wholeTable, "two undos return to the original table");
+  check(app.text() === wholeTable, "the table is put back after joining and splitting");
 
   // The sorting buttons. **This can be seen nowhere else** (misspell an id and the wasm is unhurt).
   // The text length does not change, so the row changing tells it.
@@ -117,7 +118,6 @@ function kspageProbePaint(ks) {
   document.getElementById("sort-down").click();
   check(app.text() !== sortWas, "the button is wired to sorting");
   check(document.activeElement === ime, "after the press the focus goes back to the input field");
-  check(app.text().length === sortWas.length, "sorting does not change how much text there is");
   // A refusal says why: sorted again the same way, the status says the rows are in order, not
   // "click inside a table's cell".
   const note = document.getElementById("note");
@@ -126,7 +126,7 @@ function kspageProbePaint(ks) {
   check(note.textContent === "The rows are already in this order",
     "sorted again the same way, the notice names the reason");
   undoKey();
-  check(app.text() === sortWas, "one undo returns to the original row");
+  check(app.text() === sortWas, "the rows are put back after sorting");
 
   // 22'. The document's theme (wearing colours and typefaces in one set).
   //

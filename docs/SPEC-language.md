@@ -392,6 +392,7 @@ flowchart LR
 1. **Slice (`T[]`)**:
 
 * **Definition**: a safe view onto a memory region that something else owns. It is a *fat pointer*: a pointer and a length together. It has two read-only fields: `.ptr`, a raw pointer to the first element (`T@`), and `.len`, the element count (`Sz`).
+* **The only spelling**: it is `std/lang`'s `Slice<|$T|>`, but `Slice<|T|>` written as a type is a compile error naming `T[]` (`T$[]` for writable elements), an `impl`'s target included.
 * **Safety**: every read or write by index is checked against the range at run time.
 * **Constraint**: there is no slicing syntax (a subarray written like `arr[start .. end]`). Instead, `std/chars`'s `sub(start, len)` / `sub_from(start)` / `sub_mut(start, len)` return zero-copy views. The element type does not matter: they are generic methods on `impl<|T|> T[]`, so an `I32[]` and a `U8[][]` are sliced alike.
 
@@ -424,7 +425,7 @@ flowchart LR
 
 6. **Optional (`T?`)**:
 
-* **Definition**: `T?` is `std/lang`'s `Option<|T|>`, a value that may be absent ("Null safety" in [3.4](#34-enums-enum)). The two spellings are one type, and a diagnostic writes the short one.
+* **Definition**: `T?` is `std/lang`'s `Option<|T|>`, a value that may be absent ("Null safety" in [3.4](#34-enums-enum)). `Option<|T|>` written as a type is a compile error naming `T?`, an `impl`'s target included (`impl<|T|> T?`), and a diagnostic writes the short one.
 * **Marks apply from the left**, as `[]` and `@` do: `U8[]?` is an optional slice, `U8?[]` a slice of optional bytes, and `Node$@?` an optional pointer.
 * **With a result**: `T?!E` is a result whose value may be absent, and an optional result is bracketed, `(T!E)?`. `T!E?` is a compile error, since the `?` would make the error type optional.
 * **A `?` marks a type only.** After a value it is a syntax error: `f()!` passes a failure on, and `if v: = x` takes an optional's value out. Where an expression names the type, it is written `Option<|T|>` (`Option<|I32|>.none`), or left to the place (`.none`).
@@ -1503,9 +1504,7 @@ d: Sz = cells[3]@ - cells[0]@ // 3 (three elements' worth; not 12)
 
 #### 6.2.1 Member access and indexing through a pointer
 
-`.` and `[]` reach through pointers for you, but `[]` only works where the length is known, so every index can be checked against it.
-
-**`.` and `[]` dereference the receiver's pointer automatically, regardless of the number of steps.** `p.f` is exactly the same code as `p$.f`, and `p[i]` as `p$[i]`; a multiple pointer such as `p: T@@` is peeled down to the entity. Writing the `$` changes nothing, and the linter reports it as unnecessary (`[I0309]`).
+**`.` and `[]` reach through pointers for you: they dereference the receiver's pointer automatically, regardless of the number of steps.** `p.f` is exactly the same code as `p$.f`, and `p[i]` as `p$[i]`; a multiple pointer such as `p: T@@` is peeled down to the entity. Writing the `$` changes nothing, and the linter reports it as unnecessary (`[I0309]`).
 
 But **`[]` is allowed only when what it points at carries its own length**. A *bounds check* compares the index with that length before the access.
 
@@ -1536,9 +1535,7 @@ A type that does not implement `Index` cannot be read with `[]`, as a value or t
 
 ### 6.3 Method calls and namespaces
 
-One `.` does both jobs: it calls a method on a value, and it reaches a name held by a type or an imported file.
-
-**A single `.`** calls a method on a value or a pointer alike (`vec.length_sq()`). It also walks down from a type's name or an import's alias (`Vector.new(1, 2)`, `io.out().s("Hi\n")`). The compiler tells which is meant from the left side, so there is no choosing between `::` and `.`.
+**One `.` does both jobs: it calls a method on a value or a pointer alike (`vec.length_sq()`), and it walks down from a type's name or an import's alias to a name held there (`Vector.new(1, 2)`, `io.out().s("Hi\n")`).** The compiler tells which is meant from the left side, so there is no choosing between `::` and `.`.
 
 **A type's name walks down; on its own it is not a value.** `Vector.new(1, 2)` and `Sz.width()` read a name held on the type. Written where a value goes (`x: = Vector`, `x: = Sz`), it is rejected: a type names a kind of value and holds none, so the declaration has nothing to take its type from. Build a value instead (`Vector.new(...)`, `Vector::{ ... }`), or write the value itself.
 
@@ -1582,9 +1579,9 @@ The one exception is a source type implementing `std/lang`'s `Cast<|Output|>` (`
 // std/checked_int.kspls: I32 already implements Cast to Ci32
 impl I32: Cast<|Ci32|>
     pub fn cast(r: Self$@): Ci32
-        return Ci32.new(r$)
+        return Ci32::{ .val = r$ }
 
-a: = Ci32::123 // OK: resolves to the equivalent of 123.cast() (equal to Ci32.new(123))
+a: = Ci32::123 // OK: resolves to the equivalent of 123.cast()
 b: = Ci32::(10 + 20) // OK: an expression enclosed in parentheses can be the receiver too
 ```
 
@@ -1642,9 +1639,7 @@ Caution: Do not build the descriptor by hand. `T[]::{ .ptr = a@, .len = 4 }` fix
 
 ### 6.5 Assignment and compound assignment
 
-Assignment changes a value in place. It is a statement of its own, never part of a larger expression.
-
-**Assignment and compound assignment are statements, not expressions**: they return no value, so they cannot be chained (`a = b = 0`) or embedded in an expression.
+**Assignment changes a value in place, and it and compound assignment are statements of their own, never part of a larger expression**: they return no value, so they cannot be chained (`a = b = 0`) or embedded in an expression.
 
 * **Assignment**: `=`
 * **Arithmetic compound assignment**: `+=`, `-=`, `*=`, `/=`, `%=`
@@ -1736,9 +1731,7 @@ comp2: Component = ::{ 200, .tags = ::{ "Enemy", "Boss" } } // id=200, active ta
 
 #### 6.6.2 Where the type may be omitted
 
-You may write `::{ … }` without a type name only where the compiler already knows which type is expected. The same holds for an enum's `.variant`.
-
-**The type name may be left out only where the expected type ([2.3](#23-literals)) is fixed to one**, leaving `::{ ... }` or an enum's `.variant`. There are nine such places:
+**You may write `::{ … }`, or an enum's `.variant`, without a type name only where the expected type ([2.3](#23-literals)) is fixed to one.** There are nine such places:
 
 1. **The right-hand side of a variable declaration**
 2. **The right-hand side of `=`**, which takes the type of the place assigned (`held = .some(3)`); a compound assignment such as `+=` is not one
@@ -2281,9 +2274,7 @@ impl<|T|> Holder<|T|>
 
 #### 8.1.4 A function is defined where it is declared
 
-Every function is written with its body. There are no separate header declarations as in C.
-
-**A function has a body.** A `;` in place of it is a compile error, for a free function and for a method in an `impl` alike. A signature stands alone in two places only: a trait's required method ([5.1](#51-traits-trait)) and a function in an `extern "C"` block ([11](#11-c-interoperability)).
+**Every function is written with its body; there are no separate header declarations as in C.** A `;` in place of it is a compile error, for a free function and for a method in an `impl` alike. A signature stands alone in two places only: a trait's required method ([5.1](#51-traits-trait)) and a function in an `extern "C"` block ([11](#11-c-interoperability)).
 
 **A function defined in another artifact is reached through C**: it is declared in an `extern "C"` block, as a library built from KSPL ships its interface ([11.3](#113-exposing-a-kspl-function-to-c-export)). (An *artifact* is a separately built program or library.) KSPL code reaches another package's KSPL functions, generics and methods included, through its source.
 
@@ -2329,9 +2320,7 @@ fn main(): I32
 
 ### 8.3 Error handling
 
-A function that may fail says so in its return type, `T!E`. It returns with `return` on success and `throw` on failure ([8.3.1](#831-success-and-failure-return-vs-throw)). The caller takes the contents out with `catch` ([8.3.2](#832-catching-an-error-catch)) or `!` ([8.3.3](#833-error-propagation-)).
-
-**No exception leaves a function without appearing in its return type**, so whether a call can fail is read from the type, and the caller cannot overlook it. (In Python or JavaScript, by contrast, an exception can escape a function whose signature does not mention it.)
+**A function that may fail says so in its return type, `T!E`: no exception leaves a function without appearing there**, so whether a call can fail is read from the type, and the caller cannot overlook it. (In Python or JavaScript, by contrast, an exception can escape a function whose signature does not mention it.) It returns with `return` on success and `throw` on failure ([8.3.1](#831-success-and-failure-return-vs-throw)). The caller takes the contents out with `catch` ([8.3.2](#832-catching-an-error-catch)) or `!` ([8.3.3](#833-error-propagation-)).
 
 * **The `T!E` type** holds either the success value, `T`, or the failure value, `E`.
 * **The error type cannot be omitted**: there is no short form `T!`, which would be a second spelling of one type ([`docs/DESIGN.md` "Notations not carried"](DESIGN.md)). For a type compatible with C's `int`, write `T!I32`.
@@ -2558,9 +2547,7 @@ An arena is one large block of memory that hands out pieces of itself, and lets 
 
 #### 8.4.4 What may be handed to `dealloc`
 
-`mem.dealloc` frees memory that `mem.alloc` gave out, and nothing else.
-
-**`mem.dealloc` may receive only a pointer `mem.alloc` itself returned.** The three methods of §8.4 handle the same `T$@`, so the origin cannot be told from the type. Three things must not be passed to it:
+**`mem.dealloc` frees only memory that `mem.alloc` itself gave out, and nothing else.** The three methods of §8.4 handle the same `T$@`, so the origin cannot be told from the type. Three things must not be passed to it:
 
 | What must not be handed to it | Examples |
 | :-- | :-- |
@@ -2814,8 +2801,8 @@ import "std/io"
 fn main()
     $m: = hash_map.Map<|U8[], I32|>.new(null)
     defer m.free()
-    a: = Ci32.new(10) // exactly the same type as checked_int.Ci32
-    b: = My_cu32.new(5)
+    a: = Ci32::10 // exactly the same type as checked_int.Ci32
+    b: = My_cu32::5U32
     io.out().s("Hello \{m.len\} \{a.val\} \{b.val\}\n")
 ```
 

@@ -1,0 +1,135 @@
+//< The AI-assist tools' own logic: counting the corpus, and the oracle's answers
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tools/ai_assist/corpus_count" as count
+import "tools/ai_assist/ksplc_oracle" as oracle
+
+// ==========================================
+// Tests the functions that count the training material (`tools/ai_assist/corpus_count.kspls`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a wrong word boundary or an
+// extra line gives a plausible number, which looks the same as the material growing.
+// Caution: Test each case that matches together with one that does not.
+// ==========================================
+
+fn test_which_folder_is_left_out() //< `negative` is the only folder left out of the scan
+    //<
+    //< It keeps broken spellings out of the material.
+    verdict.start("[tools/ai_assist] the folders left out of the material test...")
+    assert(count.skip_dir("negative"), "negative is left out")
+    // **Do not skip on a partial match** (a folder with a similar name would be skipped too).
+    assert(!count.skip_dir("negatives"), "negatives is not left out")
+    assert(!count.skip_dir("runtime"), "runtime is not left out")
+    assert(!count.skip_dir(""), "an empty name is not left out")
+    verdict.pass("only `negative` is left out; a merely similarly named folder stays.")
+
+fn test_counting_words() //< words split on whitespace, a run of it being one boundary
+    verdict.start("[tools/ai_assist] how words are counted test...")
+    assert(count.count_words("") == 0, "an empty spelling is 0 words")
+    assert(count.count_words("   ") == 0, "whitespace alone is 0 words")
+    assert(count.count_words("abc") == 1, "one word")
+    assert(count.count_words("a b c") == 3, "split on whitespace")
+    // **Do not add a run of whitespace to the word count.**
+    assert(count.count_words("a    b") == 2, "whitespace in a row does not add words")
+    assert(count.count_words("  a b  ") == 2, "whitespace before and after is not a word")
+    assert(count.count_words("a\nb\tc") == 3, "a newline and a tab are boundaries too")
+    verdict
+        .pass("words split on whitespace, and neither a run nor surrounding whitespace adds one.")
+
+fn test_counting_lines() //< the lines are the newline count + 1, an empty text counting as one
+    verdict.start("[tools/ai_assist] how lines are counted test...")
+    // **Do not count from 0**: one line with no newline is 1 line.
+    assert(count.count_lines("") == 1, "an empty spelling is 1 line too")
+    assert(count.count_lines("abc") == 1, "with no newline it is 1 line")
+    assert(count.count_lines("a\nb") == 2, "one newline makes 2 lines")
+    // A trailing newline adds one more line (the empty last line counts).
+    assert(count.count_lines("a\n") == 2, "a trailing newline counts as one too")
+    assert(count.count_lines("a\nb\nc") == 3, "two newlines make 3 lines")
+    verdict.pass("the lines are the newline count plus 1, and even an empty spelling is 1 line.")
+
+fn test_the_token_estimate() //< the estimate is the larger of the length / 4 and the word count
+    verdict.start("[tools/ai_assist] the token estimate test...")
+    // With few, long words, the length wins.
+    assert(count.approx_tokens("aaaaaaaaaaaaaaaa") == 4, "one long word is estimated by the length")
+    // **Do not let it drop below the word count** (with short words, length / 4 is smaller).
+    assert(count.approx_tokens("a b c d e f g h") == 8,
+        "short words in a row are estimated by the word count")
+    assert(count.approx_tokens("") == 0, "an empty spelling is 0")
+    verdict.pass("the estimate is the larger of the length / 4 and the word count, below neither.")
+
+// ==========================================
+// tools/ai_assist/ksplc_oracle: checks the compiler oracle on 0 errors, a type error (a summary
+// line), a syntax error (no summary, stderr's line count), the temporary file's removal, and JSONL.
+// It really starts ksplc_stage1.exe (make debug depends on $(STAGE1_EXE), so it is built).
+// ==========================================
+fn test_compile_errors(arena: Arena$@) //< the count and the first diagnostic, from a real ksplc
+    verdict.start("[Oracle] ksplc_oracle.compile_errors/compiles/first_diagnostic test...")
+
+    good: = "fn main() {\n}\n"
+    good_r: = oracle.compile_errors(good, "_oracle_test_good", arena)
+    assert(good_r.error_count == 0, "valid source must compile with 0 errors")
+    kspl_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.kspl")
+    c_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.c")
+    assert(!kspl_left && !c_left, "compile_errors must clean up its temp .kspls/.c files")
+
+    type_err: = "fn main() {\n    x: I32 = \"not a number\";\n}\n"
+    type_r: = oracle.compile_errors(type_err, "_oracle_test_type_err", arena)
+    assert(type_r.error_count > 0 && type_r.error_count != oracle.uncompilable,
+        "a type error must be reported via the normal 'Finished with N error(s)' summary")
+    diag: = oracle.first_diagnostic(type_r.stderr_data)
+    assert(diag.find_str(": error:").is_some(), "first_diagnostic must return a real error line")
+    type_err_compiles: = oracle.compiles(type_err, "_oracle_test_type_err2", arena)
+    assert(!type_err_compiles, "compiles() must be false when compile_errors' count is nonzero")
+
+    // A syntax error puts out no summary, so stderr's ": error:" lines are counted
+    // (ksplc_oracle.compile_errors).
+    garbage: = ")))garbage{{{***\n"
+    garbage_r: = oracle.compile_errors(garbage, "_oracle_test_garbage", arena)
+    assert(garbage_r.error_count > 0 && garbage_r.error_count != oracle.uncompilable,
+        "a parse-broken source must fall back to counting stderr diagnostic lines")
+
+    // A source that passes sema and fails in code generation.
+    // Caution: **Always test this path.** A summary printed right after sema misses later errors
+    // and says "0 error(s)", counting a failure as a pass (print_diag_summary in ksplc/main.kspls).
+    // In C a fixed-length array takes two pairs of braces per level, so 97 levels reach the limit
+    // on a zero initializer.
+    $deep: = Str_builder.new()
+    defer deep.free()
+    deep.s("fn main() {\n    a: I32")
+    for _i in Range.asc(97)
+        deep.s("[1]")
+    deep.s(" = ::{};\n}\n")
+    late_r: = oracle.compile_errors(deep.slice(), "_oracle_test_late_err", arena)
+    assert(late_r.error_count > 0 && late_r.error_count != oracle.uncompilable,
+        "an error raised after sema must still reach the summary count")
+    late_compiles: = oracle.compiles(deep.slice(), "_oracle_test_late_err2", arena)
+    assert(!late_compiles, "compiles() must be false for a source that fails in codegen")
+
+    verdict
+        .pass("normal, type and syntax errors all give the right count, and the temp file was \
+            cleared.")
+
+fn test_load_jsonl(arena: Arena$@) //< a JSONL file becomes one value per line
+    verdict.start("[Oracle] ksplc_oracle.load_jsonl test...")
+
+    // **The file goes in out/tmp**, not corpus/ (which is untracked and absent in a fresh tree);
+    // The entry point (`tests/debug/main.kspls`, `tools/tests/main.kspls`) creates out/tmp.
+    fixture: = "out/tmp/oracle_load_jsonl.jsonl"
+    io.write_file(fixture,
+        "{\"path\":\"a.kspl\",\"code\":\"x\"}\n\n{\"path\":\"b.kspl\",\"code\":\"y\"}\n")
+        catch panic("failed to write load_jsonl test fixture")
+
+    recs: = oracle.load_jsonl(fixture, arena)
+        catch panic("load_jsonl must not fail to read a well-formed fixture")
+    // out/tmp is remade on every build, so a failed delete does not carry over.
+    fs.remove_path(fixture) catch {}
+
+    assert(recs.len == 2, "blank lines must be skipped; exactly 2 records expected")
+    assert(recs[0].get("path").as_str().equals("a.kspl"), "record 0's 'path' must round-trip")
+    assert(recs[1].get("code").as_str().equals("y"), "record 1's 'code' must round-trip")
+
+    verdict.pass("blank lines are skipped and each line's JSON is restored correctly.")

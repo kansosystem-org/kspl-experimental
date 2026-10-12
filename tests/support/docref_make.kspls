@@ -14,13 +14,14 @@ import "std/verdict"
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
 
+priv const suite_found: U8[] = "suite_found := " //< how make's dump writes a folder's suite names
 priv const not_target: U8[] = "# Not a target:" //<
     //< what make's dump writes above a file it only knows
 
 priv struct Forward //< a pattern the root forwards to a package's `Makefile`
     pattern: U8[] //< as the root's dump writes it
     dir: U8[] //< the folder it forwards to
-    suites: Bool //< the names are that `Makefile`'s `suite_<name>` variables, not its targets
+    suites: Bool //< the names are that `Makefile`'s `suite_found`, not its targets
 
 // Caution: **Add a pattern here when the root gains one**, or its names read as missing; the check
 // below fails on a pattern this table does not hold.
@@ -31,7 +32,7 @@ priv const forwards: Forward[_] = ::{ Forward::{ .pattern = "test-%", .dir = "ks
 priv struct Rules //< what one `Makefile` defines
     targets: List<|U8[]|>$@
     patterns: List<|U8[]|>$@
-    suites: List<|U8[]|>$@ //< the names of its `suite_<name>` variables
+    suites: List<|U8[]|>$@ //< the suite names its `suite_found` holds
 
 priv struct Mention //< one `make` line of a document
     rel: U8[]
@@ -61,9 +62,10 @@ priv fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` 
         if ln.len == 0
             file_only = false
             continue
-        if ln.starts_with("suite_")
-            if eq: = ln.find_str(" := ")
-                out.suites.push(ln.sub(6, eq - 6))
+        if ln.starts_with(suite_found)
+            for name in ln.sub_from(suite_found.len).split(' ', arena)
+                if name.len > 0
+                    out.suites.push(name)
             continue
         colon: = ln.find_char(':').unwrap_or(0)
         if colon == 0 || file_only || ln[0] == '.' || ln[0] == '#' || ln[0] == '\t'
@@ -168,7 +170,7 @@ priv fn makes(r: Rules@, t: U8[], family: Bool): Bool //< whether these rules ma
 
 priv const mention_samples: scan.Sample[_] = ::{
     scan.Sample::{ .text = "make test-docref", .hits = true },
-    scan.Sample::{ .text = "$ make -k lint test-fmt-tree 2>&1 | tail", .hits = true },
+    scan.Sample::{ .text = "$ make -k lint test-docref 2>&1 | tail", .hits = true },
     scan.Sample::{ .text = "make LLVM=1 debug", .hits = true },
     scan.Sample::{ .text = "make debug-*", .hits = true },
     scan.Sample::{ .text = "make -C ksos test", .hits = true },
@@ -233,7 +235,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
                 seen_rules.push(rules_of(place, arena))
             r: = seen_rules.get(k)
             ok = ok || makes(r@, m.target, m.family)
-            // A forwarded suite is a `suite_<name>` of the folder it goes to.
+            // A forwarded suite is one the folder it goes to finds (`suite_found`).
             for f in forwards
                 if f.suites && f.dir.equals(place) && m.target.starts_with("test-")
                     ok = ok || names(r.suites, m.target.sub_from(5), m.family)

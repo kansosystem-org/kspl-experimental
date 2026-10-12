@@ -16,6 +16,7 @@ import "ksplc/base/locate" as base_locate
 import "ksplc/parse/layout" as parse_layout
 import "ksplc/parse/load" as parse_load
 import "ksplc/parse/source_fix" as parse_source_fix
+import "ksplc/sema/session/pointer" as sema_session_pointer
 import "ksplc/tools/surface" as tools_surface
 import "std/chars" // `find_char`
 import "std/ds" { List }
@@ -107,9 +108,9 @@ priv fn anchor_of(head: U8[], out: Str_builder$@) //< the anchor the renderer gi
     //< Lower case; a space becomes `-`; word characters and `-` stay, the rest goes. **An `_` and a
     //< byte of a multi-byte character stay too**, as the renderer keeps them.
     for ch in head
-        if ch >= 'A' && ch <= 'Z'
-            out.c(ch - 'A' + 'a')
-        else if ch.is_alnum() || ch == '_' || ch == '-' || ch >= 0x80U8
+        if ch.is_upper()
+            out.c(ch.to_lower())
+        else if ch.is_alnum() || ch == '-' || ch >= 0x80U8
             out.c(ch)
         else if ch == ' '
             out.c('-')
@@ -173,39 +174,6 @@ priv fn link_for(rows: List<|Entry|>@, links: List<|U8[]|>@, name: U8[]): U8[] /
             return links.get(i)
     return ""
 
-priv fn dotted_len(doc: U8[], from: Sz, close: Sz): Sz //<
-    //< How long the dotted name filling `[from, close)` is, or 0 where the span holds anything else
-    //<
-    //< The form the compiler accepts (`[W0211]`): at least two parts, call brackets only at the
-    //< end.
-    $i: = from
-    $parts: Sz = 0
-    for
-        if i >= close || !(doc[i].is_alpha() || doc[i] == '_')
-            return 0
-        for i < close && (doc[i].is_alnum() || doc[i] == '_')
-            i += 1
-        parts += 1
-        if i < close && doc[i] == '.'
-            i += 1
-            continue
-        break
-    if parts < 2
-        return 0
-    name_end: = i
-    if i < close && doc[i] == '('
-        $depth: Sz = 0
-        for i < close
-            if doc[i] == '('
-                depth += 1
-            else if doc[i] == ')'
-                depth -= 1
-                if depth == 0
-                    i += 1
-                    break
-            i += 1
-    return name_end - from if i == close else 0
-
 priv fn linked(doc: U8[], rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[]): U8[] //<
     //< `doc` with each backquoted dotted name of this file's entries turned into a link to it
     //<
@@ -214,25 +182,18 @@ priv fn linked(doc: U8[], rows: List<|Entry|>@, links: List<|U8[]|>@, tail: U8[]
     $out: = Str_builder.new()
     defer out.free()
     $copied: Sz = 0
-    $i: Sz = 0
-    for i < doc.len
-        if doc[i] != '`'
-            i += 1
-            continue
-        $close: Sz = 0
-        switch doc.sub_from(i + 1).find_char('`')
-        case .some(rel)
-            close = i + 1 + rel
-        case .none
+    $from: Sz = 0
+    for
+        p: = sema_session_pointer.next_dotted(doc, from)
+        if p.len == 0
             break
-        got: = dotted_len(doc, i + 1, close)
-        if got > 0 && (i == 0 || doc[i - 1] != '[')
-            target: = target_of(rows, links, tail, doc.sub(i + 1, got))
+        if p.open == 0 || doc[p.open - 1] != '['
+            target: = target_of(rows, links, tail, doc.sub(p.at, p.len))
             if target.len > 0
-                out.s(doc.sub(copied, i - copied)).c('[').s(doc.sub(i, close + 1 - i)).s("](#")
-                    .s(target).c(')')
-                copied = close + 1
-        i = close + 1
+                out.s(doc.sub(copied, p.open - copied)).c('[')
+                    .s(doc.sub(p.open, p.end - p.open)).s("](#").s(target).c(')')
+                copied = p.end
+        from = p.end
     if copied == 0
         return doc
     out.s(doc.sub_from(copied))
