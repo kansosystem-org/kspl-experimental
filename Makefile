@@ -68,8 +68,10 @@ EXT_BIN_DIR := .vscode/extensions/kspl/bin
 LSP_EXE     := ksplc_server.exe
 # Caution: **Omit no file ksplc reads or `embed`s, nor a `ksplc.cfg`**: its fix would rebuild
 # nothing, and the old compiler passes the tests (`make test-deps` holds this list to ksplc's).
-KSPL_SRCS    := $(shell find ksplc std kspeg \( -name "*.kspls" -o -name "*.kspl" \
-               -o -name ksplc.cfg \)) \
+# The `tests` folders are left out: ksplc reads none of them, and listed, a new test case rebuilt
+# the compiler twice over.
+KSPL_SRCS    := $(shell find ksplc std kspeg -type d -name tests -prune -o \( -name "*.kspls" \
+               -o -name "*.kspl" -o -name ksplc.cfg \) -print) \
                ksplc/kspl.kspeg ksplc/docs/SPEC-tools.md \
                $(wildcard ksplc/gen/runtime/*.c) $(wildcard ksplc/gen/runtime/*.h)
 
@@ -144,7 +146,9 @@ ifeq ($(LLVM),1)
 endif
 STAGE2_OUT := $(GEN_DIR)/ksplc_stage2.$(TARGET_EXT)
 STAGE2_EXE := $(OUT_DIR)/ksplc_stage2.exe
-DIFF_TXT   := $(OUT_DIR)/stage_diff.txt
+# One per backend: shared, the other backend's newer file looked up to date and its verdict
+# was read for this one.
+DIFF_TXT   := $(OUT_DIR)/stage_diff_$(BACKEND).txt
 DEBUG_OUT  := $(GEN_DIR)/test_debug.$(TARGET_EXT)
 DEBUG_LIBS := $(GEN_DIR)/test_debug.libs
 DEBUG_EXE  := $(OUT_DIR)/test_debug.exe
@@ -199,11 +203,12 @@ $(error Build this project's artifacts with MSYS2 UCRT64's own compiler [$(CC)'s
     GUI_LDFLAGS := -mwindows
 endif
 
-# Caution: **A target an `mk/*.mk` declares is not listed again here** (`clean` above, `ci-*`,
-# `surface`); each `.PHONY` names the rules in its own file.
+# Caution: **A target an `mk/*.mk` declares is not listed again here** (`ci-*`, `surface`,
+# `lint-cfg`); each `.PHONY` names the rules in its own file. `clean` and `FORCE` are declared
+# above, beside their rules.
 .PHONY: all \
 	stage1 self-host self-host-ship commit-seed \
-	fmt lint lint-cfg debug debug-file \
+	fmt lint debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install \
 	run fim-corpus fim-model fim-eval qwen kssrv perf-log
 

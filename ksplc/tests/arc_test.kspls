@@ -535,12 +535,6 @@ priv fn arc_new_of_arc_bearing_body()
     $b: = Rc<|Arc_slot|>.new(Arc_slot::{ .used = true, .rc = Rc<|I32|>.new(9) })
     p: = b.get()
     assert(p.used && p.rc.get()$ == 9, "an ARC value carried into Rc.new must stay readable")
-    // The pointee is not followed, so ownership returns here: overwriting with empty releases the
-    // content.
-    // Caution: An assignment's left side must be a **place expression**. `b.get().rc = ...` holds a
-    // call, so no release is inserted and it leaks quietly; go through a pointer.
-    empty: Rc<|I32|>[1] = ::{}
-    p.rc = empty[0]
 
 fn test_arc_new_of_arc_bearing_value()
     verdict.start("[ARC] handing a value holding ARC content to Rc<|T|>.new() test...")
@@ -548,10 +542,118 @@ fn test_arc_new_of_arc_bearing_value()
     arc_new_of_arc_bearing_body()
     b0_end: = mem.heap_used_bytes()
     assert(b0_end == b0,
-        "Rc.new must not traverse its uninitialized value region, and the hand-back must balance")
+        "Rc.new must not traverse its uninitialized value region, and the last release must release \
+            what the value holds")
     verdict
-        .pass("the garbage right after allocation was not followed as ARC, and it balanced after \
-            the ownership of what it points at was handed back.")
+        .pass("the garbage right after allocation was not followed as ARC, and the last release \
+            took the value apart.")
+
+// ==========================================
+// std/refcount: the last release takes the value apart ("Release takes the value apart" in
+// std/docs/DESIGN.md). Each case lets the last owner go with nothing handed back by hand.
+// ==========================================
+priv struct Arc_node //< one link of a chain held through `Rc`
+    v: I32
+    next: Rc<|Arc_node|>
+
+priv struct Arc_self_watch //< a value holding the only weak handle to its own block
+    me: Weak_rc<|Arc_self_watch|>
+
+priv fn arc_nested_body(inner: Rc<|I32|>$@)
+    _outer: = Rc<|Arc_holder|>.new(Arc_holder::{ .v = inner$ })
+
+priv fn arc_chain_body(n: I32, walk: Bool)
+    $head: = Rc<|Arc_node|>.empty()
+    for i in Range.asc(n)
+        head = Rc<|Arc_node|>.new(Arc_node::{ .v = I32::i, .next = head })
+    if !walk
+        return
+    // **Walk a long chain in a loop**: each step lets one node go while `next` still holds the
+    // rest, so no release recurses. Left to the last release, a million-node chain recurses once
+    // per node.
+    for !head.is_empty()
+        next: = head.get().next
+        head = next
+
+priv fn arc_self_watch_body()
+    $b: = Rc<|Arc_self_watch|>.new(Arc_self_watch::{})
+    p: = b.get()
+    p.me = b.downgrade()
+
+priv fn arc_keep($x: Rc<|I32|>): I32 //< takes a count by value, as any parameter does
+    return x.get()$
+
+priv fn arc_give(b: Rc<|Arc_holder|>$@): Rc<|I32|> //< returns a copy read through `get()`
+    $bb: = b$
+    return bb.get().v
+
+priv fn arc_through_call_body()
+    $b: = Rc<|Arc_holder|>.new(Arc_holder::{ .v = Rc<|I32|>.new(5) })
+    $bb: = b
+    $x: = bb.get().v
+    n: = arc_keep(bb.get().v)
+    $h: = Arc_holder::{ .v = bb.get().v }
+    _w: = Arc_wrap.filled(bb.get().v)
+    $g: = arc_give(b@)
+    $y: = Rc<|I32|>.empty()
+    y = bb.get().v
+    assert(n == 5 && h.v.get()$ == 5 && g.get()$ == 5 && y.get()$ == 5 && !x.is_empty(),
+        "every copy read through get() must stay readable")
+
+priv fn arc_assign_self_body() //<
+    //< `head = …head…` in one statement, the shapes a list is built by
+    $head: = Rc<|Arc_node|>.empty()
+    for i in Range.asc(5)
+        head = Rc<|Arc_node|>.new(Arc_node::{ .v = I32::i, .next = head })
+    $p: = head
+    assert(p.get().next.get().v == 3, "the new head must point at the old one, not at itself")
+    p = Rc<|Arc_node|>.empty()
+    for !head.is_empty()
+        head = head.get().next
+
+fn test_arc_copy_through_call()
+    verdict
+        .start("[ARC] a copy read through get(), and an assignment reading its own target test...")
+    // A copy out of `b.get().v` was taken for a fresh value and got no retain, so its release
+    // freed what the box still held.
+    b0: = mem.heap_used_bytes()
+    arc_through_call_body()
+    assert(mem.heap_used_bytes() == b0,
+        "a binding, an argument, a field, a payload, a return and an assignment each count once")
+    // The old value was released before the right side's retain, so the box was freed and the
+    // new node, landing at its address, pointed at itself.
+    b1: = mem.heap_used_bytes()
+    arc_assign_self_body()
+    assert(mem.heap_used_bytes() == b1, "building and walking a list by reassignment balances")
+    verdict
+        .pass("copies read through get() each took a count, and reassigning from the target \
+            retained before it released.")
+
+fn test_arc_last_release_takes_value_apart()
+    verdict.start("[ARC] the last release of an Rc takes the value apart test...")
+    b0: = mem.heap_used_bytes()
+    $inner: = Rc<|I32|>.new(7)
+    arc_nested_body(inner@)
+    assert(arc_is_alive(inner@), "the inner value outlives the outer box while a copy holds it")
+    inner = Rc<|I32|>.empty()
+    assert(mem.heap_used_bytes() == b0,
+        "releasing the outer box must release the Rc it holds (nothing handed back by hand)")
+
+    b1: = mem.heap_used_bytes()
+    arc_chain_body(10000, true)
+    assert(mem.heap_used_bytes() == b1, "a chain walked in a loop is released node by node")
+    b2: = mem.heap_used_bytes()
+    arc_chain_body(100, false)
+    assert(mem.heap_used_bytes() == b2, "a short chain left to the last release is released whole")
+
+    // The value's release drops the last weak handle; holding one weak count across it keeps the
+    // block from being freed under the release still using it.
+    b3: = mem.heap_used_bytes()
+    arc_self_watch_body()
+    assert(mem.heap_used_bytes() == b3, "a value holding its own last weak handle is freed once")
+    verdict
+        .pass("an Rc inside an Rc, a chain and a value watching itself were each released whole by \
+            the last owner.")
 
 // ==========================================
 // std/ds: where the elements of a container implementing "a subscript returning a place"

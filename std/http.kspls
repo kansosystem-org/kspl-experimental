@@ -73,6 +73,14 @@ priv fn is_field_value(s: U8[]): Bool //<
             return false
     return true
 
+priv fn is_request_target(s: U8[]): Bool //< whether a request line can carry it as its target
+    //<
+    //< Non-empty, with no control byte, space or tab. Caution: **Refuse a tab as a space**: a
+    //< lenient reader splits the line on any whitespace, so either makes the rest the version, and
+    //< a second request can be packed into one line. Reading and writing share this one test.
+    return s.len > 0 && is_field_value(s) && s.find_char(' ').is_none() &&
+        s.find_char('\t').is_none()
+
 priv fn check_version(v: U8[]): Void!Http_error //<
     //< HTTP-version is always 8 bytes: "HTTP/" + one digit + "." + one digit
     if v.len != 8 || !v.starts_with("HTTP/")
@@ -141,6 +149,12 @@ priv fn check_content_length(head: Header$@, max_body: Sz): Sz?!Http_error //<
         if n > max_body
             throw .body_too_large
     return content_length
+
+priv fn valid_status(status: I32): Bool //< whether it lies in 100 to 599, RFC 9110's range
+    //<
+    //< Caution: **Refuse one below 100 on reading too.** `may_carry_body` gives it no body, so a
+    //< body sent after it would be read as the next response.
+    return status >= 100 && status <= 599
 
 priv fn may_carry_body(status: I32): Bool //< whether a response with this status can have a body
     //<
@@ -262,7 +276,7 @@ priv fn parse_request_line(line: U8[]): Request_line!Http_error
             version: = rest.sub_from(sp2 + 1)
             // Caution: Do not accept an empty method or an empty target (`" / HTTP/1.1"`, `"GET
             // HTTP/1.1"`); every later branch would run on an empty string.
-            if !is_token(method) || target.len == 0
+            if !is_token(method) || !is_request_target(target)
                 throw .invalid_request_line
             check_version(version)!
             return Request_line::{ .method = method, .target = target, .version = version }
@@ -287,6 +301,8 @@ priv fn parse_status_line(line: U8[]): Status_line!Http_error
         if status_str.len != 3 || !is_field_value(reason)
             throw .invalid_status_line
         status: = parse_digits(status_str) catch
+            throw .invalid_status_line
+        if !valid_status(I32::status)
             throw .invalid_status_line
         return Status_line::{ .version = line.sub(0, sp1), .status = I32::status,
             .reason = reason }
@@ -521,11 +537,7 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
     target: U8[], //< the target, including the query string
     head: Header$@, //< the headers, or null
     body: U8[]): Void!Http_error
-    // Caution: Do not allow a space or a tab in the target. The request line splits on spaces (a
-    // lenient server on any whitespace), so either makes the rest the version, and a second request
-    // can be packed into one line.
-    if !is_token(method) || target.len == 0 || !is_field_value(target) ||
-        target.find_char(' ').is_some() || target.find_char('\t').is_some()
+    if !is_token(method) || !is_request_target(target)
         throw .invalid_request_line
     check_framing(head, body.len, true)!
     $b: = Str_builder.new()
@@ -605,38 +617,44 @@ pub fn format_response( //< builds one whole response as bytes, for the caller t
     //< std/net.kspls), so the sender must remember how far it got and continue once writable.
     //< **The length is the body's**: one given that differs is refused, as is any body or length
     //< for 1xx, 204 and 304, whose head names none. The answer to a HEAD is
-    //< `format_response_to_head`.
+    //< `format_response_to_head`. **On failure b is left as it was.**
     b: Str_builder$@, //< where the message is built
     status: I32, //< the status number; its phrase is `reason_phrase`'s
     head: Header$@, //< the headers, or null; `Content-Length` is added here
     body: U8[], //< the whole body
 ): Void!Http_error
-    write_status_line(b, status)!
-    names_length: = may_carry_body(status)
-    check_framing(head, body.len, names_length)!
-    write_framed_head(b, head, body.len, names_length)!
+    write_response_head(b, status, head, body.len)!
     b.s(body)
 
 pub fn format_response_to_head( //< builds the answer to a HEAD request: a head with no body
     //<
     //< The head is the one a GET would get: its `Content-Length` names `length`, the length of the
     //< body a GET would carry, which is not sent (RFC 9110 §9.3.2). For 1xx, 204 and 304 no length
-    //< is named, and `length` must be 0.
+    //< is named, and `length` must be 0. **On failure b is left as it was.**
     b: Str_builder$@, //< where the head is built
     status: I32, //< the status number; its phrase is `reason_phrase`'s
     head: Header$@, //< the headers, or null; `Content-Length` is added here
     length: Sz, //< the length of the body a GET would carry
 ): Void!Http_error
-    write_status_line(b, status)!
+    write_response_head(b, status, head, length)!
+
+priv fn write_response_head(b: Str_builder$@, status: I32, head: Header$@, length: Sz):
+    Void!Http_error //<
+        //< The head naming `length`, or nothing at all where it is refused
+        //<
+        //< Caution: **Take back what was written on a failure**: a caller queueing answers in b
+        //< would send the half head, and the next answer would read as its continuation.
     names_length: = may_carry_body(status)
     check_framing(head, length, names_length)!
-    write_framed_head(b, head, length, names_length)!
+    start: = b.len
+    write_status_line(b, status)! // refuses before it writes
+    write_framed_head(b, head, length, names_length) catch e
+        b.len = start
+        throw e
 
 priv fn write_status_line(b: Str_builder$@, status: I32): Void!Http_error //<
     //< Writes `HTTP/1.1 <status> <phrase>` and its CRLF, the phrase from `reason_phrase`
-    //<
-    //< Caution: **Keep status to three digits**, or the unreadable "HTTP/1.1 1000 x" goes out.
-    if status < 100 || status > 999
+    if !valid_status(status)
         throw .invalid_status_line
     b.s("HTTP/1.1 \{status\} ").s(reason_phrase(status)).s("\r\n")
 
@@ -645,6 +663,7 @@ pub fn format_response_head( //< builds only a response's head, for a body sent 
     //< Caution: **Do not add `Content-Length`.** That is why this function exists: a streamed
     //< body's length is not known in advance, and `format_response` adds it.
     //< **Always include `Connection: close`** (it fails without it), and a status that has a body.
+    //< On failure b is left as it was.
     b: Str_builder$@, //< where the head is built
     status: I32, //< the status number; its phrase is `reason_phrase`'s
     head: Header$@, //< the headers; `Connection: close` must be among them
@@ -655,8 +674,11 @@ pub fn format_response_head( //< builds only a response's head, for a body sent 
         throw .length_mismatch
     if !closing(head)
         throw .invalid_header
+    start: = b.len
     write_status_line(b, status)!
-    write_header_lines(b, head)!
+    write_header_lines(b, head) catch e
+        b.len = start // as in `write_response_head`
+        throw e
     b.s("\r\n")
 
 priv fn closing(head: Header$@): Bool //< whether it says `Connection: close`

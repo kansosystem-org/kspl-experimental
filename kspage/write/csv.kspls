@@ -4,7 +4,8 @@
 //< quoted in `"`, and a `"` inside is doubled as `""` (the rule of RFC 4180).
 //< Caution: **The reader and the writer must share this rule**, or it cannot read what it wrote.
 //< The shown text is written out (not the formula; saving as a document keeps that).
-//< A loaded text goes into the cell as it is.
+//< A loaded text goes into the cell as it is, but for a line break inside quotes, which becomes one
+//< space (an `Inline` holds no line break; a paste into a cell does the same).
 import "kspage/lay/caret"
 import "kspage/lay/page" { Page }
 import "kspage/model/doc" + { Block, Tile }
@@ -82,11 +83,16 @@ priv fn plain_field(c: Reader$@, out: Str_builder$@) //< reads an unquoted field
 priv fn quoted_field(c: Reader$@, out: Str_builder$@) //<
     //< Reads a field quoted in `"`
     //<
-    //< A `""` inside is one `"`. Unclosed, what there is so far is the field (a broken text that
-    //< still loads is easier to fix).
+    //< A `""` inside is one `"`, and a line break (`\r\n` too) one space. Unclosed, what there is
+    //< so far is the field (a broken text that still loads is easier to fix).
     c.pos += 1
     for c.pos < c.src.len
         ch: = c.src[c.pos]
+        if ch == '\r' || ch == '\n'
+            out.c(' ')
+            crlf: = ch == '\r' && c.pos + 1 < c.src.len && c.src[c.pos + 1] == '\n'
+            c.pos += 2 if crlf else 1
+            continue
         if ch != quote
             out.c(ch)
             c.pos += 1
@@ -109,10 +115,11 @@ priv fn read_row(c: Reader$@, out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     for more
         $sb: = Str_builder.new()
         defer sb.free()
+        // Caution: **Read on to the separator after a closing quote** (`"q"junk` is `qjunk`).
+        // Stopped there, the rest would start a row of its own.
         if c.pos < c.src.len && c.src[c.pos] == quote
             quoted_field(c, sb@)
-        else
-            plain_field(c, sb@)
+        plain_field(c, sb@)
         out.push(arena.dup_str(sb.slice()))
         more = c.pos < c.src.len && c.src[c.pos] == ','
         if more

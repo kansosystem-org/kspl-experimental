@@ -14,7 +14,7 @@ flowchart TD
     demo --> net["ksos/net/<br/>the network stack"]
     boards --> drivers["ksos/drivers/<br/>a chip's peripheral registers"]
     demo --> kernel["ksos/kernel/<br/>tasks, the scheduler, Sem, Mutex, Queue, Event"]
-    kernel -->|seven C functions, chosen at link time| port["ksos/port/<br/>posix, cortex_m, cortex_m0, rp2040"]
+    kernel -->|eight C functions, chosen at link time| port["ksos/port/<br/>posix, cortex_m, cortex_m0, rp2040"]
 ```
 
 **The kernel core (`ksos/kernel/`) depends on neither hardware nor libc** (the C standard library). The caller allocates the stacks, the `Task` and a queue's buffer statically (as fixed variables, not from a heap). So it runs unchanged on a microcontroller with no `malloc`. Where each folder sits, and what the kernel offers, is the map in [ksos](../README.md).
@@ -25,7 +25,8 @@ flowchart TD
 |------|------|
 | `ksos_port_ctx_create(stack, size)` | makes the context that enters `ksos_trampoline` on its first start (the kernel `#export`s it; it runs the current task's entry) |
 | `ksos_port_ctx_create_main()` | captures the scheduler's (initial) context |
-| `ksos_port_switch(from, to)` | saves `from` and switches to `to` |
+| `ksos_port_ctx_free(ctx)` | takes back a deleted task's context, which a later create reuses; the task may be the running one, whose switch away then saves nothing into it |
+| `ksos_port_switch(from, to)` | saves `from` and switches to `to`; a null `from` (the running task was just deleted) saves nothing |
 | `ksos_port_tick_start(reload)` | starts the periodic timer for preemption: `SIGALRM`+`setitimer` on POSIX, `SysTick` on Cortex-M |
 | `ksos_port_irq_save() / _restore(s)` | a critical section: blocking and restoring `SIGALRM` through `sigprocmask` on POSIX, `PRIMASK` on Cortex-M |
 | `ksos_port_in_isr()` | non-zero inside an interrupt handler: `IPSR` on Cortex-M; always 0 on POSIX, which has no handler mode (a signal handler runs on top of the interrupted task) |
@@ -135,14 +136,17 @@ sequenceDiagram
 
 **A chain is not followed.** When the holder itself waits on a mutex held by a third task, what it was lent does not pass on to that task. RTEMS follows it; ksos keeps one stage, so a lock's cost stays a walk of the waiters.
 
-**Misuse is not silenced.** Two mistakes panic on the spot (`make ksos-mutex-relock` and `make ksos-mutex-foreign-unlock` check it):
+**The kernel core keeps who holds which mutex** (`Holding` in `ksos/kernel/task.kspls`, which each `Mutex` embeds). So `Task.delete` sees a holder, and deleting a waiter takes back what it lent: every holder's priority is recomputed as on a release (`make ksos-kernel-check`).
+
+**Misuse is not silenced.** Three mistakes panic on the spot (`make ksos-mutex-relock`, `make ksos-mutex-foreign-unlock` and `make ksos-delete-holder` check them):
 
 | The mistake | What it would do if allowed |
 | :-- | :-- |
 | the holder locking again | left to wait, it hangs, waiting for itself to let go |
 | `unlock` by a task that is not the holder (of a free mutex too) | ignored, it leaves the caller believing it released |
+| a task ending while it holds a mutex (deleted, or its entry returning) | nobody can unlock the mutex again, so every later `lock` waits forever; after `delete_dyn` the mutex names freed memory |
 
-Both break with no diagnostic. FreeRTOS returns a failure (`pdFAIL`) and Zephyr an error (`-EPERM`), but a return value gets forgotten, so ksos stops. Re-entry by a count (FreeRTOS's recursive mutex, Zephyr's `lock_count`) is not taken: whoever miscounts the `unlock`s delays the release silently.
+All three break with no diagnostic. FreeRTOS and Zephyr leave a deleted task's mutex held; RTEMS stops with a fatal error, as ksos does. FreeRTOS returns a failure (`pdFAIL`) and Zephyr an error (`-EPERM`), but a return value gets forgotten, so ksos stops. Re-entry by a count (FreeRTOS's recursive mutex, Zephyr's `lock_count`) is not taken: whoever miscounts the `unlock`s delays the release silently.
 
 ### Event flags
 
@@ -165,12 +169,14 @@ Ksos counts time in *ticks*, a logical counter. When nothing can run, it jumps t
 
   The timeout runs on `Task.delay`'s clock (`g_tick`), so tickless idle counts it as a point to move the time to, and `_for` wakes even in a cooperative arrangement. A blocked task carries one timeout. `ksos_tick` / tickless idle move whoever expired back to ready without saying why. The woken task's wake-and-recheck takes the condition if it can, and gives up if the timeout has passed (`make ksos-timeout` and `make ksos-cm-timeout`).
   * **When `lock_for` gives up, return the priority it lent.** The holder is recomputed as on a release: the highest of its own priority and the priorities still waiting on the mutexes it holds, whose lending is still live. FreeRTOS does the same (`vTaskPriorityDisinheritAfterTimeout`) while the holder holds that one mutex alone, and leaves the priority raised when it holds more.
+  * **A timeout too large for the clock waits rather than wrapping.** `deadline_after` in `ksos/kernel/task.kspls` turns every relative tick count into an absolute deadline, saturating at the last tick. A plain sum wraps for a huge count to a deadline already passed, and the long wait ends at once (`make ksos-timeout`).
+  * **The bare form is the `_for` form with no deadline.** Each primitive has one wait loop per direction (`take_until` and the like in `ksos/kernel/sync.kspls`), so a fix to it reaches both forms.
   * **A tick is logical time**, as FreeRTOS's is. The kernel does not know a tick's real length: `enable_preemption`'s reload is in the port's unit, and only the application that set it can turn it into Hz. So an application writing a timeout in real time names the rate with `declare_tick_hz(hz)` and converts with `ms_to_ticks(ms)`. That panics if the rate was never named. It rounds up: a timeout means "wait at least ms", and rounding down turns a short ms into 0 ticks, giving up without waiting. FreeRTOS's `pdMS_TO_TICKS` rounds down, so an ms under one tick becomes 0.
   * Caution: **Do not fold how long it waits into one argument.** FreeRTOS gives every API an `xTicksToWait`, reading 0 as "do not wait" and `portMAX_DELAY` as "forever". `portMAX_DELAY` means forever only while `INCLUDE_vTaskSuspend` is on; turn it off and it becomes a finite wait. ksos separates the cases by how the call is written, refuses `_for(0)` with a panic (0 is `try_`'s job), and holds no sentinel for forever (call the bare form).
 
 ### Interrupt handlers
 
-**An interrupt handler (ISR, interrupt service routine) never waits: ksos stops one that tries to.** An interrupt handler has nothing to switch to, so `take` or `Task.delay` inside one would block the interrupted task, silently stopping an unrelated task. `require_current` and `Task.delay` check the port's `ksos_port_in_isr` and panic on the spot.
+**An interrupt handler (ISR, interrupt service routine) never waits: ksos stops one that tries to.** An interrupt handler has nothing to switch to, so `take` or `Task.delay` inside one would block the interrupted task, silently stopping an unrelated task. `require_current` and `Task.delay` check the port's `ksos_port_in_isr` and panic on the spot. `Mutex.unlock` goes through `require_current` too: an ISR holds no mutex, and an unlock there would release the interrupted task's mutex behind its back (`make ksos-cm-isr-unlock`).
 
 **Only what does not wait may be called from an ISR** (`give` / `set` / `try_*`, `Queue<|T|>.try_send`/`.try_recv` among them). Those need no dedicated version, because `irq_save` nests (`make ksos-isr`).
 
@@ -184,7 +190,7 @@ Only Cortex-M has a handler mode (`IPSR`). POSIX's signal handler runs on top of
 
 ### A task's life, its stack and the idle task
 
-* **Pausing, resuming and deleting a task** (`Task.suspend`/`Task.resume`/`Task.delete`; `make ksos-lifecycle`): the Task and the stack are allocated statically. So, as with a `done` task, a delete reclaims neither.
+* **Pausing, resuming and deleting a task** (`Task.suspend`/`Task.resume`/`Task.delete`; `make ksos-lifecycle`): the Task and the stack are allocated statically. So, as with a `done` task, a delete reclaims neither. It does return the scheduler's slot and the port's context, so create and delete repeat without running out. A task whose entry returned is `done` but keeps both until it is deleted, so a task manager still lists it.
 * **The stack-overflow canary**: `Task.create` writes a known byte run at the stack's lowest-address end, and every `schedule()` matches it. Damage panics at once (`make ksos-stack-overflow`). The demo damages the canary directly rather than overflowing by recursion. The bytes a call uses change with the optimization and the ABI, so a real overflow is not deterministic. It can also reach an unmapped region first and die as a SEGV instead of at the canary.
 * **The idle task (`enable_idle_task` in `ksos/kernel/task.kspls`)** runs when nothing else can. It sleeps on `Task.delay(1)` between calls to its hook, so its sleep comes under tickless idle with no change to the scheduler. `install_idle_reap` in `ksos/kernel/dynamic.kspls` makes reclaiming deleted tasks its hook. It is opt-in like `enable_preemption`. Once on, it never ends by itself, so the process has to be ended explicitly (`sys.exit()` or the like).
 
@@ -198,13 +204,13 @@ Only Cortex-M has a handler mode (`IPSR`). POSIX's signal handler runs on top of
   | **creating** — an associated function, the static side's verb with `_dyn` added | `Task.create_dyn` / `Sem.init_dyn` / `Mutex.init_dyn` / `Event.init_dyn` / `Queue<\|T\|>.init_dyn` |
   | **destroying** — a method on the instance | `t.delete_dyn()` / `s.destroy_dyn()` / `m.destroy_dyn()` / `e.destroy_dyn()` / `q.destroy_dyn()` |
 
-  The Task, the stack and a queue's buffer come from `heap.kspls`. So unlike the static API, create and delete can repeat until the slots run out (`kernel/task.kspls` frees and reuses a deleted task's scheduler slot). **A task deleting itself cannot be freed at once**, since it still runs on that stack. `Task.current().delete_dyn()` leaves the reclaim to the next call another task makes into this file, or to the idle task above. Deleting another task reclaims at once.
+  The Task, the stack and a queue's buffer come from `heap.kspls`, and a delete returns them besides the slot and the context `Task.delete` returns, so create and delete repeat without running out (`make ksos-cm-heap-probe` makes and deletes 120 tasks against the port's 33 contexts, ending each of the three ways). **A task deleting itself cannot be freed at once**, since it still runs on that stack. `Task.current().delete_dyn()` leaves the reclaim to the next call another task makes into this file, or to the idle task above. Deleting another task reclaims at once.
 
   **The convention of passing `null` as the receiver to mean "myself" is not taken.** If the caller always spells out `Task.current()`, the reader needs no unwritten knowledge.
 
 ## 🔌 The ports
 
-Four ports implement the seven port functions above, and `ksos/kernel/` changes for none of them.
+Four ports implement the eight port functions above, and `ksos/kernel/` changes for none of them.
 
 | Port | Runs on | How it is checked |
 | :-- | :-- | :-- |
@@ -611,6 +617,12 @@ flowchart TD
 * **What ARP resolved (the gateway's MAC) is held by the caller**, not by `mini_ipv4.kspls`, which holds no hidden global state. The caller sends the ARP request, receives and parses the reply, and assembles the UDP/TCP explicitly. The TCP sequence and ACK numbers are the caller's too.
 
 **The TCP is the smallest implementation**: a single connection with no options (always a fixed 20-byte header), no retransmit timer, no congestion control, no handling of reordering and no concurrent connections. It takes one connection straight through handshake, send and receive, then close (the comment at the top of `ksos/net/mini_ipv4.kspls`). It is extended only as far as real use needs, when it needs it.
+
+**What it receives it acknowledges, and the peer's close reaches the caller** (`ksos/net/tcp_conn.kspls`, tested over a fake link in `ksos/tests/net_test.kspls`):
+
+* **An ACK goes once a segment has been handed over whole**, and again for a segment that arrives at a seq already passed. Without it the peer resends what it sent and stops once its window is full. The peer's resend is what recovers a lost ACK, so the ACK's own send is not retried.
+* **The peer's FIN reads as 0**, the end of the stream in `mbedtls_ssl_recv_t`'s contract, after the data before it. **Its RST reads as `mbedtls_err_net_conn_reset`.** Either holds on every later call, rather than "nothing yet" for ever.
+* **An RST counts only at the expected seq.** At any other a third party could guess one into the window and cut the connection.
 
 ### The receiver does not trust what the sender claims
 

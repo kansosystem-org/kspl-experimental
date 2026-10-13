@@ -181,11 +181,12 @@ $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call ro
 # `ksos_posix_panic_needle_<suffix>` is the line the run must print. **The needle is the
 # kernel-side panic's spelling itself**; change both in one commit. `ksos_families` in
 # `tests/support/conventions_iface.kspls` reads the run.
-KSOS_POSIX_PANIC := stack-overflow mutex-relock mutex-foreign-unlock timeout-zero
+KSOS_POSIX_PANIC := stack-overflow mutex-relock mutex-foreign-unlock delete-holder timeout-zero
 
 ksos_posix_panic_needle_stack-overflow := ksos: stack overflow detected
 ksos_posix_panic_needle_mutex-relock := Mutex.lock by the holder itself
 ksos_posix_panic_needle_mutex-foreign-unlock := Mutex.unlock by a task that is not the holder
+ksos_posix_panic_needle_delete-holder := ksos: a task ended holding a mutex
 ksos_posix_panic_needle_timeout-zero := ticks must be greater than 0
 
 ksos_posix_panic_missing := $(strip \
@@ -268,7 +269,8 @@ ksos-cm-run: ksos-cm
 # `$(CM_OUT)/ksos_cm_<suffix>.elf` (`-` becomes `_`) and runs it. A demo with a peer process or
 # objdump is written by hand.
 KSOS_CM_DEMOS := heap-probe panic-probe ai-probe ai-train-probe car-model-probe \
-    ai-weights-probe pilot-probe preempt control-ai-probe mq pi event timeout isr-block isr-give
+    ai-weights-probe pilot-probe preempt control-ai-probe mq pi event timeout isr-block isr-unlock \
+    isr-give
 
 # UART0's RX path: QEMU's chardev on a Unix socket, and `tests/uart_probe.py polled` checks the echo.
 ksos-cm-uart-echo: $(CM_OBJS)
@@ -545,9 +547,10 @@ test-ksos-posix: test-ksos-cap
 .PHONY: test-ksos-posix $(KSOS_POSIX_DEMOS) $(KSOS_POSIX_GATE_TARGETS)
 
 # ==========================================
-# The .PHONY declaration for every target.
-# Caution: **This is the one place they are declared**: split across two files, one side gets
-# forgotten. Without .PHONY a file of the same name makes a target "up to date".
+# The .PHONY declaration for the demos and the board targets.
+# Each gate declares its own targets beside its rules (`test-ksos-link` and the rest above); the
+# demos come from tables shared by several gates, so they are declared once, here. Without .PHONY
+# a file of the same name makes a target "up to date".
 KSOS_BOARD_TARGETS := $(addprefix ksos-rp2040-,$(call row_keys,$(KSOS_RP2040_DEMOS))) \
     ksos-cm ksos-rp2040
 

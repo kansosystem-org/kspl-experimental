@@ -12,7 +12,7 @@
 // ==========================================
 function kspageApiLook(ks) {
   const { w, canvas, enc, outText, colorText, colorNum, scratch, nums, draw, acted, stage, handOver,
-    SHAPES, ALIGNS, COMPARES, MARKS, PAIRED_MARKS, DATINGS, COLLECTS } = ks;
+    cramps, SHAPES, ALIGNS, COMPARES, MARKS, PAIRED_MARKS, DATINGS, COLLECTS } = ks;
   // Caution: **Add it to the same `app`** (the page sees one handle).
   Object.assign(ks.api, {
     // Style `i`'s heading depth (0: not a heading) and what it collects ("none" / "contents" /
@@ -323,7 +323,7 @@ function kspageApiLook(ks) {
     // at every layout; the document stores only the name.
     // Caution: **Lay out first, then call** (the number comes from the layout result).
     insertRefer(name) {
-      w.kspage_web_layout(ks.width);
+      cramps(() => w.kspage_web_layout(ks.width));
       const len = stage(name);
       if (len <= 0) return false;
       return acted(w.kspage_web_insert_refer(len));
@@ -332,7 +332,7 @@ function kspageApiLook(ks) {
     // once** (Excel's way). **Empty if merged, else the reason** (the rule of `setBlockStyle`). One
     // undo restores the absorbed cells.
     mergeCells() {
-      w.kspage_web_layout(ks.width);
+      cramps(() => w.kspage_web_layout(ks.width));
       const got = w.kspage_web_merge_cells();
       if (got === 1) { draw(); return ""; }
       if (got === -1) return "This document is open for reading alone";
@@ -342,7 +342,7 @@ function kspageApiLook(ks) {
     },
     // Splits the merged cell the cursor is in; empty cells come back where it covered.
     splitCell() {
-      w.kspage_web_layout(ks.width);
+      cramps(() => w.kspage_web_layout(ks.width));
       return acted(w.kspage_web_split_cell());
     },
     // The link target of the cursor's inline. **Empty means it is not a link.**
@@ -360,7 +360,7 @@ function kspageApiLook(ks) {
     // The link target exactly at document position (x, y); **not moved to what is nearby** (empty
     // outside).
     hrefAt(x, y) {
-      w.kspage_web_layout(ks.width);
+      cramps(() => w.kspage_web_layout(ks.width));
       const len = w.kspage_web_href_at(x, y);
       return outText(len);
     },

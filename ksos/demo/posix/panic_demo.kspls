@@ -1,9 +1,9 @@
 //< The kernel's stops: each misuse panics instead of going on silently, one chosen per run
 //<
-//< `panic_demo <which>` runs one: `stack-overflow`, `mutex-relock`, `mutex-foreign-unlock` or
-//< `timeout-zero`. **Success is the panic**, so `ksos-<which>` greps the output for the kernel's
-//< own message (`ksos_posix_panic_needle_<which>` in `../../Makefile`). One run is one stop: a
-//< panic ends the process, so the scenarios cannot share a run.
+//< `panic_demo <which>` runs one: `stack-overflow`, `mutex-relock`, `mutex-foreign-unlock`,
+//< `delete-holder` or `timeout-zero`. **Success is the panic**, so `ksos-<which>` greps the output
+//< for the kernel's own message (`ksos_posix_panic_needle_<which>` in `../../Makefile`). One run is
+//< one stop: a panic ends the process, so the scenarios cannot share a run.
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
@@ -60,6 +60,22 @@ fn other(_arg: Void$@): Void
     io.out().s("[other] returned from unlock without a panic\n")
 
 // ==========================================
+// delete-holder: deleting a task that holds a mutex panics. Nobody could unlock the mutex again, so
+// every later lock would wait forever, and after delete_dyn the mutex would name freed memory.
+// ==========================================
+fn holding(_arg: Void$@): Void
+    io.out().s("=== Kanso OS (POSIX) deleting a mutex holder ===\n")
+    g_mutex.lock()
+    io.out().s("[holding] holding; handing the CPU to the deleter\n")
+    Task.yield()
+    g_mutex.unlock()
+
+fn deleter(_arg: Void$@): Void
+    io.out().s("[deleter] deleting the holder; this must stop here\n")
+    tcb.delete()
+    io.out().s("[deleter] returned from delete without a panic\n")
+
+// ==========================================
 // timeout-zero: a timeout of 0 panics instead of silently meaning `try_`. If 0 meant "do not
 // wait", the same thing could be written two ways, `try_take` and `take_for(0)`.
 // ==========================================
@@ -81,13 +97,18 @@ fn main(): I32
         g_mutex.init()
         tcb.create(U8$[]::stack, owner, null, 1, "owner")
         tcb_other.create(U8$[]::stack_other, other, null, 1, "other")
+    else if which.equals("delete-holder")
+        g_mutex.init()
+        tcb.create(U8$[]::stack, holding, null, 1, "holding")
+        tcb_other.create(U8$[]::stack_other, deleter, null, 1, "deleter")
     else if which.equals("timeout-zero")
         g_sem.init(0)
         tcb.create(U8$[]::stack, zero_waiter, null, 1, "zero")
     else
         // **An unknown name must not pass**: it prints no needle, so its gate fails.
         io.err()
-            .s("usage: panic_demo stack-overflow|mutex-relock|mutex-foreign-unlock|timeout-zero\n")
+            .s("usage: panic_demo \
+                stack-overflow|mutex-relock|mutex-foreign-unlock|delete-holder|timeout-zero\n")
         return 2
     task.start_scheduler()
     io.out().s("[panic_demo] UNEXPECTED: scheduler returned without a panic\n")

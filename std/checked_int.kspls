@@ -1,8 +1,12 @@
 //< Integer types whose operations report overflow instead of wrapping: `Ci8` through `Cu64`
 //<
 //< Up to 32 bits, the operation runs in the next wider native type, so the check cannot hit
-//< undefined behaviour. `I64`/`U64` have no 128-bit type, so they compare against the limits
-//< first: for a signed type, computing the overflowing result is itself UB.
+//< undefined behaviour.
+//< Caution: **Widen an operand by hand** (`I16::r.val + rhs.val`). An operation runs at its
+//< operands' width, and the wider parameter it is handed to does not change that, so
+//< `fit_ci8(r.val + rhs.val)` would wrap first and never see the overflow. `I64`/`U64` have no
+//< 128-bit type, so they compare against the limits first: for a signed type, computing the
+//< overflowing result is itself UB.
 
 // ==========================================
 // Caution: **Do not try to merge the eight types' impls into one generic** (the grounds are in
@@ -26,13 +30,13 @@ priv fn fit_ci8(wide: I16): Ci8!Checked_error //< a widened result back in Ci8, 
 impl Ci8
     pub fn checked_add(r: Self, rhs: Ci8): Ci8!Checked_error //<
         //< the sum, or an error if it does not fit
-        return fit_ci8(r.val + rhs.val)!
+        return fit_ci8(I16::r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Ci8): Ci8!Checked_error //<
         //< the difference, or an error if it does not fit
-        return fit_ci8(r.val - rhs.val)!
+        return fit_ci8(I16::r.val - rhs.val)!
     pub fn checked_mul(r: Self, rhs: Ci8): Ci8!Checked_error //<
         //< the product, or an error if it does not fit
-        return fit_ci8(r.val * rhs.val)!
+        return fit_ci8(I16::r.val * rhs.val)!
     pub fn checked_neg(r: Self): Ci8!Checked_error //<
         //< the negated value, or an error if it does not fit
         //<
@@ -86,13 +90,13 @@ priv fn fit_ci16(wide: I32): Ci16!Checked_error //< a widened result back in Ci1
 impl Ci16
     pub fn checked_add(r: Self, rhs: Ci16): Ci16!Checked_error //<
         //< the sum, or an error if it does not fit
-        return fit_ci16(r.val + rhs.val)!
+        return fit_ci16(I32::r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Ci16): Ci16!Checked_error //<
         //< the difference, or an error if it does not fit
-        return fit_ci16(r.val - rhs.val)!
+        return fit_ci16(I32::r.val - rhs.val)!
     pub fn checked_mul(r: Self, rhs: Ci16): Ci16!Checked_error //<
         //< the product, or an error if it does not fit
-        return fit_ci16(r.val * rhs.val)!
+        return fit_ci16(I32::r.val * rhs.val)!
     pub fn checked_neg(r: Self): Ci16!Checked_error //<
         //< the negated value, or an error if it does not fit
         if r.val == I16::(-32768)
@@ -142,13 +146,13 @@ priv fn fit_ci32(wide: I64): Ci32!Checked_error //< a widened result back in Ci3
 impl Ci32
     pub fn checked_add(r: Self, rhs: Ci32): Ci32!Checked_error //<
         //< the sum, or an error if it does not fit
-        return fit_ci32(r.val + rhs.val)!
+        return fit_ci32(I64::r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Ci32): Ci32!Checked_error //<
         //< the difference, or an error if it does not fit
-        return fit_ci32(r.val - rhs.val)!
+        return fit_ci32(I64::r.val - rhs.val)!
     pub fn checked_mul(r: Self, rhs: Ci32): Ci32!Checked_error //<
         //< the product, or an error if it does not fit
-        return fit_ci32(r.val * rhs.val)!
+        return fit_ci32(I64::r.val * rhs.val)!
     pub fn checked_neg(r: Self): Ci32!Checked_error //<
         //< the negated value, or an error if it does not fit
         if r.val == -2147483647 - 1
@@ -287,7 +291,7 @@ priv fn fit_cu8(wide: U16): Cu8!Checked_error //< a widened result back in Cu8, 
 impl Cu8
     pub fn checked_add(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the sum, or an error if it does not fit
-        return fit_cu8(r.val + rhs.val)!
+        return fit_cu8(U16::r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the difference, or an error if it does not fit
         if rhs.val > r.val
@@ -295,7 +299,7 @@ impl Cu8
         return Cu8::{ .val = r.val - rhs.val }
     pub fn checked_mul(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the product, or an error if it does not fit
-        return fit_cu8(r.val * rhs.val)!
+        return fit_cu8(U16::r.val * rhs.val)!
     pub fn checked_div(r: Self, rhs: Cu8): Cu8!Checked_error //<
         //< the quotient, or an error for a 0 divisor
         if rhs.val == 0
@@ -334,7 +338,7 @@ priv fn fit_cu16(wide: U32): Cu16!Checked_error //< a widened result back in Cu1
 impl Cu16
     pub fn checked_add(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the sum, or an error if it does not fit
-        return fit_cu16(r.val + rhs.val)!
+        return fit_cu16(U32::r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the difference, or an error if it does not fit
         if rhs.val > r.val
@@ -342,7 +346,7 @@ impl Cu16
         return Cu16::{ .val = r.val - rhs.val }
     pub fn checked_mul(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the product, or an error if it does not fit
-        return fit_cu16(r.val * rhs.val)!
+        return fit_cu16(U32::r.val * rhs.val)!
     pub fn checked_div(r: Self, rhs: Cu16): Cu16!Checked_error //<
         //< the quotient, or an error for a 0 divisor
         if rhs.val == 0
@@ -382,7 +386,7 @@ priv fn fit_cu32(wide: U64): Cu32!Checked_error //< a widened result back in Cu3
 impl Cu32
     pub fn checked_add(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the sum, or an error if it does not fit
-        return fit_cu32(r.val + rhs.val)!
+        return fit_cu32(U64::r.val + rhs.val)!
     pub fn checked_sub(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the difference, or an error if it does not fit
         if rhs.val > r.val
@@ -390,7 +394,7 @@ impl Cu32
         return Cu32::{ .val = r.val - rhs.val }
     pub fn checked_mul(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the product, or an error if it does not fit
-        return fit_cu32(r.val * rhs.val)!
+        return fit_cu32(U64::r.val * rhs.val)!
     pub fn checked_div(r: Self, rhs: Cu32): Cu32!Checked_error //<
         //< the quotient, or an error for a 0 divisor
         if rhs.val == 0

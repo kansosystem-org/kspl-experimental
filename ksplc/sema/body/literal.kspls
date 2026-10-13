@@ -4,6 +4,7 @@
 //< checked only where its type is known, and not while a generic is being instantiated.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core // is_comparison_op
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/session/ctx" { Sema_ctx }
@@ -40,6 +41,32 @@ fn is_untyped_int_literal(node: Ast_node$@): Bool //<
     lit: = literal_under_minus(node)
     return lit.node != null &&
         sema_type_env.is_unknown(sema_decl_eval.int_suffix_type_id(lit.node.text))
+
+fn is_untyped_numeric_expr(node: Ast_node$@): Bool //<
+    //< Whether it is built from numeric literals with no type suffix alone
+    //<
+    //< A literal, a unary `-` / `~` on one, or an arithmetic, bitwise or shift operation between
+    //< two (`4294967296 + 1`, `1 << 40`). **Only such an expression has no width of its own**, so
+    //< only it takes the outer expected type (`infer_binary_expr` in `binary.kspls`).
+    if node == null
+        return false
+    switch node.kind_id
+    case .k_integer
+        return is_untyped_int_literal(node)
+    case .k_float
+        return !node.text.ends_with("F32") && !node.text.ends_with("F64")
+    case .k_expr_unary
+        op: = node.get_unary_op().text
+        return (op.equals("-") || op.equals("~")) &&
+            is_untyped_numeric_expr(node.get_unary_target())
+    case .k_expr
+        op: = node.get_binary_op().text
+        if op.is_comparison_op() || op.equals("&&") || op.equals("||")
+            return false
+        return is_untyped_numeric_expr(node.get_binary_left()) &&
+            is_untyped_numeric_expr(node.get_binary_right())
+    default
+        return false
 
 priv fn literal_type_id(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     if node.kind_id == .k_bool

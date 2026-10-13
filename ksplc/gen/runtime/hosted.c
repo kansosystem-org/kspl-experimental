@@ -532,10 +532,11 @@ KSPL_LINK void kspl_io_broken_pipe(void) {}
 KSPL_LINK I32 argc = 0;
 KSPL_LINK U8 **argv = null;
 
-/* stdout / stderr being macros, they are wrapped in functions (get_stdout / get_stderr in
- * std/libc.kspls).
+/* stdin / stdout / stderr being macros, they are wrapped in functions (get_stdin / get_stdout /
+ * get_stderr in std/libc.kspls).
  * Caution: They must have external linkage (the reason is on hosted.h's declaration
  * side). */
+KSPL_LINK void* get_stdin(void) { return (void*)stdin; }
 KSPL_LINK void* get_stdout(void) { return (void*)stdout; }
 KSPL_LINK void* get_stderr(void) { return (void*)stderr; }
 

@@ -1,4 +1,4 @@
-//<
+//< kspage: formulas in table cells, and the bounds on how deep one computation goes
 import "kspage/expr/calc"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
@@ -143,6 +143,8 @@ priv const cases: Case[_] = ::{
         .why = "not equal can be compared" },
     Case::{ .cells = "3\t=A1=3", .row = 0, .column = 1, .want = "1",
         .why = "equal can be compared" },
+    Case::{ .cells = "3\t=A1==3", .row = 0, .column = 1, .want = "#SYNTAX!",
+        .why = "equal has one spelling, not KSPL's `==` too" },
     Case::{ .cells = "1\t=1<2<3", .row = 0, .column = 1, .want = "#SYNTAX!",
         .why = "comparisons written in a chain cannot be read" },
     Case::{ .cells = "0\t=10 if A1>0 else 20", .row = 0, .column = 1, .want = "20",
@@ -190,6 +192,28 @@ priv const cases: Case[_] = ::{
         .why = "a number that does not divide out runs to the last place" },
     Case::{ .cells = "=42/1", .row = 0, .column = 0, .want = "42",
         .why = "a whole number gets no decimal point" },
+    // Past an I64's range nothing is converted to a whole number (the answer would be undefined).
+    Case::{ .cells = "=10000000000*10000000000", .row = 0, .column = 0,
+        .want = "100000000000000000000", .why = "a number past an I64 is written as it stands" },
+    Case::{ .cells = "=-10000000000*10000000000", .row = 0, .column = 0,
+        .want = "-100000000000000000000", .why = "so is a negative one, with one minus sign" },
+    Case::{ .cells = "=(10000000000*10000000000).round(0)", .row = 0, .column = 0,
+        .want = "100000000000000000000", .why = "a number that large has nothing to round" },
+    Case::{ .cells = "=(10000000000*10000000000).year()", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a count of days that large names no day" },
+    Case::{ .cells = "=Day.of(10000000000*10000000000, 1, 1)", .row = 0, .column = 0,
+        .want = "#VALUE!", .why = "nor does a year that large" },
+    Case::{ .cells = "1e300\t=A1*A1", .row = 0, .column = 1, .want = "#VALUE!",
+        .why = "a product past an F64's range is no number" },
+    // A `.` with no digit after it starts a method.
+    Case::{ .cells = "=1.round(0)", .row = 0, .column = 0, .want = "1",
+        .why = "a method follows a whole number" },
+    Case::{ .cells = "=2026.year()", .row = 0, .column = 0, .want = "1975",
+        .why = "a whole number is a count of days" },
+    Case::{ .cells = "=1.5.round(0)", .row = 0, .column = 0, .want = "2",
+        .why = "after a decimal point a second `.` starts a method" },
+    Case::{ .cells = "=1.", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a `.` with nothing after it is not a decimal point" },
 }
 
 priv fn table_of(d: Doc$@, cells: U8[]): Block$@ //< the table `cells` spells, added to `d`
@@ -313,6 +337,22 @@ fn test_the_source_of_a_cell_is_its_formula(arena: Arena$@) //<
     bare: = plain.showing().equals("2")
     assert(bare, "in a cell with no formula the text seen is the text typed as it stands")
     verdict.pass("what is seen is the value, and the text typed can be taken apart from it.")
+
+fn test_the_cell_being_typed_in_keeps_its_value(arena: Arena$@) //<
+    //< Only the screen lays out the formula being typed in; the document still reads its value
+    //<
+    //< Export, sorting and printing read `showing`, so a cleared value would hand them the formula.
+    verdict.start("[kspage/calc] the cell being typed in keeping its value test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1*3")
+    sheet: = base.grid_sheet(arena)
+    typed: = t.children.get(0).children.get(1).inlines.get(0)
+    calc.recalc(d, sheet, typed)
+    assert(typed.showing().equals("6"), "the document reads its value")
+    assert(typed.face().equals("=A1*3"), "the screen lays out the formula")
+    calc.recalc(d, sheet)
+    assert(typed.face().equals("6"), "left, the screen lays out the value again")
+    verdict.pass("the cell being typed in keeps its value; only the screen shows the formula.")
 
 fn test_a_cells_source_can_be_replaced(arena: Arena$@) //< a formula can be replaced whole
     //<

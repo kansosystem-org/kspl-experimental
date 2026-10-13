@@ -14,6 +14,7 @@ import "kspage/lay/find"
 import "kspage/lay/flow"
 import "kspage/model/doc" { Block, Rect }
 import "kspage/model/filter"
+import "kspage/model/run" { Inline }
 // **Without an import from here the style entry points are not in the wasm** — the generated C
 // holds only what is reachable from the entry point; `#export` alone is not enough.
 import "kspage/port/web/face" as _face
@@ -57,29 +58,41 @@ priv fn row_of_caret(): Block$@? //<
 // freed here**; kept, resizing alone would pile up allocations.
 #export
 fn kspage_web_layout(width: F32): Sz
+    return lay_out(width, true)
+
+// Lays out for paper: as `kspage_web_layout`, but **with no cursor**, so the formula being typed in
+// prints its value and a row a filter hides stays hidden. The screen lays out again afterwards.
+#export
+fn kspage_web_layout_paper(width: F32): Sz
+    return lay_out(width, false)
+
+priv fn lay_out(width: F32, cursor: Bool): Sz
     ensure()
     // It recalculates before layout (otherwise the boxes show the cells' old text), and moves the
     // cursor back inside (shrinking text can leave it outside).
-    // Caution: **Pass the inline being typed** — otherwise it is replaced by its value mid-formula
-    // and the typed text disappears.
-    calc.recalc(doc, sheet, ed.caret.inline)
+    // Caution: **Pass the inline being typed** — otherwise the screen lays out its value
+    // mid-formula and the typed text disappears.
+    editing: Inline$@ = ed.caret.inline if cursor else null
+    calc.recalc(doc, sheet, editing)
     ed.clamp()
     // **The cursor's row is always laid out, whatever a filter says** (`Over.kept_row`), so a row
     // being typed into does not vanish; only this side knows the cursor, so it is set here before
     // every layout.
     sheet.over.kept_row = null
-    if held: = row_of_caret()
-        sheet.over.kept_row = held
+    if cursor
+        if held: = row_of_caret()
+            sheet.over.kept_row = held
     if page_arena != null
         page_arena.free()
     page_arena = Arena.new(state.fresh_chunk)
     // Pass the borrowing interface — otherwise a window shows only its target (the text is passed
     // in; the core does not open files).
     page = flow.layout(doc, sheet, source(), width, page_arena)
-    // Caution: Mark it again at every layout — the boxes are remade, and the marks go with them.
-    caret.mark_composing(page, ed.caret)
     sel = List<|Rect|>.create(page_arena)
-    caret.selection_rects(doc, page, ed.caret, sel)
+    // Caution: Mark it again at every layout — the boxes are remade, and the marks go with them.
+    if cursor
+        caret.mark_composing(page, ed.caret)
+        caret.selection_rects(doc, page, ed.caret, sel)
     return page.boxes.len
 
 // The height used; 0 before the first `kspage_web_layout` (`page` does not exist yet).

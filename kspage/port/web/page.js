@@ -197,6 +197,9 @@
     // **Turn the HTML's groups into submenus before wiring**, or the contents move away from it
     // (the ids do not change, so later `getElementById`s still find them).
     kspageFlyGroups(document.getElementById("bar"));
+    // **The page's one connection to its storage**, shared by the files and the drafts (two
+    // connections leave each other's writes unordered: `keep.js`'s `keepStore`).
+    ui.handles = kspageHandles();
     // **Set up the local server before the files** (they use its entry points).
     Object.assign(ui, kspageLocal(ui));
     Object.assign(ui, kspageFile(ui));

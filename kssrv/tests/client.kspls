@@ -400,8 +400,11 @@ fn shown(r: Resp, arena: Arena$@): U8[] //<
 fn is_json(r: Resp): Bool //< whether the answer says its body is JSON, a body sent or not
     return header(r.head, "content-type").equals("application/json")
 
-fn check_405(name: U8[], r: Resp, arena: Arena$@) //< checks only that a 405 comes back
-    verdict.check(name, r.status == 405, arena.text().s("\{r.status\}").take())
+fn check_405(name: U8[], r: Resp, allow: U8[], arena: Arena$@) //<
+    //< Checks that a 405 comes back, naming in `Allow` the methods that would have been taken
+    said: = header(r.head, "allow")
+    verdict.check(name, r.status == 405 && said.equals(allow),
+        arena.text().s("\{r.status\} Allow: ").s(said).take())
 
 fn short(text: U8[]): U8[]
     return text if text.len <= name_body_max else text.sub(0, name_body_max)

@@ -72,7 +72,8 @@ fn main(): I32
 //<
 //< Called by hand they double up with the inserted ones, and the automatic release writes into
 //< memory an explicit one freed (use-after-free). The conforming impl's methods are priv, so a
-//< direct call is refused (`case_trait_method_priv_upcast` in trait_shape.kspls covers an upcast).
+//< direct call is refused (`case_trait_method_priv_upcast` in the case `trait_shape` in
+//< `trait.kspls` covers an upcast).
 // EXPECT: cannot access symbol
 import "std/refcount" { Rc }
 
@@ -229,16 +230,15 @@ fn main()
 // EXPECT: cannot write to an element of a read-only slice or array
 
 // The shape writing through a read-only pointer (`T@`) by way of a `$` (an explicit dereference).
-// It is a verification paired with const_ptr_field_write.kspls (by way of a `.`), confirming that
-// the `$` side's road is shut too (both are shapes that easily pass through).
+// It is a verification paired with the case `const_ptr_field_write` in `const.kspls` (by way of a
+// `.`), confirming that the `$` side's road is shut too (both are shapes that easily pass through).
 fn case_const_ptr_deref_write()
   x: I32 = 1
   p: I32@ = I32@::x@
   p$ = 5
 
-// A derivation of the above (const_ptr_in_struct_field_write.kspls), for writing into a "field" at
-// the target. `s.p.n = v` holds two pointer crossings on its road (`s` and `s.p`), and the latter
-// is immutable.
+// A derivation of the case `const_ptr_in_struct_field_write` in `const.kspls`, writing into a
+// "field" at the target: `s.p.n = v` crosses two pointers (`s` and `s.p`), the latter immutable.
 // Having seen the first crossing (`s` being a mutable pointer) it cut short at "a pointer was
 // crossed, so the binding's mutability is not asked about", and did not look at `s.p` midway
 // being immutable.
@@ -260,9 +260,9 @@ fn case_const_ptr_in_struct_field_member_write(): I32
 // The shape taking an element out by an index (a read-only pointer `I32@`) and writing into its
 // target. The array itself and the element's slot are mutable (`I32@[2]`), but what the element
 // points at is immutable, so it is refused.
-// The regression: the same fail-open as const_ptr_nested_deref_write.kspls. write_target_type
-// returned unknown on a `[` (an index) too, so the check was given up and on the LLVM backend the
-// write held.
+// The regression: the same fail-open as the case `const_ptr_nested_deref_write` in `const.kspls`.
+// write_target_type returned unknown on a `[` (an index) too, so the check was given up and on the
+// LLVM backend the write held.
 $g: I32 = 1
 
 fn case_const_ptr_via_subscript_write()

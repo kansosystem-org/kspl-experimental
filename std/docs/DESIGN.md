@@ -168,7 +168,19 @@ Caution: **Do not confuse `Arc` with ARC in a document.** ARC (upper case) is Au
 
 **The zero value is an empty handle that owns nothing**, and retain/release skip it. So a table of empty slots such as `Rc<|T|>[N] = ::{}` is written plainly. It also survives the compiler's chained release over storage filled with zeros. `empty()` / `is_empty()` spell it out.
 
-**release does not follow what it points at.** When the last owner of an `Rc<|T|>` lets go, the `T` inside is not taken apart for you. If that `T` holds ARC values by value, give that ownership back by hand before the last owner lets go. So a list or tree built from `Rc` is taken apart from the root. Following the pointers would run a recursion of unpredictable depth at the end of a lifetime.
+### Release takes the value apart
+
+**When the last owner of an `Rc<|T|>` or `Arc<|T|>` lets go, the `T` inside is taken apart too**: every ARC value it holds by value is released, to any depth, as when a `T` on the stack leaves its scope. Left alone, every `Rc` held inside a shared value leaked, so a shared tree or graph could not be built from `Rc` at all.
+
+| What it costs | What to do |
+| :-- | :-- |
+| **The time goes where the last owner goes**: leaving one scope can free a whole tree, at a line that shows no call | Where timing matters (an interrupt, a control loop), take the structure apart step by step before that point |
+| **A long chain recurses once per link** (`next: Rc<\|Node\|>`, a million deep), and can run the stack out | Walk the chain in a loop, moving the head forward (`head = head.get().next`): each step frees one node while the rest is still held |
+| **The free runs on the thread, or in the handler, where the last owner goes**. An `Rc` inside an `Arc`'s value is then released from another thread, a data race | Hold only `Arc` in a value threads share; on bare metal, let the last owner go outside an interrupt handler |
+
+A cycle still leaks, as in every reference-counted language: make one side a weak handle. A resource that is not ARC (a `List`, a file) still needs its `free()`, since nothing runs one implicitly.
+
+**release holds one weak count while the value is taken apart.** The value may hold the last weak handle to its own block, and that handle's release would free the block under the release still using it. `Arc` gets the same from the weak count its owners hold together.
 
 ### A container owns its elements' ARC counts
 
@@ -181,7 +193,7 @@ The caller cannot reach the storage, so anything the container fails to release 
 | **Zero freshly allocated capacity** | `mem.zero` on new storage | Storing an element is an ordinary assignment, so the compiler inserts a release of the value being overwritten. Releasing leftover garbage as if it were ARC crashes |
 | **Give the ownership back when discarding** | `free` assigns an empty (the zero value) to the remaining elements, `remove` to the removed one, and a growing `resize` to the old slots it moved from | `mem.zero` runs no release: without an assignment, the compiler has nowhere to insert one |
 
-**The promise does not reach through an `Rc<|T|>` element** ("release does not follow what it points at", above): a container holds its elements, not what they point at.
+**An `Rc<|T|>` element's own release takes its value apart** ("Release takes the value apart", above), so a container of `Rc` needs nothing more.
 
 ### A constructor's name says where the returned thing goes
 
@@ -266,6 +278,8 @@ Caution: **Do not change how a newline is written**: `dedent` lines up indentati
 **Do not treat `\r` as a character**, or a whitespace-only `\r\n` line would set the minimum width while the other lines keep theirs (`"    a\r\n  \r\n    b"` would leave two spaces before `b`).
 
 **Do not let the final empty line set the minimum width**, or nothing would be stripped from a string ending in a newline.
+
+**The shared indentation is compared byte by byte, not counted.** Lines indented with a tab and with four spaces share none, so neither loses any. Counted as one column each, the tab and the first space would both go, and the two lines would no longer line up as they did.
 
 ### The destination is always named. There are three shapes, and no more are added
 

@@ -68,6 +68,11 @@ struct Fn_ctx
         //< **A function's name anywhere else is a value**, which a generic one can be only as a
         //< specialization (sema/body/resolve_path.kspls). The call's own route infers its type
         //< arguments from the arguments (sema/body/call.kspls).
+    errors_before: I32 //<
+        //< The error mark (`error_mark`) when this function's body began; 0 outside a body
+        //<
+        //< `has_error_in_fn` compares against it, so an error in one function does not silence
+        //< the diagnostics of the next.
     effective_vis: sema_type_scope.Visibility //<
         //< The effective visibility of the function being analysed
         //<
@@ -286,6 +291,18 @@ impl Sema_ctx
 
     fn has_error(r: Self$@): Bool
         return r.diags.counts.errors > 0
+    fn error_mark(r: Self$@): I32 //<
+        //< A mark to compare against later, to tell whether an error was met in between
+        //<
+        //< A repeat kept from printing counts as met (Diag_state.errors_met).
+        return r.diags.errors_met
+    fn has_error_in_fn(r: Self$@): Bool //<
+        //< Whether an error was reported since the current function's body began
+        //<
+        //< Caution: **Use it, not `has_error`, to hold back a diagnostic that would only repeat an
+        //< earlier one.** The cascade it guards against stays inside one body; counted over the
+        //< whole compilation, one mistake would silence every function after it.
+        return r.diags.errors_met > r.fn_ctx.errors_before
 
     fn err(r: Self$@, node: Ast_node$@, msg: U8[])
         r.report_diagnostic(node, .error, msg)
@@ -428,11 +445,19 @@ impl Sema_ctx
             (eff_sev == base_diag.Diagnostic_severity.information ||
             eff_sev == base_diag.Diagnostic_severity.hint)
             return
+        if eff_sev == base_diag.Diagnostic_severity.error
+            r.diags.errors_met += 1
         $key_sb: = Str_builder.new()
         defer key_sb.free()
         if has_pos
             key_sb.s(file).c(':').s("\{offset\}").c(':')
-        key_sb.s(msg)
+        // **One error per place in a generic's body**, whichever instance found it: each instance
+        // repeats the same mistake with its own type in the text (`type 'I32' has no field…`,
+        // then `'I64'`), and the copies bury the diagnostics after them.
+        if has_pos && r.in_generic_instance && eff_sev == base_diag.Diagnostic_severity.error
+            key_sb.s("error in an instance")
+        else
+            key_sb.s(msg)
         dup_key: = key_sb.slice()
         already_reported: = r.diags.reported.get(dup_key) catch 0
         if already_reported == 1

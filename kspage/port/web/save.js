@@ -191,7 +191,7 @@ function kspageSave(kf) {
     app.focus();
   };
 
-  const saveToFile = async () => {
+  const saveNow = async () => {
     // **The document the save is for** (`stillHere` above) and its target, taken before any await.
     const mine = kf.docId;
     // **Build the text before any await** (an await ends the click's user activation).
@@ -248,6 +248,14 @@ function kspageSave(kf) {
     if (here) remember("", body);
     say("Saved (" + at.name + ")" + (here ? "" : MOVED));
     app.focus();
+  };
+  // Caution: **One save at a time** — a second press while one is writing (a double click, Ctrl+S
+  // pressed twice) compares against a text the first has not recorded yet, and refuses as "changed
+  // outside", or opens a second picker. It is answered by the save under way.
+  let saving = null;
+  const saveToFile = () => {
+    if (saving === null) saving = saveNow().finally(() => { saving = null; });
+    return saving;
   };
   document.getElementById("save").addEventListener("click", saveToFile);
 

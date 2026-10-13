@@ -188,6 +188,12 @@ priv fn is_bool_arith_operand(ctx: Sema_ctx$@, left_id: I32, right_id: I32, op_t
         return false
     return ctx.env.is_bool(left_id) || ctx.env.is_bool(right_id)
 
+priv fn is_numeric_expected(ctx: Sema_ctx$@, expected_id: I32): Bool //<
+    //< Whether the outer expected type is a number, the case the operands' width governs
+    //<
+    //< Any other expected type still reaches the left (a struct literal before a user's `+`).
+    return !sema_type_env.is_unknown(expected_id) && ctx.env.is_numeric(expected_id)
+
 fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!Sema_error
     node.ice_assert(node.children.len == 3, "Binary expression node must have exactly 3 children")
 
@@ -208,18 +214,25 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
     $pass_left_id: = expected_id
     if is_cmp || is_logical || is_strict_bitwise
         pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
-    // **The outer expected type is not passed down to a `-`'s left-hand side**; once the side is
-    // known to be a number, the type is reapplied below, so the width does not change.
-    // Caution: **Pass it down for a literal only.** A literal has no type to promote from, so the
-    // left of `x: I64 = 4294967296 - 1;` would take the default I32 and be rejected as out of
-    // range.
-    defer_left: =
-        op_text.equals("-") && !sema_body_literal.is_untyped_int_literal(left_node)
-    if defer_left
-        pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
-    $left_type_id: = left_node.infer_expr(ctx, pass_left_id)!
-    if defer_left && !ctx.env.is_pointer(left_type_id)
-        left_type_id = left_node.settle_expected(ctx, left_type_id, expected_id)!
+    // **The outer expected type does not reach a numeric operation's operands** ("Integer
+    // arithmetic" in docs/SPEC-language.md): they compute at their own width and infer_expr's last
+    // step widens the result. Passed down, `c: I32 = a + b` over two U8 gave 256, not 0.
+    $right_first_id: = I32::sema_type_env.Builtin_type_id.unknown
+    $right_done: = false
+    // Caution: **Literals alone have no width, so they take it**: on both sides (`x: I64 =
+    // 4294967296 - 1`), or on a shift's left (`x: I64 = 1 << 40`). A literal before a value takes
+    // it only when the value has that type too, so the value is inferred first there.
+    if is_numeric_expected(ctx, expected_id) && !is_cmp && !is_logical && !is_strict_bitwise
+        left_untyped: = sema_body_literal.is_untyped_numeric_expr(left_node)
+        if !left_untyped
+            pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
+        else if !is_shift && !sema_body_literal.is_untyped_numeric_expr(right_node)
+            right_first_id = right_node.infer_expr(ctx,
+                I32::sema_type_env.Builtin_type_id.unknown)!
+            right_done = true
+            if ctx.env.get_real_type(right_first_id) != ctx.env.get_real_type(expected_id)
+                pass_left_id = I32::sema_type_env.Builtin_type_id.unknown
+    left_type_id: = left_node.infer_expr(ctx, pass_left_id)!
     // An operand is a value, so a type's name is refused on either side, with nothing expected of
     // it too (`Box<|I32|> == f`).
     if sema_body_resolve_path.refuse_type_name(ctx, left_node)
@@ -240,15 +253,19 @@ fn infer_binary_expr(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!S
         switch resolved
         case .user(method_sym)
             node.def_node = method_sym.node
-            right_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
+            if !right_done
+                right_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
             node.type_id = method_sym.type_id
             return method_sym.type_id
         case .failed
             return I32::sema_type_env.Builtin_type_id.unknown
         case .builtin {}
 
-    pass_right_id: = right_expected_id(ctx, right_node, left_type_id, expected_id, op_text)
-    $right_type_id: = right_node.infer_expr(ctx, pass_right_id)!
+    $right_type_id: = right_first_id
+    if !right_done
+        pass_right_id: =
+            right_expected_id(ctx, right_node, left_type_id, expected_id, op_text)
+        right_type_id = right_node.infer_expr(ctx, pass_right_id)!
     if sema_body_resolve_path.refuse_type_name(ctx, right_node)
         return I32::sema_type_env.Builtin_type_id.unknown
     if refuses_fn_operator(ctx, node, op_text, right_type_id)

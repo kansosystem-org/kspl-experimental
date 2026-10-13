@@ -74,8 +74,8 @@ priv struct Book //< the document's tables together
     editing: Inline$@ //<
         //< The run being typed in now
         //<
-        //< **No value is shown here** (the user could not edit it without seeing the typed text);
-        //< the value is still computed for the other cells.
+        //< **The screen lays it out as typed** (the user could not edit it without seeing the typed
+        //< text); its value is still computed and kept, for export and for the other cells.
     depth: Sz //< how deep the computation under way is (`max_depth`)
     // A chain went past `max_depth` at `deferred`: what was computed on the way is not kept, and
     // `settle` computes `deferred` first.
@@ -163,13 +163,17 @@ impl P
 priv fn parse_number(p: P$@): Value //< reads a number
     //<
     //< Only digits and one decimal point (the sign belongs to unary minus). **One decimal point**:
-    //< accept a second and the `.` of `5.0.round(2)` is swallowed.
+    //< accept a second and the `.` of `5.0.round(2)` is swallowed. **A `.` is the decimal point
+    //< only with a digit after it**; otherwise it starts a method (`2026.year()`).
     start: = p.c.pos
     $dot: = false
-    for p.c.pos < p.c.src.len &&
-        ((addr.at(p.c@) >= '0' && addr.at(p.c@) <= '9') || (addr.at(p.c@) == '.' && !dot))
-        if addr.at(p.c@) == '.'
+    for p.c.pos < p.c.src.len
+        ch: = addr.at(p.c@)
+        if ch == '.' && !dot && p.c.pos + 1 < p.c.src.len &&
+            p.c.src[p.c.pos + 1].is_digit()
             dot = true
+        else if !ch.is_digit()
+            break
         p.c.pos += 1
     text: = p.c.src.sub(start, p.c.pos - start)
     v: = text.to_f64() catch
@@ -260,8 +264,11 @@ priv fn parse_day_of(p: P$@): Value //< `Day.of(year, month, day)`
         return m
     if !d.ok
         return d
-    if n: = day.days_of(I64::y.num, I64::m.num, I64::d.num)
-        return number(F64::n)
+    if yy: = shown.whole_of(y.num)
+        if mm: = shown.whole_of(m.num)
+            if dd: = shown.whole_of(d.num)
+                if n: = day.days_of(yy, mm, dd)
+                    return number(F64::n)
     return Cell_error.not_number.failed()
 
 priv fn parse_fold(p: P$@, g: Grid$@, a: Addr, b: Addr): Value //<
@@ -356,8 +363,11 @@ priv fn parse_primary(p: P$@): Value //< one value
 priv fn parse_method(p: P$@, v: Value): Value //< one method following a value
     //<
     //< It is called after the `.`. **The `(` and the `)` cannot be omitted** (the same form as
-    //< KSPL). **An unknown name is rejected.**
-    kind: = method_of(parse_word(p))
+    //< KSPL). **An unknown name is rejected**; no name at all (`=1.`) does not read as a formula.
+    name: = parse_word(p)
+    if name.len <= 0
+        return Cell_error.syntax.failed()
+    kind: = method_of(name)
     if kind < 0
         return Cell_error.no_name.failed()
     if !eat(p, '(')
@@ -373,13 +383,16 @@ priv fn parse_method(p: P$@, v: Value): Value //< one method following a value
         return Cell_error.syntax.failed()
     if !v.ok
         return v
-    // **It takes a count of days**, whatever the date format (the format belongs to the text).
-    c: = day.civil_of(I64::v.num)
-    if kind == met_year
-        return number(F64::c.year)
-    if kind == met_month
-        return number(F64::c.month)
-    return number(F64::c.day)
+    // **It takes a count of days**, whatever the date format (the format belongs to the text). One
+    // too large to convert names no day.
+    if days: = shown.whole_of(v.num)
+        c: = day.civil_of(days)
+        if kind == met_year
+            return number(F64::c.year)
+        if kind == met_month
+            return number(F64::c.month)
+        return number(F64::c.day)
+    return Cell_error.not_number.failed()
 
 priv fn parse_factor(p: P$@): Value
     addr.skip_ws(p.c@)
@@ -408,14 +421,8 @@ priv fn parse_term(p: P$@): Value
             return left
         if !right.ok
             return right
-        if c == '*'
-            left = number(left.num * right.num)
-        else
-            // A division by 0 is not a number (an infinity or a NaN written as text cannot be
-            // read).
-            if right.num == 0.0
-                return Cell_error.not_number.failed()
-            left = number(left.num / right.num)
+        // A division by 0 gives an infinity or a NaN, which `number` refuses.
+        left = number(left.num * right.num if c == '*' else left.num / right.num)
         addr.skip_ws(p.c@)
     return left
 
@@ -499,7 +506,7 @@ priv fn parse_compare(p: P$@): Value //<
 priv fn parse_pick(p: P$@): Value //< `<value where true> if <condition> else <value where false>`
     //<
     //< **Both sides are computed**, so the same formula touches the same cells every time; the
-    //< error on the side not chosen is discarded (`0 if A1 == 0 else 1/A1` is 0 where A1 is 0). It
+    //< error on the side not chosen is discarded (`0 if A1 = 0 else 1/A1` is 0 where A1 is 0). It
     //< chains to the right (`a if c else b if d else e`).
     if !p.enter()
         return Cell_error.syntax.failed()
@@ -635,19 +642,20 @@ priv fn show(n: Inline$@, v: Value, book: Book$@, out: Str_builder$@) //<
     //<
     //< **The typed text is not rewritten** (it would disagree with the undo record's positions).
     //< Caution: **Clear the value of a text that is not a formula.** Otherwise the old value still
-    //< shows after the formula is typed over. **Nothing is set on the run being typed in.**
+    //< shows after the formula is typed over. **The run being typed in keeps its value too**
+    //< (export reads it); only the screen lays it out as typed (`Inline.face`).
     // A number is set on every cell, formula or not: **a chart reads it**.
     num: F64? = .some(v.num) if v.ok else .none
-    if !n.is_formula() || n == book.editing
+    if !n.is_formula()
         // Caution: **Clear only the text and set the number** (a chart reads this cell too).
-        n.show_value("", num, book.kept)
+        n.show_value("", num, false, book.kept)
         return
     out.clear()
     if v.ok
         shown.write_shown(out, v.num, shown_as(book.sheet, n.style))
     else
         out.s(v.err.error_text())
-    n.show_value(out.slice(), num, book.kept)
+    n.show_value(out.slice(), num, n == book.editing, book.kept)
 
 // ---- Recomputing a table ----
 
@@ -665,7 +673,7 @@ priv fn show_free(n: Inline$@, book: Book$@, out: Str_builder$@) //< one text in
     //< Where it is a formula, it is computed and its value set as the text to show.
     if !n.is_formula()
         // **No number is set either** (a chart never reads a text outside a cell).
-        n.show_value("", .none, book.kept)
+        n.show_value("", .none, false, book.kept)
         return
     show(n, eval(n.text(), book, null), book, out)
 

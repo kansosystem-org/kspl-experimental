@@ -43,11 +43,15 @@ $sent_count: U32 = 0
 
 // Whether sending succeeds can be set (on real hardware a failure cannot be chosen).
 $fake_send_ok: Bool = true
+// The last frame sent, kept so a test can read back the ACK it carried.
+$sent_frame: U8[1600] = ::{}
+$sent_len: Sz = 0
 
-priv fn fake_send_frame(_frame: U8[], _len: Sz): Bool
+priv fn fake_send_frame(frame: U8[], len: Sz): Bool
     if !fake_send_ok
         return false
     sent_count += 1
+    sent_len = (U8$[]::sent_frame).copy_from(0, frame.sub(0, len))
     return true
 
 priv fn fake_rx_available(): Bool
@@ -70,11 +74,18 @@ priv fn fake_link(): netlink.Link
 
 priv fn stage_segment(payload: U8$[], seq: U32) //<
     //< Puts a data segment of payload.len bytes on the fake link
+    stage_flagged(payload, seq, net.tcp_flag_ack | net.tcp_flag_psh)
+
+priv fn stage_flagged(payload: U8$[], seq: U32, flags: U8) //< stage_segment with the flags named
     for i in Range.asc(payload.len)
         payload[i] = U8::(i % 251) // a prime, so the period does not line up with the buffer
-    fake_len = net.build_tcp_segment(U8$[]::fake_frame, from_peer(), seq, our_isn + 1,
-        net.tcp_flag_ack | net.tcp_flag_psh, payload)
+    fake_len = net.build_tcp_segment(U8$[]::fake_frame, from_peer(), seq, our_isn + 1, flags,
+        payload)
     fake_ready = true
+
+priv fn last_sent(): net.Tcp_segment //<
+    //< the last frame sent, read as a segment from us to the peer
+    return net.parse_tcp_segment(U8[]::sent_frame, sent_len, our_ip, our_port, peer_port)
 
 $conn: tcpc.Tcp_conn
 $payload_buf: U8[1200] = ::{}
@@ -143,6 +154,85 @@ fn test_tcp_conn_rejects_wrong_seq() //<
     assert(n_ok == 500, "the next in-order segment must still be readable")
 
     verdict.pass("throwing a wrong order away does not dirty the carried-over state.")
+
+fn test_tcp_conn_acks_received_data() //< received data is ACKed, and a resend ACKed again
+    //<
+    //< Caution: **Without an ACK the peer resends what it sent**, and stops once its window is
+    //< full (the reason is at `send_ack` in ksos/net/tcp_conn.kspls).
+    verdict.start("[ksos/net] ACKing what was handed over, and a resend again, test...")
+
+    link: = fake_link()
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    sent_count = 0
+    stage_segment(U8$[]::payload_buf, peer_isn + 1)
+    _first: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+    assert(sent_count == 0, "no ACK may go while part of the segment is still held")
+    _second: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+    _third: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+    assert(sent_count == 1, "one ACK must go once the whole segment has been handed over")
+    ack: = last_sent()
+    assert(ack.ok && ack.flags == net.tcp_flag_ack && ack.payload_len == 0,
+        "the ACK must be a bare ACK from us to the peer")
+    assert(ack.ack == peer_isn + 1 + 1200 && ack.seq == our_isn + 1,
+        "the ACK must name the byte after the segment, from our current seq")
+
+    // The peer resends the segment (as if our ACK were lost): it is dropped and ACKed again.
+    stage_segment(U8$[]::payload_buf, peer_isn + 1)
+    n_dup: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+    assert(n_dup == tcpc.mbedtls_err_ssl_want_read, "a resent segment must not be read twice")
+    assert(sent_count == 2 && last_sent().ack == peer_isn + 1 + 1200,
+        "a resent segment must be answered with the same ACK")
+
+    verdict.pass("the whole segment is ACKed once it is handed over, and a resend is ACKed again.")
+
+fn test_tcp_conn_reads_fin_as_end_of_stream() //<
+    //< The peer's FIN reads as the end of the stream (0), not as want-read for ever
+    verdict.start("[ksos/net] reading the peer's FIN as the end of the stream test...")
+
+    // A FIN on a data segment: the data first, then 0 on every call.
+    link: = fake_link()
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    sent_count = 0
+    data: = (U8$[]::payload_buf).sub_mut(0, 100)
+    stage_flagged(data, peer_isn + 1, net.tcp_flag_ack | net.tcp_flag_psh | net.tcp_flag_fin)
+    n_data: = tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500)
+    assert(n_data == 100, "the data before the FIN must be handed over first")
+    assert(sent_count == 1 && last_sent().ack == peer_isn + 1 + 100 + 1,
+        "the ACK must cover the data and the FIN's own sequence number")
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == 0,
+        "after the FIN, recv must read the end of the stream")
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == 0,
+        "the end of the stream must stay, not turn back into want-read")
+
+    // A bare FIN.
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    empty: = (U8$[]::payload_buf).sub_mut(0, 0)
+    stage_flagged(empty, peer_isn + 1, net.tcp_flag_ack | net.tcp_flag_fin)
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == 0,
+        "a bare FIN must read as the end of the stream")
+    assert(last_sent().ack == peer_isn + 2, "a bare FIN must be ACKed")
+
+    verdict.pass("data before a FIN arrives, the FIN is ACKed, and then the stream reads 0.")
+
+fn test_tcp_conn_reports_reset() //< the peer's RST at the expected seq reads as an error
+    //<
+    //< Caution: **An RST at another seq is ignored** (the reason is at the RST check in
+    //< ksos/net/tcp_conn.kspls).
+    verdict.start("[ksos/net] reporting the peer's RST, and ignoring one at the wrong seq, test...")
+
+    link: = fake_link()
+    conn = tcpc.make(link, to_peer(), our_isn + 1, peer_isn + 1)
+    empty: = (U8$[]::payload_buf).sub_mut(0, 0)
+    stage_flagged(empty, peer_isn + 77, net.tcp_flag_rst)
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.mbedtls_err_ssl_want_read,
+        "an RST at an unexpected seq must be ignored")
+    stage_flagged(empty, peer_isn + 1, net.tcp_flag_rst)
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.mbedtls_err_net_conn_reset,
+        "an RST at the expected seq must read as a reset")
+    assert(tcpc.tcp_stream_recv(Void$@::conn@, got[0]@, 500) == tcpc.mbedtls_err_net_conn_reset,
+        "the reset must stay on later calls")
+
+    verdict.pass("an RST at the expected seq reads as a reset from then on; one elsewhere is not.")
 
 fn test_tcp_conn_send_is_partial() //< sending is one frame per call
     //<

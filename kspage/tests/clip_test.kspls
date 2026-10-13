@@ -1,4 +1,4 @@
-//<
+//< kspage: copy, cut and paste, and converting between a table and CSV text
 import "kspage/lay/ask"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
@@ -367,6 +367,25 @@ fn test_short_rows_are_padded_to_the_widest(arena: Arena$@) //<
     assert(cell_text(made, 0, 2).len == 0, "the cells wanting are empty")
     assert(cell_text(made, 2, 1).equals("f"), "the text of the row behind stays as it was")
     verdict.pass("the rows come out the length of the longest row.")
+
+fn test_a_fenced_field_keeps_to_its_row(arena: Arena$@) //<
+    //< A line break inside quotes becomes one space, and text after a closing quote stays in it
+    //<
+    //< A cell's text holds no line break; and read as a row of its own, the text behind a quote
+    //< would shift every row after it.
+    verdict.start("[kspage/csv] a fenced field keeping to its row test...")
+    $made: Block$@ = null
+    src: = "\"one\ntwo\",\"three\r\nfour\"\n\"q\"junk,c\nlast,x\n"
+    if got: = csv.read_table(src, "table", arena)
+        made = got
+    assert(made != null, "the table builds")
+    assert(made.children.len == 3, "a line break inside quotes starts no row, nor a closing quote")
+    assert(cell_text(made, 0, 0).equals("one two"), "a line break inside quotes is one space")
+    assert(cell_text(made, 0, 1).equals("three four"), "so is a CR LF")
+    assert(cell_text(made, 1, 0).equals("qjunk"), "the text after a closing quote stays in it")
+    assert(cell_text(made, 1, 1).equals("c"), "the field after it is the next column")
+    assert(cell_text(made, 2, 0).equals("last"), "the rows behind stay as they were")
+    verdict.pass("a fenced field keeps to its row and its cell holds no line break.")
 
 fn test_an_empty_source_makes_no_table(arena: Arena$@) //< an empty text makes no table
     //<

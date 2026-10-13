@@ -564,7 +564,8 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
         c.clear_scratch()
             .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'\n  \
                 Note: a fixed-length array is not a slice, so a slice's methods are not found on \
-                it. View it as one with an explicit cast: '\{elem\}[]::(...)'.")
+                it. View it as one with an explicit cast, in parentheses so that the cast covers \
+                the array alone: '(\{elem\}[]::x).\{member_name_raw\}(…)', with x the array.")
         c.err(member_node, c.scratch.slice())
         return
 
@@ -572,6 +573,10 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
     // (check_const_arg / check_type_constraint report it at the type's use).
     recv_name: = c.env.get_str(c.env.get_clean_real_type(c.env.strip_ptr(recv_id)))
     if c.has_failed_constraint(recv_name)
+        return
+    // Likewise an instance the method-table chain was cut short of (mono_queue.kspls).
+    if c.method_chain_was_cut() &&
+        c.env.instance_of(c.env.get_clean_real_type(c.env.strip_ptr(recv_id))).is_some()
         return
 
     // Caution: **Put the guidance in the error message itself.** A `hint` appears only under lint,

@@ -132,6 +132,14 @@ priv const fail_step: I32 = -2
 priv const err_tail_bytes: Sz = 400 //<
     //< How much of the end of standard error is attached to a failure's description
 
+fn id_after(id: I32): I32 //< the id the request after `id` takes
+    //<
+    //< Caution: **Go back to 1 past I32's top.** Wrapped to a negative, the id would make `encode`
+    //< send the request as a notification, and its answer would never come.
+    return 1 if id >= i32_top else id + 1
+
+priv const i32_top: I32 = 2147483647 //< the largest I32
+
 #cfg(!freestanding)
 impl Client: Owned {} //< it owns its memory and releases it with `free()`
 
@@ -205,7 +213,7 @@ impl Client
         arena: Arena$@, //< where the text and the response are built
     ): json.Val!Rpc_end
         id: = r.next_id
-        r.next_id += 1
+        r.next_id = id_after(id)
         // The write spends the same budget: the round trip's timeout bounds both halves.
         deadline: = sys.deadline_after_ms(timeout_ms)
         r.send_raw(encode(method, params, id, arena), timeout_ms)!

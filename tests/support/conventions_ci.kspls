@@ -265,9 +265,10 @@ priv fn is_entry(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source defines `main`: a line opening with it, outside a `"""` string
     //<
     //< A suite writes the programs it runs into such strings, and they are not this file's entry.
+    //< A `pub fn main` is an entry too: read as `fn main` alone, it slipped out of the gate.
     $raw: = false
     for line in src.lines(arena)
-        if !raw && line.starts_with("fn main(")
+        if !raw && (line.starts_with("fn main(") || line.starts_with("pub fn main("))
             return true
         raw = scan.flip_raw(line, raw)
     return false
@@ -277,6 +278,7 @@ priv const entry_samples: Sample[_] = ::{
     Sample::{ .text = "fn main(): I32\n  return 0\n", .hits = true },
     Sample::{ .text = "import \"std/io\"\n\nfn main() {\n}\n", .hits = true },
     Sample::{ .text = "priv const s: U8[] =\n  \"\"\"x\nfn main()\n\"\"\"\n", .hits = false },
+    Sample::{ .text = "pub fn main(): I32\n  return 0\n", .hits = true },
     Sample::{ .text = "fn mainly(): I32\n", .hits = false },
     Sample::{ .text = "  // fn main(): I32\n", .hits = false },
 }

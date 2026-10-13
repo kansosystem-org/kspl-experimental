@@ -30,6 +30,8 @@ function kspageKeys(ks) {
   const ACCENT_KEYS = { b: "bold", i: "italic", u: "underline" };
 
   // Copies text into the wasm's buffer: the length, or -1 (nothing copied) if it does not fit.
+  // Caution: **Do not drop what does not fit**: typed or composed text that long goes in as a paste
+  // does (`type`, `compositionend`), or it would vanish without a word.
   function stage(text) {
     const bytes = enc.encode(text);
     const cap = w.kspage_web_input_cap();
@@ -52,18 +54,22 @@ function kspageKeys(ks) {
     // Caution: **No typing while presenting** — keys advance, but `input` and pastes come here too.
     if (ks.showing >= 0) return;
     const len = stage(text);
-    if (len <= 0) return;
+    if (len < 0) {
+      ks.api.paste(text);
+      return;
+    }
+    if (len === 0) return;
     w.kspage_web_type(len);
     armGroupBreak();
     draw();
   }
 
-  // Replaces the text being composed. **It is not kept in the document until committed.**
+  // Replaces the text being composed. **It is not kept in the document until committed.** Text too
+  // long for the buffer shows no composition (committed, it goes in as a paste).
   function compose(text) {
     if (ks.showing >= 0) return;
     const len = stage(text);
-    if (len < 0) return;
-    w.kspage_web_compose(len);
+    w.kspage_web_compose(len < 0 ? 0 : len);
     draw();
   }
 
@@ -266,11 +272,12 @@ function kspageKeys(ks) {
   // committing `compose("")` would pass nothing; cancelling has its own entry point.
   ime.addEventListener("compositionend", (e) => {
     ks.composing = false;
-    if (e.data) {
+    if (e.data && stage(e.data) >= 0) {
       compose(e.data);
       w.kspage_web_compose_commit();
     } else {
       w.kspage_web_compose_cancel();
+      if (e.data) type(e.data);
     }
     ime.value = "";
     draw();

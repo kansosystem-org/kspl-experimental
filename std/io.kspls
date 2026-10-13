@@ -269,14 +269,18 @@ pub fn set_line_buffered(): Void //< flushes standard output at every newline fr
     //< IR would mean another mode on Windows.
     line_buffered = true
 pub fn read_stdin( //< the whole of standard input, read to the end
+    //<
+    //< **A failed read is an error, not the end**: read as the end, input cut off by a fault
+    //< would pass for the whole of it.
     arena: Arena$@, //< the arena the text is allocated in
-): U8[] //< the text read; empty if nothing came
+): U8[]!Io_error //< the text read, empty if nothing came; `read_failed("")` if a read failed
     $b: = Str_builder.new()
+    defer b.free()
+    $from: = File_stream::{ .stream = libc.get_stdin() }
+    $chunk: U8[4096] = ::{}
     for
-        c: = getchar()
-        if c < 0
+        got: = from.read(U8$[]::chunk)!
+        if got == 0
             break
-        b.c(U8::c)
-    s: = arena.dup_str(b.slice())
-    b.free()
-    return s
+        b.s(U8[]::{ .ptr = chunk@, .len = got })
+    return arena.dup_str(b.slice())

@@ -86,7 +86,7 @@ The table maps each RTOS word to everyday words and to the name in the code.
 | `ksos/boards/` | What one real board wires to what |
 | `ksos/demo/` | The demos, one firmware each; the POSIX and Cortex-M ones are tests too |
 | `ksos/tests/` | The unit tests, the USB descriptors read as text, elf2uf2 and the UART checks |
-| [`ksos/docs/`](docs/) | The design, the board's facts, the bring-up and the plan ("Further reading" below) |
+| [`ksos/docs/`](docs/) | The design, the board's facts and the bring-up ("Further reading" below) |
 
 **A folder imports only those below it**: `kernel` < `drivers` < `boards` < `demo`, with `net` beside `drivers` (it needs neither the kernel nor a register) and used only by `demo`. A driver that imports a board builds, but then serves that board alone. `make test-conventions` holds the order.
 
@@ -99,10 +99,10 @@ Remember three things (register a task, pick the next, switch) and the rest foll
 - `Task.create(stack, entry, arg, prio, name): Bool` is called on the `Task` it fills (`tcb.create(...)`). `stack` is the task's stack as a slice (`U8$[]::stack_a`), whose length is its size. **The larger `prio`, the higher**, and 0 is the idle task's. Past `max_tasks` it changes nothing and returns `false`.
 - `start_scheduler()` runs the registered tasks until none is runnable, then returns. `run_single_task(tcb, stack, entry, name, on_idle)` wraps both for a one-task `ksos_main`, then calls `on_idle` and loops forever.
 - `Task.yield()`, `Task.delay(ticks)`, and `Task.delay_until(wake_tick)`, which names an absolute tick so a periodic task does not drift by the length of its work. **`ticks` are logical, not real time** (the tickless idle bullet in that DESIGN section).
-- `Task.suspend()` / `Task.resume()` pause and resume another task, which carries on whatever it was waiting on. `Task.delete()` makes a task `done`; its memory stays the caller's.
+- `Task.suspend()` / `Task.resume()` pause and resume another task, which carries on whatever it was waiting on. `Task.delete()` makes a task `done` and returns its slot and its port context; its memory stays the caller's. Deleting a task that holds a mutex panics.
 - `irq_save()` / `irq_restore(state)`: the critical section (interrupts off) that every primitive in `ksos/kernel/sync.kspls` builds on.
 - A *canary*, a known value at the stack's lowest address, is checked on every `schedule()`. A task whose stack grew past its end overwrites it, and ksos panics (stops with a message: `ksos: stack overflow detected`).
-- **The seven `ksos_port_*` functions declared `extern "C"` at the top are the only boundary to the port layer.** The kernel knows their signatures and nothing of the register work behind them.
+- **The eight `ksos_port_*` functions declared `extern "C"` at the top are the only boundary to the port layer.** The kernel knows their signatures and nothing of the register work behind them.
 
 ### ② The synchronizing primitives — `ksos/kernel/sync.kspls`
 All four rest on `block_and_rearm`/`wake` in `ksos/kernel/task.kspls`, in one shape inside `task.irq_save()` … `task.irq_restore()`: check the condition, block where it does not hold, and check again once woken (wake-and-recheck).
@@ -121,7 +121,7 @@ Where the API above takes the `Task`, the stacks and a queue's buffer from the c
 - `t.cpu_percent()` in `ksos/kernel/task.kspls`, with `Task.get_prio`/`get_name`/`get_state` and `Task.count`/`Task.at`, is what a task manager lists. The kernel does no I/O to show it (`make ksos-task-manager`). The heap's use is `heap_used_bytes`/`heap_peak_used_bytes` in `std/mem.kspls`, called directly.
 
 ### ④ The port layer — `port/posix/`, `port/cortex_m/`, `port/cortex_m0/`, `port/rp2040/`
-Each port implements the seven functions `ksos/kernel/task.kspls` declares `extern "C"`. The files and their design are in "🔌 The ports" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
+Each port implements the eight functions `ksos/kernel/task.kspls` declares `extern "C"`. The files and their design are in "🔌 The ports" in [`ksos/docs/DESIGN.md`](docs/DESIGN.md).
 - `ksos/port/posix/`: `ucontext` switching and `SIGALRM` preemption. **It needs nothing special, so run things here first** (`make ksos` and the rest).
 - `ksos/port/cortex_m/`: ARMv7-M (thumbv7m) bare metal. Every task switch goes through PendSV, a low-priority exception the CPU offers for this. It runs under QEMU as the real chip would (`make ksos-cm-run` and the rest).
 - `ksos/port/cortex_m0/`: ARMv6-M (thumbv6m, Cortex-M0/M0+), with its own `startup.S` and `switch.S` for Thumb-1 (the smaller instruction set these CPUs have) and the rest of `cortex_m/` recompiled.
@@ -155,10 +155,11 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/panic_demo.kspls stack-overflow` | `make ksos-stack-overflow` | the canary catching a stack overflow |
 | `ksos/demo/posix/isr_signal_demo.kspls` | `make ksos-isr` | `Queue<\|T\|>.try_send` from an ISR (SIGUSR1 stands in for the interrupt) |
 | `ksos/demo/posix/task_manager_demo.kspls` | `make ksos-task-manager` | tasks and queues on the heap (`dynamic.kspls`), and the task manager's CPU use per task (`Task.cpu_percent` in `ksos/kernel/task.kspls`) |
-| `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order and the longest waiter among equals, suspend/delete while blocked, a `delay_until` into the past, the cap on seats |
+| `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order and the longest waiter among equals, suspend/delete while blocked, a `delay_until` into the past, a deleted waiter's lent priority taken back, the cap on seats |
 | `ksos/demo/posix/panic_demo.kspls mutex-relock` | `make ksos-mutex-relock` | the holder relocking stops rather than waiting forever (the panic is the pass) |
 | `ksos/demo/posix/panic_demo.kspls mutex-foreign-unlock` | `make ksos-mutex-foreign-unlock` | a non-holder's unlock stops rather than being silently ignored (panic = pass) |
-| `ksos/demo/posix/timeout_demo.kspls` | `make ksos-timeout` | timeouts (`take_for`/`recv_for`/`send_for`/`lock_for`/`wait_for`), `try_take`/`try_lock`, and `ms_to_ticks` rounding up |
+| `ksos/demo/posix/panic_demo.kspls delete-holder` | `make ksos-delete-holder` | deleting a task that holds a mutex stops rather than leaving the mutex held forever (panic = pass) |
+| `ksos/demo/posix/timeout_demo.kspls` | `make ksos-timeout` | timeouts (`take_for`/`recv_for`/`send_for`/`lock_for`/`wait_for`), a timeout too large for the clock, `try_take`/`try_lock`, and `ms_to_ticks` rounding up |
 | `ksos/demo/posix/panic_demo.kspls timeout-zero` | `make ksos-timeout-zero` | a timeout of 0 stops rather than meaning `try_` (panic = pass) |
 | `ksos/demo/posix/tick_mid_switch_demo.kspls` | `make ksos-tick-mid-switch` | a tick held over a switch into a task that has never run arrives after the switch, and the task still runs its code |
 
@@ -173,8 +174,9 @@ The Cortex-M demos need a cross compiler and QEMU (both in the development conta
 | `ksos/demo/cortex_m/cortex_m_mq.kspls` | `make ksos-cm-mq` | a queue under preemption (the critical section) |
 | `ksos/demo/cortex_m/cortex_m_timeout.kspls` | `make ksos-cm-timeout` | SysTick alone carrying `take_for`'s timeout while a spinner that never yields holds the CPU |
 | `ksos/demo/cortex_m/cortex_m_isr_block.kspls` | `make ksos-cm-isr-block` | `Sem.take` inside an interrupt handler panics rather than silently stopping the interrupted task (panic = pass) |
+| `ksos/demo/cortex_m/cortex_m_isr_unlock.kspls` | `make ksos-cm-isr-unlock` | `Mutex.unlock` inside an interrupt handler panics rather than releasing the interrupted task's mutex (panic = pass) |
 | `ksos/demo/cortex_m/cortex_m_isr_give.kspls` | `make ksos-cm-isr-give` | tasks woken by an interrupt handler's `give`s run as it returns, highest first, before the interrupted task's next line |
-| `ksos/demo/cortex_m/cortex_m_heap_probe.kspls` | `make ksos-cm-heap-probe` | the freestanding heap (`mem.init_freestanding_heap`) and `Arc<T>`, with no OS or `malloc` |
+| `ksos/demo/cortex_m/cortex_m_heap_probe.kspls` | `make ksos-cm-heap-probe` | the freestanding heap (`mem.init_freestanding_heap`) and `Arc<T>`, with no OS or `malloc`, and 120 tasks made and deleted on it against the port's 33 contexts |
 | `ksos/demo/cortex_m/cortex_m_panic_probe.kspls` | `make ksos-cm-panic-probe` | a panic's crash record read back across a real soft reset |
 | `ksos/demo/cortex_m/cortex_m_uart_echo.kspls` | `make ksos-cm-uart-echo` | UART0's receive path, judged by an outside echo test |
 | `ksos/demo/cortex_m/cortex_m_uart_irq_echo.kspls` | `make ksos-cm-uart-irq-echo` | the same receive path driven by an interrupt (NVIC IRQ0 plus `WFI`: the interrupt controller's line 0, and the instruction that sleeps until an interrupt) |

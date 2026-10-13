@@ -162,7 +162,7 @@ fn open(ln: con.Line$@, our_port: U16, peer_port: U16, isn: U32): Bool //<
 fn read_stream(out: U8$[], ms: U32): Sz //<
     //< Repeats tcp_conn's recv while running USB, and packs the received bytes into out
     //<
-    //< An answer can span segments, so it reads until ms pass with nothing.
+    //< An answer can span segments, so it reads until ms pass with nothing, or the peer closes.
     $total: Sz = 0
     $idle: U32 = 0
     for idle < ms && total < out.len
@@ -172,6 +172,8 @@ fn read_stream(out: U8$[], ms: U32): Sz //<
             total += n
             idle = 0
             continue
+        if n != tcpc.mbedtls_err_ssl_want_read
+            break // the peer closed (0) or reset the connection: nothing more comes
         timer.delay_us(1000)
         idle += 1
     return total
@@ -190,6 +192,8 @@ fn drain_stream(ms: U32): Sz //<
             total += n
             idle = 0
             continue
+        if n != tcpc.mbedtls_err_ssl_want_read
+            break // the peer closed (0) or reset the connection: nothing more comes
         timer.delay_us(1000)
         idle += 1
     return total

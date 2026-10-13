@@ -27,19 +27,20 @@ const part_suffix: U8[] = ".kssrv-part" //< the suffix of a partly written file
     //<
     //< Caution: **Put it in the same folder**, or the rename fails across file systems.
 
-fn queue_json(c: conn.Conn$@, status: I32, val: json.Val, keep: Bool) //<
-    //< Builds one JSON value and queues it as the response
+fn queue_json(c: conn.Conn$@, status: I32, val: json.Val, keep: Bool, allow: U8[] = "") //<
+    //< Builds one JSON value and queues it as the response; `allow` is a 405's `Allow`
     $body: = Str_builder.new()
     defer body.free()
     val.dump(body@)
-    conn.queue_response(c, status, "application/json", body.slice(), keep)
+    conn.queue_response(c, status, "application/json", body.slice(), keep, allow)
 
-fn queue_json_error(c: conn.Conn$@, status: I32)
+fn queue_json_error(c: conn.Conn$@, status: I32, allow: U8[] = "") //<
+    //< Queues an error answer in JSON; `allow` is a 405's `Allow`
     reason: = http.reason_phrase(status)
     $b: = Json_builder.new(c.arena)
     val: = b.obj().set("error", b.str_val(reason)).set("status", b.int_val(status)).build()
     // An error response closes (the same reason as `queue_error` on the static side).
-    queue_json(c, status, val, false)
+    queue_json(c, status, val, false, allow)
 
 fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
     //< `GET /api/status`: returns that it is running, and how much it has handled
@@ -328,7 +329,7 @@ priv enum Api //< the endpoint a route reaches
 priv struct Route //< one entry point under `/api/`
     path: U8[] //< the path
     reach: Reach //< in which mode it exists; in the other it is a 404 (`reaches`)
-    methods: U8[] //< the methods it takes, each followed by a space; another one is a 405
+    methods: U8[] //< the methods it takes, as a 405's `Allow` names them; another one is a 405
     api: Api //< the endpoint it reaches
 
 priv const routes: Route[7] = ::{ //<
@@ -336,22 +337,22 @@ priv const routes: Route[7] = ::{ //<
     //<
     //< **The guards run once, here, for every row**: decided per endpoint, a new one forgets one.
     //< `/api/file` has no `HEAD`: `/api/stat` gives the size and whether it exists (Principle 6).
-    Route::{ .path = "/api/file", .reach = .local, .methods = "GET PUT ", .api = .file },
-    Route::{ .path = "/api/stat", .reach = .local, .methods = "GET ", .api = .stat },
-    Route::{ .path = "/api/here", .reach = .local, .methods = "GET ", .api = .here },
-    Route::{ .path = "/api/stop", .reach = .local, .methods = "POST ", .api = .stop },
-    Route::{ .path = "/api/status", .reach = .both, .methods = "GET ", .api = .status },
-    Route::{ .path = "/api/car", .reach = .outward, .methods = "POST ", .api = .car },
-    Route::{ .path = "/api/pilot", .reach = .outward, .methods = "GET ", .api = .pilot },
+    Route::{ .path = "/api/file", .reach = .local, .methods = "GET, PUT", .api = .file },
+    Route::{ .path = "/api/stat", .reach = .local, .methods = "GET", .api = .stat },
+    Route::{ .path = "/api/here", .reach = .local, .methods = "GET", .api = .here },
+    Route::{ .path = "/api/stop", .reach = .local, .methods = "POST", .api = .stop },
+    Route::{ .path = "/api/status", .reach = .both, .methods = "GET", .api = .status },
+    Route::{ .path = "/api/car", .reach = .outward, .methods = "POST", .api = .car },
+    Route::{ .path = "/api/pilot", .reach = .outward, .methods = "GET", .api = .pilot },
 }
 
 priv fn takes(r: Route, method: U8[]): Bool //< whether the route takes that method
     $rest: = r.methods
     for rest.len > 0
-        sp: = rest.find_char(' ').unwrap_or(rest.len)
-        if rest.sub(0, sp).equals(method)
+        cut: = rest.find_char(',').unwrap_or(rest.len)
+        if rest.sub(0, cut).trim_spaces().equals(method)
             return true
-        rest = rest.sub_from(sp + 1)
+        rest = rest.sub_from(cut + 1) if cut < rest.len else ""
     return false
 
 fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$@, keep: Bool)
@@ -366,7 +367,7 @@ fn queue_api(c: conn.Conn$@, t: conn.Target, req: http.Request$@, ctx: conn.Ctx$
         if !reaches(c, ctx, r.reach)
             return
         if !takes(r, req.method)
-            queue_json_error(c, 405)
+            queue_json_error(c, 405, r.methods)
             return
         r.api.queue(c, t, req, ctx, keep)
         return

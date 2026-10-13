@@ -9,7 +9,7 @@ Caution: **Pushing the tag starts the workflow**, which builds on three platform
 1. **Run the gates on the commit you will tag**:
 
    ```sh
-   make ci-linux             # last line: RESULT: ALL PASS
+   make ci-linux             # last line: # ci-linux: ALL GREEN
    ```
 
    The release workflow runs no suite of its own: it only builds. A red gate here ships.

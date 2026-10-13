@@ -157,7 +157,10 @@ priv fn infer_cast_postfix(c: Sema_ctx$@, node: Ast_node$@, target_id: I32, as_t
         c.err(node, "cannot directly cast a Result type. Unwrap it using '!' or 'catch' first.")
     if node.children.len < 3
         return I32::sema_type_env.Builtin_type_id.unknown
-    if c.env.get_real_type(as_target_id) != c.env.get_real_type(target_id)
+    // A source whose type is unknown was reported where it failed; judged here, a slice target
+    // reads as a struct and the cast earns a second error that is not the writer's.
+    if c.env.get_real_type(as_target_id) != c.env.get_real_type(target_id) &&
+        !sema_type_env.is_unknown(target_id)
         refuse_struct_cast(c, node, as_target_id, target_id)
         check_slice_cast_source(c, node, as_target_id, target_id)
         check_scalar_cast_source(c, node, as_target_id, target_id)

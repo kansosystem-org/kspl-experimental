@@ -5,8 +5,8 @@
 //< **Walking the tree does not belong here**; it is [`doc.kspls`](doc.kspls)'s job: how one text
 //< is stored and how the tree is walked are read for different reasons (Principle 3). That file
 //< imports this one, never the other way.
-//< **Read the text with `text()`.** `buf` and `shown` are priv, so only three methods change the
-//< visible text (`insert` / `remove` / `show_value`).
+//< **Read the text with `text()`.** `buf`, `shown` and `typing` are priv, so only three methods
+//< change the visible text (`insert` / `remove` / `show_value`).
 import "kspage/model/font" { Font }
 import "std/chars"
 import "std/ds" { List }
@@ -41,6 +41,11 @@ struct Inline
         //< The number of the computed value
         //<
         //< Caution: **Set it together with the text** (`show_value`); a chart reads this one.
+    priv typing: Bool //<
+        //< Whether it is the formula being typed in, which the screen lays out as typed (`face`)
+        //<
+        //< Caution: **Keep the value beside it** (`shown`): export, sorting and printing read the
+        //< value while the formula is being typed. It is set with the value (`show_value`).
     href: U8[] //<
         //< The link
         //<
@@ -88,24 +93,33 @@ impl Inline
         //< chart reads this.
         return r.number
 
-    fn showing(r: Self@): U8[] //< the text shown on the screen
+    fn showing(r: Self@): U8[] //< the text the document reads as
         //<
         //< **Where a value was computed, it is that**; otherwise the typed text.
-        //< Caution: **Layout, export and sorting must all read this one** (the typed text may be a
-        //< formula). **Editing does not**: typing positions and search work on the typed text.
+        //< Caution: **Export, sorting and printing must all read this one** (the typed text may be
+        //< a formula). **Editing does not**: typing positions and search work on the typed text.
         if !r.shows_value()
             return r.text()
         return U8[]::{ .ptr = r.shown.ptr, .len = r.shown.len }
 
-    priv fn same_value(r: Self@, s: U8[], num: F64?): Bool //<
+    fn faces_value(r: Self@): Bool //< whether the screen lays out the computed value
+        return r.shows_value() && !r.typing
+
+    fn face(r: Self@): U8[] //< the text the screen lays out
+        //<
+        //< `showing`, but **the formula being typed in is laid out as typed** (the user could not
+        //< edit it without seeing it).
+        return r.showing() if r.faces_value() else r.text()
+
+    priv fn same_value(r: Self@, s: U8[], num: F64?, typing: Bool): Bool //<
         //< Whether it is the same value as now
         //<
-        //< Caution: **Compare both the text and the number** (the same formatting may hide a
+        //< Caution: **Compare the text, the number and `typing`** (the same formatting may hide a
         //< changed number). A NaN counts as "different" (the safe side).
         $now: U8[] = ""
         if r.shown != null
             now = U8[]::{ .ptr = r.shown.ptr, .len = r.shown.len }
-        if !now.equals(s)
+        if !now.equals(s) || r.typing != typing
             return false
         if a: = r.number
             switch num
@@ -117,17 +131,18 @@ impl Inline
             return false
         return true
 
-    fn show_value(r: Self$@, s: U8[], num: F64?, arena: Arena$@) //<
-        //< Sets the computed value (the text and the number)
+    fn show_value(r: Self$@, s: U8[], num: F64?, typing: Bool, arena: Arena$@) //<
+        //< Sets the computed value (the text and the number), and whether it is being typed in
         //<
         //< The arena is reused.
         //< Caution: **Do not set the text and the number separately**, or they end up disagreeing
         //< (the chart alone shows the old value).
         // **Do nothing where nothing changed**: "no value" arrives at every layout (`show_free` in
         // `../expr/calc.kspls`), and `wide` would never hit the cache.
-        if r.same_value(s, num)
+        if r.same_value(s, num, typing)
             return
         r.number = num
+        r.typing = typing
         r.forget()
         if s.len <= 0
             if r.shown != null
@@ -231,8 +246,8 @@ impl Inline
 fn new_inline(style: U8[], arena: Arena$@): Inline$@ //<
     //< makes one empty inline (attached to nothing)
     n: = Inline::{ .buf = List<|U8|>.create(arena), .style = style, .shown = null, .number = .none,
-        .href = "", .note = "", .remark = "", .remark_by = "", .refers = "", .fits = null,
-        .fit_avail = 0.0,
+        .typing = false, .href = "", .note = "", .remark = "", .remark_by = "", .refers = "",
+        .fits = null, .fit_avail = 0.0,
         .fit_font = Font::{ .family = "", .size_px = 0.0, .weight = 0U16, .italic = false } }
     return arena.create(n)
 

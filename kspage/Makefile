@@ -271,6 +271,9 @@ test-served: $(KSPAGE_PROBE_PAGE)
 	trap 'kill $$pid 2>/dev/null || true' EXIT; \
 	waited=0; \
 	while ! grep -q 'kssrv: I: open ' "$$log"; do \
+		if ! kill -0 $$pid 2>/dev/null; then \
+			echo "RESULT: SOME FAILED (1) -> kssrv ended before it became ready"; \
+			sed 's/^/  kssrv: /' "$$log"; exit 1; fi; \
 		waited=$$((waited + 1)); \
 		if [ $$waited -gt 300 ]; then \
 			echo "RESULT: SOME FAILED (1) -> kssrv did not become ready in 30s"; \

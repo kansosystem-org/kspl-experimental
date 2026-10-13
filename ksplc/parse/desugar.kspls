@@ -255,6 +255,12 @@ impl Ast_node
             recv.get_postfix_op() if recv != null && recv.kind_id == .k_expr_postfix else null
         if recv_op == null || !recv_op.text.equals(".")
             return
+        // Caution: **Expand only `.s(<the string>)`.** The chain writes the parts with `.s` and
+        // `put`, so any other method's name, and any argument after the string, would be dropped
+        // without a word (`.flush("…\{x\}")` writing text); left alone, sema refuses it.
+        member: = recv.get_postfix_member()
+        if member == null || !member.text.equals("s") || args_node.children.len != 1
+            return
         // It expands an interpolated string's call into a method chain.
         r.desugar_string_call(first_arg, ctx)
 

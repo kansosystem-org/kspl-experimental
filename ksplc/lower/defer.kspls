@@ -75,11 +75,13 @@ impl Ast_node
         // Caution: **Decide it before lowering**, as a binding does: lowered, `return f()!` reads a
         // temporary's field and looks like a place, and the extra retain leaks.
         $retain_src: Ast_node$@ = null
+        $through_call: = false
         ret_type_id: = expr_node.type_id if expr_node != null else 0
         if k == .k_stmt_return && expr_node != null && expr_node.kind_id != .k_empty &&
             lctx.sema.env.type_is_managed(ret_type_id)
             if rs: = expr_node.arc_bare_copy_source()
                 retain_src = rs.clone()
+            through_call = expr_node.arc_reads_through_call(lctx)
 
         if expr_node != null
             expr_node.lower(lctx)
@@ -95,6 +97,8 @@ impl Ast_node
         if retain_src != null
             lower_arc.emit_managed_op(lctx, retain_src, retain_src.type_id, "retain",
                 lctx.pre_stmts, 0)
+        if through_call
+            lower_arc.arc_retain_lowered(r.get_child(1), lctx)
         if lctx.has_cleanups(0)
             lctx.inject_cleanups(0)
 

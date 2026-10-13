@@ -60,6 +60,10 @@ priv const cast_u32_shr: I32 = I32::(U32::-1 >> 1U32)
 priv const cast_ref: I32 = cast_base + 1 //< a constant naming another, folded through its cast
 priv const cast_base: I32 = U8::511
 priv const cast_len: I32[cast_trunc] = ::{}
+priv const not_len: I32[~0U8 / 51U8] = ::{ 1, 2, 3, 4, 5 } //<
+    //< `~` wraps at a narrow width: 255 / 51
+priv const div_neg: I32[-10 / -3] = ::{ 1, 2, 3 } //<
+    //< a signed division folds at the operands' width
 
 priv enum Tag_unsigned: U32 //< an enum tag folds before anything is typed, so the suffix decides
     a = (1U32 - 2U32) >> 1U32
@@ -164,6 +168,8 @@ priv fn check_global_wraps() //<
     assert(u16_wrap == U16::0, "U16 addition must wrap mod 2^16")
     assert(u8_shl == U8::0, "U8 left shift must wrap mod 2^8")
     assert(I32::u8_wrap == 0, "a folded U8 wrap must stay wrapped when widened")
+    assert(not_len.len == 5, "~0U8 must fold to 255 at U8's width, not to -1")
+    assert(div_neg.len == 3, "-10 / -3 must fold to 3")
 
 priv fn check_narrow_wraps() //<
     //< A narrow unsigned wraps at the declared width at every operation
@@ -201,6 +207,21 @@ priv fn check_widening() //<
     // An operation that stays inside the range means nothing extra.
     assert(I32::(m8 * U8::2) == 32, "a U8 product inside the range must keep its value")
     assert(I32::(a8 & m8) == 16, "a bitwise U8 operation must keep its value")
+    // **An implicit widening is the same.** The wider type the result goes to does not reach the
+    // operands; passed down, it widened them first, and `wide_sum` came out 256.
+    wide_sum: I32 = a8 + b8
+    assert(wide_sum == 0, "a U8 sum stored in an I32 must wrap before it is widened")
+    big: I32 = 65536
+    wide_prod: I64 = big * big
+    assert(wide_prod == 0, "an I32 product stored in an I64 must wrap at I32")
+    i8min: = I8::(-128)
+    wide_neg: I16 = -i8min
+    assert(wide_neg == -128, "negating an I8 must happen at I8 before it is widened")
+    wide_not: U32 = ~b8
+    assert(wide_not == 254, "inverting a U8 must happen at U8 before it is widened")
+    // Literals alone have no width, so they still take the wider type.
+    wide_lit: I64 = 4294967296 + 1
+    assert(wide_lit == 4294967297, "literals alone must compute at the expected type")
 
 priv fn check_signed_overflow() //<
     //< A signed overflow wraps by mod 2^N, division by -1 included

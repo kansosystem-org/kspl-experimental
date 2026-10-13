@@ -22,22 +22,8 @@ function kspageApi(ks) {
   const { w, mem, canvas, enc, str, outText, colorText, colorNum, scratch, nums, draw, acted, stage,
   type, compose, ime, bar, paperOf, armGroupBreak, handOver,
   SHAPES, ALIGNS, MARKS, DATINGS, COLLECTS, SKETCHES } = ks;
-  // The handler for exhausted memory — **the last safety net**: the core stops once the arena runs
-  // out (`panic` in `../../../std/lang.kspls`), so unhandled **the screen freezes**.
-  // Caution: **Always clean up** — the chunk being built is referenced by nobody, and unfreed the
-  // arena shrinks **forever** (`bridge.kspls`'s `kspage_web_recover`); **do not swallow it** either
-  // (unreported, clicks do nothing). It returns the call's result, or `null`; **it lives on `ks`**
-  // so the text side below uses the same net (with two, one forgets cleanup).
-  ks.cramps = (run) => {
-    try {
-      return run();
-    } catch (e) {
-      const back = w.kspage_web_recover();
-      if (ks.api.onCramped) ks.api.onCramped(back);
-      return null;
-    }
-  };
-  const cramps = ks.cramps;
+  // The safety net for exhausted memory (`kspage.js`'s `ks.cramps`).
+  const { cramps } = ks;
   const api = {
     // Called after a redraw; the page sets it (none by default).
     onRedraw: null,
@@ -85,7 +71,7 @@ function kspageApi(ks) {
     focus() { ime.focus({ preventScroll: true }); },
     // The page's text (the boxes joined in order, **no wrap breaks**), for checks from outside.
     text() {
-      const count = w.kspage_web_layout(ks.width);
+      const count = cramps(() => w.kspage_web_layout(ks.width)) || 0;
       let out = "";
       for (let i = 0; i < count; i++) {
         out += str(w.kspage_web_box_text(i), w.kspage_web_box_text_len(i));
@@ -579,7 +565,7 @@ function kspageApi(ks) {
 // can grow there, leaving an earlier array on the old ArrayBuffer).
 // ==========================================
 function kspageApiIo(ks) {
-  // **`cramps` is `api.js`'s, on `ks`** (one handler for full memory; with two, one skips cleanup).
+  // **`cramps` is `kspage.js`'s** (one handler for full memory; with two, one skips cleanup).
   const { w, enc, outText, draw, cramps, handOver } = ks;
   Object.assign(ks.api, {
     // Makes Markdown of the current document. **It cannot be reloaded.**

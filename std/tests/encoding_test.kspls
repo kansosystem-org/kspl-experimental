@@ -76,6 +76,13 @@ priv fn check_base64_roundtrip(input: U8[])
     defer dealloc(Void$@::dec.ptr)
     assert(dec.equals(input), "base64 round-trip must reproduce the original bytes")
 
+priv fn base64_refuses(s: U8[]): Bool //< whether `decode` refuses s
+    arena: = Arena.new(256)
+    defer arena.free()
+    _d: = base64.decode(s, arena) catch
+        return true
+    return false
+
 fn test_base64_codec()
     verdict.start("[Base64] encode/decode test (known test vectors + the round trip)...")
 
@@ -94,11 +101,16 @@ fn test_base64_codec()
     check_base64_roundtrip("fo")
     check_base64_roundtrip("foo")
     check_base64_roundtrip("The quick brown fox jumps over the lazy dog")
+    // **One encoding per byte string**: a non-zero bit the padding leaves unused is refused, and
+    // the same text with those bits zero is read.
+    assert(base64_refuses("QR==") && base64_refuses("Zm9=") && base64_refuses("Zh=="),
+        "base64: a non-zero unused bit before the padding must be refused")
+    assert(!base64_refuses("QQ==") && !base64_refuses("Zm8="), "base64: canonical text is read")
 
     base64.decode("abc", null) catch
         verdict
-            .pass("The known encodings, the round trip, and the refusal of an invalid length are \
-                confirmed.")
+            .pass("The known encodings, the round trip, the refusal of a non-zero unused bit and of \
+                an invalid length are confirmed.")
         return
     panic("base64.decode should throw Base64_error.invalid_length for a non-multiple-of-4 input")
 // ==========================================
@@ -286,8 +298,9 @@ fn test_json_numbers(arena: Arena$@)
         "json: one past I64::MAX must become the float variant")
     assert(edge.get_at(3).as_int64(-1I64) == 0I64, "json: -0 is the integer 0")
 
-    // A string that is malformed as a JSON number is not accepted.
-    bad_numbers: U8[][4] = ::{ "[1.]", "[1e]", "[.5]", "[--1]" }
+    // A string that is malformed as a JSON number is not accepted, nor one past F64's range,
+    // which `dump` would write back as null.
+    bad_numbers: U8[][6] = ::{ "[1.]", "[1e]", "[.5]", "[--1]", "[1e400]", "[-1e400]" }
     for bad in bad_numbers
         $ok: = true
         _v: = json.parse(bad, arena) catch

@@ -122,12 +122,27 @@ impl<|T|> Tensor<|T|>
         r: Self$@,
         rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
     ): Tensor<|T|>!Tensor_error
-        m: = r.shape[0]
-        n: = rhs.shape[1] if rhs.shape.len == 2 else 0
-        out_shape: Sz[2] = ::{ m, n }
+        // Caution: **Check before allocating**: a refusal after it would leave `out` on the heap
+        // when `r.arena` is null, with nothing to free it.
+        r.check_matmul(rhs)!
+        out_shape: Sz[2] = ::{ r.shape[0], rhs.shape[1] }
         out: = Tensor<|T|>.new(Sz[]::out_shape, r.arena)
         r.matmul_into(rhs, out)!
         return out
+    priv fn check_matmul(r: Self$@, rhs: Tensor<|T|>): Void!Tensor_error //<
+        //< Refuses operands whose product is not defined: not 2D, or inner dimensions that differ
+        if r.shape.len != 2 || rhs.shape.len != 2
+            throw .rank_mismatch
+        k: = r.shape[1]
+        if k != rhs.shape[0] || k <= 0 || r.shape[0] < 0 || rhs.shape[1] < 0
+            throw .shape_mismatch
+    fn holds_matrix(r: Self@, m: Sz, n: Sz): Bool //< whether it has exactly `m * n` elements
+        //<
+        //< Caution: **Divide rather than multiply.** Where `Sz` is 32 bits, `m * n` can wrap to a
+        //< smaller size, and a kernel writing `[m, n]` would write past the end.
+        if m < 0 || n < 0
+            return false
+        return r.size == 0 if n == 0 else r.size % n == 0 && r.size / n == m
     pub fn matmul_into( //< the matrix product, written into a tensor the caller owns
         //<
         //< It is for a hot loop that would otherwise allocate once per step.
@@ -135,17 +150,11 @@ impl<|T|> Tensor<|T|>
         rhs: Tensor<|T|>, //< the right-hand matrix; its rows must match this one's columns
         out: Tensor<|T|>, //< where the product goes; it must already be shaped `[m, n]`
     ): Void!Tensor_error
-        if r.shape.len != 2 || rhs.shape.len != 2
-            throw .rank_mismatch
+        r.check_matmul(rhs)!
         m: = r.shape[0]
         k: = r.shape[1]
-        if k != rhs.shape[0] || k <= 0
-            throw .shape_mismatch
         n: = rhs.shape[1]
-        // Caution: **Divide rather than multiply.** Where `Sz` is 32 bits, `m * n` can wrap to a
-        // smaller `out`'s size, and the kernel would write past it.
-        fits: = out.size == 0 if n == 0 else out.size % n == 0 && out.size / n == m
-        if m < 0 || n < 0 || !fits
+        if !out.holds_matrix(m, n)
             throw .shape_mismatch
         matmul_kernel<|T|>(out.data, r.data, rhs.data, m, k, n)
     fn add_bias(r: Self$@, bias: Tensor<|T|>): Tensor<|T|>!Tensor_error //<
@@ -235,7 +244,7 @@ impl<|T|> Tensor<|T|>
                     max_val = val
             $sum_exp: T = 0.0
             for j in Range.asc(n)
-                ex: = T::math.exp((r.data + i * n + j)$ - max_val)
+                ex: = T::math.exp(F64::(r.data + i * n + j)$ - max_val)
                 (out.data + i * n + j)$ = ex
                 sum_exp = sum_exp + ex
             // The sum's reciprocal is computed once (the same reason as rmsnorm).
@@ -295,10 +304,12 @@ impl<|T|> Tensor<|T|>
             //< with its own base theta (1e6 for Qwen2.5). r's shape is [seq, n_heads*head_dim].
         if r.shape.len != 2
             throw .rank_mismatch
-        if head_dim % 2 != 0
-            throw .shape_mismatch
         seq: = r.shape[0]
         width: = r.shape[1]
+        // Caution: **Refuse a head width of 0, or one that does not tile a row**: 0 never moves the
+        // loop on, and a last head cut short reads its second half past the row.
+        if head_dim <= 0 || head_dim % 2 != 0 || width % head_dim != 0
+            throw .shape_mismatch
         half: = head_dim / 2
         out: = Tensor<|T|>.new(r.shape, r.arena)
         for s in Range.asc(seq)
@@ -317,9 +328,13 @@ impl<|T|> Tensor<|T|>
                     (out.data + idx2)$ = x2 * cos_val + x1 * sin_val
         return out
     fn update_row(r: Self$@, row_idx: Sz, src: Tensor<|T|>): Void!Tensor_error //<
-        //< Overwrites row `row_idx` (for saving into the KV cache)
+        //< Overwrites row `row_idx` with `src`, which is one row (for saving into the KV cache)
+        //<
+        //< Caution: **Refuse a `src` of several rows**: only its first would be copied, silently.
         if r.shape.len < 2 || src.shape.len < 2
             throw .rank_mismatch
+        if src.size != src.shape[src.shape.len - 1]
+            throw .shape_mismatch
         dim: = r.shape[r.shape.len - 1]
         if src.shape[src.shape.len - 1] != dim
             throw .shape_mismatch

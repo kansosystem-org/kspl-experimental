@@ -307,7 +307,7 @@ priv fn stop_cases(token: U8[], srv: Running$@, arena: Arena$@): Void!client.Htt
     verdict.check("POST /api/stop with a token that does not match is a 401", wrong.status == 401,
         client.shown(wrong, arena))
     client.check_405("GET /api/stop is 405",
-        client.get(stop_port, "/api/stop", auth, arena)!, arena)
+        client.get(stop_port, "/api/stop", auth, arena)!, "POST", arena)
     st: = client.get(stop_port, "/api/status", auth, arena)!
     verdict.check("a refused stop leaves it answering",
         st.status == 200 && srv.child.alive(), client.shown(st, arena))
@@ -557,7 +557,7 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void!client.Http_end
     verdict.check("an unknown API is a JSON 404", ok29, d30)
     // **Every entry point names its methods**, the reading ones too, and refuses the rest in JSON.
     client.check_405("POST /api/status is 405",
-        client.post_empty(port, "/api/status", arena)!, arena)
+        client.post_empty(port, "/api/status", arena)!, "GET", arena)
     api_head: = client.request(port, client.raw("HEAD", "/api/status", "", "", arena), 1,
         client.default_timeout_ms, true, arena)!
     verdict.check("HEAD /api/status is a JSON 405",
@@ -565,7 +565,7 @@ priv fn api_cases(root: U8[], arena: Arena$@): Void!client.Http_end
         api_head.get(0).head)
 
     client.check_405("anything but GET/HEAD is a 405",
-        client.post_empty(port, "/index.html", arena)!, arena)
+        client.post_empty(port, "/index.html", arena)!, "GET, HEAD", arena)
     head: = client.request(port, client.raw("HEAD", "/style.css", "", "", arena), 1,
         client.default_timeout_ms, true, arena)!
     hd: = head.get(0)
@@ -636,6 +636,16 @@ priv fn keepalive_cases(arena: Arena$@): Void!client.Http_end
     verdict.check("it says keep-alive", keep.equals("keep-alive"), keep)
     closed: = client.header(got.get(2).head, "connection")
     verdict.check("a Connection: close gets a close back", closed.equals("close"), closed)
+    // **HTTP/1.0 closes unless it lists `keep-alive`**, and `close` counts among other tokens.
+    old: = answer_then("GET /index.html HTTP/1.0\r\n", arena)
+    verdict.check("an HTTP/1.0 request is answered and closed", old.equals("close + closed"), old)
+    asked: = answer_then("GET /index.html HTTP/1.0\r\nConnection: keep-alive\r\n", arena)
+    verdict.check("an HTTP/1.0 request listing keep-alive stays open",
+        asked.equals("keep-alive"), asked)
+    listed: =
+        answer_then("GET /index.html HTTP/1.1\r\nConnection: keep-alive, close\r\n", arena)
+    verdict.check("close among the Connection tokens closes", listed.equals("close + closed"),
+        listed)
     // **Past the cap on requests per notification, the rest are answered too**, with the sending
     // side open and closed alike: no notification comes for requests already read.
     for shut in Bool[]::{ false, true }
@@ -644,6 +654,28 @@ priv fn keepalive_cases(arena: Arena$@): Void!client.Http_end
             .s("closed" if shut else "open").s(")").take()
         verdict.check(nm, answered == pipelined,
             arena.text().s("\{answered\} of \{pipelined\} answered").take())
+
+priv fn answer_then(first_lines: U8[], arena: Arena$@): U8[] //<
+    //< The `Connection` the answer to a request opening with those lines names
+    //<
+    //< ` + closed` follows when the server then closes the connection.
+    $c: = client.Conn.open(port) catch
+        return "no connection"
+    defer c.free()
+    c.send(arena.text().s(first_lines).s("Host: 127.0.0.1\r\n\r\n").take()) catch
+        return "not sent"
+    r: = c.next(false, client.default_timeout_ms, arena) catch
+        return "no answer"
+    said: = client.header(r.head, "connection")
+    _more: = c.next(false, still_open_ms, arena) catch e
+        switch e
+        case .closed
+            return arena.text().s(said).s(" + closed").take()
+        default
+            return said
+    return arena.text().s(said).s(" + a second answer").take()
+
+priv const still_open_ms: I32 = 300 //< how long a connection kept open is watched for a close
 
 priv const pipelined: Sz = 20 //< how many requests go in one write
     //<

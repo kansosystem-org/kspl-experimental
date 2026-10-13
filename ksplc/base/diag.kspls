@@ -233,14 +233,47 @@ fn print_diagnostic(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg: 
         print_json(out_file, line, column, column + span_len, msg, severity)
         return
 
+    // A line longer than the window shows only the part around the column, cut with `…` at
+    // either end. **Printed whole, a generated or minified line fills the screen** and the caret
+    // lands far below the text it marks. The position in the head stays the line's own.
+    $first: Sz = 1
+    $last: Sz = line_chars
+    if line_chars > shown_line_chars
+        first = column - shown_line_lead if column > shown_line_lead else 1
+        last = first + shown_line_chars - 1
+        if last > line_chars
+            last = line_chars
+            first = last - shown_line_chars + 1
+    cut_head: = first > 1
+    cut_tail: = last < line_chars
+    shown: = line_text.sub(byte_at_char(line_text, first - 1),
+        byte_at_char(line_text, last) - byte_at_char(line_text, first - 1))
+    if column + span_len - 1 > last + 1
+        span_len = last + 1 - column if last + 1 > column else 1
     log_w: = log()
     log_w.s("\{out_file\}:\{line\}:\{column\}: \{severity.name()\}: \{msg\}\n")
-    log_w.s("\{line\} | \{line_text\}\n")
+    log_w.s("\{line\} | ").s("…" if cut_head else "").s(shown).s("…" if cut_tail else "")
+        .s("\n")
     repeat_char(log_w, " ", num_digits)
     log_w.s(" | ")
-    repeat_char(log_w, " ", column - 1)
+    repeat_char(log_w, " ", column - first + (1 if cut_head else 0))
     repeat_char(log_w, "^", span_len)
     log_w.s("\n")
+
+priv const shown_line_chars: Sz = 120 //< the most characters of a source line a diagnostic shows
+priv const shown_line_lead: Sz = 40 //< how many characters before the column a cut line keeps
+
+priv fn byte_at_char(text: U8[], n: Sz): Sz //<
+    //< The byte offset where the `n`th character (from 0) starts, or the length past the last
+    //<
+    //< It counts characters as `count_codepoints` does (lead bytes only), so the two agree.
+    $seen: Sz = 0
+    for $i: Sz = 0; i < text.len; i += 1
+        if ((text.ptr + i)$ & 0xC0U8) != 0x80U8
+            if seen == n
+                return i
+            seen += 1
+    return text.len
 
 priv fn repeat_char(w: Writer, ch: U8[], count: Sz) //<
     //< It writes one character `count` times, for a diagnostic's gutter and underline

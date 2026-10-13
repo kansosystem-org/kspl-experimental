@@ -41,7 +41,13 @@ struct Value //< one cell's value
     ok: Bool //< whether it is a number. Where false, err is the reason
     err: Cell_error
 
-fn number(v: F64): Value
+fn number(v: F64): Value //< v as a value; an infinity or a NaN is not a number
+    //<
+    //< **This is the one place that refuses them**, whatever made them (a division by 0, a product
+    //< or a total past an F64's range): written as text, they could not be read back.
+    // `v - v` is 0 for a finite v, and a NaN for an infinity or a NaN.
+    if !(v - v == 0.0)
+        return Cell_error.not_number.failed()
     return Value::{ .num = v, .ok = true, .err = .syntax }
 
 fn rounded(v: F64, places: F64): Value //< the value rounded to places decimals

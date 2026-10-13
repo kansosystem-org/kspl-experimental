@@ -227,6 +227,9 @@ fn test_http_reject_smuggling()
     reject("an empty method must be rejected", " / HTTP/1.1\r\n\r\n")
     reject("an empty target must be rejected", "GET  HTTP/1.1\r\n\r\n")
     reject("a malformed version must be rejected", "GET / HTTP/1.1x\r\n\r\n")
+    // `write_request` refuses these targets, so the reader must not take what the writer refuses.
+    reject("a tab in the target must be rejected", "GET /a\tb HTTP/1.1\r\n\r\n")
+    reject("a control byte in the target must be rejected", "GET /a\0b HTTP/1.1\r\n\r\n")
 
     // Caution: **Include a value that wraps to a negative.** Only parse_int_core's 18-digit limit
     // refuses it; one that wraps to a positive is caught by the body-length check even with no
@@ -245,20 +248,33 @@ fn test_http_reject_smuggling()
     _resp: = http.parse_response("HTTP/1.1 4294967496 x\r\n\r\n", arena) catch
         status_ok = false
     assert(!status_ok, "a status code that is not 3 digits must be rejected")
+    // A status below 100 would carry no body, so its body would be read as the next response.
+    assert(!response_error("HTTP/1.1 099 x\r\nContent-Length: 2\r\n\r\nhi", arena)
+        .equals("accepted"), "a status below 100 must be rejected")
+    assert(!response_error("HTTP/1.1 600 x\r\nContent-Length: 0\r\n\r\n", arena).equals("accepted"),
+        "a status above 599 must be rejected")
 
     // The builder goes through the same checks, so a value from outside cannot splice in a header.
     $out: = Str_builder.new()
     defer out.free()
     bad_head: = http.headers(arena).add("X", "a\r\nInjected: 1").build()
     $inject_ok: = true
+    out.s("an answer queued before\n")
     http.format_response(out@, 200, bad_head, "") catch
         inject_ok = false
     assert(!inject_ok, "format_response must reject a CRLF-bearing header value")
+    // **A refused build leaves nothing behind**: a half head would be sent before the next answer.
+    http.format_response_to_head(out@, 200, bad_head, 3) catch {}
+    http.format_response_head(out@, 200,
+        http.headers(arena).add("Connection", "close").add("X", "a\r\nInjected: 1").build()) catch {}
+    assert(out.slice().equals("an answer queued before\n"),
+        "a refused build must leave the builder as it was")
 
     verdict
         .pass("A bare CR/LF, a header name that is not a token, a continuation line, a \
-            Content-Length that is not 1*DIGIT, a status that is not 3 digits, and a CRLF slipped \
-            in while building are all refused.")
+            Content-Length that is not 1*DIGIT, a status outside 100 to 599, a target with a tab or \
+            a control byte, and a CRLF slipped in while building are all refused, the builder left \
+            as it was.")
 
 // ==========================================
 // std/http: the builder writes no length its own reader would cut elsewhere.
@@ -583,6 +599,9 @@ fn test_jsonrpc_encode()
     assert(req.find_str("\"id\":3").is_some(), "a request must carry its id")
     assert(req.find_str("\"jsonrpc\":\"2.0\"").is_some(), "the version must be named")
     assert(req.find_str("\"method\":\"ping\"").is_some(), "the method must be named")
+    // The ids a client hands out stay requests: past I32's top they start again at 1.
+    assert(jsonrpc.id_after(7) == 8 && jsonrpc.id_after(2147483647) == 1,
+        "the id after I32's top must be 1, not a negative that makes a notification")
 
     // Without an id (a notification). A negative id means "do not write one".
     note: = jsonrpc.encode("ping", params, -1, arena)

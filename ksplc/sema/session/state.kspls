@@ -116,6 +116,12 @@ struct Diag_state //< diagnostics bookkeeping: the counts, what was reported, th
     //< quiet evaluation restores the error count (fold_quietly in `../decl/eval.kspls`).
     counts: Diagnostic_counts
     reported: Map<|U8[], I32|>$@ //< the diagnostics already reported, so each is reported once
+    errors_met: I32 //<
+        //< Every error reported, a repeat that `reported` kept from printing included
+        //<
+        //< **"Did this step report anything" reads this, not `counts.errors`** (`error_mark` in
+        //< `ctx.kspls`): a repeat is printed once and counted once, yet it still means the step
+        //< failed, and a follow-on message there only restates it.
     undefined_at: Map<|U8[], Bool|>$@ //< where an undefined name was reported, as "file:offset"
     lint_settings: List<|Lint_setting_entry|>$@ //< the levels `##lint(CODE = level)` registered
     line_starts: Map<|U8[], List<|Sz|>$@|>$@ //<
@@ -170,6 +176,11 @@ struct Mono_state //<
         //< The queue of instantiations whose method table and trait conformance are not built yet
         //<
         //< See Pending_methods.
+    method_chain_cut: Bool //<
+        //< Whether the method-table chain was cut at its depth limit (and reported)
+        //<
+        //< The instances left unbuilt then have no methods, and a "no method" error on one only
+        //< repeats that report with a type name too long to read.
     draining_methods: Bool //<
         //< drain_pending_instances' re-entry flag
         //<

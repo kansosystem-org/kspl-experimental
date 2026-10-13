@@ -2,7 +2,7 @@
 import "std/bignat"
 import "std/buf" { Buf_writer }
 import "std/chars"
-import "std/mem" { Arena }
+import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
@@ -27,6 +27,10 @@ fn test_str_ops(arena: Arena$@)
     // An empty old does nothing (Python inserts at every character); this prevents an endless loop.
     assert("abc".replace("", "-", arena).equals("abc"), "replace: an empty old does nothing")
     assert("".replace("a", "b", arena).len == 0, "replace: an empty string")
+    // A null arena is the global heap, as the parameter says.
+    on_heap: = "a.b".replace(".", "--", null)
+    assert(on_heap.equals("a--b"), "replace: a null arena puts the result on the heap")
+    mem.dealloc(Void$@::on_heap.ptr)
 
     // --- count_str: counts the places that replace would change ---
     assert("a.b.c".count_str(".") == 2, "count_str: every place")
@@ -185,7 +189,16 @@ fn test_unescape_and_dedent(arena: Arena$@) //<
     defer d4.free()
     assert(d4.slice().equals("a\r\n\r\nb\r\n"),
         "dedent: under CRLF, a line of nothing but spaces becomes `\\r\\n`")
-    verdict.pass("An unknown escape is refused, and a line of nothing but spaces is made empty.")
+    // The indentation is compared byte by byte: a tab and four spaces share none.
+    $d5: = "\ta\n    b\n".dedent()
+    defer d5.free()
+    assert(d5.slice().equals("\ta\n    b\n"), "dedent: a tab and spaces are not one indentation")
+    $d6: = "\t\ta\n\t b\n".dedent()
+    defer d6.free()
+    assert(d6.slice().equals("\ta\n b\n"), "dedent: only the bytes every line shares go")
+    verdict
+        .pass("An unknown escape is refused, a line of nothing but spaces is made empty, and only \
+            the indentation every line shares byte for byte is removed.")
 
 // ==========================================
 // std/strnum's write-then-read round trip, and the strings that must be refused.

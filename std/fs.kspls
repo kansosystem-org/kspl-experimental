@@ -33,6 +33,8 @@ extern "C"
         //< Caution: **Do not make it a Bool**: turning "cannot tell" into false lets an unreadable
         //< segment pass as "not a link" (has_link_on_path below).
     fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
+    fn kspl_copy_mode(from_ptr: U8@, from_len: Sz, to_ptr: U8@, to_len: Sz): I32 //<
+        //< Gives `to` the permission bits `from` has: 0=done, -1=refused
     fn kspl_create_owned(path_ptr: U8@, path_len: Sz, data: U8@, len: Sz): I32 //<
         //< 0=written, 1=the name is taken, -1=refused
     fn kspl_dir_trust(path_ptr: U8@, path_len: Sz): I32 //< `Dir_trust`'s order, from 0
@@ -556,7 +558,9 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
 
 pub fn copy_tree( //< copies every file under one directory to a path that does not exist yet
     //<
-    //< The relative layout is kept; only one file at a time is in memory.
+    //< The relative layout and each file's permission bits are kept; only one file at a time is in
+    //< memory. **A link is not copied**, to a file or a directory alike: followed, it would copy
+    //< what lies outside.
     //< Caution: **It fails if the destination already exists.** A copy mixed with files left by an
     //< earlier run is not a copy of the tree, and nothing in it would show that.
     from: U8[], //< the tree to copy
@@ -573,6 +577,8 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
     // off every name.
     top: = without_trailing_seps(from)
     for path in walk_files(from, skip_dir, arena)!
+        if is_link(path) // the walk leaves out a link to a directory, not one to a file
+            continue
         $k: = top.len
         for k < path.len && sys.is_path_sep(path[k])
             k += 1
@@ -580,12 +586,18 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
         mkdir_all(sys.get_dir_name(dest))!
         copy_file(path, dest)!
 
-priv fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error //< copies one file's contents
+priv fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error //<
+    //< Copies one file's contents and its permission bits
+    //<
+    //< **The mode goes too**: written fresh, a script copied with its tree would lose its execute
+    //< bit, and a file only its owner could read would become readable by others.
     body: = io.read_file(from_path) catch e
         throw .io(e)
     defer dealloc(Void$@::body.ptr)
     io.write_file(to_path, body) catch e
         throw .io(e)
+    if kspl_copy_mode(from_path.ptr, from_path.len, to_path.ptr, to_path.len) != 0
+        throw .operation_failed
 
 // ==========================================
 // A lock on a file, shared between processes

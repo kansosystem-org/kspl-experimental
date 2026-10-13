@@ -111,6 +111,10 @@ fn test_fs_write_tree()
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is written with its levels made, and a name climbing out writes nothing.")
 
+priv fn runnable(path: U8[], arena: Arena$@): Bool //< whether `test -x` says it may be started
+    r: = subproc.run_capture(U8[][]::{ "test", "-x", path }, "", 10000, 1024, arena)
+    return !r.spawn_failed && !r.timed_out && r.exit_code == 0
+
 fn test_fs_copy_tree()
     verdict.start("[Fs] copying a tree to a place where nothing stands test...")
     arena: = Arena.new(64 * 1024)
@@ -136,6 +140,20 @@ fn test_fs_copy_tree()
     assert(holds(fs.join(again, "a.txt", arena), "a") &&
         holds(fs.join(again, "sub/b.txt", arena), "b"),
         "a source ending in separators keeps every name whole")
+    // POSIX alone (Windows keeps no execute bit): the mode goes with the contents. Written fresh,
+    // a script copied with its tree lost its execute bit.
+    if !sys.is_windows()
+        script: = fs.join(from, "run.sh", arena)
+        io.write_file(script, "#!/bin/sh\n") catch panic("the script must be writable")
+        subproc.run(U8[][]::{ "chmod", "755", script }, "", 10000, 1024, arena) catch
+            panic("chmod must run")
+        with_mode: = fs.join(dir, "with_mode", arena)
+        fs.copy_tree(from, with_mode, fs_test.skip_skipme, arena) catch
+            panic("copy_tree should copy a tree holding a script")
+        assert(runnable(fs.join(with_mode, "run.sh", arena), arena),
+            "a copied file keeps its execute bit")
+        assert(!runnable(fs.join(with_mode, "a.txt", arena), arena),
+            "a copied file without one gains none")
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is copied whole to a new place, and a place that stands is refused.")
 
@@ -175,7 +193,7 @@ priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
     return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
 
 fn test_fs_walk_links() //<
-    //< A walk does not enter a link to a directory
+    //< A walk does not enter a link to a directory, and a copy takes no link at all
     //<
     //< Two links to `.` would make it visit 2^depth directories, and a link out of the tree would
     //< hand `copy_tree` files from elsewhere.
@@ -195,17 +213,19 @@ fn test_fs_walk_links() //<
     made: =
         made_link(here, fs.join(root, "self1", arena), arena) &&
         made_link(here, fs.join(root, "self2", arena), arena) &&
-        made_link(away, fs.join(root, "away", arena), arena)
+        made_link(away, fs.join(root, "away", arena), arena) &&
+        made_link(fs.join(away, "secret.txt", arena), fs.join(root, "leak.txt", arena), arena)
     if !made
         verdict.skip("a link cannot be made with `ln -s` in this environment")
         return
     files: = fs.walk_files(root, fs.skip_none, arena) catch
         panic("a walk past links must succeed, not stop at too_deep")
-    assert(files.len == 1, "only the file in the tree is found, once")
+    assert(files.len == 2, "the file and the link to a file are found, once each")
     copy: = fs.join(fs.join("out/tmp", "kspl_test_walk_copy", arena), sys_suffix(root), arena)
     fs.copy_tree(root, copy, fs.skip_none, arena) catch panic("the tree must copy")
-    assert(!fs.exists(fs.join(copy, "away/secret.txt", arena)),
-        "a copy takes nothing from outside the tree")
+    assert(holds(fs.join(copy, "a.txt", arena), "a\n"), "the file in the tree is copied")
+    assert(!fs.exists(fs.join(copy, "away/secret.txt", arena)) &&
+        !fs.exists(fs.join(copy, "leak.txt", arena)), "a copy takes nothing from outside the tree")
     verdict.pass("a walk and a copy stay inside the tree, and two links to `.` end at once.")
 
 priv fn sys_suffix(path: U8[]): U8[] //< the last name of a path, to keep the copy's place apart

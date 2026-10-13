@@ -2,13 +2,25 @@
 //<
 //< **How a number is shown changes only the text; rounding changes the value itself.** Do not mix
 //< one into the other, or changing the decimal places on the screen would change the total
-//< ([`calc.kspls`](calc.kspls)'s `ROUND` is this file's `round_to`).
+//< ([`calc.kspls`](calc.kspls)'s `.round()` is this file's `round_to`).
 //< **Rounding multiplies by 10 to the number of places and then converts to a whole number**, so
-//< the larger the number, the fewer decimal places can appear (on overflow, the result wraps).
+//< the larger the number, the fewer decimal places can appear. **Past `whole_cap` nothing is
+//< converted** (the conversion has no fixed answer there): such a number is written as F64 text.
 //< Pure functions: **they know neither the document nor the cell.**
 import "kspage/model/day"
 import "kspage/model/style" { Number_spec }
 import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+
+priv const whole_cap: F64 = 9.0e18 //< the largest size converted to an I64 (its limit: 9.22e18)
+
+fn whole_of(v: F64): I64? //< v's whole part, or none past `whole_cap` (a NaN included)
+    //<
+    //< Caution: **Check the size before converting an F64 to a whole number**: past an I64's range
+    //< the conversion has no fixed answer (a huge value shows as a wrapped, negative number).
+    if !(v <= whole_cap && v >= -whole_cap)
+        return .none
+    return .some(I64::v)
 
 // 10 to the n. **It is capped at 9** (above that an I64 multiplication overflows).
 priv const tens: I64[10] = ::{ 1I64, 10I64, 100I64, 1000I64, 10000I64, 100000I64, 1000000I64,
@@ -59,12 +71,21 @@ priv fn write_fraction(out: Str_builder$@, rest: I64, unit: I64, trim: Bool) //<
 priv fn safe_places(n: F64, want: Sz): Sz //<
     //< The decimal places that still fit an I64 after scaling by 10 to that power
     //<
-    //< **On overflow the result wraps** (the file header says why). At that size the decimals are
-    //< not visible anyway.
+    //< At that size the decimals are not visible anyway.
     $p: Sz = want
-    for p > 0 && n * F64::pow10(p) > 9.0e18
+    for p > 0 && n * F64::pow10(p) > whole_cap
         p -= 1
     return p
+
+priv fn write_large(out: Str_builder$@, n: F64) //< writes a size past `whole_cap`
+    //<
+    //< **It is the F64's own shortest text** (`1e+300`), which reads back as the same number; no
+    //< grouping and no decimal places, which a number this size does not use. A `.0` is dropped.
+    start: = out.len
+    out.s("\{n\}")
+    if out.len >= start + 2 && (out.ptr + out.len - 2)$ == '.' &&
+        (out.ptr + out.len - 1)$ == '0'
+        out.len -= 2
 
 fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
     //< Writes a number the way it is shown
@@ -73,16 +94,21 @@ fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
     //< one place comes out as "0.10".
     //< Caution: **Do not truncate**: 1.23 would come out as "1.229999" (an F64's 1.23 is slightly
     //< less).
-    // Where a date format applies, it is a date (a count of days from the origin day). **The number
-    // formatting is not read**, and **the decimals are dropped**.
+    // A date format writes a date, a count of days from the origin day (**no number format is
+    // read**, **the decimals are dropped**); a count too large to convert stays a number.
     if !spec.dated.same_dating(.none)
-        day.write_day(out, I64::v, spec.dated)
-        return
+        if days: = whole_of(v)
+            day.write_day(out, days, spec.dated)
+            return
     $n: F64 = v * 100.0 if spec.percent else v
     if n < 0.0
         out.c('-')
         n = -n
     out.s(spec.prefix)
+    if n > whole_cap
+        write_large(out, n)
+        out.s(spec.suffix)
+        return
     // Where the places are set, trailing 0s appear too (for alignment); otherwise they are dropped.
     $want: Sz = loose_places
     $trim: = true
@@ -98,8 +124,10 @@ fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
 fn round_to(v: F64, places: Sz): F64 //< the value rounded to places decimals
     //<
     //< **A half rounds away from 0** (`-0.5` is `-1`). **A value too large is not rounded** (the
-    //< reason is in the file header).
+    //< reason is in the file header); past 2 to the 52nd an F64 has no fraction to round anyway.
     size: = v if v >= 0.0 else -v
     unit: = F64::pow10(safe_places(size, places))
     half: = 0.5 if v >= 0.0 else -0.5
-    return F64::I64::(v * unit + half) / unit
+    if whole: = whole_of(v * unit + half)
+        return F64::whole / unit
+    return v

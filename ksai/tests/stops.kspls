@@ -3,6 +3,8 @@
 //< `ksplc run tests/stops.kspls <which>` runs one; [`stops_main.kspls`](stops_main.kspls) runs
 //< each as a child and checks that it stops, says why, and never reaches the line after the stop.
 //< One run is one stop: a stop ends the process, so the cases cannot share a run.
+import "ksai/grad" as _grad // `grad_matmul_input_into` on Tensor
+import "ksai/nn"
 import "ksai/optim"
 import "ksai/sampler"
 import "ksai/tensor" { Tensor }
@@ -62,6 +64,38 @@ fn updater_weight_count(arena: Arena$@)
     u.begin_step() // one weight this step where the first had two
     io.out().s("must not get here\n")
 
+// ==========================================
+// gqa-uneven-heads / gqa-odd-head-dim / gqa-several-rows: grouped-query attention refuses heads
+// that do not share out, a head RoPE cannot rotate, and more than one token per call. Taken, the
+// first reads past the cache's row, and the last drops every row but the first.
+// ==========================================
+fn gqa_new(n_heads: Sz, n_kv_heads: Sz, head_dim: Sz, arena: Arena$@): nn.Gqa_attention<|F32|> //<
+    //< An attention of those heads, 8 wide, with a cache of 4 positions
+    io.out().s("about to make \{n_heads\} heads over \{n_kv_heads\}, \{head_dim\} wide\n")
+    return nn.Gqa_attention<|F32|>.new(8, n_heads, n_kv_heads, head_dim, 4, 10000.0, arena)
+
+fn gqa_several_rows(arena: Arena$@)
+    $attn: = gqa_new(4, 2, 2, arena)
+    shape: Sz[2] = ::{ 2, 8 }
+    x: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    x.fill(0.5)
+    _out: = attn.forward(x, 0)
+    io.out().s("must not get here\n")
+
+// ==========================================
+// grad-small-out: a gradient written into an `out` smaller than its result must stop, not write
+// past the end of a buffer reused from another step.
+// ==========================================
+fn grad_small_out(arena: Arena$@)
+    dy_shape: Sz[2] = ::{ 2, 3 }
+    w_shape: Sz[2] = ::{ 4, 3 }
+    out_shape: Sz[2] = ::{ 1, 4 } // the result is [2, 4]
+    $dy: = Tensor<|F32|>.new(Sz[]::dy_shape, arena)
+    w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
+    out: = Tensor<|F32|>.new(Sz[]::out_shape, arena)
+    dy.grad_matmul_input_into(w, out)
+    io.out().s("must not get here\n")
+
 fn main(): I32
     argv: = sys.args()
     which: = argv.get(1) if argv.len == 2 else ""
@@ -73,10 +107,20 @@ fn main(): I32
         tensor_shape_product_overflow(arena)
     else if which.equals("updater-weight-count")
         updater_weight_count(arena)
+    else if which.equals("gqa-uneven-heads")
+        _a: = gqa_new(3, 2, 2, arena)
+        io.out().s("must not get here\n")
+    else if which.equals("gqa-odd-head-dim")
+        _a: = gqa_new(4, 2, 3, arena)
+        io.out().s("must not get here\n")
+    else if which.equals("gqa-several-rows")
+        gqa_several_rows(arena)
+    else if which.equals("grad-small-out")
+        grad_small_out(arena)
     else
         // **An unknown name must not pass**: it says no reason, so its check fails.
-        io.err()
-            .s("usage: stops \
-                argmax-empty-logits|tensor-shape-product-overflow|updater-weight-count\n")
+        io.err().s("usage: stops <which>, one of: argmax-empty-logits\n")
+            .s("  tensor-shape-product-overflow updater-weight-count gqa-uneven-heads\n")
+            .s("  gqa-odd-head-dim gqa-several-rows grad-small-out\n")
         return 2
     return 0

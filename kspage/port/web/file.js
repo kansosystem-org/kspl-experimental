@@ -104,7 +104,7 @@ function kspageFile(ui) {
   // Caution: **Clear it when a new name is typed** (`save.js`'s `renamed`).
   // **Keep the assignment here**: the tab's record is told when the handles change (`keepWhere`),
   // and a place that forgets would sometimes reopen something else after a reload.
-  const handles = kspageHandles();
+  const handles = ui.handles;
   // **A held target is a location too** (a chosen file has no path), so the status is updated.
   const bindBody = (at) => {
     kf.bodyAt = at;

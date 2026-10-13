@@ -71,8 +71,15 @@ void* ksos_port_ctx_create_main(void) {
     return alloc_ctx();
 }
 
+// Returns a deleted task's context. The task may be the one running: the kernel's next switch
+// passes a null from for it (see ksos_port_switch), so nothing is saved into the freed memory.
+void ksos_port_ctx_free(void* ctx) {
+    free(ctx);
+}
+
 // Saves from's context and switches to to's, with the interrupt signals blocked from before the
-// save until control comes back to from, which then gets its own mask back.
+// save until control comes back to from, which then gets its own mask back. A null from (the
+// running task was deleted) saves nothing and never comes back.
 // Caution: **Do not leave the mask to swapcontext.** It installs to's mask before it loads to's
 // registers, so a tick held pending that the mask lets through runs its handler on from's stack
 // while the kernel counts to as current: that handler's switch saves the half-made state as to's
@@ -81,6 +88,9 @@ void ksos_port_switch(void* from_ctx, void* to_ctx) {
     sigset_t set, old;
     irq_signal_set(&set);
     sigprocmask(SIG_BLOCK, &set, &old);
+    if (from_ctx == 0) {
+        setcontext(&((ksos_ctx*)to_ctx)->uc);
+    }
     swapcontext(&((ksos_ctx*)from_ctx)->uc, &((ksos_ctx*)to_ctx)->uc);
     sigprocmask(SIG_SETMASK, &old, NULL);
 }

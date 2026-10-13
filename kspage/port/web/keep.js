@@ -1,7 +1,8 @@
 // ==========================================
 // kspage's page — the saved draft (so that what was written does not vanish when the page closes).
 // **This is not a save**: the file does not change by one byte, so it is called **a draft**, never
-// saved. It writes when typing pauses (`beforeunload` misses a crashing tab).
+// saved. It writes when typing pauses, at the latest a while into typing that does not pause, and
+// when the page is hidden or left (`beforeunload` misses a crashing tab).
 // [`handle.js`](handle.js) holds the storage; this file decides when to write, discard and tell.
 // **There is one entry point, `keepSync`**: it asks only `draftNow`, and null means discard.
 // **Restoring happens only on a click** (restored at startup, a draft thought discarded would come
@@ -10,11 +11,15 @@
 // ==========================================
 function kspageKeep(ui) {
   const app = ui.app;
-  const store = kspageHandles();
+  // **The page's one connection** (`ui.handles`, shared with `file.js`).
+  const store = ui.handles;
 
   // Caution: **Do not make it too short** (the whole document is serialized each time); it is
   // longer than the delay before re-asking for the semantic colors, which someone is waiting on.
   const SETTLE_MS = 2000;
+  // The longest a change waits: **every redraw restarts the pause**, so typing that never pauses
+  // for `SETTLE_MS` would otherwise write no draft at all.
+  const MOST_MS = 10000;
   // Caps on age and count: unbounded, the quota overflows and **writing silently fails**.
   const KEEP_DAYS = 30;
   const KEEP_MAX = 32;
@@ -28,6 +33,8 @@ function kspageKeep(ui) {
   // The last text written, per number: **never the same twice** (not every redraw is typing).
   const wrote = new Map();
   let settle = null;
+  // When the change still unwritten was first asked to be kept (null with none waiting).
+  let since = null;
 
   // The drafts that can be brought back, newest first: those found at startup and those set aside
   // since, **kept until clicked** (restoring reads them).
@@ -51,14 +58,28 @@ function kspageKeep(ui) {
       from: one.path, text: one.text });
   };
 
+  // Writes the change waiting now, at once.
+  const keepNow = () => {
+    if (settle !== null) clearTimeout(settle);
+    settle = null;
+    since = null;
+    keepSync();
+  };
   // Caution: **Do not write on every redraw** (`keepSync` serializes the whole text synchronously).
   const keepLater = () => {
     if (settle !== null) clearTimeout(settle);
-    settle = setTimeout(() => {
-      settle = null;
-      keepSync();
-    }, SETTLE_MS);
+    const now = Date.now();
+    if (since === null) since = now;
+    settle = setTimeout(keepNow, Math.max(0, Math.min(SETTLE_MS, since + MOST_MS - now)));
   };
+  // Caution: **Write what is waiting when the page is hidden** (a tab switched away from, a phone's
+  // app put aside: the page may be discarded with no further event) **and when it is left**.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && settle !== null) keepNow();
+  });
+  window.addEventListener("pagehide", () => {
+    if (settle !== null) keepNow();
+  });
 
   // Caution: **Show the time** — "there is a draft" alone does not say whether to restore it.
   const said = (one) => {

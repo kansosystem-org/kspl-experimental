@@ -141,6 +141,28 @@ fn test_tensor_error_recoverable(arena: Arena$@)
         matmul_caught = true
         fallback a
     assert(matmul_caught, "matmul shape mismatch must throw a catchable Tensor_error")
+    // **A refused product allocates nothing**: on the heap (a null arena), nothing would free it.
+    $on_heap: = a
+    on_heap.arena = null
+    heap_before: = mem.heap_used_bytes()
+    _refused: = on_heap.matmul(b) catch
+        fallback a
+    assert(mem.heap_used_bytes() == heap_before, "a refused matmul must leave the heap as it was")
+
+    // Each of these would read or write past a row, or never end, if it were taken.
+    row_shape: Sz[2] = ::{ 1, 6 }
+    row: = Tensor<|F32|>.new(Sz[]::row_shape, arena)
+    row.fill(F32::1.0)
+    assert(refuses_rope(row, 0), "a RoPE head width of 0 must be refused")
+    assert(refuses_rope(row, 4), "a RoPE head width that does not tile the row must be refused")
+    assert(!refuses_rope(row, 6), "a RoPE head width that tiles the row is taken")
+    cache_shape: Sz[2] = ::{ 4, 3 }
+    $cache: = Tensor<|F32|>.new(Sz[]::cache_shape, arena)
+    two_rows: Sz[2] = ::{ 2, 3 }
+    $several: = false
+    cache.update_row(0, Tensor<|F32|>.new(Sz[]::two_rows, arena)) catch
+        several = true
+    assert(several, "update_row must refuse a source of several rows, not copy the first")
 
     // checked_add: two tensors of different element counts must fail
     c_shape: Sz[1] = ::{ 3 }
@@ -157,6 +179,12 @@ fn test_tensor_error_recoverable(arena: Arena$@)
     verdict
         .pass("Shape mismatches propagate as Tensor_error and are handled without crashing the \
             process.")
+priv fn refuses_rope(t: Tensor<|F32|>, head_dim: Sz): Bool //< whether RoPE refuses that width
+    $x: = t
+    _r: = x.apply_rope_neox(0, head_dim, 10000.0) catch
+        return true
+    return false
+
 fn test_view_rows(arena: Arena$@) //< a view of rows from any row, and a rejection past the end
     verdict.start("[Tensor] view_rows sees the rows asked for, from any row, without copying...")
     shape: Sz[2] = ::{ 4, 3 }

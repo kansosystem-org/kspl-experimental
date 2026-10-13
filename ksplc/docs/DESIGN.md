@@ -2454,7 +2454,7 @@ Caution: A variable declaration, an argument and a `return` are not enough. Stru
 
 **The verdict lives in one place, `arc_retain_copied_value`.** Copying its conditions out per position makes the same omission recur at the next.
 
-**An assignment also releases**: `dst = x;` needs, besides `retain(x)`, a release of the value being overwritten. The retain comes first, in case `x` and `dst` point at the same object.
+**An assignment also releases**: `dst = x;` needs, besides `retain(x)`, a release of the value being overwritten. **The release waits until the right side is lowered and held in a temporary** (`tmp = x; retain; release(dst); dst = tmp`, the order Swift uses). The right side's own retains are inserted while it lowers, so a release emitted before them freed `head` in `head = Rc.new(Node::{ .next = head })` before retaining it, and the new node, landing at the freed address, pointed at itself. Held in a temporary, the right side is also read before the old value goes, so `head = head.get().next` does not read a node already freed.
 
 **It targets reads from a place expression**, one that points at existing memory: an identifier or a path, a chain of `.` and `[` rooted in one, or a dereference `<expression>$`. An expression with a call inside (`f().x`) must not be a place expression. It reads part of a temporary that is already +1'd, so another retain doubles it.
 
@@ -2462,6 +2462,9 @@ Caution: A variable declaration, an argument and a `return` are not enough. Stru
 | :-- | :-- | :-- |
 | `x`, `a.b`, `xs[i]`, `p$`, `(p + i)$` | yes | yes |
 | `f().x` | no: it reads a temporary already counted | no |
+| `b.get().v`, `f()$` (through a pointer a call returns) | no clone can be made, but it reads existing memory | yes, once lowered |
+
+**A read through a pointer a call returns is a copy of existing memory, not a fresh value** (`arc_reads_through_call`). `get()` hands back a pointer into the box, not a counted result, so taken as fresh, `x: = b.get().v` got no retain, and `x`'s release freed a value the box still held. The retain's receiver cannot be a clone, which would run the call twice, so lowering first moves the pointer into a temporary (`arc_needs_pointer_hoist` in `lower_expr_postfix`), after `Operand_order` has fixed the operands' order, and the retain clones the lowered read (`arc_retain_lowered`).
 
 **A Result built around a place, or unwrapped from one, reads that place.** `return e.value` in a `V!E` function wraps `e.value`, and `v: = r catch …` and `r!` take `r`'s payload while `r` still owns it. The verdict looks through the wrap and the unwrap to the place and retains it at its own type. Missed, the place and the copy are both released, and the value is freed under the copy.
 

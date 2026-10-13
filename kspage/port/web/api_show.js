@@ -4,7 +4,8 @@
 // them; the cutting is a view, and the document does not change.**
 // ==========================================
 function kspageApiShow(ks) {
-  const { w, outText, scratch, nums, draw, acted, paintCrop, paintChrome, paperOf, regionAt } = ks;
+  const { w, outText, scratch, nums, draw, acted, paintCrop, paintChrome, paperOf, regionAt,
+    cramps } = ks;
   Object.assign(ks.api, {
     // Draws page `i` onto `target`'s canvas at 1:1 (a document that is not split is one sheet).
     // **The margins apply here** (the layout knows none); printing uses one canvas per page.
@@ -38,8 +39,10 @@ function kspageApiShow(ks) {
         w.kspage_web_set_paper(use.width, use.height, use.left, use.top, use.right, use.bottom,
           was.reading);
       }
-      const count = w.kspage_web_layout(ks.width);
-      const total = w.kspage_web_paper_count();
+      // **Lay out for paper** (no cursor: the formula being typed in prints its value). Where
+      // memory runs out, no page is drawn (the net reports it).
+      const count = cramps(() => w.kspage_web_layout_paper(ks.width));
+      const total = count === null ? 0 : w.kspage_web_paper_count();
       const last = upto < 0 ? total : Math.min(upto, total);
       for (let i = from; i < last; i += 1) {
         const target = make(i);
@@ -80,7 +83,7 @@ function kspageApiShow(ks) {
     surfaceCount() { return w.kspage_web_surface_count(); },
     // The regions **after layout**; `kind` "flow" / "grid" / "absolute" is prose / table / slide.
     regions() {
-      w.kspage_web_layout(ks.width);
+      cramps(() => w.kspage_web_layout(ks.width));
       const out = [];
       for (let i = 0; i < w.kspage_web_region_count(); i++) {
         w.kspage_web_region(i, scratch);

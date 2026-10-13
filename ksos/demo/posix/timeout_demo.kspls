@@ -8,7 +8,8 @@
 // `send_for` behave the same. When `lock_for` gives up it returns the priority it lent the holder,
 // leaving **only what the task still waiting lent**. `wait_for` giving up keeps the bits that are
 // set. `try_take` / `try_lock` answer without advancing the clock. `ms_to_ticks` converts from the
-// declared ticks per second, **rounding up**.
+// declared ticks per second, **rounding up**. A timeout too large to add to the clock waits, rather
+// than wrapping to a deadline already passed.
 // ==========================================
 
 // When a run fails, the assert names it with `panic: … at file:line` (as in every POSIX demo).
@@ -50,10 +51,11 @@ priv const holder_prio: I32 = 1
 priv const mid_prio: I32 = 2
 priv const coord_prio: I32 = 4
 
-fn giver(_arg: Void$@): Void //< 2. Give 2 ticks after the token
-    g_start_giver.take()
-    Task.delay(2)
-    g_sem.give()
+fn giver(_arg: Void$@): Void //< 2 and 8. Give 2 ticks after each token
+    for _n in Range.asc(2)
+        g_start_giver.take()
+        Task.delay(2)
+        g_sem.give()
 
 fn sender(_arg: Void$@): Void //< 3. Send 2 ticks after the token
     g_start_sender.take()
@@ -180,6 +182,15 @@ fn coordinator(_arg: Void$@): Void
     verdict
         .pass("at 1000 Hz, 250 ms is 250 ticks; at 100 Hz, 15 ms is 2 ticks (and 1 ms does not come \
             to 0).")
+
+    // --- 8. a timeout too large for the clock ---
+    verdict.start("[ksos] a huge timeout does not wrap")
+    g_start_giver.give()
+    before8: = task.current_tick()
+    got8: = g_sem.take_for(0xFFFFFFFFFFFFFFFFU64)
+    assert(got8, "timeout: a huge take_for wrapped to a passed deadline and gave up at once")
+    assert(task.current_tick() == before8 + 2, "timeout: a huge take_for did not wait for the give")
+    verdict.pass("the deadline stops at the clock's last tick, so it waits and takes the give.")
 
 fn main()
     g_sem.init(0)

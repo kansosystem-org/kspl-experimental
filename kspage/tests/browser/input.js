@@ -164,6 +164,28 @@ function kspageProbeInput(ks) {
   check(app.text() === kept,
     "what was typed across the break comes back in one");
 
+  // 5''. Text longer than the typing buffer (256 bytes) goes in whole, typed or composed.
+  //
+  // **This can be seen nowhere else**: a dictation or an autocompletion hands it over in one
+  // `input`; dropped, it vanishes without a word, and a composition commits the one before.
+  const longTyped = "long".repeat(80);
+  const beforeLong = app.text();
+  typeIn(longTyped);
+  check(app.text().length === beforeLong.length + longTyped.length,
+    "a long text typed in one go goes in whole");
+  const longComposed = "日本語".repeat(40);
+  ime.dispatchEvent(new CompositionEvent("compositionstart", { data: "", bubbles: true }));
+  ime.dispatchEvent(new CompositionEvent("compositionupdate", { data: "にほん", bubbles: true }));
+  ime.dispatchEvent(new CompositionEvent("compositionupdate",
+    { data: longComposed, bubbles: true }));
+  ime.dispatchEvent(new CompositionEvent("compositionend", { data: longComposed, bubbles: true }));
+  check(app.text().indexOf(longComposed) >= 0 && app.text().indexOf("にほん") < 0,
+    "a long composition commits whole, and not the one before it");
+  // **Take both back** (the sections after this one measure the document's first page).
+  undoKey();
+  undoKey();
+  check(app.text() === beforeLong, "each long text goes back in one step");
+
   // 6. A key during composition is not taken over. Taken, the composition does not go on.
   ime.dispatchEvent(new CompositionEvent("compositionstart", { data: "", bubbles: true }));
   const during = app.text();
@@ -185,4 +207,29 @@ function kspageProbeInput(ks) {
   check(app.text().length === typed.length - 1, "Ctrl+Z brings what was typed back");
   keyIn("z", { ctrlKey: true, shiftKey: true });
   check(app.text() === typed, "Ctrl+Shift+Z redoes it");
+
+  // 8. A fault in the page's own code is thrown on, not reported as memory used up.
+  //
+  // **This can be seen nowhere else**: the net that catches the core running out of memory sits
+  // around every layout, and a net catching everything would hide this fault behind the wrong
+  // reason and log it nowhere. A measuring that throws stands in for the fault.
+  const kept8 = app.save();
+  const shown8 = app.text();
+  const measure = CanvasRenderingContext2D.prototype.measureText;
+  let thrown = null;
+  CanvasRenderingContext2D.prototype.measureText = () => {
+    throw new TypeError("a fault the probe planted");
+  };
+  try {
+    app.load(kept8);
+  } catch (e) {
+    thrown = e;
+  } finally {
+    CanvasRenderingContext2D.prototype.measureText = measure;
+  }
+  check(thrown instanceof TypeError, "a fault in the page's code is thrown on ("
+    + String(thrown && thrown.message) + ")");
+  check((document.getElementById("note").textContent || "").indexOf("memory is used up") < 0,
+    "and is not said to be memory used up");
+  check(app.load(kept8) === "" && app.text() === shown8, "the page lays out again once it is gone");
 }

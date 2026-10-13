@@ -225,22 +225,25 @@ impl U8[]
         r: U8[],
         old: U8[], //< the text to find; empty does nothing
         new: U8[], //< the text to put in its place
-        arena: Arena$@, //< where the new string goes; null uses the global heap
+        arena: Arena$@, //< where the new string goes; null uses the global heap, freed with `dealloc`
     ): U8[]
-        if old.len == 0
-            return arena.dup_str(r)
-        b: = arena.text()
+        $b: = Str_builder.new()
+        defer b.free()
         $pos: Sz = 0
-        for pos < r.len
+        for old.len > 0 && pos < r.len
             rest: = r.sub_from(pos)
             switch rest.find_str(old)
             case .some(idx)
                 b.s(rest.sub(0, idx)).s(new)
                 pos += idx + old.len
             case .none
-                b.s(rest)
                 break
-        return b.take()
+        b.s(r.sub_from(pos))
+        // `Arena.text` and `dup_str` need an arena; `alloc_in` takes null as the heap.
+        out: = U8$@::mem.alloc_in(arena, b.len + 1)
+        mem.copy(Void$@::out, Void$@::b.ptr, b.len)
+        (out + b.len)$ = 0U8
+        return U8[]::{ .ptr = out, .len = b.len }
 
     // Use this for a text file, not `split('\n', ...)`: lines of a CRLF file from Windows would
     // keep the `\r` and not compare equal, and `"a\n"` would give two elements rather than one
@@ -343,34 +346,39 @@ impl U8[]
         $res: = Str_builder.new()
         if r.len == 0
             return res
-        // Pass 1: find the minimum indent width of the non-blank lines
-        $min_indent: Sz = 999999
-        $current_indent: Sz = 0
+        // Pass 1: the leading whitespace every non-blank line shares, compared byte by byte, as
+        // Python's textwrap.dedent does. Caution: **Do not count a tab as a space**: lines indented
+        // `\t` and `    ` share no indentation, and stripping both would change what they mean.
+        $prefix: U8[] = ""
+        $have_prefix: = false
         $is_empty_line: = true
+        $line_start: Sz = 0
         $i: Sz = 0
 
         for i < r.len
             c: = (r.ptr + i)$
             if c == '\n'
                 is_empty_line = true
-                current_indent = 0
-            else if is_empty_line && (c == ' ' || c == '\t')
-                current_indent += 1
-            else if is_empty_line && c != '\r'
-                if current_indent < min_indent
-                    min_indent = current_indent
+                line_start = i + 1
+            else if is_empty_line && c != ' ' && c != '\t' && c != '\r'
+                indent: = r.sub(line_start, i - line_start)
+                $k: Sz = 0
+                for k < indent.len && (indent[k] == ' ' || indent[k] == '\t') &&
+                    (!have_prefix || (k < prefix.len && prefix[k] == indent[k]))
+                    k += 1
+                prefix = indent.sub(0, k)
+                have_prefix = true
                 is_empty_line = false
             i += 1
 
-        if min_indent == 999999
-            min_indent = 0
+        min_indent: = prefix.len
         // Pass 2: emit each line without the minimum indent. **A whitespace-only line becomes
         // empty** (like Python's textwrap.dedent and Java's stripIndent), not invisible trailing
         // whitespace; its newline is kept, so a whitespace-only CRLF line becomes `\r\n`.
         i = 0
         is_empty_line = true
         $skip_count: Sz = 0
-        $line_start: Sz = 0
+        line_start = 0
 
         for i < r.len
             c: = (r.ptr + i)$

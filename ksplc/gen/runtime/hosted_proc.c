@@ -31,9 +31,12 @@ typedef struct {
     int out_eof; int err_eof; /* The streams whose read returned EOF. poll skips them */
 } kspl_proc_t;
 
-/* Writes all len bytes to the child's standard input within timeout_ms: 0 when all of it went,
- * -1 when the time ran out first (what went by then stays written), -2 when the child closed its
- * standard input or ended.
+/* Writes all len bytes to the child's standard input: 0 when all of it went, -1 when no byte went
+ * for timeout_ms in a row (what went by then stays written), -2 when the child closed its standard
+ * input or ended.
+ * **The limit is idle time, not the whole write**: each byte that goes moves the deadline on, so a
+ * large input to a child that reads steadily but slowly is not cut off part way, while a child
+ * that stops reading is still given up on.
  * Caution: **Never block on the write itself.** A child that stops reading fills the pipe, and a
  * blocking write would outlast every timeout, so the end is non-blocking and waited on by poll. */
 KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) {
@@ -51,6 +54,7 @@ KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) 
         ssize_t w = write(h->to_w, ptr + off, (size_t)(len - off));
         if (w > 0) {
             off += w;
+            deadline = kspl_mono_us() + (I64)timeout_ms * 1000;
             continue;
         }
         if (w < 0 && errno == EINTR) continue;
@@ -77,8 +81,12 @@ static I32 kspl_proc_read_end(int fd, U8 *buf, Sz cap, I32 timeout_ms) {
     int r = poll(&pfd, 1, timeout_ms);
     if (r == 0) return -1;
     if (r < 0) return -2;
-    ssize_t nr = read(fd, buf, (size_t)cap);
-    if (nr <= 0) return 0;
+    ssize_t nr;
+    do {
+        nr = read(fd, buf, (size_t)cap);
+    } while (nr < 0 && errno == EINTR);
+    /* **A failed read is not EOF**: read as 0, it would say the partner died while it lives. */
+    if (nr < 0) return -2;
     return (I32)nr;
 }
 
@@ -187,8 +195,9 @@ typedef struct {
     int out_eof; int err_eof;
 } kspl_proc_t;
 
-/* The same contract as the POSIX side. The end is put in PIPE_NOWAIT, so a write takes what the
- * pipe has room for and returns at once; it is looked at again after a pause until the deadline.
+/* The same contract as the POSIX side, the idle limit included. The end is put in PIPE_NOWAIT, so a
+ * write takes what the pipe has room for and returns at once; it is looked at again after a pause
+ * until timeout_ms pass with nothing taken.
  * **A step is 4096 bytes at most**, the size CreatePipe gives a pipe: a write wider than the room
  * may take nothing at all, and could then never go. */
 KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) {
@@ -206,6 +215,7 @@ KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) 
         if (!WriteFile(h->to_w, ptr + off, want, &wrote, NULL)) return -2;
         if (wrote > 0) {
             off += wrote;
+            start = GetTickCount64();
             continue;
         }
         if (GetTickCount64() - start >= (ULONGLONG)timeout_ms) return -1;

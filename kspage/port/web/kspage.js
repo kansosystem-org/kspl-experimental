@@ -8,6 +8,9 @@ function kspageBoot(canvas, wasmBytes) {
   const enc = new TextEncoder();
   const ctx = canvas.getContext("2d");
   let mem = null;
+  // What the core throws when it stops for lack of memory (`kspage_js_gave_up`), **told apart from
+  // every other error by its class** (`ks.cramps` handles it alone).
+  class GaveUp extends Error {}
 
 
   // A color crosses the boundary as a `0xRRGGBB` number, and in the DOM and the canvas it is
@@ -41,9 +44,9 @@ function kspageBoot(canvas, wasmBytes) {
       return ctx.measureText(str(tp, tl)).width;
     },
     // Called once when the core stops for lack of memory. **It must throw**, or the freestanding
-    // panic's `for {}` freezes the screen; the handler (`api.js`'s `cramps`) cleans up.
+    // panic's `for {}` freezes the screen; the handler (`ks.cramps`) cleans up.
     kspage_js_gave_up(mp, ml) {
-      throw new Error("kspage: " + str(mp, ml));
+      throw new GaveUp("kspage: " + str(mp, ml));
     },
     kspage_js_vmetrics(fp, fl, sizePx, weight, italic, outPtr) {
       const v = vmetrics(str(fp, fl), sizePx, weight, italic);
@@ -108,6 +111,24 @@ function kspageBoot(canvas, wasmBytes) {
       outsidePics: false,
       // The entry points for the outside, filled in by the entry-point files.
       api: {},
+    };
+    // The handler for exhausted memory — **the last safety net**: the core stops once the arena
+    // runs out (`panic` in `../../../std/lang.kspls`), so unhandled **the screen freezes**. It
+    // returns the call's result, or `null` when memory ran out. **Run every call that lays out or
+    // loads through it, and keep it the only net** (with two, one forgets the cleanup).
+    // Caution: **Always clean up** — the chunk being built is referenced by nobody, and unfreed the
+    // arena shrinks **forever** (`bridge.kspls`'s `kspage_web_recover`). **Report only running out
+    // of memory, and throw any other error on** (a fault in the page's code said to be "memory used
+    // up" sends the reader to the wrong cause, and is logged nowhere).
+    ks.cramps = (run) => {
+      try {
+        return run();
+      } catch (e) {
+        const back = w.kspage_web_recover();
+        if (!(e instanceof GaveUp)) throw e;
+        if (ks.api.onCramped) ks.api.onCramped(back);
+        return null;
+      }
     };
     kspageDraw(ks);
     kspageDrawCrop(ks);

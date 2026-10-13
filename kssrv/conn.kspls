@@ -73,8 +73,8 @@ struct Ctx
 
 // ==========================================
 // One connection's state.
-// Caution: Do not put a field holding an ARC by value here. `Rc<|T|>` does not release an ARC
-// inside T, so it leaks silently (see `Rc<|T|>` in std/refcount.kspls).
+// The socket, the arena and the buffers are not ARC, so the last `Rc<|Conn|>` does not free them;
+// `conn_close` does.
 // ==========================================
 struct Conn
     stream: net.Tcp_stream$@
@@ -231,15 +231,21 @@ fn table_drop(t: Conn_table$@, slot: Sz, lg: Log$@) //< closes a slot's connecti
     if ln: = lg.at(.information)
         ln.s("conn #\{serial\} closed (open \{stats.connections_open\})")
 
-fn queue_response(c: Conn$@, status: I32, ctype: U8[], body: U8[], keep: Bool) //<
-    //< Queues one answer with `body` as its body; answering a HEAD, it names the length alone
+fn queue_response( //< queues one answer with `body` as its body; to a HEAD, it names the length
     //<
     //< **The socket must not be written here** (the reason is in this file's header). The length
     //< goes in from the body (`http.format_response`).
+    c: Conn$@,
+    status: I32,
+    ctype: U8[],
+    body: U8[],
+    keep: Bool,
+    allow: U8[] = "", //< a 405's `Allow` (`answer_head`); empty for any other answer
+)
     if c.answers_head
-        queue_to_head(c, status, ctype, body.len, keep)
+        queue_to_head(c, status, ctype, body.len, keep, allow)
         return
-    http.format_response(c.outbuf@, status, answer_head(c, ctype, keep), body) catch _e
+    http.format_response(c.outbuf@, status, answer_head(c, ctype, keep, allow), body) catch _e
         unbuilt(c)
         return
     if !keep
@@ -250,9 +256,10 @@ fn queue_file(c: Conn$@, ctype: U8[], file: io.File_stream, length: Sz, keep: Bo
     //<
     //< The head names `length` (the size `stat` gave). **The connection then holds one chunk at a
     //< time, not the file** (`conn_send` in `kssrv/main.kspls`). It owns `file` from here on.
+    before: = c.outbuf.len
     queue_to_head(c, 200, ctype, length, keep)
-    // A HEAD names the length and takes no body; a head the builder refused sends nothing.
-    if c.answers_head || c.outbuf.len == 0
+    // A HEAD names the length and takes no body; a head the builder refused added nothing.
+    if c.answers_head || c.outbuf.len == before
         $f: = file
         f.free()
         return
@@ -270,25 +277,38 @@ fn peer_count(t: Conn_table$@, peer: U8[]): Sz //<
             n += 1
     return n
 
-fn queue_to_head(c: Conn$@, status: I32, ctype: U8[], length: Sz, keep: Bool) //<
-    //< Queues the answer to a HEAD: the head a GET would get, naming `length`, and no body
+fn queue_to_head( //< queues the answer to a HEAD: the head a GET would get, and no body
     //<
     //< **A body is never sent after it**: the client reads the next answer where the head ends.
-    http.format_response_to_head(c.outbuf@, status, answer_head(c, ctype, keep), length) catch _e
+    c: Conn$@,
+    status: I32,
+    ctype: U8[],
+    length: Sz, //< the length the head names
+    keep: Bool,
+    allow: U8[] = "", //< a 405's `Allow`, as at `queue_response`
+)
+    http.format_response_to_head(c.outbuf@, status, answer_head(c, ctype, keep, allow), length)
+        catch _e
         unbuilt(c)
         return
     if !keep
         c.close_after_send = true
 
-priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool): http.Header$@ //<
+priv fn answer_head(c: Conn$@, ctype: U8[], keep: Bool, allow: U8[]): http.Header$@ //<
     //< The headers every answer carries; the length is the builder's to add
-    return http.headers(c.arena).add("Content-Type", ctype)
-        .add("Connection", "keep-alive" if keep else "close").build()
+    //<
+    //< `allow` non-empty adds `Allow`, which a 405 must carry (RFC 9110 §15.5.6): without it the
+    //< client cannot tell which method would have been taken.
+    $b: = http.headers(c.arena).add("Content-Type", ctype)
+        .add("Connection", "keep-alive" if keep else "close")
+    if allow.len > 0
+        b = b.add("Allow", allow)
+    return b.build()
 
 priv fn unbuilt(c: Conn$@) //< gives up an answer the builder refused, closing without sending
     //<
-    //< A CRLF in a header or similar is this server's mistake, not the client's.
-    c.outbuf.clear()
+    //< A CRLF in a header or similar is this server's mistake, not the client's. The builder left
+    //< `outbuf` as it was, so what was queued before still goes out.
     c.close_after_send = true
 
 fn queue_stream_head(c: Conn$@) //<
@@ -306,13 +326,14 @@ fn queue_stream_head(c: Conn$@) //<
     http.format_response_head(c.outbuf@, 200, head) catch _e
         unbuilt(c)
 
-fn queue_error(c: Conn$@, status: I32)
+fn queue_error(c: Conn$@, status: I32, allow: U8[] = "") //<
+    //< Queues an error answer in plain text; `allow` is a 405's `Allow`
     $b: = Str_builder.new()
     defer b.free()
     b.s("\{status\} ").s(http.reason_phrase(status)).s("\n")
     // An error response always closes: after a broken request, there is no telling where the next
     // one starts in the remaining bytes.
-    queue_response(c, status, "text/plain; charset=utf-8", b.slice(), false)
+    queue_response(c, status, "text/plain; charset=utf-8", b.slice(), false, allow)
 
 struct Target //< splits the request target (`/a/b?x=1#f`) into the path part and the query part
     //<

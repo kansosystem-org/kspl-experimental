@@ -551,6 +551,32 @@ priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool /
     msg.s(".")
     return true
 
+priv fn append_integer_exponent_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+    //< It writes the sentence naming an exponent written on an integer (`1e5`)
+    //<
+    //< C, Rust and Python read `1e5` as a floating-point number; KSPL takes an exponent only after
+    //< a `.`, so the failure lands on the `e` with an expected set that does not say why.
+    if pos <= 0 || pos + 1 >= src.len || (src[pos] != 'e' && src[pos] != 'E')
+        return false
+    after: = src[pos + 1]
+    if !(after.is_digit() ||
+        ((after == '-' || after == '+') && pos + 2 < src.len && src[pos + 2].is_digit()))
+        return false
+    $start: = pos
+    for start > 0 && (src[start - 1].is_digit() || src[start - 1] == '_')
+        start -= 1
+    if start == pos ||
+        (start > 0 && (src[start - 1].is_alnum() || src[start - 1] == '.'))
+        return false
+    $end: = pos + 2
+    for end < src.len && src[end].is_digit()
+        end += 1
+    digits: = src.sub(start, pos - start)
+    msg.s("\n  Note: an exponent is written only on a floating-point literal, after a '.': write '")
+        .s(digits).s(".0").s(src.sub(pos, end - pos))
+        .s("' for an F64, or the integer's digits in full.")
+    return true
+
 priv fn starts_item(src: U8[], at: Sz): Bool //<
     //< Whether an item of a list can begin at `at`
     //<
@@ -589,14 +615,20 @@ priv fn text_step(src: U8[], i: Sz): Sz //<
         return line_end(src, i)
     return i + 1
 
-priv fn append_expected(msg: Str_builder$@, e: Expected) //< it writes one expected item
+priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool) //<
+    //< It writes one expected item
     //<
     //< A name goes in quotes and a kind in a readable phrasing. **Do not quote a kind**:
     //< `'Primitive_type'` reads as text to type, not the name of what can come there.
+    //< In the indentation notation the end of a line ends a statement, and no `;` is written
+    //< there, so `';'` is named as what the writer would put: the end of the line.
     //< Caution: **Do not make a table of phrasings.** The grammar (`ksplc/kspl.kspeg`) owns the
     //< rule's name, and a copy silently drifts when it is renamed.
     if !e.is_rule
-        msg.s("'\{e.text\}'")
+        if laid_out && e.text.equals(";")
+            msg.s("the end of the line")
+        else
+            msg.s("'\{e.text\}'")
         return
     head: = e.text[0].to_lower()
     msg
@@ -625,7 +657,7 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
                     msg.s(" or " if target_parser.fail.expected_label_count == 2 else ", or ")
                 else
                     msg.s(", ")
-            append_expected(msg@, (target_parser.fail.expected_labels + i)$)
+            append_expected(msg@, (target_parser.fail.expected_labels + i)$, laid_out)
     else
         msg.s("valid syntax")
     odd: = odd_indent_name(src, pos)
@@ -639,6 +671,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     if append_missing_comma_hint(msg@, src, pos)
         return msg
     if append_leading_zero_hint(msg@, src, pos)
+        return msg
+    if append_integer_exponent_hint(msg@, src, pos)
         return msg
     // **Narrow it to "a `{` was expected".** "The next line is not deeper" alone holds for nearly
     // every line and would fire on unrelated errors; the expected set says if a level is needed.

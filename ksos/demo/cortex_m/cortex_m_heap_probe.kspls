@@ -2,15 +2,55 @@
 //<
 //< It runs, under QEMU (mps2-an385), the free-list allocator of `std/mem.kspls` through
 //< `ksos/kernel/heap.kspls` (the counterpart of `pvPortMalloc`, safe from a task and an ISR by
-//< irq_save/irq_restore), and `Arc<T>` on top of it.
+//< irq_save/irq_restore), `Arc<T>` on top of it, and tasks made and deleted on it
+//< (`ksos/kernel/dynamic.kspls`) far more times than the port has contexts.
 import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/dynamic" as dyn
 import "ksos/kernel/heap"
-import "std/mem" { Arena }
+import "ksos/kernel/task" + { Task }
+import "std/mem" { Arena, heap_used_bytes }
 import "std/refcount" { Arc }
 
-$heap_buf: U8[4096]
+$heap_buf: U8[8192]
 // Caution: Do not make it a local. Cortex-M's stack is small.
 $arena_buf: U8[1024]
+
+// 7's tasks: each round makes one of each way a task ends, so a context or a slot that one of
+// them fails to return runs the port's 33 contexts out within a dozen rounds.
+priv const churn_rounds: I32 = 40
+priv const churn_stack: Sz = 1024
+priv const churn_low: I32 = 1 // below the coordinator's 2: it never runs before its delete
+priv const churn_high: I32 = 3 // above it: it runs inside create_dyn
+$churn_made: I32 = 0
+$churn_ran: I32 = 0
+$tcb_churn: Task
+$stack_churn: U8[4096]
+
+fn churn_never(_arg: Void$@): Void //<
+    //< deleted by the coordinator before it runs; running is a fault
+    churn_ran += 1000
+fn churn_self(_arg: Void$@): Void //< deletes itself, inside its create_dyn; the next one reaps it
+    churn_ran += 1
+    Task.current().delete_dyn()
+fn churn_return(_arg: Void$@): Void //< returns from its entry; the coordinator deletes it then
+    churn_ran += 1
+
+fn churn_coord(_arg: Void$@): Void
+    for $i: I32 = 0; i < churn_rounds; i += 1
+        switch Task.create_dyn(churn_never, null, churn_low, "never", churn_stack)
+        case .some(t)
+            churn_made += 1
+            t.delete_dyn()
+        case .none {}
+        switch Task.create_dyn(churn_self, null, churn_high, "self", churn_stack)
+        case .some
+            churn_made += 1
+        case .none {}
+        switch Task.create_dyn(churn_return, null, churn_high, "return", churn_stack)
+        case .some(t)
+            churn_made += 1
+            t.delete_dyn()
+        case .none {}
 
 #export
 fn ksos_main()
@@ -104,6 +144,19 @@ fn ksos_main()
         if a == null || Sz::a % 8 != 0
             odd_align_ok = false
     con.check("Arena.from_buffer aligns an unaligned buffer", odd_align_ok)
+
+    // 7. Dynamic tasks ended every way (deleted by another, deleting itself, returning) give back
+    //    their context, slot, Task and stack. A context kept would make a later create hand out
+    //    none, and the first switch to that task would fault.
+    used_before: = heap_used_bytes()
+    tcb_churn.create(U8$[]::stack_churn, churn_coord, null, 2, "churn")
+    task.start_scheduler() // returns once churn_coord has returned
+    dyn.reap_pending() // the last self-deleted task waits for this
+    con.check("120 create_dyn / delete_dyn against 33 contexts all succeed",
+        churn_made == 3 * churn_rounds)
+    con.check("each churned task ran exactly as its kind should", churn_ran == 2 * churn_rounds)
+    con.check("every churned Task and stack went back to the heap",
+        heap_used_bytes() == used_before)
 
     con.print_summary("heap probe done")
     con.exit()

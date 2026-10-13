@@ -1,5 +1,6 @@
 //< Tests of the SQLite client, against an in-memory database (`":memory:"`)
 import "ksbind/db"
+import "std/fs"
 import "std/mem" { Arena }
 import "std/reflect"
 import "std/str" // `equals`
@@ -19,7 +20,7 @@ fn test_db_crud_roundtrip()
     $cut: = false
     _z: = db.Db.open(U8[]::nul_path) catch e
         switch e
-        case .open_failed
+        case .open_failed(_code)
             cut = true
         default {}
         fallback null
@@ -169,7 +170,7 @@ fn test_db_one_statement_at_a_time()
     $none_ran: = false
     _t: = conn.prepare("SELECT n FROM t") catch e
         switch e
-        case .prepare_failed
+        case .prepare_failed(_code)
             none_ran = true
         default {}
         fallback null
@@ -254,3 +255,52 @@ fn test_db_row_out_of_range()
     conn.free()
     verdict
         .pass("A value a field cannot hold is refused by the field's name, on reading and writing.")
+
+// ==========================================
+// SQLite's result code, carried by the error, tells one cause from another.
+// ==========================================
+priv fn code_of(e: db.Db_error): I32 //< the SQLite code an error carries, or -1 for one with none
+    switch e
+    case .open_failed(code)
+        return code
+    case .prepare_failed(code)
+        return code
+    case .bind_failed(code)
+        return code
+    case .step_failed(code)
+        return code
+    case .column_failed(code)
+        return code
+    default
+        return -1
+
+priv fn exec_code(conn: db.Db$@, sql: U8[]): I32 //< the code `exec` fails with, or 0 if it ran
+    conn.exec(sql) catch e
+        return code_of(e)
+    return 0
+
+priv const busy_path: U8[] = "out/ksbind_busy_test.db" //< the file two connections share
+
+fn test_db_error_codes()
+    verdict.start("[Db] an error carrying SQLite's result code test...")
+    conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
+    conn.exec("CREATE TABLE u (n INTEGER UNIQUE)") catch panic("create table should not fail")
+    conn.exec("INSERT INTO u (n) VALUES (1)") catch panic("the first insert should run")
+    assert(exec_code(conn, "INSERT INTO u (n) VALUES (1)") == 19,
+        "a broken UNIQUE constraint carries SQLITE_CONSTRAINT (19)")
+    assert(exec_code(conn, "SELEC 1") == 1, "a syntax error carries SQLITE_ERROR (1)")
+    conn.free()
+
+    // **A busy database is told from a broken constraint**: a second connection meets the lock.
+    fs.mkdir_all("out") catch panic("the folder for the shared file should be made")
+    fs.remove_path(busy_path) catch {}
+    holder: = db.Db.open(busy_path) catch panic("the shared file should open")
+    holder.exec("CREATE TABLE t (n INTEGER)") catch panic("create table should not fail")
+    holder.exec("BEGIN EXCLUSIVE") catch panic("the exclusive lock should be taken")
+    other: = db.Db.open(busy_path) catch panic("a second connection should open")
+    busy: = exec_code(other, "INSERT INTO t (n) VALUES (1)")
+    other.free()
+    holder.free()
+    fs.remove_path(busy_path) catch {}
+    assert(busy == 5, "a write against another connection's lock carries SQLITE_BUSY (5)")
+    verdict.pass("A broken constraint, a syntax error and a busy database carry their own codes.")

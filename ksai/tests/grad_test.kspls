@@ -218,7 +218,7 @@ fn test_adam(arena: Arena$@)
     w: = Tensor<|F32|>.new(Sz[]::w_shape, arena)
     w.fill(F32::0.0)
 
-    $opt: = ai_optim.Adam<|F32|>.new_default(w, 0.1)
+    $opt: = ai_optim.Adam<|F32|>.new_default(w)
     $loss0: = 0.0
     for step in Range.asc(100)
         $logits: = x.matmul(w) catch panic("matmul shape mismatch")
@@ -227,7 +227,7 @@ fn test_adam(arena: Arena$@)
             loss0 = loss
         dlogits: = logits.grad_softmax_cross_entropy(target)
         dw: = x.grad_matmul_weight(dlogits)
-        opt.step(w, dw) // the Adam update
+        opt.step(w, dw, 0.1) // the Adam update
     $final_logits: = x.matmul(w) catch panic("matmul shape mismatch")
     loss_final: = final_logits.cross_entropy_loss(target)
     pred: = ai_sampler.argmax(final_logits)
@@ -410,17 +410,20 @@ fn test_updater_pairs_states(arena: Arena$@) //<
     b_ref: = filled(5, -1.0, arena)
     $u: = ai_optim.Updater<|F32|>.adam(0.1)
     defer u.free()
-    $adam_a: = ai_optim.Adam<|F32|>.new_default(a_ref, 0.1)
-    $adam_b: = ai_optim.Adam<|F32|>.new_default(b_ref, 0.1)
+    $adam_a: = ai_optim.Adam<|F32|>.new_default(a_ref)
+    $adam_b: = ai_optim.Adam<|F32|>.new_default(b_ref)
     for step in Range.asc(3)
         ga: = filled(3, F32::(F64::(step + 1) * 0.5), arena)
         gb: = filled(5, F32::(F64::(step + 1) * -0.25), arena)
+        // **The rate changes every step**, as a schedule changes it: each step must use its own.
+        u.lr = 0.1 / F64::(step + 1)
         u.begin_step()
         u.update(a, ga)
         u.update(b, gb)
-        adam_a.step(a_ref, ga)
-        adam_b.step(b_ref, gb)
-    assert(same(a, a_ref) && same(b, b_ref), "the Updater's Adam must move each weight as its own")
+        adam_a.step(a_ref, ga, u.lr)
+        adam_b.step(b_ref, gb, u.lr)
+    assert(same(a, a_ref) && same(b, b_ref),
+        "the Updater's Adam must move each weight as its own, at the rate of that step")
     s: = filled(3, 1.0, arena)
     $s_ref: = filled(3, 1.0, arena)
     $sgd: = ai_optim.Updater<|F32|>.sgd(0.1)
@@ -430,4 +433,6 @@ fn test_updater_pairs_states(arena: Arena$@) //<
     sgd.update(s, g)
     s_ref.sgd_step(g, 0.1)
     assert(same(s, s_ref), "the Updater's SGD must be sgd_step")
-    verdict.pass("each weight keeps its own Adam state across steps, and SGD is sgd_step")
+    verdict
+        .pass("each weight keeps its own Adam state across steps at each step's rate, and SGD is \
+            sgd_step")

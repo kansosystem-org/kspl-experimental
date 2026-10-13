@@ -353,6 +353,22 @@ fn arc_retain_copied_value(value: Ast_node$@, lctx: Lowering_ctx$@) //<
     if src: = value.arc_bare_copy_source()
         emit_managed_op(lctx, src.clone(), src.type_id, "retain", lctx.pre_stmts, 0)
 
+struct Arc_assign //< what an assignment to a managed place owes once its right side is lowered
+    dst: Ast_node$@ //< the place whose old value is released, cloned; null when none is owed
+    type_id: I32 //< the place's type
+    through_call: Bool //< whether the right side is read through a call's pointer (a late retain)
+
+fn arc_retain_lowered(value: Ast_node$@, lctx: Lowering_ctx$@) //<
+    //< The retain for a copy read through a call's pointer, once lowering took the call out of it
+    //<
+    //< arc_reads_through_call decided it before lowering; the lowered read now names a temporary
+    //< (lower_expr_postfix), so cloning it runs nothing twice.
+    if value == null
+        return
+    value.ice_assert(!value.arc_has_call(0),
+        "arc_retain_lowered: the lowered read still holds a call, so its clone would run it twice")
+    emit_managed_op(lctx, value.clone(), value.type_id, "retain", lctx.pre_stmts, 0)
+
 fn arc_release_now(value: Ast_node$@, lctx: Lowering_ctx$@) //<
     //< Releases a fresh managed value nothing takes, already lowered, right where it is computed
     //<
@@ -384,7 +400,7 @@ impl Ast_node
             return false
         if _src: = r.arc_bare_copy_source()
             return false
-        return true
+        return !r.arc_reads_through_call(lctx)
 
     fn arc_hoist_owned(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< Lowers a fresh managed value into a temporary the enclosing scope releases; refers to it
@@ -462,6 +478,59 @@ impl Ast_node
             return .some(curr)
         return .none
 
+    fn arc_reads_through_call(r: Self$@, lctx: Lowering_ctx$@): Bool //<
+        //< Whether it copies a managed value out of memory a call's pointer leads to (`b.get().v`)
+        //<
+        //< **Such a copy reads existing memory, so it needs a retain** like any place's. It is not
+        //< a fresh value: `get()` hands back a pointer, not a counted result, and taken as one, the
+        //< copy's release freed a value the box still held.
+        //< The retain's receiver cannot be a clone (the call would run twice), so lowering moves
+        //< the pointer into a temporary first (`lower_expr_postfix`), and the retain clones the
+        //< lowered read. Decide it before lowering, as arc_bare_copy_source is decided.
+        if r == null || !lctx.sema.env.type_is_managed(r.type_id)
+            return false
+        if _src: = r.arc_bare_copy_source()
+            return false
+        return r.arc_pointer_read(lctx, 0)
+
+    priv fn arc_pointer_read(r: Self$@, lctx: Lowering_ctx$@, depth: Sz): Bool //<
+        //< Whether a chain of `.` / `[` / `$` reaches its memory through a pointer a call yields
+        if r == null || depth >= max_arc_place_depth
+            return false
+        if r.kind_id == .k_expr_primary && r.children.len > 0
+            return r.get_primary_inner_expr().arc_pointer_read(lctx, depth + 1)
+        if r.kind_id != .k_expr_postfix || r.get_postfix_op() == null ||
+            r.def_node.is_fn_decl()
+            return false
+        op: = r.get_postfix_op().text
+        recv: = r.get_postfix_receiver()
+        if recv == null
+            return false
+        through: =
+            lctx.sema.env.is_pointer(recv.type_id) ||
+            (op.equals("[") && lctx.sema.env.is_slice(recv.type_id))
+        if op.equals("$")
+            return through && recv.arc_has_call(depth + 1)
+        if !op.equals(".") && !op.equals("[")
+            return false
+        if through
+            return recv.arc_has_call(depth + 1)
+        return recv.arc_pointer_read(lctx, depth + 1)
+
+    fn arc_needs_pointer_hoist(r: Self$@, lctx: Lowering_ctx$@): Bool //<
+        //< Whether this `.` / `$` reads a managed value through a pointer a call yields
+        //<
+        //< lower_expr_postfix moves that pointer into a temporary, so the lowered read holds no
+        //< call and a retain can clone it. The order of the operands around it is already fixed by
+        //< then (`Operand_order`), and a short-circuit operand keeps its hoists in its own block.
+        if !lctx.in_fn_body || !lctx.sema.env.type_is_managed(r.type_id) ||
+            r.kind_id != .k_expr_postfix || r.get_postfix_op() == null
+            return false
+        op: = r.get_postfix_op().text
+        recv: = r.get_postfix_receiver()
+        return (op.equals(".") || op.equals("$")) && recv != null &&
+            lctx.sema.env.is_pointer(recv.type_id) && recv.arc_has_call(0)
+
     priv fn arc_unwrapped(r: Self$@): Ast_node$@ //< the expression a parenthesis holds, or itself
         if r != null && r.kind_id == .k_expr_primary && r.children.len > 0
             return r.get_primary_inner_expr()
@@ -516,42 +585,61 @@ impl Ast_node
         //< gen/llvm/expr_agg.kspls).
         $ops: = Operand_order.new()
         defer ops.free()
+        $late: = List<|Ast_node$@|>.new(null)
+        defer late.free()
         for child in r.children
             if child.kind_id == .k_expr_field_init
                 arc_retain_copied_value(child.get_field_init_expr(), lctx)
+                if child.get_field_init_expr().arc_reads_through_call(lctx)
+                    late.push(child)
                 ops.add(child, child.children.len - 1, false)
         ops.apply(lctx)
         r.lower_default(lctx)
+        // Read once lowered: a field Operand_order moved now names its temporary.
+        for child in late
+            arc_retain_lowered(child.get_field_init_expr(), lctx)
 
     fn lower_arc_enum_init_call(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< An enum's payload construction `E.variant(x)`
         args: = r.find_child(.k_expr_args)
+        $late: = List<|Sz|>.new(null)
+        defer late.free()
         if args != null
-            for arg in args.children
+            for i in Range.asc(args.children.len)
+                arg: = args.get_child(i)
                 if !arg.is_literal(",")
                     arc_retain_copied_value(arg, lctx)
+                    if arg.arc_reads_through_call(lctx)
+                        late.push(i)
             $ops: = Operand_order.new()
             defer ops.free()
             ops.add_args(args)
             ops.apply(lctx)
         r.lower_default(lctx)
+        for i in late
+            arc_retain_lowered(args.get_child(i), lctx)
 
-    fn lower_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@) //<
-        //< An assignment to an existing binding, `dst = src;`
+    fn lower_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@): Arc_assign //<
+        //< What an assignment to an existing binding (`dst = src;`) owes, decided before lowering
         //<
-        //< It retains src and releases dst's overwritten value (else it leaks). **The retain comes
-        //< first**, for when src and dst are the same object.
+        //< It retains src and releases dst's overwritten value (else it leaks). **The release waits
+        //< until src is lowered and held** (finish_arc_assign): src's own retains are inserted as
+        //< it lowers, so released first, `head = Rc.new(Node::{ .next = head })` freed `head`
+        //< before retaining it, and `head = head.get().next` read a node already freed.
+        $owed: = Arc_assign::{ .dst = null, .type_id = 0, .through_call = false }
         op: = r.get_assign_op()
         if op == null || !op.text.equals("=")
-            return
+            return owed
         left: = r.get_assign_left()
         right: = r.get_assign_right()
         if left == null || right == null || !lctx.sema.env.type_is_managed(left.type_id)
-            return
+            return owed
         arc_retain_copied_value(right, lctx)
+        owed.type_id = left.type_id
+        owed.through_call = right.arc_reads_through_call(lctx)
         switch left.arc_bare_copy_source()
         case .some(dst)
-            emit_managed_op(lctx, dst.clone(), left.type_id, "release", lctx.pre_stmts, 0)
+            owed.dst = dst.clone()
         case .none
             // Caution: **Never omit the release silently.** Here the left side contains a call
             // (`rc.get().f = x`): a cloned receiver runs the call twice, and no release leaks
@@ -562,14 +650,34 @@ impl Ast_node
                     "cannot assign to an ARC-managed location whose left side contains a call: the \
                         overwritten value could not be released. Take the location into a binding \
                         first (for example 'p: = rc.get(); p.field = ...')")
+        return owed
 
-    fn lower_arc_call_arg_retains(r: Self$@, lctx: Lowering_ctx$@) //<
+    fn finish_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@, owed: Arc_assign) //<
+        //< What lower_arc_assign decided, once the right side is lowered
+        //<
+        //< The right side is held in a temporary before the old value goes, so neither its retains
+        //< nor its reads come after the release: `tmp = src; retain; release(dst); dst = tmp`, the
+        //< order Swift uses.
+        if owed.dst == null && !owed.through_call
+            return
+        $right: = r.get_assign_right()
+        if owed.dst != null
+            right = right.hoist_to_tmp(lctx, r.loc)
+            r.set_child(2, right)
+        if owed.through_call
+            arc_retain_lowered(right, lctx)
+        if owed.dst != null
+            emit_managed_op(lctx, owed.dst, owed.type_id, "release", lctx.pre_stmts, 0)
+
+    fn lower_arc_call_arg_retains(r: Self$@, lctx: Lowering_ctx$@, late: List<|Sz|>$@) //<
         //< It inserts a retain on each call argument passing a bare binding as an ARC-managed value
         //<
         //< The call is an expr_postfix of the "(" shape. A parameter that is a borrowed pointer is
         //< excluded.
         //< It pairs with the callee's release (register_arc_params), balancing the count across the
         //< call (Swift's +1 transfer). On a method call parameter[0] is the receiver, skipped.
+        //< An argument read through a call's pointer goes into `late`, by its index: its retain
+        //< waits for lowering (arc_retain_late_args).
         recv: = r.safe_get_child(0)
         if recv == null
             return
@@ -583,13 +691,22 @@ impl Ast_node
             return
         $params: = base_ast_ext.Param_cursor
             .new(callee.get_fn_params(), recv.kind_id == .k_method_access)
-        for arg in args.children
+        for i in Range.asc(args.children.len)
+            arg: = args.get_child(i)
             switch params.next()
             case .some(p)
                 if lctx.sema.env.type_is_managed(p.param_type_id())
                     arc_retain_copied_value(arg, lctx)
+                    if arg.arc_reads_through_call(lctx)
+                        late.push(i)
             case .none
                 break
+
+    fn arc_retain_late_args(r: Self$@, lctx: Lowering_ctx$@, late: List<|Sz|>@) //<
+        //< The retains lower_arc_call_arg_retains left for after lowering, on the lowered arguments
+        args: = r.safe_get_child(2)
+        for i in late
+            arc_retain_lowered(args.get_child(i), lctx)
 
     fn lower_arc_var_decl(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It lowers the decl_var, adding retain and release where its type is ARC-managed
@@ -604,11 +721,13 @@ impl Ast_node
         $type_id: I32 = 0
         $src_clone: Ast_node$@ = null
         has_expr: = expr_node != null && expr_node.kind_id != .k_empty
+        $through_call: = false
         if has_expr
             type_id = expr_node.type_id
             if lctx.sema.env.type_is_managed(type_id)
                 if src: = expr_node.arc_bare_copy_source()
                     src_clone = src.clone()
+                through_call = expr_node.arc_reads_through_call(lctx)
 
         r.lower_default(lctx)
 
@@ -617,5 +736,7 @@ impl Ast_node
         // A copy gets a retain (chained per ARC field for a struct); a call's result is already +1.
         if src_clone != null
             emit_managed_op(lctx, src_clone, src_clone.type_id, "retain", lctx.pre_stmts, 0)
+        if through_call
+            arc_retain_lowered(r.get_var_decl_expr(), lctx)
         if id_node != null
             lctx.register_arc_release(id_node, type_id)

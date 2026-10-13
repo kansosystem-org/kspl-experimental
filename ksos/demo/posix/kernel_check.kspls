@@ -1,4 +1,4 @@
-//< Seven kernel promises that looking right does not prove
+//< Eight kernel promises that looking right does not prove
 //<
 //< Each is a place where the obvious reading and the real behaviour differ, so each is checked
 //< here rather than left to watching a demo.
@@ -14,7 +14,8 @@
 // ==========================================
 //   5. A `delay_until` to a past time returns without waiting.
 //   6. Unlock returns a lent priority.
-//   7. Once the task limit is reached, `Task.create` returns false and registers nothing more.
+//   7. Deleting a task that waits on a mutex returns what it lent the holder.
+//   8. Once the task limit is reached, `Task.create` returns false and registers nothing more.
 // ==========================================
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
@@ -43,7 +44,7 @@ priv const max_tasks: Sz = 32 //<
     //< It equals the kernel's `max_tasks`, which is priv, so the number is repeated here and
     //< checked against it. Only `delete` frees a slot; a task that returned from its entry and
     //< became done keeps its slot. Deleting `gone` in check 4 frees one, so the free room is 32 - 8
-    //< + 1.
+    //< + 1 (`lender` in check 7 takes a slot and gives it back).
 priv const fixed_tasks: Sz = 8 // coord + lo/mid/hi + first/second + hold + gone
 priv const freed_by_delete: Sz = 1 // gone
 priv const free_slots: Sz = max_tasks - fixed_tasks + freed_by_delete
@@ -58,6 +59,7 @@ $tcb_first: Task
 $tcb_second: Task
 $tcb_hold: Task
 $tcb_gone: Task
+$tcb_lender: Task
 $tcb_filler: Task[26]
 $stack_coord: U8[65536]
 $stack_lo: U8[65536]
@@ -67,6 +69,7 @@ $stack_first: U8[65536]
 $stack_second: U8[65536]
 $stack_hold: U8[65536]
 $stack_gone: U8[65536]
+$stack_lender: U8[65536]
 $stack_filler: U8[851968] // filler_slots × filler_stack
 
 fn waiter(arg: Void$@): Void //< 1. All three wait on the same semaphore
@@ -105,6 +108,11 @@ fn holder(_arg: Void$@): Void //< 3. The task suspended while it waits
 fn goner(_arg: Void$@): Void //< 4. The task deleted while it waits
     g_sem_gone.take()
     g_gone_progress = 1
+
+fn lender(_arg: Void$@): Void //< 7. It outranks coord, so it lends coord its priority, then waits
+    g_mutex.lock()
+    g_mutex.unlock()
+priv const lender_prio: I32 = 6 // above coord's 4
 
 fn filler_entry(_arg: Void$@): Void {}
 
@@ -174,7 +182,19 @@ fn coordinator(_arg: Void$@): Void
         "kernel_check: lock/unlock changed the holder's priority")
     verdict.pass("merely taking and letting go does not move the priority.")
 
-    // --- 7. the cap on seats ---
+    // --- 7. a deleted waiter's loan is taken back ---
+    verdict.start("[ksos] deleting a waiter returns what it lent")
+    g_mutex.lock()
+    // lender outranks coord, so it runs inside create, finds the mutex held, lends and waits.
+    tcb_lender.create(U8$[]::stack_lender, lender, null, lender_prio, "lender")
+    assert(tcb_coord.get_prio() == lender_prio, "kernel_check: the waiter did not lend its priority")
+    tcb_lender.delete()
+    assert(tcb_coord.get_prio() == my_prio,
+        "kernel_check: the holder kept the priority of a waiter that was deleted")
+    g_mutex.unlock()
+    verdict.pass("once the waiter is deleted, the holder runs at its own priority again.")
+
+    // --- 8. the cap on seats ---
     verdict.start("[ksos] Task.create refuses past the limit")
     $made: Sz = 0
     $refused: Sz = 0

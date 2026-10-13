@@ -114,6 +114,19 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return S_ISLNK(st.st_mode) ? 1 : 0;
 }
 
+/* Gives `to` the permission bits `from` has (for std/fs.kspls's copy_tree): 0 = done, -1 = refused.
+ * **A copy written through write_file has the default mode**, so a script copied with the tree
+ * would lose its execute bit, and a private file would become readable by others. */
+KSPL_LINK I32 kspl_copy_mode(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
+    char from[4096];
+    char to[4096];
+    struct stat st;
+    if (!kspl_to_cstr(from_ptr, from_len, from, sizeof(from))) return -1;
+    if (!kspl_to_cstr(to_ptr, to_len, to, sizeof(to))) return -1;
+    if (stat(from, &st) != 0) return -1;
+    return chmod(to, st.st_mode & 07777) == 0 ? 0 : -1;
+}
+
 KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return -1;
@@ -402,6 +415,23 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     if (h == INVALID_HANDLE_VALUE) return -1;
     FindClose(h);
     return (fd.dwReserved0 & IO_REPARSE_TAG_NAME_SURROGATE_BIT) ? 1 : 0;
+}
+
+/* The POSIX side's meanings. Windows keeps no permission bits on a file; what it has of the kind
+ * is the read-only attribute, so that is what is carried over. */
+KSPL_LINK I32 kspl_copy_mode(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
+    wchar_t from[KSPL_WPATH_CAP];
+    wchar_t to[KSPL_WPATH_CAP];
+    DWORD src;
+    DWORD dst;
+    if (!kspl_path_to_wide(from_ptr, from_len, from, KSPL_WPATH_CAP)) return -1;
+    if (!kspl_path_to_wide(to_ptr, to_len, to, KSPL_WPATH_CAP)) return -1;
+    src = GetFileAttributesW(from);
+    dst = GetFileAttributesW(to);
+    if (src == INVALID_FILE_ATTRIBUTES || dst == INVALID_FILE_ATTRIBUTES) return -1;
+    if ((src & FILE_ATTRIBUTE_READONLY) == (dst & FILE_ATTRIBUTE_READONLY)) return 0;
+    dst = (dst & ~FILE_ATTRIBUTE_READONLY) | (src & FILE_ATTRIBUTE_READONLY);
+    return SetFileAttributesW(to, dst) ? 0 : -1;
 }
 
 KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {

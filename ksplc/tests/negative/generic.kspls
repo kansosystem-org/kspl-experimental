@@ -1,6 +1,26 @@
 //< Generics: type arguments, constraints and inference
 //<
 //< Each case below is compiled alone, as the file its head names.
+// ==== case generic_body_error_once
+//< A mistake in a generic's body is reported once, however many instances meet it
+//<
+//< Each instance found it again with its own type in the text, so three calls gave three errors
+//< at one place, and the follow-on "cannot infer" of the later instances came on top.
+// EXPECT: generic_body_error_once.kspls:12:11: error: type 'generic_body_error_once.P' has no field
+// EXPECT-NOT: type 'I32' has no field
+// EXPECT-NOT: cannot infer type for 'q'
+struct P
+  x: I32
+
+fn f<|T|>(v: T): T
+  _q: = v.nofield
+  return v
+
+fn main(): I32
+  _a: = f(P::{ .x = 1 })
+  _b: = f(1)
+  _c: = f(2I64)
+  return 0
 // ==== case generic_call_arg_types
 //< A generic call's arguments are checked against the parameter types after instantiation too
 //<
@@ -241,6 +261,32 @@ fn main(): I32
   // The passing side.
   ok: Op = same<|I32|>
   return ok(0) + bare() + wrong_type() + stray_on_value() + stray_on_call()
+// ==== case generic_method_chain_too_deep
+//< A method that builds its own type one level deeper each time is stopped at the chain's limit
+//<
+//< **One error, at the cut.** The instance left unbuilt has no methods, and the call reaching it
+//< used to add "has no field or method", naming a type 32 levels deep and suggesting an import.
+// EXPECT: generic method table chain too deep: 'generic_method_chain_too_deep.Box2' came out nested
+// EXPECT-NOT: has no field or method
+struct Box2<|S|>
+  inner: S
+
+struct Chain<|S|>
+  v: S
+  n: I32
+
+impl<|S|> Chain<|S|>
+  fn deeper(r: Self): Chain<|Box2<|S|>|>
+    return Chain<|Box2<|S|>|>::{ .v = Box2<|S|>::{ .inner = r.v }, .n = r.n }
+
+  fn walk(r: Self, d: I32): I32
+    if d <= 0
+      return r.n
+    return r.deeper().walk(d - 1)
+
+fn main(): I32
+  c: = Chain<|I32|>::{ .v = 1, .n = 2 }
+  return c.walk(3)
 // ==== case generic_spelling_in_diagnostic
 //< A type in a diagnostic is shown as the user wrote it
 //<

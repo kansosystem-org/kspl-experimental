@@ -197,12 +197,33 @@ priv fn names_this_server(req: http.Request$@): Bool //<
     return name.equals(local_host) || name.equals_ignore_case("localhost")
 
 priv fn wants_close(req: http.Request$@): Bool //<
-    //< Whether the client wants the connection closed
+    //< Whether the connection closes after this answer (RFC 9112 §9.3)
     //<
-    //< It closes only on an explicit `Connection: close` (HTTP/1.1's default is keep-alive).
-    if v: = req.headers.find("Connection")
-        return v.equals_ignore_case("close")
-    return false
+    //< `close` among the `Connection` tokens closes it. Otherwise HTTP/1.1 stays open, and
+    //< HTTP/1.0 only when it lists `keep-alive`. Caution: **Do not keep a 1.0 client open
+    //< unasked**: it reads the answer to the close, so it waits until `idle_conn_us` drops it.
+    $close: = false
+    $keep: = false
+    $node: = req.headers
+    for node != null
+        if node.name.equals_ignore_case("Connection")
+            close = close || lists_token(node.value, "close")
+            keep = keep || lists_token(node.value, "keep-alive")
+        node = node.next
+    v: = req.version // `HTTP/d.d`, as the parser checked
+    open_by_default: = v[5] > '1' || (v[5] == '1' && v[7] >= '1')
+    return close || !(open_by_default || keep)
+
+priv fn lists_token(list: U8[], want: U8[]): Bool //<
+    //< Whether a comma-separated header value holds `want`, in any case (`close, TE` holds `close`)
+    $rest: = list
+    for
+        cut: = rest.find_char(',').unwrap_or(rest.len)
+        if rest.sub(0, cut).trim_spaces().equals_ignore_case(want)
+            return true
+        if cut >= rest.len
+            return false
+        rest = rest.sub_from(cut + 1)
 
 // ==========================================
 // Static files
@@ -234,7 +255,7 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         return
     // Static serving is GET/HEAD only (the API's POST branched off before this).
     if !is_get && !is_head
-        conn.queue_error(c, 405)
+        conn.queue_error(c, 405, "GET, HEAD")
         return
 
     $rel: U8[] = ""

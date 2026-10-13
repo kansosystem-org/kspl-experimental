@@ -57,10 +57,12 @@ static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width
     return amount;
 }
 
-/* std/libc.kspls's `get_stdout` / `get_stderr` (the substance is in hosted.c). genc puts no
- * prototype out for std/libc's functions, a standard header having them (`emit_fwd_extern_decls`
- * in ksplc/gen/c/decl.kspls); these two are in none, so they are declared here.
+/* std/libc.kspls's `get_stdin` / `get_stdout` / `get_stderr` (the substance is in hosted.c). genc
+ * puts no prototype out for std/libc's functions, a standard header having them
+ * (`emit_fwd_extern_decls` in ksplc/gen/c/decl.kspls); these three are in none, so they are
+ * declared here.
  * Caution: **Do not make them static inline**: the LLVM artifact borrows them from the runtime. */
 
+KSPL_LINK void* get_stdin(void);
 KSPL_LINK void* get_stdout(void);
 KSPL_LINK void* get_stderr(void);

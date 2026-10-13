@@ -29,7 +29,7 @@ Most tools come in pairs: the program you run, which holds `main`, and a second 
 | `ai_assist/` | The coding assistant's data, evaluation and training pipeline, with its own tests ([its guide](ai_assist/README.md)). |
 | `release-assets/` | What the release zip carries beside the executable (its own `README.md` and the `.vscode/` settings), copied in by `.github/workflows/release.yml`. |
 | `tests/` | The tools' tests, two files by subject: `page_test.kspls` (the URL that opens kspage, the surface listing and the tour page) and `repo_test.kspls` (the repository's file statistics, and how the CI's sets are dealt out and summed up). `all.kspls` runs them, and `ai_assist/tests/` too; `main.kspls` gives them a `main` for `make debug-tools`. |
-| `docs/` | This folder's documents: the design and what is left ("Further reading" below). |
+| `docs/` | This folder's document: the design ("Further reading" below). |
 
 ## Files near the limit and how they split
 

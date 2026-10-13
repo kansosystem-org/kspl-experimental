@@ -9,9 +9,11 @@
 //   Mutex a priority-inheriting mutex (it prevents priority inversion)
 //   Event event flags (waiting on the AND/OR of several events)
 // ==========================================
-import "ksos/kernel/task" + { Task }
+import "ksos/kernel/task"
 
 // ============================ The counting semaphore ============================
+// Every primitive waits through one loop per direction, `*_until(…, deadline)`: the bare form
+// passes none (wait until woken) and `_for` a deadline, so a fix to the loop reaches both.
 struct Sem
     priv count: I32
 
@@ -21,14 +23,7 @@ impl Sem
     fn take(r: Self$@) //< takes one from the count if there is one, and blocks if not
         //<
         //< Once woken it checks the condition again (wake-and-recheck).
-        $st: = task.irq_save()
-        defer task.irq_restore(st)
-        for
-            if r.count > 0
-                r.count -= 1
-                return
-            _cur: = task.require_current()
-            st = task.block_and_rearm(Void$@::r, st)
+        r.take_until(.none)
     fn give(r: Self$@) //<
         //< Raises the count and wakes one waiting task if there is one
         //<
@@ -52,17 +47,18 @@ impl Sem
         //< true if it took one within ticks ticks, false on the timeout (the deadline is an
         //< absolute time, so waiting again does not restart it).
         assert(ticks > 0, "Sem.take_for: ticks must be greater than 0 (try_take waits for nothing)")
+        return r.take_until(.some(task.deadline_after(ticks)))
+    priv fn take_until(r: Self$@, deadline: U64?): Bool //< false once deadline passes
         $st: = task.irq_save()
         defer task.irq_restore(st)
-        deadline: = task.current_tick() + ticks
         for
             if r.count > 0
                 r.count -= 1
                 return true
             _cur: = task.require_current()
-            if task.current_tick() >= deadline
+            if task.deadline_passed(deadline)
                 return false
-            st = task.block_and_rearm_until(Void$@::r, deadline, st)
+            st = task.block_and_rearm(Void$@::r, deadline, st)
 
 // ============================ The bounded message queue ============================
 struct Queue<|T|> //<
@@ -107,49 +103,43 @@ impl<|T|> Queue<|T|>
     fn send(r: Self$@, v: T) //< blocks while it is full, until there is room
         //<
         //< Writes into the free slot and wakes a receiver waiting for data.
-        $st: = task.irq_save()
-        defer task.irq_restore(st)
-        for r.count >= r.cap
-            _cur: = task.require_current()
-            st = task.block_and_rearm(Void$@::r.cap@, st) // full -> waiting for room
-        r.push_locked(v)
+        r.send_until(v, .none)
     fn recv(r: Self$@): T //< blocks while it is empty, until data arrives
         //<
         //< Takes the first element and wakes a sender waiting for room.
-        $st: = task.irq_save()
-        defer task.irq_restore(st)
-        for r.count == 0
-            _cur: = task.require_current()
-            st = task.block_and_rearm(Void$@::r.count@, st) // empty -> waiting for data
-        return r.pop_locked()
+        for // with no deadline recv_until never comes back empty; this only takes the value out
+            if v: = r.recv_until(.none)
+                return v
     fn send_for(r: Self$@, v: T, ticks: U64): Bool //< send with a timeout
         //<
         //< true if room appeared and it wrote, false if it stayed full until the timeout.
         assert(ticks > 0,
             "Queue.send_for: ticks must be greater than 0 (try_send waits for nothing)")
-        $st: = task.irq_save()
-        defer task.irq_restore(st)
-        deadline: = task.current_tick() + ticks
-        for r.count >= r.cap
-            _cur: = task.require_current()
-            if task.current_tick() >= deadline
-                return false
-            st = task.block_and_rearm_until(Void$@::r.cap@, deadline, st)
-        r.push_locked(v)
-        return true
+        return r.send_until(v, .some(task.deadline_after(ticks)))
     fn recv_for(r: Self$@, ticks: U64): T? //< recv with a timeout
         //<
         //< some if something arrived, none if it stayed empty until the timeout.
         assert(ticks > 0,
             "Queue.recv_for: ticks must be greater than 0 (try_recv waits for nothing)")
+        return r.recv_until(.some(task.deadline_after(ticks)))
+    priv fn send_until(r: Self$@, v: T, deadline: U64?): Bool //< false once deadline passes
         $st: = task.irq_save()
         defer task.irq_restore(st)
-        deadline: = task.current_tick() + ticks
+        for r.count >= r.cap
+            _cur: = task.require_current()
+            if task.deadline_passed(deadline)
+                return false
+            st = task.block_and_rearm(Void$@::r.cap@, deadline, st) // full -> waiting for room
+        r.push_locked(v)
+        return true
+    priv fn recv_until(r: Self$@, deadline: U64?): T? //< none once deadline passes
+        $st: = task.irq_save()
+        defer task.irq_restore(st)
         for r.count == 0
             _cur: = task.require_current()
-            if task.current_tick() >= deadline
+            if task.deadline_passed(deadline)
                 return .none
-            st = task.block_and_rearm_until(Void$@::r.count@, deadline, st)
+            st = task.block_and_rearm(Void$@::r.count@, deadline, st) // empty -> waiting for data
         return .some(r.pop_locked())
     fn try_send(r: Self$@, v: T): Bool //< send's non-blocking version
         //<
@@ -179,38 +169,37 @@ struct Mutex //<
     //< holds, recomputed on every release, so the mutexes may be released in any order. A nested
     //< inheritance chain (the holder itself waiting on a mutex held by a third task) is not
     //< followed.
-    priv holder: Task$@ //< the current holder (null when free)
-    priv next_held: Mutex$@ //< the next in the holder's list of mutexes held (Task.held_mutexes)
+    priv own: task.Holding //< the holder, kept by the kernel core; waiters wait on its address
 
 impl Mutex
     fn init(r: Self$@)
-        r.holder = null
-        r.next_held = null
-    priv fn take_by(r: Self$@, me: Task$@) //<
-        //< [Call it inside a critical section] Makes me the holder, and adds r to me's held mutexes
-        r.holder = me
-        r.next_held = Mutex$@::me.held_mutexes
-        me.held_mutexes = Void$@::r
-    priv fn release_by(r: Self$@, h: Task$@) //<
-        //< [Call it inside a critical section] Frees r and takes it out of h's held mutexes
-        //<
-        //< It then sets h's priority to what the mutexes h still holds lend it (lent_prio).
-        $prev: Mutex$@ = null
-        $m: = Mutex$@::h.held_mutexes
-        for m != null && m != r
-            prev = m
-            m = m.next_held
-        if prev == null
-            h.held_mutexes = Void$@::r.next_held
-        else
-            prev.next_held = r.next_held
-        r.next_held = null
-        r.holder = null
-        h.prio = lent_prio(h)
+        r.own.init()
     fn lock(r: Self$@) //< if it is free, takes it and adds it to the holder's held mutexes
         //<
         //< On contention it raises the holder to the requester's priority (priority inheritance),
         //< blocks, and tries again once woken.
+        r.lock_until(.none)
+    fn try_lock(r: Self$@): Bool //< lock's non-waiting version
+        //<
+        //< true if it was free and is now taken; false if anyone holds it, the caller included.
+        //< From an ISR it panics like the other task-only calls.
+        st: = task.irq_save()
+        defer task.irq_restore(st)
+        me: = task.require_current()
+        if r.own.get_holder() != null
+            return false
+        r.own.take(me)
+        return true
+    fn lock_for(r: Self$@, ticks: U64): Bool //< lock with a timeout
+        //<
+        //< true if it was taken, false if the holder did not release it before the timeout.
+        assert(ticks > 0,
+            "Mutex.lock_for: ticks must be greater than 0 (try_lock waits for nothing)")
+        return r.lock_until(.some(task.deadline_after(ticks)))
+    priv fn lock_until(r: Self$@, deadline: U64?): Bool //< false once deadline passes
+        //<
+        //< Caution: **When giving up, return the lent priority**, or the holder keeps running at
+        //< the high priority with nobody left waiting.
         $st: = task.irq_save()
         defer task.irq_restore(st)
         // Even the free path records the holder's priority, so the current task is checked first.
@@ -219,83 +208,38 @@ impl Mutex
         // itself, a hang with no diagnostic (it is not reentrant: with a count, a miscounted unlock
         // would silently delay the release). Keep the message a fixed string (no allocation on a
         // panic's path).
-        if r.holder == me
+        if r.own.get_holder() == me
             panic("ksos: Mutex.lock by the holder itself (the mutex is not reentrant)")
         for
-            if r.holder == null
-                r.take_by(me)
-                return
-            // Contention: lend the requester's priority to the holder.
-            h: = r.holder
-            if h.prio < me.prio
-                h.prio = me.prio
-            st = task.block_and_rearm(Void$@::r, st)
-    fn try_lock(r: Self$@): Bool //< lock's non-waiting version
-        //<
-        //< true if it was free and is now taken; false if anyone holds it, the caller included.
-        //< From an ISR it panics like the other task-only calls.
-        st: = task.irq_save()
-        defer task.irq_restore(st)
-        me: = task.require_current()
-        if r.holder != null
-            return false
-        r.take_by(me)
-        return true
-    fn lock_for(r: Self$@, ticks: U64): Bool //< lock with a timeout
-        //<
-        //< true if it was taken, false if the holder did not release it before the timeout.
-        //< Caution: **When giving up, return the lent priority**, or the holder keeps running at
-        //< the high priority with nobody left waiting.
-        assert(ticks > 0,
-            "Mutex.lock_for: ticks must be greater than 0 (try_lock waits for nothing)")
-        $st: = task.irq_save()
-        defer task.irq_restore(st)
-        me: = task.require_current()
-        if r.holder == me
-            panic("ksos: Mutex.lock by the holder itself (the mutex is not reentrant)")
-        deadline: = task.current_tick() + ticks
-        for
-            if r.holder == null
-                r.take_by(me)
+            h: = r.own.get_holder()
+            if h == null
+                r.own.take(me)
                 return true
-            h: = r.holder
-            if task.current_tick() >= deadline
-                h.prio = lent_prio(h) // me no longer waits, so what it lent goes back
+            if task.deadline_passed(deadline)
+                h.prio = task.lent_prio(h) // me no longer waits, so what it lent goes back
                 return false
+            // Contention: lend the requester's priority to the holder.
             if h.prio < me.prio
                 h.prio = me.prio
-            st = task.block_and_rearm_until(Void$@::r, deadline, st)
+            st = task.block_and_rearm(Void$@::r.own@, deadline, st)
     fn unlock(r: Self$@) //<
         //< Wakes one waiter, and lowers the holder to what the mutexes it still holds lend it
         //<
         //< That is its own priority once it holds none. A woken waiter that outranks it runs at
-        //< once.
+        //< once. From an ISR it panics like lock (an ISR holds nothing).
         //< Caution: **An unlock by a non-holder, or of a free mutex, is stopped.** If it were
         //< ignored, the caller would believe it had released it and mutual exclusion would lapse
         //< with no diagnostic; a return value could go unread, so it panics.
         st: = task.irq_save()
         defer task.irq_restore(st)
-        if r.holder == null
+        me: = task.require_current()
+        h: = r.own.get_holder()
+        if h == null
             panic("ksos: Mutex.unlock on a mutex nobody holds")
-        if r.holder != task.g_current
+        if h != me
             panic("ksos: Mutex.unlock by a task that is not the holder")
-        r.release_by(r.holder)
-        task.wake(Void$@::r, false) // wake one waiter (it tries to take it again)
-
-priv fn lent_prio(h: Task$@): I32 //<
-    //< [Call it inside a critical section] The priority h runs at for the mutexes it holds
-    //<
-    //< The highest of its own priority and of every task waiting on one of them. A single
-    //< per-mutex saved priority cannot give this: releasing one mutex would drop a priority still
-    //< lent through another.
-    $top: = h.base_prio
-    $m: = Mutex$@::h.held_mutexes
-    for m != null
-        w: = task.highest_waiter_prio(Void$@::m)
-        if w > top
-            top = w
-        m = m.next_held
-    return top
+        r.own.release()
+        task.wake(Void$@::r.own@, false) // wake one waiter (it tries to take it again)
 
 // ============================ Event flags ============================
 priv enum Event_mode
@@ -312,26 +256,19 @@ impl Event
         //< Blocks until wanted's bits meet mode's condition
         //<
         //< Returns the flags when it held; clear_on_exit clears wanted's bits in the same step.
-        $st: = task.irq_save()
-        defer task.irq_restore(st)
-        for
-            cur: = r.bits
-            hit: = cur & wanted
-            satisfied: = (hit == wanted) if (mode == .all) else (hit != 0)
-            if satisfied
-                if clear_on_exit
-                    r.bits &= ~wanted
-                return cur
-            _cur: = task.require_current()
-            st = task.block_and_rearm(Void$@::r, st)
+        for // with no deadline wait_until never comes back empty; this only takes the value out
+            if bits: = r.wait_until(wanted, mode, clear_on_exit, .none)
+                return bits
     fn wait_for(r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool, ticks: U64): U32? //<
         //< wait with a timeout: some (the flags when it held), or none on the timeout
         //<
         //< To check without waiting, use `get` (there is no `wait_for(…, 0)`).
         assert(ticks > 0, "Event.wait_for: ticks must be greater than 0 (read get() to poll)")
+        return r.wait_until(wanted, mode, clear_on_exit, .some(task.deadline_after(ticks)))
+    priv fn wait_until(r: Self$@, wanted: U32, mode: Event_mode, clear_on_exit: Bool,
+        deadline: U64?): U32? //< none once deadline passes
         $st: = task.irq_save()
         defer task.irq_restore(st)
-        deadline: = task.current_tick() + ticks
         for
             cur: = r.bits
             hit: = cur & wanted
@@ -341,9 +278,9 @@ impl Event
                     r.bits &= ~wanted
                 return .some(cur)
             _cur: = task.require_current()
-            if task.current_tick() >= deadline
+            if task.deadline_passed(deadline)
                 return .none
-            st = task.block_and_rearm_until(Void$@::r, deadline, st)
+            st = task.block_and_rearm(Void$@::r, deadline, st)
     fn set(r: Self$@, set: U32) //<
         //< Sets the named bits and wakes every waiter
         //<

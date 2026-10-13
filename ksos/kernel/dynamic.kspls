@@ -83,23 +83,27 @@ impl Task
         Task$@? //<
             //< Allocates the Task and the stack from the heap and creates a task
             //<
-            //< It frees both and returns none when max_tasks in task.kspls or max_dyn is reached
-            //< (an allocation failure panics inside heap_alloc).
+            //< It frees both and returns none when max_tasks in task.kspls, the port's contexts or
+            //< max_dyn run out (an allocation failure panics inside heap_alloc).
         reap_pending()
         slot: = find_dyn_slot()
         if slot >= max_dyn
             return .none
         tcb: = heap.heap_alloc_as<|Task|>()
         stack: = U8$@::heap.heap_alloc(stack_size)
-        if !tcb.create(U8$[]::{ .ptr = stack, .len = stack_size }, entry, arg, prio, name)
-            heap.heap_free(Void$@::stack)
-            heap.heap_free(Void$@::tcb)
-            return .none
+        // Caution: **Record it before create.** A new task that outranks the caller runs inside
+        // create, and a delete_dyn it calls there must find its entry.
         g_dyn[slot].tcb = tcb
         g_dyn[slot].stack = stack
         g_dyn[slot].pending_reap = false
         if slot == g_dyn_count
             g_dyn_count += 1
+        if !tcb.create(U8$[]::{ .ptr = stack, .len = stack_size }, entry, arg, prio, name)
+            g_dyn[slot].tcb = null
+            g_dyn[slot].stack = null
+            heap.heap_free(Void$@::stack)
+            heap.heap_free(Void$@::tcb)
+            return .none
         return .some(tcb)
 
     fn delete_dyn(r: Self$@) //<

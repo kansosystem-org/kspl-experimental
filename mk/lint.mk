@@ -32,7 +32,7 @@ fmt: $(SEED_EXE)
 
 # **A tool is an entry point by its `fn main`**, so a new one cannot leak out of the gate; a file of
 # tools/ without one is a library, linted through the tools that import it.
-TOOL_MAINS := $(shell grep -l '^fn main' tools/*.kspls)
+TOOL_MAINS := $(shell grep -lE '^(pub )?fn main\b' tools/*.kspls)
 
 # Entries called from outside their I0402 package: linted with it off, their callers with it on.
 # Every ksplc suite stands on its harness, which the root's suites call too.

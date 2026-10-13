@@ -123,9 +123,9 @@ impl Ast_node
     fn settle_expected(r: Self$@, c: Sema_ctx$@, type_id: I32, expected_id: I32): I32!Sema_error //<
         //< Applies the outer expected type to an expression whose inference has finished
         //<
-        //< Caution: **Do not duplicate this final step.** Only a `-`'s left-hand side is inferred
-        //< without the expected type (`infer_binary_expr` in `binary.kspls`), and it reapplies the
-        //< type through here.
+        //< Caution: **Do not duplicate this final step.** A numeric operation's result is widened
+        //< here, once, after it was computed at its operands' width (`infer_binary_expr` in
+        //< `binary.kspls`).
         // **A type's name is not a value**, here where a value of the expected type is asked for
         // (`f: Op = Row`, `Box<|I32|> == f`, an argument). Taken as one, it reached C as a name
         // no value has. With nothing expected, a declaration refuses it for having no type.
@@ -172,8 +172,9 @@ priv fn check_literal_escapes(node: Ast_node$@, c: Sema_ctx$@, one_byte: Bool) /
                 '\{spell\}' is not four of them")
     case .surrogate
         m
-            .s("'\{spell\}' names a surrogate (U+D800 to U+DFFF), which is not a character. Write \
-                the character itself, or the code point it stands for")
+            .s("'\{spell\}' names a surrogate (U+D800 to U+DFFF), which is not a character, and two \
+                of them do not pair up as in UTF-16 or JSON. '\\u' reaches only U+FFFF, so write a \
+                character above it as itself in the source (an emoji, say)")
     case .wide_in_char
         m
             .s("'\{spell\}' is more than one byte in UTF-8, and a character literal is one byte. \
@@ -206,11 +207,11 @@ priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
             // is reported here. Not in an instance: its copy holds names already resolved. A failed
             // resolve registers the name.
             if !c.is_instantiating()
-                errors_before: = c.diags.counts.errors
+                errors_before: = c.error_mark()
                 $gen_params: = List<|U8[]|>.new(null)
                 defer gen_params.free()
                 node.validate_all_type_exprs(c, gen_params@)
-                if c.diags.counts.errors != errors_before
+                if c.error_mark() != errors_before
                     return I32::sema_type_env.Builtin_type_id.size_type
             inner.resolve_type(c)!
         else
@@ -259,7 +260,15 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     // only when a literal is directly below, so it does not leak into a nested expression.
     outer_negated: = c.fn_ctx.literal_negated
     c.fn_ctx.literal_negated = op.equals("-") && inner.kind_id == .k_integer
-    inner_type_id: = inner.infer_expr(c, expected_id)!
+    // A number is negated or inverted at its own width, as a binary operation computes at its
+    // operands' (`infer_binary_expr` in `binary.kspls`): `x: I16 = -a` with `a: I8` holding -128
+    // is -128, widened afterwards. Only an operand with no width of its own takes the expected
+    // type.
+    $pass_id: = expected_id
+    if (op.equals("-") || op.equals("~")) && !sema_type_env.is_unknown(expected_id) &&
+        c.env.is_numeric(expected_id) && !sema_body_literal.is_untyped_numeric_expr(inner)
+        pass_id = I32::sema_type_env.Builtin_type_id.unknown
+    inner_type_id: = inner.infer_expr(c, pass_id)!
     c.fn_ctx.literal_negated = outer_negated
 
     // Caution: **Do not let `-` or `~` on a `Bool` pass.** On C's `_Bool`, `-true` and `~true`

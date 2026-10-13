@@ -362,7 +362,7 @@ Note: `make test-docref` checks that what is named exists, so a deleted name can
 | :-- | :-- |
 | To an index (`README.md`) | Where things are is outside the specification's concern |
 | Upward (to the language specification or design rationale in `docs/`) | A specification may rely only on agreements above it |
-| **To the `DESIGN.md` in the same folder** (a `PLAN.md` there is treated the same) | They are edited together, so the same person notices when they drift |
+| **To the `DESIGN.md` in the same folder** | They are edited together, so the same person notices when they drift |
 
 Even within one folder, **do not copy the rule itself.** The specification holds the rule, and `DESIGN.md` holds why that rule was chosen. Written in both, the rule sooner or later loses an exception in only one of them.
 

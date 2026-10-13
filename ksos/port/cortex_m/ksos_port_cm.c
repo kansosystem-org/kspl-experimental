@@ -18,16 +18,28 @@ extern void ksos_trampoline(void); // the task's starting point, #exported by th
 ksos_ctx* g_pendsv_from;
 ksos_ctx* g_pendsv_to;
 
-// The static pool: the scheduler's (the main) context plus one per task.
+// The static pool: the scheduler's (the main) context plus one per task. A deleted task's context
+// is marked free (ksos_port_ctx_free) and taken again by a later create.
 #define KSOS_CM_MAX_CTX 33
 static ksos_ctx g_ctx_pool[KSOS_CM_MAX_CTX];
-static int g_ctx_used = 0;
+static uint8_t g_ctx_busy[KSOS_CM_MAX_CTX];
+
+// Where PendSV saves a thread whose context is gone (a task that deleted itself); nothing reads it.
+static ksos_ctx g_ctx_discard;
 
 static ksos_ctx* alloc_ctx(void) {
-    if (g_ctx_used >= KSOS_CM_MAX_CTX) {
-        return NULL;
+    for (int i = 0; i < KSOS_CM_MAX_CTX; i++) {
+        if (!g_ctx_busy[i]) {
+            g_ctx_busy[i] = 1;
+            return &g_ctx_pool[i];
+        }
     }
-    return &g_ctx_pool[g_ctx_used++];
+    return NULL;
+}
+
+// PENDSVSET reads 1 while PendSV is pending.
+static int pendsv_pending(void) {
+    return (*(volatile uint32_t*)0xE000ED04u & (1u << 28)) != 0u; // SCB->ICSR
 }
 
 // Makes, on the named stack, an initial frame PendSV can restore. PendSV pops {r4-r11}, and the
@@ -54,19 +66,30 @@ void* ksos_port_ctx_create_main(void) {
     return alloc_ctx();
 }
 
+// Returns a deleted task's context to the pool (the kernel calls it in a critical section). A
+// pending switch may still be about to save the thread running into it: that save goes to the
+// discard instead, or a create taking the slot first would have its new frame overwritten.
+void ksos_port_ctx_free(void* ctx) {
+    ksos_ctx* c = (ksos_ctx*)ctx;
+    if (pendsv_pending() && g_pendsv_from == c) {
+        g_pendsv_from = &g_ctx_discard;
+    }
+    g_ctx_busy[c - g_ctx_pool] = 0;
+}
+
 // Saves from and switches to to. The body is PendSV. In thread mode pend plus isb switches at
 // once, and from handler mode (SysTick and the like) it is tail-chained after that handler returns.
 // While a switch is still pending, the thread running is the pending switch's from, not the from
 // handed in (the kernel already counts the pending switch's to as current), so only to changes.
 // It happens when a second schedule() comes before PendSV runs: an interrupt handler giving
-// between another handler's schedule() and PendSV.
+// between another handler's schedule() and PendSV. A null from (the running task was deleted)
+// saves into the discard.
 void ksos_port_switch(void* from, void* to) {
-    volatile uint32_t* icsr = (volatile uint32_t*)0xE000ED04u; // SCB->ICSR
-    if ((*icsr & (1u << 28)) == 0u) { // PENDSVSET reads 1 while PendSV is pending
-        g_pendsv_from = (ksos_ctx*)from;
+    if (!pendsv_pending()) {
+        g_pendsv_from = from != NULL ? (ksos_ctx*)from : &g_ctx_discard;
     }
     g_pendsv_to = (ksos_ctx*)to;
-    *icsr = (1u << 28); // PENDSVSET
+    *(volatile uint32_t*)0xE000ED04u = (1u << 28); // SCB->ICSR: PENDSVSET
     __asm__ volatile("dsb; isb");
 }
 

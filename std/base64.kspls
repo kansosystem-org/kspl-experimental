@@ -7,7 +7,10 @@ import "std/mem" { Arena, alloc_in, dealloc }
 
 pub enum Base64_error //< why a Base64 string could not be read
     invalid_length //< the input's length is not a multiple of 4
-    invalid_char //< a character outside the alphabet, including an `=` outside the padding
+    invalid_char //< a character outside the alphabet or an `=` outside the padding
+        //<
+        //< Also the last character before the padding when the bits it carries past the data are
+        //< not zero (RFC 4648 §3.5): `QR==` and `QQ==` would otherwise both read as `A`.
 
 priv fn encode_char(v: U8): U8
     return (('A' + v) if v < 26U8 else ('a' + (v - 26U8)) if v < 52U8
@@ -74,7 +77,10 @@ pub fn decode( //< decodes a Base64 string into a new byte array
         c2: = 0 if skip2 else decode_char(s[i + 2])
         c3: = 0 if skip3 else decode_char(s[i + 3])
 
-        if c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0
+        // Caution: **Refuse the bits the padding leaves unused unless they are zero**, so each
+        // byte string has one encoding; a check comparing encodings would otherwise be fooled.
+        loose: = (skip2 && (c1 & 0xf) != 0) || (skip3 && !skip2 && (c2 & 0x3) != 0)
+        if c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0 || loose
             if arena == null
                 dealloc(Void$@::out.ptr)
             throw .invalid_char

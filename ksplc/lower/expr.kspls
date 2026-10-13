@@ -18,6 +18,7 @@ import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
+import "std/ds" { List }
 import "std/str"
 
 struct Unwrap_ctx
@@ -296,7 +297,7 @@ impl Ast_node
 
         // ARC's retain/release is decided before lower_default changes the expression's shape (the
         // same reason as in lower_arc_var_decl).
-        r.lower_arc_assign(lctx)
+        owed: = r.lower_arc_assign(lctx)
 
         // A fresh managed value the statement throws away (`mk(5)`, `pass(mk(6))`) is released at
         // once. A catch's is released inside, on success alone (lower_expr_catch_chain), since only
@@ -341,6 +342,7 @@ impl Ast_node
                 r.add_child(call_node)
                 return
         r.lower_default(lctx)
+        r.finish_arc_assign(lctx, owed)
 
     fn lower_postfix_index_operator(r: Ast_node$@, lctx: Lowering_ctx$@)
         loc: = r.loc
@@ -406,17 +408,23 @@ impl Ast_node
             return
         if op_text.equals(".") && r.lower_arc_field_of_fresh(lctx)
             return
+        if r.arc_needs_pointer_hoist(lctx)
+            r.set_child(0, r.get_postfix_receiver().hoist_complex_expr(lctx, true))
         if op_text.equals("::") && r.def_node.is_fn_decl()
             r.lower_user_cast(lctx)
             return
         if op_text.equals("[") && r.def_node.is_fn_decl()
             r.lower_postfix_index_operator(lctx)
             return
+        $late: = List<|Sz|>.new(null)
+        defer late.free()
         if op_text.equals("(")
-            r.lower_arc_call_arg_retains(lctx)
+            r.lower_arc_call_arg_retains(lctx, late@)
             r.order_call_operands(lctx)
             r.hoist_method_receiver(lctx)
         r.lower_default(lctx)
+        if late.len > 0
+            r.arc_retain_late_args(lctx, late@)
 
     priv fn hoist_index_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It copies a subscript's slice receiver with a side effect into a temporary

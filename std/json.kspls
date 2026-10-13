@@ -133,7 +133,7 @@ pub enum Json_error //< why a document could not be read, or cannot be trusted
     unexpected_eof //< it ended in the middle of a value
     invalid_character(ch: U8) //< a byte that is not allowed where it appears
     invalid_string //< a string's escape or its ending is not what JSON allows
-    invalid_number //< the digits do not match JSON's number grammar
+    invalid_number //< the digits do not match JSON's number grammar, or exceed an F64's range
     expected_colon //< a member's name was not followed by `:`
     expected_comma_or_bracket //< an element was not followed by `,` or the closing mark
     trailing_comma //< `[1,]` or `{"a":1,}`; JSON requires an element after a comma
@@ -292,6 +292,10 @@ priv fn parse_number(ctx: Parse_ctx$@): Val!Json_error //< reads one number
     // A fraction, or an integer too big for an I64: the lost precision shows in the type, not as a
     // truncated value.
     f: = text.to_f64() catch
+        throw .invalid_number
+    // Caution: **Refuse a number past F64's range** (`1e400` reads as infinity): `dump` writes
+    // null for it, so the document would not survive a round trip. `f - f` is 0 only when finite.
+    if f - f != 0.0
         throw .invalid_number
     return .float_val(f)
 

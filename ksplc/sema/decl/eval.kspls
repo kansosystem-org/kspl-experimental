@@ -305,6 +305,14 @@ impl Ast_node
         if r.children.len >= 2
             op: = r.get_unary_op().text
             val: = r.get_unary_target().eval_constexpr_internal(c, depth + 1)!
+            // Caution: **Fit the result to the operand's width**, as the binary operators do: at
+            // I64's width `-(-128I8)` is 128, and `~0U8` is -1 rather than 255. A bare literal
+            // has no width yet and folds at I64's.
+            t: = r.get_unary_target().fold_type(c, depth + 1)
+            known: = t != 0 && !sema_type_env.is_unknown(t)
+            op_id: = c.env.scalar_repr_id(t) if known else 0
+            bits: = c.env.get_portable_bit_size(op_id) if known else 64
+            is_uns: = known && c.env.is_unsigned(op_id)
             if op.equals("-")
                 // Caution: Negating the minimum silently wraps to itself (as in checked_neg in
                 // std/checked_int.kspls).
@@ -314,8 +322,8 @@ impl Ast_node
                             "integer overflow (negation of the minimum value) in compile-time \
                                 constant expression")
                     throw .invalid_argument
-                return -val
-            return ~val if op.equals("~") else val
+                return fit_or_report(r, c, -val, bits, is_uns)!
+            return fit_result(~val, bits, is_uns) if op.equals("~") else val
         return r.eval_unknown(c, depth)!
 
     fn eval_binary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
@@ -372,10 +380,18 @@ impl Ast_node
                     if la > i64_max_val / ra
                         return r.report_overflow(c)!
                 return fit_or_report(r, c, left * right, bits, is_uns)!
+            // Signed `/` and `%` follow kspl_sdiv / kspl_smod (ksplc/gen/runtime/core.h): the
+            // minimum by -1 is an overflow the compiler can see for `/`, and 0 for `%`.
             if op.equals("/")
-                return I64::(ul / ur) if is_uns else left / right
+                if is_uns
+                    return I64::(ul / ur)
+                if right == -1 && left == i64_min_val
+                    return r.report_overflow(c)!
+                return fit_or_report(r, c, left / right, bits, is_uns)!
             if op.equals("%")
-                return I64::(ul % ur) if is_uns else left % right
+                if is_uns
+                    return I64::(ul % ur)
+                return 0 if right == -1 else left % right
             // Caution: Make the upper limit the operand's width. A fixed one rejects `1U64 << 40`
             // or lets a narrow type shift by its width (undefined behaviour in C).
             if op.equals("<<")

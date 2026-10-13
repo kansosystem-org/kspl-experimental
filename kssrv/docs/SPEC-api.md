@@ -37,7 +37,7 @@ A `HEAD` request asks for the head of the answer alone, without the file itself.
 
 | Status | When the server answers it |
 |---|---|
-| 405 Method Not Allowed | anything but `GET` / `HEAD` |
+| 405 Method Not Allowed | anything but `GET` / `HEAD`; its `Allow` header names `GET, HEAD` |
 | 403 Forbidden | a path pointing outside the root |
 | 404 Not Found | not found |
 | 400 Bad Request | a broken request, a broken `%XX` |
@@ -114,7 +114,7 @@ Anything else under `/api/`:
 
 | Request | Answers |
 | :-- | :-- |
-| a method not named above for its path | `{"error":"Method Not Allowed","status":405}` |
+| a method not named above for its path | `{"error":"Method Not Allowed","status":405}`, with an `Allow` header naming the path's methods (`GET, PUT` for `/api/file`) |
 | any other `/api/...` | `{"error":"Not Found","status":404}` |
 
 **No endpoint lists a folder.** A client asks for each file by name; a listing would hand anyone the names under the root.
@@ -272,7 +272,7 @@ These hold for every connection, in both modes.
 
 | | What holds |
 | :-- | :-- |
-| The connection | **Kept, as HTTP/1.1's default calls for** (keep-alive: one connection carries many requests). It closes where the client sent `Connection: close`, and where an error response was returned |
+| The connection | **Kept, as HTTP/1.1's default calls for** (keep-alive: one connection carries many requests). It closes where `close` is among the client's `Connection` tokens, where an HTTP/1.0 client did not list `keep-alive` there, and where an error response was returned |
 | At the cap | **128 connections are held at once.** One arriving at the cap is closed at once with no response. It is not queued, so a client sees a closed socket rather than a wait |
 | From one address | **Facing outward, 16 at most.** One more from the same address is closed at once with no response, so one machine cannot take every slot. With `--local` every peer is this machine, and only the cap of 128 applies |
 | An idle connection | **Closed once it has passed no byte either way for 30 seconds**, a page's hold (`GET /api/here`) excepted |

@@ -167,6 +167,20 @@ function kspageProbeLocal(ks) {
     const got = back.ok ? await back.text() : "";
     ks.check(back.ok, "the place saved can be read from the server");
     ks.check(got === want, "the text written comes back as a byte row");
+    // **Two presses at once save once** (a double click): two saves in flight compare against a
+    // text neither has recorded yet and can refuse as "changed outside", or open a second picker.
+    // A third press after the first answer comes after anything the second would say.
+    const savedHere = () => heard.filter((m) => m.indexOf("Saved (saved.kspage") >= 0).length;
+    clear();
+    document.getElementById("save").click();
+    document.getElementById("save").click();
+    await untilSays("Saved (saved.kspage");
+    document.getElementById("save").click();
+    for (let waited = 0; waited < 4000 && savedHere() < 2; waited += 50) {
+      await new Promise((go) => setTimeout(go, 50));
+    }
+    ks.check(savedHere() === 2 && !heard.some((m) => m.indexOf("changed outside") >= 0),
+      "two presses at once save once (" + heard.join(" / ") + ")");
 
     // Opening by a place is the field's Enter (a location bar's shape). **"Open" is the browser's
     // window**, with or without the server, as whoever arrived by a double-click expects.

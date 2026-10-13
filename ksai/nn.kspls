@@ -283,10 +283,9 @@ impl<|T|> Embedding<|T|>
         token_id: I32, //< which row of the table
         compute_arena: Arena$@, //< the arena this step's working tensors are allocated from
     ): Tensor<|T|>
-        // token_id can be invalid if the vocabulary is broken or tampered with (load() in
-        // ksai/tokenizer.kspls can produce a negative from a truncating cast from Sz). I32→Sz
-        // sign-extends, so a negative becomes a huge offset and an out-of-bounds read (a panic
-        // stops it here, as in Tensor.get/set).
+        // token_id comes from the caller, not only from the tokenizer, so it can lie outside the
+        // table. I32→Sz sign-extends, so a negative becomes a huge offset and an out-of-bounds read
+        // (a panic stops it here, as in Tensor.get/set).
         if token_id < 0 || Sz::token_id >= r.weight.shape[0]
             panic("Embedding.forward: token_id out of bounds")
         dim: = r.weight.shape[1]
@@ -351,6 +350,13 @@ impl<|T|> Gqa_attention<|T|>
         max_seq_len: Sz, //< the longest sequence the cache must hold
         rope_theta: F64, //< the base of the positional rotation (RoPE)
         arena: Arena$@): Gqa_attention<|T|>
+        // Caution: **Refuse heads that do not share out evenly.** Uneven, the last query heads read
+        // a key head past the cache's row; with no key head, `forward` divides by zero.
+        if n_kv_heads <= 0 || n_heads <= 0 || n_heads % n_kv_heads != 0
+            panic("Gqa_attention: n_kv_heads must be positive and divide n_heads")
+        // RoPE pairs each head's two halves, so an odd or empty head cannot be rotated.
+        if head_dim <= 0 || head_dim % 2 != 0
+            panic("Gqa_attention: head_dim must be even and positive")
         q_dim: = n_heads * head_dim
         kv_dim: = n_kv_heads * head_dim
         cache_shape: Sz[2] = ::{ max_seq_len, kv_dim }
@@ -377,6 +383,10 @@ impl<|T|> Gqa_attention<|T|>
         start_pos: Sz, //< this input's position in the sequence
         q_lora: lora.Lora<|T|>$@, //< the adapter on the query; null adds nothing
         v_lora: lora.Lora<|T|>$@): Tensor<|T|>
+        // **One token per call**: the scores and the output below are one row, so a second row of
+        // `x` would be dropped without a word.
+        if x.shape.len != 2 || x.shape[0] != 1
+            panic("Gqa_attention: forward takes one token, a single row of x")
         compute_arena: = x.arena
         kv_dim: = r.n_kv_heads * r.head_dim
         q_dim: = r.n_heads * r.head_dim

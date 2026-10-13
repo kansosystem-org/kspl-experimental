@@ -22,17 +22,23 @@ function kspageHandles() {
   // The drafts, **keyed by the `at` inside each** (`keyPath`), so a listed draft carries its key.
   const DRAFTS = "drafts";
 
-  // Caution: **Open it only once** (otherwise one page holds several connections to one store). A
+  // Caution: **Open it only once** (otherwise one page holds several connections to one store):
+  // **call this function once per page** and share what it returns (`page.js`'s `ui.handles`). A
   // failure is remembered too (otherwise a private window waits on every click).
   let opening = null;
   const openDb = () => {
     if (opening) return opening;
     opening = new Promise((done) => {
       let ask = null;
+      let answered = false;
+      const answer = (db) => {
+        answered = true;
+        done(db);
+      };
       try {
         ask = indexedDB.open(DB_NAME, DB_VERSION);
       } catch (_) {
-        done(null);
+        answer(null);
         return;
       }
       // Caution: **Check that it exists before creating it** (creating it again fails the upgrade
@@ -44,17 +50,43 @@ function kspageHandles() {
           db.createObjectStore(DRAFTS, { keyPath: "at" });
         }
       };
-      ask.onsuccess = () => done(ask.result);
-      ask.onerror = () => done(null);
+      ask.onsuccess = () => {
+        const db = ask.result;
+        // An open answered as blocked that goes through later is closed: unused, it would block
+        // the next upgrade in turn.
+        if (answered) {
+          db.close();
+          return;
+        }
+        // Caution: **Let go when a newer version is opened elsewhere** (another window of a later
+        // page): held, that window's upgrade waits at `blocked`. The next use opens it again.
+        db.onversionchange = () => {
+          db.close();
+          opening = null;
+        };
+        db.onclose = () => {
+          opening = null;
+        };
+        answer(db);
+      };
+      ask.onerror = () => answer(null);
       // Caution: **Answer when it is blocked too** — with another window holding the old version
       // open it stops at `blocked`, and the save's click would never return.
-      ask.onblocked = () => done(null);
+      ask.onblocked = () => answer(null);
     });
     return opening;
   };
 
+  // The connection to use now. Caution: **Take it again where it was let go meanwhile**
+  // (`opening` no longer the one waited on): a transaction on a closed connection throws, and the
+  // write would be lost in silence.
+  const liveDb = () => {
+    const was = openDb();
+    return was.then((db) => (opening === was ? db : liveDb()));
+  };
+
   // Caution: **Waiting on one transaction never throws** (not remembering is not a failed save).
-  const inStore = (name, mode, use) => openDb().then((db) => {
+  const inStore = (name, mode, use) => liveDb().then((db) => {
     if (!db) return null;
     return new Promise((done) => {
       let deal = null;

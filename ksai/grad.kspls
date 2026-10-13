@@ -24,7 +24,7 @@ impl<|T|> Tensor<|T|>
                 max_v = v
         $sum_exp: = 0.0
         for i in Range.asc(n)
-            sum_exp += math.exp((r.data + offset + i)$ - max_v)
+            sum_exp += math.exp(F64::(r.data + offset + i)$ - max_v)
         return Reduce_stats::{ .max_v = max_v, .sum_exp = sum_exp }
     // --- The backward pass of the matrix product Y = X @ W -------
     // Each grad has an "allocate and return" version and an `_into` one; `cfg` switches between
@@ -44,6 +44,8 @@ impl<|T|> Tensor<|T|>
         k: = w.shape[0]
         assert(w.shape[1] == n, "grad_matmul_input inner dimension mismatch")
         m: = r.shape[0]
+        // `out` may be reused from another step: a smaller one would be written past its end.
+        assert(out.holds_matrix(m, k), "grad_matmul_input: out is not [m, k]")
         tensor.transb_kernel<|T|>(out.data, r.data, w.data, m, n, k)
     fn grad_matmul_input(r: Self$@, w: Tensor<|T|>): Tensor<|T|> //<
         //< The "allocate and return" version (a thin wrapper over `_into`), on `r.arena`
@@ -63,6 +65,7 @@ impl<|T|> Tensor<|T|>
         k: = r.shape[1]
         assert(dy.shape[0] == m, "grad_matmul_weight row mismatch")
         n: = dy.shape[1]
+        assert(out.holds_matrix(k, n), "grad_matmul_weight: out is not [k, n]") // as for the input
         // Loop order rr-i-j: the inner `j` runs contiguously over the dY row and the out row. The
         // additions into out[i][j] stay in ascending rr, as in the naive version, so the result is
         // unchanged bit for bit.
@@ -88,6 +91,7 @@ impl<|T|> Tensor<|T|>
         k: = r.shape[1]
         assert(dy.shape[0] == m, "grad_matmul_weight row mismatch")
         n: = dy.shape[1]
+        assert(out.holds_matrix(k, n), "grad_matmul_weight: out is not [k, n]")
         tensor.blas_gemm<|T|>(tensor.cblas_trans, tensor.cblas_no_trans, k, n, m, r.data, k,
             dy.data, n, out.data, n)
     pub fn grad_matmul_weight( //< the same, but allocated on `r.arena` instead of into `out`

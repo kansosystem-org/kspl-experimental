@@ -102,7 +102,8 @@ function kspageProbeStore(ks) {
   // origin is opaque and neither arena opens — **that side is a check too**: an answer must come
   // back where it cannot remember (gone silently quiet, the press of save never returns).
   const done = ks.hold();
-  const store = kspageHandles();
+  // **Borrow the page's connection** (the page opens one only: `ui.handles` in `port/web/page.js`).
+  const store = app.keepStore;
   const TAB = "probe-tab";
   // A page that cannot remember. **`file://` comes here.**
   // **Wait through `ks.fed`**: the arena answers off the page's thread (why: `fed` in `probe.js`).
@@ -160,10 +161,38 @@ function kspageProbeStore(ks) {
     for (let i = 0; i < many; i += 1) await store.keepWhere("probe-cap-" + i, null);
     await dir.removeEntry("kspage-probe.kspage");
     await again(dir);
+    await letGo();
   })().then(done, (e) => {
     check(false, "the handles' arena answers (" + String((e && e.stack) || e) + ")");
     done();
   });
+
+  // 9''. The page lets its connection go when another page opens a later version of the store, and
+  // opens it again at its next use. Held, that opening stops at `blocked`.
+  // Caution: **Abort the upgrade once it is reached**, and **do not delete the store**: the other
+  // sections keep drafts in it meanwhile, and a later version left behind would shut this page's
+  // own version out.
+  async function letGo() {
+    const now = (await indexedDB.databases()).find((one) => one.name === "kspage");
+    const how = await new Promise((go) => {
+      const ask = indexedDB.open("kspage", (now ? now.version : 0) + 1);
+      ask.onblocked = () => go("blocked");
+      ask.onupgradeneeded = () => {
+        ask.transaction.abort();
+        go("let go");
+      };
+      ask.onsuccess = () => {
+        ask.result.close();
+        go("no upgrade");
+      };
+      ask.onerror = () => go("failed");
+    });
+    check(how === "let go", "the page lets its storage go for a later version (" + how + ")");
+    await store.keepWhere(TAB, { path: "after.kspage", bodyAt: null, pastAt: null });
+    const was = await store.takeWhere(TAB);
+    check(was !== null && was.path === "after.kspage", "and opens it again at its next use");
+    await store.keepWhere(TAB, null);
+  }
 
   // 9'. A page read again comes up on the document it had open, with where it writes back.
   //

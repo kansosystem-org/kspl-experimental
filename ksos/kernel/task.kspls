@@ -51,9 +51,8 @@ struct Task
     priv arg: Void$@
     priv state: Task_state
     prio: I32 //< the priority it runs at: base_prio, raised while a mutex it holds is waited on
-    base_prio: I32 //< its own priority, from Task.create (sync.kspls returns prio to it)
-    held_mutexes: Void$@ //<
-        //< the mutexes it holds, a list sync.kspls keeps (null if none; opaque here)
+    base_prio: I32 //< its own priority, from Task.create (lent_prio returns prio to it)
+    priv held: Holding$@ //< the mutexes it holds, a list Holding keeps (null if none)
     priv delay_until: U64 //<
         //< when a delayed task wakes; when blocked, the timeout (if deadline_set)
     priv deadline_set: Bool //< whether blocked has a timeout (without one it waits until woken)
@@ -75,9 +74,12 @@ priv $g_wait_seq: U64 = 0 // how many waits have begun (block_current stamps eac
 priv $g_main_ctx: Void$@ = null
 // --- The port ABI (each port implements it; POSIX: ksos/port/posix/ksos_port_posix.c) ---
 extern "C"
-    fn ksos_port_ctx_create(stack: U8$@, stack_size: Sz): Void$@
+    fn ksos_port_ctx_create(stack: U8$@, stack_size: Sz): Void$@ //< null when none is left
     fn ksos_port_ctx_create_main(): Void$@
-    fn ksos_port_switch(from_ctx: Void$@, to_ctx: Void$@)
+    fn ksos_port_ctx_free(ctx: Void$@) //<
+        //< returns a deleted task's context; it may be the running one, which a switch then leaves
+    fn ksos_port_switch(from_ctx: Void$@, to_ctx: Void$@) //<
+        //< saves from and runs to; a null from (the running task was deleted) saves nothing
     fn ksos_port_tick_start(reload: U32) //<
         //< starts the periodic timer (preemption); the port implements it
     fn ksos_port_irq_save(): U32 //<
@@ -99,10 +101,10 @@ priv fn find_task_slot(): Sz //<
         return max_tasks
     return slot
 
-// When the capacity is exceeded it touches neither tcb nor the port context and returns false
-// (ignoring it is fine where the capacity is known not to be reached). A deleted slot is reused,
-// so repeated create/delete never runs out of slots. Called from a running task, a new task that
-// outranks it runs before create returns, as a woken one does (preempt_if_outranked).
+// When the task table or the port's contexts are full it touches neither tcb nor the stack and
+// returns false (ignoring it is fine where the capacity is known not to be reached). Task.delete
+// returns both the slot and the context, so repeated create/delete never runs out. Called from a
+// running task, a new task that outranks it runs before create returns (preempt_if_outranked).
 impl Task
     fn create(r: Self$@, stack: U8$[], entry: Task_fn, arg: Void$@, prio: I32, name: U8[]): Bool
         // A stack too small to hold the canary is a configuration mistake no run-time check can
@@ -116,12 +118,16 @@ impl Task
         slot: = find_task_slot()
         if slot >= max_tasks
             return false
+        ctx: = ksos_port_ctx_create(stack.ptr, stack.len)
+        if ctx == null
+            return false
+        r.ctx = ctx
         r.entry = entry
         r.arg = arg
         r.state = .ready
         r.prio = prio
         r.base_prio = prio
-        r.held_mutexes = null
+        r.held = null
         r.delay_until = 0
         r.deadline_set = false
         r.wait_obj = null
@@ -131,12 +137,27 @@ impl Task
         r.cpu_ticks = 0
         for i in Range.asc(stack_guard_bytes)
             stack[i] = stack_guard_byte
-        r.ctx = ksos_port_ctx_create(stack.ptr, stack.len)
         g_tasks[slot] = r
         if slot == g_task_count
             g_task_count += 1
         preempt_if_outranked(prio)
         return true
+
+priv fn slot_of(t: Task$@): Sz //< t's index in g_tasks, or max_tasks if it is not there
+    $slot: Sz = max_tasks
+    for i in Range.asc(g_task_count)
+        if g_tasks[i] == t
+            slot = i
+    return slot
+
+priv fn end_task(t: Task$@) //< [Call it inside a critical section] makes t done
+    //<
+    //< Its entry returned, or Task.delete ended it.
+    //< Caution: **A task ending with a mutex held is stopped.** Nobody could unlock that mutex, so
+    //< every later lock would wait forever, and after delete_dyn it would name freed memory.
+    if t.held != null
+        panic("ksos: a task ended holding a mutex (unlock it before Task.delete or returning)")
+    t.state = .done
 
 priv fn check_stack_guard(t: Task$@) //< checks that t's stack guard is still as written
     //<
@@ -145,14 +166,17 @@ priv fn check_stack_guard(t: Task$@) //< checks that t's stack guard is still as
         if (t.stack_guard + i)$ != stack_guard_byte
             panic("ksos: stack overflow detected")
 // The trampoline each port's initial context (from ksos_port_ctx_create) calls. It runs the
-// current task's entry, then marks it done and yields (this context is never picked again).
+// current task's entry, then marks it done and yields (this context is never picked again). The
+// task keeps its slot and context until Task.delete returns them.
 #export
 fn ksos_trampoline()
     t: = g_current
     if t != null
         e: = t.entry
         e(t.arg)
-        t.state = .done
+        s: = ksos_port_irq_save()
+        end_task(t)
+        ksos_port_irq_restore(s)
     // Unreachable (pick_next never picks a done task); a guard that keeps calling schedule(), with
     // no critical section, for a path that is never taken.
     for
@@ -260,7 +284,7 @@ impl Task
         defer ksos_port_irq_restore(s)
         if g_current != null
             g_current.state = .delayed
-            g_current.delay_until = g_tick + ticks
+            g_current.delay_until = deadline_after(ticks)
         schedule()
 
     fn delay_until(wake_tick: U64) //<
@@ -278,6 +302,23 @@ impl Task
 
 fn current_tick(): U64
     return g_tick
+
+priv const last_tick: U64 = 0xFFFFFFFFFFFFFFFFU64
+
+fn deadline_after(ticks: U64): U64 //< the absolute tick ticks from now, for a delay or a timeout
+    //<
+    //< Caution: **It saturates at the last tick.** A plain `current_tick() + ticks` wraps for a
+    //< huge ticks to a deadline already passed, and the wait meant to be long ends at once.
+    d: = g_tick + ticks
+    if d < g_tick
+        return last_tick
+    return d
+
+fn deadline_passed(deadline: U64?): Bool //<
+    //< whether a wait's deadline has come (none: no deadline)
+    if d: = deadline
+        return g_tick >= d
+    return false
 
 impl Task
     fn suspend(r: Self$@) //<
@@ -305,21 +346,29 @@ impl Task
             preempt_if_outranked(r.prio)
 
     fn delete(r: Self$@) //<
-        //< Makes r done (the same final state as when a task's entry returns normally)
+        //< Makes r done and returns its g_tasks slot and its port context for a later create
         //<
         //< The Task's and the stack's memory stay the caller's (static, or from create_dyn in
-        //< ksos/kernel/dynamic.kspls), so this method does not free them. It releases the g_tasks
-        //< slot for a later create (see find_task_slot). If already done, it does nothing.
+        //< ksos/kernel/dynamic.kspls), so this method does not free them. A task whose entry
+        //< returned is done but keeps both until deleted; deleting again does nothing. A deleted
+        //< waiter leaves its wait, and what it lent a mutex's holder is taken back.
         s: = ksos_port_irq_save()
         defer ksos_port_irq_restore(s)
-        if r.state == .done
-            return
-        was_current: = r == g_current
-        r.state = .done
-        for i in Range.asc(g_task_count)
-            if g_tasks[i] == r
-                g_tasks[i] = null
-        if was_current
+        slot: = slot_of(r)
+        if slot >= max_tasks
+            return // deleted already
+        if r.state != .done
+            end_task(r)
+        g_tasks[slot] = null
+        waited: = r.wait_obj != null // blocked, or suspended while blocked
+        r.wait_obj = null
+        if waited
+            relend_all()
+        // The context goes back now even for the running task: schedule() then switches with a
+        // null from, which saves nothing into it.
+        ksos_port_ctx_free(r.ctx)
+        r.ctx = null
+        if r == g_current
             schedule()
 
     fn get_name(r: Self$@): U8[] //<
@@ -449,39 +498,93 @@ priv fn preempt_if_outranked(prio: I32) //<
     if cur != null && prio > cur.prio
         schedule()
 
-fn highest_waiter_prio(obj: Void$@): I32 //<
+priv fn highest_waiter_prio(obj: Void$@): I32 //<
     //< [Call it inside a critical section] The highest priority among the tasks waiting on obj
     //<
-    //< 0 if nobody waits (an application's tasks have 1 or more). sync.kspls recomputes a mutex
-    //< holder's priority from it, on a release and when a wait gives up on a timeout.
+    //< 0 if nobody waits (an application's tasks have 1 or more). lent_prio is built on it.
     $top: I32 = 0
     for i in Range.asc(g_task_count)
         t: = g_tasks[i]
         if t != null && t.state == .blocked && t.wait_obj == obj && t.prio > top
             top = t.prio
     return top
-fn block_and_rearm(obj: Void$@, state: U32): U32 //<
+// ============================ Who holds which mutex ============================
+// The kernel core keeps each mutex's holder and each holder's list of what it holds (sync.kspls's
+// Mutex embeds a Holding, and waits on its address), so Task.delete can refuse a holder and take
+// back what a deleted waiter lent.
+struct Holding //< one mutex's ownership: its holder, and the next mutex in that holder's list
+    priv holder: Task$@ //< null when free
+    priv next: Holding$@
+
+impl Holding
+    fn init(r: Self$@)
+        r.holder = null
+        r.next = null
+    fn get_holder(r: Self$@): Task$@ //< the holder (null when free)
+        return r.holder
+    fn take(r: Self$@, me: Task$@) //<
+        //< [Call it inside a critical section] Makes me the holder, and adds r to me's list
+        r.holder = me
+        r.next = me.held
+        me.held = r
+    fn release(r: Self$@) //<
+        //< [Call it inside a critical section] Frees r and takes it out of its holder's list
+        //<
+        //< It then sets the holder's priority to what the mutexes it still holds lend it.
+        h: = r.holder
+        $prev: Holding$@ = null
+        $m: = h.held
+        for m != null && m != r
+            prev = m
+            m = m.next
+        if prev == null
+            h.held = r.next
+        else
+            prev.next = r.next
+        r.next = null
+        r.holder = null
+        h.prio = lent_prio(h)
+
+fn lent_prio(h: Task$@): I32 //<
+    //< [Call it inside a critical section] The priority h runs at for the mutexes it holds
+    //<
+    //< The highest of its own priority and of every task waiting on one of them. A single
+    //< per-mutex saved priority cannot give this: releasing one mutex would drop a priority still
+    //< lent through another.
+    $top: = h.base_prio
+    $m: = h.held
+    for m != null
+        w: = highest_waiter_prio(Void$@::m)
+        if w > top
+            top = w
+        m = m.next
+    return top
+
+priv fn relend_all() //<
+    //< [Call it inside a critical section] sets each holder's priority to lent_prio
+    //<
+    //< For a waiter that left without its lock loop (a deleted one), whose holder is not kept.
+    for i in Range.asc(g_task_count)
+        t: = g_tasks[i]
+        if t != null && t.held != null
+            t.prio = lent_prio(t)
+
+fn block_and_rearm(obj: Void$@, deadline: U64?, state: U32): U32 //<
     //< [Call it inside a critical section] Blocks on obj and returns the new state once woken
     //<
-    //< It ends the critical section for the switch and enters it again once woken. It is the shared
-    //< part of the wake-and-recheck loop of sem, msgq, mutex and event.
-    if g_current != null
-        g_current.deadline_set = false
+    //< It is the shared part of the wake-and-recheck loop of sem, msgq, mutex and event. If no one
+    //< wakes it by deadline, the clock (ksos_tick / tickless idle) does; none waits until woken.
+    //< Caution: Take an absolute time (deadline_after), not a relative tick; a relative one
+    //< restarted on every re-wait lets the timeout run on forever.
+    cur: = g_current
+    if cur != null
+        cur.deadline_set = false
+        if d: = deadline
+            cur.delay_until = d
+            cur.deadline_set = true
     block_current(obj)
     ksos_port_irq_restore(state) // ending the critical section performs the switch (the block)
     return ksos_port_irq_save() // enter the critical section again once woken
-fn block_and_rearm_until(obj: Void$@, deadline: U64, state: U32): U32 //<
-    //< [Call it inside a critical section] block_and_rearm **with a timeout**
-    //<
-    //< If no one wakes it by time deadline, the clock (ksos_tick / tickless idle) wakes this task.
-    //< Caution: Take an absolute time, not a relative tick; a relative one restarted on every
-    //< re-wait lets the timeout run on forever.
-    if g_current != null
-        g_current.delay_until = deadline
-        g_current.deadline_set = true
-    block_current(obj)
-    ksos_port_irq_restore(state)
-    return ksos_port_irq_save()
 fn enable_preemption(reload: U32) //< turns preemption on
     //<
     //< It starts the port's periodic timer (SysTick on Cortex-M, SIGALRM/setitimer on POSIX), which
@@ -549,7 +652,8 @@ fn ksos_tick()
 fn start_scheduler() //< switches to the first of the registered tasks and starts scheduling
     //<
     //< When no task is runnable any more it returns here.
-    g_main_ctx = ksos_port_ctx_create_main()
+    if g_main_ctx == null
+        g_main_ctx = ksos_port_ctx_create_main() // made once: a second start reuses it
     $first: Task$@ = null
     switch pick_next()
     case .some(t)

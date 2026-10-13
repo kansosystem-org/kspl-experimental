@@ -119,6 +119,21 @@ export function run(ks) {
   leaveCell();
   check(find("$760") >= 0, "one step returns the original formula");
 
+  // --- The cell being typed in ---
+  // **Only the screen shows its formula**: CSV, Markdown, sorting and paper read its value.
+  const typingAt = geom(find("$360"));
+  w.kspage_web_click(typingAt[0] + 1, typingAt[1] + typingAt[3] / 2, 0);
+  check(find("=A2*B2") >= 0 && find("$360") < 0, "the screen shows the formula being typed in");
+  check(ks.csv().split("\n")[1] === "3,120,$360", `CSV writes its value (${ks.csv().split("\n")[1]})`);
+  check(ks.md().includes("$360") && !ks.md().includes("A2"), "Markdown writes its value");
+  // As a formula's text it would sort after the numbers; as its value the rows are in order.
+  check(w.kspage_web_sort_rows(0) === -3, "it sorts by its value (the rows are already in order)");
+  const paperCount = w.kspage_web_layout_paper(300);
+  const onPaper = Array.from({ length: paperCount }, (_, i) => ks.textOf(i));
+  check(onPaper.includes("$360") && !onPaper.includes("=A2*B2"), "paper shows its value");
+  check(find("=A2*B2") >= 0, "laid out for the screen again, it shows the formula");
+  leaveCell();
+
   // Over the body it is not a cell.
   w.kspage_web_click(0, 10, 0);
   check(w.kspage_web_takes_formula() === 0, "in a body with no formula nothing can be swapped");

@@ -65,6 +65,10 @@ pub fn alloc( //< allocates raw bytes from the global heap
     if size < 0
         panic("alloc size must be non-negative")
     alloc_size: = size + alloc_header_size
+    // Caution: **Refuse a size the header wrapped** (as `Arena.alloc` does): malloc would hand out
+    // a few bytes, and the caller would write `size` of them.
+    if alloc_size < size
+        panic("alloc size is too large to add the header")
     ptr: = libc.malloc(alloc_size)
     if ptr == null
         panic("Out of memory")
@@ -434,7 +438,8 @@ pub fn memcmp( //< C's `memcmp`, written here so freestanding needs no libc
         da: = (pa + i)$
         db: = (pb + i)$
         if da != db
-            return da - db
+            // Widened before subtracting: at U8's width `1 - 2` is 255, a "greater" answer.
+            return I32::da - I32::db
     return 0
 // clang emits AAPCS runtime calls (__aeabi_memclr4 and similar) when it turns a struct's
 // zero-initialization or copy into a 4/8-byte aligned call. They are implemented in

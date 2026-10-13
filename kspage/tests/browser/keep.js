@@ -32,7 +32,11 @@ function kspageProbeKeep(ks) {
   typeIn(MARK);
   check(app.text().indexOf(MARK) >= 0,
     "the document brought back can be typed on (" + app.text().slice(0, 14) + ")");
-  app.keepSync();
+  // **Leaving the page writes what is waiting**: the pause the draft waits for may never come
+  // before the page goes. **Ask the store at once**, before "New" below sets the draft aside
+  // anyway (one connection answers in the order asked).
+  window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
+  const leftWith = app.keepStore.takeDrafts();
   // Caution: **Put the document back** (the draft brought back took its place in the window)
   // **over a blank sheet**: read over the draft itself, the draft's key would be written again
   // without the mark before the store is looked at. "New" sets the typed draft aside first.
@@ -80,7 +84,11 @@ function kspageProbeKeep(ks) {
         "the document brought back is held back under its own key ("
           + (mine.length === 1 ? mine[0].at : "none") + ")");
       // 5. It finds the earlier round's draft at start-up.
-      return app.keepBoot().then((many) => {
+      return leftWith.then((left) => {
+        check(having(left, MARK).length === 1,
+          "leaving the page writes the draft waiting (" + shown(left) + ")");
+        return app.keepBoot();
+      }).then((many) => {
         check(many >= 1,
           "the earlier round's draft is found at start-up (" + many + ")");
         // **The count can be brought back** holds those found and those set aside since.

@@ -11,15 +11,19 @@
 // ==========================================
 import "std/mem" { alloc_as, dealloc, zero }
 
+priv fn release_value<|T|>(place: T$@) //<
+    //< Releases every ARC value the value at `place` holds, leaving it the zero value
+    //<
+    //< Assigning the zero value makes the compiler release the value overwritten, chained through
+    //< fields, payloads and elements as on leaving a scope; for a `T` holding no ARC it is a plain
+    //< write. `List.free` gives its elements back the same way.
+    $empty: T[1] = ::{}
+    place$ = empty[0]
+
 // ============================ Rc<T> ============================
 
 priv struct _Rc_ctrl<|T|> //<
-    //< The reference-counting wrapper for a single thread (the equivalent of Rust's `Rc<T>`)
-    //<
-    //< Caution: Use `Arc<|T|>` to share between threads (this one is not atomic). **release does
-    //< not follow the T it points at.** If T holds ARC content (an `Rc<|T|>` field), give up that
-    //< ownership by hand (assign `.none`) before the last owner goes, or it all leaks silently;
-    //< take apart a list or tree built with `Rc<|T|>` from the root downwards.
+    //< The control block of `Rc<|T|>`: the two counts and the value they keep alive
     strong: Sz
     weak: Sz //<
         //< The number of live `Weak_rc<|T|>` handles
@@ -30,7 +34,12 @@ priv struct _Rc_ctrl<|T|> //<
 
 pub struct Rc<|T|> //< a shared owner counted by the compiler, for one thread
     //<
-    //< A plain assignment (`b: = a;`) or an argument shares it safely (the file header says why).
+    //< **The last release takes the value apart**: every ARC value `T` holds (an `Rc` field, an
+    //< array of them) is released too, to any depth, as when `T` leaves a scope on the stack.
+    //< Caution: **That release runs at the line where the last owner goes**, and a long chain
+    //< (`next: Rc<|Node|>` a million deep) recurses once per node there. Walk such a chain in a
+    //< loop first ("Release takes the value apart" in `std/docs/DESIGN.md`). A resource that is not
+    //< ARC (a `List`, a file) still needs its `free()`.
     priv ctrl: _Rc_ctrl<|T|>$@
 
 pub struct Weak_rc<|T|> //< a handle that does not own the value, so a cycle does not leak
@@ -83,11 +92,19 @@ impl<|T|> Rc<|T|>: Ref_counted //< the compiler counts it, so no call is written
             return
         r.ctrl.strong += 1
     priv fn release(r: Self@) //<
-        //< Decrements strong, and frees `_Rc_ctrl` if weak is 0 too
+        //< Decrements strong; at 0 releases the value, and frees `_Rc_ctrl` if weak is 0 too
+        //<
+        //< Caution: **Hold one weak count while the value is released.** The value may hold the
+        //< last `Weak_rc` to this block, and its release would free the block under this call.
         if r.ctrl == null
             return
         r.ctrl.strong -= 1
-        if r.ctrl.strong == 0 && r.ctrl.weak == 0
+        if r.ctrl.strong > 0
+            return
+        r.ctrl.weak += 1
+        release_value<|T|>(r.ctrl.value@)
+        r.ctrl.weak -= 1
+        if r.ctrl.weak == 0
             dealloc(Void$@::r.ctrl)
 
 impl<|T|> Weak_rc<|T|>
@@ -135,7 +152,10 @@ priv struct _Arc_ctrl<|T|> //<
 
 pub struct Arc<|T|> //< a shared owner counted atomically, so threads can share it
     //<
-    //< The compiler counts it as it counts `Rc<|T|>`, but atomically.
+    //< The compiler counts it as it counts `Rc<|T|>`, but atomically. As with `Rc<|T|>`, the last
+    //< release takes the value apart, at the line and **on the thread** where the last owner goes.
+    //< Caution: **An `Rc` inside `T` is then released from that thread**; hold only `Arc` in a
+    //< value threads share.
     priv ctrl: _Arc_ctrl<|T|>$@
 
 pub struct Weak_arc<|T|> //< the `Arc` version of `Weak_rc`, which threads can share
@@ -195,6 +215,8 @@ impl<|T|> Arc<|T|>: Ref_counted //< the compiler counts it, so no call is writte
             return
         prev_strong: = kspl_atomic_add(r.ctrl.strong@, -1)
         if prev_strong == 1
+            // The implicit weak, still held, keeps the block alive while the value is released.
+            release_value<|T|>(r.ctrl.value@)
             _drop_implicit_weak<|T|>(r.ctrl)
 
 impl<|T|> Weak_arc<|T|>

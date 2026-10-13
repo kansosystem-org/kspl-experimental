@@ -47,6 +47,10 @@ impl Sema_ctx
             return false
         return r.mono.constraint_failed.get(inst_name) catch false
 
+    fn method_chain_was_cut(r: Self$@): Bool //<
+        //< Whether the method-table chain was cut at its depth limit (Mono_state.method_chain_cut)
+        return r.mono.method_chain_cut
+
     fn snapshot_generic_args(r: Self$@): List<|sema_session_state.Generic_arg|>$@ //<
         //< Copies the currently bound type arguments
         //<
@@ -230,15 +234,18 @@ impl Sema_ctx
             if p.depth > max_method_chain_depth
                 // The position is the type's declaration: the body advancing the chain is not known
                 // here.
+                // **Name the nesting, not an owner of the methods**: the instance at the limit is
+                // the innermost one (`Box2` in the example), not the type whose method nests it.
                 r.clear_scratch()
-                    .s("generic method table chain too deep: methods of '\{inst.template\}' build \
-                        their own type one level deeper each time (for example 'Chain<|S|>' making \
-                        'Chain<|Box2<|S|>|>'), and the chain was followed \
-                        \{max_method_chain_depth\} levels down. It only grows where a method of the \
-                        deeper type is actually called; stop the recursion there, or make the step \
-                        a free generic function taking the receiver")
+                    .s("generic method table chain too deep: '\{inst.template\}' came out nested \
+                        \{max_method_chain_depth\} levels, each level's methods requiring the next \
+                        (as when a method of 'Chain<|S|>' returns 'Chain<|Box2<|S|>|>' and a method \
+                        of that one is called). It only grows where a method of the deeper type is \
+                        actually called; stop the recursion there, or make the step a free generic \
+                        function taking the receiver")
                 r.err(tmpl_node if tmpl_node != null else r.generics.inst_site,
                     r.scratch.slice())
+                r.mono.method_chain_cut = true
                 throw .analysis_failed
             r.generics.inst_chain_depth = p.depth
             real_id: = r.env.get_real_type(p.type_id)

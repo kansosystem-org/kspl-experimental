@@ -2537,7 +2537,15 @@ p: = rc.get()
 p.field = x
 ```
 
-**A container holds the counts of its elements.** An ARC-managed value put into a `List<|T|>` / `Map<|K, V|>` keeps its count balanced on every path (taking out, overwriting, growing, `remove`, `free`), since the caller cannot reach the contents to fix a leak. This covers the elements themselves, not what an `Rc<|T|>` points at. An `Rc<|T|>`'s release does not walk that, so if `T` holds ARC by value, return the contents' ownership by hand before letting the last owner go.
+**A container holds the counts of its elements.** An ARC-managed value put into a `List<|T|>` / `Map<|K, V|>` keeps its count balanced on every path (taking out, overwriting, growing, `remove`, `free`), since the caller cannot reach the contents to fix a leak. An element that is itself an `Rc<|T|>` takes its value apart when its last owner goes (below).
+
+**The last owner of an `Rc<|T|>` / `Arc<|T|>` takes the value apart.** When the count reaches 0, every ARC-managed value `T` holds by value is released too, to any depth, as when a `T` leaves a scope. Three consequences are the writer's to keep in mind:
+
+* **The time goes where the last owner goes.** Leaving one scope can free a whole tree, at a line that shows no call.
+* **A long chain recurses once per link.** A list of a million `Rc` nodes, let go at its head, can run the stack out. Walk such a chain in a loop (`head = head.get().next`), which frees one node per step.
+* **The release runs where the last owner goes**: on that thread for an `Arc`, and inside an interrupt handler if it goes there. An `Rc` held inside an `Arc`'s value is then released from another thread, which is a data race ([14.2](#142-undefined---no-answer-is-fixed)).
+
+A cycle of owners is never released; make one side a `Weak_rc` / `Weak_arc`. A value that is not ARC-managed (a `List`, a file) is not freed by this; it keeps its own `free()`.
 
 For these APIs, see [Appendix B](#appendix-b-the-standard-library).
 

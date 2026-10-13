@@ -277,7 +277,7 @@ function kspageDraw(ks) {
     let got = pictures.get(src);
     if (got) return got;
     got = new Image();
-    got.addEventListener("load", () => draw());
+    got.addEventListener("load", () => ks.draw());
     // Caution: **Store it before starting the load** — setting `src` starts loading, so the
     // "loaded" event could come with no image stored to draw.
     pictures.set(src, got);
@@ -493,7 +493,7 @@ function kspageDraw(ks) {
     const done = size
       ? w.kspage_web_place_frame(at[0], at[1], at[2] + dx, at[3] + dy)
       : w.kspage_web_move_frames(dx, dy);
-    if (done !== 0) draw();
+    if (done !== 0) ks.draw();
     return done !== 0;
   }
 
@@ -716,18 +716,11 @@ function kspageDraw(ks) {
   ks.headRoom = headRoom;
   ks.boxCount = () => boxCount;
   // Caution: **Run the drawing through the safety net** — a layout uses the most arena, and where
-  // it runs out unrefused **the screen freezes**. The net is `api.js`'s `cramps` (it frees the
-  // half-built arena and reports). **Keep the `draw` called inside it bare** (wrapped twice, the
-  // cleanup would run twice).
+  // it runs out unrefused **the screen freezes**. The net is `kspage.js`'s `ks.cramps` (it frees
+  // the half-built arena and reports). **Keep the `draw` called inside it bare** (wrapped twice,
+  // the cleanup would run twice).
   ks.draw = () => {
-    try {
-      draw();
-    } catch (e) {
-      const back = w.kspage_web_recover();
-      if (ks.api && ks.api.onCramped) {
-        ks.api.onCramped(back);
-      }
-    }
+    ks.cramps(draw);
   };
   // **An entry point that acted redraws, and says so** (`api*.js`): the wasm answers 0 for "did
   // nothing", anything else for "acted".

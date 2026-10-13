@@ -253,7 +253,7 @@ Caution: **Do not bring layout decisions into it.** The thicker it grows, the mo
 * **Send plain text through the same gate.** If only one route is guarded, the page dies the same way through the other.
 * **Why the last net is needed**: a packed text (a row of `{}`, three bytes per block) can use up the arena within the cap while it is being read. A cap fitted to reading's worst case would stop that too, but **cutting every ordinary document to a quarter, to stop a shape the net already handles, is not a fair exchange.**
 
-**The net calls a JS entry point that throws.** The wasm holds no code that raises an exception, so only the JS side can throw. A freestanding panic (the error stop of a build with no standard library) records the reason and stops at `for {}` (`../../std/lang.kspls`), so an unhandled panic freezes the screen. The exception passes through the wasm frames to the catch at the caller (`port/web/api.js`'s `cramps`).
+**The net calls a JS entry point that throws.** The wasm holds no code that raises an exception, so only the JS side can throw. A freestanding panic (the error stop of a build with no standard library) records the reason and stops at `for {}` (`../../std/lang.kspls`), so an unhandled panic freezes the screen. The exception passes through the wasm frames to the catch at the caller (`port/web/kspage.js`'s `ks.cramps`), which every call that lays out or loads goes through. **The net reports only that signal** (its own error class): any other exception is a fault in the page's code, so it is thrown on to the browser's console after the cleanup, never shown as "memory used up", which would send its reader to the wrong cause.
 
 **After a refusal, the half-built arena is freed** (`kspage_web_recover`). Otherwise refusing loses half its point: after the unwinding nothing points at the half-built chunks, so the arena shrinks by that much for good, until even saving fails. Keep the reading's arena in a global: a local one is lost in the unwinding, leaving nothing to free it through. Do not touch the document. It is swapped only after reading, so a refused read leaves it unharmed.
 
@@ -1436,7 +1436,7 @@ Rules and fills come with the copy. The web's sticky heading (CSS's `position: s
 **Layout asks one question; the document is left alone.** `grid.place_rows` asks `filter.row_shown` for each row. A row left out takes no height but keeps its number, so formulas still point at it and merged cells are fixed up by number.
 
 * **A formula counts every row**, as in all four products (`SUBTOTAL` is their opt-in): a total that moved with the filter would show two values on two screens.
-* **The heading is always laid out, and so is the row the cursor is in** (`Over.kept_row`, set by the page before every layout). A row being typed into must not vanish under the hands (in Numbers' live filtering it can). When the cursor leaves, the row goes if it fails the condition.
+* **The heading is always laid out, and so is the row the cursor is in** (`Over.kept_row`, set by the page before every layout). A row being typed into must not vanish under the hands (in Numbers' live filtering it can). When the cursor leaves, the row goes if it fails the condition. Paper has no cursor, so there the row follows the condition.
 * Tab, Enter and the arrows skip the rows left out, as Excel's skip hidden rows.
 
 **No hiding rows by hand, and no folding groups.** A hand-hidden row is state inside the data, the source of the second family of complaints: pasting into hidden rows, deleting them unseen, a forgotten row travelling with the file. The manual's last chapter names both.
@@ -1473,7 +1473,7 @@ The value is shown only at layout (`Inline.show_value`), and goes into neither t
 | **2** | `120` | `3` |
 | **3** | `=A2*B2` (shows 360) | `=10 if B2 > 2 else 0` (shows 10) |
 
-**Only the cell being typed in shows its formula** (`Book.editing`); showing the value there would take the typed text away. Replacing a formula whole is a separate operation (`Editor.set_source`).
+**Only the cell being typed in shows its formula, and only on the screen** (`Book.editing`, `Inline.face`); showing the value there would take the typed text away. Its value is still kept, so CSV, Markdown, sorting and paper read the value (`Inline.showing`); paper is laid out with no cursor (`kspage_web_layout_paper`). Replacing a formula whole is a separate operation (`Editor.set_source`).
 
 **The reckoning moves the cursor**: the text shrinks and can leave the cursor past its end, so `Editor.clamp` fits it back onto a character boundary.
 
@@ -1490,6 +1490,8 @@ The value is shown only at layout (`Inline.show_value`), and goes into neither t
 | Taking a day apart | `A1.year()` / `.month()` / `.day()` |
 
 **There is no function-first form (`SUM(range)`)**: folding and taking apart are methods chained after the value, so the reading order is the evaluation order (`A1:A3.sum().round(0)`).
+
+**A `.` after digits is a decimal point only where a digit follows it**, so a method can follow a whole number (`2026.year()`, `1.round(0)`). In `5.0.round(2)` the first `.` is the point and the second starts the method.
 
 **`Day` is a type's name**, so no table may be named `Day` (`Day.of` would read as its cell). `if` and `else` are keywords, so `ifx` is another word, not `if`.
 
@@ -1573,13 +1575,15 @@ So cells are solved **in dependency order, not in the order written**, and an ea
 
 There are six comparisons (`=` / `<>` / `<` / `<=` / `>` / `>=`), read after addition and subtraction. **The answer is 1 or 0 so that existing operators can combine answers**: multiplying gives "and"; adding and testing for greater than 0 gives "or".
 
+**Equal and not equal are `=` and `<>`, the spreadsheet's spelling, not KSPL's `==` and `!=`**: they are what a person typing a formula already knows, and `==` is not accepted as a second spelling (Principle 6), so `A1 == 0` is `#SYNTAX!`.
+
 **Comparisons do not chain**: `A1<B1<C1` would compare the first answer, 1 or 0, with `C1`, which is not what it reads as, so it is refused as text left unread.
 
-**Only numbers can be compared.** A value is only ever a number or an error, so a text cell is "not a number" (`"yes" == A1` cannot be written).
+**Only numbers can be compared.** A value is only ever a number or an error, so a text cell is "not a number" (`"yes" = A1` cannot be written).
 
 ### The conditional expression evaluates both arms
 
-**Both arms are solved, then one is chosen**, and the error on the arm not chosen is discarded: `0 if A1 == 0 else 1/A1` is 0 even where A1 is 0.
+**Both arms are solved, then one is chosen**, and the error on the arm not chosen is discarded: `0 if A1 = 0 else 1/A1` is 0 even where A1 is 0.
 
 Solving only the chosen arm would make the same formula touch different cells from one reckoning to the next, and change which cycles are found.
 
@@ -1591,7 +1595,7 @@ Solving only the chosen arm would make the same formula touch different cells fr
 
 Caution: **Do not merge the two.** If the number format changed the value, merely changing the places shown would move a total.
 
-**Round at the last place when writing a number out**: truncating shows F64's 1.23 (an F64 is a 64-bit floating-point number, which stores 1.23 a little under) as "1.229999". The larger the number, the fewer decimal places can be written: rounding multiplies by 10 to the power of the places and converts to an integer, so past the range of I64 (a 64-bit integer) the result is nonsense.
+**Round at the last place when writing a number out**: truncating shows F64's 1.23 (an F64 is a 64-bit floating-point number, which stores 1.23 a little under) as "1.229999". The larger the number, the fewer decimal places can be written: rounding multiplies by 10 to the power of the places and converts to an integer. **Past about 9×10^18, near the edge of I64 (a 64-bit integer), nothing is converted**, since a conversion past I64's range has no fixed answer ([`expr/shown.kspls`](../expr/shown.kspls)'s `whole_of`). Such a number is written as the F64's own shortest text (`1e+300`, which reads back as the same number), with no grouping or places, and is not rounded: an F64 that large holds no fraction. A count of days that large names no day: `.year()` gives `#VALUE!`, and a date format writes it as a number.
 
 ### Conditional styles are resolved at layout
 
@@ -1617,13 +1621,13 @@ A formula that cannot give a number shows one of five marks. **They stay distinc
 | :-- | :-- |
 | `#SYNTAX!` | it is not readable as a formula |
 | `#REF!` | there is no cell where it points |
-| `#VALUE!` | what it points at is not a number |
+| `#VALUE!` | what it points at is not a number, or the answer is none (a division by 0, a day past the calendar's reach) |
 | `#CYCLE!` | it comes back round to itself |
 | `#NAME!` | an unknown function's name |
 
 **Do not overwrite a mark already raised with the mark for text left unread**: the unread text lies past where the first mark arose, and the first reason is closer to the fix. A formula read only part way is not accepted either; discarding the unread rest and answering would let a typing slip pass silently.
 
-**Division by 0 gives no number either**: an infinity or a NaN (the floating-point "not a number") turned into text would leave an unreadable value in the cell.
+**An infinity or a NaN (the floating-point "not a number") is no number either** (`#VALUE!`), whether a division by 0 or a product past an F64's range made it: turned into text it would leave an unreadable value in the cell. One place refuses them ([`expr/value.kspls`](../expr/value.kspls)'s `number`).
 
 **A formula can point only at a cell**, not at text outside a table cell. A table inside a cell is a table in its own right, and can be pointed at if it has a name.
 
@@ -2639,6 +2643,8 @@ flowchart TD
 
 **It must also work where nothing can be remembered.** IndexedDB cannot be opened under an opaque origin (`file://`), so there the page comes up on the sample. Do not stop silently. A store that fails to open answers "nothing remembered" ([`port/web/handle.js`](../port/web/handle.js)); otherwise start-up waits forever for a document that never comes.
 
+**The page opens one connection to that store and shares it** between where the document lives and the drafts (`ui.handles` in [`port/web/page.js`](../port/web/page.js)): IndexedDB orders transactions only within one connection. **It lets the connection go when another window opens a newer version** (`versionchange`), or that window's upgrade would wait for good; the next use opens it again.
+
 ### Drafts are held aside, and a draft is never called a save
 
 **While you type, kspage keeps a copy of the unsaved text inside the browser, a *draft*, so a crash loses little.** The file is written only on a press, so without drafts a crashed tab loses the whole day's typing; every other editor keeps one. A draft is never written to the file, and the screen never calls it "saved".
@@ -2647,12 +2653,12 @@ What happens to a draft, and when:
 
 | When | What happens |
 | :-- | :-- |
-| Typing pauses (2 seconds), or the document is left | its text is written to IndexedDB ([`port/web/keep.js`](../port/web/keep.js)) |
+| Typing pauses (2 seconds), typing has gone on 10 seconds without one, or the page is hidden or left | its text is written to IndexedDB ([`port/web/keep.js`](../port/web/keep.js)) |
 | Another document is opened over it | what it has unsaved is set aside as a draft first ("A document is replaced by another only when nothing would be lost" below) |
 | The page starts | drafts past 30 days and past 32 of them are pruned; the status bar says in one line where the earlier drafts are |
 | The person brings one back (from "File", then "the record of what is half-written") | it opens in no file; the first save asks for the destination |
 
-**Do not write it on closing (`beforeunload`).** No event fires when the tab crashes, so it fails exactly when it is needed.
+**Do not write it only on closing (`beforeunload`).** No event fires when the tab crashes, so it fails exactly when it is needed. Hiding the page (`visibilitychange`) and leaving it (`pagehide`) only add to the pause: a phone discards a page put aside with no further event. **The pause has a ceiling**, since every redraw restarts it and typing that never pauses would otherwise write nothing.
 
 **It does not write to the file.** The browser grants write permission only on a press ("The save destination is remembered, and permission is asked at the first save"), so saving by itself is impossible in principle.
 

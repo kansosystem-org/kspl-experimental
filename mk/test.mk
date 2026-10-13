@@ -52,7 +52,8 @@ C_FMT_OFF := C_FMT=:
 
 # Caution: **Not `out/tools.exe`**: tools look names up in `out/` and would start the wrong program
 # with nothing said. Hence `debug_`.
-## Local-cycle|debug-*|Run only that package's tests (`debug-tools` for `tools/`)
+## Local-cycle|debug-*|Run only that package's tests (the names are `OWN_MAKE_PKGS` in `mk/test.mk`)
+## Local-cycle|debug-tools|Run only the tests of `tools/`
 debug-tools: $(STAGE1_EXE)
 	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tools/tests/main.kspls OUT_STEM=debug_tools \
 		$(C_FMT_OFF)
@@ -218,6 +219,7 @@ ifneq ($(suites_text_unknown),)
 $(error SUITES_TEXT holds a name absent from SUITES: $(suites_text_unknown))
 endif
 
+## Per-item|test-suites-text|The suites that read text alone (`SUITES_TEXT`), CI's Linux-only share
 test-suites-text: $(addprefix test-,$(SUITES_TEXT))
 	$(call suites_passed,TEST SUITES (text, Linux only),$(SUITES_TEXT))
 
@@ -233,9 +235,11 @@ ifneq ($(suites_b_unknown),)
 $(error SUITES_B holds a name absent from SUITES: $(suites_b_unknown))
 endif
 
+## Per-item|test-suites-a|Half A of the remaining suites (what `SUITES_B` leaves), one CI job's share
 test-suites-a: $(addprefix test-,$(SUITES_A))
 	$(call suites_passed,TEST SUITES (half A),$(SUITES_A))
 
+## Per-item|test-suites-b|Half B of the remaining suites (`SUITES_B`), one CI job's share
 test-suites-b: $(addprefix test-,$(SUITES_B))
 	$(call suites_passed,TEST SUITES (half B),$(SUITES_B))
 

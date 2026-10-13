@@ -269,6 +269,9 @@ impl Ast_node
 
         if name_node != null
             c.fn_ctx.name = name_node.text
+        saved_errors_before: = c.fn_ctx.errors_before
+        c.fn_ctx.errors_before = c.error_mark()
+        defer c.fn_ctx.errors_before = saved_errors_before
         c.fn_ctx.effective_vis = c.compute_effective_vis(r)
 
         $is_export: = false
@@ -336,7 +339,7 @@ impl Ast_node
         sema_body_lint_stmt.lint_defer_gap(c, block)
         if r.has_attribute("naked") && !block.holds_only_asm(c)
             return false
-        if c.has_error()
+        if c.has_error_in_fn()
             return true
         if !r.analyze_function_body(c, block)
             return false

@@ -64,6 +64,17 @@ priv fn decimal_exceeds_i64_max(digits: U8[]): Bool //<
     // magnitude.
     return digits.compare(i64_max) > 0
 
+fn emit_folded_i64(c: Genc_ctx$@, v: I64) //<
+    //< It writes a value the constant folder produced as a C `long long` constant
+    //<
+    //< Caution: **I64::MIN has no literal in C.** `-9223372036854775808` is a minus applied to
+    //< 9223372036854775808, which fits no signed type, so the compiler warns and the type becomes
+    //< unsigned. It is written as `(-9223372036854775807LL - 1)`, as `<stdint.h>` writes INT64_MIN.
+    if v == -9223372036854775807I64 - 1
+        c.s("(-9223372036854775807LL - 1)")
+    else
+        c.s("\{v\}LL")
+
 impl Ast_node
     fn emit_float(r: Ast_node$@, c: Genc_ctx$@)
         text_val: = r.text
