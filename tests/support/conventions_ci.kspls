@@ -6,14 +6,74 @@
 //< Note: The workflow and `tools/ci_gates.kspls` are compared, and the gates and the suites with
 //< the platform table of `docs/SPEC-gates.md`. Disagreements inside ksplc are checked by
 //< `conventions_match.kspls`.
+import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars" // `trim_spaces`
 import "std/ds" { List }
+import "std/fs"
+import "std/io"
 import "std/mem" { Arena }
 import "std/str" // `strip_prefix` / `find_str`
 import "std/verdict"
 import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/extract"
 import "tests/support/harness"
 import "tests/support/harness_text" as htext
+
+priv fn check_extracted_suite_shares(arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    want_core: Bool[_] = ::{ true, false, false, true, true, false, false, true }
+    for i in Range.asc(want_core.len)
+        core: = extract.in_part(i, .core)
+        rest: = extract.in_part(i, .rest)
+        if !extract.in_part(i, .all) || core == rest || core != want_core[i]
+            bad
+                .push(arena.text().s("suite position \{i\} was assigned incorrectly").take())
+    verdict.check_list("the extracted compiler suite shares are complete and disjoint", 8,
+        "positions", bad@, "deal successive pairs in opposite directions between core and rest")
+
+priv fn missing_exec(mode: U8[], body: U8[]): Bool //<
+    //< Git's regular-file mode lacks execute permission
+    return mode.equals("100644") && body.starts_with("#!")
+
+priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on Windows
+    modes: U8[][_] = ::{ "100644", "100755", "100644", "120000", "100644" }
+    bodies: U8[][_] = ::{ "#!/bin/sh\n", "#!/bin/sh\n", "# comment\n", "#!/bin/sh", "\n#!/bin/sh" }
+    want: Bool[_] = ::{ true, false, false, false, false }
+    $samples: = List<|U8[]|>.new(arena)
+    for i in Range.asc(want.len)
+        if missing_exec(modes[i], bodies[i]) != want[i]
+            samples
+                .push(arena.text().s("mode sample \{i\} was read the other way").take())
+    verdict.check_list("the shebang permission check can fire", want.len, "samples", samples@,
+        "mend the judgment, not the samples")
+    result: = ksplc_harness.run(U8[][]::{ "git", "ls-files", "--stage", "-z" })
+    if !verdict.check("git lists indexed file modes", result.code == 0 && result.out.len > 0,
+        result.out)
+        return
+    $bad: = List<|U8[]|>.new(arena)
+    $seen: Sz = 0
+    for record in result.out.split(0, arena)
+        if record.len == 0
+            continue
+        $tab: Sz = 0
+        switch record.find_char('\t')
+        case .some(at)
+            tab = at
+        case .none
+            bad.push("git returned a file mode without a path")
+            continue
+        if !record.starts_with("100644 ") && !record.starts_with("100755 ")
+            continue
+        rel: = record.sub_from(tab + 1)
+        body: =
+            io.read_file_capped(fs.join(harness.root(), rel, arena), 2, arena) catch
+            bad.push(arena.text().s(rel).s(": cannot read its shebang").take())
+            continue
+        seen += 1
+        if missing_exec(record.sub(0, 6), body)
+            bad.push(rel)
+    verdict.check_list("every tracked shebang file has Git's executable bit", seen, "files", bad@,
+        "run git update-index --chmod=+x -- <path>; also chmod +x <path> on Unix")
 
 priv const ci_yml: U8[] = ".github/workflows/ci.yml"
 priv const jobs_head: U8[] = "jobs:"
@@ -128,7 +188,7 @@ priv const matrix_head: U8[] = "target: ["
 priv const linux_only: U8[] = "ci-linux-only" //<
     //< What only the Linux runner runs (qemu, wasm, the browser, BLAS)
 
-priv fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
+fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The variants `enum Set` declares, in the source's spelling
     $out: = List<|U8[]|>.new(arena)
     $inside: = false
@@ -539,6 +599,8 @@ priv fn check_msys2_list(arena: Arena$@)
 fn run(arena: Arena$@) //< this section's entry point
     //<
     //< Caution: **Call it from `conventions_match.kspls`'s `run`** (there is one suite).
+    check_shebang_modes(arena)
+    check_extracted_suite_shares(arena)
     check_msys2_list(arena)
     check_dispatch_switches(arena)
     check_ci_shards(arena)

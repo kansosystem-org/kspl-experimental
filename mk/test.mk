@@ -104,9 +104,9 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
 # `make -j` starts them in this order, and a heavy one at the back runs alone; `make test-suites`
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
 # `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`). **The compiler's copy
-# (`extract-ksplc`) runs apart from the other packages'**: it rebuilds itself and runs its suites,
-# the longest copy by far, so CI can start it beside them (`test-extract` below is both).
-SUITES := lsp-tree extract-ksplc extract-rest kspls-trip docref c-warnings docsnippet pilot-copy \
+# (`extract-ksplc-core` / `extract-ksplc-rest`) runs apart from the other packages'**: each copy
+# rebuilds itself and takes a share of the suites; the other packages overlap the core share.
+SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest kspls-trip docref c-warnings docsnippet pilot-copy \
   conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate own-machine \
   $(PRIVATE_SUITES)
 
@@ -233,14 +233,18 @@ test-suites-text: $(addprefix test-,$(SUITES_TEXT))
 
 # --- The two halves CI runs on separate jobs, of what is left ---
 # **Cut for the two jobs to end together on Windows**, the slowest (by the job log's timestamps;
-# MSYS2 counts no child's CPU); half A is what B leaves. A's two slots are the two extract halves,
-# the small suites filling the shorter one; `sync-share`, slow on Windows, rides B's wait.
-SUITES_B := lsp-tree c-warnings $(PRIVATE_SUITES)
+# MSYS2 counts no child's CPU); half A is what B leaves. Each gets one compiler suite share;
+# the other packages overlap A's compiler share, and B also pays for LLVM and tool checks.
+SUITES_B := extract-ksplc-rest lsp-tree c-warnings $(PRIVATE_SUITES)
 SUITES_A := $(filter-out $(SUITES_B) $(SUITES_TEXT),$(SUITES))
 
 suites_b_unknown := $(filter-out $(SUITES),$(SUITES_B))
 ifneq ($(suites_b_unknown),)
 $(error SUITES_B holds a name absent from SUITES: $(suites_b_unknown))
+endif
+
+ifneq ($(words $(SUITES_A) $(SUITES_B) $(SUITES_TEXT)),$(words $(sort $(SUITES_A) $(SUITES_B) $(SUITES_TEXT))))
+$(error a suite belongs to more than one CI share or is listed twice)
 endif
 
 ## Per-item|test-suites-a|Half A of the remaining suites (what `SUITES_B` leaves), one CI job's share
@@ -254,7 +258,10 @@ test-suites-b: $(addprefix test-,$(SUITES_B))
 ## Local-cycle|test-extract|Every package with its own `Makefile` from a copy (both halves)
 test-extract: test-extract-ksplc test-extract-rest
 
-.PHONY: test-suites test-suites-a test-suites-b test-suites-text test-extract $(addprefix test-,$(ALL_SUITES))
+## Per-item|test-extract-ksplc|The compiler from isolated copies, both suite shares
+test-extract-ksplc: test-extract-ksplc-core test-extract-ksplc-rest
+
+.PHONY: test-suites test-suites-a test-suites-b test-suites-text test-extract test-extract-ksplc $(addprefix test-,$(ALL_SUITES))
 
 # --- Checking the generated LLVM IR's signature agreement ---
 # Caution: **LLVM's verifier does not match a call against its `define`**: only a stack argument

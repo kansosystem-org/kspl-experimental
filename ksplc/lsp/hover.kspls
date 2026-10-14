@@ -426,7 +426,7 @@ priv fn send_literal_type(state: Doc_state$@, literal: Ast_node$@, id_val: json.
 
 priv fn resolve_hover_target(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     target_node: Ast_node$@, ctx: Hover_ctx$@)
-    def_res: = lsp_nav.resolve_def_node(state.sema, state.root_file, path, target_node)
+    def_res: = lsp_nav.resolve_def_node(state.sema, path, target_node)
     ctx.def_node = def_res.def_node
 
     if ctx.def_node != null
@@ -650,34 +650,22 @@ priv fn build_hover_def_code(state: Doc_state$@, ctx: Hover_ctx$@, def_code: Str
     def_file: = ctx.def_node.loc.file()
     def_src: = base_core.source_of(state.sema.source_map, def_file)
 
-    if def_src.len > 0
-        offset: Sz = ctx.def_node.loc.offset
-        $span: = ctx.def_node.get_span_length()
-        $actual_offset: = offset
-        if actual_offset > def_src.len
-            actual_offset = def_src.len
-            span = 0
-        if actual_offset + span > def_src.len
-            span = def_src.len - actual_offset
-
-        $last_was_space: = false
-        $max_len: = span
-        if max_len > 150
-            max_len = 150
-
-        for i_char in Range.asc(max_len)
-            c_char: = (def_src.ptr + actual_offset + i_char)$
-            if c_char == '{' || c_char == ';'
-                break
-            if c_char == '\n' || c_char == '\r' || c_char == '\t' || c_char == ' '
-                if !last_was_space
-                    def_code.c(' ')
-                    last_was_space = true
-                continue
-            def_code.c(c_char)
-            last_was_space = false
-        if span > 150
-            def_code.s("...")
+    if def_src.len == 0
+        return
+    snippet: = def_src.sub(ctx.def_node.loc.offset, ctx.def_node.get_span_length())
+    $last_was_space: = false
+    for c_char in snippet.sub(0, 150)
+        if c_char == '{' || c_char == ';'
+            break
+        if c_char.is_space()
+            if !last_was_space
+                def_code.c(' ')
+                last_was_space = true
+            continue
+        def_code.c(c_char)
+        last_was_space = false
+    if snippet.len > 150
+        def_code.s("...")
 
 priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bool,
     out: Str_builder$@): Bool //<
@@ -688,13 +676,10 @@ priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: 
     parent_name: = find_parent_type_name(state, def_node, keep_args)
     if parent_name.len == 0
         return false
-    if state.sema == null
-        out.s(parent_name)
-    else
-        // The parent can be an instantiated type too, so it goes through the display as well.
-        $shown: = state.sema.env.display_str_named(parent_name)
-        defer shown.free()
-        out.s(shown.slice())
+    // The parent can be an instantiated type too, so it goes through the display as well.
+    $shown: = state.sema.env.display_str_named(parent_name)
+    defer shown.free()
+    out.s(shown.slice())
     out.c('.')
     return true
 
@@ -712,15 +697,13 @@ priv fn enclosing_impl_target(path: List<|Ast_node$@|>$@): U8[] //<
 
 priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node$@,
     fqn_name: Str_builder$@)
-    $name_str: = target_node.text
-    $orig_name: U8[] = name_str
+    $orig_name: = target_node.text
     $sym: Sema_symbol$@ = null
 
     if ctx.def_node != null
         id_n: = ctx.def_node.find_child(.k_identifier)
         if id_n != null
-            name_str = id_n.text
-            orig_name = name_str
+            orig_name = id_n.text
         if ctx.def_node.sym_ptr != null
             sym = Sema_symbol$@::ctx.def_node.sym_ptr
             d_kind: = ctx.def_node.kind_id

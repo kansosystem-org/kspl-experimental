@@ -193,6 +193,8 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 
 Parsed into the caller's arena, a document holds nothing to free, so keeping `doc.val` alone is enough.
 
+**An HTTP response's version and reason phrase enter its arena when the status line is parsed.** Reading the body may grow and move the receive buffer, so views into that buffer cannot survive until the response is complete. The buffer and socket readers share this arena-owned status line, and each field is copied once.
+
 Caution: **The arena of its own takes a whole chunk at its first allocation**, however small the value. For many small values, such as each message a server reads, pass an arena of the caller's and free it once.
 
 **No free function takes the arena as an argument** (an `alloc_in(arena, n)`): it would be a second spelling of `arena.alloc(n)`.
@@ -225,7 +227,7 @@ Caution: **Do not confuse `Arc` with ARC in a document.** ARC (upper case) is Au
 
 A cycle still leaks, as in every reference-counted language: make one side a weak handle. A resource that is not ARC (a `List`, a file) still needs its `free()`, since nothing runs one implicitly.
 
-**release holds one weak count while the value is taken apart.** The value may hold the last weak handle to its own block, and that handle's release would free the block under the release still using it. `Arc` gets the same from the weak count its owners hold together.
+**Both wrappers hold one implicit weak count for all strong owners together.** It stays held while the last owner takes the value apart: the value may hold the last explicit weak handle to its own block, whose release must not free the block under that call. The wrappers share one private control-block layout and initialization. `Rc` updates its counts directly; `Arc` uses atomic operations, so a single atomic decrement decides which thread frees the block.
 
 ### A container owns its elements' ARC counts
 
@@ -1400,6 +1402,8 @@ Caution: **Hold separate buffers for standard output and standard error.** Share
 
 **Whether a value fits is asked apart from writing it** (`fits_int`, from the kind and the width): truncated, 300 becomes 44 in a `U8`, so a walker taking values from outside refuses one that does not fit rather than writing it. Kept in `std/reflect`, the ranges stand in one place for every walker.
 
+**The JSON walker uses one value dispatcher in each direction.** An optional's contents and a list's element use a local copy of the field descriptor with the element's kind and width; the name and nested table stay with it. The object walk handles absent keys and optional tags before dispatch, so a missing optional becomes `.none` while an explicit `null` fails without changing its tag. Scalar fields and container contents then share the same conversions and range checks.
+
 **Other encoders spell out every width because they are collections of methods** (serde's `serialize_i8` … `serialize_f64`, the overloads of Swift's `Codable`). Static dispatch (choosing the method at compile time) puts the width in their API. KSPL's table is data walked at run time, so it holds the width as a number. Rounding the width instead, as Jackson's `NumberType` does, loses `short` versus `int` across the round trip.
 
 ### JSON's numbers hold integers and decimals separately
@@ -1556,6 +1560,7 @@ The cause is often small: one error type in a signature brings its whole file al
 | :-- | :-- |
 | `str` | `strfmt`, which it imports for `to_hex_lower` and as the anchor bringing `\{x\}`'s conformances into every program using `str` |
 | `str` | Not `io`: the `Writer` / `Formattable` contract is in `std/lang`, so string-only code is spared file I/O. The reverse, `io` bringing `str` along, remains |
+| `sha256`, `url` | `chars` holds the package's hex-digit encoder, so neither needs numeric formatting. `strfmt` uses the same encoder behind its public `to_hex_lower` / `to_hex_upper` methods, whose callers still import `strfmt` |
 | `ds`, `sha256` | Stay outside the lump, because they take no `Writer`: `ds` builds its message with `Panic_msg`, and `sha256` writes straight into the caller's array |
 
 **Do not add a function taking a `Writer` for convenience**: it brings the whole lump along.

@@ -965,6 +965,8 @@ The regression is in `ksplc/tests/lang_types_test.kspls`.
 
 **The immutable version and the mutable version are one struct in C.** The C name drops the immutability at the declared position (`variance_stripped` in `sema/type/env.kspls`). Otherwise the C compiler would reject the one tier of weakening that KSPL allows, as an incompatible separate struct.
 
+**An implicit permission conversion changes the node's type without adding a cast.** `apply_type_coercion` in `sema/body/coerce.kspls` handles value-copy immutability and the weakening of a view or a type argument whose declaration permits it in one branch. The shape comparison comes first; the compatibility query runs only where copying the value's outer qualifier does not suffice. An incompatible conversion is reported once by the common mismatch path.
+
 #### Where immutability's two axes are enforced
 
 **KSPL asks two separate questions about a write: may this name get a new value, and may the thing it points at be changed?** One function, `enforce_mutability` in `sema/body/write_perm.kspls`, answers both, and picks the question by whether the write goes through a pointer. The language specification (`docs/SPEC-language.md` §4.2) keeps the two axes orthogonal (independent of each other):
@@ -1019,7 +1021,7 @@ Caution: **Attach a copy of that moment's type-argument bindings to all work put
 
 Caution: **Name an instance through those functions only.** A second spelling of the rule makes two names for one instance, and C fails with `redefinition of ...` or `unknown type name`.
 
-**A type's name in the generated code is spelled in one place, and from Lower on only once.** `Env.mangle_type_id_to` spells it, and every name of a type in the output comes from there: the declaration's (`transform_decl_name` in `lower/abi.kspls`), each use's, and the tags a `switch` names. Spelled a second way, from the type's canonical string, the name drifts on an instance whose immutability is dropped (`variance_stripped`): a `switch` on `Pick<|I32|>` of an `enum Pick<|$T|>` named tags C never declared. Code generation asks for the same few thousand names tens of thousands of times, and spelling one walks it a character at a time. So from Lower on, each type's name is kept on its entry (`Entry.c_name`) the first time it is spelled, and later requests copy it. **Not earlier**: until sema has recorded every instance, an instance whose immutability is dropped can still answer with the name its record will replace, and a kept name would give one type two names. `lower_root.run` turns the keeping on (`Env.c_names_final`), where it turns on the ARC answers' memo for the same reason. The cost is one slice on each type's entry and one copy of each name the output uses.
+**A type's name in the generated code is spelled in one place, and from Lower on only once.** `Env.mangle_type_id_to` in `sema/type/naming.kspls` spells it, and every name of a type in the output comes from there: the declaration's (`transform_decl_name` in `lower/abi.kspls`), each use's, and the tags a `switch` names. Spelled a second way, from the type's canonical string, the name drifts on an instance whose immutability is dropped (`variance_stripped`): a `switch` on `Pick<|I32|>` of an `enum Pick<|$T|>` named tags C never declared. Code generation asks for the same few thousand names tens of thousands of times, and spelling one walks it a character at a time. So from Lower on, each type's name is kept on its entry (`Entry.c_name`) the first time it is spelled, and later requests copy it. **Not earlier**: until sema has recorded every instance, an instance whose immutability is dropped can still answer with the name its record will replace, and a kept name would give one type two names. `lower_root.run` turns the keeping on (`Env.c_names_final`), where it turns on the ARC answers' memo for the same reason. The cost is one slice on each type's entry and one copy of each name the output uses.
 
 **An instantiation's name is decided by the definition's position alone, not by how a reference spells it** (unqualified from within the same file, say): the record holds the template's FQN. Two spellings of one type would make two bodies for the same type: `std.ds.Map_entry<|Sz, I32|>$@`, and `Map_entry<|Sz, I32|>$@` unqualified inside `std/ds.kspls`. The generated C then refers to an element type it never defines (`error: unknown type name 'Map_entry_Sz_I32'`). `generics.templates` keys a template by its FQN alone ("Name resolution with no namespace goes through one function"). Normalize to the FQN before making the record:
 
@@ -1547,7 +1549,7 @@ The backends only translate; every decision has been made before them. They are 
 
 | The overlap | How it is handled |
 | :-- | :-- |
-| the composite types' de-duplication (10 lines × 3 places) | **gathered** in `Mangle_seen` in `ksplc/sema/type/env.kspls` (the rule is a property of the type table, so it sits with env) |
+| the composite types' de-duplication (10 lines × 3 places) | **gathered** in `Mangle_seen` in `ksplc/sema/type/naming.kspls` (the key is the output name, so it sits with its spelling) |
 | `clear_scratch` / `take_scratch` (6 lines × 2 places) | not gathered: each is one statement, and a shared function would need as many lines at each caller |
 
 **There is no trait for the output destination.** The shared files touch the source map, the type table and plain values, never the output buffer, so plain functions are enough. Do not add a trait that binds `Genc_ctx` and `Genllvm_ctx` together.
@@ -2542,6 +2544,8 @@ Every place where a counted value is copied and the copy can outlive the origina
 Caution: A variable declaration, an argument and a `return` are not enough. Struct-literal fields, array-literal elements, enum payloads and assignment into an existing binding slip through. At each, the count is one short, so a value that should still be alive is freed.
 
 **The verdict lives in one place, `Arc_take` in `lower/arc.kspls`.** Every taker decides with it before lowering (a place is retained at its own type, a read only the lowered form names is retained once lowered, a new value brings its own count) and places the retain with it after lowering. Copying its conditions out per position makes the same omission recur at the next.
+
+A managed read is classified as an ordinary place copy before asking whether only its lowered form can name the memory. Both `Arc_take.decide` and the freshness check make that distinction first, then ask `arc_read_once_lowered` for the remaining reads. This keeps the managed-type and place checks at the decision boundary, with no second scan inside the helper.
 
 **The retain goes where the copy is made, never earlier.** Emitted when the taker is first looked at, ahead of its operands, `two(a, mk(k)!)` retained `a` before `mk(k)!` could leave, and the exit never gave that count back. The operands of a call, a compound literal and an enum's payload go through `Operand_order` (`lower/order.kspls`), which knows which operand is taken (`add_value`):
 

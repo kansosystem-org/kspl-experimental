@@ -677,12 +677,10 @@ impl Ast_node
             sema_body_lint_stmt.lint_type_given(c, expr_node, expected_id,
                 "The return type already gives it.")
         else
-            $is_void_ok: = false
-            if sema_type_env.is_void(expected_id) || sema_type_env.is_unknown(expected_id)
-                is_void_ok = true
-            else if c.env.is_result(expected_id)
-                if sema_type_env.is_void(c.env.strip_result(expected_id))
-                    is_void_ok = true
+            is_void_ok: =
+                sema_type_env.is_void(expected_id) || sema_type_env.is_unknown(expected_id) ||
+                (c.env.is_result(expected_id) &&
+                sema_type_env.is_void(c.env.strip_result(expected_id)))
             if !is_void_ok
                 c.clear_scratch()
                     .s("expected return value of type '\{c.env.get_str(c.fn_ctx.ret_id)\}', but got \
@@ -712,9 +710,7 @@ impl Ast_node
             throw .analysis_failed
         expr_node: = r.get_fallback_expr()
         if expr_node != null
-            $exp: = c.fn_ctx.fallback_type
-            if exp == 0
-                exp = I32::sema_type_env.Builtin_type_id.unknown
+            exp: = c.fn_ctx.fallback_type
             prev_in_fallback: = c.fn_ctx.in_fallback_value
             c.fn_ctx.in_fallback_value = true
             defer c.fn_ctx.in_fallback_value = prev_in_fallback

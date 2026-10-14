@@ -447,15 +447,14 @@ impl Ast_node
         is_ptr_src: = cg.env.is_pointer(recv_type) || cg.env.is_fn_ptr(recv_type)
         is_ptr_dst: = cg.env.is_pointer(target_type) || cg.env.is_fn_ptr(target_type)
 
+        if is_ptr_src && is_ptr_dst
+            return base_core.arena.dup_str(recv_reg)
         $cast_inst: = "bitcast"
-        $is_noop: = false
 
-        if is_ptr_src && !is_ptr_dst
+        if is_ptr_src
             cast_inst = "ptrtoint"
-        else if !is_ptr_src && is_ptr_dst
+        else if is_ptr_dst
             cast_inst = "inttoptr"
-        else if is_ptr_src && is_ptr_dst
-            is_noop = true
         else
             real_src_id: = cg.env.scalar_repr_id(recv_type)
             real_dst_id: = cg.env.scalar_repr_id(target_type)
@@ -472,7 +471,7 @@ impl Ast_node
                 else if from_size > to_size
                     cast_inst = "fptrunc"
                 else
-                    is_noop = true
+                    return base_core.arena.dup_str(recv_reg)
             else if is_f_src && !is_f_dst
                 cast_inst = "fptoui" if dst_is_unsigned else "fptosi"
             else if !is_f_src && is_f_dst
@@ -483,10 +482,7 @@ impl Ast_node
                 else if from_size > to_size
                     cast_inst = "trunc"
                 else
-                    is_noop = true
-
-        if is_noop
-            return base_core.arena.dup_str(recv_reg)
+                    return base_core.arena.dup_str(recv_reg)
 
         // Caution: A recv_reg that is neither %N nor @name is a constant's text; passed through a
         // zext/sext from the smaller type, LLVM truncates it (`sext i32 9223372036854775807 to

@@ -491,7 +491,11 @@ fn http_echo_server(listener: net.Tcp_listener$@): Void$@
     resp_headers: = http.headers(server_arena).add("Content-Type", "text/plain").build()
     $out: = Str_builder.new()
     defer out.free()
-    http.format_response(out@, 200, resp_headers, "pong")
+    $body: = Str_builder.new()
+    defer body.free()
+    for _i in Range.asc(4096)
+        body.s("pong")
+    http.format_response(out@, 200, resp_headers, body.slice())
         catch panic("server format_response should succeed")
     conn.write_all(out.slice()) catch panic("server write_all should succeed")
     conn.free()
@@ -551,7 +555,8 @@ fn test_http_socket_roundtrip()
         catch panic("client read_response should succeed")
     defer resp.free()
     resp_ok: =
-        resp.status == 200 && resp.reason.equals("OK") && resp.body.equals("pong")
+        resp.status == 200 && resp.version.equals("HTTP/1.1") && resp.reason.equals("OK") &&
+        resp.body.len == 16384 && resp.body.count_str("pong") == 4096
     assert(resp_ok, "client must parse the server's response correctly")
     switch resp.headers.find("content-type")
     case .some(v)

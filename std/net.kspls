@@ -103,14 +103,6 @@ priv fn handle_set_nonblocking(handle: I64): Void!Net_error //< makes a handle n
 pub struct Tcp_listener //< a socket that waits for incoming connections
     priv handle: I64
 
-priv fn opened(h: I64, zero_means: Net_error): I64!Net_error //<
-    //< A raw handle the runtime returned, or its failure: negative is a name that did not resolve
-    if h < 0
-        throw .resolve_failed
-    if h == 0
-        throw zero_means
-    return h
-
 impl Tcp_listener
     pub fn bind( //< starts listening on the address and port
         //<
@@ -121,8 +113,11 @@ impl Tcp_listener
         port: I32, //< the port to listen on; 0 lets the OS choose a free one (see `port`)
     ): Tcp_listener$@!Net_error
         checked_port(port)!
-        h: =
-            opened(kspl_tcp_listen(host.ptr, host.len, port, default_backlog), .bind_failed)!
+        h: = kspl_tcp_listen(host.ptr, host.len, port, default_backlog)
+        if h < 0
+            throw .resolve_failed
+        if h == 0
+            throw .bind_failed
         l: = mem.alloc_as<|Tcp_listener|>()
         l.handle = h
         return l
@@ -133,9 +128,7 @@ impl Tcp_listener
         h: = kspl_tcp_accept(r.handle)
         if h == 0
             throw Net_error.accept_failed.would_block_or()
-        s: = mem.alloc_as<|Tcp_stream|>()
-        s.handle = h
-        return s
+        return Tcp_stream.connected_stream(h)
 
     pub fn port(r: Self@): I32!Net_error //< the port it listens on, the OS's choice for a 0
         return bound_port(r.handle)!
@@ -268,12 +261,9 @@ pub struct Peer_addr //< the address of the peer of a connection
     pub port: I32 //< the peer's port
 
 impl Tcp_stream
-    priv fn connected_stream(h: I64): Tcp_stream$@!Net_error //<
-        //< Wraps the raw handle that a connect returned (0 means failure) in a Tcp_stream
-        //<
-        //< accept does not use this: it checks would_block only on failure.
+    priv fn connected_stream(h: I64): Tcp_stream$@ //< wraps a successfully opened socket
         s: = mem.alloc_as<|Tcp_stream|>()
-        s.handle = opened(h, .connect_failed)!
+        s.handle = h
         return s
 
     pub fn connect( //< connects by name, trying the candidate addresses in overlapping attempts

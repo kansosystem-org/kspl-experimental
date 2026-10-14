@@ -11,6 +11,7 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
+import "tests/support/conventions_ci" as ci_layout
 import "tests/support/conventions_scan" as scan
 import "tests/support/harness"
 
@@ -158,8 +159,20 @@ priv fn package_of(rel: U8[], dirs: List<|U8[]|>@): U8[] //<
             return d
     return ""
 
-priv fn makes(r: Rules@, t: U8[], family: Bool): Bool //< whether these rules make the target
+priv fn shard_target(t: U8[], arena: Arena$@): Bool //<
+    //< a section named by the CI's canonical table
+    if !t.starts_with("ci-shard-")
+        return false
+    for v in ci_layout.set_variants(harness.read_under_root("tools/ci_gates.kspls"), arena)
+        if v.starts_with("ci_shard_") && v.replace("_", "-", arena).equals(t)
+            return true
+    return false
+
+priv fn makes(r: Rules@, t: U8[], family: Bool, arena: Arena$@): Bool //<
+    //< whether these rules make the target
     if names(r.targets, t, family)
+        return true
+    if names(r.patterns, "ci-shard-%", false) && shard_target(t, arena)
         return true
     if !family
         return false
@@ -185,6 +198,15 @@ priv fn names_a_target(text: U8[], arena: Arena$@): Bool
     return mention_of(text, arena).len > 0
 
 fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref_test.kspls`
+    shard_samples: scan.Sample[_] = ::{
+        scan.Sample::{ .text = "ci-shard-core", .hits = true },
+        scan.Sample::{ .text = "ci-shard-rest", .hits = true },
+        scan.Sample::{ .text = "ci-shard-linux", .hits = false },
+        scan.Sample::{ .text = "ci-shard-unknown", .hits = false },
+        scan.Sample::{ .text = "ci-linux-only", .hits = false },
+    }
+    scan.check_samples("the reading of a CI section's target can fire",
+        scan.Sample[]::shard_samples, "shard_samples", shard_target, arena)
     tracked: = harness.tracked()
     $dirs: = List<|U8[]|>.new(arena)
     for rel in tracked
@@ -234,7 +256,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
                 seen_dirs.push(place)
                 seen_rules.push(rules_of(place, arena))
             r: = seen_rules.get(k)
-            ok = ok || makes(r@, m.target, m.family)
+            ok = ok || makes(r@, m.target, m.family, arena)
             // A forwarded suite is one the folder it goes to finds (`suite_found`).
             for f in forwards
                 if f.suites && f.dir.equals(place) && m.target.starts_with("test-")

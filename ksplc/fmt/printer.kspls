@@ -453,13 +453,11 @@ impl Formatter
         // Caution: Do not list the preceding tokens one by one. A missed one is taken as binary and
         // printed `::{ - 1` / `else - 2`; the existing predicates keep up as brackets and keywords
         // are added.
-        if text.equals("-")
-            r.flags.last_was_unary_minus =
-                last_txt.is_opening_bracket() || last_txt.is_space_required_keyword() ||
-                (last_txt.is_op() && !r.flags.last_was_postfix_mark) || last_txt.equals(",") ||
-                last_txt.equals(";")
-        else
-            r.flags.last_was_unary_minus = false
+        r.flags.last_was_unary_minus =
+            text.equals("-") &&
+            (last_txt.is_opening_bracket() || last_txt.is_space_required_keyword() ||
+            (last_txt.is_op() && !r.flags.last_was_postfix_mark) || last_txt.equals(",") ||
+            last_txt.equals(";"))
         // On a chain's `.`, wrapping is decided by the width of the whole .m(args) that follows
         // (pending_seg_len, set by format_internal); measured per token, a segment looks too short,
         // especially with a string argument.
@@ -681,10 +679,9 @@ impl Formatter
 
         kind_id: = node.kind_id
         len: = node.children.len
-        $my_no_space: = no_space_mode
-
-        if kind_id == .k_type_args || kind_id == .k_type_gen_params || kind_id == .k_type_postfix
-            my_no_space = true
+        my_no_space: =
+            no_space_mode || kind_id == .k_type_args || kind_id == .k_type_gen_params ||
+            kind_id == .k_type_postfix
 
         was_in_type_expr: = r.flags.in_type_expr
         if kind_id == .k_type_expr
@@ -716,10 +713,9 @@ impl Formatter
         // Caution: **Read the setting at the `fn`.** The k_stmt_block inside does not know whose
         // body it is, so an `if`'s body would get the same handling (which is AllowShortBlocks'
         // job).
-        $pass_allow_single: = false
-        if kind_id == .k_stmt_defer ||
+        pass_allow_single: =
+            kind_id == .k_stmt_defer ||
             (kind_id == .k_decl_fn && r.config.allow_short_functions)
-            pass_allow_single = true
         was_bare_close: = r.bare_close
         if r.layout && my_brace_suppress && kind_id == .k_stmt_block && body_count == 1
             r.bare_close = body.close_brace_off

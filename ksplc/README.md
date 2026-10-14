@@ -81,7 +81,7 @@ The design is "The Parse layer: from text to an AST (Desugar included)" in [`ksp
 
 | Folder | The question it answers | Files |
 | :-- | :-- | :-- |
-| [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `scope` (the symbol table: from a name to what it declares), `display` (the strings a diagnostic prints) |
+| [`type/`](sema/type/) | How is a type or a name expressed? | `def` (the types' shapes), `env` / `query` / `arc` (the type table and its queries), `naming` (output names and instantiation-cache keys), `scope` (the symbol table: from a name to what it declares), `display` (the strings a diagnostic prints) |
 | [`session/`](sema/session/) | What is shared through one analysis? | `ctx` (`Sema_ctx` itself, the diagnostics, declaring a symbol), `state`, `import_table` / `imports` (the import declarations and their ledger), `pointer` (what a comment's pointer stands for), `c_boundary` (what the generated C cannot hold), `prof` (the breakdown of sema's time) |
 | [`decl/`](sema/decl/) | What is there, under what name, and of what type? | `collect` (the entry point), `declare`, `registry` / `layout`, `resolve`, `name` (what a written name names), `access`, `attrs`, `eval`, `reflect`, `type_check`, the generics (`mono*` / `subst`), the traits (`trait_check` / `trait_default`) |
 | [`flow/`](sema/flow/) | Which state is a binding in, and when? | `track`, `stmt` (branching and joining), `release`, `report` (the diagnostics) |
@@ -249,6 +249,8 @@ Caution: **After any change under `ksplc/` (`ksplc/kspl.kspeg` included), update
 
 **The shared foundation is split by the reason for reading it**: `harness`, `harness_build` (the only caller of the C compiler and the linker), `harness_expect`, `harness_markers` and `harness_grow`, each saying in its opening comment what it holds.
 
+The CLI suite keeps command selection and diagnostics in `tests/suite/cli_test.kspls`; `tests/support/cli_emit.kspls` holds the emitted-file checks and their shared command assertions. The package-location suite keeps std discovery in `tests/suite/std_dir_test.kspls`; `tests/support/std_dir_named.kspls` holds named-package and path-identity checks, with the child-environment setup both halves use.
+
 **A fixture is one small source with its expected result written in its opening comment.** The three fixture folders share the marks (read by `harness_markers.markers()`):
 
 ```kspls
@@ -289,14 +291,6 @@ Rules for every fixture folder:
 * Prove a move between files by the marks. List every `EXPECT` line in the folder before and after, keeping duplicates (`grep -h '^// EXPECT' tests/negative/* | sort`, run in this folder). The two lists must be the same, line for line: each case then still demands its own error.
 
 ## Files near the limit and how they split
-
-**Each file near the line cap, and how it splits.** `tests/negative/deep_*` is material that confirms a limit itself, so once split, the test would no longer hold (the check excludes it by name).
-
-* [`ksplc/tests/suite/std_dir_test.kspls`](tests/suite/std_dir_test.kspls): what splits out is the band of a package that names itself (`[package]` in its folder's `ksplc.cfg`: the `named_*` material and the cases on it), which asks nothing about where `std` is. Where it goes is a new `std_dir_named.kspls` under `ksplc/tests/support/`. The helpers both halves call (`case_dir`, `run_exe` and `ksplc_env`) go down with it, and the suite imports them back.
-
-* [`ksplc/tests/suite/cli_test.kspls`](tests/suite/cli_test.kspls): what splits out is the band on the files a compile writes beside its output (`case_surface_doc`, `case_emit_libs`, `case_library`: `--emit-surface`, `--emit-libs` and `--library=`), each of which builds a sample folder and reads back one file. Where it goes is a new `cli_emit.kspls` under `ksplc/tests/support/`; `std_flag` goes down with it, and the suite imports it back.
-
-* [`ksplc/sema/type/env.kspls`](sema/type/env.kspls): what splits out is the band that names a type in the output and in the instantiation cache: `mangle_type_id_to` and its walk, `instance_c_name_to`, `type_args_to`, `instance_key_to` / `instance_key`, `c_repr_type_id` and `Mangle_seen`. Each reads the type table, and nothing else in the file calls it. Where it goes is a new `naming.kspls` beside it, as a second `impl Env`; the backends, `lower/` and `sema/decl/mono.kspls` import it, and the row naming `Mangle_seen`'s home in [`ksplc/docs/DESIGN.md`](docs/DESIGN.md) follows it.
 
 **How to choose the cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md).** This package adds two constraints of its own:
 

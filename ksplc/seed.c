@@ -470,6 +470,7 @@ typedef struct ksplc_fmt_file_Fixed_points ksplc_fmt_file_Fixed_points;
 typedef struct ksplc_fmt_file_Fmt_error ksplc_fmt_file_Fmt_error;
 typedef struct std_subproc_Run_result std_subproc_Run_result;
 typedef struct std_subproc_Job std_subproc_Job;
+typedef struct std_subproc_Running_job std_subproc_Running_job;
 typedef struct std_subproc_Run_error std_subproc_Run_error;
 typedef I32 std_subproc_Spawn_error;
 typedef I32 std_subproc_Write_end;
@@ -498,7 +499,6 @@ typedef I32 ksplc_sema_type_env_Builtin_type_id;
 typedef struct ksplc_sema_type_env_Info ksplc_sema_type_env_Info;
 typedef struct ksplc_sema_type_env_Instance ksplc_sema_type_env_Instance;
 typedef struct ksplc_sema_type_env_Env ksplc_sema_type_env_Env;
-typedef struct ksplc_sema_type_env_Mangle_seen ksplc_sema_type_env_Mangle_seen;
 typedef struct ksplc_sema_session_state_Generic_arg ksplc_sema_session_state_Generic_arg;
 typedef struct ksplc_sema_session_state_Alias_info ksplc_sema_session_state_Alias_info;
 typedef struct ksplc_sema_session_state_Import_symbol_info ksplc_sema_session_state_Import_symbol_info;
@@ -519,6 +519,7 @@ typedef struct ksplc_sema_session_state_Layout_measure ksplc_sema_session_state_
 typedef struct ksplc_sema_session_state_Folded_layout ksplc_sema_session_state_Folded_layout;
 typedef struct ksplc_sema_session_state_Layout_state ksplc_sema_session_state_Layout_state;
 typedef struct ksplc_sema_session_state_Resolving_state ksplc_sema_session_state_Resolving_state;
+typedef struct ksplc_sema_type_naming_Mangle_seen ksplc_sema_type_naming_Mangle_seen;
 typedef struct ksplc_sema_session_ctx_Jump_label ksplc_sema_session_ctx_Jump_label;
 typedef struct ksplc_sema_session_ctx_Fn_ctx ksplc_sema_session_ctx_Fn_ctx;
 typedef I32 ksplc_sema_session_ctx_Sema_error;
@@ -772,6 +773,7 @@ typedef struct std_lang_Option_ksplc_lsp_server_Editor_reader_Ptr std_lang_Optio
 typedef struct std_ds_List_ksplc_tools_surface_Line std_ds_List_ksplc_tools_surface_Line;
 typedef struct std_ds_List_ksplc_tools_doc_Entry std_ds_List_ksplc_tools_doc_Entry;
 typedef struct std_lang_Option_std_ds_List_ksplc_tools_doc_Entry std_lang_Option_std_ds_List_ksplc_tools_doc_Entry;
+typedef struct std_lang_Option_ksplc_tools_run_Target_kind std_lang_Option_ksplc_tools_run_Target_kind;
 typedef struct std_ds_List_ksplc_tools_interface_Named std_ds_List_ksplc_tools_interface_Named;
 typedef struct kspl_vtable_std_lang_Callable2_std_lang_Slice_U8_Const_std_lang_Slice_U8_Const_I32 kspl_vtable_std_lang_Callable2_std_lang_Slice_U8_Const_std_lang_Slice_U8_Const_I32;
 typedef struct std_lang_Callable2_std_lang_Slice_U8_Const_std_lang_Slice_U8_Const_I32 std_lang_Callable2_std_lang_Slice_U8_Const_std_lang_Slice_U8_Const_I32;
@@ -1766,6 +1768,24 @@ typedef struct std_lang_Callable2_std_subproc_Run_result_std_subproc_Run_result_
 typedef struct kspl_vtable_std_lang_Iter_std_subproc_Run_result kspl_vtable_std_lang_Iter_std_subproc_Run_result;
 typedef struct std_lang_Iter_std_subproc_Run_result std_lang_Iter_std_subproc_Run_result;
 typedef struct std_lang_Option_std_subproc_Run_result std_lang_Option_std_subproc_Run_result;
+typedef struct std_ds_List_std_subproc_Running_job std_ds_List_std_subproc_Running_job;
+typedef struct kspl_vtable_std_lang_Index_Sz_std_subproc_Running_job kspl_vtable_std_lang_Index_Sz_std_subproc_Running_job;
+typedef struct std_lang_Index_Sz_std_subproc_Running_job std_lang_Index_Sz_std_subproc_Running_job;
+typedef struct kspl_vtable_std_lang_Index_mut_Sz_std_subproc_Running_job kspl_vtable_std_lang_Index_mut_Sz_std_subproc_Running_job;
+typedef struct std_lang_Index_mut_Sz_std_subproc_Running_job std_lang_Index_mut_Sz_std_subproc_Running_job;
+typedef struct kspl_vtable_std_lang_Index_place_Sz_std_subproc_Running_job kspl_vtable_std_lang_Index_place_Sz_std_subproc_Running_job;
+typedef struct std_lang_Index_place_Sz_std_subproc_Running_job std_lang_Index_place_Sz_std_subproc_Running_job;
+typedef struct kspl_vtable_std_lang_Index_ref_Sz_std_subproc_Running_job kspl_vtable_std_lang_Index_ref_Sz_std_subproc_Running_job;
+typedef struct std_lang_Index_ref_Sz_std_subproc_Running_job std_lang_Index_ref_Sz_std_subproc_Running_job;
+typedef struct kspl_vtable_std_lang_Callable1_std_subproc_Running_job_Bool kspl_vtable_std_lang_Callable1_std_subproc_Running_job_Bool;
+typedef struct std_lang_Callable1_std_subproc_Running_job_Bool std_lang_Callable1_std_subproc_Running_job_Bool;
+typedef struct kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool;
+typedef struct std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool;
+typedef struct kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32 kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32;
+typedef struct std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32 std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32;
+typedef struct kspl_vtable_std_lang_Iter_std_subproc_Running_job kspl_vtable_std_lang_Iter_std_subproc_Running_job;
+typedef struct std_lang_Iter_std_subproc_Running_job std_lang_Iter_std_subproc_Running_job;
+typedef struct std_lang_Option_std_subproc_Running_job std_lang_Option_std_subproc_Running_job;
 typedef struct std_ds_Map_seq_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr std_ds_Map_seq_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr;
 typedef struct kspl_vtable_std_lang_Iter_std_ds_Map_entry_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr kspl_vtable_std_lang_Iter_std_ds_Map_entry_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr;
 typedef struct std_lang_Iter_std_ds_Map_entry_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr std_lang_Iter_std_ds_Map_entry_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr;
@@ -2535,6 +2555,8 @@ typedef struct ksplc_base_ast_Loc_Array_1 Const_ksplc_base_ast_Loc_Array_1;
 typedef struct ksplc_base_ast_Loc_Array_1 ksplc_base_ast_Loc_Array_1;
 typedef struct std_subproc_Run_result_Array_1 Const_std_subproc_Run_result_Array_1;
 typedef struct std_subproc_Run_result_Array_1 std_subproc_Run_result_Array_1;
+typedef struct std_subproc_Running_job_Array_1 Const_std_subproc_Running_job_Array_1;
+typedef struct std_subproc_Running_job_Array_1 std_subproc_Running_job_Array_1;
 typedef struct ksplc_sema_type_scope_Sema_symbol_Ptr_Array_1 ksplc_sema_type_scope_Sema_symbol_Ptr_Const_Array_1;
 typedef struct ksplc_sema_type_scope_Sema_symbol_Ptr_Array_1 ksplc_sema_type_scope_Sema_symbol_Ptr_Array_1;
 typedef struct std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_Array_1 std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_Const_Array_1;
@@ -3281,6 +3303,11 @@ enum {
   kspl_ksplc_parse_normalize_stmt_Loop_phase_init = 0,
   kspl_ksplc_parse_normalize_stmt_Loop_phase_cond = 1,
   kspl_ksplc_parse_normalize_stmt_Loop_phase_step = 2,
+};
+
+struct std_subproc_Running_job {
+  I64 handle;
+  I64 deadline_us;
 };
 
 enum {
@@ -4156,8 +4183,7 @@ struct std_ds_Hashable_I32 {
 };
 
 struct kspl_vtable_std_ds_Hashable_I32 {
-  U32 (*hash)
-  (void *r);
+  U32 (*hash)(void *r);
   Bool (*equals)(void *r, I32 other);
 };
 
@@ -4167,8 +4193,7 @@ struct std_ds_Hashable_I64 {
 };
 
 struct kspl_vtable_std_ds_Hashable_I64 {
-  U32 (*hash)
-  (void *r);
+  U32 (*hash)(void *r);
   Bool (*equals)(void *r, I64 other);
 };
 
@@ -4178,8 +4203,7 @@ struct std_ds_Hashable_Sz {
 };
 
 struct kspl_vtable_std_ds_Hashable_Sz {
-  U32 (*hash)
-  (void *r);
+  U32 (*hash)(void *r);
   Bool (*equals)(void *r, Sz other);
 };
 
@@ -4771,8 +4795,7 @@ struct std_lang_Index_Sz_I32 {
 };
 
 struct kspl_vtable_std_lang_Index_Sz_I32 {
-  I32 (*get)
-  (void *r, Sz index);
+  I32 (*get)(void *r, Sz index);
 };
 
 struct std_lang_Index_mut_Sz_I32 {
@@ -5715,8 +5738,7 @@ struct std_lang_Index_Sz_I64 {
 };
 
 struct kspl_vtable_std_lang_Index_Sz_I64 {
-  I64 (*get)
-  (void *r, Sz index);
+  I64 (*get)(void *r, Sz index);
 };
 
 struct std_lang_Index_mut_Sz_I64 {
@@ -5871,6 +5893,13 @@ struct std_lang_Option_ksplc_parse_load_Kspeg_prof_entry_Ptr {
 
 struct std_ds_List_ksplc_base_ast_Loc {
   ksplc_base_ast_Loc *ptr;
+  Sz len;
+  Sz cap;
+  std_mem_Arena *arena;
+};
+
+struct std_ds_List_std_subproc_Running_job {
+  std_subproc_Running_job *ptr;
   Sz len;
   Sz cap;
   std_mem_Arena *arena;
@@ -6937,7 +6966,7 @@ struct ksplc_lsp_state_Doc_cache {
   Bool is_open;
 };
 
-struct ksplc_sema_type_env_Mangle_seen {
+struct ksplc_sema_type_naming_Mangle_seen {
   ksplc_sema_type_env_Env *env;
   std_ds_Map_std_lang_Slice_U8_Const_I32 *seen;
   std_str_Str_builder buf;
@@ -7129,6 +7158,41 @@ struct kspl_vtable_std_lang_Index_Sz_ksplc_parse_layout_Phys {
 struct ksplc_parse_layout_Line_open_Array_32 {
   ksplc_parse_layout_Line_open data[32];
 };
+struct std_subproc_Running_job_Array_1 {
+  std_subproc_Running_job data[1];
+};
+typedef enum {
+  kspl_std_lang_Option_std_subproc_Running_job_some = 0,
+  kspl_std_lang_Option_std_subproc_Running_job_none = 1,
+} kspl_std_lang_Option_std_subproc_Running_job_Tag;
+
+struct std_lang_Option_std_subproc_Running_job {
+  I32 tag;
+  union {
+    struct {
+      std_subproc_Running_job value;
+    } some;
+  } payload;
+};
+
+struct std_lang_Index_mut_Sz_std_subproc_Running_job {
+  void *obj;
+  const struct kspl_vtable_std_lang_Index_mut_Sz_std_subproc_Running_job *vtable;
+};
+
+struct kspl_vtable_std_lang_Index_mut_Sz_std_subproc_Running_job {
+  void (*set)(void *r, Sz index, std_subproc_Running_job val);
+};
+
+struct std_lang_Index_Sz_std_subproc_Running_job {
+  void *obj;
+  const struct kspl_vtable_std_lang_Index_Sz_std_subproc_Running_job *vtable;
+};
+
+struct kspl_vtable_std_lang_Index_Sz_std_subproc_Running_job {
+  std_subproc_Running_job (*get)(void *r, Sz index);
+};
+
 struct kspl_I64_Result_std_subproc_Spawn_error {
   bool is_err;
   std_subproc_Spawn_error error_code;
@@ -7640,6 +7704,20 @@ struct kspl_std_thread_Cond_var_Result_std_thread_Thread_error {
   std_thread_Cond_var val;
 };
 
+typedef enum {
+  kspl_std_lang_Option_ksplc_tools_run_Target_kind_some = 0,
+  kspl_std_lang_Option_ksplc_tools_run_Target_kind_none = 1,
+} kspl_std_lang_Option_ksplc_tools_run_Target_kind_Tag;
+
+struct std_lang_Option_ksplc_tools_run_Target_kind {
+  I32 tag;
+  union {
+    struct {
+      ksplc_tools_run_Target_kind value;
+    } some;
+  } payload;
+};
+
 struct ksplc_usage_Info_topic_Array_7 {
   ksplc_usage_Info_topic data[7];
 };
@@ -7649,8 +7727,7 @@ struct std_lang_Callable2_Sz_Sz_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_Sz_Sz_I32 {
-  I32 (*call)
-  (void *r, Sz a, Sz b);
+  I32 (*call)(void *r, Sz a, Sz b);
 };
 
 struct std_lang_Callable2_ksplc_parse_load_Kspeg_prof_entry_Ptr_ksplc_parse_load_Kspeg_prof_entry_Ptr_I32 {
@@ -7659,8 +7736,7 @@ struct std_lang_Callable2_ksplc_parse_load_Kspeg_prof_entry_Ptr_ksplc_parse_load
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_parse_load_Kspeg_prof_entry_Ptr_ksplc_parse_load_Kspeg_prof_entry_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_parse_load_Kspeg_prof_entry *a, ksplc_parse_load_Kspeg_prof_entry *b);
+  I32 (*call)(void *r, ksplc_parse_load_Kspeg_prof_entry *a, ksplc_parse_load_Kspeg_prof_entry *b);
 };
 
 struct std_lang_Callable2_ksplc_lsp_call_hier_Call_hier_entry_Ptr_ksplc_lsp_call_hier_Call_hier_entry_Ptr_I32 {
@@ -7669,8 +7745,7 @@ struct std_lang_Callable2_ksplc_lsp_call_hier_Call_hier_entry_Ptr_ksplc_lsp_call
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lsp_call_hier_Call_hier_entry_Ptr_ksplc_lsp_call_hier_Call_hier_entry_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_lsp_call_hier_Call_hier_entry *a, ksplc_lsp_call_hier_Call_hier_entry *b);
+  I32 (*call)(void *r, ksplc_lsp_call_hier_Call_hier_entry *a, ksplc_lsp_call_hier_Call_hier_entry *b);
 };
 
 struct std_lang_Callable2_ksplc_lsp_semtok_Tok_ksplc_lsp_semtok_Tok_I32 {
@@ -7679,8 +7754,7 @@ struct std_lang_Callable2_ksplc_lsp_semtok_Tok_ksplc_lsp_semtok_Tok_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lsp_semtok_Tok_ksplc_lsp_semtok_Tok_I32 {
-  I32 (*call)
-  (void *r, ksplc_lsp_semtok_Tok a, ksplc_lsp_semtok_Tok b);
+  I32 (*call)(void *r, ksplc_lsp_semtok_Tok a, ksplc_lsp_semtok_Tok b);
 };
 
 struct std_lang_Callable2_ksplc_sema_session_prof_Body_prof_entry_Ptr_ksplc_sema_session_prof_Body_prof_entry_Ptr_I32 {
@@ -7689,8 +7763,7 @@ struct std_lang_Callable2_ksplc_sema_session_prof_Body_prof_entry_Ptr_ksplc_sema
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_prof_Body_prof_entry_Ptr_ksplc_sema_session_prof_Body_prof_entry_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_prof_Body_prof_entry *a, ksplc_sema_session_prof_Body_prof_entry *b);
+  I32 (*call)(void *r, ksplc_sema_session_prof_Body_prof_entry *a, ksplc_sema_session_prof_Body_prof_entry *b);
 };
 
 struct std_lang_Callable1_kspeg_engine_Rule_keywords_Ptr_Bool {
@@ -7717,8 +7790,7 @@ struct std_lang_Callable2_std_lang_Slice_U8_Const_std_lang_Slice_U8_Const_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_std_lang_Slice_U8_Const_std_lang_Slice_U8_Const_I32 {
-  I32 (*call)
-  (void *r, std_lang_Slice_U8 a, std_lang_Slice_U8 b);
+  I32 (*call)(void *r, std_lang_Slice_U8 a, std_lang_Slice_U8 b);
 };
 
 struct ksplc_gen_entry_Main_plan {
@@ -8056,6 +8128,24 @@ struct std_ds_Map_entry_I64_std_lang_Slice_U8_Const {
   U32 hash;
   Bool is_active;
   Bool is_tombstone;
+};
+
+struct std_lang_Index_ref_Sz_std_subproc_Running_job {
+  void *obj;
+  const struct kspl_vtable_std_lang_Index_ref_Sz_std_subproc_Running_job *vtable;
+};
+
+struct kspl_vtable_std_lang_Index_ref_Sz_std_subproc_Running_job {
+  const std_subproc_Running_job *(*at_ref)(void *r, Sz index, std_lang_Slice_U8 file, Sz line);
+};
+
+struct std_lang_Index_place_Sz_std_subproc_Running_job {
+  void *obj;
+  const struct kspl_vtable_std_lang_Index_place_Sz_std_subproc_Running_job *vtable;
+};
+
+struct kspl_vtable_std_lang_Index_place_Sz_std_subproc_Running_job {
+  std_subproc_Running_job *(*at)(void *r, Sz index, std_lang_Slice_U8 file, Sz line);
 };
 
 struct std_lang_Index_ref_Sz_std_subproc_Job_Const {
@@ -9508,8 +9598,7 @@ struct std_ds_Hashable_std_lang_Slice_U8_Const {
 };
 
 struct kspl_vtable_std_ds_Hashable_std_lang_Slice_U8_Const {
-  U32 (*hash)
-  (void *r);
+  U32 (*hash)(void *r);
   Bool (*equals)(void *r, std_lang_Slice_U8 other);
 };
 
@@ -10613,8 +10702,7 @@ struct std_lang_Callable2_kspeg_engine_Rule_keywords_Ptr_kspeg_engine_Rule_keywo
 };
 
 struct kspl_vtable_std_lang_Callable2_kspeg_engine_Rule_keywords_Ptr_kspeg_engine_Rule_keywords_Ptr_I32 {
-  I32 (*call)
-  (void *r, kspeg_engine_Rule_keywords *a, kspeg_engine_Rule_keywords *b);
+  I32 (*call)(void *r, kspeg_engine_Rule_keywords *a, kspeg_engine_Rule_keywords *b);
 };
 
 struct std_lang_Callable2_kspeg_engine_Rule_keywords_Ptr_kspeg_engine_Rule_keywords_Ptr_Bool {
@@ -10669,8 +10757,7 @@ struct std_lang_Callable2_ksplc_base_ast_Ast_node_Ptr_ksplc_base_ast_Ast_node_Pt
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_ast_Ast_node_Ptr_ksplc_base_ast_Ast_node_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_ast_Ast_node *a, ksplc_base_ast_Ast_node *b);
+  I32 (*call)(void *r, ksplc_base_ast_Ast_node *a, ksplc_base_ast_Ast_node *b);
 };
 
 struct std_lang_Callable2_ksplc_base_ast_Ast_node_Ptr_ksplc_base_ast_Ast_node_Ptr_Bool {
@@ -10766,8 +10853,7 @@ struct std_lang_Callable2_ksplc_parse_layout_Phys_ksplc_parse_layout_Phys_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_parse_layout_Phys_ksplc_parse_layout_Phys_I32 {
-  I32 (*call)
-  (void *r, ksplc_parse_layout_Phys a, ksplc_parse_layout_Phys b);
+  I32 (*call)(void *r, ksplc_parse_layout_Phys a, ksplc_parse_layout_Phys b);
 };
 
 struct std_lang_Callable2_ksplc_parse_layout_Phys_ksplc_parse_layout_Phys_Bool {
@@ -10845,8 +10931,7 @@ struct std_lang_Callable2_I32_I32_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_I32_I32_I32 {
-  I32 (*call)
-  (void *r, I32 a, I32 b);
+  I32 (*call)(void *r, I32 a, I32 b);
 };
 
 struct std_lang_Callable2_I32_I32_Bool {
@@ -10919,8 +11004,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Generic_arg_ksplc_sema_sessio
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Generic_arg_ksplc_sema_session_state_Generic_arg_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Generic_arg a, ksplc_sema_session_state_Generic_arg b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Generic_arg a, ksplc_sema_session_state_Generic_arg b);
 };
 
 struct std_lang_Callable2_ksplc_sema_session_state_Generic_arg_ksplc_sema_session_state_Generic_arg_Bool {
@@ -10947,8 +11031,7 @@ struct std_lang_Callable2_Bool_Bool_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_Bool_Bool_I32 {
-  I32 (*call)
-  (void *r, Bool a, Bool b);
+  I32 (*call)(void *r, Bool a, Bool b);
 };
 
 struct std_lang_Callable2_Bool_Bool_Bool {
@@ -10989,8 +11072,7 @@ struct std_lang_Callable2_kspeg_rule_Rule_Ptr_kspeg_rule_Rule_Ptr_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_kspeg_rule_Rule_Ptr_kspeg_rule_Rule_Ptr_I32 {
-  I32 (*call)
-  (void *r, kspeg_rule_Rule *a, kspeg_rule_Rule *b);
+  I32 (*call)(void *r, kspeg_rule_Rule *a, kspeg_rule_Rule *b);
 };
 
 struct std_lang_Callable2_kspeg_rule_Rule_Ptr_kspeg_rule_Rule_Ptr_Bool {
@@ -11017,8 +11099,7 @@ struct std_lang_Callable2_kspeg_engine_Node_Ptr_kspeg_engine_Node_Ptr_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_kspeg_engine_Node_Ptr_kspeg_engine_Node_Ptr_I32 {
-  I32 (*call)
-  (void *r, kspeg_engine_Node *a, kspeg_engine_Node *b);
+  I32 (*call)(void *r, kspeg_engine_Node *a, kspeg_engine_Node *b);
 };
 
 struct std_lang_Callable2_kspeg_engine_Node_Ptr_kspeg_engine_Node_Ptr_Bool {
@@ -11045,8 +11126,7 @@ struct std_lang_Callable2_kspeg_rule_Rule_entry_Ptr_kspeg_rule_Rule_entry_Ptr_I3
 };
 
 struct kspl_vtable_std_lang_Callable2_kspeg_rule_Rule_entry_Ptr_kspeg_rule_Rule_entry_Ptr_I32 {
-  I32 (*call)
-  (void *r, kspeg_rule_Rule_entry *a, kspeg_rule_Rule_entry *b);
+  I32 (*call)(void *r, kspeg_rule_Rule_entry *a, kspeg_rule_Rule_entry *b);
 };
 
 struct std_lang_Callable2_kspeg_rule_Rule_entry_Ptr_kspeg_rule_Rule_entry_Ptr_Bool {
@@ -11073,8 +11153,7 @@ struct std_lang_Callable2_kspeg_engine_Rule_prof_Ptr_kspeg_engine_Rule_prof_Ptr_
 };
 
 struct kspl_vtable_std_lang_Callable2_kspeg_engine_Rule_prof_Ptr_kspeg_engine_Rule_prof_Ptr_I32 {
-  I32 (*call)
-  (void *r, kspeg_engine_Rule_prof *a, kspeg_engine_Rule_prof *b);
+  I32 (*call)(void *r, kspeg_engine_Rule_prof *a, kspeg_engine_Rule_prof *b);
 };
 
 struct std_lang_Callable2_kspeg_engine_Rule_prof_Ptr_kspeg_engine_Rule_prof_Ptr_Bool {
@@ -11106,8 +11185,7 @@ struct std_lang_Callable2_std_lang_Slice_U8_std_lang_Slice_U8_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_std_lang_Slice_U8_std_lang_Slice_U8_I32 {
-  I32 (*call)
-  (void *r, std_lang_Slice_U8 a, std_lang_Slice_U8 b);
+  I32 (*call)(void *r, std_lang_Slice_U8 a, std_lang_Slice_U8 b);
 };
 
 struct std_lang_Callable2_std_lang_Slice_U8_std_lang_Slice_U8_Bool {
@@ -11179,8 +11257,7 @@ struct std_lang_Callable2_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_P
 };
 
 struct kspl_vtable_std_lang_Callable2_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_I32 {
-  I32 (*call)
-  (void *r, std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *a, std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *b);
+  I32 (*call)(void *r, std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *a, std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *b);
 };
 
 struct std_lang_Callable2_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr_Bool {
@@ -11207,8 +11284,7 @@ struct std_lang_Callable2_ksplc_sema_type_def_Struct_field_Ptr_ksplc_sema_type_d
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_type_def_Struct_field_Ptr_ksplc_sema_type_def_Struct_field_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_type_def_Struct_field *a, ksplc_sema_type_def_Struct_field *b);
+  I32 (*call)(void *r, ksplc_sema_type_def_Struct_field *a, ksplc_sema_type_def_Struct_field *b);
 };
 
 struct std_lang_Callable2_ksplc_sema_type_def_Struct_field_Ptr_ksplc_sema_type_def_Struct_field_Ptr_Bool {
@@ -11235,8 +11311,7 @@ struct std_lang_Callable2_ksplc_sema_type_scope_Sema_symbol_Ptr_ksplc_sema_type_
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_type_scope_Sema_symbol_Ptr_ksplc_sema_type_scope_Sema_symbol_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_type_scope_Sema_symbol *a, ksplc_sema_type_scope_Sema_symbol *b);
+  I32 (*call)(void *r, ksplc_sema_type_scope_Sema_symbol *a, ksplc_sema_type_scope_Sema_symbol *b);
 };
 
 struct std_lang_Callable2_ksplc_sema_type_scope_Sema_symbol_Ptr_ksplc_sema_type_scope_Sema_symbol_Ptr_Bool {
@@ -11263,8 +11338,7 @@ struct std_lang_Callable2_ksplc_sema_type_def_Enum_variant_Ptr_ksplc_sema_type_d
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_type_def_Enum_variant_Ptr_ksplc_sema_type_def_Enum_variant_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_type_def_Enum_variant *a, ksplc_sema_type_def_Enum_variant *b);
+  I32 (*call)(void *r, ksplc_sema_type_def_Enum_variant *a, ksplc_sema_type_def_Enum_variant *b);
 };
 
 struct std_lang_Callable2_ksplc_sema_type_def_Enum_variant_Ptr_ksplc_sema_type_def_Enum_variant_Ptr_Bool {
@@ -11291,8 +11365,7 @@ struct std_lang_Callable2_ksplc_sema_type_def_Entry_Ptr_ksplc_sema_type_def_Entr
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_type_def_Entry_Ptr_ksplc_sema_type_def_Entry_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_type_def_Entry *a, ksplc_sema_type_def_Entry *b);
+  I32 (*call)(void *r, ksplc_sema_type_def_Entry *a, ksplc_sema_type_def_Entry *b);
 };
 
 struct std_lang_Callable2_ksplc_sema_type_def_Entry_Ptr_ksplc_sema_type_def_Entry_Ptr_Bool {
@@ -11319,8 +11392,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Trait_inst_ksplc_sema_session
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Trait_inst_ksplc_sema_session_state_Trait_inst_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Trait_inst a, ksplc_sema_session_state_Trait_inst b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Trait_inst a, ksplc_sema_session_state_Trait_inst b);
 };
 
 struct std_lang_Callable2_ksplc_sema_session_state_Trait_inst_ksplc_sema_session_state_Trait_inst_Bool {
@@ -11347,8 +11419,7 @@ struct std_lang_Callable2_ksplc_sema_flow_track_Local_state_ksplc_sema_flow_trac
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_flow_track_Local_state_ksplc_sema_flow_track_Local_state_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_flow_track_Local_state a, ksplc_sema_flow_track_Local_state b);
+  I32 (*call)(void *r, ksplc_sema_flow_track_Local_state a, ksplc_sema_flow_track_Local_state b);
 };
 
 struct std_lang_Callable2_ksplc_sema_flow_track_Local_state_ksplc_sema_flow_track_Local_state_Bool {
@@ -11375,8 +11446,7 @@ struct std_lang_Callable2_ksplc_sema_flow_track_Df_exit_target_ksplc_sema_flow_t
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_flow_track_Df_exit_target_ksplc_sema_flow_track_Df_exit_target_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_flow_track_Df_exit_target a, ksplc_sema_flow_track_Df_exit_target b);
+  I32 (*call)(void *r, ksplc_sema_flow_track_Df_exit_target a, ksplc_sema_flow_track_Df_exit_target b);
 };
 
 struct std_lang_Callable2_ksplc_sema_flow_track_Df_exit_target_ksplc_sema_flow_track_Df_exit_target_Bool {
@@ -11403,8 +11473,7 @@ struct std_lang_Callable2_ksplc_sema_body_generic_infer_Pairing_ksplc_sema_body_
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_body_generic_infer_Pairing_ksplc_sema_body_generic_infer_Pairing_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_body_generic_infer_Pairing a, ksplc_sema_body_generic_infer_Pairing b);
+  I32 (*call)(void *r, ksplc_sema_body_generic_infer_Pairing a, ksplc_sema_body_generic_infer_Pairing b);
 };
 
 struct std_lang_Callable2_ksplc_sema_body_generic_infer_Pairing_ksplc_sema_body_generic_infer_Pairing_Bool {
@@ -11431,8 +11500,7 @@ struct std_lang_Callable2_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_std_ds_Lis
 };
 
 struct kspl_vtable_std_lang_Callable2_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_I32 {
-  I32 (*call)
-  (void *r, std_ds_List_ksplc_base_ast_Ast_node_Ptr *a, std_ds_List_ksplc_base_ast_Ast_node_Ptr *b);
+  I32 (*call)(void *r, std_ds_List_ksplc_base_ast_Ast_node_Ptr *a, std_ds_List_ksplc_base_ast_Ast_node_Ptr *b);
 };
 
 struct std_lang_Callable2_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_std_ds_List_ksplc_base_ast_Ast_node_Ptr_Ptr_Bool {
@@ -11532,8 +11600,7 @@ struct std_lang_Callable2_I64_I64_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_I64_I64_I32 {
-  I32 (*call)
-  (void *r, I64 a, I64 b);
+  I32 (*call)(void *r, I64 a, I64 b);
 };
 
 struct std_lang_Callable2_I64_I64_Bool {
@@ -11605,8 +11672,7 @@ struct std_lang_Callable2_ksplc_base_ast_Loc_ksplc_base_ast_Loc_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_ast_Loc_ksplc_base_ast_Loc_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_ast_Loc a, ksplc_base_ast_Loc b);
+  I32 (*call)(void *r, ksplc_base_ast_Loc a, ksplc_base_ast_Loc b);
 };
 
 struct std_lang_Callable2_ksplc_base_ast_Loc_ksplc_base_ast_Loc_Bool {
@@ -11625,6 +11691,33 @@ struct std_lang_Callable1_ksplc_base_ast_Loc_Bool {
 
 struct kspl_vtable_std_lang_Callable1_ksplc_base_ast_Loc_Bool {
   Bool (*call)(void *r, ksplc_base_ast_Loc a);
+};
+
+struct std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32 {
+  void *obj;
+  const struct kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32 *vtable;
+};
+
+struct kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_I32 {
+  I32 (*call)(void *r, std_subproc_Running_job a, std_subproc_Running_job b);
+};
+
+struct std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool {
+  void *obj;
+  const struct kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool *vtable;
+};
+
+struct kspl_vtable_std_lang_Callable2_std_subproc_Running_job_std_subproc_Running_job_Bool {
+  Bool (*call)(void *r, std_subproc_Running_job a, std_subproc_Running_job b);
+};
+
+struct std_lang_Callable1_std_subproc_Running_job_Bool {
+  void *obj;
+  const struct kspl_vtable_std_lang_Callable1_std_subproc_Running_job_Bool *vtable;
+};
+
+struct kspl_vtable_std_lang_Callable1_std_subproc_Running_job_Bool {
+  Bool (*call)(void *r, std_subproc_Running_job a);
 };
 
 struct std_lang_Iter_std_ds_Map_entry_std_lang_Slice_U8_Const_ksplc_sema_type_scope_Sema_symbol_Ptr_Ptr {
@@ -11759,8 +11852,7 @@ struct std_lang_Callable2_ksplc_sema_body_lint_stmt_Lock_site_Ptr_ksplc_sema_bod
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_body_lint_stmt_Lock_site_Ptr_ksplc_sema_body_lint_stmt_Lock_site_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_body_lint_stmt_Lock_site *a, ksplc_sema_body_lint_stmt_Lock_site *b);
+  I32 (*call)(void *r, ksplc_sema_body_lint_stmt_Lock_site *a, ksplc_sema_body_lint_stmt_Lock_site *b);
 };
 
 struct std_lang_Callable2_ksplc_sema_body_lint_stmt_Lock_site_Ptr_ksplc_sema_body_lint_stmt_Lock_site_Ptr_Bool {
@@ -11796,8 +11888,7 @@ struct std_lang_Callable2_ksplc_sema_body_lint_stmt_Lock_borrow_Ptr_ksplc_sema_b
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_body_lint_stmt_Lock_borrow_Ptr_ksplc_sema_body_lint_stmt_Lock_borrow_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_body_lint_stmt_Lock_borrow *a, ksplc_sema_body_lint_stmt_Lock_borrow *b);
+  I32 (*call)(void *r, ksplc_sema_body_lint_stmt_Lock_borrow *a, ksplc_sema_body_lint_stmt_Lock_borrow *b);
 };
 
 struct std_lang_Callable2_ksplc_sema_body_lint_stmt_Lock_borrow_Ptr_ksplc_sema_body_lint_stmt_Lock_borrow_Ptr_Bool {
@@ -11842,8 +11933,7 @@ struct std_lang_Callable2_ksplc_lower_order_Order_class_ksplc_lower_order_Order_
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lower_order_Order_class_ksplc_lower_order_Order_class_I32 {
-  I32 (*call)
-  (void *r, ksplc_lower_order_Order_class a, ksplc_lower_order_Order_class b);
+  I32 (*call)(void *r, ksplc_lower_order_Order_class a, ksplc_lower_order_Order_class b);
 };
 
 struct std_lang_Callable2_ksplc_lower_order_Order_class_ksplc_lower_order_Order_class_Bool {
@@ -11879,8 +11969,7 @@ struct std_lang_Callable2_ksplc_gen_llvm_stmt_Case_info_ksplc_gen_llvm_stmt_Case
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_gen_llvm_stmt_Case_info_ksplc_gen_llvm_stmt_Case_info_I32 {
-  I32 (*call)
-  (void *r, ksplc_gen_llvm_stmt_Case_info a, ksplc_gen_llvm_stmt_Case_info b);
+  I32 (*call)(void *r, ksplc_gen_llvm_stmt_Case_info a, ksplc_gen_llvm_stmt_Case_info b);
 };
 
 struct std_lang_Callable2_ksplc_gen_llvm_stmt_Case_info_ksplc_gen_llvm_stmt_Case_info_Bool {
@@ -11925,8 +12014,7 @@ struct std_lang_Callable2_ksplc_tools_keywords_Keyword_group_Ptr_ksplc_tools_key
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_tools_keywords_Keyword_group_Ptr_ksplc_tools_keywords_Keyword_group_Ptr_I32 {
-  I32 (*call)
-  (void *r, ksplc_tools_keywords_Keyword_group *a, ksplc_tools_keywords_Keyword_group *b);
+  I32 (*call)(void *r, ksplc_tools_keywords_Keyword_group *a, ksplc_tools_keywords_Keyword_group *b);
 };
 
 struct std_lang_Callable2_ksplc_tools_keywords_Keyword_group_Ptr_ksplc_tools_keywords_Keyword_group_Ptr_Bool {
@@ -12334,8 +12422,7 @@ struct std_lang_Callable2_ksplc_parse_layout_Note_ksplc_parse_layout_Note_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_parse_layout_Note_ksplc_parse_layout_Note_I32 {
-  I32 (*call)
-  (void *r, ksplc_parse_layout_Note a, ksplc_parse_layout_Note b);
+  I32 (*call)(void *r, ksplc_parse_layout_Note a, ksplc_parse_layout_Note b);
 };
 
 struct ksplc_parse_layout_Note_Array_1 {
@@ -12385,6 +12472,15 @@ struct kspl_vtable_std_lang_Iter_ksplc_parse_layout_Phys {
 struct ksplc_parse_layout_Line_opens {
   ksplc_parse_layout_Line_open_Array_32 items;
   Sz n;
+};
+
+struct std_lang_Iter_std_subproc_Running_job {
+  void *obj;
+  const struct kspl_vtable_std_lang_Iter_std_subproc_Running_job *vtable;
+};
+
+struct kspl_vtable_std_lang_Iter_std_subproc_Running_job {
+  std_lang_Option_std_subproc_Running_job (*next)(void *r);
 };
 
 struct std_lang_Index_std_lang_Slice_U8_Const_ksplc_sema_session_state_Import_hit_Resultstd_ds_Ds_error {
@@ -12452,8 +12548,7 @@ struct std_lang_Callable2_ksplc_lower_order_Operand_slot_ksplc_lower_order_Opera
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lower_order_Operand_slot_ksplc_lower_order_Operand_slot_I32 {
-  I32 (*call)
-  (void *r, ksplc_lower_order_Operand_slot a, ksplc_lower_order_Operand_slot b);
+  I32 (*call)(void *r, ksplc_lower_order_Operand_slot a, ksplc_lower_order_Operand_slot b);
 };
 
 struct ksplc_lower_order_Operand_slot_Array_1 {
@@ -12646,8 +12741,7 @@ struct std_lang_Callable2_std_argp_Cmd_std_argp_Cmd_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_std_argp_Cmd_std_argp_Cmd_I32 {
-  I32 (*call)
-  (void *r, std_argp_Cmd a, std_argp_Cmd b);
+  I32 (*call)(void *r, std_argp_Cmd a, std_argp_Cmd b);
 };
 
 struct std_argp_Cmd_Array_1 {
@@ -12709,8 +12803,7 @@ struct std_lang_Callable2_std_argp_Opt_std_argp_Opt_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_std_argp_Opt_std_argp_Opt_I32 {
-  I32 (*call)
-  (void *r, std_argp_Opt a, std_argp_Opt b);
+  I32 (*call)(void *r, std_argp_Opt a, std_argp_Opt b);
 };
 
 struct std_argp_Opt_Array_1 {
@@ -12777,8 +12870,7 @@ struct std_lang_Callable2_ksplc_tools_interface_Export_ksplc_tools_interface_Exp
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_tools_interface_Export_ksplc_tools_interface_Export_I32 {
-  I32 (*call)
-  (void *r, ksplc_tools_interface_Export a, ksplc_tools_interface_Export b);
+  I32 (*call)(void *r, ksplc_tools_interface_Export a, ksplc_tools_interface_Export b);
 };
 
 struct ksplc_tools_interface_Export_Array_1 {
@@ -12840,8 +12932,7 @@ struct std_lang_Callable2_ksplc_tools_interface_Named_ksplc_tools_interface_Name
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_tools_interface_Named_ksplc_tools_interface_Named_I32 {
-  I32 (*call)
-  (void *r, ksplc_tools_interface_Named a, ksplc_tools_interface_Named b);
+  I32 (*call)(void *r, ksplc_tools_interface_Named a, ksplc_tools_interface_Named b);
 };
 
 struct ksplc_tools_interface_Named_Array_1 {
@@ -12903,8 +12994,7 @@ struct std_lang_Callable2_ksplc_tools_run_Unit_ksplc_tools_run_Unit_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_tools_run_Unit_ksplc_tools_run_Unit_I32 {
-  I32 (*call)
-  (void *r, ksplc_tools_run_Unit a, ksplc_tools_run_Unit b);
+  I32 (*call)(void *r, ksplc_tools_run_Unit a, ksplc_tools_run_Unit b);
 };
 
 struct ksplc_tools_run_Unit_Array_1 {
@@ -12966,8 +13056,7 @@ struct std_lang_Callable2_ksplc_tools_doc_Entry_ksplc_tools_doc_Entry_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_tools_doc_Entry_ksplc_tools_doc_Entry_I32 {
-  I32 (*call)
-  (void *r, ksplc_tools_doc_Entry a, ksplc_tools_doc_Entry b);
+  I32 (*call)(void *r, ksplc_tools_doc_Entry a, ksplc_tools_doc_Entry b);
 };
 
 struct ksplc_tools_doc_Entry_Array_1 {
@@ -13029,8 +13118,7 @@ struct std_lang_Callable2_ksplc_tools_surface_Line_ksplc_tools_surface_Line_I32 
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_tools_surface_Line_ksplc_tools_surface_Line_I32 {
-  I32 (*call)
-  (void *r, ksplc_tools_surface_Line a, ksplc_tools_surface_Line b);
+  I32 (*call)(void *r, ksplc_tools_surface_Line a, ksplc_tools_surface_Line b);
 };
 
 struct ksplc_tools_surface_Line_Array_1 {
@@ -13092,8 +13180,7 @@ struct std_lang_Callable2_ksplc_source_checks_Read_file_ksplc_source_checks_Read
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_source_checks_Read_file_ksplc_source_checks_Read_file_I32 {
-  I32 (*call)
-  (void *r, ksplc_source_checks_Read_file a, ksplc_source_checks_Read_file b);
+  I32 (*call)(void *r, ksplc_source_checks_Read_file a, ksplc_source_checks_Read_file b);
 };
 
 struct ksplc_source_checks_Read_file_Array_1 {
@@ -13155,8 +13242,7 @@ struct std_lang_Callable2_ksplc_sema_decl_reflect_Row_spec_ksplc_sema_decl_refle
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_decl_reflect_Row_spec_ksplc_sema_decl_reflect_Row_spec_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_decl_reflect_Row_spec a, ksplc_sema_decl_reflect_Row_spec b);
+  I32 (*call)(void *r, ksplc_sema_decl_reflect_Row_spec a, ksplc_sema_decl_reflect_Row_spec b);
 };
 
 struct ksplc_sema_decl_reflect_Row_spec_Array_1 {
@@ -13219,8 +13305,7 @@ struct std_lang_Callable2_ksplc_lower_ctx_Jump_ctx_ksplc_lower_ctx_Jump_ctx_I32 
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lower_ctx_Jump_ctx_ksplc_lower_ctx_Jump_ctx_I32 {
-  I32 (*call)
-  (void *r, ksplc_lower_ctx_Jump_ctx a, ksplc_lower_ctx_Jump_ctx b);
+  I32 (*call)(void *r, ksplc_lower_ctx_Jump_ctx a, ksplc_lower_ctx_Jump_ctx b);
 };
 
 struct ksplc_lower_ctx_Jump_ctx_Array_1 {
@@ -13285,8 +13370,7 @@ struct std_lang_Callable2_ksplc_lsp_uses_Spot_ksplc_lsp_uses_Spot_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lsp_uses_Spot_ksplc_lsp_uses_Spot_I32 {
-  I32 (*call)
-  (void *r, ksplc_lsp_uses_Spot a, ksplc_lsp_uses_Spot b);
+  I32 (*call)(void *r, ksplc_lsp_uses_Spot a, ksplc_lsp_uses_Spot b);
 };
 
 struct ksplc_lsp_uses_Spot_Array_1 {
@@ -13348,8 +13432,7 @@ struct std_lang_Callable2_ksplc_lsp_complete_Pick_ksplc_lsp_complete_Pick_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_lsp_complete_Pick_ksplc_lsp_complete_Pick_I32 {
-  I32 (*call)
-  (void *r, ksplc_lsp_complete_Pick a, ksplc_lsp_complete_Pick b);
+  I32 (*call)(void *r, ksplc_lsp_complete_Pick a, ksplc_lsp_complete_Pick b);
 };
 
 struct ksplc_lsp_complete_Pick_Array_1 {
@@ -13439,8 +13522,7 @@ struct std_lang_Callable2_ksplc_sema_session_ctx_Jump_label_ksplc_sema_session_c
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_ctx_Jump_label_ksplc_sema_session_ctx_Jump_label_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_ctx_Jump_label a, ksplc_sema_session_ctx_Jump_label b);
+  I32 (*call)(void *r, ksplc_sema_session_ctx_Jump_label a, ksplc_sema_session_ctx_Jump_label b);
 };
 
 struct ksplc_sema_session_ctx_Jump_label_Array_1 {
@@ -13534,8 +13616,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Lint_setting_entry_ksplc_sema
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Lint_setting_entry_ksplc_sema_session_state_Lint_setting_entry_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Lint_setting_entry a, ksplc_sema_session_state_Lint_setting_entry b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Lint_setting_entry a, ksplc_sema_session_state_Lint_setting_entry b);
 };
 
 struct ksplc_sema_session_state_Lint_setting_entry_Array_1 {
@@ -13597,8 +13678,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Pending_methods_ksplc_sema_se
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Pending_methods_ksplc_sema_session_state_Pending_methods_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Pending_methods a, ksplc_sema_session_state_Pending_methods b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Pending_methods a, ksplc_sema_session_state_Pending_methods b);
 };
 
 struct ksplc_sema_session_state_Pending_methods_Array_1 {
@@ -13683,8 +13763,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Pending_constraint_ksplc_sema
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Pending_constraint_ksplc_sema_session_state_Pending_constraint_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Pending_constraint a, ksplc_sema_session_state_Pending_constraint b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Pending_constraint a, ksplc_sema_session_state_Pending_constraint b);
 };
 
 struct ksplc_sema_session_state_Pending_constraint_Array_1 {
@@ -13746,8 +13825,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Pending_inst_ksplc_sema_sessi
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Pending_inst_ksplc_sema_session_state_Pending_inst_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Pending_inst a, ksplc_sema_session_state_Pending_inst b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Pending_inst a, ksplc_sema_session_state_Pending_inst b);
 };
 
 struct ksplc_sema_session_state_Pending_inst_Array_1 {
@@ -13815,8 +13893,7 @@ struct std_lang_Callable2_std_subproc_Run_result_std_subproc_Run_result_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_std_subproc_Run_result_std_subproc_Run_result_I32 {
-  I32 (*call)
-  (void *r, std_subproc_Run_result a, std_subproc_Run_result b);
+  I32 (*call)(void *r, std_subproc_Run_result a, std_subproc_Run_result b);
 };
 
 struct std_subproc_Run_result_Array_1 {
@@ -13878,8 +13955,7 @@ struct std_lang_Callable2_ksplc_parse_layout_Frame_ksplc_parse_layout_Frame_I32 
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_parse_layout_Frame_ksplc_parse_layout_Frame_I32 {
-  I32 (*call)
-  (void *r, ksplc_parse_layout_Frame a, ksplc_parse_layout_Frame b);
+  I32 (*call)(void *r, ksplc_parse_layout_Frame a, ksplc_parse_layout_Frame b);
 };
 
 struct ksplc_parse_layout_Frame_Array_1 {
@@ -13941,8 +14017,7 @@ struct std_lang_Callable2_ksplc_parse_layout_Insert_ksplc_parse_layout_Insert_I3
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_parse_layout_Insert_ksplc_parse_layout_Insert_I32 {
-  I32 (*call)
-  (void *r, ksplc_parse_layout_Insert a, ksplc_parse_layout_Insert b);
+  I32 (*call)(void *r, ksplc_parse_layout_Insert a, ksplc_parse_layout_Insert b);
 };
 
 struct ksplc_parse_layout_Insert_Array_1 {
@@ -14004,8 +14079,7 @@ struct std_lang_Callable2_ksplc_parse_layout_Logical_ksplc_parse_layout_Logical_
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_parse_layout_Logical_ksplc_parse_layout_Logical_I32 {
-  I32 (*call)
-  (void *r, ksplc_parse_layout_Logical a, ksplc_parse_layout_Logical b);
+  I32 (*call)(void *r, ksplc_parse_layout_Logical a, ksplc_parse_layout_Logical b);
 };
 
 struct ksplc_parse_layout_Logical_Array_1 {
@@ -14067,8 +14141,7 @@ struct std_lang_Callable2_ksplc_base_ast_doc_Param_doc_ksplc_base_ast_doc_Param_
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_ast_doc_Param_doc_ksplc_base_ast_doc_Param_doc_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_ast_doc_Param_doc a, ksplc_base_ast_doc_Param_doc b);
+  I32 (*call)(void *r, ksplc_base_ast_doc_Param_doc a, ksplc_base_ast_doc_Param_doc b);
 };
 
 struct ksplc_base_ast_doc_Param_doc_Array_1 {
@@ -14130,8 +14203,7 @@ struct std_lang_Callable2_ksplc_fmt_import_Item_ksplc_fmt_import_Item_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_fmt_import_Item_ksplc_fmt_import_Item_I32 {
-  I32 (*call)
-  (void *r, ksplc_fmt_import_Item a, ksplc_fmt_import_Item b);
+  I32 (*call)(void *r, ksplc_fmt_import_Item a, ksplc_fmt_import_Item b);
 };
 
 struct ksplc_fmt_import_Item_Array_1 {
@@ -14193,8 +14265,7 @@ struct std_lang_Callable2_ksplc_base_ast_spell_Sig_part_ksplc_base_ast_spell_Sig
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_ast_spell_Sig_part_ksplc_base_ast_spell_Sig_part_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_ast_spell_Sig_part a, ksplc_base_ast_spell_Sig_part b);
+  I32 (*call)(void *r, ksplc_base_ast_spell_Sig_part a, ksplc_base_ast_spell_Sig_part b);
 };
 
 struct std_lang_Callable2_ksplc_base_ast_spell_Sig_part_std_str_Str_builder_Ptr_Bool {
@@ -14282,8 +14353,7 @@ struct std_lang_Callable2_ksplc_base_cfg_inactive_Cfg_inactive_ksplc_base_cfg_in
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_cfg_inactive_Cfg_inactive_ksplc_base_cfg_inactive_Cfg_inactive_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_cfg_inactive_Cfg_inactive a, ksplc_base_cfg_inactive_Cfg_inactive b);
+  I32 (*call)(void *r, ksplc_base_cfg_inactive_Cfg_inactive a, ksplc_base_cfg_inactive_Cfg_inactive b);
 };
 
 struct ksplc_base_cfg_inactive_Cfg_inactive_Array_1 {
@@ -14345,8 +14415,7 @@ struct std_lang_Callable2_ksplc_base_package_Package_decl_ksplc_base_package_Pac
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_package_Package_decl_ksplc_base_package_Package_decl_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_package_Package_decl a, ksplc_base_package_Package_decl b);
+  I32 (*call)(void *r, ksplc_base_package_Package_decl a, ksplc_base_package_Package_decl b);
 };
 
 struct ksplc_base_package_Package_decl_Array_1 {
@@ -14408,8 +14477,7 @@ struct std_lang_Callable2_ksplc_base_lint_codes_Global_setting_ksplc_base_lint_c
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_lint_codes_Global_setting_ksplc_base_lint_codes_Global_setting_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_lint_codes_Global_setting a, ksplc_base_lint_codes_Global_setting b);
+  I32 (*call)(void *r, ksplc_base_lint_codes_Global_setting a, ksplc_base_lint_codes_Global_setting b);
 };
 
 struct ksplc_base_lint_codes_Global_setting_Array_1 {
@@ -14471,8 +14539,7 @@ struct std_lang_Callable2_ksplc_base_config_file_Setting_ksplc_base_config_file_
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_config_file_Setting_ksplc_base_config_file_Setting_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_config_file_Setting a, ksplc_base_config_file_Setting b);
+  I32 (*call)(void *r, ksplc_base_config_file_Setting a, ksplc_base_config_file_Setting b);
 };
 
 struct ksplc_base_config_file_Setting_Array_1 {
@@ -14534,8 +14601,7 @@ struct std_lang_Callable2_ksplc_base_diag_Lsp_diagnostic_ksplc_base_diag_Lsp_dia
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_base_diag_Lsp_diagnostic_ksplc_base_diag_Lsp_diagnostic_I32 {
-  I32 (*call)
-  (void *r, ksplc_base_diag_Lsp_diagnostic a, ksplc_base_diag_Lsp_diagnostic b);
+  I32 (*call)(void *r, ksplc_base_diag_Lsp_diagnostic a, ksplc_base_diag_Lsp_diagnostic b);
 };
 
 struct ksplc_base_diag_Lsp_diagnostic_Array_1 {
@@ -14614,8 +14680,7 @@ struct std_lang_Callable2_std_json_Val_std_json_Val_I32 {
 };
 
 struct kspl_vtable_std_lang_Callable2_std_json_Val_std_json_Val_I32 {
-  I32 (*call)
-  (void *r, std_json_Val a, std_json_Val b);
+  I32 (*call)(void *r, std_json_Val a, std_json_Val b);
 };
 
 struct std_json_Member {
@@ -15261,8 +15326,7 @@ struct std_lang_Callable2_ksplc_sema_session_state_Folded_layout_ksplc_sema_sess
 };
 
 struct kspl_vtable_std_lang_Callable2_ksplc_sema_session_state_Folded_layout_ksplc_sema_session_state_Folded_layout_I32 {
-  I32 (*call)
-  (void *r, ksplc_sema_session_state_Folded_layout a, ksplc_sema_session_state_Folded_layout b);
+  I32 (*call)(void *r, ksplc_sema_session_state_Folded_layout a, ksplc_sema_session_state_Folded_layout b);
 };
 
 struct ksplc_sema_session_state_Folded_layout_Array_1 {
@@ -16017,9 +16081,9 @@ extern const I32 kspl_priv_ksplc_sema_type_query_max_const_add_depth;
 extern const I32 kspl_priv_ksplc_sema_type_query_unlimited_const_add_depth;
 extern const Sz kspl_priv_ksplc_sema_type_query_max_type_unwrap_depth;
 extern const Sz kspl_ksplc_sema_type_query_max_alias_chain_depth;
-extern const Sz kspl_priv_ksplc_sema_type_env_max_mangle_depth;
 extern const Sz kspl_priv_ksplc_sema_session_c_boundary_max_ffi_nesting_depth;
 extern const Sz kspl_priv_ksplc_sema_type_display_max_generic_key_depth;
+extern const Sz kspl_priv_ksplc_sema_type_naming_max_mangle_depth;
 extern const I32 kspl_priv_ksplc_sema_session_ctx_max_errors;
 extern const Sz kspl_priv_ksplc_sema_session_ctx_max_instance_notes;
 extern const Sz kspl_ksplc_lsp_position_max_walk_depth;
@@ -16145,8 +16209,7 @@ extern const I64 kspl_priv_ksplc_tools_run_run_slot_spare_secs;
 extern const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_run_cflags;
 extern const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_run_opt_flag;
 extern const std_lang_Slice_U8_Const_Array_2 kspl_priv_ksplc_tools_run_run_section_flags;
-extern Bool kspl_priv_ksplc_tools_run_target_known;
-extern ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_answer;
+extern std_lang_Option_ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_answer;
 extern const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_exe_stack_msvc;
 extern const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_exe_stack_gnu;
 extern const Sz kspl_priv_ksplc_tools_run_max_run_units;
@@ -16208,6 +16271,7 @@ std_lang_Range kspl_std_lang_Range_new(Sz start, Sz stop, Sz step);
 std_lang_Range kspl_std_lang_Range_asc(Sz stop);
 std_lang_Range kspl_std_lang_Range_desc(Sz n);
 void kspl_std_lang_bounds_panic(std_lang_Slice_U8 func_name, Sz idx, Sz len, std_lang_Slice_U8 file, Sz line);
+U8 kspl_std_chars_hex_digit(U8 value, U8 alpha);
 Bool kspl_U8_is_space(U8 r);
 Bool kspl_U8_is_digit(U8 r);
 Bool kspl_U8_is_alpha(U8 r);
@@ -16280,7 +16344,6 @@ static void kspl_priv_std_bignat_copy_bytes(U8 *dst, const U8 *src, Sz n);
 std_bignat_Binary_float kspl_std_bignat_decompose_f64(U64 mag);
 U64 kspl_std_bignat_f64_to_bits(F64 v);
 F64 kspl_std_bignat_f64_from_bits(U64 bits);
-U8 kspl_U8_to_hex_with(U8 r, U8 alpha);
 U8 kspl_U8_to_hex_lower(U8 r);
 U8 kspl_U8_to_hex_upper(U8 r);
 std_lang_Writer kspl_std_strfmt_Int_fmt_fmt(std_strfmt_Int_fmt r, std_lang_Writer w);
@@ -16590,7 +16653,6 @@ std_json_Val kspl_std_json_Array_builder_build(std_json_Array_builder r);
 std_json_Obj_builder kspl_std_json_Obj_builder_set(std_json_Obj_builder r, std_lang_Slice_U8 key, std_json_Val val);
 std_json_Val kspl_std_json_Obj_builder_build(std_json_Obj_builder r);
 static kspl_Void_Result_std_json_Json_error kspl_priv_std_json_enter_nesting(std_json_Parse_ctx *ctx);
-static void kspl_priv_std_json_exit_nesting(std_json_Parse_ctx *ctx);
 static void kspl_priv_std_json_skip_ws(std_json_Parse_ctx *ctx);
 static Bool kspl_priv_std_json_match_str(std_json_Parse_ctx *ctx, std_lang_Slice_U8 s);
 static Bool kspl_priv_std_json_is_json_escape(U8 ec);
@@ -17225,7 +17287,6 @@ ksplc_fmt_file_Fixed_points kspl_ksplc_fmt_file_Fixed_points_open();
 std_lang_Slice_U8 kspl_ksplc_fmt_file_Fixed_points_key_path(ksplc_fmt_file_Fixed_points *r, std_lang_Slice_U8 raw, Bool laid, ksplc_fmt_style_Config config);
 void kspl_ksplc_fmt_file_Fixed_points_print_stats(ksplc_fmt_file_Fixed_points *r);
 kspl_Void_Result_ksplc_fmt_file_Fmt_error kspl_ksplc_fmt_file_format_file(std_lang_Slice_U8 in_path, kspeg_engine_Target *base_parser, ksplc_fmt_style_Config config, Bool in_place, Bool to_layout, ksplc_fmt_file_Fixed_points *fixed);
-static std_str_Str_builder kspl_priv_std_subproc_pack_argv(std_lang_Slice_std_lang_Slice_U8_Const argv);
 static I64 kspl_priv_std_subproc_start(std_lang_Slice_std_lang_Slice_U8_Const argv, std_lang_Slice_U8 cwd, I32 stdio, std_lang_Slice_U8 out_path, std_lang_Slice_U8 err_path);
 static std_subproc_Run_result kspl_priv_std_subproc_spawn_failed_result();
 static Bool kspl_priv_std_subproc_take_into(std_str_Str_builder *into, std_lang_Slice_U8 chunk, I32 n, Sz cap);
@@ -17415,24 +17476,14 @@ Bool kspl_ksplc_sema_type_env_Env_has_implemented_trait_fqn(ksplc_sema_type_env_
 Bool kspl_ksplc_sema_type_env_Env_has_implemented_operator_trait(ksplc_sema_type_env_Env *r, I32 target_id, std_lang_Slice_U8 trait_name);
 I32 kspl_ksplc_sema_type_env_Env_implemented_trait_instance(ksplc_sema_type_env_Env *r, I32 target_id, std_lang_Slice_U8 base_fqn);
 void kspl_ksplc_sema_type_env_Env_register(ksplc_sema_type_env_Env *r, std_lang_Slice_U8 name, I32 expected_id);
-std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w);
-std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w, Sz depth);
 std_lang_Option_ksplc_sema_type_env_Instance kspl_ksplc_sema_type_env_Env_variance_stripped(ksplc_sema_type_env_Env *r, I32 type_id);
 std_lang_Option_ksplc_sema_type_env_Instance kspl_ksplc_sema_type_env_Env_strip_variance(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst);
-I32 kspl_ksplc_sema_type_env_Env_c_repr_type_id(ksplc_sema_type_env_Env *r, I32 type_id);
 void kspl_ksplc_sema_type_env_Env_note_instance(ksplc_sema_type_env_Env *r, I32 type_id, ksplc_sema_type_env_Instance inst);
 std_lang_Option_ksplc_sema_type_env_Instance kspl_ksplc_sema_type_env_Env_instance_of(ksplc_sema_type_env_Env *r, I32 type_id);
 std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_instance_base(ksplc_sema_type_env_Env *r, I32 type_id);
 I32 kspl_ksplc_sema_type_env_Env_instance_arg(ksplc_sema_type_env_Env *r, I32 type_id, Sz pos);
 std_lang_Slice_I32 kspl_ksplc_sema_type_env_Env_instance_args(ksplc_sema_type_env_Env *r, I32 type_id);
-std_lang_Writer kspl_ksplc_sema_type_env_Env_type_args_to(ksplc_sema_type_env_Env *r, std_lang_Slice_I32 args, std_lang_Writer w);
-std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_key_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w);
-std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_instance_key(ksplc_sema_type_env_Env *r, I32 type_id);
-std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_c_name_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w);
 I32 kspl_ksplc_sema_type_env_Env_slice_struct_elem(ksplc_sema_type_env_Env *r, I32 type_id);
-ksplc_sema_type_env_Mangle_seen kspl_ksplc_sema_type_env_Mangle_seen_new(ksplc_sema_type_env_Env *env);
-void kspl_ksplc_sema_type_env_Mangle_seen_free(ksplc_sema_type_env_Mangle_seen *r);
-Bool kspl_ksplc_sema_type_env_Mangle_seen_admit(ksplc_sema_type_env_Mangle_seen *r, I32 type_id);
 void kspl_ksplc_sema_session_ctx_Sema_ctx_check_ffi_safety(ksplc_sema_session_ctx_Sema_ctx *r, I32 type_id, ksplc_base_ast_Ast_node *err_node);
 void kspl_ksplc_sema_session_ctx_Sema_ctx_check_ffi_safety_at(ksplc_sema_session_ctx_Sema_ctx *r, I32 type_id, ksplc_base_ast_Ast_node *err_node, std_ds_List_I32 *seen, Sz depth);
 Bool kspl_ksplc_sema_session_ctx_Sema_ctx_check_c_keyword_collision(ksplc_sema_session_ctx_Sema_ctx *r, std_lang_Slice_U8 name, ksplc_base_ast_Ast_node *node);
@@ -17482,6 +17533,16 @@ std_str_Str_builder kspl_ksplc_sema_type_env_Env_display_str(ksplc_sema_type_env
 std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_display(ksplc_sema_type_env_Env *r, I32 id);
 std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_display_key(ksplc_sema_type_env_Env *r, std_lang_Slice_U8 key);
 std_str_Str_builder kspl_ksplc_sema_type_env_Env_display_str_named(ksplc_sema_type_env_Env *r, std_lang_Slice_U8 name);
+std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w);
+std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w, Sz depth);
+I32 kspl_ksplc_sema_type_env_Env_c_repr_type_id(ksplc_sema_type_env_Env *r, I32 type_id);
+std_lang_Writer kspl_ksplc_sema_type_env_Env_type_args_to(ksplc_sema_type_env_Env *r, std_lang_Slice_I32 args, std_lang_Writer w);
+std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_key_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w);
+std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_instance_key(ksplc_sema_type_env_Env *r, I32 type_id);
+std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_c_name_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w);
+ksplc_sema_type_naming_Mangle_seen kspl_ksplc_sema_type_naming_Mangle_seen_new(ksplc_sema_type_env_Env *env);
+void kspl_ksplc_sema_type_naming_Mangle_seen_free(ksplc_sema_type_naming_Mangle_seen *r);
+Bool kspl_ksplc_sema_type_naming_Mangle_seen_admit(ksplc_sema_type_naming_Mangle_seen *r, I32 type_id);
 std_lang_Option_ksplc_sema_session_state_Generic_arg kspl_ksplc_sema_session_ctx_Sema_ctx_find_generic_arg(ksplc_sema_session_ctx_Sema_ctx *r, std_lang_Slice_U8 param_name);
 ksplc_sema_session_ctx_Sema_ctx kspl_ksplc_sema_session_ctx_Sema_ctx_new(std_lang_Slice_U8 source, std_lang_Slice_U8 file_name, ksplc_sema_type_env_Env *env, std_ds_Map_I32_ksplc_sema_type_scope_Sema_symbol_Ptr *global_scope, std_ds_Map_std_lang_Slice_U8_Const_std_lang_Slice_U8 *source_map);
 void kspl_ksplc_sema_session_ctx_Sema_ctx_free(ksplc_sema_session_ctx_Sema_ctx *r);
@@ -17870,7 +17931,7 @@ static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_call_type_name(ksplc_sema_sessi
 static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_function_of(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name);
 static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_path_type_name(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *node, Sz end, Sz depth);
 std_lang_Slice_U8 kspl_ksplc_lsp_nav_folded_receiver_type(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *mark);
-static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_local_decl_of(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name);
+static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_local_decl_of(std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name);
 static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_local_type_name(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name, Sz depth);
 static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_declared_type_name(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *t_node);
 static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_field_type_name(ksplc_sema_session_ctx_Sema_ctx *c, std_lang_Slice_U8 owner, ksplc_base_ast_Ast_node *field);
@@ -17879,7 +17940,7 @@ static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_field
 static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_declared_field(ksplc_sema_session_ctx_Sema_ctx *c, std_lang_Slice_U8 struct_name, std_lang_Slice_U8 name);
 static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_member_of(ksplc_sema_session_ctx_Sema_ctx *c, std_lang_Slice_U8 raw_type, std_lang_Slice_U8 name);
 static kspl_ksplc_base_ast_Ast_node_Ptr_Result kspl_priv_ksplc_lsp_nav_resolve_dot_access_def(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node, std_lang_Slice_U8 target_text);
-static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *_c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node, std_lang_Slice_U8 target_text);
+static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node, std_lang_Slice_U8 target_text);
 static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_binding_in(ksplc_base_ast_Ast_node *p, ksplc_base_ast_Ast_node *target_node, std_lang_Slice_U8 name);
 static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_type_param_named(ksplc_base_ast_Ast_node *decl, std_lang_Slice_U8 name);
 static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_fn_param_named(ksplc_base_ast_Ast_node *decl, std_lang_Slice_U8 name);
@@ -17889,10 +17950,10 @@ static std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_find_
 std_lang_Slice_U8 kspl_ksplc_lsp_nav_declared_doc(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *def_node);
 static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_place_of(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *node);
 std_lang_Slice_U8 kspl_ksplc_lsp_nav_linked_doc(ksplc_sema_session_ctx_Sema_ctx *c, ksplc_base_ast_Ast_node *root, ksplc_base_ast_Ast_node *def_node);
-Bool kspl_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym, ksplc_base_ast_Ast_node *target_node, ksplc_lsp_nav_Enum_resolve_result *res);
-ksplc_lsp_nav_Def_resolve_result kspl_ksplc_lsp_nav_resolve_def_node(ksplc_sema_session_ctx_Sema_ctx *sema, ksplc_base_ast_Ast_node *root_file, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node);
+static void kspl_priv_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym, ksplc_base_ast_Ast_node *target_node, ksplc_lsp_nav_Enum_resolve_result *res);
+ksplc_lsp_nav_Def_resolve_result kspl_ksplc_lsp_nav_resolve_def_node(ksplc_sema_session_ctx_Sema_ctx *sema, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node);
 static std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_written_type_name(ksplc_base_ast_Ast_node *n);
-ksplc_lsp_nav_Enum_resolve_result kspl_ksplc_lsp_nav_resolve_enum_variant_def(ksplc_sema_session_ctx_Sema_ctx *sema, KSPL_UNUSED ksplc_base_ast_Ast_node *_root_file, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node);
+static ksplc_lsp_nav_Enum_resolve_result kspl_priv_ksplc_lsp_nav_resolve_enum_variant_def(ksplc_sema_session_ctx_Sema_ctx *sema, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node);
 static Bool kspl_priv_ksplc_lsp_call_hier_is_fn_or_impl_decl(ksplc_base_ast_Ast_node *n);
 static void kspl_priv_ksplc_lsp_call_hier_add_call_entry(ksplc_lsp_call_hier_Fqn_lookup_idx *idx, ksplc_base_ast_Ast_node *caller, ksplc_base_ast_Ast_node *callee, ksplc_base_ast_Ast_node *range_node, Bool is_ref, std_ds_Map_std_lang_Slice_U8_Const_ksplc_lsp_call_hier_Call_hier_entry_Ptr *map);
 static std_json_Val kspl_priv_ksplc_lsp_call_hier_build_call_hier_item(ksplc_base_ast_Ast_node *target, ksplc_base_ast_Ast_node *id_n, std_lang_Slice_U8 name, std_lang_Slice_U8 fqn_slice, std_lang_Slice_U8 src_res, std_ds_List_Sz *starts, Bool is_ref_only, ksplc_base_locate_Uri_style style, std_json_Json_builder b);
@@ -19333,7 +19394,7 @@ static std_lang_Slice_U8 kspl_priv_ksplc_tools_keywords_rule_group_label(std_lan
 static ksplc_tools_keywords_Keyword_group *kspl_priv_ksplc_tools_keywords_find_or_create_group(std_ds_List_ksplc_tools_keywords_Keyword_group_Ptr *groups, std_lang_Slice_U8 label, std_mem_Arena *arena);
 void kspl_ksplc_tools_keywords_run_keyword_dump(kspeg_engine_Target *parser);
 static kspl_Void_Result_std_argp_Argp_error kspl_priv_std_argp_store_value(std_argp_Opt *o, std_lang_Slice_U8 val);
-static void kspl_priv_std_argp_pad_to(std_str_Str_builder *line, Sz column);
+static void kspl_priv_std_argp_help_name(std_lang_Writer out, std_lang_Slice_U8 name, std_lang_Slice_U8 suffix);
 std_argp_Parser *kspl_std_argp_Parser_create(std_lang_Slice_U8 prog, std_lang_Slice_U8 about, std_mem_Arena *arena);
 void kspl_std_argp_Parser_positional(std_argp_Parser *r, std_lang_Slice_U8 usage);
 void kspl_std_argp_Parser_add(std_argp_Parser *r, std_lang_Slice_U8 name, std_lang_Slice_U8 help, std_argp_Kind kind, Bool required);
@@ -20867,9 +20928,9 @@ const I32 kspl_priv_ksplc_sema_type_query_max_const_add_depth = 1;
 const I32 kspl_priv_ksplc_sema_type_query_unlimited_const_add_depth = 1000;
 const Sz kspl_priv_ksplc_sema_type_query_max_type_unwrap_depth = (Sz)1000;
 const Sz kspl_ksplc_sema_type_query_max_alias_chain_depth = (Sz)1000;
-const Sz kspl_priv_ksplc_sema_type_env_max_mangle_depth = (Sz)1000;
 const Sz kspl_priv_ksplc_sema_session_c_boundary_max_ffi_nesting_depth = (Sz)32;
 const Sz kspl_priv_ksplc_sema_type_display_max_generic_key_depth = (Sz)8;
+const Sz kspl_priv_ksplc_sema_type_naming_max_mangle_depth = (Sz)1000;
 const I32 kspl_priv_ksplc_sema_session_ctx_max_errors = 50;
 const Sz kspl_priv_ksplc_sema_session_ctx_max_instance_notes = (Sz)8;
 const Sz kspl_ksplc_lsp_position_max_walk_depth = (Sz)2000;
@@ -27895,8 +27956,7 @@ const I64 kspl_priv_ksplc_tools_run_run_slot_spare_secs = 3600LL;
 const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_run_cflags = KSPL_STR(std_lang_Slice_U8, "-std=c99");
 const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_run_opt_flag = KSPL_STR(std_lang_Slice_U8, "-O0");
 const std_lang_Slice_U8_Const_Array_2 kspl_priv_ksplc_tools_run_run_section_flags = (const std_lang_Slice_U8_Const_Array_2){.data = {KSPL_STR(const std_lang_Slice_U8, "-ffunction-sections"), KSPL_STR(const std_lang_Slice_U8, "-fdata-sections")}};
-Bool kspl_priv_ksplc_tools_run_target_known = false;
-ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_answer = (ksplc_tools_run_Target_kind){.msvc = false, .darwin = false, .windows = false};
+std_lang_Option_ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_answer = (std_lang_Option_ksplc_tools_run_Target_kind){.tag = kspl_std_lang_Option_ksplc_tools_run_Target_kind_none};
 const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_exe_stack_msvc = KSPL_STR(std_lang_Slice_U8, "-Wl,/STACK:8388608");
 const std_lang_Slice_U8 kspl_priv_ksplc_tools_run_exe_stack_gnu = KSPL_STR(std_lang_Slice_U8, "-Wl,--stack,8388608");
 const Sz kspl_priv_ksplc_tools_run_max_run_units = (Sz)16;
@@ -28704,6 +28764,18 @@ __attribute__((noinline)) void kspl_std_lang_bounds_panic(std_lang_Slice_U8 func
   return;
 }
 
+U8 kspl_std_chars_hex_digit(U8 value, U8 alpha) {
+  KSPL_UNUSED U8 __kspl_tmp_001 = {0};
+  if (value < 10) {
+    __kspl_tmp_001 = (U8)((unsigned)(48) + (unsigned)(value));
+  }
+
+  else {
+    __kspl_tmp_001 = (U8)((unsigned)(alpha) + (unsigned)((U8)((unsigned)(value) - (unsigned)(10))));
+  }
+  return __kspl_tmp_001;
+}
+
 Bool kspl_U8_is_space(U8 r) {
   KSPL_UNUSED Bool __kspl_tmp_003 = r == 32;
   if (!__kspl_tmp_003) {
@@ -28900,11 +28972,11 @@ U8 kspl_std_chars_codepoint_byte(I32 cp, Sz i) {
   else {
     KSPL_UNUSED U8 __kspl_tmp_007 = {0};
     if (k == (Sz)0) {
-      __kspl_tmp_007 = (U8)((I32)((U32)(lead) + (U32)(cp >> kspl_shift_check((Sz)((size_t)((Sz)((size_t)(n) - (size_t)((Sz)1))) * (size_t)((Sz)6)), 32, 0, "std/chars", 297))));
+      __kspl_tmp_007 = (U8)((I32)((U32)(lead) + (U32)(cp >> kspl_shift_check((Sz)((size_t)((Sz)((size_t)(n) - (size_t)((Sz)1))) * (size_t)((Sz)6)), 32, 0, "std/chars", 292))));
     }
 
     else {
-      __kspl_tmp_007 = (U8)((I32)((U32)(0x80) + (U32)(cp >> kspl_shift_check((Sz)((size_t)((Sz)((size_t)((Sz)((size_t)(n) - (size_t)((Sz)1))) - (size_t)(k))) * (size_t)((Sz)6)), 32, 0, "std/chars", 297) & 0x3f)));
+      __kspl_tmp_007 = (U8)((I32)((U32)(0x80) + (U32)(cp >> kspl_shift_check((Sz)((size_t)((Sz)((size_t)((Sz)((size_t)(n) - (size_t)((Sz)1))) - (size_t)(k))) * (size_t)((Sz)6)), 32, 0, "std/chars", 292) & 0x3f)));
     }
     __kspl_tmp_006 = __kspl_tmp_007;
   }
@@ -28976,7 +29048,7 @@ Sz kspl_std_mem_heap_peak_used_bytes() {
 
 void kspl_std_mem_zero(void *dest, Sz bytes) {
   if (bytes < (Sz)0) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "zero bytes must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)345);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "zero bytes must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)344);
   }
 
   if (bytes == (Sz)0) {
@@ -28989,7 +29061,7 @@ void kspl_std_mem_zero(void *dest, Sz bytes) {
 
 void kspl_std_mem_copy(void *dest, void *src, Sz bytes) {
   if (bytes < (Sz)0) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "copy bytes must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)370);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "copy bytes must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)364);
   }
 
   if (bytes == (Sz)0) {
@@ -29002,7 +29074,7 @@ void kspl_std_mem_copy(void *dest, void *src, Sz bytes) {
 
 void kspl_std_mem_move(void *dest, void *src, Sz bytes) {
   if (bytes < (Sz)0) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "move bytes must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)397);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "move bytes must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)385);
   }
 
   if (bytes == (Sz)0) {
@@ -29038,7 +29110,7 @@ static KSPL_UNUSED Sz kspl_priv_std_mem_free_chunks(std_mem_Arena_chunk *from, s
 }
 
 std_mem_Arena *kspl_std_mem_Arena_new(Sz chunk_size) {
-  kspl_std_lang_assert(chunk_size > (Sz)0, KSPL_STR(std_lang_Slice_U8, "Arena.new: chunk_size must be above 0"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)499);
+  kspl_std_lang_assert(chunk_size > (Sz)0, KSPL_STR(std_lang_Slice_U8, "Arena.new: chunk_size must be above 0"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)479);
   std_mem_Arena *ptr = kspl_std_mem_alloc_as_std_mem_Arena();
   ptr->head = null;
   ptr->default_chunk_size = chunk_size;
@@ -29077,12 +29149,12 @@ void *kspl_std_mem_Arena_alloc(std_mem_Arena *r, Sz size) {
   }
 
   if (size < (Sz)0) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena alloc size must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)543);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena alloc size must be non-negative"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)523);
   }
 
   Sz alloc_size = (Sz)((size_t)(((Sz)((size_t)((Sz)((size_t)(size) + (size_t)(kspl_priv_std_mem_max_align))) - (size_t)((Sz)1))) / (kspl_priv_std_mem_max_align)) * (size_t)(kspl_priv_std_mem_max_align));
   if (alloc_size < size) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena alloc size is too large to round up"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)549);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena alloc size is too large to round up"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)529);
   }
 
   if (r->head != null) {
@@ -29096,7 +29168,7 @@ void *kspl_std_mem_Arena_alloc(std_mem_Arena *r, Sz size) {
   }
 
   if (r->default_chunk_size == (Sz)0) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena.from_buffer: static buffer exhausted (no growth allowed)"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)561);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena.from_buffer: static buffer exhausted (no growth allowed)"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)541);
   }
 
   Sz new_cap = kspl_std_mem_Arena_next_chunk_cap(r, alloc_size);
@@ -29126,7 +29198,7 @@ std_mem_Arena_state kspl_std_mem_Arena_save(std_mem_Arena *r) {
 
 void kspl_std_mem_Arena_restore(std_mem_Arena *r, std_mem_Arena_state state) {
   if (!kspl_std_mem_Arena_places(r, state)) {
-    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena.restore: the mark is not this arena's, or was saved before its reset() or before a restore() to an earlier mark"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)586);
+    kspl_std_lang_panic(KSPL_STR(std_lang_Slice_U8, "Arena.restore: the mark is not this arena's, or was saved before its reset() or before a restore() to an earlier mark"), KSPL_STR(std_lang_Slice_U8, "std/mem"), (Sz)566);
   }
 
   KSPL_UNUSED Sz _freed = kspl_priv_std_mem_free_chunks(r->head, state.chunk);
@@ -29838,24 +29910,12 @@ F64 kspl_std_bignat_f64_from_bits(U64 bits) {
   return v;
 }
 
-U8 kspl_U8_to_hex_with(U8 r, U8 alpha) {
-  KSPL_UNUSED U8 __kspl_tmp_001 = {0};
-  if (r < 10) {
-    __kspl_tmp_001 = (U8)((unsigned)(48) + (unsigned)(r));
-  }
-
-  else {
-    __kspl_tmp_001 = (U8)((unsigned)(alpha) + (unsigned)((U8)((unsigned)(r) - (unsigned)(10))));
-  }
-  return __kspl_tmp_001;
-}
-
 U8 kspl_U8_to_hex_lower(U8 r) {
-  return kspl_U8_to_hex_with(r, 97);
+  return kspl_std_chars_hex_digit(r, 97);
 }
 
 U8 kspl_U8_to_hex_upper(U8 r) {
-  return kspl_U8_to_hex_with(r, 65);
+  return kspl_std_chars_hex_digit(r, 65);
 }
 
 std_lang_Writer kspl_std_strfmt_Int_fmt_fmt(std_strfmt_Int_fmt r, std_lang_Writer w) {
@@ -29890,7 +29950,7 @@ std_lang_Writer kspl_std_strfmt_Hex_fmt_fmt(std_strfmt_Hex_fmt r, std_lang_Write
   {
     Sz i = need;
     for (; i > (Sz)0; i = (Sz)((size_t)(i) - (size_t)((Sz)1))) {
-      U8 nib = (U8)(r.val >> kspl_shift_check((U64)((Sz)((size_t)((Sz)((size_t)(i) - (size_t)((Sz)1))) * (size_t)((Sz)4))), 64, 1, "std/strfmt", 87) & 0xfULL);
+      U8 nib = (U8)(r.val >> kspl_shift_check((U64)((Sz)((size_t)((Sz)((size_t)(i) - (size_t)((Sz)1))) * (size_t)((Sz)4))), 64, 1, "std/strfmt", 84) & 0xfULL);
       KSPL_UNUSED U8 __kspl_tmp_008 = {0};
       if (r.upper) {
         __kspl_tmp_008 = kspl_U8_to_hex_upper(nib);
@@ -29993,34 +30053,23 @@ static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_uint(std_lang_Writ
 
 static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_magnitude(std_lang_Writer w, U64 mag, Bool is_neg, Sz width, U8 fill, Bool comma) {
   U8_Array_32 buf = (U8_Array_32){{0}};
-  U8 *ptr = (buf.data);
-  Sz idx = (Sz)0;
-  if (mag == 0ULL) {
-    (*(ptr + idx)) = 48;
-    idx = (Sz)((size_t)(idx) + (size_t)((Sz)1));
-  }
-
-  else {
-    U64 temp = mag;
-    for (; temp > 0ULL;) {
-      (*(ptr + idx)) = (U8)((U64)48 + temp % (10ULL));
-      idx = (Sz)((size_t)(idx) + (size_t)((Sz)1));
-      temp /= (10ULL);
-    }
-  }
-  KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_asc(idx / ((Sz)2));
+  Sz idx = (Sz)32;
+  U64 temp = mag;
   {
-    KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
-    for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      KSPL_UNUSED Sz __kspl_tmp_005 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
-      Sz k = __kspl_tmp_005;
-      Sz tail = (Sz)((size_t)((Sz)((size_t)(idx) - (size_t)((Sz)1))) - (size_t)(k));
-      U8 tmp = (*(ptr + k));
-      (*(ptr + k)) = (*(ptr + tail));
-      (*(ptr + tail)) = tmp;
+    for (;;) {
+      idx = (Sz)((size_t)(idx) - (size_t)((Sz)1));
+      {
+        U8 *_kspl_dst_16 = &(buf.data[kspl_bounds_check(idx, 32, "std/strfmt", 340)]);
+        *_kspl_dst_16 = (U8)((U64)48 + temp % (10ULL));
+      }
+      temp /= (10ULL);
+      if (temp == 0ULL) {
+        goto _mir_label_002;
+      }
     }
+  _mir_label_002:;
   }
-  return kspl_priv_std_strfmt_write_digits(w, (std_lang_Slice_U8){.ptr = (U8 *)(ptr), .len = idx}, is_neg, width, fill, comma);
+  return kspl_priv_std_strfmt_write_digits(w, (std_lang_Slice_U8){.ptr = (U8 *)((buf.data) + idx), .len = (Sz)((size_t)((Sz)32) - (size_t)(idx))}, is_neg, width, fill, comma);
 }
 
 static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_digits(std_lang_Writer w, std_lang_Slice_U8 digits, Bool is_neg, Sz width, U8 fill, Bool comma) {
@@ -30075,7 +30124,7 @@ static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_digits(std_lang_Wr
         Sz at = (Sz)((size_t)(i) - (size_t)((Sz)((size_t)(count) - (size_t)(digits.len))));
         KSPL_UNUSED U8 __kspl_tmp_008 = {0};
         if (at >= (Sz)0) {
-          __kspl_tmp_008 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&digits, at, KSPL_STR(std_lang_Slice_U8, "std/strfmt"), (Sz)382)));
+          __kspl_tmp_008 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&digits, at, KSPL_STR(std_lang_Slice_U8, "std/strfmt"), (Sz)371)));
         }
 
         else {
@@ -30234,26 +30283,26 @@ static KSPL_UNUSED void kspl_priv_std_strfmt_increment_digits(std_strfmt_Float_d
   Sz i = d->n;
   for (; i > (Sz)0;) {
     i = (Sz)((size_t)(i) - (size_t)((Sz)1));
-    if (d->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 469)] < 57) {
+    if (d->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 458)] < 57) {
       {
-        U8 *_kspl_dst_16 = &(d->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 470)]);
-        *_kspl_dst_16 = (U8)((unsigned)(*_kspl_dst_16) + (unsigned)(1));
+        U8 *_kspl_dst_17 = &(d->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 459)]);
+        *_kspl_dst_17 = (U8)((unsigned)(*_kspl_dst_17) + (unsigned)(1));
       }
       return;
     }
 
     {
-      U8 *_kspl_dst_17 = &(d->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 472)]);
-      *_kspl_dst_17 = 48;
+      U8 *_kspl_dst_18 = &(d->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 461)]);
+      *_kspl_dst_18 = 48;
     }
   }
   {
-    U8 *_kspl_dst_18 = &(d->digits.data[(Sz)0]);
-    *_kspl_dst_18 = 49;
+    U8 *_kspl_dst_19 = &(d->digits.data[(Sz)0]);
+    *_kspl_dst_19 = 49;
   }
   {
-    U8 *_kspl_dst_19 = &(d->digits.data[kspl_bounds_check(d->n, 340, "std/strfmt", 474)]);
-    *_kspl_dst_19 = 48;
+    U8 *_kspl_dst_20 = &(d->digits.data[kspl_bounds_check(d->n, 340, "std/strfmt", 463)]);
+    *_kspl_dst_20 = 48;
   }
   d->n = (Sz)((size_t)(d->n) + (size_t)((Sz)1));
   d->k = (I32)((U32)(d->k) + (U32)(1));
@@ -30310,8 +30359,8 @@ static KSPL_UNUSED void kspl_priv_std_strfmt_digits_of(std_strfmt_Float_digits *
       }
 
       {
-        U8 *_kspl_dst_20 = &(out->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 510)]);
-        *_kspl_dst_20 = (U8)((unsigned)(d) + (unsigned)(48));
+        U8 *_kspl_dst_21 = &(out->digits.data[kspl_bounds_check(i, 340, "std/strfmt", 499)]);
+        *_kspl_dst_21 = (U8)((unsigned)(d) + (unsigned)(48));
       }
     _mir_label_003:;
     }
@@ -30343,9 +30392,9 @@ static KSPL_UNUSED void kspl_priv_std_strfmt_shortest_digits(std_strfmt_Float_di
     __kspl_tmp_001 = 0ULL;
   }
   std_bignat_Wide g = (std_bignat_Wide){.hi = (p.hi >> (2ULL)) + __kspl_tmp_001, .lo = g_lo};
-  U64 vb = kspl_priv_std_strfmt_round_to_odd(g, cb << kspl_shift_check(h, 64, 1, "std/strfmt", 534));
-  U64 vbl = kspl_priv_std_strfmt_round_to_odd(g, cbl << kspl_shift_check(h, 64, 1, "std/strfmt", 535));
-  U64 vbr = kspl_priv_std_strfmt_round_to_odd(g, (cb + 2ULL) << kspl_shift_check(h, 64, 1, "std/strfmt", 536));
+  U64 vb = kspl_priv_std_strfmt_round_to_odd(g, cb << kspl_shift_check(h, 64, 1, "std/strfmt", 523));
+  U64 vbl = kspl_priv_std_strfmt_round_to_odd(g, cbl << kspl_shift_check(h, 64, 1, "std/strfmt", 524));
+  U64 vbr = kspl_priv_std_strfmt_round_to_odd(g, (cb + 2ULL) << kspl_shift_check(h, 64, 1, "std/strfmt", 525));
   U64 s = vb >> (2ULL);
   if (s >= 10ULL) {
     U64 sp = s / (10ULL) * 10ULL;
@@ -30467,8 +30516,8 @@ static KSPL_UNUSED __attribute__((noinline)) void kspl_priv_std_strfmt_fixed_dig
     kspl_std_bignat_Bignat_shl(&twice, (Sz)1);
     if (kspl_std_bignat_Bignat_cmp(&twice, &s) > 0) {
       {
-        U8 *_kspl_dst_21 = &(out->digits.data[(Sz)0]);
-        *_kspl_dst_21 = 49;
+        U8 *_kspl_dst_22 = &(out->digits.data[(Sz)0]);
+        *_kspl_dst_22 = 49;
       }
       out->n = (Sz)1;
       out->k = (I32)((U32)(cutoff) + (U32)(1));
@@ -30485,8 +30534,8 @@ static KSPL_UNUSED __attribute__((noinline)) void kspl_priv_std_strfmt_fixed_dig
       KSPL_UNUSED Sz _i = __kspl_tmp_006;
       kspl_std_bignat_Bignat_mul_small(&r, 10U);
       {
-        U8 *_kspl_dst_22 = &(out->digits.data[kspl_bounds_check(out->n, 340, "std/strfmt", 604)]);
-        *_kspl_dst_22 = (U8)((unsigned)(kspl_priv_std_strfmt_next_digit(&r, &s)) + (unsigned)(48));
+        U8 *_kspl_dst_23 = &(out->digits.data[kspl_bounds_check(out->n, 340, "std/strfmt", 593)]);
+        *_kspl_dst_23 = (U8)((unsigned)(kspl_priv_std_strfmt_next_digit(&r, &s)) + (unsigned)(48));
       }
       out->n = (Sz)((size_t)(out->n) + (size_t)((Sz)1));
     }
@@ -30498,7 +30547,7 @@ static KSPL_UNUSED __attribute__((noinline)) void kspl_priv_std_strfmt_fixed_dig
   if (!__kspl_tmp_007) {
     KSPL_UNUSED Bool __kspl_tmp_008 = c == 0;
     if (__kspl_tmp_008) {
-      __kspl_tmp_008 = (((U8)((unsigned)(out->digits.data[kspl_bounds_check((Sz)((size_t)(out->n) - (size_t)((Sz)1)), 340, "std/strfmt", 610)]) - (unsigned)(48))) & 1) == 1;
+      __kspl_tmp_008 = (((U8)((unsigned)(out->digits.data[kspl_bounds_check((Sz)((size_t)(out->n) - (size_t)((Sz)1)), 340, "std/strfmt", 599)]) - (unsigned)(48))) & 1) == 1;
     }
 
     __kspl_tmp_007 = __kspl_tmp_008;
@@ -30619,8 +30668,8 @@ static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_shortest(std_lang_
         KSPL_UNUSED Sz __kspl_tmp_016 = kspl_std_lang_Range_get(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2);
         Sz i = __kspl_tmp_016;
         {
-          U8 *_kspl_dst_23 = &(d->digits.data[kspl_bounds_check((Sz)((size_t)(n) + (size_t)(i)), 340, "std/strfmt", 654)]);
-          *_kspl_dst_23 = 48;
+          U8 *_kspl_dst_24 = &(d->digits.data[kspl_bounds_check((Sz)((size_t)(n) + (size_t)(i)), 340, "std/strfmt", 643)]);
+          *_kspl_dst_24 = 48;
         }
       }
     }
@@ -30697,7 +30746,7 @@ static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_fixed(std_lang_Wri
       }
 
       if (__kspl_tmp_007) {
-        __kspl_tmp_006 = d->digits.data[kspl_bounds_check((Sz)idx, 340, "std/strfmt", 680)];
+        __kspl_tmp_006 = d->digits.data[kspl_bounds_check((Sz)idx, 340, "std/strfmt", 669)];
       }
 
       else {
@@ -30714,8 +30763,8 @@ static KSPL_UNUSED std_lang_Writer kspl_priv_std_strfmt_write_decomposed(std_lan
   if (precision < 0) {
     if (is_zero) {
       {
-        U8 *_kspl_dst_24 = &(d.digits.data[(Sz)0]);
-        *_kspl_dst_24 = 48;
+        U8 *_kspl_dst_25 = &(d.digits.data[(Sz)0]);
+        *_kspl_dst_25 = 48;
       }
       d.n = (Sz)1;
       d.k = 1;
@@ -31024,8 +31073,8 @@ Bool kspl_kspeg_rule_First_bytes_allows(const kspeg_rule_First_bytes *r, U8 c) {
 
 void kspl_kspeg_rule_First_bytes_add(kspeg_rule_First_bytes *r, U8 c) {
   {
-    U64 *_kspl_dst_25 = &(r->bits.data[kspl_bounds_check((Sz)((I32)c / (64)), 4, "kspeg/rule", 72)]);
-    *_kspl_dst_25 |= 1ULL << kspl_shift_check((U64)c % (64ULL), 64, 1, "kspeg/rule", 72);
+    U64 *_kspl_dst_26 = &(r->bits.data[kspl_bounds_check((Sz)((I32)c / (64)), 4, "kspeg/rule", 72)]);
+    *_kspl_dst_26 |= 1ULL << kspl_shift_check((U64)c % (64ULL), 64, 1, "kspeg/rule", 72);
   }
   return;
 }
@@ -31038,8 +31087,8 @@ void kspl_kspeg_rule_First_bytes_add_all(kspeg_rule_First_bytes *r) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
       {
-        U64 *_kspl_dst_26 = &(r->bits.data[kspl_bounds_check(i, 4, "kspeg/rule", 76)]);
-        *_kspl_dst_26 = ~0ULL;
+        U64 *_kspl_dst_27 = &(r->bits.data[kspl_bounds_check(i, 4, "kspeg/rule", 76)]);
+        *_kspl_dst_27 = ~0ULL;
       }
     }
   }
@@ -31054,8 +31103,8 @@ void kspl_kspeg_rule_First_bytes_merge(kspeg_rule_First_bytes *r, kspeg_rule_Fir
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
       {
-        U64 *_kspl_dst_27 = &(r->bits.data[kspl_bounds_check(i, 4, "kspeg/rule", 80)]);
-        *_kspl_dst_27 |= other.bits.data[kspl_bounds_check(i, 4, "kspeg/rule", 80)];
+        U64 *_kspl_dst_28 = &(r->bits.data[kspl_bounds_check(i, 4, "kspeg/rule", 80)]);
+        *_kspl_dst_28 |= other.bits.data[kspl_bounds_check(i, 4, "kspeg/rule", 80)];
       }
     }
   }
@@ -31703,8 +31752,8 @@ std_lang_Option_std_lang_Slice_U8_Const kspl_kspeg_rule_left_recursive_rule(std_
           }
 
           {
-            Bool *_kspl_dst_28 = &((*(kspl_std_ds_List_Bool_at(&seen, (Sz)r_id, KSPL_STR(std_lang_Slice_U8, "kspeg/rule"), (Sz)398))));
-            *_kspl_dst_28 = true;
+            Bool *_kspl_dst_29 = &((*(kspl_std_ds_List_Bool_at(&seen, (Sz)r_id, KSPL_STR(std_lang_Slice_U8, "kspeg/rule"), (Sz)398))));
+            *_kspl_dst_29 = true;
           }
           kspeg_rule_Rule_entry *e = kspl_std_ds_List_kspeg_rule_Rule_entry_Ptr_get(entries, (Sz)r_id);
           kspl_kspeg_rule_left_refs(e->rule, entries, e->skips_space, &todo);
@@ -31843,8 +31892,8 @@ void kspl_kspeg_expected_Fail_track_order_expected(kspeg_expected_Fail_track *r)
           kspeg_expected_Expected e = (*(r->expected_labels + i));
           if (e.is_optional == (pass == (Sz)1)) {
             {
-              kspeg_expected_Expected *_kspl_dst_29 = &(sorted.data[kspl_bounds_check(n, 8, "kspeg/expected", 169)]);
-              *_kspl_dst_29 = e;
+              kspeg_expected_Expected *_kspl_dst_30 = &(sorted.data[kspl_bounds_check(n, 8, "kspeg/expected", 169)]);
+              *_kspl_dst_30 = e;
             }
             n = (Sz)((size_t)(n) + (size_t)((Sz)1));
           }
@@ -35779,8 +35828,8 @@ void kspl_std_sha256_Sha256_compress(std_sha256_Sha256 *r, std_lang_Slice_U8 blo
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
       {
-        U32 *_kspl_dst_30 = &(w.data[kspl_bounds_check(i, 64, "std/sha256", 56)]);
-        *_kspl_dst_30 = kspl_std_lang_Slice_U8_Const_get_u32_be(block, (Sz)((size_t)(i) * (size_t)((Sz)4)));
+        U32 *_kspl_dst_31 = &(w.data[kspl_bounds_check(i, 64, "std/sha256", 55)]);
+        *_kspl_dst_31 = kspl_std_lang_Slice_U8_Const_get_u32_be(block, (Sz)((size_t)(i) * (size_t)((Sz)4)));
       }
     }
   }
@@ -35790,12 +35839,12 @@ void kspl_std_sha256_Sha256_compress(std_sha256_Sha256 *r, std_lang_Slice_U8 blo
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_006 = kspl_std_lang_Range_get(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2);
       Sz i = __kspl_tmp_006;
-      KSPL_UNUSED U32 __kspl_tmp_009 = w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)16)), 64, "std/sha256", 59)];
-      KSPL_UNUSED U32 __kspl_tmp_008 = __kspl_tmp_009 + kspl_priv_std_sha256_small_sigma0(w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)15)), 64, "std/sha256", 59)]);
-      KSPL_UNUSED U32 __kspl_tmp_007 = __kspl_tmp_008 + w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)7)), 64, "std/sha256", 59)];
+      KSPL_UNUSED U32 __kspl_tmp_009 = w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)16)), 64, "std/sha256", 58)];
+      KSPL_UNUSED U32 __kspl_tmp_008 = __kspl_tmp_009 + kspl_priv_std_sha256_small_sigma0(w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)15)), 64, "std/sha256", 58)]);
+      KSPL_UNUSED U32 __kspl_tmp_007 = __kspl_tmp_008 + w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)7)), 64, "std/sha256", 58)];
       {
-        U32 *_kspl_dst_31 = &(w.data[kspl_bounds_check(i, 64, "std/sha256", 58)]);
-        *_kspl_dst_31 = __kspl_tmp_007 + kspl_priv_std_sha256_small_sigma1(w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)2)), 64, "std/sha256", 58)]);
+        U32 *_kspl_dst_32 = &(w.data[kspl_bounds_check(i, 64, "std/sha256", 57)]);
+        *_kspl_dst_32 = __kspl_tmp_007 + kspl_priv_std_sha256_small_sigma1(w.data[kspl_bounds_check((Sz)((size_t)(i) - (size_t)((Sz)2)), 64, "std/sha256", 57)]);
       }
     }
   }
@@ -35816,8 +35865,8 @@ void kspl_std_sha256_Sha256_compress(std_sha256_Sha256 *r, std_lang_Slice_U8 blo
       U32 ch = (e & f) ^ (~e & g);
       KSPL_UNUSED U32 __kspl_tmp_015 = hh;
       KSPL_UNUSED U32 __kspl_tmp_014 = __kspl_tmp_015 + kspl_priv_std_sha256_big_sigma1(e) + ch;
-      KSPL_UNUSED U32 __kspl_tmp_013 = __kspl_tmp_014 + (U32)kspl_priv_std_sha256_round_k.data[kspl_bounds_check(i, 64, "std/sha256", 72)];
-      U32 temp1 = __kspl_tmp_013 + w.data[kspl_bounds_check(i, 64, "std/sha256", 72)];
+      KSPL_UNUSED U32 __kspl_tmp_013 = __kspl_tmp_014 + (U32)kspl_priv_std_sha256_round_k.data[kspl_bounds_check(i, 64, "std/sha256", 71)];
+      U32 temp1 = __kspl_tmp_013 + w.data[kspl_bounds_check(i, 64, "std/sha256", 71)];
       U32 maj = (a & b) ^ (a & c) ^ (b & c);
       U32 temp2 = kspl_priv_std_sha256_big_sigma0(a) + maj;
       hh = g;
@@ -35831,36 +35880,36 @@ void kspl_std_sha256_Sha256_compress(std_sha256_Sha256 *r, std_lang_Slice_U8 blo
     }
   }
   {
-    U32 *_kspl_dst_32 = &(r->h.data[(Sz)0]);
-    *_kspl_dst_32 += a;
+    U32 *_kspl_dst_33 = &(r->h.data[(Sz)0]);
+    *_kspl_dst_33 += a;
   }
   {
-    U32 *_kspl_dst_33 = &(r->h.data[(Sz)1]);
-    *_kspl_dst_33 += b;
+    U32 *_kspl_dst_34 = &(r->h.data[(Sz)1]);
+    *_kspl_dst_34 += b;
   }
   {
-    U32 *_kspl_dst_34 = &(r->h.data[(Sz)2]);
-    *_kspl_dst_34 += c;
+    U32 *_kspl_dst_35 = &(r->h.data[(Sz)2]);
+    *_kspl_dst_35 += c;
   }
   {
-    U32 *_kspl_dst_35 = &(r->h.data[(Sz)3]);
-    *_kspl_dst_35 += d;
+    U32 *_kspl_dst_36 = &(r->h.data[(Sz)3]);
+    *_kspl_dst_36 += d;
   }
   {
-    U32 *_kspl_dst_36 = &(r->h.data[(Sz)4]);
-    *_kspl_dst_36 += e;
+    U32 *_kspl_dst_37 = &(r->h.data[(Sz)4]);
+    *_kspl_dst_37 += e;
   }
   {
-    U32 *_kspl_dst_37 = &(r->h.data[(Sz)5]);
-    *_kspl_dst_37 += f;
+    U32 *_kspl_dst_38 = &(r->h.data[(Sz)5]);
+    *_kspl_dst_38 += f;
   }
   {
-    U32 *_kspl_dst_38 = &(r->h.data[(Sz)6]);
-    *_kspl_dst_38 += g;
+    U32 *_kspl_dst_39 = &(r->h.data[(Sz)6]);
+    *_kspl_dst_39 += g;
   }
   {
-    U32 *_kspl_dst_39 = &(r->h.data[(Sz)7]);
-    *_kspl_dst_39 += hh;
+    U32 *_kspl_dst_40 = &(r->h.data[(Sz)7]);
+    *_kspl_dst_40 += hh;
   }
   return;
 }
@@ -35891,8 +35940,8 @@ void kspl_std_sha256_Sha256_update(std_sha256_Sha256 *r, std_lang_Slice_U8 data)
         KSPL_UNUSED Sz __kspl_tmp_004 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
         Sz i = __kspl_tmp_004;
         {
-          U8 *_kspl_dst_40 = &(r->buf.data[kspl_bounds_check((Sz)((size_t)(r->buf_len) + (size_t)(i)), 64, "std/sha256", 110)]);
-          *_kspl_dst_40 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&data, i, KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)110)));
+          U8 *_kspl_dst_41 = &(r->buf.data[kspl_bounds_check((Sz)((size_t)(r->buf_len) + (size_t)(i)), 64, "std/sha256", 109)]);
+          *_kspl_dst_41 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&data, i, KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)109)));
         }
       }
     }
@@ -35914,8 +35963,8 @@ void kspl_std_sha256_Sha256_update(std_sha256_Sha256 *r, std_lang_Slice_U8 data)
   }
   for (; pos < data.len;) {
     {
-      U8 *_kspl_dst_41 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 126)]);
-      *_kspl_dst_41 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&data, pos, KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)126)));
+      U8 *_kspl_dst_42 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 125)]);
+      *_kspl_dst_42 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&data, pos, KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)125)));
     }
     r->buf_len = (Sz)((size_t)(r->buf_len) + (size_t)((Sz)1));
     pos = (Sz)((size_t)(pos) + (size_t)((Sz)1));
@@ -35926,15 +35975,15 @@ void kspl_std_sha256_Sha256_update(std_sha256_Sha256 *r, std_lang_Slice_U8 data)
 Const_U8_Array_32 kspl_std_sha256_Sha256_finalize(std_sha256_Sha256 *r) {
   U64 bit_len = r->total_len * 8ULL;
   {
-    U8 *_kspl_dst_42 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 133)]);
-    *_kspl_dst_42 = 0x80;
+    U8 *_kspl_dst_43 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 132)]);
+    *_kspl_dst_43 = 0x80;
   }
   r->buf_len = (Sz)((size_t)(r->buf_len) + (size_t)((Sz)1));
   if (r->buf_len > kspl_priv_std_sha256_length_at) {
     for (; r->buf_len < kspl_priv_std_sha256_block_size;) {
       {
-        U8 *_kspl_dst_43 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 139)]);
-        *_kspl_dst_43 = 0;
+        U8 *_kspl_dst_44 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 138)]);
+        *_kspl_dst_44 = 0;
       }
       r->buf_len = (Sz)((size_t)(r->buf_len) + (size_t)((Sz)1));
     }
@@ -35944,8 +35993,8 @@ Const_U8_Array_32 kspl_std_sha256_Sha256_finalize(std_sha256_Sha256 *r) {
 
   for (; r->buf_len < kspl_priv_std_sha256_length_at;) {
     {
-      U8 *_kspl_dst_44 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 144)]);
-      *_kspl_dst_44 = 0;
+      U8 *_kspl_dst_45 = &(r->buf.data[kspl_bounds_check(r->buf_len, 64, "std/sha256", 143)]);
+      *_kspl_dst_45 = 0;
     }
     r->buf_len = (Sz)((size_t)(r->buf_len) + (size_t)((Sz)1));
   }
@@ -35961,7 +36010,7 @@ Const_U8_Array_32 kspl_std_sha256_Sha256_finalize(std_sha256_Sha256 *r) {
       KSPL_UNUSED Sz __kspl_tmp_007 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_007;
       KSPL_UNUSED Sz __kspl_tmp_008 = (Sz)((size_t)(i) * (size_t)((Sz)4));
-      kspl_std_lang_Slice_U8_put_u32_be(&out_slice, __kspl_tmp_008, r->h.data[kspl_bounds_check(i, 8, "std/sha256", 155)]);
+      kspl_std_lang_Slice_U8_put_u32_be(&out_slice, __kspl_tmp_008, r->h.data[kspl_bounds_check(i, 8, "std/sha256", 154)]);
     }
   }
   return out;
@@ -35974,21 +36023,21 @@ Const_U8_Array_32 kspl_std_sha256_hash(std_lang_Slice_U8 data) {
 }
 
 void kspl_std_sha256_write_hex(const Const_U8_Array_32 digest, std_lang_Slice_U8 out) {
-  kspl_std_lang_assert(out.len >= kspl_std_sha256_hex_len, KSPL_STR(std_lang_Slice_U8, "sha256.write_hex: out is shorter than hex_len"), KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)175);
+  kspl_std_lang_assert(out.len >= kspl_std_sha256_hex_len, KSPL_STR(std_lang_Slice_U8, "sha256.write_hex: out is shorter than hex_len"), KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)174);
   KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_asc(kspl_std_sha256_digest_size);
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
-      const U8 byte = digest.data[kspl_bounds_check(i, 32, "std/sha256", 177)];
+      const U8 byte = digest.data[kspl_bounds_check(i, 32, "std/sha256", 176)];
       {
-        U8 *_kspl_dst_45 = &((*(kspl_std_lang_Slice_U8_at(&out, (Sz)((size_t)(i) * (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)178))));
-        *_kspl_dst_45 = kspl_U8_to_hex_lower(byte >> (4));
+        U8 *_kspl_dst_46 = &((*(kspl_std_lang_Slice_U8_at(&out, (Sz)((size_t)(i) * (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)177))));
+        *_kspl_dst_46 = kspl_std_chars_hex_digit(byte >> (4), 97);
       }
       {
-        U8 *_kspl_dst_46 = &((*(kspl_std_lang_Slice_U8_at(&out, (Sz)((size_t)((Sz)((size_t)(i) * (size_t)((Sz)2))) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)179))));
-        *_kspl_dst_46 = kspl_U8_to_hex_lower((U8)byte & 0x0f);
+        U8 *_kspl_dst_47 = &((*(kspl_std_lang_Slice_U8_at(&out, (Sz)((size_t)((Sz)((size_t)(i) * (size_t)((Sz)2))) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/sha256"), (Sz)178))));
+        *_kspl_dst_47 = kspl_std_chars_hex_digit((U8)byte & 0x0f, 97);
       }
     }
   }
@@ -38233,11 +38282,6 @@ static KSPL_UNUSED kspl_Void_Result_std_json_Json_error kspl_priv_std_json_enter
   return (kspl_Void_Result_std_json_Json_error){.is_err = false};
 }
 
-static KSPL_UNUSED void kspl_priv_std_json_exit_nesting(std_json_Parse_ctx *ctx) {
-  ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
-  return;
-}
-
 static KSPL_UNUSED void kspl_priv_std_json_skip_ws(std_json_Parse_ctx *ctx) {
   {
     for (;;) {
@@ -38653,8 +38697,11 @@ static KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error kspl_priv_std_js
 
   if (__kspl_tmp_002) {
     ctx->pos = (Sz)((size_t)(ctx->pos) + (size_t)((Sz)1));
-    kspl_priv_std_json_exit_nesting(ctx);
-    return ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_obj_val, .payload.obj_val = {(std_json_Obj){.head = null}}}});
+    KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_003 = ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_obj_val, .payload.obj_val = {(std_json_Obj){.head = null}}}});
+    {
+      ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+    }
+    return __kspl_tmp_003;
   }
 
   std_json_Member *head = null;
@@ -38662,58 +38709,81 @@ static KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error kspl_priv_std_js
   {
     for (;;) {
       kspl_priv_std_json_skip_ws(ctx);
-      KSPL_UNUSED Bool __kspl_tmp_005 = ctx->pos < ctx->src.len;
-      if (__kspl_tmp_005) {
-        __kspl_tmp_005 = (U8)(*(ctx->src.ptr + ctx->pos)) == 125;
+      KSPL_UNUSED Bool __kspl_tmp_006 = ctx->pos < ctx->src.len;
+      if (__kspl_tmp_006) {
+        __kspl_tmp_006 = (U8)(*(ctx->src.ptr + ctx->pos)) == 125;
       }
 
-      if (__kspl_tmp_005) {
+      if (__kspl_tmp_006) {
+        KSPL_UNUSED std_json_Json_error __kspl_tmp_007 = (std_json_Json_error){.tag = kspl_std_json_Json_error_trailing_comma};
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
         KSPL_START_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = (std_json_Json_error){.tag = kspl_std_json_Json_error_trailing_comma}};
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_007};
       }
 
-      KSPL_UNUSED kspl_std_lang_Slice_U8_Result_std_json_Json_error __kspl_tmp_006 = kspl_priv_std_json_parse_string(ctx);
-      if (__kspl_tmp_006.is_err) {
-        KSPL_RECORD_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_006.error_code};
-      }
-
-      std_lang_Slice_U8 key = __kspl_tmp_006.val;
-      kspl_priv_std_json_skip_ws(ctx);
-      KSPL_UNUSED Bool __kspl_tmp_007 = ctx->pos >= ctx->src.len;
-      if (!__kspl_tmp_007) {
-        __kspl_tmp_007 = (U8)(*(ctx->src.ptr + ctx->pos)) != 58;
-      }
-
-      if (__kspl_tmp_007) {
-        KSPL_START_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = (std_json_Json_error){.tag = kspl_std_json_Json_error_expected_colon}};
-      }
-
-      ctx->pos = (Sz)((size_t)(ctx->pos) + (size_t)((Sz)1));
-      KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_008 = kspl_priv_std_json_parse_value(ctx);
+      KSPL_UNUSED kspl_std_lang_Slice_U8_Result_std_json_Json_error __kspl_tmp_008 = kspl_priv_std_json_parse_string(ctx);
       if (__kspl_tmp_008.is_err) {
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
         KSPL_RECORD_TRACE();
         return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_008.error_code};
       }
 
-      std_json_Val val = __kspl_tmp_008.val;
-      std_json_Member *node = kspl_std_mem_Arena_create_std_json_Member(ctx->arena, (std_json_Member){.key = key, .val = val});
-      kspl_priv_std_json_append_member(&head, &tail, node);
-      KSPL_UNUSED kspl_Bool_Result_std_json_Json_error __kspl_tmp_009 = kspl_priv_std_json_check_comma_or_end(ctx, 125);
-      if (__kspl_tmp_009.is_err) {
-        KSPL_RECORD_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_009.error_code};
+      std_lang_Slice_U8 key = __kspl_tmp_008.val;
+      kspl_priv_std_json_skip_ws(ctx);
+      KSPL_UNUSED Bool __kspl_tmp_009 = ctx->pos >= ctx->src.len;
+      if (!__kspl_tmp_009) {
+        __kspl_tmp_009 = (U8)(*(ctx->src.ptr + ctx->pos)) != 58;
       }
 
-      if (__kspl_tmp_009.val) {
-        goto _mir_label_004;
+      if (__kspl_tmp_009) {
+        KSPL_UNUSED std_json_Json_error __kspl_tmp_010 = (std_json_Json_error){.tag = kspl_std_json_Json_error_expected_colon};
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
+        KSPL_START_TRACE();
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_010};
+      }
+
+      ctx->pos = (Sz)((size_t)(ctx->pos) + (size_t)((Sz)1));
+      KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_011 = kspl_priv_std_json_parse_value(ctx);
+      if (__kspl_tmp_011.is_err) {
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
+        KSPL_RECORD_TRACE();
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_011.error_code};
+      }
+
+      std_json_Val val = __kspl_tmp_011.val;
+      std_json_Member *node = kspl_std_mem_Arena_create_std_json_Member(ctx->arena, (std_json_Member){.key = key, .val = val});
+      kspl_priv_std_json_append_member(&head, &tail, node);
+      KSPL_UNUSED kspl_Bool_Result_std_json_Json_error __kspl_tmp_012 = kspl_priv_std_json_check_comma_or_end(ctx, 125);
+      if (__kspl_tmp_012.is_err) {
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
+        KSPL_RECORD_TRACE();
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_012.error_code};
+      }
+
+      if (__kspl_tmp_012.val) {
+        goto _mir_label_005;
       }
     }
-  _mir_label_004:;
+  _mir_label_005:;
   }
-  kspl_priv_std_json_exit_nesting(ctx);
-  return ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_obj_val, .payload.obj_val = {(std_json_Obj){.head = head}}}});
+  KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_013 = ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_obj_val, .payload.obj_val = {(std_json_Obj){.head = head}}}});
+  {
+    ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+  }
+  return __kspl_tmp_013;
+  {
+    ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+  }
 }
 
 static KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error kspl_priv_std_json_parse_array(std_json_Parse_ctx *ctx) {
@@ -38732,8 +38802,11 @@ static KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error kspl_priv_std_js
 
   if (__kspl_tmp_002) {
     ctx->pos = (Sz)((size_t)(ctx->pos) + (size_t)((Sz)1));
-    kspl_priv_std_json_exit_nesting(ctx);
-    return ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_array_val, .payload.array_val = {null}}});
+    KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_003 = ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_array_val, .payload.array_val = {null}}});
+    {
+      ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+    }
+    return __kspl_tmp_003;
   }
 
   std_json_Node *head = null;
@@ -38741,39 +38814,55 @@ static KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error kspl_priv_std_js
   {
     for (;;) {
       kspl_priv_std_json_skip_ws(ctx);
-      KSPL_UNUSED Bool __kspl_tmp_005 = ctx->pos < ctx->src.len;
-      if (__kspl_tmp_005) {
-        __kspl_tmp_005 = (U8)(*(ctx->src.ptr + ctx->pos)) == 93;
+      KSPL_UNUSED Bool __kspl_tmp_006 = ctx->pos < ctx->src.len;
+      if (__kspl_tmp_006) {
+        __kspl_tmp_006 = (U8)(*(ctx->src.ptr + ctx->pos)) == 93;
       }
 
-      if (__kspl_tmp_005) {
+      if (__kspl_tmp_006) {
+        KSPL_UNUSED std_json_Json_error __kspl_tmp_007 = (std_json_Json_error){.tag = kspl_std_json_Json_error_trailing_comma};
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
         KSPL_START_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = (std_json_Json_error){.tag = kspl_std_json_Json_error_trailing_comma}};
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_007};
       }
 
-      KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_006 = kspl_priv_std_json_parse_value(ctx);
-      if (__kspl_tmp_006.is_err) {
+      KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_008 = kspl_priv_std_json_parse_value(ctx);
+      if (__kspl_tmp_008.is_err) {
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
         KSPL_RECORD_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_006.error_code};
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_008.error_code};
       }
 
-      std_json_Val val = __kspl_tmp_006.val;
+      std_json_Val val = __kspl_tmp_008.val;
       std_json_Node *node = kspl_std_mem_Arena_create_std_json_Node(ctx->arena, (std_json_Node){.val = val});
       kspl_priv_std_json_append_node(&head, &tail, node);
-      KSPL_UNUSED kspl_Bool_Result_std_json_Json_error __kspl_tmp_007 = kspl_priv_std_json_check_comma_or_end(ctx, 93);
-      if (__kspl_tmp_007.is_err) {
+      KSPL_UNUSED kspl_Bool_Result_std_json_Json_error __kspl_tmp_009 = kspl_priv_std_json_check_comma_or_end(ctx, 93);
+      if (__kspl_tmp_009.is_err) {
+        {
+          ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+        }
         KSPL_RECORD_TRACE();
-        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_007.error_code};
+        return (kspl_std_json_Val_Result_std_json_Json_error){.is_err = true, .error_code = __kspl_tmp_009.error_code};
       }
 
-      if (__kspl_tmp_007.val) {
-        goto _mir_label_004;
+      if (__kspl_tmp_009.val) {
+        goto _mir_label_005;
       }
     }
-  _mir_label_004:;
+  _mir_label_005:;
   }
-  kspl_priv_std_json_exit_nesting(ctx);
-  return ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_array_val, .payload.array_val = {head}}});
+  KSPL_UNUSED kspl_std_json_Val_Result_std_json_Json_error __kspl_tmp_010 = ((kspl_std_json_Val_Result_std_json_Json_error){.is_err = false, .val = (std_json_Val){.tag = kspl_std_json_Val_array_val, .payload.array_val = {head}}});
+  {
+    ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+  }
+  return __kspl_tmp_010;
+  {
+    ctx->depth = (Sz)((size_t)(ctx->depth) - (size_t)((Sz)1));
+  }
 }
 
 kspl_std_json_Doc_Result_std_json_Json_error kspl_std_json_parse(std_lang_Slice_U8 src, std_mem_Arena *arena) {
@@ -38886,20 +38975,19 @@ void kspl_std_json_Val_dump_at(std_json_Val r, std_str_Str_builder *out, Sz inde
     break;
   }
   case kspl_std_json_Val_array_val: {
+    std_json_Node *head = r.payload.array_val.head;
     (void)(kspl_std_str_Str_builder_c(out, 91));
-    std_json_Node *curr = kspl_std_json_Val_arr_head(r);
-    Bool first = true;
+    std_json_Node *curr = head;
     for (; curr != null;) {
-      if (!first) {
+      if (curr != head) {
         (void)(kspl_std_str_Str_builder_c(out, 44));
       }
 
-      first = false;
       kspl_priv_std_json_write_break(out, indent, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       kspl_std_json_Val_dump_at(curr->val, out, indent, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       curr = curr->next;
     }
-    if (!first) {
+    if (head != null) {
       kspl_priv_std_json_write_break(out, indent, depth);
     }
 
@@ -38907,15 +38995,14 @@ void kspl_std_json_Val_dump_at(std_json_Val r, std_str_Str_builder *out, Sz inde
     break;
   }
   case kspl_std_json_Val_obj_val: {
+    std_json_Obj o = r.payload.obj_val.o;
     (void)(kspl_std_str_Str_builder_c(out, 123));
-    std_json_Member *m = kspl_std_json_Val_obj_head(r);
-    Bool first = true;
+    std_json_Member *m = o.head;
     for (; m != null;) {
-      if (!first) {
+      if (m != o.head) {
         (void)(kspl_std_str_Str_builder_c(out, 44));
       }
 
-      first = false;
       kspl_priv_std_json_write_break(out, indent, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       KSPL_UNUSED std_str_Str_builder *__kspl_tmp_008 = kspl_std_str_Str_builder_c(out, 34);
       (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_escape_and_append(__kspl_tmp_008, m->key), KSPL_STR(std_lang_Slice_U8, "\":")));
@@ -38926,7 +39013,7 @@ void kspl_std_json_Val_dump_at(std_json_Val r, std_str_Str_builder *out, Sz inde
       kspl_std_json_Val_dump_at(m->val, out, indent, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       m = m->next;
     }
-    if (!first) {
+    if (o.head != null) {
       kspl_priv_std_json_write_break(out, indent, depth);
     }
 
@@ -43711,7 +43798,7 @@ Bool kspl_ksplc_base_ast_spell_mentions_ident(std_lang_Slice_U8 text, std_lang_S
 
       KSPL_UNUSED Bool __kspl_tmp_004 = at > (Sz)0;
       if (__kspl_tmp_004) {
-        __kspl_tmp_004 = kspl_U8_is_alnum((*(kspl_std_lang_Slice_U8_Const_at_ref(&text, (Sz)((size_t)(at) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)36))));
+        __kspl_tmp_004 = kspl_U8_is_alnum((*(kspl_std_lang_Slice_U8_Const_at_ref(&text, (Sz)((size_t)(at) - (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)37))));
       }
 
       if (__kspl_tmp_004) {
@@ -43721,7 +43808,7 @@ Bool kspl_ksplc_base_ast_spell_mentions_ident(std_lang_Slice_U8 text, std_lang_S
       Sz after = (Sz)((size_t)(at) + (size_t)(name.len));
       KSPL_UNUSED Bool __kspl_tmp_005 = after < text.len;
       if (__kspl_tmp_005) {
-        __kspl_tmp_005 = kspl_U8_is_alnum((*(kspl_std_lang_Slice_U8_Const_at_ref(&text, after, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)39))));
+        __kspl_tmp_005 = kspl_U8_is_alnum((*(kspl_std_lang_Slice_U8_Const_at_ref(&text, after, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)40))));
       }
 
       if (__kspl_tmp_005) {
@@ -43826,7 +43913,7 @@ void kspl_ksplc_base_ast_Ast_node_sig_parts(ksplc_base_ast_Ast_node *r, std_ds_L
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)124)));
+      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)125)));
       if (p->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_fn_param) {
         std_lang_Slice_U8 name = kspl_ksplc_base_ast_Ast_node_get_decl_id_text(p);
         ksplc_base_ast_Ast_node *d = kspl_ksplc_base_ast_Ast_node_get_param_default(p);
@@ -43973,7 +44060,7 @@ void kspl_ksplc_base_ast_Ast_node_get_full_path_str_to(ksplc_base_ast_Ast_node *
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)171)));
+        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)172)));
         if (child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_args) {
           (void)(((res).vtable->s((res).obj, child->text)));
         }
@@ -44038,7 +44125,7 @@ void kspl_ksplc_base_ast_Ast_node_extract_type_name_to(ksplc_base_ast_Ast_node *
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)203)));
+        ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)204)));
         kspl_ksplc_base_ast_Ast_node_extract_type_name_to(c, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       }
     }
@@ -44065,7 +44152,7 @@ void kspl_ksplc_base_ast_Ast_node_extract_type_name_to(ksplc_base_ast_Ast_node *
     {
       KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
       for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)209)));
+        ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)210)));
         if (c == null) {
           goto _mir_label_009;
         }
@@ -44164,7 +44251,7 @@ Bool kspl_ksplc_base_ast_Ast_node_mentions_self_type(ksplc_base_ast_Ast_node *r)
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)245)));
+      ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)246)));
       if (kspl_ksplc_base_ast_Ast_node_mentions_self_type(c)) {
         return true;
       }
@@ -44209,7 +44296,7 @@ std_lang_Slice_U8 kspl_ksplc_base_ast_Ast_node_self_type_spelling(ksplc_base_ast
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)270)));
+      ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/base/ast_spell"), (Sz)271)));
       if (c->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_postfix) {
         KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = {0};
         if (kspl_std_lang_Slice_U8_Const_starts_with(c->text, KSPL_STR(std_lang_Slice_U8, "$"), (Sz)0)) {
@@ -45859,8 +45946,8 @@ void kspl_ksplc_fmt_kinds_Fmt_rules_set_flag(ksplc_fmt_kinds_Fmt_rules *r, ksplc
 
   if (__kspl_tmp_001) {
     {
-      I32 *_kspl_dst_47 = &(r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 24)]);
-      *_kspl_dst_47 = r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 24)] | flag;
+      I32 *_kspl_dst_48 = &(r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 24)]);
+      *_kspl_dst_48 = r->flags.data[kspl_bounds_check((Sz)kind_id, 512, "ksplc/fmt/kinds", 24)] | flag;
     }
   }
 
@@ -45880,8 +45967,8 @@ void kspl_ksplc_fmt_kinds_Fmt_rules_init(ksplc_fmt_kinds_Fmt_rules *r) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
       {
-        I32 *_kspl_dst_48 = &(r->flags.data[kspl_bounds_check(i, 512, "ksplc/fmt/kinds", 32)]);
-        *_kspl_dst_48 = 0;
+        I32 *_kspl_dst_49 = &(r->flags.data[kspl_bounds_check(i, 512, "ksplc/fmt/kinds", 32)]);
+        *_kspl_dst_49 = 0;
       }
     }
   }
@@ -49522,91 +49609,90 @@ void kspl_ksplc_fmt_printer_Formatter_write_token(ksplc_fmt_printer_Formatter *r
   }
 
   Bool require_space = kspl_ksplc_fmt_space_calc_spacing_requirement(last_txt, text, r->flags, no_space_mode);
-  if (kspl_std_lang_Slice_U8_Const_equals(text, KSPL_STR(std_lang_Slice_U8, "-"))) {
-    KSPL_UNUSED Bool __kspl_tmp_021 = kspl_std_lang_Slice_U8_is_opening_bracket(last_txt);
+  KSPL_UNUSED Bool __kspl_tmp_018 = kspl_std_lang_Slice_U8_Const_equals(text, KSPL_STR(std_lang_Slice_U8, "-"));
+  if (__kspl_tmp_018) {
+    KSPL_UNUSED Bool __kspl_tmp_022 = kspl_std_lang_Slice_U8_is_opening_bracket(last_txt);
+    if (!__kspl_tmp_022) {
+      __kspl_tmp_022 = kspl_std_lang_Slice_U8_is_space_required_keyword(last_txt);
+    }
+
+    KSPL_UNUSED Bool __kspl_tmp_021 = __kspl_tmp_022;
     if (!__kspl_tmp_021) {
-      __kspl_tmp_021 = kspl_std_lang_Slice_U8_is_space_required_keyword(last_txt);
+      KSPL_UNUSED Bool __kspl_tmp_023 = kspl_std_lang_Slice_U8_is_op(last_txt);
+      if (__kspl_tmp_023) {
+        __kspl_tmp_023 = !r->flags.last_was_postfix_mark;
+      }
+
+      __kspl_tmp_021 = __kspl_tmp_023;
     }
 
     KSPL_UNUSED Bool __kspl_tmp_020 = __kspl_tmp_021;
     if (!__kspl_tmp_020) {
-      KSPL_UNUSED Bool __kspl_tmp_022 = kspl_std_lang_Slice_U8_is_op(last_txt);
-      if (__kspl_tmp_022) {
-        __kspl_tmp_022 = !r->flags.last_was_postfix_mark;
-      }
-
-      __kspl_tmp_020 = __kspl_tmp_022;
+      __kspl_tmp_020 = kspl_std_lang_Slice_U8_equals(last_txt, KSPL_STR(std_lang_Slice_U8, ","));
     }
 
     KSPL_UNUSED Bool __kspl_tmp_019 = __kspl_tmp_020;
     if (!__kspl_tmp_019) {
-      __kspl_tmp_019 = kspl_std_lang_Slice_U8_equals(last_txt, KSPL_STR(std_lang_Slice_U8, ","));
+      __kspl_tmp_019 = kspl_std_lang_Slice_U8_equals(last_txt, KSPL_STR(std_lang_Slice_U8, ";"));
     }
 
-    KSPL_UNUSED Bool __kspl_tmp_018 = __kspl_tmp_019;
-    if (!__kspl_tmp_018) {
-      __kspl_tmp_018 = kspl_std_lang_Slice_U8_equals(last_txt, KSPL_STR(std_lang_Slice_U8, ";"));
-    }
-
-    r->flags.last_was_unary_minus = __kspl_tmp_018;
+    __kspl_tmp_018 = __kspl_tmp_019;
   }
 
-  else {
-    r->flags.last_was_unary_minus = false;
-  }
+  r->flags.last_was_unary_minus = __kspl_tmp_018;
   Sz text_len = text.len;
   Bool dot_break_ok = false;
-  KSPL_UNUSED Bool __kspl_tmp_023 = kspl_std_lang_Slice_U8_Const_equals(text, KSPL_STR(std_lang_Slice_U8, "."));
-  if (__kspl_tmp_023) {
-    __kspl_tmp_023 = r->pending_seg_len > (Sz)0;
+  KSPL_UNUSED Bool __kspl_tmp_024 = kspl_std_lang_Slice_U8_Const_equals(text, KSPL_STR(std_lang_Slice_U8, "."));
+  if (__kspl_tmp_024) {
+    __kspl_tmp_024 = r->pending_seg_len > (Sz)0;
   }
 
-  if (__kspl_tmp_023) {
+  if (__kspl_tmp_024) {
     text_len = r->pending_seg_len;
     dot_break_ok = r->pending_dot_break_ok;
   }
 
   else {
-    KSPL_UNUSED Bool __kspl_tmp_024 = kspl_std_lang_Slice_U8_Const_equals(text, KSPL_STR(std_lang_Slice_U8, "catch"));
-    if (__kspl_tmp_024) {
-      __kspl_tmp_024 = r->pending_seg_len > (Sz)0;
+    KSPL_UNUSED Bool __kspl_tmp_025 = kspl_std_lang_Slice_U8_Const_equals(text, KSPL_STR(std_lang_Slice_U8, "catch"));
+    if (__kspl_tmp_025) {
+      __kspl_tmp_025 = r->pending_seg_len > (Sz)0;
     }
 
-    if (__kspl_tmp_024) {
+    if (__kspl_tmp_025) {
       text_len = r->pending_seg_len;
     }
   }
   r->pending_seg_len = (Sz)0;
   r->pending_dot_break_ok = false;
-  KSPL_UNUSED Bool __kspl_tmp_025 = !kspl_ksplc_parse_line_cont_takes_value_on_its_line(last_txt);
-  if (__kspl_tmp_025) {
-    __kspl_tmp_025 = kspl_ksplc_fmt_printer_Formatter_calc_will_break(r, last_txt, text, require_space, text_len, dot_break_ok);
+  KSPL_UNUSED Bool __kspl_tmp_026 = !kspl_ksplc_parse_line_cont_takes_value_on_its_line(last_txt);
+  if (__kspl_tmp_026) {
+    __kspl_tmp_026 = kspl_ksplc_fmt_printer_Formatter_calc_will_break(r, last_txt, text, require_space, text_len, dot_break_ok);
   }
 
-  Bool will_break = __kspl_tmp_025;
+  Bool will_break = __kspl_tmp_026;
   if (will_break) {
     kspl_ksplc_fmt_printer_Formatter_write_nl(r);
-    KSPL_UNUSED Bool __kspl_tmp_027 = r->layout;
+    KSPL_UNUSED Bool __kspl_tmp_028 = r->layout;
+    if (__kspl_tmp_028) {
+      __kspl_tmp_028 = kspl_std_lang_Slice_U8_equals(last_txt, KSPL_STR(std_lang_Slice_U8, "}"));
+    }
+
+    KSPL_UNUSED Bool __kspl_tmp_027 = __kspl_tmp_028;
     if (__kspl_tmp_027) {
-      __kspl_tmp_027 = kspl_std_lang_Slice_U8_equals(last_txt, KSPL_STR(std_lang_Slice_U8, "}"));
+      __kspl_tmp_027 = kspl_priv_ksplc_fmt_printer_is_arm_or_else(text);
     }
 
-    KSPL_UNUSED Bool __kspl_tmp_026 = __kspl_tmp_027;
-    if (__kspl_tmp_026) {
-      __kspl_tmp_026 = kspl_priv_ksplc_fmt_printer_is_arm_or_else(text);
-    }
-
-    r->flags.wrap_indent = !__kspl_tmp_026;
+    r->flags.wrap_indent = !__kspl_tmp_027;
     require_space = false;
   }
 
   else {
-    KSPL_UNUSED Bool __kspl_tmp_028 = require_space;
-    if (__kspl_tmp_028) {
-      __kspl_tmp_028 = !r->flags.is_line_start;
+    KSPL_UNUSED Bool __kspl_tmp_029 = require_space;
+    if (__kspl_tmp_029) {
+      __kspl_tmp_029 = !r->flags.is_line_start;
     }
 
-    if (__kspl_tmp_028) {
+    if (__kspl_tmp_029) {
       kspl_ksplc_fmt_printer_Formatter_write_space(r);
     }
   }
@@ -49958,8 +50044,12 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
 
   ksplc_base_ast_kinds_Ast_kind kind_id = node->kind_id;
   Sz len = node->children->len;
-  Bool my_no_space = no_space_mode;
-  KSPL_UNUSED Bool __kspl_tmp_005 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_args;
+  KSPL_UNUSED Bool __kspl_tmp_006 = no_space_mode;
+  if (!__kspl_tmp_006) {
+    __kspl_tmp_006 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_args;
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_005 = __kspl_tmp_006;
   if (!__kspl_tmp_005) {
     __kspl_tmp_005 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_gen_params;
   }
@@ -49969,10 +50059,7 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
     __kspl_tmp_004 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_postfix;
   }
 
-  if (__kspl_tmp_004) {
-    my_no_space = true;
-  }
-
+  Bool my_no_space = __kspl_tmp_004;
   Bool was_in_type_expr = r->flags.in_type_expr;
   if (kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_expr) {
     r->flags.in_type_expr = true;
@@ -49980,125 +50067,121 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
 
   ksplc_fmt_printer_Body_scan body = kspl_priv_ksplc_fmt_printer_scan_body(node);
   Sz body_count = body.body_count;
-  KSPL_UNUSED Bool __kspl_tmp_006 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_top_level_item;
-  if (__kspl_tmp_006) {
-    __kspl_tmp_006 = kspl_ksplc_base_ast_Ast_node_has_literal_child(node, KSPL_STR(std_lang_Slice_U8, "{"));
+  KSPL_UNUSED Bool __kspl_tmp_007 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_top_level_item;
+  if (__kspl_tmp_007) {
+    __kspl_tmp_007 = kspl_ksplc_base_ast_Ast_node_has_literal_child(node, KSPL_STR(std_lang_Slice_U8, "{"));
   }
 
-  Bool is_extern = __kspl_tmp_006;
-  KSPL_UNUSED Bool __kspl_tmp_007 = kspl_ksplc_fmt_kinds_Fmt_rules_is_block(&kspl_ksplc_fmt_kinds_rules, (I32)kind_id);
-  if (!__kspl_tmp_007) {
-    __kspl_tmp_007 = is_extern;
+  Bool is_extern = __kspl_tmp_007;
+  KSPL_UNUSED Bool __kspl_tmp_008 = kspl_ksplc_fmt_kinds_Fmt_rules_is_block(&kspl_ksplc_fmt_kinds_rules, (I32)kind_id);
+  if (!__kspl_tmp_008) {
+    __kspl_tmp_008 = is_extern;
   }
 
-  ksplc_fmt_printer_Brace_shape shape = kspl_ksplc_fmt_printer_Formatter_brace_shape(r, node, body, __kspl_tmp_007, allow_single_line_block);
+  ksplc_fmt_printer_Brace_shape shape = kspl_ksplc_fmt_printer_Formatter_brace_shape(r, node, body, __kspl_tmp_008, allow_single_line_block);
   Bool is_block = shape.is_block;
   Bool is_brace_container = shape.is_brace_container;
   Bool force_multiline = shape.force_multiline;
   Bool is_list = kspl_ksplc_fmt_kinds_Fmt_rules_is_list(&kspl_ksplc_fmt_kinds_rules, (I32)kind_id);
-  KSPL_UNUSED Bool __kspl_tmp_008 = is_brace_container;
-  if (__kspl_tmp_008) {
-    __kspl_tmp_008 = !force_multiline;
-  }
-
-  Bool my_brace_suppress = __kspl_tmp_008;
-  KSPL_UNUSED Bool __kspl_tmp_009 = is_list;
+  KSPL_UNUSED Bool __kspl_tmp_009 = is_brace_container;
   if (__kspl_tmp_009) {
     __kspl_tmp_009 = !force_multiline;
   }
 
-  Bool my_list_suppress = __kspl_tmp_009;
+  Bool my_brace_suppress = __kspl_tmp_009;
+  KSPL_UNUSED Bool __kspl_tmp_010 = is_list;
+  if (__kspl_tmp_010) {
+    __kspl_tmp_010 = !force_multiline;
+  }
+
+  Bool my_list_suppress = __kspl_tmp_010;
   if (my_list_suppress) {
     r->suppress_nl_depth = (Sz)((size_t)(r->suppress_nl_depth) + (size_t)((Sz)1));
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_019 = len == (Sz)0;
+  KSPL_UNUSED Bool __kspl_tmp_020 = len == (Sz)0;
+  if (!__kspl_tmp_020) {
+    __kspl_tmp_020 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier;
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_019 = __kspl_tmp_020;
   if (!__kspl_tmp_019) {
-    __kspl_tmp_019 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier;
+    __kspl_tmp_019 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_keyword;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_018 = __kspl_tmp_019;
   if (!__kspl_tmp_018) {
-    __kspl_tmp_018 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_keyword;
+    __kspl_tmp_018 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_017 = __kspl_tmp_018;
   if (!__kspl_tmp_017) {
-    __kspl_tmp_017 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal;
+    __kspl_tmp_017 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_primitive_type;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_016 = __kspl_tmp_017;
   if (!__kspl_tmp_016) {
-    __kspl_tmp_016 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_primitive_type;
+    __kspl_tmp_016 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_string;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_015 = __kspl_tmp_016;
   if (!__kspl_tmp_015) {
-    __kspl_tmp_015 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_string;
+    __kspl_tmp_015 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_char;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_014 = __kspl_tmp_015;
   if (!__kspl_tmp_014) {
-    __kspl_tmp_014 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_char;
+    __kspl_tmp_014 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_integer;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_013 = __kspl_tmp_014;
   if (!__kspl_tmp_013) {
-    __kspl_tmp_013 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_integer;
+    __kspl_tmp_013 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_float;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_012 = __kspl_tmp_013;
   if (!__kspl_tmp_012) {
-    __kspl_tmp_012 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_float;
+    __kspl_tmp_012 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_bool;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_011 = __kspl_tmp_012;
   if (!__kspl_tmp_011) {
-    __kspl_tmp_011 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_bool;
+    __kspl_tmp_011 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_null;
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_010 = __kspl_tmp_011;
-  if (!__kspl_tmp_010) {
-    __kspl_tmp_010 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_null;
-  }
-
-  if (__kspl_tmp_010) {
+  if (__kspl_tmp_011) {
     kspl_ksplc_fmt_printer_Formatter_write_token(r, node, my_no_space);
     return;
   }
 
-  Bool pass_allow_single = false;
-  KSPL_UNUSED Bool __kspl_tmp_020 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_defer;
-  if (!__kspl_tmp_020) {
-    KSPL_UNUSED Bool __kspl_tmp_021 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
-    if (__kspl_tmp_021) {
-      __kspl_tmp_021 = r->config.allow_short_functions;
+  KSPL_UNUSED Bool __kspl_tmp_021 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_defer;
+  if (!__kspl_tmp_021) {
+    KSPL_UNUSED Bool __kspl_tmp_022 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
+    if (__kspl_tmp_022) {
+      __kspl_tmp_022 = r->config.allow_short_functions;
     }
 
-    __kspl_tmp_020 = __kspl_tmp_021;
+    __kspl_tmp_021 = __kspl_tmp_022;
   }
 
-  if (__kspl_tmp_020) {
-    pass_allow_single = true;
-  }
-
+  Bool pass_allow_single = __kspl_tmp_021;
   Sz was_bare_close = r->bare_close;
-  KSPL_UNUSED Bool __kspl_tmp_024 = r->layout;
+  KSPL_UNUSED Bool __kspl_tmp_025 = r->layout;
+  if (__kspl_tmp_025) {
+    __kspl_tmp_025 = my_brace_suppress;
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_024 = __kspl_tmp_025;
   if (__kspl_tmp_024) {
-    __kspl_tmp_024 = my_brace_suppress;
+    __kspl_tmp_024 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_block;
   }
 
   KSPL_UNUSED Bool __kspl_tmp_023 = __kspl_tmp_024;
   if (__kspl_tmp_023) {
-    __kspl_tmp_023 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_block;
+    __kspl_tmp_023 = body_count == (Sz)1;
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_022 = __kspl_tmp_023;
-  if (__kspl_tmp_022) {
-    __kspl_tmp_022 = body_count == (Sz)1;
-  }
-
-  if (__kspl_tmp_022) {
+  if (__kspl_tmp_023) {
     r->bare_close = body.close_brace_off;
   }
 
@@ -50107,47 +50190,47 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      KSPL_UNUSED Sz __kspl_tmp_027 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
-      Sz i = __kspl_tmp_027;
+      KSPL_UNUSED Sz __kspl_tmp_028 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
+      Sz i = __kspl_tmp_028;
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_get_child(node, i);
-      KSPL_UNUSED Bool __kspl_tmp_030 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_postfix;
-      if (!__kspl_tmp_030) {
-        __kspl_tmp_030 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_postfix;
+      KSPL_UNUSED Bool __kspl_tmp_031 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_postfix;
+      if (!__kspl_tmp_031) {
+        __kspl_tmp_031 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_postfix;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_030 = __kspl_tmp_031;
+      if (__kspl_tmp_030) {
+        __kspl_tmp_030 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal;
       }
 
       KSPL_UNUSED Bool __kspl_tmp_029 = __kspl_tmp_030;
       if (__kspl_tmp_029) {
-        __kspl_tmp_029 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal;
+        __kspl_tmp_029 = kspl_std_lang_Slice_U8_Const_equals(child->text, KSPL_STR(std_lang_Slice_U8, "!"));
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_028 = __kspl_tmp_029;
-      if (__kspl_tmp_028) {
-        __kspl_tmp_028 = kspl_std_lang_Slice_U8_Const_equals(child->text, KSPL_STR(std_lang_Slice_U8, "!"));
+      r->postfix_mark_next = __kspl_tmp_029;
+      KSPL_UNUSED Bool __kspl_tmp_032 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_switch;
+      if (__kspl_tmp_032) {
+        KSPL_UNUSED Bool __kspl_tmp_033 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "case"));
+        if (!__kspl_tmp_033) {
+          __kspl_tmp_033 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "default"));
+        }
+
+        __kspl_tmp_032 = __kspl_tmp_033;
       }
 
-      r->postfix_mark_next = __kspl_tmp_028;
-      KSPL_UNUSED Bool __kspl_tmp_031 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_switch;
-      if (__kspl_tmp_031) {
-        KSPL_UNUSED Bool __kspl_tmp_032 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "case"));
-        if (!__kspl_tmp_032) {
-          __kspl_tmp_032 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "default"));
+      if (__kspl_tmp_032) {
+        KSPL_UNUSED Bool __kspl_tmp_035 = first_arm;
+        if (!__kspl_tmp_035) {
+          __kspl_tmp_035 = r->block_on_one_line;
         }
 
-        __kspl_tmp_031 = __kspl_tmp_032;
-      }
-
-      if (__kspl_tmp_031) {
-        KSPL_UNUSED Bool __kspl_tmp_034 = first_arm;
-        if (!__kspl_tmp_034) {
-          __kspl_tmp_034 = r->block_on_one_line;
+        KSPL_UNUSED Bool __kspl_tmp_034 = __kspl_tmp_035;
+        if (__kspl_tmp_034) {
+          __kspl_tmp_034 = r->suppress_nl_depth == (Sz)0;
         }
 
-        KSPL_UNUSED Bool __kspl_tmp_033 = __kspl_tmp_034;
-        if (__kspl_tmp_033) {
-          __kspl_tmp_033 = r->suppress_nl_depth == (Sz)0;
-        }
-
-        if (__kspl_tmp_033) {
+        if (__kspl_tmp_034) {
           kspl_ksplc_fmt_printer_Formatter_catch_up_trivia(r, (Sz)child->loc.offset, false);
           kspl_ksplc_fmt_printer_Formatter_write_nl(r);
           r->flags.wrap_indent = false;
@@ -50162,62 +50245,62 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
       Bool is_block_close = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "}"));
       Bool is_block_open = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "{"));
       Bool is_semi = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, ";"));
-      KSPL_UNUSED Bool __kspl_tmp_037 = is_semi;
+      KSPL_UNUSED Bool __kspl_tmp_038 = is_semi;
+      if (__kspl_tmp_038) {
+        __kspl_tmp_038 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_for;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_037 = __kspl_tmp_038;
       if (__kspl_tmp_037) {
-        __kspl_tmp_037 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_for;
+        __kspl_tmp_037 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_for_init;
       }
 
       KSPL_UNUSED Bool __kspl_tmp_036 = __kspl_tmp_037;
       if (__kspl_tmp_036) {
-        __kspl_tmp_036 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_for_init;
+        __kspl_tmp_036 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_fn_lit_sig;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_035 = __kspl_tmp_036;
-      if (__kspl_tmp_035) {
-        __kspl_tmp_035 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_fn_lit_sig;
-      }
-
-      Bool ends_stmt = __kspl_tmp_035;
+      Bool ends_stmt = __kspl_tmp_036;
       Bool is_comma = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, ","));
-      KSPL_UNUSED Bool __kspl_tmp_038 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_assign_op;
-      if (!__kspl_tmp_038) {
-        __kspl_tmp_038 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "="));
-      }
-
-      Bool is_assign = __kspl_tmp_038;
-      KSPL_UNUSED Bool __kspl_tmp_039 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "&&"));
+      KSPL_UNUSED Bool __kspl_tmp_039 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_assign_op;
       if (!__kspl_tmp_039) {
-        __kspl_tmp_039 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "||"));
+        __kspl_tmp_039 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "="));
       }
 
-      Bool is_logical = __kspl_tmp_039;
-      KSPL_UNUSED Bool __kspl_tmp_040 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_fn_sig;
-      if (__kspl_tmp_040) {
-        __kspl_tmp_040 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, ":"));
+      Bool is_assign = __kspl_tmp_039;
+      KSPL_UNUSED Bool __kspl_tmp_040 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "&&"));
+      if (!__kspl_tmp_040) {
+        __kspl_tmp_040 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "||"));
       }
 
-      Bool is_ret_colon = __kspl_tmp_040;
-      KSPL_UNUSED Bool __kspl_tmp_043 = is_brace_container;
+      Bool is_logical = __kspl_tmp_040;
+      KSPL_UNUSED Bool __kspl_tmp_041 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_fn_sig;
+      if (__kspl_tmp_041) {
+        __kspl_tmp_041 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, ":"));
+      }
+
+      Bool is_ret_colon = __kspl_tmp_041;
+      KSPL_UNUSED Bool __kspl_tmp_044 = is_brace_container;
+      if (__kspl_tmp_044) {
+        __kspl_tmp_044 = force_multiline;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_043 = __kspl_tmp_044;
       if (__kspl_tmp_043) {
-        __kspl_tmp_043 = force_multiline;
+        __kspl_tmp_043 = is_close_brace;
       }
 
       KSPL_UNUSED Bool __kspl_tmp_042 = __kspl_tmp_043;
-      if (__kspl_tmp_042) {
-        __kspl_tmp_042 = is_close_brace;
-      }
-
-      KSPL_UNUSED Bool __kspl_tmp_041 = __kspl_tmp_042;
-      if (!__kspl_tmp_041) {
-        KSPL_UNUSED Bool __kspl_tmp_044 = is_block;
-        if (__kspl_tmp_044) {
-          __kspl_tmp_044 = is_block_close;
+      if (!__kspl_tmp_042) {
+        KSPL_UNUSED Bool __kspl_tmp_045 = is_block;
+        if (__kspl_tmp_045) {
+          __kspl_tmp_045 = is_block_close;
         }
 
-        __kspl_tmp_041 = __kspl_tmp_044;
+        __kspl_tmp_042 = __kspl_tmp_045;
       }
 
-      if (__kspl_tmp_041) {
+      if (__kspl_tmp_042) {
         kspl_ksplc_fmt_printer_Formatter_catch_up_trivia(r, (Sz)child->loc.offset, false);
         kspl_ksplc_fmt_printer_Formatter_pull_trailing_comment(r, body.open_brace_off, (Sz)child->loc.offset);
         if (r->indent_level > (Sz)0) {
@@ -50227,62 +50310,62 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
         r->flags.force_next_nl = true;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_045 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_ternary;
-      if (__kspl_tmp_045) {
-        KSPL_UNUSED Bool __kspl_tmp_046 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "if"));
-        if (!__kspl_tmp_046) {
-          __kspl_tmp_046 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "else"));
+      KSPL_UNUSED Bool __kspl_tmp_046 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_ternary;
+      if (__kspl_tmp_046) {
+        KSPL_UNUSED Bool __kspl_tmp_047 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "if"));
+        if (!__kspl_tmp_047) {
+          __kspl_tmp_047 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "else"));
         }
 
-        __kspl_tmp_045 = __kspl_tmp_046;
+        __kspl_tmp_046 = __kspl_tmp_047;
       }
 
-      if (__kspl_tmp_045) {
+      if (__kspl_tmp_046) {
         kspl_ksplc_fmt_printer_Formatter_break_before_choice(r, node, i);
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_048 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_defer;
+      KSPL_UNUSED Bool __kspl_tmp_049 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_defer;
+      if (__kspl_tmp_049) {
+        __kspl_tmp_049 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_block;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_048 = __kspl_tmp_049;
       if (__kspl_tmp_048) {
-        __kspl_tmp_048 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_block;
+        __kspl_tmp_048 = kspl_ksplc_fmt_printer_Formatter_writes_bare(r, child, depth);
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_047 = __kspl_tmp_048;
-      if (__kspl_tmp_047) {
-        __kspl_tmp_047 = kspl_ksplc_fmt_printer_Formatter_writes_bare(r, child, depth);
+      if (__kspl_tmp_048) {
+        goto _mir_label_026;
       }
 
-      if (__kspl_tmp_047) {
-        goto _mir_label_025;
+      KSPL_UNUSED Bool __kspl_tmp_052 = is_comma;
+      if (!__kspl_tmp_052) {
+        __kspl_tmp_052 = is_assign;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_051 = is_comma;
+      KSPL_UNUSED Bool __kspl_tmp_051 = __kspl_tmp_052;
       if (!__kspl_tmp_051) {
-        __kspl_tmp_051 = is_assign;
+        __kspl_tmp_051 = is_logical;
       }
 
       KSPL_UNUSED Bool __kspl_tmp_050 = __kspl_tmp_051;
       if (!__kspl_tmp_050) {
-        __kspl_tmp_050 = is_logical;
+        __kspl_tmp_050 = is_ret_colon;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_049 = __kspl_tmp_050;
-      if (!__kspl_tmp_049) {
-        __kspl_tmp_049 = is_ret_colon;
-      }
-
-      if (__kspl_tmp_049) {
+      if (__kspl_tmp_050) {
         kspl_ksplc_fmt_printer_Formatter_format_internal(r, child, my_no_space, pass_allow_single, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
-        KSPL_UNUSED Bool __kspl_tmp_053 = is_comma;
+        KSPL_UNUSED Bool __kspl_tmp_054 = is_comma;
+        if (__kspl_tmp_054) {
+          __kspl_tmp_054 = force_multiline;
+        }
+
+        KSPL_UNUSED Bool __kspl_tmp_053 = __kspl_tmp_054;
         if (__kspl_tmp_053) {
-          __kspl_tmp_053 = force_multiline;
+          __kspl_tmp_053 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_switch;
         }
 
-        KSPL_UNUSED Bool __kspl_tmp_052 = __kspl_tmp_053;
-        if (__kspl_tmp_052) {
-          __kspl_tmp_052 = kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_switch;
-        }
-
-        if (__kspl_tmp_052) {
+        if (__kspl_tmp_053) {
           r->flags.force_next_nl = true;
         }
 
@@ -50291,114 +50374,114 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
           kspl_ksplc_fmt_printer_Formatter_wrap_before_next_element(r, node, i, is_comma, is_assign);
         }
 
-        goto _mir_label_025;
+        goto _mir_label_026;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_055 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_postfix;
+      KSPL_UNUSED Bool __kspl_tmp_056 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_postfix;
+      if (__kspl_tmp_056) {
+        __kspl_tmp_056 = i >= (Sz)1;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_055 = __kspl_tmp_056;
       if (__kspl_tmp_055) {
-        __kspl_tmp_055 = i >= (Sz)1;
+        __kspl_tmp_055 = kspl_ksplc_base_ast_Ast_node_src_starts_with_dot(child, r->src);
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_054 = __kspl_tmp_055;
-      if (__kspl_tmp_054) {
-        __kspl_tmp_054 = kspl_ksplc_base_ast_Ast_node_src_starts_with_dot(child, r->src);
-      }
-
-      if (__kspl_tmp_054) {
+      if (__kspl_tmp_055) {
         r->pending_seg_len = kspl_ksplc_base_ast_Ast_node_calc_chain_segment_len(node, i, r->src);
-        KSPL_UNUSED Bool __kspl_tmp_056 = kspl_ksplc_base_ast_Ast_node_has_multi_dot_chain(node, r->src);
-        if (!__kspl_tmp_056) {
-          __kspl_tmp_056 = !kspl_ksplc_base_ast_Ast_node_chain_segment_has_comma(node, i, r->src);
+        KSPL_UNUSED Bool __kspl_tmp_057 = kspl_ksplc_base_ast_Ast_node_has_multi_dot_chain(node, r->src);
+        if (!__kspl_tmp_057) {
+          __kspl_tmp_057 = !kspl_ksplc_base_ast_Ast_node_chain_segment_has_comma(node, i, r->src);
         }
 
-        r->pending_dot_break_ok = __kspl_tmp_056;
+        r->pending_dot_break_ok = __kspl_tmp_057;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_058 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_catch;
+      KSPL_UNUSED Bool __kspl_tmp_059 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_catch;
+      if (__kspl_tmp_059) {
+        __kspl_tmp_059 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "catch"));
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_058 = __kspl_tmp_059;
       if (__kspl_tmp_058) {
-        __kspl_tmp_058 = kspl_ksplc_base_ast_Ast_node_is_keyword(child, KSPL_STR(std_lang_Slice_U8, "catch"));
+        __kspl_tmp_058 = kspl_ksplc_base_ast_Ast_node_find_child(node, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_block) == null;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_057 = __kspl_tmp_058;
-      if (__kspl_tmp_057) {
-        __kspl_tmp_057 = kspl_ksplc_base_ast_Ast_node_find_child(node, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_stmt_block) == null;
-      }
-
-      if (__kspl_tmp_057) {
+      if (__kspl_tmp_058) {
         r->pending_seg_len = kspl_ksplc_base_ast_Ast_node_printed_width(node, r->src);
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_061 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list;
+      KSPL_UNUSED Bool __kspl_tmp_062 = kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list;
+      if (__kspl_tmp_062) {
+        __kspl_tmp_062 = i > (Sz)0;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_061 = __kspl_tmp_062;
       if (__kspl_tmp_061) {
-        __kspl_tmp_061 = i > (Sz)0;
+        __kspl_tmp_061 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute;
       }
 
       KSPL_UNUSED Bool __kspl_tmp_060 = __kspl_tmp_061;
       if (__kspl_tmp_060) {
-        __kspl_tmp_060 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute;
+        __kspl_tmp_060 = r->suppress_nl_depth == (Sz)0;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_059 = __kspl_tmp_060;
-      if (__kspl_tmp_059) {
-        __kspl_tmp_059 = r->suppress_nl_depth == (Sz)0;
-      }
-
-      if (__kspl_tmp_059) {
+      if (__kspl_tmp_060) {
         r->flags.force_next_nl = true;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_064 = ends_stmt;
+      KSPL_UNUSED Bool __kspl_tmp_065 = ends_stmt;
+      if (__kspl_tmp_065) {
+        __kspl_tmp_065 = r->bare_close >= (Sz)0;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_064 = __kspl_tmp_065;
       if (__kspl_tmp_064) {
-        __kspl_tmp_064 = r->bare_close >= (Sz)0;
+        KSPL_UNUSED Sz __kspl_tmp_066 = kspl_ksplc_fmt_source_skip_space_from(r->src, (Sz)((I32)((U32)(child->loc.offset) + (U32)(1))));
+        __kspl_tmp_064 = __kspl_tmp_066 == r->bare_close;
       }
 
       KSPL_UNUSED Bool __kspl_tmp_063 = __kspl_tmp_064;
-      if (__kspl_tmp_063) {
-        KSPL_UNUSED Sz __kspl_tmp_065 = kspl_ksplc_fmt_source_skip_space_from(r->src, (Sz)((I32)((U32)(child->loc.offset) + (U32)(1))));
-        __kspl_tmp_063 = __kspl_tmp_065 == r->bare_close;
-      }
+      if (!__kspl_tmp_063) {
+        KSPL_UNUSED Bool __kspl_tmp_069 = r->layout;
+        if (__kspl_tmp_069) {
+          __kspl_tmp_069 = r->paren_depth == (Sz)0;
+        }
 
-      KSPL_UNUSED Bool __kspl_tmp_062 = __kspl_tmp_063;
-      if (!__kspl_tmp_062) {
-        KSPL_UNUSED Bool __kspl_tmp_068 = r->layout;
+        KSPL_UNUSED Bool __kspl_tmp_068 = __kspl_tmp_069;
         if (__kspl_tmp_068) {
-          __kspl_tmp_068 = r->paren_depth == (Sz)0;
+          __kspl_tmp_068 = r->suppress_nl_depth == (Sz)0;
         }
 
         KSPL_UNUSED Bool __kspl_tmp_067 = __kspl_tmp_068;
         if (__kspl_tmp_067) {
-          __kspl_tmp_067 = r->suppress_nl_depth == (Sz)0;
-        }
+          KSPL_UNUSED Bool __kspl_tmp_072 = is_block;
+          if (__kspl_tmp_072) {
+            __kspl_tmp_072 = body_count > (Sz)0;
+          }
 
-        KSPL_UNUSED Bool __kspl_tmp_066 = __kspl_tmp_067;
-        if (__kspl_tmp_066) {
-          KSPL_UNUSED Bool __kspl_tmp_071 = is_block;
+          KSPL_UNUSED Bool __kspl_tmp_071 = __kspl_tmp_072;
           if (__kspl_tmp_071) {
-            __kspl_tmp_071 = body_count > (Sz)0;
+            KSPL_UNUSED Bool __kspl_tmp_073 = is_block_open;
+            if (!__kspl_tmp_073) {
+              __kspl_tmp_073 = is_block_close;
+            }
+
+            __kspl_tmp_071 = __kspl_tmp_073;
           }
 
           KSPL_UNUSED Bool __kspl_tmp_070 = __kspl_tmp_071;
-          if (__kspl_tmp_070) {
-            KSPL_UNUSED Bool __kspl_tmp_072 = is_block_open;
-            if (!__kspl_tmp_072) {
-              __kspl_tmp_072 = is_block_close;
-            }
-
-            __kspl_tmp_070 = __kspl_tmp_072;
+          if (!__kspl_tmp_070) {
+            __kspl_tmp_070 = ends_stmt;
           }
 
-          KSPL_UNUSED Bool __kspl_tmp_069 = __kspl_tmp_070;
-          if (!__kspl_tmp_069) {
-            __kspl_tmp_069 = ends_stmt;
-          }
-
-          __kspl_tmp_066 = __kspl_tmp_069;
+          __kspl_tmp_067 = __kspl_tmp_070;
         }
 
-        __kspl_tmp_062 = __kspl_tmp_066;
+        __kspl_tmp_063 = __kspl_tmp_067;
       }
 
-      Bool hide = __kspl_tmp_062;
+      Bool hide = __kspl_tmp_063;
       if (hide) {
         kspl_ksplc_fmt_printer_Formatter_catch_up_trivia(r, (Sz)child->loc.offset, false);
         if (is_block_close) {
@@ -50411,12 +50494,12 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
       else {
         kspl_ksplc_fmt_printer_Formatter_format_internal(r, child, my_no_space, pass_allow_single, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       }
-      KSPL_UNUSED Bool __kspl_tmp_073 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "("));
-      if (!__kspl_tmp_073) {
-        __kspl_tmp_073 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "["));
+      KSPL_UNUSED Bool __kspl_tmp_074 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "("));
+      if (!__kspl_tmp_074) {
+        __kspl_tmp_074 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "["));
       }
 
-      if (__kspl_tmp_073) {
+      if (__kspl_tmp_074) {
         if (r->paren_depth == (Sz)0) {
           r->paren_indent_level = r->indent_level;
         }
@@ -50425,23 +50508,23 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
       }
 
       else {
-        KSPL_UNUSED Bool __kspl_tmp_074 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, ")"));
-        if (!__kspl_tmp_074) {
-          __kspl_tmp_074 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "]"));
+        KSPL_UNUSED Bool __kspl_tmp_075 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, ")"));
+        if (!__kspl_tmp_075) {
+          __kspl_tmp_075 = kspl_ksplc_base_ast_Ast_node_is_literal(child, KSPL_STR(std_lang_Slice_U8, "]"));
         }
 
-        if (__kspl_tmp_074) {
+        if (__kspl_tmp_075) {
           if (r->paren_depth > (Sz)0) {
             r->paren_depth = (Sz)((size_t)(r->paren_depth) - (size_t)((Sz)1));
           }
         }
       }
-      KSPL_UNUSED Bool __kspl_tmp_075 = my_brace_suppress;
-      if (__kspl_tmp_075) {
-        __kspl_tmp_075 = is_close_brace;
+      KSPL_UNUSED Bool __kspl_tmp_076 = my_brace_suppress;
+      if (__kspl_tmp_076) {
+        __kspl_tmp_076 = is_close_brace;
       }
 
-      if (__kspl_tmp_075) {
+      if (__kspl_tmp_076) {
         if (r->suppress_nl_depth > (Sz)0) {
           r->suppress_nl_depth = (Sz)((size_t)(r->suppress_nl_depth) - (size_t)((Sz)1));
         }
@@ -50449,45 +50532,45 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
         my_brace_suppress = false;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_076 = my_brace_suppress;
-      if (__kspl_tmp_076) {
-        __kspl_tmp_076 = is_open_brace;
+      KSPL_UNUSED Bool __kspl_tmp_077 = my_brace_suppress;
+      if (__kspl_tmp_077) {
+        __kspl_tmp_077 = is_open_brace;
       }
 
-      if (__kspl_tmp_076) {
+      if (__kspl_tmp_077) {
         r->suppress_nl_depth = (Sz)((size_t)(r->suppress_nl_depth) + (size_t)((Sz)1));
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_077 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list;
-      if (__kspl_tmp_077) {
-        __kspl_tmp_077 = r->suppress_nl_depth == (Sz)0;
-      }
-
-      if (__kspl_tmp_077) {
-        r->flags.force_next_nl = true;
-      }
-
-      KSPL_UNUSED Bool __kspl_tmp_080 = is_brace_container;
-      if (__kspl_tmp_080) {
-        __kspl_tmp_080 = force_multiline;
-      }
-
-      KSPL_UNUSED Bool __kspl_tmp_079 = __kspl_tmp_080;
-      if (__kspl_tmp_079) {
-        __kspl_tmp_079 = is_open_brace;
-      }
-
-      KSPL_UNUSED Bool __kspl_tmp_078 = __kspl_tmp_079;
-      if (!__kspl_tmp_078) {
-        KSPL_UNUSED Bool __kspl_tmp_081 = is_block;
-        if (__kspl_tmp_081) {
-          __kspl_tmp_081 = is_block_open;
-        }
-
-        __kspl_tmp_078 = __kspl_tmp_081;
+      KSPL_UNUSED Bool __kspl_tmp_078 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_attribute_list;
+      if (__kspl_tmp_078) {
+        __kspl_tmp_078 = r->suppress_nl_depth == (Sz)0;
       }
 
       if (__kspl_tmp_078) {
+        r->flags.force_next_nl = true;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_081 = is_brace_container;
+      if (__kspl_tmp_081) {
+        __kspl_tmp_081 = force_multiline;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_080 = __kspl_tmp_081;
+      if (__kspl_tmp_080) {
+        __kspl_tmp_080 = is_open_brace;
+      }
+
+      KSPL_UNUSED Bool __kspl_tmp_079 = __kspl_tmp_080;
+      if (!__kspl_tmp_079) {
+        KSPL_UNUSED Bool __kspl_tmp_082 = is_block;
+        if (__kspl_tmp_082) {
+          __kspl_tmp_082 = is_block_open;
+        }
+
+        __kspl_tmp_079 = __kspl_tmp_082;
+      }
+
+      if (__kspl_tmp_079) {
         r->flags.force_next_nl = true;
         r->indent_level = (Sz)((size_t)(r->indent_level) + (size_t)((Sz)1));
       }
@@ -50507,7 +50590,7 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
         kspl_ksplc_fmt_printer_Formatter_write_space(r);
       }
 
-    _mir_label_025:;
+    _mir_label_026:;
     }
   }
   r->bare_close = was_bare_close;
@@ -50515,21 +50598,21 @@ void kspl_ksplc_fmt_printer_Formatter_format_internal(ksplc_fmt_printer_Formatte
     r->block_on_one_line = !is_block;
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_082 = my_list_suppress;
-  if (__kspl_tmp_082) {
-    __kspl_tmp_082 = r->suppress_nl_depth > (Sz)0;
+  KSPL_UNUSED Bool __kspl_tmp_083 = my_list_suppress;
+  if (__kspl_tmp_083) {
+    __kspl_tmp_083 = r->suppress_nl_depth > (Sz)0;
   }
 
-  if (__kspl_tmp_082) {
+  if (__kspl_tmp_083) {
     r->suppress_nl_depth = (Sz)((size_t)(r->suppress_nl_depth) - (size_t)((Sz)1));
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_083 = kspl_ksplc_fmt_kinds_Fmt_rules_is_stmt_or_decl(&kspl_ksplc_fmt_kinds_rules, (I32)kind_id);
-  if (__kspl_tmp_083) {
-    __kspl_tmp_083 = r->suppress_nl_depth == (Sz)0;
+  KSPL_UNUSED Bool __kspl_tmp_084 = kspl_ksplc_fmt_kinds_Fmt_rules_is_stmt_or_decl(&kspl_ksplc_fmt_kinds_rules, (I32)kind_id);
+  if (__kspl_tmp_084) {
+    __kspl_tmp_084 = r->suppress_nl_depth == (Sz)0;
   }
 
-  if (__kspl_tmp_083) {
+  if (__kspl_tmp_084) {
     r->flags.force_next_nl = true;
   }
 
@@ -51867,8 +51950,8 @@ void kspl_ksplc_parse_layout_Line_opens_step(ksplc_parse_layout_Line_opens *r, s
         __kspl_tmp_007 = c;
       }
       {
-        ksplc_parse_layout_Line_open *_kspl_dst_49 = &(r->items.data[kspl_bounds_check(r->n, 32, "ksplc/parse/layout", 251)]);
-        *_kspl_dst_49 = (ksplc_parse_layout_Line_open){.at = i, .kind = __kspl_tmp_007, .stmt_from = (Sz)((size_t)(i) + (size_t)((Sz)1))};
+        ksplc_parse_layout_Line_open *_kspl_dst_50 = &(r->items.data[kspl_bounds_check(r->n, 32, "ksplc/parse/layout", 251)]);
+        *_kspl_dst_50 = (ksplc_parse_layout_Line_open){.at = i, .kind = __kspl_tmp_007, .stmt_from = (Sz)((size_t)(i) + (size_t)((Sz)1))};
       }
     }
 
@@ -51924,8 +52007,8 @@ void kspl_ksplc_parse_layout_Line_opens_step(ksplc_parse_layout_Line_opens *r, s
 
       if (__kspl_tmp_012) {
         {
-          Sz *_kspl_dst_50 = &(r->items.data[kspl_bounds_check((Sz)((size_t)(r->n) - (size_t)((Sz)1)), 32, "ksplc/parse/layout", 261)].stmt_from);
-          *_kspl_dst_50 = (Sz)((size_t)(i) + (size_t)((Sz)1));
+          Sz *_kspl_dst_51 = &(r->items.data[kspl_bounds_check((Sz)((size_t)(r->n) - (size_t)((Sz)1)), 32, "ksplc/parse/layout", 261)].stmt_from);
+          *_kspl_dst_51 = (Sz)((size_t)(i) + (size_t)((Sz)1));
         }
       }
     }
@@ -56629,8 +56712,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_parse_syntax_msg_innermost_open(std_lang_S
         }
 
         {
-          Sz *_kspl_dst_51 = &(open.data[kspl_bounds_check(n, 64, "ksplc/parse/syntax_msg", 485)]);
-          *_kspl_dst_51 = i;
+          Sz *_kspl_dst_52 = &(open.data[kspl_bounds_check(n, 64, "ksplc/parse/syntax_msg", 485)]);
+          *_kspl_dst_52 = i;
         }
         n = (Sz)((size_t)(n) + (size_t)((Sz)1));
       }
@@ -59000,26 +59083,21 @@ kspl_Void_Result_ksplc_fmt_file_Fmt_error kspl_ksplc_fmt_file_format_file(std_la
   }
 }
 
-static KSPL_UNUSED std_str_Str_builder kspl_priv_std_subproc_pack_argv(std_lang_Slice_std_lang_Slice_U8_Const argv) {
-  std_str_Str_builder buf = kspl_std_str_Str_builder_new();
+static KSPL_UNUSED I64 kspl_priv_std_subproc_start(std_lang_Slice_std_lang_Slice_U8_Const argv, std_lang_Slice_U8 cwd, I32 stdio, std_lang_Slice_U8 out_path, std_lang_Slice_U8 err_path) {
+  std_str_Str_builder argv_buf = kspl_std_str_Str_builder_new();
   KSPL_UNUSED std_lang_Slice_std_lang_Slice_U8_Const __kspl_for_coll1 = argv;
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 a = (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "std/subproc"), (Sz)64)));
-      (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&buf, a), 0));
+      std_lang_Slice_U8 a = (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "std/subproc"), (Sz)63)));
+      (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&argv_buf, a), 0));
     }
   }
-  return buf;
-}
-
-static KSPL_UNUSED I64 kspl_priv_std_subproc_start(std_lang_Slice_std_lang_Slice_U8_Const argv, std_lang_Slice_U8 cwd, I32 stdio, std_lang_Slice_U8 out_path, std_lang_Slice_U8 err_path) {
-  std_str_Str_builder argv_buf = kspl_priv_std_subproc_pack_argv(argv);
-  KSPL_UNUSED I64 __kspl_tmp_001 = kspl_proc_start(argv_buf.ptr, argv_buf.len, (I32)argv.len, cwd.ptr, cwd.len, stdio, out_path.ptr, out_path.len, err_path.ptr, err_path.len);
+  KSPL_UNUSED I64 __kspl_tmp_003 = kspl_proc_start(argv_buf.ptr, argv_buf.len, (I32)argv.len, cwd.ptr, cwd.len, stdio, out_path.ptr, out_path.len, err_path.ptr, err_path.len);
   {
     kspl_std_str_Str_builder_free(&argv_buf);
   }
-  return __kspl_tmp_001;
+  return __kspl_tmp_003;
   {
     kspl_std_str_Str_builder_free(&argv_buf);
   }
@@ -61791,12 +61869,12 @@ static KSPL_UNUSED I32 kspl_priv_ksplc_sema_type_env_close_of_group(std_lang_Sli
   {
     Sz i = open;
     for (; i < s.len; i = (Sz)((size_t)(i) + (size_t)((Sz)1))) {
-      if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&s, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)93))) == 40) {
+      if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&s, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)84))) == 40) {
         depth = (I32)((U32)(depth) + (U32)(1));
       }
 
       else
-          if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&s, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)95))) == 41) {
+          if ((U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&s, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)86))) == 41) {
         depth = (I32)((U32)(depth) - (U32)(1));
         if (depth == 0) {
           return (I32)i;
@@ -62454,7 +62532,7 @@ std_lang_Option_ksplc_sema_type_def_Fn_sig_Ptr kspl_ksplc_sema_type_env_Env_fn_s
 
   KSPL_UNUSED Bool __kspl_tmp_001 = __kspl_tmp_002;
   if (!__kspl_tmp_001) {
-    __kspl_tmp_001 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&s, (Sz)((I32)((U32)(close) + (U32)(1))), KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)459))) != 58;
+    __kspl_tmp_001 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&s, (Sz)((I32)((U32)(close) + (U32)(1))), KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)450))) != 58;
   }
 
   if (__kspl_tmp_001) {
@@ -62693,7 +62771,7 @@ Bool kspl_ksplc_sema_type_env_Env_has_implemented_trait_fqn(ksplc_sema_type_env_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 i_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)605)));
+      I32 i_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)596)));
       if (kspl_ksplc_sema_type_env_Env_get_real_type(r, i_id) == want_real) {
         return true;
       }
@@ -62709,7 +62787,7 @@ Bool kspl_ksplc_sema_type_env_Env_has_implemented_operator_trait(ksplc_sema_type
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 i_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)620)));
+      I32 i_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)611)));
       KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = kspl_ksplc_sema_type_env_Env_get_str(r, kspl_ksplc_sema_type_env_Env_get_real_type(r, i_id));
       if (kspl_std_lang_Slice_U8_equals(__kspl_tmp_003, kspl_std_str_Str_builder_slice(&want))) {
         KSPL_UNUSED Bool __kspl_tmp_004 = true;
@@ -62735,7 +62813,7 @@ I32 kspl_ksplc_sema_type_env_Env_implemented_trait_instance(ksplc_sema_type_env_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 i_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)633)));
+      I32 i_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)624)));
       I32 real = kspl_ksplc_sema_type_env_Env_get_real_type(r, i_id);
       if (kspl_std_lang_Slice_U8_Const_equals(kspl_ksplc_sema_type_env_Env_instance_base(r, real), base_fqn)) {
         return real;
@@ -62760,145 +62838,6 @@ void kspl_ksplc_sema_type_env_Env_register(ksplc_sema_type_env_Env *r, std_lang_
   {
     kspl_std_str_Str_builder_free(&msg);
   }
-}
-
-std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w) {
-  KSPL_UNUSED Bool __kspl_tmp_002 = !r->c_names_final;
-  if (!__kspl_tmp_002) {
-    __kspl_tmp_002 = type_id <= 0;
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_001 = __kspl_tmp_002;
-  if (!__kspl_tmp_001) {
-    __kspl_tmp_001 = (Sz)type_id >= r->id_to_type->len;
-  }
-
-  if (__kspl_tmp_001) {
-    return kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, type_id, w, (Sz)0);
-  }
-
-  ksplc_sema_type_def_Entry *entry = kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(r->id_to_type, (Sz)type_id);
-  if (entry->c_name.len == (Sz)0) {
-    std_str_Str_builder spelled = kspl_std_str_Str_builder_new();
-    (void)(kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, type_id, (std_lang_Writer){.obj = (void *)&spelled, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}, (Sz)0));
-    KSPL_UNUSED std_mem_Arena *__kspl_tmp_003 = kspl_ksplc_base_core_arena;
-    entry->c_name = kspl_std_mem_Arena_dup_str(__kspl_tmp_003, kspl_std_str_Str_builder_slice(&spelled));
-    {
-      kspl_std_str_Str_builder_free(&spelled);
-    }
-  }
-
-  return ((w).vtable->s((w).obj, entry->c_name));
-}
-
-std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w, Sz depth) {
-  if (depth >= kspl_priv_ksplc_sema_type_env_max_mangle_depth) {
-    KSPL_UNUSED std_lang_Writer __kspl_tmp_001 = kspl_std_io_err();
-    (void)(((__kspl_tmp_001).vtable->s((__kspl_tmp_001).obj, KSPL_STR(std_lang_Slice_U8, "\nfatal: type expression nesting too deep (possible unbounded pointer/array/slice chain).\n"))));
-    kspl_std_sys_exit(1);
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_002 = type_id <= 0;
-  if (!__kspl_tmp_002) {
-    __kspl_tmp_002 = kspl_ksplc_sema_type_env_is_unknown(type_id);
-  }
-
-  if (__kspl_tmp_002) {
-    return ((w).vtable->s((w).obj, kspl_ksplc_base_core_unknown_type_name));
-  }
-
-  ksplc_sema_type_env_Info info = kspl_ksplc_sema_type_env_Env_get_info(r, type_id);
-  std_lang_Writer res = w;
-  I32 base_id = 0;
-  std_lang_Slice_U8 suffix = KSPL_STR(std_lang_Slice_U8, "");
-  I32 arr_size = (I32)((U32)(0) - (U32)(1));
-  I32 err_id = 0;
-  switch (info.tag) {
-  case kspl_ksplc_sema_type_env_Info_const_of: {
-    I32 b = info.payload.const_of.base_id;
-    ksplc_sema_type_env_Info b_info = kspl_ksplc_sema_type_env_Env_get_info(r, b);
-    KSPL_UNUSED Bool __kspl_tmp_005 = kspl_ksplc_sema_type_env_Env_slice_struct_elem(r, b) != 0;
-    if (!__kspl_tmp_005) {
-      __kspl_tmp_005 = kspl_ksplc_sema_type_env_Info_is_array(b_info);
-    }
-
-    KSPL_UNUSED Bool __kspl_tmp_004 = __kspl_tmp_005;
-    if (!__kspl_tmp_004) {
-      __kspl_tmp_004 = kspl_ksplc_sema_type_env_Info_is_pointer(b_info);
-    }
-
-    KSPL_UNUSED Bool __kspl_tmp_003 = __kspl_tmp_004;
-    if (!__kspl_tmp_003) {
-      __kspl_tmp_003 = kspl_ksplc_sema_type_env_Info_is_result(b_info);
-    }
-
-    Bool is_view = __kspl_tmp_003;
-    if (is_view) {
-      res = kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, b, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
-      return ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "_Const")));
-    }
-
-    res = ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "Const_")));
-    return kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, b, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
-  }
-  case kspl_ksplc_sema_type_env_Info_pointer: {
-    I32 b = info.payload.pointer.base_id;
-    base_id = b;
-    suffix = KSPL_STR(std_lang_Slice_U8, "_Ptr");
-    break;
-  }
-  case kspl_ksplc_sema_type_env_Info_array: {
-    I32 b = info.payload.array.base_id;
-    I32 s = info.payload.array.size;
-    base_id = b;
-    suffix = KSPL_STR(std_lang_Slice_U8, "_Array_");
-    arr_size = s;
-    break;
-  }
-  case kspl_ksplc_sema_type_env_Info_result: {
-    I32 b = info.payload.result.base_id;
-    I32 e = info.payload.result.err_id;
-    base_id = b;
-    suffix = KSPL_STR(std_lang_Slice_U8, "_Result");
-    err_id = e;
-    break;
-  }
-  default: {
-  } break;
-  }
-  if (base_id != 0) {
-    res = kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, base_id, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
-    res = ((res).vtable->s((res).obj, suffix));
-    if (arr_size != (I32)((U32)(0) - (U32)(1))) {
-      KSPL_UNUSED std_lang_Writer __kspl_tmp_006 = ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "")));
-      res = kspl_std_lang_put_std_lang_Writer_I32(__kspl_tmp_006, arr_size);
-    }
-
-    if (err_id != 0) {
-      std_lang_Slice_U8 err_str = kspl_ksplc_sema_type_env_Env_get_str(r, err_id);
-      if (!kspl_std_lang_Slice_U8_equals(err_str, KSPL_STR(std_lang_Slice_U8, "I32"))) {
-        res = ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "_")));
-        res = kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, err_id, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
-      }
-    }
-
-    return res;
-  }
-
-  KSPL_UNUSED std_lang_Option_ksplc_sema_type_env_Instance __kspl_tmp_007 = kspl_ksplc_sema_type_env_Env_variance_stripped(r, type_id);
-  switch (__kspl_tmp_007.tag) {
-  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_some: {
-    ksplc_sema_type_env_Instance plain = __kspl_tmp_007.payload.some.value;
-    return kspl_ksplc_sema_type_env_Env_instance_c_name_to(r, plain, res);
-  }
-  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_none: {
-    break;
-  }
-  default:
-    __builtin_unreachable();
-  }
-  std_lang_Slice_U8 base_str = kspl_ksplc_sema_type_env_Env_get_str(r, type_id);
-  return kspl_std_lang_Slice_U8_mangle_type_name_to(base_str, res);
 }
 
 std_lang_Option_ksplc_sema_type_env_Instance kspl_ksplc_sema_type_env_Env_variance_stripped(ksplc_sema_type_env_Env *r, I32 type_id) {
@@ -62939,7 +62878,7 @@ std_lang_Option_ksplc_sema_type_env_Instance kspl_ksplc_sema_type_env_Env_strip_
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_006 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_006;
-      const I32 a = (*(kspl_std_lang_Slice_I32_Const_at_ref(&inst.args, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)755)));
+      const I32 a = (*(kspl_std_lang_Slice_I32_Const_at_ref(&inst.args, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)664)));
       KSPL_UNUSED Bool __kspl_tmp_007 = kspl_ksplc_base_ast_variance_names_mut(mask, i);
       if (__kspl_tmp_007) {
         __kspl_tmp_007 = kspl_ksplc_sema_type_env_Env_is_const(r, a);
@@ -62962,49 +62901,13 @@ std_lang_Option_ksplc_sema_type_env_Instance kspl_ksplc_sema_type_env_Env_strip_
   return (std_lang_Option_ksplc_sema_type_env_Instance){.tag = kspl_std_lang_Option_ksplc_sema_type_env_Instance_some, .payload.some = {(ksplc_sema_type_env_Instance){.template = inst.template, .args = kspl_std_ds_List_I32_slice(&args)}}};
 }
 
-I32 kspl_ksplc_sema_type_env_Env_c_repr_type_id(ksplc_sema_type_env_Env *r, I32 type_id) {
-  KSPL_UNUSED std_lang_Option_ksplc_sema_type_env_Instance __kspl_tmp_001 = kspl_ksplc_sema_type_env_Env_variance_stripped(r, type_id);
-  switch (__kspl_tmp_001.tag) {
-  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_some: {
-    KSPL_UNUSED ksplc_sema_type_env_Instance _plain = __kspl_tmp_001.payload.some.value;
-    std_str_Str_builder key = kspl_std_str_Str_builder_new();
-    (void)(kspl_ksplc_sema_type_env_Env_mangle_type_id_to(r, type_id, (std_lang_Writer){.obj = (void *)&key, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
-    KSPL_UNUSED std_ds_Map_std_lang_Slice_U8_Const_I32 *__kspl_tmp_002 = r->type_to_id;
-    KSPL_UNUSED kspl_I32_Result_std_ds_Ds_error __kspl_tmp_003 = kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_get(__kspl_tmp_002, kspl_std_str_Str_builder_slice(&key));
-    KSPL_UNUSED I32 __kspl_tmp_004 = {0};
-    if (__kspl_tmp_003.is_err) {
-      __kspl_tmp_004 = type_id;
-    }
-
-    else {
-      __kspl_tmp_004 = __kspl_tmp_003.val;
-    }
-    KSPL_UNUSED I32 __kspl_tmp_006 = __kspl_tmp_004;
-    {
-      kspl_std_str_Str_builder_free(&key);
-    }
-    return __kspl_tmp_006;
-    {
-      kspl_std_str_Str_builder_free(&key);
-    }
-    break;
-  }
-  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_none: {
-    break;
-  }
-  default:
-    __builtin_unreachable();
-  }
-  return type_id;
-}
-
 void kspl_ksplc_sema_type_env_Env_note_instance(ksplc_sema_type_env_Env *r, I32 type_id, ksplc_sema_type_env_Instance inst) {
   std_ds_List_I32 args = kspl_std_ds_List_I32_new(kspl_ksplc_base_core_arena);
   KSPL_UNUSED std_lang_Slice_I32 __kspl_for_coll1 = inst.args;
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 a = (*(kspl_std_lang_Slice_I32_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)785)));
+      I32 a = (*(kspl_std_lang_Slice_I32_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)677)));
       kspl_std_ds_List_I32_push(&args, a);
     }
   }
@@ -63051,7 +62954,7 @@ I32 kspl_ksplc_sema_type_env_Env_instance_arg(ksplc_sema_type_env_Env *r, I32 ty
     ksplc_sema_type_env_Instance inst = __kspl_tmp_001.payload.some.value;
     KSPL_UNUSED I32 __kspl_tmp_002 = {0};
     if (pos < inst.args.len) {
-      __kspl_tmp_002 = (*(kspl_std_lang_Slice_I32_Const_at_ref(&inst.args, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)817)));
+      __kspl_tmp_002 = (*(kspl_std_lang_Slice_I32_Const_at_ref(&inst.args, pos, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)709)));
     }
 
     else {
@@ -63082,75 +62985,6 @@ std_lang_Slice_I32 kspl_ksplc_sema_type_env_Env_instance_args(ksplc_sema_type_en
   }
 }
 
-std_lang_Writer kspl_ksplc_sema_type_env_Env_type_args_to(ksplc_sema_type_env_Env *r, std_lang_Slice_I32 args, std_lang_Writer w) {
-  std_lang_Writer res = w;
-  KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_asc(args.len);
-  {
-    KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
-    for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
-      Sz i = __kspl_tmp_003;
-      if (i > (Sz)0) {
-        res = ((res).vtable->s((res).obj, kspl_ksplc_base_ast_type_arg_sep));
-      }
-
-      KSPL_UNUSED std_lang_Writer __kspl_tmp_004 = res;
-      res = ((__kspl_tmp_004).vtable->s((__kspl_tmp_004).obj, kspl_ksplc_sema_type_env_Env_get_str(r, (*(kspl_std_lang_Slice_I32_Const_at_ref(&args, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/env"), (Sz)837))))));
-    }
-  }
-  return res;
-}
-
-std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_key_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w) {
-  KSPL_UNUSED std_lang_Writer __kspl_tmp_002 = ((w).vtable->s((w).obj, inst.template));
-  KSPL_UNUSED std_lang_Writer __kspl_tmp_001 = kspl_ksplc_sema_type_env_Env_type_args_to(r, inst.args, ((__kspl_tmp_002).vtable->s((__kspl_tmp_002).obj, KSPL_STR(std_lang_Slice_U8, "<|"))));
-  return ((__kspl_tmp_001).vtable->s((__kspl_tmp_001).obj, KSPL_STR(std_lang_Slice_U8, "|>")));
-}
-
-std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_instance_key(ksplc_sema_type_env_Env *r, I32 type_id) {
-  KSPL_UNUSED std_lang_Option_ksplc_sema_type_env_Instance __kspl_tmp_001 = kspl_ksplc_sema_type_env_Env_instance_of(r, type_id);
-  switch (__kspl_tmp_001.tag) {
-  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_some: {
-    ksplc_sema_type_env_Instance inst = __kspl_tmp_001.payload.some.value;
-    std_str_Str_builder key = kspl_std_str_Str_builder_new();
-    (void)(kspl_ksplc_sema_type_env_Env_instance_key_to(r, inst, (std_lang_Writer){.obj = (void *)&key, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
-    KSPL_UNUSED std_mem_Arena *__kspl_tmp_002 = kspl_ksplc_base_core_arena;
-    KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = kspl_std_mem_Arena_dup_str(__kspl_tmp_002, kspl_std_str_Str_builder_slice(&key));
-    {
-      kspl_std_str_Str_builder_free(&key);
-    }
-    return __kspl_tmp_003;
-    {
-      kspl_std_str_Str_builder_free(&key);
-    }
-    break;
-  }
-  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_none: {
-    return KSPL_STR(std_lang_Slice_U8, "");
-  }
-  default:
-    __builtin_unreachable();
-  }
-}
-
-std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_c_name_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w) {
-  std_str_Str_builder full = kspl_std_str_Str_builder_new();
-  (void)(kspl_std_str_Str_builder_s(&full, inst.template));
-  if (inst.args.len > (Sz)0) {
-    KSPL_UNUSED std_str_Str_builder *__kspl_tmp_001 = kspl_std_str_Str_builder_s(&full, KSPL_STR(std_lang_Slice_U8, "_"));
-    (void)(kspl_ksplc_sema_type_env_Env_type_args_to(r, inst.args, (std_lang_Writer){.obj = (void *)__kspl_tmp_001, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
-  }
-
-  KSPL_UNUSED std_lang_Writer __kspl_tmp_002 = kspl_std_lang_Slice_U8_mangle_type_name_to(kspl_std_str_Str_builder_slice(&full), w);
-  {
-    kspl_std_str_Str_builder_free(&full);
-  }
-  return __kspl_tmp_002;
-  {
-    kspl_std_str_Str_builder_free(&full);
-  }
-}
-
 I32 kspl_ksplc_sema_type_env_Env_slice_struct_elem(ksplc_sema_type_env_Env *r, I32 type_id) {
   I32 real_id = kspl_ksplc_sema_type_env_Env_get_clean_real_type(r, type_id);
   if (!kspl_std_lang_Slice_U8_Const_equals(kspl_ksplc_sema_type_env_Env_instance_base(r, real_id), kspl_ksplc_base_core_slice_fqn)) {
@@ -63158,40 +62992,6 @@ I32 kspl_ksplc_sema_type_env_Env_slice_struct_elem(ksplc_sema_type_env_Env *r, I
   }
 
   return kspl_ksplc_sema_type_env_Env_instance_arg(r, real_id, (Sz)0);
-}
-
-ksplc_sema_type_env_Mangle_seen kspl_ksplc_sema_type_env_Mangle_seen_new(ksplc_sema_type_env_Env *env) {
-  KSPL_UNUSED std_mem_Arena *__kspl_tmp_002 = kspl_ksplc_base_core_arena;
-  KSPL_UNUSED std_ds_Map_std_lang_Slice_U8_Const_I32 *__kspl_tmp_001 = kspl_std_mem_Arena_create_std_ds_Map_std_lang_Slice_U8_Const_I32(__kspl_tmp_002, kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_new(null));
-  return (ksplc_sema_type_env_Mangle_seen){.env = env, .seen = __kspl_tmp_001, .buf = kspl_std_str_Str_builder_new()};
-}
-
-void kspl_ksplc_sema_type_env_Mangle_seen_free(ksplc_sema_type_env_Mangle_seen *r) {
-  kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_free(r->seen);
-  kspl_std_str_Str_builder_free(&r->buf);
-  return;
-}
-
-Bool kspl_ksplc_sema_type_env_Mangle_seen_admit(ksplc_sema_type_env_Mangle_seen *r, I32 type_id) {
-  r->buf.len = (Sz)0;
-  (void)(kspl_ksplc_sema_type_env_Env_mangle_type_id_to(r->env, type_id, (std_lang_Writer){.obj = (void *)&r->buf, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
-  std_lang_Slice_U8 name = kspl_std_str_Str_builder_slice(&r->buf);
-  KSPL_UNUSED kspl_I32_Result_std_ds_Ds_error __kspl_tmp_001 = kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_get(r->seen, name);
-  KSPL_UNUSED I32 __kspl_tmp_002 = {0};
-  if (__kspl_tmp_001.is_err) {
-    __kspl_tmp_002 = 0;
-  }
-
-  else {
-    __kspl_tmp_002 = __kspl_tmp_001.val;
-  }
-  if (__kspl_tmp_002 != 0) {
-    return false;
-  }
-
-  KSPL_UNUSED std_ds_Map_std_lang_Slice_U8_Const_I32 *__kspl_tmp_004 = r->seen;
-  kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_set(__kspl_tmp_004, kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, name), 1);
-  return true;
 }
 
 void kspl_ksplc_sema_session_ctx_Sema_ctx_check_ffi_safety(ksplc_sema_session_ctx_Sema_ctx *r, I32 type_id, ksplc_base_ast_Ast_node *err_node) {
@@ -64582,6 +64382,284 @@ std_str_Str_builder kspl_ksplc_sema_type_env_Env_display_str_named(ksplc_sema_ty
   return b;
 }
 
+std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w) {
+  KSPL_UNUSED Bool __kspl_tmp_002 = !r->c_names_final;
+  if (!__kspl_tmp_002) {
+    __kspl_tmp_002 = type_id <= 0;
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_001 = __kspl_tmp_002;
+  if (!__kspl_tmp_001) {
+    __kspl_tmp_001 = (Sz)type_id >= r->id_to_type->len;
+  }
+
+  if (__kspl_tmp_001) {
+    return kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, type_id, w, (Sz)0);
+  }
+
+  ksplc_sema_type_def_Entry *entry = kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(r->id_to_type, (Sz)type_id);
+  if (entry->c_name.len == (Sz)0) {
+    std_str_Str_builder spelled = kspl_std_str_Str_builder_new();
+    (void)(kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, type_id, (std_lang_Writer){.obj = (void *)&spelled, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}, (Sz)0));
+    KSPL_UNUSED std_mem_Arena *__kspl_tmp_003 = kspl_ksplc_base_core_arena;
+    entry->c_name = kspl_std_mem_Arena_dup_str(__kspl_tmp_003, kspl_std_str_Str_builder_slice(&spelled));
+    {
+      kspl_std_str_Str_builder_free(&spelled);
+    }
+  }
+
+  return ((w).vtable->s((w).obj, entry->c_name));
+}
+
+std_lang_Writer kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(ksplc_sema_type_env_Env *r, I32 type_id, std_lang_Writer w, Sz depth) {
+  if (depth >= kspl_priv_ksplc_sema_type_naming_max_mangle_depth) {
+    KSPL_UNUSED std_lang_Writer __kspl_tmp_001 = kspl_std_io_err();
+    (void)(((__kspl_tmp_001).vtable->s((__kspl_tmp_001).obj, KSPL_STR(std_lang_Slice_U8, "\nfatal: type expression nesting too deep (possible unbounded pointer/array/slice chain).\n"))));
+    kspl_std_sys_exit(1);
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_002 = type_id <= 0;
+  if (!__kspl_tmp_002) {
+    __kspl_tmp_002 = kspl_ksplc_sema_type_env_is_unknown(type_id);
+  }
+
+  if (__kspl_tmp_002) {
+    return ((w).vtable->s((w).obj, kspl_ksplc_base_core_unknown_type_name));
+  }
+
+  ksplc_sema_type_env_Info info = kspl_ksplc_sema_type_env_Env_get_info(r, type_id);
+  std_lang_Writer res = w;
+  I32 base_id = 0;
+  std_lang_Slice_U8 suffix = KSPL_STR(std_lang_Slice_U8, "");
+  I32 arr_size = (I32)((U32)(0) - (U32)(1));
+  I32 err_id = 0;
+  switch (info.tag) {
+  case kspl_ksplc_sema_type_env_Info_const_of: {
+    I32 b = info.payload.const_of.base_id;
+    ksplc_sema_type_env_Info b_info = kspl_ksplc_sema_type_env_Env_get_info(r, b);
+    KSPL_UNUSED Bool __kspl_tmp_005 = kspl_ksplc_sema_type_env_Env_slice_struct_elem(r, b) != 0;
+    if (!__kspl_tmp_005) {
+      __kspl_tmp_005 = kspl_ksplc_sema_type_env_Info_is_array(b_info);
+    }
+
+    KSPL_UNUSED Bool __kspl_tmp_004 = __kspl_tmp_005;
+    if (!__kspl_tmp_004) {
+      __kspl_tmp_004 = kspl_ksplc_sema_type_env_Info_is_pointer(b_info);
+    }
+
+    KSPL_UNUSED Bool __kspl_tmp_003 = __kspl_tmp_004;
+    if (!__kspl_tmp_003) {
+      __kspl_tmp_003 = kspl_ksplc_sema_type_env_Info_is_result(b_info);
+    }
+
+    Bool is_view = __kspl_tmp_003;
+    if (is_view) {
+      res = kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, b, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
+      return ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "_Const")));
+    }
+
+    res = ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "Const_")));
+    return kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, b, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
+  }
+  case kspl_ksplc_sema_type_env_Info_pointer: {
+    I32 b = info.payload.pointer.base_id;
+    base_id = b;
+    suffix = KSPL_STR(std_lang_Slice_U8, "_Ptr");
+    break;
+  }
+  case kspl_ksplc_sema_type_env_Info_array: {
+    I32 b = info.payload.array.base_id;
+    I32 s = info.payload.array.size;
+    base_id = b;
+    suffix = KSPL_STR(std_lang_Slice_U8, "_Array_");
+    arr_size = s;
+    break;
+  }
+  case kspl_ksplc_sema_type_env_Info_result: {
+    I32 b = info.payload.result.base_id;
+    I32 e = info.payload.result.err_id;
+    base_id = b;
+    suffix = KSPL_STR(std_lang_Slice_U8, "_Result");
+    err_id = e;
+    break;
+  }
+  default: {
+  } break;
+  }
+  if (base_id != 0) {
+    res = kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, base_id, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
+    res = ((res).vtable->s((res).obj, suffix));
+    if (arr_size != (I32)((U32)(0) - (U32)(1))) {
+      KSPL_UNUSED std_lang_Writer __kspl_tmp_006 = ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "")));
+      res = kspl_std_lang_put_std_lang_Writer_I32(__kspl_tmp_006, arr_size);
+    }
+
+    if (err_id != 0) {
+      std_lang_Slice_U8 err_str = kspl_ksplc_sema_type_env_Env_get_str(r, err_id);
+      if (!kspl_std_lang_Slice_U8_equals(err_str, KSPL_STR(std_lang_Slice_U8, "I32"))) {
+        res = ((res).vtable->s((res).obj, KSPL_STR(std_lang_Slice_U8, "_")));
+        res = kspl_ksplc_sema_type_env_Env_mangle_type_id_to_impl(r, err_id, res, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
+      }
+    }
+
+    return res;
+  }
+
+  KSPL_UNUSED std_lang_Option_ksplc_sema_type_env_Instance __kspl_tmp_007 = kspl_ksplc_sema_type_env_Env_variance_stripped(r, type_id);
+  switch (__kspl_tmp_007.tag) {
+  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_some: {
+    ksplc_sema_type_env_Instance plain = __kspl_tmp_007.payload.some.value;
+    return kspl_ksplc_sema_type_env_Env_instance_c_name_to(r, plain, res);
+  }
+  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_none: {
+    break;
+  }
+  default:
+    __builtin_unreachable();
+  }
+  std_lang_Slice_U8 base_str = kspl_ksplc_sema_type_env_Env_get_str(r, type_id);
+  return kspl_std_lang_Slice_U8_mangle_type_name_to(base_str, res);
+}
+
+I32 kspl_ksplc_sema_type_env_Env_c_repr_type_id(ksplc_sema_type_env_Env *r, I32 type_id) {
+  KSPL_UNUSED std_lang_Option_ksplc_sema_type_env_Instance __kspl_tmp_001 = kspl_ksplc_sema_type_env_Env_variance_stripped(r, type_id);
+  switch (__kspl_tmp_001.tag) {
+  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_some: {
+    KSPL_UNUSED ksplc_sema_type_env_Instance _plain = __kspl_tmp_001.payload.some.value;
+    std_str_Str_builder key = kspl_std_str_Str_builder_new();
+    (void)(kspl_ksplc_sema_type_env_Env_mangle_type_id_to(r, type_id, (std_lang_Writer){.obj = (void *)&key, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
+    KSPL_UNUSED std_ds_Map_std_lang_Slice_U8_Const_I32 *__kspl_tmp_002 = r->type_to_id;
+    KSPL_UNUSED kspl_I32_Result_std_ds_Ds_error __kspl_tmp_003 = kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_get(__kspl_tmp_002, kspl_std_str_Str_builder_slice(&key));
+    KSPL_UNUSED I32 __kspl_tmp_004 = {0};
+    if (__kspl_tmp_003.is_err) {
+      __kspl_tmp_004 = type_id;
+    }
+
+    else {
+      __kspl_tmp_004 = __kspl_tmp_003.val;
+    }
+    KSPL_UNUSED I32 __kspl_tmp_006 = __kspl_tmp_004;
+    {
+      kspl_std_str_Str_builder_free(&key);
+    }
+    return __kspl_tmp_006;
+    {
+      kspl_std_str_Str_builder_free(&key);
+    }
+    break;
+  }
+  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_none: {
+    break;
+  }
+  default:
+    __builtin_unreachable();
+  }
+  return type_id;
+}
+
+std_lang_Writer kspl_ksplc_sema_type_env_Env_type_args_to(ksplc_sema_type_env_Env *r, std_lang_Slice_I32 args, std_lang_Writer w) {
+  std_lang_Writer res = w;
+  KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_asc(args.len);
+  {
+    KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
+    for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
+      KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
+      Sz i = __kspl_tmp_003;
+      if (i > (Sz)0) {
+        res = ((res).vtable->s((res).obj, kspl_ksplc_base_ast_type_arg_sep));
+      }
+
+      KSPL_UNUSED std_lang_Writer __kspl_tmp_004 = res;
+      res = ((__kspl_tmp_004).vtable->s((__kspl_tmp_004).obj, kspl_ksplc_sema_type_env_Env_get_str(r, (*(kspl_std_lang_Slice_I32_Const_at_ref(&args, i, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/type/naming"), (Sz)131))))));
+    }
+  }
+  return res;
+}
+
+std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_key_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w) {
+  KSPL_UNUSED std_lang_Writer __kspl_tmp_002 = ((w).vtable->s((w).obj, inst.template));
+  KSPL_UNUSED std_lang_Writer __kspl_tmp_001 = kspl_ksplc_sema_type_env_Env_type_args_to(r, inst.args, ((__kspl_tmp_002).vtable->s((__kspl_tmp_002).obj, KSPL_STR(std_lang_Slice_U8, "<|"))));
+  return ((__kspl_tmp_001).vtable->s((__kspl_tmp_001).obj, KSPL_STR(std_lang_Slice_U8, "|>")));
+}
+
+std_lang_Slice_U8 kspl_ksplc_sema_type_env_Env_instance_key(ksplc_sema_type_env_Env *r, I32 type_id) {
+  KSPL_UNUSED std_lang_Option_ksplc_sema_type_env_Instance __kspl_tmp_001 = kspl_ksplc_sema_type_env_Env_instance_of(r, type_id);
+  switch (__kspl_tmp_001.tag) {
+  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_some: {
+    ksplc_sema_type_env_Instance inst = __kspl_tmp_001.payload.some.value;
+    std_str_Str_builder key = kspl_std_str_Str_builder_new();
+    (void)(kspl_ksplc_sema_type_env_Env_instance_key_to(r, inst, (std_lang_Writer){.obj = (void *)&key, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
+    KSPL_UNUSED std_mem_Arena *__kspl_tmp_002 = kspl_ksplc_base_core_arena;
+    KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = kspl_std_mem_Arena_dup_str(__kspl_tmp_002, kspl_std_str_Str_builder_slice(&key));
+    {
+      kspl_std_str_Str_builder_free(&key);
+    }
+    return __kspl_tmp_003;
+    {
+      kspl_std_str_Str_builder_free(&key);
+    }
+    break;
+  }
+  case kspl_std_lang_Option_ksplc_sema_type_env_Instance_none: {
+    return KSPL_STR(std_lang_Slice_U8, "");
+  }
+  default:
+    __builtin_unreachable();
+  }
+}
+
+std_lang_Writer kspl_ksplc_sema_type_env_Env_instance_c_name_to(ksplc_sema_type_env_Env *r, ksplc_sema_type_env_Instance inst, std_lang_Writer w) {
+  std_str_Str_builder full = kspl_std_str_Str_builder_new();
+  (void)(kspl_std_str_Str_builder_s(&full, inst.template));
+  if (inst.args.len > (Sz)0) {
+    KSPL_UNUSED std_str_Str_builder *__kspl_tmp_001 = kspl_std_str_Str_builder_s(&full, KSPL_STR(std_lang_Slice_U8, "_"));
+    (void)(kspl_ksplc_sema_type_env_Env_type_args_to(r, inst.args, (std_lang_Writer){.obj = (void *)__kspl_tmp_001, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
+  }
+
+  KSPL_UNUSED std_lang_Writer __kspl_tmp_002 = kspl_std_lang_Slice_U8_mangle_type_name_to(kspl_std_str_Str_builder_slice(&full), w);
+  {
+    kspl_std_str_Str_builder_free(&full);
+  }
+  return __kspl_tmp_002;
+  {
+    kspl_std_str_Str_builder_free(&full);
+  }
+}
+
+ksplc_sema_type_naming_Mangle_seen kspl_ksplc_sema_type_naming_Mangle_seen_new(ksplc_sema_type_env_Env *env) {
+  KSPL_UNUSED std_mem_Arena *__kspl_tmp_002 = kspl_ksplc_base_core_arena;
+  KSPL_UNUSED std_ds_Map_std_lang_Slice_U8_Const_I32 *__kspl_tmp_001 = kspl_std_mem_Arena_create_std_ds_Map_std_lang_Slice_U8_Const_I32(__kspl_tmp_002, kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_new(null));
+  return (ksplc_sema_type_naming_Mangle_seen){.env = env, .seen = __kspl_tmp_001, .buf = kspl_std_str_Str_builder_new()};
+}
+
+void kspl_ksplc_sema_type_naming_Mangle_seen_free(ksplc_sema_type_naming_Mangle_seen *r) {
+  kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_free(r->seen);
+  kspl_std_str_Str_builder_free(&r->buf);
+  return;
+}
+
+Bool kspl_ksplc_sema_type_naming_Mangle_seen_admit(ksplc_sema_type_naming_Mangle_seen *r, I32 type_id) {
+  r->buf.len = (Sz)0;
+  (void)(kspl_ksplc_sema_type_env_Env_mangle_type_id_to(r->env, type_id, (std_lang_Writer){.obj = (void *)&r->buf, .vtable = &kspl_vtable_impl_std_str_Str_builder_std_lang_Writer}));
+  std_lang_Slice_U8 name = kspl_std_str_Str_builder_slice(&r->buf);
+  KSPL_UNUSED kspl_I32_Result_std_ds_Ds_error __kspl_tmp_001 = kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_get(r->seen, name);
+  KSPL_UNUSED I32 __kspl_tmp_002 = {0};
+  if (__kspl_tmp_001.is_err) {
+    __kspl_tmp_002 = 0;
+  }
+
+  else {
+    __kspl_tmp_002 = __kspl_tmp_001.val;
+  }
+  if (__kspl_tmp_002 != 0) {
+    return false;
+  }
+
+  KSPL_UNUSED std_ds_Map_std_lang_Slice_U8_Const_I32 *__kspl_tmp_004 = r->seen;
+  kspl_std_ds_Map_std_lang_Slice_U8_Const_I32_set(__kspl_tmp_004, kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, name), 1);
+  return true;
+}
+
 std_lang_Option_ksplc_sema_session_state_Generic_arg kspl_ksplc_sema_session_ctx_Sema_ctx_find_generic_arg(ksplc_sema_session_ctx_Sema_ctx *r, std_lang_Slice_U8 param_name) {
   KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_desc(r->generics.args->len);
   {
@@ -64750,12 +64828,12 @@ void kspl_ksplc_sema_session_ctx_Sema_ctx_err(ksplc_sema_session_ctx_Sema_ctx *r
 
 void kspl_ksplc_sema_session_ctx_Sema_ctx_check_param_type(ksplc_sema_session_ctx_Sema_ctx *r, ksplc_base_ast_Ast_node *param, I32 t_id) {
   std_lang_Slice_U8 name = kspl_ksplc_base_ast_Ast_node_find_text(param, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier);
-  if (t_id == (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)) {
+  if (kspl_ksplc_sema_type_env_is_unknown(t_id)) {
     (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(r), KSPL_STR(std_lang_Slice_U8, "parameter '")), name), KSPL_STR(std_lang_Slice_U8, "' has no type: write '")), name), KSPL_STR(std_lang_Slice_U8, ": <type>'")));
   }
 
   else
-      if (t_id == (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_void_type)) {
+      if (kspl_ksplc_sema_type_env_is_void(t_id)) {
     (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(r), KSPL_STR(std_lang_Slice_U8, "parameter '")), name), KSPL_STR(std_lang_Slice_U8, "' cannot be Void, which holds no value")));
   }
 
@@ -64838,7 +64916,7 @@ ksplc_base_lint_codes_Lint_level kspl_ksplc_sema_session_ctx_Sema_ctx_lint_level
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_sema_session_state_Lint_setting_entry entry = (*(kspl_std_ds_List_ksplc_sema_session_state_Lint_setting_entry_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/session/ctx"), (Sz)377)));
+      ksplc_sema_session_state_Lint_setting_entry entry = (*(kspl_std_ds_List_ksplc_sema_session_state_Lint_setting_entry_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/session/ctx"), (Sz)378)));
       KSPL_UNUSED Bool __kspl_tmp_003 = kspl_std_lang_Slice_U8_Const_equals(entry.file, file);
       if (__kspl_tmp_003) {
         __kspl_tmp_003 = kspl_std_lang_Slice_U8_Const_equals(entry.code, code);
@@ -65575,7 +65653,7 @@ void kspl_ksplc_base_ast_Ast_node_collect_lint_decl(ksplc_base_ast_Ast_node *r, 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll2->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *setting = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/session/ctx"), (Sz)809)));
+      ksplc_base_ast_Ast_node *setting = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/session/ctx"), (Sz)810)));
       if (setting->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_lint_setting) {
         goto _mir_label_001;
       }
@@ -65586,7 +65664,7 @@ void kspl_ksplc_base_ast_Ast_node_collect_lint_decl(ksplc_base_ast_Ast_node *r, 
       {
         KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
         for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-          ksplc_base_ast_Ast_node *part = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/session/ctx"), (Sz)822)));
+          ksplc_base_ast_Ast_node *part = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/session/ctx"), (Sz)823)));
           if (part->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier) {
             goto _mir_label_003;
           }
@@ -68372,7 +68450,7 @@ std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr kspl_ksplc_sema_session_ct
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 id = (*(kspl_std_lang_Slice_I32_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)130)));
+      I32 id = (*(kspl_std_lang_Slice_I32_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)131)));
       I32 real = kspl_ksplc_sema_type_env_Env_get_real_type(r->env, id);
       KSPL_UNUSED kspl_Void_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_006 = kspl_ksplc_sema_session_ctx_Sema_ctx_ensure_instance_methods(r, real);
       if (__kspl_tmp_006.is_err) {
@@ -68424,7 +68502,7 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_session_ctx_Se
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 alias_name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)162)));
+      std_lang_Slice_U8 alias_name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)163)));
       if (kspl_std_lang_Slice_U8_Const_equals(alias_name, name)) {
         KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_003 = sym->node;
         kspl_ksplc_sema_session_ctx_Sema_ctx_err(r, __kspl_tmp_003, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(kspl_std_lang_put_std_str_Arena_text_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(kspl_ksplc_base_core_arena), KSPL_STR(std_lang_Slice_U8, "circular typedef: '")), name), KSPL_STR(std_lang_Slice_U8, "' leads back to itself"))));
@@ -68798,7 +68876,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)334)));
+      ksplc_base_ast_Ast_node *item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)335)));
       if (item != own_name) {
         KSPL_UNUSED kspl_Void_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_019 = kspl_ksplc_base_ast_Ast_node_resolve_all_types(item, c);
         if (__kspl_tmp_019.is_err) {
@@ -68828,7 +68906,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *path_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)357)));
+      ksplc_base_ast_Ast_node *path_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)358)));
       KSPL_UNUSED Bool __kspl_tmp_003 = path_node->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal;
       if (!__kspl_tmp_003) {
         __kspl_tmp_003 = path_node->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_keyword;
@@ -69151,7 +69229,7 @@ kspl_std_lang_Slice_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *arg = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)462)));
+      ksplc_base_ast_Ast_node *arg = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)463)));
       KSPL_UNUSED Bool __kspl_tmp_005 = arg->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal;
       if (!__kspl_tmp_005) {
         __kspl_tmp_005 = arg->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_keyword;
@@ -69512,7 +69590,7 @@ static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_s
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)615)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)616)));
       KSPL_UNUSED Bool __kspl_tmp_012 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_args;
       if (!__kspl_tmp_012) {
         __kspl_tmp_012 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_postfix;
@@ -69579,7 +69657,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_decl_resolve_holds_value_expr(ksplc
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)638)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)639)));
       if (kspl_priv_ksplc_sema_decl_resolve_holds_value_expr(child)) {
         return true;
       }
@@ -69635,7 +69713,7 @@ static KSPL_UNUSED std_lang_Option_I32 kspl_priv_ksplc_sema_decl_resolve_const_t
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)659)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)660)));
       KSPL_UNUSED std_lang_Option_I32 __kspl_tmp_009 = kspl_priv_ksplc_sema_decl_resolve_const_type_arg_value(child, c);
       switch (__kspl_tmp_009.tag) {
       case kspl_std_lang_Option_I32_some: {
@@ -69802,7 +69880,7 @@ static KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_priv_k
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)728)));
+      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/resolve"), (Sz)729)));
       if (p->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_type_postfix) {
         KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_003 = kspl_priv_ksplc_sema_decl_resolve_apply_type_postfix(c, current_tid, p);
         if (__kspl_tmp_003.is_err) {
@@ -74083,7 +74161,7 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_decl_mono_count_generic_params(ksplc_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)79)));
+      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)80)));
       KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_003 = kspl_ksplc_base_ast_Ast_node_gen_param_id_node(p);
       switch (__kspl_tmp_003.tag) {
       case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
@@ -74329,7 +74407,7 @@ kspl_std_str_Str_builder_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sem
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *m_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)221)));
+        ksplc_base_ast_Ast_node *m_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)222)));
         KSPL_UNUSED Bool __kspl_tmp_013 = m_node->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn_proto;
         if (!__kspl_tmp_013) {
           __kspl_tmp_013 = m_node->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
@@ -74463,7 +74541,7 @@ void kspl_ksplc_sema_session_ctx_Sema_ctx_bind_generic_args(ksplc_sema_session_c
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)280)));
+      ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)281)));
       ksplc_base_ast_Ast_node *param_id_node = null;
       KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_003 = kspl_ksplc_base_ast_Ast_node_gen_param_id_node(p);
       switch (__kspl_tmp_003.tag) {
@@ -74486,7 +74564,7 @@ void kspl_ksplc_sema_session_ctx_Sema_ctx_bind_generic_args(ksplc_sema_session_c
 
       if (p_idx < args.len) {
         I32 k_id = kspl_ksplc_sema_type_env_Env_get_or_add(r->env, param_id_node->text);
-        const I32 a_id = (*(kspl_std_lang_Slice_I32_Const_at_ref(&args, p_idx, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)295)));
+        const I32 a_id = (*(kspl_std_lang_Slice_I32_Const_at_ref(&args, p_idx, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)296)));
         kspl_std_ds_List_ksplc_sema_session_state_Generic_arg_push(r->generics.args, (ksplc_sema_session_state_Generic_arg){.param_name_id = k_id, .bound_type_id = a_id, .is_const = is_const_param});
         KSPL_UNUSED Bool __kspl_tmp_004 = is_const_param;
         if (__kspl_tmp_004) {
@@ -74626,7 +74704,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_session_ctx_S
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *generic_impl = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)360)));
+        ksplc_base_ast_Ast_node *generic_impl = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)361)));
         if (kspl_ksplc_sema_session_ctx_Sema_ctx_has_failed_constraint(r, inst_name)) {
           goto _mir_label_002;
         }
@@ -74733,7 +74811,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_session_ctx_S
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll2->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *generic_impl = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)418)));
+      ksplc_base_ast_Ast_node *generic_impl = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)419)));
       if (!kspl_ksplc_sema_session_ctx_Sema_ctx_generic_impl_applies(r, generic_impl, inst)) {
         goto _mir_label_001;
       }
@@ -74743,7 +74821,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_session_ctx_S
       {
         KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
         for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-          ksplc_base_ast_Ast_node *m_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)422)));
+          ksplc_base_ast_Ast_node *m_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/decl/mono"), (Sz)423)));
           if (m_node->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn) {
             goto _mir_label_003;
           }
@@ -79264,21 +79342,20 @@ void kspl_ksplc_lsp_nav_handle_definition(ksplc_lsp_state_Doc_state *state, std_
   ksplc_base_ast_Ast_node *def_node = null;
   if (path->len > (Sz)0) {
     KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *__kspl_tmp_001 = state->sema;
-    KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_002 = state->root_file;
-    def_node = kspl_ksplc_lsp_nav_resolve_def_node(__kspl_tmp_001, __kspl_tmp_002, path, kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_get(path, (Sz)((size_t)(path->len) - (size_t)((Sz)1)))).def_node;
+    def_node = kspl_ksplc_lsp_nav_resolve_def_node(__kspl_tmp_001, path, kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_get(path, (Sz)((size_t)(path->len) - (size_t)((Sz)1)))).def_node;
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_003 = path->len > (Sz)0;
-  if (__kspl_tmp_003) {
-    __kspl_tmp_003 = state->sema != null;
+  KSPL_UNUSED Bool __kspl_tmp_002 = path->len > (Sz)0;
+  if (__kspl_tmp_002) {
+    __kspl_tmp_002 = state->sema != null;
   }
 
-  if (__kspl_tmp_003) {
-    KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *__kspl_tmp_004 = state->sema;
-    KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_005 = kspl_priv_ksplc_lsp_nav_resolve_decl_type_def(__kspl_tmp_004, path, kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_get(path, (Sz)((size_t)(path->len) - (size_t)((Sz)1))));
-    switch (__kspl_tmp_005.tag) {
+  if (__kspl_tmp_002) {
+    KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *__kspl_tmp_003 = state->sema;
+    KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_004 = kspl_priv_ksplc_lsp_nav_resolve_decl_type_def(__kspl_tmp_003, path, kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_get(path, (Sz)((size_t)(path->len) - (size_t)((Sz)1))));
+    switch (__kspl_tmp_004.tag) {
     case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
-      ksplc_base_ast_Ast_node *type_def = __kspl_tmp_005.payload.some.value;
+      ksplc_base_ast_Ast_node *type_def = __kspl_tmp_004.payload.some.value;
       def_node = type_def;
       break;
     }
@@ -79315,16 +79392,16 @@ void kspl_ksplc_lsp_nav_handle_definition(ksplc_lsp_state_Doc_state *state, std_
   Sz line = (Sz)0;
   Sz col = (Sz)0;
   if (def_src.len > (Sz)0) {
-    KSPL_UNUSED Sz __kspl_tmp_006 = kspl_std_lang_Slice_U8_clamp_offset(def_src, t_offset);
-    ksplc_lsp_msg_Position pos = kspl_std_lang_Slice_U8_get_line_char(def_src, __kspl_tmp_006, kspl_ksplc_sema_session_ctx_Sema_ctx_line_starts_for(state->sema, def_file, def_src));
+    KSPL_UNUSED Sz __kspl_tmp_005 = kspl_std_lang_Slice_U8_clamp_offset(def_src, t_offset);
+    ksplc_lsp_msg_Position pos = kspl_std_lang_Slice_U8_get_line_char(def_src, __kspl_tmp_005, kspl_ksplc_sema_session_ctx_Sema_ctx_line_starts_for(state->sema, def_file, def_src));
     line = pos.line;
     col = pos.character;
   }
 
   std_json_Json_builder b = kspl_std_json_Json_builder_new(arena);
   ksplc_base_locate_Uri_style style = kspl_ksplc_base_locate_uri_style_of(state->uri_perm);
-  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_007 = kspl_ksplc_base_locate_Uri_style_spell(style, def_file);
-  kspl_ksplc_lsp_msg_send_response(id_val, kspl_std_json_Json_builder_location(&b, __kspl_tmp_007, line, col, line, (Sz)((size_t)(col) + (size_t)(text_len))), arena);
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_006 = kspl_ksplc_base_locate_Uri_style_spell(style, def_file);
+  kspl_ksplc_lsp_msg_send_response(id_val, kspl_std_json_Json_builder_location(&b, __kspl_tmp_006, line, col, line, (Sz)((size_t)(col) + (size_t)(text_len))), arena);
   {
     kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_free(path);
   }
@@ -79654,7 +79731,7 @@ static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_l
     return (std_lang_Option_ksplc_base_ast_Ast_node_Ptr){.tag = kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_none};
   }
 
-  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_002 = kspl_priv_ksplc_lsp_nav_local_decl_of(c, path, name);
+  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_002 = kspl_priv_ksplc_lsp_nav_local_decl_of(path, name);
   switch (__kspl_tmp_002.tag) {
   case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
     ksplc_base_ast_Ast_node *d = __kspl_tmp_002.payload.some.value;
@@ -79747,7 +79824,7 @@ std_lang_Slice_U8 kspl_ksplc_lsp_nav_folded_receiver_type(ksplc_sema_session_ctx
     return KSPL_STR(std_lang_Slice_U8, "");
   }
 
-  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_005 = kspl_priv_ksplc_lsp_nav_local_decl_of(c, path, kspl_ksplc_base_ast_Ast_node_get_child(p, (Sz)0));
+  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_005 = kspl_priv_ksplc_lsp_nav_local_decl_of(path, kspl_ksplc_base_ast_Ast_node_get_child(p, (Sz)0));
   switch (__kspl_tmp_005.tag) {
   case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
     ksplc_base_ast_Ast_node *decl = __kspl_tmp_005.payload.some.value;
@@ -79776,7 +79853,7 @@ std_lang_Slice_U8 kspl_ksplc_lsp_nav_folded_receiver_type(ksplc_sema_session_ctx
   return kspl_priv_ksplc_lsp_nav_path_type_name(c, path, p, at, (Sz)0);
 }
 
-static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_local_decl_of(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name) {
+static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_local_decl_of(std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name) {
   KSPL_UNUSED Bool __kspl_tmp_001 = name == null;
   if (!__kspl_tmp_001) {
     __kspl_tmp_001 = name->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier;
@@ -79790,12 +79867,12 @@ static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_l
     return (std_lang_Option_ksplc_base_ast_Ast_node_Ptr){.tag = kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some, .payload.some = {name->def_node}};
   }
 
-  return kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(c, path, name, name->text);
+  return kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(path, name, name->text);
 }
 
 static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_local_type_name(ksplc_sema_session_ctx_Sema_ctx *c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *name, Sz depth) {
   ksplc_base_ast_Ast_node *local = null;
-  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_001 = kspl_priv_ksplc_lsp_nav_local_decl_of(c, path, name);
+  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_001 = kspl_priv_ksplc_lsp_nav_local_decl_of(path, name);
   switch (__kspl_tmp_001.tag) {
   case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
     ksplc_base_ast_Ast_node *d = __kspl_tmp_001.payload.some.value;
@@ -80236,7 +80313,7 @@ static KSPL_UNUSED kspl_ksplc_base_ast_Ast_node_Ptr_Result kspl_priv_ksplc_lsp_n
   return ((kspl_ksplc_base_ast_Ast_node_Ptr_Result){.is_err = false, .val = null});
 }
 
-static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *_c, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node, std_lang_Slice_U8 target_text) {
+static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node, std_lang_Slice_U8 target_text) {
   {
     Sz i = path->len;
     for (; i > (Sz)0; i = (Sz)((size_t)(i) - (size_t)((Sz)1))) {
@@ -80576,11 +80653,6 @@ std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_ksplc_lsp_nav_get_definition_no
     return (std_lang_Option_ksplc_base_ast_Ast_node_Ptr){.tag = kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_none};
   }
 
-  ksplc_base_ast_Ast_node *local_def = target_node->def_node;
-  if (local_def != null) {
-    return (std_lang_Option_ksplc_base_ast_Ast_node_Ptr){.tag = kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some, .payload.some = {local_def}};
-  }
-
   ksplc_sema_session_state_Alias_info *alias = kspl_ksplc_sema_session_ctx_Sema_ctx_peek_file_alias(c, c->file_name, target_text);
   KSPL_UNUSED Bool __kspl_tmp_020 = alias != null;
   if (__kspl_tmp_020) {
@@ -80648,7 +80720,7 @@ std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_ksplc_lsp_nav_get_definition_no
     }
   }
 
-  return kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(c, path, target_node, target_text);
+  return kspl_priv_ksplc_lsp_nav_resolve_fallback_parent_def(path, target_node, target_text);
 }
 
 std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_ksplc_lsp_nav_find_parent_enum(ksplc_base_ast_Ast_node *node, ksplc_base_ast_Ast_node *target) {
@@ -80670,7 +80742,7 @@ static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_l
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)617)));
+        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)613)));
         if (child == target) {
           return (std_lang_Option_ksplc_base_ast_Ast_node_Ptr){.tag = kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some, .payload.some = {node}};
         }
@@ -80682,7 +80754,7 @@ static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_l
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)620)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)616)));
       KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_006 = kspl_priv_ksplc_lsp_nav_find_parent_enum_depth(child, target, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       switch (__kspl_tmp_006.tag) {
       case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
@@ -80808,7 +80880,7 @@ std_lang_Slice_U8 kspl_ksplc_lsp_nav_linked_doc(ksplc_sema_session_ctx_Sema_ctx 
   }
 }
 
-Bool kspl_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym, ksplc_base_ast_Ast_node *target_node, ksplc_lsp_nav_Enum_resolve_result *res) {
+static KSPL_UNUSED void kspl_priv_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym, ksplc_base_ast_Ast_node *target_node, ksplc_lsp_nav_Enum_resolve_result *res) {
   KSPL_UNUSED Bool __kspl_tmp_002 = sym == null;
   if (!__kspl_tmp_002) {
     __kspl_tmp_002 = sym->node == null;
@@ -80820,7 +80892,7 @@ Bool kspl_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym
   }
 
   if (__kspl_tmp_001) {
-    return false;
+    return;
   }
 
   ksplc_base_ast_Ast_node *enum_node = sym->node;
@@ -80828,7 +80900,7 @@ Bool kspl_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *variant = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)701)));
+      ksplc_base_ast_Ast_node *variant = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)697)));
       if (variant->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_enum_variant) {
         ksplc_base_ast_Ast_node *v_id = kspl_ksplc_base_ast_Ast_node_find_child(variant, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier);
         KSPL_UNUSED Bool __kspl_tmp_005 = v_id != null;
@@ -80839,37 +80911,25 @@ Bool kspl_ksplc_lsp_nav_scan_enum_variant(ksplc_sema_type_scope_Sema_symbol *sym
         if (__kspl_tmp_005) {
           res->enum_node = enum_node;
           res->variant_node = variant;
-          return true;
+          return;
         }
       }
     }
   }
-  return false;
+  return;
 }
 
-ksplc_lsp_nav_Def_resolve_result kspl_ksplc_lsp_nav_resolve_def_node(ksplc_sema_session_ctx_Sema_ctx *sema, ksplc_base_ast_Ast_node *root_file, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node) {
-  ksplc_lsp_nav_Enum_resolve_result enum_res = kspl_ksplc_lsp_nav_resolve_enum_variant_def(sema, root_file, path, target_node);
-  ksplc_base_ast_Ast_node *def_node = null;
+ksplc_lsp_nav_Def_resolve_result kspl_ksplc_lsp_nav_resolve_def_node(ksplc_sema_session_ctx_Sema_ctx *sema, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node) {
+  ksplc_lsp_nav_Enum_resolve_result enum_res = kspl_priv_ksplc_lsp_nav_resolve_enum_variant_def(sema, path, target_node);
+  KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_001 = {0};
   if (enum_res.variant_node != null) {
-    def_node = enum_res.variant_node;
+    __kspl_tmp_001 = enum_res.variant_node;
   }
 
   else {
-    KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_001 = kspl_ksplc_lsp_nav_get_definition_node(sema, path);
-    switch (__kspl_tmp_001.tag) {
-    case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
-      ksplc_base_ast_Ast_node *d = __kspl_tmp_001.payload.some.value;
-      def_node = d;
-      break;
-    }
-    case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_none: {
-      break;
-    }
-    default:
-      __builtin_unreachable();
-    }
+    __kspl_tmp_001 = kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_unwrap_or(kspl_ksplc_lsp_nav_get_definition_node(sema, path), null);
   }
-  return (ksplc_lsp_nav_Def_resolve_result){.def_node = def_node, .enum_node = enum_res.enum_node};
+  return (ksplc_lsp_nav_Def_resolve_result){.def_node = __kspl_tmp_001, .enum_node = enum_res.enum_node};
 }
 
 static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_written_type_name(ksplc_base_ast_Ast_node *n) {
@@ -80899,7 +80959,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_lsp_nav_written_type_name(k
   return KSPL_STR(std_lang_Slice_U8, "");
 }
 
-ksplc_lsp_nav_Enum_resolve_result kspl_ksplc_lsp_nav_resolve_enum_variant_def(ksplc_sema_session_ctx_Sema_ctx *sema, KSPL_UNUSED ksplc_base_ast_Ast_node *_root_file, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node) {
+static KSPL_UNUSED ksplc_lsp_nav_Enum_resolve_result kspl_priv_ksplc_lsp_nav_resolve_enum_variant_def(ksplc_sema_session_ctx_Sema_ctx *sema, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node) {
   ksplc_lsp_nav_Enum_resolve_result res = (ksplc_lsp_nav_Enum_resolve_result){.variant_node = null, .enum_node = null};
   KSPL_UNUSED Bool __kspl_tmp_001 = sema == null;
   if (!__kspl_tmp_001) {
@@ -80931,7 +80991,7 @@ ksplc_lsp_nav_Enum_resolve_result kspl_ksplc_lsp_nav_resolve_enum_variant_def(ks
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)745)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/nav"), (Sz)736)));
       KSPL_UNUSED Bool __kspl_tmp_006 = is_child;
       if (!__kspl_tmp_006) {
         __kspl_tmp_006 = child == target_node;
@@ -80984,7 +81044,7 @@ ksplc_lsp_nav_Enum_resolve_result kspl_ksplc_lsp_nav_resolve_enum_variant_def(ks
     else {
       __kspl_tmp_013 = __kspl_tmp_012.val;
     }
-    (void)(kspl_ksplc_lsp_nav_scan_enum_variant(__kspl_tmp_013, target_node, &res));
+    kspl_priv_ksplc_lsp_nav_scan_enum_variant(__kspl_tmp_013, target_node, &res);
   }
 
   return res;
@@ -83562,7 +83622,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lsp_hover_send_literal_type(ksplc_lsp_st
 }
 
 static KSPL_UNUSED void kspl_priv_ksplc_lsp_hover_resolve_hover_target(ksplc_lsp_state_Doc_state *state, std_ds_List_ksplc_base_ast_Ast_node_Ptr *path, ksplc_base_ast_Ast_node *target_node, ksplc_lsp_hover_Hover_ctx *ctx) {
-  ksplc_lsp_nav_Def_resolve_result def_res = kspl_ksplc_lsp_nav_resolve_def_node(state->sema, state->root_file, path, target_node);
+  ksplc_lsp_nav_Def_resolve_result def_res = kspl_ksplc_lsp_nav_resolve_def_node(state->sema, path, target_node);
   ctx->def_node = def_res.def_node;
   if (ctx->def_node != null) {
     kspl_priv_ksplc_lsp_hover_classify_def_node(state, ctx->def_node, def_res.enum_node, ctx);
@@ -84074,76 +84134,46 @@ static KSPL_UNUSED void kspl_priv_ksplc_lsp_hover_build_hover_def_code(ksplc_lsp
 
   std_lang_Slice_U8 def_file = kspl_ksplc_base_ast_Loc_file(ctx->def_node->loc);
   std_lang_Slice_U8 def_src = kspl_ksplc_base_core_source_of(state->sema->source_map, def_file);
-  if (def_src.len > (Sz)0) {
-    Sz offset = (Sz)ctx->def_node->loc.offset;
-    Sz span = kspl_ksplc_base_ast_Ast_node_get_span_length(ctx->def_node);
-    Sz actual_offset = offset;
-    if (actual_offset > def_src.len) {
-      actual_offset = def_src.len;
-      span = (Sz)0;
-    }
+  if (def_src.len == (Sz)0) {
+    return;
+  }
 
-    if ((Sz)((size_t)(actual_offset) + (size_t)(span)) > def_src.len) {
-      span = (Sz)((size_t)(def_src.len) - (size_t)(actual_offset));
-    }
-
-    Bool last_was_space = false;
-    Sz max_len = span;
-    if (max_len > (Sz)150) {
-      max_len = (Sz)150;
-    }
-
-    KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_asc(max_len);
+  KSPL_UNUSED Sz __kspl_tmp_001 = (Sz)ctx->def_node->loc.offset;
+  std_lang_Slice_U8 snippet = kspl_std_lang_Slice_U8_sub(def_src, __kspl_tmp_001, kspl_ksplc_base_ast_Ast_node_get_span_length(ctx->def_node));
+  Bool last_was_space = false;
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_for_coll1 = kspl_std_lang_Slice_U8_Const_sub(snippet, (Sz)0, (Sz)150);
+  {
     {
-      {
-        KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
-        for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-          KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
-          Sz i_char = __kspl_tmp_003;
-          U8 c_char = (*(def_src.ptr + actual_offset + i_char));
-          KSPL_UNUSED Bool __kspl_tmp_004 = c_char == 123;
-          if (!__kspl_tmp_004) {
-            __kspl_tmp_004 = c_char == 59;
-          }
-
-          if (__kspl_tmp_004) {
-            goto _mir_label_002;
-          }
-
-          KSPL_UNUSED Bool __kspl_tmp_007 = c_char == 10;
-          if (!__kspl_tmp_007) {
-            __kspl_tmp_007 = c_char == 13;
-          }
-
-          KSPL_UNUSED Bool __kspl_tmp_006 = __kspl_tmp_007;
-          if (!__kspl_tmp_006) {
-            __kspl_tmp_006 = c_char == 9;
-          }
-
-          KSPL_UNUSED Bool __kspl_tmp_005 = __kspl_tmp_006;
-          if (!__kspl_tmp_005) {
-            __kspl_tmp_005 = c_char == 32;
-          }
-
-          if (__kspl_tmp_005) {
-            if (!last_was_space) {
-              (void)(kspl_std_str_Str_builder_c(def_code, 32));
-              last_was_space = true;
-            }
-
-            goto _mir_label_001;
-          }
-
-          (void)(kspl_std_str_Str_builder_c(def_code, c_char));
-          last_was_space = false;
-        _mir_label_001:;
+      KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
+      for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
+        U8 c_char = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lsp/hover"), (Sz)657)));
+        KSPL_UNUSED Bool __kspl_tmp_004 = c_char == 123;
+        if (!__kspl_tmp_004) {
+          __kspl_tmp_004 = c_char == 59;
         }
+
+        if (__kspl_tmp_004) {
+          goto _mir_label_003;
+        }
+
+        if (kspl_U8_is_space(c_char)) {
+          if (!last_was_space) {
+            (void)(kspl_std_str_Str_builder_c(def_code, 32));
+            last_was_space = true;
+          }
+
+          goto _mir_label_002;
+        }
+
+        (void)(kspl_std_str_Str_builder_c(def_code, c_char));
+        last_was_space = false;
+      _mir_label_002:;
       }
-    _mir_label_002:;
     }
-    if (span > (Sz)150) {
-      (void)(kspl_std_str_Str_builder_s(def_code, KSPL_STR(std_lang_Slice_U8, "...")));
-    }
+  _mir_label_003:;
+  }
+  if (snippet.len > (Sz)150) {
+    (void)(kspl_std_str_Str_builder_s(def_code, KSPL_STR(std_lang_Slice_U8, "...")));
   }
 
   return;
@@ -84155,19 +84185,17 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_lsp_hover_write_owner_prefix(ksplc_lsp_s
     return false;
   }
 
-  if (state->sema == null) {
-    (void)(kspl_std_str_Str_builder_s(out, parent_name));
-  }
-
-  else {
-    std_str_Str_builder shown = kspl_ksplc_sema_type_env_Env_display_str_named(state->sema->env, parent_name);
-    (void)(kspl_std_str_Str_builder_s(out, kspl_std_str_Str_builder_slice(&shown)));
-    {
-      kspl_std_str_Str_builder_free(&shown);
-    }
-  }
+  std_str_Str_builder shown = kspl_ksplc_sema_type_env_Env_display_str_named(state->sema->env, parent_name);
+  (void)(kspl_std_str_Str_builder_s(out, kspl_std_str_Str_builder_slice(&shown)));
   (void)(kspl_std_str_Str_builder_c(out, 46));
-  return true;
+  KSPL_UNUSED Bool __kspl_tmp_001 = true;
+  {
+    kspl_std_str_Str_builder_free(&shown);
+  }
+  return __kspl_tmp_001;
+  {
+    kspl_std_str_Str_builder_free(&shown);
+  }
 }
 
 static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_lsp_hover_enclosing_impl_target(std_ds_List_ksplc_base_ast_Ast_node_Ptr *path) {
@@ -84200,14 +84228,12 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_lsp_hover_enclosing_impl_ta
 }
 
 static KSPL_UNUSED void kspl_priv_ksplc_lsp_hover_get_fqn_name(ksplc_lsp_state_Doc_state *state, ksplc_lsp_hover_Hover_ctx *ctx, ksplc_base_ast_Ast_node *target_node, std_str_Str_builder *fqn_name) {
-  std_lang_Slice_U8 name_str = target_node->text;
-  std_lang_Slice_U8 orig_name = name_str;
+  std_lang_Slice_U8 orig_name = target_node->text;
   ksplc_sema_type_scope_Sema_symbol *sym = null;
   if (ctx->def_node != null) {
     ksplc_base_ast_Ast_node *id_n = kspl_ksplc_base_ast_Ast_node_find_child(ctx->def_node, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier);
     if (id_n != null) {
-      name_str = id_n->text;
-      orig_name = name_str;
+      orig_name = id_n->text;
     }
 
     if (ctx->def_node->sym_ptr != null) {
@@ -84671,7 +84697,7 @@ std_lang_Option_ksplc_lsp_uses_Target kspl_ksplc_lsp_uses_target_at(ksplc_lsp_st
   default:
     __builtin_unreachable();
   }
-  ksplc_base_ast_Ast_node *def = kspl_ksplc_lsp_nav_resolve_def_node(state->sema, state->root_file, path, at).def_node;
+  ksplc_base_ast_Ast_node *def = kspl_ksplc_lsp_nav_resolve_def_node(state->sema, path, at).def_node;
   if (def != null) {
     KSPL_UNUSED std_lang_Option_ksplc_lsp_uses_Target __kspl_tmp_008 = (std_lang_Option_ksplc_lsp_uses_Target){.tag = kspl_std_lang_Option_ksplc_lsp_uses_Target_some, .payload.some = {(ksplc_lsp_uses_Target){.def = def, .name = name, .stands_for = null}}};
     {
@@ -86341,7 +86367,7 @@ Sz kspl_ksplc_gen_c_ctx_unit_for(std_lang_Slice_U8 file_path, Sz unit_count) {
     return (Sz)0;
   }
 
-  return (Sz)(kspl_std_lang_Slice_U8_Const_hash(file_path) % (U32)kspl_div_check((U32)unit_count, "ksplc/gen/c/ctx", 76));
+  return (Sz)(kspl_std_lang_Slice_U8_Const_hash(file_path) % (U32)kspl_div_check((U32)unit_count, "ksplc/gen/c/ctx", 77));
 }
 
 ksplc_gen_c_ctx_Genc_ctx *kspl_ksplc_gen_c_ctx_Genc_ctx_new(std_lang_Writer out, ksplc_sema_session_ctx_Sema_ctx *sema, std_ds_Map_std_lang_Slice_U8_Const_std_lang_Slice_U8 *source_map, ksplc_gen_c_ctx_Emit_split split) {
@@ -86575,9 +86601,9 @@ std_lang_Writer kspl_ksplc_gen_c_ctx_Genc_ctx_map_c_type_to_impl(ksplc_gen_c_ctx
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_007 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_007;
-      if (kspl_std_lang_Slice_U8_equals(base_str, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prims, i, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/ctx"), (Sz)312))))) {
+      if (kspl_std_lang_Slice_U8_equals(base_str, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prims, i, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/ctx"), (Sz)313))))) {
         KSPL_UNUSED std_lang_Writer __kspl_tmp_008 = res;
-        return ((__kspl_tmp_008).vtable->s((__kspl_tmp_008).obj, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prims, i, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/ctx"), (Sz)313)))));
+        return ((__kspl_tmp_008).vtable->s((__kspl_tmp_008).obj, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prims, i, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/ctx"), (Sz)314)))));
       }
     }
   }
@@ -88010,32 +88036,22 @@ I32 kspl_ksplc_base_ast_Ast_node_apply_type_coercion(ksplc_base_ast_Ast_node *r,
   }
 
   Bool is_ref = __kspl_tmp_035;
-  KSPL_UNUSED Bool __kspl_tmp_037 = kspl_ksplc_sema_type_env_Env_same_shape_ignoring_const(c->env, type_id, expected_id);
-  if (__kspl_tmp_037) {
-    KSPL_UNUSED Bool __kspl_tmp_038 = !is_ref;
-    if (!__kspl_tmp_038) {
-      KSPL_UNUSED Bool __kspl_tmp_039 = type_id != expected_id;
-      if (__kspl_tmp_039) {
-        __kspl_tmp_039 = kspl_ksplc_sema_type_env_Env_is_const_compatible(c->env, type_id, expected_id);
-      }
+  KSPL_UNUSED Bool __kspl_tmp_038 = kspl_ksplc_sema_type_env_Env_same_shape_ignoring_const(c->env, type_id, expected_id);
+  if (__kspl_tmp_038) {
+    __kspl_tmp_038 = !is_ref;
+  }
 
-      __kspl_tmp_038 = __kspl_tmp_039;
+  KSPL_UNUSED Bool __kspl_tmp_037 = __kspl_tmp_038;
+  if (!__kspl_tmp_037) {
+    KSPL_UNUSED Bool __kspl_tmp_039 = type_id != expected_id;
+    if (__kspl_tmp_039) {
+      __kspl_tmp_039 = kspl_ksplc_sema_type_env_Env_is_const_compatible(c->env, type_id, expected_id);
     }
 
-    __kspl_tmp_037 = __kspl_tmp_038;
+    __kspl_tmp_037 = __kspl_tmp_039;
   }
 
   if (__kspl_tmp_037) {
-    r->type_id = expected_id;
-    return expected_id;
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_040 = type_id != expected_id;
-  if (__kspl_tmp_040) {
-    __kspl_tmp_040 = kspl_ksplc_sema_type_env_Env_is_const_compatible(c->env, type_id, expected_id);
-  }
-
-  if (__kspl_tmp_040) {
     r->type_id = expected_id;
     return expected_id;
   }
@@ -92436,8 +92452,8 @@ static KSPL_UNUSED kspl_std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr_Re
   inst->flags.is_used = true;
   node->def_node = inst->node;
   {
-    ksplc_base_ast_Ast_node **_kspl_dst_52 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)((size_t)(node->children->len) - (size_t)((Sz)2)))->def_node);
-    *_kspl_dst_52 = inst->node;
+    ksplc_base_ast_Ast_node **_kspl_dst_53 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)((size_t)(node->children->len) - (size_t)((Sz)2)))->def_node);
+    *_kspl_dst_53 = inst->node;
   }
   return ((kspl_std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = (std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr){.tag = kspl_std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr_some, .payload.some = {inst}}});
 }
@@ -92727,8 +92743,8 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_resolve_p
   if (named.parts.owner == null) {
     if (node->children->len >= (Sz)1) {
       {
-        ksplc_base_ast_Ast_node **_kspl_dst_53 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)0)->def_node);
-        *_kspl_dst_53 = sym->node;
+        ksplc_base_ast_Ast_node **_kspl_dst_54 = &(kspl_ksplc_base_ast_Ast_node_get_child(node, (Sz)0)->def_node);
+        *_kspl_dst_54 = sym->node;
       }
     }
 
@@ -99022,26 +99038,25 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
   }
 
   else {
-    Bool is_void_ok = false;
-    KSPL_UNUSED Bool __kspl_tmp_002 = kspl_ksplc_sema_type_env_is_void(expected_id);
+    KSPL_UNUSED Bool __kspl_tmp_003 = kspl_ksplc_sema_type_env_is_void(expected_id);
+    if (!__kspl_tmp_003) {
+      __kspl_tmp_003 = kspl_ksplc_sema_type_env_is_unknown(expected_id);
+    }
+
+    KSPL_UNUSED Bool __kspl_tmp_002 = __kspl_tmp_003;
     if (!__kspl_tmp_002) {
-      __kspl_tmp_002 = kspl_ksplc_sema_type_env_is_unknown(expected_id);
-    }
-
-    if (__kspl_tmp_002) {
-      is_void_ok = true;
-    }
-
-    else
-        if (kspl_ksplc_sema_type_env_Env_is_result(c->env, expected_id)) {
-      if (kspl_ksplc_sema_type_env_is_void(kspl_ksplc_sema_type_env_Env_strip_result(c->env, expected_id))) {
-        is_void_ok = true;
+      KSPL_UNUSED Bool __kspl_tmp_004 = kspl_ksplc_sema_type_env_Env_is_result(c->env, expected_id);
+      if (__kspl_tmp_004) {
+        __kspl_tmp_004 = kspl_ksplc_sema_type_env_is_void(kspl_ksplc_sema_type_env_Env_strip_result(c->env, expected_id));
       }
+
+      __kspl_tmp_002 = __kspl_tmp_004;
     }
 
+    Bool is_void_ok = __kspl_tmp_002;
     if (!is_void_ok) {
-      KSPL_UNUSED std_str_Str_builder *__kspl_tmp_003 = kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "expected return value of type '"));
-      (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8(__kspl_tmp_003, kspl_ksplc_sema_type_env_Env_get_str(c->env, c->fn_ctx.ret_id)), KSPL_STR(std_lang_Slice_U8, "', but got none")));
+      KSPL_UNUSED std_str_Str_builder *__kspl_tmp_005 = kspl_std_str_Str_builder_s(kspl_ksplc_sema_session_ctx_Sema_ctx_clear_scratch(c), KSPL_STR(std_lang_Slice_U8, "expected return value of type '"));
+      (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8(__kspl_tmp_005, kspl_ksplc_sema_type_env_Env_get_str(c->env, c->fn_ctx.ret_id)), KSPL_STR(std_lang_Slice_U8, "', but got none")));
       kspl_ksplc_sema_session_ctx_Sema_ctx_err(c, r, kspl_std_str_Str_builder_slice(&c->scratch));
       KSPL_START_TRACE();
       return (kspl_Void_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = (ksplc_sema_session_ctx_Sema_error)kspl_ksplc_sema_session_ctx_Sema_error_analysis_failed};
@@ -99090,10 +99105,6 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
   ksplc_base_ast_Ast_node *expr_node = kspl_ksplc_base_ast_Ast_node_get_fallback_expr(r);
   if (expr_node != null) {
     I32 exp = c->fn_ctx.fallback_type;
-    if (exp == 0) {
-      exp = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
-    }
-
     Bool prev_in_fallback = c->fn_ctx.in_fallback_value;
     c->fn_ctx.in_fallback_value = true;
     KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_001 = kspl_ksplc_base_ast_Ast_node_infer_expr(expr_node, c, exp);
@@ -99164,7 +99175,7 @@ kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_base_ast_Ast_node_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *stmt = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/body/stmt"), (Sz)747)));
+      ksplc_base_ast_Ast_node *stmt = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/body/stmt"), (Sz)743)));
       KSPL_UNUSED kspl_Void_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_003 = kspl_ksplc_base_ast_Ast_node_infer_stmts(stmt, c);
       if (__kspl_tmp_003.is_err) {
         KSPL_RECORD_TRACE();
@@ -100431,8 +100442,8 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_dot_infer
     case kspl_std_lang_Option_ksplc_sema_decl_mono_name_Method_template_some: {
       KSPL_UNUSED ksplc_sema_decl_mono_name_Method_template _tmpl = __kspl_tmp_031.payload.some.value;
       {
-        I32 *_kspl_dst_54 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
-        *_kspl_dst_54 = owner_id;
+        I32 *_kspl_dst_55 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
+        *_kspl_dst_55 = owner_id;
       }
       return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)});
     }
@@ -100447,8 +100458,8 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_dot_infer
     case kspl_std_lang_Option_ksplc_sema_type_scope_Sema_symbol_Ptr_some: {
       KSPL_UNUSED ksplc_sema_type_scope_Sema_symbol *_sym = __kspl_tmp_032.payload.some.value;
       {
-        I32 *_kspl_dst_55 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
-        *_kspl_dst_55 = owner_id;
+        I32 *_kspl_dst_56 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
+        *_kspl_dst_56 = owner_id;
       }
       return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)});
     }
@@ -100460,8 +100471,8 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_dot_infer
     }
     if (kspl_ksplc_sema_session_ctx_Sema_ctx_has_failed_constraint(c, kspl_ksplc_sema_type_env_Env_base_type_name(c->env, owner_id))) {
       {
-        I32 *_kspl_dst_56 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
-        *_kspl_dst_56 = owner_id;
+        I32 *_kspl_dst_57 = &(kspl_ksplc_sema_decl_name_named_fn(node).owner->type_id);
+        *_kspl_dst_57 = owner_id;
       }
       return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)});
     }
@@ -101130,8 +101141,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_body_dot_edit_distance(std_lang_Slice
       KSPL_UNUSED Sz __kspl_tmp_004 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz j = __kspl_tmp_004;
       {
-        Sz *_kspl_dst_57 = &(row.data[kspl_bounds_check(j, 65, "ksplc/sema/body/dot", 638)]);
-        *_kspl_dst_57 = j;
+        Sz *_kspl_dst_58 = &(row.data[kspl_bounds_check(j, 65, "ksplc/sema/body/dot", 638)]);
+        *_kspl_dst_58 = j;
       }
     }
   }
@@ -101144,8 +101155,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_body_dot_edit_distance(std_lang_Slice
       before = last;
       last = row;
       {
-        Sz *_kspl_dst_58 = &(row.data[(Sz)0]);
-        *_kspl_dst_58 = (Sz)((size_t)(i) + (size_t)((Sz)1));
+        Sz *_kspl_dst_59 = &(row.data[(Sz)0]);
+        *_kspl_dst_59 = (Sz)((size_t)(i) + (size_t)((Sz)1));
       }
       KSPL_UNUSED std_lang_Range __kspl_for_coll2 = kspl_std_lang_Range_asc(b.len);
       {
@@ -101202,8 +101213,8 @@ static KSPL_UNUSED Sz kspl_priv_ksplc_sema_body_dot_edit_distance(std_lang_Slice
           }
 
           {
-            Sz *_kspl_dst_59 = &(row.data[kspl_bounds_check((Sz)((size_t)(j) + (size_t)((Sz)1)), 65, "ksplc/sema/body/dot", 651)]);
-            *_kspl_dst_59 = cost;
+            Sz *_kspl_dst_60 = &(row.data[kspl_bounds_check((Sz)((size_t)(j) + (size_t)((Sz)1)), 65, "ksplc/sema/body/dot", 651)]);
+            *_kspl_dst_60 = cost;
           }
         }
       }
@@ -101325,7 +101336,6 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_postfix_i
     kspl_ksplc_sema_session_ctx_Sema_ctx_information(c, left, KSPL_STR(std_lang_Slice_U8, "[I0309] Unnecessary explicit '$' dereference; '.' already auto-dereferences pointers."));
   }
 
-  I32 pass_expected_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
   I32 as_target_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
   KSPL_UNUSED Bool __kspl_tmp_010 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "::"));
   if (__kspl_tmp_010) {
@@ -101352,79 +101362,61 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_postfix_i
 
     as_target_id = __kspl_tmp_012.val;
     as_type_node->type_id = as_target_id;
-    pass_expected_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "@"))) {
-    pass_expected_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
-  }
-
-  else {
-    KSPL_UNUSED Bool __kspl_tmp_013 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "catch"));
-    if (!__kspl_tmp_013) {
-      __kspl_tmp_013 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "!"));
+  KSPL_UNUSED Bool __kspl_tmp_013 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "("));
+  if (__kspl_tmp_013) {
+    KSPL_UNUSED kspl_Bool_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_014 = kspl_ksplc_sema_body_dot_try_rewrite_enum_fmt(node, left, c);
+    if (__kspl_tmp_014.is_err) {
+      KSPL_RECORD_TRACE();
+      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_014.error_code};
     }
 
-    if (__kspl_tmp_013) {
-      if (!kspl_ksplc_sema_type_env_is_unknown(expected_id)) {
-        pass_expected_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
-      }
-    }
+    __kspl_tmp_013 = __kspl_tmp_014.val;
   }
-  KSPL_UNUSED Bool __kspl_tmp_014 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "("));
-  if (__kspl_tmp_014) {
-    KSPL_UNUSED kspl_Bool_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_015 = kspl_ksplc_sema_body_dot_try_rewrite_enum_fmt(node, left, c);
+
+  if (__kspl_tmp_013) {
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_015 = kspl_ksplc_sema_body_postfix_infer(node, c, expected_id);
     if (__kspl_tmp_015.is_err) {
       KSPL_RECORD_TRACE();
       return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_015.error_code};
     }
 
-    __kspl_tmp_014 = __kspl_tmp_015.val;
-  }
-
-  if (__kspl_tmp_014) {
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_016 = kspl_ksplc_sema_body_postfix_infer(node, c, expected_id);
-    if (__kspl_tmp_016.is_err) {
-      KSPL_RECORD_TRACE();
-      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_016.error_code};
-    }
-
-    return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_016.val});
+    return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_015.val});
   }
 
   I32 target_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
-  KSPL_UNUSED Bool __kspl_tmp_017 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "."));
-  if (__kspl_tmp_017) {
-    __kspl_tmp_017 = left->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_primitive_type;
+  KSPL_UNUSED Bool __kspl_tmp_016 = kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "."));
+  if (__kspl_tmp_016) {
+    __kspl_tmp_016 = left->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_primitive_type;
   }
 
-  if (__kspl_tmp_017) {
+  if (__kspl_tmp_016) {
     target_id = kspl_ksplc_sema_type_env_Env_get_or_add(c->env, left->text);
     left->type_id = target_id;
   }
 
   else {
     ksplc_base_ast_Ast_node *outer_callee = c->fn_ctx.callee;
-    KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_018 = {0};
+    KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_017 = {0};
     if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "("))) {
-      __kspl_tmp_018 = left;
+      __kspl_tmp_017 = left;
     }
 
     else {
-      __kspl_tmp_018 = null;
+      __kspl_tmp_017 = null;
     }
-    c->fn_ctx.callee = __kspl_tmp_018;
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_019 = kspl_ksplc_base_ast_Ast_node_infer_expr(left, c, pass_expected_id);
-    if (__kspl_tmp_019.is_err) {
+    c->fn_ctx.callee = __kspl_tmp_017;
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_018 = kspl_ksplc_base_ast_Ast_node_infer_expr(left, c, (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown));
+    if (__kspl_tmp_018.is_err) {
       {
         c->fn_ctx.callee = outer_callee;
       }
       KSPL_RECORD_TRACE();
-      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_019.error_code};
+      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_018.error_code};
     }
 
-    target_id = __kspl_tmp_019.val;
+    target_id = __kspl_tmp_018.val;
     {
       c->fn_ctx.callee = outer_callee;
     }
@@ -101434,7 +101426,18 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_postfix_i
   }
 
   if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "("))) {
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_020 = kspl_ksplc_sema_body_call_infer(c, node, left, target_id, expected_id);
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_019 = kspl_ksplc_sema_body_call_infer(c, node, left, target_id, expected_id);
+    if (__kspl_tmp_019.is_err) {
+      KSPL_RECORD_TRACE();
+      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_019.error_code};
+    }
+
+    return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_019.val});
+  }
+
+  if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "["))) {
+    I32 recv_id = kspl_ksplc_sema_type_env_Env_receiver_base_id(c->env, target_id);
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_020 = kspl_priv_ksplc_sema_body_postfix_infer_postfix_array(c, node, target_id, recv_id, expected_id);
     if (__kspl_tmp_020.is_err) {
       KSPL_RECORD_TRACE();
       return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_020.error_code};
@@ -101443,29 +101446,18 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_postfix_i
     return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_020.val});
   }
 
-  if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "["))) {
-    I32 recv_id = kspl_ksplc_sema_type_env_Env_receiver_base_id(c->env, target_id);
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_021 = kspl_priv_ksplc_sema_body_postfix_infer_postfix_array(c, node, target_id, recv_id, expected_id);
+  if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "::"))) {
+    return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = kspl_priv_ksplc_sema_body_postfix_infer_cast_postfix(c, node, target_id, as_target_id)});
+  }
+
+  if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "@"))) {
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_021 = kspl_priv_ksplc_sema_body_postfix_infer_address_postfix(c, node, left, target_id);
     if (__kspl_tmp_021.is_err) {
       KSPL_RECORD_TRACE();
       return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_021.error_code};
     }
 
     return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_021.val});
-  }
-
-  if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "::"))) {
-    return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = kspl_priv_ksplc_sema_body_postfix_infer_cast_postfix(c, node, target_id, as_target_id)});
-  }
-
-  if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "@"))) {
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_022 = kspl_priv_ksplc_sema_body_postfix_infer_address_postfix(c, node, left, target_id);
-    if (__kspl_tmp_022.is_err) {
-      KSPL_RECORD_TRACE();
-      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_022.error_code};
-    }
-
-    return ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_022.val});
   }
 
   if (kspl_std_lang_Slice_U8_Const_equals(op, KSPL_STR(std_lang_Slice_U8, "$"))) {
@@ -102099,7 +102091,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_sema_body_postfix_path_meant(ksplc_sema_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *part = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/body/postfix"), (Sz)434)));
+      ksplc_base_ast_Ast_node *part = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/body/postfix"), (Sz)425)));
       if (part->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier) {
         (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&dotted, part->text), 46));
       }
@@ -105073,8 +105065,8 @@ static KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_priv_k
     else
         if (left->children->len > (Sz)0) {
       {
-        ksplc_base_ast_Ast_node **_kspl_dst_60 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
-        *_kspl_dst_60 = inst_sym->node;
+        ksplc_base_ast_Ast_node **_kspl_dst_61 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
+        *_kspl_dst_61 = inst_sym->node;
       }
     }
   }
@@ -105349,7 +105341,6 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_call_infe
     }
   }
 
-  Bool is_generic_call = false;
   ksplc_sema_type_scope_Sema_symbol *sym = null;
   KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_017 = {0};
   if (named.fqn.len > (Sz)0) {
@@ -105432,8 +105423,8 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_call_infe
     left->def_node = sym->node;
     if (left->children->len > (Sz)0) {
       {
-        ksplc_base_ast_Ast_node **_kspl_dst_61 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
-        *_kspl_dst_61 = sym->node;
+        ksplc_base_ast_Ast_node **_kspl_dst_62 = &(kspl_ksplc_base_ast_Ast_node_last_child(left)->def_node);
+        *_kspl_dst_62 = sym->node;
       }
     }
 
@@ -105473,48 +105464,51 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_call_infe
     return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_027};
   }
 
-  if (generic_fn_ptr != null) {
-    is_generic_call = true;
-    if (named.reach == (ksplc_sema_decl_name_Name_reach)kspl_ksplc_sema_decl_name_Name_reach_by_fqn) {
-      kspl_ksplc_sema_session_ctx_Sema_ctx_report_name_by_fqn(c, node, named);
-    }
+  Bool is_generic_call = generic_fn_ptr != null;
+  KSPL_UNUSED Bool __kspl_tmp_028 = is_generic_call;
+  if (__kspl_tmp_028) {
+    __kspl_tmp_028 = named.reach == (ksplc_sema_decl_name_Name_reach)kspl_ksplc_sema_decl_name_Name_reach_by_fqn;
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_029 = !is_fn_ptr;
+  if (__kspl_tmp_028) {
+    kspl_ksplc_sema_session_ctx_Sema_ctx_report_name_by_fqn(c, node, named);
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_030 = !is_fn_ptr;
+  if (__kspl_tmp_030) {
+    __kspl_tmp_030 = !is_method_access;
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_029 = __kspl_tmp_030;
   if (__kspl_tmp_029) {
-    __kspl_tmp_029 = !is_method_access;
+    __kspl_tmp_029 = kspl_priv_ksplc_sema_body_call_refuses_value_called(c, node, sym, target_id);
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_028 = __kspl_tmp_029;
-  if (__kspl_tmp_028) {
-    __kspl_tmp_028 = kspl_priv_ksplc_sema_body_call_refuses_value_called(c, node, sym, target_id);
-  }
-
-  if (__kspl_tmp_028) {
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_030 = ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)});
+  if (__kspl_tmp_029) {
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_031 = ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown)});
     {
       kspl_std_str_Str_builder_free(&base_fn_name);
     }
-    return __kspl_tmp_030;
+    return __kspl_tmp_031;
   }
 
   std_lang_Slice_U8 op_text = node->text;
   ksplc_base_ast_Ast_node *args_node = kspl_ksplc_base_ast_Ast_node_get_postfix_member(node);
   if (is_fn_ptr) {
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_031 = kspl_priv_ksplc_sema_body_call_infer_value_call(c, node, target_id, args_node);
-    if (__kspl_tmp_031.is_err) {
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_032 = kspl_priv_ksplc_sema_body_call_infer_value_call(c, node, target_id, args_node);
+    if (__kspl_tmp_032.is_err) {
       {
         kspl_std_str_Str_builder_free(&base_fn_name);
       }
       KSPL_RECORD_TRACE();
-      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_031.error_code};
+      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_032.error_code};
     }
 
-    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_032 = ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_031.val});
+    KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_033 = ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = __kspl_tmp_032.val});
     {
       kspl_std_str_Str_builder_free(&base_fn_name);
     }
-    return __kspl_tmp_032;
+    return __kspl_tmp_033;
   }
 
   I32 type_id = (I32)((ksplc_sema_type_env_Builtin_type_id)kspl_ksplc_sema_type_env_Builtin_type_id_unknown);
@@ -105534,45 +105528,18 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_call_infe
 
   if (args_node != null) {
     ksplc_base_ast_Ast_node *def_node = kspl_priv_ksplc_sema_body_call_callee_decl(left, sym, generic_fn_ptr, is_method_access);
-    KSPL_UNUSED Bool __kspl_tmp_033 = is_method_access;
-    if (__kspl_tmp_033) {
-      __kspl_tmp_033 = def_node != null;
+    KSPL_UNUSED Bool __kspl_tmp_034 = is_method_access;
+    if (__kspl_tmp_034) {
+      __kspl_tmp_034 = def_node != null;
     }
 
-    if (__kspl_tmp_033) {
+    if (__kspl_tmp_034) {
       kspl_priv_ksplc_sema_body_call_check_method_receiver_lvalue(c, left, def_node);
     }
 
-    ksplc_base_ast_Ast_node *arg_def = def_node;
-    Bool args_generic = is_generic_call;
+    KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_035 = {0};
     if (is_generic_call) {
-      KSPL_UNUSED kspl_ksplc_base_ast_Ast_node_Ptr_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_034 = kspl_priv_ksplc_sema_body_call_instance_for_written_args(c, node, fn_tmpl, written, def_node);
-      if (__kspl_tmp_034.is_err) {
-        {
-          kspl_std_str_Str_builder_free(&base_fn_name);
-        }
-        KSPL_RECORD_TRACE();
-        return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_034.error_code};
-      }
-
-      ksplc_base_ast_Ast_node *inst_node = __kspl_tmp_034.val;
-      if (inst_node != null) {
-        arg_def = inst_node;
-        args_generic = false;
-      }
-    }
-
-    KSPL_UNUSED kspl_Void_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_035 = kspl_ksplc_sema_body_call_args_infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic);
-    if (__kspl_tmp_035.is_err) {
-      {
-        kspl_std_str_Str_builder_free(&base_fn_name);
-      }
-      KSPL_RECORD_TRACE();
-      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_035.error_code};
-    }
-
-    if (is_generic_call) {
-      KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_036 = kspl_priv_ksplc_sema_body_call_infer_generic_call_result(c, node, left, fn_tmpl, written, is_method_access, def_node, args_node, type_id);
+      KSPL_UNUSED kspl_ksplc_base_ast_Ast_node_Ptr_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_036 = kspl_priv_ksplc_sema_body_call_instance_for_written_args(c, node, fn_tmpl, written, def_node);
       if (__kspl_tmp_036.is_err) {
         {
           kspl_std_str_Str_builder_free(&base_fn_name);
@@ -105581,15 +105548,56 @@ kspl_I32_Result_ksplc_sema_session_ctx_Sema_error kspl_ksplc_sema_body_call_infe
         return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_036.error_code};
       }
 
-      type_id = __kspl_tmp_036.val;
+      __kspl_tmp_035 = __kspl_tmp_036.val;
+    }
+
+    else {
+      __kspl_tmp_035 = (ksplc_base_ast_Ast_node *)null;
+    }
+    ksplc_base_ast_Ast_node *inst_node = __kspl_tmp_035;
+    KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_037 = {0};
+    if (inst_node != null) {
+      __kspl_tmp_037 = inst_node;
+    }
+
+    else {
+      __kspl_tmp_037 = def_node;
+    }
+    ksplc_base_ast_Ast_node *arg_def = __kspl_tmp_037;
+    KSPL_UNUSED Bool __kspl_tmp_038 = is_generic_call;
+    if (__kspl_tmp_038) {
+      __kspl_tmp_038 = inst_node == null;
+    }
+
+    Bool args_generic = __kspl_tmp_038;
+    KSPL_UNUSED kspl_Void_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_039 = kspl_ksplc_sema_body_call_args_infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic);
+    if (__kspl_tmp_039.is_err) {
+      {
+        kspl_std_str_Str_builder_free(&base_fn_name);
+      }
+      KSPL_RECORD_TRACE();
+      return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_039.error_code};
+    }
+
+    if (is_generic_call) {
+      KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_040 = kspl_priv_ksplc_sema_body_call_infer_generic_call_result(c, node, left, fn_tmpl, written, is_method_access, def_node, args_node, type_id);
+      if (__kspl_tmp_040.is_err) {
+        {
+          kspl_std_str_Str_builder_free(&base_fn_name);
+        }
+        KSPL_RECORD_TRACE();
+        return (kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = true, .error_code = __kspl_tmp_040.error_code};
+      }
+
+      type_id = __kspl_tmp_040.val;
     }
   }
 
-  KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_037 = ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = type_id});
+  KSPL_UNUSED kspl_I32_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_041 = ((kspl_I32_Result_ksplc_sema_session_ctx_Sema_error){.is_err = false, .val = type_id});
   {
     kspl_std_str_Str_builder_free(&base_fn_name);
   }
-  return __kspl_tmp_037;
+  return __kspl_tmp_041;
   {
     kspl_std_str_Str_builder_free(&base_fn_name);
   }
@@ -105845,7 +105853,7 @@ static KSPL_UNUSED kspl_Void_Result_ksplc_sema_session_ctx_Sema_error kspl_priv_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *ch = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/body/call"), (Sz)616)));
+      ksplc_base_ast_Ast_node *ch = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/sema/body/call"), (Sz)612)));
       if (kspl_ksplc_base_ast_Ast_node_is_literal(ch, KSPL_STR(std_lang_Slice_U8, ","))) {
         goto _mir_label_001;
       }
@@ -107792,7 +107800,7 @@ void kspl_ksplc_base_ast_Ast_node_apply_abi_recursive(ksplc_base_ast_Ast_node *r
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/abi"), (Sz)34)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/abi"), (Sz)35)));
       kspl_ksplc_base_ast_Ast_node_apply_abi_recursive(child, c);
     }
   }
@@ -109294,8 +109302,8 @@ ksplc_base_ast_Ast_node *kspl_ksplc_lower_expr_build_linked_method_call(ksplc_ba
   ksplc_base_ast_Ast_node *m_acc = kspl_ksplc_base_ast_Ast_node_get_child(call_node, (Sz)0);
   m_acc->def_node = method_node;
   {
-    ksplc_base_ast_Ast_node **_kspl_dst_62 = &(kspl_ksplc_base_ast_Ast_node_get_child(m_acc, (Sz)1)->def_node);
-    *_kspl_dst_62 = method_node;
+    ksplc_base_ast_Ast_node **_kspl_dst_63 = &(kspl_ksplc_base_ast_Ast_node_get_child(m_acc, (Sz)1)->def_node);
+    *_kspl_dst_63 = method_node;
   }
   return call_node;
 }
@@ -110277,7 +110285,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_arc_expand_place_index_ops(ksplc_l
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)101)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)102)));
       kspl_priv_ksplc_lower_arc_expand_place_index_ops(lctx, child, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
     }
   }
@@ -110394,7 +110402,7 @@ static KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_priv_ksplc_l
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *op = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)176)));
+      ksplc_base_ast_Ast_node *op = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)177)));
       (void)(kspl_ksplc_base_ast_Ast_node_add_child(body, op));
     }
   }
@@ -110488,7 +110496,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_arc_emit_arc_owned_positions(ksplc
     {
       KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
       for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll3->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *op = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)224)));
+        ksplc_base_ast_Ast_node *op = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)225)));
         (void)(kspl_ksplc_base_ast_Ast_node_add_child(ok_block, op));
       }
     }
@@ -110537,7 +110545,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_arc_emit_managed_enum_op(ksplc_low
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll3->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)271)));
+      ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)272)));
       KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_006 = kspl_ksplc_base_ast_Ast_node_new((ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_case_pattern, KSPL_STR(std_lang_Slice_U8, "pattern"), loc);
       KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_005 = kspl_ksplc_base_ast_Ast_node_add_child(__kspl_tmp_006, kspl_ksplc_base_ast_Ast_node_new((ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_literal, KSPL_STR(std_lang_Slice_U8, "."), loc));
       ksplc_base_ast_Ast_node *pat = kspl_ksplc_base_ast_Ast_node_add_child(__kspl_tmp_005, kspl_ksplc_base_ast_Ast_node_new((ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier, v->name, loc));
@@ -110546,7 +110554,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_arc_emit_managed_enum_op(ksplc_low
       {
         KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
         for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-          ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)277)));
+          ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)278)));
           std_lang_Slice_U8 bind_name = kspl_ksplc_lower_ctx_Lowering_ctx_gen_indexed_name(lctx, kspl_priv_ksplc_lower_arc_arc_payload_bind_prefix);
           ksplc_base_ast_Ast_node *bind_node = kspl_ksplc_base_ast_Ast_node_build_ident(bind_name, f->type_id, loc);
           (void)(kspl_ksplc_base_ast_Ast_node_add_child(pat, bind_node));
@@ -110569,7 +110577,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_arc_emit_managed_enum_op(ksplc_low
       {
         KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
         for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll2->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-          ksplc_base_ast_Ast_node *op = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)292)));
+          ksplc_base_ast_Ast_node *op = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)293)));
           (void)(kspl_ksplc_base_ast_Ast_node_add_child(block, op));
         }
       }
@@ -110724,12 +110732,12 @@ ksplc_lower_arc_Arc_take kspl_ksplc_lower_arc_Arc_take_decide(ksplc_base_ast_Ast
     break;
   }
   case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_none: {
+    take.once_lowered = kspl_ksplc_base_ast_Ast_node_arc_read_once_lowered(value, lctx);
     break;
   }
   default:
     __builtin_unreachable();
   }
-  take.once_lowered = kspl_ksplc_base_ast_Ast_node_arc_read_once_lowered(value, lctx);
   return take;
 }
 
@@ -110803,7 +110811,7 @@ static KSPL_UNUSED ksplc_base_ast_Ast_node *kspl_priv_ksplc_lower_arc_arc_releas
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *s = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)470)));
+      ksplc_base_ast_Ast_node *s = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)472)));
       (void)(kspl_ksplc_base_ast_Ast_node_add_child(block, s));
     }
   }
@@ -111005,33 +111013,12 @@ std_lang_Option_ksplc_base_ast_Ast_node_Ptr kspl_ksplc_base_ast_Ast_node_arc_bar
 }
 
 Bool kspl_ksplc_base_ast_Ast_node_arc_read_once_lowered(ksplc_base_ast_Ast_node *r, ksplc_lower_ctx_Lowering_ctx *lctx) {
-  KSPL_UNUSED Bool __kspl_tmp_001 = r == null;
+  KSPL_UNUSED Bool __kspl_tmp_001 = kspl_ksplc_base_ast_Ast_node_arc_pointer_read(r, lctx, (Sz)0);
   if (!__kspl_tmp_001) {
-    __kspl_tmp_001 = !kspl_ksplc_sema_type_env_Env_type_is_managed(lctx->sema->env, r->type_id);
+    __kspl_tmp_001 = kspl_ksplc_base_ast_Ast_node_arc_part_of_fresh(r, lctx, (Sz)0);
   }
 
-  if (__kspl_tmp_001) {
-    return false;
-  }
-
-  KSPL_UNUSED std_lang_Option_ksplc_base_ast_Ast_node_Ptr __kspl_tmp_002 = kspl_ksplc_base_ast_Ast_node_arc_bare_copy_source(r);
-  switch (__kspl_tmp_002.tag) {
-  case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_some: {
-    KSPL_UNUSED ksplc_base_ast_Ast_node *_src = __kspl_tmp_002.payload.some.value;
-    return false;
-  }
-  case kspl_std_lang_Option_ksplc_base_ast_Ast_node_Ptr_none: {
-    break;
-  }
-  default:
-    __builtin_unreachable();
-  }
-  KSPL_UNUSED Bool __kspl_tmp_003 = kspl_ksplc_base_ast_Ast_node_arc_pointer_read(r, lctx, (Sz)0);
-  if (!__kspl_tmp_003) {
-    __kspl_tmp_003 = kspl_ksplc_base_ast_Ast_node_arc_part_of_fresh(r, lctx, (Sz)0);
-  }
-
-  return __kspl_tmp_003;
+  return __kspl_tmp_001;
 }
 
 Bool kspl_ksplc_base_ast_Ast_node_arc_pointer_read(ksplc_base_ast_Ast_node *r, ksplc_lower_ctx_Lowering_ctx *lctx, Sz depth) {
@@ -111198,7 +111185,7 @@ Bool kspl_ksplc_base_ast_Ast_node_arc_has_call(ksplc_base_ast_Ast_node *r, Sz de
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)653)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)652)));
       if (kspl_ksplc_base_ast_Ast_node_arc_has_call(child, (Sz)((size_t)(depth) + (size_t)((Sz)1)))) {
         return true;
       }
@@ -111277,7 +111264,7 @@ void kspl_ksplc_base_ast_Ast_node_lower_arc_aggregate_literal(ksplc_base_ast_Ast
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)691)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/arc"), (Sz)690)));
       if (child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_field_init) {
         KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_003 = child;
         KSPL_UNUSED Sz __kspl_tmp_004 = (Sz)((size_t)(child->children->len) - (size_t)((Sz)1));
@@ -112126,7 +112113,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_collect_fn_defs(ksplc_base_a
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)46)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)47)));
       kspl_priv_ksplc_lower_prune_collect_fn_defs(child, out, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
     }
   }
@@ -112163,7 +112150,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_mark_referenced_fns(ksplc_ba
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)57)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)58)));
       kspl_priv_ksplc_lower_prune_mark_referenced_fns(child, w, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
     }
   }
@@ -112196,7 +112183,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_mark_export_roots(ksplc_base
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)71)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)72)));
       kspl_priv_ksplc_lower_prune_mark_export_roots(child, w, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
     }
   }
@@ -112234,7 +112221,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_mark_roots(ksplc_base_ast_As
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)91)));
+      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)92)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(child_node);
       KSPL_UNUSED Bool __kspl_tmp_005 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
       if (!__kspl_tmp_005) {
@@ -112259,7 +112246,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_drop_unreached(ksplc_base_as
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)111)));
+      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)112)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(child_node);
       if (child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_impl) {
         kspl_priv_ksplc_lower_prune_drop_unreached(child, reached);
@@ -112398,7 +112385,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_mark_referenced_types(ksplc_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)170)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)171)));
       kspl_priv_ksplc_lower_prune_mark_referenced_types(child, c, seen, work, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
     }
   }
@@ -112420,7 +112407,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_mark_type_members(ksplc_sema
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)188)));
+        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)189)));
         kspl_priv_ksplc_lower_prune_mark_type(c, seen, work, f->type_id);
       }
     }
@@ -112441,12 +112428,12 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_mark_type_members(ksplc_sema
     {
       KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
       for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll3->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-        ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)192)));
+        ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)193)));
         KSPL_UNUSED std_ds_List_ksplc_sema_type_def_Struct_field_Ptr *__kspl_for_coll2 = v->payload_fields;
         {
           KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
           for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll2->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-            ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)193)));
+            ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)194)));
             kspl_priv_ksplc_lower_prune_mark_type(c, seen, work, f->type_id);
           }
         }
@@ -112481,7 +112468,7 @@ void kspl_ksplc_lower_prune_prune_unreachable_types(ksplc_base_ast_Ast_node *roo
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)214)));
+      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)215)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(child_node);
       KSPL_UNUSED kspl_Bool_Result_std_ds_Ds_error __kspl_tmp_006 = kspl_std_ds_Map_Sz_Bool_get(insts, (Sz)child);
       KSPL_UNUSED Bool __kspl_tmp_007 = {0};
@@ -112504,7 +112491,7 @@ void kspl_ksplc_lower_prune_prune_unreachable_types(ksplc_base_ast_Ast_node *roo
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_sema_session_state_Folded_layout f = (*(kspl_std_ds_List_ksplc_sema_session_state_Folded_layout_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)220)));
+      ksplc_sema_session_state_Folded_layout f = (*(kspl_std_ds_List_ksplc_sema_session_state_Folded_layout_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)221)));
       kspl_priv_ksplc_lower_prune_mark_type(c, seen, work, f.type_id);
     }
   }
@@ -112547,7 +112534,7 @@ void kspl_ksplc_lower_prune_prune_unreachable_types(ksplc_base_ast_Ast_node *roo
   {
     KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
     for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll3->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)235)));
+      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)236)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(child_node);
       KSPL_UNUSED kspl_Bool_Result_std_ds_Ds_error __kspl_tmp_019 = kspl_std_ds_Map_Sz_Bool_get(insts, (Sz)child);
       KSPL_UNUSED Bool __kspl_tmp_020 = {0};
@@ -112634,7 +112621,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_lower_prune_names_dropped_inst(ksplc_sem
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        I32 p = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)265)));
+        I32 p = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)266)));
         if (kspl_priv_ksplc_lower_prune_names_dropped_inst(c, p, insts, reached, (Sz)((size_t)(depth) + (size_t)((Sz)1)))) {
           return true;
         }
@@ -112690,7 +112677,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_drop_orphan_complex_types(ks
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 tid = (*(kspl_std_lang_Slice_I32_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)286)));
+      I32 tid = (*(kspl_std_lang_Slice_I32_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)287)));
       Bool keep = !kspl_priv_ksplc_lower_prune_names_dropped_inst(c, tid, insts, reached, (Sz)0);
       KSPL_UNUSED ksplc_sema_type_env_Info __kspl_tmp_003 = kspl_ksplc_sema_type_env_Env_get_info(c->env, tid);
       switch (__kspl_tmp_003.tag) {
@@ -112727,7 +112714,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_lower_prune_drop_orphan_complex_types(ks
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      I32 tid = (*(kspl_std_lang_Slice_I32_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)295)));
+      I32 tid = (*(kspl_std_lang_Slice_I32_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)296)));
       kspl_std_ds_List_I32_push(c->env->complex_types, tid);
     }
   }
@@ -112742,7 +112729,7 @@ void kspl_ksplc_lower_prune_prune_unreachable_fns(ksplc_base_ast_Ast_node *root,
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)306)));
+      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)307)));
       kspl_priv_ksplc_lower_prune_collect_fn_defs(kspl_ksplc_base_ast_Ast_node_unwrap_top_level(child_node), defs, (Sz)0);
     }
   }
@@ -112831,7 +112818,7 @@ Bool kspl_ksplc_base_ast_Ast_node_is_alive_for_backend(ksplc_base_ast_Ast_node *
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *ch = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)347)));
+        ksplc_base_ast_Ast_node *ch = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)348)));
         KSPL_UNUSED Bool __kspl_tmp_010 = ch->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
         if (__kspl_tmp_010) {
           __kspl_tmp_010 = kspl_ksplc_base_ast_Ast_node_is_alive_for_backend(ch);
@@ -112850,7 +112837,7 @@ Bool kspl_ksplc_base_ast_Ast_node_is_alive_for_backend(ksplc_base_ast_Ast_node *
     {
       KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
       for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *ch = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)352)));
+        ksplc_base_ast_Ast_node *ch = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/lower/prune"), (Sz)353)));
         KSPL_UNUSED ksplc_base_ast_kinds_Ast_kind __kspl_tmp_013 = ch->kind_id;
         switch (__kspl_tmp_013) {
         case kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn_proto:
@@ -113094,7 +113081,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_param_list(ksplc_base_ast_Ast_node *r, ks
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)154)));
+        ksplc_base_ast_Ast_node *item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)155)));
         if (item->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_fn_param) {
           if (!is_first) {
             (void)(kspl_ksplc_gen_c_ctx_Genc_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, ", ")));
@@ -113178,7 +113165,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_forward_declarations(ksplc_base_ast_Ast_n
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)189)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)190)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       if (!kspl_ksplc_base_ast_Ast_node_is_emittable(child)) {
         goto _mir_label_001;
@@ -113213,7 +113200,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_function_prototypes(ksplc_base_ast_Ast_no
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll2->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)210)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)211)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       if (!kspl_ksplc_base_ast_Ast_node_is_emittable(child)) {
         goto _mir_label_001;
@@ -113238,7 +113225,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_function_prototypes(ksplc_base_ast_Ast_no
         {
           KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
           for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-            ksplc_base_ast_Ast_node *m = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)223)));
+            ksplc_base_ast_Ast_node *m = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)224)));
             KSPL_UNUSED Bool __kspl_tmp_006 = m->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
             if (__kspl_tmp_006) {
               __kspl_tmp_006 = kspl_ksplc_base_ast_Ast_node_is_emittable(m);
@@ -113268,7 +113255,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_fwd_extern_decls(ksplc_base_ast_Ast_node 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll2->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)229)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)230)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       KSPL_UNUSED Bool __kspl_tmp_004 = child->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_extern;
       if (__kspl_tmp_004) {
@@ -113288,7 +113275,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_fwd_extern_decls(ksplc_base_ast_Ast_node 
       {
         KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
         for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-          ksplc_base_ast_Ast_node *item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)234)));
+          ksplc_base_ast_Ast_node *item = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)235)));
           if (kspl_ksplc_base_ast_Ast_node_is_alive_for_backend(item)) {
             kspl_ksplc_base_ast_Ast_node_emit_fwd_extern_item(item, cg);
           }
@@ -113589,7 +113576,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_fwd_externs_and_embeds(ksplc_base_ast_Ast
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)436)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)437)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       if (!kspl_ksplc_base_ast_Ast_node_is_emittable(child)) {
         goto _mir_label_001;
@@ -113664,7 +113651,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_fwd_aliases(ksplc_base_ast_Ast_node *r, k
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)480)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)481)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       KSPL_UNUSED Bool __kspl_tmp_005 = child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_typedef;
       if (__kspl_tmp_005) {
@@ -113903,12 +113890,12 @@ void kspl_ksplc_gen_c_decl_emit_single_complex_type(ksplc_gen_c_ctx_Genc_ctx *cg
 }
 
 static KSPL_UNUSED void kspl_priv_ksplc_gen_c_decl_emit_complex_types_fwd(ksplc_gen_c_ctx_Genc_ctx *cg) {
-  ksplc_sema_type_env_Mangle_seen seen = kspl_ksplc_sema_type_env_Mangle_seen_new(cg->env);
+  ksplc_sema_type_naming_Mangle_seen seen = kspl_ksplc_sema_type_naming_Mangle_seen_new(cg->env);
   KSPL_UNUSED std_ds_List_I32 *__kspl_for_coll1 = cg->env->complex_types;
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 type_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)599)));
+      I32 type_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)600)));
       KSPL_UNUSED ksplc_sema_type_env_Info __kspl_tmp_003 = kspl_ksplc_sema_type_env_Env_get_info(cg->env, type_id);
       switch (__kspl_tmp_003.tag) {
       case kspl_ksplc_sema_type_env_Info_array: {
@@ -113916,7 +113903,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_gen_c_decl_emit_complex_types_fwd(ksplc_
         I32 size = __kspl_tmp_003.payload.array.size;
         KSPL_UNUSED Bool __kspl_tmp_004 = size != (I32)((U32)(0) - (U32)(1));
         if (__kspl_tmp_004) {
-          __kspl_tmp_004 = kspl_ksplc_sema_type_env_Mangle_seen_admit(&seen, type_id);
+          __kspl_tmp_004 = kspl_ksplc_sema_type_naming_Mangle_seen_admit(&seen, type_id);
         }
 
         if (__kspl_tmp_004) {
@@ -113929,7 +113916,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_gen_c_decl_emit_complex_types_fwd(ksplc_
       case kspl_ksplc_sema_type_env_Info_result: {
         KSPL_UNUSED I32 _base_id = __kspl_tmp_003.payload.result.base_id;
         KSPL_UNUSED I32 _err_id = __kspl_tmp_003.payload.result.err_id;
-        if (kspl_ksplc_sema_type_env_Mangle_seen_admit(&seen, type_id)) {
+        if (kspl_ksplc_sema_type_naming_Mangle_seen_admit(&seen, type_id)) {
           std_lang_Slice_U8 m_slice = kspl_ksplc_gen_c_ctx_Genc_ctx_mangled_in_scratch(cg, type_id);
           (void)(kspl_ksplc_gen_c_ctx_Genc_ctx_s(kspl_std_lang_put_ksplc_gen_c_ctx_Genc_ctx_Ptr_std_lang_Slice_U8(kspl_ksplc_gen_c_ctx_Genc_ctx_s(kspl_std_lang_put_ksplc_gen_c_ctx_Genc_ctx_Ptr_std_lang_Slice_U8(kspl_ksplc_gen_c_ctx_Genc_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "typedef struct kspl_")), m_slice), KSPL_STR(std_lang_Slice_U8, " kspl_")), m_slice), KSPL_STR(std_lang_Slice_U8, ";\n")));
         }
@@ -113942,11 +113929,11 @@ static KSPL_UNUSED void kspl_priv_ksplc_gen_c_decl_emit_complex_types_fwd(ksplc_
     }
   }
   {
-    kspl_ksplc_sema_type_env_Mangle_seen_free(&seen);
+    kspl_ksplc_sema_type_naming_Mangle_seen_free(&seen);
   }
   return;
   {
-    kspl_ksplc_sema_type_env_Mangle_seen_free(&seen);
+    kspl_ksplc_sema_type_naming_Mangle_seen_free(&seen);
   }
 }
 
@@ -114060,7 +114047,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_gen_c_decl_alias_refs_waiting(ksplc_gen_
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)672)));
+        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/decl"), (Sz)673)));
         kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_push(&queue, child);
       }
     }
@@ -114368,7 +114355,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_block_inline(ksplc_base_ast_Ast_node *r, 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/stmt"), (Sz)156)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/stmt"), (Sz)157)));
       kspl_ksplc_base_ast_Ast_node_emit(child, c);
     }
   }
@@ -114660,7 +114647,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_loop_stmt(ksplc_base_ast_Ast_node *r, ksp
       {
         KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
         for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-          ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/stmt"), (Sz)327)));
+          ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/stmt"), (Sz)328)));
           kspl_ksplc_base_ast_Ast_node_emit(child, c);
         }
       }
@@ -114836,13 +114823,16 @@ void kspl_ksplc_base_ast_Ast_node_emit_switch_stmt(ksplc_base_ast_Ast_node *r, k
           }
         _mir_label_010:;
         }
-        Bool def_jumps = false;
         if (def_block != null) {
           kspl_ksplc_base_ast_Ast_node_emit(def_block, c);
-          def_jumps = kspl_ksplc_base_ast_Ast_node_block_ends_in_jump(def_block);
         }
 
-        if (!def_jumps) {
+        KSPL_UNUSED Bool __kspl_tmp_011 = def_block == null;
+        if (!__kspl_tmp_011) {
+          __kspl_tmp_011 = !kspl_ksplc_base_ast_Ast_node_block_ends_in_jump(def_block);
+        }
+
+        if (__kspl_tmp_011) {
           (void)(kspl_ksplc_gen_c_ctx_Genc_ctx_s(c, KSPL_STR(std_lang_Slice_U8, "        break;\n")));
         }
 
@@ -114850,17 +114840,17 @@ void kspl_ksplc_base_ast_Ast_node_emit_switch_stmt(ksplc_base_ast_Ast_node *r, k
       }
     }
   }
-  KSPL_UNUSED Bool __kspl_tmp_012 = is_enum;
-  if (!__kspl_tmp_012) {
-    __kspl_tmp_012 = is_bool;
+  KSPL_UNUSED Bool __kspl_tmp_013 = is_enum;
+  if (!__kspl_tmp_013) {
+    __kspl_tmp_013 = is_bool;
   }
 
-  KSPL_UNUSED Bool __kspl_tmp_011 = __kspl_tmp_012;
-  if (__kspl_tmp_011) {
-    __kspl_tmp_011 = !has_default;
+  KSPL_UNUSED Bool __kspl_tmp_012 = __kspl_tmp_013;
+  if (__kspl_tmp_012) {
+    __kspl_tmp_012 = !has_default;
   }
 
-  if (__kspl_tmp_011) {
+  if (__kspl_tmp_012) {
     (void)(kspl_ksplc_gen_c_ctx_Genc_ctx_s(c, KSPL_STR(std_lang_Slice_U8, "    default: __builtin_unreachable();\n")));
   }
 
@@ -115741,7 +115731,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_gen_c_root_emit_layout_checks(ksplc_gen_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      U8 ch = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)60)));
+      U8 ch = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)61)));
       KSPL_UNUSED U8 __kspl_tmp_003 = {0};
       if (kspl_U8_is_alnum(ch)) {
         __kspl_tmp_003 = ch;
@@ -115826,7 +115816,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_gen_c_root_emit_main_error_return(ksplc_
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)90)));
+        ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)91)));
         (void)(kspl_ksplc_gen_c_ctx_Genc_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "  case ")));
         kspl_ksplc_gen_c_literal_emit_folded_i64(cg, v->tag_value);
         KSPL_UNUSED ksplc_gen_c_ctx_Genc_ctx *__kspl_tmp_009 = kspl_ksplc_gen_c_ctx_Genc_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, ": _name = \""));
@@ -115930,7 +115920,7 @@ void kspl_ksplc_base_ast_Ast_node_collect_pending_nodes(ksplc_base_ast_Ast_node 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)151)));
+      ksplc_base_ast_Ast_node *child_node = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)152)));
       ksplc_base_ast_Ast_node *child = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(child_node);
       ksplc_base_ast_kinds_Ast_kind k = child->kind_id;
       KSPL_UNUSED Bool __kspl_tmp_004 = k == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_struct;
@@ -115950,20 +115940,19 @@ void kspl_ksplc_base_ast_Ast_node_collect_pending_nodes(ksplc_base_ast_Ast_node 
       }
     }
   }
-  ksplc_sema_type_env_Mangle_seen seen = kspl_ksplc_sema_type_env_Mangle_seen_new(cg->env);
+  ksplc_sema_type_naming_Mangle_seen seen = kspl_ksplc_sema_type_naming_Mangle_seen_new(cg->env);
   KSPL_UNUSED std_ds_List_I32 *__kspl_for_coll2 = cg->env->complex_types;
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      I32 t_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)160)));
-      Bool skip = false;
+      I32 t_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/c/root"), (Sz)161)));
       KSPL_UNUSED ksplc_sema_type_env_Info __kspl_tmp_007 = kspl_ksplc_sema_type_env_Env_get_info(cg->env, t_id);
       switch (__kspl_tmp_007.tag) {
       case kspl_ksplc_sema_type_env_Info_array: {
         KSPL_UNUSED I32 _b = __kspl_tmp_007.payload.array.base_id;
         I32 s = __kspl_tmp_007.payload.array.size;
         if (s == (I32)((U32)(0) - (U32)(1))) {
-          skip = true;
+          goto _mir_label_005;
         }
 
         break;
@@ -115971,22 +115960,19 @@ void kspl_ksplc_base_ast_Ast_node_collect_pending_nodes(ksplc_base_ast_Ast_node 
       default: {
       } break;
       }
-      KSPL_UNUSED Bool __kspl_tmp_008 = !skip;
-      if (__kspl_tmp_008) {
-        __kspl_tmp_008 = kspl_ksplc_sema_type_env_Mangle_seen_admit(&seen, t_id);
-      }
-
-      if (__kspl_tmp_008) {
+      if (kspl_ksplc_sema_type_naming_Mangle_seen_admit(&seen, t_id)) {
         kspl_std_ds_List_I32_push(pending_complex, t_id);
       }
+
+    _mir_label_005:;
     }
   }
   {
-    kspl_ksplc_sema_type_env_Mangle_seen_free(&seen);
+    kspl_ksplc_sema_type_naming_Mangle_seen_free(&seen);
   }
   return;
   {
-    kspl_ksplc_sema_type_env_Mangle_seen_free(&seen);
+    kspl_ksplc_sema_type_naming_Mangle_seen_free(&seen);
   }
 }
 
@@ -116429,12 +116415,12 @@ static KSPL_UNUSED ksplc_gen_c_root_Dep_block kspl_priv_ksplc_gen_c_root_node_bl
       KSPL_UNUSED I32 _size_str = info.payload.array.size;
       is_value_dep = true;
       {
-        I32 *_kspl_dst_63 = &(dep_ids.data[(Sz)0]);
-        *_kspl_dst_63 = base_id;
+        I32 *_kspl_dst_64 = &(dep_ids.data[(Sz)0]);
+        *_kspl_dst_64 = base_id;
       }
       {
-        I32 *_kspl_dst_64 = &(dep_ids.data[(Sz)1]);
-        *_kspl_dst_64 = t_id;
+        I32 *_kspl_dst_65 = &(dep_ids.data[(Sz)1]);
+        *_kspl_dst_65 = t_id;
       }
       dep_ids_len = (Sz)2;
       break;
@@ -116444,24 +116430,24 @@ static KSPL_UNUSED ksplc_gen_c_root_Dep_block kspl_priv_ksplc_gen_c_root_node_bl
       I32 err_id = info.payload.result.err_id;
       is_value_dep = true;
       {
-        I32 *_kspl_dst_65 = &(dep_ids.data[(Sz)0]);
-        *_kspl_dst_65 = base_id;
+        I32 *_kspl_dst_66 = &(dep_ids.data[(Sz)0]);
+        *_kspl_dst_66 = base_id;
       }
       {
-        I32 *_kspl_dst_66 = &(dep_ids.data[(Sz)1]);
-        *_kspl_dst_66 = err_id;
+        I32 *_kspl_dst_67 = &(dep_ids.data[(Sz)1]);
+        *_kspl_dst_67 = err_id;
       }
       {
-        I32 *_kspl_dst_67 = &(dep_ids.data[(Sz)2]);
-        *_kspl_dst_67 = t_id;
+        I32 *_kspl_dst_68 = &(dep_ids.data[(Sz)2]);
+        *_kspl_dst_68 = t_id;
       }
       dep_ids_len = (Sz)3;
       break;
     }
     default: {
       {
-        I32 *_kspl_dst_68 = &(dep_ids.data[(Sz)0]);
-        *_kspl_dst_68 = t_id;
+        I32 *_kspl_dst_69 = &(dep_ids.data[(Sz)0]);
+        *_kspl_dst_69 = t_id;
       }
       dep_ids_len = (Sz)1;
     } break;
@@ -116490,8 +116476,8 @@ static KSPL_UNUSED ksplc_gen_c_root_Dep_block kspl_priv_ksplc_gen_c_root_node_bl
 
     if (__kspl_tmp_002) {
       {
-        I32 *_kspl_dst_69 = &(dep_ids.data[kspl_bounds_check(dep_ids_len, 4, "ksplc/gen/c/root", 409)]);
-        *_kspl_dst_69 = curr->def_node->type_id;
+        I32 *_kspl_dst_70 = &(dep_ids.data[kspl_bounds_check(dep_ids_len, 4, "ksplc/gen/c/root", 409)]);
+        *_kspl_dst_70 = curr->def_node->type_id;
       }
       dep_ids_len = (Sz)((size_t)(dep_ids_len) + (size_t)((Sz)1));
     }
@@ -117320,7 +117306,7 @@ void kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_emit_sanitize_attrs(ksplc_gen_llvm_ctx_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/ctx"), (Sz)249)));
+      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/ctx"), (Sz)250)));
       KSPL_UNUSED ksplc_gen_llvm_ctx_Genllvm_ctx *__kspl_tmp_003 = kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(r, KSPL_STR(std_lang_Slice_U8, "sanitize_"));
       (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_c(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(__kspl_tmp_003, name), 32));
     }
@@ -117335,7 +117321,7 @@ void kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_emit_llvm_str_body(ksplc_gen_llvm_ctx_G
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      U8 b = (*(kspl_std_lang_Slice_U8_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/ctx"), (Sz)261)));
+      U8 b = (*(kspl_std_lang_Slice_U8_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/ctx"), (Sz)262)));
       kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_emit_llvm_str_byte(r, b);
     }
   }
@@ -117500,7 +117486,7 @@ std_lang_Slice_U8 kspl_ksplc_gen_llvm_ctx_format_f64_hex(F64 v) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
       Sz shift = (Sz)((size_t)((Sz)((size_t)((Sz)15) - (size_t)(i))) * (size_t)((Sz)4));
-      U8 nib = (U8)(bits >> kspl_shift_check(shift, 64, 0, "ksplc/gen/llvm/ctx", 365) & 0xFULL);
+      U8 nib = (U8)(bits >> kspl_shift_check(shift, 64, 0, "ksplc/gen/llvm/ctx", 366) & 0xFULL);
       (void)(kspl_std_str_Str_builder_c(&out, kspl_U8_to_hex_upper(nib)));
     }
   }
@@ -117520,7 +117506,7 @@ Bool kspl_ksplc_gen_llvm_ctx_is_preamble_fn(std_lang_Slice_U8 name) {
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < (Sz)6; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_gen_llvm_ctx_Preamble_fn f = __kspl_for_coll1.data[kspl_bounds_check((Sz)__kspl_for_idx_s1, 6, "ksplc/gen/llvm/ctx", 390)];
+      ksplc_gen_llvm_ctx_Preamble_fn f = __kspl_for_coll1.data[kspl_bounds_check((Sz)__kspl_for_idx_s1, 6, "ksplc/gen/llvm/ctx", 391)];
       if (kspl_std_lang_Slice_U8_Const_equals(f.name, name)) {
         return true;
       }
@@ -117530,7 +117516,7 @@ Bool kspl_ksplc_gen_llvm_ctx_is_preamble_fn(std_lang_Slice_U8 name) {
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < (Sz)3; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      std_lang_Slice_U8 call = __kspl_for_coll2.data[kspl_bounds_check((Sz)__kspl_for_idx_s2, 3, "ksplc/gen/llvm/ctx", 393)];
+      std_lang_Slice_U8 call = __kspl_for_coll2.data[kspl_bounds_check((Sz)__kspl_for_idx_s2, 3, "ksplc/gen/llvm/ctx", 394)];
       if (kspl_std_lang_Slice_U8_Const_equals(call, name)) {
         return true;
       }
@@ -117558,8 +117544,8 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_gen_llvm_types_llvm_prim_na
   {
     I32 i = 0;
     for (; (Sz)i < prim_map.len; i = (I32)((U32)(i) + (U32)(2))) {
-      if (kspl_std_lang_Slice_U8_Const_equals(base_str, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prim_map, (Sz)i, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)36))))) {
-        return (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prim_map, (Sz)((I32)((U32)(i) + (U32)(1))), KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)37)));
+      if (kspl_std_lang_Slice_U8_Const_equals(base_str, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prim_map, (Sz)i, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)37))))) {
+        return (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&prim_map, (Sz)((I32)((U32)(i) + (U32)(1))), KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)38)));
       }
     }
   }
@@ -118106,7 +118092,7 @@ Bool kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_is_laid(ksplc_gen_llvm_ctx_Genllvm_ctx 
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)375)));
+        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)376)));
         if (kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_is_laid(r, f->type_id, (Sz)((size_t)(depth) + (size_t)((Sz)1)))) {
           return true;
         }
@@ -118143,7 +118129,7 @@ I32 kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_field_index(ksplc_gen_llvm_ctx_Genllvm_c
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
         KSPL_UNUSED Sz __kspl_tmp_006 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
         Sz i = __kspl_tmp_006;
-        KSPL_UNUSED Sz __kspl_tmp_007 = (Sz)offs.data[kspl_bounds_check(i, 3, "ksplc/gen/llvm/types", 398)];
+        KSPL_UNUSED Sz __kspl_tmp_007 = (Sz)offs.data[kspl_bounds_check(i, 3, "ksplc/gen/llvm/types", 399)];
         if (__kspl_tmp_007 > pos) {
           piece = (I32)((U32)(piece) + (U32)(1));
         }
@@ -118153,8 +118139,8 @@ I32 kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_field_index(ksplc_gen_llvm_ctx_Genllvm_c
         }
 
         piece = (I32)((U32)(piece) + (U32)(1));
-        KSPL_UNUSED const Sz __kspl_tmp_008 = offs.data[kspl_bounds_check(i, 3, "ksplc/gen/llvm/types", 403)];
-        pos = (Sz)((size_t)(__kspl_tmp_008) + (size_t)(sizes.data[kspl_bounds_check(i, 3, "ksplc/gen/llvm/types", 403)]));
+        KSPL_UNUSED const Sz __kspl_tmp_008 = offs.data[kspl_bounds_check(i, 3, "ksplc/gen/llvm/types", 404)];
+        pos = (Sz)((size_t)(__kspl_tmp_008) + (size_t)(sizes.data[kspl_bounds_check(i, 3, "ksplc/gen/llvm/types", 404)]));
       }
     }
     break;
@@ -118229,18 +118215,18 @@ static KSPL_UNUSED void kspl_priv_ksplc_gen_llvm_types_emit_laid_result(ksplc_ge
 }
 
 void kspl_ksplc_gen_llvm_types_emit_complex_types(ksplc_gen_llvm_ctx_Genllvm_ctx *cg) {
-  ksplc_sema_type_env_Mangle_seen seen = kspl_ksplc_sema_type_env_Mangle_seen_new(cg->env);
+  ksplc_sema_type_naming_Mangle_seen seen = kspl_ksplc_sema_type_naming_Mangle_seen_new(cg->env);
   KSPL_UNUSED std_ds_List_I32 *__kspl_for_coll1 = cg->env->complex_types;
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      I32 type_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)443)));
+      I32 type_id = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)444)));
       KSPL_UNUSED ksplc_sema_type_env_Info __kspl_tmp_003 = kspl_ksplc_sema_type_env_Env_get_info(cg->env, type_id);
       switch (__kspl_tmp_003.tag) {
       case kspl_ksplc_sema_type_env_Info_result: {
         I32 base_id = __kspl_tmp_003.payload.result.base_id;
         I32 err_id = __kspl_tmp_003.payload.result.err_id;
-        if (!kspl_ksplc_sema_type_env_Mangle_seen_admit(&seen, type_id)) {
+        if (!kspl_ksplc_sema_type_naming_Mangle_seen_admit(&seen, type_id)) {
           goto _mir_label_001;
         }
 
@@ -118269,11 +118255,11 @@ void kspl_ksplc_gen_llvm_types_emit_complex_types(ksplc_gen_llvm_ctx_Genllvm_ctx
   (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "%U8_Slice = type { ptr, i64 }\n")));
   (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "%Const_U8_Slice = type { ptr, i64 }\n\n")));
   {
-    kspl_ksplc_sema_type_env_Mangle_seen_free(&seen);
+    kspl_ksplc_sema_type_naming_Mangle_seen_free(&seen);
   }
   return;
   {
-    kspl_ksplc_sema_type_env_Mangle_seen_free(&seen);
+    kspl_ksplc_sema_type_naming_Mangle_seen_free(&seen);
   }
 }
 
@@ -118312,7 +118298,7 @@ Bool kspl_ksplc_base_ast_Ast_node_emit_llvm_param_list(ksplc_base_ast_Ast_node *
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *param = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)484)));
+      ksplc_base_ast_Ast_node *param = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)485)));
       if (param->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_fn_param) {
         if (!is_first) {
           (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, ", ")));
@@ -118433,7 +118419,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_struct(ksplc_base_ast_Ast_node *r, k
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)529)));
+      ksplc_base_ast_Ast_node *c = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)530)));
       if (c->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_struct_field) {
         ksplc_base_ast_Ast_node *type_node = kspl_ksplc_base_ast_Ast_node_get_decl_type_node(c);
         if (type_node != null) {
@@ -118467,7 +118453,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_laid_struct(ksplc_base_ast_Ast_node 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)548)));
+      ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)549)));
       KSPL_UNUSED kspl_Sz_Result_ksplc_sema_session_ctx_Sema_error __kspl_tmp_003 = kspl_ksplc_sema_session_ctx_Sema_ctx_field_offset_of(cg->sema, r->type_id, f->name, r);
       KSPL_UNUSED Sz __kspl_tmp_004 = {0};
       if (__kspl_tmp_003.is_err) {
@@ -118543,8 +118529,8 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_enum(ksplc_base_ast_Ast_node *r, ksp
     }
     Sz word = __kspl_tmp_001;
     Sz tag_size = kspl_ksplc_sema_session_ctx_Sema_ctx_type_layout(cg->sema, tag_id).size;
-    Sz start = (Sz)((size_t)((Sz)kspl_sdiv((I64)((Sz)((size_t)((Sz)((size_t)(tag_size) + (size_t)(word))) - (size_t)((Sz)1))), (I64)(word), "ksplc/gen/llvm/types", 576)) * (size_t)(word));
-    Sz n = (Sz)kspl_sdiv((I64)((Sz)((size_t)(lay.size) - (size_t)(start))), (I64)(word), "ksplc/gen/llvm/types", 577);
+    Sz start = (Sz)((size_t)((Sz)kspl_sdiv((I64)((Sz)((size_t)((Sz)((size_t)(tag_size) + (size_t)(word))) - (size_t)((Sz)1))), (I64)(word), "ksplc/gen/llvm/types", 577)) * (size_t)(word));
+    Sz n = (Sz)kspl_sdiv((I64)((Sz)((size_t)(lay.size) - (size_t)(start))), (I64)(word), "ksplc/gen/llvm/types", 578);
     (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_t(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "%")), m_name), KSPL_STR(std_lang_Slice_U8, " = type { ")), tag_id));
     if (n > (Sz)0) {
       (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_std_lang_put_ksplc_gen_llvm_ctx_Genllvm_ctx_Ptr_Sz(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_std_lang_put_ksplc_gen_llvm_ctx_Genllvm_ctx_Ptr_Sz(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, ", [")), n), KSPL_STR(std_lang_Slice_U8, " x i")), (Sz)((size_t)(word) * (size_t)((Sz)8))), KSPL_STR(std_lang_Slice_U8, "]")));
@@ -118574,7 +118560,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_trait(ksplc_base_ast_Ast_node *r, ks
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_scope_Sema_symbol *method = (*(kspl_std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)599)));
+        ksplc_sema_type_scope_Sema_symbol *method = (*(kspl_std_ds_List_ksplc_sema_type_scope_Sema_symbol_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/types"), (Sz)600)));
         if (!kspl_ksplc_base_ast_Ast_node_has_vtable_slot(method->node)) {
           goto _mir_label_002;
         }
@@ -120476,163 +120462,145 @@ std_lang_Slice_U8 kspl_ksplc_base_ast_Ast_node_emit_llvm_cast(ksplc_base_ast_Ast
   }
 
   Bool is_ptr_dst = __kspl_tmp_007;
-  std_lang_Slice_U8 cast_inst = KSPL_STR(std_lang_Slice_U8, "bitcast");
-  Bool is_noop = false;
   KSPL_UNUSED Bool __kspl_tmp_008 = is_ptr_src;
   if (__kspl_tmp_008) {
-    __kspl_tmp_008 = !is_ptr_dst;
+    __kspl_tmp_008 = is_ptr_dst;
   }
 
   if (__kspl_tmp_008) {
+    return kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, recv_reg);
+  }
+
+  std_lang_Slice_U8 cast_inst = KSPL_STR(std_lang_Slice_U8, "bitcast");
+  if (is_ptr_src) {
     cast_inst = KSPL_STR(std_lang_Slice_U8, "ptrtoint");
   }
 
+  else
+      if (is_ptr_dst) {
+    cast_inst = KSPL_STR(std_lang_Slice_U8, "inttoptr");
+  }
+
   else {
-    KSPL_UNUSED Bool __kspl_tmp_009 = !is_ptr_src;
+    I32 real_src_id = kspl_ksplc_sema_type_env_Env_scalar_repr_id(cg->env, recv_type);
+    I32 real_dst_id = kspl_ksplc_sema_type_env_Env_scalar_repr_id(cg->env, target_type);
+    Bool is_f_src = kspl_ksplc_sema_type_env_Env_is_float(cg->env, real_src_id);
+    Bool is_f_dst = kspl_ksplc_sema_type_env_Env_is_float(cg->env, real_dst_id);
+    Bool src_is_unsigned = kspl_ksplc_sema_type_env_Env_is_unsigned(cg->env, real_src_id);
+    Bool dst_is_unsigned = kspl_ksplc_sema_type_env_Env_is_unsigned(cg->env, real_dst_id);
+    I32 from_size = kspl_ksplc_sema_type_env_Env_get_primitive_bit_size(cg->env, real_src_id);
+    I32 to_size = kspl_ksplc_sema_type_env_Env_get_primitive_bit_size(cg->env, real_dst_id);
+    KSPL_UNUSED Bool __kspl_tmp_009 = is_f_src;
     if (__kspl_tmp_009) {
-      __kspl_tmp_009 = is_ptr_dst;
+      __kspl_tmp_009 = is_f_dst;
     }
 
     if (__kspl_tmp_009) {
-      cast_inst = KSPL_STR(std_lang_Slice_U8, "inttoptr");
-    }
-
-    else {
-      KSPL_UNUSED Bool __kspl_tmp_010 = is_ptr_src;
-      if (__kspl_tmp_010) {
-        __kspl_tmp_010 = is_ptr_dst;
+      if (from_size < to_size) {
+        cast_inst = KSPL_STR(std_lang_Slice_U8, "fpext");
       }
 
-      if (__kspl_tmp_010) {
-        is_noop = true;
+      else
+          if (from_size > to_size) {
+        cast_inst = KSPL_STR(std_lang_Slice_U8, "fptrunc");
       }
 
       else {
-        I32 real_src_id = kspl_ksplc_sema_type_env_Env_scalar_repr_id(cg->env, recv_type);
-        I32 real_dst_id = kspl_ksplc_sema_type_env_Env_scalar_repr_id(cg->env, target_type);
-        Bool is_f_src = kspl_ksplc_sema_type_env_Env_is_float(cg->env, real_src_id);
-        Bool is_f_dst = kspl_ksplc_sema_type_env_Env_is_float(cg->env, real_dst_id);
-        Bool src_is_unsigned = kspl_ksplc_sema_type_env_Env_is_unsigned(cg->env, real_src_id);
-        Bool dst_is_unsigned = kspl_ksplc_sema_type_env_Env_is_unsigned(cg->env, real_dst_id);
-        I32 from_size = kspl_ksplc_sema_type_env_Env_get_primitive_bit_size(cg->env, real_src_id);
-        I32 to_size = kspl_ksplc_sema_type_env_Env_get_primitive_bit_size(cg->env, real_dst_id);
-        KSPL_UNUSED Bool __kspl_tmp_011 = is_f_src;
-        if (__kspl_tmp_011) {
-          __kspl_tmp_011 = is_f_dst;
+        return kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, recv_reg);
+      }
+    }
+
+    else {
+      KSPL_UNUSED Bool __kspl_tmp_010 = is_f_src;
+      if (__kspl_tmp_010) {
+        __kspl_tmp_010 = !is_f_dst;
+      }
+
+      if (__kspl_tmp_010) {
+        KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_011 = {0};
+        if (dst_is_unsigned) {
+          __kspl_tmp_011 = KSPL_STR(std_lang_Slice_U8, "fptoui");
         }
 
-        if (__kspl_tmp_011) {
+        else {
+          __kspl_tmp_011 = KSPL_STR(std_lang_Slice_U8, "fptosi");
+        }
+        cast_inst = __kspl_tmp_011;
+      }
+
+      else {
+        KSPL_UNUSED Bool __kspl_tmp_012 = !is_f_src;
+        if (__kspl_tmp_012) {
+          __kspl_tmp_012 = is_f_dst;
+        }
+
+        if (__kspl_tmp_012) {
+          KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_013 = {0};
+          if (src_is_unsigned) {
+            __kspl_tmp_013 = KSPL_STR(std_lang_Slice_U8, "uitofp");
+          }
+
+          else {
+            __kspl_tmp_013 = KSPL_STR(std_lang_Slice_U8, "sitofp");
+          }
+          cast_inst = __kspl_tmp_013;
+        }
+
+        else {
           if (from_size < to_size) {
-            cast_inst = KSPL_STR(std_lang_Slice_U8, "fpext");
+            KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_014 = {0};
+            if (src_is_unsigned) {
+              __kspl_tmp_014 = KSPL_STR(std_lang_Slice_U8, "zext");
+            }
+
+            else {
+              __kspl_tmp_014 = KSPL_STR(std_lang_Slice_U8, "sext");
+            }
+            cast_inst = __kspl_tmp_014;
           }
 
           else
               if (from_size > to_size) {
-            cast_inst = KSPL_STR(std_lang_Slice_U8, "fptrunc");
+            cast_inst = KSPL_STR(std_lang_Slice_U8, "trunc");
           }
 
           else {
-            is_noop = true;
-          }
-        }
-
-        else {
-          KSPL_UNUSED Bool __kspl_tmp_012 = is_f_src;
-          if (__kspl_tmp_012) {
-            __kspl_tmp_012 = !is_f_dst;
-          }
-
-          if (__kspl_tmp_012) {
-            KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_013 = {0};
-            if (dst_is_unsigned) {
-              __kspl_tmp_013 = KSPL_STR(std_lang_Slice_U8, "fptoui");
-            }
-
-            else {
-              __kspl_tmp_013 = KSPL_STR(std_lang_Slice_U8, "fptosi");
-            }
-            cast_inst = __kspl_tmp_013;
-          }
-
-          else {
-            KSPL_UNUSED Bool __kspl_tmp_014 = !is_f_src;
-            if (__kspl_tmp_014) {
-              __kspl_tmp_014 = is_f_dst;
-            }
-
-            if (__kspl_tmp_014) {
-              KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_015 = {0};
-              if (src_is_unsigned) {
-                __kspl_tmp_015 = KSPL_STR(std_lang_Slice_U8, "uitofp");
-              }
-
-              else {
-                __kspl_tmp_015 = KSPL_STR(std_lang_Slice_U8, "sitofp");
-              }
-              cast_inst = __kspl_tmp_015;
-            }
-
-            else {
-              if (from_size < to_size) {
-                KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_016 = {0};
-                if (src_is_unsigned) {
-                  __kspl_tmp_016 = KSPL_STR(std_lang_Slice_U8, "zext");
-                }
-
-                else {
-                  __kspl_tmp_016 = KSPL_STR(std_lang_Slice_U8, "sext");
-                }
-                cast_inst = __kspl_tmp_016;
-              }
-
-              else
-                  if (from_size > to_size) {
-                cast_inst = KSPL_STR(std_lang_Slice_U8, "trunc");
-              }
-
-              else {
-                is_noop = true;
-              }
-            }
+            return kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, recv_reg);
           }
         }
       }
     }
   }
-  if (is_noop) {
-    return kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, recv_reg);
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_020 = kspl_std_lang_Slice_U8_Const_equals(cast_inst, KSPL_STR(std_lang_Slice_U8, "zext"));
-  if (!__kspl_tmp_020) {
-    __kspl_tmp_020 = kspl_std_lang_Slice_U8_Const_equals(cast_inst, KSPL_STR(std_lang_Slice_U8, "sext"));
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_019 = __kspl_tmp_020;
-  if (__kspl_tmp_019) {
-    __kspl_tmp_019 = recv_reg.len > (Sz)0;
-  }
-
-  KSPL_UNUSED Bool __kspl_tmp_018 = __kspl_tmp_019;
-  if (__kspl_tmp_018) {
-    __kspl_tmp_018 = (*(recv_reg.ptr + 0)) != 37;
+  KSPL_UNUSED Bool __kspl_tmp_018 = kspl_std_lang_Slice_U8_Const_equals(cast_inst, KSPL_STR(std_lang_Slice_U8, "zext"));
+  if (!__kspl_tmp_018) {
+    __kspl_tmp_018 = kspl_std_lang_Slice_U8_Const_equals(cast_inst, KSPL_STR(std_lang_Slice_U8, "sext"));
   }
 
   KSPL_UNUSED Bool __kspl_tmp_017 = __kspl_tmp_018;
   if (__kspl_tmp_017) {
-    __kspl_tmp_017 = (*(recv_reg.ptr + 0)) != 64;
+    __kspl_tmp_017 = recv_reg.len > (Sz)0;
   }
 
-  if (__kspl_tmp_017) {
-    KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_021 = recv_reg;
-    return kspl_priv_ksplc_gen_llvm_expr_extend_constant_text(cg, __kspl_tmp_021, recv_type, kspl_std_lang_Slice_U8_Const_equals(cast_inst, KSPL_STR(std_lang_Slice_U8, "zext")));
+  KSPL_UNUSED Bool __kspl_tmp_016 = __kspl_tmp_017;
+  if (__kspl_tmp_016) {
+    __kspl_tmp_016 = (*(recv_reg.ptr + 0)) != 37;
+  }
+
+  KSPL_UNUSED Bool __kspl_tmp_015 = __kspl_tmp_016;
+  if (__kspl_tmp_015) {
+    __kspl_tmp_015 = (*(recv_reg.ptr + 0)) != 64;
+  }
+
+  if (__kspl_tmp_015) {
+    KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_019 = recv_reg;
+    return kspl_priv_ksplc_gen_llvm_expr_extend_constant_text(cg, __kspl_tmp_019, recv_type, kspl_std_lang_Slice_U8_Const_equals(cast_inst, KSPL_STR(std_lang_Slice_U8, "zext")));
   }
 
   I32 res_reg = kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_next_reg(cg);
-  KSPL_UNUSED ksplc_gen_llvm_ctx_Genllvm_ctx *__kspl_tmp_022 = kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_std_lang_put_ksplc_gen_llvm_ctx_Genllvm_ctx_Ptr_I32(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "    %")), res_reg), KSPL_STR(std_lang_Slice_U8, " = "));
-  (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(__kspl_tmp_022, cast_inst), KSPL_STR(std_lang_Slice_U8, " ")));
-  KSPL_UNUSED ksplc_gen_llvm_ctx_Genllvm_ctx *__kspl_tmp_023 = kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_t(cg, recv_type), KSPL_STR(std_lang_Slice_U8, " "));
-  (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(__kspl_tmp_023, recv_reg), KSPL_STR(std_lang_Slice_U8, " to ")));
+  KSPL_UNUSED ksplc_gen_llvm_ctx_Genllvm_ctx *__kspl_tmp_020 = kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_std_lang_put_ksplc_gen_llvm_ctx_Genllvm_ctx_Ptr_I32(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(cg, KSPL_STR(std_lang_Slice_U8, "    %")), res_reg), KSPL_STR(std_lang_Slice_U8, " = "));
+  (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(__kspl_tmp_020, cast_inst), KSPL_STR(std_lang_Slice_U8, " ")));
+  KSPL_UNUSED ksplc_gen_llvm_ctx_Genllvm_ctx *__kspl_tmp_021 = kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_t(cg, recv_type), KSPL_STR(std_lang_Slice_U8, " "));
+  (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(__kspl_tmp_021, recv_reg), KSPL_STR(std_lang_Slice_U8, " to ")));
   (void)(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_s(kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_t(cg, target_type), KSPL_STR(std_lang_Slice_U8, "\n")));
   return kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_reg_str(cg, res_reg);
 }
@@ -120694,8 +120662,8 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_gen_llvm_expr_extend_consta
     return kspl_std_mem_Arena_dup_str(kspl_ksplc_base_core_arena, text);
   }
 
-  I64 lo = (I64)((U64)(0) - (U64)((I64)((U64)(1LL) << kspl_shift_check((I64)((I32)((U32)(bits) - (U32)(1))), 64, 0, "ksplc/gen/llvm/expr", 535))));
-  I64 hi = (I64)((U64)((I64)((U64)(1LL) << kspl_shift_check((I64)bits, 64, 0, "ksplc/gen/llvm/expr", 536))) - (U64)(1LL));
+  I64 lo = (I64)((U64)(0) - (U64)((I64)((U64)(1LL) << kspl_shift_check((I64)((I32)((U32)(bits) - (U32)(1))), 64, 0, "ksplc/gen/llvm/expr", 531))));
+  I64 hi = (I64)((U64)((I64)((U64)(1LL) << kspl_shift_check((I64)bits, 64, 0, "ksplc/gen/llvm/expr", 532))) - (U64)(1LL));
   KSPL_UNUSED Bool __kspl_tmp_006 = v < lo;
   if (!__kspl_tmp_006) {
     __kspl_tmp_006 = v > hi;
@@ -121978,7 +121946,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_extern_block(ksplc_base_ast_Ast_node
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)48)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)49)));
       if (child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn_proto) {
         std_lang_Slice_U8 name = kspl_ksplc_base_ast_Ast_node_find_text(child, (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_identifier);
         KSPL_UNUSED Bool __kspl_tmp_003 = !kspl_ksplc_base_core_config.is_freestanding;
@@ -122617,7 +122585,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_const_aggregate(ksplc_base_ast_Ast_n
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)381)));
+        ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)382)));
         if (child->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_field_init) {
           has_init = true;
           goto _mir_label_002;
@@ -122663,7 +122631,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_const_vtable(ksplc_base_ast_Ast_node
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *f = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)407)));
+      ksplc_base_ast_Ast_node *f = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)408)));
       if (f->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_field_init) {
         goto _mir_label_001;
       }
@@ -122719,7 +122687,7 @@ std_ds_List_ksplc_base_ast_Ast_node_Ptr kspl_ksplc_base_ast_Ast_node_const_array
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)432)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)433)));
       if (child->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_field_init) {
         goto _mir_label_005;
       }
@@ -122819,7 +122787,7 @@ std_ds_List_ksplc_base_ast_Ast_node_Ptr kspl_ksplc_base_ast_Ast_node_const_struc
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)469)));
+      ksplc_base_ast_Ast_node *child = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)470)));
       if (child->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_expr_field_init) {
         goto _mir_label_005;
       }
@@ -123025,7 +122993,7 @@ void kspl_ksplc_base_ast_Ast_node_emit_llvm_laid_variant(ksplc_base_ast_Ast_node
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_base_ast_Ast_node *arg = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)559)));
+        ksplc_base_ast_Ast_node *arg = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)560)));
         if (kspl_ksplc_base_ast_Ast_node_is_literal(arg, KSPL_STR(std_lang_Slice_U8, ","))) {
           goto _mir_label_004;
         }
@@ -123408,7 +123376,7 @@ Bool kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_holds_laid_value(ksplc_gen_llvm_ctx_Gen
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)780)));
+        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/gen/llvm/decl"), (Sz)781)));
         if (kspl_ksplc_gen_llvm_ctx_Genllvm_ctx_holds_laid_value(r, f->type_id, (Sz)((size_t)(depth) + (size_t)((Sz)1)))) {
           return true;
         }
@@ -125860,8 +125828,8 @@ void kspl_ksplc_base_ast_Ast_node_desugar_slice_elems(ksplc_base_ast_Ast_node *r
 
   ksplc_base_ast_Ast_node *inner_ty = kspl_ksplc_base_ast_Ast_node_clone(ty);
   {
-    std_lang_Slice_U8 *_kspl_dst_70 = &(kspl_ksplc_base_ast_Ast_node_last_child(inner_ty)->text);
-    *_kspl_dst_70 = KSPL_STR(std_lang_Slice_U8, "[_]");
+    std_lang_Slice_U8 *_kspl_dst_71 = &(kspl_ksplc_base_ast_Ast_node_last_child(inner_ty)->text);
+    *_kspl_dst_71 = KSPL_STR(std_lang_Slice_U8, "[_]");
   }
   std_ds_List_ksplc_base_ast_Ast_node_Ptr *inner_children = kspl_ksplc_base_ast_new_ast_node_list();
   kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_push(inner_children, inner_ty);
@@ -127919,8 +127887,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_decl_collect_register_type_symbols(
           }
           struct_def->pending_decl = __kspl_tmp_004;
           {
-            ksplc_sema_type_env_Info *_kspl_dst_71 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
-            *_kspl_dst_71 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_struct_type, .payload.struct_type = {struct_def}};
+            ksplc_sema_type_env_Info *_kspl_dst_72 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
+            *_kspl_dst_72 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_struct_type, .payload.struct_type = {struct_def}};
           }
           break;
         }
@@ -127948,8 +127916,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_decl_collect_register_type_symbols(
           }
           enum_def->pending_decl = __kspl_tmp_005;
           {
-            ksplc_sema_type_env_Info *_kspl_dst_72 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
-            *_kspl_dst_72 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_enum_type, .payload.enum_type = {enum_def}};
+            ksplc_sema_type_env_Info *_kspl_dst_73 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
+            *_kspl_dst_73 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_enum_type, .payload.enum_type = {enum_def}};
           }
           break;
         }
@@ -127966,8 +127934,8 @@ static KSPL_UNUSED void kspl_priv_ksplc_sema_decl_collect_register_type_symbols(
           KSPL_UNUSED std_lang_Slice_U8 _f = trait_reg.payload.ok.fqn;
           I32 type_id = trait_reg.payload.ok.type_id;
           {
-            ksplc_sema_type_env_Info *_kspl_dst_73 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
-            *_kspl_dst_73 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_trait_type, .payload.trait_type = {kspl_ksplc_sema_type_def_Trait_def_new()}};
+            ksplc_sema_type_env_Info *_kspl_dst_74 = &(kspl_std_ds_List_ksplc_sema_type_def_Entry_Ptr_get(c->env->id_to_type, (Sz)type_id)->info);
+            *_kspl_dst_74 = (ksplc_sema_type_env_Info){.tag = kspl_ksplc_sema_type_env_Info_trait_type, .payload.trait_type = {kspl_ksplc_sema_type_def_Trait_def_new()}};
           }
           break;
         }
@@ -134800,10 +134768,17 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_run_target_triple(std
 }
 
 static KSPL_UNUSED ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_kind(std_mem_Arena *arena) {
-  if (kspl_priv_ksplc_tools_run_target_known) {
-    return kspl_priv_ksplc_tools_run_target_answer;
+  switch (kspl_priv_ksplc_tools_run_target_answer.tag) {
+  case kspl_std_lang_Option_ksplc_tools_run_Target_kind_some: {
+    ksplc_tools_run_Target_kind answer = kspl_priv_ksplc_tools_run_target_answer.payload.some.value;
+    return answer;
   }
-
+  case kspl_std_lang_Option_ksplc_tools_run_Target_kind_none: {
+    break;
+  }
+  default:
+    __builtin_unreachable();
+  }
   std_lang_Slice_U8 triple = kspl_priv_ksplc_tools_run_target_triple(arena);
   KSPL_UNUSED Bool __kspl_tmp_001 = kspl_std_lang_Option_Sz_is_some(kspl_std_lang_Slice_U8_find_str(triple, KSPL_STR(std_lang_Slice_U8, "msvc")));
   KSPL_UNUSED Bool __kspl_tmp_003 = kspl_std_lang_Option_Sz_is_some(kspl_std_lang_Slice_U8_find_str(triple, KSPL_STR(std_lang_Slice_U8, "darwin")));
@@ -134832,9 +134807,9 @@ static KSPL_UNUSED ksplc_tools_run_Target_kind kspl_priv_ksplc_tools_run_target_
     __kspl_tmp_004 = __kspl_tmp_007;
   }
 
-  kspl_priv_ksplc_tools_run_target_answer = (ksplc_tools_run_Target_kind){.msvc = __kspl_tmp_001, .darwin = __kspl_tmp_002, .windows = __kspl_tmp_004};
-  kspl_priv_ksplc_tools_run_target_known = true;
-  return kspl_priv_ksplc_tools_run_target_answer;
+  ksplc_tools_run_Target_kind answer = (ksplc_tools_run_Target_kind){.msvc = __kspl_tmp_001, .darwin = __kspl_tmp_002, .windows = __kspl_tmp_004};
+  kspl_priv_ksplc_tools_run_target_answer = (std_lang_Option_ksplc_tools_run_Target_kind){.tag = kspl_std_lang_Option_ksplc_tools_run_Target_kind_some, .payload.some = {answer}};
+  return answer;
 }
 
 void kspl_ksplc_tools_run_append_link_libs(std_ds_List_std_lang_Slice_U8_Const *list, std_mem_Arena *arena) {
@@ -134943,7 +134918,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_shadowed_now(std_lang_Slice_U8
   std_lang_Slice_U8 rest = kspl_std_lang_Slice_U8_Const_sub_from(path, base.len);
   KSPL_UNUSED Bool __kspl_tmp_002 = rest.len == (Sz)0;
   if (!__kspl_tmp_002) {
-    __kspl_tmp_002 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&rest, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)204))) != 47;
+    __kspl_tmp_002 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&rest, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)203))) != 47;
   }
 
   if (__kspl_tmp_002) {
@@ -134964,7 +134939,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_is_absent_mark(std_lang_Slice_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)210)));
+      U8 c = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)209)));
       if (c != 45) {
         return false;
       }
@@ -134990,7 +134965,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_deps_are_fresh(std_lang_Slice_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 line = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)225)));
+      std_lang_Slice_U8 line = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)224)));
       if (line.len < (Sz)((size_t)(kspl_ksplc_base_cache_hash_hex_len) + (size_t)((Sz)2))) {
         KSPL_UNUSED Bool __kspl_tmp_006 = false;
         {
@@ -135070,7 +135045,7 @@ void kspl_ksplc_tools_run_write_deps_file(std_lang_Slice_U8 deps_path, std_ds_Li
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 import_path = (*(kspl_std_ds_List_std_lang_Slice_U8_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)252)));
+      std_lang_Slice_U8 import_path = (*(kspl_std_ds_List_std_lang_Slice_U8_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)251)));
       std_str_Str_builder file_path = kspl_std_str_Str_builder_new();
       KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = import_path;
       kspl_ksplc_base_locate_append_file_path(__kspl_tmp_003, kspl_std_lang_Slice_U8_reads_as_laid_out(import_path), &file_path);
@@ -135093,7 +135068,7 @@ void kspl_ksplc_tools_run_write_deps_file(std_lang_Slice_U8 deps_path, std_ds_Li
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      std_lang_Slice_U8 embedded = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)262)));
+      std_lang_Slice_U8 embedded = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)261)));
       if (!kspl_priv_ksplc_tools_run_append_dep_line(embedded, &out)) {
         {
           kspl_std_str_Str_builder_free(&out);
@@ -135106,7 +135081,7 @@ void kspl_ksplc_tools_run_write_deps_file(std_lang_Slice_U8 deps_path, std_ds_Li
   {
     KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
     for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll3->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-      std_lang_Slice_U8 cfg = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)268)));
+      std_lang_Slice_U8 cfg = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)267)));
       if (!kspl_priv_ksplc_tools_run_append_dep_line(cfg, &out)) {
         {
           kspl_std_str_Str_builder_free(&out);
@@ -135119,7 +135094,7 @@ void kspl_ksplc_tools_run_write_deps_file(std_lang_Slice_U8 deps_path, std_ds_Li
   {
     KSPL_UNUSED I32 __kspl_for_idx_s4 = 0;
     for (; (Sz)__kspl_for_idx_s4 < __kspl_for_coll5->len; __kspl_for_idx_s4 = (I32)((U32)(__kspl_for_idx_s4) + (U32)(1))) {
-      std_lang_Slice_U8 cfg = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll5, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)274)));
+      std_lang_Slice_U8 cfg = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll5, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)273)));
       KSPL_UNUSED std_lang_Range __kspl_for_coll4 = kspl_std_lang_Range_asc(kspl_ksplc_base_cache_hash_hex_len);
       {
         KSPL_UNUSED I32 __kspl_for_idx_s5 = 0;
@@ -135259,7 +135234,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_link_names(ksplc_base_a
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *attr = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)331)));
+      ksplc_base_ast_Ast_node *attr = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)330)));
       KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_004 = {0};
       if (kspl_ksplc_base_ast_Ast_node_is_attribute_named(attr, KSPL_STR(std_lang_Slice_U8, "link"))) {
         __kspl_tmp_004 = kspl_ksplc_base_ast_Ast_node_link_name(attr);
@@ -135298,7 +135273,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_append_named_libs(std_lang_Sli
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 word = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)344)));
+      std_lang_Slice_U8 word = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)343)));
       if (word.len > (Sz)0) {
         kspl_std_ds_List_std_lang_Slice_U8_Const_push(list, kspl_std_mem_Arena_dup_str(arena, word));
       }
@@ -135353,7 +135328,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_append_slot_key(std_lang_Slice
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 d = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)383)));
+      std_lang_Slice_U8 d = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)382)));
       (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&h, d), 0));
     }
   }
@@ -135387,7 +135362,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_has_obj(std_ds_List_ksplc_tool
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)414)));
+      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)413)));
       if (kspl_std_lang_Slice_U8_Const_equals(u.obj, obj)) {
         return true;
       }
@@ -135480,7 +135455,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_objects(std_lang_Slice_U
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll2.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)456)));
+      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)455)));
       KSPL_UNUSED Bool __kspl_tmp_006 = name.len != (Sz)((size_t)(kspl_ksplc_base_cache_hash_hex_len) + (size_t)((Sz)2));
       if (!__kspl_tmp_006) {
         __kspl_tmp_006 = !kspl_std_lang_Slice_U8_Const_ends_with(name, KSPL_STR(std_lang_Slice_U8, ".o"));
@@ -135495,7 +135470,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_objects(std_lang_Slice_U
       {
         KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
         for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-          ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)460)));
+          ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)459)));
           if (kspl_std_lang_Slice_U8_Const_ends_with(u.obj, name)) {
             keep = true;
           }
@@ -135578,7 +135553,7 @@ static KSPL_UNUSED Bool kspl_priv_ksplc_tools_run_compile_units(std_ds_List_kspl
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)507)));
+      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)506)));
       if (u.handle == 0LL) {
         goto _mir_label_009;
       }
@@ -135602,7 +135577,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_append_child_ksplc(std_ds_List
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 d = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)528)));
+      std_lang_Slice_U8 d = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)527)));
       KSPL_UNUSED std_str_Arena_text *__kspl_tmp_005 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(arena), KSPL_STR(std_lang_Slice_U8, "--define="));
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(list, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(__kspl_tmp_005, d)));
     }
@@ -135654,7 +135629,7 @@ static KSPL_UNUSED I32 kspl_priv_ksplc_tools_run_exec_program(std_lang_Slice_U8 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 a = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)559)));
+      std_lang_Slice_U8 a = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)558)));
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(&argv, a);
     }
   }
@@ -135735,7 +135710,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_sweep_aside(std_lang_Slice_U8 
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)598)));
+      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)597)));
       if (kspl_std_lang_Slice_U8_Const_starts_with(name, stem, (Sz)0)) {
         KSPL_UNUSED kspl_Void_Result_std_fs_Fs_error __kspl_tmp_007 = kspl_std_fs_remove_path(kspl_std_fs_join(dir, name, arena));
         if (__kspl_tmp_007.is_err) {
@@ -135900,7 +135875,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_rebuild_in_slot(const ksplc_to
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)712)));
+      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)711)));
       (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&want_objs, kspl_std_sys_get_file_name(u.obj)), 10));
     }
   }
@@ -135908,7 +135883,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_rebuild_in_slot(const ksplc_to
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)714)));
+      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)713)));
       (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(&want_objs, lib), 10));
     }
   }
@@ -136091,7 +136066,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_build_and_link(const ksplc_too
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)802)));
+      ksplc_tools_run_Unit u = (*(kspl_std_ds_List_ksplc_tools_run_Unit_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)801)));
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(&link_argv, kspl_priv_ksplc_tools_run_under_slot(u.obj, slot->dir));
     }
   }
@@ -136101,7 +136076,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_run_build_and_link(const ksplc_too
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)808)));
+      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)807)));
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(&link_argv, lib);
     }
   }
@@ -136211,7 +136186,7 @@ void kspl_ksplc_tools_run_build_program(std_lang_Slice_U8 input, std_lang_Slice_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < (Sz)2; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 f = __kspl_for_coll1.data[kspl_bounds_check((Sz)__kspl_for_idx_s1, 2, "ksplc/tools/run", 878)];
+      std_lang_Slice_U8 f = __kspl_for_coll1.data[kspl_bounds_check((Sz)__kspl_for_idx_s1, 2, "ksplc/tools/run", 877)];
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(&cc, f);
     }
   }
@@ -136224,7 +136199,7 @@ void kspl_ksplc_tools_run_build_program(std_lang_Slice_U8 input, std_lang_Slice_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      std_lang_Slice_U8 w = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)885)));
+      std_lang_Slice_U8 w = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)884)));
       if (w.len > (Sz)0) {
         kspl_std_ds_List_std_lang_Slice_U8_Const_push(&cc, w);
       }
@@ -136235,7 +136210,7 @@ void kspl_ksplc_tools_run_build_program(std_lang_Slice_U8 input, std_lang_Slice_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
     for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll3.len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)889)));
+      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/run"), (Sz)888)));
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(&cc, lib);
     }
   }
@@ -136248,10 +136223,9 @@ void kspl_ksplc_tools_run_build_program(std_lang_Slice_U8 input, std_lang_Slice_
     KSPL_UNUSED std_lang_Writer __kspl_tmp_022 = kspl_std_io_err();
     KSPL_UNUSED std_lang_Writer __kspl_tmp_021 = kspl_std_lang_put_std_lang_Writer_std_lang_Slice_U8_Const(((__kspl_tmp_022).vtable->s((__kspl_tmp_022).obj, KSPL_STR(std_lang_Slice_U8, "ksplc build: the C compiler failed on "))), c_path);
     (void)(((__kspl_tmp_021).vtable->s((__kspl_tmp_021).obj, KSPL_STR(std_lang_Slice_U8, "\n"))));
-    kspl_std_sys_exit(cc_code);
   }
 
-  kspl_std_sys_exit(0);
+  kspl_std_sys_exit(cc_code);
   {
     kspl_std_mem_Arena_free(arena);
   }
@@ -136334,7 +136308,7 @@ void kspl_ksplc_tools_interface_Walk_note(ksplc_tools_interface_Walk *r, I32 raw
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        I32 p = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)93)));
+        I32 p = (*(kspl_std_ds_List_I32_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)94)));
         kspl_ksplc_tools_interface_Walk_note(r, p, true, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       }
     }
@@ -136440,7 +136414,7 @@ void kspl_ksplc_tools_interface_Walk_note_struct(ksplc_tools_interface_Walk *r, 
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)133)));
+        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)134)));
         kspl_ksplc_tools_interface_Walk_note(r, f->type_id, true, (Sz)((size_t)(depth) + (size_t)((Sz)1)));
       }
     }
@@ -136454,7 +136428,7 @@ Bool kspl_ksplc_tools_interface_Walk_handle_opens(ksplc_tools_interface_Walk *r,
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)141)));
+      ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)142)));
       KSPL_UNUSED Bool __kspl_tmp_003 = f->vis != (ksplc_sema_type_scope_Visibility)kspl_ksplc_sema_type_scope_Visibility_public;
       if (!__kspl_tmp_003) {
         __kspl_tmp_003 = !kspl_ksplc_tools_interface_Walk_crosses(r, f->type_id, (Sz)0);
@@ -136508,7 +136482,7 @@ Bool kspl_ksplc_tools_interface_Walk_crosses(ksplc_tools_interface_Walk *r, I32 
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)161)));
+        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)162)));
         if (!kspl_ksplc_tools_interface_Walk_crosses(r, f->type_id, (Sz)((size_t)(depth) + (size_t)((Sz)1)))) {
           return false;
         }
@@ -136609,8 +136583,8 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_c_scalar(st
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
-      if (kspl_std_lang_Slice_U8_Const_equals(kspl, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&names, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)209))))) {
-        return (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&c_names, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)210)));
+      if (kspl_std_lang_Slice_U8_Const_equals(kspl, (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&names, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)210))))) {
+        return (*(kspl_std_lang_Slice_std_lang_Slice_U8_Const_Const_at_ref(&c_names, i, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)211)));
       }
     }
   }
@@ -136847,7 +136821,7 @@ std_lang_Slice_U8 kspl_ksplc_tools_interface_render(ksplc_base_ast_Ast_node *roo
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)337)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)338)));
       ksplc_base_ast_Ast_node *n = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       KSPL_UNUSED Bool __kspl_tmp_007 = n->kind_id == (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_struct;
       if (!__kspl_tmp_007) {
@@ -136869,7 +136843,7 @@ std_lang_Slice_U8 kspl_ksplc_tools_interface_render(ksplc_base_ast_Ast_node *roo
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)341)));
+      ksplc_base_ast_Ast_node *raw = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)342)));
       ksplc_base_ast_Ast_node *n = kspl_ksplc_base_ast_Ast_node_unwrap_top_level(raw);
       KSPL_UNUSED Bool __kspl_tmp_012 = n->kind_id != (ksplc_base_ast_kinds_Ast_kind)kspl_ksplc_base_ast_kinds_Ast_kind_k_decl_fn;
       if (!__kspl_tmp_012) {
@@ -136894,14 +136868,14 @@ std_lang_Slice_U8 kspl_ksplc_tools_interface_render(ksplc_base_ast_Ast_node *roo
   {
     KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
     for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll4.len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(&__kspl_for_coll4, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)348)));
+      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(&__kspl_for_coll4, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)349)));
       walk.site = e.node;
       kspl_ksplc_tools_interface_Walk_note(&walk, kspl_priv_ksplc_tools_interface_ret_id_of(e.node), true, (Sz)0);
       KSPL_UNUSED std_ds_List_ksplc_base_ast_Ast_node_Ptr __kspl_for_coll3 = kspl_priv_ksplc_tools_interface_params_of(e.node);
       {
         KSPL_UNUSED I32 __kspl_for_idx_s4 = 0;
         for (; (Sz)__kspl_for_idx_s4 < __kspl_for_coll3.len; __kspl_for_idx_s4 = (I32)((U32)(__kspl_for_idx_s4) + (U32)(1))) {
-          ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)351)));
+          ksplc_base_ast_Ast_node *p = (*(kspl_std_ds_List_ksplc_base_ast_Ast_node_Ptr_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)352)));
           kspl_ksplc_tools_interface_Walk_note(&walk, p->type_id, true, (Sz)0);
         }
       }
@@ -136980,7 +136954,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_interface_check_names(ksplc_tools_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)384)));
+      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)385)));
       KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_003 = e.node;
       kspl_priv_ksplc_tools_interface_claim(walk, &seen, __kspl_tmp_003, kspl_ksplc_base_ast_Ast_node_get_decl_id_text(e.node));
     }
@@ -136989,7 +136963,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_interface_check_names(ksplc_tools_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll3->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)386)));
+      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)387)));
       KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_006 = {0};
       if (t.node != null) {
         __kspl_tmp_006 = t.node;
@@ -137009,7 +136983,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_interface_check_names(ksplc_tools_
           {
             KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
             for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll2->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-              ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)392)));
+              ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)393)));
               KSPL_UNUSED std_str_Arena_text *__kspl_tmp_011 = kspl_std_mem_Arena_text(kspl_ksplc_base_core_arena);
               KSPL_UNUSED std_str_Arena_text *__kspl_tmp_010 = kspl_std_str_Arena_text_c(kspl_std_str_Arena_text_s(__kspl_tmp_011, t.name), 95);
               kspl_priv_ksplc_tools_interface_claim(walk, &seen, site, kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_s(__kspl_tmp_010, v->name)));
@@ -137100,7 +137074,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_guard_of(st
   std_str_Arena_text *g = kspl_std_mem_Arena_text(kspl_ksplc_base_core_arena);
   KSPL_UNUSED Bool __kspl_tmp_003 = base.len > (Sz)0;
   if (__kspl_tmp_003) {
-    __kspl_tmp_003 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&base, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)422))));
+    __kspl_tmp_003 = kspl_U8_is_digit((*(kspl_std_lang_Slice_U8_Const_at_ref(&base, (Sz)0, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)423))));
   }
 
   if (__kspl_tmp_003) {
@@ -137111,7 +137085,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_guard_of(st
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      U8 ch = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)424)));
+      U8 ch = (*(kspl_std_lang_Slice_U8_Const_at_ref(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)425)));
       if (kspl_U8_is_lower(ch)) {
         (void)(kspl_std_str_Arena_text_c(g, (U8)((I32)((U32)((I32)ch) - (U32)(32)))));
       }
@@ -137141,7 +137115,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_c(ks
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)442)));
+      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)443)));
       if (t.is_enum) {
         kspl_priv_ksplc_tools_interface_c_doc(kspl_priv_ksplc_tools_interface_summary_of(walk->c, t.node), KSPL_STR(std_lang_Slice_U8, ""), &out);
         KSPL_UNUSED ksplc_sema_type_env_Info __kspl_tmp_003 = kspl_ksplc_sema_type_env_Env_get_info(walk->c->env, t.type_id);
@@ -137172,7 +137146,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_c(ks
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll3.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)454)));
+      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)455)));
       kspl_priv_ksplc_tools_interface_c_doc(kspl_priv_ksplc_tools_interface_summary_of(walk->c, t.node), KSPL_STR(std_lang_Slice_U8, ""), &out);
       KSPL_UNUSED std_str_Str_builder *__kspl_tmp_008 = kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "struct "));
       (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(__kspl_tmp_008, t.name), KSPL_STR(std_lang_Slice_U8, " {\n")));
@@ -137184,7 +137158,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_c(ks
         {
           KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
           for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll2->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-            ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)459)));
+            ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)460)));
             kspl_priv_ksplc_tools_interface_c_doc(kspl_priv_ksplc_tools_interface_summary_of(walk->c, f->node), KSPL_STR(std_lang_Slice_U8, "    "), &out);
             (void)(kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "    ")));
             KSPL_UNUSED I32 __kspl_tmp_012 = f->type_id;
@@ -137204,7 +137178,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_c(ks
   {
     KSPL_UNUSED I32 __kspl_for_idx_s4 = 0;
     for (; (Sz)__kspl_for_idx_s4 < __kspl_for_coll5->len; __kspl_for_idx_s4 = (I32)((U32)(__kspl_for_idx_s4) + (U32)(1))) {
-      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(__kspl_for_coll5, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)466)));
+      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(__kspl_for_coll5, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)467)));
       kspl_priv_ksplc_tools_interface_c_doc(e.doc, KSPL_STR(std_lang_Slice_U8, ""), &out);
       std_str_Str_builder params = kspl_std_str_Str_builder_new();
       std_ds_List_ksplc_base_ast_Ast_node_Ptr ps = kspl_priv_ksplc_tools_interface_params_of(e.node);
@@ -137256,7 +137230,7 @@ static KSPL_UNUSED std_ds_List_ksplc_tools_interface_Named kspl_priv_ksplc_tools
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)491)));
+      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)492)));
       KSPL_UNUSED Bool __kspl_tmp_003 = !t.is_enum;
       if (__kspl_tmp_003) {
         __kspl_tmp_003 = t.body;
@@ -137308,7 +137282,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_interface_visit_body(ksplc_tools_i
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)505)));
+        ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)506)));
         I32 inner = kspl_ksplc_sema_type_env_Env_get_clean_real_type(walk->c->env, f->type_id);
         KSPL_UNUSED ksplc_sema_type_env_Info __kspl_tmp_009 = kspl_ksplc_sema_type_env_Env_get_info(walk->c->env, inner);
         switch (__kspl_tmp_009.tag) {
@@ -137340,7 +137314,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_tools_interface_render_c_enum(ksplc_tool
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)522)));
+        ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)523)));
         kspl_priv_ksplc_tools_interface_c_doc(kspl_priv_ksplc_tools_interface_summary_of(walk->c, v->node), KSPL_STR(std_lang_Slice_U8, ""), out);
         KSPL_UNUSED std_str_Str_builder *__kspl_tmp_004 = kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(out, KSPL_STR(std_lang_Slice_U8, "#define ")), name), KSPL_STR(std_lang_Slice_U8, "_"));
         (void)(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(__kspl_tmp_004, v->name), KSPL_STR(std_lang_Slice_U8, " ((")), name), KSPL_STR(std_lang_Slice_U8, ")")));
@@ -137394,7 +137368,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_kspl
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll3->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)546)));
+      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll3, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)547)));
       if (!t.body) {
         goto _mir_label_001;
       }
@@ -137417,7 +137391,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_kspl
         {
           KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
           for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll1->len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-            ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)556)));
+            ksplc_sema_type_def_Enum_variant *v = (*(kspl_std_ds_List_ksplc_sema_type_def_Enum_variant_Ptr_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)557)));
             KSPL_UNUSED std_str_Str_builder *__kspl_tmp_011 = kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "  "));
             KSPL_UNUSED std_str_Str_builder *__kspl_tmp_010 = kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(__kspl_tmp_011, v->name), KSPL_STR(std_lang_Slice_U8, " = "));
             KSPL_UNUSED std_str_Str_builder *__kspl_tmp_009 = kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_I64(__kspl_tmp_010, v->tag_value), KSPL_STR(std_lang_Slice_U8, ";"));
@@ -137435,7 +137409,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_kspl
         {
           KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
           for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll2->len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-            ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)561)));
+            ksplc_sema_type_def_Struct_field *f = (*(kspl_std_ds_List_ksplc_sema_type_def_Struct_field_Ptr_at(__kspl_for_coll2, (Sz)__kspl_for_idx_s3, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)562)));
             KSPL_UNUSED std_str_Str_builder *__kspl_tmp_017 = kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "  "));
             KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_018 = {0};
             if (f->vis == (ksplc_sema_type_scope_Visibility)kspl_ksplc_sema_type_scope_Visibility_public) {
@@ -137467,7 +137441,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_kspl
   {
     KSPL_UNUSED I32 __kspl_for_idx_s4 = 0;
     for (; (Sz)__kspl_for_idx_s4 < __kspl_for_coll4.len; __kspl_for_idx_s4 = (I32)((U32)(__kspl_for_idx_s4) + (U32)(1))) {
-      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll4, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)571)));
+      std_lang_Slice_U8 lib = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll4, (Sz)__kspl_for_idx_s4, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)572)));
       KSPL_UNUSED std_str_Str_builder *__kspl_tmp_022 = kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "#link(\""));
       (void)(kspl_std_str_Str_builder_s(kspl_std_str_Str_builder_s(__kspl_tmp_022, lib), KSPL_STR(std_lang_Slice_U8, "\") ")));
     }
@@ -137477,7 +137451,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_kspl
   {
     KSPL_UNUSED I32 __kspl_for_idx_s5 = 0;
     for (; (Sz)__kspl_for_idx_s5 < __kspl_for_coll5->len; __kspl_for_idx_s5 = (I32)((U32)(__kspl_for_idx_s5) + (U32)(1))) {
-      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll5, (Sz)__kspl_for_idx_s5, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)574)));
+      ksplc_tools_interface_Named t = (*(kspl_std_ds_List_ksplc_tools_interface_Named_at(__kspl_for_coll5, (Sz)__kspl_for_idx_s5, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)575)));
       if (!t.body) {
         KSPL_UNUSED std_str_Str_builder *__kspl_tmp_026 = kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "  pub struct "));
         KSPL_UNUSED std_str_Str_builder *__kspl_tmp_025 = kspl_std_str_Str_builder_s(kspl_std_lang_put_std_str_Str_builder_Ptr_std_lang_Slice_U8_Const(__kspl_tmp_026, t.name), KSPL_STR(std_lang_Slice_U8, ";"));
@@ -137489,7 +137463,7 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_tools_interface_render_kspl
   {
     KSPL_UNUSED I32 __kspl_for_idx_s6 = 0;
     for (; (Sz)__kspl_for_idx_s6 < __kspl_for_coll7->len; __kspl_for_idx_s6 = (I32)((U32)(__kspl_for_idx_s6) + (U32)(1))) {
-      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(__kspl_for_coll7, (Sz)__kspl_for_idx_s6, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)577)));
+      ksplc_tools_interface_Export e = (*(kspl_std_ds_List_ksplc_tools_interface_Export_at(__kspl_for_coll7, (Sz)__kspl_for_idx_s6, KSPL_STR(std_lang_Slice_U8, "ksplc/tools/interface"), (Sz)578)));
       KSPL_UNUSED std_str_Str_builder *__kspl_tmp_029 = kspl_std_str_Str_builder_s(&out, KSPL_STR(std_lang_Slice_U8, "  pub fn "));
       (void)(kspl_std_str_Str_builder_c(kspl_std_str_Str_builder_s(__kspl_tmp_029, kspl_ksplc_base_ast_Ast_node_get_decl_id_text(e.node)), 40));
       std_ds_List_ksplc_base_ast_Ast_node_Ptr ps = kspl_priv_ksplc_tools_interface_params_of(e.node);
@@ -137743,11 +137717,17 @@ static KSPL_UNUSED kspl_Void_Result_std_argp_Argp_error kspl_priv_std_argp_store
   return (kspl_Void_Result_std_argp_Argp_error){.is_err = false};
 }
 
-static KSPL_UNUSED void kspl_priv_std_argp_pad_to(std_str_Str_builder *line, Sz column) {
-  for (; line->len < column;) {
-    (void)(kspl_std_str_Str_builder_c(line, 32));
+static KSPL_UNUSED void kspl_priv_std_argp_help_name(std_lang_Writer out, std_lang_Slice_U8 name, std_lang_Slice_U8 suffix) {
+  KSPL_UNUSED std_lang_Writer __kspl_tmp_002 = ((out).vtable->s((out).obj, KSPL_STR(std_lang_Slice_U8, "  ")));
+  KSPL_UNUSED std_lang_Writer __kspl_tmp_001 = ((__kspl_tmp_002).vtable->s((__kspl_tmp_002).obj, name));
+  (void)(((__kspl_tmp_001).vtable->s((__kspl_tmp_001).obj, suffix)));
+  {
+    Sz i = (Sz)((size_t)((Sz)((size_t)((Sz)2) + (size_t)(name.len))) + (size_t)(suffix.len));
+    for (; i < kspl_priv_std_argp_help_column; i = (Sz)((size_t)(i) + (size_t)((Sz)1))) {
+      (void)(((out).vtable->c((out).obj, 32)));
+    }
   }
-  (void)(kspl_std_str_Str_builder_c(line, 32));
+  (void)(((out).vtable->c((out).obj, 32)));
   return;
 }
 
@@ -137801,7 +137781,7 @@ void kspl_std_argp_Parser_append_names(std_argp_Parser *r, std_ds_List_std_lang_
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_argp_Opt o = (*(kspl_std_ds_List_std_argp_Opt_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)226)));
+      std_argp_Opt o = (*(kspl_std_ds_List_std_argp_Opt_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)227)));
       kspl_std_ds_List_std_lang_Slice_U8_Const_push(out, o.name);
     }
   }
@@ -137835,7 +137815,7 @@ std_argp_Opt *kspl_std_argp_Parser_find(std_argp_Parser *r, std_lang_Slice_U8 na
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
-      std_argp_Opt *o = kspl_std_ds_List_std_argp_Opt_at(r->opts, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)250);
+      std_argp_Opt *o = kspl_std_ds_List_std_argp_Opt_at(r->opts, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)251);
       if (kspl_std_lang_Slice_U8_Const_equals(o->name, name)) {
         return o;
       }
@@ -137851,7 +137831,7 @@ std_argp_Cmd *kspl_std_argp_Parser_find_cmd(std_argp_Parser *r, std_lang_Slice_U
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_003;
-      std_argp_Cmd *c = kspl_std_ds_List_std_argp_Cmd_at(r->cmds, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)257);
+      std_argp_Cmd *c = kspl_std_ds_List_std_argp_Cmd_at(r->cmds, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)258);
       if (kspl_std_lang_Slice_U8_Const_equals(c->name, name)) {
         return c;
       }
@@ -138061,7 +138041,7 @@ kspl_Void_Result_std_argp_Argp_error kspl_std_argp_Parser_parse_list(std_argp_Pa
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_018 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
       Sz i = __kspl_tmp_018;
-      std_argp_Opt *o = kspl_std_ds_List_std_argp_Opt_at(r->opts, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)351);
+      std_argp_Opt *o = kspl_std_ds_List_std_argp_Opt_at(r->opts, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)352);
       KSPL_UNUSED Bool __kspl_tmp_019 = o->required;
       if (__kspl_tmp_019) {
         __kspl_tmp_019 = !o->seen;
@@ -138085,21 +138065,19 @@ void kspl_std_argp_Parser_print_options(std_argp_Parser *r, std_lang_Writer out)
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
         KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
         Sz i = __kspl_tmp_003;
-        std_argp_Cmd *c = kspl_std_ds_List_std_argp_Cmd_at(r->cmds, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)380);
-        std_str_Str_builder line = kspl_std_str_Str_builder_new();
-        KSPL_UNUSED std_str_Str_builder *__kspl_tmp_004 = kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, "  "));
-        (void)(kspl_std_str_Str_builder_s(__kspl_tmp_004, c->name));
+        std_argp_Cmd *c = kspl_std_ds_List_std_argp_Cmd_at(r->cmds, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)381);
+        KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_004 = c->name;
+        KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_005 = {0};
         if (c->trailing != null) {
-          (void)(kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, " <target> [args...]")));
+          __kspl_tmp_005 = KSPL_STR(std_lang_Slice_U8, " <target> [args...]");
         }
 
-        kspl_priv_std_argp_pad_to(&line, kspl_priv_std_argp_help_column);
-        KSPL_UNUSED std_lang_Writer __kspl_tmp_006 = ((out).vtable->s((out).obj, kspl_std_str_Str_builder_slice(&line)));
-        KSPL_UNUSED std_lang_Writer __kspl_tmp_005 = ((__kspl_tmp_006).vtable->s((__kspl_tmp_006).obj, c->help));
-        (void)(((__kspl_tmp_005).vtable->c((__kspl_tmp_005).obj, 10)));
-        {
-          kspl_std_str_Str_builder_free(&line);
+        else {
+          __kspl_tmp_005 = KSPL_STR(std_lang_Slice_U8, "");
         }
+        kspl_priv_std_argp_help_name(out, __kspl_tmp_004, __kspl_tmp_005);
+        KSPL_UNUSED std_lang_Writer __kspl_tmp_006 = ((out).vtable->s((out).obj, c->help));
+        (void)(((__kspl_tmp_006).vtable->c((__kspl_tmp_006).obj, 10)));
       }
     }
   }
@@ -138111,55 +138089,40 @@ void kspl_std_argp_Parser_print_options(std_argp_Parser *r, std_lang_Writer out)
     for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
       KSPL_UNUSED Sz __kspl_tmp_009 = kspl_std_lang_Range_get(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2);
       Sz i = __kspl_tmp_009;
-      std_argp_Opt *o = kspl_std_ds_List_std_argp_Opt_at(r->opts, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)390);
-      std_str_Str_builder line = kspl_std_str_Str_builder_new();
-      (void)(kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, "  ")));
-      (void)(kspl_std_str_Str_builder_s(&line, o->name));
+      std_argp_Opt *o = kspl_std_ds_List_std_argp_Opt_at(r->opts, i, KSPL_STR(std_lang_Slice_U8, "std/argp"), (Sz)386);
+      std_lang_Slice_U8 suffix = KSPL_STR(std_lang_Slice_U8, "");
       KSPL_UNUSED std_argp_Kind __kspl_tmp_010 = o->kind;
       switch (__kspl_tmp_010.tag) {
       case kspl_std_argp_Kind_int_val: {
         KSPL_UNUSED I64 *_o = __kspl_tmp_010.payload.int_val.out;
-        (void)(kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, "=<int>")));
+        suffix = KSPL_STR(std_lang_Slice_U8, "=<int>");
         break;
       }
       case kspl_std_argp_Kind_str_val: {
         KSPL_UNUSED std_lang_Slice_U8 *_o = __kspl_tmp_010.payload.str_val.out;
-        (void)(kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, "=<str>")));
+        suffix = KSPL_STR(std_lang_Slice_U8, "=<str>");
         break;
       }
       case kspl_std_argp_Kind_str_list: {
         KSPL_UNUSED std_ds_List_std_lang_Slice_U8_Const *_o = __kspl_tmp_010.payload.str_list.out;
-        (void)(kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, "=<str>")));
+        suffix = KSPL_STR(std_lang_Slice_U8, "=<str>");
         break;
       }
       default: {
       } break;
       }
-      kspl_priv_std_argp_pad_to(&line, kspl_priv_std_argp_help_column);
-      (void)(kspl_std_str_Str_builder_s(&line, o->help));
+      kspl_priv_std_argp_help_name(out, o->name, suffix);
+      (void)(((out).vtable->s((out).obj, o->help)));
       if (o->required) {
-        (void)(kspl_std_str_Str_builder_s(&line, KSPL_STR(std_lang_Slice_U8, " (required)")));
+        (void)(((out).vtable->s((out).obj, KSPL_STR(std_lang_Slice_U8, " (required)"))));
       }
 
-      KSPL_UNUSED std_lang_Writer __kspl_tmp_011 = ((out).vtable->s((out).obj, kspl_std_str_Str_builder_slice(&line)));
-      (void)(((__kspl_tmp_011).vtable->c((__kspl_tmp_011).obj, 10)));
-      {
-        kspl_std_str_Str_builder_free(&line);
-      }
+      (void)(((out).vtable->c((out).obj, 10)));
     }
   }
-  std_str_Str_builder help_line = kspl_std_str_Str_builder_new();
-  (void)(kspl_std_str_Str_builder_s(&help_line, KSPL_STR(std_lang_Slice_U8, "  --help")));
-  kspl_priv_std_argp_pad_to(&help_line, kspl_priv_std_argp_help_column);
-  KSPL_UNUSED std_lang_Writer __kspl_tmp_012 = ((out).vtable->s((out).obj, kspl_std_str_Str_builder_slice(&help_line)));
-  (void)(((__kspl_tmp_012).vtable->s((__kspl_tmp_012).obj, KSPL_STR(std_lang_Slice_U8, "show this usage\n"))));
-  {
-    kspl_std_str_Str_builder_free(&help_line);
-  }
+  kspl_priv_std_argp_help_name(out, KSPL_STR(std_lang_Slice_U8, "--help"), KSPL_STR(std_lang_Slice_U8, ""));
+  (void)(((out).vtable->s((out).obj, KSPL_STR(std_lang_Slice_U8, "show this usage\n"))));
   return;
-  {
-    kspl_std_str_Str_builder_free(&help_line);
-  }
 }
 
 std_lang_Writer kspl_std_argp_Argp_error_fmt(std_argp_Argp_error r, std_lang_Writer w) {
@@ -138893,7 +138856,6 @@ static KSPL_UNUSED std_lang_Slice_U8 kspl_priv_ksplc_main_only_input(std_ds_List
 }
 
 static KSPL_UNUSED ksplc_main_Mode kspl_priv_ksplc_main_read_mode(std_argp_Parser *p, std_lang_Slice_U8 mode_name, std_ds_List_std_lang_Slice_U8_Const *in_files, ksplc_main_Cli *o) {
-  ksplc_main_Mode mode = {0};
   if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "fmt"))) {
     if (in_files->len == (Sz)0) {
       kspl_ksplc_usage_error_exit(kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "fmt")));
@@ -138913,26 +138875,22 @@ static KSPL_UNUSED ksplc_main_Mode kspl_priv_ksplc_main_read_mode(std_argp_Parse
       kspl_ksplc_usage_error_exit(KSPL_STR(std_lang_Slice_U8, "--to: the only notations that can be put out are kspl and kspls\n"));
     }
 
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_fmt, .payload.fmt = {in_files, o->fmt_in_place, o->fmt_config, o->to_name}};
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_fmt, .payload.fmt = {in_files, o->fmt_in_place, o->fmt_config, o->to_name}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "lsp"))) {
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_lsp};
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "lsp"))) {
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_lsp};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "lsp-worker"))) {
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_lsp_worker};
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "lsp-worker"))) {
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_lsp_worker};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "lint"))) {
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_lint, .payload.lint = {kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "lint")))}};
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "lint"))) {
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_lint, .payload.lint = {kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "lint")))}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "info"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "info"))) {
     std_lang_Slice_U8 subject = kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_for_topics(KSPL_STR(std_lang_Slice_U8, "info"), kspl_ksplc_usage_info_topics()));
     ksplc_usage_Info_topic topic = kspl_ksplc_usage_parse_info_topic(subject);
     kspl_ksplc_usage_refuse_unread_std_dir(p, topic);
@@ -138944,25 +138902,22 @@ static KSPL_UNUSED ksplc_main_Mode kspl_priv_ksplc_main_read_mode(std_argp_Parse
     default: {
     } break;
     }
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_info, .payload.info = {topic}};
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_info, .payload.info = {topic}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "clean"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "clean"))) {
     if (in_files->len != (Sz)0) {
       kspl_ksplc_usage_error_exit(kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "clean")));
     }
 
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_clean};
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_clean};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "emit-runtime"))) {
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_emit_runtime, .payload.emit_runtime = {kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "emit-runtime")))}};
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "emit-runtime"))) {
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_emit_runtime, .payload.emit_runtime = {kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "emit-runtime")))}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "explain"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "explain"))) {
     std_lang_Slice_U8 asked = kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "explain")));
     std_lang_Slice_U8 code = kspl_ksplc_tools_explain_canonical_code(asked, kspl_ksplc_base_core_arena);
     if (!kspl_ksplc_base_lint_codes_is_known(code)) {
@@ -138970,61 +138925,55 @@ static KSPL_UNUSED ksplc_main_Mode kspl_priv_ksplc_main_read_mode(std_argp_Parse
       kspl_ksplc_usage_error_exit(msg);
     }
 
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_explain, .payload.explain = {code}};
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_explain, .payload.explain = {code}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "doc"))) {
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_doc, .payload.doc = {kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "doc")))}};
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "doc"))) {
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_doc, .payload.doc = {kspl_priv_ksplc_main_only_input(in_files, kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "doc")))}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "run"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "run"))) {
     if (in_files->len == (Sz)0) {
       kspl_ksplc_usage_error_exit(kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "run")));
     }
 
     KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_003 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)0);
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_run, .payload.run = {__kspl_tmp_003, o->script_args}};
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_run, .payload.run = {__kspl_tmp_003, o->script_args}};
   }
 
-  else
-      if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "build"))) {
+  if (kspl_std_lang_Slice_U8_Const_equals(mode_name, KSPL_STR(std_lang_Slice_U8, "build"))) {
     if (in_files->len != (Sz)2) {
       kspl_ksplc_usage_error_exit(kspl_ksplc_usage_usage_of(KSPL_STR(std_lang_Slice_U8, "build")));
     }
 
     KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_004 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)0);
     KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_005 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)1);
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_build, .payload.build = {__kspl_tmp_004, __kspl_tmp_005, o->cflags}};
+    return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_build, .payload.build = {__kspl_tmp_004, __kspl_tmp_005, o->cflags}};
   }
 
-  else {
-    if (in_files->len != (Sz)2) {
-      if (in_files->len > (Sz)2) {
-        KSPL_UNUSED std_lang_Writer __kspl_tmp_006 = kspl_std_io_err();
-        (void)(((__kspl_tmp_006).vtable->s((__kspl_tmp_006).obj, KSPL_STR(std_lang_Slice_U8, "Error: too many input files (expected <input.kspl> <output.c>):\n"))));
-        KSPL_UNUSED std_ds_List_std_lang_Slice_U8_Const *__kspl_for_coll1 = in_files;
-        {
-          KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
-          for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-            std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)307)));
-            KSPL_UNUSED std_lang_Writer __kspl_tmp_011 = kspl_std_io_err();
-            KSPL_UNUSED std_lang_Writer __kspl_tmp_010 = ((__kspl_tmp_011).vtable->s((__kspl_tmp_011).obj, KSPL_STR(std_lang_Slice_U8, "  ")));
-            KSPL_UNUSED std_lang_Writer __kspl_tmp_009 = ((__kspl_tmp_010).vtable->s((__kspl_tmp_010).obj, f));
-            (void)(((__kspl_tmp_009).vtable->c((__kspl_tmp_009).obj, 10)));
-          }
+  if (in_files->len != (Sz)2) {
+    if (in_files->len > (Sz)2) {
+      KSPL_UNUSED std_lang_Writer __kspl_tmp_006 = kspl_std_io_err();
+      (void)(((__kspl_tmp_006).vtable->s((__kspl_tmp_006).obj, KSPL_STR(std_lang_Slice_U8, "Error: too many input files (expected <input.kspl> <output.c>):\n"))));
+      KSPL_UNUSED std_ds_List_std_lang_Slice_U8_Const *__kspl_for_coll1 = in_files;
+      {
+        KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
+        for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
+          std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)305)));
+          KSPL_UNUSED std_lang_Writer __kspl_tmp_011 = kspl_std_io_err();
+          KSPL_UNUSED std_lang_Writer __kspl_tmp_010 = ((__kspl_tmp_011).vtable->s((__kspl_tmp_011).obj, KSPL_STR(std_lang_Slice_U8, "  ")));
+          KSPL_UNUSED std_lang_Writer __kspl_tmp_009 = ((__kspl_tmp_010).vtable->s((__kspl_tmp_010).obj, f));
+          (void)(((__kspl_tmp_009).vtable->c((__kspl_tmp_009).obj, 10)));
         }
       }
-
-      kspl_ksplc_usage_usage_exit();
     }
 
-    KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_012 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)0);
-    KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_013 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)1);
-    mode = (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_compile, .payload.compile = {__kspl_tmp_012, __kspl_tmp_013, o->deps_path, o->libs_path}};
+    kspl_ksplc_usage_usage_exit();
   }
-  return mode;
+
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_012 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)0);
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_013 = kspl_std_ds_List_std_lang_Slice_U8_Const_get(in_files, (Sz)1);
+  return (ksplc_main_Mode){.tag = kspl_ksplc_main_Mode_compile, .payload.compile = {__kspl_tmp_012, __kspl_tmp_013, o->deps_path, o->libs_path}};
 }
 
 ksplc_main_Mode kspl_ksplc_main_Mode_new() {
@@ -139049,7 +138998,7 @@ ksplc_main_Mode kspl_ksplc_main_Mode_new() {
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)335)));
+      std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)331)));
       if (kspl_std_lang_Slice_U8_Const_equals(f, KSPL_STR(std_lang_Slice_U8, "-"))) {
         KSPL_UNUSED std_lang_Writer __kspl_tmp_008 = kspl_std_io_err();
         (void)(((__kspl_tmp_008).vtable->s((__kspl_tmp_008).obj, KSPL_STR(std_lang_Slice_U8, "Error: unknown option: -\n"))));
@@ -139168,7 +139117,7 @@ kspl_Void_Result_ksplc_pipeline_Compile_error kspl_ksplc_main_Mode_dispatch(kspl
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        std_lang_Slice_U8 f_path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)392)));
+        std_lang_Slice_U8 f_path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)388)));
         KSPL_UNUSED Bool __kspl_tmp_011 = {0};
         if (to.len > (Sz)0) {
           __kspl_tmp_011 = kspl_std_lang_Slice_U8_Const_equals(to, KSPL_STR(std_lang_Slice_U8, "kspls"));
@@ -139196,7 +139145,7 @@ kspl_Void_Result_ksplc_pipeline_Compile_error kspl_ksplc_main_Mode_dispatch(kspl
       {
         KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
         for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll2.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-          std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)400)));
+          std_lang_Slice_U8 f = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll2, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)396)));
           KSPL_UNUSED std_lang_Writer __kspl_tmp_021 = kspl_std_io_err();
           KSPL_UNUSED std_lang_Writer __kspl_tmp_020 = ((__kspl_tmp_021).vtable->s((__kspl_tmp_021).obj, KSPL_STR(std_lang_Slice_U8, "  -> ")));
           KSPL_UNUSED std_lang_Writer __kspl_tmp_019 = ((__kspl_tmp_020).vtable->s((__kspl_tmp_020).obj, f));
@@ -139383,7 +139332,7 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_check_sanitize(ksplc_main_Cli *o, s
     {
       KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
       for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-        std_lang_Slice_U8 w = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)490)));
+        std_lang_Slice_U8 w = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)486)));
         if (kspl_std_lang_Slice_U8_Const_starts_with(w, KSPL_STR(std_lang_Slice_U8, "-fsanitize="), (Sz)0)) {
           kspl_ksplc_usage_error_exit(KSPL_STR(std_lang_Slice_U8, "--cflags: name the sanitizers with --sanitize=<names>, which hands the C compiler its -fsanitize=\n"));
         }
@@ -139408,55 +139357,41 @@ static KSPL_UNUSED void kspl_priv_ksplc_main_check_sanitize(ksplc_main_Cli *o, s
     kspl_ksplc_usage_error_exit(KSPL_STR(std_lang_Slice_U8, "--sanitize: the C a compile writes is instrumented by the C compiler that reads it, so give that compiler -fsanitize=<names>. On a compile, --sanitize marks --to=llvm's IR, which no front end marks\n"));
   }
 
-  KSPL_UNUSED std_ds_List_std_lang_Slice_U8_Const __kspl_for_coll4 = kspl_std_lang_Slice_U8_Const_split(o->sanitize, 44, kspl_ksplc_base_core_arena);
+  KSPL_UNUSED std_ds_List_std_lang_Slice_U8_Const __kspl_for_coll3 = kspl_std_lang_Slice_U8_Const_split(o->sanitize, 44, kspl_ksplc_base_core_arena);
   {
     KSPL_UNUSED I32 __kspl_for_idx_s2 = 0;
-    for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll4.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
-      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll4, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)507)));
-      Bool known = false;
-      KSPL_UNUSED std_lang_Slice_U8_Array_4 __kspl_for_coll2 = kspl_priv_ksplc_main_sanitizer_names;
-      {
-        KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
-        for (; (Sz)__kspl_for_idx_s3 < (Sz)4; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
-          std_lang_Slice_U8 k = __kspl_for_coll2.data[kspl_bounds_check((Sz)__kspl_for_idx_s3, 4, "ksplc/main", 509)];
-          KSPL_UNUSED Bool __kspl_tmp_008 = known;
-          if (!__kspl_tmp_008) {
-            __kspl_tmp_008 = kspl_std_lang_Slice_U8_Const_equals(k, name);
-          }
-
-          known = __kspl_tmp_008;
-        }
-      }
-      if (!known) {
-        KSPL_UNUSED std_str_Arena_text *__kspl_tmp_009 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(kspl_ksplc_base_core_arena), KSPL_STR(std_lang_Slice_U8, "--sanitize: '"));
-        std_str_Arena_text *said = kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(__kspl_tmp_009, name), KSPL_STR(std_lang_Slice_U8, "' is not a sanitizer ksplc knows:"));
-        KSPL_UNUSED std_lang_Range __kspl_for_coll3 = kspl_std_lang_Range_asc((Sz)4);
+    for (; (Sz)__kspl_for_idx_s2 < __kspl_for_coll3.len; __kspl_for_idx_s2 = (I32)((U32)(__kspl_for_idx_s2) + (U32)(1))) {
+      std_lang_Slice_U8 name = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(&__kspl_for_coll3, (Sz)__kspl_for_idx_s2, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)503)));
+      if (!kspl_std_lang_Slice_U8_Const_is_one_of(name, (std_lang_Slice_std_lang_Slice_U8_Const){.ptr = (std_lang_Slice_U8 *)kspl_priv_ksplc_main_sanitizer_names.data, .len = 4})) {
+        KSPL_UNUSED std_str_Arena_text *__kspl_tmp_006 = kspl_std_str_Arena_text_s(kspl_std_mem_Arena_text(kspl_ksplc_base_core_arena), KSPL_STR(std_lang_Slice_U8, "--sanitize: '"));
+        std_str_Arena_text *said = kspl_std_str_Arena_text_s(kspl_std_str_Arena_text_s(__kspl_tmp_006, name), KSPL_STR(std_lang_Slice_U8, "' is not a sanitizer ksplc knows:"));
+        KSPL_UNUSED std_lang_Range __kspl_for_coll2 = kspl_std_lang_Range_asc((Sz)4);
         {
-          KSPL_UNUSED I32 __kspl_for_idx_s4 = 0;
-          for (; (Sz)__kspl_for_idx_s4 < __kspl_for_coll3.len; __kspl_for_idx_s4 = (I32)((U32)(__kspl_for_idx_s4) + (U32)(1))) {
-            KSPL_UNUSED Sz __kspl_tmp_012 = kspl_std_lang_Range_get(&__kspl_for_coll3, (Sz)__kspl_for_idx_s4);
-            Sz i = __kspl_tmp_012;
-            KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_014 = {0};
+          KSPL_UNUSED I32 __kspl_for_idx_s3 = 0;
+          for (; (Sz)__kspl_for_idx_s3 < __kspl_for_coll2.len; __kspl_for_idx_s3 = (I32)((U32)(__kspl_for_idx_s3) + (U32)(1))) {
+            KSPL_UNUSED Sz __kspl_tmp_009 = kspl_std_lang_Range_get(&__kspl_for_coll2, (Sz)__kspl_for_idx_s3);
+            Sz i = __kspl_tmp_009;
+            KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_011 = {0};
             if (i > (Sz)0) {
-              __kspl_tmp_014 = KSPL_STR(std_lang_Slice_U8, ", ");
+              __kspl_tmp_011 = KSPL_STR(std_lang_Slice_U8, ", ");
             }
 
             else {
-              __kspl_tmp_014 = KSPL_STR(std_lang_Slice_U8, " ");
+              __kspl_tmp_011 = KSPL_STR(std_lang_Slice_U8, " ");
             }
-            KSPL_UNUSED std_str_Arena_text *__kspl_tmp_013 = kspl_std_str_Arena_text_s(said, __kspl_tmp_014);
-            (void)(kspl_std_str_Arena_text_s(__kspl_tmp_013, kspl_priv_ksplc_main_sanitizer_names.data[kspl_bounds_check(i, 4, "ksplc/main", 515)]));
+            KSPL_UNUSED std_str_Arena_text *__kspl_tmp_010 = kspl_std_str_Arena_text_s(said, __kspl_tmp_011);
+            (void)(kspl_std_str_Arena_text_s(__kspl_tmp_010, kspl_priv_ksplc_main_sanitizer_names.data[kspl_bounds_check(i, 4, "ksplc/main", 508)]));
           }
         }
         kspl_ksplc_usage_error_exit(kspl_std_str_Arena_text_take(kspl_std_str_Arena_text_c(said, 10)));
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_015 = kspl_std_lang_Slice_U8_Const_equals(name, KSPL_STR(std_lang_Slice_U8, "undefined"));
-      if (__kspl_tmp_015) {
-        __kspl_tmp_015 = kspl_ksplc_base_core_is_llvm_target();
+      KSPL_UNUSED Bool __kspl_tmp_012 = kspl_std_lang_Slice_U8_Const_equals(name, KSPL_STR(std_lang_Slice_U8, "undefined"));
+      if (__kspl_tmp_012) {
+        __kspl_tmp_012 = kspl_ksplc_base_core_is_llvm_target();
       }
 
-      if (__kspl_tmp_015) {
+      if (__kspl_tmp_012) {
         kspl_ksplc_usage_error_exit(KSPL_STR(std_lang_Slice_U8, "--sanitize=undefined: its checks are written into C by clang's front end, which LLVM IR does not pass through. KSPL's own checks stop an index, a shift, a divisor or an enum's tag out of range in either backend; for the rest, build through C (ksplc build --sanitize=undefined)\n"));
       }
     }
@@ -139759,7 +139694,7 @@ static KSPL_UNUSED kspl_Void_Result_ksplc_pipeline_Compile_error kspl_priv_ksplc
   {
     KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
     for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1->len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      std_lang_Slice_U8 path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)671)));
+      std_lang_Slice_U8 path = (*(kspl_std_ds_List_std_lang_Slice_U8_Const_at(__kspl_for_coll1, (Sz)__kspl_for_idx_s1, KSPL_STR(std_lang_Slice_U8, "ksplc/main"), (Sz)664)));
       KSPL_UNUSED ksplc_base_ast_Ast_node *__kspl_tmp_008 = compiler->root_file;
       KSPL_UNUSED ksplc_sema_session_ctx_Sema_ctx *__kspl_tmp_009 = compiler->sema;
       KSPL_UNUSED ksplc_tools_interface_Form __kspl_tmp_010 = kspl_ksplc_tools_interface_form_of(path);
@@ -140538,18 +140473,7 @@ Sz kspl_std_lang_Slice_U8_Const_count_codepoints(std_lang_Slice_U8 r) {
 }
 
 Bool kspl_std_lang_Slice_U8_Const_contains_nul(std_lang_Slice_U8 r) {
-  KSPL_UNUSED std_lang_Range __kspl_for_coll1 = kspl_std_lang_Range_asc(r.len);
-  {
-    KSPL_UNUSED I32 __kspl_for_idx_s1 = 0;
-    for (; (Sz)__kspl_for_idx_s1 < __kspl_for_coll1.len; __kspl_for_idx_s1 = (I32)((U32)(__kspl_for_idx_s1) + (U32)(1))) {
-      KSPL_UNUSED Sz __kspl_tmp_003 = kspl_std_lang_Range_get(&__kspl_for_coll1, (Sz)__kspl_for_idx_s1);
-      Sz i = __kspl_tmp_003;
-      if ((U8)(*(r.ptr + i)) == 0) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return kspl_std_lang_Option_Sz_is_some(kspl_std_lang_Slice_U8_Const_find_char(r, 0));
 }
 
 I32 kspl_std_lang_Slice_U8_Const_compare(std_lang_Slice_U8 r, std_lang_Slice_U8 b) {
@@ -140640,16 +140564,7 @@ Bool kspl_std_lang_Slice_U8_Const_starts_with(std_lang_Slice_U8 r, std_lang_Slic
 }
 
 Bool kspl_std_lang_Slice_U8_Const_ends_with(std_lang_Slice_U8 r, std_lang_Slice_U8 suffix) {
-  if (r.len < suffix.len) {
-    return false;
-  }
-
-  if (suffix.len == (Sz)0) {
-    return true;
-  }
-
-  Sz start = (Sz)((size_t)(r.len) - (size_t)(suffix.len));
-  return memcmp((void *)(r.ptr + start), (void *)suffix.ptr, suffix.len) == 0;
+  return kspl_std_lang_Slice_U8_Const_starts_with(r, suffix, (Sz)((size_t)(r.len) - (size_t)(suffix.len)));
 }
 
 std_lang_Slice_U8 kspl_std_lang_Slice_U8_Const_strip_prefix(std_lang_Slice_U8 r, std_lang_Slice_U8 prefix) {
@@ -140927,10 +140842,7 @@ std_lang_Slice_U8 kspl_std_lang_Slice_U8_Const_replace(std_lang_Slice_U8 r, std_
   _mir_label_003:;
   }
   (void)(kspl_std_str_Str_builder_s(&b, kspl_std_lang_Slice_U8_Const_sub_from(r, pos)));
-  U8 *out = (U8 *)kspl_std_mem_Arena_alloc(arena, (Sz)((size_t)(b.len) + (size_t)((Sz)1)));
-  kspl_std_mem_copy((void *)out, (void *)b.ptr, b.len);
-  (*(out + b.len)) = 0;
-  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_005 = (std_lang_Slice_U8){.ptr = (U8 *)(out), .len = b.len};
+  KSPL_UNUSED std_lang_Slice_U8 __kspl_tmp_005 = kspl_std_mem_Arena_dup_str(arena, kspl_std_str_Str_builder_slice(&b));
   {
     kspl_std_str_Str_builder_free(&b);
   }
@@ -141205,9 +141117,9 @@ std_str_Str_builder kspl_std_lang_Slice_U8_Const_dedent(std_lang_Slice_U8 r) {
           for (;;) {
             KSPL_UNUSED Bool __kspl_tmp_007 = k < indent.len;
             if (__kspl_tmp_007) {
-              KSPL_UNUSED Bool __kspl_tmp_008 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&indent, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)400))) == 32;
+              KSPL_UNUSED Bool __kspl_tmp_008 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&indent, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)397))) == 32;
               if (!__kspl_tmp_008) {
-                __kspl_tmp_008 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&indent, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)400))) == 9;
+                __kspl_tmp_008 = (U8)(*(kspl_std_lang_Slice_U8_Const_at_ref(&indent, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)397))) == 9;
               }
 
               __kspl_tmp_007 = __kspl_tmp_008;
@@ -141219,8 +141131,8 @@ std_str_Str_builder kspl_std_lang_Slice_U8_Const_dedent(std_lang_Slice_U8 r) {
               if (!__kspl_tmp_009) {
                 KSPL_UNUSED Bool __kspl_tmp_010 = k < prefix.len;
                 if (__kspl_tmp_010) {
-                  KSPL_UNUSED const U8 __kspl_tmp_011 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&prefix, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)401)));
-                  __kspl_tmp_010 = __kspl_tmp_011 == (*(kspl_std_lang_Slice_U8_Const_at_ref(&indent, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)401)));
+                  KSPL_UNUSED const U8 __kspl_tmp_011 = (*(kspl_std_lang_Slice_U8_Const_at_ref(&prefix, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)398)));
+                  __kspl_tmp_010 = __kspl_tmp_011 == (*(kspl_std_lang_Slice_U8_Const_at_ref(&indent, k, KSPL_STR(std_lang_Slice_U8, "std/str"), (Sz)398)));
                 }
 
                 __kspl_tmp_009 = __kspl_tmp_010;
@@ -141251,59 +141163,57 @@ std_str_Str_builder kspl_std_lang_Slice_U8_Const_dedent(std_lang_Slice_U8 r) {
   line_start = (Sz)0;
   for (; i < r.len;) {
     const U8 c = (*(r.ptr + i));
-    if ((U8)c == 10) {
-      if (is_empty_line) {
-        res.len = line_start;
-      }
-
-      (void)(kspl_std_str_Str_builder_c(&res, 10));
-      is_empty_line = true;
-      skip_count = (Sz)0;
-      line_start = res.len;
+    KSPL_UNUSED Bool __kspl_tmp_016 = (U8)c == 10;
+    if (!__kspl_tmp_016) {
+      __kspl_tmp_016 = (U8)c == 13;
     }
 
-    else
-        if ((U8)c == 13) {
+    if (__kspl_tmp_016) {
       if (is_empty_line) {
         res.len = line_start;
       }
 
-      (void)(kspl_std_str_Str_builder_c(&res, 13));
+      (void)(kspl_std_str_Str_builder_c(&res, c));
       line_start = res.len;
+      if ((U8)c == 10) {
+        is_empty_line = true;
+        skip_count = (Sz)0;
+      }
+
     }
 
     else {
-      KSPL_UNUSED Bool __kspl_tmp_017 = is_empty_line;
-      if (__kspl_tmp_017) {
-        __kspl_tmp_017 = skip_count < min_indent;
+      KSPL_UNUSED Bool __kspl_tmp_018 = is_empty_line;
+      if (__kspl_tmp_018) {
+        __kspl_tmp_018 = skip_count < min_indent;
       }
 
-      KSPL_UNUSED Bool __kspl_tmp_016 = __kspl_tmp_017;
-      if (__kspl_tmp_016) {
-        KSPL_UNUSED Bool __kspl_tmp_018 = (U8)c == 32;
-        if (!__kspl_tmp_018) {
-          __kspl_tmp_018 = (U8)c == 9;
+      KSPL_UNUSED Bool __kspl_tmp_017 = __kspl_tmp_018;
+      if (__kspl_tmp_017) {
+        KSPL_UNUSED Bool __kspl_tmp_019 = (U8)c == 32;
+        if (!__kspl_tmp_019) {
+          __kspl_tmp_019 = (U8)c == 9;
         }
 
-        __kspl_tmp_016 = __kspl_tmp_018;
+        __kspl_tmp_017 = __kspl_tmp_019;
       }
 
-      if (__kspl_tmp_016) {
+      if (__kspl_tmp_017) {
         skip_count = (Sz)((size_t)(skip_count) + (size_t)((Sz)1));
       }
 
       else {
-        KSPL_UNUSED Bool __kspl_tmp_019 = is_empty_line;
-        if (__kspl_tmp_019) {
-          KSPL_UNUSED Bool __kspl_tmp_020 = (U8)c == 32;
-          if (!__kspl_tmp_020) {
-            __kspl_tmp_020 = (U8)c == 9;
+        KSPL_UNUSED Bool __kspl_tmp_020 = is_empty_line;
+        if (__kspl_tmp_020) {
+          KSPL_UNUSED Bool __kspl_tmp_021 = (U8)c == 32;
+          if (!__kspl_tmp_021) {
+            __kspl_tmp_021 = (U8)c == 9;
           }
 
-          __kspl_tmp_019 = __kspl_tmp_020;
+          __kspl_tmp_020 = __kspl_tmp_021;
         }
 
-        is_empty_line = __kspl_tmp_019;
+        is_empty_line = __kspl_tmp_020;
         (void)(kspl_std_str_Str_builder_c(&res, c));
       }
     }
@@ -145659,16 +145569,7 @@ Bool kspl_std_lang_Slice_U8_starts_with(std_lang_Slice_U8 r, std_lang_Slice_U8 p
 }
 
 Bool kspl_std_lang_Slice_U8_ends_with(std_lang_Slice_U8 r, std_lang_Slice_U8 suffix) {
-  if (r.len < suffix.len) {
-    return false;
-  }
-
-  if (suffix.len == (Sz)0) {
-    return true;
-  }
-
-  Sz start = (Sz)((size_t)(r.len) - (size_t)(suffix.len));
-  return memcmp((void *)(r.ptr + start), (void *)suffix.ptr, suffix.len) == 0;
+  return kspl_std_lang_Slice_U8_Const_starts_with(r, suffix, (Sz)((size_t)(r.len) - (size_t)(suffix.len)));
 }
 
 std_lang_Option_Sz kspl_std_lang_Slice_U8_find_str(std_lang_Slice_U8 r, std_lang_Slice_U8 target) {
@@ -145756,20 +145657,20 @@ Bool kspl_std_lang_Slice_U8_equals(std_lang_Slice_U8 r, std_lang_Slice_U8 b) {
 
 void kspl_std_lang_Slice_U8_put_u32_be(const std_lang_Slice_U8 *r, Sz at, U32 v) {
   {
-    U8 *_kspl_dst_74 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)95))));
-    *_kspl_dst_74 = (U8)(v >> (24));
+    U8 *_kspl_dst_75 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)95))));
+    *_kspl_dst_75 = (U8)(v >> (24));
   }
   {
-    U8 *_kspl_dst_75 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)96))));
-    *_kspl_dst_75 = (U8)(v >> (16) & 0xffU);
+    U8 *_kspl_dst_76 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)96))));
+    *_kspl_dst_76 = (U8)(v >> (16) & 0xffU);
   }
   {
-    U8 *_kspl_dst_76 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)97))));
-    *_kspl_dst_76 = (U8)(v >> (8) & 0xffU);
+    U8 *_kspl_dst_77 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)97))));
+    *_kspl_dst_77 = (U8)(v >> (8) & 0xffU);
   }
   {
-    U8 *_kspl_dst_77 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)98))));
-    *_kspl_dst_77 = (U8)(v & 0xffU);
+    U8 *_kspl_dst_78 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)98))));
+    *_kspl_dst_78 = (U8)(v & 0xffU);
   }
   return;
 }
@@ -145782,20 +145683,20 @@ void kspl_std_lang_Slice_U8_put_u64_be(const std_lang_Slice_U8 *r, Sz at, U64 v)
 
 void kspl_std_lang_Slice_U8_put_u32_le(const std_lang_Slice_U8 *r, Sz at, U32 v) {
   {
-    U8 *_kspl_dst_78 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)110))));
-    *_kspl_dst_78 = (U8)(v & 0xffU);
+    U8 *_kspl_dst_79 = &((*(kspl_std_lang_Slice_U8_at(r, at, KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)110))));
+    *_kspl_dst_79 = (U8)(v & 0xffU);
   }
   {
-    U8 *_kspl_dst_79 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)111))));
-    *_kspl_dst_79 = (U8)(v >> (8) & 0xffU);
+    U8 *_kspl_dst_80 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)1)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)111))));
+    *_kspl_dst_80 = (U8)(v >> (8) & 0xffU);
   }
   {
-    U8 *_kspl_dst_80 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)112))));
-    *_kspl_dst_80 = (U8)(v >> (16) & 0xffU);
+    U8 *_kspl_dst_81 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)2)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)112))));
+    *_kspl_dst_81 = (U8)(v >> (16) & 0xffU);
   }
   {
-    U8 *_kspl_dst_81 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)113))));
-    *_kspl_dst_81 = (U8)(v >> (24));
+    U8 *_kspl_dst_82 = &((*(kspl_std_lang_Slice_U8_at(r, (Sz)((size_t)(at) + (size_t)((Sz)3)), KSPL_STR(std_lang_Slice_U8, "std/bytes"), (Sz)113))));
+    *_kspl_dst_82 = (U8)(v >> (24));
   }
   return;
 }

@@ -65,11 +65,13 @@ def echo_probe(elf, sock_name, payload, pass_note):
         return 1
     proc = subprocess.Popen(
         [
-            "qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic",
+            "qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3",
+            "-display", "none", "-monitor", "none",
             "-semihosting", "-chardev",
             f"socket,id=uart0,path={sock_path},server=on,wait=off", "-serial",
             "chardev:uart0", "-kernel", elf
         ],
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

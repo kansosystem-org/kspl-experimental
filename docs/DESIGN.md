@@ -2623,6 +2623,10 @@ Caution: **Do not drop `-g`.** When a shipped executable dies, that is the only 
 
 ### Where CI's time goes, and what shrinks it
 
+**One local command, `make ci`, covers the three workflow sections together.** The shared sections run on the host, so native process, file and compiler behavior is exercised there. The Linux-only section needs Linux's APIs and tooling, so Windows and macOS run it in the devcontainer. Its writable checkout and build outputs are isolated from the host; only logs return, carrying their execution platform so that a skip allowed on one OS cannot be accepted on another. Docker's layer cache keeps unchanged tool installation out of later rounds. A periodic progress line names the active gate while its own output is quiet.
+
+**The shared jobs divide the compiler's extraction suites too.** Whole-package checks leave the compiler's long suite list concentrated in one job. Each shared job instead rebuilds an isolated compiler and takes a share of its longest-first list, dealing successive pairs in opposite directions so the leading heavy suites do not collect in one job. This repeats the isolated bootstrap and package-boundary checks, but keeps every regression suite in exactly one job. The other packages overlap the core share; lint also runs there to offset the rest share's LLVM checks. No job is added.
+
 CI's machines effectively have one core, so the only way to make the gates faster is to do less work in total.
 
 **Do not write the seconds here** (Principle 7). Each run lists its own seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last run's list again. A one-core run (below) comes closer to a runner's figures than a local `-j` run. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race`, `test-sanitize` and `self-host-ship` in the Linux job, and self-host ×2 in the shared ones. `lint` and `perf-log` follow, and those stages are the bulk of it.

@@ -1,6 +1,6 @@
 name: CI
 
-# The `make ci` on hand (the gates Linux and Windows ucrt64 share) is the primary barrier; this
+# The complete `make ci` on hand is the primary barrier; this
 # confirms once a week what cannot be run on hand (macOS, Windows).
 # **A scheduled run runs only the default branch's**; run a working branch from "Run
 # workflow". Sixty days with no movement stop the schedule until it is enabled again by hand.
@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 # Which check runs in which job is "What each platform runs" in docs/SPEC-gates.md; the gates and
-# their order are `tools/ci_gates.kspls`'s table, run by a make target (`ci-linux`, `ci-macos`,
+# their order are `tools/ci_gates.kspls`'s table, run by a make target (`ci`, `ci-macos`,
 # `ci-shard-*`), so the same target runs locally.
 jobs:
   # --- Linux: every gate, in the devcontainer image of .devcontainer/Dockerfile ---
@@ -100,6 +100,8 @@ jobs:
           name: log-linux-${{ matrix.target }}
           path: |
             out/log/ci/*.log
+            out/log/ci/*.end
+            out/log/suite/*.times
             out/log/extract/*.log
           if-no-files-found: warn
           retention-days: 14
@@ -130,11 +132,14 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: log-macos
-          path: out/log/ci/*.log
+          path: |
+            out/log/ci/*.log
+            out/log/ci/*.end
+            out/log/suite/*.times
           if-no-files-found: warn
           retention-days: 14
 
-  # --- Windows (MSYS2 UCRT64 / mingw): the full make ci, as docs/HOWTO-build.md sets it up ---
+  # --- Windows (MSYS2 UCRT64 / mingw): both native shared sections ---
   windows-ucrt64:
     if: github.event_name != 'workflow_dispatch' || inputs['windows-ucrt64']
     runs-on: windows-latest
@@ -176,6 +181,8 @@ jobs:
           name: log-windows-ucrt64-${{ matrix.target }}
           path: |
             out/log/ci/*.log
+            out/log/ci/*.end
+            out/log/suite/*.times
             out/log/extract/*.log
           if-no-files-found: warn
           retention-days: 14

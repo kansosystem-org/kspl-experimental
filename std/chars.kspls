@@ -105,10 +105,7 @@ impl U8[]
     pub fn contains_nul(r: U8[]): Bool //< whether a NUL byte appears anywhere in it
         //<
         //< The check to run before passing a string across the C boundary (see `to_cstr`).
-        for i in Range.asc(r.len)
-            if (r.ptr + i)$ == 0U8
-                return true
-        return false
+        return r.find_char(0U8).is_some()
 
     pub fn compare(r: U8[], b: U8[]): I32 //< -1, 0 or 1 by bytes, for sorting
         //<
@@ -149,12 +146,7 @@ impl U8[]
         return libc.memcmp(Void$@::(r.ptr + offset), Void$@::prefix.ptr, prefix.len) == 0
 
     pub fn ends_with(r: U8[], suffix: U8[]): Bool //< whether the text appears at the end
-        if r.len < suffix.len
-            return false
-        if suffix.len == 0
-            return true
-        start: = r.len - suffix.len
-        return libc.memcmp(Void$@::(r.ptr + start), Void$@::suffix.ptr, suffix.len) == 0
+        return r.starts_with(suffix, r.len - suffix.len)
 
     pub fn strip_prefix(r: U8[], prefix: U8[]): U8[] //<
         //< a view past the prefix, or the whole string
@@ -230,6 +222,9 @@ impl U8[]
 
     pub fn trim_spaces(r: U8[]): U8[] //< a view with the whitespace at both ends dropped
         return r.trim_start().trim_end()
+
+fn hex_digit(value: U8, alpha: U8): U8 //< one nibble as a digit, with `alpha` for ten
+    return ('0' + value) if value < 10U8 else alpha + (value - 10U8)
 
 impl U8
     pub fn is_space(r: Self): Bool //< a space, a tab, a newline or a carriage return

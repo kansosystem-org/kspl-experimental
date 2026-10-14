@@ -603,6 +603,19 @@ fn test_run_many(arena: Arena$@)
     assert(rs.get(2).stderr_data.trim_end().equals("oops"), "standard error is separate")
     assert(rs.get(2).stdout_data.len == 0, "they are not mixed")
 
+    mixed: = Job[]::{
+        Job::{ .argv = U8[][]::{ "kspl_test_missing_parallel_program" }, .cwd = "" },
+        Job::{ .argv = U8[][]::{ "/bin/echo", "after" }, .cwd = "" },
+    }
+    recovered: = subproc.run_many(mixed, 0, verdict.default_timeout_ms, 3, work, arena)
+    assert(recovered.len == 2 && recovered[0].spawn_failed,
+        "a failed start keeps its result and consumes no slot")
+    assert(!recovered[1].spawn_failed && !recovered[1].timed_out && recovered[1].exit_code == 0 &&
+        recovered[1].stdout_data.equals("aft"),
+        "a zero slot count runs serially and keeps the output cap after a failed start")
+    empty: = subproc.run_many(Job[]::{}, 1, verdict.default_timeout_ms, 16, work, arena)
+    assert(empty.len == 0, "no jobs give no results")
+
     // Runs the same work with 1 slot and with 3; the parallel run must be clearly faster.
     // Caution: **Keep the margin wide.** A `run_many` that ignores the slot count gets a ratio of
     // one and is caught at any threshold; a tight threshold fails a slow runner that works

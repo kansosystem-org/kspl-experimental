@@ -370,7 +370,6 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         if intr_id != -1
             return intr_id
 
-    $is_generic_call: = false
     $sym: Sema_symbol$@ = null
     fqn_lookup: = named.fqn if named.fqn.len > 0 else lookup_name
     is_through_type: = named.reach == .through_type
@@ -430,10 +429,9 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         through_type != null, sym, is_method_access)
     if stray_type_args
         throw .analysis_failed
-    if generic_fn_ptr != null
-        is_generic_call = true
-        if named.reach == .by_fqn
-            c.report_name_by_fqn(node, named)
+    is_generic_call: = generic_fn_ptr != null
+    if is_generic_call && named.reach == .by_fqn
+        c.report_name_by_fqn(node, named)
 
     // A call of something that cannot be called is caught here. A named function's symbol holds
     // **the return type** in type_id, so `type_id = target_id` below is right for it, but for a
@@ -463,13 +461,11 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
         if is_method_access && def_node != null
             check_method_receiver_lvalue(c, left, def_node)
 
-        $arg_def: = def_node
-        $args_generic: = is_generic_call
-        if is_generic_call
-            inst_node: = instance_for_written_args(c, node, fn_tmpl, written, def_node)!
-            if inst_node != null
-                arg_def = inst_node
-                args_generic = false
+        inst_node: =
+            (instance_for_written_args(c, node, fn_tmpl, written, def_node)! if is_generic_call
+            else null)
+        arg_def: = inst_node if inst_node != null else def_node
+        args_generic: = is_generic_call && inst_node == null
         infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic)!
 
         if is_generic_call

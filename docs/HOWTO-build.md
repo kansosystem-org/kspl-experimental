@@ -31,7 +31,7 @@ What every gate (each check CI runs, any of which can fail the build) checks, an
 
 **Keep the clone outside a cloud-synced folder** (OneDrive, Dropbox, iCloud Drive and the like). The build writes thousands of short-lived files under `out/`, and the sync agent locks and uploads each as it appears. One test deliberately makes a path longer than Windows's 260 characters, and OneDrive refuses to sync it.
 
-**On Windows with Docker, keep the clone inside WSL2's own filesystem** (for example `~/src/kspl`), not in a Windows folder mounted into the container. That folder has no POSIX permissions, so every file reads as executable, and the build is slower.
+**On WSL2, including Docker backed by WSL2, keep the clone inside Linux's own filesystem** (for example `~/src/kspl`), rather than a Windows mount such as `/mnt/c`. The build creates and inspects many small files, which costs more across that mount, and its POSIX permissions may differ.
 
 ### The two-stage bootstrap (`make`)
 
@@ -80,7 +80,7 @@ make debug                         # every test main.kspls calls
 make debug-std                     # std only (an order of magnitude less to build)
 ```
 
-Note: After changing one package, `make debug-<name>` answers sooner. **It does not narrow what must be confirmed**: every package builds on `std/`, so run `make ci-linux` before pushing.
+Note: After changing one package, `make debug-<name>` answers sooner. **It does not narrow what must be confirmed**: every package builds on `std/`, so run `make ci` before pushing. It runs core, rest and Linux-only gates; on Windows/macOS, start Docker with Linux containers first. The first run builds the devcontainer image; subsequent runs reuse Docker's layer cache. Linux build outputs stay inside the container, and its logs are copied back to `out/log/`.
 
 ### Putting `ksplc` on the PATH (`make install`, optional)
 
@@ -209,7 +209,7 @@ The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain 
 
 ### 3. Run `make` / `make ci`
 
-**From here, `make`, `make debug`, `make ci` and the rest run as on Linux and macOS.**
+**From here, `make` and `make debug` run natively. Start Docker with Linux-container support before `make ci`.** The shared sections run in UCRT64, and the Linux-only section runs in the devcontainer. To run only what the native Windows workflow checks, use `make ci-shard-core` and `make ci-shard-rest`.
 
 **Known caveats**, if it goes wrong:
 

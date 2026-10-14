@@ -1,7 +1,7 @@
-//< Builds and tests packages from a copy; both extract suites run it, each on its own share
+//< Builds and tests packages from a copy; the extract suites share this body
 //<
-//< **Each suite is a file of its own**, as every other name in `mk/test.mk`'s table is, so the
-//< two share this body rather than one file taking flags.
+//< **Each suite is a file of its own**, as every other name in `mk/test.mk`'s table is.
+//< They share this body rather than one file taking flags.
 //<
 //< **A package's suites run apart**, side by side, each a run of its own under the usual time limit
 //< (`verdict.default_timeout_ms`): one limit over the whole `make test` grows too short as the
@@ -24,6 +24,15 @@ priv const alone_dir: U8[] = "alone" //<
     //<
     //< Caution: **Never the package's own name**, or a package found by its folder passes too and
     //< the one thing this suite checks goes unseen.
+
+enum Part //< two shares of the package's longest-first suite list
+    all
+    core
+    rest
+
+fn in_part(index: Sz, part: Part): Bool //< each suite belongs to exactly one half
+    core: = index % 4 == 0 || index % 4 == 3
+    return part == .all || (core if part == .core else !core)
 
 priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //< the top folders carrying a `Makefile`
     $out: = List<|U8[]|>.new(arena)
@@ -158,7 +167,7 @@ priv fn relay_skips(dir: U8[], out: U8[], arena: Arena$@) //<
         if line.starts_with("SKIP ")
             verdict.skip_check(arena.text().s("\{dir\}'s own tests").take(), line.sub_from(5))
 
-priv fn case_alone(dir: U8[], arena: Arena$@) //<
+priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
     //< One package: its copy passes its own tests, and fails without what finds it
     //<
     //< **The second run is what gives the first its meaning**: if it still passes without its name,
@@ -171,7 +180,8 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
             arena.text().s("\{dir\} carries a Makefile but names no package in its ksplc.cfg")
             .take())
         return
-    work: = harness.sandbox(arena.text().s("extract_\{dir\}").take())
+    label: = arena.text().s("\{dir\}_\{part.variant_name()\}").take()
+    work: = harness.sandbox(arena.text().s("extract_\{label\}").take())
     copy: = fs.join(work, alone_dir, arena)
     deps: = fs.join(work, "deps", arena)
     $placed: = copy_package(dir, copy)
@@ -189,14 +199,21 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
     if offers(copy, "self-host")
         h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
         check_run(arena.text().s("\{dir\} rebuilds itself from the copy").take(),
-            arena.text().s("\{dir\}_self-host").take(), h.code, h.out, arena)
+            arena.text().s("\{label\}_self-host").take(), h.code, h.out, arena)
     // **The rest of `make test` goes first, then the suites side by side** (CI runs ksplc's suites
     // here, the longest wait otherwise), each its own run and check.
     jobs: = arena.text().s("-j\{verdict.jobs()\}").take()
     r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
-    if check_run(name, arena.text().s("\{dir\}_test").take(), r.code, r.out, arena)
+    if check_run(name, arena.text().s("\{label\}_test").take(), r.code, r.out, arena)
         relay_skips(dir, r.out, arena)
-    suites: = suites_of(copy, arena)
+    $suites: = List<|U8[]|>.new(arena)
+    all: = suites_of(copy, arena)
+    for i in Range.asc(all.len)
+        if in_part(i, part)
+            suites.push(all.get(i))
+    if part != .all
+        verdict.check("the compiler's suite share is not empty", suites.len > 0,
+            "the copy must expose its SUITES list")
     $items: = List<|subproc.Job|>.new(arena)
     for s in suites
         target: = arena.text().s("test-\{s\}").take()
@@ -204,11 +221,11 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
             .push(subproc.Job::{ .argv = harness
             .make_argv(make_args(copy, uses, target, U8[][]::{}, arena)), .cwd = "" })
     outs: = ksplc_harness.run_all(items.slice(),
-        arena.text().s("extract_\{dir\}").take())
+        arena.text().s("extract_\{label\}").take())
     for i in Range.asc(outs.len)
         o: = outs.get(i)
         passed: = arena.text().s("\{dir\}'s suite \{suites.get(i)\} passes from the copy").take()
-        what: = arena.text().s("\{dir\}_\{suites.get(i)\}").take()
+        what: = arena.text().s("\{label\}_\{suites.get(i)\}").take()
         if check_run(passed, what, o.code, o.out, arena)
             relay_skips(dir, o.out, arena)
     // The seeds are the repository's files, as `make test-<name>-fuzz` passes them, so a finding
@@ -217,7 +234,7 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
         seeds: = arena.text().s("FUZZ_SEEDS=\{harness.root()\}").take()
         f: = make_in(copy, uses, "test-fuzz", U8[][]::{ seeds }, arena)
         fuzzed: = arena.text().s("\{dir\} scatters broken input from the copy").take()
-        if check_run(fuzzed, arena.text().s("\{dir\}_fuzz").take(), f.code, f.out, arena)
+        if check_run(fuzzed, arena.text().s("\{label\}_fuzz").take(), f.code, f.out, arena)
             relay_skips(dir, f.out, arena)
     taken: = "lang.kspls" if is_std else "ksplc.cfg"
     proof: =
@@ -229,7 +246,7 @@ priv fn case_alone(dir: U8[], arena: Arena$@) //<
     lost: = make_in(copy, uses, "test", U8[][]::{ "SUITES=" }, arena)
     verdict.check(proof, lost.code != 0, lost.out)
 
-fn run(only: U8[], except: U8[]): I32 //<
+fn run(only: U8[], except: U8[], part: Part): I32 //<
     //< Every package with its own `Makefile`, or only `only`, minus `except`; the suite's exit code
     arena: = harness.begin(64 * 1024 * 1024)
     $pkgs: = List<|U8[]|>.new(arena)
@@ -241,5 +258,5 @@ fn run(only: U8[], except: U8[]): I32 //<
         "no top folder holds a Makefile" if only.len == 0
         else arena.text().s("\{only\} holds no Makefile").take())
     for dir in pkgs
-        case_alone(dir, arena)
+        case_alone(dir, part, arena)
     return ksplc_harness.finish()

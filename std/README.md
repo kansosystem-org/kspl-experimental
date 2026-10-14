@@ -44,11 +44,10 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | `lang` + `libc` alone | 2 |
 | `bytes` `math` `checked_int` `time` `mem` `buf` `reflect` `ring` `prng` `bignat` `log` `stack_limit` | 3 |
 | `chars` | 3 (4 on a freestanding build, one with no operating system under it, where `mem` supplies `memcmp`) |
-| `strfmt` `thread` | 4 |
-| `strnum` | 5 (6 on a freestanding build, through `chars`) |
-| `ds` (`List` / `Map`), `base64` `rand` `net` | 5 |
+| `thread` | 4 |
+| `strfmt` `strnum` `sha256` | 5 (6 on a freestanding build, through `chars`) |
+| `ds` (`List` / `Map`), `base64` `rand` `net` `url` | 5 |
 | `seq` | 6 |
-| `sha256` | 7 (8 on a freestanding build, through `chars`) |
 | `str` `regex` | 8 |
 | `io` | 9 |
 | `sys` `json` `fs` and the like, which use those above | 9+ |

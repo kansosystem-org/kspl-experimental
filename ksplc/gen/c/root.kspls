@@ -19,6 +19,7 @@ import "ksplc/gen/entry" as gen_entry
 import "ksplc/gen/runtime" as gen_runtime
 import "ksplc/lower/prune" as lower_prune
 import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // the one-character tests and cuts
 import "std/ds" { List, Map }
@@ -155,18 +156,17 @@ impl Ast_node
                 if child.is_emittable()
                     pending_ast.push(child)
 
-        $seen: = sema_type_env.Mangle_seen.new(cg.env)
+        $seen: = sema_type_naming.Mangle_seen.new(cg.env)
         defer seen.free()
         for t_id in cg.env.complex_types
             // A slice needs no forward declaration. **Only what passed the filter is recorded**
             // (`Mangle_seen`).
-            $skip: = false
             switch cg.env.get_info(t_id)
             case .array(_b, s)
                 if s == -1
-                    skip = true
+                    continue
             default {}
-            if !skip && seen.admit(t_id)
+            if seen.admit(t_id)
                 pending_complex.push(t_id)
 
     // It emits declarations in dependency order (Kahn's algorithm); what is left at the end is a

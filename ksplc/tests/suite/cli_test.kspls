@@ -17,6 +17,7 @@
 
 // Caution: **Do not copy the per-subcommand list into here.** Its source is flag_faces in
 // ksplc/usage.kspls, which `--help` prints; the test checks that ksplc behaves as those lines say.
+import "ksplc/tests/support/cli_emit" + { cli, ok_case, ng_case, std_flag }
 import "ksplc/tests/support/cli_sanitize"
 import "ksplc/tests/support/cli_streams"
 import "ksplc/tests/support/harness"
@@ -42,37 +43,6 @@ priv fn cache_root(arena: Arena$@): U8[] //< the cache directory for this suite 
     //<
     //< `info cache-dir` and `clean` point here.
     return fs.join(harness.tmp_dir(), "cli_cache", arena)
-
-priv fn cli(args: U8[][]): verdict.Run_out //< it runs ksplc once
-    //<
-    //< Not `harness.ksplc`: a subcommand that does not accept `--std-dir=` rejects its call.
-    return harness.ksplc_bare(args)
-
-priv fn ok_case(name: U8[], args: U8[][], expect: U8[]) //<
-    //< It checks that the run passes (exit code 0) and what the output must contain
-    r: = cli(args)
-    if r.code != 0
-        verdict.check(name, false,
-            harness.arena().text().s("the exit code is not 0\n\{r.out\}").take())
-        return
-    if expect.len > 0 && r.out.find_str(expect).is_none()
-        verdict.check(name, false,
-            harness.arena().text().s("\{expect\} does not come out\n\{r.out\}").take())
-        return
-    verdict.check(name, true, "")
-
-priv fn ng_case(name: U8[], args: U8[][], expect: U8[]) //<
-    //< It checks that the run is rejected (a non-zero exit code) and what the error must contain
-    r: = cli(args)
-    if r.code == 0
-        verdict.check(name, false,
-            harness.arena().text().s("it passed without being turned away\n\{r.out\}").take())
-        return
-    if expect.len > 0 && r.out.find_str(expect).is_none()
-        verdict.check(name, false,
-            harness.arena().text().s("\{expect\} does not come out\n\{r.out\}").take())
-        return
-    verdict.check(name, true, "")
 
 priv struct Face_flags //<
     //< One line of `--help`'s "the options each subcommand accepts"
@@ -384,7 +354,7 @@ priv fn case_summary_codes(arena: Arena$@) //<
     io.write_file(src, body) catch
         verdict.check("the closing line: the sample can be written", false, src)
         return
-    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "lint", src }, dir)
+    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "lint", src }, dir)
     verdict.check("the closing line offers explain only the codes it knows",
         r.out.find_str("does not explicitly implement interface").is_some() &&
         r.out.find_str("explained by `ksplc explain <code>`: I0401.").is_some(), r.out)
@@ -402,7 +372,7 @@ priv fn case_build(arena: Arena$@) //<
         return
     // The output's folder is not there yet: the build makes it.
     exe: = fs.join(dir, "bin/prog.exe", arena)
-    ok_case("build: it builds", U8[][]::{ "build", std_flag(arena), src, exe }, "")
+    ok_case("build: it builds", U8[][]::{ "build", std_flag(), src, exe }, "")
     ran: = harness.run(U8[][]::{ exe })
     verdict.check("build: the executable runs, with the program's exit code",
         ran.code == 3 && ran.out.equals("built\n"), ran.out)
@@ -410,14 +380,14 @@ priv fn case_build(arena: Arena$@) //<
         fs.exists(fs.join(dir, "bin/prog.c", arena)) &&
         fs.exists(fs.join(dir, "bin/prog.libs", arena)), "")
     ng_case("build: --cflags reaches the C compiler",
-        U8[][]::{ "build", std_flag(arena), "--cflags=-fkspl-no-such-flag", src, exe },
+        U8[][]::{ "build", std_flag(), "--cflags=-fkspl-no-such-flag", src, exe },
         "ksplc build: the C compiler failed")
     ng_case("build: an output its own C would overwrite is refused",
-        U8[][]::{ "build", std_flag(arena), src, fs.join(dir, "prog.c", arena) }, "overwritten")
+        U8[][]::{ "build", std_flag(), src, fs.join(dir, "prog.c", arena) }, "overwritten")
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
     io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
     ng_case("build: a program with no main() is refused by ksplc, not by the linker",
-        U8[][]::{ "build", std_flag(arena), src, exe }, "this program has no main()")
+        U8[][]::{ "build", std_flag(), src, exe }, "this program has no main()")
 
 priv fn case_main_failure_status(arena: Arena$@) //<
     //< A failing `main` exits non-zero whatever its error: a number in 1..255 as it is, else 1
@@ -434,7 +404,7 @@ priv fn case_main_failure_status(arena: Arena$@) //<
     for i in Range.asc(bodies.len)
         io.write_file(src, bodies[i]) catch {}
         name: = arena.text().s("a failing main exits with \{wants[i]\} (case \{i\})").take()
-        built: = cli(U8[][]::{ "build", std_flag(arena), src, exe })
+        built: = cli(U8[][]::{ "build", std_flag(), src, exe })
         if built.code != 0
             verdict.check(name, false, built.out)
             continue
@@ -449,43 +419,13 @@ priv fn case_output_language(arena: Arena$@) //<
         verdict.check("--to: the program can be written", false, "")
         return
     ll: = fs.join(dir, "prog.ll", arena)
-    ok_case("--to=llvm writes LLVM IR", U8[][]::{ std_flag(arena), "--to=llvm", src, ll }, "")
+    ok_case("--to=llvm writes LLVM IR", U8[][]::{ std_flag(), "--to=llvm", src, ll }, "")
     text: = io.read_file(ll) catch ""
     verdict.check("--to=llvm's output is LLVM IR", text.find_str("define ").is_some(), text)
     ok_case("--to=c writes C",
-        U8[][]::{ std_flag(arena), "--to=c", src, fs.join(dir, "prog.c", arena) }, "")
+        U8[][]::{ std_flag(), "--to=c", src, fs.join(dir, "prog.c", arena) }, "")
     ng_case("--to on a compile names c or llvm",
-        U8[][]::{ std_flag(arena), "--to=kspl", src, fs.join(dir, "x.c", arena) }, "'c' or 'llvm'")
-
-priv fn lib_opt(path: U8[], arena: Arena$@): U8[] //< `--library=<path>`
-    return arena.text().s("--library=").s(path).take()
-
-priv fn case_library(arena: Arena$@) //<
-    //< `--library=` builds a library and writes each interface it names, from one compile
-    //<
-    //< A value that names no form, or one path twice, is refused rather than written.
-    dir: = harness.sandbox("cli_library")
-    src: = fs.join(dir, "lib.kspls", arena)
-    io.write_file(src, "#export\npub fn lib_twice(n: I32): I32\n  return n * 2\n") catch
-        verdict.check("--library: the library can be written", false, "")
-        return
-    out_c: = fs.join(dir, "lib.c", arena)
-    h: = fs.join(dir, "lib.h", arena)
-    api: = fs.join(dir, "lib_api.kspls", arena)
-    ok_case("--library= twice writes both interfaces from one compile",
-        U8[][]::{ std_flag(arena), lib_opt(h, arena), lib_opt(api, arena), src, out_c }, "")
-    verdict.check("both interfaces are written",
-        fs.exists(h) && fs.exists(api) && fs.exists(out_c), dir)
-    ng_case("--library needs the interface it writes",
-        U8[][]::{ std_flag(arena), "--library", src, out_c }, "'--library=<value>'")
-    ng_case("--library= refuses a name of neither form",
-        U8[][]::{ std_flag(arena), lib_opt("x.txt", arena), src, out_c }, "names neither form")
-    ng_case("--library= refuses one path named twice",
-        U8[][]::{ std_flag(arena), lib_opt(h, arena), lib_opt(h, arena), src, out_c },
-        "is named twice")
-    ng_case("--library refuses --program, since a library has no main()",
-        U8[][]::{ std_flag(arena), "--program", lib_opt(h, arena), src, out_c },
-        "--program cannot be combined")
+        U8[][]::{ std_flag(), "--to=kspl", src, fs.join(dir, "x.c", arena) }, "'c' or 'llvm'")
 
 priv fn case_machine(arena: Arena$@) //<
     //< `--machine` names a machine from ksplc's table, and nothing else
@@ -503,17 +443,17 @@ priv fn case_machine(arena: Arena$@) //<
     verdict.check("info machine names the machine ksplc runs on", host.code == 0 && name.len > 0,
         host.out)
     ok_case("the machine info names compiles",
-        U8[][]::{ std_flag(arena), arena.text().s("--machine=").s(name).take(), src, out_c }, "")
+        U8[][]::{ std_flag(), arena.text().s("--machine=").s(name).take(), src, out_c }, "")
     ng_case("an unknown machine is refused, with the known ones listed",
-        U8[][]::{ std_flag(arena), "--machine=pdp11", src, out_c }, "thumbv7m-none-eabi")
+        U8[][]::{ std_flag(), "--machine=pdp11", src, out_c }, "thumbv7m-none-eabi")
     ng_case("--to=llvm is refused for a machine with 4-byte pointers",
-        U8[][]::{ std_flag(arena), "--to=llvm", "--machine=thumbv7m-none-eabi", src, out_c },
+        U8[][]::{ std_flag(), "--to=llvm", "--machine=thumbv7m-none-eabi", src, out_c },
         "8-byte pointers")
     ng_case("--machine does not take effect on run", U8[][]::{ "run", "--machine=x", src },
         "compile lint")
     ll: = fs.join(dir, "prog.ll", arena)
     ok_case("--to=llvm takes a 64-bit machine",
-        U8[][]::{ std_flag(arena), "--to=llvm", "--machine=aarch64-linux-gnu", src, ll }, "")
+        U8[][]::{ std_flag(), "--to=llvm", "--machine=aarch64-linux-gnu", src, ll }, "")
     text: = io.read_file(ll) catch ""
     verdict.check("the IR names the machine's triple",
         text.find_str("target triple = \"aarch64-unknown-linux-gnu\"").is_some(), text)
@@ -548,11 +488,6 @@ priv fn case_refusals()
     ng_case("fmt with no input gives fmt's usage line", U8[][]::{ "fmt" },
         "usage: ksplc fmt [options...] <input.kspl>...")
 
-priv fn std_flag(_arena: Arena$@): U8[] //< the option passing the standard library's directory
-    //<
-    //< **The working directory changes before the run, so a relative path would not resolve.**
-    return harness.arena().text().s("--std-dir=\{harness.std_dir()\}").take()
-
 priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives formatting
     //<
     //< Caution: **Check that it survives formatting** — forget to put the mark back and `make fmt`
@@ -573,7 +508,7 @@ priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives
         verdict.check("BOM: the sample can be written", false, laid)
         return
     for path in U8[][]::{ braced, laid }
-        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", path }, dir)
+        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "run", path }, dir)
         verdict.check(arena.text().s("BOM: it runs even with a BOM at the head (").s(path).s(")")
             .take(), r.code == 0 && r.out.find_str("ok").is_some(), r.out)
         // Caution: Do not pass `--std-dir` to `fmt` (it has no effect there, so it is rejected).
@@ -605,168 +540,12 @@ priv fn case_bad_utf8(arena: Arena$@) //< checks that a byte that is not UTF-8 s
     for want in U8[][]::{ "s.kspls:2:14: error: this byte (0xFF)",
         "c.kspl:2:10: error: this byte (0xED)" }
         path: = in_string if want.starts_with("s.") else in_comment
-        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), path, out_c }, dir)
+        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), path, out_c }, dir)
         verdict.check(arena.text().s("UTF-8: the compile stops at the byte (").s(want).s(")").take(),
             r.code != 0 && r.out.find_str(want).is_some(), r.out)
         f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", path }, dir)
         verdict.check(arena.text().s("UTF-8: fmt stops at the byte too (").s(want).s(")").take(),
             f.code != 0 && f.out.find_str(want).is_some(), f.out)
-
-priv fn case_surface_doc(arena: Arena$@) //<
-    //< The record of the published API carries the documentation as a fourth column
-    //<
-    //< Caution: **Check both sides of the parting**, the opening paragraph and the detail; one
-    //< alone lets the other be lost unnoticed. **Check the full stop between them too**: without it
-    //< two fragments run into one broken sentence, and none is wanted where the summary ends in its
-    //< own (`described` in `../../base/ast_doc.kspls`). **A `pub` C function is a row too**, keyed
-    //< with its block's attributes; without it, what reaches every package goes unrecorded.
-    dir: = fs.join(harness.tmp_dir(), "cli_surface", arena)
-    fs.mkdir_all(dir) catch {}
-    src: = fs.join(dir, "api.kspl", arena)
-    tsv: = fs.join(dir, "api.tsv", arena)
-    obj: = fs.join(dir, "api.c", arena)
-    body: U8[] =
-        """pub struct Row { //< one row of the table
-  //<
-  //< What a row stands for, in a sentence.
-  pub text: U8[]; //< the text as the writer typed it
-}
-
-pub fn count(rows: Row[1]): Sz { //< how many rows carry text
-  //<
-  //< Walks the table once and counts.
-  return rows[0].text.len;
-}
-
-pub fn named(rows: Row[1]): Sz { //< it names the column as `text`
-  //<
-  //< A summary closing on a code span takes its stop behind the span.
-  return rows[0].text.len;
-}
-
-pub fn closed(rows: Row[1]): Sz { //< it closes its own sentence.
-  //<
-  //< No second stop is put in behind it.
-  return rows[0].text.len;
-}
-
-#link("m")
-extern "C" {
-  pub fn c_reached(x: I32): I32; //< reached from every package
-  fn c_kept(): I32;
-}
-
-fn main(): I32 {
-  return 0;
-}
-"""
-    io.write_file(src, body) catch
-        verdict.check("the record's documentation: the sample can be written", false, src)
-        return
-    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena),
-        arena.text().s("--emit-surface=").s(tsv).take(), src, obj }, dir)
-    if r.code != 0
-        verdict.check("the record's documentation: it is put out", false, r.out)
-        return
-    got: = io.read_file(tsv) catch ""
-    wants: U8[][6] = ::{ "Row\tpub struct Row\tone row of the table. What a row stands for, in a \
-        sentence.", "Row.text\tpub text: U8[]\tthe text as the writer typed it",
-        "count\tpub fn count(rows: Row[1]): Sz\thow many rows carry text. Walks the table once and \
-            counts.",
-        "named\tpub fn named(rows: Row[1]): Sz\tit names the column as `text`. A summary closing on \
-            a code span takes its stop behind the span.",
-        "closed\tpub fn closed(rows: Row[1]): Sz\tit closes its own sentence. No second stop is put \
-            in behind it.",
-        "c_reached #link(\"m\")\tpub fn c_reached(x: I32): I32\treached from every package" }
-    for want in wants
-        verdict.check(arena.text().s("the record's documentation carries \"").s(want).s("\"").take(),
-            got.find_str(want).is_some(), got)
-    verdict.check("the record leaves out a C function that is not pub",
-        got.find_str("c_kept").is_none(), got)
-
-priv fn emitted_libs(dir: U8[], entry: U8[], flags: U8[][], arena: Arena$@): U8[] //<
-    //< What `--emit-libs` wrote for the entry file, or `FAILED` and the output where it failed
-    libs: = fs.join(dir, "out.libs", arena)
-    fs.remove_path(libs) catch {}
-    $argv: = List<|U8[]|>.new(arena)
-    argv.push(harness.ksplc_exe())
-    argv.push(std_flag(arena))
-    for f in flags
-        argv.push(f)
-    argv.push(arena.text().s("--emit-libs=").s(libs).take())
-    argv.push(fs.join(dir, entry, arena))
-    argv.push(fs.join(dir, "out.c", arena))
-    r: = harness.run_in(argv.slice(), dir)
-    if r.code != 0
-        return arena.text().s("FAILED ").s(r.out).take()
-    return harness.read_generated(libs)
-
-priv fn case_emit_libs(arena: Arena$@) //<
-    //< `--emit-libs` writes the libraries the kept `extern` blocks name (`#link`)
-    //<
-    //< **A file's names come before those of the files it imports** (a one-pass linker wants a
-    //< library before the ones it uses), each once, at its first place; a block that `#cfg` dropped
-    //< names nothing.
-    //< Caution: **A failed compile leaves no file.** A build that reads a stale one links the
-    //< libraries of a program that does not build.
-    dir: = fs.join(harness.tmp_dir(), "cli_emit_libs", arena)
-    fs.mkdir_all(dir) catch {}
-    main_src: U8[] =
-        """import "wrap";
-
-#link("app") #link("shared")
-extern "C" {
-  fn app_value(): I32;
-}
-
-#cfg(extra) #link("extra")
-extern "C" {
-  fn extra_value(): I32;
-}
-
-fn main(): I32 {
-  return wrap.value();
-}
-"""
-    wrap_src: U8[] =
-        """#link("wrapped") #link("shared")
-extern "C" {
-  fn wrapped_value(): I32;
-}
-
-pub fn value(): I32 {
-  return 0;
-}
-"""
-    none_src: U8[] = """fn main(): I32 {
-  return 0;
-}
-"""
-    bad_src: U8[] =
-        """#link("app")
-extern "C" {
-  fn app_value(): I32;
-}
-
-fn main(): I32 {
-  return app_value(1);
-}
-"""
-    fs.write_tree(dir, U8[][]::{ "main.kspl", "wrap.kspl", "none.kspl", "bad.kspl" },
-        U8[][]::{ main_src, wrap_src, none_src, bad_src }, harness.arena()) catch
-        verdict.check("--emit-libs: the sample can be written", false, dir)
-        return
-    got: = emitted_libs(dir, "main.kspl", U8[][]::{}, arena)
-    verdict.check("--emit-libs: a file's names before those of what it imports, each once",
-        got.equals("-lapp -lshared -lwrapped\n"), got)
-    flagged: = emitted_libs(dir, "main.kspl", U8[][]::{ "--define=extra" }, arena)
-    verdict.check("--emit-libs: a block #cfg keeps names its library in its place",
-        flagged.equals("-lapp -lshared -lextra -lwrapped\n"), flagged)
-    none: = emitted_libs(dir, "none.kspl", U8[][]::{}, arena)
-    verdict.check("--emit-libs: naming no library writes an empty line", none.equals("\n"), none)
-    bad: = emitted_libs(dir, "bad.kspl", U8[][]::{}, arena)
-    verdict.check("--emit-libs: a compile that fails writes no file",
-        bad.starts_with("FAILED ") && !fs.exists(fs.join(dir, "out.libs", arena)), bad)
 
 priv fn case_entry_spelling(arena: Arena$@)
     dir: = fs.join(harness.tmp_dir(), "cli_entry", arena)
@@ -792,7 +571,7 @@ priv fn case_entry_spelling(arena: Arena$@)
     // package.
     spellings: = U8[][]::{ "main.kspl", "./main.kspl", ".\\main.kspl" }
     for one in spellings
-        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", one }, dir)
+        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "run", one }, dir)
         verdict.check(arena.text().s("the entry file's spelling: \{one\}").take(), r.code == 0,
             r.out)
     // **`./hw` and `hw` in an import are the same file.**
@@ -800,7 +579,7 @@ priv fn case_entry_spelling(arena: Arena$@)
     io.write_file(dotted, "import \"./hw\";\n\nfn main() {\n  hw.say();\n}\n") catch
         verdict.check("the entry file's spelling: the sample can be written", false, dotted)
         return
-    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", "dotted.kspl" }, dir)
+    r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "run", "dotted.kspl" }, dir)
     verdict.check("the `./` in an import's spelling is the same unit too", r.code == 0, r.out)
 
     // An import not found must say **where it searched** as an absolute path: a path holding a `/`
@@ -809,7 +588,7 @@ priv fn case_entry_spelling(arena: Arena$@)
     io.write_file(lost, "import \"src/hw\";\n\nfn main() {\n  hw.say();\n}\n") catch
         verdict.check("the entry file's spelling: the sample can be written", false, lost)
         return
-    bad: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), "run", "lost.kspl" }, dir)
+    bad: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(), "run", "lost.kspl" }, dir)
     // Caution: **Normalise the separators before matching.** The working directory comes with the
     // OS's separator and the diagnostic writes `/`, so this string is converted to `/`.
     want: = dir.replace("\\", "/", arena)
@@ -962,14 +741,14 @@ fn main(): I32
     case_refusals()
     cli_streams.case_refusal_stream(arena)
     case_output_language(arena)
-    case_library(arena)
+    cli_emit.case_library(arena)
     case_machine(arena)
     cli_sanitize.case_sanitize(arena)
     case_help_matches_behavior(arena)
     case_bom(arena)
     case_bad_utf8(arena)
-    case_surface_doc(arena)
-    case_emit_libs(arena)
+    cli_emit.case_surface_doc(arena)
+    cli_emit.case_emit_libs(arena)
     case_entry_spelling(arena)
     case_diagnostic_json(arena)
     return harness.finish()

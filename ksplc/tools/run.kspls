@@ -102,22 +102,21 @@ priv struct Target_kind //< the properties read from the triple that change the 
 
 // The answer, cached after the first query. Uncached, **`CC -dumpmachine` runs for each of the
 // three callers**: only slower, so no gate but `tests/suite/run_test.kspls` notices.
-priv $target_known: Bool = false
-priv $target_answer: Target_kind = ::{ .msvc = false, .darwin = false, .windows = false }
+priv $target_answer: Target_kind? = .none
 
 priv fn target_kind(arena: Arena$@): Target_kind
-    if target_known
-        return target_answer
+    if answer: = target_answer
+        return answer
     triple: = target_triple(arena)
     // Where the triple could not be read (empty), it falls back to the OS check.
-    target_answer = Target_kind::{ .msvc = triple.find_str("msvc").is_some(),
+    answer: = Target_kind::{ .msvc = triple.find_str("msvc").is_some(),
         .darwin =
         triple.find_str("darwin").is_some() || triple.find_str("apple").is_some(),
         .windows =
         triple.find_str("windows").is_some() || triple.find_str("mingw").is_some() ||
         triple.find_str("cygwin").is_some() || (triple.len == 0 && sys.is_windows()) }
-    target_known = true
-    return target_answer
+    target_answer = .some(answer)
+    return answer
 
 fn append_link_libs(list: List<|U8[]|>$@, arena: Arena$@) //<
     //< It appends to list the libraries passed when linking the artifact
@@ -895,5 +894,4 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     cc_code: = spawn_or_exit(cc@, cc_name(), "")
     if cc_code != 0
         io.err().s("ksplc build: the C compiler failed on \{c_path\}\n")
-        sys.exit(cc_code)
-    sys.exit(0)
+    sys.exit(cc_code)

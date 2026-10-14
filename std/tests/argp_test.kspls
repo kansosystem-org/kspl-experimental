@@ -24,6 +24,7 @@ fn test_argp(arena: Arena$@)
     check_rest(arena)
     check_errors(arena)
     check_required_and_help(arena)
+    check_usage_layout(arena)
 
     test_no_short_names(arena)
     test_repeatable(arena)
@@ -35,6 +36,38 @@ fn test_argp(arena: Arena$@)
         .pass("Defaults, the `=` shape and refusing the spaced one, rest, refusing a single dash, \
             each error, what is required, --help, refusing short forms, repetition, commands, the \
             uninterpreted remainder and `--` are all confirmed.")
+
+priv fn check_usage_layout(arena: Arena$@) //<
+    //< padding includes suffixes, with a space for long names
+    $flag: = false
+    $text: U8[] = ""
+    $count: I64 = 0
+    values: = List<|U8[]|>.create(arena)
+    p: = argp.Parser.create("t", "about", arena)
+    p.positional("<file>")
+    p.subcommand("build", "compile")
+    p.subcommand_trailing("run", "execute", values)
+    p.flag("--quiet", flag@, "silent")
+    p.flag("--a-name-longer-than-the-column", flag@, "long")
+    p.str_required("--name", text@, "name")
+    p.int_opt("--count", count@, "count")
+    p.str_list_opt("--item", values, "repeat")
+    p.command_flag("--version", "version")
+    $out: = str.Str_builder.new()
+    defer out.free()
+    p.print_usage(out@)
+    expected: U8[] =
+        "Usage: t [command] [options] \
+            <file>\n\nabout\n\nCommands:\n\u0020\u0020build                    \
+            compile\n\u0020\u0020run <target> [args...]   \
+            execute\n\nOptions:\n\u0020\u0020--quiet                  \
+            silent\n\u0020\u0020--a-name-longer-than-the-column \
+            long\n\u0020\u0020--name=<str>             name \
+            (required)\n\u0020\u0020--count=<int>            \
+            count\n\u0020\u0020--item=<str>             \
+            repeat\n\u0020\u0020--version                \
+            version\n\u0020\u0020--help                   show this usage\n"
+    assert(out.slice().equals(expected), "argp: help layout is exact for every declaration kind")
 
 priv fn check_defaults_and_joined(arena: Arena$@) //<
     //< A default is the variable's initial value itself, and a value is joined with `=`

@@ -266,10 +266,7 @@ impl U8[]
             case .none
                 break
         b.s(r.sub_from(pos))
-        out: = U8$@::arena.alloc(b.len + 1)
-        mem.copy(Void$@::out, Void$@::b.ptr, b.len)
-        (out + b.len)$ = 0U8
-        return U8[]::{ .ptr = out, .len = b.len }
+        return arena.dup_str(b.slice())
 
     // Use this for a text file, not `split('\n', ...)`: lines of a CRLF file from Windows would
     // keep the `\r` and not compare equal, and `"a\n"` would give two elements rather than one
@@ -416,18 +413,14 @@ impl U8[]
 
         for i < r.len
             c: = (r.ptr + i)$
-            if c == '\n'
+            if c == '\n' || c == '\r'
                 if is_empty_line
                     res.len = line_start
-                res.c('\n')
-                is_empty_line = true
-                skip_count = 0
+                res.c(c)
                 line_start = res.len
-            else if c == '\r'
-                if is_empty_line
-                    res.len = line_start
-                res.c('\r')
-                line_start = res.len
+                if c == '\n'
+                    is_empty_line = true
+                    skip_count = 0
             else
                 if is_empty_line && skip_count < min_indent && (c == ' ' || c == '\t')
                     skip_count += 1

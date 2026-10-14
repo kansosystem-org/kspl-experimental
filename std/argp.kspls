@@ -13,7 +13,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/io"
 import "std/mem" + { Arena, Own_arena }
-import "std/str" { Str_builder }
+import "std/str"
 import "std/strnum" // `to_i64`
 import "std/sys"
 
@@ -76,10 +76,11 @@ priv const help_column: Sz = 26 //< the column where the description starts
     //<
     //< Each byte counts as one display column (ASCII).
 
-priv fn pad_to(line: Str_builder$@, column: Sz)
-    for line.len < column
-        line.c(' ')
-    line.c(' ') // a name past the column still gets one space
+priv fn help_name(out: Writer, name: U8[], suffix: U8[])
+    out.s("  ").s(name).s(suffix)
+    for $i: Sz = 2 + name.len + suffix.len; i < help_column; i += 1
+        out.c(' ')
+    out.c(' ') // a name past the column still gets one space
 
 pub struct Parser //< the declarations, and where the parsed values go
     pub prog: U8[] //< the program's name, used in the usage and in every error
@@ -378,39 +379,28 @@ impl Parser
             out.s("\nCommands:\n")
             for i in Range.asc(r.cmds.len)
                 c: = r.cmds.at(i)
-                $line: = Str_builder.new()
-                defer line.free()
-                line.s("  ").s(c.name)
-                if c.trailing != null
-                    line.s(" <target> [args...]")
-                pad_to(line@, help_column)
-                out.s(line.slice()).s(c.help).c('\n')
+                help_name(out, c.name, " <target> [args...]" if c.trailing != null else "")
+                out.s(c.help).c('\n')
         out.s("\nOptions:\n")
         for i in Range.asc(r.opts.len)
             o: = r.opts.at(i)
-            $line: = Str_builder.new()
-            defer line.free()
-            line.s("  ")
-            line.s(o.name)
+            $suffix: U8[] = ""
             // Only ASCII before the column (see `help_column`).
             switch o.kind
             case .int_val(_o)
-                line.s("=<int>")
+                suffix = "=<int>"
             case .str_val(_o)
-                line.s("=<str>")
+                suffix = "=<str>"
             case .str_list(_o)
-                line.s("=<str>") // the description says that it repeats
+                suffix = "=<str>" // the description says that it repeats
             default {} // a flag and a command take no value
-            pad_to(line@, help_column)
-            line.s(o.help)
+            help_name(out, o.name, suffix)
+            out.s(o.help)
             if o.required
-                line.s(" (required)")
-            out.s(line.slice()).c('\n')
-        $help_line: = Str_builder.new()
-        defer help_line.free()
-        help_line.s("  --help")
-        pad_to(help_line@, help_column)
-        out.s(help_line.slice()).s("show this usage\n")
+                out.s(" (required)")
+            out.c('\n')
+        help_name(out, "--help", "")
+        out.s("show this usage\n")
 
     pub fn parse_or_exit( //< reads the arguments, or prints why and ends the process
         //<

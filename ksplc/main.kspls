@@ -242,20 +242,19 @@ priv fn only_input(in_files: List<|U8[]|>$@, refusal: U8[]): U8[] //<
 
 priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o: Cli$@): Mode //<
     //< The mode the subcommand names, with its inputs checked
-    $mode: Mode
     if mode_name.equals("fmt")
         if in_files.len == 0
             usage.error_exit(usage.usage_of("fmt"))
         if o.to_name.len > 0 && !o.to_name.equals("kspl") && !o.to_name.equals("kspls")
             usage.error_exit("--to: the only notations that can be put out are kspl and kspls\n")
-        mode = .fmt(in_files, o.fmt_in_place, o.fmt_config, o.to_name)
-    else if mode_name.equals("lsp")
-        mode = .lsp
-    else if mode_name.equals("lsp-worker")
-        mode = .lsp_worker
-    else if mode_name.equals("lint")
-        mode = .lint(only_input(in_files, usage.usage_of("lint")))
-    else if mode_name.equals("info")
+        return .fmt(in_files, o.fmt_in_place, o.fmt_config, o.to_name)
+    if mode_name.equals("lsp")
+        return .lsp
+    if mode_name.equals("lsp-worker")
+        return .lsp_worker
+    if mode_name.equals("lint")
+        return .lint(only_input(in_files, usage.usage_of("lint")))
+    if mode_name.equals("info")
         subject: =
             only_input(in_files, usage.usage_for_topics("info", usage.info_topics()))
         topic: = usage.parse_info_topic(subject)
@@ -264,16 +263,16 @@ priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o
         case .machine
             check_machine(mode_name)
         default {}
-        mode = .info(topic)
-    else if mode_name.equals("clean")
+        return .info(topic)
+    if mode_name.equals("clean")
         // **It takes no subject**: there is one thing to clean, and a word after it would change
         // nothing.
         if in_files.len != 0
             usage.error_exit(usage.usage_of("clean"))
-        mode = .clean
-    else if mode_name.equals("emit-runtime")
-        mode = .emit_runtime(only_input(in_files, usage.usage_of("emit-runtime")))
-    else if mode_name.equals("explain")
+        return .clean
+    if mode_name.equals("emit-runtime")
+        return .emit_runtime(only_input(in_files, usage.usage_of("emit-runtime")))
+    if mode_name.equals("explain")
         asked: = only_input(in_files, usage.usage_of("explain"))
         code: = tools_explain.canonical_code(asked, base_core.arena)
         // An error has no code, so a message the reader wants explained may well have none.
@@ -283,33 +282,30 @@ priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o
                     one (the table is 5.4 in ksplc/docs/SPEC-tools.md); an error's message is its \
                     own explanation.\n").take()
             usage.error_exit(msg)
-        mode = .explain(code)
-    else if mode_name.equals("doc")
-        mode = .doc(only_input(in_files, usage.usage_of("doc")))
-    else if mode_name.equals("run")
+        return .explain(code)
+    if mode_name.equals("doc")
+        return .doc(only_input(in_files, usage.usage_of("doc")))
+    if mode_name.equals("run")
         if in_files.len == 0
             usage.error_exit(usage.usage_of("run"))
         // `--to=llvm` / `--freestanding` / `--library` are not valid for run, and
         // check_flag_faces has already rejected them (its per-subcommand table is the canonical
         // source; docs/DESIGN.md Principle 6).
-        mode = .run(in_files.get(0), o.script_args)
-    else if mode_name.equals("build")
+        return .run(in_files.get(0), o.script_args)
+    if mode_name.equals("build")
         if in_files.len != 2
             usage.error_exit(usage.usage_of("build"))
-        mode = .build(in_files.get(0), in_files.get(1), o.cflags)
-    else
-        if in_files.len != 2
-            // It rejects "too many" as well as "too few". If it silently used the first two, a
-            // path cut by the shell's word splitting (one containing a space) would compile an
-            // unrelated file for no clear reason.
-            if in_files.len > 2
-                io.err().s("Error: too many input files (expected <input.kspl> <output.c>):\n")
-                for f in in_files
-                    io.err().s("  ").s(f).c('\n')
-            usage.usage_exit()
-        mode =
-            .compile(in_files.get(0), in_files.get(1), o.deps_path, o.libs_path)
-    return mode
+        return .build(in_files.get(0), in_files.get(1), o.cflags)
+    if in_files.len != 2
+        // It rejects "too many" as well as "too few". If it silently used the first two, a
+        // path cut by the shell's word splitting (one containing a space) would compile an
+        // unrelated file for no clear reason.
+        if in_files.len > 2
+            io.err().s("Error: too many input files (expected <input.kspl> <output.c>):\n")
+            for f in in_files
+                io.err().s("  ").s(f).c('\n')
+        usage.usage_exit()
+    return .compile(in_files.get(0), in_files.get(1), o.deps_path, o.libs_path)
 
 impl Mode
     priv fn new(): Self
@@ -505,10 +501,7 @@ priv fn check_sanitize(o: Cli$@, mode_name: U8[]) //<
                 reads it, so give that compiler -fsanitize=<names>. On a compile, --sanitize marks \
                 --to=llvm's IR, which no front end marks\n")
     for name in o.sanitize.split(',', base_core.arena)
-        $known: = false
-        for k in sanitizer_names
-            known = known || k.equals(name)
-        if !known
+        if !name.is_one_of(U8[][]::sanitizer_names)
             said: = base_core.arena.text().s("--sanitize: '").s(name)
                 .s("' is not a sanitizer ksplc knows:")
             for i in Range.asc(sanitizer_names.len)

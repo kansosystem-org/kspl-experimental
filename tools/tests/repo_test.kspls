@@ -136,18 +136,19 @@ fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and not
         assert(back.equals(s.variant_name()), "every set reads back from its own name")
     verdict.pass("a set is named as make names it, and only so.")
 
-fn test_the_shards_part_ci() //< each gate of `ci` is in one shard, and `ci-linux` adds Linux's
+fn test_the_shards_part_ci() //< `ci` is the disjoint union of all three workflow sections
     verdict.start("[tools/ci_gates] how the gates are dealt out test...")
     for g in ci_gates.gates
         core: = ci_gates.Set.ci_shard_core.runs(g)
         rest: = ci_gates.Set.ci_shard_rest.runs(g)
-        // Caution: **In both shards, a gate runs twice; in neither, `ci`'s jobs never run it.**
-        assert(ci_gates.Set.ci.runs(g) == (core || rest), "a gate of ci is in a shard")
-        assert(!(core && rest), "no gate is in both shards")
-        linux: = ci_gates.Set.ci_linux.runs(g)
-        assert(linux == (ci_gates.Set.ci.runs(g) || ci_gates.Set.ci_linux_only.runs(g)),
-            "ci-linux is ci and what Linux alone runs")
-    verdict.pass("the two shards part ci between them, and ci-linux adds Linux's.")
+        linux: = ci_gates.Set.ci_linux_only.runs(g)
+        assert(ci_gates.Set.ci.runs(g) == (core || rest || linux),
+            "ci runs the union of all three workflow sections")
+        assert(!(core && rest) && !(core && linux) && !(rest && linux),
+            "no gate is in more than one section")
+        assert(ci_gates.Set.ci_linux.runs(g) == ci_gates.Set.ci.runs(g),
+            "ci-linux keeps its full Linux coverage")
+    verdict.pass("ci runs core, rest and Linux-only exactly once.")
 
 // ==========================================
 // Sample gate logs, each cut to a real round's shape, and the summary read back from them
@@ -257,6 +258,16 @@ fn test_a_green_round_stays_short(arena: Arena$@) //<
     assert(p.ends_with("# gates invoked: 3 (0 FAIL, SKIP lines in 1), gate seconds: 36, -j12\n"),
         "the closing line counts them, and ends it")
     verdict.pass("a green round lists its gates and counts its skips, and names no cause.")
+
+fn test_a_container_log_keeps_its_platform(arena: Arena$@) //<
+    //< Linux-only logs copied back to Windows are judged for the platform that ran them
+    text: = "SKIP case: Windows has no SIGPIPE\nRESULT: ALL PASS\n"
+    native: = sample("suites_a", text, "0 3 win32\n", arena)
+    linux: = sample("suites_a", text, "1 3 linux\n", arena)
+    assert(native.ok && native.unexpected == 0, "Windows expects its own missing SIGPIPE")
+    assert(!linux.ok && linux.unexpected == 1, "Linux cannot inherit Windows's allowed skips")
+    assert(linux.sec == 3I64, "the recorded duration survives the platform field")
+    verdict.pass("a copied container log is judged for its execution platform.")
 
 fn test_an_unexpected_skip_is_named_last(arena: Arena$@) //<
     //< The SKIP that failed a gate is the summary's last word, marked apart from the expected ones

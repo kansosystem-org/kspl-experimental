@@ -121,6 +121,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends sudo \
     && rm -rf /var/lib/apt/lists/* \
     && echo "ubuntu ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/ubuntu \
-    && chmod 0440 /etc/sudoers.d/ubuntu
+    && chmod 0440 /etc/sudoers.d/ubuntu \
+    && install -d -o ubuntu -g ubuntu /workspaces/kanso-ci
 
 USER ubuntu

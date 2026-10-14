@@ -21,6 +21,7 @@ import "ksplc/sema/session/pointer" as sema_session_pointer
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars"
@@ -29,7 +30,7 @@ import "std/json" + { Json_builder }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 
-struct Enum_resolve_result
+priv struct Enum_resolve_result
     variant_node: Ast_node$@
     enum_node: Ast_node$@
 
@@ -65,8 +66,7 @@ fn handle_definition(state: Doc_state$@, params: json.Val, id_val: json.Val, are
     defer path.free()
     $def_node: Ast_node$@ = null
     if path.len > 0
-        def_node = resolve_def_node(state.sema, state.root_file, path, path.get(path.len - 1))
-            .def_node
+        def_node = resolve_def_node(state.sema, path, path.get(path.len - 1)).def_node
     // **Only the jump goes on to the type** from where a name is declared; elsewhere the name
     // stands for its declaration (`get_definition_node`).
     if path.len > 0 && state.sema != null
@@ -239,7 +239,7 @@ priv fn function_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@)
     //< The function a bare name calls, or none where the name is a value's (a local shadows it)
     if name == null || name.kind_id != .k_identifier
         return .none
-    switch local_decl_of(c, path, name)
+    switch local_decl_of(path, name)
     case .some(d)
         if d.is_fn_decl()
             return .some(d)
@@ -277,7 +277,7 @@ fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_nod
         at += 1
     if at == 0 || at >= p.children.len
         return ""
-    switch local_decl_of(c, path, p.get_child(0))
+    switch local_decl_of(path, p.get_child(0))
     case .some(decl)
         if decl.kind_id != .k_fn_param && decl.kind_id != .k_decl_var &&
             decl.kind_id != .k_decl_const
@@ -286,13 +286,13 @@ fn folded_receiver_type(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, mark: Ast_nod
         return ""
     return path_type_name(c, path, p, at, 0)
 
-priv fn local_decl_of(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
+priv fn local_decl_of(path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
     //< What a name on the path is declared by, found the way the hover finds a local
     if name == null || name.kind_id != .k_identifier
         return .none
     if name.def_node != null
         return .some(name.def_node)
-    return resolve_fallback_parent_def(c, path, name, name.text)
+    return resolve_fallback_parent_def(path, name, name.text)
 
 priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@, depth: Sz):
     U8[] //<
@@ -301,7 +301,7 @@ priv fn local_type_name(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_nod
         //< Caution: **`Self` is the enclosing impl's type**, not a type of that name; so is an `r`
         //< written with no type at all.
     $local: Ast_node$@ = null
-    switch local_decl_of(c, path, name)
+    switch local_decl_of(path, name)
     case .some(d)
         local = d
     case .none
@@ -461,8 +461,8 @@ priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target
             return mod_sym.node
     return null
 
-priv fn resolve_fallback_parent_def(_c: Sema_ctx$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@, target_text: U8[]): Ast_node$@?
+priv fn resolve_fallback_parent_def(path: List<|Ast_node$@|>$@, target_node: Ast_node$@,
+    target_text: U8[]): Ast_node$@?
     for $i: = path.len; i > 0; i -= 1
         if found: = binding_in(path.get(i - 1), target_node, target_text)
             return .some(found)
@@ -580,10 +580,6 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? /
             return .some(dot_def)
         return .none
 
-    local_def: = target_node.def_node
-    if local_def != null
-        return .some(local_def)
-
     alias: = c.peek_file_alias(c.file_name, target_text)
     if alias != null && alias.decl_node != null
         return .some(alias.decl_node)
@@ -605,7 +601,7 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? /
         if t_sym != null
             return .some(t_sym.node)
 
-    return resolve_fallback_parent_def(c, path, target_node, target_text)
+    return resolve_fallback_parent_def(path, target_node, target_text)
 
 fn find_parent_enum(node: Ast_node$@, target: Ast_node$@): Ast_node$@?
     return find_parent_enum_depth(node, target, 0)
@@ -694,9 +690,9 @@ fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
     out.s(doc.sub_from(copied))
     return base_core.arena.dup_str(out.slice())
 
-fn scan_enum_variant(sym: Sema_symbol$@, target_node: Ast_node$@, res: Enum_resolve_result$@): Bool
+priv fn scan_enum_variant(sym: Sema_symbol$@, target_node: Ast_node$@, res: Enum_resolve_result$@)
     if sym == null || sym.node == null || sym.node.kind_id != .k_decl_enum
-        return false
+        return
     enum_node: = sym.node
     for variant in enum_node.children
         if variant.kind_id == .k_enum_variant
@@ -704,24 +700,19 @@ fn scan_enum_variant(sym: Sema_symbol$@, target_node: Ast_node$@, res: Enum_reso
             if v_id != null && v_id.text.equals(target_node.text)
                 res.enum_node = enum_node
                 res.variant_node = variant
-                return true
-    return false
+                return
 
 struct Def_resolve_result
     def_node: Ast_node$@
     enum_node: Ast_node$@
 
-fn resolve_def_node(sema: Sema_ctx$@, root_file: Ast_node$@, path: List<|Ast_node$@|>$@,
-    target_node: Ast_node$@): Def_resolve_result //<
+fn resolve_def_node(sema: Sema_ctx$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
+    Def_resolve_result //<
         //< The definition of a target node, an enum variant first, else the ordinary resolution
-    enum_res: = resolve_enum_variant_def(sema, root_file, path, target_node)
-    $def_node: Ast_node$@ = null
-    if enum_res.variant_node != null
-        def_node = enum_res.variant_node
-    else
-        if d: = get_definition_node(sema, path)
-            def_node = d
-    return Def_resolve_result::{ .def_node = def_node, .enum_node = enum_res.enum_node }
+    enum_res: = resolve_enum_variant_def(sema, path, target_node)
+    return Def_resolve_result::{ .def_node =
+        (enum_res.variant_node if enum_res.variant_node != null
+        else get_definition_node(sema, path).unwrap_or(null)), .enum_node = enum_res.enum_node }
 
 priv fn written_type_name(n: Ast_node$@): U8[] //<
     //< The type's own name as a variant's head writes it (`Kind` of `m.Kind.small`), or ""
@@ -732,8 +723,8 @@ priv fn written_type_name(n: Ast_node$@): U8[] //<
         return n.last_child().text
     return ""
 
-fn resolve_enum_variant_def(sema: Sema_ctx$@, _root_file: Ast_node$@,
-    path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Enum_resolve_result
+priv fn resolve_enum_variant_def(sema: Sema_ctx$@, path: List<|Ast_node$@|>$@,
+    target_node: Ast_node$@): Enum_resolve_result
     $res: = Enum_resolve_result::{ .variant_node = null, .enum_node = null }
     if sema == null || path.len < 2
         return res

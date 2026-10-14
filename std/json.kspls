@@ -186,9 +186,6 @@ priv fn enter_nesting(ctx: Parse_ctx$@): Void!Json_error
     if ctx.depth > max_nesting_depth || ctx.stack.near()
         throw .too_deep
 
-priv fn exit_nesting(ctx: Parse_ctx$@)
-    ctx.depth -= 1
-
 priv fn skip_ws(ctx: Parse_ctx$@)
     for ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos).is_space()
         ctx.pos += 1
@@ -349,11 +346,11 @@ priv fn parse_value(ctx: Parse_ctx$@): Val!Json_error
 
 priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
     enter_nesting(ctx)!
+    defer ctx.depth -= 1
     ctx.pos += 1
     skip_ws(ctx)
     if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '}'
         ctx.pos += 1
-        exit_nesting(ctx)
         return .obj_val(Obj::{ .head = null })
     $head: Member$@ = null
     $tail: Member$@ = null
@@ -375,16 +372,15 @@ priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
 
         if check_comma_or_end(ctx, '}')!
             break
-    exit_nesting(ctx)
     return .obj_val(Obj::{ .head = head })
 
 priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
     enter_nesting(ctx)!
+    defer ctx.depth -= 1
     ctx.pos += 1
     skip_ws(ctx)
     if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == ']'
         ctx.pos += 1
-        exit_nesting(ctx)
         return .array_val(null)
     $head: Node$@ = null
     $tail: Node$@ = null
@@ -399,7 +395,6 @@ priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
 
         if check_comma_or_end(ctx, ']')!
             break
-    exit_nesting(ctx)
     return .array_val(head)
 
 pub struct Doc //< a parsed document: its value, and the arena `parse` built it in given null
@@ -509,37 +504,33 @@ impl Val
                 f.fmt(out)
         case .str_val(s)
             out.c('"').escape_and_append(s).c('"')
-        case .array_val
+        case .array_val(head)
             out.c('[')
-            $curr: = r.arr_head()
-            $first: = true
+            $curr: = head
             for curr != null
-                if !first
+                if curr != head
                     out.c(',')
-                first = false
                 write_break(out, indent, depth + 1)
                 curr.val.dump_at(out, indent, depth + 1)
                 curr = curr.next
             // Caution: **Keep an empty sequence on one line**, as the `[]` other implementations
             // write.
-            if !first
+            if head != null
                 write_break(out, indent, depth)
             out.c(']')
-        case .obj_val
+        case .obj_val(o)
             out.c('{')
-            $m: = r.obj_head()
-            $first: = true
+            $m: = o.head
             for m != null
-                if !first
+                if m != o.head
                     out.c(',')
-                first = false
                 write_break(out, indent, depth + 1)
                 out.c('"').escape_and_append(m.key).s("\":")
                 if indent > 0
                     out.c(' ')
                 m.val.dump_at(out, indent, depth + 1)
                 m = m.next
-            if !first
+            if o.head != null
                 write_break(out, indent, depth)
             out.c('}')
     pub fn get( //< an object's member, or `null_val`; with a duplicate key, the first one

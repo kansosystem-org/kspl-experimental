@@ -336,7 +336,6 @@ pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up;
 // Caution: **A container whose elements can be ARC zeroes newly allocated memory with this
 // before using it.** Assigning to an element releases the old value, so following garbage as ARC
 // crashes; zero means "an empty handle that owns nothing" (see `Rc<|T|>`).
-#cfg(!freestanding)
 pub fn zero( //< sets a range of bytes to 0
     dest: Void$@, //< where the range begins
     bytes: Sz, //< how long it is
@@ -348,19 +347,14 @@ pub fn zero( //< sets a range of bytes to 0
     // null (`reader.read(<empty buffer>)` ends up here).
     if bytes == 0
         return
+    #cfg(!freestanding)
     libc.memset(dest, 0, bytes)
-// Its own implementation, for the same reason as copy.
-#cfg(freestanding)
-pub fn zero( //< sets a range of bytes to 0
-    dest: Void$@, //< where the range begins
-    bytes: Sz, //< how long it is
-)
-    if bytes < 0
-        panic("zero bytes must be non-negative")
-    d: = U8$@::dest
-    for i in Range.asc(bytes)
-        (d + i)$ = 0
-#cfg(!freestanding)
+    #cfg(freestanding)
+    software:
+        d: = U8$@::dest
+        for i in Range.asc(bytes)
+            (d + i)$ = 0
+
 pub fn copy( //< copies a range of bytes; the two ranges must not overlap (`move` where they may)
     dest: Void$@, //< where the bytes go
     src: Void$@, //< where they come from
@@ -371,53 +365,39 @@ pub fn copy( //< copies a range of bytes; the two ranges must not overlap (`move
     // The same reason as in zero: a 0-byte call passes no null to libc.
     if bytes == 0
         return
+    #cfg(!freestanding)
     libc.memcpy(dest, src, bytes)
-// A simple byte loop, which avoids linking libgcc/newlib; slower, but embedded copies are small.
-#cfg(freestanding)
-pub fn copy( //< copies a range of bytes; the two ranges must not overlap (`move` where they may)
-    dest: Void$@, //< where the bytes go
-    src: Void$@, //< where they come from
-    bytes: Sz, //< how many
-)
-    if bytes < 0
-        panic("copy bytes must be non-negative")
-    d: = U8$@::dest
-    s: = U8$@::src
-    for i in Range.asc(bytes)
-        (d + i)$ = (s + i)$
-#cfg(!freestanding)
-pub fn move( //< copies a range of bytes that may overlap the destination
-    //<
-    //< For shifting bytes within one buffer, where `copy` is undefined.
-    dest: Void$@, //< where the bytes go
-    src: Void$@, //< where they come from
-    bytes: Sz, //< how many
-)
-    if bytes < 0
-        panic("move bytes must be non-negative")
-    // The same reason as in zero: a 0-byte call passes no null to libc.
-    if bytes == 0
-        return
-    libc.memmove(dest, src, bytes)
-// The same byte loop as copy, running from the tail when the destination lies after the source.
-#cfg(freestanding)
-pub fn move( //< copies a range of bytes that may overlap the destination
-    //<
-    //< For shifting bytes within one buffer, where `copy` is undefined.
-    dest: Void$@, //< where the bytes go
-    src: Void$@, //< where they come from
-    bytes: Sz, //< how many
-)
-    if bytes < 0
-        panic("move bytes must be non-negative")
-    d: = U8$@::dest
-    s: = U8$@::src
-    if d > s
-        for $i: Sz = bytes; i > 0; i -= 1
-            (d + i - 1)$ = (s + i - 1)$
-    else
+    #cfg(freestanding)
+    software:
+        d: = U8$@::dest
+        s: = U8$@::src
         for i in Range.asc(bytes)
             (d + i)$ = (s + i)$
+
+pub fn move( //< copies a range of bytes that may overlap the destination
+    //<
+    //< For shifting bytes within one buffer, where `copy` is undefined.
+    dest: Void$@, //< where the bytes go
+    src: Void$@, //< where they come from
+    bytes: Sz, //< how many
+)
+    if bytes < 0
+        panic("move bytes must be non-negative")
+    // The same reason as in zero: a 0-byte call passes no null to libc.
+    if bytes == 0
+        return
+    #cfg(!freestanding)
+    libc.memmove(dest, src, bytes)
+    #cfg(freestanding)
+    software:
+        d: = U8$@::dest
+        s: = U8$@::src
+        if d > s
+            for $i: Sz = bytes; i > 0; i -= 1
+                (d + i - 1)$ = (s + i - 1)$
+        else
+            for i in Range.asc(bytes)
+                (d + i)$ = (s + i)$
 // std/chars and std/str call libc.memcmp, which freestanding lacks. #export emits this under the C
 // name "memcmp", which satisfies libc.kspls's extern declaration without changing the callers.
 #cfg(freestanding)

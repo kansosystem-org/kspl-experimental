@@ -12,19 +12,16 @@
 // here and "how a string is cut and joined" there (Principle 3 in `../docs/DESIGN.md`).
 // ==========================================
 import "std/bignat" + { Bignat, Binary_float, Wide }
+import "std/chars"
 #cfg(!freestanding)
 import "std/libc"
 
-// Converts a nibble to one hex character; `std/str` uses it too (the `\u00XX` escape).
 impl U8
-    priv fn to_hex_with(r: Self, alpha: U8): U8
-        return ('0' + r) if r < 10U8 else alpha + (r - 10U8)
-
     pub fn to_hex_lower(r: Self): U8 //< one nibble as a hex digit, using `a`-`f`
-        return r.to_hex_with('a')
+        return chars.hex_digit(r, 'a')
 
     pub fn to_hex_upper(r: Self): U8 //< one nibble as a hex digit, using `A`-`F`
-        return r.to_hex_with('A')
+        return chars.hex_digit(r, 'A')
 
 // ==========================================
 // The format wrappers for string interpolation. `\{expr\}` only expands to put(w, expr) ("The
@@ -336,24 +333,16 @@ priv fn write_magnitude(w: Writer, mag: U64, is_neg: Bool, width: Sz, fill: U8, 
         //< The two differ only in how they get `mag` and `is_neg`. The digits go into a U8[32] on
         //< the stack, so nothing is allocated.
     $buf: U8[32] = ::{}
-    ptr: = buf@
-    $idx: Sz = 0
-    if mag == 0
-        (ptr + idx)$ = '0'
-        idx += 1
-    else
-        $temp: = mag
-        for temp > 0
-            (ptr + idx)$ = U8::('0' + temp % 10)
-            idx += 1
-            temp /= 10
-    // The digits are pushed lowest first; reverse them before aligning.
-    for k in Range.asc(idx / 2)
-        tail: = idx - 1 - k
-        tmp: = (ptr + k)$
-        (ptr + k)$ = (ptr + tail)$
-        (ptr + tail)$ = tmp
-    return write_digits(w, U8[]::{ .ptr = ptr, .len = idx }, is_neg, width, fill, comma)
+    $idx: = buf.len
+    $temp: = mag
+    for
+        idx -= 1
+        buf[idx] = U8::('0' + temp % 10)
+        temp /= 10
+        if temp == 0
+            break
+    return write_digits(w, U8[]::{ .ptr = buf@ + idx, .len = buf.len - idx }, is_neg, width, fill,
+        comma)
 
 priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8, comma: Bool):
     Writer //<

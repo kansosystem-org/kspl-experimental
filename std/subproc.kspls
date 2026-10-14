@@ -21,7 +21,7 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 extern "C"
-    // argv is passed as one buffer with NUL separators (`pack_argv`). `stdio` is the sum of the
+    // argv is passed as one buffer with NUL separators (`start`). `stdio` is the sum of the
     // `stdio_*` bits below; when `out_path` / `err_path` is not empty, that stream goes to a file,
     // and a stream with neither inherits the parent's.
     fn kspl_proc_start(argv_buf: U8@, argv_buf_len: Sz, argc: I32, cwd: U8@, cwd_len: Sz,
@@ -53,22 +53,15 @@ priv const stdio_group: I32 = 16 //< the child leads a process group of its own 
     //< ("A child stopped at its time limit is stopped with all it started" in
     //< std/docs/DESIGN.md).
 
-priv fn pack_argv(argv: U8[][]): Str_builder //<
-    //< Packs argv into the form the C code expects (one buffer with NUL separators)
-    //<
-    //< The caller `free`s the returned builder. **If an argument (or the working directory)
-    //< contains a NUL, the start fails.** A NUL is the C separator, so an embedded one would split
-    //< an argument in two and add one the caller never wrote (the C code checks the count).
-    //< An empty argument is allowed.
-    $buf: = Str_builder.new()
-    for a in argv
-        buf.s(a).c(0U8)
-    return buf
-
 priv fn start(argv: U8[][], cwd: U8[], stdio: I32, out_path: U8[], err_path: U8[]): I64 //<
     //< Starts the child; returns 0 on failure
-    $argv_buf: = pack_argv(argv)
+    //<
+    //< Arguments are packed with NUL separators. An embedded NUL fails the start: the C side
+    //< checks the count, so it cannot split an argument in two. An empty argument is allowed.
+    $argv_buf: = Str_builder.new()
     defer argv_buf.free()
+    for a in argv
+        argv_buf.s(a).c(0U8)
     return kspl_proc_start(argv_buf.ptr, argv_buf.len, I32::argv.len, cwd.ptr, cwd.len, stdio,
         out_path.ptr, out_path.len, err_path.ptr, err_path.len)
 
@@ -284,6 +277,11 @@ priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_
         .stdout_data = out.unwrap_or(empty), .stderr_data = err.unwrap_or(empty),
         .output_lost = out.is_none() || err.is_none() }
 
+#cfg(!freestanding)
+priv struct Running_job //< a handle and its deadline; handle 0 means no child remains
+    handle: I64
+    deadline_us: I64
+
 // Runs jobs at most max_parallel at a time and returns the results **in the input order**.
 // **The caller creates work_dir.** A file with the same name is truncated and rewritten.
 // **Each job has its own time limit**, counted from its own start, as `run_capture`'s; a job past
@@ -305,22 +303,21 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
     slots: = max_parallel if max_parallel > 0 else 1
     $work: = mem.scratch(arena)
     defer work.free()
-    // Each job's handle (0 once collected, or for one that did not start) and its deadline.
-    $live: = List<|I64|>.new(work.arena)
-    $deadlines: = List<|I64|>.new(work.arena)
+    $live: = List<|Running_job|>.new(work.arena)
     $running: Sz = 0
     for i in Range.asc(jobs.len)
         for running >= slots
-            collect_one(live@, deadlines@, results@, output_cap, work_dir, work.arena, arena)
+            collect_one(live@, results@, output_cap, work_dir, work.arena, arena)
             running -= 1
         h: = start_job(jobs[i], i, work_dir, work.arena)
-        live.push(h)
-        deadlines.push(sys.deadline_after_ms(timeout_ms))
+        live
+            .push(Running_job::{ .handle = h,
+            .deadline_us = sys.deadline_after_ms(timeout_ms) })
         results.push(spawn_failed_result())
         if h != 0
             running += 1
     for running > 0
-        collect_one(live@, deadlines@, results@, output_cap, work_dir, work.arena, arena)
+        collect_one(live@, results@, output_cap, work_dir, work.arena, arena)
         running -= 1
     return results
 
@@ -329,20 +326,20 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
 // Caution: **Not the oldest first.** Waiting on the job started first holds every slot a later,
 // quicker job freed, so the jobs behind it start late.
 #cfg(!freestanding)
-priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
-    results: List<|Run_result|>$@, output_cap: Sz, work_dir: U8[], work: Arena$@, arena: Arena$@)
+priv fn collect_one(live: List<|Running_job|>$@, results: List<|Run_result|>$@, output_cap: Sz,
+    work_dir: U8[], work: Arena$@, arena: Arena$@)
     $pause: I32 = 1
     for
         now: = sys.mono_us()
         for k in Range.asc(live.len)
-            h: = live.get(k)
-            if h == 0
+            job: = live[k]@
+            if job.handle == 0
                 continue
             $code: I32 = 0
-            if kspl_proc_ended(h, code@) || now >= deadlines.get(k)
+            if kspl_proc_ended(job.handle, code@) || now >= job.deadline_us
                 results.set(k,
-                    reap_job(h, deadlines.get(k), k, output_cap, work_dir, work, arena))
-                live.set(k, 0)
+                    reap_job(job.handle, job.deadline_us, k, output_cap, work_dir, work, arena))
+                job.handle = 0
                 return
         sys.sleep_ms(pause)
         pause = next_pause(pause)

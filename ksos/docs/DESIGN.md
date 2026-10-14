@@ -291,6 +291,8 @@ The timer is SysTick (the timer built into every Cortex-M core). PendSV is set t
 
 **QEMU (`qemu-system-arm`, `mps2-an385`) checks it running as the real chip would.** The demos write to the console through ARM semihosting (a debug channel that lets bare-metal code ask the emulator to print), and end QEMU through it once their checks are done. **The exit carries the verdict**: semihosting's exit on a 32-bit core takes a reason rather than a status, and QEMU exits with 0 only for "the application ended", so a run whose checks failed, that never reached its checks, or that panicked ends with another reason and QEMU exits with 1 (`exit` and `on_panic` in `ksos/demo/common/semihost_console.kspls`).
 
+**Automated emulators have no terminal input or monitor.** Parallel runs sharing a terminal can suspend each other while changing its settings. The semihosting demos discard UART input; the UART probes use their socket instead. Every run has a time limit followed by a forced kill if graceful shutdown stalls, so a stopped emulator cannot hold the gate indefinitely.
+
 ### The Cortex-M0/M0+ port (`port/cortex_m0/`)
 
 The Cortex-M0+ (inside the RP2040) has a smaller instruction set, so two assembly files are rewritten for it. Everything else is reused.

@@ -315,7 +315,7 @@ priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
 
     opt_round: = json.parse(out.slice(), arena)
         catch panic("json: a string holding only the fields present has to be readable")
-    $spec_back: Spec = ::{}
+    $spec_back: Spec = ::{ .size_px = .some(99.0) }
     json_struct.into_struct(opt_round.val, spec_back@, arena)
         catch panic("json: the round trip does not fail under a field that resolves to present or \
             absent either")
@@ -335,7 +335,7 @@ priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
     // An explicit `null` is refused as a difference in kind.
     $null_at: U8[] = ""
     explicit: = json.parse("{\"family\":null}", arena) catch panic("json: the fixture must parse")
-    $null_out: Spec = ::{}
+    $null_out: Spec = ::{ .family = .some("kept") }
     json_struct.into_struct(explicit.val, null_out@, arena) catch e
         switch e
         case .field_type(which)
@@ -344,6 +344,7 @@ priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
             panic("json: an explicit null is a difference in kind")
     named_null: = null_at.equals("family")
     assert(named_null, "json: an explicit null is refused with the key's name attached")
+    assert(null_out.family.is_some(), "json: a refused null leaves the option's tag untouched")
 
 priv fn roundtrip_widths(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
     //< Every number width round-trips with its sign

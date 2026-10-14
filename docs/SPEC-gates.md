@@ -68,13 +68,17 @@ Caution: **When adding a gate, make it print one line in this notation.** A nota
 
 | Target | What it runs |
 | :-- | :-- |
-| `ci` | The gates common to Linux and Windows (ucrt64) |
-| `ci-linux` | `ci` plus the Linux-only gates |
+| `ci` | The union of `ci-shard-core`, `ci-shard-rest` and `ci-linux-only` on every host |
+| `ci-linux` | The same complete set as `ci`, retained for existing callers |
 | `ci-linux-only` | The Linux-only gates alone |
-| `ci-shard-core`, `ci-shard-rest` | One job's share of `ci`: the two halves the Linux and Windows jobs split it into |
+| `ci-shard-core`, `ci-shard-rest` | The two shared sections run natively by the Linux and Windows jobs |
 | `ci-macos` | macOS's set |
 
 The workflow only calls the targets, so **to change which gates run, fix the table**, not ci.yml. The same targets reproduce a run on your own machine.
+
+**On Linux, `make ci` runs the complete set locally. On native Windows and macOS, it runs the shared sections locally and the Linux-only section in Docker.** Docker must be running with Linux-container support. macOS also needs GNU make 4 (`brew install make`); the runner selects `gmake` when available. The image is built from `.devcontainer/Dockerfile` for `linux/amd64`; the checkout is mounted read-only and copied into an isolated writable checkout, excluding `out/`. Only logs return to the host, so Linux executables never replace native build outputs. Missing Docker or a failed container run fails `make ci`. Native macOS hardware checks remain `make ci-macos` in the macOS workflow job.
+
+**A running gate prints its name, elapsed time and log path every fifteen seconds.** Each gate's completion record carries its execution platform, so a Linux log copied to Windows keeps Linux's rules for expected skips.
 
 The chart shows one run, from the workflow down to the logs.
 
@@ -90,7 +94,7 @@ flowchart TD
     G --> O["each gate's log, out/log/ci/name.log,<br/>uploaded to the run's Artifacts"]
 ```
 
-**The common gates run as two sections, in parallel, as separate jobs.** `ci-shard-core` runs self-host (the compiler rebuilding itself) and one half of the regression suites, and `ci-shard-rest` runs the rest and the other half. The suites are dealt across both halves rather than kept whole, so that neither half makes its job wait much longer than the other; `SUITES_B` in `mk/test.mk` says which suite goes where. Linux runs three jobs: these two and `ci-linux-only`. The number of sections is set by how many job start-ups can be paid for, not by what divides evenly (the grounds are "Where CI's time goes" in [`DESIGN.md`](DESIGN.md)).
+**The common gates run as two sections, in parallel, as separate jobs.** `ci-shard-core` runs C self-hosting, lint and one share of the regression suites; `ci-shard-rest` runs LLVM self-hosting, LLVM tests and the other share. `SUITES_B` in `mk/test.mk` assigns the root suites. The compiler extraction checks deal successive pairs of its longest-first suite list in opposite directions between the jobs, using separate copies and scratch directories. `make test-extract-ksplc` runs both shares. Linux runs three jobs: these two and `ci-linux-only`. The number of sections is set by how many job start-ups can be paid for, not by what divides evenly (the grounds are "Where CI's time goes" in [`DESIGN.md`](DESIGN.md)).
 
 **Always measure the usage time before adding a section.** The cheapest way to shrink the wait is not splitting but choosing which jobs run ("How CI runs" above).
 
@@ -114,7 +118,7 @@ flowchart TD
 
 **The table says what CI runs, not what passed.** ✅ means the job runs the check, and ➖ means it does not. A note number points at the note below that says why, or adds what a reader needs to know. The Linux job runs inside a container image built from `.devcontainer/Dockerfile`. That image is cached at `ghcr.io/<owner>/<repository>/devcontainer` (`imageName` in `.github/workflows/ci.yml`; only a run on main writes it), and is pulled rather than built while the Dockerfile is unchanged. The first run after the Dockerfile changes rebuilds the cache, and on that run alone the Linux job takes several minutes longer.
 
-| Check | Linux (`make ci-linux`) | macOS (`make ci-macos`) | Windows (ucrt64, `make ci`) |
+| Check | Linux (`make ci`) | macOS workflow (`make ci-macos`) | Windows workflow (ucrt64, shared sections) |
 |---|:---:|:---:|:---:|
 | self-host (the C backend) | ✅ | ✅ | ✅ |
 | self-host-ship (the `-O2` build `make install` and the release ship emits stage2's C to the byte) | ✅ | ➖(note 22) | ➖(note 22) |
@@ -154,7 +158,7 @@ flowchart TD
 | test-file-path (the logical name is stable however the entry point is written) | ✅ | ➖(note 2) | ✅ |
 | test-js-syntax (the page's JS parses as syntax) | ✅ | ➖(note 15) | ➖(note 15) |
 | test-broken-pipe (writing to nobody does not die, and output losing its destination ends quietly) | ✅ | ➖(note 2) | ➖(note 16) |
-| test-extract (extract-ksplc / extract-rest), every package with its own `Makefile` built and tested from a copy of its folder alone | ✅ | ➖(note 2) | ✅ |
+| test-extract (extract-ksplc-core / extract-ksplc-rest / extract-rest), every package with its own `Makefile` built and tested from a copy of its folder alone | ✅ | ➖(note 2) | ✅ |
 | The checks on the tree's text (conventions / docref / docsnippet / textrip / spec-claims / vscode / lint-gate / recipe-bytes / deps / pytools) | ✅ | ➖(note 2) | ➖(note 28) |
 | The other suites (c-warnings / pilot-copy / own-machine / cli / config / std-dir / thin-use / lint / fmt / link-rules / ext-import / doc / runtime / limits / decl-macros / spawn / place / visibility) | ✅(note 24) | ➖(note 2) | ✅(note 24) |
 | self-host (the LLVM backend) | ✅ | ✅ | ✅ |
@@ -166,7 +170,7 @@ flowchart TD
 | test-race (the programs that start threads, built with ThreadSanitizer, report no data race) | ✅ | ➖(note 2) | ➖(note 19) |
 | test-sanitize (ksplc's and std's own tests, built through both backends with the address, leak and undefined-behaviour sanitizers, report nothing) | ✅ | ➖(note 31) | ➖(note 31) |
 
-**The compiler's own suites run from a copy.** On Linux and ucrt64, `test-extract` copies ksplc's folder alone, rebuilds the compiler there, and runs that folder's suites (`test-negative`, `test-equiv`, `test-run` and the rest of `SUITES` in `ksplc/Makefile`) against it. macOS runs the ones its column marks by name, from the repository.
+**The compiler's own suites run from copies.** On Linux and ucrt64, each compiler extraction share copies ksplc's folder alone and rebuilds the compiler there. The two shares together run every entry of `SUITES` in `ksplc/Makefile` against those compilers, without repeating a suite. macOS runs the ones its column marks by name, from the repository.
 
 **The lint gate passes only when every count is 0, hints included.** It analyses the entry points listed in `LINT_TARGETS` in `mk/lint.mk`. A generic (code written once for many types) is analysed only where it is instantiated, that is, used with a concrete type. So code that only one entry point instantiates (`tests/debug/main.kspls`, say) escapes the gate unless that entry point is listed. `make test-lint-gate` checks that a file holding one information diagnostic makes `make lint` exit non-zero.
 
@@ -205,7 +209,7 @@ flowchart TD
 | `KSBIND_REQUIRE_LIBS` | OpenSSL and SQLite (`libssl-dev`, `libsqlite3-dev`) | ksbind's own tests (in `test-extract`), and their run in `test-race` | The bindings, linked and run |
 | `KSOS_REQUIRE_ARM` | The `arm-none-eabi` toolchain | `test-ksos-link` (note 6) | That ksos's bare-metal demos link, and that each window function sits in RAM |
 
-`KSPAGE_REQUIRE_BROWSER` and `KSPAGE_REQUIRE_DESKTOP` are not switches of this kind: they are off unless a gate's row in `tools/ci_gates.kspls` sets them, and only `make ci-linux` runs those rows. `make kspage` checks the desktop entry too, and a person building kspage needs no validator for it.
+`KSPAGE_REQUIRE_BROWSER` and `KSPAGE_REQUIRE_DESKTOP` are not switches of this kind: they are off unless a gate's row in `tools/ci_gates.kspls` sets them. Those rows belong to `ci-linux-only`, which `make ci` includes on every host. `make kspage` checks the desktop entry too, and a person building kspage needs no validator for it.
 
 A missing tool no switch covers, whose skip no Linux row of `expected_skips` holds (`wasm-ld` and `node`, say), has no way off: a Linux round fails where it is missing, since only the image is promised to hold it. On a machine of your own, the devcontainer (`.devcontainer/`) gives every tool at once.
 
@@ -252,7 +256,7 @@ A missing tool no switch covers, whose skip no Linux row of `expected_skips` hol
 * **note 26**: `ksplc/tests/suite/layout_targets_test.kspls` compiles `ksplc/tests/prog/layout_probe.kspls` with `--machine` for each machine ksplc knows (`machines` in `ksplc/base/target.kspls`), and has clang compile the C for the same machine with warnings refused. The C checks every number ksplc folded, so a size laid out wrongly fails there. **Each check is shown to fire**: a 32-bit machine's C compiled for a 64-bit one, and the other way round, must fail at a check naming the machine. It needs only clang, which builds for every machine. Where `wasm-ld`, `node` and clang's wasm32 builtins are found, the wasm32 build also runs, with a 128-bit product that links only with those builtins, and each way a folded size decides the program (a static `if`, a constant chain, a `case` label, reflection) must answer as wasm32 lays values out.
 * **note 27**: Linux and Windows run the same check through `test-extract`: ksai's own `make test`, run on its copy, trains `llama_engine` and requires the loss to fall (`ksai/tests/examples_main.kspls`). macOS runs no `test-extract`, so it runs `make run` instead.
 * **note 28**: what these read is the tree's text, or the text the compiler translates it to, so the answer cannot differ by platform. Run on Windows as well, they would pay a second time (a Windows minute is billed double) for the answer Linux already gave, so they run in `ci-linux-only` (`Shard.linux` in `tools/ci_gates.kspls`; the suites are `SUITES_TEXT` in `mk/test.mk`). What the platform decides stays on Windows: building, linking and running, the language server over the tree (`lsp-tree`), and the C compiler's warnings (`c-warnings`).
-* **note 29**: `make debug` runs the tests of every package but kssrv and ksbind in one program (kssrv's start the server as a child, and ksbind's link OpenSSL and SQLite, so each runs only as its package's own `make test`). Linux and Windows run the same tests already, one package at a time, as each package's own `make test` from a copy of its folder (`test-extract`, in `suites_a`), which also proves the package stands alone; a failed check fails that run, since each package's tests end with the checks' own verdict. So there they run only what no copy holds: `tools/`, which has no `Makefile` (`make debug-tools`). macOS runs no copy, so it runs `make debug`, which holds `tools/` too; kssrv's and ksbind's tests go unrun there.
+* **note 29**: `make debug` runs the tests of every package but kssrv and ksbind in one program (kssrv's start the server as a child, and ksbind's link OpenSSL and SQLite, so each runs only as its package's own `make test`). Linux and Windows run the same tests already, one package at a time, as each package's own `make test` from a copy of its folder (`test-extract`, across the suite shares), which also proves the package stands alone; a failed check fails that run, since each package's tests end with the checks' own verdict. So there they run only what no copy holds: `tools/`, which has no `Makefile` (`make debug-tools`). macOS runs no copy, so it runs `make debug`, which holds `tools/` too; kssrv's and ksbind's tests go unrun there.
 * **note 30**: `make LLVM=1 debug` holds neither kssrv nor ksbind (note 29), so `test-llvm-pkgs` builds the server and ksbind's tests through the LLVM backend and runs kssrv's tests on that server and ksbind's as they are. It runs in `ci-linux-only`, the one job whose image holds ksbind's libraries (OpenSSL, SQLite).
 * **note 31**: `test-sanitize` builds ksplc's own tests (`ksplc/tests/main.kspls`: the language, ARC, packed fields, casts and the rest) and std's (`std/tests/main.kspls`) through both backends with clang's `-fsanitize=address,undefined`, and runs each as its package's own `make test` runs it: ksplc's from its folder, and std's, which write fixed names under the folder they run in, each build from a fresh folder of its own. The address sanitizer stops a program at a use after free, a double free or an access out of bounds; the leak sanitizer, which comes with it, reports at the end what was never freed; the undefined-behaviour sanitizer stops at an operation C leaves undefined, such as a signed overflow or a misaligned access. It fails on any report from any process, or on a non-zero exit. **It sees what counting bytes cannot**: ksplc's ARC tests judge a balance by the bytes in use (`heap_used_bytes`), which a use after free, or a binding left pointing at freed memory, leaves unchanged.
   * **It shows that it can fire**: a use after free, a read past the end of an allocation, a leak and a misaligned store, each written on purpose and built and run the same way, must be reported as what they are. **And that the LLVM build is watched through its marks**: the read past the end, built through LLVM without `--sanitize`, must go unreported.
@@ -310,6 +314,10 @@ Caution: **Do not edit a record by hand.** The next `make surface` overwrites th
 ## What the convention checks count
 
 This section says only what `make test-conventions` counts, and where. The principles themselves are "Development Principles" in [`DESIGN.md`](DESIGN.md). **Do not copy the rules here.**
+
+### Executable scripts
+
+**Every tracked regular file beginning with `#!` must have mode `100755` in Git's index.** `make test-conventions` checks the recorded mode rather than the host's permissions, so the check also applies on Windows. Set it with `git update-index --chmod=+x -- <path>`; on Unix, also run `chmod +x <path>` to update the working file. New files must be staged before their modes can be checked. Symbolic links are excluded.
 
 ### Principle 3 - what is counted, and how
 

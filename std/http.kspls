@@ -219,14 +219,6 @@ priv fn get_content_length(head: Header$@): Sz?!Http_error //<
         node = node.next
     return .some(length) if found else .none
 
-priv fn check_content_length(head: Header$@, max_body: Sz): Sz?!Http_error //<
-    //< Refuses a Content-Length larger than max_body
-    content_length: = get_content_length(head)!
-    if n: = content_length
-        if n > max_body
-            throw .body_too_large
-    return content_length
-
 priv fn valid_status(status: I32): Bool //< whether it lies in 100 to 599, RFC 9110's range
     //<
     //< Caution: **Refuse one below 100 on reading too.** `may_carry_body` gives it no body, so a
@@ -385,12 +377,12 @@ priv fn parse_request_line(line: U8[]): Request_line!Http_error
             return Request_line::{ .method = method, .target = target, .version = version }
     throw .invalid_request_line
 
-priv struct Status_line //< parses the status line ("HTTP-version SP status SP reason")
-    version: U8[]
+priv struct Status_line //< an arena-owned status line, stable while the receive buffer grows
+    version: U8$[]
     status: I32
-    reason: U8[]
+    reason: U8$[]
 
-priv fn parse_status_line(line: U8[]): Status_line!Http_error
+priv fn parse_status_line(line: U8[], arena: Arena$@): Status_line!Http_error
     if sp1: = line.find_char(' ')
         check_version(line.sub(0, sp1))!
         rest: = line.sub_from(sp1 + 1)
@@ -407,24 +399,9 @@ priv fn parse_status_line(line: U8[]): Status_line!Http_error
             throw .invalid_status_line
         if !valid_status(I32::status)
             throw .invalid_status_line
-        return Status_line::{ .version = line.sub(0, sp1), .status = I32::status,
-            .reason = reason }
+        return Status_line::{ .version = arena.dup_str(line.sub(0, sp1)), .status = I32::status,
+            .reason = arena.dup_str(reason) }
     throw .invalid_status_line
-
-priv fn build_request(work: mem.Scratch, line: Request_line, head: Header$@, body: U8[],
-    consumed: Sz): Request$@ //<
-        //< parse_request's result, its parts copied into the arena it then keeps
-    arena: = work.arena
-    req: Request = ::{
-        .own = work.own,
-        .method = arena.dup_str(line.method),
-        .target = arena.dup_str(line.target),
-        .version = arena.dup_str(line.version),
-        .headers = head,
-        .body = arena.dup_str(body),
-        .consumed = consumed,
-    }
-    return arena.create(req)
 
 priv fn build_response(work: mem.Scratch, line: Status_line, head: Header$@, body: U8[],
     consumed: Sz): Response$@ //<
@@ -432,9 +409,9 @@ priv fn build_response(work: mem.Scratch, line: Status_line, head: Header$@, bod
     arena: = work.arena
     resp: Response = ::{
         .own = work.own,
-        .version = arena.dup_str(line.version),
+        .version = line.version,
         .status = line.status,
-        .reason = arena.dup_str(line.reason),
+        .reason = line.reason,
         .headers = head,
         .body = arena.dup_str(body),
         .consumed = consumed,
@@ -449,9 +426,6 @@ priv struct Head_parts //< a message's head, read, and where its body starts
     head: Header$@
     head_end: Sz //< where the body starts in the buffer
     length: Sz? //< `Content-Length`'s, within the caller's limit; none where it is absent
-
-priv fn request_body_len(h: Head_parts): Sz //< a request without `Content-Length` has no body
-    return h.length.unwrap_or(0)
 
 priv fn response_body_len(h: Head_parts, status: I32): Sz!Http_error //<
     //< A response's body length: 0 for a status that has no body, else `Content-Length`'s
@@ -490,7 +464,10 @@ priv fn scan_head(src: U8[], max_body: Sz, arena: Arena$@): Head_parts!Http_erro
         throw e.past_head_limit(src)
     if ctx.pos > max_head_bytes
         throw .head_too_large
-    length: = check_content_length(head, max_body)!
+    length: = get_content_length(head)!
+    if n: = length
+        if n > max_body
+            throw .body_too_large
     return Head_parts::{ .first_line = first_line, .head = head, .head_end = ctx.pos,
         .length = length }
 
@@ -525,11 +502,20 @@ pub fn parse_request( //< the one request at the start of the buffer; fails if i
     r: = scan_request_head(src, max_body, work.arena) catch e
         work.free()
         throw e
-    body_len: = request_body_len(r.parts)
+    body_len: = r.parts.length.unwrap_or(0)
     body: = body_in(src, r.parts, body_len) catch e
         work.free()
         throw e
-    return build_request(work, r.line, r.parts.head, body, r.parts.head_end + body_len)
+    return work.arena
+        .create(Request::{
+        .own = work.own,
+        .method = work.arena.dup_str(r.line.method),
+        .target = work.arena.dup_str(r.line.target),
+        .version = work.arena.dup_str(r.line.version),
+        .headers = r.parts.head,
+        .body = work.arena.dup_str(body),
+        .consumed = r.parts.head_end + body_len,
+    })
 
 pub fn request_length( //< how many bytes the request at the start of the buffer takes in all
     //<
@@ -543,7 +529,7 @@ pub fn request_length( //< how many bytes the request at the start of the buffer
     $work: = mem.scratch(arena)
     defer work.free()
     r: = scan_request_head(src, max_body, work.arena)!
-    return r.parts.head_end + request_body_len(r.parts)
+    return r.parts.head_end + r.parts.length.unwrap_or(0)
 
 pub fn parse_response( //< the one response at the start of the buffer; fails if it is incomplete
     //<
@@ -559,7 +545,7 @@ pub fn parse_response( //< the one response at the start of the buffer; fails if
 
 priv fn response_in(src: U8[], work: mem.Scratch): Response$@!Http_error //< parse_response's work
     h: = scan_head(src, default_max_body_bytes, work.arena)!
-    status_line: = parse_status_line(h.first_line)!
+    status_line: = parse_status_line(h.first_line, work.arena)!
     body_len: = response_body_len(h, status_line.status)!
     body: = body_in(src, h, body_len)!
     return build_response(work, status_line, h.head, body, h.head_end + body_len)
@@ -586,27 +572,18 @@ priv fn read_chunk_into(stream: net.Tcp_stream$@, b: Str_builder$@, chunk: U8$[]
 priv const read_chunk: Sz = 4096 //< how much one read from a connection takes
 
 priv fn read_head(stream: net.Tcp_stream$@, b: Str_builder$@, arena: Arena$@, max_body: Sz,
-    deadline_us: I64): Head_parts!Http_error //<
+    deadline_us: I64, chunk: U8$[]): Head_parts!Http_error //<
         //< Reads from stream to the head's empty line (or past `max_head_bytes`); reads the head
         //<
-        //< Caution: **Parse the first line before `read_body`.** It is a view into b, which a
+        //< Caution: **Copy the first line's fields before reading the body.** They view b, which a
         //< further read may move. **Look for the empty line only where it can newly be**, from
         //< three bytes before what the last read added: searched from the start each time, a head
         //< arriving a byte at a time costs its length squared.
-    chunk: U8[read_chunk] = ::{}
     $from: Sz = 0
     for b.slice().sub_from(from).find_str("\r\n\r\n").is_none() && b.len <= max_head_bytes
         from = b.len - 3 if b.len > 3 else 0
-        read_chunk_into(stream, b, U8$[]::chunk, deadline_us)!
+        read_chunk_into(stream, b, chunk, deadline_us)!
     return scan_head(b.slice(), max_body, arena)
-
-priv fn read_body(stream: net.Tcp_stream$@, b: Str_builder$@, h: Head_parts, body_len: Sz,
-    deadline_us: I64): U8[]!Http_error //<
-        //< Reads from stream until the body after the head is all in b; returns it, a view into b
-    chunk: U8[read_chunk] = ::{}
-    for b.len - h.head_end < body_len
-        read_chunk_into(stream, b, U8$[]::chunk, deadline_us)!
-    return b.slice().sub(h.head_end, body_len)
 
 pub fn read_response( //< reads one whole response from a connection and splits it into its parts
     stream: net.Tcp_stream$@, //< the connection to read from, which blocks
@@ -626,10 +603,13 @@ priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch, max_body: Sz,
     deadline: = sys.deadline_after_ms(timeout_ms)
     $b: = Str_builder.new()
     defer b.free()
-    h: = read_head(stream, b@, work.arena, max_body, deadline)!
-    status_line: = parse_status_line(h.first_line)!
+    chunk: U8[read_chunk] = ::{}
+    h: = read_head(stream, b@, work.arena, max_body, deadline, U8$[]::chunk)!
+    status_line: = parse_status_line(h.first_line, work.arena)!
     body_len: = response_body_len(h, status_line.status)!
-    body: = read_body(stream, b@, h, body_len, deadline)!
+    for b.len - h.head_end < body_len
+        read_chunk_into(stream, b@, U8$[]::chunk, deadline)!
+    body: = b.slice().sub(h.head_end, body_len)
     return build_response(work, status_line, h.head, body, h.head_end + body_len)
 
 // ---------------------------------------------------------

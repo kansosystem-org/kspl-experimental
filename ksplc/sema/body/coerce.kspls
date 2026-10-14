@@ -257,21 +257,13 @@ impl Ast_node
 
         is_ref: =
             c.env.is_pointer(type_id) || c.env.is_slice(type_id) || c.env.is_array(type_id)
-        // Immutability can appear at any level of nesting (`U8[]`, what `U8$[]@` points at): the
-        // shapes are compared with every level stripped, then is_const_compatible allows only the
-        // direction that does not weaken immutability.
-        if c.env.same_shape_ignoring_const(type_id, expected_id) &&
-            (!is_ref ||
-            (type_id != expected_id && c.env.is_const_compatible(type_id, expected_id)))
+        // A value copy takes the binding's writability. A view and a type argument that declares
+        // variance (`Box<|$I32|>` → `Box<|I32|>`) follow is_const_compatible's one-level weakening.
+        if (c.env.same_shape_ignoring_const(type_id, expected_id) && !is_ref) ||
+            (type_id != expected_id && c.env.is_const_compatible(type_id, expected_id))
             // **No cast is emitted** for immutability alone: the representation is identical. A
             // `::` here would discard a qualifier in C (`Const_U8_Slice = U8_Slice` has a non-const
             // ptr while `U8@` is `const U8 *`), and the C compiler warns.
-            r.type_id = expected_id
-            return expected_id
-
-        // One level of weakening on a type argument that declares variance (`Box<|$I32|>` →
-        // `Box<|I32|>`), which **the branch above cannot handle**. No cast: both have one C name.
-        if type_id != expected_id && c.env.is_const_compatible(type_id, expected_id)
             r.type_id = expected_id
             return expected_id
 
@@ -297,7 +289,7 @@ fn implicit_cast_kind(c: Sema_ctx$@, real_src: I32, real_dst: I32, original_id: 
         return .none
     // A slice or generic instance holds the immutability in its name, which
     // `same_shape_ignoring_const` misses, so `is_const_compatible` decides alone (as in
-    // apply_type_coercion's two branches).
+    // apply_type_coercion).
     if c.env.is_const_compatible(original_id, expected_id)
         return .permission
     return .none

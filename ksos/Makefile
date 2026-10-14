@@ -101,9 +101,11 @@ ksos_cap = $(or $(ksos_run_cap_$@),$(KSOS_RUN_CAP))
 # $(call ksos_capped,<command>): the shell words that run it under the cap. On hitting the cap they
 # print the line the gates read and exit 1; otherwise they leave its exit status in `rc`.
 define ksos_capped
-echo "timeout $(ksos_cap) $(1)"; rc=0; timeout $(ksos_cap) $(1) || rc=$$?; \
-	if [ "$$rc" = 124 ]; then \
-		echo "[FAIL] $@ did not finish in $(ksos_cap)s: it hung (timeout killed it)"; exit 1; fi
+echo "timeout -k 2 $(ksos_cap) $(1)"; rc=0; timeout -k 2 $(ksos_cap) $(1) || rc=$$?; \
+    if [ "$$rc" = 124 ]; then \
+		echo "[FAIL] $@ did not finish in $(ksos_cap)s: it hung (timeout killed it)"; exit 1; \
+    elif [ "$$rc" = 137 ]; then \
+		echo "[FAIL] $@ was killed with SIGKILL (forced timeout cleanup or an external kill)"; exit 1; fi
 endef
 # $(call ksos_capped_run,<command>): a recipe line that runs it under the cap and ends with its
 # exit status.
@@ -115,6 +117,10 @@ ksos_capped_run = @$(call ksos_capped,$(1)); exit $$rc
 ksos_run_cap_cap-check-spin := 1
 cap-check-spin:
 	$(call ksos_capped_run,sh -c 'while :; do :; done')
+
+ksos_run_cap_cap-check-stubborn := 1
+cap-check-stubborn:
+	$(call ksos_capped_run,sh -c 'trap "" TERM; while :; do :; done')
 
 test-ksos-cap: export CAP_LOST_MSG := [FAIL] the cap did not stop a run that spins for ever (the check's own 20 s bound ended it)
 test-ksos-cap: export CAP_PASSED_MSG := [FAIL] the gate passed a run that spins for ever
@@ -131,8 +137,15 @@ test-ksos-cap:
 		$(KSOS_LOG_DIR)/cap_cap-check-spin.log; then \
 		printf '%s %s\n' "$$CAP_SILENT_MSG" "$(KSOS_LOG_DIR)/cap_cap-check-spin.log"; exit 1; fi; \
 	printf '%s, in %s s)\n' "$$CAP_OK_MSG" "$$took"
+	@rc=0; timeout 10 $(MAKE) --no-print-directory ksos-capgate-cap-check-stubborn \
+		>$(KSOS_LOG_DIR)/stubborn-check.log 2>&1 || rc=$$?; \
+	if [ "$$rc" = 0 ] || [ "$$rc" = 124 ] || \
+		! grep -q '^\[FAIL\] cap-check-stubborn was killed with SIGKILL' \
+		$(KSOS_LOG_DIR)/stubborn-check.log; then \
+		cat $(KSOS_LOG_DIR)/stubborn-check.log; exit 1; fi; \
+	echo "RESULT: ALL PASS (a run ignoring TERM was forcibly killed and failed its gate)"
 
-.PHONY: cap-check-spin test-ksos-cap
+.PHONY: cap-check-spin cap-check-stubborn test-ksos-cap
 
 # --- Kanso OS (RTOS): the portable core plus the port layer ------------------------
 POSIX_PORT_SRC := port/posix/ksos_port_posix.c
@@ -246,8 +259,8 @@ cm_link = $(call bare_link,$(CM_CC),$(CM_OUT),$(CM_DIR)/link.ld,$(CM_OBJS),$(LIB
 # Without it the SysTick follows the host's clock, and a host that stalls QEMU gets two ticks
 # delivered back to back to catch up, which no real board does: the control loop's period check
 # then sees a one-tick slip in about one run in ten (`cortex_m_control_ai_probe.kspls`).
-cm_qemu = $(call ksos_capped_run,qemu-system-arm -M mps2-an385 -cpu cortex-m3 -nographic \
-    -semihosting -icount shift=auto -kernel $(1))
+cm_qemu = $(call ksos_capped_run,qemu-system-arm -M mps2-an385 -cpu cortex-m3 \
+    -display none -monitor none -serial null -semihosting -icount shift=auto -kernel $(1) </dev/null)
 
 # The cooperative demo: the build, plus checking the vector table and PendSV with objdump.
 ksos-cm: $(CM_OBJS)
@@ -493,7 +506,8 @@ endef
 $(foreach t,$(KSOS_QEMU_PARALLEL_DEMOS),$(eval $(call ksos_gate_rule,qemu,$(t))))
 # The cap's own check (`test-ksos-cap`) runs its spin through the same gate recipe.
 $(eval $(call ksos_gate_rule,cap,cap-check-spin))
-.PHONY: ksos-capgate-cap-check-spin
+$(eval $(call ksos_gate_rule,cap,cap-check-stubborn))
+.PHONY: ksos-capgate-cap-check-spin ksos-capgate-cap-check-stubborn
 KSOS_QEMU_GATE_TARGETS := $(addprefix ksos-qemugate-,$(KSOS_QEMU_PARALLEL_DEMOS))
 
 # $(call ksos_run_gate,<target>,<log prefix>), shared by test-ksos-qemu and test-ksos-posix.

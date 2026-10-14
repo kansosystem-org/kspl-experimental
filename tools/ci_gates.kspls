@@ -17,7 +17,7 @@ enum Shard //< which job runs a gate on Linux and Windows
     //< **A shard's name is what `make ci-shard-<name>` and the workflow's matrix use.**
     //< Caution: **A shard costs a job's start-up** (checkout, MSYS2, stage1: about a shard's work,
     //< more on Windows), so measure before adding one ("Where CI's time goes" in `docs/DESIGN.md`).
-    core //< the first of the two jobs both platforms split `ci` into
+    core //< the first of the two shared jobs on Linux and Windows
     rest //< the second
     linux //<
         //< The Linux job alone (`make ci-linux-only`)
@@ -32,9 +32,9 @@ enum Par //< how `make` is asked to run one gate's targets
     synced //<
         //< `-j<jobs> --output-sync=target`: each target's output kept together
         //<
-        //< Caution: **Never on a gate macOS runs.** Its `make` is 3.81, which has no
-        //< `--output-sync` and stops with exit 2 before running anything (`run_set` in
-        //< `tools/ci.kspls` refuses it).
+        //< Caution: **Never in `ci-macos`.** Its system make is 3.81, which lacks
+        //< `--output-sync`; `run_set` in `tools/ci.kspls` refuses that combination. The complete
+        //< local `ci` on macOS selects GNU make for the shared sections.
 
 struct Gate //< one gate: what `make` is asked for, and where it runs
     log: U8[] //< its log's name, `out/log/ci/<log>.log`
@@ -55,13 +55,13 @@ const gates: Gate[_] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
         .shard = .core, .macos = true, .stops = true },
     // **Only macOS runs every package's tests in one program**: Linux and Windows run each
-    // package's own `make test` from a copy (`test-extract`, in `suites_a`), which macOS does not.
+    // package's own `make test` from a copy (`test-extract`, across both suite shares).
     Gate::{ .log = "debug", .args = "debug", .par = .serial, .verdict = true, .shard = .none,
         .macos = true, .stops = false },
     // tools/ has tests but no `Makefile`, so no copy runs them; `debug` holds them on macOS.
     Gate::{ .log = "debug_tools", .args = "debug-tools", .par = .serial, .verdict = true,
         .shard = .rest, .macos = false, .stops = false },
-    Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .rest,
+    Gate::{ .log = "lint", .args = "lint", .par = .parallel, .verdict = true, .shard = .core,
         .macos = true, .stops = false },
     Gate::{ .log = "lint_cfg", .args = "lint-cfg", .par = .serial, .verdict = true,
         .shard = .linux, .macos = false, .stops = false },
@@ -107,9 +107,9 @@ const gates: Gate[_] = ::{
     // **Linux alone**: the baseline is Linux's, so another platform's numbers say nothing.
     Gate::{ .log = "perf", .args = "perf-log", .par = .serial, .verdict = false, .shard = .linux,
         .macos = false, .stops = false },
-    // macOS runs these of ksplc's own suites, which the jobs above reach through `suites_a`. It
-    // leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps what
-    // meets Apple's toolchain only there (`fm`, `emit_runtime`).
+    // macOS runs these compiler suites, which the shared jobs reach through both suite shares.
+    // It leaves out `perf` (the baseline is Linux's) and what is platform-independent; it keeps
+    // what meets Apple's toolchain only there (`fm`, `emit_runtime`).
     Gate::{ .log = "lsp", .args = "test-lsp", .par = .serial, .verdict = true, .shard = .none,
         .macos = true, .stops = false },
     Gate::{ .log = "negative", .args = "test-negative", .par = .serial, .verdict = true,
@@ -155,8 +155,8 @@ const gates: Gate[_] = ::{
 }
 
 enum Set //< a set of gates one command runs, named as `make` names it
-    ci //< `make ci`: what Linux and Windows both run
-    ci_linux //< `make ci-linux`: that, then what Linux alone runs
+    ci //< `make ci`: the shared gates and every Linux-only gate
+    ci_linux //< the complete set, retained as `make ci-linux` for existing callers
     ci_linux_only //< `make ci-linux-only`: what Linux alone runs
     ci_macos //< `make ci-macos`
     ci_shard_core //< `make ci-shard-core`
@@ -179,7 +179,7 @@ impl Set
         shared: = g.shard == Shard.core || g.shard == Shard.rest
         switch s
         case .ci
-            return shared
+            return shared || g.shard == Shard.linux
         case .ci_linux
             return shared || g.shard == Shard.linux
         case .ci_linux_only
@@ -385,21 +385,24 @@ fn outcomes(j: Judge@, arena: Arena$@): List<|Outcome|> //<
     return out
 
 fn outcome_of(g: Gate, text: U8[], ended: U8[], j: Judge@, arena: Arena$@): Outcome //<
-    //< What one gate left, read from its log's text and its `.end`'s (`<exit code> <seconds>`)
+    //< What one gate left (`.end`: exit code, seconds, and optionally its execution platform)
     $ok: = false
     $sec: I64 = 0I64
     words: = ended.trim_spaces().split(' ', arena)
-    if words.len == 2
+    $judge: = j$
+    if words.len == 2 || words.len == 3
         ok = (words.get(0).to_i64() catch 1I64) == 0I64
         sec = words.get(1).to_i64() catch 0I64
+        if words.len == 3
+            judge.platform = words.get(2)
     skips: = skip_lines(text, arena)
     $odd: Sz = 0
     for line in skips
-        if j.unexpected(line)
+        if judge.unexpected(line)
             odd += 1
     $why: = List<|Cause|>.new(arena)
     if !ok
-        why = causes(text, g.verdict, j, arena)
+        why = causes(text, g.verdict, judge@, arena)
     return Outcome::{ .log = g.log, .ok = ok, .sec = sec, .skips = skips.len, .unexpected = odd,
         .causes = why }
 
