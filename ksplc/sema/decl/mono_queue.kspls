@@ -61,11 +61,13 @@ impl Sema_ctx
             snapshot.push(r.generics.args.get(i))
         return snapshot
 
-    fn queue_fn_body(r: Self$@, node: Ast_node$@, impl_name: U8[], depth: Sz) //<
-        //< Queues an instantiated body for inference **exactly once**
-        //<
-        //< The call site and the method table both queue it, in no fixed order (is_body_queued in
-        //< sema/type/scope.kspls).
+    fn queue_fn_body(r: Self$@, node: Ast_node$@, impl_name: U8[], depth: Sz, shown: U8[],
+        site: Ast_node$@) //<
+            //< Queues an instantiated body for inference **exactly once**
+            //<
+            //< The call site and the method table both queue it, in no fixed order (is_body_queued
+            //< in sema/type/scope.kspls). `shown` and `site` are what a diagnostic in the body
+            //< names (Pending_inst); the first to queue it gives them.
         if node == null || node.sym_ptr == null
             return
         sym: = Sema_symbol$@::node.sym_ptr
@@ -74,7 +76,8 @@ impl Sema_ctx
         sym.flags.is_body_queued = true
         r.generics.pending
             .push(sema_session_state.Pending_inst::{ .node = node, .impl_name = impl_name,
-            .bound_args = r.snapshot_generic_args(), .depth = depth })
+            .bound_args = r.snapshot_generic_args(), .depth = depth, .shown = shown, .site = site,
+            .from = r.generics.analysing })
 
     fn ensure_instance_methods(r: Self$@, type_id: I32): Void!Sema_error //<
         //< Builds the method table of the instance type_id where its building was deferred
@@ -201,7 +204,8 @@ impl Sema_ctx
         // The depth is one more than the current body's or table's.
         r.mono.pending_methods
             .push(sema_session_state.Pending_methods::{ .type_id = type_id, .inst_name = inst_name,
-            .depth = r.generics.inst_chain_depth + 1, .awaits_pull = true })
+            .site = r.generics.inst_site, .depth = r.generics.inst_chain_depth + 1,
+            .awaits_pull = true })
 
     fn drain_pending_instances(r: Self$@): Void!Sema_error //<
         //< Builds queued instances' method tables and trait conformances until the queue empties
@@ -268,7 +272,7 @@ impl Sema_ctx
                 tmpl_node.find_child(.k_type_gen_params) if tmpl_node != null else null
             if gen_params == null
                 if !r.has_failed_constraint(p.inst_name)
-                    r.instantiate_generic_methods(real_id, inst)!
+                    r.instantiate_generic_methods(real_id, inst, p.site)!
                 continue
             $backup: = r.backup_mono_state()
             defer r.restore_mono_state(backup@)
@@ -288,7 +292,7 @@ impl Sema_ctx
             // A body that violated a constraint is not checked, so as not to bury the real
             // diagnostic (constraint_failed in sema/session/state.kspls).
             if !r.has_failed_constraint(p.inst_name)
-                r.instantiate_generic_methods(real_id, inst)!
+                r.instantiate_generic_methods(real_id, inst, p.site)!
             // The conformance too, or `impl<|T|> List<|T|>: Index...` stays unattached and `for x
             // in list` fails with "pointer indexing is forbidden" inside std.
             r.register_generic_trait_impls(real_id, inst, p.inst_name, true)!

@@ -13,7 +13,7 @@ FUZZ_ARGS ?=
 # 1 fails a reader built without the address sanitizer (Linux CI holds its runtime); else a SKIP.
 KANSO_REQUIRE_ASAN ?=
 # -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
-ASAN_CFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=address
+ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 
 EXAMPLES := llama_engine qwen_infer fim_coder
 .PHONY: examples $(EXAMPLES) test test-unit test-fuzz
@@ -38,14 +38,14 @@ test: examples test-unit
 	"$(KSPLC)" run tests/examples_main.kspls "$(OUT)/llama_engine.exe" "$(OUT)/qwen_infer.exe" \
 		"$(OUT)/fim_coder.exe" "$(OUT)/examples_test"
 
-fuzz_build = "$(KSPLC)" build --cflags="$(1)" tests/read_prog.kspls "$(OUT)/fuzz/read_prog.exe"
+fuzz_build = "$(KSPLC)" build $(1) tests/read_prog.kspls "$(OUT)/fuzz/read_prog.exe"
 # Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
 test-fuzz:
 	@mkdir -p "$(OUT)/fuzz"
 	rm -rf "$(OUT)/fuzz/work"
-	@if $(call fuzz_build,$(ASAN_CFLAGS)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
+	@if $(call fuzz_build,$(ASAN_BUILD)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
 		echo "# the reader: with the address sanitizer"; \
 	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
-		$(call fuzz_build,-O0) || exit 1; fi; \
+		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
 	"$(KSPLC)" run tests/fuzz_main.kspls "$(OUT)/fuzz/read_prog.exe" "$(OUT)/fuzz/work" $$asan \
 		$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)

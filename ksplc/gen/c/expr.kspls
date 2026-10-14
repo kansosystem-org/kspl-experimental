@@ -284,19 +284,21 @@ impl Ast_node
         r.ice_assert(r.children.len >= 2, "emit_unary_expr: missing operator or operand")
         op: = r.get_unary_op().text
         target: = r.get_unary_target()
+        if op.equals("-") && target.emit_negated_i64_min(c)
+            return
 
         // Only unary minus exceeds the width (negating a type's minimum); `~` stays in range and
         // `!` is Bool. C's unsigned unary minus is `0 - x`, so the conversion alone gives `mod
         // 2^N`.
-        twin: = signed_wrap_twin(c, r.type_id) if op.equals("-") else ""
+        twin: = wrap_twin(c, r.type_id) if op.equals("-") else ""
         if twin.len > 0
             c.s("(").t(c.env.strip_const_deep(r.type_id)).s(")((\{twin\})(0) - (\{twin\})(")
             target.emit_expr(c)
             c.s("))")
             return
 
-        // For an unsigned type narrower than `int`, both `~` and unary minus convert the promoted
-        // result back to the type.
+        // For an unsigned type narrower than `int`, `~` converts the promoted result back to the
+        // type.
         narrow: = narrow_unsigned(c, r.type_id)
         if narrow
             c.s("(").t(c.env.strip_const_deep(r.type_id)).s(")(")
@@ -322,9 +324,11 @@ impl Ast_node
             return
         c.s("kspl_shift_check(")
         r.emit_expr(c)
+        // The amount's own signedness says how a stop prints it.
+        unsigned_flag: = 1 if c.env.is_unsigned(r.type_id) else 0
         c
-            .s(", \{c.env.get_portable_bit_size(left_type_id)\}, \"\{r.loc.file()\}\", \
-                \{c.last_line\})")
+            .s(", \{c.env.get_portable_bit_size(left_type_id)\}, \{unsigned_flag\}, \
+                \"\{r.loc.file()\}\", \{c.last_line\})")
 
     fn emit_divisor(r: Ast_node$@, c: Genc_ctx$@, value_type_id: I32) //<
         //< The only place that emits a divisor: the receiver is the divisor's expression
@@ -354,9 +358,8 @@ impl Ast_node
 
     priv fn emit_binary_expr(r: Ast_node$@, c: Genc_ctx$@) //< the only place that emits wrapping
         //<
-        //< Only for can_exceed_width's operations: a narrow unsigned result is converted back to
-        //< the type, a signed one is computed in the same-width unsigned; both end in the declared
-        //< type.
+        //< Only for can_exceed_width's operations: the operands are computed in wrap_twin's
+        //< unsigned type, and the result is converted back to the declared type.
         r.ice_assert(r.children.len == 3, "Binary expression node must have exactly 3 children")
         op: = r.get_binary_op().text
         // Caution: **Do not wrap a subtraction between pointers.** The result's type is `Sz` but
@@ -374,15 +377,12 @@ impl Ast_node
         if !can_exceed_width(op)
             r.emit_binary_body(c)
             return
-        twin: = signed_wrap_twin(c, r.type_id)
-        if twin.len == 0 && !narrow_unsigned(c, r.type_id)
+        twin: = wrap_twin(c, r.type_id)
+        if twin.len == 0
             r.emit_binary_body(c)
             return
         c.s("(").t(c.env.strip_const_deep(r.type_id)).s(")(")
-        if twin.len > 0
-            r.emit_binary_wrapped(c, twin)
-        else
-            r.emit_binary_body(c)
+        r.emit_binary_wrapped(c, twin)
         c.s(")")
 
     priv fn emit_binary_wrapped(r: Ast_node$@, c: Genc_ctx$@, twin: U8[]) //<
@@ -503,40 +503,36 @@ priv fn can_exceed_width(op: U8[]): Bool //< whether an operation's result can e
     return op.is_additive_op() || op.equals("*") || op.equals("<<")
 
 priv fn narrow_unsigned(c: Genc_ctx$@, type_id: I32): Bool //<
-    //< Whether an operation's result on this type must be converted back to the declared type
+    //< Whether `~`'s result on this type must be converted back to the declared type
     //<
-    //< **C's integer promotions widen `U8` / `U16` to `int`.** `U32` and up need none (`Sz` counts
-    //< as 32, the portable minimum). A signed type goes through signed_wrap_twin instead.
+    //< **C's integer promotions widen `U8` / `U16` to `int`**, so `~` sets the bits above the
+    //< width. `U32` and up need none (`Sz` counts as 32, the portable minimum).
     return c.env.is_integer(type_id) && c.env.is_unsigned(type_id) &&
         c.env.get_portable_bit_size(type_id) < 32
 
-priv fn is_signed_int(c: Genc_ctx$@, type_id: I32): Bool //< whether the type is a signed integer
-    real: = c.env.strip_const_deep(c.env.get_real_type(type_id))
-    return c.env.is_integer(real) && !c.env.is_unsigned(real)
-
 fn compound_wrap_twin(c: Genc_ctx$@, op: U8[], type_id: I32): U8[] //<
-    //< The unsigned twin a compound assignment's `op` (`+` of `+=`) needs; empty if none
+    //< The unsigned type a compound assignment's `op` (`+` of `+=`) computes in; empty if none
     if op.len == 0 || !can_exceed_width(op)
         return ""
-    return signed_wrap_twin(c, type_id)
+    return wrap_twin(c, type_id)
 
-priv fn signed_wrap_twin(c: Genc_ctx$@, type_id: I32): U8[] //<
-    //< The C name of the same-width unsigned that does the signed wrapping; empty if not signed
+priv fn wrap_twin(c: Genc_ctx$@, type_id: I32): U8[] //<
+    //< The C name of the unsigned type `+` `-` `*` `<<` compute in; empty where C's own wraps
     //<
-    //< Caution: **Do not emit signed arithmetic to C unchanged.** KSPL says `mod 2^N`, but C makes
-    //< signed overflow undefined and the optimizer relies on it (a loop on `i > 0` with `i *= 2`
-    //< never ends). **Use the same-width unsigned**; `U64` would make a 32-bit target do 64-bit
-    //< work.
-    if !is_signed_int(c, type_id)
-        return ""
+    //< Caution: **Do not leave an operation to C's own arithmetic.** KSPL says `mod 2^N`, but C
+    //< makes signed overflow undefined, and promotes `U8` … `I16` to the signed `int`, where
+    //< `U16::65535 * U16::65535` overflows. A type narrower than 32 bits computes in `unsigned`,
+    //< a signed one in the same-width unsigned: `U64` would make a 32-bit target do 64-bit work.
     real: = c.env.strip_const_deep(c.env.get_real_type(type_id))
+    if !c.env.is_integer(real)
+        return ""
+    bits: = c.env.get_portable_bit_size(real)
+    if bits < 32
+        return "unsigned"
+    if c.env.is_unsigned(real)
+        return ""
     if real == (I32::sema_type_env.Builtin_type_id.size_type)
         return "size_t"
-    bits: = c.env.get_portable_bit_size(real)
-    if bits == 8
-        return "U8"
-    if bits == 16
-        return "U16"
     if bits == 32
         return "U32"
     return "U64" if bits == 64 else ""

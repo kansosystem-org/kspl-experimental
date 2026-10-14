@@ -517,10 +517,10 @@ priv fn check_the_name_it_speaks_with(arena: Arena$@)
 // flag dropped, the requirement not handed on) fuzzes a plain build, and its gate stays green.
 // ==========================================
 priv const fuzz_target: U8[] = "\ntest-fuzz:"
-priv const asan_flags_mark: U8[] = "ASAN_CFLAGS := "
-priv const asan_marks: U8[][_] = ::{ "ASAN_CFLAGS := ", "$(call fuzz_build,$(ASAN_CFLAGS))",
-    "$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)" } //<
-        //< The flags, the build with them, and the requirement handed to the driver
+priv const asan_flags_mark: U8[] = "ASAN_BUILD := "
+priv const asan_marks: U8[][_] = ::{ "ASAN_BUILD := --sanitize=address ",
+    "$(call fuzz_build,$(ASAN_BUILD))", "$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)" } //<
+        //< The sanitizer asked for, the build with it, and the requirement handed to the driver
 
 priv fn fuzzes_sanitized(text: U8[], _arena: Arena$@): Bool //<
     //< Whether a `Makefile` builds what it fuzzes with the sanitizer and hands the requirement on
@@ -532,15 +532,17 @@ priv fn fuzzes_sanitized(text: U8[], _arena: Arena$@): Bool //<
 // Caution: **Leave out each mark in turn**: a table missing one cannot notice its test is gone.
 priv const asan_samples: Sample[_] = ::{
     Sample::{ .text =
-        "ASAN_CFLAGS := -O1\n$(call fuzz_build,$(ASAN_CFLAGS))\n$(if $(filter \
-            1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = true },
+        "ASAN_BUILD := --sanitize=address --cflags=-O1\n$(call fuzz_build,$(ASAN_BUILD))\n$(if \
+            $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = true },
     Sample::{ .text =
-        "$(call fuzz_build,$(ASAN_CFLAGS))\n$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)",
-        .hits = false },
-    Sample::{ .text =
-        "ASAN_CFLAGS := -O1\n$(call fuzz_build,-O0)\n$(if $(filter \
+        "ASAN_BUILD := --cflags=-O1\n$(call fuzz_build,$(ASAN_BUILD))\n$(if $(filter \
             1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = false },
-    Sample::{ .text = "ASAN_CFLAGS := -O1\n$(call fuzz_build,$(ASAN_CFLAGS))\n", .hits = false },
+    Sample::{ .text =
+        "ASAN_BUILD := --sanitize=address --cflags=-O1\n$(call fuzz_build,--cflags=-O0)\n$(if \
+            $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan)", .hits = false },
+    Sample::{ .text =
+        "ASAN_BUILD := --sanitize=address --cflags=-O1\n$(call fuzz_build,$(ASAN_BUILD))\n",
+        .hits = false },
 }
 
 priv fn check_fuzz_sanitized(arena: Arena$@)
@@ -562,7 +564,7 @@ priv fn check_fuzz_sanitized(arena: Arena$@)
             flags = got
         else if !got.equals(flags)
             bad
-                .push(arena.text().s(rel).s("'s `ASAN_CFLAGS` is `").s(got).s("`, another's `")
+                .push(arena.text().s(rel).s("'s `ASAN_BUILD` is `").s(got).s("`, another's `")
                 .s(flags).s("`").take())
     verdict.check_list("every fuzzed program is built with the address sanitizer, one way", seen,
         "packages", bad@,

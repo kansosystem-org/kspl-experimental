@@ -703,6 +703,49 @@ impl Ast_node
         case .none
             return ""
 
+    fn is_const_gen_param(r: Self$@): Bool //<
+        //< Whether one type parameter is `const` (`const N: Sz`)
+        //<
+        //< Caution: **Ask this rather than looking for the keyword**, as with gen_param_name.
+        if r == null || r.kind_id != .k_type_gen_param
+            return false
+        kw: = r.find_child(.k_keyword)
+        return kw != null && kw.text.equals("const")
+
+    fn gen_param_at(r: Self$@, pos: Sz): Ast_node$@ //<
+        //< The type parameter at pos of a `type_gen_params`, counted as gen_param_id_node counts
+        //<
+        //< null past the last one, or where r is null.
+        if r == null
+            return null
+        $n: Sz = 0
+        for p in r.children
+            if _id: = p.gen_param_id_node()
+                if n == pos
+                    return p
+                n += 1
+        return null
+
+    fn bare_written_name(r: Self$@): U8[] //<
+        //< A name written alone (`N`, not `m.N` or `N + 1`), else empty
+        //<
+        //< A generic's argument wraps it in a type's nodes (`Buf<|N|>`), an array's length does
+        //< not.
+        if r == null
+            return ""
+        k: = r.kind_id
+        if k == .k_identifier
+            return r.text
+        if (k == .k_expr_path || k == .k_type_path || k == .k_generic_path) &&
+            r.children.len == 1 && r.get_child(0).kind_id == .k_identifier
+            return r.get_child(0).text
+        if k == .k_type_arg || k == .k_type_expr || k == .k_type_atom
+            if r.children.len == 1
+                return r.get_child(0).bare_written_name()
+            if r.children.len == 0
+                return r.text
+        return ""
+
     fn get_decl_type_node(r: Self$@): Ast_node$@
         if r == null
             return null

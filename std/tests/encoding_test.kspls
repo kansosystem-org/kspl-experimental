@@ -125,7 +125,7 @@ priv fn dumped(v: json.Val, out: Str_builder$@): U8[]
 
 priv fn round_trip(src: U8[], want: U8[], arena: Arena$@, out: Str_builder$@)
     v: = json.parse(src, arena) catch panic("json: a well-formed number must parse")
-    round_ok: = dumped(v, out).equals(want)
+    round_ok: = dumped(v.val, out).equals(want)
     assert(round_ok, "json: number round-trip must keep both the value and the kind")
 
 priv fn parsed(s: U8[]): F64 //< tries `to_f64` once
@@ -203,6 +203,12 @@ fn test_to_f64() //< the conversion from a string to F64
         "to_f64: an exact tie must round to the even neighbour")
     assert(parsed("9007199254740993.0000000000000001") == 9007199254740994.0,
         "to_f64: a hair above the tie must round up")
+    // A tie written with a fraction reads 10^-1 from the table, which Eisel-Lemire needs rounded
+    // up ("One table of powers of ten serves both directions" in std/docs/DESIGN.md).
+    assert(parsed("5433782604899581.5") == 5433782604899582.0,
+        "to_f64: a tie with a fraction must round to the even neighbour")
+    assert(parsed("632618362848191160e-1") == 63261836284819116.0,
+        "to_f64: a tie with a negative exponent must round to the even neighbour")
     // **A digit past the 19th changes the answer too**: the midpoint after 1 has 55 digits.
     assert(parsed("1.00000000000000011102230246251565404236316680908203125") == 1.0,
         "to_f64: the exact midpoint after 1 (55 digits) ties to even, which is 1")
@@ -210,6 +216,13 @@ fn test_to_f64() //< the conversion from a string to F64
         "to_f64: one more digit past the midpoint must round up to the next F64")
     assert(parsed("0.1000000000000000055511151231257827021181583404541015625") == 0.1,
         "to_f64: the exact decimal expansion of 0.1 must come back as 0.1")
+    // **A leading 0 is not a significant digit**: counted as one, it takes one of the 19 places,
+    // and the approximation falls further off than the slow path's steps reach.
+    assert(parsed("0.00003008264692815159") == 3.008264692815159e-5,
+        "to_f64: the 16 digits after four 0s past the point must all count")
+    assert(parsed("0.000001555807952092567") == 1.555807952092567e-6,
+        "to_f64: the fixed form `dump` writes below 10^-4 must read back as that F64")
+    assert(parsed("00000000000000000001.5") == 1.5, "to_f64: 0s before the integer are not digits")
     // The shortest 17-digit form reads back to the same value (the round trip with the writer).
     assert(parsed("0.30000000000000004") == 0.1 + 0.2,
         "to_f64: the 17-digit spelling of 0.1 + 0.2 must land on that F64")
@@ -235,7 +248,7 @@ priv fn check_json_escape(src: U8[], want: U8[]) //<
     arena: = Arena.new(4 * 1024)
     defer arena.free()
     v: = json.parse(src, arena) catch panic("json: a well-formed \\u escape must parse")
-    assert(v.as_str().equals(want), "json: \\u escapes must decode to the same bytes as UTF-8")
+    assert(v.val.as_str().equals(want), "json: \\u escapes must decode to the same bytes as UTF-8")
 
 fn test_json_escapes(arena: Arena$@) //< std/json: a string holding `\uXXXX`
     //<
@@ -250,7 +263,6 @@ fn test_json_escapes(arena: Arena$@) //< std/json: a string holding `\uXXXX`
         $ok: = true
         _v: = json.parse(src, arena) catch
             ok = false
-            fallback .null_val
         assert(!ok, "json: a malformed \\u escape must be rejected, not passed through as text")
     check_json_escape("\"a\\u0041b\"", "aAb")
     check_json_escape("\"\\u3042\"", "あ")
@@ -289,14 +301,14 @@ fn test_json_numbers(arena: Arena$@)
     edge: =
         json.parse("[9223372036854775807, -9223372036854775808, 9223372036854775808, -0]", arena)
         catch panic("json: the I64 edge values must parse")
-    assert(edge.get_at(0).as_int64(0I64) == 9223372036854775807I64,
+    assert(edge.val.get_at(0).as_int64(0I64) == 9223372036854775807I64,
         "json: I64::MAX must stay an integer")
-    assert(edge.get_at(1).as_int64(0I64) == -9223372036854775807I64 - 1I64,
+    assert(edge.val.get_at(1).as_int64(0I64) == -9223372036854775807I64 - 1I64,
         "json: I64::MIN must stay an integer")
-    assert(edge.get_at(2).as_int64(0I64) == 0I64 &&
-        edge.get_at(2).as_f64(-1.0) == 9223372036854775808.0,
+    assert(edge.val.get_at(2).as_int64(0I64) == 0I64 &&
+        edge.val.get_at(2).as_f64(-1.0) == 9223372036854775808.0,
         "json: one past I64::MAX must become the float variant")
-    assert(edge.get_at(3).as_int64(-1I64) == 0I64, "json: -0 is the integer 0")
+    assert(edge.val.get_at(3).as_int64(-1I64) == 0I64, "json: -0 is the integer 0")
 
     // A string that is malformed as a JSON number is not accepted, nor one past F64's range,
     // which `dump` would write back as null.
@@ -305,7 +317,6 @@ fn test_json_numbers(arena: Arena$@)
         $ok: = true
         _v: = json.parse(bad, arena) catch
             ok = false
-            fallback .null_val
         assert(!ok, "json: a malformed number must be rejected")
 
     // The builder: everything that can be read can also be written.
@@ -322,17 +333,17 @@ fn test_json_numbers(arena: Arena$@)
 
     // Reading a number gives the same answer for either variant.
     nums: = json.parse("[2, 2.5]", arena) catch panic("json: an array of numbers must parse")
-    assert(nums.get_at(0).as_f64(-1.0) == 2.0, "json: as_f64 must accept an integer variant")
-    assert(nums.get_at(1).as_f64(-1.0) == 2.5, "json: as_f64 must return the float value")
-    assert(nums.get_at(0).as_int(-1) == 2, "json: as_int must still read integers")
+    assert(nums.val.get_at(0).as_f64(-1.0) == 2.0, "json: as_f64 must accept an integer variant")
+    assert(nums.val.get_at(1).as_f64(-1.0) == 2.5, "json: as_f64 must return the float value")
+    assert(nums.val.get_at(0).as_int(-1) == 2, "json: as_int must still read integers")
     wide: = json.parse("[4294967297, 3000000000, 2147483647, -2147483648]", arena)
         catch panic("json: an array of numbers must parse")
     past_i32: =
-        wide.get_at(0).as_int(-1) == -1 && wide.get_at(1).as_int(-1) == -1
+        wide.val.get_at(0).as_int(-1) == -1 && wide.val.get_at(1).as_int(-1) == -1
     assert(past_i32, "json: as_int gives the default for an integer past I32, not its low bytes")
     i32_edges: =
-        wide.get_at(2).as_int(0) == 2147483647 &&
-        wide.get_at(3).as_int(0) == -2147483647 - 1
+        wide.val.get_at(2).as_int(0) == 2147483647 &&
+        wide.val.get_at(3).as_int(0) == -2147483647 - 1
     assert(i32_edges, "json: as_int reads I32's own edges")
 
     verdict
@@ -357,7 +368,7 @@ fn test_json_string_escapes(arena: Arena$@) //<
     // `\b` and `\f` have no visible character, so they are checked as bytes.
     ctrl: = json.parse("{\"t\":\"a\\bb\\fc\"}", arena)
         catch panic("json: the control-escape fixture must parse")
-    cs: = ctrl.get("t").as_str()
+    cs: = ctrl.val.get("t").as_str()
     assert(cs.len == 5, "json: backspace and formfeed must each decode to one byte")
     assert(cs[1] == 0x08U8 && cs[3] == 0x0cU8,
         "json: backspace and formfeed must decode to their bytes")
@@ -375,15 +386,15 @@ fn test_json_string_escapes(arena: Arena$@) //<
     assert(escaped_ok, "json: every byte below 0x20 must be escaped on the way out")
     // Reading back what was written must give the original byte sequence.
     back: = json.parse(written, arena) catch panic("json: what we wrote must parse")
-    round_ok: = back.get("t").as_str().equals(raw)
+    round_ok: = back.val.get("t").as_str().equals(raw)
     assert(round_ok, "json: escaping and unescaping must round-trip")
     // A key is a string too: written raw, `"a\"b"` would end the key early.
     keyed: = json.parse("{\"a\\\"b\\n\":1}", arena) catch panic("json: the key fixture must parse")
     ob.clear()
-    keyed.dump(ob@)
+    keyed.val.dump(ob@)
     assert(ob.slice().equals("{\"a\\\"b\\n\":1}"), "json: a key is escaped on the way out")
     key_back: = json.parse(ob.slice(), arena) catch panic("json: a dumped key must parse again")
-    assert(key_back.get("a\"b\n").as_int(0) == 1, "json: an escaped key round-trips")
+    assert(key_back.val.get("a\"b\n").as_int(0) == 1, "json: an escaped key round-trips")
 
     verdict
         .pass("The BMP, a surrogate pair, control characters, malformed strings and the write round \
@@ -391,7 +402,7 @@ fn test_json_string_escapes(arena: Arena$@) //<
 
 priv fn expect_str(src: U8[], want: U8[], arena: Arena$@)
     v: = json.parse(src, arena) catch panic("json: the escape fixture must parse")
-    got: = v.get("t").as_str()
+    got: = v.val.get("t").as_str()
     assert(got.equals(want), "json: an escaped string must decode to its bytes")
 
 priv fn json_parses(src: U8[], arena: Arena$@): Bool //<
@@ -437,6 +448,34 @@ fn test_json_malformed_input(arena: Arena$@) //<
         .pass("Anything left over, a non-JSON escape, a leading 0, a raw control character and a \
             trailing comma are refused, and well-formed strings go through.")
 
+priv fn nested_outcome(depth: Sz, arena: Arena$@): U8[] //<
+    //< What parsing `depth` nested arrays gives: "parses", "too_deep", or "other"
+    $doc: = Str_builder.new()
+    defer doc.free()
+    for _i in Range.asc(depth)
+        doc.c('[')
+    for _i in Range.asc(depth)
+        doc.c(']')
+    _v: = json.parse(doc.slice(), arena) catch e
+        switch e
+        case .too_deep
+            return "too_deep"
+        default
+            return "other"
+    return "parses"
+
+fn test_json_nesting_to_the_count(arena: Arena$@) //<
+    //< std/json: nesting to `max_nesting_depth` parses, and one level more is `too_deep`
+    //<
+    //< **On every build, a sanitized one too**: the stack check beside the count must not refuse
+    //< what the main thread's stack holds.
+    verdict.start("[Json] nesting up to the count parses, one level more is too deep...")
+    assert(nested_outcome(json.max_nesting_depth, arena).equals("parses"),
+        "json: nesting to max_nesting_depth parses")
+    assert(nested_outcome(json.max_nesting_depth + 1, arena).equals("too_deep"),
+        "json: one level past max_nesting_depth is refused as too_deep")
+    verdict.pass("Nesting to the count parses, and one level more is refused as too_deep.")
+
 priv fn quoted_hex(hex: U8[], arena: Arena$@): U8[] //< a JSON string of the bytes spelt in hex
     t: = arena.text().c('"')
     for $i: Sz = 0; i + 1 < hex.len; i += 2
@@ -469,7 +508,7 @@ fn test_json_utf8(arena: Arena$@) //<
     defer ob.free()
     jb.str_val(U8[]::mixed).dump(ob@)
     back: = json.parse(ob.slice(), arena) catch panic("json: what the writer puts out must parse")
-    assert(back.as_str().equals("a\uFFFDあ\uFFFD"),
+    assert(back.val.as_str().equals("a\uFFFDあ\uFFFD"),
         "json: bytes that are not UTF-8 are written as U+FFFD, and UTF-8 stays as it is")
     verdict
         .pass("Every ill-formed UTF-8 sequence is refused, every width's edges go through, and the \
@@ -486,9 +525,10 @@ fn test_json_duplicate_keys(arena: Arena$@) //<
     defer out.free()
     dup: = json.parse("{\"a\":1,\"a\":2}", arena)
         catch panic("json: duplicate keys must still parse")
-    assert(dup.get("a").as_int(-1) == 1, "json: a duplicated key must read as the first one")
+    assert(dup.val.get("a").as_int(-1) == 1, "json: a duplicated key must read as the first one")
     // The duplicate is kept, so a document passed on stays the same.
-    assert(dumped(dup, out@).equals("{\"a\":1,\"a\":2}"), "json: dumping must keep both members")
+    assert(dumped(dup.val, out@).equals("{\"a\":1,\"a\":2}"),
+        "json: dumping must keep both members")
 
     // The builder replaces; appending would write a value hidden behind first-wins.
     $jb: = Json_builder.new(arena)
@@ -520,10 +560,10 @@ fn test_json_indent(arena: Arena$@) //<
     v: = json.parse(src, arena) catch panic("json: the fixture must parse")
 
     // The default is one line, so no caller has to change.
-    assert(dumped(v, out@).equals(src), "json: the default must stay on one line")
+    assert(dumped(v.val, out@).equals(src), "json: the default must stay on one line")
 
     out.clear()
-    v.dump(out@, 2)
+    v.val.dump(out@, 2)
     want: U8[] =
         "{\n  \"a\": {\n    \"b\": 1\n  },\n  \"e\": {},\n  \"f\": [],\n  \"g\": [\n    1,\n    \
             [\n      2\n    ]\n  ]\n}"
@@ -533,10 +573,10 @@ fn test_json_indent(arena: Arena$@) //<
     // The caller chooses the indent width. 0 or less is "no indentation"; there is no negative
     // width.
     out.clear()
-    v.dump(out@, 0)
+    v.val.dump(out@, 0)
     assert(out.slice().equals(src), "json: indent=0 must be the compact form")
     out.clear()
-    v.dump(out@, -1)
+    v.val.dump(out@, -1)
     assert(out.slice().equals(src), "json: a non-positive indent must be the compact form")
     verdict
         .pass("The default stays on one line, and indentation gives the same strings as other \

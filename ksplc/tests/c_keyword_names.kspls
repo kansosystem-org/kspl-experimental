@@ -1,7 +1,7 @@
-//< Uses C's reserved words, and the names the target's headers `#define`, as KSPL names
+//< Uses C's reserved words, the target headers' macros and the compiler's own names as KSPL names
 //<
 //< They stand at every position the generated C writes a name bare. Bare, each expands into a C
-//< error.
+//< error; one spelled like a name the compiler makes (`made_names`) would read the compiler's.
 // ==========================================
 // Caution: **Include the names the preamble headers `#define`** (`is_preamble_macro` in
 // `base/c_name.kspls`), **the ones erased with `#undef`** (`Sig_row` — from the declaration half's
@@ -39,6 +39,7 @@ struct Sig_row //< the names the declaration half's headers `#define`
     sa_handler: I32
     sigev_notify_function: I32
     L_tmpnam: I32
+    P_tmpdir: I32 //< the XSI level's (the preamble raises it for sigaltstack)
     math_errhandling: I32
     bool: I32 //<
         //< The one name here that cannot be erased, so it takes a suffix
@@ -137,6 +138,39 @@ priv fn matched(n: I32): I32 //< matches a `switch` against a name spelled like 
         return v
     return 0
 
+priv enum Made_err
+    bad
+
+priv fn may_fail(n: I32): I32!Made_err
+    if n > 2
+        throw .bad
+    return n
+
+priv fn catch_reads_own_e(): I32 //< a `catch` naming no error, beside the source's own `_e`
+    _e: I32 = 42
+    return may_fail(5) catch
+        fallback _e + 1
+
+priv fn temps_beside_own(): I32 //< Lower's temporaries beside locals spelled as they once were
+    _mir_tmp_001: I32 = 1
+    _mir_tmp_002: I32 = 2
+    return may_fail(5) catch _mir_tmp_001 + _mir_tmp_002
+
+priv fn for_in_beside_own(): I32 //< a `for … in` beside locals spelled as its temporaries
+    _for_coll1: I32 = 7
+    _for_idx_s1: I32 = 100
+    $total: I32 = 0
+    for x in I32[]::{ 1, 2 }
+        total += x + _for_coll1
+    return total + _for_idx_s1
+
+fn made_names() //< the source's names never meet the names the compiler makes beside them
+    verdict.start("[Genc] a local spelled like a compiler-made one stays the source's test...")
+    assert(catch_reads_own_e() == 43, "made names: a catch block reads the source's _e")
+    assert(temps_beside_own() == 3, "made names: Lower's temporaries leave the source's alone")
+    assert(for_in_beside_own() == 117, "made names: a for … in leaves the source's locals alone")
+    verdict.pass("each name the compiler makes is one no source can spell.")
+
 fn run()
     verdict.start("[Genc] using a C reserved word as an identifier test...")
     assert(matched(3) == 6, "C keyword names: switch on a keyword-named local")
@@ -174,6 +208,7 @@ fn run()
     assert(apply(twice, 3) == 6, "C keyword names: function pointer parameter")
 
     arena: = Arena.new(4096)
+    defer arena.free()
     lst: = List<|I32|>.create(arena)
     lst.push(11)
     lst.push(12)
@@ -211,12 +246,12 @@ fn run()
 
     // The declaration half's macros in both places (a field; a local, a parameter, `.`, `->`).
     $sig: Sig_row = ::{ .si_pid = 1, .sa_handler = 2, .sigev_notify_function = 4, .L_tmpnam = 8,
-        .math_errhandling = 16, .bool = 32 }
+        .math_errhandling = 16, .bool = 32, .P_tmpdir = 64 }
     seen_sig: Sig_row@ = sig@
     si_pid: =
         sig.si_pid + seen_sig.sa_handler + sig.sigev_notify_function + seen_sig.L_tmpnam + sig
-        .math_errhandling + seen_sig.bool
-    assert(si_pid == 63, "decl-half macro names: field and local spellings agree")
+        .math_errhandling + seen_sig.bool + sig.P_tmpdir
+    assert(si_pid == 127, "decl-half macro names: field and local spellings agree")
     assert(sigev(1, 2) == 3, "decl-half macro names: parameters and a local")
 
     // Windows's CRT names agree in both places too.

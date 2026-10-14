@@ -34,6 +34,9 @@ static int kspl_fopen_mode_ok(const char *mode) {
     return 1;
 }
 
+/* How much of a file kspl_copy_file holds at a time. */
+#define KSPL_COPY_PIECE 65536
+
 #ifndef _WIN32
 #include <dirent.h>
 #include <errno.h>
@@ -73,24 +76,27 @@ KSPL_LINK void kspl_dir_close(I64 handle) {
     closedir((DIR *)(intptr_t)handle);
 }
 
-/* size_out = the byte count, is_dir_out = 1 for a directory, mtime_out = the modification time
- * (Unix epoch seconds). Returns false on failure (a path that does not exist, and so on). */
-KSPL_LINK Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, I64 *mtime_out) {
+/* What stands at a path, following links (for std/fs.kspls's stat): size_out = the byte count,
+ * kind_out = `File_kind`'s order (0 a regular file, 1 a directory, 2 anything else: a FIFO, a
+ * device, a socket), mtime_out = the modification time (Unix epoch seconds). False where nothing
+ * can be read there. */
+KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *kind_out,
+    I64 *mtime_out) {
     char path[4096];
-    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     struct stat st;
+    if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
     if (stat(path, &st) != 0) return false;
-    * size_out = (I64)st.st_size;
-    * is_dir_out = S_ISDIR(st.st_mode) ? 1 : 0;
-    * mtime_out = (I64)st.st_mtime;
+    *size_out = (I64)st.st_size;
+    *kind_out = S_ISREG(st.st_mode) ? 0 : S_ISDIR(st.st_mode) ? 1 : 2;
+    *mtime_out = (I64)st.st_mtime;
     return true;
 }
 
 /* Whether the owner's execute bit is up (for std/fs.kspls's is_executable).
  * The owner's bit, not access(X_OK), which is nearly always true under root.
- * Caution: It must not be shaped as adding an output argument to kspl_stat. kspl_stat is declared
- * in both std/io.kspls and std/fs.kspls, and disagreeing with the seed's old one breaks the
- * bootstrap's link. An addition is always a separate function. */
+ * Caution: It must not be shaped as adding an output argument to kspl_path_info, which std/io.kspls
+ * and std/fs.kspls both declare: disagreeing with the seed's old one breaks the bootstrap's link.
+ * An addition is always a separate function. */
 KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     char path[4096];
     if (!kspl_to_cstr(path_ptr, path_len, path, sizeof(path))) return false;
@@ -114,17 +120,55 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return S_ISLNK(st.st_mode) ? 1 : 0;
 }
 
-/* Gives `to` the permission bits `from` has (for std/fs.kspls's copy_tree): 0 = done, -1 = refused.
- * **A copy written through write_file has the default mode**, so a script copied with the tree
- * would lose its execute bit, and a private file would become readable by others. */
-KSPL_LINK I32 kspl_copy_mode(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
+/* Copies one file to a name that does not stand yet, with the source's permission bits (for
+ * std/fs.kspls's copy_tree): 0 = done, 1 = the source cannot be opened, -1 = refused.
+ * **The bits are the copy's from its first byte**: created wider and narrowed afterwards, a private
+ * file would stand readable by others while it is written, and for good where the narrowing fails.
+ * O_EXCL makes it new, so a link planted at the name is not followed; the umask can only narrow
+ * the bits at the creation, and fchmod then gives them exactly. Only a regular file is copied
+ * (read, a FIFO would wait for good), a piece at a time, and what fails partway is removed. */
+KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
     char from[4096];
     char to[4096];
     struct stat st;
+    int ok = 1;
     if (!kspl_to_cstr(from_ptr, from_len, from, sizeof(from))) return -1;
     if (!kspl_to_cstr(to_ptr, to_len, to, sizeof(to))) return -1;
-    if (stat(from, &st) != 0) return -1;
-    return chmod(to, st.st_mode & 07777) == 0 ? 0 : -1;
+    int in = open(from, O_RDONLY | O_CLOEXEC);
+    if (in < 0) return 1;
+    char *buf = (char *)malloc(KSPL_COPY_PIECE);
+    if (buf == NULL || fstat(in, &st) != 0 || !S_ISREG(st.st_mode)) {
+        free(buf);
+        close(in);
+        return -1;
+    }
+    int out = open(to, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, st.st_mode & 0777);
+    if (out < 0) {
+        free(buf);
+        close(in);
+        return -1;
+    }
+    for (;;) {
+        ssize_t got = read(in, buf, KSPL_COPY_PIECE);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) {
+            ok = got == 0;
+            break;
+        }
+        for (ssize_t done = 0; ok && done < got;) {
+            ssize_t n = write(out, buf + done, (size_t)(got - done));
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) ok = 0;
+            else done += n;
+        }
+        if (!ok) break;
+    }
+    if (ok && fchmod(out, st.st_mode & 07777) != 0) ok = 0;
+    if (close(out) != 0) ok = 0;
+    close(in);
+    free(buf);
+    if (!ok) unlink(to);
+    return ok ? 0 : -1;
 }
 
 KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
@@ -369,14 +413,16 @@ KSPL_LINK void kspl_dir_close(I64 handle) {
     free(d);
 }
 
-KSPL_LINK Bool kspl_stat(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *is_dir_out, I64 *mtime_out) {
+/* The POSIX side's meanings; a device (`NUL`, `CON`) is the "anything else". */
+KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I32 *kind_out,
+    I64 *mtime_out) {
     wchar_t path[KSPL_WPATH_CAP];
     struct _stat64 st;
     if (!kspl_path_to_wide(path_ptr, path_len, path, KSPL_WPATH_CAP)) return false;
     if (_wstat64(path, &st) != 0) return false;
-    * size_out = (I64)st.st_size;
-    * is_dir_out = (st.st_mode & _S_IFDIR) ? 1 : 0;
-    * mtime_out = (I64)st.st_mtime;
+    *size_out = (I64)st.st_size;
+    *kind_out = (st.st_mode & _S_IFMT) == _S_IFREG ? 0 : (st.st_mode & _S_IFMT) == _S_IFDIR ? 1 : 2;
+    *mtime_out = (I64)st.st_mtime;
     return true;
 }
 
@@ -417,21 +463,54 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     return (fd.dwReserved0 & IO_REPARSE_TAG_NAME_SURROGATE_BIT) ? 1 : 0;
 }
 
-/* The POSIX side's meanings. Windows keeps no permission bits on a file; what it has of the kind
- * is the read-only attribute, so that is what is carried over. */
-KSPL_LINK I32 kspl_copy_mode(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
+/* The POSIX side's meanings. Windows keeps no permission bits: who may read the copy is the ACL it
+ * takes from its folder, as a file kspl_create_owned makes, and what is carried over is the
+ * read-only mark, put on once the contents are in (a read-only file takes no writes). CREATE_NEW
+ * makes it new, and a directory, which needs FILE_FLAG_BACKUP_SEMANTICS, does not open. */
+KSPL_LINK I32 kspl_copy_file(const U8 *from_ptr, Sz from_len, const U8 *to_ptr, Sz to_len) {
     wchar_t from[KSPL_WPATH_CAP];
     wchar_t to[KSPL_WPATH_CAP];
-    DWORD src;
-    DWORD dst;
+    BY_HANDLE_FILE_INFORMATION info;
+    HANDLE in, out;
+    char *buf;
+    int ok = 1;
     if (!kspl_path_to_wide(from_ptr, from_len, from, KSPL_WPATH_CAP)) return -1;
     if (!kspl_path_to_wide(to_ptr, to_len, to, KSPL_WPATH_CAP)) return -1;
-    src = GetFileAttributesW(from);
-    dst = GetFileAttributesW(to);
-    if (src == INVALID_FILE_ATTRIBUTES || dst == INVALID_FILE_ATTRIBUTES) return -1;
-    if ((src & FILE_ATTRIBUTE_READONLY) == (dst & FILE_ATTRIBUTE_READONLY)) return 0;
-    dst = (dst & ~FILE_ATTRIBUTE_READONLY) | (src & FILE_ATTRIBUTE_READONLY);
-    return SetFileAttributesW(to, dst) ? 0 : -1;
+    in = CreateFileW(from, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
+    if (in == INVALID_HANDLE_VALUE) return 1;
+    buf = (char *)malloc(KSPL_COPY_PIECE);
+    if (buf == NULL || !GetFileInformationByHandle(in, &info) || GetFileType(in) != FILE_TYPE_DISK) {
+        free(buf);
+        CloseHandle(in);
+        return -1;
+    }
+    out = CreateFileW(to, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (out == INVALID_HANDLE_VALUE) {
+        free(buf);
+        CloseHandle(in);
+        return -1;
+    }
+    for (;;) {
+        DWORD got = 0;
+        if (!ReadFile(in, buf, (DWORD)KSPL_COPY_PIECE, &got, NULL)) ok = 0;
+        if (!ok || got == 0) break;
+        for (DWORD done = 0; ok && done < got;) {
+            DWORD n = 0;
+            if (!WriteFile(out, buf + done, got - done, &n, NULL) || n == 0) ok = 0;
+            done += n;
+        }
+        if (!ok) break;
+    }
+    if (!CloseHandle(out)) ok = 0;
+    CloseHandle(in);
+    free(buf);
+    if (ok && (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0 &&
+        !SetFileAttributesW(to, FILE_ATTRIBUTE_READONLY)) {
+        ok = 0;
+    }
+    if (!ok) DeleteFileW(to);
+    return ok ? 0 : -1;
 }
 
 KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {

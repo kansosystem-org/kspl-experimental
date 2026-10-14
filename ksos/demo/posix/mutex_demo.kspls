@@ -7,9 +7,11 @@
 //< Both workers have one priority, so priority inheritance does not act here, but lock/unlock and
 //< waiting and waking can be verified (make ksos-mutex-nested and make ksos-cm-pi show the
 //< inheritance).
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
+import "std/verdict"
 
 $g_mutex: sync.Mutex
 $shared: I32 = 0 // the shared counter under protection
@@ -34,13 +36,15 @@ fn worker(arg: Void$@): Void
         // but a woken task of equal priority waits for its turn rather than cutting in.
         Task.yield()
 
-fn main()
+fn main(): I32
     io.out().s("=== Kanso OS (POSIX port) — mutex mutual-exclusion demo ===\n")
     g_mutex.init()
     // Round-robin both at the same priority, so they contend for the lock (alternating) every time.
     tcb_a.create(U8$[]::stack_a, worker, Void$@::g_id_a@, 1, "A")
     tcb_b.create(U8$[]::stack_b, worker, Void$@::g_id_b@, 1, "B")
     task.start_scheduler()
+    task_end.require_all_ended()
     assert(shared == 10, "mutex: a lost update slipped through the lock")
     io.out().s("[main] final shared=10 -> mutual exclusion held\n")
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    return verdict.finish()

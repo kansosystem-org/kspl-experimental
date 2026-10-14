@@ -8,7 +8,9 @@
 TEST_JOBS ?= $(HOST_CORES)
 
 # `--platform`: a SKIP that platform's rows in `tools/ci_gates.kspls` do not expect fails its gate.
-ci_run = ./$(SEED_EXE) run tools/ci.kspls --make='$(MAKE)' --jobs=$(TEST_JOBS) --platform=$(PLATFORM)
+# `--relaxed`: the switches a person turned off where the platform requires them (`mk/test.mk`).
+ci_run = ./$(SEED_EXE) run tools/ci.kspls --make='$(MAKE)' --jobs=$(TEST_JOBS) --platform=$(PLATFORM) \
+  --relaxed='$(strip $(require_relaxed))'
 
 ## Gates|ci|Every gate runnable on this environment
 ## Gates|ci-linux|Every Linux gate (`ci` plus what has its tool on Linux only)

@@ -1,0 +1,49 @@
+//< A `#packed` struct's fields, read and written through each path an access can take
+//<
+//< Its fields sit at any byte, so each access must be made byte-wise. **These values agree whether
+//< or not that holds on x86**; `make test-equiv` runs the same shapes with C's alignment trap, and
+//< reads the IR's `align`.
+import "std/verdict"
+
+#packed
+priv struct Rec
+    tag: U8
+    n: I32
+    big: I64
+    inner: Rec_inner
+    nums: I32[3]
+
+priv struct Rec_inner
+    h: I16
+    w: I64
+
+priv fn second(): Sz //< an index translation cannot fold, so the target is fixed first
+    return 1
+
+#noinline
+priv fn fill(rs: Rec$[], i: Sz, v: I32) //< every field written through a subscript, then updated
+    rs[i].tag = U8::v
+    rs[i].n = v
+    rs[i].n *= 4
+    rs[i].big = I64::v << 33
+    rs[i].big += 1
+    rs[i].inner = ::{ .h = I16::v, .w = v }
+    rs[i].inner.w -= 2
+    rs[i].nums[second()] = v
+    rs[i].nums[second()] += 1
+
+fn test_packed_fields()
+    verdict.start("[Lang] a #packed struct's fields through a subscript test...")
+    $rs: Rec[3] = ::{}
+    fill(Rec$[]::rs, 2, 9)
+    r: = rs[2]
+    assert(rs[2].tag == U8::9 && rs[2].n == 36, "a byte and a word field keep what was written")
+    assert(rs[2].big == (9I64 << 33) + 1, "an eight-byte field takes a write and an update")
+    assert(r.inner.h == I16::9 && r.inner.w == 7, "a struct inside the packed one keeps its fields")
+    assert(rs[2].nums[1] == 10 && rs[2].nums[0] == 0, "an array inside it keeps its elements")
+    assert(rs[1].n == 0 && rs[1].nums[2] == 0, "the record beside it is untouched")
+    $copy: = rs[2].inner
+    copy.w += 1
+    rs[second()].inner = copy
+    assert(rs[1].inner.w == 8, "a whole struct field written back through a subscript")
+    verdict.pass("each field of a #packed struct reads back what was written through a subscript.")

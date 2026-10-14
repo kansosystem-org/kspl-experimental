@@ -1,11 +1,15 @@
 //< Tests of std's string operations: `std/str`, `std/strnum` and the writers into memory
-import "std/bignat"
+import "std/bignat" + { Bignat }
 import "std/buf" { Buf_writer }
 import "std/chars"
+import "std/io"
 import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt"
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/subproc"
+import "std/sys"
+import "std/tests/sys_test"
 import "std/verdict"
 
 // ==========================================
@@ -289,6 +293,70 @@ fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     assert(bignat.f32_to_bits(F32::(1.0 / 0.0)) == 0x7F800000U32, "infinity is 0x7F800000")
     verdict.pass("Known values read as their bit patterns, -0 and infinity included.")
 
+priv fn wide_to_bignat(w: bignat.Wide): Bignat
+    $v: = Bignat.from_u64(w.hi)
+    v.shl(64)
+    lo: = Bignat.from_u64(w.lo)
+    v.add(lo@)
+    return v
+
+priv fn pow5_bignat(n: I32): Bignat
+    $v: = Bignat.from_u64(1U64)
+    for _i in Range.asc(n)
+        v.mul_small(5U32)
+    return v
+
+priv fn pow10_entry_exact(q: I32): Bool //< whether pow10_128(q) is 10^q's top 128 bits, truncated
+    //<
+    //< With T the entry and e = 127 - (floor_log2_pow10(q) - q), T <= 5^q x 2^e < T + 1 must hold:
+    //< 10^q is 5^q x 2^q, so the two share their bits.
+    t: = bignat.pow10_128(q)
+    if (t.hi >> 63U64) != 1U64
+        return false
+    e: = 127 - (bignat.floor_log2_pow10(q) - q)
+    $low: = wide_to_bignat(t) // T, then T + 1, scaled to meet 5^q x 2^e
+    $high: = low
+    high.add_small(1U32)
+    $value: = pow5_bignat(q if q >= 0 else -q)
+    if q < 0 // 2^e / 5^-q: multiply T and T + 1 by 5^-q instead
+        low.mul(value@)
+        high.mul(value@)
+        value = Bignat.from_u64(1U64)
+    if e >= 0
+        value.shl(e)
+    else
+        low.shl(-e)
+        high.shl(-e)
+    return low.cmp(value@) <= 0 && value.cmp(high@) < 0
+
+fn test_pow10_table() //< every power of ten the float conversions read is exact
+    //<
+    //< **Check every entry, rebuilt or held**: a wrong correction bit shows in one entry only, and
+    //< moves a float's digits only where that power is used.
+    //< `floor_log10_pow2` is checked over every exponent an F64 or an F32 has.
+    verdict.start("[bignat] the 128-bit powers of ten test...")
+    for q in Range.new(bignat.pow10_q_min, bignat.pow10_q_max + 1, 1)
+        assert(pow10_entry_exact(I32::q), "pow10_128(q) must be 10^q's top 128 bits, truncated")
+    for e in Range.new(-1100, 1101, 1)
+        for three_quarters in Bool[]::{ false, true }
+            k: = strfmt.floor_log10_pow2(I32::e, three_quarters)
+            // 10^k <= v < 10^(k + 1), with v = 2^e or 3 x 2^(e - 2), all scaled to integers.
+            $v: = Bignat.from_u64(3U64 if three_quarters else 4U64)
+            $lo: = Bignat.from_u64(4U64)
+            $hi: = Bignat.from_u64(40U64)
+            if e >= 0
+                v.shl(e)
+            else
+                lo.shl(-e)
+                hi.shl(-e)
+            if k >= 0
+                lo.mul_pow10(k)
+                hi.mul_pow10(k)
+            else
+                v.mul_pow10(-k)
+            assert(lo.cmp(v@) <= 0 && v.cmp(hi@) < 0, "floor_log10_pow2 must be exact")
+    verdict.pass("Every 10^q from 10^-342 to 10^324 and every floor(log10(2^e)) is exact.")
+
 fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the result
     //<
     //< What is written lives as long as the arena, and take() releases the builder.
@@ -306,6 +374,61 @@ fn test_arena_text(arena: Arena$@) //< a writer that allocates and returns the r
     // The empty case works too.
     assert(arena.text().take().len == 0, "length 0 when nothing is written")
     verdict.pass("It stays for the arena's lifetime, and two of them do not break each other.")
+
+priv const self_append_src: U8[] = //< a child that writes builders from views of their own bytes
+    //<
+    //< Each source is past 1 KiB: glibc scribbles over a freed block only above that size.
+    """import "std/chars"
+import "std/io"
+import "std/str" { Str_builder }
+
+fn main()
+  $b: = Str_builder.new()
+  defer b.free()
+  $want: = Str_builder.new()
+  defer want.free()
+  for _i in Range.asc(256)
+    b.s("abcdefgh")
+  want.s(b.slice()).s(b.slice())
+  b.s(b.slice())
+  assert(b.slice().equals(want.slice()), "s: the builder written onto itself as it grows")
+  v: = b.slice()
+  want.clear().s("xyxy").s(v.sub_from(2))
+  b.clear().s("xy").s(v)
+  assert(b.slice().equals(want.slice()), "s: a view taken before clear(), as it grows")
+  w: = b.slice()
+  b.clear().s("--").s(w.sub(0, 6))
+  assert(b.slice().equals("----xycd"), "s: a view overlapping where its bytes land")
+  $e: = Str_builder.new()
+  defer e.free()
+  want.clear()
+  for _i in Range.asc(512)
+    e.s("a\"")
+    want.s("a\"")
+  for _i in Range.asc(512)
+    want.s("a\\\"")
+  e.escape_and_append(e.slice())
+  assert(e.slice().equals(want.slice()), "escape_and_append: the builder escaped onto itself")
+  io.out().s("ok")
+"""
+
+fn test_builder_writes_its_own_bytes(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //<
+    //< Caution: **Run it as a child with freed memory scribbled over** (`MALLOC_PERTURB_` on glibc,
+    //< `MallocScribble` on macOS). Read after the free, a block's bytes are usually still there,
+    //< so a test in this process passes without the fix. Windows has no such switch.
+    verdict.start("[str] a builder written from a view of its own bytes...")
+    sys.set_env("MALLOC_PERTURB_", "165") catch panic("set_env should succeed")
+    sys.set_env("MallocScribble", "1") catch panic("set_env should succeed")
+    r: = subproc.run_capture(sys_test.child_argv(ksplc, "self_append", self_append_src, arena), "",
+        300000, 1 << 20, arena)
+    sys.unset_env("MALLOC_PERTURB_") catch panic("unset_env should succeed")
+    sys.unset_env("MallocScribble") catch panic("unset_env should succeed")
+    if r.exit_code != 0 || !r.stdout_data.equals("ok")
+        io.err().s(r.stderr_data)
+    assert(r.exit_code == 0 && r.stdout_data.equals("ok"),
+        "each write must read its source before the old buffer is freed")
+    verdict.pass("Written onto itself, as it grows or not, a builder keeps every byte.")
 
 // ==========================================
 // A Writer that writes into the caller's memory.

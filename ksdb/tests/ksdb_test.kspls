@@ -40,8 +40,8 @@ fn test_append_and_replay() //< that it appends, reads back, and keeps the order
     $buf: U8[32] = ::{}
     $it: = reopened.iter()
     for it.next()
-        it.read(U8$[]::buf)
-        got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+        got_len: = it.read(U8$[]::buf) catch panic("a record written here fits the buffer")
+        got: = U8[]::{ .ptr = buf[0]@, .len = got_len }
         if seen == 0
             assert(it.kind == kind_sample && got.equals("one"), "the first is one")
         if seen == 1
@@ -50,6 +50,17 @@ fn test_append_and_replay() //< that it appends, reads back, and keeps the order
             assert(it.kind == kind_policy && got.equals("policy-blob"), "the third is policy-blob")
         seen += 1
     assert(seen == 3, "all three read")
+
+    // **A short buffer is refused, not filled with the record's head**: a cut record reads as a
+    // whole shorter one, and nothing shows that its end is missing.
+    $tiny: U8[2] = ::{}
+    $first: = reopened.iter()
+    assert(first.next(), "the first record is there")
+    $refused: = false
+    _cut: = first.read(U8$[]::tiny) catch e
+        refused = e == ksdblog.Ksdb_error.too_small
+        fallback 0
+    assert(refused && tiny[0] == 0U8, "a short buffer returns too_small and is left untouched")
     verdict
         .pass("It reads again in the order appended, and opening again points at the same position.")
 
@@ -171,8 +182,8 @@ fn test_torn_write_truncates() //< a power cut in the middle of a write
     $buf: U8[32] = ::{}
     $it: = reopened.iter()
     for it.next()
-        it.read(U8$[]::buf)
-        got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+        got_len: = it.read(U8$[]::buf) catch panic("a record written here fits the buffer")
+        got: = U8[]::{ .ptr = buf[0]@, .len = got_len }
         assert(got.equals("kept"), "what stays is the one finished record alone")
         seen += 1
     assert(seen == 1, "the half-written part is not read")
@@ -209,8 +220,8 @@ fn test_torn_payload_still_appends() //<
     $buf: U8[32] = ::{}
     $it: = reopened.iter()
     for it.next()
-        it.read(U8$[]::buf)
-        got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+        got_len: = it.read(U8$[]::buf) catch panic("a record written here fits the buffer")
+        got: = U8[]::{ .ptr = buf[0]@, .len = got_len }
         in_order: = got.equals("kept") if seen == 0 else got.equals("after-crash")
         assert(in_order, "the records from before and after the power cut read oldest first")
         seen += 1
@@ -420,8 +431,8 @@ fn test_keeps_appending_after_a_power_loss() //<
     $buf: U8[32] = ::{}
     $it: = reopened.iter()
     for it.next()
-        it.read(U8$[]::buf)
-        got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+        got_len: = it.read(U8$[]::buf) catch panic("a record written here fits the buffer")
+        got: = U8[]::{ .ptr = buf[0]@, .len = got_len }
         if seen == 0
             assert(got.equals("before"), "the record from before the power cut stays")
         if seen == 1
@@ -504,8 +515,8 @@ fn test_every_power_cut_keeps_what_was_written()
             $it: = again.iter()
             for it.next()
                 assert(seen < done, "a record not finished must not read")
-                it.read(U8$[]::buf)
-                got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+                got_len: = it.read(U8$[]::buf) catch panic("a record written here fits the buffer")
+                got: = U8[]::{ .ptr = buf[0]@, .len = got_len }
                 assert(got.equals(cut_payloads[seen]), "everything finished has to read in order")
                 seen += 1
             assert(seen == done, "not one of the finished records may be missing")
@@ -565,8 +576,8 @@ fn test_a_scrambled_store_is_survivable()
         $it: = again.iter()
         for it.next()
             assert(Sz::it.len <= buf.len, "no record longer than any written may come out")
-            it.read(U8$[]::buf)
-            got: = U8[]::{ .ptr = buf[0]@, .len = it.len }
+            got_len: = it.read(U8$[]::buf) catch panic("a record written here fits the buffer")
+            got: = U8[]::{ .ptr = buf[0]@, .len = got_len }
             assert(is_one_of(got), "no unwritten content may come out")
             // Caution: **Check the kind too**, or a record with only its kind garbled reaches the
             // policy's reader.

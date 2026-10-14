@@ -71,15 +71,15 @@ priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or 
 priv fn read_lines(path: U8[], logical: U8[], parser: kspeg.Target$@): List<|Entry|>? //<
     //< One file's entries, or none where it cannot be read or parsed (the reason is printed)
     //<
-    //< **The bytes are mended as the loader mends them** (`parse_layout.mend`), so a `.kspls` file
-    //< gives the record the same text a compile gives it.
+    //< **The bytes are mended as the loader mends them** (`parse_load.mend_as_read`), so a
+    //< `.kspls` file gives the record the same text a compile gives it.
     raw: = io.read_file(path) catch e
         io.err().s("ksplc doc: cannot read \{path\}: \{e\}\n")
         return .none
     defer dealloc(Void$@::raw.ptr)
     $notes: = List<|parse_layout.Note|>.new(base_core.arena)
     src: = base_core.arena
-        .dup_str(parse_layout.mend(raw, path.is_laid_out(), notes@, base_core.arena).code)
+        .dup_str(parse_load.mend_as_read(raw, logical, path.is_laid_out(), notes@).code)
     parse_source_fix.mask_shebang(src)
     root: Ast_node$@ = parse_load.parse_raw_ast(src, logical, parser) catch
         return .none

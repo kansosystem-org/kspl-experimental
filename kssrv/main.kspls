@@ -132,11 +132,8 @@ priv fn content_type_for(path: U8[]): U8[] //< looks the Content-Type up from th
 priv enum Rel_path //< makes a relative path under the root from a percent-decoded path
     //<
     //< Caution: **Pass the root.** A check on the path string alone (`fs.is_safe_relative`) leaves
-    //< a way out through a link inside the root. **Use `decode_component`**, which keeps a `+`: a
-    //< space written as `+` is a query's convention, not a path's (see std/url.kspls). The decode
-    //< happens only once.
+    //< a way out through a link inside the root.
     ok(rel: U8[]) //< the path under the root, on the arena
-    malformed //< the `%XX` encoding is broken
     // A path not accepted as a name under the root (`..` steps, a NUL, a Windows device name, a
     // link in an intermediate folder: everything `fs.stays_under` refuses).
     rejected
@@ -162,9 +159,21 @@ priv fn hides_name(rel: U8[]): Bool //<
         at = end + 1
     return false
 
-priv fn path_to_rel(path: U8[], root: U8[], arena: Arena$@): Rel_path
-    decoded: = url.decode_component(path, arena) catch _e
-        return .malformed
+priv fn asks_for_page(decoded: U8[]): Bool //<
+    //< Whether a decoded path names the page: the root itself, or `index.html` in it
+    //<
+    //< **Decided from the text alone**, so it can be asked before anything under the root is looked
+    //< at (the reason is at the token's check in `queue_for_request`).
+    $rest: = decoded
+    for rest.len > 0 && rest[0] == '/'
+        rest = rest.sub_from(1)
+    return rest.len == 0 || rest.equals(index_name)
+
+priv fn path_to_rel(decoded: U8[], root: U8[], is_page: Bool, arena: Arena$@): Rel_path
+    // **The page is the root's index file and nothing else** (`asks_for_page`): a folder standing
+    // at that name would otherwise have its own index served as the page, without the token.
+    if is_page
+        return .ok(index_name) if api.rel_under(root, index_name).is_some() else .rejected
     $t: U8[] = ""
     switch api.rel_under(root, decoded)
     case .some(r)
@@ -174,10 +183,9 @@ priv fn path_to_rel(path: U8[], root: U8[], arena: Arena$@): Rel_path
     // Caution: **Check the name that is served, not the one asked for.** A folder gives its index,
     // and checked before the index was added, a link standing at a folder's index served what it
     // points at for the folder's own path, though the index asked for by name was refused.
-    if t.len == 0 || fs.is_dir(fs.join(root, t, arena))
-        served: =
-            (index_name if t.len == 0
-            else arena.text().s(t).c('/').s(index_name).take())
+    // The root itself is the page, so `t` is never empty here.
+    if fs.is_dir(fs.join(root, t, arena))
+        served: = arena.text().s(t).c('/').s(index_name).take()
         switch api.rel_under(root, served)
         case .some(r)
             t = r
@@ -191,7 +199,8 @@ priv fn names_this_server(req: http.Request$@): Bool //<
     //< Whether the `Host` header names this machine's loopback, as the token's URL does
     //<
     //< **The port is not compared**: a re-pointed page always sends its own name, so the name alone
-    //< tells it apart.
+    //< tells it apart. `http.parse_request` refuses a second `Host`, so the one found is the only
+    //< one.
     host: = req.headers.find("Host").unwrap_or("")
     name: = host.sub(0, host.find_char(':').unwrap_or(host.len))
     return name.equals(local_host) || name.equals_ignore_case("localhost")
@@ -210,9 +219,7 @@ priv fn wants_close(req: http.Request$@): Bool //<
             close = close || lists_token(node.value, "close")
             keep = keep || lists_token(node.value, "keep-alive")
         node = node.next
-    v: = req.version // `HTTP/d.d`, as the parser checked
-    open_by_default: = v[5] > '1' || (v[5] == '1' && v[7] >= '1')
-    return close || !(open_by_default || keep)
+    return close || !(http.is_1_1_or_later(req.version) || keep)
 
 priv fn lists_token(list: U8[], want: U8[]): Bool //<
     //< Whether a comma-separated header value holds `want`, in any case (`close, TE` holds `close`)
@@ -258,13 +265,29 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         conn.queue_error(c, 405, "GET, HEAD")
         return
 
-    $rel: U8[] = ""
-    switch path_to_rel(t.path, ctx.root, c.arena)
-    case .ok(r)
-        rel = r
-    case .malformed
+    // **Use `decode_component`**, which keeps a `+`: a space written as `+` is a query's
+    // convention, not a path's (see std/url.kspls). The decode happens only once.
+    decoded: = url.decode_component(t.path, c.arena) catch _e
         conn.queue_error(c, 400)
         return
+    // **Only the named page may be outside the root** (`--page`). Only `/` and `/index.html` are
+    // replaced, and **the client cannot choose it with a string it wrote** (`path_to_rel` refuses a
+    // `..` or an absolute path). The agreement is "Where it listens" in
+    // `docs/SPEC-local-server.md`.
+    is_page: = asks_for_page(decoded)
+    // Caution: **For local use, hand out only the page without the token** (where the token is
+    // handed over). Any other file comes from the origin that keeps the token, so served freely, an
+    // HTML file in the root opened in the page's tab could read it, and any program on this machine
+    // could read the root. The page reads its pictures through `/api/file`, with the token.
+    // **Check it before the path is resolved**: resolving answers a link with 403, so a client
+    // without the token would learn which names under the root are links.
+    if ctx.is_local() && !is_page && !api.authorized(req, ctx.token)
+        conn.queue_error(c, 401)
+        return
+    $rel: U8[] = ""
+    switch path_to_rel(decoded, ctx.root, is_page, c.arena)
+    case .ok(r)
+        rel = r
     case .rejected
         // `fs.join` does not resolve `..`, so a path let through would return a file outside the
         // root. A 403, not a 404: the form was refused, and whether the name exists is not checked.
@@ -274,19 +297,7 @@ priv fn queue_for_request(c: conn.Conn$@, req: http.Request$@, ctx: conn.Ctx$@) 
         conn.queue_error(c, 404)
         return
 
-    // **Only the named page may be outside the root** (`--page`). Only `/` and `/index.html` are
-    // replaced, and **the client cannot choose it with a string it wrote** (`path_to_rel` has
-    // already refused a `..` or an absolute path). The agreement is "Where it listens" in
-    // `docs/SPEC-local-server.md`.
     // A directory has already become its index (`/docs` and `/docs/` alike) in `path_to_rel`.
-    is_page: = rel.equals(index_name)
-    // Caution: **For local use, hand out only the page without the token** (where the token is
-    // handed over). Any other file comes from the origin that keeps the token, so served freely, an
-    // HTML file in the root opened in the page's tab could read it, and any program on this machine
-    // could read the root. The page reads its pictures through `/api/file`, with the token.
-    if ctx.is_local() && !is_page && !api.authorized(req, ctx.token)
-        conn.queue_error(c, 401)
-        return
     target_path: =
         ctx.page if ctx.page.len > 0 && is_page else fs.join(ctx.root, rel, c.arena)
 
@@ -733,11 +744,17 @@ fn main(): I32
         return 2
     port_text: = cli.rest.get(0)
     root: = cli.rest.get(1)
-    // Caution: **Do not start at all when the named page does not exist.** A 404 later leaves "the
-    // page is blank" with no visible reason (the same section of the agreement).
-    if page.len > 0 && !fs.exists(page)
+    // Caution: **Do not start at all unless the named page is a file it can serve.** A 404 later
+    // leaves "the page is blank" with no visible reason, and a folder would be a second root (the
+    // same section of the agreement). Serving asks `conn.regular_file_size` too, so the two agree.
+    if page.len > 0 && conn.regular_file_size(page).is_none()
         if ln: = lg.at(.error)
-            ln.s("no such page: \{page\}")
+            if fs.is_dir(page)
+                ln.s("the page must be a file, not a folder: \{page\}")
+            else if fs.exists(page)
+                ln.s("the page must be a regular file, not a pipe or a device: \{page\}")
+            else
+                ln.s("no such page: \{page\}")
         return 1
 
     // **The token lives in main's memory**, not in an arena that is rewound per request.

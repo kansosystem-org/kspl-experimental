@@ -6,6 +6,7 @@ import "kspeg/engine" as kspeg
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/core" as base_core
 import "ksplc/base/lint_codes" as base_lint_codes
+import "ksplc/base/locate" as base_locate
 import "ksplc/base/package" as base_package
 import "ksplc/base/stats" as base_stats
 import "ksplc/gen/c/ctx" as gen_c_ctx + { Genc_ctx }
@@ -30,7 +31,6 @@ import "ksplc/sema/decl/collect" as sema_decl_collect
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/session/ctx" { Bodies, Sema_ctx, Sema_error }
-import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/session/prof" as sema_session_prof
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -56,7 +56,7 @@ fn emit_runtime(out_path: U8[]): Void!Compile_error //<
 
 fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head: Arena_headroom,
     peak_heap: Sz) //<
-        //< It prints `--stats`' report once; only this function lays it out.
+        //< It prints `--stats`' report once, on standard error; only this function lays it out.
         //<
         //< **Put the summary (`[Overall]`) at the end**: a terminal shows the last screen;
         //< `make perf-log` uses `cat`.
@@ -67,7 +67,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     parse_load.prof.print_kspeg()
     sema_session_prof.prof.print_bodies()
 
-    io.out().s("\n[Layer]\n")
+    io.err().s("\n[Layer]\n")
     print_layer("Parse", base_stats.stages.parse)
     if sys.timing_available()
         $sb: = Str_builder.new()
@@ -77,9 +77,9 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
             .s("  - AST Conv:    \{Sz::(parse_load.prof.ast_conv_us / 1000):6,\} ms\n")
             .s("  - AST Norm:    \{Sz::(parse_load.prof.norm_us / 1000):6,\} ms\n")
             .s("  - Cache I/O:   \{Sz::(parse_load.prof.cache_us / 1000):6,\} ms\n")
-        io.out().s(sb.slice())
+        io.err().s(sb.slice())
     else
-        io.out().s("  - File I/O / KSPEG Parse / AST Conv / AST Norm / Cache I/O: N/A\n")
+        io.err().s("  - File I/O / KSPEG Parse / AST Conv / AST Norm / Cache I/O: N/A\n")
     parse_ast_cache.print_stats()
     print_layer("Desugar", base_stats.stages.desugar)
     print_layer("Sema", base_stats.stages.sema)
@@ -90,7 +90,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     pr
         .s("  - Pruned fns:  \{lower_prune.stats.fn_dropped:6,\} of \
             \{lower_prune.stats.fn_defs:,\}\n")
-    io.out().s(pr.slice())
+    io.err().s(pr.slice())
     print_layer("Backend Gen", base_stats.stages.backend)
     // Caution: **Print the remainder**: `Compile time` and `AST Arena usage` minus the stages'
     // total (start-up, argument parsing, allocations after a stage). Without it, a growing
@@ -116,7 +116,7 @@ fn print_stats_report(elapsed_us: I64, arena_used: Sz, arena_cap: Sz, arena_head
     tail.s("AST Arena usage   : \{arena_used:,\} / \{arena_cap:,\} bytes\n")
         .s("AST Arena headroom: \{arena_head.free:,\} bytes before next chunk \
             (+\{arena_head.step:,\} bytes)\n").s("System Peak Memory: \{peak_heap:,\} bytes\n\n")
-    io.out().s(tail.slice())
+    io.err().s(tail.slice())
 
 priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
     //<
@@ -130,7 +130,7 @@ priv fn print_layer(label: U8[], stage: base_stats.Stage) //< one stage's line
         sb.s("\{label\}: \{Sz::(stage.us / 1000):,\} ms, \{stage.bytes:,\} bytes\n")
     else
         sb.s("\{label\}: N/A, \{stage.bytes:,\} bytes\n")
-    io.out().s(sb.slice())
+    io.err().s(sb.slice())
 
 enum Compile_error
     parse(err: parse_load.Parse_error)
@@ -186,7 +186,7 @@ impl Compiler
 
         // Caution: **Put std/lang into the tree first**: every file imports it implicitly, so it
         // must come before collect's Pass 0. loaded_files makes sure it is read once.
-        lang_file: = sema_session_import_table.lang_file()
+        lang_file: = base_locate.lang_file()
         if !perm_file.equals(lang_file)
             lang_stack: = List<|U8$[]|>.create(base_core.arena)
             parse_load.load_and_parse_file(lang_file, r.loaded_files, r.root_file, r.base_parser,

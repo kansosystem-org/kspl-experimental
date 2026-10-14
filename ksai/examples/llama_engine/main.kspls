@@ -10,7 +10,6 @@ import "ksai/safetensors" as ai_safetensors
 import "ksai/sampler" as ai_sampler
 import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as ai_tokenizer
-import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
 import "std/prng"
@@ -67,7 +66,7 @@ fn main()
     io.out().s("Prompt: ").s(prompt).s("\n\n")
     io.out().s("Output: ").s(prompt)
 
-    tokens: = tok.encode(prompt)
+    tokens: = tok.encode(prompt, model_arena)
     // The generation loop assumes the prompt is one token ("Kanso" -> 10 with this merge table):
     // it does not feed a longer prompt into the KV cache first, so start_pos and the cache would
     // drift apart.
@@ -87,28 +86,26 @@ fn main()
         next_token: = ai_sampler.sample(logits, cfg, rng@, step_arena)
         tokens.push(next_token)
 
-        single_token_list: = List<|I32|>.create(step_arena)
-        single_token_list.push(next_token)
-        decoded_str: = tok.decode(single_token_list)
-        io.out().s(decoded_str)
+        io.out().s(tok.decode_one(next_token))
 
     io.out().s("\n\n=========================================\n")
     io.out().s(" Generation Complete!\n")
 
     lora_finetune_demo(llama@, tok@, model_arena)
     lora_continual_stream_demo(llama@, tok@, model_arena)
-    full_finetune_demo(llama@, tok@)
+    full_finetune_demo(llama@, tok@, model_arena)
 // ==========================================
 // The full-model end-to-end training demo: back-propagation updates every parameter from the
 // embedding to lm_head, fitting the next token to the target (train_step), and the loss must go
 // down.
 // ==========================================
-priv fn full_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokenizer$@)
+priv fn full_finetune_demo(llama: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokenizer$@,
+    arena: Arena$@)
     io.out().s("\n=========================================\n")
     io.out().s(" Full-Model End-to-End Training (every layer is trained)\n")
     io.out().s("=========================================\n")
 
-    tokens: = tok.encode("Kanso")
+    tokens: = tok.encode("Kanso", arena)
     target: I32 = 11 // "AI" is what we want predicted next
 
     $loss0: = 0.0

@@ -32,8 +32,14 @@ function track(disposable) {
 let hoverRequestSeq = 0;
 
 // At activate() both onDidOpenTextDocument and visibleTextEditors.forEach can send didOpen for a
-// document already open; the URIs sent are recorded so each is sent once.
+// document already open; the URIs sent are recorded so each is sent once, and so a didClose goes
+// only for a document the server was told is open.
 let openedUris = new Set();
+
+// Caution: **Send nothing before `initialize` is answered.** The protocol forbids it, and the
+// documents open at start-up would otherwise race the handshake. What is sent meanwhile waits here,
+// in order, and goes out after `initialized`; null once the answer has come.
+let heldMessages = null;
 
 // Whether this is a document to send to the language server.
 // **Send the indented notation (.kspls) too.** ksplc fixes the source into the brace notation
@@ -51,9 +57,21 @@ function sendDidOpenOnce(document) {
     if (openedUris.has(uri)) return;
     openedUris.add(uri);
     sendNotification("textDocument/didOpen", {
-        textDocument: { uri, languageId: document.languageId, version: 1,
+        textDocument: { uri, languageId: document.languageId, version: document.version,
             text: document.getText() }
     });
+}
+
+// Caution: **Tell the server a document is closed.** It analyses every other file against an open
+// document's text, not the disk's; left open, a file changed on disk afterwards (a checkout, `make
+// fmt`) stays the old text for every other file's errors, references and renames.
+// **A change still waiting belongs to text the editor has discarded**, so it is dropped, not sent.
+function sendDidClose(document) {
+    if (!isKsplDoc(document)) return;
+    pendingChanges.delete(document.uri.toString());
+    const uri = getRelativeUri(document.uri);
+    if (!openedUris.delete(uri)) return;
+    sendNotification("textDocument/didClose", { textDocument: { uri } });
 }
 
 function getLogLevel() {
@@ -73,6 +91,15 @@ function logMessage(msg, level = 'messages') {
 function logSystem(msg) {
     if (outputChannel) {
         outputChannel.appendLine(msg);
+    }
+}
+
+// **The panel comes forward only for an error**, or when the person turns the trace on: brought
+// forward on every start, it covers the terminal for nothing.
+function logError(msg) {
+    if (outputChannel) {
+        outputChannel.appendLine(msg);
+        outputChannel.show(true);
     }
 }
 
@@ -105,9 +132,16 @@ function flushPendingChanges() {
         didChangeTimeout = null;
     }
     if (pendingChanges.size > 0) {
-        for (const [uriStr, doc] of pendingChanges.entries()) {
+        for (const doc of pendingChanges.values()) {
+            const uri = getRelativeUri(doc.uri);
+            // A document opened before the extension started was never announced; its first
+            // change announces it whole.
+            if (!openedUris.has(uri)) {
+                sendDidOpenOnce(doc);
+                continue;
+            }
             sendNotification("textDocument/didChange", {
-                textDocument: { uri: getRelativeUri(doc.uri) },
+                textDocument: { uri, version: doc.version },
                 contentChanges: [{ text: doc.getText() }]
             });
         }
@@ -150,7 +184,7 @@ function startLspServer(context) {
     }
 
     if (!fs.existsSync(exePath)) {
-        logSystem(`[Error] LSP Server executable not found at: ${exePath}`);
+        logError(`[Error] LSP Server executable not found at: ${exePath}`);
         return;
     }
 
@@ -180,24 +214,36 @@ function startLspServer(context) {
     // Caution: **Settle whatever is in flight.** With no deadline of our own, a request left in the
     // table when the process goes never answers, and the editor spins for ever.
     lspProcess.on('error', (err) => {
-        logSystem(`[LSP Process Error] ${err.message}`);
+        logError(`[LSP Process Error] ${err.message}`);
         lspProcess = null;
         settlePendingRequests();
     });
+    // A stop of our own takes the listeners off first (`disposePreviousActivation`), so an exit
+    // seen here is the server going by itself.
     lspProcess.on('exit', (code) => {
-        logMessage(`[LSP Process Exit] Code: ${code}`, 'messages');
+        logError(`[LSP Process Exit] Code: ${code}`);
         lspProcess = null;
         settlePendingRequests();
     });
     // Caution: **Take the legend from the answer; do not copy it here.** A token's number means
     // what `initialize`'s legend says (`ksplc/lsp/semtok.kspls`); a copied roster puts the colours
     // on the wrong names the day a kind is added, with nothing saying so.
-    sendRequest("initialize", { capabilities: {} }).then((result) => {
+    heldMessages = [];
+    sendRequest("initialize", {
+        capabilities: { textDocument: { rename: { prepareSupport: true } } }
+    }).then((result) => {
         const caps = result && result.capabilities;
         const said = caps && caps.semanticTokensProvider;
         if (said && said.legend && Array.isArray(said.legend.tokenTypes)) {
             registerSemanticTokens(said.legend);
         }
+    }, (err) => {
+        logError(`[Error] initialize failed: ${err.message}`);
+    }).then(() => {
+        const held = heldMessages || [];
+        heldMessages = null;
+        sendNotification("initialized", {});
+        for (const msgObj of held) writeMessage(msgObj);
     });
 }
 
@@ -287,8 +333,15 @@ function processBuffer() {
 
 function dispatchMessage(msg) {
     if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-        pendingRequests.get(msg.id)(msg.result);
+        const waiting = pendingRequests.get(msg.id);
         pendingRequests.delete(msg.id);
+        // **A refusal carries its reason**: a rename the server turns down says why, and the
+        // editor shows that message only from a rejected promise.
+        if (msg.error) {
+            waiting.reject(new Error(msg.error.message));
+        } else {
+            waiting.resolve(msg.result);
+        }
     } else if (msg.method === "textDocument/publishDiagnostics") {
         const uriStr = msg.params.uri;
         const uri = resolveUri(uriStr);
@@ -317,8 +370,8 @@ function dispatchMessage(msg) {
 function settlePendingRequests() {
     const waiting = pendingRequests;
     pendingRequests = new Map();
-    for (const resolve of waiting.values()) {
-        resolve(null);
+    for (const one of waiting.values()) {
+        one.resolve(null);
     }
 }
 
@@ -329,11 +382,11 @@ function settlePendingRequests() {
 // results". `vscode-languageclient` holds no per-request deadline either.
 function sendRequest(method, params, token) {
     flushPendingChanges();
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         if (!lspProcess || lspProcess.exitCode !== null) return resolve(null);
 
         const id = reqId++;
-        pendingRequests.set(id, resolve);
+        pendingRequests.set(id, { resolve, reject });
         // For a reader who will not wait, **the answer is merely let go of**: the server has no
         // `$/cancelRequest`, and a late answer finds its id gone from the table.
         if (token) {
@@ -346,18 +399,35 @@ function sendRequest(method, params, token) {
         }
 
         const msgObj = { jsonrpc: "2.0", id, method, params };
-        logJsonRpc("[SEND]", msgObj); 
-
-        const msgStr = JSON.stringify(msgObj);
-        lspProcess.stdin.write(`Content-Length: ${Buffer.byteLength(msgStr)}\r\n\r\n${msgStr}`);
+        if (method === "initialize") {
+            writeMessage(msgObj);
+        } else {
+            postMessage(msgObj);
+        }
     });
 }
 
 function sendNotification(method, params) {
-    if (!lspProcess || lspProcess.exitCode !== null) return;
     const msgObj = { jsonrpc: "2.0", method, params };
-    logJsonRpc("[SEND NOTIFY]", msgObj); 
+    if (method === "initialized") {
+        writeMessage(msgObj);
+    } else {
+        postMessage(msgObj);
+    }
+}
 
+// Sends a message, or holds it while `initialize` is unanswered (`heldMessages`).
+function postMessage(msgObj) {
+    if (heldMessages) {
+        heldMessages.push(msgObj);
+        return;
+    }
+    writeMessage(msgObj);
+}
+
+function writeMessage(msgObj) {
+    if (!lspProcess || lspProcess.exitCode !== null) return;
+    logJsonRpc(msgObj.id !== undefined ? "[SEND]" : "[SEND NOTIFY]", msgObj);
     const msgStr = JSON.stringify(msgObj);
     lspProcess.stdin.write(`Content-Length: ${Buffer.byteLength(msgStr)}\r\n\r\n${msgStr}`);
 }
@@ -381,6 +451,7 @@ function disposePreviousActivation() {
     pendingChanges = new Map();
     hoverRequestSeq = 0;
     openedUris = new Set();
+    heldMessages = null;
     for (const d of activeDisposables) {
         try { d.dispose(); } catch (e) {}
     }
@@ -409,7 +480,6 @@ exports.activate = function (context) {
     disposePreviousActivation();
     KSPL_GLOBAL.__kansoKsplTeardown = disposePreviousActivation;
     outputChannel = track(vsc.window.createOutputChannel("Kanso LSP"));
-    if (getLogLevel() !== 'off') outputChannel.show(true);
     logSystem("🚀 Kanso Native LSP Extension Activated!");
 
     diagnosticCollection = track(vsc.languages.createDiagnosticCollection('kspl'));
@@ -505,9 +575,7 @@ exports.activate = function (context) {
             sendDidOpenOnce(document);
         })),
         track(vsc.workspace.onDidCloseTextDocument(document => {
-            if (isKsplDoc(document)) {
-                openedUris.delete(getRelativeUri(document.uri));
-            }
+            sendDidClose(document);
         }))
     );
     vsc.window.visibleTextEditors.forEach(editor => {
@@ -557,11 +625,6 @@ exports.activate = function (context) {
 
         track(vsc.languages.registerReferenceProvider(selector, {
             async provideReferences(document, position, context, token) {
-                sendNotification("textDocument/didChange", {
-                    textDocument: { uri: getRelativeUri(document.uri) },
-                    contentChanges: [{ text: document.getText() }]
-                });
-
                 const result = await sendRequest("textDocument/references", {
                     textDocument: { uri: getRelativeUri(document.uri) },
                     position: { line: position.line, character: position.character },
@@ -593,16 +656,19 @@ exports.activate = function (context) {
             }
         })),
 
+        // **The server decides what can be renamed, and to what.** A refusal (a name in the
+        // standard library, a keyword, a name already taken) rejects the promise with the server's
+        // reason, which the editor shows in place of the rename.
         track(vsc.languages.registerRenameProvider(selector, {
-            async provideRenameEdits(document, position, newName, token) {
-                const ident = getIdentifierAtPosition(document, position);
-                if (!ident) return null;
-
-                sendNotification("textDocument/didChange", {
+            async prepareRename(document, position, token) {
+                const result = await sendRequest("textDocument/prepareRename", {
                     textDocument: { uri: getRelativeUri(document.uri) },
-                    contentChanges: [{ text: document.getText() }]
-                });
-
+                    position: { line: position.line, character: position.character }
+                }, token);
+                if (!result || !result.range) return null;
+                return { range: toRange(result.range), placeholder: result.placeholder };
+            },
+            async provideRenameEdits(document, position, newName, token) {
                 const result = await sendRequest("textDocument/rename", {
                     textDocument: { uri: getRelativeUri(document.uri) },
                     position: { line: position.line, character: position.character },
@@ -630,12 +696,6 @@ exports.activate = function (context) {
             }
         }))
     );
-}
-
-function getIdentifierAtPosition(document, position) {
-    const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
-    if (!wordRange) return null;
-    return { word: document.getText(wordRange), range: wordRange };
 }
 
 // A symbol kind from the server as VS Code numbers it; a function where the server sent none.

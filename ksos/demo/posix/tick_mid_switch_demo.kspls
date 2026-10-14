@@ -12,6 +12,7 @@
 //   yield     the second task yields into the third, which has never run, with a tick held.
 // The timer itself is set too slow to fire during the run, so every tick is one raised here.
 // ==========================================
+import "ksos/demo/common/task_end"
 import "ksos/kernel/task" + { Task }
 import "std/sys"
 import "std/verdict"
@@ -40,7 +41,7 @@ fn second(_arg: Void$@): Void //< switches into third, which has never run, with
 fn third(_arg: Void$@): Void
     g_ran[2] = 1
 
-fn main()
+fn main(): I32
     tcb_1.create(U8$[]::stack_1, first, null, 1, "first")
     tcb_2.create(U8$[]::stack_2, second, null, 1, "second")
     tcb_3.create(U8$[]::stack_3, third, null, 1, "third")
@@ -51,8 +52,10 @@ fn main()
     sys.raise_signal(sigalrm)
     task.start_scheduler() // returns once every task is done
     task.irq_restore(s)
+    task_end.require_all_ended()
     assert(g_ran[0] == 1, "tick_mid_switch: the task started with a tick held never ran its code")
     assert(g_ran[1] == 1, "tick_mid_switch: the task that yielded with a tick held never resumed")
     assert(g_ran[2] == 1, "tick_mid_switch: the task yielded into with a tick held never ran")
     assert(task.current_tick() == 2, "tick_mid_switch: each held tick must arrive exactly once")
     verdict.pass("every task ran its code, and each held tick arrived once, after its switch.")
+    return verdict.finish()

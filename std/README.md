@@ -61,7 +61,7 @@ std's own tests live here, in no listing above. Their entry point is `run_std` i
 
 **`make test` runs them from this folder** with nothing but a `ksplc`, against the `std` this folder holds, so a copy of the folder tests itself ([`std/Makefile`](Makefile)).
 
-**`make test-fuzz` feeds broken input to std's readers** (the JSON reader and the like) through `std/tests/read_prog.kspls`. How a round is judged is "Fuzzing watches the program from outside" in [`std/docs/DESIGN.md`](docs/DESIGN.md). The broken inputs are made from seeds: std's own writers, and the JSON files in the folder `FUZZ_SEEDS` names. That is this folder unless set; the repository passes its root (`make test-std-fuzz`).
+**`make test-fuzz` feeds broken input to std's readers** (the JSON reader and the like) through `std/tests/read_prog.kspls`, which checks that what it read comes back the same through std's writer where one exists. How a round is judged is "Fuzzing watches the program from outside" in [`std/docs/DESIGN.md`](docs/DESIGN.md). The broken inputs are made from seeds: std's own writers, and the JSON files in the folder `FUZZ_SEEDS` names. That is this folder unless set; the repository passes its root (`make test-std-fuzz`).
 
 ## Pitfalls
 

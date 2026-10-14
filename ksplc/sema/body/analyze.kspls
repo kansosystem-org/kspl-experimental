@@ -43,17 +43,32 @@ impl Sema_ctx
                     the extra main(), or move it out of the file being imported.")
             r.err(m.node, r.scratch.slice())
 
+    fn is_entry_main(r: Self$@, decl: Ast_node$@): Bool //< whether decl is the program's `main`
+        ms: = r.env.find_main_symbol().unwrap_or(null)
+        return ms != null && ms.node == decl
+
     fn check_main_signature(r: Self$@) //<
-        //< Limits main's visibility and return type to what the entry can call and use
+        //< Limits main's shape, visibility and return type to what the entry can call and use
         //<
-        //< A `priv` main is `static` in C, out of reach of the start-up code in another file. Only
-        //< nothing, an integer (the exit code) or a Result of either converts meaningfully to C's
-        //< `int main`. A freestanding build's return is not checked: it emits no `int main`
-        //< wrapper, so the startup code decides what happens to the return value.
+        //< The start-up code calls `main` with no arguments and no type arguments. A `priv` main
+        //< is `static` in C, out of reach of the start-up code in another file. Only nothing, an
+        //< integer (the exit code) or a Result of either converts meaningfully to C's `int main`.
+        //< A freestanding build's return is not checked: the startup code decides what happens.
         if r.suppress_errors
             return
         main_sym: = r.env.find_main_symbol().unwrap_or(null)
         if main_sym == null
+            r.check_main_present()
+            return
+        if !main_sym.kind.is_function()
+            r.err(main_sym.node,
+                "main() cannot take type parameters: the program's start-up code calls it with \
+                    none, so no copy of it would ever be made. Drop the '<|…|>'.")
+            return
+        if base_ast_ext.Param_cursor.count(main_sym.node.get_fn_params()) > 0
+            r.err(main_sym.node,
+                "main() takes no parameters: the program's start-up code calls it with none. Read \
+                    the command line with 'sys.args()' (import \"std/sys\").")
             return
         if main_sym.vis == sema_type_scope.Visibility.file_private
             r.err(main_sym.node,
@@ -71,6 +86,25 @@ impl Sema_ctx
                 of either ('Void!E' / 'I32!E'), but returns '\{r.env.get_str(ret_id)\}'. A value of \
                 this type cannot become an exit code, so it would be silently discarded.")
         r.err(main_sym.node, r.scratch.slice())
+
+    priv fn check_main_present(r: Self$@) //<
+        //< Refuses a program with no `main`, where one is built (`--program`)
+        //<
+        //< `ksplc run` and `ksplc build` pass the option. A plain compile may hold none: its C may
+        //< be linked with a `main` written elsewhere.
+        if !base_core.config.is_program
+            return
+        for m_entry in r.env.files.items()
+            ms: = m_entry.value.symbols.get("main") catch null
+            if ms != null && ms.node != null
+                r.err(ms.node,
+                    "'main' must be a function: the program's start-up code calls it, and here it \
+                        names something else. Declare 'fn main()' instead.")
+                return
+        r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
+            .error,
+            "this program has no main(): a program starts at 'fn main()', so there is nothing to \
+                run. Add one, or build a library from '#export' functions with '--library'")
 
     fn check_library_shape(r: Self$@, root: Ast_node$@) //<
         //< Under `--library`, refuses what a library cannot hold
@@ -217,6 +251,9 @@ impl Ast_node
             c.err(r, c.scratch.slice())
             ok = false
 
+        if r.has_attribute("noreturn") && !r.keeps_noreturn(c, block)
+            ok = false
+
         if !sema_flow_track.analyze_definite_initialization(c, r, block)
             ok = false
 
@@ -228,6 +265,46 @@ impl Ast_node
                         "[I0305] Redundant 'return' at the end of a Void function.")
             r.lint_nullable_pointer_return(c, block, base_ret_id)
             r.lint_release_method_spelling(c)
+        return ok
+
+    priv fn keeps_noreturn(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool //<
+        //< Whether a `#noreturn` function's body hands control back by no path, reporting each one
+        //<
+        //< **C trusts the attribute and only warns** (`-Winvalid-noreturn`): a caller compiled on
+        //< the promise runs on past the call into whatever follows it.
+        $ok: = block.report_way_back(c)
+        if !block.is_guaranteed_to_leave(true)
+            c.clear_scratch()
+                .s("function '\{c.fn_ctx.name\}' is declared '#noreturn', but control may reach the \
+                    end of its body. End it with a call that does not return (such as 'sys.exit' or \
+                    'panic') or an endless 'for'")
+            c.err(r, c.scratch.slice())
+            ok = false
+        return ok
+
+    priv fn report_way_back(r: Self$@, c: Sema_ctx$@): Bool //<
+        //< Reports each `return`, `throw` and `!` under r, which return to the caller; false if any
+        //<
+        //< A function literal inside is a body of its own, so it is not looked into.
+        if r == null || r.kind_id == .k_expr_fn_lit
+            return true
+        $ok: = true
+        $way: = ""
+        if r.kind_id == .k_stmt_return
+            way = "return"
+        else if r.kind_id == .k_stmt_throw
+            way = "throw"
+        else if r.kind_id == .k_expr_postfix && r.get_postfix_op().is_literal("!")
+            way = "!"
+        if way.len > 0
+            c.clear_scratch()
+                .s("'\{way\}' returns to the caller, but the function is declared '#noreturn', \
+                    which promises that control never comes back")
+            c.err(r, c.scratch.slice())
+            ok = false
+        for ch in r.children
+            if !ch.report_way_back(c)
+                ok = false
         return ok
 
     priv fn lint_release_method_spelling(r: Self$@, c: Sema_ctx$@) //<

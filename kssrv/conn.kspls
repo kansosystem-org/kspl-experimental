@@ -148,13 +148,15 @@ impl Ctx
     fn is_local(r: Self$@): Bool //< whether it serves one user on this machine (`--local`)
         return r.token.len > 0
 
-fn regular_file_size(path: U8[]): Sz? //< a regular file's size, or none (absent, or a folder)
+fn regular_file_size(path: U8[]): Sz? //<
+    //< a regular file's size; none where it is absent or not one
     //<
-    //< Caution: **Check this before opening.** On some OSes `fopen` opens a folder, and the read's
-    //< result alone cannot tell that from "a broken file".
+    //< Caution: **Check this before opening.** On some OSes `fopen` opens a folder, which reads as
+    //< "a broken file"; a FIFO's read waits for a writer that may never come, holding the server,
+    //< and a device's never ends.
     info: = fs.stat(path) catch _e
         return .none
-    if info.is_dir
+    if info.kind != fs.File_kind.file
         return .none
     return .some(Sz::info.size)
 

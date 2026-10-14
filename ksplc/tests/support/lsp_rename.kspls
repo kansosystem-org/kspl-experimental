@@ -1,0 +1,242 @@
+//< The `lsp` suite's checks on renaming: what it refuses, and the import lines it reaches
+//<
+//< Not a suite; `../suite/lsp_test.kspls` calls `run_rename`. **The workspace is a folder of its
+//< own**, with std read from outside it, as a project sees an installed standard library.
+//< Each refusal is shown beside a rename that goes through, so a server answering every request
+//< with an error cannot pass.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/lsp_client"
+import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, is_missing }
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/json" + { Json_builder }
+import "std/jsonrpc"
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const lib_src: U8[] = "fn hit(): I32\n    return 0\n\nfn helper(): I32\n    return 2\n"
+priv const user_uri: U8[] = "user.kspls"
+priv const pick_uri: U8[] = "pick.kspls" //< brings `helper` in by name
+priv const pick_src: U8[] =
+    """import "lib" { helper }
+
+fn twice(): I32
+    return helper() + helper()
+"""
+priv const alias_uri: U8[] = "alias.kspls" //< brings `helper` in under a name of its own
+    //<
+    //< The body names `helper` too, through the file's alias, so a rename of `helper` analyses it
+    //< and sees the uses of `h` resolve to `helper` as well.
+priv const alias_src: U8[] =
+    """import "lib" + { helper as h }
+
+fn thrice(): I32
+    return h() + h() + h() + lib.helper()
+"""
+priv const user_src: U8[] =
+    """import "std/io"
+import "lib"
+
+fn other(): I32
+    return 1
+
+fn use(seed: I32): I32
+    total: = seed + lib.hit()
+    io.out().s("x")
+    return total + other()
+
+struct Pair
+    a: I32
+
+impl Pair
+    fn first(p: Self@): I32
+        return p.a
+
+impl Pair
+    fn second(p: Self@): I32
+        return p.a
+"""
+
+priv struct Ask //< one client, and where the probe's names stand in its document
+    c: jsonrpc.Client$@
+    arena: Arena$@
+
+impl Ask
+    priv fn at(r: Self, line_head: U8[], word: U8[]): json.Val //<
+        //< the position of `word` on a line of the user's document
+        return r.at_in(user_uri, user_src, line_head, word)
+
+    priv fn at_in(r: Self, uri: U8[], src: U8[], line_head: U8[], word: U8[]): json.Val //<
+        //< the position of `word` on a line of the document `uri`, whose text is `src`
+        line: = decl_line(src, line_head, r.arena)
+        return lsp_client.at_pos(uri, line, col_in_line(src, line_head, word, r.arena) + 1,
+            r.arena)
+
+    priv fn rename(r: Self, line_head: U8[], word: U8[], new_name: U8[]): json.Val //<
+        //< The whole response to renaming `word` to `new_name` in the user's document
+        return r.rename_in(user_uri, user_src, line_head, word, new_name)
+
+    priv fn rename_in(r: Self, uri: U8[], src: U8[], line_head: U8[], word: U8[], new_name: U8[]):
+        json.Val //<
+            //< The whole response to renaming `word` to `new_name` in the document `uri`
+        $b: = Json_builder.new(r.arena)
+        pos: = r.at_in(uri, src, line_head, word)
+        params: = b.obj().set("textDocument", pos.get("textDocument"))
+            .set("position", pos.get("position")).set("newName", b.str_val(new_name)).build()
+        return lsp_client.answer(r.c, "textDocument/rename", params, lsp_client.walk_ms, r.arena)
+
+    priv fn refuses(r: Self, label: U8[], got: json.Val, says: U8[]) //<
+        //< Checks that a response is an error whose message says `says`, and carries no edit
+        message: = got.get("error").get("message").as_str()
+        verdict.check(label,
+            is_missing(got.get("result")) && message.find_str(says).is_some(),
+            lsp_client.why(r.c, lsp_client.dump(got, r.arena), r.arena))
+
+fn run_rename(exe: U8[], plain_caps: json.Val, arena: Arena$@) //<
+    //< Starts a server on a workspace of its own and checks what a rename refuses
+    //<
+    //< `plain_caps` is the capabilities the suite's own server gave a client that said nothing.
+    verdict.check("a client that does not ask prepareRename is told only that renaming is answered",
+        plain_caps.get("renameProvider").as_bool(false), lsp_client.dump(plain_caps, arena))
+    dir: = harness.sandbox("lsp_rename")
+    fs.write_tree(dir, U8[][]::{ "lib.kspls", user_uri, pick_uri, alias_uri },
+        U8[][]::{ lib_src, user_src, pick_src, alias_src }, arena) catch
+        verdict.check("the rename workspace can be laid out", false, dir)
+        return
+    $c: =
+        lsp_client.start(exe, U8[][]::{ .ptr = null, .len = 0 }, dir, arena) catch
+        verdict.check("the rename workspace's server starts", false, dir)
+        return
+    defer c.free()
+    $b: = Json_builder.new(arena)
+    asks: = b.obj()
+        .set("textDocument",
+        b.obj()
+        .set("rename", b.obj().set("prepareSupport", b.bool_val(true)).build()).build()).build()
+    init: =
+        c.request("initialize", b.obj().set("capabilities", asks).build(), lsp_client.read_ms, arena)
+        catch
+        verdict.check("the rename workspace's server answers initialize", false, "")
+        return
+    caps: = init.val.get("result").get("capabilities")
+    verdict.check("a client that asks prepareRename is told it is answered",
+        caps.get("renameProvider").get("prepareProvider").as_bool(false),
+        lsp_client.dump(caps, arena))
+    c.notify("textDocument/didOpen", lsp_client.did_open(user_uri, user_src, arena),
+        lsp_client.send_ms, arena) catch {}
+    ask: = Ask::{ .c = c@, .arena = arena }
+    check_prepare(ask)
+    check_names(ask)
+    check_clashes(ask)
+    c.notify("textDocument/didOpen", lsp_client.did_open(pick_uri, pick_src, arena),
+        lsp_client.send_ms, arena) catch {}
+    c.notify("textDocument/didOpen", lsp_client.did_open(alias_uri, alias_src, arena),
+        lsp_client.send_ms, arena) catch {}
+    check_selected(ask)
+
+priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refusal on std's
+    local: = lsp_client.answer(ask.c, "textDocument/prepareRename",
+        ask.at("    total: =", "total"), lsp_client.read_ms, ask.arena)
+    r: = local.get("result")
+    verdict.check("prepareRename on a local answers its range and its name",
+        r.get("placeholder").as_str().equals("total") &&
+        r.get("range").get("start").get("character").as_int(-1) == 4 &&
+        r.get("range").get("end").get("character").as_int(-1) == 9,
+        lsp_client.why(ask.c, lsp_client.dump(local, ask.arena), ask.arena))
+    std_name: = lsp_client.answer(ask.c, "textDocument/prepareRename",
+        ask.at("    io.out()", "out"), lsp_client.read_ms, ask.arena)
+    ask.refuses("prepareRename refuses a name the standard library declares, saying where",
+        std_name, "outside this workspace")
+    // **The rename itself refuses too**: a client that never sends prepareRename would otherwise
+    // be handed an edit to the installed std.
+    ask.refuses("a rename of a std function refuses, with no edit to std",
+        ask.rename("    io.out()", "out", "stdout_x"), "outside this workspace")
+
+priv fn check_names(ask: Ask) //< the new name must be one the grammar reads as an identifier
+    ask.refuses("a new name that is not an identifier is refused",
+        ask.rename("    total: =", "total", "1bad name"), "is not a name")
+    ask.refuses("a keyword as the new name is refused",
+        ask.rename("    total: =", "total", "return"), "is a keyword")
+    ask.refuses("a primitive type's name as the new name is refused",
+        ask.rename("    total: =", "total", "I32"), "is a keyword")
+    fine: = ask.rename("    total: =", "total", "sum")
+    edits: = fine.get("result").get("changes").get(user_uri).arr_list(ask.arena)
+    verdict.check("a free new name renames the declaration and its use", edits.len == 2,
+        lsp_client.why(ask.c, lsp_client.dump(fine, ask.arena), ask.arena))
+
+priv fn check_clashes(ask: Ask) //< the new name must not be declared where it would land
+    ask.refuses("a local renamed to its function's parameter is refused",
+        ask.rename("    total: =", "total", "seed"), "already declared")
+    ask.refuses("a local renamed to a function its scope calls is refused",
+        ask.rename("    total: =", "total", "other"), "already declared")
+    ask.refuses("a name an import binds in the file is refused",
+        ask.rename("    total: =", "total", "io"), "already bound by an import")
+    ask.refuses("a function renamed to another of the same file is refused",
+        ask.rename("fn other", "other", "use"), "already declared")
+    ask.refuses("a method renamed to a method of its type in another impl is refused",
+        ask.rename("    fn first", "first", "second"), "already declared")
+    // **A member is reached after a `.`**, so a top-level function of the same name is no clash.
+    member: = ask.rename("    a: I32", "a", "use")
+    verdict.check("a field renamed to a top-level function's name goes through",
+        member.get("result").get("changes").get(user_uri).arr_list(ask.arena).len == 3,
+        lsp_client.why(ask.c, lsp_client.dump(member, ask.arena), ask.arena))
+
+priv fn edits_in(got: json.Val, uri: U8[], arena: Arena$@): List<|json.Val|> //<
+    //< the edits a rename's answer makes in `uri`; none where it names no such file
+    return got.get("result").get("changes").get(uri).arr_list(arena)
+
+priv fn starts_at(edits: List<|json.Val|>@, line: Sz, character: Sz): Bool //<
+    //< whether one of the edits starts at that line and column
+    for i in Range.asc(edits.len)
+        start: = edits.get(i).get("range").get("start")
+        if start.get("line").as_int(-1) == line &&
+            start.get("character").as_int(-1) == character
+            return true
+    return false
+
+priv fn places(found: List<|json.Val|>@, arena: Arena$@): U8[] //<
+    //< where each of a list of locations or edits starts, as `[<file>:]<line>:<column>`
+    out: = arena.text()
+    for i in Range.asc(found.len)
+        start: = found.get(i).get("range").get("start")
+        uri: = found.get(i).get("uri").as_str()
+        if uri.len > 0
+            out.s(uri).c(':')
+        out.s("\{start.get("line").as_int(-1)\}:\{start.get("character").as_int(-1)\} ")
+    return out.take()
+
+priv fn check_selected(ask: Ask) //<
+    //< A name a selective import brings in is renamed in the import line too
+    //<
+    //< **The import line names it, so a rename that skips the line stops the program compiling.**
+    //< Renaming the declaration changes the left side of an `as` and the uses written by that
+    //< name; renaming the new name, the right side and its uses alone.
+    by_name: = ask.rename_in(pick_uri, pick_src, "    return helper()", "helper", "aid")
+    pick: = edits_in(by_name, pick_uri, ask.arena)
+    verdict.check("a name a selective import brings in is renamed in the import line too",
+        edits_in(by_name, "lib.kspls", ask.arena).len == 1 && pick.len == 3 &&
+        starts_at(pick@, 0, col_in_line(pick_src, "import", "helper", ask.arena)),
+        lsp_client.why(ask.c, lsp_client.dump(by_name, ask.arena), ask.arena))
+    alias: = edits_in(by_name, alias_uri, ask.arena)
+    verdict.check("renaming it changes the left side of an 'as', not the new name's uses",
+        alias.len == 2 &&
+        starts_at(alias@, 0, col_in_line(alias_src, "import", "helper", ask.arena)),
+        lsp_client.why(ask.c, places(alias@, ask.arena), ask.arena))
+    refs: = lsp_client.answer(ask.c, "textDocument/references",
+        ask.at_in(pick_uri, pick_src, "    return helper()", "helper"), lsp_client.walk_ms,
+        ask.arena)
+    found: = refs.get("result").arr_list(ask.arena)
+    // The declaration, both import lines and the three uses by name; the uses of `h` are its own.
+    verdict.check("the references of a name a selective import brings in count the import lines",
+        found.len == 6,
+        lsp_client.why(ask.c, places(found@, ask.arena), ask.arena))
+    renamed: = ask.rename_in(alias_uri, alias_src, "    return h()", "h", "k")
+    own: = edits_in(renamed, alias_uri, ask.arena)
+    verdict.check("renaming the new name of an 'as' changes its right side and its uses alone",
+        own.len == 4 &&
+        starts_at(own@, 0, col_in_line(alias_src, "import", " h ", ask.arena) + 1) &&
+        edits_in(renamed, "lib.kspls", ask.arena).len == 0 &&
+        edits_in(renamed, pick_uri, ask.arena).len == 0,
+        lsp_client.why(ask.c, lsp_client.dump(renamed, ask.arena), ask.arena))

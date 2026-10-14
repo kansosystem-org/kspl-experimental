@@ -62,14 +62,14 @@ priv fn has_named_field_init(node: Ast_node$@): Bool //<
     return false
 
 priv fn check_omitted_fields_visibility(node: Ast_node$@, c: Sema_ctx$@,
-    struct_def: sema_type_def.Struct_def$@, written: Map<|Sz, Bool|>$@, shown: U8[]) //<
+    struct_def: sema_type_def.Struct_def$@, written: Map<|Sz, Ast_node$@|>$@, shown: U8[]) //<
         //< Checks whether the fields not written are visible from this position.
         //<
         //< **Checking the written ones alone is not enough**: with zero filling, `S::{}` **would
         //< build a value with an invisible field from outside**. Written fields are reported at
         //< their own position (check_field_visibility); the rest as one item here.
     for f_idx in Range.asc(struct_def.fields_list.len)
-        if written.get(f_idx) catch false
+        if (written.get(f_idx) catch null) != null
             continue
         field: = struct_def.fields_list.get(f_idx)
         if c.is_field_visible_here(field)
@@ -133,7 +133,7 @@ priv struct Init_walk //< what a walk over a literal's initializers carries from
     check_visibility: Bool //< whether its fields' visibility is checked (a declared struct's)
     shown: U8[] //< the struct as a diagnostic names it, as written rather than by its full path
     by_name: Map<|U8[], Sz|>$@ //< each field's index by its name
-    written: Map<|Sz, Bool|>$@ //< the fields written so far
+    written: Map<|Sz, Ast_node$@|>$@ //< each field or index written so far, by what wrote it
     at: Sz //< where the next initializer without a name or an index lands
 
 priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@, arr_size: I32):
@@ -152,6 +152,9 @@ priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@,
             .s("too many initializers for array of length \{arr_size\}: this one lands at index \
                 \{walk.at\}")
         c.err(child, c.scratch.slice())
+    else
+        c.clear_scratch().s("index \{walk.at\}")
+        mark_written(c, walk, walk.at, child)
     walk.at += 1
 
 priv fn take_struct_field(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@): I32 //<
@@ -190,9 +193,29 @@ priv fn mark_field_written(c: Sema_ctx$@, walk: Init_walk$@, idx: Sz, child: Ast
     child.def_node = field_def.node
     if walk.check_visibility
         c.check_field_visibility(field_def, shown_at)
-    walk.written.set(idx, true)
+    c.clear_scratch().s("field '\{field_def.name\}'")
+    mark_written(c, walk, idx, child)
     walk.at = idx
     return field_def.type_id
+
+priv fn mark_written(c: Sema_ctx$@, walk: Init_walk$@, at: Sz, child: Ast_node$@) //<
+    //< It records place `at` as written by `child`, refusing a second write of it
+    //<
+    //< The caller leaves the place's name ("field 'x'", "index 0") in scratch. **Refused, not
+    //< merged**: the later value would silently replace the earlier one, as C lets it.
+    first: = walk.written.get(at) catch null
+    if first == null
+        walk.written.set(at, child)
+        return
+    $how: = "by position"
+    if first.get_field_init_name().is_some()
+        how = "by name"
+    else if first.get_field_init_index().is_some()
+        how = "by index"
+    c.scratch
+        .s(" is written twice in this literal: first \{how\} on line \{c.line_of(first.loc)\}, then \
+            here. The later value would silently replace the earlier one; write each once")
+    c.err(child, c.scratch.slice())
 
 fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     $type_node: = node.get_struct_literal_type()
@@ -258,7 +281,7 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
         for f_idx in Range.asc(struct_def.fields_list.len)
             field_idx_map.set(struct_def.fields_list.get(f_idx).name, f_idx)
     // The written fields' indices, for the zero-filled rest's visibility.
-    $written: = Map<|Sz, Bool|>.new(null)
+    $written: = Map<|Sz, Ast_node$@|>.new(null)
     defer written.free()
     $walk: = Init_walk::{ .struct_def = struct_def, .check_visibility = struct_sym_ptr != null,
         .shown = c.env.display(base_struct_id), .by_name = field_idx_map@, .written = written@,

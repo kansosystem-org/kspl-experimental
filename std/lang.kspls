@@ -210,6 +210,115 @@ impl Panic_msg
             return r
         return r.s(" at ").s(file).s(":").n(line)
 
+// ============================ The error trace ============================
+// The route the last failure took, which the runtime records at each `throw` and `!`. It is here,
+// not in `sys`, because a failing `main` prints it whatever the program imports.
+#cfg(!freestanding)
+extern "C"
+    pub fn kspl_error_trace_depth(): I32 //< how many frames the error trace holds
+    pub fn kspl_get_trace_frame_info(index: I32, file: U8@$@, func: U8@$@, line: I32$@) //<
+        //< the file, function and line of the trace's frame at index
+
+#cfg(!freestanding)
+priv struct Trace_text //< text for standard error, written whenever its buffer fills
+    buf: U8[256]
+    len: Sz
+
+#cfg(!freestanding)
+impl Trace_text
+    fn c(r: Self$@, ch: U8): Self$@ //< writes one byte
+        if r.len == r.buf.len
+            r.flush()
+        r.buf[r.len] = ch
+        r.len += 1
+        return r
+
+    fn s(r: Self$@, t: U8[]): Self$@ //< writes text
+        for ch in t
+            r.c(ch)
+        return r
+
+    fn n(r: Self$@, v: I64): Self$@ //< writes a number as decimal
+        $m: = Panic_msg.new()
+        return r.s(m.n(v).slice())
+
+    fn flush(r: Self$@) //< writes what is gathered to standard error, and empties the buffer
+        err: = libc.get_stderr()
+        libc.fwrite(Void$@::r.buf[0]@, 1, r.len, err)
+        libc.fflush(err)
+        r.len = 0
+
+priv fn c_text(p: U8@): U8[] //< a C string's bytes before its NUL; empty for a null pointer
+    if p == null
+        return ""
+    $n: Sz = 0
+    for (p + n)$ != 0
+        n += 1
+    return U8[]::{ .ptr = p, .len = n }
+
+priv fn has_at(s: U8[], part: U8[], at: Sz): Bool //< whether `part` stands in `s` from `at`
+    if at + part.len > s.len
+        return false
+    for i in Range.asc(part.len)
+        if s[at + i] != part[i]
+            return false
+    return true
+
+priv fn trace_module(file: U8[]): U8[] //< a frame's file up to `.kspl`, which `.kspls` opens with
+    for k in Range.asc(file.len)
+        if has_at(file, ".kspl", k)
+            return U8[]::{ .ptr = file.ptr, .len = k }
+    return file
+
+priv fn trace_fn_name(raw_func: U8[], module: U8[]): U8[] //<
+    //< The function's own name from the C symbol `kspl_[priv_]<module, '_' for '/' and '.'>_<name>`
+    $at: Sz = 0
+    if has_at(raw_func, "kspl_priv_", 0)
+        at = 10
+    else if has_at(raw_func, "kspl_", 0)
+        at = 5
+    $k: Sz = 0
+    for k < module.len && at + k < raw_func.len
+        c: = module[k]
+        want: = '_' if c == '/' || c == '\\' || c == '.' else c
+        if raw_func[at + k] != want
+            break
+        k += 1
+    if k == module.len && has_at(raw_func, "_", at + k)
+        at += k + 1
+    return U8[]::{ .ptr = raw_func.ptr + at, .len = raw_func.len - at }
+
+#cfg(!freestanding)
+pub fn print_trace() //< writes the route this thread's last failure took to standard error
+    //<
+    //< A failing `main` calls it too. Caution: **Write with libc alone**, as `panic` does: every
+    //< program holds this file. The lines are gathered and written in few `fwrite`s, so they are
+    //< less likely to mix with other output.
+    depth: = kspl_error_trace_depth()
+    if depth <= 0
+        return
+    $out: Trace_text = ::{}
+    out.s("stack backtrace:\n")
+    $frame_idx: I64 = 0
+    for $i: = depth - 1; i >= 0; i -= 1
+        $file_ptr: U8@ = null
+        $func_ptr: U8@ = null
+        $line: I32 = 0
+        kspl_get_trace_frame_info(i, file_ptr@, func_ptr@, line@)
+        raw_func: = c_text(func_ptr)
+        raw_file: = c_text(file_ptr)
+        out.s("   " if frame_idx < 10 else "  ").n(frame_idx).s(": ")
+        frame_idx += 1
+        if raw_func.len == 9 && has_at(raw_func, "kspl_main", 0)
+            out.s("main")
+        else
+            module: = trace_module(raw_file)
+            for c in module
+                out.c('.' if c == '/' || c == '\\' else c)
+            out.s(".").s(trace_fn_name(raw_func, module))
+        out.s(" at ").s(raw_file).s(":").n(line).s("\n")
+    out.flush()
+
 // ============================ Option ============================ Puts "is there a value or not"
 // in the type. Only a switch can take the value out, and the exhaustiveness check makes a missing
 // "absent" case a compile error.

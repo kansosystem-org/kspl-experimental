@@ -90,6 +90,7 @@ priv struct Cli //< what the command line asked for, before it is checked
     split_units: U8[]
     diag_format: U8[]
     cflags: U8[]
+    sanitize: U8[]
     lint_specs: List<|U8[]|>$@
 
 priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcommand and option
@@ -127,6 +128,9 @@ priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcom
         "the number of translation units to split the generated C into (the default is 1)")
     p.str_opt("--cflags", o.cflags@,
         "flags for the C compiler, added after ksplc's own so the last one wins (\"-O0 -g\")")
+    p.str_opt("--sanitize", o.sanitize@,
+        "the sanitizers the program is built with, separated by commas: address, thread, memory, \
+            and build's undefined (the C compiler's -fsanitize= names)")
     p.str_opt("--style", o.style@, "the formatting settings (\"IndentWidth: 4, ColumnLimit: 100\")")
     p.str_opt("--to", o.to_name@,
         "what the output is written in: a compile's c (the default) or llvm, fmt's kspl or kspls \
@@ -138,6 +142,8 @@ priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcom
         "put the time taken per phase out (for fmt, how often its cache answered)")
     p.flag("--freestanding", base_core.config.is_freestanding@,
         "generate for an environment with no OS")
+    p.flag("--program", base_core.config.is_program@,
+        "the output becomes a program, so refuse an input with no main() (run and build pass it)")
     p.str_list_opt("--library", base_core.config.interface_paths,
         "build a library and write its interface there: a .h for C, a .kspls or .kspl for KSPL (it \
             can be repeated); only #export functions are visible outside it, its runtime and std \
@@ -180,6 +186,11 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
         base_core.config.diag_json = true
     else if o.diag_format.len > 0 && !o.diag_format.equals("text")
         usage.error_exit("--diagnostic-format: expected text or json\n")
+    // **The report is text on standard error**, the stream json leaves to its objects.
+    if base_core.config.diag_json && base_core.config.enable_stats
+        usage
+            .error_exit("--stats cannot be combined with --diagnostic-format=json: its report is \
+                text on standard error, where json writes only JSON objects\n")
     // `--to` names what the output is written in; a compile's languages are c and llvm.
     if mode_name.equals("compile") && o.to_name.equals("llvm")
         base_core.config.target = .llvm
@@ -205,6 +216,8 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
         // It ties is_freestanding to cfg(freestanding), so this flag alone enables std/sys's
         // freestanding panic and the like, with no --define=freestanding to remember.
         base_core.config.defines.push("freestanding")
+    check_sanitize(o, mode_name)
+    base_core.config.sanitize = o.sanitize
     if o.style.len > 0
         // fmt_printer holds the name used in the diagnostic. Kept apart from the list of
         // accepted keys, the two would drift, and a newly added key would be missing from the
@@ -307,7 +320,7 @@ impl Mode
             .fmt_config = fmt_style.Config.default_fmt(),
             .script_args = List<|U8[]|>.create(base_core.arena), .deps_path = "", .libs_path = "",
             .surface_scope = "", .style = "", .std_dir = "", .pkg_src_dir = "", .split_units = "",
-            .diag_format = "", .cflags = "",
+            .diag_format = "", .cflags = "", .sanitize = "",
             .lint_specs = List<|U8[]|>.create(base_core.arena) }
         p: = argp.Parser.create("ksplc", "", base_core.arena)
         // Kept so print_usage can build the usage list from the declarations.
@@ -349,7 +362,7 @@ impl Mode
             defer dir.free()
             if !base_cache.clear_all(dir@, arena)
                 base_cache.exit_unlocated("ksplc")
-            io.out().s("ksplc: cleared ").s(dir.slice()).c('\n')
+            io.err().s("ksplc: cleared ").s(dir.slice()).c('\n')
         case .emit_runtime(out_path)
             pipeline.emit_runtime(out_path)!
         case .explain(code)
@@ -404,10 +417,12 @@ impl Mode
             parser: = kspl_parser()!
             defer parser.free_memo()
             run_compiler(in_path, "", "", "", parser, true)!
+            end_compile("")
         case .compile(in_path, out_path, deps_path, libs_path)
             parser: = kspl_parser()!
             defer parser.free_memo()
             run_compiler(in_path, out_path, deps_path, libs_path, parser, false)!
+            end_compile("")
 
 priv fn check_machine(face: U8[]) //<
     //< It refuses a machine ksplc has no widths for, listing the ones it has
@@ -440,6 +455,10 @@ priv fn refuse_with_library() //<
     //<
     //< Each needs a symbol of the library visible outside it, which `--library` makes `static`
     //< ("How linkage is chosen" in ksplc/docs/DESIGN.md).
+    if base_core.config.is_program
+        usage
+            .error_exit("--library: --program cannot be combined: a library has no main(), and is \
+                entered through its '#export' functions\n")
     if base_core.config.unit_count > 1
         usage
             .error_exit("--library: --split cannot be combined: the units reach each other's \
@@ -454,6 +473,53 @@ priv fn refuse_with_library() //<
             .error_exit("--library: --freestanding cannot be combined: the C compiler calls the \
                 bare-metal runtime's helpers (__aeabi_memcpy and the like) by name from any object, \
                 so they cannot be private. A bare-metal image is built from source\n")
+
+priv const sanitizer_names: U8[][4] = ::{ "address", "thread", "memory", "undefined" } //<
+    //< The sanitizers `--sanitize=` takes, by the names the C compiler's `-fsanitize=` takes
+    //<
+    //< The first three are LLVM's function attributes too (`sanitize_<name>`). `undefined` is not:
+    //< its checks are written by clang's front end, so only C takes it.
+
+priv fn check_sanitize(o: Cli$@, mode_name: U8[]) //<
+    //< It refuses `--sanitize` where it cannot take effect, and `-fsanitize=` in build's `--cflags`
+    //<
+    //< **One way to ask** (Principle 6): `build` hands its C compiler `-fsanitize=` from
+    //< `--sanitize`, so the same word in `--cflags` would be a second. Which machine has which
+    //< sanitizer is the C compiler's to say: it refuses `-fsanitize=thread` for Windows itself.
+    if mode_name.equals("build")
+        for w in o.cflags.split(' ', base_core.arena)
+            if w.starts_with("-fsanitize=")
+                usage
+                    .error_exit("--cflags: name the sanitizers with --sanitize=<names>, which hands \
+                        the C compiler its -fsanitize=\n")
+    if o.sanitize.len == 0
+        return
+    if base_core.config.is_freestanding
+        usage
+            .error_exit("--sanitize: --freestanding cannot be combined: a sanitizer's runtime maps \
+                its shadow memory and writes its reports through the OS, and none is built for bare \
+                metal\n")
+    if mode_name.equals("compile") && !base_core.is_llvm_target()
+        usage
+            .error_exit("--sanitize: the C a compile writes is instrumented by the C compiler that \
+                reads it, so give that compiler -fsanitize=<names>. On a compile, --sanitize marks \
+                --to=llvm's IR, which no front end marks\n")
+    for name in o.sanitize.split(',', base_core.arena)
+        $known: = false
+        for k in sanitizer_names
+            known = known || k.equals(name)
+        if !known
+            said: = base_core.arena.text().s("--sanitize: '").s(name)
+                .s("' is not a sanitizer ksplc knows:")
+            for i in Range.asc(sanitizer_names.len)
+                said.s(", " if i > 0 else " ").s(sanitizer_names[i])
+            usage.error_exit(said.c('\n').take())
+        if name.equals("undefined") && base_core.is_llvm_target()
+            usage
+                .error_exit("--sanitize=undefined: its checks are written into C by clang's front \
+                    end, which LLVM IR does not pass through. KSPL's own checks stop an index, a \
+                    shift, a divisor or an enum's tag out of range in either backend; for the rest, \
+                    build through C (ksplc build --sanitize=undefined)\n")
 
 priv fn check_interface_paths() //<
     //< It refuses a `--library=` interface that cannot be written
@@ -518,31 +584,42 @@ priv fn print_flag_words(append: fn(list: List<|U8[]|>$@, arena: Arena$@)) //<
     usage.print_words(words@)
 
 priv fn print_diag_summary(compiler: pipeline.Compiler$@, is_lint: Bool) //<
-    //< The summary of the diagnostics' counts
+    //< The summary of the diagnostics' counts, on standard error with them
     //<
-    //< With neither an error nor a warning it prints nothing. **It is printed only after every
-    //< stage has finished** (the one `defer` in run_compiler); earlier, later stages' counts miss
-    //< it.
-    if compiler == null || compiler.sema == null
+    //< With neither an error nor a warning it prints nothing, and under json nothing either (the
+    //< closing object counts, `end_compile`). **It is printed only after every stage has
+    //< finished** (the one `defer` in run_compiler); earlier, later stages' counts miss it.
+    if compiler == null || compiler.sema == null || base_core.config.diag_json
         return
     errs: = compiler.sema.diags.counts.errors
     warns: = compiler.sema.diags.counts.warnings
     if !is_lint && errs == 0 && warns == 0
         return
-    io.out().s("Finished with \{errs\} error(s), \{warns\} warning(s)")
+    io.err().s("Finished with \{errs\} error(s), \{warns\} warning(s)")
     if is_lint
-        io.out()
+        io.err()
             .s(", \{compiler.sema.diags.counts.infos\} information(s), and \
                 \{compiler.sema.diags.counts.hints\} hint(s)")
-    io.out().s(".\n")
+    io.err().s(".\n")
     // Caution: **Name the command where the codes are.** An explanation nobody is told about goes
     // unread; the lint gate reads only the line above, and a clean run names no code.
     codes: = compiler.sema.diags.counts.codes
     if codes.len > 0
-        io.out().s("The codes above are explained by `ksplc explain <code>`: ")
+        io.err().s("The codes above are explained by `ksplc explain <code>`: ")
         for i in Range.asc(codes.len)
-            io.out().s(", " if i > 0 else "").s(codes.get(i))
-        io.out().s(".\n")
+            io.err().s(", " if i > 0 else "").s(codes.get(i))
+        io.err().s(".\n")
+
+priv fn end_compile(closing: U8[]) //<
+    //< It ends a compile or a lint that reached its verdict; `closing` is empty where it succeeded
+    //<
+    //< **Every line about the run goes to standard error**, so standard output holds only what was
+    //< asked for (the program's own under `ksplc run`). Text gives the closing line, and success
+    //< nothing; json gives the closing object instead, its stream's last line.
+    if base_core.config.diag_json
+        base_diag.print_json_closing(closing.len == 0)
+    else
+        io.err().s(closing)
 
 priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: U8[],
     parser: kspeg.Target$@, is_lint: Bool): Void!pipeline.Compile_error
@@ -657,11 +734,8 @@ impl pipeline.Compile_error
         //< It reports a propagated error as one line, `<category>/<variant>: <details>`, and exits
         //<
         //< The part before the colon (`parse/syntax_error`, or a bare `codegen`) is the error's
-        //< identifier unchanged. **A line closing a run whose diagnostics are printed goes with the
-        //< summary, on standard output**; any other is an error of its own, on standard error.
-        //< Caution: **Do not put the closing line on standard error**: under
-        //< `--diagnostic-format=json` that stream holds the diagnostics alone, and the line adds
-        //< nothing they did not say.
+        //< identifier unchanged. Every line goes to standard error. **A line closing a compile
+        //< whose diagnostics are printed** becomes the closing object under json (`end_compile`).
         $msg: = Str_builder.new()
         defer msg.free()
         $closes: = false
@@ -703,7 +777,7 @@ impl pipeline.Compile_error
             closes = true
             msg.s("codegen: compilation terminated (see diagnostics above)\n")
         case .fmt_failed
-            closes = true
+            // Not `closes`: fmt ends no compile, so it has no closing object either.
             msg.s("fmt/failed: some files could not be formatted (listed above)\n")
         // The io case has already exited inside the helper. The rest are reported here, the same
         // way.
@@ -711,7 +785,7 @@ impl pipeline.Compile_error
             msg.s("unknown: unrecognized error\n")
         if !closes
             usage.error_exit(msg.slice())
-        io.out().s(msg.slice())
+        end_compile(msg.slice())
         sys.exit(1)
 
 priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
@@ -727,7 +801,8 @@ priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
     code: = spec.sub(0, eq)
     level_name: = spec.sub_from(eq + 1)
     if !base_lint_codes.is_known(code)
-        usage.error_exit("--lint: unknown diagnostic code\n")
+        why: = base_lint_codes.unknown_code_msg(code)
+        usage.error_exit(base_core.arena.text().s("--lint: \{why\}\n").take())
     switch base_lint_codes.Lint_level.parse(level_name)
     case .some(level)
         base_lint_codes.set_global_level(code, level)
@@ -743,7 +818,7 @@ priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
 const internal_trace_env_name: U8[] = "KSPLC_INTERNAL_TRACE" //<
     //< The environment variable that decides whether ksplc prints its own `!` propagation trace
     //<
-    //< `sys.print_trace` prints the trace.
+    //< `print_trace` (std/lang) prints the trace.
 
 priv fn print_internal_trace() //<
     //< It prints the propagation trace when exiting on a `Compile_error`, and only when asked
@@ -755,7 +830,7 @@ priv fn print_internal_trace() //<
     //< 2 hides the raw C errors).
     if v: = sys.get_env(internal_trace_env_name)
         if v.len > 0
-            sys.print_trace()
+            print_trace()
 
 fn main(): Void!I32
     with_setup:

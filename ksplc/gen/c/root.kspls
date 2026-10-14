@@ -12,6 +12,7 @@ import "ksplc/base/mangle" as base_mangle
 import "ksplc/base/target" as base_target
 import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/decl" as gen_c_decl
+import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/gen/c/stmt" as gen_c_stmt
 import "ksplc/gen/c/types" as gen_c_types
 import "ksplc/gen/entry" as gen_entry
@@ -75,15 +76,32 @@ priv fn emit_layout_checks(cg: Genc_ctx$@) //<
 priv fn emit_main_error_return(cg: Genc_ctx$@, plan: gen_entry.Main_plan) //<
     //< The failure path where `main` returns a Result
     //<
-    //< It prints the message and the propagation trace, and returns the exit code.
-    if plan.err_is_number
-        cg.s("  fprintf(get_stderr(), \"").s(gen_entry.failed_with_code)
-            .s("\\n\", _res.error_code);\n")
-    else
-        cg.s("  fprintf(get_stderr(), \"").s(gen_entry.failed).s("\\n\");\n")
+    //< It prints the message and the propagation trace, and returns the exit code
+    //< (`gen_entry.Main_err` says which).
+    switch plan.err
+    case .number
+        // A local of 64 bits, so comparing a narrow type with 255 draws no "always true" warning.
+        cg.s("  ").s("unsigned long long" if plan.err_is_unsigned else "long long")
+            .s(" _code = _res.error_code;\n")
+        cg.s("  fprintf(get_stderr(), \"").s(plan.failure_line()).s("\\n\", _code);\n")
+    case .variant
+        cg.s("  const char *_name = \"\";\n  switch ((long long)_res.error_code")
+            .s(".tag" if plan.err_has_payload else "").s(") {\n")
+        for v in plan.err_variants
+            cg.s("  case ")
+            gen_c_literal.emit_folded_i64(cg, v.tag_value)
+            cg.s(": _name = \"").s(v.name).s("\"; break;\n")
+        cg.s("  default: break;\n  }\n")
+        cg.s("  fprintf(get_stderr(), \"").s(plan.failure_line()).s("\\n\", _name);\n")
+    default
+        cg.s("  fprintf(get_stderr(), \"").s(plan.failure_line()).s("\\n\");\n")
     if plan.trace_fn.len > 0
         cg.s("    ").s(plan.trace_fn).s("();\n")
-    cg.s("  return _res.error_code;\n}\n" if plan.err_is_number else "  return 1;\n}\n")
+    switch plan.err
+    case .number
+        cg.s("  return (_code >= 1 && _code <= \{gen_entry.exit_code_max\}) ? (int)_code : 1;\n}\n")
+    default
+        cg.s("  return 1;\n}\n")
 
 impl Ast_node
     fn emit(r: Self$@, cg: Genc_ctx$@)
@@ -274,7 +292,7 @@ int main(int _argc, char **_argv) {
 """)
                 for call in gen_entry.startup_calls
                     cg.s("    ").s(call).s("();\n")
-                if plan.returns_result
+                if plan.returns_result()
                     cg.s("    ").t(main_sym.type_id).s(" _res = kspl_main();\n")
                     cg.s("""
     if (_res.is_err) {

@@ -22,6 +22,7 @@ import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
 import "ksplc/sema/body/stmt" as sema_body_stmt
 import "ksplc/sema/body/struct_literal" as sema_body_struct_literal
 import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
@@ -208,7 +209,7 @@ priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
             // resolve registers the name.
             if !c.is_instantiating()
                 errors_before: = c.error_mark()
-                $gen_params: = List<|U8[]|>.new(null)
+                $gen_params: = List<|Ast_node$@|>.new(null)
                 defer gen_params.free()
                 node.validate_all_type_exprs(c, gen_params@)
                 if c.error_mark() != errors_before
@@ -292,6 +293,7 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         switch resolved
         case .user(method_sym)
             node.def_node = method_sym.node
+            c.refuse_packed_receiver(inner, method_sym.node, op)
             node.type_id = method_sym.type_id
             return method_sym.type_id
         case .failed
@@ -514,6 +516,26 @@ fn mark_variant_used(c: Sema_ctx$@, enum_name: U8[], variant_name: U8[]) //<
     if sym != null
         sym.flags.is_used = true
 
+priv fn refuse_variant_without_enum(c: Sema_ctx$@, node: Ast_node$@, expected_id: I32) //<
+    //< Refuses a `.variant` where the expected type is no enum, naming that type
+    //<
+    //< **`.err(e)` and `.ok(v)` around a Result get the KSPL spelling instead**: Rust's habit of
+    //< returning `Err(e)` meets a `T!E` whose expected value is the `T`, and naming `T` alone
+    //< would send the writer looking for an enum.
+    variant: = node.get_implicit_enum_variant().text
+    c.clear_scratch()
+    if (variant.equals("err") || variant.equals("ok")) &&
+        (c.env.is_result(expected_id) || c.env.is_result(c.fn_ctx.ret_id))
+        c.scratch
+            .s("'.\{variant\}' does not build a Result: a 'T!E' is no enum, and a function \
+                returning one fails with 'throw <error>' and gives its value with 'return <value>'")
+    else
+        shown: = c.env.display(expected_id)
+        c.scratch
+            .s("'.\{variant\}' needs an enum here, but the expected type is '\{shown\}'. Write the \
+                value in full")
+    c.err(node, c.scratch.slice())
+
 priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     I32!Sema_error
     if sema_type_env.is_unknown(expected_id) || sema_type_env.is_void(expected_id)
@@ -530,11 +552,7 @@ priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I
     case .some(d)
         enum_def = d
     case .none
-        shown: = c.env.display(expected_id)
-        c.clear_scratch()
-            .s("'.\{node.get_implicit_enum_variant().text\}' needs an enum here, but the expected \
-                type is '\{shown\}'. Write the value in full")
-        c.err(node, c.scratch.slice())
+        refuse_variant_without_enum(c, node, expected_id)
         return expected_id
 
     variant_node: = node.get_implicit_enum_variant()

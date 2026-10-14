@@ -184,8 +184,9 @@ priv fn answers(out: U8[], id: I32, arena: Arena$@): Bool //<
         body: = got.unwrap_or("")
         if body.len == 0
             return false
-        msg: = json.parse(body, arena) catch .null_val
-        if msg.get("id").as_int(-1) == id && msg.has_key("result")
+        msg: = json.parse(body, arena) catch
+            continue
+        if msg.val.get("id").as_int(-1) == id && msg.val.has_key("result")
             return true
 
 priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
@@ -265,7 +266,8 @@ fn main(): I32
         return ksplc_harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
     if !verdict.check("the language server comes up over the whole tree",
-        !is_missing(init.get("result").get("capabilities")), lsp_client.dump(init, arena))
+        !is_missing(init.val.get("result").get("capabilities")),
+        lsp_client.dump(init.val, arena))
         return ksplc_harness.finish()
 
     check_workspace_survives_unbuildable(c@, arena)

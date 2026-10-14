@@ -6,11 +6,12 @@
 import "std/chars"
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" + { Arena, dealloc }
 import "std/str" // `arena.text()`
 import "std/subproc"
 import "std/sys"
 import "std/tests/fs_test"
+import "std/thread"
 import "std/verdict"
 
 priv const base: U8[] = "out/tmp/kspl_test_tree"
@@ -154,8 +155,49 @@ fn test_fs_copy_tree()
             "a copied file keeps its execute bit")
         assert(!runnable(fs.join(with_mode, "a.txt", arena), arena),
             "a copied file without one gains none")
+        check_mode_from_first_byte(dir, arena)
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is copied whole to a new place, and a place that stands is refused.")
+
+struct Mode_watch //< what the thread watching a copy as it is written reads and reports
+    path: U8[]
+    stop: thread.Atomic_sz
+    seen_bare: thread.Atomic_sz //< 1 once the copy stood without its source's execute bit
+
+#export
+fn tree_test_watch_mode(w: Mode_watch$@): Void$@ //< looks at the copy until told to stop
+    for w.stop.load() == 0
+        if fs.exists(w.path) && !fs.can_run(w.path)
+            w.seen_bare.store(1)
+    return null
+
+priv fn check_mode_from_first_byte(dir: U8[], arena: Arena$@) //<
+    //< A copy has its source's bits from its first byte, never the default mode while written
+    //<
+    //< The source is its owner's alone and executable (0700), so a copy created with the default
+    //< mode stands without the execute bit until narrowed, for as long as its contents take.
+    from: = fs.join(dir, "private", arena)
+    key: = fs.join(from, "key", arena)
+    fs.mkdir(from) catch panic("the private folder must be creatable")
+    big: = Arena.new((16 << 20) + 4096)
+    defer big.free()
+    body: = U8[]::{ .ptr = U8@::big.alloc(16 << 20), .len = 16 << 20 }
+    io.write_file(key, body) catch panic("the private file must be writable")
+    subproc.run(U8[][]::{ "chmod", "700", key }, "", 10000, 1024, arena) catch
+        panic("chmod must run")
+    to: = fs.join(dir, "private_copy", arena)
+    w: = mem.alloc_as<|Mode_watch|>()
+    defer dealloc(Void$@::w)
+    w.path = fs.join(to, "key", arena)
+    w.stop = thread.Atomic_sz.new(0)
+    w.seen_bare = thread.Atomic_sz.new(0)
+    t: = thread.Thread.spawn<|Mode_watch|>(tree_test_watch_mode, w) catch
+        panic("the watching thread must start")
+    fs.copy_tree(from, to, fs.skip_none, arena) catch panic("the private file must copy")
+    w.stop.store(1)
+    t.join_and_free()
+    assert(w.seen_bare.load() == 0, "the copy never stands with a mode its source does not have")
+    assert(runnable(w.path, arena), "the copy ends with its source's mode")
 
 priv fn trust_at_mode(dir: U8[], mode: U8[], arena: Arena$@): fs.Dir_trust //<
     //< `dir_trust`'s answer once `chmod` has given the folder that mode

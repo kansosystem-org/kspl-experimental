@@ -6,6 +6,7 @@
 //< constraint, and builds a function's own type (`fn_signature_type_id`).
 import "ksplc/base/ast" { Ast_node, variance_names_mut }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
 import "ksplc/sema/decl/eval" as sema_decl_eval
@@ -184,8 +185,11 @@ impl Sema_ctx
         // Caution: **Check the depth here too.** The stack of aliases being resolved counts only a
         // forward chain (`A0 = A1; A1 = A2; …`); a backward one (`A1 = A0; A2 = A1; …`) does not
         // nest.
+        // **A chain whose far end was refused is that refusal's chain**: the forward walk above
+        // reported it where it was cut, and a second error here would name the same chain.
         if r.env.alias_chain_len(target_id) + 1 >= sema_type_query.max_alias_chain_depth
-            r.err(sym.node, too_deep(name))
+            if !sema_type_env.is_unknown(r.env.get_real_type(target_id))
+                r.err(sym.node, too_deep(name))
             sym.type_id = 0
             r.resolving.aliases.len -= 1
             return 0
@@ -244,6 +248,11 @@ impl Sema_ctx
                     type_node.def_node = sym.node
                     set_resolved_def_node(path_node, atom, sym.node)
                     return sym.type_id
+                // **A refused alias (too deep, circular) is the unknown type**, reported once at
+                // its declaration. Named as a type of its own, every use would add a mismatch
+                // ("expected 'A999', but got 'I32'") that says nothing of the cause.
+                if sym.type_id == 0
+                    return I32::sema_type_env.Builtin_type_id.unknown
             type_node.def_node = sym.node
             set_resolved_def_node(path_node, atom, sym.node)
         tmpl: = r.written_template(w)
@@ -448,9 +457,18 @@ impl Ast_node
             //< `Slice<|$U8|>`).
         $args: = List<|I32|>.new(base_core.arena)
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
+        params: = decl.find_child(.k_type_gen_params) if decl != null else null
         $pos: Sz = 0
         for arg in r.children
             if arg.kind_id == .k_literal || arg.kind_id == .k_keyword || arg.kind_id == .k_empty
+                continue
+            // **Inside an instance the declaration's check has judged it** (check_type_arg_kinds
+            // in type_check.kspls), its kind and any arithmetic: judged again here, a `const`
+            // parameter's name, now its value, would be reported again as a literal nobody wrote.
+            if !c.is_instantiating() &&
+                refuses_arg_kind(c, arg, decl, params.gen_param_at(pos), null)
+                args.push(unknown)
+                pos += 1
                 continue
             if v: = const_type_arg_value(arg, c)
                 $value: = Str_builder.new()
@@ -460,9 +478,8 @@ impl Ast_node
                 pos += 1
                 continue
             if holds_value_expr(arg)
-                c.err(arg,
-                    "a value passed as a type argument must be a literal, a negated literal or the \
-                        name of a const; declare 'const n: I32 = ...' and pass 'n'")
+                if !c.is_instantiating()
+                    refuse_computed_arg(c, arg)
                 args.push(unknown)
                 pos += 1
                 continue
@@ -500,6 +517,87 @@ priv fn names_unknown_type(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
     case .none
         return false
 
+fn refuses_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, decl: Ast_node$@, param: Ast_node$@,
+    own: Ast_node$@): Bool //<
+        //< Reports a written argument of the other kind than its parameter, and says whether it did
+        //<
+        //< own is the enclosing generic's parameter the argument names, or null: its kind is the
+        //< argument's. A name that names nothing is left to the type check, which says so.
+    if param == null
+        return false
+    is_value: = own.is_const_gen_param() if own != null else written_arg_is_value(arg, c)
+    if is_value == param.is_const_gen_param() ||
+        (own == null && !is_value && names_unknown_type(c, arg))
+        return false
+    refuse_arg_kind(c, arg, decl, param, own)
+    return true
+
+fn written_arg_is_value(arg: Ast_node$@, c: Sema_ctx$@): Bool //<
+    //< Whether a written type argument is a value: a literal, a constant's name, or arithmetic
+    //<
+    //< Anything else stands for a type. A generic's own `const` parameter folds to nothing in its
+    //< declaration, so the declaration's check asks the names in scope before this.
+    return is_literal_arg(arg) || holds_value_expr(arg) ||
+        const_type_arg_value(arg, c).is_some()
+
+fn refuses_computed_arg(c: Sema_ctx$@, arg: Ast_node$@): Bool //<
+    //< Reports a type argument that computes a value (`Buf<|(n + 1)|>`), and says whether it did
+    if !holds_value_expr(arg)
+        return false
+    refuse_computed_arg(c, arg)
+    return true
+
+priv fn refuse_computed_arg(c: Sema_ctx$@, arg: Ast_node$@) //<
+    //< A type argument's value is written as it names its type, so arithmetic cannot stand there
+    c.err(arg,
+        "a value passed as a type argument must be a literal, a negated literal or the name of a \
+            const; declare 'const n: I32 = ...' and pass 'n'")
+
+fn refuse_arg_kind(c: Sema_ctx$@, arg: Ast_node$@, generic: Ast_node$@, param: Ast_node$@,
+    own: Ast_node$@) //<
+        //< Reports a type argument of the other kind than its parameter's: value or type
+        //<
+        //< own is the enclosing generic's parameter the argument names, or null; the hint then
+        //< says how to declare it instead. Any other argument is not quoted: sugar has rewritten
+        //< its text (`U8[]` reads `Slice<|U8|>`), and the caret shows it.
+    takes_value: = param.is_const_gen_param()
+    type_node: = param.find_child(.k_type_expr)
+    c.clear_scratch().s("'\{generic.get_decl_id_text()\}' takes a ")
+    if takes_value
+        c.scratch.s("value for its parameter 'const \{param.gen_param_name()\}")
+        write_param_type(c, type_node)
+        c.scratch.s("', but ")
+    else
+        c.scratch.s("type for its parameter '\{param.gen_param_name()\}', but ")
+    if own == null
+        c.scratch.s("this argument is \{"a type" if takes_value else "a value"\}")
+    else if takes_value
+        c.scratch
+            .s("'\{own.gen_param_name()\}' is a type parameter\n  Hint: declare it 'const \
+                \{own.gen_param_name()\}")
+        write_param_type(c, type_node)
+        c.scratch.s("' to pass a value through it")
+    else
+        c.scratch
+            .s("'\{own.gen_param_name()\}' is a const parameter, which stands for a value\n  Hint: \
+                declare it without 'const' to pass a type through it")
+    c.err(arg, c.scratch.slice())
+
+priv fn write_param_type(c: Sema_ctx$@, type_node: Ast_node$@) //<
+    //< `: T` of `const n: T`, if written
+    if type_node != null
+        c.scratch.s(": \{type_node.text\}")
+
+priv fn is_literal_arg(node: Ast_node$@): Bool //<
+    //< Whether a type argument is a literal (`8`, `true`), under the nodes that wrap it alone
+    if node == null
+        return false
+    switch node.kind_id
+    case .k_integer, .k_float, .k_bool, .k_char, .k_string, .k_null
+        return true
+    default {}
+    return node.children.len == 1 && is_literal_arg(node.get_child(0))
+
 priv fn type_arg_head(node: Ast_node$@): Ast_node$@? //<
     //< The node holding a type argument's head name (a path or an identifier)
     //<
@@ -527,8 +625,9 @@ priv fn holds_value_expr(node: Ast_node$@): Bool //<
     //< Only what const_type_arg_value folds, or a plain literal, can stand there. Let through, the
     //< argument is read as a type, the instance takes the node's text for a name, and the C holds
     //< `return expr;` (Principle 2).
-    //< Caution: Do not descend into a nested type argument, as in const_type_arg_value.
-    if node == null || node.kind_id == .k_type_args
+    //< Caution: Do not descend into a nested type argument or a postfix, as in
+    //< const_type_arg_value.
+    if node == null || node.kind_id == .k_type_args || node.kind_id == .k_type_postfix
         return false
     switch node.kind_id
     case .k_expr, .k_expr_ternary, .k_expr_catch_chain, .k_expr_catch, .k_expr_or, .k_expr_and,
@@ -546,9 +645,10 @@ priv fn const_type_arg_value(node: Ast_node$@, c: Sema_ctx$@): I32? //<
     //<
     //< A plain literal (`Foo<|8|>` / `Foo<|true|>`) has no type path, so it gives none. A negated
     //< one (`Foo<|-3|>`) is a unary node whose text is the `-` alone, so it is folded here.
-    //< Caution: Do not descend into a nested type argument (the `n` of `Foo<|Bar<|n|>|>`), nor past
-    //< a name's node even if it does not fold: `mod.Foo`'s `Foo` can match another scope's const.
-    if node == null || node.kind_id == .k_type_args
+    //< Caution: Do not descend into a nested type argument (the `n` of `Foo<|Bar<|n|>|>`) or a
+    //< postfix (the `n` of `Foo<|I32[n]|>`, a type), nor past a name's node even if it does not
+    //< fold: `mod.Foo`'s `Foo` can match another scope's const.
+    if node == null || node.kind_id == .k_type_args || node.kind_id == .k_type_postfix
         return .none
     if node.kind_id == .k_type_path || node.kind_id == .k_expr_path ||
         node.kind_id == .k_identifier
@@ -689,12 +789,24 @@ priv fn array_size(c: Sema_ctx$@, size_node: Ast_node$@): I32 //<
     //< A written array size: -1 for `_`, else its constant value (1 after reporting a bad one)
     if size_node.text.equals("_")
         return -1
-    size_val: = c.eval_constexpr_quiet(size_node, -1)
+    $too_deep: = false
+    size_val: = c.fold_quietly(size_node, true) catch e
+        switch e
+        case .nesting_too_deep
+            too_deep = true
+        default {}
+        fallback -1I64
     if size_val > 0
-        return size_val
+        return I32::size_val
     // Stay silent if a `sizeof` cycle is recorded: this is its consequence (report_registry_cycle
     // in sema/decl/layout.kspls reports it).
-    if !c.suppress_errors && c.resolving.registry_cycle_at == null
+    if c.suppress_errors || c.resolving.registry_cycle_at != null
+        return 1
+    // **A chain cut at the depth limit is named as such**, by folding again aloud (silent where
+    // that chain was reported already), never as a size that is not positive.
+    if too_deep
+        _loud: = size_node.eval_constexpr(c) catch 0
+    else
         c.err(size_node, "array size must be a positive constant expression greater than 0")
     return 1
 

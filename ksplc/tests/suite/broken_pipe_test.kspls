@@ -85,6 +85,20 @@ fn main() {
 }
 """
 
+// The same probe writing one byte per call, the path a `.c()` takes.
+priv const loud_bytes_src: U8[] =
+    """import "std/io";
+import "std/sys";
+
+fn main() {
+  $a: = sys.args();
+  for _i in Range.asc(2000000) {
+    io.out().c('x').c('\n');
+  }
+  io.write_file(a[1], "done") catch {};
+}
+"""
+
 // The probe printing the signals a started child ignores (Linux's `/proc/self/status`).
 priv const child_sig_src: U8[] =
     """import "std/io";
@@ -136,25 +150,25 @@ priv fn check_dead_child(work: U8[], arena: Arena$@) //<
     verdict.check("a write to a peer that has ended gets an error back",
         r.out.find_str("REFUSED").is_some(), r.out)
 
-priv fn check_head(work: U8[], arena: Arena$@) //<
-    //< checks that it ends quietly once the destination is gone
-    exe: = build("loud", loud_src, work, arena)
+priv fn check_head(name: U8[], src: U8[], how: U8[], work: U8[], arena: Arena$@) //<
+    //< checks that it ends quietly once the destination is gone, writing as `how` says
+    exe: = build(name, src, work, arena)
     if exe.len == 0
         return
     // Caution: **Check the positive control first.** Without it, a run where the probe could write
     // nothing looks like "it ended quietly".
-    full_mark: = fs.join(work, "full.txt", arena)
+    full_mark: = fs.join(work, arena.text().s("\{name\}_full.txt").take(), arena)
     full: = harness.run(U8[][]::{ exe, full_mark })
-    verdict.check("with a counterpart connected it can write to the end",
-        full.code == 0 && fs.exists(full_mark),
+    verdict.check(arena.text().s("with a counterpart connected it can write to the end \{how\}")
+        .take(), full.code == 0 && fs.exists(full_mark),
         arena.text().s("exit status \{full.code\}").take())
-    cut_mark: = fs.join(work, "cut.txt", arena)
+    cut_mark: = fs.join(work, arena.text().s("\{name\}_cut.txt").take(), arena)
     // **Have the shell build the pipe**; the caller cannot connect stages itself.
     piped: = harness
         .run(U8[][]::{ "/bin/sh", "-c",
         arena.text().s("'\{exe\}' '\{cut_mark\}' | head -1 > /dev/null").take() })
-    verdict.check("once the destination goes it ends without writing it all",
-        !fs.exists(cut_mark),
+    verdict.check(arena.text().s("once the destination goes it ends without writing it all \{how\}")
+        .take(), !fs.exists(cut_mark),
         arena.text()
         .s("the mark is left (it ran to the end). The shell's exit status \{piped.code\}").take())
 
@@ -188,6 +202,7 @@ fn main(): I32 //<
         return harness.finish()
     work: = harness.sandbox("brokenpipe")
     check_dead_child(work, arena)
-    check_head(work, arena)
+    check_head("loud", loud_src, "(a string per call)", work, arena)
+    check_head("loud_bytes", loud_bytes_src, "(a byte per call)", work, arena)
     check_child_default(work, arena)
     return harness.finish()

@@ -321,6 +321,12 @@ priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], are
         c.kill()
     return restart_worker(docs, "", arena)
 
+priv fn message_of(body: U8[], arena: Arena$@): json.Val //<
+    //< the message; null if it does not parse
+    doc: = json.parse(body, arena) catch
+        return .null_val
+    return doc.val
+
 priv fn named_uri(params: json.Val): U8[] //< the document a message names; empty for none
     //<
     //< A call hierarchy's second step names it in `item`, every other request in `textDocument`.
@@ -371,8 +377,7 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
         // A cheap look first: only a body naming `exit` is parsed here.
         $last: = !got
         if got && body.slice().find_str("\"exit\"").is_some()
-            doc: = json.parse(body.slice(), arena) catch .null_val
-            last = doc.get("method").as_str().equals("exit")
+            last = message_of(body.slice(), arena).get("method").as_str().equals("exit")
         box: = r.inbox.lock()
         if got
             jsonrpc.frame_into(box.frames@, body.slice())
@@ -484,10 +489,10 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         case .ended
             break
 
-        doc: = json.parse(msg_body, arena) catch .null_val
-        method: = doc.get("method").as_str()
-        id_val: = doc.get("id")
-        params: = doc.get("params")
+        msg: = message_of(msg_body, arena)
+        method: = msg.get("method").as_str()
+        id_val: = msg.get("id")
+        params: = msg.get("params")
         docs.observe(method, params)
         // **The document a request names is analysed first**, as a didOpen, so its diagnostics
         // come too and a crash in that analysis is told from one in answering.

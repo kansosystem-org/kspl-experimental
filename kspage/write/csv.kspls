@@ -3,16 +3,19 @@
 //< Fields are separated by `,` and lines by a newline. A text holding a `,`, a `"` or a newline is
 //< quoted in `"`, and a `"` inside is doubled as `""` (the rule of RFC 4180).
 //< Caution: **The reader and the writer must share this rule**, or it cannot read what it wrote.
-//< The shown text is written out (not the formula; saving as a document keeps that).
+//< The shown text is written out (not the formula; saving as a document keeps that). A text a
+//< spreadsheet would run as a formula gets a leading `'`, which reading takes off (`field_into`).
 //< A loaded text goes into the cell as it is, but for a line break inside quotes, which becomes one
 //< space (an `Inline` holds no line break; a paste into a cell does the same).
 import "kspage/lay/caret"
 import "kspage/lay/page" { Page }
 import "kspage/model/doc" + { Block, Tile }
+import "kspage/model/run" { Inline }
 import "kspage/model/style" { Sheet, Style }
 import "kspage/write/block"
 import "kspage/write/edit" + { Editor }
 import "kspage/write/shape"
+import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
@@ -26,16 +29,48 @@ priv fn tricky(text: U8[]): Bool //< whether the text has to be quoted
             return true
     return false
 
-priv fn field_into(out: Str_builder$@, text: U8[]) //< writes one cell to `out`
-    if !tricky(text)
-        out.s(text)
+priv const guard: U8 = '\'' //< the mark that keeps a spreadsheet from reading a text as a formula
+
+priv fn formula_like(text: U8[]): Bool //<
+    //< Whether a spreadsheet opening the CSV would run the text, guarded or not
+    //<
+    //< **A run of `'` is looked through**, so the guard reads back (`unguarded`) whatever the text:
+    //< `'=x` is written `''=x`. The characters are the ones OWASP's CSV-injection guidance names.
+    $i: Sz = 0
+    for i < text.len && text[i] == guard
+        i += 1
+    if i >= text.len
+        return false
+    c: = text[i]
+    return c == '=' || c == '+' || c == '-' || c == '@' || c == '\t' || c == '\r'
+
+priv fn field_into(out: Str_builder$@, text: U8[], number: Bool) //< writes one cell to `out`
+    //<
+    //< **A text a spreadsheet would run as a formula gets a leading `'`** (Excel's mark for "this
+    //< is text"): a cell reading `+HYPERLINK(…)` or `-2+3` must stay words for whoever opens the
+    //< file. **A cell whose value is a number never does** (`number`), so `-5` stays `-5`.
+    $sb: = Str_builder.new()
+    defer sb.free()
+    if !number && formula_like(text)
+        sb.c(guard)
+    sb.s(text)
+    got: = sb.slice()
+    if !tricky(got)
+        out.s(got)
         return
     out.c(quote)
-    for $i: Sz = 0; i < text.len; i += 1
-        if text[i] == quote
+    for $i: Sz = 0; i < got.len; i += 1
+        if got[i] == quote
             out.c(quote)
-        out.c(text[i])
+        out.c(got[i])
     out.c(quote)
+
+priv fn unguarded(text: U8[]): U8[] //< a field read with the writer's `'` taken back off
+    //<
+    //< The counterpart of `field_into`: the `'` comes off exactly where the writer puts one on.
+    if text.len > 0 && text[0] == guard && formula_like(text)
+        return text.sub(1, text.len - 1)
+    return text
 
 fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one table as CSV text
     //<
@@ -49,19 +84,23 @@ fn write_table(t: Block$@, out: Str_builder$@, arena: Arena$@) //< writes one ta
         for $c: Sz = 0; c < cols; c += 1
             if c > 0
                 out.c(',')
-            field_into(out, cell_text(tiles, r, c))
+            if n: = cell_inline(tiles, r, c)
+                field_into(out, n.showing(), n.figure().is_some())
+            else
+                field_into(out, "", false)
         out.c('\n')
 
-priv fn cell_text(tiles: List<|Tile|>$@, row: Sz, column: Sz): U8[] //<
-    //< The shown text of the cell at row `row`, column `column`
+priv fn cell_inline(tiles: List<|Tile|>$@, row: Sz, column: Sz): Inline$@? //<
+    //< The text of the cell at row `row`, column `column`; none for a covered or empty cell
     //<
-    //< A covered cell is empty.
+    //< Its shown text is written, and whether its value is a number decides the guard
+    //< (`field_into`).
     for $i: Sz = 0; i < tiles.len; i += 1
         one: = tiles.get(i)
         if one.row == row && one.column == column && one.block != null &&
             one.block.inlines.len > 0
-            return one.block.inlines.get(0).showing()
-    return ""
+            return .some(one.block.inlines.get(0))
+    return .none
 
 priv struct Reader //< the position reached while reading
     //<
@@ -154,7 +193,7 @@ fn read_table(src: U8[], name: U8[], arena: Arena$@): Block$@? //<
         row: = made.add_child("")
         got: = rows.get(r)
         for $i: Sz = 0; i < wide; i += 1
-            text: = got.get(i) if i < got.len else ""
+            text: = unguarded(got.get(i)) if i < got.len else ""
             row.add_child("").add_text(text)
     return .some(made)
 
@@ -167,7 +206,7 @@ impl Editor
         if r.shut()
             return false
         room: = r.room_after_caret(page)
-        if !room.found || src.len <= 0
+        if !room.found || src.len <= 0 || !r.fits_below(room.block, 3) // a table, rows, cells
             return false
         r.break_group()
         st: = r.step()

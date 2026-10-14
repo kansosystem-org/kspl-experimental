@@ -38,7 +38,9 @@ impl File_stream: Writer //< so it can be used wherever a `Writer` is expected
                 r.flush_if_stdout()
         return r
     pub fn c(r: Self$@, val: U8): Self$@ //< writes one byte and returns the stream
-        if libc.fprintf(r.stream_of(), "%c", val) < 1
+        // Caution: **A failure is a negative answer, not one below 1.** `fputc` answers with the
+        // byte it wrote, so a NUL written answers 0.
+        if libc.fputc(val, r.stream_of()) < 0
             kspl_io_broken_pipe()
         if line_buffered && val == '\n'
             r.flush_if_stdout()
@@ -136,9 +138,9 @@ priv fn fopen_checked(path: U8[], mode: U8[]): Void$@!Io_error //<
 priv fn is_dir_path(path: U8[]): Bool //<
     //< whether a directory is at path; a link to one counts
     $size: I64 = 0
-    $dir: I32 = 0
+    $kind: I32 = 0
     $mtime: I64 = 0
-    return kspl_stat(path.ptr, path.len, size@, dir@, mtime@) && dir != 0
+    return kspl_path_info(path.ptr, path.len, size@, kind@, mtime@) && kind == 1 // `File_kind.dir`
 
 priv fn open_error(path: U8[], mode: U8[]): Io_error //< the reason it could not be opened
     //<
@@ -187,14 +189,14 @@ priv fn read_upto(path: U8[], cap: Sz, arena: Arena$@): U8[]!Io_error
         room = cap
     if room == 0
         return U8[]::{ .ptr = null, .len = 0 }
-    $buffer: = U8$@::mem.alloc_in(arena, room)
+    $buffer: = U8$@::arena.alloc(room)
     $len: Sz = 0
     for
         len += libc.fread(buffer + len, 1, room - len, file)
         if len < room || room == cap
             break
         wider: = room * 2 if cap == no_cap || room < cap / 2 else cap
-        grown: = U8$@::mem.alloc_in(arena, wider)
+        grown: = U8$@::arena.alloc(wider)
         mem.copy(grown, buffer, len)
         if arena == null
             dealloc(Void$@::buffer)
@@ -260,7 +262,7 @@ extern "C"
         //< -1 when the size cannot be read. After a seek that succeeded the position is back at the
         //< start; a stream that cannot seek (a pipe) stays where it was, so reading on is still
         //< right.
-    fn kspl_stat(path_ptr: U8@, path_len: Sz, size_out: I64$@, is_dir_out: I32$@,
+    fn kspl_path_info(path_ptr: U8@, path_len: Sz, size_out: I64$@, kind_out: I32$@,
         mtime_out: I64$@): Bool //< Kept in step with the original declaration in `std/fs.kspls`
 pub fn set_line_buffered(): Void //< flushes standard output at every newline from here on
     //<
@@ -272,7 +274,7 @@ pub fn read_stdin( //< the whole of standard input, read to the end
     //<
     //< **A failed read is an error, not the end**: read as the end, input cut off by a fault
     //< would pass for the whole of it.
-    arena: Arena$@, //< the arena the text is allocated in
+    arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): U8[]!Io_error //< the text read, empty if nothing came; `read_failed("")` if a read failed
     $b: = Str_builder.new()
     defer b.free()

@@ -1,9 +1,14 @@
-//< LSP: finds where a name is used, and answers both references and rename
+//< LSP: finds where a name is used, the one list references and rename both answer from
 //<
-//< **One function collects the places**; references turn the list into `Location`s, renaming
-//< into `changes`. **Matching is by definition, not by name.**
+//< **One function collects the places** (`collect_spots`); references turn the list into
+//< `Location`s here, renaming into `changes` (`rename.kspls`). **Matching is by definition, not by
+//< name.**
 //< **The list must be in a fixed order.** The collection is a Map, so its plain order comes from
 //< the hash and the same answer **looks shuffled on screen** from one request to the next.
+//< **A selective import's `as` declares a name of its own** (`import "p" { a as b }`), for its
+//< file alone. The places of `a` are its declaration, every `a` written (the import line's
+//< included) and none of `b`'s; those of `b` are the import line's `b` and its uses. So renaming
+//< either leaves the other standing, and the program still compiles.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -13,6 +18,7 @@ import "ksplc/lsp/nav" as lsp_nav
 import "ksplc/lsp/position" as lsp_position
 import "ksplc/lsp/state" { Doc_state }
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/session/import_table" as _sema_session_import_table
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/json" + { Json_builder }
@@ -23,37 +29,101 @@ import "std/str" { Str_builder }
 struct Spot //< one place of use
     //<
     //< `is_decl` marks the declaration itself: **a references request says whether to count it**
-    //< (`context.includeDeclaration`).
+    //< (`context.includeDeclaration`). `node` and `path` are what a rename checks a new name
+    //< against (`rename.kspls`).
     uri: U8[]
     line: Sz
     character: Sz
     len: Sz
     is_decl: Bool
+    file: U8[] //< the file's logical name
+    node: Ast_node$@ //< the identifier
+    path: List<|Ast_node$@|>$@ //< the nodes from its file's top down to its parent
 
-fn handle(ws_state: Doc_state$@, method: U8[], params: json.Val, id_val: json.Val, arena: Arena$@) //<
-    //< It answers both references and rename (see the file header); only the answer differs
-    uri: = params.get("textDocument").get("uri").as_str()
-    path: = lsp_position.find_path_at_params(ws_state, params)
+struct Target //< what a position names: the definition, and the name written there
+    def: Ast_node$@
+    name: Ast_node$@
+    stands_for: Ast_node$@ //<
+        //< where `def` is an `as` name, the declaration it stands for; else null
+
+fn target_at(state: Doc_state$@, params: json.Val): Target? //<
+    //< The definition the name at the request's position stands for; none off a name
+    path: = lsp_position.find_path_at_params(state, params)
     defer path.free()
     if path.len <= 0
+        return .none
+    at: = path.get(path.len - 1)
+    $name: Ast_node$@ = null
+    switch name_node(at)
+    case .some(n)
+        name = n
+    default
+        return .none
+    if selector: = as_selector(state.sema, path, name)
+        return .some(Target::{ .def = selector.get_selector_alias(), .name = name,
+            .stands_for = selector.get_selector_name().def_node })
+    def: = lsp_nav.resolve_def_node(state.sema, state.root_file, path, at).def_node
+    if def != null
+        return .some(Target::{ .def = def, .name = name, .stands_for = null })
+    // Where the name is unresolved (sema names no local binding, say), the identifier itself is
+    // taken as the definition.
+    return .some(Target::{ .def = name.def_node if name.def_node != null else name, .name = name,
+        .stands_for = null })
+
+priv fn as_selector(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, name: Ast_node$@): Ast_node$@? //<
+    //< The `a as b` selector whose `b` the name is, on the import line or at a use; none otherwise
+    //<
+    //< Caution: **A use must stand for what `a` names**, or a local `b` shadowing the import in
+    //< one function would be taken for it.
+    $selector: Ast_node$@ = null
+    if path.len >= 2 && path.get(path.len - 2).kind_id == .k_decl_import_selector
+        selector = path.get(path.len - 2)
+    else if c != null
+        info: = c.peek_import_symbol(name.loc.file(), name.text)
+        if info != null && info.decl_node != null &&
+            is_def_match(name.def_node, info.decl_node.get_selector_name().def_node)
+            selector = info.decl_node
+    if selector == null || selector.get_selector_alias() == null ||
+        !selector.get_selector_alias().text.equals(name.text) ||
+        selector.get_selector_name().def_node == null
+        return .none
+    return .some(selector)
+
+priv fn name_node(at: Ast_node$@): Ast_node$@? //< the identifier a picked node is, or holds
+    if at.kind_id == .k_identifier
+        return .some(at)
+    id_child: = at.find_child(.k_identifier)
+    if id_child != null
+        return .some(id_child)
+    last: = at.last_child()
+    if at.children.len > 0 && last.kind_id == .k_identifier
+        return .some(last)
+    return .none
+
+fn handle_references(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
+    //< `textDocument/references`: it returns the uses as a list of `Location`
+    //<
+    //< **Count the declaration only as asked** (`context.includeDeclaration`), or "only the uses"
+    //< cannot be had (a common complaint).
+    switch target_at(ws_state, params)
+    case .some(t)
+        // Every place is returned in this request's URI style (`Uri_style` in
+        // `../base/locate.kspls`), since a client spells every file the same way.
+        uri: = params.get("textDocument").get("uri").as_str()
+        spots: = collect_spots(ws_state, t, base_locate.uri_style_of(uri), arena)
+        want_decl: = wants_decl(params)
+        $b: = Json_builder.new(arena)
+        $arr: = b.arr()
+        for i in Range.asc(spots.len)
+            s: = spots.get(i)
+            if s.is_decl && !want_decl
+                continue
+            range: = b.range(s.line, s.character, s.line, s.character + s.len)
+            arr = arr
+                .push(b.obj().set("uri", b.str_val(s.uri)).set("range", range).build())
+        lsp_msg.send_response(id_val, arr.build(), arena)
+    default
         lsp_msg.send_null_response(id_val, arena)
-        return
-    $def_node: Ast_node$@ = null
-    switch target_def_of(ws_state, path, path.get(path.len - 1))
-    case .some(d)
-        def_node = d
-    default {}
-    if def_node == null
-        lsp_msg.send_null_response(id_val, arena)
-        return
-    // Every place is returned in this request's URI style (`Uri_style` in `../base/locate.kspls`),
-    // since a client spells every file the same way.
-    builder: = Json_builder.new(arena)
-    $spots: = collect_spots(ws_state, def_node, base_locate.uri_style_of(uri), arena)
-    if method.equals("textDocument/references")
-        send_references(spots@, wants_decl(params), id_val, builder)
-    else
-        send_rename(spots@, params.get("newName").as_str(), id_val, builder)
 
 priv fn wants_decl(params: json.Val): Bool //< whether the references count the declaration itself
     //<
@@ -65,40 +135,18 @@ priv fn wants_decl(params: json.Val): Bool //< whether the references count the 
     default
         return true
 
-priv fn target_def_of(ws_state: Doc_state$@, path: List<|Ast_node$@|>$@, target_node: Ast_node$@):
-    Ast_node$@? //<
-        //< The definition the name under the cursor points at, or null
-        //<
-        //< Where the name is unresolved (sema names no local binding, say), the identifier itself
-        //< is taken as the definition.
-    def_node: = lsp_nav
-        .resolve_def_node(ws_state.sema, ws_state.root_file, path, target_node).def_node
-    if def_node != null
-        return .some(def_node)
-    id_child: = target_node.find_child(.k_identifier)
-    last: = target_node.last_child()
-    $n: Ast_node$@ = null
-    if target_node.kind_id == .k_identifier
-        n = target_node
-    else if id_child != null
-        n = id_child
-    else if target_node.children.len > 0 && last.kind_id == .k_identifier
-        n = last
-    if n == null
-        return .none
-    return .some(n.def_node if n.def_node != null else n)
-
-priv fn collect_spots(ws_state: Doc_state$@, def_node: Ast_node$@, style: base_locate.Uri_style,
-    arena: Arena$@): List<|Spot|> //<
-        //< It collects the places that refer to that definition, across the whole workspace.
+fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style, arena: Arena$@):
+    List<|Spot|> //<
+        //< It collects the places of the target's definition, across the whole workspace.
         //<
         //< Caution: **Walk the generics' templates too.** An instantiated tree cannot be reached
         //< from `root_file`, so skipping them silently misses the calls found only inside a
         //< generic.
     $out: = List<|Spot|>.new(arena)
     seen: = arena.create(Map<|U8[], I32|>.new(arena))
-    $w: = Walk::{ .target_def = def_node, .c = ws_state.sema, .style = style, .seen = seen,
-        .out = out@, .arena = arena }
+    $w: = Walk::{ .target_def = t.def, .stands_for = t.stands_for, .c = ws_state.sema,
+        .style = style, .seen = seen, .out = out@,
+        .above = List<|Ast_node$@|>.create(arena), .arena = arena }
     if ws_state.root_file != null
         w.node(ws_state.root_file, 0)
     if ws_state.sema != null
@@ -118,43 +166,6 @@ priv fn spot_order(a: Spot, b: Spot): I32 //< by name, then line, then column
     if a.character != b.character
         return -1 if a.character < b.character else 1
     return 0
-
-// ==========================================
-// Assembling the answer
-// ==========================================
-
-priv fn send_references(spots: List<|Spot|>@, want_decl: Bool, id_val: json.Val, $b: Json_builder) //<
-    //< `textDocument/references`: it returns the uses as a list of `Location`
-    //<
-    //< **Count the declaration only as asked** (`context.includeDeclaration`), or "only the uses"
-    //< cannot be had (a common complaint).
-    $arr: = b.arr()
-    for i in Range.asc(spots.len)
-        s: = spots.get(i)
-        if s.is_decl && !want_decl
-            continue
-        range: = b.range(s.line, s.character, s.line, s.character + s.len)
-        arr = arr
-            .push(b.obj().set("uri", b.str_val(s.uri)).set("range", range).build())
-    lsp_msg.send_response(id_val, arr.build(), b.arena)
-
-priv fn send_rename(spots: List<|Spot|>@, new_name: U8[], id_val: json.Val, $b: Json_builder) //<
-    //< `textDocument/rename`: it returns the uses as per-file edits
-    //<
-    //< **Rewrite the declaration too**, or the workspace no longer compiles.
-    $changes: = b.obj()
-    $at: Sz = 0
-    for at < spots.len
-        uri: = spots.get(at).uri
-        $edits: = b.arr()
-        for at < spots.len && spots.get(at).uri.equals(uri)
-            s: = spots.get(at)
-            range: = b.range(s.line, s.character, s.line, s.character + s.len)
-            edits = edits
-                .push(b.obj().set("range", range).set("newText", b.str_val(new_name)).build())
-            at += 1
-        changes = changes.set(uri, edits.build())
-    lsp_msg.send_response(id_val, b.obj().set("changes", changes.build()).build(), b.arena)
 
 // ==========================================
 // Walking the tree and collecting
@@ -196,10 +207,13 @@ priv fn is_the_decl(n: Ast_node$@, target_def: Ast_node$@): Bool //<
 
 priv struct Walk //< what one search for a definition's uses carries down the tree
     target_def: Ast_node$@ //< the definition whose uses are wanted
+    stands_for: Ast_node$@ //< `Target.stands_for`: what an `as` name's uses resolve to
     c: Sema_ctx$@
     style: base_locate.Uri_style
     seen: Map<|U8[], I32|>$@ //< `<file>:<offset>` of each place added
     out: List<|Spot|>$@ //< the places found
+    above: List<|Ast_node$@|>$@ //<
+        //< the nodes from the walk's start down to the parent of the one visited
     arena: Arena$@
 
 impl Walk
@@ -217,24 +231,38 @@ impl Walk
                 !node.loc.file().equals(target_def.loc.file())
                 return
 
-        $hit: Ast_node$@ = null
-        if node.kind_id == .k_identifier &&
-            (is_def_match(node.def_node, target_def) || is_def_match(node, target_def))
-            hit = node
-        if hit != null && hit.loc.file().len > 0
-            w.add_spot(hit)
+        if node.kind_id == .k_identifier && node.loc.file().len > 0 && w.refers(node)
+            w.add_spot(node)
 
+        w.above.push(node)
         for child in node.children
-            if child != hit
-                w.node(child, depth + 1)
+            w.node(child, depth + 1)
+        w.above.len -= 1
+
+    priv fn refers(w: Self$@, n: Ast_node$@): Bool //<
+        //< whether an identifier is a place of the target
+        //<
+        //< An `as` name's uses resolve to the declaration it stands for, as that declaration's own
+        //< places do, so the spelling and the file tell the two apart (the head of this file).
+        if w.stands_for != null
+            return n.loc.file().equals(w.target_def.loc.file()) &&
+                n.text.equals(w.target_def.text) &&
+                (n == w.target_def || is_def_match(n.def_node, w.stands_for))
+        return (is_def_match(n.def_node, w.target_def) || is_def_match(n, w.target_def)) &&
+            !w.writes_as_name(n)
+
+    priv fn writes_as_name(w: Self$@, n: Ast_node$@): Bool //<
+        //< whether an identifier is spelled as an `as` name its file's selective import declares
+        if w.c == null
+            return false
+        info: = w.c.peek_import_symbol(n.loc.file(), n.text)
+        return info != null && info.decl_node != null &&
+            info.decl_node.get_selector_alias() != null
 
     priv fn add_spot(w: Self$@, hit: Ast_node$@) //<
         //< It adds one place, dropping a duplicate by `<file>:<offset>`
         //<
         //< The duplicates come from root_file's walk and a template's.
-        //< Caution: **Get the line-start table from `line_starts_for`**, which builds it once per
-        //< file. Built per place, a name used a thousand times in one file walks that file a
-        //< thousand times.
         src: = base_core.source_of(w.c.source_map, hit.loc.file())
         if src.len == 0
             return
@@ -246,11 +274,35 @@ impl Walk
             return
         w.seen.set(w.arena.dup_str(key.slice()), 1)
 
-        pos: = src.get_line_char(offset, w.c.line_starts_for(hit.loc.file(), src))
+        pos: = position_of(w.c, hit)
         $safe: = hit.loc.file().with_forward_slashes()
         defer safe.free()
         uri: = w.style.spell(safe.slice())
         w.out
             .push(Spot::{ .uri = w.arena.dup_str(uri), .line = pos.line,
             .character = pos.character, .len = hit.text.get_generic_base_name().len,
-            .is_decl = is_the_decl(hit, w.target_def) })
+            .is_decl = is_the_decl(hit, w.target_def), .file = hit.loc.file(), .node = hit,
+            .path = w.path_in_file() })
+
+    priv fn path_in_file(w: Self$@): List<|Ast_node$@|>$@ //<
+        //< The nodes above the one visited, from the top of its own file down
+        //<
+        //< **An imported file hangs under the file importing it**, so the walk's own path starts in
+        //< another file; the part above the nearest file's top is cut off.
+        $from: Sz = 0
+        for i in Range.asc(w.above.len)
+            if w.above.get(i).kind_id == .k_file
+                from = i
+        out: = List<|Ast_node$@|>.create(w.arena)
+        for i in Range.new(from, w.above.len, 1)
+            out.push(w.above.get(i))
+        return out
+
+fn position_of(c: Sema_ctx$@, node: Ast_node$@): lsp_msg.Position //<
+    //< Where a node stands in its file, as the LSP counts
+    //<
+    //< Caution: **Get the line-start table from `line_starts_for`**, which builds it once per file.
+    //< Built per place, a name used a thousand times in one file walks that file a thousand times.
+    src: = base_core.source_of(c.source_map, node.loc.file())
+    return src.get_line_char(src.clamp_offset(node.loc.offset),
+        c.line_starts_for(node.loc.file(), src))

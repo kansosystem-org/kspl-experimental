@@ -6,9 +6,11 @@
 //< beside it). What is applied to text (a style, a color, a note, an annotation, a link) is in
 //< [`shape.kspls`](shape.kspls).
 //< Note: It is split from [`shape.kspls`](shape.kspls) for the 1000-line-per-file cap.
+import "kspage/expr/calc"
 import "kspage/lay/caret"
 import "kspage/lay/page" { Page }
 import "kspage/model/doc" + { Block, Doc }
+import "kspage/model/limit"
 import "kspage/model/run" + { Inline }
 import "kspage/model/style" + { Sheet }
 import "kspage/write/record" { Step }
@@ -366,6 +368,14 @@ impl Editor
             return doc.no_owner()
         return r.doc.parent_of(own.block)
 
+    fn fits_below(r: Self$@, parent: Block$@, levels: Sz): Bool //<
+        //< Whether `levels` of blocks put under `parent` stand no deeper than a document holds
+        //<
+        //< Null `parent` is the top level. **Every insertion asks it before changing anything**
+        //< (`limit.nesting_fits`): a slide's frame holds the cursor one level below the slide, so
+        //< slides put in frames nest without end, and saved past the limit the file never loads.
+        return limit.nesting_fits(r.doc.depth_of(parent) + levels)
+
     fn holder_at(r: Self$@, page: Page$@): Block$@? //<
         //< The container the cursor is in (a table, a presentation slide, an image)
         //<
@@ -475,16 +485,30 @@ impl Editor
         //< Caution: **Do not copy the table's position here** ("A table is pointed at by name" in
         //< `kspage/docs/DESIGN.md`), nor put the name on a cell itself — nothing reads a cell's
         //< name.
-        if page != null
-            spot: = ask.cell_of(page, r.caret)
-            if spot.found
-                return .some(spot.table)
+        if t: = r.table_at(page)
+            return .some(t)
         if b: = r.frame_at()
             return .some(b)
         own: = r.doc.owner_of(r.caret.inline)
         if !own.found
             return .none
         return .some(own.block)
+
+    priv fn table_at(r: Self$@, page: Page$@): Block$@? //< the table whose cell holds the cursor
+        if page != null
+            spot: = ask.cell_of(page, r.caret)
+            if spot.found
+                return .some(spot.table)
+        return .none
+
+    fn name_fault_at(r: Self$@, page: Page$@, text: U8[]): calc.Name_fault //<
+        //< Why `text` cannot name the current place, or `none`
+        //<
+        //< **Only a table's name is held to the formula's reading** (`calc.name_fault`): no
+        //< formula reads a frame's or a paragraph's, so `Figure 1` stays a fine name for a figure.
+        if _t: = r.table_at(page)
+            return calc.name_fault(text)
+        return .none
 
     fn name_at(r: Self$@, page: Page$@): U8[] //< the name of the current place
         //<
@@ -499,7 +523,8 @@ impl Editor
         //< formula), a slide's frame (listed by it among what is placed), and a paragraph with a
         //< running number (referred to from the body).
         //< Caution: **Do not call it with `page` null** (`named_at` decides where it goes).
-        if r.shut()
+        //< **A table's name no formula could reach is refused** (`name_fault_at` says why).
+        if r.shut() || !r.name_fault_at(page, text).reachable()
             return false
         if b: = r.named_at(page)
             r.break_group()

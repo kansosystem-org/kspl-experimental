@@ -17,7 +17,9 @@ What every gate (each check CI runs, any of which can fail the build) checks, an
 | :-- | :-- | :-- |
 | **Clang** | Compiles the generated C, as `clang -std=c99` by default. The quick start needs it too, to link the C that KSPL emits | Yes |
 | **Make** | Builds the compiler from source and drives the two-stage bootstrap, the LSP server and the rest | Yes |
-| **Clang-Format** | Tidies the generated C in the two places a person reads it, `make debug-file` and `make commit-seed` | Recommended, optional |
+| **Clang-Format** | Tidies the generated C in the two places a person reads it, `make debug-file` and `make commit-seed` | Optional, except for `make commit-seed`. Without it, `make debug-file` (VS Code's F5) leaves its C as generated and says so in one line; `make commit-seed` stops, since the seed in git is tidied and an untidied one would change every line of it |
+
+**That is what building needs. Running every gate needs more** (a second C compiler, the sanitizers, node and the rest): `.devcontainer/Dockerfile` installs each tool the gates use, and is their one list. Where a gate meets a missing tool, "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md) says what it does, and on Linux how to run without the tool.
 
 ## Building and testing
 
@@ -65,6 +67,8 @@ make lint
 
 Formatting runs as many files at once as there are cores (`FMT_JOBS`, default `nproc`). The files are independent, so the result is the same. **`make fmt FMT_JOBS=1` runs one file at a time**, for when the failures should come in a fixed order.
 
+**`make fmt` formats with the seed, while the formatting gate (`make test-kspls-trip`) asks the ksplc just built.** After a change to ksplc's formatter, run `make commit-seed` before `make fmt`, or the gate keeps failing on files `make fmt` leaves as they are.
+
 **`make fmt` formats `.kspl` and `.kspls` each in its own notation** (braces, or indentation), and `make lint` accepts either. "3.1 Basic use" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md) covers converting between the notations, and the one comment `make lint` asks you to move so the round trip is exact (why: "The indentation notation" in [`DESIGN.md`](DESIGN.md)).
 
 ### The tests (`make debug`)
@@ -86,18 +90,19 @@ Note: After changing one package, `make debug-<name>` answers sooner. **It does 
 make install                       # puts Stage2 into ~/.local/bin/ksplc, std/ into ~/.local/lib/kspl/std
 ```
 
-It ends by printing where it installed, in lines that start `# installed ->`.
+It ends by printing where it installed, in lines that start `# installed ->`, and **which `ksplc` your PATH starts**: the one just installed (a line with ✅), another one found first (named, with the line to put in your shell's configuration), or none. That last part is `make install-check` (with the same `PREFIX=`), which you can run again after changing PATH. It searches PATH as a shebang does (through `env`), and compares files, not names. On Windows it reads the UCRT64 shell's PATH; cmd and PowerShell keep their own, and `where ksplc` there names the one they start.
 
 * `make install PREFIX=/usr/local` installs elsewhere (writing there needs `sudo`). **Pass `PREFIX` as an absolute path.** A relative one is refused: it would land inside the repository, and the only sign would be a PATH that does not work. Where MSYS2 gives `HOME` in Windows form (`C:\msys64\home\<user>`), `make` converts it to `/` separators.
 * **It installs only a compiler that reproduces itself.** It first runs `make self-host` and `make self-host-ship`, and stops where either differs. It changes no file in the tree: it neither formats nor re-bakes the seed. After a change to how ksplc generates code, the seed still generates the old way, so it stops there until `make commit-seed` has run; the message says so.
 * **Do not put `out/ksplc_seed.exe` on the PATH.** The seed is the compiler from the last time it was re-taken: it lacks every later feature and is built with `-O0 -g` (no optimization, with debug information). `make install` installs Stage2 instead: the self-hosting fixed point (the compiler that reproduces itself), rebuilt with optimization ("A shipped executable is built optimized" in [`DESIGN.md`](DESIGN.md)).
 
-**If it goes wrong, there are three ways, each with its own sign.**
+**If it goes wrong, there are four ways, each with its own sign.**
 
 | What you see | Why | The fix |
 | :-- | :-- | :-- |
 | `file not found or unreadable: std/lang.kspls` when launching outside the repository | The `ksplc` started has no `std/` beside it (copied by hand, not by `make install`), so `std/` is looked for only directly under the current directory | Run `make install`, which puts `std/` where `ksplc` looks for it; `ksplc info std-dir` names the folder taken |
 | `env: 'ksplc': No such file or directory`, only when a script is launched by its shebang (typing `ksplc` works) | `export PATH="~/.local/bin:$PATH"` put a literal `~` in the PATH (double quotes do not expand it). bash expands it at the prompt, but `env`'s search for a shebang (`execvp`) does not | Write `$HOME` (expanded inside double quotes) or an absolute path: `export PATH="$HOME/.local/bin:$PATH"`. `make install` warns when `env ksplc` cannot be found |
+| `ksplc` runs, but lacks what you just built (an older version answers) | Another `ksplc`, installed earlier elsewhere (`/usr/local/bin`, say), comes before `$PREFIX/bin` on PATH | Put `$PREFIX/bin` first, or remove the other one; `make install-check` names the one found first. A shell already open may remember the old place until `hash -r` |
 | It works in a terminal opened from the desktop, but not in VS Code's integrated terminal | The PATH was set in `~/.bash_profile`, which **only a login shell reads** | Set it in `~/.bashrc` (`~/.zshrc` for zsh), or use `~/.local/bin` (`make install`'s default), which many distributions' `~/.profile` already adds |
 
 ## Windows natively, without Docker
@@ -141,21 +146,25 @@ Why the two stay apart is "The Windows executable is built on UCRT64" in [`DESIG
 * **Do not fix that by reordering the PATH.** With `/usr/bin` first, `cc`/`gcc` come from the POSIX side and build a different `ksplc.exe` that depends on `msys-2.0.dll` (the Makefile rejects it via `-dumpmachine`).
 * `type -a make python` shows collisions. `pacman -Qo <path>` names the package that installed a file, and `Required By` in `pacman -Qi <package>` tells whether it may be removed.
 
+**The packages `make ci` needs are listed in [`tools/msys2-packages.txt`](../tools/msys2-packages.txt)**, one a line, each with what it is for. CI's `windows-ucrt64` job and the release's Windows build install that same file, so what passes there is what you install here. Install `git` first and clone the repository (outside a synced folder, as "[Building and testing](#building-and-testing)" says), then install the list from the clone's top folder:
+
 ```sh
 pacman -Syu   # the first time updates the core, so follow the guidance to close the terminal once, reopen it, and re-run
-pacman -S --needed \
-  git make python \
-  mingw-w64-ucrt-x86_64-clang \
-  mingw-w64-ucrt-x86_64-clang-tools-extra \
-  mingw-w64-ucrt-x86_64-lldb
+pacman -S --needed git
+# clone the repository and cd into it, then:
+pacman -S --needed $(sed 's/#.*//' tools/msys2-packages.txt)
+```
+
+Two more are worth adding; `make ci` needs neither:
+
+```sh
+pacman -S --needed mingw-w64-ucrt-x86_64-clang-tools-extra mingw-w64-ucrt-x86_64-lldb
 ```
 
 | Package | What it gives you |
 | :-- | :-- |
-| `make` | MSYS2's own `make` (`/usr/bin/make`; `make --version` says `Built for x86_64-pc-msys`) |
-| `mingw-w64-ucrt-x86_64-clang` | `clang`, the compiler itself, which also compiles the LLVM IR that `--to=llvm` emits |
 | `mingw-w64-ucrt-x86_64-clang-tools-extra` | `clang-format` (see [Requirements](#requirements)) |
-| `mingw-w64-ucrt-x86_64-lldb` | `lldb`, for debugging, such as investigating a panic; optional |
+| `mingw-w64-ucrt-x86_64-lldb` | `lldb`, for debugging, such as investigating a panic |
 
 Caution: **Do not install `mingw-w64-ucrt-x86_64-make`.** UCRT64's PATH would pick it first. If it is installed, the Makefile rejects it at start-up and says what breaks and how to reach MSYS2's `make`.
 
@@ -207,4 +216,5 @@ The `Makefile` finds `ld.lld` / `llvm-objdump` / `llvm-objcopy` under the plain 
 | What you see | Why | The fix |
 | :-- | :-- | :-- |
 | **A link fails with `Permission denied`** | `make ci` rebuilds the same `.exe` many times in a short span, and a program that watches new files can briefly lock one just written. A real-time scan such as Windows Defender's does it, and so does a sync agent such as OneDrive's | Re-running often fixes it. Where it recurs, exclude this repository's `out/` (or the whole repository) from the scan, and keep the repository outside a synced folder (for example `C:\dev\kspl`), as "[Building and testing](#building-and-testing)" says |
+| `make ci` ends `ALL GREEN`, yet its digest lists `SKIP` lines: `node`, Wine, the MinGW cross compiler, an ARM toolchain and others | Those gates need a tool the package list leaves out, or one that has no place on Windows (Wine runs Windows programs on Linux). Each such line is one that `expected_skips` in `tools/ci_gates.kspls` names for `win32`, and a `SKIP` it does not name fails its gate, so a green round has skipped only those | Nothing to fix. What each skip leaves unchecked is "Gates that pass silently where a tool is missing" in [`SPEC-gates.md`](SPEC-gates.md). Installing the tools step 2 lists for Kanso OS and kspage (`llvm`, `lld`, the ARM toolchain, `node`) turns their skips into real runs |
 | Part of `std/tests/sys_test.kspls` skips itself | It needs POSIX paths such as `/bin/echo`, so it skips itself on native Windows (`sys.is_windows()`) | Nothing to fix. Subprocesses themselves (`run_capture`, through `CreateProcess`) work there, and the `windows-ucrt64` job in `.github/workflows/ci.yml` runs them on real hardware |

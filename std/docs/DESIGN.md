@@ -15,7 +15,7 @@ When adding or changing a file, check whether the table can gain a row. If it ca
 
 | Word | What it means here |
 | :-- | :-- |
-| **the heap** (the global heap) | Memory taken with `malloc` and given back one block at a time with `free`. In `std`, passing `null` where a function asks for an arena means "use the heap", and then the caller owes a `free()` |
+| **the heap** (the global heap) | Memory taken with `malloc` and given back one block at a time with `free`. In `std`, passing `null` where a function asks for an arena means "use the heap", and then the caller owes a `free()` for what comes back ("A null arena is the heap, for every function that takes one") |
 | **`Arc`** (the type) | Not ARC: `Arc<\|T\|>` is the reference-counted handle shared between threads ("The names of the reference-counting types" below) |
 | **`T@` / `T$@`** | A pointer to a `T`. Without `$`, you may only read through it; with `$`, you may also write |
 | **`U8[]` / `U8$[]`** | A slice: a pointer plus a length. `U8[]` is a read-only byte string; `U8$[]` is one whose bytes may be rewritten. A `$` before a variable's name (`$x: = 1`) instead lets the variable itself change later. The two kinds of `$` are "4.2 The two axes of mutability" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#42-the-two-axes-of-mutability) |
@@ -93,8 +93,10 @@ Each row is a bug or attack that other libraries are known for, and what the `st
 | `net` | **An accepted socket's mode depends on the OS.** A *non-blocking* socket returns "not ready" where a blocking one would wait. From a non-blocking listener, Linux returns a blocking socket, while Windows, macOS and the BSDs copy the non-blocking mode. So the same read waits on one OS and returns "not ready" on another. Python made `accept` return blocking for this reason | BSD sockets' `accept` | `accept` returns a blocking stream on every OS. A reactor's caller makes it non-blocking by asking, as for any other stream |
 | `http` | **Request smuggling**: two programs on the way (a proxy and a server) see a different end for the same request, so a second request hides inside the first. The causes: `Content-Length` and `Transfer-Encoding` read differently, or `Content-Length` given twice | HTTP/1.1 implementations in general | Refuses any `Transfer-Encoding`, and a duplicated `Content-Length` whose values disagree |
 | `http` | **Response splitting**: a line break (CRLF) injected into a header value starts a header or a response of its own | The same | Refuses at write time a CRLF in a header name or value, the method, the target or the reason phrase |
-| `http` | **A writer that frames otherwise than its reader**: a `Content-Length` the body does not have, or one beside `Transfer-Encoding`, splits the message where another reader cuts it | The same | Refuses at write time whatever the reader refuses: `Transfer-Encoding`, and a `Content-Length` that is not the body's or is given twice (`length_mismatch`). 1xx, 204 and 304 get no length and no body (RFC 9110 §8.6). The answer to a HEAD, which names the length of a body it does not carry, has its own builder (`format_response_to_head`) |
+| `http` | **A writer that frames otherwise than its reader**: a `Content-Length` the body does not have, or one beside `Transfer-Encoding`, splits the message where another reader cuts it | The same | Refuses at write time whatever the reader refuses: `Transfer-Encoding`, and a `Content-Length` that is not the body's or is given twice (`length_mismatch`). A header value with a space or a tab at either end is refused too (`invalid_header`): RFC 9110 §5.5 gives a value none, and the reader trims it, so it would read back as another value. 1xx, 204 and 304 get no length and no body (RFC 9110 §8.6). The answer to a HEAD, which names the length of a body it does not carry, has its own builder (`format_response_to_head`) |
+| `http` | **Two `Host` headers, or one value, read differently by two programs on the way**: a proxy routes by one and the server checks the other, so a request reaches a host by a name nobody checked. `user@a` is host `a` to a reader that takes userinfo, and `a/b` is host `a` to one that takes a path. A request with no `Host` on HTTP/1.1 is malformed the same way | HTTP/1.1 implementations in general; RFC 9112 §3.2 asks a server to answer each with 400 | `parse_request` and `request_length` refuse a request naming `Host` more than once, on HTTP/1.1 and later not at all, or with a value that is not a host and an optional port (RFC 3986's `uri-host [":" port]`, the port up to 65535) (`invalid_host`); HTTP/1.0 may leave it out. `format_request` and `write_request` refuse the same head. Whether a version is "1.1 or later" is decided in one place, `http.is_1_1_or_later`, which a server's keep-alive default reads too |
 | `http` | **A body that runs to the close** cannot be told from one cut off early | The same | Refuses a response that may carry a body but names no length (`unsupported_close_delimited`), rather than return what arrived as the whole body. 1xx, 204 and 304 end at their head |
+| `jsonrpc` | **Two readers cut one stream into different frames.** Readers differ on which of two `Content-Length` lines counts, the first or the last; and a limit on the head checked against what one read brought takes a long head arriving at once and refuses it arriving a byte at a time | LSP clients and servers in general | A head naming two lengths that differ, or one it cannot read, has no length, so the frame is `broken`. The head's limit counts its own bytes: its end is looked for only within `max_head_bytes`, however the bytes arrive |
 | `jsonrpc` | **Nothing comes back for a broken frame or a dropped response.** (A *frame* is one message with its `Content-Length` header in front.) On a frame missing `Content-Length`, `lsp4j` sends no response, only a log line ([#210](https://github.com/eclipse-lsp4j/lsp4j/issues/210)); on a dropped response, `pylspclient` cannot look up the id and throws | LSP clients in general (`lsp4j` / `lsp-server` / `pylspclient`) | A frame declaring no length, or over the limit, returns `Rpc_end.broken` **as a value**, and its broken head is dropped from the pool so it cannot repeat forever ("The frame is kept apart from the transport" below) |
 
 **Data formats**
@@ -152,6 +154,49 @@ fn main()
     in_arena.push(2)
 ```
 
+### A null arena is the heap, for every function that takes one
+
+Pass `null` where a function takes an arena, and it works on the heap instead. **Taking `null` needs no check in each function.** `Arena.alloc` with a null receiver takes the bytes from the heap, and every way an arena hands out memory (`alloc_as`, `create`, `dup_str`, `text`) goes through it. The arena's fields are private to `std/mem`, so nothing reaches arena memory another way, and a new function honours `null` without being told. `make test-conventions` holds each function that takes an arena to a call with `null` in std's tests, so a new one without such a call fails there.
+
+**What comes back is the caller's to free**, and the function's summary says how:
+
+| What it returns | How the caller frees it |
+| :-- | :-- |
+| One block: a string or bytes | `mem.dealloc(Void$@::s.ptr)` |
+| A `List` | `xs.free()`, after the strings each element owns (`fs.read_dir` and `fs.walk_files` a string each, `verdict.run_children` its `out`, `subproc.run_many` its two outputs, `fuzz.gather` its `name` and `data`). A list placed on the heap and handed out as a pointer (`List.create`) then gives back its own block with `mem.dealloc(Void$@::xs)` ([below](#a-lists-free-leaves-the-list-itself)) |
+| A child's two outputs (`subproc.run_capture`) | Each with `mem.dealloc`; a child that did not start has empty ones, which free as nothing |
+| A value of many blocks: a JSON document (`json.parse`, `jsonrpc`'s `read_msg` and `request`), a `Json_builder`, an HTTP request or response, the headers `http.headers` builds, a query's pairs, an `argp.Parser`, the fuzz driver's `Findings` and `Setup` | `v.free()`, which lets all of it go at once ([below](#a-value-of-many-blocks-keeps-an-arena-of-its-own)) |
+| The fields `json_struct.into_struct` fills in the caller's struct | Each string with `mem.dealloc` and each list with `free()`, as above. **A refusal leaves the fields it filled before it**, freed the same way |
+
+**What a function does not return, it frees before returning**, `null` or not: a path joined on the way, a list it sorts from, the object it encodes into text. That work goes in `mem.scratch(arena)`: the caller's arena where one was given, else an arena of the function's own that is freed on the way out. So with `null` the caller owes a free for the result alone. A function that refuses after making its result gives the result back too, so a failure leaves nothing to free; `into_struct` alone cannot, since what it fills is the caller's.
+
+#### A list's `free()` leaves the list itself
+
+**`free()` gives back what a list holds, never the block the list stands in.** A list from `new` stands in the caller's variable, and one `create` put in an arena goes with the arena, so only a list `create` put on the heap leaves a block behind. Giving that one back from `free()` would mean every list carrying where it stands: 8 more bytes on each list's 32, paid by every list, the many small ones a tree keeps in each node included, for the few made on the heap. So the caller who passed `null` gives the block back, as for any one block: `xs.free()`, then `mem.dealloc(Void$@::xs)`. The compiler reads that `dealloc` as the block's own release and not as a use of what `free()` released, and refuses any use after it ("8.4.5 Tracking a free with `Owned`" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#845-tracking-a-free-with-owned)).
+
+#### A value of many blocks keeps an arena of its own
+
+**Given `null`, a value of many blocks is built in an arena of its own, which the value keeps** (`mem.Own_arena`), and its `free()` lets that arena go at once. The arena is the same `mem.scratch` a function's work goes in: the function keeps it with the result instead of freeing it on the way out. Given an arena, the value keeps nothing, and its `free()` frees nothing: that arena does. So `doc: = json.parse(text, null)!` and then `defer doc.free()` is written as for a `List`.
+
+| What it settles | How |
+| :-- | :-- |
+| **No free walks the value block by block.** A walk names every block the build made, so a part added to the build and not to the walk leaks without a word, and a failure halfway leaves a partial structure the walk must take apart | Building in one arena, a failed call frees that arena and leaves nothing, and `free()` is one line whatever the value holds |
+| **Freeing a part frees nothing.** A header further down a list, or a request's `headers`, has the same type as the whole | Only the value the call returned holds the arena; every part holds an empty one, so freeing a part cannot tear a hole in the whole |
+| **Freeing twice is refused where it can be seen.** Each such type conforms to `Owned`, so a second `free()` of a local, or a use after it, is a compile error, as for a `List` | Through a copy or a field it is not seen, as for any block given back |
+| **Code outside std cannot make a value that claims an arena** | `mem.Own_arena`'s field is visible only inside std, so such a value is built through std's own functions |
+
+**A parsed JSON document is a type of its own, `json.Doc`: the value (`doc.val`), and the arena `parse` made for it given `null`.** Any kind of JSON value can be the whole document, so an arena kept in the value would sit in the string, array and object variants alike. The document keeps it apart instead:
+
+* **Every `switch` over a value writes each variant's own field alone** (`case .str_val(s)`), never a field for the arena it does not read.
+* **What frees is in one place**: the document `parse`, `read_msg` and `request` return. A value a `Json_builder` makes lives in the builder's arena, and the builder frees it.
+* **A part cannot be freed at all.** `doc.val`, and every value read out of it (`get`, `get_at`, `arr_list`), is a `json.Val`, which has no `free()`, so freeing a part is a compile error instead of a call that frees nothing.
+
+Parsed into the caller's arena, a document holds nothing to free, so keeping `doc.val` alone is enough.
+
+Caution: **The arena of its own takes a whole chunk at its first allocation**, however small the value. For many small values, such as each message a server reads, pass an arena of the caller's and free it once.
+
+**No free function takes the arena as an argument** (an `alloc_in(arena, n)`): it would be a second spelling of `arena.alloc(n)`.
+
 The rules of the language itself (`defer`, ARC, arenas) are "8.4 The memory management model" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md#84-the-memory-management-model-defer--arc--arenas). The sections below say how `std` uses them.
 
 ### The names of the reference-counting types
@@ -191,7 +236,7 @@ The caller cannot reach the storage, so anything the container fails to release 
 | Promise | How | What breaks without it |
 | :-- | :-- | :-- |
 | **Zero freshly allocated capacity** | `mem.zero` on new storage | Storing an element is an ordinary assignment, so the compiler inserts a release of the value being overwritten. Releasing leftover garbage as if it were ARC crashes |
-| **Give the ownership back when discarding** | `free` assigns an empty (the zero value) to the remaining elements, `remove` to the removed one, and a growing `resize` to the old slots it moved from | `mem.zero` runs no release: without an assignment, the compiler has nowhere to insert one |
+| **Give the ownership back when discarding** | `free` assigns an empty (the zero value) to the remaining elements, `remove` to the removed one, and a resize to every slot it moved a pair from | `mem.zero` runs no release: without an assignment, the compiler has nowhere to insert one |
 
 **An `Rc<|T|>` element's own release takes its value apart** ("Release takes the value apart", above), so a container of `Rc` needs nothing more.
 
@@ -207,7 +252,7 @@ The table of the three names is "Pitfalls" in [std](../README.md). This section 
 
 Caution: **Do not mark an arena parameter with a suffix**, least of all `_in`. `_in` also means "in that place" (`harness.run_in(argv, cwd)`) and "inside a thing" (`index_in(row, cell)`), so it cannot be read as pointing at an arena.
 
-**`mem.alloc_in(arena, size)` keeps its `_in`.** It cannot merge into `mem.alloc`. An arena takes no default, so every heap allocation in the tree would gain a `null`. And moving the arena last would touch both `alloc` definitions, which `#cfg` splits between hosted and freestanding. So the name tells the two apart. Do not rename it as a leftover. A function outside `std` in the same case (a value returned against a pointer) keeps `_in` for the same reason, and says so where it is defined.
+**A function outside `std` that returns a pointer, beside one of the same name returning a value, may end in `_in`** where `create` does not name what it does (opening something, not making an empty one). The suffix then says where the result is, not that an arena is taken, and the function says so where it is defined.
 
 **Do not take an arena only to discard it.** The signature is the one mark that a function takes an arena, so the caller reads one there as "I handed over where the content goes". A discarded one misleads them about whether clean-up is needed.
 
@@ -232,6 +277,16 @@ Misaligned, a header's `Sz` or a pointer straddles a boundary. A host mostly tol
 Caution: **It shows only when an unrelated change adds one byte**, because the ordering decides whether it works.
 
 So **the receiver** aligns it (`align_pad` in `std/mem.kspls`), rather than asking the caller to place the buffer on an 8-byte boundary: the caller cannot control a `U8[N]`'s alignment. Rounding only the chunk header's size up to a multiple of 8 is not enough: every address handed out stays misaligned, since the head itself is.
+
+### An arena refuses a mark it cannot place
+
+`arena.restore(mark)` rewinds to a mark `save()` took. A mark from another arena, one saved before `reset()`, and one past what its chunk now holds (an earlier `restore()` rewound past it) stop the program at the `restore`, with a message that names them, before anything is freed.
+
+**Rewinding frees every chunk from the newest down to the mark's.** With a mark whose chunk the arena does not hold, that walk frees all of its chunks and makes the foreign chunk its head. The next allocations then land inside the other arena's live data, and the first sign is a double free when both arenas are freed, far from the call that caused it.
+
+So `restore` first looks for the mark's chunk among its own, the same walk it makes to free them, and the mark carries the arena's count of resets. The count is needed because a chunk allocated later can take a freed chunk's address, and because `reset()` keeps one chunk, where an old mark would otherwise look valid once the new round has used as much.
+
+**What remains unchecked keeps the arena whole.** A mark that an earlier `restore()` rewound past, but whose chunk now holds at least as much again, rewinds to its place without a stop. Every chunk it keeps is one of this arena's, and every byte it hands out afterwards is past what it keeps, so nothing allocated overlaps. Telling that mark apart would cost a record of every mark ever saved, as an arena hands them out by value.
 
 ## Strings, numbers and bytes
 
@@ -299,19 +354,29 @@ It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the 
 
 **Why an overflow is not a panic**: the length is unknown until the text is assembled, and stopping a program because a display string outgrew its buffer is out of proportion. `Buf_writer` counts what it dropped and reports it through `overflowed()`. That serves the purpose of C's `snprintf` returning the length it could have written. The count is held in the writer instead, since partway along a chain of calls no return value can be checked.
 
+### A builder can be written from a view of its own bytes
+
+`b.s(b.slice())` writes `b`'s text twice over, and any view of `b`'s bytes can be written back into `b`, through `escape_and_append` too. Nothing has to be copied out first.
+
+**Growing frees the buffer such a view points into**, so `s` copies from the view before it frees the old buffer, and copies with `move`, since a view taken before `clear()` can overlap where its bytes land. A write from anywhere else pays nothing for it: no address is compared. `escape_and_append` writes many times from one source, so a source lying in the builder's memory is copied once before it starts.
+
+Caution: **Do not free the old buffer before the copy.** The copy then reads freed memory and still gets the right bytes until the allocator happens to reuse or unmap the block, so it passes every ordinary test and corrupts text far from the cause. Its test runs as a child with freed memory scribbled over, for that reason.
+
+**Refusing such a write is not taken instead.** The type cannot refuse it, since a view is an address and a length with nothing saying which builder it came from; and refusing at run time would cost every write the address comparison that making it work avoids.
+
 ### The digits of a floating-point number are assembled here
 
 `std` prints floating-point numbers with its own code, not with C's `printf`. The same code runs on bare metal, where there is no C library, and prints the same digits on every platform.
 
-`std/strfmt` does not take a floating-point number's digits from libc's `%f`. It assembles them exactly with `std/bignat`, which does arithmetic on numbers with as many digits as needed (*multiple precision*). The method is Steele & White's and Burger & Dybvig's "free format" for the shortest digits, plus a cut at a fixed place for `.N`. One implementation serves hosted and freestanding alike. What it prints is "3.6.1 The default notation for primitives" and "3.6.2 Format specifiers" in `docs/SPEC-language.md`; this section holds why.
+`std/strfmt` does not take a floating-point number's digits from libc's `%f`. The shortest digits come from Raffaello Giulietti's Schubfach, which reads one power of ten from a table and decides the digits with 64-bit products ("One table of powers of ten serves both directions" below). The digits of `.N` are assembled exactly with `std/bignat`, which does arithmetic on numbers with as many digits as needed (*multiple precision*), and cut at a fixed place. One implementation serves hosted and freestanding alike. What it prints is "3.6.1 The default notation for primitives" and "3.6.2 Format specifiers" in `docs/SPEC-language.md`; this section holds why.
 
 **Why here**: freestanding has no libc. Yet `Str_builder` conforms to `Writer`, and the vtable references every method's thunk. So `snprintf` would be linked into a bare-metal program that never writes a float: the linker's removal of unused code (`--gc-sections`) cannot drop a thunk.
 
 **The default is the shortest representation that reads back to the same value**, as Rust, Swift, Python, Java's `Double.toString` and C++'s `std::format` print. It switches to the exponent form at JSON's and JavaScript's boundaries. Where the languages differ, KSPL follows JSON, the most common output format, so `\{x\}` and `std/json` print by one rule. An F32 is shortest at its own width, or `0.1F32` would print as `0.10000000149011612`.
 
-**`.N` comes from the same generator**, exactly: `1e300` at `.2` gets all 301 integer digits right, as libc's `%.2f` does. It rounds ties to even like `printf`'s default, since rounding half away from zero would print `%.0f` of `0.5` as `"1"`, a visible disagreement. `make test-freestanding-math` compares against the real `snprintf` as strings: every precision from 0 to 19 agrees, `1e300` and subnormals included.
+**`.N` is exact**: `1e300` at `.2` gets all 301 integer digits right, as libc's `%.2f` does. It rounds ties to even like `printf`'s default, since rounding half away from zero would print `%.0f` of `0.5` as `"1"`, a visible disagreement. `make test-freestanding-math` compares against the real `snprintf` as strings: every precision from 0 to 19 agrees, `1e300` and subnormals included.
 
-**No lookup table.** Ryu, Schubfach and Dragonbox are fast with a table of powers of ten (about 600 entries of 128 bits). Multiple precision alone spares every program handling strings that memory, and lets the parser (`to_f64`) share the base. It is fast enough for formatting. **It uses about 3KB of stack** (four multiple-precision values), which a bare-metal program formatting a float on a small stack must allow for.
+**`.N` keeps multiple precision.** Its digits run as far as the 309th of `1e300`, which no fixed width holds, and a set count of decimals is written far less often than the shortest form. **It uses about 3KB of stack** (its multiple-precision values), which a bare-metal program writing `.N` on a small stack must allow for; the shortest form needs about a quarter of that.
 
 NaN and infinity (`nan` / `inf` / `-inf`) pad to a width with spaces, since the `0` flag and the digit separator mean something only for a run of digits.
 
@@ -325,18 +390,34 @@ NaN and infinity (`nan` / `inf` / `-inf`) pad to a width with spaces, since the 
 
 **What is given up**: `strtod`'s `inf`, `nan` and hexadecimal floating point, which JSON's numbers never hold and a configuration value holds only ambiguously.
 
-**Every text is rounded correctly**: to the nearest F64, and on a tie to the one whose mantissa is even. The work goes in two steps:
+**Every text is rounded correctly**: to the nearest F64, and on a tie to the one whose mantissa is even. The significand takes the first 19 significant digits, and the work goes in up to three steps:
 
 | The text | How it is converted |
 | :-- | :-- |
 | At most 19 significant digits, a mantissa below 2^53 and a power of ten within ±22 | One exact step |
-| Anything else | Approximated, compared with the midpoint to its neighbour in `std/bignat`'s multiple precision, and moved one *ulp* at a time (one step to the next representable F64). The method is Clinger's AlgorithmR |
+| Any other text | Eisel-Lemire: the 19 digits times the power of ten from the table ("One table of powers of ten serves both directions" below). It is exact for the digits it is given |
+| A text past 19 digits whose later digits decide the rounding: the 19 digits and the 19 digits plus 1 read as two F64s | Compared with the midpoint to its neighbour in `std/bignat`'s multiple precision, and moved one *ulp* at a time (one step to the next representable F64). The method is Clinger's AlgorithmR |
+
+Caution: **The 19 digits are significant ones: a leading 0 counts as none.** The third step starts from the F64 the 19 digits give, and its ulp steps reach only a few ulp. Counted among them, the 0s of `0.0000301…` (the fixed form `std/json` writes for a small decimal) leave that start further off than the steps reach, and the text reads as another F64.
 
 Why those limits, and why reading 768 digits of mantissa is enough, is `pow10_max` / `f64_exact_digits` in `std/strnum.kspls`. So regression tests may compare for equality, against literals the C compiler rounded correctly.
 
-**No lookup table here either.** Rust's `dec2flt` and Go's `strconv` widen the fast path with a table of powers of ten (Eisel-Lemire, about 650 entries of 128 bits), but KSPL sends every other text to multiple precision. **The same implementation runs freestanding**, so sparing a program that merely reads strings the table's memory outweighs slowness on outlying texts (a long mantissa, a power beyond ±22).
+Caution: **Cap both the mantissa and the exponent**, or a 20th digit overflows U64, and the exponent of `1e999999999` overflows I64 and turns infinity into 0. The caps and their reasons are `f64_mantissa_digits` / `f64_exp_digits_limit` in `std/strnum.kspls`.
 
-Caution: **Cap both the mantissa and the scaling**, or a 20th digit overflows U64 and `1e999999999` spins forever, though the result can only be infinity or 0. The caps and their reasons are `f64_mantissa_digits` / `f64_exp_limit` / `f64_exp_digits_limit` in `std/strnum.kspls`.
+### One table of powers of ten serves both directions
+
+**Writing the shortest digits and reading a text each take one entry from a table of 10^q at 128 bits** (`pow10_128` in `std/bignat.kspls`), so every F64 takes about the same short time, of the order of C's `printf` and `strtod`. Multiple precision stays only where no fixed width can do: `.N`'s exact digits, and a text past 19 digits whose later digits decide the rounding.
+
+**Why a table: speed on every input, at the table's memory.** Multiple precision alone takes microseconds a number, tens of times what C takes, for every shortest form, every subnormal and every text past 10^±22 or 2^53. A program reading or writing many numbers (a JSON file of measurements) pays that on each one. The table costs read-only memory instead, and only in a program that writes or reads a float: the linker drops it from any other. On a Cortex-M0+ at `-Os` it comes to about 1.5KB more flash for writing the shortest form and 2KB for reading a text, and no RAM; `arm-none-eabi-size` on `make test-ksos-link`'s ELFs that read a float (the car demos) shows it.
+
+| Direction | Algorithm | Why it |
+| :-- | :-- | :-- |
+| An F64 or an F32 to its shortest digits | Raffaello Giulietti's Schubfach | One entry and three 128-bit products decide the digits, with no case split by range, and its proof covers every F64. Ryu needs two tables and Dragonbox several times the code, for speed beyond what is asked. An F32 goes through the same code and is shortest at its own width |
+| A text to the nearest F64 | Eisel-Lemire, as fast_float does it | One entry, and its lower half only when a carry could reach the bits kept. Mushtak and Lemire prove it exact for 19 digits, so only a longer text can need multiple precision |
+
+**The table is held compressed**: one entry in 27 (25 entries) and 2 bits a power that correct a rebuilt entry, 568 bytes against 10.7KB for every power from 10^-342 to 10^324. Any other entry is the held one below it times 5^r, rebuilt with two more 64-bit products. That costs little next to the conversion, and a small microcontroller keeps the 10KB.
+
+**Every entry is exact**, 10^q's top 128 bits truncated: both proofs assume it, and an entry one unit off moves the digits only of the values that use that power, which no sample of values finds. `test_pow10_table` in `make debug` rebuilds every entry, held or rebuilt, in multiple precision. Eisel-Lemire's proof wants 10^-27 to 10^-1 rounded up instead: 5^-q fits a U64 there, so a quotient that comes out exact, where a tie can lie, shows nothing or a 1 below the bits kept. `nearest_f64` in `std/strnum.kspls` adds that 1 itself, so the table holds one fact.
 
 ### Format-specifier dispatch per type stays as an impl per type
 
@@ -399,6 +480,14 @@ The other key arrives as the type argument `Key`, as in `std/lang`'s `Add` / `Eq
 **The built-in types' conformances go in std.** In the compiler, an implementation that exists to make a type a key of std's containers would invert the layers. So `Sz`'s `Hashable` sits in `std/ds.kspls` beside what requires it.
 
 `ds.fmix32` is the one place the bit mixing lives, so no key type copies it. It scrambles a hash so that keys whose low bits are the same still spread over the slots. Without it such keys crowd one slot, and `Map` degrades into a linear search (the masking is described at `fmix32` in `std/ds.kspls`). **Measure before adding it — adding it everywhere is a mistake.** In a `hash` on the innermost loop the extra operation outweighs the diffusion, so a parser's memo lookup and a key of token IDs, whose low bits already differ, leave it out.
+
+### A map that keeps a few pairs stays small however many keys pass through it
+
+`Map` is open addressing: a removed pair leaves a tombstone, a mark a lookup steps over, so a key pushed past that slot is still found. Tombstones take slots as live pairs do, and a resize comes once half the slots are used, counting both.
+
+**A resize that finds at most a quarter of the slots live drops the tombstones in place and keeps the capacity.** Only a fuller table doubles. Doubling every time would grow a map that holds a handful of pairs without end while different keys are set and removed, as a cache of open connections or a table of in-flight requests does: memory grows with the number of keys ever seen, not with the number held. The rehash leaves the table at most a quarter full, so a quarter of its slots must go before the next, and each insertion pays O(1) for it. Working in place, it allocates nothing, so a map in an arena does not grow the arena either.
+
+**The capacity never shrinks on its own**, since a map emptied once is usually filled again. A program that needs the memory back builds a new map and frees the old one.
 
 ### A function that returns every entry does not build a nested generic
 
@@ -512,7 +601,7 @@ flowchart LR
 
 **The wraparound is not guaranteed by a type.** Wrapping the index in a modular type would stop a forgotten `% cap`, but the type spreads into signatures and needs a conversion at every boundary. Rust's `std::num::Wrapping` shows this: methods such as `wrapping_add` are the usual way there. Instead `head` / `tail` are `priv` and only `step` advances them. Tests, not the type, catch a forgotten one: `make debug`'s ring tests always cross the wraparound, since writes that do not cross pass with or without `% cap`.
 
-Caution: **Only the wraparound is guaranteed, not the memory's bounds.** `Ring<|cap|>.new` receives only the head address of a `U8[cap]`, so a `Ring<|512|>` over a `U8[8]` writes out of range with no diagnostic. Matching the sizes is the caller's job, so do not read the type argument as watching the bounds.
+**The storage is a slice of exactly `cap` bytes.** `Ring<|cap|>.new` stops the program, naming both lengths, when the slice is any other length: shorter, the queue would write past its end; longer, bytes the caller sized would never be used, a capacity that looks larger than it is. The slice's bounds check stays on every byte. It costs one comparison, while the wrap stays `% cap` on the type, a constant.
 
 **Why `peek()` returns a slice into the buffer**: most embedded send paths stream what accumulated straight to the device, and copying it out would add a working buffer. The cost: `peek()` returns only the contiguous part up to the wraparound, so a caller taking everything goes round `peek` → `consume` twice. Joining the parts inside would need a memmove, defeating the point.
 
@@ -672,6 +761,47 @@ Output waiting in a buffer is lost when a program crashes. A program whose last 
 
 Caution: **The code that keeps the panic record must not itself crash.** On freestanding, `panic` sets the message, the stack pointer (SP) and a piece of the stack aside in `.noinit_panic`, a region that start-up does not clear. But `kspl_get_sp` is per-architecture inline assembly that returns 0 where an architecture lacks it. Reading address 0 crashes that read, and not one word about why the program stopped survives: on wasm this turns "there is not enough space" into `memory access out of bounds`. So when `sp == 0` the stack piece is not read, and `take_panic_record` returns a `stack_len` of 0.
 
+### Standard output has one buffer, the C library's
+
+A program writes to standard output through `io.out()`, and the C library's stream (`stdout`) holds what waits to be written. Nothing in `std/io` keeps a second buffer above it.
+
+| Where standard output goes | When the bytes are written |
+| :-- | :-- |
+| A terminal | At each newline (on Windows, at each call), and before the program waits to read from a terminal, so a prompt shows |
+| A pipe or a file | When the buffer is full, at `flush()`, and at a normal exit |
+| Any of them, after `io.set_line_buffered()` | At each newline too |
+| Any of them, at a `panic` or before a child is started | All that waits is written first |
+
+Standard error waits for nothing: each call is written at once.
+
+**Each `Writer` call is one call into C, the cheapest that does the job.** `s` hands the whole string to `fwrite`, and `c` one byte to `fputc`. A number's digits go out as one string per run between separators, not a call per digit. The cost of output is per call, not per byte: a `fprintf` per byte, parsing a format each time, makes a program printing many short numbers about four times slower than a C program's `printf`, and with these calls it runs as fast.
+
+**Why no buffer of its own**: the runtime's own paths write through the C stream. A panic, and starting a child, flush `stdout` in C. They cannot see a buffer above it, so a panic would lose the output before it, and a child started with bytes still waiting would write its own output ahead of them. Two buffers for one purpose would also mean two answers to "has it been written yet".
+
+**Why not unbuffered**: a write to the OS per call makes heavy output into a pipe slower by a system call per string. **Why not line-buffered everywhere**: into a pipe that costs a system call per line, and a program's output into a pipe is usually read by another program, which reads it in blocks. A watched run that wants each line at once asks for it with `io.set_line_buffered()` (the section above).
+
+**Reading does not flush standard output.** On a terminal a prompt still shows before the read: the C library writes a terminal's waiting output before a read from standard input waits (glibc and macOS's libc), and Windows's writes to a console at once. **Into a pipe** (`prog | tee log`) the prompt waits in the buffer, so a program that prompts there calls `io.out().flush()` before it reads. A flush at every read would cost a program that reads a byte (`io.getchar`) and writes between reads a system call per byte when its output is a pipe: a filter's throughput, given up for a case a flush call covers.
+
+### A crash names what happened, in one line
+
+A program that touches memory it may not, such as a write through a null pointer or a recursion that runs its stack out, is stopped by the OS, not by one of the language's checks. Left there, it ends without a word: a shell may print "Segmentation fault", a parent sees the code 139, and nothing names what happened. **With an OS, the runtime writes one line to standard error, then lets the fault end the program as it would have.**
+
+| What the fault's address says | The line (POSIX; Windows names the exception, such as `STATUS_ACCESS_VIOLATION`) |
+| :-- | :-- |
+| It lies in the first page: a null pointer, with a field's offset added | `crash: null pointer dereference (SIGSEGV at address 0x0)` |
+| It lies at the end of the thread's stack | `crash: stack overflow (SIGSEGV at address 0x7ffc5d4b8ee8)` |
+| Anywhere else | `crash: invalid memory access (SIGSEGV at address 0x…)`, or `crash: bus error (SIGBUS …)` |
+
+* **The exit code stays the fault's own.** POSIX puts the signal back to its default and raises it again, so a parent reads 139 and a core dump is written where one is enabled; Windows ends with the exception's code, read as 139 ("A child's end is one code on every OS" below). A caller checking the code sees no difference.
+* **The prefix is `crash: `, not `panic: `.** A panic is a stop the program makes at a rule it checks, at a line it names ("Conditions that stop execution at run time" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)); a crash is the OS's, and the fault names an address, not a line. One word per kind of stop keeps each one a single string to search for.
+* **No trace is printed.** Walking the stack inside a fault handler is safe only with an unwinder the runtime does not carry on every OS, and `print_trace`'s error trace is the route of the last `!` failure, unrelated to the fault. The line says what happened; a debugger on a build with `-g`, as `ksplc build` makes, says where.
+* **The handler calls only what is safe there** (write, signal, raise): the fault may strike inside the C library, holding its locks. So standard output is not flushed, and a program whose last lines matter is line-buffered (the section above).
+* **A handler already in place is kept** (a sanitizer's, a host program's), and a library takes none, since its host owns the signals.
+* **A stack overflow needs a stack of its own for the handler.** The main thread's is set before `main`, a `std/thread` thread's as it starts. A thread that C code starts has none, so its overflow ends with 139 and no line.
+* **Freestanding has no OS to stop the access**, so nothing here applies to it.
+
+The implementation is "A crash says what happened" in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c). The check is `make test-runtime` (the `crash_*` cases in `ksplc/tests/runtime/stops.kspls`).
+
 ### A run of checks goes on past a failure, and names what failed on its last line
 
 `std/verdict` can run many checks without stopping at the first failure. It ends with one `RESULT:` line naming every check that failed, and the exit code is the verdict.
@@ -702,6 +832,23 @@ Why a walk that walked nothing fails is at `check_list` in `std/verdict.kspls`; 
 **A round past its wait is run again with five times the wait** before it counts as not ending, since a crowded machine slows a finite round, and the target is a program that never stops. `check_reach` keeps a run that tried nothing from passing: checking only for crashes, a mutation that broke every seed at the parser's entry would go green.
 
 **What this gives up**: coverage and speed. A coverage-guided fuzzer keeps an input that opened a new path and mutates it further, reaching deep paths a blind one reaches only by luck. Here the seeds carry the depth, so the suites gather real files and write seeds from each writer. And a process per round is far slower than a call.
+
+**std's own fuzz (`make test-fuzz`) scatters at each reader of outside bytes, and checks a round trip wherever std holds a writer for what it reads.** The program under test, `std/tests/read_prog.kspls`, is told the kind of each input:
+
+| Kind | What reads it | What must hold besides an end |
+| :-- | :-- | :-- |
+| `json` | `json.parse` | The value, written (`dump`, flat and indented) and read back, `equals` the one read, and is written the same again |
+| `json-struct` | `json_struct.into_struct`, into a struct with a field of each kind it walks: integers of each width and sign, an `F32`, a `Bool`, a string, a nested struct, lists of numbers, strings and structs, and options | The struct, written (`from_struct`) and read back into another, is written the same again. Only this second trip is held to equality: the first drops unknown keys and rounds an `F32` |
+| `url` | `url.decode_component`, `url.parse_query` | A component, encoded (`url.encode`), decodes to itself; the pairs, encoded into a query, parse back to the same pairs in order |
+| `base64` | `base64.decode` | The bytes, encoded, decode to themselves |
+| `regex` | `Regex.compile`, then matching | `is_match`, `find` and `find_all`'s first match agree, and a search visits no more states than the program holds per byte, plus one |
+| `http-req` | `http.parse_request` | None |
+| `http-res` | `http.parse_response` | A response the writer takes (`format_response`) reads back as the status, headers and body it was given, and is written the same again |
+| `http-write` | `http.format_request` and `format_response`, given fields split at each 0 byte | What the writer takes reads back the same: the method and target or the status, the headers in order with the `Content-Length` the writer adds, and the body |
+| `jsonrpc` | `jsonrpc.take_frame`, over a stream of frames | The frames before the first broken one are the same whether the bytes arrive at once, a byte at a time or seven at a time; each body, framed again (`frame_into`), is taken back the same |
+| `argv` | `argp.Parser.parse_list`, with flags, values, a repeated item, a command chosen by name and by flag, one taking an uninterpreted rest, positionals and `--` | What it read, written back as a command line, parses to the same values, items given, command and positionals |
+
+**Every seed is read once before any mutation** (`fuzz.check_seeds`): one the program refuses is dropped, unless the program's own writer made it, and one that stops the program fails, since dropped it would hide a crash on a file nobody mutated. **A broken round trip stops with `assert`**, so the driver counts it among the announced stops, and the input it keeps prints the broken property when run again. **Why under the fuzz, beside the unit tests**: a unit test checks the values its writer thought of; under the fuzz, the trip runs on every value a mutation reaches, such as a header value ending in a space or a head one byte past its limit.
 
 ### Writing to a closed pipe returns an error value, and output whose destination is gone ends quietly
 
@@ -738,7 +885,7 @@ The implementation is "Writing when nobody is left to read it" in [`../../ksplc/
 
 **Why results are reaped in submission order**: they then match the input, so the caller carries no mapping. The cost: one slow item at the front leaves the slots behind it idle; reaping in completion order would keep the slots full, but leave restoring the order to the caller.
 
-**Each child has a time limit of its own**, counted from its start, as `run_capture`'s is; past it, the child is killed and comes back `timed_out` with what it wrote by then, and the rest run on. A limit over the whole batch instead would grow too short as the batch grows, and a slow child would take the others' results down with it. Waiting with a limit means looking again after a pause, since POSIX's `waitpid` takes no time limit: the pauses start at 1 ms and double up to 10 ms, so a slot stands idle at most 10 ms after its child ends. Submission order keeps every child's limit honoured: children start in order, so each one's deadline falls no earlier than those of the children reaped before it.
+**Each child has a time limit of its own**, counted from its start, as `run_capture`'s is; past it, the child is killed with all it started ("A child stopped at its time limit is stopped with all it started" below) and comes back `timed_out` with what it wrote by then, and the rest run on. A limit over the whole batch instead would grow too short as the batch grows, and a slow child would take the others' results down with it. Waiting with a limit means looking again after a pause, since POSIX's `waitpid` takes no time limit: the pauses start at 1 ms and double up to 10 ms, so a slot stands idle at most 10 ms after its child ends. Submission order keeps every child's limit honoured: children start in order, so each one's deadline falls no earlier than those of the children reaped before it.
 
 ### Three ways to start a child process, split by where its output goes
 
@@ -839,6 +986,34 @@ Any other code is the child's own, a negative one included. The table's copy in 
 **Exit code 3 is not read as an abort.** It is what a program that ends normally with 3 gives (robocopy's "files copied, extra files present"), so reading it as 134 would report a crash that did not happen. The cost: a program built against msvcrt, or UCRT without fault reporting, that calls `abort()` reads as 3.
 
 **Whether the child has finished is not one of the codes.** `Piped_child.exit_code` returns an `I32?`, none while the child runs. A number set aside for "still running" is also some child's exit code: Windows's `exit(-1)` ends with -1, which would read as "not finished" forever. A kill by `Child.kill` or `Piped_child.kill` reaps the child and gives no code, since nothing can read the handle afterwards.
+
+### A child stopped at its time limit is stopped with all it started
+
+**A child that `run_capture`, `run` or `run_many` stops at its time limit is stopped together with every process it started.** A child is often a shell or a compiler driver whose work runs in children of its own (`cc` starts the compiler proper and the assembler). Killed alone, it leaves those running: they go on writing files after the caller has given up, and hold its output open.
+
+**So these children lead a process group of their own on POSIX, and are put in a job object of their own on Windows**, and the kill is sent to the group, or ends the job. On Windows the child starts suspended and runs only once it is in the job, so nothing it starts can begin outside it.
+
+**A terminal's signals are passed on.** A group of its own is outside the terminal's foreground group, so Ctrl+C and a hangup reach the starter alone; a starter they ended would leave its children running with nobody left to stop them at their limit. So while such a child runs, the runtime takes `SIGINT`, `SIGQUIT`, `SIGHUP` and `SIGTERM`, passes each on to every group it holds, and then ends by the signal as it would have by default. **It takes a signal only where it is still at its default**: a program that ignores or handles one has chosen how it ends, and its grouped children then do not hear of it. Windows needs none of this: a console's Ctrl+C reaches every process attached to it, in a job or not.
+
+**The other ways of starting stay in the starter's group.** Out of the foreground group, a child that reads the terminal is stopped by the OS, so `spawn_wait` and `spawn_async`, whose children are on the terminal, would hang an interactive tool. `spawn_redirect`'s child is meant to outlive its starter, and `Child.kill` and `Piped_child.kill` stop the child alone.
+
+What this gives up:
+
+| Case | What happens |
+| :-- | :-- |
+| A child stopped at its limit asks something on the terminal (a password prompt) | The OS stops it until the limit ends it; a tool that must ask runs through `spawn_wait` |
+| A process the child started leaves the group on purpose (a daemon calling `setsid`) | It is not stopped |
+| The child has ended and been reaped | Nothing is stopped. On POSIX the group's number was the child's process ID, which the OS may then hand to another process, so the kill could reach a stranger. Windows keeps the job, but stops nothing either, so the two agree |
+
+**The job object does not kill on close.** With that setting, what the child left running at a normal end would die when the starter lets the job go, and on the starter's crash, while on POSIX it runs on; one call would end differently per OS.
+
+### A child's outputs are read a short while past its end
+
+**Once the child itself has ended, `run_capture` reads its outputs for `pipe_grace_ms` (100 ms) more, then closes them and returns the child's own exit code.** A process the child started without redirecting its outputs (`server &` in a shell script) holds the pipes open after the child has ended. Waiting for them to close would run to the time limit and report a child that ended in time as `timed_out`, its exit code lost.
+
+**Nothing the child itself wrote is lost**: once it has ended, everything it wrote is in the pipes, and is read. What the grace can cut is what the processes it left behind write after it. Those processes are not killed: a child that ended normally may have started something meant to stay, and only a time limit stops what a child started. Their next write to the closed pipe fails.
+
+**The grace is short because it guards nothing the child wrote**: it only lets a process that is finishing its last write land it. `run_many` collects through files, which a leftover process cannot hold open, so its children's ends are seen at once.
 
 ### A child holds only the streams it is handed
 
@@ -998,7 +1173,15 @@ Caution: **Do not substitute `stat`.** It follows a link, answering "a directory
 
 **`copy_tree` refuses a destination that already stands**: a copy mixed with an earlier run's leftovers is not the tree copied, and nothing says so. Python's `copytree` refuses the same by default, and Go's `CopyFS` refuses to overwrite a file that exists.
 
+**Each file `copy_tree` copies has its source's permission bits from its first byte**, for the reason `write_unique` gives its mode as it creates: created with the default mode and narrowed afterwards, a file only its owner may read would stand readable by others while its contents are written, and for good where the narrowing failed. The umask can only narrow the bits at the creation, so they are set exactly once the contents are in, on the open file. Each file is created as new, so a link planted in the copy is not followed, and one that fails partway is removed. Only a regular file is copied: read, a FIFO would wait for good. **On Windows the read-only mark is what is carried over**, put on once the contents are in; who may read the copy is its folder's ACL, as for `write_unique`.
+
 **Removing a tree is not offered.** Checking whether an entry is a link, then descending into it, is how Rust's `remove_dir_all` (CVE-2022-21658), libc++'s `remove_all`, Python's `rmtree` before 3.3 and Go's `RemoveAll` (golang/go#52745) were all attacked: between the check and the removal a directory is swapped for a link, and the removal runs outside the tree. Each fixed it by removing relative to a directory it holds open and refusing to follow links. That needs the runtime to open and remove relative to a handle, on POSIX and Windows alike. Without that, removing is the caller's job, over a tree it made and nobody else writes into.
+
+### A path's metadata names three kinds: a regular file, a directory, anything else
+
+`fs.stat` reports what stands at a path as `File_kind`: `file`, `dir` or `other`. **What a caller decides is whether it may read the thing through to its end**, and only a regular file can be: a FIFO's read waits for a writer that may never come, and a device's never ends. A server that serves a FIFO, or a copy that reads one, stops there with nothing said. So `other` holds every kind that is not read as a file (a FIFO, a device, a socket), and no caller has to list them.
+
+**Not taken: a variant per kind the OS knows.** The kinds differ per OS (Windows reports a device and no FIFO by path), and no caller in the tree acts on one of them apart from the rest; a variant nobody reads would be kept in step on every OS for nothing.
 
 ### A path is made absolute by its spelling alone
 
@@ -1095,9 +1278,11 @@ Each call of a recursive function takes some of the thread's *stack*; when the s
 
 **`std/stack_limit` asks the OS where the calling thread's stack ends, and a walk compares its own position with that** (`Stack_limit.new(margin)` once per walk, `near()` at each level; the per-OS calls are in `kspl_stack_floor` in [`../../ksplc/gen/runtime/hosted_thread.c`](../../ksplc/gen/runtime/hosted_thread.c)). The margin is the caller's: what runs after the walk refuses (the unwinding, building the message) runs below where it stopped, and only the walk knows how much that is.
 
-**A walk run many times over mostly shallow input asks late** (`Stack_limit.later(margin, deep)`, checked by `near_at(depth)`). Asking costs a read of `/proc/self/maps` on Linux's main thread, far more than a shallow walk, so it is asked only once the walk reaches `deep`. `std/json`'s parse and `std/regex`'s compile take that shape. The levels above `deep` are few enough to fit in any stack.
+**The walk's position is its frame's address, not a local's** (`kspl_stack_here` in [`../../ksplc/gen/runtime/core.c`](../../ksplc/gen/runtime/core.c)). The address sanitizer moves a local whose address is taken onto a stack of its own on the heap, to catch a use after return. Measured by a local, every walk built with it would read as past its stack's end and refuse input of any depth. A frame's address is on the thread's stack on every build, so a sanitized program refuses only what an unsanitized one does.
 
-**A walk that reaches a limit refuses the whole input**, never one branch of it. If a match too deep for its count answered "no match" in that branch alone, backtracking could report a shorter match or none: a wrong answer rather than a refusal. So `std/regex`'s attempt budget ends the whole `find` as `too_complex`, and its compile's depth and stack end the whole pattern as `too_deep`.
+**A walk run many times over mostly shallow input asks late** (`Stack_limit.later(margin)`, checked by the same `near()`). Asking costs a read of `/proc/self/maps` on Linux's main thread, far more than a shallow walk, so it is asked only once the walk has gone a fixed amount of stack below where the limit was made (`unasked_room` in `std/stack_limit.kspls`). `std/json`'s parse and `std/regex`'s compile take that shape. **That amount is counted in bytes, not levels**, for the reason the count alone fails: the address sanitizer's frames are several times the plain ones, so a count of levels small enough for any stack on one build is not on another. The bytes are few enough for any thread's stack to hold.
+
+**A walk that reaches a limit refuses the whole input**, never one branch of it. A branch refused alone reads as that branch being absent: a parse would return a tree missing a part, a wrong answer rather than a refusal. So `std/json`'s parse ends the whole document as `too_deep`, and `std/regex`'s compile the whole pattern.
 
 **Not taken: growing the stack** (rustc's `stacker`, Go's goroutines). It lifts the limit instead of reporting it, but it needs a way of switching stacks the language lacks, and a debugger and a profiler lose the thread across the switch. Not taken either: running the walk on a thread whose stack size is chosen. The size must still be guessed from what a level costs, the very number that moves.
 
@@ -1172,6 +1357,11 @@ Content-Length: 17\r\n
 
 Caution: **Drop the broken header from the buffer then.** Kept, every later read sees the same header and returns the same failure forever, with no way to resynchronize.
 
+**Where a read ends must not change the frames.** A pipe splits a message anywhere, so the same bytes arriving at once or a byte at a time must give the same frames, up to the first broken one. Two rules follow:
+
+* **A head's limit counts the head's own bytes.** Its end is looked for only within `max_head_bytes`. Looked for in all that has arrived, a head past the limit would be read when it came in one read, and broken when it came a byte at a time.
+* **Two lengths that differ give no length.** Readers differ on which `Content-Length` line counts, the first or the last, so a head naming two would be cut at one place here and at another by the peer. The frame is `broken`, as `std/http` refuses the same head; the same length named twice is read.
+
 What is bounded, and by what:
 
 | What could run forever | Bounded by |
@@ -1226,50 +1416,58 @@ Caution: **Hold separate buffers for standard output and standard error.** Share
 
 **The reader accepts only RFC 8259's shapes.** A raw control character inside a string (`"a<newline>b"`), bytes in a string that are not UTF-8 (§8.1: an overlong form, a surrogate, a sequence cut short), and a comma before the closing bracket (`[1,]`, `{"a":1,}`) are refused, the latter as `trailing_comma`; reported as `invalid_string` at a key's position, it would not lead the writer to the trailing comma. Unlike the others, KSPL holds no option to loosen this: a loose reader lets the sender's broken output take hold unseen.
 
+**Two values are equal (`Val.equals`) when they hold the same JSON**: a number only one of its own kind, a decimal only the same F64 bit for bit, and an object the same members in any order, a repeated key counted each time it appears. The kinds stay apart because the reader keeps `1` and `1.0` apart. Bit for bit, because the writer promises the same F64 back (below), and `==` would take `-0.0` for `0.0`. Any order, because RFC 8259's object is unordered and another writer may reorder it; each repeated key counts, because the reader keeps every member and `dump` writes them all. The order of members is not lost to a round trip all the same: `dump` writes them as read, which the byte-for-byte check under the fuzz holds ("Fuzzing watches the program from outside").
+
 **Writing takes the shortest representation that reads back as the same F64** (the `F64`'s own `fmt`, through which `dump` writes it in `std/json.kspls`). An integral value keeps its `.0`, so it does not come back as the integer variant, and the switch to the `1e+21` shape sits where JS's `Number::toString` puts it, so a round trip through JS does not move the text.
 
 ## Regular expressions
 
-`std/regex` matches by *backtracking*: it tries one way to match, and on failure steps back and tries the next.
+**A search with `std/regex` takes time linear in the text, whatever the pattern.** It runs every way through the pattern side by side, one byte of the text at a time, and never tries one way and then steps back to try the next. Stepping back costs time exponential in the text for patterns such as `(a+)+$` or `(a|a)*b`, so a program matching a pattern or a text it does not control could be made to hang by a few dozen bytes (a *ReDoS*, regular-expression denial of service). Capping the stepping back with a budget stops the hang but refuses correct questions instead, and which ones depends on the text.
 
-Two words used below: a *capture group* is a part of the pattern in parentheses, `( … )`, whose matched text `Match.group(n)` returns afterwards. A *backtracking point* is a place the matcher may step back to: another alternative, one byte less of a repetition, one round fewer.
+**What this gives up**: the backreference (`\1`, "the text group 1 caught, again"). It makes a way's future depend on the text it caught, not only on its place in the pattern, and matching with it is NP-hard, so no search linear in the text takes it on. It is refused ("A notation that is refused stays refused" below), as is a lookaround (`(?=…)`).
 
-### The pattern runs as a flat program, and the backtracking points live in a list
+Three words used below: a *capture group* is a part of the pattern in parentheses, `( … )`, whose matched text `Match.group(n)` returns afterwards. A *way* is one path through the pattern that the search is following. A *state* is one step of the compiled program together with how many empty rounds are open there ("A round that read nothing stops the repetition" below).
 
-`compile` turns the pattern into a tree once, and the tree into a program of steps: match one byte, try this and keep that, jump, record where a group starts or ends, test a boundary, begin a round, done. A match runs the program; each choice it makes pushes a backtracking point onto a list on the heap, and a failure pops the newest one.
+### The pattern runs as a flat program, every way at once
 
-**Matching does not recurse.** Walking the tree by recursion costs one native call per atom and per round, so `(ab)*` over a text of a few thousand rounds either refused the text at a depth limit or would have exhausted the stack, though the text only is long, not hard. In the list, a round costs one entry, and **only the attempt budget**, which grows with the text, ends a search.
-
-For the pattern `(ab|c)d` the program is:
+`compile` turns the pattern into a tree once, and the tree into a program of steps: match one byte, go on at two places (the first preferred), jump, record a position, test a boundary, open or close a round, done. For the pattern `(ab|c)d` the program is:
 
 | Step | What it does |
 | :-- | :-- |
-| 0 | group 1 starts here |
-| 1 | go on at 2; keep 5 to try on failure |
+| 0 | record where group 1 starts |
+| 1 | go on at 2, and at 5 with lower priority |
 | 2, 3 | match `a`, then `b` |
 | 4 | go on at 6 |
 | 5 | match `c` |
-| 6 | group 1 ends here |
+| 6 | record where group 1 ends |
 | 7 | match `d` |
 | 8 | done |
 
-**A single atom repeated (`a*`, `[0-9]{2,4}`) is one step**, not a loop: it reads its whole run at once, and its backtracking point gives back one byte at a time (the longest first), or takes one more (the shortest first). The order is all that separates longest from shortest match.
+A search keeps the ways alive at the current byte in a list, in the order the pattern prefers them. For each byte it carries every way whose step matches the byte to the next byte's list, following the steps that read no byte until each way stands on a step that reads one. **Two ways that reach the same state at the same byte have the same future**, so the later one is dropped: a list never holds more ways than the program has states, and a byte costs at most one visit to each state. This is Thompson's construction run as a *Pike VM*, the engine behind RE2, Go's `regexp` and Rust's `regex`.
 
-### A failure undoes what it passes on its way back
+**The answer is the one stepping back would give** (*leftmost-first*): the earliest start wins, and from it the match the pattern's order prefers, so `a|ab` on `ab` matches `a`. Every start runs in the same pass, a later start with lower priority than the ways already alive. When a way reaches `done`, the ways after it in the list are dropped; those before it are preferred, so they go on and may replace the match.
 
-When an attempt fails, the group positions it recorded must be erased, or a later answer would show them: `((a)x|ab)c` matching through `ab` must keep no group 2 from the failed `(a)x`, and `(a)(b)|c` matching `c` must keep nothing in groups 1 and 2.
+**Matching does not recurse.** The steps that read no byte are followed through a list on the heap, and a round of `(ab)*` costs one entry, so a text is never refused for its length.
 
-**Each write records the old value on the same list**, below the backtracking points pushed after it. Stepping back pops the list down to the newest point, restoring every value written since, so one mechanism covers an alternative inside a group and one of the whole pattern alike. `find` still clears the groups at each start position, since nothing on the list crosses from one start to the next.
+**A start at a byte no match begins with is skipped**: `compile` gathers the bytes a match can begin with, and while no way is alive the search moves to the next such byte without running the program. A pattern whose every alternative starts with `^` (`anchored`) starts only at the search's first position.
 
-### A repeated group counts its rounds, and a round that did not advance stops it
+### A repetition is written out round by round, and the program's size is limited
 
-For `(…)*`, `(…)+` and `(…){m,n}` the program holds one step that every round passes through. It reads the group's round count and where the current round started from a register of its own; both are written through the list too, so stepping back restores them. Entering the group from outside sets them afresh, so an outer repetition's rounds do not share an inner one's count.
+`x{2,4}` becomes `x x`, then two rounds each preceded by a choice to skip past the whole repetition; `x{2,}` becomes `x x`, then a loop. The longest match prefers the round, the shortest (`*?`, `{m,n}?`) the skip. `*`, `+` and `?` are the counts `{0,}`, `{1,}` and `{0,1}`.
 
-**A round that ended where it started stops the repetition**: without the check, `(a?)*` would loop on the empty match for good. **The round is not undone; only the repetition stops**, so `(a?)*b`'s group holds the empty string, as Python's `re` and PCRE answer.
+**A count is not kept beside a way.** A way's future would then depend on its count, two ways at the same step could no longer be merged, and the bound on the list would be lost.
 
-**The count bounds `{m,n}` without copying the group**, so `(…){1000}` is one step and one register, not a thousand copies of the group's steps.
+**So the program's size is limited, not only the count: a pattern whose program would hold more than `max_program_size` (20000) states is refused as `too_large`.** A search's memory and its work per byte grow with the states, since each list holds a row of positions per state, so the limit bounds both: up to about 8 MB for a pattern with nine groups. One count up to `max_repeat_count` (1000) on a short body fits (`[a-z]{1,1000}`, `(ab){1000}`); a count of counts does not (`(a{1000}){1000}` would hold a million). **The program stops being written once it passes the limit**, so `((a{1000}){1000}){1000}` is refused at once, not after a billion steps.
 
 **`(…)?` is not a repetition** but an empty alternative, wrapped from outside in a non-capturing group, so that `(ab)?c` matching `c` leaves the group "not participating", as Python's `re` and PCRE answer.
+
+### A round that read nothing stops the repetition
+
+**A round that ended where it started stops the repetition**: without the check, `(a?)*` would go round on the empty match for good. **The round is not undone; only the repetition stops**, so `(a?)*b`'s group holds the empty string, as Python's `re` and PCRE answer.
+
+A body that can match empty is wrapped in a step that opens a round and one that closes it. Each way counts the rounds it opened since it last read a byte; closing a round while that count is above zero means the round read nothing, so the way leaves the repetition there.
+
+**That count is part of the state.** Two ways at the same step, one in a round that has read nothing and one in a round that has, have different futures: at the round's end the first leaves the repetition and the second goes round again, so merging them would drop one. **Only the innermost rounds can be empty**: a round opens after the ones around it, so if it has read a byte, so have they. One count therefore says which rounds are empty, and a step inside n such repetitions holds n + 1 states, not 2ⁿ.
 
 ### Every match is returned in a `List`. No lazy iterator is made
 
@@ -1279,19 +1477,19 @@ For `(…)*`, `(…)+` and `(…){m,n}` the program holds one step that every ro
 
 **It returns `Match`es, not strings** (nor tuples where there are groups): strings would lose the groups' positions. A `Match` holds the groups too, so one function serves both "only the span" and "the groups too".
 
+**Only `compile` and `find` can fail.** Every refusal (a malformed pattern, a limit) is `compile`'s, and a search cannot be refused, so `find` fails only with `no_match`, while `find_all` answers no match with an empty list and `is_match` with `false`. A `catch` written on either would be accepted and never run.
+
 **The function, not the caller, steps one byte past a zero-length match**; left to the caller, the mistake of spinning in place would be written every time. It steps as Python's `re.finditer` does: `a*` on "baa" gives the three entries (0,0) (1,3) (3,3).
 
-**The positions are indices into the original string**: the search moves its start (`find_from`) rather than cutting the string and searching again. Cutting would leave even the groups' positions for the caller to add back, and forgetting it leaves the match itself correct, so it goes unnoticed (`make debug`'s `test_regex_find_all` catches it by reading the second entry's group from the original string).
+**The positions are indices into the original string**: the search moves its start (`search`'s `from`) rather than cutting the string and searching again. Cutting would leave even the groups' positions for the caller to add back, and forgetting it leaves the match itself correct, so it goes unnoticed (`make debug`'s `test_regex_find_all` catches it by reading the second entry's group from the original string).
 
-The backtracking budget restarts per match, as when calling `find` again by hand, and within one `find` it grows with the text (`max_match_steps` plus `steps_per_byte` a byte), since a fixed budget across a long string's start positions would make correct input `too_complex`. **The cost**: each entry holds a whole `Slots`, heavier than the span alone, which a caller streaming through a huge input accounts for.
+**Each search is linear in what it reads, but `find_all` searches again from each match's end.** A search may read past the match it returns, following a preferred way that fails later, and the next search reads those bytes again: `\w*x|\w` over a long word reads the rest of the word once per letter. So over a text built for it, `find_all` takes time quadratic in the text. **The cost** besides: each entry holds a whole `Slots`, heavier than the span alone, which a caller streaming through a huge input accounts for.
 
 ### For a hot loop over many lines, look by hand
 
 A pattern costs far more per line than a direct look at the string. For line-by-line work over hundreds of thousands of lines, look at the text by hand instead.
 
-Over 200,000 short lines, `^GET /` takes about 10 ms, `^(GET|POST) /` about 20 ms and the unanchored `(GET|POST) /` about 50 ms, while `starts_with` for the same two words is under 1 ms. A group costs a little (its alternatives are tried one after another, and each choice leaves a backtracking point), and moving the start position costs one run of the program per byte; looking by hand costs neither. **So for "line by line, over hundreds of thousands of lines", look by hand** (`starts_with` and an index). A regular expression suits few applications of a complex pattern, such as a few searches over one log.
-
-A pattern whose every alternative starts with `^` does not move the start position (`anchored`), which is the larger of the two costs.
+A search on a line pays for its lists before it reads a byte, and then carries each way the pattern's alternatives open; `starts_with` pays neither. Over 200,000 short lines, `^GET /`, `^(GET|POST) /` and the unanchored `(GET|POST) /` each take tens of times what `starts_with` for the same words takes. **So for "line by line, over hundreds of thousands of lines", look by hand** (`starts_with` and an index). A regular expression suits few applications of a complex pattern, such as a few searches over one log.
 
 ### After `\`, an alphanumeric is accepted only in a defined escape
 
@@ -1334,7 +1532,7 @@ A pattern with more than 9 capture groups is refused with `too_many_groups` too:
 
 **`.` does not match `\n`.** Python, Java, Rust's `regex` and C++'s `std::regex` do not match one by default either, and matching newlines takes an option (`(?s)` / DOTALL) written elsewhere. KSPL holds no options, so a newline is matched with `[\s\S]`. Differing here would make a `.*` spanning lines return another answer, which someone bringing a pattern from another implementation sees only as the matched span growing.
 
-**The counted repetitions `{n}` `{n,}` `{n,m}` are held** (the `\d{4}-\d{2}` shape is needed daily for a date or an ID). `*` `+` `?` are shorthands for them on one tree (`.repeat`'s minimum and maximum counts); with `a{0,}` and `a*` as different trees, a difference in the answer would split across two paths. A count on a group uses the same mechanism (`group_repeat`'s remaining count). Only `(ab){0,1}` takes `(ab)?`'s "wrap in an empty alternative" shape (that one is not a count). The upper bound is `max_repeat_count` (1000, as in RE2 and Go), and a group's repetition, descending one level of recursion per round, hits the depth limit first.
+**The counted repetitions `{n}` `{n,}` `{n,m}` are held** (the `\d{4}-\d{2}` shape is needed daily for a date or an ID). `*` `+` `?` are shorthands for them on one tree (`.repeat`'s minimum and maximum counts); with `a{0,}` and `a*` as different trees, a difference in the answer would split across two paths. A count on a group takes the same pair (`.group_repeat`'s). Only `(ab){0,1}` takes `(ab)?`'s "wrap in an empty alternative" shape (that one is not a count). The upper bound is `max_repeat_count` (1000, as in RE2 and Go), and a count is written out round by round, so a count on a large body meets `max_program_size` first ("A repetition is written out round by round, and the program's size is limited" above).
 
 **A `{` not in a count's shape is refused** (`invalid_repeat`): swallowed as a character, `a{3` would silently match "the three characters `a{3`" (the reason in "A notation that is refused stays refused" above). A literal `{` is written `\{` or `[{]`, and `}` alone is a character (Python's `re` and PCRE read it so).
 
@@ -1380,7 +1578,7 @@ Caution: **Do not cut by area (networking, cryptography, strings) — that makes
 
 Caution: **Do not take a `pub` in `std/` off as "unused".** `std/` is distributed, `pub` is the contract with its users outside, and no reference inside the repository does not mean no contract.
 
-**The failure type shows what a walk cannot decide**: a caller that only receives a `T!E` with `catch e` never writes `E`'s name. `std/regex`'s `Regex_error`, the failure type of `compile` / `find` / `find_all` themselves, appears nowhere outside `std/regex.kspls`, so a walk calls it "a `pub` nobody uses"; a result struct and a trait fare the same.
+**The failure type shows what a walk cannot decide**: a caller that only receives a `T!E` with `catch e` never writes `E`'s name. `std/regex`'s `Regex_error`, the failure type of `compile` / `find` themselves, appears nowhere outside `std/regex.kspls`, so a walk calls it "a `pub` nobody uses"; a result struct and a trait fare the same.
 
 **So [I0402], which flags a `pub` used only within its package, is not enabled in `std/`**: judging by the references one compilation sees, it calls the published API itself, with no users yet, "unneeded". It may be enabled in a unit building an executable (which ones is "A test inspecting the inside of a unit goes inside that unit" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)).
 

@@ -3,9 +3,10 @@
 //< **How a number is shown changes only the text; rounding changes the value itself.** Do not mix
 //< one into the other, or changing the decimal places on the screen would change the total
 //< ([`calc.kspls`](calc.kspls)'s `.round()` is this file's `round_to`).
-//< **Rounding multiplies by 10 to the number of places and then converts to a whole number**, so
-//< the larger the number, the fewer decimal places can appear. **Past `whole_cap` nothing is
-//< converted** (the conversion has no fixed answer there): such a number is written as F64 text.
+//< **Rounding multiplies by 10 to the number of places and then converts to a whole number**, and
+//< no more places are written than the F64 holds (`safe_places`), so the larger the number, the
+//< fewer decimal places appear. **Past `whole_cap` nothing is converted** (the conversion has no
+//< fixed answer there): such a number is written as F64 text.
 //< Pure functions: **they know neither the document nor the cell.**
 import "kspage/model/day"
 import "kspage/model/style" { Number_spec }
@@ -68,12 +69,16 @@ priv fn write_fraction(out: Str_builder$@, rest: I64, unit: I64, trim: Bool) //<
     if out.len <= start + 1
         out.len = start
 
+priv const exact_cap: F64 = 9007199254740992.0 //< 2 to the 53rd: past it an F64 skips integers
+
 priv fn safe_places(n: F64, want: Sz): Sz //<
-    //< The decimal places that still fit an I64 after scaling by 10 to that power
+    //< The decimal places the F64 n holds, at most want
     //<
-    //< At that size the decimals are not visible anyway.
+    //< Scaled by 10 to that power it stays under `exact_cap`, so every digit written is one the
+    //< number holds; one place more and the last digit is made up (`…676.8` for an F64 that
+    //< holds `…680`).
     $p: Sz = want
-    for p > 0 && n * F64::pow10(p) > whole_cap
+    for p > 0 && n * F64::pow10(p) > exact_cap
         p -= 1
     return p
 
@@ -101,11 +106,13 @@ fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
             day.write_day(out, days, spec.dated)
             return
     $n: F64 = v * 100.0 if spec.percent else v
-    if n < 0.0
-        out.c('-')
+    neg: = n < 0.0
+    if neg
         n = -n
-    out.s(spec.prefix)
     if n > whole_cap
+        if neg
+            out.c('-')
+        out.s(spec.prefix)
         write_large(out, n)
         out.s(spec.suffix)
         return
@@ -117,6 +124,10 @@ fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
         trim = false
     unit: = pow10(safe_places(n, want))
     scaled: = I64::(n * F64::unit + 0.5)
+    // Caution: **Write the sign after rounding**: what rounds to 0 is no negative (`-0`).
+    if neg && scaled > 0I64
+        out.c('-')
+    out.s(spec.prefix)
     write_whole(out, scaled / unit, spec.grouped)
     write_fraction(out, scaled % unit, unit, trim)
     out.s(spec.suffix)

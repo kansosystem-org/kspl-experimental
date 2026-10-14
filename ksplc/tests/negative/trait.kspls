@@ -291,7 +291,7 @@ fn main()
 //< `@` on an index access through `Index`, the trait that returns a value, is rejected
 //<
 //< `get` returns a copy, so the `@` is a temporary's address and a `p$ = v` write quietly misses
-//< the container. The built-in slice and array and an `operator.Index_place` type give a true
+//< the container. The built-in slice and array and an `Index_place` type give a true
 //< element address with `a[i]@`; this case covers a type implementing `Index` alone.
 // EXPECT: cannot take the address of an element accessed through the 'Index' interface
 
@@ -312,7 +312,7 @@ fn main(): I32
 //<
 //< `get`/`set` exchange values and return no element place, so a read-and-write-back cannot be
 //< assembled; let through, genc emits an invalid three-argument getter call and C fails.
-//< Implement "an index returning a place" (`operator.Index_place`) and `a[i] += v` can be used.
+//< Implement "an index returning a place" (`Index_place`) and `a[i] += v` can be used.
 // ==========================================
 // EXPECT: compound assignment is not supported for types that index through the 'Index_mut'
 // interface
@@ -374,13 +374,13 @@ pub struct Key
   pub a: I32
 
 impl Key: Bad
-  pub fn dup(r: Self$@): Self
-    return r$
-  pub fn equals(r: Self$@, other: Key): Bool
+  pub fn dup(r: Self$@): Self$@
+    return r
+  pub fn equals(r: Self@, other: Key): Bool
     return r.a == other.a
 
 fn main(): I32
-  k: Key = ::{ .a = 1 }
+  $k: Key = ::{ .a = 1 }
   return k.dup().a - 1
 // ==== case trait_self_inside_return
 //< A trait method cannot hold `Self` **at a type argument's position** in its return type
@@ -505,7 +505,7 @@ fn main()
 //< Returning or throwing a trait value upcast from local storage is rejected
 //<
 //< The upcast synthesises `&the value` with no `@` in the source, so it dangles once the frame goes
-//< (docs/DESIGN.md "Why dangling is stopped only on the paths that create an invisible pointer"). A
+//< (docs/DESIGN.md "Which pointers into a frame are stopped from leaving it"). A
 //< value parameter and a throw are the same; into a `Trait!Err` the upcast sits inside result_wrap,
 //< which is peeled off and checked too.
 // EXPECT: cannot return an interface value built from local storage
@@ -568,8 +568,8 @@ fn main()
 //< Returning it bare is the case `trait_upcast_returns_local`. Without this, a struct holding a
 //< closure escapes and is called with its environment dead. The passing side is held by
 //< **running correctly** (test_closure_wrapped_in_struct in `ksplc/tests/lang_limits_test.kspls`).
-// EXPECT: cannot return an interface value built from local storage
-// EXPECT: cannot throw an interface value built from local storage
+// EXPECT: cannot return a closure: it keeps pointers to its captured variables
+// EXPECT: cannot throw a closure: it keeps pointers to its captured variables
 
 priv struct Holder
   pred: Callable1<|I32, Bool|>

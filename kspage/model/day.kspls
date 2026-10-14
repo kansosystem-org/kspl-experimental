@@ -43,10 +43,17 @@ priv fn shifted_days(y: I64, m: I64, d: I64): I64 //<
     day_of_era: = in_era * 365I64 + in_era / 4I64 - in_era / 100I64 + day_of_year
     return era * days_per_400 + day_of_era
 
+priv const year_reach: I64 = 10000000000000I64 //< the furthest year either way: 10 to the 13th
+    //<
+    //< **Its count of days (under 4×10^15) is a whole number an F64 holds exactly** (up to 2 to
+    //< the 53rd), so the day a formula names is the day it reads back. Further out the count
+    //< would be rounded, and far further the reckoning here overflows an I64.
+
 fn days_of(y: I64, m: I64, d: I64): I64? //< the days from the origin day to y-m-d
     //<
-    //< **A date that does not exist on the calendar is not returned** (2026-02-30 and the like).
-    if d < 1I64 || d > month_days(y, m)
+    //< **A date that does not exist on the calendar is not returned** (2026-02-30 and the like),
+    //< nor one past `year_reach`.
+    if y > year_reach || y < -year_reach || d < 1I64 || d > month_days(y, m)
         return .none
     return .some(shifted_days(y, m, d) - shifted_days(epoch_year, 1I64, 1I64))
 

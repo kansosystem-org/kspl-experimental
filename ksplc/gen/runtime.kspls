@@ -39,6 +39,12 @@ fn write_decls($w: Writer): Writer //<
     w = w
         .s("""
 #define _POSIX_C_SOURCE 200809L
+// The XSI level of the same edition, beside it: sigaltstack, the stack a crash report runs on once
+// the program's own has run out (hosted.c's "A crash says what happened"), is XSI, which the bare
+// POSIX level hides on glibc and musl. Windows has neither level.
+#if !defined(_WIN32)
+#define _XOPEN_SOURCE 700
+#endif
 // Caution: **On macOS, always raise _DARWIN_C_SOURCE too.** Apple's headers hide "what is not in
 // POSIX.1" where `_POSIX_C_SOURCE` is defined. What hides includes sysconf's _SC_NPROCESSORS_ONLN
 // (an extension) and even the BSD type aliases <sys/*.h> uses internally (u_int / u_char /
@@ -84,17 +90,56 @@ fn write_decls($w: Writer): Writer //<
 #include <time.h>
 #include <math.h>
 #include <signal.h>
+#if !defined(_WIN32)
+/* The four below stand here because they name sigaction's handler fields and siginfo's address,
+   names the list below removes. A signal is taken only where it is at its default: a handler
+   already set (a sanitizer's, the host program's) is left alone. */
+__attribute__((unused)) static int kspl_signal_at_default(int sig) {
+    struct sigaction old;
+    if (sigaction(sig, NULL, &old) != 0) return 0;
+    return (old.sa_flags & SA_SIGINFO) == 0 && old.sa_handler == SIG_DFL;
+}
+
+/* Puts handler on sig (for hosted_proc.c's groups). */
+__attribute__((unused)) static void kspl_take_default_signal(int sig, void (*handler)(int)) {
+    struct sigaction sa;
+    if (!kspl_signal_at_default(sig)) return;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    (void)sigaction(sig, &sa, NULL);
+}
+
+/* Puts action on a fault, run on the alternate stack (hosted.c's crash section); 1 where taken. */
+__attribute__((unused)) static int kspl_take_default_fault(int sig,
+    void (*action)(int, siginfo_t *, void *)) {
+    struct sigaction sa;
+    if (!kspl_signal_at_default(sig)) return 0;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = action;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    return sigaction(sig, &sa, NULL) == 0;
+}
+
+/* The address a fault names. */
+__attribute__((unused)) static uintptr_t kspl_fault_addr(const siginfo_t *info) {
+    return (uintptr_t)info->si_addr;
+}
+#endif
 
 /* These are object-like macros the headers above `#define`, of the same names as KSPL's
    identifiers. Unremoved, they are expanded at the positions that come out bare (a local
    variable, a formal parameter, a struct field) and become a C compiler error. The runtime reads
-   none of them.
+   none of them, but for the four functions above.
    Caution: The names removed differ per target: si_* / sa_* / sigev_* come from POSIX's
    <signal.h>, and environ / popen / strcasecmp / sys_errlist and the like from Windows's CRT.
    An #undef of an undefined macro is correct C, so both lists can stay and pass on either
    target. */
 #undef L_ctermid
 #undef L_tmpnam
+#undef P_tmpdir
 #undef environ
 #undef math_errhandling
 #undef matherr

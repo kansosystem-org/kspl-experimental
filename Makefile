@@ -86,6 +86,11 @@ SHIP_CFLAGS := -std=c99 -w -g -O2
 # It copies ksplc's own link rules (`ksplc info link-libs`); `make test-link-rules` compares them.
 LDLIBS    := -lm
 C_FMT     := clang-format -style="{ColumnLimit: 0}" -i
+# `$(call c_fmt,<file>)` tidies C a person reads. **Clang-Format is optional**: without it the file
+# stays as generated, which builds and debugs the same, and one line says so. `commit-seed` alone
+# requires it (`seed_fmt_help`).
+c_fmt = if command -v $(firstword $(C_FMT)) >/dev/null 2>&1; then $(C_FMT) $(1); else \
+  printf '\# clang-format is not installed: %s is left as generated (it builds the same)\n' $(1); fi
 KSPL_FMT   := --in-place
 # Names the std, so a machine's KSPLC_STD_DIR brings in no other and seed.c's byte-match holds.
 # Caution: **Keep it relative**: $(CURDIR) word-splits unquoted, and ksplc.exe cannot open `/c/...`.
@@ -209,7 +214,7 @@ endif
 .PHONY: all \
 	stage1 self-host self-host-ship commit-seed \
 	fmt lint debug debug-file \
-	test-llvm-abi test-freestanding-math test-simd install-lsp install \
+	test-llvm-abi test-freestanding-math test-simd install-lsp install install-check \
 	run fim-corpus fim-model fim-eval qwen kssrv perf-log
 
 # A blank line, parting the lines a `$(foreach)` lists; here as mk/test.mk uses it.
@@ -252,18 +257,19 @@ self-host: $(DIFF_TXT)
 
 # --- Measuring performance (the two logs it hands to perf_guard) ---
 # Caution: **Measure two runs of the same executable**, in a cache of its own: a rebuilt ksplc
-# misses on its first, and one run alone hides the other's regression.
+# misses on its first, and one run alone hides the other's regression. `--stats` reports on
+# standard error, with the diagnostics: each log keeps that stream, shown whether or not it failed.
 ## Measure-and-inspect|perf-log|Measure and record translation's elapsed time and peak memory
 perf-log: $(STAGE1_EXE) $(SEED_EXE) | $(OUT_DIR)
 	@rm -rf $(TMP_DIR)/perf_cache
 	@echo "# MEASURING cold (empty cache)"
 	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspls \
-		$(TMP_DIR)/perf_cold.c > $(LOG_DIR)/perf_cold.log
-	@cat $(LOG_DIR)/perf_cold.log
+		$(TMP_DIR)/perf_cold.c 2> $(LOG_DIR)/perf_cold.log; \
+		rc=$$?; cat $(LOG_DIR)/perf_cold.log; exit $$rc
 	@echo "# MEASURING warm (same cache, 2nd run)"
 	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspls \
-		$(TMP_DIR)/perf_measure.c > $(LOG_DIR)/perf.log
-	@cat $(LOG_DIR)/perf.log
+		$(TMP_DIR)/perf_measure.c 2> $(LOG_DIR)/perf.log; \
+		rc=$$?; cat $(LOG_DIR)/perf.log; exit $$rc
 	./$(SEED_EXE) run tests/tools/perf_guard.kspls --cold=$(LOG_DIR)/perf_cold.log \
 	  --warm=$(LOG_DIR)/perf.log
 
@@ -320,12 +326,20 @@ $(DIFF_TXT): $(STAGE1_OUT) $(STAGE2_OUT)
 # Strips `#line` from stage2's C into the seed (C backend only): one added source line would shift
 # every later one in git's history. **`cmp` compares the stripped side**; then run `make self-host`.
 # Caution: **Read `$(STAGE2_OUT)` by name, not as `$<`** (`tests/suite/recipe_bytes_test.kspls` §4).
+define seed_fmt_help
+ERROR: make commit-seed needs clang-format, and this machine has none.
+  ksplc/seed.c in git is tidied by it, so a seed written untidied would change every line of it.
+  Install clang-format (.devcontainer/Dockerfile names the package), or re-bake in the devcontainer.
+endef
+
+commit-seed: export SEED_FMT_HELP := $(seed_fmt_help)
 ## Build-and-install|commit-seed|Re-bake stage2's generated C into `ksplc/seed.c` (needed once a runtime `.c` is touched)
 commit-seed: $(STAGE2_OUT) $(STAGE1_EXE) | $(OUT_DIR)
 	@echo "# UPDATING SEED COMPILER SOURCE..."
 ifeq ($(BACKEND),c)
 # **Tidy first, then strip**: stripped first, `clang-format` joins `else` and `if` into `else if`.
 # Caution: **Exactly one pass, on a copy**: `clang-format` is not idempotent on this C.
+	@command -v $(firstword $(C_FMT)) >/dev/null 2>&1 || { printf '%s\n' "$$SEED_FMT_HELP"; exit 1; }
 	@cp $(STAGE2_OUT) $(TMP_DIR)/seed_fmt.c
 	@$(C_FMT) $(TMP_DIR)/seed_fmt.c
 	@awk '!/^#line /' $(TMP_DIR)/seed_fmt.c > $(TMP_DIR)/seed_stripped.c
@@ -444,7 +458,7 @@ ksos_make = $(call pkg_make,ksos) OUT=../$(OUT_DIR) TEST_JOBS=$(TEST_JOBS)
 ## Gates|test-ksos-qemu|Run them under QEMU (`qemu-system-arm` is needed)
 ## Gates|test-ksos-posix|Run the demos on the POSIX host's port
 ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ksos-posix: $(STAGE1_EXE)
-	@$(ksos_make) $@ $(if $(filter test-ksos-link,$@),KSOS_REQUIRE_ARM=$(filter linux,$(PLATFORM)))
+	@$(ksos_make) $@
 
 ## Run|ksos-*|One POSIX host demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
 ## Run|ksos-cm-*|One Cortex-M demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)

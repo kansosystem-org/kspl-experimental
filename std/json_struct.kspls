@@ -110,14 +110,14 @@ priv fn arr_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): Va
 
 pub fn into_struct<|T: reflect.Reflectable|>( //< copies a JSON object into a reflectable value
     //<
-    //< **A field whose key is missing or of another kind is refused** (the reason is at
-    //< `Json_error`), and so is an integer the field cannot hold: 70000 into a `U16`, -1 into a
-    //< `U8`.
+    //< **A field whose key is missing or of another kind is refused** (why is at `Json_error`), and
+    //< so is an integer the field cannot hold: 70000 into a `U16`. With `null`, free each string it
+    //< wrote with `dealloc` and each list with `free()`; a refusal leaves those written before it.
     //< Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena;
     //< freeing that first leaves the written value pointing at freed memory.
     v: Val, //< the object to read from
     out: T$@, //< the value to write into, field by field
-    arena: Arena$@, //< where the names are copied to, so they outlive the parse
+    arena: Arena$@, //< where strings and lists go; null means the heap, freed as above
 ): Void!Json_error
     fill_from(U8$@::out, out.fields(), v, arena, 0)!
 
@@ -230,7 +230,8 @@ priv fn fill_list(at: U8$@, f: reflect.Field_info, v: Val, arena: Arena$@, depth
         //< the field's position then yields an ordinary `List` (`../std/ds.kspls`).
     if depth > max_nesting_depth
         throw .too_deep
-    items: = v.arr_list(arena)
+    $items: = v.arr_list(arena)
+    defer items.free() // only work: the elements are copied into `room`
     count: = items.len
     // Caution: **Check the product before allocating.** Where `Sz` is 32 bits, a long array of
     // large elements wraps to a small size, and the writes below run past it with the input's data.

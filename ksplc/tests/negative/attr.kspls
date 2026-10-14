@@ -149,6 +149,55 @@ extern "C"
 
 fn main(): I32
   return 0
+// ==== case attr_noreturn_comes_back
+//< A `#noreturn` function is refused each way control comes back: `return`, `throw`, `!`, its end
+//<
+//< C trusts the attribute and only warns, and a caller compiled on the promise runs on into
+//< whatever follows the call. A function literal inside is a body of its own; the passing side ends.
+// EXPECT: attr_noreturn_comes_back.kspls:18:9: error: 'return' returns to the caller, but the function is declared '#noreturn'
+// EXPECT: attr_noreturn_comes_back.kspls:22:5: error: 'throw' returns to the caller
+// EXPECT: attr_noreturn_comes_back.kspls:27:11: error: '!' returns to the caller
+// EXPECT: function 'case_falls_off' is declared '#noreturn', but control may reach the end of its body
+// EXPECT: Finished with 4 error(s)
+import "std/sys"
+
+priv enum Er
+    bad
+
+#noreturn
+priv fn case_return(n: I32)
+    if n > 0
+        return
+    sys.exit(2)
+#noreturn
+priv fn case_throw(): I32!Er
+    throw .bad
+priv fn may(): I32!Er
+    return 1
+#noreturn
+priv fn case_propagate(): I32!Er
+    _x: = may()!
+    for {}
+#noreturn
+priv fn case_falls_off(n: I32)
+    if n > 0
+        sys.exit(1)
+#noreturn
+priv fn ends(n: I32)
+    _inner: = fn(): I32
+        return 1
+    if n > 0
+        sys.exit(1)
+    else
+        panic("stop")
+
+fn main()
+    if sys.args().len > 5
+        case_return(1)
+        case_throw() catch 0
+        case_propagate() catch 0
+        case_falls_off(1)
+    ends(1)
 // ==== case attr_on_extern_struct
 //< No attribute (other than `#cfg`) can be written on an `extern` struct
 //<

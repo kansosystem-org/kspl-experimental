@@ -11,7 +11,8 @@ import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
-import "std/str"
+import "std/str" { Str_builder }
+import "std/strnum" // reading a floating-point literal's value
 
 fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     type_id: = literal_type_id(node, c, expected_id)
@@ -30,7 +31,42 @@ fn infer_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
         // ksplc/docs/DESIGN.md).
         if type_is_known && !c.is_instantiating()
             check_literal_bounds(c, node, type_id, c.fn_ctx.literal_negated)
+    else if node.kind_id == .k_float && !c.is_instantiating()
+        check_float_literal_range(c, node, type_id)
     return type_id
+
+priv fn check_float_literal_range(c: Sema_ctx$@, node: Ast_node$@, type_id: I32) //<
+    //< Refuses a floating-point literal that its type holds only as infinity, or as zero
+    //<
+    //< **An error, as for an integer** (check_literal_bounds): the value would change silently, and
+    //< C only warns, for a `double` alone. Rounding to a nearby value and a subnormal pass: every
+    //< decimal fraction rounds (`0.1`), and a subnormal is still the number, with fewer digits.
+    $clean: = Str_builder.new()
+    defer clean.free()
+    _stop: = node.text.append_clean_number(clean@, "F")
+    v: = clean.slice().to_f64() catch
+        return
+    held: = F64::(F32::v) if c.env.get_primitive_bit_size(type_id) == 32 else v
+    $becomes: = ""
+    if held - held != 0.0
+        becomes = "infinity"
+    else if held == 0.0 && has_nonzero_digit(clean.slice())
+        becomes = "zero"
+    else
+        return
+    type_name: = c.env.get_str(type_id)
+    c.clear_scratch()
+        .s("literal '\{node.text\}' becomes \{becomes\} in type '\{type_name\}', so its value would \
+            change silently. Write a value inside the type's range, or use a wider type")
+    c.err(node, c.scratch.slice())
+
+priv fn has_nonzero_digit(number: U8[]): Bool //< whether a decimal's significand is not zero
+    for ch in number
+        if ch == 'e' || ch == 'E'
+            return false
+        if ch >= '1' && ch <= '9'
+            return true
+    return false
 
 fn is_untyped_int_literal(node: Ast_node$@): Bool //<
     //< Whether it is an integer literal with no type suffix

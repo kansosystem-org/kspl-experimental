@@ -48,6 +48,7 @@ stateDiagram-v2
     delayed --> ready : its tick arrives
     ready --> suspended : Task.suspend, also from delayed or blocked
     suspended --> ready : Task.resume
+    suspended --> delayed : Task.resume, before its tick
     running --> done : its entry returns, or Task.delete
     done --> [*]
 ```
@@ -154,22 +155,23 @@ One demo per feature. The POSIX ones need no special tools:
 | `ksos/demo/posix/lifecycle_demo.kspls` | `make ksos-lifecycle` | `Task.suspend`/`Task.resume`/`Task.delete` |
 | `ksos/demo/posix/panic_demo.kspls stack-overflow` | `make ksos-stack-overflow` | the canary catching a stack overflow |
 | `ksos/demo/posix/isr_signal_demo.kspls` | `make ksos-isr` | `Queue<\|T\|>.try_send` from an ISR (SIGUSR1 stands in for the interrupt) |
-| `ksos/demo/posix/task_manager_demo.kspls` | `make ksos-task-manager` | tasks and queues on the heap (`dynamic.kspls`), and the task manager's CPU use per task (`Task.cpu_percent` in `ksos/kernel/task.kspls`) |
-| `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order and the longest waiter among equals, suspend/delete while blocked, a `delay_until` into the past, a deleted waiter's lent priority taken back, the cap on seats |
+| `ksos/demo/posix/task_manager_demo.kspls` | `make ksos-task-manager` | tasks and queues on the heap (`dynamic.kspls`), the idle task giving a deleted task's stack back, and the task manager's CPU use per task (`Task.cpu_percent` in `ksos/kernel/task.kspls`) following what each task asks for |
+| `ksos/demo/posix/kernel_check.kspls` | `make ksos-kernel-check` | the kernel's edges: waking in priority order and the longest waiter among equals, suspend/delete while blocked, suspend while delayed, a `delay_until` into the past, a deleted waiter's lent priority taken back, the cap on seats |
 | `ksos/demo/posix/panic_demo.kspls mutex-relock` | `make ksos-mutex-relock` | the holder relocking stops rather than waiting forever (the panic is the pass) |
 | `ksos/demo/posix/panic_demo.kspls mutex-foreign-unlock` | `make ksos-mutex-foreign-unlock` | a non-holder's unlock stops rather than being silently ignored (panic = pass) |
 | `ksos/demo/posix/panic_demo.kspls delete-holder` | `make ksos-delete-holder` | deleting a task that holds a mutex stops rather than leaving the mutex held forever (panic = pass) |
 | `ksos/demo/posix/timeout_demo.kspls` | `make ksos-timeout` | timeouts (`take_for`/`recv_for`/`send_for`/`lock_for`/`wait_for`), a timeout too large for the clock, `try_take`/`try_lock`, and `ms_to_ticks` rounding up |
 | `ksos/demo/posix/panic_demo.kspls timeout-zero` | `make ksos-timeout-zero` | a timeout of 0 stops rather than meaning `try_` (panic = pass) |
 | `ksos/demo/posix/tick_mid_switch_demo.kspls` | `make ksos-tick-mid-switch` | a tick held over a switch into a task that has never run arrives after the switch, and the task still runs its code |
+| `ksos/demo/posix/dyn_race_demo.kspls` | `make ksos-dyn-race` | three tasks creating and deleting tasks on the heap at once, cut by a tick every 100 µs: every Task and stack goes back to the heap exactly once |
 
 The Cortex-M demos need a cross compiler and QEMU (both in the development container), and `make test-ksos-qemu` runs them all. `make ksos-cm` builds `cortex_m_min.kspls` and checks its vector table and PendSV with objdump. `make ksos-cm-run` runs that ELF under QEMU (`mps2-an385`). Every other target builds and runs in one.
 
 | The demo | The make target | What it demonstrates |
 |---|---|---|
-| `ksos/demo/cortex_m/cortex_m_min.kspls` | `make ksos-cm-run` | the cooperative scheduler on bare metal |
+| `ksos/demo/cortex_m/cortex_m_min.kspls` | `make ksos-cm-run` | the cooperative scheduler on bare metal: the higher priority first whatever the order of registration, a `Task.delay` that sleeps its tick, and `Task.yield` |
 | `ksos/demo/cortex_m/cortex_m_preempt.kspls` | `make ksos-cm-preempt` | preemption by SysTick (the Cortex-M's built-in timer): two tasks that never yield both run, and a monitor's `Task.delay` still wakes |
-| `ksos/demo/cortex_m/cortex_m_pi.kspls` | `make ksos-cm-pi` | priority inheritance: the high-priority requester gets the lock past a mid-priority task that never `yield`s |
+| `ksos/demo/cortex_m/cortex_m_pi.kspls` | `make ksos-cm-pi` | priority inheritance: the high-priority requester gets the lock past a mid-priority task that never `yield`s, only once the holder's section is over, and the holder drops back to its own priority |
 | `ksos/demo/cortex_m/cortex_m_event.kspls` | `make ksos-cm-event` | a barrier of event flags: three workers' bits raised under preemption, and clear-on-exit |
 | `ksos/demo/cortex_m/cortex_m_mq.kspls` | `make ksos-cm-mq` | a queue under preemption (the critical section) |
 | `ksos/demo/cortex_m/cortex_m_timeout.kspls` | `make ksos-cm-timeout` | SysTick alone carrying `take_for`'s timeout while a spinner that never yields holds the CPU |
@@ -201,7 +203,10 @@ The Cortex-M demos need a cross compiler and QEMU (both in the development conta
 
 **The POSIX and Cortex-M demos are the tests themselves.** Deleting one deletes a check. Merging them into one big demo hides which feature broke, and leaves everything after the first stop unrun.
 
-Caution: **In a POSIX demo, stop with `assert` on anything unexpected.** The gate reads the exit code and the `RESULT:` line, so a demo that prints "UNEXPECTED" and carries on passes green.
+**A demo passes only by saying so.** The gate needs exit status 0, no failure mark and a `RESULT: ALL PASS` line (`ksos_run_gate` in `ksos/Makefile`), and a demo prints that line only once every check it makes has run. A line such as "OK" is not a check: the gate does not read it.
+
+* **A POSIX demo** stops with `assert` on anything unexpected, then ends `main` with `task_end.require_all_ended()` ([`ksos/demo/common/task_end.kspls`](demo/common/task_end.kspls)) and `verdict.finish()`. **`start_scheduler` returns as quietly when the remaining tasks wait for ever** (a lost wake, a deadlock, a timeout that never fires) **as when they are done**, so without that call a demo whose checks sit in a stuck task would pass on having said nothing wrong.
+* **A Cortex-M demo** reports each claim with `con.check`, then ends with `con.print_summary` and `con.exit` ([`ksos/demo/common/semihost_console.kspls`](demo/common/semihost_console.kspls)). A run that checked nothing, left before its summary or panicked fails, on its `RESULT:` line and in QEMU's exit status alike.
 
 **The RP2040's demos run only on the real board, where a small demo is the smallest unit to flash** when narrowing down what does not work.
 

@@ -35,6 +35,75 @@ pub typedef Exposed = Hidden
 fn main(): I32
   e: Exposed = ::{ .v = 1 }
   return e.v
+// ==== case cast_fn_type_signature
+//< A cast between function types whose signatures differ is refused
+//<
+//< A call through it hands the function its arguments in the other signature's shape, undefined
+//< behaviour that C compiles without a word. The parameters' names and an alias do not count, and
+//< an address that arrives as `Void@` still becomes a function type.
+// EXPECT: cannot cast 'fn(I32):I32' to 'fn(I64):I64': a function called through another signature receives its arguments and gives its result in the wrong shape
+// EXPECT: Hint: write a function of that signature which calls this one
+// EXPECT: cannot cast 'fn(I32):I32' to 'fn(I32,I32):I32'
+// EXPECT: cannot cast 'fn(I32):I32' to 'fn(I32):Void'
+// EXPECT: Finished with 3 error(s)
+typedef Num = I32
+
+priv fn twice(x: I32): I32
+  return x * 2
+
+fn main(): I32
+  f: = twice
+  _wide: = (fn(x: I64): I64)::f
+  _more: = (fn(x: I32, y: I32): I32)::f
+  _none: = (fn(x: I32): Void)::f
+  renamed: = (fn(n: Num): Num)::f
+  raw: = Void@::f
+  back: = (fn(x: I32): I32)::raw
+  return renamed(1) + back(2)
+// ==== case cast_to_aggregate
+//< A cast to or from an aggregate is refused in KSPL, not left to the C compiler
+//<
+//< C casts only to a scalar, so each of these would reach the C compiler as an invalid cast. An
+//< enum without payloads cast from an integer, and a slice made from an array, stay casts.
+// EXPECT: cannot cast to enum type 'cast_to_aggregate.E' with payloads
+// EXPECT: cannot cast to optional type 'I32?'
+// EXPECT: cannot cast to optional type 'cast_to_aggregate.P?'
+// EXPECT: cannot cast to array type 'I64[2]'
+// EXPECT: cannot cast to trait type 'cast_to_aggregate.Shape'
+// EXPECT: cannot cast 'cast_to_aggregate.Shape' to 'I32'
+// EXPECT-NOT: Plain
+trait Shape
+  fn area(r: Self): I32
+
+priv struct P
+  x: I32
+
+impl P: Shape
+  fn area(r: Self@): I32
+    return r.x
+
+priv enum E
+  a(x: I32)
+  b
+
+priv enum Plain
+  one
+  two
+
+fn main(): I32
+  p: P = ::{ .x = 1 }
+  arr: I32[2] = ::{ 1, 2 }
+  _e: = E::5
+  _o: = I32?::5
+  _op: = P?::p
+  _wide: = I64[2]::arr
+  _s: = Shape::p
+  held: Shape = p
+  _n: = I32::held
+  // The passing side.
+  _ok_enum: = Plain::1
+  _ok_view: = I32[]::arr
+  return 0
 // ==== case type_arg_bare_is_readonly
 //< An **unmarked** type argument at a position declared mutable makes the target immutable
 //<
@@ -217,16 +286,19 @@ fn main(): I32
   return I32::(r.probe() + Sz::p + Sz::d) + case_typed() + Row.typed_self() +
     I32::case_compared(null)
 // ==== case typedef_cycle
-//< A typedef that leads back to itself is refused, naming the alias
+//< A typedef that leads back to itself is refused once, naming the alias
 //<
 //< It never reaches an underlying type. The bare "circular typedef detected" named no alias, so in
-//< a file of many the writer had to find the cycle by hand.
+//< a file of many the writer had to find the cycle by hand. **A use of the alias adds nothing**: a
+//< mismatch against a type nothing can reach would only hide the cycle's error.
 // EXPECT: circular typedef: 'A' leads back to itself
+// EXPECT: Finished with 1 error(s)
 typedef A = B
 typedef B = A
 
-fn main()
-    return
+fn main(): I32
+    x: A = 0
+    return x
 // ==== case typedef_written_as_alias
 //< Another language's keyword for a type alias suggests `typedef`, with the line to write
 //<

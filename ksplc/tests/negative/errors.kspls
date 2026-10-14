@@ -104,6 +104,7 @@ fn main(): I32
 //<
 //< **Counted apart from the 50, the summary says 51** while the specification promises 50
 //< ("Compilation stops at 50 errors" in ksplc/docs/SPEC-tools.md).
+// EXPECT: error: expected 'I32', but got 'Bool'
 // EXPECT: Too many errors (>= 50). Further errors are suppressed.
 // EXPECT: Finished with 50 error(s)
 // EXPECT-NOT: Finished with 51
@@ -180,6 +181,21 @@ fn h(): I32!I32
 fn g(): I32!I32
     a: = h()?
     return a
+// ==== case result_built_as_variant
+//< `.err(e)` and `.ok(v)` in a `T!E` function name `throw` and `return`, the KSPL spelling
+//<
+//< Rust's `Err(e)` is the likely habit. The value expected there is the `T`, and naming it alone
+//< ("the expected type is 'I32'") sends the writer looking for an enum.
+// EXPECT: result_built_as_variant.kspls:10:12: error: '.err' does not build a Result: a 'T!E' is no enum, and a function returning one fails with 'throw <error>' and gives its value with 'return <value>'
+// EXPECT: result_built_as_variant.kspls:11:10: error: '.ok' does not build a Result
+// EXPECT-NOT: the expected type is 'I32'
+fn g(fail: Bool): I32!I32
+  if fail
+    return .err(3)
+  return .ok(1)
+
+fn main()
+  _v: = g(true) catch 0
 // ==== case result_error_type_optional
 //< `T!E?` is refused: `?` would fold into the error type, which cannot be optional
 //<

@@ -148,9 +148,9 @@ priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
     for _k in Range.asc(8)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        p: = msg.get("params")
+        p: = msg.val.get("params")
         if !p.get("uri").as_str().ends_with("laid_probe.kspls")
             continue
         found = true
@@ -168,11 +168,8 @@ priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
 priv fn check_hover(c: jsonrpc.Client$@, arena: Arena$@) //< the hovers
     //<
     //< Caution: **Check the content**; with the position drifted, something still comes back.
-    got: =
-        c.request("textDocument/hover",
+    got: = lsp_client.answer(c, "textDocument/hover",
         lsp_client.at_pos(probe_uri, bind_line_at, bind_col_at, arena), lsp_client.read_ms, arena)
-        catch
-        fallback .null_val
     text: = got.get("result").get("contents").get("value").as_str()
     // Caution: **Check the name too.** The type alone passes with the position drifted to another
     // `I32`.
@@ -183,11 +180,8 @@ priv fn check_hover(c: jsonrpc.Client$@, arena: Arena$@) //< the hovers
 priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a definition
     //<
     //< **The destination's line must be the indentation notation's line.**
-    got: =
-        c.request("textDocument/definition",
+    got: = lsp_client.answer(c, "textDocument/definition",
         lsp_client.at_pos(probe_uri, bind_line_at, call_col_at, arena), lsp_client.read_ms, arena)
-        catch
-        fallback .null_val
     res: = got.get("result")
     $line: I64 = -1I64
     $uri: U8[] = ""
@@ -857,7 +851,7 @@ fn main(): I32
         catch
         return harness.fatal("initialize does not return")
     if !verdict.check("the language server comes up",
-        !lsp_read.is_missing(init.get("result")), lsp_client.dump(init, arena))
+        !lsp_read.is_missing(init.val.get("result")), lsp_client.dump(init.val, arena))
         return harness.finish()
     check_diagnostics(c@, arena)
     check_hover(c@, arena)

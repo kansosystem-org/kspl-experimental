@@ -4,9 +4,11 @@
 //< either bit0 or bit1 is set (an OR wait). 2) .all holds once both bit1 and bit2 are set (an AND
 //< wait), and clears those bits when it holds. Each time setter sets a bit, the waiters wake and
 //< check their condition again (wake-and-recheck).
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
+import "std/verdict"
 
 $g_ev: sync.Event
 
@@ -39,11 +41,13 @@ fn coordinator(_arg: Void$@): Void
     io.out().s("[coord] bits after clear=\{I32::after\} (0x6 cleared, bit0 remains)\n")
     assert(after == 0x1, "event: clear_on_exit must clear only the waited bits")
 
-fn main()
+fn main(): I32
     io.out().s("=== Kanso OS (POSIX port) — event flags demo ===\n")
     g_ev.init()
     // coordinator has the higher priority (2), so it runs first and blocks on the unmet condition.
     tcb_co.create(U8$[]::stack_co, coordinator, null, 2, "coord")
     tcb_set.create(U8$[]::stack_set, setter, null, 1, "setter")
     task.start_scheduler()
+    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    return verdict.finish()

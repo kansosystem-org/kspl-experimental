@@ -51,7 +51,7 @@ Caution: **Do not inspect only the last level**: a link on a folder would pass u
 
 **A race remains**: the server inspects the path first and opens it afterwards, and the folders can change in between. Say a request asks for `notes/a.txt`. The server finds that `notes` is a real folder, not a link. Before it opens the file, another program replaces `notes` with a link to the user's home folder, and the open follows that link out of the root. So the two refusals stop a client that can only send a path, such as a web page in the browser, which cannot make a link inside the root. They do not stop a program on the same machine that can write into the root. Closing the race needs two things together: an open that the kernel itself keeps inside the root's folder (on Linux, `openat2` with `RESOLVE_BENEATH`), and file functions that pass on the file already opened rather than the path's text, so that nothing looks the path up a second time.
 
-**There is exactly one exception: the page named by the person who launches the server.** That person may name, at launch, the one file returned for `/` and `/index.html` (`kssrv --page=<file>`). The page still cannot point outside the root: it cannot choose that file with a string it wrote. Only one file can be named, never a folder, because a folder would be a second root that the two refusals above do not cover.
+**There is exactly one exception: the page named by the person who launches the server.** That person may name, at launch, the one file returned for `/` and `/index.html` (`kssrv --page=<file>`). The page still cannot point outside the root: it cannot choose that file with a string it wrote. Only one regular file can be named, never a folder, because a folder would be a second root that the two refusals above do not cover, and never a FIFO or a device, whose read may never end.
 
 * **Naming it is the launching person's judgment.** Named while the server faces outward (without `--local`), that file is served to other machines, so treat it as a choice as weighty as choosing the root.
 * **Do not start up when the named file does not exist**: a later 404 leaves nobody able to tell why the page is blank.
@@ -147,8 +147,8 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 
 | Status | When it is returned |
 | :-- | :-- |
-| 400 | A malformed request, or a malformed `%XX` |
-| 401 | No token, or it does not match |
+| 400 | A malformed request (a `Host` given twice included), or a malformed `%XX` |
+| 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike), so a request without the token learns nothing of the names under the root |
 | 403 | It pointed outside the root, or named a `Host` other than the loopback |
 | 404 | A name that does not exist, or an unknown endpoint |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |

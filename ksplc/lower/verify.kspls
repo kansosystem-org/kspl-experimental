@@ -9,6 +9,7 @@ import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/diag" as base_diag
 import "ksplc/lower/root" as lower_root
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/query" as sema_type_query
 import "std/str" { Str_builder }
@@ -60,6 +61,13 @@ priv fn check_postfix(r: Ast_node$@, c: Sema_ctx$@)
         return
     if !r.text.equals("@")
         return
+    // Sema refuses each form that takes such an address; one made here would claim an alignment
+    // the place lacks ("A field of a `#packed` struct is reached byte-wise" in
+    // ksplc/docs/DESIGN.md).
+    if c.packed_place_align(child) > 0
+        r
+            .ice_panic("Lower ICE: an '@' was taken of a field a '#packed' struct leaves \
+                under-aligned")
     // **An array decays to a pointer to its element** (`U8[32]`'s `@` is a `U8@`, as in C). The
     // element type after the decay is not checked.
     if c.env.is_array(c.env.get_real_type(child.type_id))

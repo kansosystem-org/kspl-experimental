@@ -4,12 +4,18 @@
 //< order of its own choosing (gcc takes a call's arguments from the right, clang from the left).
 //< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-language.md), so an operand
 //< that a later operand could disturb is moved into a temporary ahead of the statement.
+//< It also places the retain an operand taken with a count owes ("The rules for implementing ARC"
+//< in ksplc/docs/DESIGN.md), so a later operand's `!` never leaves that count behind.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/core" as _base_core // the operator classes (`is_div_op` ...)
+import "ksplc/base/diag" as base_diag
+import "ksplc/lower/arc" { Arc_take }
+import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
 import "ksplc/lower/root" as lower_root
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/ds" { List }
@@ -34,30 +40,49 @@ struct Operand_slot //< one operand, named by its parent and its position there
     parent: Ast_node$@
     idx: Sz
     by_address: Bool //< whether it is a place the consumer reads through its address
+    takes: Bool //< whether the consumer takes it as a managed value with a count of its own
+    take: Arc_take //< the retain that count owes, decided before anything is lowered
+    fresh: Bool //< whether it brings that count itself (a new value), decided with take
+    retained: Bool //< whether the retain is already placed (at its move)
+    live_name: U8[] //< the flag of the temporary holding it across later operands; else empty
 
 struct Operand_order //< the operands of one expression, in the order the source writes them
     slots: List<|Operand_slot|>
+    finished: Bool //< whether finish ran, which an operand taken with a count needs
 
 impl Operand_order: Owned {}
 
 impl Operand_order
     fn new(): Operand_order
-        return Operand_order::{ .slots = List<|Operand_slot|>.new(null) }
+        return Operand_order::{ .slots = List<|Operand_slot|>.new(null), .finished = false }
     fn free(r: Self$@)
+        for s in r.slots
+            base_diag.ice_assert(r.finished || !s.takes,
+                "Operand_order: an operand taken with a count was never finished, so its retain is \
+                    lost")
         r.slots.free()
 
     fn add(r: Self$@, parent: Ast_node$@, idx: Sz, by_address: Bool)
         if parent != null && idx < parent.children.len
             r.slots
-                .push(Operand_slot::{ .parent = parent, .idx = idx, .by_address = by_address })
+                .push(Operand_slot::{ .parent = parent, .idx = idx, .by_address = by_address,
+                .takes = false, .take = Arc_take::{ .src = null, .once_lowered = false },
+                .fresh = false, .retained = false, .live_name = "" })
 
-    fn add_args(r: Self$@, args: Ast_node$@) //<
-        //< every argument of an `expr_args`, the commas skipped
-        if args == null || args.kind_id != .k_expr_args
+    fn add_value(r: Self$@, parent: Ast_node$@, idx: Sz, takes: Bool, lctx: Lowering_ctx$@) //<
+        //< An operand passed by value; `takes` where the consumer takes it with a count of its own
+        //<
+        //< What that count owes is decided now, before any operand is lowered (Arc_take).
+        before: = r.slots.len
+        r.add(parent, idx, false)
+        if !takes || r.slots.len == before
             return
-        for i in Range.asc(args.children.len)
-            if !args.get_child(i).is_literal(",")
-                r.add(args, i, false)
+        $s: = r.slots.get(r.slots.len - 1)
+        node: = parent.get_child(idx)
+        s.takes = true
+        s.take = Arc_take.decide(node, lctx)
+        s.fresh = node.is_arc_fresh(lctx)
+        r.slots.set(r.slots.len - 1, s)
 
     fn apply(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It moves into a temporary each operand that C could run on the wrong side of another
@@ -66,30 +91,60 @@ impl Operand_order
         //< with a later one that is not `fixed`. It is lowered as it moves, so the statements it
         //< hoists keep their place in the order; the rest are lowered later by the caller, where
         //< they stand.
+        //< An operand taken with a count that a later acting operand could leave behind is held in
+        //< a flagged temporary (arc_hold_until_taken); a new value moves for it even where `fixed`.
         if !lctx.in_fn_body || r.slots.len < 2
             return
         $classes: = List<|Order_class|>.new(null)
         defer classes.free()
         for s in r.slots
-            classes.push(s.operand_class(lctx))
+            cls: = s.operand_class(lctx)
+            classes.push(.reads if s.takes && s.fresh && cls == .fixed else cls)
         $moves: = List<|Bool|>.new(null)
         defer moves.free()
+        $holds: = List<|Bool|>.new(null)
+        defer holds.free()
         $acts_after: = false
         $varies_after: = false
         for $i: = r.slots.len; i > 0; i -= 1
             cls: = classes.get(i - 1)
             moves.push(cls != .fixed && (acts_after || (cls == .acts && varies_after)))
+            holds.push(acts_after)
             acts_after = acts_after || cls == .acts
             varies_after = varies_after || cls != .fixed
         for i in Range.asc(r.slots.len)
             if !moves.get(r.slots.len - 1 - i)
                 continue
-            s: = r.slots.get(i)
+            $s: = r.slots.get(i)
             node: = s.parent.get_child(s.idx)
+            if s.takes && holds.get(r.slots.len - 1 - i) && lctx.can_own_temporaries()
+                node.lower(lctx)
+                held: = lower_arc.arc_hold_until_taken(node, s.take, lctx)
+                s.parent.set_child(s.idx, held.tmp)
+                s.retained = true
+                s.live_name = held.live_name
+                r.slots.set(i, s)
+                continue
             moved: =
                 (node.hoist_address(lctx) if s.reads_address(lctx)
                 else node.hoist_complex_expr(lctx, true))
             s.parent.set_child(s.idx, moved)
+
+    fn finish(r: Self$@, lctx: Lowering_ctx$@) //<
+        //< Once the consumer's operands are lowered: the retains still owed, and the held counts
+        //<
+        //< A retain of an operand not moved goes here, after every operand that could leave: such
+        //< an operand is `fixed` or nothing after it acts, so nothing between disturbs it. A held
+        //< count is now the consumer's, so no exit releases it any more.
+        r.finished = true
+        for s in r.slots
+            if !s.takes
+                continue
+            node: = s.parent.get_child(s.idx)
+            if !s.retained
+                s.take.retain(node, lctx)
+            if s.live_name.len > 0
+                lower_arc.arc_taken(s.live_name, lctx, node.loc)
 
 impl Operand_slot
     fn reads_address(r: Self, lctx: Lowering_ctx$@): Bool //<
@@ -235,6 +290,8 @@ impl Ast_node
         //< It takes the place's address into a temporary and returns `<temporary>$` in its stead
         //<
         //< The place is still read or written where it stands; only the address is fixed earlier.
+        if lctx.sema.packed_place_align(r) > 0
+            return r.hoist_packed_holder(lctx)
         loc: = r.loc
         ptr_id: = lctx.sema.env.make_ptr(r.type_id)
         addr: = Ast_node.new(.k_expr_postfix, "@", loc).with_type(ptr_id).add_child(r)
@@ -242,3 +299,35 @@ impl Ast_node
         tmp: = addr.hoist_complex_expr(lctx, true)
         return Ast_node.new(.k_expr_postfix, "$", loc).with_type(r.type_id).add_child(tmp)
             .add_child(Ast_node.new(.k_literal, "$", loc))
+
+    priv fn hoist_packed_holder(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
+        //< hoist_address for a field `#packed` leaves under-aligned: the holder is fixed instead
+        //<
+        //< A pointer to the field would claim its type's alignment, so the struct holding it is
+        //< fixed (its address, or the pointer reaching it). The steps from there are `.` and an
+        //< array's `[]`; an index among them moves by value, so it runs in order too, and its
+        //< bounds check runs where the field is used.
+        $chain: = List<|Ast_node$@|>.new(null)
+        defer chain.free()
+        $holder: = r
+        for _i in Range.asc(max_order_depth)
+            if holder == null || lctx.sema.packed_place_align(holder) == 0
+                break
+            chain.push(holder)
+            holder =
+                (holder.get_primary_inner_expr() if holder.kind_id == .k_expr_primary
+                else holder.get_postfix_receiver())
+        if holder == null || chain.len == 0
+            r.ice_panic("Lower ICE: a field under-aligned by '#packed' has no holder to fix")
+        last: = chain.get(chain.len - 1)
+        holder_at: = 1 if last.kind_id == .k_expr_primary && last.has_parentheses() else 0
+        last.set_child(holder_at,
+            (holder.hoist_address(lctx)
+            if holder.is_place_expr() && !lctx.sema.env.is_pointer(holder.type_id)
+            else holder.hoist_complex_expr(lctx, true)))
+        for $i: = chain.len; i > 0; i -= 1
+            step: = chain.get(i - 1)
+            if step.kind_id == .k_expr_postfix && step.postfix_op_text().equals("[") &&
+                step.get_child(2).order_class(lctx, 0) != .fixed
+                step.set_child(2, step.get_child(2).hoist_complex_expr(lctx, true))
+        return r

@@ -161,7 +161,7 @@ KSOS_POSIX_TEMPLATED := mq:msgq_demo mutex:mutex_demo mutex-nested:mutex_nested_
     wake-preempt:wake_preempt_demo event:event_demo preempt:posix_preempt_demo \
     delay-until:delay_until_demo lifecycle:lifecycle_demo isr:isr_signal_demo \
     task-manager:task_manager_demo kernel-check:kernel_check timeout:timeout_demo \
-    tick-mid-switch:tick_mid_switch_demo
+    tick-mid-switch:tick_mid_switch_demo dyn-race:dyn_race_demo
 
 ifneq ($(call rows_missing,$(KSOS_POSIX_TEMPLATED),2),)
 $(error a POSIX demo's row has no input: $(call rows_missing,$(KSOS_POSIX_TEMPLATED),2))
@@ -240,8 +240,8 @@ endef
 # $(call cm_link,<src.kspls>,<elf>[,<stem>]): a Cortex-M3 build (`bare_link`).
 cm_link = $(call bare_link,$(CM_CC),$(CM_OUT),$(CM_DIR)/link.ld,$(CM_OBJS),$(LIBGCC_CM),$(1),$(2),$(3),$(CM_MACHINE))
 
-# $(call cm_qemu,<elf>): runs it on MPS2-AN385 (Cortex-M3), under the cap (`ksos_capped_run`): the
-# only stop for a hung demo, since semihosting's exit returns 0 whatever the demo's verdict.
+# $(call cm_qemu,<elf>): runs it on MPS2-AN385 (Cortex-M3), under the cap (`ksos_capped_run`), the
+# only stop for a hung demo. QEMU's exit status is the demo's verdict (`con.exit`).
 # Caution: **Keep `-icount shift=auto`**: it makes the board's clock count executed instructions.
 # Without it the SysTick follows the host's clock, and a host that stalls QEMU gets two ticks
 # delivered back to back to catch up, which no real board does: the control loop's period check
@@ -448,12 +448,12 @@ test-ksos-ramtext: ksos-linkcheck-rp2040_board_probe
 	done; \
 	printf '%s (%s)\n' "$$RAMTEXT_OK_MSG" "$(words $(RAMTEXT_WINDOWS))"
 
-# Caution: With no ARM toolchain it skips **explicitly**. A non-empty `KSOS_REQUIRE_ARM` makes the
-# absence an error: **set it where the toolchain is promised**, or the check runs nowhere, green.
-KSOS_REQUIRE_ARM ?=
+# Caution: With no ARM toolchain it skips **explicitly**. `KSOS_REQUIRE_ARM=1` makes the absence
+# an error: **set it where the toolchain is promised**, or the check runs nowhere, green.
+KSOS_REQUIRE_ARM ?= 0
 ifeq ($(strip $(LIBGCC_CM)),)
-ifneq ($(strip $(KSOS_REQUIRE_ARM)),)
-test-ksos-link: export LINK_REQUIRED_MSG := ERROR: test-ksos-link is required here (KSOS_REQUIRE_ARM); it does not skip.
+ifeq ($(strip $(KSOS_REQUIRE_ARM)),1)
+test-ksos-link: export LINK_REQUIRED_MSG := ERROR: test-ksos-link is required here, as KSOS_REQUIRE_ARM=1 says. On a machine without the ARM toolchain, KSOS_REQUIRE_ARM=0 makes it skip; that round is then not CI's verdict.
 test-ksos-link:
 	@printf '%s\n' "$$ARM_TOOLCHAIN_HINT" >&2
 	@printf '%s\n' "$$LINK_REQUIRED_MSG" >&2
@@ -497,17 +497,25 @@ $(eval $(call ksos_gate_rule,cap,cap-check-spin))
 KSOS_QEMU_GATE_TARGETS := $(addprefix ksos-qemugate-,$(KSOS_QEMU_PARALLEL_DEMOS))
 
 # $(call ksos_run_gate,<target>,<log prefix>), shared by test-ksos-qemu and test-ksos-posix.
+# **A demo passes on three things at once**: its exit status is 0 (`set -o pipefail` keeps tee's
+# success from hiding a failure), its log holds no failure mark (`[FAIL]`, `RESULT: SOME FAILED`),
+# and **it holds a `RESULT: ALL PASS` line**. A demo prints that line only once its checks have
+# run, so a run whose checks were never reached (a task left waiting for ever, which ends the
+# scheduler in silence) fails here rather than passing on having said nothing wrong.
 # Caution: A body lined up by $(foreach) has to begin with a tab (only that marks a recipe line).
-# **The exit code alone is not enough** (semihosting exits 0): the log is grepped for a failure, and
-# `set -o pipefail` keeps tee's success from hiding one. The child runs `-j1`: a shared job server
-# **can build the same port .o at once**, so the caller makes the shared things first.
+# The child runs `-j1`: a shared job server **can build the same port .o at once**, so the caller
+# makes the shared things first.
 define ksos_run_gate
 	@echo "# --- $(2): $(1) ---"
 	@mkdir -p $(KSOS_LOG_DIR)
 	set -o pipefail; $(MAKE) -j1 $(1) 2>&1 | tee $(KSOS_LOG_DIR)/$(2)_$(1).log
-	@if grep -qE '\[FAIL\]|[1-9][0-9]* FAIL|RESULT:.*FAIL' $(KSOS_LOG_DIR)/$(2)_$(1).log; then \
+	@if grep -qE '\[FAIL\]|RESULT:.*FAIL' $(KSOS_LOG_DIR)/$(2)_$(1).log; then \
 		echo "ERROR: $(1) reported a failure (see $(KSOS_LOG_DIR)/$(2)_$(1).log)" >&2; exit 1; fi
+	@if ! grep -q '^RESULT: ALL PASS' $(KSOS_LOG_DIR)/$(2)_$(1).log; then \
+		printf '%s %s (see %s)\n' "$(1)" "$$KSOS_NO_PASS_MSG" "$(KSOS_LOG_DIR)/$(2)_$(1).log" >&2; \
+		exit 1; fi
 endef
+export KSOS_NO_PASS_MSG := printed no RESULT: ALL PASS line, so nothing says its checks ran
 
 ifeq ($(strip $(LIBGCC_CM)),)
 test-ksos-qemu:

@@ -1,0 +1,149 @@
+//< Builds a program through ksplc with a sanitizer, for the suites that run one
+//<
+//< **The one place such a build is composed**: `race_test` (ThreadSanitizer) and `sanitize_test`
+//< (the address and undefined-behaviour sanitizers) both build through it, so a link word or a
+//< backend added here reaches both.
+import "ksplc/tests/support/harness" as ksplc_harness
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `trim_spaces`
+import "std/sys"
+import "tests/support/harness"
+
+struct Built //< an executable, or why it was not built
+    exe: U8[]
+    why: U8[]
+    deps: U8[] //< the sources it was compiled from, one whole path a line
+
+priv fn words_of(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
+    //< Appends what `ksplc info <topic>` answers, word by word
+    //<
+    //< Caution: **Do not copy the link words here**; ksplc knows them.
+    r: = ksplc_harness.run(U8[][]::{ ksplc_harness.ksplc_exe(), "info", topic })
+    if r.code != 0
+        return false
+    for w in r.out.trim_spaces().split(' ', arena)
+        if w.len > 0
+            out.push(w)
+    return true
+
+fn build( //< Compiles entry (from the folder dir) through ksplc, and links it with cflags into exe
+    //<
+    //< **Both backends**: the C one, or `--to=llvm` where llvm is set, with the runtime `ksplc
+    //< emit-runtime` writes linked beside the IR. The libraries the program names (`#link`) are
+    //< linked too.
+    dir: U8[], //< the folder ksplc runs in, as the package's own `make test` runs it
+    entry: U8[], //< the program's source
+    exe: U8[], //< the executable to write; the files it is made from go beside it
+    cflags: U8[][], //< the sanitizer's options and the optimisation level
+    llvm: Bool, //< through the LLVM backend
+    marks: U8[], //<
+        //< What `--sanitize=` names to the LLVM backend (`address`); empty names nothing
+        //<
+        //< **The IR is instrumented only where it is marked**: clang's `-fsanitize=` passes over
+        //< an unmarked function. The C backend takes none, as its C compiler marks the C itself.
+    arena: Arena$@,
+): Built
+    gen: = arena.text().s(exe).s(".ll" if llvm else ".c").take()
+    libs: = arena.text().s(exe).s(".libs").take()
+    deps: = arena.text().s(exe).s(".deps").take()
+    $args: = List<|U8[]|>.new(arena)
+    for w in U8[][]::{ ksplc_harness.ksplc_exe(),
+        arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take(),
+        arena.text().s("--pkg-src-dir=").s(harness.root()).take(),
+        arena.text().s("--emit-libs=").s(libs).take(),
+        arena.text().s("--emit-deps=").s(deps).take() }
+        args.push(w)
+    if llvm
+        args.push("--to=llvm")
+        if marks.len > 0
+            args.push(arena.text().s("--sanitize=").s(marks).take())
+    args.push(entry)
+    args.push(gen)
+    made: = ksplc_harness.run_in(args.slice(), dir)
+    if made.code != 0
+        return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(made.out).take() }
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push(ksplc_harness.cc())
+    for f in cflags
+        argv.push(f)
+    argv.push("-std=c99")
+    argv.push(gen)
+    if llvm
+        for f in harness_build.llvm_cflags
+            argv.push(f)
+        // Caution: **The same ksplc that wrote the IR must emit it** (the version symbol matches
+        // them).
+        rt: = arena.text().s(exe).s(".runtime.c").take()
+        emitted: = ksplc_harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
+        if emitted.code != 0
+            return Built::{ .why = arena.text().s("emit-runtime failed:\n").s(emitted.out).take() }
+        argv.push(rt)
+    argv.push(arena.text().c('@').s(libs).take())
+    if !words_of("exe-flags", argv@, arena) || !words_of("link-libs", argv@, arena)
+        return Built::{ .why = "the link words cannot be asked of ksplc" }
+    argv.push("-o")
+    argv.push(exe)
+    linked: = ksplc_harness.run(argv.slice())
+    if linked.code != 0
+        return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
+    listed: = io.read_file(deps) catch
+        fallback ""
+    // A package's own files are listed from its folder; each path is made whole here.
+    whole: = arena.text()
+    for line in listed.lines(arena)
+        at: = line.find_char(' ').unwrap_or(0)
+        if at > 0 // a space, with a name before it
+            path: = line.sub_from(at + 1)
+            whole.s(path if sys.is_absolute(path) else fs.join(dir, path, arena)).c('\n')
+    return Built::{ .exe = exe, .deps = whole.take() }
+
+fn runs_with( //<
+    //< Empty where the C compiler builds and runs a program with cflags; else what it said
+    //<
+    //< **This is how a suite tells a missing sanitizer from a fault**: a C compiler or a platform
+    //< without its runtime fails here, before any program is built.
+    work: U8[], //< a folder of the suite's own
+    cflags: U8[][], //< the sanitizer's options
+    env: U8[][], //< `NAME=value` pairs the probe runs under, for an option the runtime may refuse
+    arena: Arena$@,
+): U8[]
+    c: = fs.join(work, "probe.c", arena)
+    exe: = fs.join(work, "probe.exe", arena)
+    io.write_file(c, "int main(void) { return 0; }\n") catch
+        return "cannot write the probe"
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push(ksplc_harness.cc())
+    for f in cflags
+        argv.push(f)
+    for w in U8[][]::{ c, "-o", exe }
+        argv.push(w)
+    built: = ksplc_harness.run(argv.slice())
+    if built.code != 0
+        return built.out
+    $run: = List<|U8[]|>.new(arena)
+    run.push("env")
+    for e in env
+        run.push(e)
+    run.push(exe)
+    ran: = ksplc_harness.run(run.slice())
+    return ("" if ran.code == 0
+        else arena.text().s("it builds but does not run:\n").s(ran.out).take())
+
+fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto the arena
+    //<
+    //< Caution: **A run keeps its words past the call that names them**, so a literal list (on that
+    //< call's frame) is copied here first.
+    $out: = List<|U8[]|>.new(arena)
+    for w in words
+        out.push(w)
+    return out.slice()
+
+fn pkg_env(arena: Arena$@): U8[][] //<
+    //< What a package's tests that start a child compiler, or name another package, find them by
+    return kept(U8[][]::{ arena.text().s("KSPLC_STD_DIR=").s(ksplc_harness.std_dir()).take(),
+        arena.text().s("KSPLC_PKG_SRC_DIR=").s(harness.root()).take() }, arena)

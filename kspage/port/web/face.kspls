@@ -190,8 +190,10 @@ fn kspage_web_name(): Sz
     ensure()
     return state.say(ed.name_at(page))
 
-// Makes the `len` bytes in the typing arena the name of the current place; 1 if set, empty removes
-// it. It is separate from a style's name.
+// Makes the `len` bytes in the typing arena the name of the current place; 1 if set, 0 if there
+// is no place, empty removes it. It is separate from a style's name. **A table's name no formula
+// could reach comes back as its reason** (`calc.Name_fault`): -1 a separator, -2 a leading digit
+// or `#`, -3 the leading `Day`.
 // Caution: **Refuse before layout** — layout decides whether it is a cell, so before it **a name
 // meant for the table attaches to the cell** while the screen says "set".
 #export
@@ -199,7 +201,16 @@ fn kspage_web_set_name(len: Sz): I32
     ensure()
     if page == null || len < 0 || len > input_cap
         return 0
-    return 1 if ed.set_name(page, U8[]::{ .ptr = input@, .len = len }) else 0
+    name: = U8[]::{ .ptr = input@, .len = len }
+    switch ed.name_fault_at(page, name)
+    case .none {}
+    case .separator
+        return -1
+    case .leading
+        return -2
+    case .type_name
+        return -3
+    return 1 if ed.set_name(page, name) else 0
 
 // Inserts the `len`-byte name in the typing arena as an inline that refers from the body; 1 if
 // inserted. Only a block with a running number can be referred to. The number is recounted at

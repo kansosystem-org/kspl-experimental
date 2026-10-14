@@ -111,6 +111,25 @@ pub fn fatal(msg: U8[]): I32 //< ends a suite that cannot go on (its input files
     end_suite()
     return code
 
+pub fn require_or_skip( //<
+    //< a check this machine lacks a tool for: a failure where required, else a SKIP
+    //<
+    //< **Required where the switch reads `1`**, as the repository sets it where CI's image holds
+    //< every tool (`REQUIRE_SWITCHES` in `mk/test.mk`). **The failure says how to run without it**,
+    //< so a machine lacking the tool is not left with a red it cannot act on.
+    name: U8[], //< the check
+    switch_name: U8[], //< the switch that requires the tool (`KANSO_REQUIRE_CHOWN`)
+    lacks: U8[], //< what this machine lacks, which the SKIP line says too
+)
+    if !sys.get_env(switch_name).unwrap_or("").equals("1")
+        verdict.skip_check(name, lacks)
+        return
+    verdict.check(name, false,
+        suite_arena.text().s(lacks).s("\n    ").s(switch_name)
+        .s("=1 makes that a failure here (the default on Linux, whose CI image holds every tool). ")
+        .s("On a machine without it, ").s(switch_name)
+        .s("=0 makes this a SKIP; such a round is not CI's verdict").take())
+
 // ==========================================
 // The compiler under inspection, and its std
 // ==========================================
@@ -227,7 +246,7 @@ pub fn run_capped(argv: U8[][], cwd: U8[], timeout_ms: I32): verdict.Run_out //<
     //< (`verdict.default_timeout_ms`'s).
     return verdict.run_child(argv, cwd, timeout_ms, suite_arena)
 
-pub fn run_all(items: subproc.Job[], name: U8[]): List<|verdict.Run_out|>$@ //<
+pub fn run_all(items: subproc.Job[], name: U8[]): List<|verdict.Run_out|> //<
     //< Runs jobs side by side (`verdict.run_children`), collected in `work_<name>` in the scratch
     dir: = fs.join(scratch, suite_arena.text().s("work_\{name\}").take(), suite_arena)
     return verdict.run_children(items, dir, suite_arena)

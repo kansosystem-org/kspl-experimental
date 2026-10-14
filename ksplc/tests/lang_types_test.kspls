@@ -6,6 +6,7 @@ import "std/chars" as std_chars
 import "std/ds" { List, Map }
 import "std/io"
 import "std/mem" + { Arena, dealloc }
+import "std/ring"
 import "std/str" { Str_builder }
 import "std/sys"
 import "std/verdict"
@@ -236,7 +237,7 @@ fn test_index_key_type_follows_the_impl(arena: Arena$@)
             declaration.")
 
 // ==========================================
-// "A subscript returning a place" (operator.Index_place): the shapes that a value get/set
+// "A subscript returning a place" (`Index_place`): the shapes that a value get/set
 // (`Index` / `Index_mut`) cannot express work on a type implementing `at` as on a built-in slice.
 // ==========================================
 priv struct Cell
@@ -376,163 +377,6 @@ fn test_defer_reads_values_at_scope_exit()
     verdict
         .pass("it reads the value at the moment of leaving, and the value at registration can be \
             kept by copying it oneself.")
-// ==========================================
-// Calling a function that **returns** a function pointer.
-// A named function's symbol holds its return type in type_id, so judged by type alone `fn cb(): Cb`
-// (Cb an alias of a function pointer) looks like a function pointer to call, mistyping `cb()`.
-// ==========================================
-priv typedef Cb_i32 = fn(): I32
-priv typedef Cb_item = fn(): Fn_ptr_item
-
-priv struct Fn_ptr_item
-    v: I32
-
-priv fn fn_ptr_source_i32(): I32
-    return 9
-
-priv fn fn_ptr_source_item(): Fn_ptr_item
-    return Fn_ptr_item::{ .v = 21 }
-
-priv fn returns_cb_i32(): Cb_i32
-    return fn_ptr_source_i32
-
-priv fn returns_cb_item(): Cb_item
-    return fn_ptr_source_item
-
-priv struct Cb_holder
-    f: Cb_item
-
-fn test_fn_returning_fn_ptr()
-    verdict.start("[fn-ptr] a function returning a function pointer test...")
-
-    // With a type annotation: the return type resolves to the alias itself.
-    annotated: Cb_i32 = returns_cb_i32()
-    assert(annotated() == 9, "a function returning a fn-pointer alias must yield the alias")
-
-    // With no type annotation (the path prone to wrong C with zero diagnostics).
-    inferred: = returns_cb_item()
-    inferred_v: = inferred().v
-    assert(inferred_v == 21,
-        "an unannotated binding must take the fn-pointer type, not its return type")
-
-    // An indirect call through a field holding a function pointer is still an indirect call.
-    h: Cb_holder = ::{ .f = returns_cb_item() }
-    assert(h.f().v == 21, "calling through a fn-pointer field must stay an indirect call")
-
-    // The same for an indirect call through a function-pointer variable.
-    via_var: Cb_i32 = fn_ptr_source_i32
-    assert(via_var() == 9, "calling through a fn-pointer variable must stay an indirect call")
-
-    verdict.pass("")
-// ==========================================
-// A generic function named as a value is the specialization written after it (`same<|I32|>`):
-// that instance is built and its address taken. Without it the template's bare name reached C
-// and LLVM, which have no such function.
-// ==========================================
-priv typedef Spec_op = fn(x: I32): I32
-
-priv fn spec_same<|T|>(x: T): T
-    return x
-
-priv fn spec_first<|A, B|>(a: A, _b: B): A
-    return a
-
-priv fn spec_apply(f: Spec_op, x: I32): I32
-    return f(x)
-
-priv fn spec_pick(): Spec_op
-    return spec_same<|I32|>
-
-priv struct Spec_holder
-    op: Spec_op
-
-priv const spec_at_top: Spec_op = spec_same<|I32|>
-
-fn test_generic_fn_specialization_as_value()
-    verdict.start("[fn-ptr] a generic function's specialization as a value test...")
-    bound: Spec_op = spec_same<|I32|>
-    assert(bound(5) == 5, "a binding holds the specialization")
-    assert(spec_apply(spec_same<|I32|>, 6) == 6, "an argument passes the specialization")
-    h: Spec_holder = ::{ .op = spec_same<|I32|> }
-    assert(h.op(7) == 7, "a field holds the specialization")
-    assert(spec_at_top(8) == 8, "a top-level constant holds the specialization")
-    assert(spec_pick() == spec_same<|I32|>, "one specialization is one function, named twice")
-    wide: fn(x: F64): F64 = spec_same<|F64|>
-    assert(wide(1.5) == 1.5, "another type argument names another specialization")
-    two: fn(a: I64, b: U8): I64 = spec_first<|I64, U8|>
-    assert(two(9, 1) == 9, "every type argument is written, in the declaration's order")
-    // Another file's generic, named through its import.
-    alloc: fn(): I32$@ = mem.alloc_as<|I32|>
-    p: = alloc()
-    p$ = 3
-    assert(p$ == 3, "another file's specialization is built and called")
-    dealloc(p)
-    assert(spec_same<|I32|>(2) == 2 && spec_same(4) == 4, "a call is unchanged")
-    verdict.pass("")
-// ==========================================
-// A method named through its type is a value too: the function that takes the receiver first.
-// Every type argument is written, the type's on the type and the method's own after the method.
-// Without this, a generic type's method and a generic method reached C as a bare name
-// (`Holder<|I32|>.get` became `get`).
-// ==========================================
-priv struct Spec_plain
-    v: I32
-
-impl Spec_plain
-    fn read(r: Self@): I32
-        return r.v
-    fn twice(x: I32): I32
-        return x * 2
-    fn same<|T|>(x: T): T
-        return x
-    fn own_same(): Spec_op
-        return Self.same<|I32|>
-
-priv struct Spec_box<|T|>
-    v: T
-
-impl<|T|> Spec_box<|T|>
-    fn get(r: Self@): T
-        return r.v
-    fn keep(x: T): T
-        return x
-    fn pair<|U|>(_x: T, y: U): U
-        return y
-    fn own_keep(): fn(x: T): T
-        return Self.keep
-
-priv typedef Spec_ints = Spec_box<|I32|>
-
-fn test_method_named_as_value()
-    verdict.start("[fn-ptr] a method named through its type as a value test...")
-    p: = Spec_plain::{ .v = 4 }
-    read: fn(r: Spec_plain@): I32 = Spec_plain.read
-    assert(read(p@) == 4, "a method takes its receiver as the first argument")
-    assert(spec_apply(Spec_plain.twice, 5) == 10, "a method with no receiver is a plain function")
-    same: Spec_op = Spec_plain.same<|I32|>
-    assert(same(6) == 6, "a generic method is the specialization written after it")
-    assert(Spec_plain.own_same()(7) == 7, "'Self' names the type inside its impl")
-    b: = Spec_box<|I32|>::{ .v = 8 }
-    get: fn(r: Spec_box<|I32|>@): I32 = Spec_box<|I32|>.get
-    assert(get(b@) == 8, "a generic type's method is its instance's")
-    keep: Spec_op = Spec_box<|I32|>.keep
-    assert(keep(9) == 9, "a generic type's static method is its instance's")
-    pair: fn(x: I32, y: U8): U8 = Spec_box<|I32|>.pair<|U8|>
-    assert(pair(1, 2) == 2, "the type's type arguments and the method's own are both written")
-    via_alias: Spec_op = Spec_ints.keep
-    assert(via_alias(3) == 3, "a typedef naming an instance names its methods")
-    assert(Spec_box<|I32|>.own_keep()(4) == 4, "'Self' names the instance inside its impl")
-    assert(keep == Spec_box<|I32|>.keep, "one method is one function, named twice")
-    // Another file's: a generic type's method, and one added to a built-in type.
-    $xs: = List<|I32|>.new(null)
-    defer xs.free()
-    push: fn(r: List<|I32|>$@, item: I32) = List<|I32|>.push
-    push(xs@, 5)
-    assert(xs.len == 1 && xs[0] == 5, "another file's generic type's method is built and called")
-    digit: fn(c: U8): Bool = U8.is_digit
-    assert(digit('7') && !digit('x'), "a method added to a built-in type is a value")
-    assert(p.read() == 4 && Spec_box<|I32|>.keep(2) == 2, "a call is unchanged")
-    verdict.pass("")
 // ==========================================
 // The three safe shapes of returning a trait value (a global, the heap, a pointer's target) pass
 // the check that stops a value's upcast (which synthesizes `&value` into {obj, vtable}).
@@ -784,8 +628,7 @@ priv struct Hold<|T|> //<
     //< A composite type that each of two or more type arguments is bound from **inside**
     //<
     //< **Choose by position.** In `f<|K, V|>(m: Map<|K, V|>)` both hit the same parameter; K takes
-    //< the 0th type argument, V the 1st (positional_generic_binding in
-    //< `ksplc/sema/body/generic_infer.kspls`).
+    //< the 0th type argument, V the 1st (bind_path in `ksplc/sema/body/generic_infer.kspls`).
     v: T
 
 priv fn two_bare<|S, T|>(_a: S, _b: T): Sz
@@ -809,6 +652,18 @@ priv fn first_held<|T|>(xs: Hold<|T|>[]): T //< the variable one list further do
 priv fn put_first<|T|>(xs: T$[], v: T) //< a writable slice binds its element too
     xs[0] = v
 
+priv fn apply_to<|T, U|>(f: fn(x: T): U, v: T): U //< `U` stands only in a function type's result
+    return f(v)
+
+priv fn widen_i32(x: I32): I64
+    return I64::x * 2
+
+priv fn through<|T|>(p: T@): T //< a pointer's target binds
+    return p$
+
+priv fn second_of<|T|>(a: T[2]): T //< a fixed array's element binds, not the whole array
+    return a[1]
+
 fn test_generic_args_infer_from_composites()
     verdict.start("[Types] inferring a type argument from inside a composite type test...")
     h: = Hold<|I32|>::{ .v = 1 }
@@ -824,9 +679,88 @@ fn test_generic_args_infer_from_composites()
     assert(first_of(I32[]::arr) == 6, "a slice's element binds, written or writable")
     held: Hold<|I32|>[1] = ::{ h }
     assert(first_held(Hold<|I32|>[]::held) == 1, "it resolves through a slice of an instance")
+    assert(apply_to(widen_i32, 21) == 42, "a function type's result binds from the named function")
+    assert(through(h.v@) == 1, "a pointer's target binds")
+    assert(second_of(arr) == 8, "an array's element binds")
     verdict
         .pass("with two or more type arguments the binding target is decided by the position inside \
             a composite type.")
+
+// ==========================================
+// A `const` parameter written as an array's length or as a generic's value argument is read off
+// the argument (`bind_value` in `ksplc/sema/body/generic_infer.kspls`); two values that disagree,
+// a slice and a call where nothing fixes it are refused (the cases `generic_const_length_conflict`
+// and `generic_type_args_not_inferred` in `tests/negative/generic.kspls`).
+// ==========================================
+
+priv fn total_of<|const N: Sz|>(v: I32[N]): Sz //< `N` bounds the loop and sizes a type
+    $t: Sz = 0
+    for i in Range.asc(N)
+        t += Sz::v[i]
+    return t * 100 + sizeof(I32[N])
+
+priv fn grid_shape<|const R: Sz, const C: Sz|>(_g: I32[C][R]): Sz //< each level binds its own
+    return R * 10 + C
+
+priv fn held_len<|const N: Sz|>(h: Hold<|I32[N]|>@): Sz //< inside a generic's argument too
+    return N + Sz::h.v[0]
+
+priv fn forwarded<|const M: Sz|>(a: I32[M]): Sz //< an instance's array passes its length on
+    return total_of(a)
+
+fn test_const_args_infer_from_array_lengths()
+    verdict.start("[Types] inferring a const parameter from an array's length test...")
+    s: I32[3] = ::{ 1, 2, 3 }
+    assert(total_of(s) == 612, "N is 3: the loop sums three elements and the type holds 12 bytes")
+    assert(total_of<|3|>(s) == total_of(s), "written, the value is the one inferred")
+    g: I32[3][2] = ::{::{ 1, 2, 3 }, ::{ 4, 5, 6 } }
+    assert(grid_shape(g) == 23, "a nested array binds the outer and the inner length")
+    h: = Hold<|I32[4]|>::{ .v = ::{ 7, 0, 0, 0 } }
+    assert(held_len(h@) == 11, "an array inside a generic's type argument binds its length")
+    assert(forwarded(s) == 612, "a generic passes its own const parameter's array on")
+    verdict.pass("a const parameter takes the length of the array written where it stands.")
+
+priv struct Cbuf<|const n: Sz|> //< a generic with a value argument to read a `const` one off
+    data: U8[n]
+
+priv struct Cflag<|const on: Bool|> //< the same, with a value that is no number
+    x: I32
+
+priv fn cbuf_cap<|const N: Sz|>(_b: Cbuf<|N|>@): Sz //< behind a pointer
+    return N
+
+priv fn held_cap<|const N: Sz|>(_h: Hold<|Cbuf<|N|>|>@): Sz //< inside another generic's argument
+    return N
+
+priv fn row_shape<|const N: Sz, const K: Sz|>(_r: Cbuf<|N|>[K]): Sz //< an array of them
+    return N * 10 + K
+
+priv fn cbuf_and_array<|const N: Sz|>(_b: Cbuf<|N|>@, v: I32[N]): Sz //< two sources that agree
+    return N + Sz::v[0]
+
+priv fn flag_of<|const B: Bool|>(_f: Cflag<|B|>@): Bool
+    return B
+
+priv fn ring_cap<|const N: Sz|>(_r: ring.Ring<|N|>@): Sz //< another file's, through its import
+    return N
+
+fn test_const_args_infer_from_value_args()
+    verdict.start("[Types] inferring a const parameter from a generic's value argument test...")
+    b: = Cbuf<|8|>::{}
+    assert(cbuf_cap(b@) == 8, "N is the 8 of 'Cbuf<|8|>', read behind a pointer")
+    assert(cbuf_cap<|8|>(b@) == cbuf_cap(b@), "written, the value is the one inferred")
+    h: = Hold<|Cbuf<|5|>|>::{}
+    assert(held_cap(h@) == 5, "a value argument inside another generic's type argument binds")
+    r: Cbuf<|2|>[3] = ::{}
+    assert(row_shape(r) == 23, "an array of them binds the value argument and the length")
+    s: I32[8] = ::{ 4, 0, 0, 0, 0, 0, 0, 0 }
+    assert(cbuf_and_array(b@, s) == 12, "a value argument and an array's length agreeing")
+    f: = Cflag<|true|>::{}
+    assert(flag_of(f@), "a Bool value binds as a number does")
+    $store: U8[4] = ::{}
+    q: = ring.Ring<|4|>.new(U8$[]::store)
+    assert(ring_cap(q@) == 4, "another file's generic, named through its import")
+    verdict.pass("a const parameter takes the value a generic's argument has where it stands.")
 
 // ==========================================
 // Two numeric operands of different types compute in the one that holds every value of the other

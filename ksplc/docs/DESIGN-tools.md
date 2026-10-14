@@ -126,6 +126,8 @@ Caution: **Measure with the cache an ordinary session would have.** ksplc's own 
 
 Caution: **Match on the definition, not the spelling**: the same spelling appears in comments, strings and other names.
 
+**A name in a selective import's braces is a place of what it names; an `as` name is a name of its own.** In `import "lib" { helper as h }`, the `helper` is a use of `lib`'s `helper` (the analysis binds it, `bind_import_symbols` in `ksplc/sema/session/imports.kspls`), so it is listed and rewritten with that function's other places. `h` and its uses are `h`'s places alone. Counted with `helper`'s, a rename of `helper` would turn `h()` into a name that file does not bind, and the program would stop compiling. The narrowing also reads only the bodies that spell `helper`, so `h`'s uses would be found in some files and missed in others.
+
 **The list is ordered by file name, then line, then column.** It is gathered in a `Map`, whose order follows the hash, and the LSP leaves the order open. A person reads the references, so an order that changes between requests makes the same answer shuffle on screen.
 
 **`context.includeDeclaration` is honoured exactly; where it is absent, the declaration is counted.** The default is to return the declaration, and false comes only to leave it out. An implementation that ignores the option cannot answer "leave the declaration out and show only the uses", a common complaint.
@@ -135,6 +137,17 @@ Caution: **Match on the definition, not the spelling**: the same spelling appear
 Caution: **Do not ask the client for it.** The server holds both, so receiving them from the client counts the same thing in two places (as with the workspace's file list, "The server finds the workspace's files without asking the client").
 
 Only the call hierarchy's requests carry no position; there the clue is the `item.data` the server returned earlier.
+
+## A rename is refused where the new name cannot stand
+
+**A rename answers an error naming the reason, and writes nothing, where its edits would break the program or change what it means** (`ksplc/lsp/rename.kspls`). An edit applied across files is hard to take back by hand, and it lands in files nobody has open, so the refusal comes before it, not as diagnostics after it.
+
+* **The new name is checked against the grammar itself**: it must read whole as `Identifier`, and a word `_Keyword` reads is named as a keyword (`reads_whole` in `ksplc/parse/load.kspls`). A list of reserved words kept here would miss the next one the grammar adds.
+* **A declaration outside the workspace is read only.** The workspace is what the walk lists ("The server finds the workspace's files without asking the client"), and `holds` in `ksplc/lsp/workspace.kspls` asks the walk's own rules of one file. An installed standard library or a package read from `--pkg-src-dir` sits outside it, and an edit there rewrites a copy every other project shares. A repository that holds `std/` itself, as this one does, renames in it as in any other folder. Every place is asked, not only the declaration, so a use in such a file refuses the rename too.
+* **`prepareRename` asks the second question of the declaration alone**, from the document's own analysis, so the editor refuses before a name is typed, without the workspace's analysis the rename itself needs. The capability is declared only to a client that says it sends the request, as the protocol allows.
+* **A new name already declared where it would land is refused.** At each place the name is written bare, every scope around it is searched: the block, the blocks enclosing it, the function's parameters, the file's declarations and the names its imports bind. A declaration found there would be declared twice, hide the renamed one, or be hidden by it. A member (a field, a variant, a method) is reached after a `.`, so it is compared only with its type's members, a method also with the methods of the type's other `impl`s.
+* **The search is conservative.** A declaration counts for its whole scope, before the place as well as after it, and a `switch` counts the bindings of all its arms together. A rename that could have gone through is sometimes refused, and the message names the declaration in the way, so the person can see why. The opposite error, an edit that silently changes which declaration a name means, is the one the check exists to stop.
+* **What is declared is read from the compiler's own record** (each declaration's symbol, `sym_ptr`), not from the shapes of the tree, so a binding of any form (a `for`'s item, `if v: =`, a pattern's payload) is found. A field is no symbol, and is read from its declaration.
 
 ## The call hierarchy identifies a definition by an FQN that includes the file
 

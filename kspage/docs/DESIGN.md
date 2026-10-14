@@ -1493,7 +1493,9 @@ The value is shown only at layout (`Inline.show_value`), and goes into neither t
 
 **A `.` after digits is a decimal point only where a digit follows it**, so a method can follow a whole number (`2026.year()`, `1.round(0)`). In `5.0.round(2)` the first `.` is the point and the second starts the method.
 
-**`Day` is a type's name**, so no table may be named `Day` (`Day.of` would read as its cell). `if` and `else` are keywords, so `ifx` is another word, not `if`.
+**A number starts with a digit, as in KSPL**: `=.5` is `#SYNTAX!`, and `0.5` is its one spelling. In KSPL a leading `.` starts a name (`.some`), and a second spelling of one number is not taken (Principle 6).
+
+**`Day` is a type's name**, so no table's name may start with `Day` (`Day.of` would read as its cell; "A table is pointed at by name" below). `if` and `else` are keywords, so `ifx` is another word, not `if`.
 
 ### A day is a count of days from 1970-01-01, and nothing returns today
 
@@ -1504,6 +1506,8 @@ Values get no day kind; with one, every step of the reckoning would branch on "n
 Caution: **Do not move the origin**: every day in every saved document would shift. The calendar is the Gregorian one extended into the past, ignoring each country's switch-over.
 
 **A text is read and shown as a day only where its style says so** (`Number_spec.dated`; no type is guessed, "What it does not hold" above). On a day the number format does not apply (neither grouping nor per cent is read): with one text formatted two ways, the screen cannot show which acted. A day cannot be written literally inside a formula (`2026-08-18` is a subtraction): write `Day.of(year, month, day)`, and take it apart with `.year()` / `.month()` / `.day()`.
+
+**The calendar reaches 10^13 years either way** ([`model/day.kspls`](../model/day.kspls)'s `year_reach`): its count of days is a whole number an F64 holds exactly, so the day a formula names is the day it reads back. `Day.of` past it is `#VALUE!`; reckoned anyway, the count would be rounded to another day, and far enough out it would overflow an I64.
 
 **Nothing returns "today"**: the same document would give a different answer each day, and layout would stop being a pure function, which the tests stand on.
 
@@ -1533,7 +1537,17 @@ A range can point into another table too (`detail!A1:B2.sum()`); **the name cove
 
 Caution: **Do not fall back silently to the paragraph.** That is the same mistake as putting the table's name on the cell.
 
-**A name is recognised by the `!` after it**; where none follows, the reader puts back what it read (as with a range's `:`). Only the formula's separators are barred from a name, so a name can be Japanese prose as it is.
+**A name is recognised by the `!` after it**; where none follows, the reader puts back what it read (as with a range's `:`). A name ends at the formula's first separator: a space, an operator (`+ - * / < > =`), a bracket, `,` or `:`. So `A1>T!A1` compares `A1` with `T`'s `A1`.
+
+**A table takes only a name a formula can reach** ([`expr/calc.kspls`](../expr/calc.kspls)'s `name_fault`, checked by `Editor.set_name`). Three kinds are refused where the name is set, and the status bar says which rule was broken:
+
+| The name | Why no formula reaches it |
+| :-- | :-- |
+| holds a separator, a `!` or a control character (`Q1 sales`, `my-table`) | the name would end there |
+| starts with a digit or `#` (`2026`) | it reads as a number or a mark |
+| has `Day` as its leading letters (`Day`, `Day2`) | it reads as the date type |
+
+Accepted, such a name would sit on the table while every formula using it read `#REF!`, `#SYNTAX!` or `#NAME!`, with nothing pointing at the name as the cause. **Every other character is allowed**, so a name can be Japanese prose as it is, and words join with `_` (`Q1_sales`). **Only a table's name is held to this**: no formula reads a frame's or a paragraph's, so `Figure 1` stays a fine name for a figure. The loader takes a name as it is, for the reason a style's name is not refused there ("A style name holds no whitespace" below).
 
 ### The dependencies are followed while it is solved
 
@@ -1565,7 +1579,7 @@ So cells are solved **in dependency order, not in the order written**, and an ea
 
 **A place is a range only if a `:` follows it**; otherwise the reader puts back what it read, or the `A1` of `A1+2` would be taken for a range's end.
 
-**A cell in the range that is not a number is skipped**: a range means "the numbers around here" without naming each, and empty cells and heading words get mixed in. An operator differs: `=A1+A2` names two cells, so a non-number there is an error. An error mark inside the range is carried through; skipped, it would let a total look right while a cell inside it is `#CYCLE!`.
+**A cell of typed text that is not a number is skipped**: a range means "the numbers around here" without naming each, and empty cells and heading words get mixed in. An operator differs: `=A1+A2` names two cells, so a non-number there is an error. **A formula in the range that gives no number is carried through, whatever the reason** (`#CYCLE!`, or `#VALUE!` from `=1/0` or from pointing at a text): it shows a mark, and skipped, it would let a total look right beside it. Which of the two a cell is comes from the cell, typed or formula (`typed` in [`expr/calc.kspls`](../expr/calc.kspls)), not from the reason: one reason, "not a number", covers both a heading word and `=1/0`.
 
 **With no number in the range**, the total and the count are 0, but there is no least or greatest value (`#VALUE!`).
 
@@ -1595,7 +1609,7 @@ Solving only the chosen arm would make the same formula touch different cells fr
 
 Caution: **Do not merge the two.** If the number format changed the value, merely changing the places shown would move a total.
 
-**Round at the last place when writing a number out**: truncating shows F64's 1.23 (an F64 is a 64-bit floating-point number, which stores 1.23 a little under) as "1.229999". The larger the number, the fewer decimal places can be written: rounding multiplies by 10 to the power of the places and converts to an integer. **Past about 9×10^18, near the edge of I64 (a 64-bit integer), nothing is converted**, since a conversion past I64's range has no fixed answer ([`expr/shown.kspls`](../expr/shown.kspls)'s `whole_of`). Such a number is written as the F64's own shortest text (`1e+300`, which reads back as the same number), with no grouping or places, and is not rounded: an F64 that large holds no fraction. A count of days that large names no day: `.year()` gives `#VALUE!`, and a date format writes it as a number.
+**Round at the last place when writing a number out**: truncating shows F64's 1.23 (an F64 is a 64-bit floating-point number, which stores 1.23 a little under) as "1.229999". The larger the number, the fewer decimal places can be written: rounding multiplies by 10 to the power of the places and converts to an integer, and **no more places are written than the F64 holds**. Scaled, the number stays under 2^53, past which an F64 skips integers, so `=123456789012345678` shows `123456789012345680` (the F64's own value), never a made-up `…676.8` ([`expr/shown.kspls`](../expr/shown.kspls)'s `safe_places`). **The sign is written after rounding**: what rounds to 0 shows `0`, never `-0` (`=0.3-0.1-0.2`). **Past about 9×10^18, near the edge of I64 (a 64-bit integer), nothing is converted**, since a conversion past I64's range has no fixed answer ([`expr/shown.kspls`](../expr/shown.kspls)'s `whole_of`). Such a number is written as the F64's own shortest text (`1e+300`, which reads back as the same number), with no grouping or places, and is not rounded: an F64 that large holds no fraction. A count of days that large names no day: `.year()` gives `#VALUE!`, and a date format writes it as a number.
 
 ### Conditional styles are resolved at layout
 
@@ -1648,7 +1662,9 @@ Caution: **Solve the body after the tables.** Solved first, a body formula would
 | `=A2*2` | `=A3*2` |
 | `=A1:A4.sum()` | `=A1:A5.sum()` (the range takes in the row added) |
 
-Caution: **A formula pointing at the deleted row itself becomes `#REF!`**; closing up the numbers would silently point it at the neighbouring cell. So `#REF!` is also text a formula may contain, or a rewritten formula could not be read.
+Caution: **A formula pointing at the deleted row itself becomes `#REF!`**; closing up the numbers would silently point it at the neighbouring cell. So `#REF!` is also text a formula may contain, with its table's name too (`detail!#REF!`), or a rewritten formula could not be read.
+
+**A reference that does not move is copied whole, its name included**: read again a character at a time, the `A2` of `detail!A2` would pass for a reference with no name and move with the formula's own table.
 
 **A range shrinks by the part of its end that was deleted**: turning the end into `#REF!` would make the whole range unreadable and lose the total of the cells still there. Only when the near end passes the far end is the whole range `#REF!`.
 
@@ -1955,6 +1971,11 @@ Opening a saved text replaces the whole document, and everything that pointed in
 **Reading and writing CSV share one set of quoting rules** ([`write/csv.kspls`](../write/csv.kspls)). With two, kspage could write a file it cannot read back.
 
 **Export writes the text shown, not the formula.** CSV carries values, and the receiver cannot solve a formula. Imported text goes into the cell as it is, so a text beginning with `=` becomes a formula, as if typed. Rows are padded to the longest row; otherwise the cell count would vary from row to row and the columns would be undefined.
+
+**A text a spreadsheet would run as a formula is written with a leading `'`** (`field_into`): one starting with `=`, `+`, `-`, `@`, a tab or a carriage return. A spreadsheet opening the file reads such a field as a formula, so a cell typed as words (`-to do`, or a received document's `+HYPERLINK(…)`) would run on the reader's machine; `'` is the mark spreadsheets read as "this is text". A field is changed, not merely quoted, because spreadsheets run a quoted formula too.
+
+* **A cell whose value is a number is never marked** (`Inline.figure`): `-5` stays `-5`, and so does a formula's answer. Marked, every negative number would arrive as text.
+* **Reading takes the `'` back off, exactly where writing puts one on** (`unguarded`): a field whose text, after its leading `'`s, starts with one of those characters loses one `'`. So a text typed with its own leading `'` (`'=x`) goes out as `''=x` and comes back as typed, and kspage reads what it wrote (the rule above).
 
 ## A document's past lives in its files
 
@@ -2480,6 +2501,10 @@ Refusing, as Word's field does, tells the writer what happened.
 
 **Both entry points, the file ([`share/store.kspls`](../share/store.kspls)) and the screen ([`port/web/face.kspls`](../port/web/face.kspls)), check the same numbers.** One wider entry point would make the range meaningless, so the model holds the ranges and the entry points only read them (Principle 6: one means to one purpose).
 
+**A length the editor makes itself is brought inside the range, not refused**: a column fitted to its text, a border or a frame dragged or nudged, a frame placed by number, a picture at the size it came in. Nobody typed a number the screen could refuse, so a refusal would not say what to change; kept outside, the document saves but never opens again. The two writers every such size and frame passes ([`write/edit.kspls`](../write/edit.kspls)'s `do_set_size`, [`write/field.kspls`](../write/field.kspls)'s `do_set_frame`) bring it in with `limit.length_in`, and a shape drawn anew takes the same `field.rect_in`. A picture larger than the range is placed at the largest size it holds, its proportions kept (`Editor.insert_image`). This is not the rounding the caution above forbids: nothing a file says is changed, and what the screen shows is what is saved.
+
+**A merge or a nesting the editor would make outside the range is refused where it is asked for, not brought inside.** Merging a selection of more than 1000 rows or columns, adding a column that would widen a merge past 1000, and putting a block where it would stand deeper than 32 levels (each slide put in a slide's frame goes one level down) would each save a file that never opens again. Brought inside, the edit would change the document's shape instead: a merge covering fewer cells than were selected, a column added beside the merge rather than through it, a slide put somewhere other than where it was asked for. So merging, adding a column and inserting a slide refuse and say why in the status bar (`Merge_end.too_wide` and `Line_end.too_wide` in [`write/cells.kspls`](../write/cells.kspls), `Surface_end.too_deep` in [`write/insert.kspls`](../write/insert.kspls)). Every insertion asks `Editor.fits_below` in [`write/block.kspls`](../write/block.kspls) before it changes anything; the others reach the depth only inside some thirty slides nested in one another, and refuse with their usual message.
+
 ```mermaid
 flowchart LR
   file["A saved file<br/>(share/store.kspls)"] --> check{"Inside the range in<br/>model/limit.kspls?"}
@@ -2948,6 +2973,19 @@ Note: Both numbers come from the same place the layout uses (`kspage/model/numbe
 **It is one per column.** Markdown can write alignment only per column, so the writer takes the header row's cells. A different alignment in a lower row cannot be written. Taking "any row that holds one" would let adding one row change the whole column's alignment. Left is the default, written `---`.
 
 **The annotations (`Inline.remark`) and the asides (`Block.aside`) are not written**, and get no mark. They are not the document's contents, so nothing is dropped from the flow.
+
+**A text is escaped only where CommonMark (and GFM, whose tables the writer uses) would read it as markup** (`escape_into`), so the export renders as the document reads and `snake_case` stays readable:
+
+| What | Escaped |
+| :-- | :-- |
+| `\` `` ` `` `*` `[` `]` `<` `~` | everywhere (`~` is GFM's strikethrough, and three open a fence) |
+| `#` `>` `-` `+` `=`, and the `.` or `)` after leading digits | where the text starts a block's contents: a line's start, and **after a list's `- `**, since an item holds blocks (`- # x` is a heading inside the item) |
+| spaces and tabs leading such a text | written as `&#32;` and `&#9;`: four open a code block, and fewer are dropped |
+| `&` | only where it starts a character reference (`&amp;`, `&#169;`): `Fish &amp; chips` would show `Fish & chips` |
+| `_` | unless it stands between two ASCII letters or digits: a bracket beside it lets it open emphasis (`(_x_)`), and so may a character outside ASCII |
+| a heading's trailing run of `#` | a `\` before it, or it is read as the closing sequence and dropped (`Item #`) |
+
+**What the writing gathers goes in an arena of its own, thrown away at the end** (`write`): the headings, the notes, a table's cells. Put in the document's arena, every export would grow the open document for good, as `layout` would (its own caution). Only a reference's shown number stays in the document's arena, where `Inline.shown` keeps it.
 
 ### Plain text holds one line per block
 

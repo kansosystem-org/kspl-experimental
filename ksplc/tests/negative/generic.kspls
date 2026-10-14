@@ -21,6 +21,33 @@ fn main(): I32
   _b: = f(1)
   _c: = f(2I64)
   return 0
+// ==== case generic_body_error_names_instance
+//< An error in a generic's body names the instantiation it met, and the line that asked for it
+//<
+//< The line alone is the template's, and the mistake may be the caller's type argument. The chain
+//< reaches the caller's own line, innermost first; a second instance meeting the same error adds
+//< nothing, the error being reported once (`instance_notes` in `sema/session/ctx.kspls`).
+// EXPECT: generic_body_error_names_instance.kspls:17:12: error: Operator '<' requires
+// EXPECT: Note: in 'generic_body_error_names_instance.smaller<|generic_body_error_names_instance.Pt|>', instantiated at generic_body_error_names_instance.kspls:20:12.
+// EXPECT: Note: in 'generic_body_error_names_instance.wrap<|generic_body_error_names_instance.Pt|>', instantiated at generic_body_error_names_instance.kspls:24:11.
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: Qt|>'
+priv struct Pt
+    x: I32
+priv struct Qt
+    y: I32
+
+priv fn smaller<|T|>(a: T, b: T): Bool
+    return a < b
+
+priv fn wrap<|T|>(a: T, b: T): Bool
+    return smaller<|T|>(a, b)
+
+fn main(): I32
+    _i: = wrap<|I32|>(1, 2)
+    _p: = wrap<|Pt|>(Pt::{ .x = 1 }, Pt::{ .x = 2 })
+    _q: = wrap<|Qt|>(Qt::{ .y = 1 }, Qt::{ .y = 2 })
+    return 0
 // ==== case generic_call_arg_types
 //< A generic call's arguments are checked against the parameter types after instantiation too
 //<
@@ -309,21 +336,27 @@ fn main(): I32
 //<
 //< The `Output` of `std.lang.Index<|Idx, Output|>` is replaced by the implementing type's own
 //< type; `Output`, not a concrete type, is what was written, so no visibility diagnostic stands.
-//< The program fails on purpose (an undefined symbol), and EXPECT-NOT finds no visibility one.
-// EXPECT: undefined path or identifier 'no_such_fn'
-// EXPECT-NOT: is less visible than the
+//< The case fails on purpose through the same check, at a field rather than a return value.
+// EXPECT: field type 'Leaked' is less visible than the field exposing it
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: than the function exposing it
 
 pub struct Row
   pub cells: I32[4]
 
-impl Row: _operator.Index<|Sz, I32|>
+impl Row: Index<|Sz, I32|>
   pub fn get(r: Self$@, index: Sz): I32
     return r.cells[index]
+
+priv struct Leaked
+  v: I32
+
+pub struct Leaky
+  pub slot: Leaked
 
 fn main()
   row: Row = ::{ .cells = ::{ 1, 2, 3, 4 } }
   _x: = row[0]
-  no_such_fn()
 // ==== case generic_type_args_missing
 //< A generic type written with no type arguments is rejected
 //<
@@ -334,6 +367,177 @@ struct W<|T|>
   v: T
 fn main()
   _x: W
+// ==== case generic_type_args_not_inferred
+//< A type parameter no argument fixes is refused at the call, which is told what to write
+//<
+//< Bound from the first argument instead, `zero(5)` would take `I32` and `f(2)` leave `U` raw in C.
+//< The expected type does not fix it. A `const` parameter is read where it stands as an array's
+//< length or a generic's value argument: a slice has no length fixed at translation time, an `I32`
+//< is no `Buf<|N|>`, and `fill` has no parameter where it stands.
+// EXPECT: cannot infer the type argument 'T' of 'zero': no parameter's type mentions it
+// EXPECT: cannot infer the type argument 'T' of 'zero': no parameter's type mentions it
+// EXPECT: cannot infer the type argument 'U' of 'f': no parameter's type mentions it
+// EXPECT: with a type written for each of 'T', 'U'
+// EXPECT: cannot infer the type argument 'T' of 'count': the argument for 'xs' has type 'I32'
+// EXPECT: cannot infer the const parameter 'N' of 'sum': the argument for 'v' has type 'I32[]', which has no length or value fixed at translation time where that parameter's type has 'N'
+// EXPECT: 'sum<|…|>(…)', with an argument written for each of 'N'
+// EXPECT: cannot infer the const parameter 'N' of 'cap': the argument for '_b' has type 'I32', which has no length or value fixed at translation time where that parameter's type has 'N'
+// EXPECT: cannot infer the const parameter 'N' of 'fill': no parameter's type has it as an array's length or a generic's value argument, the places a const parameter is read from
+// EXPECT: Finished with 7 error(s)
+// EXPECT-NOT: expected 'U8[]'
+import "std/ds" { List }
+
+priv fn zero<|T|>(_n: I64): T
+  return ::{}
+
+priv fn f<|T, U|>(_v: T): U
+  return ::{}
+
+priv fn count<|T|>(xs: List<|T|>@): Sz
+  return xs.len
+
+priv fn sum<|const N: Sz|>(v: I32[N]): I32
+  return v[0]
+
+priv struct Buf<|const n: Sz|>
+  data: U8[n]
+
+priv fn cap<|const N: Sz|>(_b: Buf<|N|>@): Sz
+  return N
+
+priv fn fill<|const N: Sz|>(_x: I32): Sz
+  return N
+
+fn main(): I32
+  _x: = zero(5)
+  _y: U8[] = zero(7)
+  _z: = f(2)
+  _n: = count(5)
+  _c: = cap(5)
+  _d: = fill(1)
+  s: I32[3] = ::{ 1, 2, 3 }
+  return sum(I32[]::s)
+// ==== case generic_const_length_conflict
+//< Two arguments fixing one `const` parameter to different values refuse the call, naming both
+//<
+//< Either value chosen alone would make the instance refuse the other argument, as if only that
+//< one were wrong. Written at the call, the value still decides, and the other array is refused.
+//< An array's length and a generic's value argument (`Buf<|4|>`) are values alike.
+// EXPECT: cannot infer the const parameter 'N' of 'both': the argument for 'a' (type 'I32[3]') fixes it to 3, and the argument for 'b' (type 'I32[4]') to 4
+// EXPECT: Hint: pass arguments that agree on 'N'
+// EXPECT: Hint: pass arguments that agree on 'N'
+// EXPECT: expected 'I32[3]', but got 'I32[4]'
+// EXPECT: Buf<|4|>@') fixes it to 4, and the argument for 'a' (type 'I32[3]') to 3
+// EXPECT: Finished with 3 error(s)
+priv fn both<|const N: Sz|>(a: I32[N], b: I32[N]): I32
+  return a[0] + b[0]
+
+priv struct Buf<|const n: Sz|>
+  data: U8[n]
+
+priv fn mixed<|const N: Sz|>(_b: Buf<|N|>@, a: I32[N]): I32
+  return a[0]
+
+fn main(): I32
+  s: I32[3] = ::{ 1, 2, 3 }
+  t: I32[4] = ::{ 1, 2, 3, 4 }
+  b: = Buf<|4|>::{}
+  return both(s, t) + both<|3|>(s, t) + mixed(b@, s)
+// ==== case generic_arg_kind
+//< An argument of the other kind than its parameter is refused where it is written, naming both
+//<
+//< In a generic's declaration its own `const` parameter where a type goes (`Hold<|N|>`), or its
+//< type parameter where a value goes (`Buf<|T|>`, an array's length), is refused called or not.
+//< Left to a call, it failed there as a mismatch blaming the call's argument. Outside a generic a
+//< value for a type, or a type for a `const`, is refused where it is resolved, for a function's
+//< type arguments too.
+//< Caution: Keep the passing side: a constant's name, the generic's own `const` and an array of a
+//< constant's length (a type, though a value stands inside it) each stand where they belong.
+// EXPECT: 'Hold' takes a type for its parameter 'T', but 'N' is a const parameter, which stands for a value
+// EXPECT: Hint: declare it without 'const' to pass a type through it
+// EXPECT: 'Buf' takes a value for its parameter 'const n: Sz', but 'T' is a type parameter
+// EXPECT: Hint: declare it 'const T: Sz' to pass a value through it
+// EXPECT: 'N' is a const parameter, which stands for a value, not a type
+// EXPECT: 'T' is a type parameter, but an array's length is a value
+// EXPECT: 'Hold' takes a type for its parameter 'T', but this argument is a value
+// EXPECT: 'Hold' takes a type for its parameter 'T', but this argument is a value
+// EXPECT: 'Hold' takes a type for its parameter 'T', but this argument is a value
+// EXPECT: 'Buf' takes a value for its parameter 'const n: Sz', but this argument is a type
+// EXPECT: 'Buf' takes a value for its parameter 'const n: Sz', but this argument is a type
+// EXPECT: 'fill' takes a value for its parameter 'const N: Sz', but this argument is a type
+// EXPECT: 'id' takes a type for its parameter 'T', but this argument is a value
+// EXPECT: Finished with 11 error(s)
+priv struct Hold<|T|>
+  v: T
+
+priv struct Buf<|const n: Sz|>
+  data: U8[n]
+
+const k: Sz = 2
+
+priv fn as_type<|const N: Sz|>(_h: Hold<|N|>@): Sz
+  return N
+
+priv fn as_value<|T|>(_b: Buf<|T|>@): Sz
+  return 0
+
+priv fn bare<|const N: Sz|>(_x: N): Sz
+  return N
+
+priv fn length<|T|>(): Sz
+  _a: I32[T]
+  return 0
+
+priv fn passes<|U, const N: Sz|>(_h: Hold<|U[N]|>@, _b: Buf<|N|>@): Sz
+  return N
+
+priv fn fill<|const N: Sz|>(): Sz
+  return N
+
+priv fn id<|T|>(): Sz
+  return sizeof(T)
+
+fn main(): I32
+  _a: Hold<|4|>
+  _b: Hold<|k|>
+  _c: Hold<|-1|>
+  _d: Buf<|I32|>
+  _e: Buf<|U8[]|>
+  _f: = fill<|I32|>()
+  _g: = id<|3|>()
+  h: = Hold<|I32[k]|>::{ .v = ::{ 1, 2 } }
+  b: = Buf<|k|>::{}
+  _n: = passes(h@, b@)
+  return 0
+// ==== case generic_const_in_arithmetic
+//< A `const` parameter standing only inside arithmetic is said to be why nothing fixes it
+//<
+//< Arithmetic on it (`I32[N * 2]`) is not solved for it, so the call writes the value. Without
+//< the reason the refusal read as if no parameter mentioned it. In a generic's argument
+//< (`Buf<|(N + 1)|>`) arithmetic is refused besides, at the declaration and once.
+//< Caution: Keep the bare place beside it: there the argument still fixes it.
+// EXPECT: a value passed as a type argument must be a literal, a negated literal or the name of a const
+// EXPECT: cannot infer the const parameter 'N' of 'shifted': the parameter '_b' has it only inside arithmetic, 'N + 1', which is not solved for it
+// EXPECT: cannot infer the const parameter 'N' of 'longer': the parameter 'v' has it only inside arithmetic, 'N * 2', which is not solved for it
+// EXPECT: Hint: call one specialization, 'longer<|…|>(…)', with an argument written for each of 'N'
+// EXPECT: Finished with 3 error(s)
+priv struct Buf<|const n: Sz|>
+  data: U8[n]
+
+priv fn shifted<|const N: Sz|>(_b: Buf<|(N + 1)|>@): Sz
+  return N
+
+priv fn longer<|const N: Sz|>(v: I32[N * 2]): I32
+  return v[0]
+
+priv fn plain<|const N: Sz|>(v: I32[N]): I32
+  return v[0]
+
+fn main(): I32
+  b: = Buf<|4|>::{}
+  s: I32[4] = ::{ 1, 2, 3, 4 }
+  _a: = shifted(b@)
+  return longer(s) + longer<|2|>(s) + plain(s)
 // ==== case generic_type_args_too_few
 //< Fewer type arguments than the declaration has are rejected
 //<

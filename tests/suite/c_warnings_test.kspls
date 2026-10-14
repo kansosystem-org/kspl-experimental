@@ -5,6 +5,9 @@
 //< moment one is added.
 //< Caution: **Do not bring existing C files into the scope.** Only the C that ksplc writes is
 //< checked, under `-fsyntax-only` (no linking).
+//< **Both families are mandatory where `KANSO_REQUIRE_BOTH_CC=1`** (`mk/test.mk` sets it on Linux,
+//< whose image holds gcc and clang); elsewhere a missing one gives a `SKIP` line, never a silent
+//< pass.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
@@ -22,6 +25,8 @@ priv const candidates: U8[][_] = ::{ "clang", "gcc", "cc" } //<
     //<
     //< Caution: **Do not check with one alone.** Each warns about code the other is silent on
     //< (gcc: an arithmetic or comparison operand of a bit operation); one installed alone decides.
+
+priv const families: U8[][_] = ::{ "clang", "gcc" } //< the families both of which must be found
 
 // **Do not leave `-Wextra` and `-O2` out.** Without them -Wsign-compare and
 // -Wstrict-aliasing (inactive without optimisation) are invisible, and both catch wrong answers.
@@ -45,7 +50,7 @@ priv const freestanding_ksplc: U8[][_] = ::{ "--freestanding" } //<
     //<
     //< Caution: **Keep the list of options in a const.** A `U8[][]::{ ... }` built in a function
     //< and put in a struct points at the stack frame, gone after the return, with no diagnostic
-    //< ("Why dangling is stopped only on the paths that create an invisible pointer" in
+    //< ("Which pointers into a frame are stopped from leaving it" in
     //< `docs/DESIGN.md`); it breaks far away, as a garbled argv length.
 priv const freestanding_cc: U8[][_] = ::{ "-ffreestanding" }
 
@@ -76,40 +81,56 @@ priv fn targets(arena: Arena$@): List<|Target|> //<
         .cc_flags = none })
     return out
 
-priv fn identity(cc: U8[], arena: Arena$@): U8[] //< that compiler's identity
-    //<
-    //< The same compiler gives the same identity: target, version and family. **Not by the name it
-    //< reports** (`--version`'s first line): gcc prints the name it was called by.
-    triple: = ksplc_harness.run(U8[][]::{ cc, "-dumpmachine" })
-    if triple.code != 0
-        return ""
-    version: = ksplc_harness.run(U8[][]::{ cc, "-dumpversion" })
-    banner: = ksplc_harness.run(U8[][]::{ cc, "--version" })
-    family: = "clang" if banner.out.find_str("clang").is_some() else "gcc"
-    return arena.text().s("\{triple.out.trim_spaces()\}|\{version.out.trim_spaces()\}|\{family\}")
-        .take()
+priv struct Cc //< one usable C compiler
+    name: U8[] //< what it is started by
+    family: U8[] //< one of `families`
+    id: U8[] //< its identity: target, version and family
 
-priv fn compilers(arena: Arena$@): List<|U8[]|> //<
+priv fn identify(name: U8[], arena: Arena$@): Cc? //< that compiler, where it starts
+    //<
+    //< The same compiler gives the same identity. **Not by the name it reports** (`--version`'s
+    //< first line): gcc prints the name it was called by, and macOS's `gcc` is clang.
+    triple: = ksplc_harness.run(U8[][]::{ name, "-dumpmachine" })
+    if triple.code != 0
+        return .none
+    version: = ksplc_harness.run(U8[][]::{ name, "-dumpversion" })
+    banner: = ksplc_harness.run(U8[][]::{ name, "--version" })
+    family: = "clang" if banner.out.find_str("clang").is_some() else "gcc"
+    id: = arena.text().s("\{triple.out.trim_spaces()\}|\{version.out.trim_spaces()\}|\{family\}")
+        .take()
+    return .some(Cc::{ .name = name, .family = family, .id = id })
+
+priv fn compilers(arena: Arena$@): List<|Cc|> //<
     //< Returns the usable compilers, keeping one of each identity
     //<
     //< Caution: **Drop the duplicates.** `cc` is usually a symlink to clang/gcc, and running it
     //< twice only doubles the failing lines. Whether it starts is tested by starting it (PATH is
     //< not read).
-    $found: = List<|U8[]|>.new(arena)
-    $ids: = List<|U8[]|>.new(arena)
+    $found: = List<|Cc|>.new(arena)
     for name in candidates
-        id: = identity(name, arena)
-        if id.len == 0
+        switch identify(name, arena)
+        case .none
             continue
-        $seen: = false
-        for i in Range.asc(ids.len)
-            if ids.get(i).equals(id)
-                seen = true
-        if seen
-            continue
-        ids.push(id)
-        found.push(name)
+        case .some(cc)
+            if !found.any(fn(f: Cc; cc: Cc): Bool {
+                return f.id.equals(cc.id);
+            })
+                found.push(cc)
     return found
+
+priv fn check_families(ccs: List<|Cc|>@, arena: Arena$@) //<
+    //< Says which family no compiler found belongs to: a failure where both are required
+    //<
+    //< The `SKIP` reason is the one `tools/ci_gates.kspls` expects on a platform holding one alone.
+    for fam in families
+        if ccs.any(fn(c: Cc; fam: U8[]): Bool {
+            return c.family.equals(fam);
+        })
+            continue
+        name: = arena.text().s("the generated C under \{fam\}").take()
+        why: = arena.text().s("only one of the two C compilers is installed (no \{fam\} starts)")
+            .take()
+        ksplc_harness.require_or_skip(name, "KANSO_REQUIRE_BOTH_CC", why)
 
 priv fn warning_lines(out: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Collects only the warning lines
@@ -148,6 +169,7 @@ fn main(): I32
     ccs: = compilers(arena)
     if ccs.len == 0
         return ksplc_harness.fatal("no C compiler that can put the generated C through is found")
+    check_families(ccs@, arena)
     dir: = harness.sandbox("c_warnings")
     verdict.check("the search for a built-in slice type can fire",
         builtin_slice("a kspl_I32_Slice b").equals("kspl_I32_Slice") &&
@@ -168,10 +190,10 @@ fn main(): I32
         verdict.check(arena.text().s("\{t.slot\}: no built-in slice type but the bytes'").take(),
             stray.len == 0, stray)
         for cc in ccs
-            name: = arena.text().s("\{t.slot\}: \{cc\} is warning-free").take()
+            name: = arena.text().s("\{t.slot\}: \{cc.name\} is warning-free").take()
             // No `-I` is needed: ksplc embeds the runtime headers that the generated C `#include`s.
             $argv: = List<|U8[]|>.new(arena)
-            argv.push(cc)
+            argv.push(cc.name)
             for f in cflags
                 argv.push(f)
             for f in t.cc_flags

@@ -50,6 +50,63 @@ fn main(): I32
   p: Sz$@ = null // an immutable binding. an axis apart from the target being mutable
   writes_ptr(p@)
   return I32::n
+// ==== case addr_of_packed_field
+//< A field `#packed` leaves under-aligned must not have its address taken, in any of the ways
+//<
+//< A pointer carries no alignment of its own, so an access through it assumes its type's, and a
+//< word access at an odd address faults on a Cortex-M0. `@`, a receiver taken by pointer (a
+//< method, an operator, a slice field's subscript) and a slice cast all take one. A one-byte field,
+//< the struct itself and a field that keeps its alignment pass, as do reads and writes.
+// EXPECT: as '@' would: a pointer to 'I32' promises 4. Copy the field into a local
+// EXPECT: as 'bump', which takes its receiver by pointer, would: a pointer to
+// EXPECT: as '+', which takes its receiver by pointer, would
+// EXPECT: as '[]', which takes its receiver by pointer, would: a pointer to 'I32$[]'
+// EXPECT: as a slice cast would: a pointer to 'I32$[2]' promises 4
+// EXPECT: Finished with 5 error(s)
+
+priv struct In
+  x: I32
+
+impl In
+  fn bump(r: Self$@)
+    r.x += 1
+
+impl In: Add<|In, In|>
+  fn add(r: Self@, o: In): In
+    return In::{ .x = r.x + o.x }
+
+#packed
+priv struct Pk
+  a: U8
+  b: I32
+  d: In
+  nums: I32[2]
+  s: I32$[]
+
+#packed
+#align(4)
+priv struct Kept //< its field sits at a multiple of 4, and the struct starts at one
+  pad: I32
+  n: I32
+
+priv fn take(p: I32$@): I32
+  return p$
+
+priv fn view(s: I32[]): Sz
+  return s.len
+
+fn main(): I32
+  $m: Pk = ::{}
+  $k: Kept = ::{}
+  m.b = take(m.b@)
+  m.d.bump()
+  _sum: = m.d + m.d
+  m.s[0] = 1
+  _n: = view(I32[]::m.nums)
+  _ok: = m.a@
+  _whole: = m@
+  m.d.x += m.nums[1]
+  return take(k.n@)
 // ==== case arc_assign_through_call
 //< An assignment into an ARC-managed place must release the value it overwrites
 //<
@@ -80,6 +137,181 @@ import "std/refcount" { Rc }
 fn main()
   $a: = Rc<|I32|>.new(1)
   a.retain()
+// ==== case frame_pointer_stored_outside
+//< A slice or an interface value pointing into the frame is refused where a store outlives it
+//<
+//< A global, a parameter's pointee, `p$` and a slice's element all outlive the frame, as `return`
+//< does. `kept_inside` stores into the frame or stores a global's view, and passes.
+// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored into the global 'g', which
+// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored into the global 'g_views', which
+// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored behind a pointer
+// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored behind a pointer
+// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored behind a pointer
+// EXPECT: cannot store an interface value built from local storage: the interface value keeps a pointer to it, and it would be stored into the global 'g_shape'
+// EXPECT: cannot store 's': it was set from a slice or an interface value built from local storage
+// EXPECT: Finished with 7 error(s)
+import "std/io"
+
+trait Shape
+  fn area(r: Self): I32
+
+struct Sq
+  n: I32
+
+impl Sq: Shape
+  fn area(r: Self): I32
+    return r.n * r.n
+
+struct View
+  s: U8[]
+
+$g: U8[] = ""
+$g_views: View[2] = ::{}
+$g_sq: Sq = ::{ .n = 1 }
+$g_shape: Shape? = .none
+$keep: U8[4] = ::{ 'k', 'e', 'e', 'p' }
+
+fn slice_into_global()
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  g = U8[]::a
+
+fn run_into_global_element()
+  g_views[1] = ::{ .s = U8[]::{ 'x', 'y' } }
+
+fn slice_behind_param(v: View$@, out: U8[]$[])
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  v.s = U8[]::a
+  out[0] = U8[]::a
+
+fn slice_through_deref(p: View$@)
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  p$ = View::{ .s = U8[]::a }
+
+fn upcast_into_global()
+  sq: = Sq::{ .n = 3 }
+  g_shape = .some(sq)
+
+fn marked_local_into_global()
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  s: = U8[]::a
+  g = s
+
+fn kept_inside(): Sz
+  a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
+  $v: View = ::{ .s = "" }
+  v.s = U8[]::a
+  $arr: View[1] = ::{}
+  arr[0].s = U8[]::a
+  g = U8[]::keep
+  g_shape = .some(g_sq)
+  return v.s.len + arr[0].s.len + g.len
+
+fn main()
+  $v: View = ::{ .s = "" }
+  $outs: U8[][1] = ::{ "" }
+  slice_into_global()
+  run_into_global_element()
+  slice_behind_param(v@, U8[]$[]::outs)
+  slice_through_deref(v@)
+  upcast_into_global()
+  marked_local_into_global()
+  io.out().s("\{kept_inside()\}\n")
+// ==== case frame_address_leaves
+//< The address of the frame's own storage is refused where it leaves by `return` or `throw`
+//<
+//< A local's or a by-value parameter's `@`, of a field or an element too, stepped or cast, anywhere
+//< inside the value, and through a local set from one: each reads a dead frame. **A store passes**
+//< (`stored_then_cleared`): a local's address kept in a global is taken back before the return.
+//< `ok_*` point elsewhere: a global, a pointer's target, an allocation, a call's result.
+// EXPECT: cannot return the address of local storage: 'x' lives in this function's frame, and this function's frame dies here
+// EXPECT: cannot return the address of local storage: 'a' lives in this function's frame
+// EXPECT: cannot return the address of local storage: 's' lives in this function's frame
+// EXPECT: cannot return the address of local storage: 'v' lives in this function's frame
+// EXPECT: cannot return the address of local storage: 'b' lives in this function's frame
+// EXPECT: cannot return the address of local storage: 'd' lives in this function's frame
+// EXPECT: cannot return 'q': it was set from the address of local storage
+// EXPECT: cannot throw the address of local storage: 'e' lives in this function's frame
+// EXPECT: Finished with 11 error(s)
+import "std/mem" + { Arena }
+
+priv struct Pt
+  f: I32
+
+priv struct Holder
+  p: I32@
+
+$g: I32 = 1
+$gp: I32@ = null
+
+priv fn of_local(): I32@
+  x: I32 = 5
+  return x@
+
+priv fn of_element(): I32@
+  a: I32[2] = ::{ 1, 2 }
+  return a[1]@
+
+priv fn of_field(): I32@
+  s: Pt = ::{ .f = 1 }
+  return s.f@
+
+priv fn of_param(v: I32): I32@
+  return v@
+
+priv fn in_descriptor(): U8[]
+  $b: U8[4] = ::{ 1, 2, 3, 4 }
+  return U8[]::{ .ptr = b[0]@, .len = 4 }
+
+priv fn in_struct(): Holder
+  x: I32 = 5
+  return Holder::{ .p = x@ }
+
+priv fn in_option(): I32@?
+  x: I32 = 5
+  return .some(x@)
+
+priv fn in_cast_or_branch(c: Bool): U8@
+  x: I32 = 5
+  return U8@::x@ if c else U8@::g@
+
+priv fn stepped(): I32@
+  $d: I32[2] = ::{ 1, 2 }
+  return d[0]@ + 1
+
+priv fn through_locals(): I32@
+  x: I32 = 5
+  p: = x@
+  q: = p
+  return q
+
+priv fn thrown(): I32!I32@
+  e: I32 = 5
+  throw e@
+
+priv fn stored_then_cleared(): I32
+  x: I32 = 5
+  gp = x@
+  n: = gp$
+  gp = null
+  return n
+
+priv fn ok_global(): I32@
+  return g@
+
+priv fn ok_target(p: I32$@): I32@
+  return p$@
+
+priv fn ok_through_pointer(p: Pt@): I32@
+  return p.f@
+
+priv fn ok_alloc(arena: Arena$@): I32@
+  return arena.create(5)
+
+priv fn ok_call(): I32@
+  return ok_global()
+
+fn main(): I32
+  return stored_then_cleared() + ok_call()$ + ok_global()$
 // ==== case mut_method_on_immut_array_elem
 //< A `Self$@` method is rejected on an element of an immutable fixed-length array
 //<

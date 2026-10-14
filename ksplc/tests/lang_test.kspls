@@ -184,13 +184,16 @@ fn test_checked_int()
         fallback checked_int.Ci32::0
     assert(div_caught, "Ci32: division by zero must be catchable")
 
-    // I64/U64: the path that compares against the boundary values (there is no 128-bit width)
-    $i64_caught: = false
-    _bad64: =
-        (checked_int.Ci64::4000000000I64).checked_mul(checked_int.Ci64::4000000000I64) catch
-        i64_caught = true
-        fallback checked_int.Ci64::0I64
-    assert(i64_caught, "Ci64: 4e9 * 4e9 must overflow I64 range")
+    // I64/U64: no wider type, so a product is divided back (7 marks a refusal: no product here)
+    big: = checked_int.Ci64::4000000000I64
+    over: = big.checked_mul(big) catch checked_int.Ci64::7I64
+    assert(over.val == 7, "Ci64: 4e9 * 4e9 must overflow I64 range")
+    min: = checked_int.Ci64::(-9223372036854775807I64 - 1)
+    min_neg: = min.checked_mul(checked_int.Ci64::(-1I64)) catch checked_int.Ci64::7I64
+    assert(min_neg.val == 7, "Ci64: I64::MIN * -1 must overflow")
+    near: = checked_int.Ci64::3037000499I64
+    square: = near.checked_mul(near) catch panic("Ci64: 3037000499^2 must fit")
+    assert(square.val == 9223372030926249001, "Ci64: a product just under the limit is exact")
 
     sum64: =
         (checked_int.Ci64::1000000000000I64).checked_add(checked_int.Ci64::1I64)
@@ -208,7 +211,7 @@ fn test_checked_int()
     diff32: = checked_int.Cu32::100U32 - checked_int.Cu32::30U32
     assert(diff32.val == 70, "Cu32: 100 - 30 must equal 70 via operator sugar")
 
-    // The native integer types implement operator.Cast, so `Dest::src` builds a Ci* / Cu* (see
+    // The native integer types implement `Cast`, so `Dest::src` builds a Ci* / Cu* (see
     // ksplc/sema/body/postfix.kspls), from a literal, a variable and an expression.
     cast_lit: = checked_int.Ci32::123
     assert(cast_lit.val == 123, "Ci32::123 (literal receiver) must produce val=123")
@@ -223,7 +226,7 @@ fn test_checked_int()
     verdict
         .pass("the Checked_* types detect the overflow of addition, subtraction, multiplication, \
             division and the unary minus correctly, and work through the operators and through the \
-            prefix cast notation (operator.Cast) alike.")
+            prefix cast notation (`Cast`) alike.")
 
 // The selective import `import "path" { A, B as C };` (dropping the namespace, renaming).
 // A `typedef` taken by a selective import can be written as a type. **That this declaration
@@ -300,7 +303,7 @@ fn pick_second<|T|>(_flag: Bool, v: T): T //<
     //< The type inference of a call whose T-declaring parameter is the second or later
     //<
     //< The inference looks through the parameters for the one declaring T
-    //< (extract_inferred_generic_arg in sema/body/call.kspls); if it took the first one,
+    //< (inferred_type_args in sema/body/generic_infer.kspls); if it took the first one,
     //< `pick(true, 42)` would bind T = Bool.
     return v
 

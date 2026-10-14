@@ -29,10 +29,17 @@ fn uart_irq_echo_task(_arg: Void$@): Void
 
     con.out().s("[IRQ] received byte: 0x\{byte:02x\} (ISR fire count: \{uart.irq_count()\})\n")
     con.puts("[IRQ] echoing it back...\n")
+    $echoed: = true
     uart.putc(byte) catch
         con.puts("[IRQ] UART0 putc() timed out\n")
+        echoed = false
 
     con.puts("[semihosting] UART0 interrupt-driven RX echo probe done.\n")
+    // The byte itself is matched outside (`tests/uart_probe.py`), which holds the verdict the gate
+    // reads; these say what the probe saw from its side.
+    con.check("the byte came in through the RX interrupt", uart.irq_count() > 0)
+    con.check("it went back out", echoed)
+    con.print_summary("UART0 RX interrupt echo, the probe's side")
 // The bare-metal entry called from startup.S.
 #export
 fn ksos_main()

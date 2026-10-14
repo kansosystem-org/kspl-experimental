@@ -1,300 +1,400 @@
 //< Infers a generic call's type arguments from its actual arguments, where no `<|…|>` is written
 //<
-//< Each type variable binds to the actual argument of the first formal parameter that uses it (a
-//< method's receiver skipped), by position inside a composite type (`Callable1<|T, U|>`). The match
-//< is on the types' spellings; `inferred_type_args` reads the answer into type ids, once.
+//< Each parameter's written type is walked against its argument's type id, part by part: a
+//< pointer's target, an array's element, a result's two sides, a generic's or a conformed trait's
+//< arguments, a function type's parameters and result. A type parameter binds where it stands
+//< bare, a `const` parameter where it stands as an array's length or as a generic's value
+//< argument. One no argument binds is refused here, with the form to write.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
-import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/ast_spell" as _base_ast_spell // `get_decl_id_text`
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/name" as _sema_decl_name
-import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
-import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/display" as _sema_type_display
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as _sema_type_query
 import "std/chars"
 import "std/ds" { List }
-import "std/str" { Str_builder }
+import "std/str"
 
-priv fn bound_contains_generic(bound: U8[], gen_name: U8[]): Bool //<
-    //< Whether the type-argument list bound holds gen_name, itself or inside a nested list
-    //<
-    //< An example of bound is "K, ksplc.sema.scope.Symbol@". Nested, as in `Slice<|Hold<|T|>|>`
-    //< (`Hold<|T|>[]`), positional_in finds the position one list down.
-    //< An inferred list can be longer than the declaration's (`f<|K|>` taking a `Map<|K, V|>`), so
-    //< no count check belongs here: it would fail a correct call.
-    for pos in Range.asc(bound.count_type_args())
-        if type_str_mentions_generic(bound.nth_type_arg(pos).trim_spaces(), gen_name)
-            return true
-    return false
+priv struct Pairing //< one formal parameter and the argument that fills it
+    param: Ast_node$@
+    arg: Ast_node$@
+    arg_id: I32 //< the argument's own type (a function's name gives its function type)
 
-priv fn type_str_mentions_generic(param_type_str: U8[], gen_name: U8[]): Bool //<
-    //< Whether param_type_str holds the type variable gen_name, bare or inside another type
-    //<
-    //< For example T?, T[], T@, T! or Container<|X, gen_name, ...|>.
-    if param_type_str.equals(gen_name)
-        return true
-    // One level of `[]` / `@` / `!` (as in `T[]`) is stripped before comparing.
-    if param_type_str.strip_suffix("[]").equals(gen_name) ||
-        param_type_str.strip_suffix("@").equals(gen_name) ||
-        param_type_str.strip_suffix("!").equals(gen_name)
-        return true
-    switch param_type_str.find_generic_bounds()
-    case .found(_s, ins, ine, _e)
-        return bound_contains_generic(param_type_str.sub(ins, ine - ins), gen_name)
-    default
-        return false
+priv struct Bindings //< what a call binds each of the callee's own type parameters to
+    names: List<|U8[]|>$@ //< the parameters' names, in the declaration's order
+    is_value: List<|Bool|>$@ //< whether that one is a `const` parameter
+    ids: List<|I32|>$@ //< the type each is bound to; unknown while no argument has bound it
+    bound_by: List<|Pairing|>$@ //< the pair whose argument bound each, for a conflict's report
+    pair: Pairing //< the pair being walked
+    callee: U8[] //< the called function's name, for a conflict's report
+    is_refused: Bool //< whether two arguments fixed one `const` parameter to different values
 
-priv fn trait_impl_spelling(c: Sema_ctx$@, expected_str: U8[], arg_id: I32): U8[] //<
-    //< The type-argument string the type variable binds to, taken from the actual argument arg_id
-    //<
-    //< expected_str is the declared type of that argument.
-    //< **It exists for closures.**
-    base: = expected_str.get_generic_base_name()
-    if base.len == 0
-        return ""
-    trait_fqn: = c.resolve_fqn_for_type(base)
-    conformed: = c.env.implemented_trait_instance(c.env.strip_const_deep(arg_id), trait_fqn)
-    return c.env.instance_key(conformed)
-
-priv fn extract_generic_binding(c: Sema_ctx$@, expected_str: U8[], arg_id: I32): U8[]
-    arg_str: = c.env.get_str(arg_id)
-
-    $clean_arg_id: = c.env.strip_const(arg_id)
-    no_result_id: = c.env.strip_result(clean_arg_id)
-    no_ptr_id: = c.env.strip_ptr(no_result_id)
-    clean_arg_id = c.env.strip_array(no_ptr_id)
-
-    $orig_arg_str: U8[] = c.env.get_str(clean_arg_id)
-    // Caution: Do not walk all of instantiated_nodes: N instantiations times M calls is O(N*M). Ask
-    // the instance's record (instances of sema_type_env.Env).
-    found_key: = c.env.instance_key(clean_arg_id)
-    if found_key.len > 0
-        orig_arg_str = found_key
-
-    switch orig_arg_str.find_generic_bounds()
-    case .found(_s, ins, ine, _e)
-        return orig_arg_str.sub(ins, ine - ins)
-    default
-        // Otherwise from the instantiation of the trait it conforms to.
-        named: = trait_impl_spelling(c, expected_str, clean_arg_id)
-        switch named.find_generic_bounds()
-        case .found(_s2, ins2, ine2, _e2)
-            return named.sub(ins2, ine2 - ins2)
-        default {}
-        if expected_str.ends_with("[]") && arg_str.ends_with("[]")
-            return arg_str.strip_suffix("[]")
-        if expected_str.ends_with("@") && arg_str.ends_with("@")
-            return arg_str.strip_suffix("@")
-        if expected_str.ends_with("!") && arg_str.ends_with("!")
-            return arg_str.strip_suffix("!")
-    return arg_str
-
-priv fn positional_generic_binding(c: Sema_ctx$@, expected_str: U8[], gen_name: U8[], arg_id: I32):
-    U8[] //<
-        //< Takes from the argument the type at **the same position** gen_name has in the type
-        //<
-        //< It serves the path that must not return the whole list.
-        //< Caution: **If the counts do not match, return empty**, or another variable's binding is
-        //< taken.
-    switch expected_str.find_generic_bounds()
-    case .found(_s, ins, ine, _e)
-        whole: = extract_generic_binding(c, expected_str, arg_id)
-        return positional_in(c, expected_str.sub(ins, ine - ins), whole, gen_name)
-    default
-        return ""
-
-priv fn positional_in(c: Sema_ctx$@, want: U8[], whole: U8[], gen_name: U8[]): U8[] //<
-    //< The argument in whole at the position gen_name holds in want, nested lists looked into
-    //<
-    //< A slice is `Slice<|T|>`, so `Hold<|T|>[]` puts `T` one list down (`Slice<|Hold<|T|>|>`).
-    //< A writable position (`$T`, as in `T$[]`) matches an argument carrying the same mark.
-    n: = want.count_type_args()
-    if n != whole.count_type_args()
-        return ""
-    for i in Range.asc(n)
-        w: = want.nth_type_arg(i).trim_spaces()
-        a: = whole.nth_type_arg(i).trim_spaces()
-        if w.equals(gen_name)
-            return base_core.arena.dup_str(a)
-        if w.starts_with("$") && w.sub_from(1).equals(gen_name) && a.starts_with("$")
-            return base_core.arena.dup_str(a.sub_from(1))
-        switch w.find_generic_bounds()
-        case .found(_s, wi, we, _e)
-            spelled: = instance_spelling(c, a)
-            switch spelled.find_generic_bounds()
-            case .found(_s2, ai, ae, _e2)
-                inner: =
-                    positional_in(c, w.sub(wi, we - wi), spelled.sub(ai, ae - ai), gen_name)
-                if inner.len > 0
-                    return inner
-            default {}
-        default {}
-    return ""
-
-priv fn instance_spelling(c: Sema_ctx$@, type_str: U8[]): U8[] //<
-    //< A type argument spelled as its instance was written (`Hold<|I32|>`), not mangled
-    //<
-    //< The list holds a nested instance's mangled name, which has no list of its own to look into.
-    type_id: = c.env.type_to_id.get(type_str) catch 0
-    if type_id == 0
-        return type_str
-    key: = c.env.instance_key(c.env.get_clean_real_type(type_id))
-    return key if key.len > 0 else type_str
-
-priv fn slice_spelled_out(written: U8[]): U8[] //<
-    //< A written parameter type with a trailing slice sugar spelled as the `Slice<|…|>` it means
-    //<
-    //< Caution: **Match the argument's own spelling.** Its type is `Slice<|Hold<|I32|>|>`, so
-    //< against the sugar `Hold<|T|>[]` the positions are one list apart, and `T` took the whole
-    //< `Hold<|I32|>` (`I32[][]` was expected for `T[]`). `T$[]` is `Slice<|$T|>`.
-    $mark: = ""
-    $elem: = written
-    if written.ends_with("$[]")
-        mark = "$"
-        elem = written.strip_suffix("$[]")
-    else if written.ends_with("[]")
-        elem = written.strip_suffix("[]")
-    else
-        return written
-    b: = base_core.arena.text()
-    b.s("Slice<|").s(mark).s(slice_spelled_out(elem)).s("|>")
-    return b.take()
-
-priv fn params_from(p_list: Ast_node$@, skip: Sz): base_ast_ext.Param_cursor //<
-    //< A cursor over p_list's formal parameters, the first `skip` of them passed over
-    $params: = base_ast_ext.Param_cursor.new(p_list, false)
-    for _i in Range.asc(skip)
-        _passed: = params.next()
-    return params
-
-priv fn binding_for_generic(c: Sema_ctx$@, p_list: Ast_node$@, args_node: Ast_node$@,
-    param_offset: Sz, gen_name: U8[], one_at_a_time: Bool): U8[] //<
-        //< Builds the binding from the argument of **the first** parameter that uses gen_name
-        //<
-        //< Empty if there is none. one_at_a_time selects the one-variable-at-a-time path.
-        //< Caution: Not just the first one: in `fn pick<|T|>(flag: Bool, v: T): T`, T would be
-        //< Bool.
-    $params: = params_from(p_list, param_offset)
-    for arg_node in args_node.children
-        if arg_node.is_literal(",")
-            continue
-        $target_param: Ast_node$@ = null
-        switch params.next()
-        case .some(pn)
-            target_param = pn
-        case .none
-            break
-        p_type: = target_param.get_decl_type_node()
-        if p_type == null
-            continue
-
-        $expected_str_b: = p_type.extract_type_name()
-        defer expected_str_b.free()
-        expected_str: = slice_spelled_out(expected_str_b.slice())
-        arg_id: = c.own_type_of_name(arg_node)
-        if expected_str.equals(gen_name)
-            return c.env.get_str(arg_id)
-        if !type_str_mentions_generic(expected_str, gen_name)
-            continue
-        // Caution: **Match by position even with one type variable**: the `U` of
-        // `f<|U|>(g: Callable1<|T, U|>)` is the second; the whole list would bind it to `T`.
-        picked: = positional_generic_binding(c, expected_str, gen_name, arg_id)
-        if picked.len > 0
-            return picked
-        if one_at_a_time
-            // One variable at a time: skip to the next formal parameter (the whole list would
-            // repeat once per variable).
-            continue
-        return extract_generic_binding(c, expected_str, arg_id)
-    return ""
-
-priv fn bare_bindings_for_all(c: Sema_ctx$@, gen_params: Ast_node$@, p_list: Ast_node$@,
-    args_node: Ast_node$@, param_offset: Sz): U8[] //<
-        //< Lists, per type variable, the binding of the parameter declared as exactly that variable
-        //<
-        //< Empty if any variable is left unbound (then the composite-type path takes over).
-        //< Caution: Keep a const generic (`<|const N|>`) out: argument types do not determine it,
-        //< and the list would come out shifted by one.
-    $joined: = Str_builder.new()
-    defer joined.free()
-    $count: = 0
+priv fn bindings_of(gen_params: Ast_node$@, callee: U8[]): Bindings //<
+    //< One unbound slot per type parameter
+    b: = Bindings::{ .callee = callee, .names = List<|U8[]|>.create(base_core.arena),
+        .is_value = List<|Bool|>.create(base_core.arena),
+        .ids = List<|I32|>.create(base_core.arena),
+        .bound_by = List<|Pairing|>.create(base_core.arena) }
     for gp in gen_params.children
-        if gp.find_child(.k_keyword) != null
-            return ""
         name: = gp.gen_param_name()
         if name.len == 0
             continue
-        bound: = binding_for_generic(c, p_list, args_node, param_offset, name, true)
-        if bound.len == 0
-            return ""
-        if count > 0
-            joined.s(", ")
-        joined.s(bound)
-        count += 1
-    if count < 2
-        return ""
-    return base_core.arena.dup_str(joined.slice())
+        b.names.push(name)
+        b.is_value.push(gp.is_const_gen_param())
+        b.ids.push(I32::sema_type_env.Builtin_type_id.unknown)
+        b.bound_by.push(::{})
+    return b
 
-fn inferred_type_args(c: Sema_ctx$@, def_node: Ast_node$@, args_node: Ast_node$@, arg0_id: I32,
-    is_method: Bool): I32[] //<
-        //< Infers a generic call's type arguments from the actual arguments, one type id each
-        //<
-        //< The inference matches the spellings of the parameters' types against the arguments'
-        //< (extract_inferred_generic_arg below); its answer is read into type ids here, once.
-    inferred: = extract_inferred_generic_arg(c, def_node, args_node, arg0_id, is_method)
-    $ids: = List<|I32|>.new(base_core.arena)
-    for pos in Range.asc(inferred.count_type_args())
-        ids.push(c.env.get_or_add(inferred.nth_type_arg(pos)))
-    return ids.slice()
+priv fn bind_name(b: Bindings$@, name: U8[], arg_id: I32) //<
+    //< Binds the type parameter called name to arg_id; the first argument to reach it wins
+    //<
+    //< **The type is taken with its immutability.** `pick(v@)` on an immutable `v` binds `T` of
+    //< `a: T$@` to the immutable type, so the call is accepted and a write through `a` is refused
+    //< in the instance; dropped, the same call would be refused at the call.
+    for i in Range.asc(b.names.len)
+        if b.names.get(i).equals(name) && !b.is_value.get(i) &&
+            sema_type_env.is_unknown(b.ids.get(i))
+            b.ids.set(i, arg_id)
 
-priv fn extract_inferred_generic_arg(c: Sema_ctx$@, def_node: Ast_node$@, args_node: Ast_node$@,
-    arg0_id: I32, is_method: Bool): U8[] //<
-        //< Infers a generic call's type arguments from the actual arguments (`<|…|>` not written)
-        //<
-        //< It infers each type variable from the actual argument of the first formal parameter that
-        //< uses it (skipping a method's receiver), and lists the bindings in the declaration's
-        //< order.
-    arg0_str: = c.env.get_str(arg0_id)
-    if def_node == null
-        return arg0_str
+priv fn bind_value(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, value_id: I32) //<
+    //< Binds the `const` parameter written names to the value the argument has there
+    //<
+    //< The value is an array's length or a generic's value argument, one type id per value
+    //< (`8`), so an array of 8 and a `Buf<|8|>` fix it alike.
+    //< **A second argument fixing it to another value refuses the call**, naming both: the
+    //< instance either one would choose refuses the other's argument, blaming only that one.
+    name: = written.bare_written_name()
+    if name.len == 0 || sema_type_env.is_unknown(value_id)
+        return
+    for i in Range.asc(b.names.len)
+        if !b.names.get(i).equals(name) || !b.is_value.get(i)
+            continue
+        if sema_type_env.is_unknown(b.ids.get(i))
+            b.ids.set(i, value_id)
+            b.bound_by.set(i, b.pair)
+        else if b.ids.get(i) != value_id && !b.is_refused
+            b.is_refused = true
+            first: = b.bound_by.get(i)
+            c.clear_scratch()
+                .s("cannot infer the const parameter '\{name\}' of '\{b.callee\}': the argument for \
+                    '\{first.param.get_decl_id_text()\}' (type '\{c.env.display(first.arg_id)\}') \
+                    fixes it to \{c.env.get_str(b.ids.get(i))\}, and the argument for \
+                    '\{b.pair.param.get_decl_id_text()\}' (type '\{c.env.display(b.pair.arg_id)\}') \
+                    to \{c.env.get_str(value_id)\}\n  Hint: pass arguments that agree on '\{name\}'")
+            c.err(b.pair.arg, c.scratch.slice())
 
-    gen_params: = def_node.find_child(.k_type_gen_params)
-    if gen_params == null || gen_params.children.len == 0
-        return arg0_str
+priv fn bind_type(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, arg_id: I32) //<
+    //< Walks a written parameter type against its argument's type, binding the names it meets
+    //<
+    //< Where the two shapes part, the walk stops: the arguments' check after the instantiation
+    //< reports the mismatch, or no binding is left for the refusal of an unbound parameter.
+    if written == null || sema_type_env.is_unknown(arg_id)
+        return
+    switch written.kind_id
+    case .k_type_arg
+        // `$T`: the mark is a literal before the type.
+        bind_type(c, b, written.last_child(), arg_id)
+    case .k_type_expr
+        bind_type_expr(c, b, written, arg_id)
+    case .k_type_atom
+        // An atom holds one type, a function type's `fn` keyword or a group's `(` before it.
+        for ch in written.children
+            if ch.kind_id != .k_literal && ch.kind_id != .k_keyword
+                bind_type(c, b, ch, arg_id)
+                return
+        bind_name(b, written.text, arg_id)
+    case .k_type_path, .k_expr_path
+        bind_path(c, b, written, arg_id)
+    case .k_type_fn_sig
+        bind_fn_sig(c, b, written, arg_id)
+    case .k_identifier
+        bind_name(b, written.text, arg_id)
+    default {}
 
-    gen_name: = gen_params.get_child(0).gen_param_name()
-    if gen_name.len == 0
-        return arg0_str
+priv fn bind_type_expr(c: Sema_ctx$@, b: Bindings$@, written: Ast_node$@, arg_id: I32) //<
+    //< A type and its postfixes: each postfix, outermost first, peels one level off the argument
+    $base: Ast_node$@ = null
+    $posts: = List<|Ast_node$@|>.new(base_core.arena)
+    for ch in written.children
+        if ch.kind_id == .k_type_postfix
+            posts.push(ch)
+        else if base == null && ch.kind_id != .k_literal
+            base = ch
+    $cur: = arg_id
+    for $i: = posts.len; i > 0; i -= 1
+        p: = posts.get(i - 1)
+        pt: = p.text.strip_prefix("$")
+        switch c.env.get_info(c.env.get_clean_real_type(cur))
+        case .pointer(pointee)
+            if !pt.equals("@")
+                return
+            cur = pointee
+        case .array(elem, size)
+            if !pt.starts_with("[")
+                return
+            if p.children.len > 0 && size >= 0
+                bind_value(c, b, p.get_child(0),
+                    c.env.get_or_add(c.clear_scratch().s("\{size\}").slice()))
+            cur = elem
+        case .result(ok_id, err_id)
+            if !pt.starts_with("!")
+                return
+            if p.children.len > 0
+                bind_type(c, b, p.get_child(0), err_id)
+            cur = ok_id
+        default
+            return
+    if base == null
+        bind_name(b, written.text, cur)
+    else
+        bind_type(c, b, base, cur)
 
-    p_list: = def_node.get_fn_params()
-    if p_list == null || p_list.children.len == 0
-        return arg0_str
-
-    param_offset: Sz = 1 if is_method else 0
-    if args_node != null
-        if gen_params.children.len > 1
-            all: = bare_bindings_for_all(c, gen_params, p_list, args_node, param_offset)
-            if all.len > 0
-                return all
+priv fn bind_path(c: Sema_ctx$@, b: Bindings$@, path: Ast_node$@, arg_id: I32) //<
+    //< A named type: a type parameter itself, or a generic whose arguments are walked in turn
+    //<
+    //< The argument's own instance answers when it is one of the same generic, else the instance
+    //< of that generic trait it conforms to (a closure's `Callable1<|I32, I64|>`). The generic is
+    //< named by `read_written_type`, so an import alias or a renamed import reads as its FQN.
+    //< Where the generic's own parameter is `const`, the argument there is a value (`Buf<|8|>`).
+    written: = c.read_written_type(path)
+    if written.args == null
+        if written.member == null && written.alias_file.len == 0
+            bind_name(b, written.name, arg_id)
+        return
+    $fqn: = written.fqn
+    if path.is_sugar_made()
+        fqn =
+            (base_core.option_fqn if written.name.equals(base_core.option_ident())
+            else base_core.slice_fqn)
+    real: = c.env.get_clean_real_type(arg_id)
+    $args: = c.env.instance_args(real)
+    if !c.env.instance_base(real).equals(fqn)
+        conformed: = c.env.implemented_trait_instance(c.env.strip_const_deep(real), fqn)
+        if conformed == 0
+            return
+        args = c.env.instance_args(conformed)
+    tmpl: = c.generics.templates.get(fqn) catch null
+    tmpl_params: = tmpl.find_child(.k_type_gen_params) if tmpl != null else null
+    $own_params: = List<|Ast_node$@|>.new(base_core.arena)
+    if tmpl_params != null
+        for gp in tmpl_params.children
+            if gp.gen_param_name().len > 0
+                own_params.push(gp)
+    $pos: Sz = 0
+    for w in written.args.children
+        if w.kind_id == .k_literal || w.kind_id == .k_keyword || w.kind_id == .k_empty
+            continue
+        if pos >= args.len
+            return
+        if pos < own_params.len && own_params.get(pos).is_const_gen_param()
+            bind_value(c, b, w, args[pos])
         else
-            found: =
-                binding_for_generic(c, p_list, args_node, param_offset, gen_name, false)
-            return found if found.len > 0 else arg0_str
+            bind_type(c, b, w, args[pos])
+        pos += 1
 
-    $params: = params_from(p_list, param_offset)
-    $target_param: Ast_node$@ = null
-    switch params.next()
-    case .some(pn)
-        target_param = pn
-    case .none
-        return arg0_str
-    p1_type: = target_param.get_decl_type_node()
-    if p1_type == null
-        return arg0_str
+priv fn bind_fn_sig(c: Sema_ctx$@, b: Bindings$@, sig_node: Ast_node$@, arg_id: I32) //<
+    //< A function type: its parameters' types and its result's, against the argument's
+    switch c.env.fn_sig_of(arg_id)
+    case .some(sig)
+        $pos: Sz = 0
+        for p in base_ast_ext.Param_cursor.new(sig_node.get_fn_params(), false)
+            if pos >= sig.params.len
+                return
+            bind_type(c, b, p.get_decl_type_node(), sig.params.get(pos))
+            pos += 1
+        bind_type(c, b, sig_node.get_decl_type_node(), sig.ret_id)
+    case .none {}
 
-    $expected_str_b: = p1_type.extract_type_name()
-    defer expected_str_b.free()
-    expected_str: = expected_str_b.slice()
-    if expected_str.equals(gen_name)
-        return arg0_str
-    return extract_generic_binding(c, expected_str, arg0_id)
+priv fn mentions(written: Ast_node$@, name: U8[]): Bool //<
+    //< Whether a written type names name anywhere in it, as a type of its own or inside one
+    if written == null
+        return false
+    if (written.kind_id == .k_identifier ||
+        (written.kind_id == .k_type_atom && written.children.len == 0)) &&
+        written.text.equals(name)
+        return true
+    for ch in written.children
+        if mentions(ch, name)
+            return true
+    return false
+
+priv fn names_value(written: Ast_node$@, name: U8[]): Bool //<
+    //< Whether a written type has name where a value stands anywhere in it
+    //<
+    //< An array's length (`I32[N]`) or a generic's argument (`Buf<|N|>`): a `const` parameter's
+    //< name cannot stand there as a type.
+    if written == null
+        return false
+    if written.kind_id == .k_type_postfix &&
+        written.text.strip_prefix("$").starts_with("[") && written.children.len > 0 &&
+        written.get_child(0).bare_written_name().equals(name)
+        return true
+    if written.kind_id == .k_type_args
+        for ch in written.children
+            if ch.bare_written_name().equals(name)
+                return true
+    for ch in written.children
+        if names_value(ch, name)
+            return true
+    return false
+
+priv fn arithmetic_on(written: Ast_node$@, name: U8[]): Ast_node$@? //<
+    //< Where a written type has name inside arithmetic in a value's place (`I32[N + 1]`), if any
+    //<
+    //< An array's length or a generic's argument that mentions it without being it alone.
+    if written == null
+        return .none
+    $value: Ast_node$@ = null
+    if written.kind_id == .k_type_postfix &&
+        written.text.strip_prefix("$").starts_with("[") && written.children.len > 0
+        value = written.get_child(0)
+    if value != null && value.bare_written_name().len == 0 && mentions(value, name)
+        return .some(value)
+    if written.kind_id == .k_type_args
+        for ch in written.children
+            if ch.bare_written_name().len == 0 && mentions(ch, name)
+                return .some(ch)
+    for ch in written.children
+        if found: = arithmetic_on(ch, name)
+            return .some(found)
+    return .none
+
+priv fn spell_value(c: Sema_ctx$@, node: Ast_node$@) //<
+    //< Appends a value written in a type (`N + 1`) to scratch, from its tokens
+    //<
+    //< An operator stands between spaces, a parenthesis against what it holds.
+    for ch in node.children
+        spell_value(c, ch)
+    if node.children.len > 0 || node.text.len == 0
+        return
+    last: = c.scratch.slice()
+    if !last.ends_with("'") && !last.ends_with("(") && !node.text.equals(")")
+        c.scratch.c(' ')
+    c.scratch.s(node.text)
+
+fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node$@) //<
+    //< Appends the type parameters' names to scratch, quoted and joined by commas (`'A', 'B'`)
+    if gen_params == null
+        return
+    $is_first: = true
+    for gp in gen_params.children
+        name: = gp.gen_param_name()
+        if name.len == 0
+            continue
+        if !is_first
+            c.scratch.s(", ")
+        c.scratch.s("'\{name\}'")
+        is_first = false
+
+priv fn refuse_unbound(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], gen_params: Ast_node$@,
+    b: Bindings@, pairs: List<|Pairing|>$@, at: Sz) //<
+        //< Reports the type parameter at `at` that no argument bound, with the form to write
+        //<
+        //< Where a parameter's type mentions it (a `const` one: where a value stands), its argument
+        //< did not have that type's shape and the error stands on it; otherwise nothing in the
+        //< call could fix it.
+    name: = b.names.get(at)
+    $where: = call
+    $has_value: = false
+    for v in b.is_value
+        has_value = has_value || v
+    is_value: = b.is_value.get(at)
+    c.clear_scratch()
+        .s("cannot infer the \{"const parameter" if is_value else "type argument"\} '\{name\}' of \
+            '\{callee\}': ")
+    $missed: = false
+    for pair in pairs
+        written: = pair.param.get_decl_type_node()
+        if missed ||
+            !(names_value(written, name) if is_value else mentions(written, name))
+            continue
+        missed = true
+        where = pair.arg
+        c.scratch
+            .s("the argument for '\{pair.param.get_decl_id_text()\}' has type \
+                '\{c.env.display(pair.arg_id)\}', which ")
+        if is_value
+            c.scratch
+                .s("has no length or value fixed at translation time where that parameter's type \
+                    has '\{name\}'")
+        else
+            c.scratch.s("does not have the shape of that parameter's type")
+    if !missed && is_value
+        for pair in pairs
+            if missed
+                break
+            written: = pair.param.get_decl_type_node()
+            if inside: = arithmetic_on(written, name)
+                missed = true
+                where = pair.arg
+                c.scratch
+                    .s("the parameter '\{pair.param.get_decl_id_text()\}' has it only inside \
+                        arithmetic, '")
+                spell_value(c, inside)
+                c.scratch.s("', which is not solved for it")
+    if !missed && is_value
+        c.scratch
+            .s("no parameter's type has it as an array's length or a generic's value argument, the \
+                places a const parameter is read from")
+    else if !missed
+        c.scratch
+            .s("no parameter's type mentions it, and the type the call's result is given does not \
+                fix it")
+    c.scratch.s("\n  Hint: call one specialization, '\{callee\}<|…|>(…)', with ")
+    c.scratch.s("an argument" if has_value else "a type")
+    c.scratch.s(" written for each of ")
+    write_gen_param_names(c, gen_params)
+    c.err(where, c.scratch.slice())
+
+fn inferred_type_args(c: Sema_ctx$@, call: Ast_node$@, callee: U8[], def_node: Ast_node$@,
+    args_node: Ast_node$@, is_method: Bool): I32[] //<
+        //< The type arguments a generic call binds from its arguments, one per type parameter
+        //<
+        //< Empty where it is refused: a type parameter no argument binds (reported here), or an
+        //< argument whose type is unknown, an error already reported for it. A method's receiver
+        //< is not among the arguments: its instance has already bound the type's own parameters.
+    gen_params: = def_node.find_child(.k_type_gen_params) if def_node != null else null
+    if gen_params == null
+        return I32[]::{}
+    $b: = bindings_of(gen_params, callee)
+    pairs: = List<|Pairing|>.create(base_core.arena)
+    $saw_unknown: = false
+    if args_node != null
+        $params: = base_ast_ext.Param_cursor.new(def_node.get_fn_params(), is_method)
+        for arg_node in args_node.children
+            if arg_node.is_literal(",")
+                continue
+            switch params.next()
+            case .some(param)
+                arg_id: = c.own_type_of_name(arg_node)
+                saw_unknown = saw_unknown || sema_type_env.is_unknown(arg_id)
+                pairs.push(Pairing::{ .param = param, .arg = arg_node, .arg_id = arg_id })
+            case .none
+                break
+    // The parameters' types are read in the declaring file, where their names resolve. **A
+    // function's name binds last**: it takes its type from where it is written, so where the other
+    // arguments fixed the parameter's type, the name is checked against it rather than fixing it.
+    old_file: = c.file_name
+    if def_node.loc.file().len > 0
+        c.set_current_file(def_node.loc.file())
+    name_mark: = c.env.generic_fn_value_type_id()
+    for pair in pairs
+        if pair.arg.type_id != name_mark
+            b.pair = pair
+            bind_type(c, b@, pair.param.get_decl_type_node(), pair.arg_id)
+    for pair in pairs
+        if pair.arg.type_id == name_mark
+            b.pair = pair
+            bind_type(c, b@, pair.param.get_decl_type_node(), pair.arg_id)
+    c.set_current_file(old_file)
+    if b.is_refused
+        return I32[]::{}
+    for i in Range.asc(b.ids.len)
+        if sema_type_env.is_unknown(b.ids.get(i))
+            if !saw_unknown
+                refuse_unbound(c, call, callee, gen_params, b@, pairs, i)
+            return I32[]::{}
+    return b.ids.slice()

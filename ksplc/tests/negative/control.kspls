@@ -68,6 +68,111 @@ fn main(): I32
   defer .close()
   xs.push(1)
   return 0
+// ==== case defer_read_at_early_exit
+//< A defer's body is checked against the state at each early exit, not only at the block's end
+//<
+//< Checked at the end alone, each path below that leaves before its variable is set reads it
+//< uninitialized, or frees `s` twice. The last function sets `g` first and passes: the count is exact.
+// EXPECT: variable 'a' may be used uninitialized here (this `defer` body runs when line 31 leaves the scope)
+// EXPECT: variable 'b' may be used uninitialized here (this `defer` body runs when line 37 leaves the scope)
+// EXPECT: variable 'c' may be used uninitialized here (this `defer` body runs when line 45 leaves the scope)
+// EXPECT: variable 'cc' may be used uninitialized here (this `defer` body runs when line 51 leaves the scope)
+// EXPECT: variable 'd' may be used uninitialized here (this `defer` body runs when line 59 leaves the scope)
+// EXPECT: variable 'e' may be used uninitialized here (this `defer` body runs when line 67 leaves the scope)
+// EXPECT: variable 'f' may be used uninitialized here (this `defer` body runs when line 75 leaves the scope)
+// EXPECT: variable 's' may already be freed here (use-after-free or double free) (this `defer` body runs when line 84 leaves the scope)
+// EXPECT: Finished with 8 error(s)
+import "std/str"
+import "std/str" { Str_builder }
+
+priv enum Er
+  bad
+
+priv fn may(n: I32): I32!Er
+  if n < 0
+    throw .bad
+  return n
+
+priv fn use(_v: I32) {}
+
+priv fn by_return(early: Bool)
+  $a: I32
+  defer use(a)
+  if early
+    return
+  a = 1
+
+priv fn by_propagation(n: I32): I32!Er
+  $b: I32
+  defer use(b)
+  b = may(n)!
+  return b
+
+priv fn by_loop_jumps(n: I32)
+  for $i: = 0; i < n; i += 1
+    $c: I32
+    defer use(c)
+    if i == 1
+      continue
+    c = i
+  for $j: = 0; j < n; j += 1
+    $cc: I32
+    defer use(cc)
+    if j == 2
+      break
+    cc = j
+
+priv fn by_labelled_break(n: I32)
+  out:
+    $d: I32
+    defer use(d)
+    if n > 3
+      break out
+    d = n
+
+priv fn by_fallback(n: I32): I32
+  return may(n) catch
+    $e: I32
+    defer use(e)
+    if n > 3
+      fallback 0
+    e = n
+    fallback e
+
+priv fn by_throw(n: I32): I32!Er
+  $f: I32
+  defer use(f)
+  if n > 3
+    throw .bad
+  f = n
+  return f
+
+priv fn freed_on_early_path(early: Bool)
+  $s: = Str_builder.new()
+  defer s.free()
+  if early
+    s.free()
+    return
+  s.s("kept")
+
+priv fn set_before_every_exit(n: I32): I32!Er
+  $g: I32
+  defer use(g)
+  g = 0
+  if n > 3
+    return 1
+  g = may(n)!
+  return g
+
+fn main()
+  by_return(true)
+  _b: = by_propagation(1) catch 0
+  by_loop_jumps(3)
+  by_labelled_break(4)
+  _e: = by_fallback(-1)
+  _f: = by_throw(1) catch 0
+  freed_on_early_path(true)
+  _g: = set_before_every_exit(1) catch 0
 // ==== case endless_for_from_iter
 //< `for x in` over an `Iter` ends when `next()` gives nothing
 //<

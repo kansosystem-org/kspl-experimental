@@ -1,4 +1,5 @@
 //< kspage: copy, cut and paste, and converting between a table and CSV text
+import "kspage/expr/calc"
 import "kspage/lay/ask"
 import "kspage/lay/caret"
 import "kspage/lay/flow"
@@ -394,6 +395,33 @@ fn test_an_empty_source_makes_no_table(arena: Arena$@) //< an empty text makes n
     if _got: = csv.read_table("", "table", arena)
         assert(false, "no table is built from an empty text")
     verdict.pass("no table is built from an empty text.")
+
+fn test_a_text_a_spreadsheet_would_run_is_guarded(arena: Arena$@) //<
+    //< A text starting as a formula does goes out behind a `'`, and comes back in without it
+    //<
+    //< Unguarded, a spreadsheet opening the file runs `+HYPERLINK(…)` or `@SUM(…)` typed as words.
+    //< **A number is never guarded** (`-5` stays `-5`), and the reader takes off just the `'` the
+    //< writer put on, so a text already starting with one goes round too.
+    verdict.start("[kspage/csv] a formula-looking text guarded test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    row: = t.add_child("")
+    texts: = U8[][]::{ "-5", "=1+2", "-abc", "+x", "@sum", "\tx", "'=x", "'plain", "a=b" }
+    for one in texts
+        row.add_child("").add_text(one)
+    calc.recalc(d, base.grid_sheet(arena))
+    $out: = Str_builder.new()
+    defer out.free()
+    csv.write_table(t, out@, arena)
+    assert(out.slice().equals("-5,3,'-abc,'+x,'@sum,'\tx,''=x,'plain,a=b\n"),
+        "only a text a spreadsheet would run is guarded, and no number")
+    $back: Block$@ = null
+    if got: = csv.read_table(out.slice(), "table", arena)
+        back = got
+    assert(back != null, "what was written reads back")
+    for $i: Sz = 2; i < texts.len; i += 1
+        assert(cell_text(back, 0, i).equals(texts[i]), "a guarded text reads back as it was typed")
+    verdict.pass("a text a spreadsheet would run goes out guarded and comes back as it was.")
 
 fn test_inserting_a_csv_table_undoes_as_one_step(arena: Arena$@) //<
     //< It inserts after the paragraph the cursor is in

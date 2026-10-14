@@ -70,18 +70,40 @@ priv fn lead_in(s: Sink$@, depth: Sz) //< turns a list's level into spaces
 
 priv fn always_escaped(c: U8): Bool //<
     //< The characters that read as markup wherever they stand
-    return c == '\\' || c == '`' || c == '*' || c == '[' || c == ']' || c == '<'
+    //<
+    //< `~` is GFM's strikethrough, and three open a fence.
+    return c == '\\' || c == '`' || c == '*' || c == '[' || c == ']' || c == '<' || c == '~'
 
 priv fn head_escaped(c: U8): Bool //<
     //< The characters that read as the start of a block only at the start of a line
     return c == '#' || c == '>' || c == '-' || c == '+' || c == '='
 
-priv fn word_edge(text: U8[], at: Sz): Bool //< whether the `_` at `at` stands at a word boundary
+priv fn word_edge(text: U8[], at: Sz): Bool //<
+    //< whether the `_` at `at` could start or end emphasis
     //<
-    //< Inside a word it is not emphasis, so it is not escaped.
-    before: = at == 0 || text[at - 1] == ' '
-    after: = at + 1 >= text.len || text[at + 1] == ' '
-    return before || after
+    //< **Only between two letters or digits is it plain** (`snake_case`), so only there is it not
+    //< escaped. A bracket or a mark beside it lets it open emphasis (`(_x_)`), and so may a
+    //< character outside ASCII (CommonMark counts Unicode punctuation such as `「`).
+    before: = at > 0 && letter_or_digit(text[at - 1])
+    after: = at + 1 < text.len && letter_or_digit(text[at + 1])
+    return !before || !after
+
+priv fn letter_or_digit(c: U8): Bool //< an ASCII letter or digit (`is_alnum` takes `_` in too)
+    return c.is_lower() || c.is_upper() || c.is_digit()
+
+priv fn entity_at(text: U8[], at: Sz): Bool //<
+    //< whether the `&` at `at` starts a character reference
+    //<
+    //< `&amp;`, `&#38;` and `&#x26;` are read as the character they name, so the `&` is escaped
+    //< there and nowhere else (everywhere, `Fish & chips` would carry a stray `\`). **It errs to
+    //< the safe side**: any run of letters and digits up to a `;` counts, named or not.
+    $i: Sz = at + 1
+    if i < text.len && text[i] == '#'
+        i += 1
+    start: = i
+    for i < text.len && letter_or_digit(text[i])
+        i += 1
+    return i > start && i < text.len && text[i] == ';'
 
 priv fn only_digits(text: U8[], at: Sz): Bool //< whether what is before `at` is only digits
     //<
@@ -97,13 +119,21 @@ priv fn escape_into(out: Str_builder$@, text: U8[], head: Bool, cell: Bool) //<
     //< Writes a text, escaping it as Markdown
     //<
     //< Only what would read as markup is escaped (escaping a `_` inside a word makes `snake_case`
-    //< unreadable). A `|` is escaped only inside a cell. `head` means "this text starts the line's
-    //< contents".
+    //< unreadable). A `|` is escaped only inside a cell. `head` means "this text starts a block's
+    //< contents": the start of a line, or right after a list's `- ` (an item holds blocks too).
+    //< **Spaces and tabs leading such a text are written as character references**: four of them
+    //< open a code block, and fewer are dropped.
+    $lead: = head
     for $i: Sz = 0; i < text.len; i += 1
         c: = text[i]
+        lead = lead && (c == ' ' || c == '\t')
+        if lead
+            out.s("&#32;" if c == ' ' else "&#9;")
+            continue
         at_head: = head && i == 0
         numbered: = head && (c == '.' || c == ')') && only_digits(text, i)
-        if always_escaped(c) || (at_head && head_escaped(c)) || numbered || (cell && c == '|')
+        if always_escaped(c) || (at_head && head_escaped(c)) || numbered || (cell && c == '|') ||
+            (c == '&' && entity_at(text, i))
             out.c('\\').c(c)
             continue
         if c == '_' && word_edge(text, i)
@@ -337,10 +367,32 @@ priv fn lead_into(s: Sink$@, st: Style$@, ord: Sz) //<
         s.out.s("\{ord if ord > 0 else 1\}. ")
     case .none, .serial, .outline {}
 
-priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz): Bool //<
+priv fn keep_closing(s: Sink$@, from: Sz) //< keeps the `#`s ending a heading's line as its text
+    //<
+    //< A run of `#` that ends the line after a space, or that is the whole of what follows the
+    //< opening `# `, is read as a closing sequence and dropped (CommonMark): `Item #` would lose
+    //< its `#`. A `\` before the run keeps it.
+    got: = s.out.slice()
+    $end: Sz = got.len
+    for end > from && got[end - 1] == ' '
+        end -= 1
+    $k: Sz = end
+    for k > from && got[k - 1] == '#'
+        k -= 1
+    if k == end || (k > from && got[k - 1] != ' ')
+        return
+    tail: = got.len - k
+    hashes: = end - k
+    s.out.len = k
+    s.out.c('\\')
+    for $i: Sz = 0; i < tail; i += 1
+        s.out.c('#' if i < hashes else ' ')
+
+priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz, head: Bool): Bool //<
     //< Writes the marker at the start of a line as text
     //<
-    //< True if anything was written.
+    //< True if anything was written. `head` is as in `escape_into` (a heading's mark follows its
+    //< `# `, so it is not).
     //< A marker Markdown has a syntax for (`-`, `#`) does not come here; what comes is "Figure 1. "
     //< and a heading's chapter number.
     if st == null
@@ -354,7 +406,7 @@ priv fn write_mark(s: Sink$@, st: Style$@, b: Block$@, ord: Sz): Bool //<
         marker.mark_into(mk@, st.marker, no)
     if mk.slice().len <= 0
         return false
-    escape_into(s.out, mk.slice(), false, false)
+    escape_into(s.out, mk.slice(), head, false)
     return true
 
 priv fn write_image(s: Sink$@, b: Block$@): Bool //< writes a picture
@@ -379,7 +431,7 @@ priv fn write_contents(s: Sink$@, depth: Sz) //< writes the table of contents
         h: = s.heads.get(i)
         lead_in(s, depth + h.level - 1)
         s.out.s("- ")
-        escape_into(s.out, h.text, false, false)
+        escape_into(s.out, h.text, true, false)
         s.out.c('\n')
 
 priv fn write_note_list(s: Sink$@, depth: Sz) //< writes the list of notes
@@ -390,7 +442,7 @@ priv fn write_note_list(s: Sink$@, depth: Sz) //< writes the list of notes
     for $i: Sz = 0; i < s.notes.len; i += 1
         lead_in(s, depth)
         s.out.s("[^\{i + 1\}]: ")
-        escape_into(s.out, s.notes.get(i).text, false, false)
+        escape_into(s.out, s.notes.get(i).text, true, false)
         s.out.c('\n')
 
 priv const plain_code_name: U8[] = "code" //< the style name of a fence that declares no language
@@ -602,24 +654,30 @@ priv fn write_block(s: Sink$@, b: Block$@, depth: Sz, ord: Sz) //< writes one bl
     start_block(s, kind)
     lead_in(s, depth)
     $inner: Sz = depth
-    $marked: = false
+    // Whether the runs start a block's contents (`escape_into`'s `head`).
+    $head: = true
+    $titled: Sz = -1
     if level > 0
         // The depth stops at six (Markdown has nothing deeper).
         hashes: = level if level <= 6 else 6
         for $i: Sz = 0; i < hashes; i += 1
             s.out.c('#')
         s.out.c(' ')
-        write_mark(s, st, b, ord)
-        marked = true
+        titled = s.out.len
+        write_mark(s, st, b, ord, false)
+        head = false
     else if kind != 0
+        // **A list item's contents start a block of their own** (`- # x` is a heading in a list),
+        // so `head` stays.
         lead_into(s, st, ord)
         inner = depth + 1
-        marked = true
     else
-        marked = write_mark(s, st, b, ord)
+        head = !write_mark(s, st, b, ord, true)
     if write_image(s, b)
-        marked = true
-    runs_into(s, b, !marked, false)
+        head = false
+    runs_into(s, b, head, false)
+    if titled >= 0
+        keep_closing(s, titled)
     end_line(s)
     if b.children.len > 0
         write_blocks(s, b.children, inner)
@@ -646,11 +704,15 @@ priv fn write_blocks(s: Sink$@, blocks: List<|Block$@|>$@, depth: Sz) //<
 fn write(d: Doc$@, sheet: Sheet$@, out: Str_builder$@) //< writes a document as Markdown text
     //<
     //< Caution: **Assign the numbers before writing starts** (the headings after the table of
-    //< contents are needed too).
-    heads: = List<|number.Heading|>.create(d.arena)
-    notes: = List<|number.Note|>.create(d.arena)
-    serials: = List<|number.Serial|>.create(d.arena)
-    number.number_all(d.blocks, sheet, heads, notes, serials, d.arena, d.arena)
+    //< contents are needed too). **What the writing gathers goes in an arena of its own, thrown
+    //< away at the end**: in the document's, every export would grow it for good. Only a
+    //< reference's shown number goes in the document's (`Inline.shown` keeps it).
+    scratch: = Arena.new(16 * 1024)
+    defer scratch.free()
+    heads: = List<|number.Heading|>.create(scratch)
+    notes: = List<|number.Note|>.create(scratch)
+    serials: = List<|number.Serial|>.create(scratch)
+    number.number_all(d.blocks, sheet, heads, notes, serials, scratch, d.arena)
     $s: = Sink::{ .out = out, .sheet = sheet, .heads = heads, .notes = notes, .serials = serials,
-        .arena = d.arena, .in_list = 0 }
+        .arena = scratch, .in_list = 0 }
     write_blocks(s@, d.blocks, 0)

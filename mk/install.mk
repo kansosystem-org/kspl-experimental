@@ -47,6 +47,16 @@ define install_path_help
 #         $$HOME ($$HOME is expanded inside double quotes as well).
 endef
 
+define install_other_help
+#      A shebang (#!/usr/bin/env -S ksplc run) starts that one, not the one installed here, and
+#      so does typing `ksplc`. Put this folder first on PATH, in your shell's configuration
+#      (~/.bashrc for bash, ~/.zshrc for zsh), or remove the other one:
+#
+#      export PATH="$(PREFIX)/bin:$$PATH"
+#
+#      A shell already open may remember the other one's place: `hash -r` makes it look again.
+endef
+
 define install_std_dir_help
 #
 #   KSPLC_STD_DIR is set, so ksplc reads the std/ it names, not the one installed here.
@@ -55,13 +65,10 @@ define install_std_dir_help
 endef
 
 define install_ok_help
-#   ✅ ksplc can be found through env (starting directly with a shebang is available)
+#   ✅ the ksplc first on PATH is the one installed here, so a shebang starts it
 endef
 
 install: export ABS_HELP := $(install_abs_help)
-install: export OK_HELP := $(install_ok_help)
-install: export PATH_HELP := $(install_path_help)
-install: export STD_DIR_HELP := $(install_std_dir_help)
 # **What it installs is checked first**: stage2 reproduces itself (`self-host`) and the optimized
 # build emits stage2's notation to the byte (`self-host-ship`). It neither formats the tree nor
 # re-bakes the seed: each rewrites files, and the seed is re-baked when the seed's rules call for
@@ -86,19 +93,34 @@ install: self-host self-host-ship install-lsp
 	@rm -rf "$(PREFIX)/lib/kspl/std"
 	@cp -R std "$(PREFIX)/lib/kspl/std"
 	@echo "# installed -> $(PREFIX)/lib/kspl/std"
-	@# Caution: **Matching PATH as a string is not enough.**
-	@# A shebang uses env's execvp, which does **not** expand `~` in PATH;
-	@# bash does, so `export PATH="~/.local/bin:$$PATH"`
-	@# runs ksplc from the prompt while the shebang falls.
-	@# So the check asks env itself,
-	@# the very route a shebang treads.
-	@# It asks for `ksplc`, not $(INSTALL_NAME),
-	@# so MSYS2's execvp resolving win32's `ksplc.exe`
-	@# is checked too.
-	@if env ksplc info std-dir >/dev/null 2>&1; then \
+	@$(MAKE) --no-print-directory install-check
+
+install-check: export OK_HELP := $(install_ok_help)
+install-check: export OTHER_HELP := $(install_other_help)
+install-check: export PATH_HELP := $(install_path_help)
+install-check: export STD_DIR_HELP := $(install_std_dir_help)
+# Caution: **Search PATH as env does, not as bash does.** A shebang starts ksplc through env's
+# execvp, which takes each entry as written (`~` stays a character, an empty one is the current
+# folder); bash expands `~`, so a check asking bash passes where the shebang falls. **Then compare
+# files, not names** (`-ef`): an older ksplc earlier on PATH also answers to `ksplc`. Both names are
+# tried, so MSYS2's `ksplc` reaching win32's `ksplc.exe` is checked too.
+## Build-and-install|install-check|Say whether the `ksplc` a shebang starts is the one `make install` put in (`PREFIX=`)
+install-check:
+	@installed="$(PREFIX)/bin/$(INSTALL_NAME)"; found=""; set -f; IFS=:; \
+	for d in $$PATH; do \
+		for n in $(sort ksplc $(INSTALL_NAME)); do \
+			p="$${d:-.}/$$n"; \
+			if [ -z "$$found" ] && [ -f "$$p" ] && [ -x "$$p" ]; then found="$$p"; fi; \
+		done; \
+		if [ -n "$$found" ]; then break; fi; \
+	done; \
+	if [ -z "$$found" ]; then \
+		printf '%s\n' "$$PATH_HELP"; \
+	elif [ "$$found" -ef "$$installed" ]; then \
 		printf '%s\n' "$$OK_HELP"; \
 	else \
-		printf '%s\n' "$$PATH_HELP"; \
+		printf '#\n#   ksplc first on PATH is another one: %s\n' "$$found"; \
+		printf '%s\n' "$$OTHER_HELP"; \
 	fi
 	@if [ -n "$$KSPLC_STD_DIR" ]; then \
 		printf '%s\n' "$$STD_DIR_HELP" "#      KSPLC_STD_DIR=$$KSPLC_STD_DIR"; \

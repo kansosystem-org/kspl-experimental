@@ -1,6 +1,7 @@
 //< Tests of `std/net` over real TCP loopback traffic
 import "std/ds" { List }
 import "std/io"
+import "std/mem"
 import "std/net"
 import "std/reactor"
 import "std/str"
@@ -128,13 +129,25 @@ fn test_net_names() //<
             and a NUL-holding name, and a holder that is short, each by name.")
 
 // ==========================================
-// The IPv6 loopback. **It is skipped in an environment with no IPv6** (`socket(AF_INET6)` returns
-// EAFNOSUPPORT).
+// The IPv6 loopback. **It is skipped where `::1` cannot be bound**, for one of two reasons that
+// `no_ipv6_loopback` tells apart: only one of them is a setting the machine's start can change.
 // ==========================================
+priv fn no_ipv6_loopback(): U8[] //< why `::1` cannot be bound here, as a SKIP line's reason
+    //<
+    //< **IPv6's every address still binds where only the loopback lacks `::1`**: a socket of the
+    //< family opens, and nothing checks an address the interfaces hold. So a failing `"::"` means
+    //< the OS has no IPv6 at all (a Linux kernel started with `ipv6.disable=1`), which neither an
+    //< image nor a container's option can give; a passing one means the loopback's IPv6 is turned
+    //< off (`disable_ipv6` on a container's `lo`), which a container's start decides.
+    any: = net.Tcp_listener.bind("::", 0) catch
+        return "this machine has no IPv6 at all"
+    any.free()
+    return "IPv6 is on, but the loopback holds no `::1`"
+
 fn test_tcp_ipv6()
     verdict.start("[Net] connecting over the IPv6 loopback and peer() test...")
     listener: = net.Tcp_listener.bind("::1", 0) catch
-        verdict.skip("this machine has no IPv6 loopback")
+        verdict.skip(no_ipv6_loopback())
         return
     port: = listener.port() catch panic("a bound socket knows its port")
     t: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, listener)
@@ -252,7 +265,7 @@ fn test_tcp_overlapped_ipv6()
             one...")
     $peer_host: U8[64] = ::{}
     v6: = net.Tcp_listener.bind("::1", 0) catch
-        verdict.skip("this machine has no IPv6 loopback")
+        verdict.skip(no_ipv6_loopback())
         return
     port: = v6.port() catch panic("a bound socket knows its port")
     t6: = thread.Thread.spawn<|net.Tcp_listener|>(net_accept_once, v6)
@@ -419,6 +432,39 @@ fn test_tcp_read_for() //<
     client.free()
     listener.free()
     verdict.pass("read_for ends at its timeout on a quiet peer, and reads what the peer sends.")
+
+priv const four_gib: I64 = 1I64 << 32 //< a length whose low 32 bits are all 0
+
+fn test_tcp_past_int() //<
+    //< A read and a write handed more than an `int` holds each move a piece and say how much
+    //<
+    //< Windows takes the length as an `int`: cut to one, 4 GiB asks for nothing, so the read ends
+    //< as if the peer had closed and `write_all` fails as `io_failed`. **The memory is never
+    //< touched here**: the read fills five bytes of it, and the write runs non-blocking, so it
+    //< moves only what the socket takes at once. Only a 64-bit `Sz` holds a length past an `int`.
+    verdict.start("[Net] a read and a write handed more than an int holds move a piece test...")
+    len: = Sz::four_gib
+    listener: = net.Tcp_listener.bind("127.0.0.1", 0)
+        catch panic("bind should succeed on a free port")
+    port: = listener.port() catch panic("a bound socket knows its port")
+    client: = net.Tcp_stream.connect("127.0.0.1", port)
+        catch panic("connect should succeed once the listener is bound")
+    conn: = listener.accept() catch panic("accept should succeed once the client connects")
+    big: = U8$@::mem.alloc(len)
+    conn.write_all("hello") catch panic("server write should succeed")
+    got: = client.read(U8$[]::{ .ptr = big, .len = len })
+        catch panic("a read into a buffer of 4 GiB should succeed")
+    assert(U8[]::{ .ptr = big, .len = got }.equals("hello"), "the read of 4 GiB gets what came")
+    client.set_nonblocking() catch panic("a connected stream can be made non-blocking")
+    sent: = client.write(U8[]::{ .ptr = big, .len = len }) catch e
+        io.err().s("the write of 4 GiB failed as \{e\}\n")
+        panic("a write of 4 GiB should send a piece")
+    assert(sent > 0 && sent < len, "the write of 4 GiB sends a piece and says its size")
+    mem.dealloc(Void$@::big)
+    conn.free()
+    client.free()
+    listener.free()
+    verdict.pass("A read and a write handed 4 GiB each move a piece and return its size.")
 
 // ==========================================
 // Tests of `std/reactor` watching TCP connections, and of what a non-blocking listener accepts

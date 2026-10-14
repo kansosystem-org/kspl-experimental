@@ -116,13 +116,12 @@ fn test_script_names_itself(ksplc: U8[], arena: Arena$@) //< ksplc runs the chil
 
 priv const counter_src: U8[] = //< a child that reads all of its standard input and says how much
     """import "std/io"
-import "std/mem" { Arena }
+import "std/mem"
 
 fn main()
-  a: = Arena.new(1 << 20)
-  got: = io.read_stdin(a) catch panic("standard input could not be read")
+  got: = io.read_stdin(null) catch panic("standard input could not be read")
   io.out().s("read \{got.len\}\n")
-  a.free()
+  mem.dealloc(Void$@::got.ptr)
 """
 
 fn test_async_child_and_stdin(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
@@ -176,3 +175,40 @@ fn test_run_many_frees_slots_early(arena: Arena$@) //<
         "the third job ran in the slot the second freed, before the first ended")
     assert(rs.get(1).exit_code == 0 && rs.get(2).exit_code == 0, "the results keep the jobs' order")
     verdict.pass("The slot a quick job freed went to the next job while the long one still ran.")
+
+fn test_time_limit_ends_the_whole_run(arena: Arena$@) //<
+    //< A time limit stops what the child started, and what it started cannot hold up its end
+    //<
+    //< The grandchild leaves a mark a second after the limit: killed with the child, it leaves
+    //< none. The background `sleep` keeps the pipes open past the child's end.
+    verdict
+        .start("[Sys] a time limit stops a child's own children, and a child's end is not held up \
+            by them...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines")
+        return
+    dir: = "out/tmp/kspl_test_whole_run"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    mark: = arena.text().s(dir).s("/mark").take()
+    fs.remove_path(mark) catch {}
+    nested: = arena.text().s("sh -c 'sleep 1; touch \"\{mark\}\"'; true").take()
+    r: = subproc.run_capture(U8[][]::{ "/bin/sh", "-c", nested }, "", 300, 1024, arena)
+    assert(r.timed_out, "the child waiting on its own child times out")
+    sys.sleep_ms(1500)
+    assert(!fs.exists(mark), "the child's own child is killed with it at the time limit")
+    t0: = sys.mono_us()
+    left: = subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "echo before; sleep 3 & exit 3" }, "",
+        2500, 1024, arena)
+    took_ms: = (sys.mono_us() - t0) / 1000I64
+    assert(!left.timed_out && left.exit_code == 3,
+        "a child that ended in time gives its own code, though its outputs stay open")
+    assert(left.stdout_data.trim_end().equals("before"),
+        "what the child wrote before its end is kept")
+    $m: = Panic_msg.new()
+    assert(took_ms < 2000I64,
+        m.s("run_capture returns soon after the child's end, not at the limit (took ").n(took_ms)
+        .s(" ms)").slice())
+    fs.remove_path(dir) catch {}
+    verdict
+        .pass("A time limit killed the child's own child too, and a child whose outputs stayed open \
+            returned its own code at its end.")

@@ -489,6 +489,39 @@ priv fn innermost_open(src: U8[], pos: Sz): Sz //<
         i = text_step(src, i)
     return open[n - 1] if n > 0 else -1
 
+priv fn opened_by_layout(src: U8[], at: Sz): Bool //<
+    //< Whether the `{` at `at` is one the indentation reader put in, rather than one written
+    //<
+    //< The reader puts ` {` at the end of a heading's code (`to_braces` in `layout.kspls`). A
+    //< written `{` that ends a line stands inside a call's brackets (a closure's body) or after
+    //< `::` (a value), and a written block's `{` has its body on its own line.
+    if at < 1 || src[at] != '{' || src[at - 1] != ' '
+        return false
+    $j: = at + 1
+    for j < src.len && src[j] == ' '
+        j += 1
+    if j < src.len && src[j] != '\n' && !src.starts_with("//", j)
+        return false
+    around: = innermost_open(src, at)
+    return around < 0 || src[around] == '{'
+
+priv fn append_non_ascii_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
+    //< It writes the sentence naming a character outside ASCII where a name or a mark was expected
+    //<
+    //< Python, Rust, Swift, Java and C++ all take a name in other scripts (`café`, `かんそ`), so
+    //< the writer expects it to work; KSPL's names are ASCII ("Identifiers and naming rules" in
+    //< `docs/SPEC-language.md`), and the expected list alone does not say why `か` is refused.
+    if pos >= src.len || src[pos] < 0x80U8
+        return false
+    $end: = pos + 1
+    for end < src.len && (src[end] & 0xC0U8) == 0x80U8
+        end += 1
+    msg.s("\n  Note: a name is written with the ASCII letters, digits and '_' alone, so '")
+        .s(src.sub(pos, end - pos))
+        .s("' cannot stand in one. Spell the name in ASCII; other text goes in a string or a \
+            comment.")
+    return true
+
 priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming a `,` that may be missing between two items of a list
     //<
@@ -615,18 +648,20 @@ priv fn text_step(src: U8[], i: Sz): Sz //<
         return line_end(src, i)
     return i + 1
 
-priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool) //<
+priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid_block: Bool) //<
     //< It writes one expected item
     //<
     //< A name goes in quotes and a kind in a readable phrasing. **Do not quote a kind**:
     //< `'Primitive_type'` reads as text to type, not the name of what can come there.
-    //< In the indentation notation the end of a line ends a statement, and no `;` is written
-    //< there, so `';'` is named as what the writer would put: the end of the line.
+    //< **The indentation notation writes no statement's `;` and no block's `}`**: they are named
+    //< the end of the line and, in a block the indentation opened (`in_laid_block`), of the block.
     //< Caution: **Do not make a table of phrasings.** The grammar (`ksplc/kspl.kspeg`) owns the
     //< rule's name, and a copy silently drifts when it is renamed.
     if !e.is_rule
         if laid_out && e.text.equals(";")
             msg.s("the end of the line")
+        else if in_laid_block && e.text.equals("}")
+            msg.s("the end of the block")
         else
             msg.s("'\{e.text\}'")
         return
@@ -638,6 +673,36 @@ priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool) //<
         c: = e.text[i]
         msg.c(' ' if c == '_' else c.to_lower())
 
+fn parse_error_at(src: U8[], pos: Sz): Sz //<
+    //< Where the syntax error found at `pos` is reported
+    //<
+    //< That is `pos`, or **the opening quote of a string that runs to the end of the text**: the
+    //< parser fails only where the text runs out, far below the quote the writer left open.
+    at: = unclosed_string_at(src, pos)
+    return at if at >= 0 else pos
+
+priv fn unclosed_string_at(src: U8[], pos: Sz): Sz //<
+    //< Where a string still open at the end of the text opens, or -1
+    //<
+    //< It is -1 too where that string opens after `pos`, so the failure is not inside it.
+    //< **Only a string reaching the end counts.** An ordinary string may hold a line end, so one
+    //< that a later quote closes is text the parser read, and its mistake shows where it ends.
+    $i: Sz = 0
+    for i < src.len
+        if src[i] == '"'
+            e: = literal_end(src, i)
+            if e >= src.len && !closes_at_end(src, i)
+                return i if i <= pos else -1
+        i = text_step(src, i)
+    return -1
+
+priv fn closes_at_end(src: U8[], at: Sz): Bool //<
+    //< Whether the string opening at `at` closes on the text's last byte
+    //<
+    //< literal_end runs both a string closed there and one never closed to the end.
+    quote: = "\"\"\"" if src.starts_with("\"\"\"", at) else "\""
+    return src.len - at >= 2 * quote.len && src.ends_with(quote)
+
 fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid_out: Bool):
     Str_builder //<
         //< It builds the message for the syntax error at `pos`
@@ -647,7 +712,15 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
         //< level, or one holding only comments). This is the one place where the wording differs by
         //< notation.
     $msg: = Str_builder.new()
+    // **The expected list would name the end of the text**, where the parser ran out; the mistake
+    // is the open quote the message is placed on (`parse_error_at`).
+    if unclosed_string_at(src, pos) >= 0
+        msg
+            .s("this string is never closed: no '\"' after it ends it, so the rest of the file was \
+                read as its text. Close it where its text ends")
+        return msg
     msg.s("expected ")
+    in_laid_block: = laid_out && opened_by_layout(src, innermost_open(src, pos))
     if target_parser.fail.expected_label_count > 0
         for i in Range.asc(target_parser.fail.expected_label_count)
             if i > 0
@@ -657,7 +730,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
                     msg.s(" or " if target_parser.fail.expected_label_count == 2 else ", or ")
                 else
                     msg.s(", ")
-            append_expected(msg@, (target_parser.fail.expected_labels + i)$, laid_out)
+            append_expected(msg@, (target_parser.fail.expected_labels + i)$, laid_out,
+                in_laid_block)
     else
         msg.s("valid syntax")
     odd: = odd_indent_name(src, pos)
@@ -665,6 +739,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
         msg.s("\n  Note: this line is indented with ").s(odd)
             .s(". Only the plain space (U+0020) counts as a column, so the line is read as if it \
                 began at column 0 and left the block that encloses it. Indent with spaces.")
+        return msg
+    if append_non_ascii_hint(msg@, src, pos)
         return msg
     if append_unclosed_bracket_hint(msg@, src, pos)
         return msg

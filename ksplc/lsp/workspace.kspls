@@ -8,6 +8,7 @@
 //< file** (an import resolves by a name from the root), so it walks.
 //< **The root is the current working directory.**
 import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -35,6 +36,40 @@ fn workspace_kspl(arena: Arena$@): List<|U8[]|> //<
     $skip: = read_ignored_dirs(arena)
     walk("", skip.slice(), 0, out@, arena)
     return out
+
+fn holds(path: U8[], arena: Arena$@): Bool //<
+    //< Whether the walk lists that file: a source under the root, in no folder the walk skips
+    //<
+    //< **It is where a rename may write** (`rename.kspls`): a file it does not list, such as an
+    //< installed std or a package read from elsewhere, is a library the editor only reads.
+    //< Caution: **Ask the walk's own rules** (`enters`, `takes`), or a rename writes into a folder
+    //< the references never searched. The file-count limit alone is not asked.
+    rest: = base_locate.rest_under(base_locate.canonical_path(path),
+        base_locate.canonical_path(base_locate.cwd()))
+    if rest.len == 0
+        return false
+    $skip: = read_ignored_dirs(arena)
+    $at: Sz = 0
+    $depth: Sz = 0
+    for
+        switch rest.sub_from(at).find_char('/')
+        case .some(slash)
+            if !enters(rest.sub(at, slash), rest.sub(0, at + slash), skip.slice())
+                return false
+            at += slash + 1
+            depth += 1
+        default
+            return depth <= max_depth && takes(rest.sub_from(at))
+
+priv fn takes(name: U8[]): Bool //< whether the walk lists a file of that name
+    return name.len > 0 && name[0] != '.' && name.has_kspl_ext()
+
+priv fn enters(name: U8[], dir: U8[], skip: U8[][]): Bool //<
+    //< Whether the walk goes into the folder `dir`, named `name`
+    //<
+    //< Caution: **Do not descend through a link to a folder.** Two links to `.` make the walk visit
+    //< 2^depth folders, and a link out of the workspace reads files nobody opened.
+    return name.len > 0 && name[0] != '.' && !name.is_one_of(skip) && !fs.is_link(dir)
 
 priv fn read_ignored_dirs(arena: Arena$@): List<|U8[]|> //<
     //< From `.gitignore`, it takes only the lines naming a folder
@@ -87,10 +122,9 @@ priv fn walk(rel: U8[], skip: U8[][], depth: Sz, out: List<|U8[]|>$@, arena: Are
         child: = name if rel.len == 0 else fs.join(rel, name, arena)
         info: = fs.stat(child) catch _e
             continue
-        // Caution: **Do not descend through a link to a folder.** Two links to `.` make the walk
-        // visit 2^depth folders, and a link out of the workspace reads files nobody opened.
-        if info.is_dir
-            if !name.is_one_of(skip) && !fs.is_link(child)
+        if info.kind == fs.File_kind.dir
+            if enters(name, child, skip)
                 walk(child, skip, depth + 1, out, arena)
-        else if child.has_kspl_ext()
+        else if info.kind == fs.File_kind.file && takes(name)
+            // A FIFO or a device by a source's name is not read: its read may never end.
             out.push(child)

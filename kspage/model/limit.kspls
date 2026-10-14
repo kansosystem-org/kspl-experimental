@@ -1,7 +1,9 @@
 //< The allowed range of a number read from a document
 //<
 //< **In some fields, one number decides the amount of work.**
-//< **Values outside the range are rejected**: rejecting tells the writer what happened.
+//< **Values outside the range are rejected**: rejecting tells the writer what happened. A length
+//< the editor makes itself is brought inside instead (`length_in`), so what it saves loads back;
+//< a merge or a nesting it would make outside is refused, since bringing it in changes the shape.
 //< **The range is kept in this one place.**
 
 const most_span: I64 = 1000 //< how many rows and columns a merge can cover
@@ -79,6 +81,18 @@ fn length_fits(got: F64): Bool //< whether it is allowed as a length, a gap or a
     //< **Negative values are allowed** (a hanging indent, a frame dragged past the edge); the
     //< magnitude decides the work. A value that is not a number fits nowhere.
     return got >= -most_length && got <= most_length
+
+fn length_in(got: F32): F32 //< the nearest length that `length_fits`; one that is no number is 0
+    //<
+    //< **For a length the editor makes itself** (a size measured, dragged or taken from a
+    //< picture): refused, the person could not tell why, and kept, the saved file would not load.
+    if !(got == got)
+        return 0.0
+    if got > F32::most_length
+        return F32::most_length
+    if got < -F32::most_length
+        return -F32::most_length
+    return got
 
 fn page_fits(got: F64): Bool //< whether it is allowed as the paper's width or height
     return got == 0.0 || (got >= least_page && got <= most_length)

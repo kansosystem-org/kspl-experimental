@@ -46,6 +46,14 @@ KSPL_LINK void kspl_get_trace_frame_info(int index, const U8** out_file, const U
     *out_line = kspl_error_trace_data[index].line;
 }
 
+/* Where the calling thread's stack is now, for std/stack_limit to compare with kspl_stack_floor.
+ * Caution: **Not a local's address.** The address sanitizer moves a local whose address is taken
+ * onto a stack of its own on the heap, to catch a use after return, so that address says nothing
+ * of how deep the thread's stack is. A frame's own address is always on the thread's stack. */
+KSPL_LINK Sz kspl_stack_here(void) {
+    return (Sz)(intptr_t)__builtin_frame_address(0);
+}
+
 /* The atomic operations (std/mem.kspls's Arc<T> and the freestanding heap's spinlock,
  * std/thread.kspls's Atomic_sz) on the clang/gcc builtins, needing no <stdatomic.h> at -std=c99.
  * Caution: On a core holding no LDREX/STREX (Armv6-M: Cortex-M0+, the RP2040) they are **not

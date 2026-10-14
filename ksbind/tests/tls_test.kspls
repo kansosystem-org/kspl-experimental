@@ -6,6 +6,7 @@
 import "ksbind/tls"
 import "std/chars" // `sub_mut`
 import "std/fs"
+import "std/libc"
 import "std/mem" { dealloc, Arena }
 import "std/net"
 import "std/str" // `to_cstr`, `equals`
@@ -13,7 +14,8 @@ import "std/sys"
 import "std/thread"
 import "std/verdict"
 
-// What only the tests need: the server half, keys and certificates, and writing a certificate out.
+// What only the tests need: the server half on a socket, keys and certificates, and writing a
+// certificate out.
 // Ed25519 asks for no parameters, so no `ctrl` macro stands between (OpenSSL 1.1.1 or later).
 // `long` crosses as in `../tls.kspls`.
 extern "C"
@@ -24,7 +26,6 @@ extern "C"
     struct X509_NAME
     struct ASN1_INTEGER
     struct ASN1_TIME
-    struct BIO
 
 #link("ssl")
 #link("crypto")
@@ -51,9 +52,9 @@ extern "C"
         len: I32, loc: I32, set: I32): I32
     fn X509_set_issuer_name(x: X509$@, name: X509_NAME$@): I32
     fn X509_sign(x: X509$@, pkey: EVP_PKEY$@, md: EVP_MD@): I32
-    fn BIO_new_file(filename: Void@, mode: Void@): BIO$@
-    fn BIO_free(a: BIO$@): I32
-    fn PEM_write_bio_X509(bp: BIO$@, x: X509$@): I32
+    fn BIO_new_file(filename: Void@, mode: Void@): tls.BIO$@
+    fn PEM_write_bio_X509(bp: tls.BIO$@, x: X509$@): I32
+    fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
 
 priv const evp_pkey_ed25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
 priv const mbstring_asc: I32 = 0x1001 //< MBSTRING_ASC
@@ -63,6 +64,7 @@ priv enum Peer_act //< what the peer does once a client connects
     refused //< offers its certificate, which the client refuses
     echo_then_close //< answers `ping` with `pong`, then closes with a close_notify
     echo_then_cut //< answers `ping` with `pong`, then drops the connection with no close_notify
+    gone //< completes the handshake, then drops the connection without reading a byte
 
 priv struct Tls_peer //<
     //< what the peer's thread is handed: where to listen, what to answer with, and how to end
@@ -84,12 +86,14 @@ fn tls_test_peer(peer: Tls_peer$@): Void$@
     default
         ssl: = tls.SSL_new(peer.ctx)
         assert(ssl != null, "the peer's SSL should be made")
-        assert(tls.SSL_set_fd(ssl, conn.raw_fd()) == 1, "the peer's socket should be set")
+        assert(SSL_set_fd(ssl, conn.raw_fd()) == 1, "the peer's socket should be set")
         switch peer.act
         case .refused
             // The client refuses the certificate, so the handshake ends here, on the peer's side
             // too.
             SSL_accept(ssl)
+        case .gone
+            assert(SSL_accept(ssl) == 1, "the peer's handshake should succeed")
         default
             assert(SSL_accept(ssl) == 1, "the peer's handshake should succeed")
             // Reads the whole `ping` first: a byte left unread would turn the close into a reset.
@@ -184,7 +188,7 @@ impl Test_ca
         bio: = BIO_new_file(Void@::c_file, "w")
         dealloc(Void$@::c_file)
         assert(bio != null && PEM_write_bio_X509(bio, cert) == 1, "the CA should be written out")
-        BIO_free(bio)
+        tls.BIO_free(bio)
         sys.set_env("SSL_CERT_FILE", file) catch panic("SSL_CERT_FILE should be set")
         return ::{ .key = key, .cert = cert, .dir = dir, .file = file }
 
@@ -325,3 +329,53 @@ fn test_tls_cut_connection_is_an_error()
     after: = Peer_act.echo_then_cut.round_trip_then(arena)
     assert(after == After_pong.error, "a read after a cut with no close_notify must fail")
     verdict.pass("A connection cut without a close_notify fails, rather than reading as an end.")
+
+priv const sigpipe: I32 = 13 //< SIGPIPE's number on Linux and macOS
+priv const write_tries: Sz = 50 //< the cap on writes to a peer that is gone before one fails
+priv const write_gap_ms: I32 = 20 //< the wait between them, for the peer's reset to arrive
+
+priv $sigpipes_seen: I32 = 0 //< how many SIGPIPEs reached `count_sigpipe`
+
+priv fn count_sigpipe(_sig: I32): Void //< a SIGPIPE handler that only counts
+    sigpipes_seen += 1
+    // Registered again: under SysV semantics one delivery puts the default back.
+    libc.signal(sigpipe, count_sigpipe)
+
+fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
+    verdict.start("[Tls] writing to a peer that is gone failing with no SIGPIPE test...")
+    if sys.is_windows()
+        verdict.skip("Windows has no SIGPIPE")
+        return
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    ctx: = ca.issue_ctx("localhost")
+    defer tls.SSL_CTX_free(ctx)
+    listener: = listen_on()
+    defer listener.free()
+    port: = listener.port() catch panic("a bound socket knows its port")
+    $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = .gone }
+    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    s: = tls.Tls_stream.connect("localhost", port)
+        catch panic("a certificate the trusted CA issued for this host should connect")
+    t.join_and_free()
+    // **This program ignores SIGPIPE, as every KSPL program does, but the program a library is
+    // linked into may not**: a handler stands in for that program, and counts what the default
+    // would have killed it with.
+    sigpipes_seen = 0
+    before: = libc.signal(sigpipe, count_sigpipe)
+    $failed: Sz = 0
+    for _try in Range.asc(write_tries)
+        s.write(ping) catch
+            failed += 1
+        if failed >= 2
+            break
+        sys.sleep_ms(write_gap_ms)
+    // `free` sends a close_notify, one more write to the peer that is gone.
+    s.free()
+    seen: = sigpipes_seen
+    libc.signal(sigpipe, before)
+    assert(failed >= 2, "a write to a peer that is gone should fail")
+    assert(seen == 0, "a write to a peer that is gone should fail as a value, raising no SIGPIPE")
+    verdict.pass("A write to a peer that is gone fails as a value, and raises no SIGPIPE.")

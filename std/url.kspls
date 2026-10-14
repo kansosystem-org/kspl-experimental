@@ -3,7 +3,7 @@
 //< For putting text safely into an HTTP path or a query parameter; decoding returns the original
 //< text unchanged.
 import "std/chars"
-import "std/mem" { Arena, alloc_in }
+import "std/mem" + { Arena, Own_arena }
 import "std/strfmt"
 
 pub enum Url_error //< why a piece of a URL could not be decoded
@@ -24,7 +24,7 @@ pub fn encode( //< percent-encodes a piece of text so it can go inside a URL
     $n: Sz = 0
     for c in s
         n += 1 if is_unreserved(c) else 3
-    out: = U8$[]::{ .ptr = U8$@::alloc_in(arena, n), .len = n }
+    out: = U8$[]::{ .ptr = U8$@::arena.alloc(n), .len = n }
     $at: Sz = 0
     for c in s
         if is_unreserved(c)
@@ -59,7 +59,7 @@ priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_erro
         else
             i += 1
         n += 1
-    out: = U8$[]::{ .ptr = U8$@::alloc_in(arena, n), .len = n }
+    out: = U8$[]::{ .ptr = U8$@::arena.alloc(n), .len = n }
     $at: Sz = 0
     i = 0
     for i < s.len
@@ -80,14 +80,36 @@ pub struct Query_param //< one `name=value` pair of a query string
     pub name: U8$[] //< the name, already decoded and copied into the arena
     pub value: U8$[] //< the value; empty when the pair has no `=`
     pub next: Query_param$@ //< the next pair, in the order they appear
+    priv own: Own_arena //< in the first pair `parse_query` returned given null, their arena
+
+impl Query_param
+    pub fn free(r: Self$@) //< lets go every pair, when `parse_query` was given null
+        //<
+        //< **Only the first pair of such a list frees anything.** One parsed into an arena owns
+        //< nothing, and neither does a pair further down.
+        if r != null
+            $own: = r.own
+            own.free()
+impl Query_param: Owned {} //< `free()` lets go the arena a query parsed with null lives in
 
 pub fn parse_query( //< splits a query string into a linked list of pairs
     //<
     //< Each name and value is percent-decoded, a `+` read as a space as a form writes it, and
     //< copied into the arena, in order.
     query: U8[], //< the text after the `?`; a leading `?` is dropped
-    arena: Arena$@, //< where the decoded names and values are copied
+    arena: Arena$@, //< where the pairs go; null means an arena of the pairs' own and a `free()`
 ): Query_param$@!Url_error //< the first pair, or null for an empty query; a broken `%XX` fails
+    $work: = mem.scratch(arena)
+    head: = pairs_of(query, work.arena) catch e
+        work.free()
+        throw e
+    if head == null
+        work.free()
+    else
+        head.own = work.own
+    return head
+
+priv fn pairs_of(query: U8[], arena: Arena$@): Query_param$@!Url_error //< parse_query's work
     $head: Query_param$@ = null
     $tail: Query_param$@ = null
     q: = query.strip_prefix("?")

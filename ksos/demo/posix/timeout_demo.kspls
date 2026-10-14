@@ -13,6 +13,7 @@
 // ==========================================
 
 // When a run fails, the assert names it with `panic: … at file:line` (as in every POSIX demo).
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/verdict"
@@ -192,7 +193,7 @@ fn coordinator(_arg: Void$@): Void
     assert(task.current_tick() == before8 + 2, "timeout: a huge take_for did not wait for the give")
     verdict.pass("the deadline stops at the clock's last tick, so it waits and takes the give.")
 
-fn main()
+fn main(): I32
     g_sem.init(0)
     g_start_giver.init(0)
     g_q.init(g_qbuf[0]@, 2)
@@ -209,3 +210,5 @@ fn main()
     tcb_mid.create(U8$[]::stack_mid, mid_waiter, null, mid_prio, "mid")
     tcb_setter.create(U8$[]::stack_setter, setter, null, 1, "setter")
     task.start_scheduler()
+    task_end.require_all_ended()
+    return verdict.finish()

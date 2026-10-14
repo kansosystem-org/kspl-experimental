@@ -1,4 +1,4 @@
-//< Eight kernel promises that looking right does not prove
+//< Nine kernel promises that looking right does not prove
 //<
 //< Each is a place where the obvious reading and the real behaviour differ, so each is checked
 //< here rather than left to watching a demo.
@@ -15,8 +15,10 @@
 //   5. A `delay_until` to a past time returns without waiting.
 //   6. Unlock returns a lent priority.
 //   7. Deleting a task that waits on a mutex returns what it lent the holder.
-//   8. Once the task limit is reached, `Task.create` returns false and registers nothing more.
+//   8. A delay suspended and resumed lasts its whole length, or ends at the resume once expired.
+//   9. Once the task limit is reached, `Task.create` returns false and registers nothing more.
 // ==========================================
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/chars" // U8$[].sub_mut
@@ -44,7 +46,7 @@ priv const max_tasks: Sz = 32 //<
     //< It equals the kernel's `max_tasks`, which is priv, so the number is repeated here and
     //< checked against it. Only `delete` frees a slot; a task that returned from its entry and
     //< became done keeps its slot. Deleting `gone` in check 4 frees one, so the free room is 32 - 8
-    //< + 1 (`lender` in check 7 takes a slot and gives it back).
+    //< + 1 (`lender` in check 7 and `sleeper` in check 8 take a slot and give it back).
 priv const fixed_tasks: Sz = 8 // coord + lo/mid/hi + first/second + hold + gone
 priv const freed_by_delete: Sz = 1 // gone
 priv const free_slots: Sz = max_tasks - fixed_tasks + freed_by_delete
@@ -60,6 +62,7 @@ $tcb_second: Task
 $tcb_hold: Task
 $tcb_gone: Task
 $tcb_lender: Task
+$tcb_sleeper: Task
 $tcb_filler: Task[26]
 $stack_coord: U8[65536]
 $stack_lo: U8[65536]
@@ -70,6 +73,7 @@ $stack_second: U8[65536]
 $stack_hold: U8[65536]
 $stack_gone: U8[65536]
 $stack_lender: U8[65536]
+$stack_sleeper: U8[65536]
 $stack_filler: U8[851968] // filler_slots × filler_stack
 
 fn waiter(arg: Void$@): Void //< 1. All three wait on the same semaphore
@@ -113,6 +117,17 @@ fn lender(_arg: Void$@): Void //< 7. It outranks coord, so it lends coord its pr
     g_mutex.lock()
     g_mutex.unlock()
 priv const lender_prio: I32 = 6 // above coord's 4
+
+priv const sleep_ticks: U64 = 10 //< how long each of `sleeper`'s two delays asks for
+$g_slept: U64[2] //< how long each delay really lasted
+$g_sleeps: Sz = 0 //< how many delays have returned
+
+fn sleeper(_arg: Void$@): Void //< 8. The task suspended while it sleeps, twice
+    for i in Range.asc(2)
+        from: = task.current_tick()
+        Task.delay(sleep_ticks)
+        g_slept[i] = task.current_tick() - from
+        g_sleeps += 1
 
 fn filler_entry(_arg: Void$@): Void {}
 
@@ -194,7 +209,29 @@ fn coordinator(_arg: Void$@): Void
     g_mutex.unlock()
     verdict.pass("once the waiter is deleted, the holder runs at its own priority again.")
 
-    // --- 8. the cap on seats ---
+    // --- 8. suspend / resume while delayed ---
+    verdict.start("[ksos] suspend while delayed")
+    // sleeper ranks below coord, so it starts its first delay once coord sleeps (at t).
+    tcb_sleeper.create(U8$[]::stack_sleeper, sleeper, null, 1, "sleeper")
+    Task.delay(1) // t+1
+    tcb_sleeper.suspend()
+    Task.delay(1) // t+2
+    tcb_sleeper.resume()
+    Task.delay(sleep_ticks - 1) // t+11: the first delay ended at t+10, the second runs to t+20
+    assert(g_sleeps == 1 && g_slept[0] == sleep_ticks,
+        "kernel_check: a delay suspended and resumed ended before its time")
+    tcb_sleeper.suspend()
+    Task.delay(sleep_ticks + 5) // t+26: the second delay expired at t+20, while suspended
+    tcb_sleeper.resume()
+    Task.delay(1)
+    assert(g_sleeps == 2 && g_slept[1] == sleep_ticks + 6, // from t+10 to the resume at t+26
+        "kernel_check: a delay that expired while suspended did not end at the resume")
+    tcb_sleeper.delete()
+    verdict
+        .pass("a delay paused before its end still lasts its whole length; one that ended while \
+            paused returns at the resume.")
+
+    // --- 9. the cap on seats ---
     verdict.start("[ksos] Task.create refuses past the limit")
     $made: Sz = 0
     $refused: Sz = 0
@@ -213,7 +250,7 @@ fn coordinator(_arg: Void$@): Void
         .pass("registering after the 32 seats are filled is turned away with false, and the table \
             grows no further (a seat that was deleted is reused).")
 
-fn main()
+fn main(): I32
     g_sem.init(0)
     g_sem_equal.init(0)
     g_sem_hold.init(0)
@@ -231,3 +268,5 @@ fn main()
     tcb_hold.create(U8$[]::stack_hold, holder, null, 1, "hold")
     tcb_gone.create(U8$[]::stack_gone, goner, null, 1, "gone")
     task.start_scheduler()
+    task_end.require_all_ended()
+    return verdict.finish()

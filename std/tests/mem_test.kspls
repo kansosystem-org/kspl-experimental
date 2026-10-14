@@ -1,7 +1,7 @@
 //< Tests of `std/mem` and the counted references
 //<
-//< What an arena keeps across a reset, the heap's counters under threads, and `Rc` / `Arc`
-//< balancing their counts.
+//< What an arena keeps across a reset, the marks it rewinds to, the heap's counters under threads,
+//< and `Rc` / `Arc` balancing their counts.
 import "std/mem" + { Arena, alloc, dealloc }
 import "std/refcount" { Rc, Arc, Weak_rc, Weak_arc }
 import "std/tests/sys_test"
@@ -43,6 +43,79 @@ fn test_arena_reset_fixed_buffer()
     assert(a.headroom().free == whole, "Arena: a fixed buffer is whole again after reset")
     a.alloc(whole)
     verdict.pass("Arena.reset on a fixed buffer frees nothing and hands it all out again")
+
+// ==========================================
+// std/mem: rewinding an arena to a mark, and the marks it refuses.
+// ==========================================
+fn test_arena_restore()
+    verdict.start("[Arena] restore rewinds to a mark, across a chunk and more than once...")
+    a: = Arena.new(4 * kib)
+    defer a.free()
+    a.alloc(100)
+    mark: = a.save()
+    first: = a.alloc(16)
+    a.alloc(5 * kib) // past the chunk, so it takes one of its own
+    grown: = a.get_total_allocated()
+    a.restore(mark)
+    assert(a.get_total_allocated() < grown, "Arena: the chunk taken after the mark is freed")
+    assert(a.alloc(16) == first,
+        "Arena: the next allocation lands where the first after the mark did")
+    a.restore(mark)
+    assert(a.alloc(16) == first, "Arena: the same mark rewinds again")
+    verdict.pass("Arena.restore frees what came after the mark, and a mark serves more than once")
+
+priv const restore_foreign_src: U8[] = //< a child that rewinds one arena to another's mark
+    """import "std/mem" { Arena }
+
+fn main()
+  a: = Arena.new(4096)
+  b: = Arena.new(4096)
+  _x: = a.alloc(100)
+  mark: = a.save()
+  _y: = b.alloc(5000)
+  b.restore(mark)
+"""
+
+priv const restore_before_reset_src: U8[] = //< a child that rewinds to a mark from before reset
+    //<
+    //< After the reset the one chunk is kept and holds more than the mark did, so only the count
+    //< of resets tells the mark is stale.
+    """import "std/mem" { Arena }
+
+fn main()
+  a: = Arena.new(4096)
+  _x: = a.alloc(100)
+  mark: = a.save()
+  a.reset()
+  _y: = a.alloc(200)
+  a.restore(mark)
+"""
+
+priv const restore_rewound_past_src: U8[] = //< a child that rewinds to a mark it rewound past
+    """import "std/mem" { Arena }
+
+fn main()
+  a: = Arena.new(4096)
+  _x: = a.alloc(100)
+  early: = a.save()
+  _y: = a.alloc(100)
+  late: = a.save()
+  a.restore(early)
+  a.restore(late)
+"""
+
+fn test_arena_restore_refuses_stale_marks(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
+    verdict.start("[Arena] restore to a mark it cannot place...")
+    // Without the refusal the foreign mark frees every chunk and becomes the head, so the next
+    // allocations overlap the other arena's data and only a double free at the end shows it.
+    why: = "Arena.restore: the mark is not this arena's"
+    assert(sys_test.child_stops_with(ksplc, "restore_foreign", restore_foreign_src, why, arena),
+        "a mark from another arena must stop the program at restore, naming it")
+    assert(sys_test.child_stops_with(ksplc, "restore_reset", restore_before_reset_src, why, arena),
+        "a mark from before reset() must stop the program at restore")
+    assert(sys_test.child_stops_with(ksplc, "restore_past", restore_rewound_past_src, why, arena),
+        "a mark an earlier restore rewound past must stop the program at restore")
+    verdict.pass("Arena.restore stops on a mark from another arena, before reset, or rewound past")
 
 fn test_move_overlap()
     verdict.start("[Mem] move shifts bytes within one buffer, either way...")

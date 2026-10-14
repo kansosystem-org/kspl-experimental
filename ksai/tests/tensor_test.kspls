@@ -1,3 +1,4 @@
+import "ksai/lora" { Lora }
 import "ksai/lora_set" { Qkv_lora }
 import "ksai/model_file" as ai_file
 import "ksai/quant"
@@ -5,6 +6,7 @@ import "ksai/safetensors" as ai_st
 import "ksai/tensor" { Tensor }
 import "std/buf" { Buf_writer }
 import "std/bytes" as std_bytes
+import "std/io"
 import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/verdict"
@@ -296,6 +298,47 @@ fn test_safetensors_roundtrip(arena: Arena$@)
             "safetensors roundtrip must preserve every element bit-for-bit")
 
     verdict.pass("not one element is garbled over the header length, header and data round trip.")
+fn test_model_file_leaves_no_heap(arena: Arena$@) //<
+    //< That reading a model file holds nothing past what its result frees
+    //<
+    //< **A refused file frees what it read**, and an adapter set lives wholly in its arena: with
+    //< either on the heap, a server reloading files for its lifetime grows by a file per load.
+    verdict.start("[Safetensors] a refused file and a freed adapter set leave the heap as found...")
+    bad_path: = "out/tmp/kspl_test_debug_bad.safetensors"
+    $bad: U8[64] = ::{}
+    bad[0] = 0xffU8 // a header length past the file's end
+    io.write_file(bad_path, U8[]::bad) catch panic("the bad file has to be writable under out/")
+    heap_before: = mem.heap_used_bytes()
+    $refused: = false
+    _st: = ai_file.load_safetensors(bad_path, arena) catch
+        refused = true
+        fallback ai_st.Safetensors::{}
+    assert(refused, "a header length past the file's end is refused")
+    assert(mem.heap_used_bytes() == heap_before, "a refused file must not stay on the heap")
+
+    path: = "out/tmp/kspl_test_debug_adapters.safetensors"
+    shape: Sz[2] = ::{ 2, 2 }
+    a: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    a.fill(F32::0.25)
+    one: = Lora<|F32|>::{ .a = a, .b = a, .scale = F32::2.0 }
+    $set: = Qkv_lora<|F32|>::{ .q = one, .v = one }
+    ai_file.save_qkv_lora_set<|F32|>(set@, 1, path, arena)
+        catch panic("save_qkv_lora_set should succeed for a writable out/ path")
+    own: = Arena.new(4096)
+    got: = ai_file.load_qkv_lora_set<|F32|>(path, 1, own) catch
+        panic("load_qkv_lora_set should read back the set just written")
+    assert(got.q.scale == F32::2.0 && got.v.a.data$ == F32::0.25, "the set reads back as written")
+    own.free()
+    assert(mem.heap_used_bytes() == heap_before, "freeing the arena frees the whole adapter set")
+    short: = Arena.new(4096)
+    $missing: = false
+    _none: = ai_file.load_qkv_lora_set<|F32|>(path, 2, short) catch
+        missing = true
+        fallback Qkv_lora<|F32|>$@::null
+    short.free()
+    assert(missing, "a block the file lacks is refused")
+    assert(mem.heap_used_bytes() == heap_before, "a set refused halfway must not stay on the heap")
+    verdict.pass("")
 // ==========================================
 // The range a file declares for itself (`data_offsets` and `shape`) is not trusted.
 // Caution: **Nothing goes wrong at the moment it returns**: it breaks only when the data is

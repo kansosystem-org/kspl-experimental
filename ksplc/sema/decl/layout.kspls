@@ -9,12 +9,14 @@
 //< not add them to Ctx).
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/target" as base_target
 import "ksplc/sema/decl/registry" as sema_decl_registry
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
 import "ksplc/sema/session/state" as sema_session_state
+import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
@@ -40,6 +42,10 @@ priv struct Enum_parts //< `enum_parts`' answer: a tagged enumeration's layout, 
 priv fn align_to(offset: Sz, align: Sz): Sz //< rounds offset up to a multiple of align
     rem: = offset % align
     return (offset + (align - rem)) if rem > 0 else offset
+
+priv fn low_align(align: Sz, offset: Sz): Sz //< the alignment left `offset` bytes past `align`
+    low: = offset & (0 - offset)
+    return align if low == 0 || low > align else low
 
 priv fn result_err_at(err: sema_session_state.Type_layout): Sz //<
     //< Where a Result's `error_code` starts: after the one-byte `is_err`, at the error's alignment
@@ -86,8 +92,8 @@ impl Sema_ctx
 
     priv fn reset_layout_memo(r: Self$@) //< recreates the cache of measured layouts
         //<
-        //< Caution: the memo is arena-allocated but its entries array is on the heap (alloc_in with
-        //< arena=null): free it first, or every reset leaks.
+        //< Caution: the memo is arena-allocated but its entries array is on the heap (a Map made
+        //< with a null arena): free it first, or every reset leaks.
         r.layout.memo.free()
         r.layout.memo = base_core.arena
             .create(Map<|I32, sema_session_state.Type_layout|>.new_with_cap(64, null))
@@ -104,6 +110,8 @@ impl Sema_ctx
         base_diag.ice_assert(root_file != null,
             "check_type_layouts: called before the files are read")
         r.check_infinite_size_types()
+        if !r.has_error()
+            r.check_packed_managed_fields()
         for top_node in root_file.children
             child: = top_node.unwrap_top_level()
             if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
@@ -150,6 +158,29 @@ impl Sema_ctx
                     break
         r.layout.field = null
         r.layout.scanning_all = false
+
+    priv fn check_packed_managed_fields(r: Self$@) //<
+        //< Refuses an ARC-managed field that `#packed` leaves under-aligned
+        //<
+        //< Its count is kept through the field's address (lower/arc.kspls passes `field@` to the
+        //< retain and release helpers), which such a field cannot give ("refuse_packed_address").
+        count: = r.env.id_to_type.len
+        for $id: Sz = 1; id < count; id += 1
+            switch r.env.get_info(I32::id)
+            case .struct_type(def)
+                if def.is_packed
+                    start: = r.type_layout(I32::id).align
+                    for f in def.fields_list
+                        if r.env.type_is_managed(f.type_id) &&
+                            r.field_kept_align(def, start, f.name) < r.type_layout(f.type_id).align
+                            shown: = r.env.display(f.type_id)
+                            r.clear_scratch()
+                                .s("field '\{f.name\}' holds the ARC-managed '\{shown\}', whose \
+                                    count is kept through the field's address, but '#packed' leaves \
+                                    that address under-aligned. Keep it in a struct without \
+                                    '#packed'")
+                            r.err(f.node, r.scratch.slice())
+            default {}
 
     fn ensure_type_registry(r: Self$@, type_id: I32, err_node: base_ast.Ast_node$@):
         Void!Sema_error //<
@@ -335,6 +366,100 @@ impl Sema_ctx
                 fields at fixed offsets)")
         r.err(err_node, r.scratch.slice())
         throw .invalid_argument
+
+    fn packed_place_align(r: Self$@, place: Ast_node$@): Sz //<
+        //< The alignment a place inside a `#packed` struct keeps, 0 where it keeps its type's own
+        //<
+        //< Such a field, and all inside it, can start at any byte. **Every reader of a place's
+        //< alignment calls it**: genc and genllvm make the access byte-wise, and sema refuses the
+        //< address (`refuse_packed_address` below).
+        kept: = r.place_kept_align(place, 0)
+        if kept == 0
+            return 0
+        own: = r.type_layout(place.type_id).align
+        return kept if kept < own else 0
+
+    fn refuse_packed_address(r: Self$@, place: Ast_node$@, how: U8[]): Bool //<
+        //< Reports `how` taking the address of a place `#packed` leaves under-aligned
+        //<
+        //< False where the place keeps its type's alignment. A pointer carries no alignment of its
+        //< own, so each access through it would assume the type's.
+        kept: = r.packed_place_align(place)
+        if kept == 0
+            return false
+        own: = r.type_layout(place.type_id).align
+        shown: = r.env.display(place.type_id)
+        r.clear_scratch()
+            .s("cannot take the address of a field that '#packed' leaves aligned to \{kept\} \
+                byte(s), as \{how\} would: a pointer to '\{shown\}' promises \{own\}. Copy the \
+                field into a local ('$v: = <field>;'), use the local, and assign it back")
+        r.err(place, r.scratch.slice())
+        return true
+
+    fn refuse_packed_receiver(r: Self$@, recv: Ast_node$@, method: Ast_node$@, written: U8[]) //<
+        //< refuse_packed_address for a receiver that `method` takes by pointer
+        //<
+        //< A method call, a user operator and a subscript through `Index_place` / `Index_ref` alike
+        //< pass `recv@`; `written` is what the source shows (`bump`, `+`, `[]`). A receiver that
+        //< is not a place is copied to a temporary first, so it is not one.
+        if recv == null || r.env.is_pointer(recv.type_id) ||
+            recv.receiver_needs_hoist(false, r.env.is_slice(recv.type_id))
+            return
+        switch r.env.method_receiver_permission(method)
+        case .some(need)
+            if need.ptr
+                how: = base_core.arena.text()
+                    .s("'\{written\}', which takes its receiver by pointer,").take()
+                r.refuse_packed_address(recv, how)
+        case .none {}
+
+    priv fn place_kept_align(r: Self$@, place: Ast_node$@, depth: Sz): Sz //<
+        //< The alignment a place's address is sure of, 0 where no `#packed` struct holds it
+        //<
+        //< A step through a pointer starts afresh: what it points at is laid out at its type's own.
+        if place == null || depth >= max_type_layout_depth
+            return 0
+        if place.kind_id == .k_expr_primary
+            return r.place_kept_align(place.get_primary_inner_expr(), depth + 1)
+        if place.kind_id != .k_expr_postfix
+            return 0
+        recv: = place.get_postfix_receiver()
+        op: = place.postfix_op_text()
+        if recv == null || !(op.equals(".") || op.equals("["))
+            return 0
+        outer: =
+            0 if r.env.is_pointer(recv.type_id) else r.place_kept_align(recv, depth + 1)
+        base_id: = r.env.receiver_base_id(recv.type_id)
+        if op.equals("[")
+            // A slice's or an `Index` type's element is reached through a pointer.
+            if outer == 0 || !r.env.is_array(base_id)
+                return 0
+            return low_align(outer, r.type_layout(r.env.strip_array(base_id)).size)
+        member: = place.get_postfix_member()
+        if member == null
+            return 0
+        if def: = r.env.get_struct_def(r.env.base_type_name(base_id))
+            if outer == 0 && !def.is_packed
+                return 0
+            start: = outer if outer > 0 else r.type_layout(base_id).align
+            return r.field_kept_align(def, start, member.text)
+        return 1 if outer > 0 else 0 // a Result's or a payload's part: no offset to read
+
+    fn packed_field_align(r: Self$@, struct_id: I32, field: sema_type_def.Struct_field$@): Sz //<
+        //< packed_place_align for a field of a struct at its own alignment (a literal's slot)
+        if def: = r.env.get_struct_def(r.env.base_type_name(struct_id))
+            if def.is_packed
+                kept: = r.field_kept_align(def, r.type_layout(struct_id).align, field.name)
+                own: = r.type_layout(field.type_id).align
+                return kept if kept < own else 0
+        return 0
+
+    priv fn field_kept_align(r: Self$@, def: sema_type_def.Struct_def$@, start: Sz, name: U8[]): Sz //<
+        //< the alignment a field keeps in a struct whose start is aligned to `start`
+        $resolving: = List<|I32|>.new(null)
+        defer resolving.free()
+        return low_align(start,
+            r.walk_fields(def.fields_list, resolving@, !def.is_packed, name).size)
 
     fn record_folded(r: Self$@, type_id: I32, measure: sema_session_state.Layout_measure, value: Sz,
         at: Ast_node$@) //<

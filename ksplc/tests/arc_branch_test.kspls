@@ -1,0 +1,290 @@
+//< ARC (automatic reference counting) where a count travels through a branch or an expression
+//<
+//< A ternary's branch, a catch's substitute, a `switch` arm's binding, an operand a later `!`
+//< leaves behind, and a part read off a value nothing owns yet. Each case reads back an exact
+//< count, so a leak shows as a count left over and an early release as one missing.
+// ==========================================
+// Caution: **Count with a block the test owns, never with freed memory.** A Tally's last release
+// frees nothing, so a missing retain reads as a count one short instead of passing on Linux's
+// freed memory (the trap "A retain goes wherever a copy happens" in ksplc/docs/DESIGN.md names).
+// ==========================================
+import "std/verdict"
+
+priv struct Tally_block //< the count one Tally value has, owned by the test reading it
+    count: Sz
+
+struct Tally //< an ARC type whose release only counts down
+    priv block: Tally_block$@
+
+impl Tally
+    fn on(b: Tally_block$@): Tally //< the first owner of b, at count 1
+        b.count = 1
+        return ::{ .block = b }
+    fn peek(r: Self@): Sz //< a read through a borrowed receiver
+        return r.block.count
+
+impl Tally: Ref_counted //< the zero value (no block) owns nothing, as std's handles
+    priv fn retain(r: Self@)
+        if r.block != null
+            r.block.count += 1
+    priv fn release(r: Self@)
+        if r.block != null
+            r.block.count -= 1
+
+priv enum Tally_err
+    failed
+
+priv struct Tally_box
+    n: I32
+    t: Tally
+
+priv struct Tally_pair
+    a: Tally
+    b: Tally
+
+priv enum Tally_slot
+    one(t: Tally)
+    two(a: Tally, b: Tally)
+    none
+
+priv fn tally_or_fail(b: Tally_block$@, fail: Bool): Tally!Tally_err
+    if fail
+        throw .failed
+    return Tally.on(b)
+
+priv fn tally_take(t: Tally): Sz //< takes a count by value, as any parameter does
+    return t.peek()
+
+priv fn tally_two(a: Tally, b: Tally): Sz
+    return a.peek() + b.peek()
+
+// ==========================================
+// Each branch of a ternary, and a catch's substitute, hands over a count of its own: a binding it
+// reads is retained there, so the value it yields carries one count whichever way it went.
+// ==========================================
+priv fn pick_returned(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Tally
+    a: = Tally.on(ab)
+    b: = Tally.on(bb)
+    return a if c else b
+
+priv fn pick_bound(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Sz //< the count while bound
+    a: = Tally.on(ab)
+    b: = Tally.on(bb)
+    x: = a if c else b
+    return x.peek()
+
+priv fn pick_into_field(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Tally_box
+    a: = Tally.on(ab)
+    b: = Tally.on(bb)
+    return Tally_box::{ .n = 0, .t = a if c else b }
+
+priv fn pick_read_only(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Sz
+    a: = Tally.on(ab)
+    return (a if c else Tally.on(bb)).peek()
+
+priv fn catch_substitute(ab: Tally_block$@, fb: Tally_block$@): Sz
+    a: = Tally.on(ab)
+    x: = tally_or_fail(fb, true) catch a
+    return x.peek()
+
+priv fn catch_fallback(ab: Tally_block$@, fb: Tally_block$@): Tally
+    a: = Tally.on(ab)
+    x: = tally_or_fail(fb, true) catch
+        fallback a
+    return x
+
+priv fn catch_substitute_dropped(fb: Tally_block$@, sb: Tally_block$@) //< the value goes unused
+    tally_or_fail(fb, true) catch Tally.on(sb)
+
+priv fn catch_on_place(r: Tally!Tally_err, sb: Tally_block$@): Sz //< `r` still owns its success
+    sub: = Tally.on(sb)
+    x: = r catch sub
+    return x.peek()
+
+priv fn catch_on_place_dropped(r: Tally!Tally_err)
+    r catch {}
+
+fn test_arc_branch_hands_over_a_count()
+    verdict
+        .start("[ARC] a ternary's branch and a catch's substitute hand over a count of their own \
+            test...")
+    $ab: = Tally_block::{}
+    $bb: = Tally_block::{}
+    release_on_exit:
+        _t: = pick_returned(ab@, bb@, true)
+        assert(ab.count == 1 && bb.count == 0, "a returned branch keeps the one count it hands over")
+    release_on_exit:
+        _t: = pick_returned(ab@, bb@, false)
+        assert(ab.count == 0 && bb.count == 1, "the other branch hands over its count too")
+    assert(pick_bound(ab@, bb@, true) == 2, "a bound branch holds its own count beside its source")
+    release_on_exit:
+        h: = pick_into_field(ab@, bb@, false)
+        assert(bb.count == 1 && h.n == 0, "a branch stored into a field keeps its count")
+    assert(pick_read_only(ab@, bb@, true) == 2, "a branch only read is held while it is read")
+    assert(pick_read_only(ab@, bb@, false) == 1, "a new value in a branch arrives with one count")
+    assert(ab.count == 0 && bb.count == 0, "every branch's count is given back")
+
+    $fb: = Tally_block::{}
+    assert(catch_substitute(ab@, fb@) == 2, "a catch's substitute holds its own count")
+    release_on_exit:
+        _t: = catch_fallback(ab@, fb@)
+        assert(ab.count == 1, "a fallback's binding keeps the count it hands over")
+    catch_substitute_dropped(fb@, ab@)
+    assert(ab.count == 0, "a new substitute a statement's catch throws away is released")
+    $rb: = Tally_block::{}
+    release_on_exit:
+        r: Tally!Tally_err = Tally.on(rb@)
+        assert(catch_on_place(r, ab@) == 3, "a success read off a Result binding is counted")
+        catch_on_place_dropped(r)
+        assert(rb.count == 1, "a success a statement's catch throws away stays the binding's")
+    assert(ab.count == 0 && fb.count == 0 && rb.count == 0, "every substitute's count is given back")
+    verdict
+        .pass("each branch and each substitute handed over exactly one count, whether it read a \
+            binding or made a new value.")
+
+// ==========================================
+// A `switch` arm's binding (and `if v: = o`'s) holds a count of its own for the arm, so the arm
+// may reassign its subject and still use the binding.
+// ==========================================
+priv fn arm_outlives_subject(b: Tally_block$@): Sz //< the count after the subject lets go
+    $s: = Tally_slot.one(Tally.on(b))
+    switch s
+    case .one(t)
+        s = .none
+        return t.peek() * 10 + tally_take(t)
+    default
+        return -1
+
+priv fn arm_two_bindings(ab: Tally_block$@, bb: Tally_block$@): Sz
+    $s: = Tally_slot.two(Tally.on(ab), Tally.on(bb))
+    switch s
+    case .two(a, b)
+        s = .none
+        return a.peek() + b.peek()
+    default
+        return -1
+
+priv fn bind_outlives_option(b: Tally_block$@): Sz
+    $o: Tally? = .some(Tally.on(b))
+    if t: = o
+        o = .none
+        return t.peek()
+    return -1
+
+fn test_arc_arm_binding_holds_a_count()
+    verdict.start("[ARC] a switch arm's binding holds a count of its own test...")
+    $ab: = Tally_block::{}
+    $bb: = Tally_block::{}
+    assert(arm_outlives_subject(ab@) == 1 * 10 + 2,
+        "the binding stays counted once the subject is reassigned, and a copy of it counts too")
+    assert(arm_two_bindings(ab@, bb@) == 2, "each binding of a payload holds its own count")
+    assert(bind_outlives_option(ab@) == 1, "an 'if' binding stays counted once its Option is reset")
+    assert(ab.count == 0 && bb.count == 0, "every binding gives its count back when the arm ends")
+    verdict.pass("each binding held one count through its arm, and gave it back at the arm's end.")
+
+// ==========================================
+// An operand that already holds a count (a new value, or a binding's copy) is released when a
+// later operand's `!` leaves the statement before the consumer takes it.
+// ==========================================
+priv fn two_fresh(ab: Tally_block$@, fb: Tally_block$@, fail: Bool): Sz!Tally_err
+    return tally_two(tally_or_fail(ab, false)!, tally_or_fail(fb, fail)!)
+
+priv fn two_place_first(ab: Tally_block$@, fb: Tally_block$@): Sz!Tally_err
+    a: = Tally.on(ab)
+    return tally_two(a, tally_or_fail(fb, true)!)
+
+priv fn two_place_last(ab: Tally_block$@, fb: Tally_block$@): Sz!Tally_err
+    a: = Tally.on(ab)
+    return tally_two(tally_or_fail(fb, true)!, a)
+
+priv fn two_mutable_place(ab: Tally_block$@, fb: Tally_block$@): Sz!Tally_err
+    $a: Tally = ::{}
+    a = Tally.on(ab)
+    return tally_two(a, tally_or_fail(fb, true)!)
+
+priv fn pair_fresh(ab: Tally_block$@, fb: Tally_block$@): Tally_pair!Tally_err
+    return Tally_pair::{ .a = tally_or_fail(ab, false)!, .b = tally_or_fail(fb, true)! }
+
+priv fn pair_place(ab: Tally_block$@, fb: Tally_block$@): Tally_pair!Tally_err
+    a: = Tally.on(ab)
+    return Tally_pair::{ .a = a, .b = tally_or_fail(fb, true)! }
+
+priv fn array_fresh(ab: Tally_block$@, fb: Tally_block$@): Sz!Tally_err
+    xs: Tally[2] = ::{ tally_or_fail(ab, false)!, tally_or_fail(fb, true)! }
+    return xs[0].peek()
+
+priv fn payload_fresh(ab: Tally_block$@, fb: Tally_block$@): Tally_slot!Tally_err
+    return .two(tally_or_fail(ab, false)!, tally_or_fail(fb, true)!)
+
+fn test_arc_operand_left_by_exit()
+    verdict.start("[ARC] an operand's count is given back when a later operand leaves test...")
+    $ab: = Tally_block::{}
+    $fb: = Tally_block::{}
+    sum: = two_fresh(ab@, fb@, false) catch -1
+    assert(sum == 2 && ab.count == 0 && fb.count == 0, "without an exit each operand is taken once")
+    _r1: = two_fresh(ab@, fb@, true) catch -1
+    assert(ab.count == 0, "a new value an argument holds is released when a later '!' leaves")
+    _r2: = two_place_first(ab@, fb@) catch -1
+    assert(ab.count == 0, "a binding's copy an argument holds is released when a later '!' leaves")
+    _r3: = two_place_last(ab@, fb@) catch -1
+    assert(ab.count == 0, "a binding read after the '!' that leaves is not counted at all")
+    _r4: = two_mutable_place(ab@, fb@) catch -1
+    assert(ab.count == 0, "a mutable binding's copy is released when a later '!' leaves")
+    _p1: = pair_fresh(ab@, fb@) catch Tally_pair::{}
+    assert(ab.count == 0, "a struct literal's field is released when a later field's '!' leaves")
+    _p2: = pair_place(ab@, fb@) catch Tally_pair::{}
+    assert(ab.count == 0, "a struct literal's copied field is released when a later '!' leaves")
+    _a1: = array_fresh(ab@, fb@) catch -1
+    assert(ab.count == 0, "an array literal's element is released when a later '!' leaves")
+    _s1: = payload_fresh(ab@, fb@) catch .none
+    assert(ab.count == 0, "a payload's value is released when a later payload's '!' leaves")
+    verdict.pass("every count an operand held was given back on the way out, and taken otherwise.")
+
+// ==========================================
+// A field or an element read off a value nothing owns yet: the value is held to the end of the
+// block, and the part is counted only where something takes it.
+// ==========================================
+priv fn tally_box(b: Tally_block$@): Tally_box
+    return Tally_box::{ .n = 7, .t = Tally.on(b) }
+
+priv fn tally_array(ab: Tally_block$@, bb: Tally_block$@): Tally[2]
+    return ::{ Tally.on(ab), Tally.on(bb) }
+
+priv fn tally_box_or_fail(b: Tally_block$@, fail: Bool): Tally_box!Tally_err
+    if fail
+        throw .failed
+    return tally_box(b)
+
+priv fn field_only_read(b: Tally_block$@): Sz
+    return tally_box(b).t.peek()
+
+priv fn field_taken(b: Tally_block$@): Sz
+    x: = tally_box(b).t
+    return x.peek()
+
+priv fn element_taken(ab: Tally_block$@, bb: Tally_block$@): Sz
+    return tally_take(tally_array(ab, bb)[1])
+
+priv fn element_only_read(ab: Tally_block$@, bb: Tally_block$@): Sz
+    return tally_array(ab, bb)[0].peek()
+
+priv fn field_of_catch(ab: Tally_block$@, bb: Tally_block$@): Sz
+    return (tally_box_or_fail(ab, true) catch tally_box(bb)).t.peek()
+
+fn test_arc_part_of_new_value()
+    verdict
+        .start("[ARC] a field or element read off a new value is counted only when taken test...")
+    $ab: = Tally_block::{}
+    $bb: = Tally_block::{}
+    assert(field_only_read(ab@) == 1, "a field only read is borrowed from the held value")
+    assert(ab.count == 0, "the held value goes at the end of its block")
+    assert(field_taken(ab@) == 2, "a field taken counts beside the held value")
+    assert(ab.count == 0, "and both counts are given back")
+    assert(element_taken(ab@, bb@) == 2, "an element taken counts beside the held array")
+    assert(ab.count == 0 && bb.count == 0, "every element of the held array is released")
+    assert(element_only_read(ab@, bb@) == 1, "an element only read is borrowed from the held array")
+    assert(ab.count == 0 && bb.count == 0, "the held array goes at the end of its block")
+    assert(field_of_catch(ab@, bb@) == 1, "a field read off a catch's value is borrowed")
+    assert(bb.count == 0, "the catch's value goes at the end of its block")
+    verdict
+        .pass("a part only read was borrowed, a part taken was counted, and the value read went.")

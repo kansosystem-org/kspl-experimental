@@ -5,6 +5,7 @@
 //< ARC's releases) and jump targets that each way out reads. The walk itself is in `root.kspls`;
 //< every file of `lower/` receives this context.
 import "ksplc/base/ast" as base_ast + { Ast_node }
+import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/scope" { Sema_symbol, Sym_kind }
@@ -46,12 +47,13 @@ struct Lowering_ctx
     fb: Fallback_ctx
     cleanup_stack: List<|List<|Ast_node$@|>$@|>$@
     jump_stack: List<|Jump_ctx|>$@
-    arc_param_pending: List<|Ast_node$@|>$@ //<
-        //< The releases of ARC-managed arguments, waiting for the function body's cleanup scope
+    arc_scope_pending: List<|Ast_node$@|>$@ //<
+        //< The releases waiting for the next block's cleanup scope
         //<
-        //< lower_decl_fn pushes them, and the first lower_block flushes them. There they are
-        //< released like the local variables, both at the normal exit and on an early return (see
-        //< ksplc/lower/arc.kspls).
+        //< Those of a function's managed arguments and of a switch arm's managed bindings:
+        //< lower_decl_fn and lower_stmt_switch push them, and the next lower_block flushes them.
+        //< There they are released like the local variables, both at the normal exit and on an
+        //< early return (see ksplc/lower/arc.kspls).
     lower_depth: Sz
     in_fn_body: Bool //<
         //< Whether the walk is inside a function's body, where statements run in order
@@ -82,7 +84,7 @@ impl Lowering_ctx
         pre_stmts: = base_ast.new_ast_node_list()
         cleanup_stack: = List<|List<|Ast_node$@|>$@|>.create(base_core.arena)
         jump_stack: = List<|Jump_ctx|>.create(base_core.arena)
-        arc_param_pending: = base_ast.new_ast_node_list()
+        arc_scope_pending: = base_ast.new_ast_node_list()
         arc_helpers: = base_core.arena
             .create(Map<|U8[], Ast_node$@|>.new(base_core.arena))
         arc_helper_decls: = base_ast.new_ast_node_list()
@@ -90,7 +92,7 @@ impl Lowering_ctx
         fb: = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
         ctx: = Lowering_ctx::{ .sema = sema, .pre_stmts = pre_stmts, .tmp_counter = 0, .fb = fb,
             .cleanup_stack = cleanup_stack, .jump_stack = jump_stack,
-            .arc_param_pending = arc_param_pending, .lower_depth = 0, .in_fn_body = false,
+            .arc_scope_pending = arc_scope_pending, .lower_depth = 0, .in_fn_body = false,
             .arc_helpers = arc_helpers, .arc_helper_decls = arc_helper_decls, .relocating = 0,
             .stmt_decls = stmt_decls }
         return base_core.arena.create(ctx)
@@ -138,8 +140,9 @@ impl Lowering_ctx
         s.free()
         return name
 
-    fn gen_tmp_name(r: Self$@): U8$[]
-        return r.gen_indexed_name("_mir_tmp_")
+    fn gen_tmp_name(r: Self$@): U8$[] //< a temporary's name, in the made names' space
+        return base_core.arena
+            .dup_str(base_c_name.made_name(r.gen_indexed_name(base_c_name.made_temp_stem)))
     fn gen_label_name(r: Self$@): U8$[]
         return r.gen_indexed_name("_mir_label_")
 

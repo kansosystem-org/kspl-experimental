@@ -7,6 +7,7 @@ import "ksplc/base/ast_place" as _base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/call" as sema_body_call
+import "ksplc/sema/body/generic_infer" as sema_body_generic_infer
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
@@ -70,20 +71,6 @@ priv fn fn_value_type_id(node: Ast_node$@, c: Sema_ctx$@, sym: Sema_symbol$@, ex
     c.err(node, c.scratch.slice())
     return expected_id
 
-priv fn write_gen_param_names(c: Sema_ctx$@, gen_params: Ast_node$@) //<
-    //< Appends the type parameters' names to scratch, quoted and joined by commas (`'A', 'B'`)
-    if gen_params == null
-        return
-    $is_first: = true
-    for gp in gen_params.children
-        name: = gp.gen_param_name()
-        if name.len == 0
-            continue
-        if !is_first
-            c.scratch.s(", ")
-        c.scratch.s("'\{name\}'")
-        is_first = false
-
 priv fn refuse_unwritten_type_args(c: Sema_ctx$@, at: Ast_node$@, what: U8[], name: U8[],
     form: U8[], gen_params: Ast_node$@) //<
         //< Reports a generic named as a value without its type arguments, with the form to write
@@ -93,7 +80,7 @@ priv fn refuse_unwritten_type_args(c: Sema_ctx$@, at: Ast_node$@, what: U8[], na
         .s("generic \{what\} '\{name\}' cannot be used as a value without its type arguments: no \
             call's arguments are here to infer them from\n  Hint: name one specialization, \
             '\{form\}', with a type written for each of ")
-    write_gen_param_names(c, gen_params)
+    sema_body_generic_infer.write_gen_param_names(c, gen_params)
     c.err(at, c.scratch.slice())
 
 priv fn instantiate_written(node: Ast_node$@, c: Sema_ctx$@, fn_tmpl: sema_decl_mono.Fn_instance,
@@ -260,7 +247,7 @@ fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_nod
         c.scratch
             .s("a method of it can be used as a value: each instance has its own '\{m\}'\n  Hint: \
                 name one instance's, '\{n\}<|…|>.\{m\}', with a type written for each of ")
-    write_gen_param_names(c, owner_tmpl.find_child(.k_type_gen_params))
+    sema_body_generic_infer.write_gen_param_names(c, owner_tmpl.find_child(.k_type_gen_params))
     c.err(node, c.scratch.slice())
 
 fn infer_path_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error

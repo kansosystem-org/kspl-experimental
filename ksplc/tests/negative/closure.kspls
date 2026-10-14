@@ -50,6 +50,7 @@ fn main(): I32
 //< The body is lifted to a top-level function (desugar_fn_lit in ksplc/parse/desugar.kspls), so the
 //< outer locals are not visible; **the reason is stated**, and two sides that pass stand beside it.
 //< Caution: Only one capture is placed: an unresolved path is reported only at the first one.
+// EXPECT: error: undefined path or identifier 'n'
 // EXPECT: an anonymous function cannot capture 'n' from the enclosing scope
 // EXPECT-NOT: Please check for typos
 import "std/io"
@@ -79,6 +80,7 @@ fn main(): I32
 //< It is lifted to a top-level function that does not receive `Self`, so `r` is a name that is
 //< nowhere. What is named must be **the side that could not be resolved** (`r`): naming the `v` of
 //< `r.v` casts suspicion on a name that exists and gives advice that cannot be acted on.
+// EXPECT: error: undefined path or identifier 'r'
 // EXPECT: an anonymous function cannot capture 'r' from the enclosing scope
 // EXPECT-NOT: is neither a known import alias nor a type
 import "std/io"
@@ -201,7 +203,7 @@ fn main(): I32
 //<
 //< Writing a capture fails because `call` rebinds it to an immutable local (`build_closure_src` in
 //< parse/desugar.kspls); returning it fails because the environment rides on the caller's frame
-//< ("Why dangling is stopped only on the paths that create an invisible pointer" of
+//< ("Which pointers into a frame are stopped from leaving it" of
 //< docs/DESIGN.md). Should this start passing, the synthesis fell out of those checks.
 
 // ==========================================
@@ -210,7 +212,7 @@ fn main(): I32
 // ==========================================
 
 // EXPECT: cannot assign to immutable variable 'd'
-// EXPECT: cannot return an interface value built from local storage
+// EXPECT: cannot return a closure: it keeps pointers to its captured variables
 import "std/io"
 
 priv fn apply1(p: Callable1<|I32, Bool|>): Bool
@@ -232,6 +234,65 @@ fn main(): I32
   })
   io.out().s("\{bad_write\}\{good\}\{leak().call(1)\}\n")
   return 0
+// ==== case closure_stored_outside_frame
+//< A closure stored where it outlives its function is refused, as returning it is
+//<
+//< Its environment points into the frame, so a global or a place behind a pointer keeps a dead
+//< frame and the later call crashes. `kept_inside` stores into the frame and passes: the count is exact.
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored behind a pointer
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored behind a pointer
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored into the global 'g', which
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored into the global 'g_opt', which
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored into the global 'g_holder', which
+// EXPECT: cannot store 'c': it was set from a slice or an interface value built from local storage
+// EXPECT: Finished with 6 error(s)
+import "std/io"
+
+priv struct Holder
+  c: Callable1<|I32, I32|>?
+
+priv $g: Callable1<|I32, I32|>
+priv $g_opt: Callable1<|I32, I32|>? = .none
+priv $g_holder: Holder = ::{ .c = .none }
+priv $g_ptr: fn(x: I32): I32
+
+impl Holder
+  priv fn arm(r: Self$@, n: I32)
+    r.c = .some(fn(x: I32; n: I32): I32 { return x + n; })
+
+priv fn into_global(n: I32)
+  g = fn(x: I32; n: I32): I32 { return x + n; }
+
+priv fn wrapped_in_option(n: I32)
+  g_opt = .some(fn(x: I32; n: I32): I32 { return x + n; })
+
+priv fn into_global_field(n: I32)
+  g_holder.c = .some(fn(x: I32; n: I32): I32 { return x * n; })
+
+priv fn through_param(h: Holder$@, n: I32)
+  h.c = .some(fn(x: I32; n: I32): I32 { return x - n; })
+
+priv fn through_local_name(n: I32)
+  c: Callable1<|I32, I32|> = fn(x: I32; n: I32): I32 { return x + n; }
+  g = c
+
+priv fn kept_inside(n: I32): I32
+  $h: Holder = ::{ .c = .none }
+  h.c = .some(fn(x: I32; n: I32): I32 { return x + n; })
+  g_ptr = fn(x: I32): I32 { return x + 1; }
+  if c: = h.c
+    return c.call(1) + g_ptr(1)
+  return 0
+
+fn main()
+  $h: Holder = ::{ .c = .none }
+  into_global(1)
+  wrapped_in_option(1)
+  into_global_field(1)
+  through_param(h@, 1)
+  through_local_name(1)
+  h.arm(2)
+  io.out().s("\{kept_inside(1)\}\n")
 // ==== case double_free
 //< A double free: .free() called twice on the same local
 // EXPECT: may already be freed here
@@ -275,11 +336,17 @@ fn main()
 //< The counterpart of the case above: a borrow by `@` and a method call are not moves
 //<
 //< Should these be wrongly treated as moves, `Mutex<|T|>` becomes unusable in earnest (even lock()
-//< could be called only once). It is made to fail deliberately for a different reason (an undefined
-//< symbol), and an EXPECT-NOT pins down that not one move-related diagnostic comes out.
-// EXPECT: undefined path or identifier 'no_such_worker'
-// EXPECT-NOT: was moved out of
+//< could be called only once). The case fails on purpose through the same check, on another value.
+// EXPECT: variable 'gone' was moved out of
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: variable 'mx'
 import "std/thread"
+
+priv fn bump(m: thread.Mutex<|I32|>$@): Void$@
+  p: = m.lock()
+  p$ += 1
+  m.unlock()
+  return null
 
 fn main()
   $mx: = thread.Mutex<|I32|>.new(0) catch
@@ -287,9 +354,16 @@ fn main()
   p: = mx.lock()
   p$ += 1
   mx.unlock()
-  _t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(no_such_worker, mx@) catch
+  t: = thread.Thread.spawn<|thread.Mutex<|I32|>|>(bump, mx@) catch
     return
+  t.join_and_free()
   mx.free()
+
+  $gone: = thread.Mutex<|I32|>.new(0) catch
+    return
+  $kept: = gone
+  gone.free()
+  kept.free()
 // ==== case move_only_result_payload
 //< Move_only's structural derivation also walks a Result's success payload
 //<

@@ -15,6 +15,7 @@ import "ksplc/sema/body/call_args" { check_args_against_instance, infer_call_arg
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/generic_infer" as sema_body_generic_infer
 import "ksplc/sema/decl/access" as sema_decl_access
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono" as sema_decl_mono
 import "ksplc/sema/decl/mono_name" as sema_decl_mono_name
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
@@ -91,6 +92,8 @@ priv fn infer_enum_init_call(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@):
 priv fn check_method_receiver_lvalue(c: Sema_ctx$@, left: Ast_node$@, def_node: Ast_node$@) //<
     //< Checks that the receiver is an lvalue where the method demands `@`; an rvalue is an error
     recv_node: = left.get_postfix_receiver()
+    member: = left.get_postfix_member()
+    c.refuse_packed_receiver(recv_node, def_node, member.text if member != null else "")
     switch c.env.method_receiver_permission(def_node)
     case .some(need)
         requires_ptr: = need.ptr
@@ -144,6 +147,10 @@ fn refuse_type_args_on_plain_fn(c: Sema_ctx$@, fn_name: U8[], type_args: Ast_nod
         .s("function '\{fn_name\}' is not generic, so '\{type_args.text\}' names nothing: drop it")
     c.err(type_args, c.scratch.slice())
 
+priv fn callee_name(left: Ast_node$@): U8[] //< the name a generic call's callee is written by
+    return (left.get_postfix_member().text if left.kind_id == .k_method_access
+        else left.get_path_or_ident_name())
+
 priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_node$@,
     inferred: I32[]): Bool //<
         //< Rejects a type argument bound to a function's name that gives no function type
@@ -160,9 +167,7 @@ priv fn refuses_fn_name_binding(c: Sema_ctx$@, left: Ast_node$@, args_node: Ast_
             bound = true
     if !bound || args_node == null
         return false
-    callee: =
-        (left.get_postfix_member().text if left.kind_id == .k_method_access
-        else left.get_path_or_ident_name())
+    callee: = callee_name(left)
     for arg_node in args_node.children
         if arg_node.type_id != mark_id
             continue
@@ -202,30 +207,23 @@ priv fn instance_for_written_args(c: Sema_ctx$@, node: Ast_node$@,
 
 priv fn infer_generic_call_result(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     fn_tmpl: sema_decl_mono.Fn_instance, written: Ast_node$@, is_method_access: Bool,
-    def_node: Ast_node$@, args_node: Ast_node$@, arg0_id: I32, cur_type_id: I32): I32!Sema_error //<
+    def_node: Ast_node$@, args_node: Ast_node$@, cur_type_id: I32): I32!Sema_error //<
         //< Instantiates a generic call from its type arguments and returns the return type
         //<
         //< written is the `<|…|>` that names them at the call, or null where they are inferred from
         //< the arguments. It also rewrites def_node and the node's kind to the instance.
     $type_id: = cur_type_id
-    $inst_args: = I32[]::{ I32::sema_type_env.Builtin_type_id.i32_type }
-
+    $inst_args: = I32[]::{}
     if written != null
         inst_args = written.build_resolved_type_args(c, def_node)!
         // Checks the count the user wrote against the declaration, not an inferred list (the reason
         // is at check_written_generic_arity in sema/decl/mono.kspls).
         sema_decl_mono.check_written_generic_arity(c, def_node, inst_args.len, node)
-    else if !sema_type_env.is_unknown(arg0_id)
-        inst_args = sema_body_generic_infer.inferred_type_args(c, def_node, args_node, arg0_id,
-            is_method_access)
-        if refuses_fn_name_binding(c, left, args_node, inst_args)
+    else
+        inst_args = sema_body_generic_infer.inferred_type_args(c, node, callee_name(left), def_node,
+            args_node, is_method_access)
+        if inst_args.len == 0 || refuses_fn_name_binding(c, left, args_node, inst_args)
             return I32::sema_type_env.Builtin_type_id.unknown
-    else if c.has_error()
-        // Caution: **Do not instantiate with the placeholder once an error is reported.** An
-        // argument whose type is unknown leaves `I32` as the type argument, and the instance's own
-        // checks then report a mismatch the user never wrote (`put`'s `Writer` bound inside
-        // `std/lang`).
-        return I32::sema_type_env.Builtin_type_id.unknown
     // The call position is recorded during the instantiation, so that a bound violation
     // (`f<|T: some.Trait|>`) is reported here rather than on the template's line
     // (check_type_constraint in sema/decl/resolve.kspls). Instantiations nest, so it is restored.
@@ -472,13 +470,12 @@ fn infer(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, target_id: I32, expe
             if inst_node != null
                 arg_def = inst_node
                 args_generic = false
-        arg0_id: =
-            infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic)!
+        infer_call_args(c, args_node, arg_def, is_method_access, op_text, args_generic)!
 
         if is_generic_call
             type_id =
                 infer_generic_call_result(c, node, left, fn_tmpl, written, is_method_access,
-                def_node, args_node, arg0_id, type_id)!
+                def_node, args_node, type_id)!
     return type_id
 
 priv fn callee_symbol(left: Ast_node$@, named_sym: Sema_symbol$@, is_method_access: Bool):

@@ -18,6 +18,8 @@ priv enum Chain //< what chain to build
     arc_field //< the same shape, with the innermost holding an ARC-managed type
     generic_mono //< a generic struct points at the next (the monomorphization chain)
     type_alias //< a type alias points at the next alias
+    type_alias_back //< a type alias points at the one before it, and a variable uses the last
+    const_ref //< a constant is defined by the one before it, and an array's length reads the last
 
 priv struct Grown //< one fixture to build
     stem: U8[] //< the file name to use (without the extension)
@@ -28,6 +30,11 @@ priv struct Grown //< one fixture to build
     depth: Sz //< the steps to build.
     // Caution: It must be deeper than the limit
     chain: Chain
+    once: Bool //<
+        //< Whether the refusal must be the only error
+        //<
+        //< SPEC-language's "Implementation limits" forbids a cutoff that surfaces as other errors
+        //< (a type mismatch, a repeat per step of the chain); this is how a fixture holds that.
 
 // The list of fixtures to build. **This is the canonical source.**
 priv const grown: Grown[_] = ::{
@@ -37,27 +44,42 @@ priv const grown: Grown[_] = ::{
             than a stack exhaustion at translation time",
         .guard = "max_type_layout_depth in ksplc/sema/decl/layout.kspls",
         .expect = "type definition nesting too deep", .limit = 1000, .depth = 1500,
-        .chain = .struct_field },
+        .chain = .struct_field, .once = false },
     Grown::{ .stem = "deep_arc_field_chain",
         .why =
         "that a chain holding an ARC-managed type deep inside is refused as a safe error rather \
             than a stack exhaustion from the automatic insertion of retain/release",
         .guard = "max_arc_emit_depth in ksplc/lower/arc.kspls",
         .expect = "type nesting too deep for automatic retain/release", .limit = 1000,
-        .depth = 1200, .chain = .arc_field },
+        .depth = 1200, .chain = .arc_field, .once = false },
     Grown::{ .stem = "deep_generic_chain",
         .why =
         "that a monomorphization chain by way of differently named generic structs is refused as a \
             safe error rather than a stack exhaustion",
         .guard = "max_mono_depth in ksplc/sema/decl/mono.kspls",
         .expect = "generic type instantiation chain too deep", .limit = 128, .depth = 600,
-        .chain = .generic_mono },
+        .chain = .generic_mono, .once = false },
     Grown::{ .stem = "deep_alias_chain",
         .why =
         "that a long acyclic chain of type aliases is refused as a safe error rather than a stack \
             exhaustion at translation time",
         .guard = "max_alias_chain_depth in ksplc/sema/type/query.kspls",
-        .expect = "typedef chain too deep", .limit = 1000, .depth = 1500, .chain = .type_alias },
+        .expect = "typedef chain too deep", .limit = 1000, .depth = 1500, .chain = .type_alias,
+        .once = true },
+    Grown::{ .stem = "deep_alias_chain_back",
+        .why =
+        "that a long chain of type aliases each naming the one before is refused once, at the \
+            chain, and a variable of the last type adds no mismatch",
+        .guard = "max_alias_chain_depth in ksplc/sema/type/query.kspls",
+        .expect = "typedef chain too deep", .limit = 1000, .depth = 1500,
+        .chain = .type_alias_back, .once = true },
+    Grown::{ .stem = "deep_const_chain",
+        .why =
+        "that a long chain of constants each defined by the one before is refused once, at the \
+            chain, rather than once per constant the fold cuts short",
+        .guard = "max_constexpr_depth in ksplc/sema/decl/eval.kspls",
+        .expect = "constant expression nesting too deep", .limit = 1024, .depth = 1500,
+        .chain = .const_ref, .once = true },
 }
 priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
     //<
@@ -67,6 +89,8 @@ priv fn write_head(out: Str_builder$@, g: Grown) //< the fixture's header
     out.s("// (the ").s(g.guard).s(" safety valve).\n")
     out.s("// **This material is assembled by tests/support/harness_grow.kspls.**\n")
     out.s("// EXPECT: ").s(g.expect).s("\n")
+    if g.once
+        out.s("// EXPECT: Finished with 1 error(s)\n")
 
 priv fn write_struct_chain(out: Str_builder$@, depth: Sz) //< the struct chain
     //<
@@ -101,6 +125,26 @@ priv fn write_alias_chain(out: Str_builder$@, depth: Sz) //< the alias chain
         out.s("typedef A\{i\} = A\{i + 1\};\n")
     out.s("typedef A\{depth\} = I32;\n\nfn main() {\n  x: A0 = 0;\n}\n")
 
+priv fn write_alias_chain_back(out: Str_builder$@, depth: Sz) //<
+    //< The alias chain written the other way, the innermost first
+    //<
+    //< **The resolver walks it from the inside**, so the cut falls on a later alias, and the
+    //< variable's type is one that was refused.
+    out.s("typedef A0 = I32;\n")
+    for i in Range.asc(depth)
+        out.s("typedef A\{i + 1\} = A\{i\};\n")
+    out.s("\nfn main(): I32 {\n  x: A\{depth\} = 0;\n  return x;\n}\n")
+
+priv fn write_const_chain(out: Str_builder$@, depth: Sz) //<
+    //< The constant chain
+    //<
+    //< **Each constant is defined by the one written before it**, so every one of them is folded on
+    //< its own and the later ones are cut short too: a refusal per constant is what must not come.
+    out.s("const C0: I32 = 1;\n")
+    for i in Range.asc(depth)
+        out.s("const C\{i + 1\}: I32 = C\{i\};\n")
+    out.s("\nfn main(): I32 {\n  x: I32[C\{depth\}] = ::{ 0 };\n  return x[0];\n}\n")
+
 priv fn write_body(out: Str_builder$@, g: Grown)
     switch g.chain
     case .struct_field
@@ -111,6 +155,10 @@ priv fn write_body(out: Str_builder$@, g: Grown)
         write_generic_chain(out, g.depth)
     case .type_alias
         write_alias_chain(out, g.depth)
+    case .type_alias_back
+        write_alias_chain_back(out, g.depth)
+    case .const_ref
+        write_const_chain(out, g.depth)
 
 fn write_all(dir: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Builds the list under `dir` and returns the paths written

@@ -25,6 +25,15 @@ priv const i64_min_folded: I64 = -9223372036854775807 - 1 //<
     //< Caution: **Do not write a suffix.** This checks that the declared type propagates; if it is
     //< lost, the default I32 truncates the value (0 from the fold, -1 from the code).
 priv const i64_neg_left: I64 = -4294967296 - 1
+priv const i64_min_literal: I64 = -9223372036854775808 //<
+    //< I64's minimum written as one literal: the minus and the digits fold as one value
+    //<
+    //< Its magnitude alone fits no I64, and C reads it as unsigned with a warning.
+priv const i64_min_len: I32[I32::(i64_min_literal >> 63) + 2] = ::{ 7 }
+
+priv enum Tag_min: I64 //< an I64 tag at the minimum, written as one literal
+    lo = -9223372036854775808
+    hi = 9223372036854775807
 
 priv const u32_wrap: U32 = 1U32 - 2U32 //<
     //< Sign: division, remainder, right shift and ordering against a wrapped unsigned value
@@ -87,6 +96,7 @@ fn test_const_fold_width()
     check_signed_overflow()
     check_literal_exception()
     check_min_rendering()
+    check_min_literal()
     verdict.pass("")
 
 priv fn check_global_folds() //<
@@ -194,6 +204,17 @@ priv fn check_narrow_wraps() //<
     assert(f == 27, "U8 bitwise not must wrap to mod 2^8 before it is divided")
     assert(g == 48, "U8 left shift must wrap to mod 2^8 before it is divided")
     assert(h == 2232, "U16 addition must wrap to mod 2^16 before it is divided")
+    // A 16-bit product passes the range of the `int` C promotes to: the C must not compute it there
+    // (`make test-equiv` runs that C with C's overflow trap; at `-O0` it answers right anyway).
+    u16max: U16 = 65535U16
+    i16neg: I16 = 0I16 - 1I16
+    $u16acc: = u16max
+    u16acc *= u16max
+    $i16acc: = i16neg
+    i16acc *= i16neg
+    assert(u16max * u16max == U16::1, "U16 multiplication must wrap mod 2^16 past int's range")
+    assert(i16neg * i16neg == I16::1, "I16 multiplication must wrap mod 2^16 past int's range")
+    assert(u16acc == U16::1 && i16acc == I16::1, "a 16-bit `*=` must wrap mod 2^16 too")
 
 priv fn check_widening() //<
     //< A run-time narrow result wraps before it is widened
@@ -227,7 +248,7 @@ priv fn check_signed_overflow() //<
     //< A signed overflow wraps by mod 2^N, division by -1 included
     // A signed overflow wraps by `mod 2^N` too. **C leaves signed overflow undefined.** Unless the
     // generated code goes through an unsigned of the same width, the answer changes with the
-    // optimization level (signed_wrap_twin in gen/c/expr.kspls).
+    // optimization level (wrap_twin in gen/c/expr.kspls).
     // Caution: **Test it with a local.** For a global `const` the fold makes an overflow a compile
     // error, so only the run-time path can pin the wrapping down.
     i32max: I32 = 2147483647
@@ -307,3 +328,12 @@ priv fn check_min_rendering() //<
     shown.s("\{min_i64\}")
     assert(shown.slice().equals("-9223372036854775808"),
         "I64::MIN must render every digit, not just the sign")
+
+priv fn check_min_literal() //<
+    //< `-9223372036854775808` is I64's minimum, folded, generated and as a tag
+    local: I64 = -9223372036854775808
+    assert(i64_min_literal == local && local == -9223372036854775807I64 - 1,
+        "-9223372036854775808 must be I64's minimum, folded and computed alike")
+    assert(i64_min_len.len == 1, "the minimum folds as a value an array length can use")
+    assert(I64::Tag_min.lo == local && I64::Tag_min.hi == -(local + 1),
+        "an I64 tag at the minimum must keep its value")

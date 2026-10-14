@@ -13,6 +13,7 @@
 //   create    low creates a task above its own priority.
 //   equal     a woken task of the waker's own priority does not cut in (it waits for a yield).
 // ==========================================
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/verdict"
@@ -100,7 +101,7 @@ fn low(_arg: Void$@): Void
     assert(g_peer_ran, "wake_preempt: the woken peer did not run at the yield")
     verdict.pass("the peer ran at the yield, not at the give.")
 
-fn main()
+fn main(): I32
     g_sem.init(0)
     g_mutex.init()
     g_q.init(g_qbuf[0]@, 2)
@@ -110,3 +111,5 @@ fn main()
     tcb_peer.create(U8$[]::stack_peer, peer, null, 1, "peer")
     tcb_high.create(U8$[]::stack_high, high, null, 3, "high")
     task.start_scheduler()
+    task_end.require_all_ended()
+    return verdict.finish()

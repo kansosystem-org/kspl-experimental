@@ -14,18 +14,13 @@ pub enum Strnum_error //< why a string could not be read as a number
     out_of_bounds //< the shape is right but the value does not fit the type
 
 priv const f64_mantissa_digits: Sz = 19 //<
-    //< How many decimal digits `to_f64`'s fast path takes into the significand
+    //< How many decimal digits `to_f64` takes into the significand
     //<
-    //< Caution: Stop at 19. The 20th overflows a U64 (10^20 > 2^64); the slow path handles the
-    //< rest.
-priv const f64_exp_limit: I64 = 400I64 //<
-    //< The largest power of 10 used when computing an approximation
-    //<
-    //< An F64 ends at 10^+/-308, so beyond this the value is infinity or 0; without a cap, a long
-    //< run of digits alone could make it loop for a long time.
+    //< Caution: Stop at 19. The 20th overflows a U64 (10^20 > 2^64); the digits past it are judged
+    //< in multiple precision when they decide the rounding.
 priv const f64_exp_digits_limit: I64 = 1000000000I64 //< the cap on the exponent part
     //<
-    //< Caution: **Do not cap it with `f64_exp_limit`.** The 0s after the decimal point are
+    //< Caution: **Do not cap it near F64's range (±400).** The 0s after the decimal point are
     //< subtracted from the scale, so capping `0.000…1e4001`'s exponent at 400 gives a wrong value.
 priv const pow10_max: Sz = 22 //< the powers of 10 an F64 can hold **exactly**.
     //<
@@ -40,11 +35,19 @@ priv const f64_exact_digits: Sz = 768 //<
     //<
     //< **768 is enough.** The midpoint between two neighbouring F64s ends within 767 decimal
     //< digits, so later digits matter only as "not 0".
-priv const f64_refine_steps: I32 = 128 //<
+priv const f64_refine_steps: I32 = 4 //<
     //< The most times the slow path adjusts the value by 1 ulp
     //<
-    //< Built 10^22 at a time, the approximation rounds at most 19 times and is off by a few dozen
-    //< ulp at most; only a bug in the algorithm goes past that.
+    //< It starts from the F64 nearest the 19 digits kept, and the text lies between that and the
+    //< one nearest those digits plus 1, at most 1 ulp apart; only a bug in the algorithm goes past.
+priv const f64_tie_q_min: I64 = -4I64 //<
+    //< The smallest power of 10 at which w x 10^q can lie exactly halfway between two F64s
+    //<
+    //< A tie is an odd number 54 bits wide times a power of 2. Below this, 5^-q must divide w and
+    //< leaves under 54 bits; above f64_tie_q_max, 5^q alone is wider.
+priv const f64_tie_q_max: I64 = 23I64 //< the largest such power
+priv const f64_round_up_q_min: I64 = -27I64 //< the lowest 10^q whose entry nearest_f64 rounds up
+priv const f64_q_max: I64 = 308I64 //< above this power of 10, even a significand of 1 is infinity
 priv const f64_inf_bits: U64 = 0x7FF0000000000000U64
 priv const pow10_exact: F64[_] = ::{ 1.0, 1.0e1, 1.0e2, 1.0e3, 1.0e4, 1.0e5, 1.0e6, 1.0e7, 1.0e8,
     1.0e9, 1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15, 1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20,
@@ -152,16 +155,21 @@ impl U8[]
             i = 1
         // The significand accumulates as an integer; digits past 19 are **counted as a power of
         // 10** in the scale, since adding them would overflow a U64.
+        // Caution: **A leading 0 takes none of the 19 places.** Taking one, `0.0000301…` keeps
+        // fewer digits, and the approximation lands further off than `refine_f64`'s steps reach.
         $mant: U64 = 0
         $taken: Sz = 0
         $exp10: I64 = 0
         $seen: Sz = 0
+        $dropped: = false // a digit was left out of the significand
         for i < body.len && (body.ptr + i).is_digit()
-            if taken < f64_mantissa_digits
-                mant = mant * 10U64 + U64::((body.ptr + i)$ - '0')
-                taken += 1
-            else
+            digit: = U64::((body.ptr + i)$ - '0')
+            if taken >= f64_mantissa_digits
                 exp10 += 1I64
+                dropped = true
+            else if taken > 0 || digit != 0U64 // a leading 0 is nothing to take
+                mant = mant * 10U64 + digit
+                taken += 1
             seen += 1
             i += 1
         if i < body.len && (body.ptr + i)$ == '.'
@@ -173,10 +181,15 @@ impl U8[]
             i += 1
             frac_start: = i
             for i < body.len && (body.ptr + i).is_digit()
-                if taken < f64_mantissa_digits
-                    mant = mant * 10U64 + U64::((body.ptr + i)$ - '0')
+                digit: = U64::((body.ptr + i)$ - '0')
+                if taken == 0 && digit == 0U64
+                    exp10 -= 1I64 // a leading 0 only lowers the scale
+                else if taken < f64_mantissa_digits
+                    mant = mant * 10U64 + digit
                     taken += 1
                     exp10 -= 1I64
+                else
+                    dropped = true
                 seen += 1
                 i += 1
             if i == frac_start
@@ -204,31 +217,80 @@ impl U8[]
         // The fast path. If every digit was taken and both the significand and the power fit an F64
         // exactly, the result is rounded only once.
         fast_exact: =
-            seen == taken && mant < f64_exact_mantissa && exp10 >= -pow10_max && exp10 <= pow10_max
+            !dropped && mant < f64_exact_mantissa && exp10 >= -pow10_max && exp10 <= pow10_max
         if fast_exact
             v: =
                 (F64::mant * pow10_exact[Sz::exp10] if exp10 >= 0I64
                 else F64::mant / pow10_exact[Sz::(-exp10)])
             return -v if neg else v
-        // Cap the scale too, or a huge exponent loops 10^22 a step (towards infinity or 0).
-        if exp10 > f64_exp_limit
-            exp10 = f64_exp_limit
-        if exp10 < -f64_exp_limit
-            exp10 = -f64_exp_limit
-        $v: = F64::mant
-        $e: I64 = exp10
-        step: I64 = pow10_max
-        for e > step
-            v *= pow10_exact[pow10_max]
-            e -= step
-        for e < -step
-            v /= pow10_exact[pow10_max]
-            e += step
-        v = v * pow10_exact[Sz::e] if e >= 0I64 else v / pow10_exact[Sz::(-e)]
-        // **The second of the two paths.** Outside the fast path's bounds the value above is only
-        // an approximation, so `refine_f64` adjusts it against the midpoint in arbitrary precision.
-        v = refine_f64(body, v)
+        // **The second path**, exact for the 19 digits kept (Eisel-Lemire). Where digits were
+        // dropped, the text lies between those digits and those digits plus 1: if both read as one
+        // F64 so does the text, else `refine_f64` judges it in multiple precision.
+        $bits: = nearest_f64(mant, exp10)
+        if dropped && bits != nearest_f64(mant + 1U64, exp10)
+            bits = refine_f64(body, bits)
+        v: = bignat.f64_from_bits(bits)
         return -v if neg else v
+
+priv fn leading_zeros(v: U64): U64 //< how many 0 bits stand above the highest 1 (v > 0)
+    $n: U64 = 0
+    $x: = v
+    for width in U64[]::{ 32U64, 16U64, 8U64, 4U64, 2U64, 1U64 }
+        if x >> (64U64 - width) == 0U64
+            n += width
+            x <<= width
+    return n
+
+priv fn nearest_f64(w: U64, q: I64): U64 //<
+    //< The bits of the F64 nearest w x 10^q, a tie to the even one
+    //<
+    //< It is Eisel-Lemire as fast_float does it: w times the top 128 bits of 10^q gives the top 55
+    //< bits of the product, and Mushtak and Lemire prove those always round right. The low half of
+    //< the table is read only when a carry from below could reach those bits.
+    if w == 0U64 || q < I64::bignat.pow10_q_min
+        return 0U64
+    if q > f64_q_max
+        return f64_inf_bits
+    lz: = leading_zeros(w)
+    $p: = bignat.pow10_128(I32::q)
+    // From 10^-27 to 10^-1 the entry is rounded up instead, as the proof needs: 5^-q fits a U64
+    // there, and an exact quotient (where a tie can be) then shows nothing or a 1 below its bits.
+    if q < 0I64 && q >= f64_round_up_q_min
+        p.lo += 1U64
+        if p.lo == 0U64
+            p.hi += 1U64
+    $x: = bignat.mul_wide(w << lz, p.hi)
+    if (x.hi & 0x1FFU64) == 0x1FFU64
+        low: = bignat.mul_wide(w << lz, p.lo).hi
+        x.lo += low
+        if x.lo < low
+            x.hi += 1U64
+    upper: = x.hi >> 63U64
+    shift: = upper + 9U64
+    $mant: = x.hi >> shift // 54 bits: the 53 kept and one to round by
+    // The exponent field: the product's top bit stands at 2^(floor_log2_pow10(q) + 63 + upper -
+    // lz), and the field is biased by 1023.
+    $power2: =
+        I64::bignat.floor_log2_pow10(I32::q) + 63I64 + I64::upper - I64::lz + 1023I64
+    if power2 <= 0I64
+        // A subnormal. Rounding up to 2^52 gives the smallest normal, whose bits are the same.
+        if -power2 + 1I64 >= 64I64
+            return 0U64
+        mant >>= U64::(-power2 + 1I64)
+        mant += mant & 1U64
+        return mant >> 1U64
+    // Exactly halfway, with nothing cut off: round down to the even one instead of up.
+    tie_range: = q >= f64_tie_q_min && q <= f64_tie_q_max
+    if tie_range && x.lo <= 1U64 && (mant & 3U64) == 1U64 && (mant << shift) == x.hi
+        mant &= ~1U64
+    mant += mant & 1U64
+    mant >>= 1U64
+    if mant == bignat.f64_hidden_bit << 1U64 // rounded up to the next power of 2
+        mant = bignat.f64_hidden_bit
+        power2 += 1I64
+    if power2 >= 0x7FFI64
+        return f64_inf_bits
+    return (U64::power2 << 52U64) | (mant & bignat.f64_mantissa_mask)
 
 priv struct Decimal_text //< the input to `to_f64`'s slow path
     //<
@@ -317,8 +379,10 @@ priv fn cmp_scaled(d: Decimal_text@, pow10: Bignat@, q: U64, t: I64): I32 //<
     // The digits not collected make the true value larger, which matters only if both look equal.
     return 1 if c == 0 && d.sticky else c
 
-priv fn refine_f64(body: U8[], approx: F64): F64 //<
-    //< Adjusts the approximation `approx` (0 or more) to the F64 nearest the text's true value
+// `#noinline` keeps its multiple-precision values (some 1.5KB) out of `to_f64`'s frame.
+#noinline
+priv fn refine_f64(body: U8[], approx: U64): U64 //<
+    //< Moves `approx` (an F64's bits, 0 or more) to the bits of the F64 nearest the text
     //<
     //< It is Clinger's AlgorithmR. A neighbour is the bit pattern +/-1 (IEEE 754 is ordered by
     //< magnitude over the positives). Above the upper midpoint it moves up, below the lower one it
@@ -326,19 +390,19 @@ priv fn refine_f64(body: U8[], approx: F64): F64 //<
     //< Caution: **Do not move up from infinity.** The bit pattern +1 is a NaN.
     d: = collect_decimal(body)
     if d.n_digits == 0
-        return 0.0
+        return 0U64
     // The range decided by the digit count and the scale alone. Below 10^-324 it does not reach
     // half the smallest subnormal, and at or above 10^309 it is past the midpoint between the
     // maximum and infinity.
     magnitude: = I64::d.n_digits + d.exp10
     if magnitude <= -324I64
-        return 0.0
+        return 0U64
     if magnitude >= 310I64
-        return bignat.f64_from_bits(f64_inf_bits)
+        return f64_inf_bits
     abs_exp: = Sz::(d.exp10 if d.exp10 >= 0I64 else -d.exp10)
     $pow10: = Bignat.from_u64(1U64)
     pow10.mul_pow10(abs_exp)
-    $bits: = bignat.f64_to_bits(approx)
+    $bits: = approx
     for _step in Range.asc(f64_refine_steps)
         // The value is f x 2^k. The midpoints are f +/- 1/2 ulp. Just above a power of 2 the gap
         // below is half, so the lower midpoint is f - 1/4 ulp. Both can be written as integers in
@@ -367,4 +431,4 @@ priv fn refine_f64(body: U8[], approx: F64): F64 //<
                     bits -= 1U64
                 break
         break
-    return bignat.f64_from_bits(bits)
+    return bits

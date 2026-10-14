@@ -20,7 +20,7 @@ enum Task_state //<
     blocked
     delayed
     done
-    suspended //< paused by Task.suspend (skipped by pick_next until Task.resume makes it ready)
+    suspended //< paused by Task.suspend (skipped by pick_next until Task.resume lets it run)
 
 impl Task_state
     fn name(r: Self): U8$[] //< turns a task's state into a string for display
@@ -56,6 +56,7 @@ struct Task
     priv delay_until: U64 //<
         //< when a delayed task wakes; when blocked, the timeout (if deadline_set)
     priv deadline_set: Bool //< whether blocked has a timeout (without one it waits until woken)
+    priv delay_kept: Bool //< whether it was suspended in a delay, which `resume` goes back to
     priv wait_obj: Void$@ //<
         //< the synchronization object waited on while blocked (null if none)
     priv wait_seq: U64 //< when it began its wait, as a count of waits (wake takes the lowest)
@@ -130,6 +131,7 @@ impl Task
         r.held = null
         r.delay_until = 0
         r.deadline_set = false
+        r.delay_kept = false
         r.wait_obj = null
         r.wait_seq = 0
         r.name = name
@@ -324,26 +326,34 @@ impl Task
     fn suspend(r: Self$@) //<
         //< Takes r out of scheduling; it can be paused from any state (ready, delayed or blocked)
         //<
-        //< Paused while blocked, it keeps what it waits on. If done, it does nothing. Pausing the
-        //< current task switches to another at once.
+        //< Paused while blocked, it keeps what it waits on; paused in a delay, it keeps the delay's
+        //< expiry. If done or already paused, it does nothing. Pausing the current task switches to
+        //< another at once.
         s: = ksos_port_irq_save()
         defer ksos_port_irq_restore(s)
-        if r.state == .done
+        if r.state == .done || r.state == .suspended
             return
         was_current: = r == g_current
+        r.delay_kept = r.state == .delayed
         r.state = .suspended
         if was_current
             schedule()
 
-    fn resume(r: Self$@) //< makes a paused r ready again
+    fn resume(r: Self$@) //< lets a paused r run again
         //<
-        //< It does not recheck the wait's condition; the wake-and-recheck loop in Sem.take and the
-        //< like does that when it next runs. From any state other than suspended it does nothing.
+        //< **A delay not yet expired goes on to its expiry**, since `delay` never returns early;
+        //< one that expired while paused wakes at once. It does not recheck a wait's condition; the
+        //< wake-and-recheck loop in Sem.take and the like does that when it next runs. From any
+        //< state other than suspended it does nothing.
         s: = ksos_port_irq_save()
         defer ksos_port_irq_restore(s)
-        if r.state == .suspended
-            r.state = .ready
-            preempt_if_outranked(r.prio)
+        if r.state != .suspended
+            return
+        if r.delay_kept && r.delay_until > g_tick
+            r.state = .delayed
+            return
+        r.state = .ready
+        preempt_if_outranked(r.prio)
 
     fn delete(r: Self$@) //<
         //< Makes r done and returns its g_tasks slot and its port context for a later create

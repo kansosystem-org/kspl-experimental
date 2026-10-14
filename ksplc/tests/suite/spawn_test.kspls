@@ -153,8 +153,8 @@ priv fn check_long(work: U8[], arena: Arena$@) //<
 // The properties pinned down:
 //   * panic flushes stdout before the abort (the output before the panic remains)
 //   * io.set_line_buffered() keeps the output even when a signal kills the program (no panic)
-//   * standard output and standard error carry the bytes written (Windows's text mode would turn a
-//     written "\r\n" into "\r\r\n")
+//   * standard output and standard error carry the bytes written (no "\r\r\n" from text mode)
+//   * a prompt written to a terminal shows before the program waits to read
 // ==========================================
 
 priv const lines: Sz = 300 //< the number of lines printed
@@ -245,8 +245,53 @@ priv fn check_bytes(arena: Arena$@) //<
         b.built && b.out.find_str("out\n").is_some() && b.out.find_str("err\n").is_some() &&
         b.out.find_char('\r').is_none(), b.out)
 
+// A prompt, a read, then a death by signal: only what was written before the death remains, so a
+// prompt in the output went out before the program waited to read.
+priv const prompt_src: U8[] =
+    """import "std/io";
+
+fn main(): I32 {
+    io.out().s("Name? ");
+    c: = io.getchar();
+    p: I32$@ = null;
+    p$ = c;
+    return 0;
+}
+"""
+
+priv fn run_prompt(exe_cmd: U8[], arena: Arena$@): verdict.Run_out //<
+    //< Runs exe_cmd (a shell command) on a terminal `script` makes, with one line to read
+    return harness
+        .run(U8[][]::{ "/bin/sh", "-c",
+        arena.text().s("printf 'x\\n' | script -qec \"\{exe_cmd\}\" /dev/null").take() })
+
+priv fn check_prompt(arena: Arena$@) //<
+    //< A prompt written to a terminal shows before the program waits to read
+    //<
+    //< The terminal is util-linux's `script`. Where there is none (macOS's takes other options),
+    //< the case is a skip, and on Windows too: MSYS2's `script` makes a pseudo-terminal a native
+    //< program sees as a pipe, and `/bin/sh` is no path a native program can start.
+    name: = "a prompt to a terminal shows before the read"
+    if sys.is_windows()
+        verdict.skip_check(name, "Windows has no terminal `script` can give a native program")
+        return
+    if harness.run(U8[][]::{ "script", "-qec", "true", "/dev/null" }).code != 0
+        verdict.skip_check(name, "no util-linux `script` to give the program a terminal")
+        return
+    exe: = build_child(harness.sandbox("flush_prompt"), "prompt", prompt_src, arena)
+    if exe.len == 0
+        return
+    // The premise: into a pipe the prompt waits in the buffer, and the death loses it. Unless it
+    // is lost there, the next case passing proves nothing about the terminal.
+    piped: = run_prompt(arena.text().s("'\{exe\}' | cat").take(), arena)
+    // Caution: **Check that it ran.** A run that could not start prints no prompt either.
+    verdict.check("a prompt into a pipe is lost on a death by signal (confirming the premise)",
+        piped.code >= 0 && piped.out.find_str("Name? ").is_none(), piped.out)
+    on_tty: = run_prompt(arena.text().s("'\{exe\}'").take(), arena)
+    verdict.check(name, on_tty.out.find_str("Name? ").is_some(), on_tty.out)
+
 priv fn run_output_flush(arena: Arena$@) //< the output kept on an abnormal exit
-    io.out().s("# keeping the output on an abnormal exit: 4\n")
+    io.out().s("# keeping the output on an abnormal exit: 6\n")
     check_flush_case("panic", "panic: the output before the panic remains", "", panic_call, true,
         "panic: boom", arena)
     // The premise: unless the output is lost with no line buffer, the next case passing proves
@@ -257,3 +302,4 @@ priv fn run_output_flush(arena: Arena$@) //< the output kept on an abnormal exit
     check_flush_case("linebuf", "set_line_buffered: the output remains even on a death by signal",
         "    io.set_line_buffered();\n", crash, true, "", arena)
     check_bytes(arena)
+    check_prompt(arena)

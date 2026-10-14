@@ -1,0 +1,21 @@
+//< Whether every task ended, the question `task.start_scheduler()` leaves open when it returns
+//<
+//< `start_scheduler` returns once no task can run: when every task has ended, and also when the
+//< rest wait for something that never comes (a lost wake, a deadlock, a timeout that never fires).
+//< A demo whose checks run inside its tasks would then return as if it had passed, its checks
+//< never reached. **A demo that returns from `start_scheduler` asks this before its verdict.**
+//< It allocates nothing and prints through `panic`, so every port can use it.
+import "ksos/kernel/task" { Task }
+
+fn require_all_ended( //< stops the run, naming the first task that has not ended
+    file: U8[] = caller_file, //< keep the default: the panic names the demo's line
+    line: Sz = caller_line, //< keep the default
+)
+    for i in Range.asc(Task.count())
+        t: = Task.at(i)
+        // null: a deleted task's slot.
+        if t != null && t.get_state() != .done
+            $m: = Panic_msg.new()
+            m.s("ksos demo: the scheduler returned with task ").s(t.get_name()).s(" still ")
+                .s(t.get_state().name()).s(", waiting for something that never comes")
+            panic(m.slice(), file, line)

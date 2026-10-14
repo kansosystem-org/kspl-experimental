@@ -20,7 +20,7 @@ FUZZ_ARGS ?=
 # 1 fails a reader built without the address sanitizer (Linux CI holds its runtime); else a SKIP.
 KANSO_REQUIRE_ASAN ?=
 # -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
-ASAN_CFLAGS := -O1 -g -fno-omit-frame-pointer -fsanitize=address
+ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 # Where the page is written: one `kspage.html` that opens alone, beside the `kspage.wasm` bound in.
 WEB ?= $(OUT)/web
 
@@ -29,15 +29,15 @@ WEB ?= $(OUT)/web
 test:
 	"$(KSPLC)" run tests/main.kspls
 
-fuzz_build = "$(KSPLC)" build --cflags="$(1)" tests/open_prog.kspls "$(OUT)/fuzz/open_prog.exe"
+fuzz_build = "$(KSPLC)" build $(1) tests/open_prog.kspls "$(OUT)/fuzz/open_prog.exe"
 # Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
 test-fuzz:
 	@mkdir -p "$(OUT)/fuzz"
 	rm -rf "$(OUT)/fuzz/work"
-	@if $(call fuzz_build,$(ASAN_CFLAGS)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
+	@if $(call fuzz_build,$(ASAN_BUILD)) > "$(OUT)/fuzz/asan.log" 2>&1; then asan=--asan; \
 		echo "# the reader: with the address sanitizer"; \
 	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
-		$(call fuzz_build,-O0) || exit 1; fi; \
+		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
 	"$(KSPLC)" run tests/fuzz_main.kspls "$(OUT)/fuzz/open_prog.exe" "$(OUT)/fuzz/work" \
 		"$(FUZZ_SEEDS)" $$asan $(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)
 
@@ -62,6 +62,11 @@ WASM_CC  := clang --target=$(WASM_MACHINE) -std=c99 -O2 -ffreestanding -nostdlib
 # 1 MiB holds std's walks (they stop 64 KiB short of the end: `std/stack_limit`) many levels deep.
 WASM_LD  := wasm-ld --no-entry --gc-sections --stack-first -z stack-size=1048576 \
     --allow-undefined-file=$(WEB_SRC)/imports.txt
+# **clang's builtins library for wasm32 goes in every link**, as libgcc does in a bare-metal ARM one:
+# clang lowers what wasm32 has no instruction for to calls only it defines. clang 22 makes a
+# 128-bit product (`__multi3`) of std/bignat's 64-by-64 one, so without it the page fails to link
+# as soon as it formats a float. clang files it under the `wasi` machine's folder.
+WASM_BUILTINS := $(shell clang --target=wasm32-wasi -rtlib=compiler-rt -print-libgcc-file-name 2>/dev/null)
 
 export KSPAGE_OPEN_NOTE := (opening it in a browser is enough; no web server is wanted)
 # **Write `#` as `\#`** (make cuts an assignment at a `#`) and **put no ` in either**: the recipe's
@@ -76,7 +81,11 @@ web:
 		"$(OUT)/gen/kspage_bridge.c"
 	$(WASM_CC) -c "$(OUT)/gen/kspage_bridge.c" -o "$(OUT)/gen/kspage_bridge.o"
 	$(WASM_CC) -c $(WEB_SRC)/rt.c -o "$(OUT)/gen/kspage_rt.o"
-	$(WASM_LD) "$(OUT)/gen/kspage_bridge.o" "$(OUT)/gen/kspage_rt.o" -o "$(WEB)/kspage.wasm"
+	@test -f "$(WASM_BUILTINS)" || { echo "clang's wasm32 builtins are not installed \
+	(libclang-rt-<version>-dev-wasm32; .devcontainer/Dockerfile names it): the link needs them"; \
+	exit 1; }
+	$(WASM_LD) "$(OUT)/gen/kspage_bridge.o" "$(OUT)/gen/kspage_rt.o" "$(WASM_BUILTINS)" \
+		-o "$(WEB)/kspage.wasm"
 	# Caution: **Do not line the sources' names up here**: the template names what is bound
 	#    (`__KSPAGE_FILE:...__` in `port/web/page.html`); a list here lets one drop silently.
 	"$(KSPLC)" run $(WEB_SRC)/bundle.kspls $(WEB_SRC)/page.html "$(WEB)/kspage.wasm" \

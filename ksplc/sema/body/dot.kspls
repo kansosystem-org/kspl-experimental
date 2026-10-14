@@ -18,7 +18,7 @@ import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/type_check" as sema_decl_type_check
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
-import "ksplc/sema/session/import_table" as sema_session_import_table
+import "ksplc/sema/session/import_table" // `is_file_imported`
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
@@ -407,7 +407,8 @@ fn infer_dot_access(c: Sema_ctx$@, node: Ast_node$@, _left: Ast_node$@, target_i
 
     if !found
         if target_id != 0 && !sema_type_env.is_unknown(target_id)
-            report_missing_member(c, member_node, recv_id, base_type_str)
+            report_missing_member(c, member_node, recv_id, base_type_str,
+                c.fn_ctx.callee == node)
         reject_slotless_trait_call(c, recv_id, member_name_raw, base_type_str, member_node)
         node.set_kind(.k_method_access)
         if !sema_type_env.is_unknown(expected_id)
@@ -505,7 +506,7 @@ priv fn check_method_import(c: Sema_ctx$@, member_node: Ast_node$@, found_sym: S
     // Caution: **Do not accept it because "some file loaded it".** The call would rest
     // on what else the program imports, and [I0401] would call the import unused.
     if c.env.is_slice(recv_id) || (struct_file.len == 0 && !is_declared_type(c, recv_id))
-        struct_file = sema_session_import_table.lang_file()
+        struct_file = base_locate.lang_file()
     // **Not inside an instantiation**: the receiver's type may come from the type
     // argument, and a generic cannot import every file serving its bound ("While a
     // generic is being instantiated, a diagnostic that depends on a type argument is
@@ -527,8 +528,11 @@ priv fn check_method_import(c: Sema_ctx$@, member_node: Ast_node$@, found_sym: S
     c.err(member_node, c.scratch.slice())
 
 priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32,
-    base_type_str: U8[]) //<
+    base_type_str: U8[], is_call: Bool) //<
         //< Explains why the receiver's type has no member of that name, the one reason that applies
+        //<
+        //< is_call says whether the access is a call's callee; only a call can reach an extension
+        //< method another file declares.
     member_name_raw: = member_node.text
     // A trait's methods are looked up only through symtab.resolve, which filters by visibility, so
     // a `priv` one ends up here. Report the access violation, as for an impl's priv method, not a
@@ -583,11 +587,69 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
     // so a plain compilation would say only "absent" (as for an `impl` on a built-in type in
     // another file, such as the `fmt` that `\{x\}` calls).
     c.clear_scratch()
-        .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'\n  Note: an \
-            extension method is visible only where its defining file is imported. If \
-            '\{member_name_raw\}' comes from another file, import it (and check that the import is \
-            not cyclic).")
+        .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'")
+    // **Without a call only a field can stand there**, and no other file can add one: name the
+    // field a typo most likely meant, never the import of an extension method.
+    if !is_call
+        near: = nearest_field(c, recv_id, member_name_raw)
+        if near.len > 0
+            c.scratch.s("\n  Note: the field with the nearest name is '\{near\}'.")
+    else
+        c.scratch
+            .s("\n  Note: an extension method is visible only where its defining file is imported. \
+                If '\{member_name_raw\}' comes from another file, import it (and check that the \
+                import is not cyclic).")
     c.err(member_node, c.scratch.slice())
+
+priv const max_near_name: Sz = 64 //< the longest name nearest_field compares, in bytes
+
+priv fn nearest_field(c: Sema_ctx$@, recv_id: I32, name: U8[]): U8[] //<
+    //< The receiver's field whose name is nearest to `name`, or empty where none is near enough
+    //<
+    //< **Near is at most one edit per three characters** (`edit_distance`), so a short name
+    //< allows one: more would offer an unrelated field as the meaning. On a tie the field
+    //< declared first wins.
+    entry: = c.env.id_to_type.get(c.env.get_clean_real_type(c.env.strip_ptr(recv_id)))
+    if entry == null
+        return ""
+    $best: U8[] = ""
+    $best_cost: = (name.len if name.len > 3 else 3) / 3 + 1
+    switch entry.info
+    case .struct_type(def)
+        for field in def.fields_list
+            cost: = edit_distance(name, field.name)
+            if cost < best_cost
+                best = field.name
+                best_cost = cost
+    default {}
+    return best
+
+priv fn edit_distance(a: U8[], b: U8[]): Sz //<
+    //< How many single-byte edits turn `a` into `b`
+    //<
+    //< An edit is an insertion, a deletion, a substitution or a swap of two neighbours (`totla`
+    //< for `total` is one). A name longer than max_near_name counts as far from everything.
+    if a.len > max_near_name || b.len > max_near_name
+        return max_near_name
+    $before: Sz[max_near_name + 1] = ::{} // the row for a's byte before the last
+    $last: Sz[max_near_name + 1] = ::{}
+    $row: Sz[max_near_name + 1] = ::{}
+    for j in Range.asc(b.len + 1)
+        row[j] = j
+    for i in Range.asc(a.len)
+        before = last
+        last = row
+        row[0] = i + 1
+        for j in Range.asc(b.len)
+            $cost: = last[j] + (0 if a[i] == b[j] else 1)
+            if last[j + 1] + 1 < cost
+                cost = last[j + 1] + 1
+            if row[j] + 1 < cost
+                cost = row[j] + 1
+            if i > 0 && j > 0 && a[i] == b[j - 1] && a[i - 1] == b[j] && before[j - 1] + 1 < cost
+                cost = before[j - 1] + 1
+            row[j + 1] = cost
+    return row[b.len]
 
 priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32) //<
     //< Refuses a method named through a value without being called (`p.m`)

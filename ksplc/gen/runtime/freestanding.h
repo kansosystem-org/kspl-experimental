@@ -30,11 +30,24 @@ static inline KSPL_UNUSED int64_t kspl_div_check(int64_t divisor, const char* fi
     return divisor;
 }
 
-static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width, const char* file, int line)
+static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width, int amount_unsigned,
+    const char* file, int line)
 {
-    (void)file; (void)line;
+    (void)amount_unsigned; (void)file; (void)line;
     if (amount < 0 || amount >= width) {
         while(1) {}
     }
     return amount;
+}
+
+static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* tags, int64_t count,
+    const char* enum_name, const char* file, int line)
+{
+    (void)enum_name; (void)file; (void)line;
+    for (int64_t i = 0; i < count; i++) {
+        if (tags[i] == value) {
+            return value;
+        }
+    }
+    while(1) {}
 }

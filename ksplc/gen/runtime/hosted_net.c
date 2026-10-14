@@ -82,7 +82,8 @@ static void kspl_net_no_sigpipe(int fd) {
 #endif
 
 /* The four that carry data take types differing per environment (POSIX a void pointer and a
- * size_t, Windows a char pointer and an int); absorbed here so the caller writes no cast. */
+ * size_t, Windows a char pointer and an int); absorbed here so the caller writes no cast. A length
+ * reaching them is at most KSPL_NET_PIECE (kspl_tcp_send below), which the int holds. */
 static I32 kspl_net_send(kspl_fd_t fd, const U8 *buf, Sz len) {
     return (I32)send(fd, buf, (size_t)len, KSPL_SEND_FLAGS);
 }
@@ -461,14 +462,23 @@ KSPL_LINK I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, S
     return (I32)n;
 }
 
+/* The most bytes one send or recv is handed. A call moves a piece and returns its count, as a short
+ * one may anyway, and the caller's loop (`write_all` in std/net.kspls) asks for the rest.
+ * Caution: **Hand no more in one call.** Windows takes the length as an int, but an int's worth is
+ * not enough to stay under: Winsock takes a non-blocking send whole or refuses it with WSAENOBUFS,
+ * so a send of 1 GiB failed on Windows 11 where Wine had sent a piece. 64 KiB is the piece
+ * Microsoft's guidance names for a send. A larger piece would save only calls: a blocking send of
+ * more waits in the kernel for the same room. */
+#define KSPL_NET_PIECE ((Sz)0x10000)
+
 KSPL_LINK I32 kspl_tcp_send(I64 handle, const U8 *buf, Sz len) {
     if (handle == 0) return -1;
-    return kspl_net_send(kspl_socket_of(handle)->fd, buf, len);
+    return kspl_net_send(kspl_socket_of(handle)->fd, buf, len < KSPL_NET_PIECE ? len : KSPL_NET_PIECE);
 }
 
 KSPL_LINK I32 kspl_tcp_recv(I64 handle, U8 *buf, Sz cap) {
     if (handle == 0) return -1;
-    return kspl_net_recv(kspl_socket_of(handle)->fd, buf, cap);
+    return kspl_net_recv(kspl_socket_of(handle)->fd, buf, cap < KSPL_NET_PIECE ? cap : KSPL_NET_PIECE);
 }
 
 /* Closes a socket. */

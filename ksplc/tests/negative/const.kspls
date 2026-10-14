@@ -138,9 +138,11 @@ fn main()
 //< Where folding is required, a signed overflow is rejected
 //<
 //< Caution: **Look at the intermediate result too**: `(2147483647 + 1) - 1` fits an `I32` at last.
-//< **Decide by the operands' type width**, not `I64`'s boundary. `1 << 31` stands the top bit up
-//< and is no overflow (a shift looks at its amount; the case shift_count_out_of_range in tests/negative/numbers.kspls).
+//< **Decide by the operands' type width**, not `I64`'s boundary: `1 << 31` is 2^31, past `I32`'s
+//< maximum, as `1I64 << 63` is past `I64`'s. A bit pattern is written unsigned and cast.
 // EXPECT: integer overflow in compile-time constant expression
+// EXPECT: Finished with 8 error(s)
+// EXPECT-NOT: does not fit the enum's base type
 // EXPECT-NOT: [W0
 import "std/io"
 
@@ -152,6 +154,14 @@ priv enum Mid_mul
 // The lower boundary.
 priv enum Mid_sub
   c = (-2147483647 - 2) + 1
+// A left shift into the sign bit, at once and in two steps, as a tag and as a constant, and at
+// `I64`.
+priv enum Shift_top
+  g = 1 << 31
+  h = (1 << 30) << 1
+const shift_i64: I64 = 1I64 << 63
+const shift_i32: I32 = 1 << 31
+const shift_steps: I32 = (1 << 30) << 1
 
 // Inside the width it passes (that the errors do not grow here is pinned down at the same time).
 priv enum Ok_add
@@ -160,10 +170,13 @@ priv enum Ok_bit
   e = 1 << 30
 priv enum Ok_min
   f = -2147483647 - 1
+priv enum Ok_pattern
+  i = I32::(1U32 << 31)
+  j = -1 << 30
 
 fn main(): I32
   io.out()
-    .s("\{Mid_add.a.variant_name()\}\{Ok_add.d.variant_name()\}\{Ok_bit.e.variant_name()\}\{Ok_min.f.variant_name()\}\{Mid_mul.b.variant_name()\}\{Mid_sub.c.variant_name()\}\n")
+    .s("\{Mid_add.a.variant_name()\}\{Ok_add.d.variant_name()\}\{Ok_bit.e.variant_name()\}\{Ok_min.f.variant_name()\}\{Mid_mul.b.variant_name()\}\{Mid_sub.c.variant_name()\}\{Shift_top.g.variant_name()\}\{shift_i64\}\{shift_i32\}\{shift_steps\}\{Ok_pattern.i.variant_name()\}\n")
   return 0
 // ==== case const_slice_descriptor_write
 //< Replacing the descriptor through a pointer to an immutable slice descriptor (`U8$[]@`)

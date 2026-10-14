@@ -4,13 +4,14 @@
 //< answer, with a stop it announced (`panic:`), with a silent crash, or with no end before the
 //< timeout; only the first is not a finding. **The same seed, seed files and count give the same
 //< trials**, so two numbers reproduce a finding. Why it is not coverage-guided is in "Fuzzing
-//< watches the program from outside" in `std/docs/DESIGN.md`.
+//< watches the program from outside" in `std/docs/DESIGN.md`. **Given null, a function frees its
+//< own work**, and its summary says how to free what it returns.
 import "std/argp"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" + { Arena, Own_arena, dealloc }
 import "std/prng" { Prng }
 import "std/str" // `arena.text()`
 import "std/strfmt" as _strfmt
@@ -79,7 +80,8 @@ pub fn report_asan(a: Sanitized) //< says whether the program under test is sani
     if a.required || a.asan
         verdict.check("the program under test is built with the address sanitizer", a.asan,
             "the C compiler holds no sanitizer runtime (in the devcontainer, \
-                libclang-rt-<version>-dev)")
+                libclang-rt-<version>-dev), and `--require-asan` makes that a failure: leave it out \
+                where this machine lacks the runtime")
     else
         verdict.skip_check("building the program under test with the address sanitizer",
             "this environment's C compiler holds no sanitizer runtime")
@@ -87,7 +89,7 @@ pub fn report_asan(a: Sanitized) //< says whether the program under test is sani
 pub fn again_with_asan( //< the reproduce line, carrying `--asan` where the build had it
     a: Sanitized, //< what the command line said
     again: U8[], //< the line without it (`Setup.again`)
-    arena: Arena$@, //< where the line goes
+    arena: Arena$@, //< where the line goes; null means the heap, freed with `dealloc`
 ): U8[] //< the line to print
     return arena.text().s(again).s(" --asan" if a.asan else "").take()
 
@@ -96,18 +98,39 @@ pub struct Setup //< what a fuzz driver's command line names
     pub work: U8[] //< the work folder, as a full path; it stands once `setup` returns
     pub dirs: U8[][] //< the seed folders (`.` when none is named); empty for a driver taking none
     pub again: U8[] //< the command that runs the driver again, without the two numbers
+    priv own: Own_arena //< the arena it lives in, when `setup` was given null
+
+impl Setup
+    pub fn free(r: Self) //< lets go all it names, when `setup` was given null
+        //<
+        //< Made in the caller's arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
+impl Setup: Owned {} //< `free()` lets go the arena a setup made with null lives in
 
 pub fn setup( //< reads `<program> <work folder> [seed folder ...]`, and makes the work folder
     //<
     //< It declares the positional arguments and the two numbers (`declare`), so the caller declares
-    //< only its own options before the call.
+    //< only its own options before the call. With `null`, `defer s.free()` frees the result.
     p: argp.Parser$@, //< the driver's parser
     o: Opts$@, //< where the two numbers are stored; its values at the call are the defaults
     run_as: U8[], //< how the driver is started (`ksplc run tests/fuzz_main.kspls`)
     program: U8[], //< how the usage names the program under test (`<reader>`)
     seed_dirs: Bool, //< whether seed folders may follow the work folder
-    arena: Arena$@, //< where the paths and the text go
-): Setup!U8[] //< the command line; fails with the line to stop on
+    arena: Arena$@, //< where the paths and the text go; null means an arena of its own and a `free()`
+): Setup!U8[] //<
+    //< the command line; fails with the line to stop on, in `arena` (null: `dealloc` it)
+    $work: = mem.scratch(arena)
+    $got: = setup_in(p, o, run_as, program, seed_dirs, work.arena) catch why
+        line: = arena.dup_str(why)
+        work.free()
+        throw line
+    got.own = work.own
+    return got
+
+priv fn setup_in(p: argp.Parser$@, o: Opts$@, run_as: U8[], program: U8[], seed_dirs: Bool,
+    arena: Arena$@): Setup!U8[] //<
+        //< setup's work, every part in `arena`
     usage: = arena.text().s(program).s(" <work folder>")
         .s(" [seed folder ...]" if seed_dirs else "").take()
     p.positional(usage)
@@ -169,12 +192,17 @@ pub fn gather( //< collects the files with the given endings under the folders, 
     dirs: U8[][], //< where to look; a folder inside another one yields its files twice
     endings: U8[][], //< the file endings to collect (`.md`, `.kspls`)
     cap: I64, //< files of this many bytes or more are skipped
-    arena: Arena$@, //< where the list and the bytes are stored
-): List<|Sample|> //< the seeds found; a folder that cannot be walked is skipped
+    arena: Arena$@, //< where the list, the names and the bytes go; null means the heap, as below
+): List<|Sample|> //< the seeds found; a folder that cannot be walked is skipped.
+    //<
+    //< With `null`, free each seed's `name` and `data` with `dealloc`, then the list with `free()`.
     $out: = List<|Sample|>.new(arena)
+    // The walk's paths are work: each seed keeps a copy of its name.
+    $work: = mem.scratch(arena)
+    defer work.free()
     for handed in dirs
         dir: = handed.strip_suffix("/")
-        files: = fs.walk_files(dir, fs.skip_build_output, arena) catch
+        files: = fs.walk_files(dir, fs.skip_build_output, work.arena) catch
             continue
         for path in files
             $kind: U8[] = ""
@@ -191,7 +219,8 @@ pub fn gather( //< collects the files with the given endings under the folders, 
                 continue
             kept: = arena.dup_str(data)
             dealloc(Void$@::data.ptr)
-            name: = path.sub_from(dir.len + 1) if path.len > dir.len else path
+            name: = arena
+                .dup_str(path.sub_from(dir.len + 1) if path.len > dir.len else path)
             out.push(Sample::{ .kind = kind, .name = name, .data = kept, .built = false })
     return out
 
@@ -343,16 +372,19 @@ pub fn check_seeds( //< has the program read every seed once, and returns those 
     //< Caution: **Do not continue silently if a seed cannot be written**: the program then reads
     //< the previous trial's input, and the input fuzzed and the finding disagree. **Drop a refused
     //< seed here, before fuzzing**, or every trial mutates a seed that is unreadable from the
-    //< start.
+    //< start. **A seed that stops the program fails**: dropped, a file that crashes it goes unseen.
     c: Campaign@, //< the fuzz run
     all: List<|Sample|>@, //< every seed; each is of one of the run's kinds
-    arena: Arena$@, //< where the list and the text go
-): List<|Sample|> //< the seeds the program accepted
+    arena: Arena$@, //< where the list goes; null means the heap and a `free()`
+): List<|Sample|> //< the seeds the program accepted, each the same as in `all`
     $live: = List<|Sample|>.new(arena)
-    $bad: = List<|U8[]|>.new(arena)
+    // The trials and the lines are work.
+    $work: = mem.scratch(arena)
+    defer work.free()
+    $bad: = List<|U8[]|>.new(work.arena)
     for i in Range.asc(all.len)
         one: = all.get(i)
-        at: = arena.text().s(one.kind).s(": ").s(one.name)
+        at: = work.arena.text().s(one.kind).s(": ").s(one.name)
         $at_kind: = c.kinds.len
         for j in Range.asc(c.kinds.len)
             if c.kinds[j].name.equals(one.kind)
@@ -360,59 +392,68 @@ pub fn check_seeds( //< has the program read every seed once, and returns those 
         if at_kind == c.kinds.len
             bad.push(at.s(": is of no kind the run names").take())
             continue
-        ran: = read_once(c, c.kinds[at_kind], one.data, arena) catch
+        ran: = read_once(c, c.kinds[at_kind], one.data, work.arena) catch
             bad.push(at.s(": cannot be written").take())
             continue
         if ran.got.spawn_failed || ran.got.timed_out
             bad.push(at.s(": cannot be started, or does not end").take())
+            continue
+        if classify(ran.got@) != .ok
+            bad.push(at.s(": stops the program (exit code=\{ran.got.exit_code\})").take())
             continue
         if ran.got.exit_code != 0
             if one.built
                 bad.push(at.s(": what was written cannot be read back").take())
             continue
         live.push(one)
-    verdict.check_list(arena.text().s(c.subject).s(" itself can read back the seeds ")
-        .s(c.subject).s(" wrote").take(), all.len, "seeds", bad@,
-        "a seed the program wrote must parse back; the format's writer and reader have parted")
+    verdict.check_list(work.arena.text().s(c.subject)
+        .s(" answers every seed, and reads back the seeds ").s(c.subject).s(" wrote").take(),
+        all.len, "seeds", bad@,
+        "a seed that stops the program is a finding as it stands; one the program wrote must parse \
+            back, or the format's writer and reader have parted")
     return live
 
 pub fn scatter( //< runs the trials, checks that they reached the program, and reports them
     //<
-    //< A kind with no seed is reported as skipped and left out of the draw.
+    //< **A kind with no seed fails**, and is left out of the draw: its input goes unfuzzed, and no
+    //< machine lacks anything to explain it (`check_seeds` refused its seeds, or none is written).
     c: Campaign@, //< the fuzz run
     seeds: List<|Sample|>@, //< the seeds to mutate (`check_seeds`, or real files as they are)
     what: U8[], //< what is scattered, as the heading names it (`byte sequences`)
     o: Opts, //< the two numbers of the run
-    arena: Arena$@, //< where the inputs, the outputs and the findings go
+    arena: Arena$@, //< where the line a failure stops on goes (null: the heap, freed with `dealloc`)
 ): Void!U8[] //< fails with the line to stop on: no seed, or a trial that could not be run
-    $kinds: = List<|Input_kind|>.new(arena)
+    // The inputs, the outputs and the findings are work.
+    $work: = mem.scratch(arena)
+    defer work.free()
+    $kinds: = List<|Input_kind|>.new(work.arena)
     for k in c.kinds
         if count_of(seeds, k.name) > 0
             kinds.push(k)
         else
-            verdict.skip_check(arena.text().s("scattering at the ").s(k.name).s(" input").take(),
-                "no seed of it is left under the folders the seeds come from")
+            verdict.check(work.arena.text().s("scattering at the ").s(k.name).s(" input").take(),
+                false, "no seed of it is left under the folders the seeds come from")
     if kinds.len == 0
-        throw "not one seed"
+        throw arena.dup_str("not one seed")
     trials: = Sz::o.trials
     io.out().s("\n# scattering broken ").s(what).s(" (\{trials\} trials, \{seeds.len\} seeds, ")
         .s("rng seed \{o.seed\})\n")
     $r: = Prng.new(U64::o.seed)
-    found: = findings_new(arena)
+    found: = findings_new(work.arena)
     $read_ok: Sz = 0
     for trial in Range.asc(trials)
         k: = kinds.get(trial % kinds.len if c.in_turn else r.below(kinds.len))
         one: = seeds.get(pick(seeds, k.name, r@))
-        data: = mutate(one.data, r@, arena)
-        ran: = read_once(c, k, data, arena) catch
-            throw "cannot write the broken input"
+        data: = mutate(one.data, r@, work.arena)
+        ran: = read_once(c, k, data, work.arena) catch
+            throw arena.dup_str("cannot write the broken input")
         if ran.got.spawn_failed
             throw arena.text().s("cannot start ").s(c.argv[0]).take()
         if !ran.got.timed_out && ran.got.exit_code == 0
             read_ok += 1
-        note(found, ran@, trial, one.name, data, c.work, k.ext, arena)
-    check_reach(read_ok, trials, c.reach_div, arena)
-    report_all(found, o, c.subject, c.wait_ms, c.again, arena)
+        note(found, ran@, trial, one.name, data, c.work, k.ext)
+    check_reach(read_ok, trials, c.reach_div, work.arena)
+    report_all(found, o, c.subject, c.wait_ms, c.again, work.arena)
 
 // ==========================================
 // Counting and reporting the findings
@@ -437,10 +478,26 @@ pub struct Findings //< the findings, grouped by how the trials ended
     crashes: List<|Finding|>$@ //< the trials that crashed silently
     aborts: List<|Finding|>$@ //< the trials that announced a stop
     hangs: List<|Finding|>$@ //< the trials that did not end
+    arena: Arena$@ //< where the lists and each finding's text go
+    own: Own_arena //< that arena, when `findings_new` was given null; `free` lets it go
 
-pub fn findings_new(arena: Arena$@): Findings //< an empty set of findings
-    return Findings::{ .crashes = List<|Finding|>.create(arena),
-        .aborts = List<|Finding|>.create(arena), .hangs = List<|Finding|>.create(arena) }
+pub fn findings_new( //< an empty set of findings
+    //<
+    //< With `null`, `defer found.free()` frees it and every finding `note` adds.
+    arena: Arena$@, //< where they go; null means an arena of their own and a `free()`
+): Findings
+    work: = mem.scratch(arena)
+    return Findings::{ .crashes = List<|Finding|>.create(work.arena),
+        .aborts = List<|Finding|>.create(work.arena),
+        .hangs = List<|Finding|>.create(work.arena), .arena = work.arena, .own = work.own }
+
+impl Findings
+    pub fn free(r: Self) //< lets go every finding, when `findings_new` was given null
+        //<
+        //< Made in the caller's arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
+impl Findings: Owned {} //< `free()` lets go the arena findings made with null live in
 
 priv fn classify(got: subproc.Run_result@): Verdict //< how a trial ended, seen from outside
     //<
@@ -474,8 +531,8 @@ pub fn note( //< records one trial, and saves its input if it is a finding
     data: U8[], //< the input the trial read
     dir: U8[], //< where a failing input is saved
     ext: U8[], //< the saved file's ending, the same one the trial read it under
-    arena: Arena$@, //< where the finding is stored
 )
+    arena: = f.arena
     if t.slow
         io.out().s("  trial \{trial\}: seed=").s(seed_name)
             .s(" ran past the cap but ended once stretched\n")
@@ -535,8 +592,14 @@ pub fn report_all( //< prints the findings, the three check lines, and how to ru
     subject: U8[], //< the program under test, as the lines name it (`ksplc`, `std`)
     wait_ms: I32, //< the first timeout of each trial
     again: U8[], //< the command that starts this fuzz run, without the two numbers
-    arena: Arena$@, //< where the text is built
+    arena: Arena$@, //< where the text is built while reporting; null builds it on the heap
 )
+    $work: = mem.scratch(arena)
+    defer work.free()
+    report_in(f, o, subject, wait_ms, again, work.arena)
+
+priv fn report_in(f: Findings, o: Opts, subject: U8[], wait_ms: I32, again: U8[], arena: Arena$@) //<
+    //< report_all's work, its text in `arena`
     trials: = Sz::o.trials
     if trials <= 0
         verdict.check(arena.text().s(subject).s(" was scattered at").take(), false,

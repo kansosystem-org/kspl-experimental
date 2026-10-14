@@ -31,8 +31,11 @@ fn main()
     $payload: U8[64] = ::{}
     $it: = lg.iter()
     for it.next()
-        it.read(U8$[]::payload)
-        // it.kind and it.len are the kind and content length of the record now pointed at.
+        // it.kind and it.len are the kind and content length of the record now pointed at. A
+        // record longer than `payload` throws `too_small`, as `last` does, instead of being cut.
+        n: = it.read(U8$[]::payload) catch
+            continue
+        io.out().s("kind \{it.kind\}: \{n\} bytes\n")
 
     // "The newest one" per kind. This is the shape for taking the policy handed down.
     // With not one record it throws `not_found`, which is not length 0.

@@ -2,9 +2,11 @@
 import "std/ds" + { List, Map }
 import "std/json"
 import "std/mem" + { Arena }
+import "std/refcount" { Rc }
 import "std/ring"
 import "std/seq"
 import "std/str"
+import "std/tests/sys_test"
 import "std/verdict"
 
 struct Seq_person
@@ -162,7 +164,7 @@ $named_buf: U8[named_cap]
 fn test_ring_basic()
     verdict.start("[Ring] write/read/full/empty test...")
 
-    $r: = ring.Ring<|8|>.new(ring_buf[0]@)
+    $r: = ring.Ring<|8|>.new(U8$[]::ring_buf)
     assert(r.is_empty(), "Ring: it starts out empty")
     assert(r.len() == 0, "Ring: len starts at 0")
     assert(r.free_space() == 8, "Ring: free_space starts at cap")
@@ -187,7 +189,7 @@ fn test_ring_basic()
     assert(r.is_empty() && r.free_space() == 8, "Ring: clear goes back to empty")
 
     // Writing the capacity as a named const behaves the same as writing it as a literal.
-    $named: = ring.Ring<|named_cap|>.new(named_buf[0]@)
+    $named: = ring.Ring<|named_cap|>.new(U8$[]::named_buf)
     named_space: = named.free_space()
     assert(named_space == 4, "Ring<|named_cap|>: a named const takes effect as the capacity")
     assert(named.write("abcdef") == 4, "Ring<|named_cap|>: it stops at cap")
@@ -196,7 +198,7 @@ fn test_ring_basic()
     // **Two spellings of the same value give the same type** ("What can be written where a value is
     // passed as a type argument" in `../../docs/SPEC-language.md`). A separate instantiation would
     // fail here with a type mismatch.
-    same: ring.Ring<|4|> = ring.Ring<|named_cap|>.new(named_buf[0]@)
+    same: ring.Ring<|4|> = ring.Ring<|named_cap|>.new(U8$[]::named_buf)
     assert(same.free_space() == 4, "Ring<|named_cap|> and Ring<|4|> are one and the same type")
 
     verdict
@@ -206,7 +208,7 @@ fn test_ring_basic()
 fn test_ring_wraparound()
     verdict.start("[Ring] the wrap, peek and consume test...")
 
-    $r: = ring.Ring<|8|>.new(ring_buf[0]@)
+    $r: = ring.Ring<|8|>.new(U8$[]::ring_buf)
     r.clear()
 
     // Advances tail to 4, so that the write runs past the end.
@@ -244,6 +246,35 @@ fn test_ring_wraparound()
     verdict
         .pass("A write/read that crosses the wrap goes through, peek gives the contiguous part \
             alone, and two rounds give the whole.")
+
+priv const ring_short_src: U8[] = //< a child that gives a `Ring<|8|>` 4 bytes of storage
+    """import "std/ring"
+
+fn main()
+  $buf: U8[4] = ::{}
+  _r: = ring.Ring<|8|>.new(U8$[]::buf)
+"""
+
+priv const ring_long_src: U8[] = //< a child that gives a `Ring<|8|>` 16 bytes of storage
+    """import "std/ring"
+
+fn main()
+  $buf: U8[16] = ::{}
+  _r: = ring.Ring<|8|>.new(U8$[]::buf)
+"""
+
+fn test_ring_refuses_other_lengths(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
+    //<
+    //< Shorter, the queue would write past the buffer's end; longer, bytes the caller sized would
+    //< never be used.
+    verdict.start("[Ring] storage of a length other than cap...")
+    short: = sys_test.child_stops_with(ksplc, "ring_short", ring_short_src,
+        "Ring.new: the buffer holds 4 bytes, but cap is 8", arena)
+    assert(short, "a buffer shorter than cap must stop the program, naming both lengths")
+    long: = sys_test.child_stops_with(ksplc, "ring_long", ring_long_src,
+        "Ring.new: the buffer holds 16 bytes, but cap is 8", arena)
+    assert(long, "a buffer longer than cap must stop the program, naming both lengths")
+    verdict.pass("Ring.new refuses storage shorter or longer than cap, naming both lengths.")
 
 // ==========================================
 // Tests of going round std's lists with `for x in`, and of removing from a `Map` or a `List`
@@ -300,12 +331,12 @@ fn test_iteration(arena: Arena$@)
     // --- json.Val.arr_list ---
     v: = json.parse("[1, 2, 3, 4]", arena) catch panic("iterate_test: parsing the JSON failed")
     $j_sum: I64 = 0
-    for item in v.arr_list(arena)
+    for item in v.val.arr_list(arena)
         j_sum += item.as_int(0)
     assert(j_sum == 10, "arr_list: the sum of the elements")
     // For a value that is not an array, it returns an empty list.
     scalar: = json.parse("42", arena) catch panic("iterate_test: parsing the JSON failed")
-    assert(scalar.arr_list(arena).len == 0, "arr_list: empty when it is not an array")
+    assert(scalar.val.arr_list(arena).len == 0, "arr_list: empty when it is not an array")
 
     verdict.pass("split, entries and arr_list all went round under for in.")
 // ==========================================
@@ -379,6 +410,61 @@ fn test_map_removal() //<
 
     verdict
         .pass("A colliding key is not lost to removal, and putting it back in does not double it.")
+
+fn test_map_churn() //< setting and removing ever new keys keeps a small map small
+    //<
+    //< Caution: **Keep live keys whose buckets sit at the table's end**, so their run wraps past
+    //< slot 0: rehashing in place must not lose a pair whose probe crosses the end.
+    verdict.start("[Map] a small map under endless set and remove of new keys test...")
+    $m: = Map<|I32, I32|>.new(null)
+    defer m.free()
+    $live: = List<|I32|>.new(null)
+    defer live.free()
+    for $k: I32 = 1; live.len < 6; k += 1
+        if (ds.fmix32(U32::k) & 31) >= 30
+            live.push(k)
+            m.set(k, k * 2)
+    for $i: I32 = 0; i < 200000; i += 1
+        key: = 1000000 + i
+        m.set(key, i)
+        _r: = m.remove(key)
+    assert(m.len == live.len, "only the kept keys remain")
+    assert(m.cap == 32, "the capacity stays where a few pairs put it")
+    $all_found: = true
+    for k in live.slice()
+        if (m.get(k) catch -1) != k * 2
+            all_found = false
+    assert(all_found, "every kept key is still reachable")
+
+    // An arena takes back nothing, so a rehash that moved to new slots would grow it every time.
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    $ma: = Map<|I32, I32|>.new(arena)
+    ma.set(1, 1)
+    held: = arena.get_total_allocated()
+    for $i: I32 = 2; i < 100000; i += 1
+        ma.set(i, i)
+        _r: = ma.remove(i)
+    assert(arena.get_total_allocated() == held && (ma.get(1) catch -1) == 1,
+        "the tombstones are dropped in the slots the map has")
+
+    // A value moved within the slots keeps its count: nothing leaks and nothing is freed early.
+    before: = mem.heap_used_bytes()
+    churn_counted_values()
+    assert(mem.heap_used_bytes() == before, "a moved ARC value is neither leaked nor freed twice")
+    verdict.pass("A map that keeps a few pairs keeps its size however many keys pass through.")
+
+priv fn churn_counted_values() //< sets and removes ARC values past several in-place rehashes
+    $m: = Map<|I32, Rc<|I32|>|>.new(null)
+    defer m.free()
+    for $k: I32 = 0; k < 40; k += 1
+        m.set(k, Rc<|I32|>.new(k))
+    for $i: I32 = 100; i < 5000; i += 1
+        m.set(i, Rc<|I32|>.new(i))
+        _r: = m.remove(i)
+    $kept: = m.get(39) catch
+        fallback Rc<|I32|>.new(-1)
+    assert(kept.get()$ == 39 && m.cap == 256, "a kept value survives the rehashes in place")
 
 fn test_map_odd_cap() //< a capacity that is not a power of two
     verdict.start("[Map] new_with_cap with a count that is not a power of two test...")

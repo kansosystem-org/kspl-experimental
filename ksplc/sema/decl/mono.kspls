@@ -4,7 +4,7 @@
 //< arguments and register the instance; an instance already made is returned as it is. The
 //< instance's method table and trait conformance are queued (`sema/decl/mono_queue.kspls`), and
 //< the copied tree is rewritten by `sema/decl/subst.kspls`.
-import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast" { Ast_node, is_anon_env_type }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
@@ -285,12 +285,10 @@ impl Sema_ctx
             case .none
                 continue
             $constraint_node: Ast_node$@ = null
-            $is_const_param: = false
+            is_const_param: = p.is_const_gen_param()
 
             if p.kind_id == .k_type_gen_param
                 constraint_node = p.find_child(.k_type_constraint)
-                kw_node: = p.find_child(.k_keyword)
-                is_const_param = kw_node != null && kw_node.text.equals("const")
 
             if p_idx < args.len
                 k_id: = r.env.get_or_add(param_id_node.text)
@@ -407,9 +405,13 @@ impl Sema_ctx
         return !sema_decl_mono_target.impl_target_rejects(r, generic_impl,
             raw_target_type.slice(), inst.args, r.variance_mask_of(inst.template))
 
-    fn instantiate_generic_methods(r: Self$@, type_id: I32, inst: sema_type_env.Instance):
-        Void!Sema_error
+    fn instantiate_generic_methods(r: Self$@, type_id: I32, inst: sema_type_env.Instance,
+        site: Ast_node$@): Void!Sema_error //<
+            //< Instantiates the methods the generic impls give `inst`, and queues their bodies
+            //<
+            //< `site` is what the user wrote that made the instance, or null.
         inst_nodes: = List<|Ast_node$@|>.create(base_core.arena)
+        inst_shown: = List<|U8[]|>.create(base_core.arena) // each one's name, for a diagnostic
         real_id: = r.env.get_real_type(type_id)
         t_entry: = r.env.id_to_type.get(real_id)
         // A defer fires on a continue too.
@@ -443,15 +445,20 @@ impl Sema_ctx
                 if t_entry != null
                     t_entry.add_method(arena_short, m_sym_res)
                 inst_nodes.push(m_sym_res.node)
+                // **A closure's body is part of the function that writes it**: its environment's
+                // name is the compiler's, so it names no instantiation (`instance_notes` in ctx).
+                inst_shown
+                    .push("" if is_anon_env_type(inst.template)
+                    else base_core.arena.text().s(r.env.display(type_id)).c('.').s(m_name).take())
 
         impl_name: = r.env.get_str(type_id)
 
         // Queued on pending, not inferred here (the reason is at instantiate_fn below).
         // Caution: **Queue it at the same depth as the table** (not 0); what the body instantiates
         // is one level deeper (inst_chain_depth in sema/session/state.kspls).
-        for inst_node in inst_nodes
-            r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name),
-                r.generics.inst_chain_depth)
+        for i in Range.asc(inst_nodes.len)
+            r.queue_fn_body(inst_nodes.get(i), base_core.arena.dup_str(impl_name),
+                r.generics.inst_chain_depth, inst_shown.get(i), site)
 
     priv fn fn_instance_names(r: Self$@, fi: Fn_instance, owner: Fn_owner, key: Str_builder$@,
         c_name: Str_builder$@) //<
@@ -621,7 +628,8 @@ impl Sema_ctx
                 impl_name_val = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
             // Only queued on pending: inferring under the caller's symtab scopes and fn_ctx would
             // break, so infer.kspls's worklist loop infers it after resetting the scopes.
-            r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name_val), chain_depth)
+            r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name_val), chain_depth,
+                r.env.display_key(full_inst_name.slice()), r.generics.inst_site)
 
         r.restore_mono_state(backup@)
 

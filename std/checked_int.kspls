@@ -1,12 +1,11 @@
 //< Integer types whose operations report overflow instead of wrapping: `Ci8` through `Cu64`
 //<
-//< Up to 32 bits, the operation runs in the next wider native type, so the check cannot hit
-//< undefined behaviour.
+//< Up to 32 bits, the operation runs in the next wider native type, where the exact result fits,
+//< and that result is compared with the limits.
 //< Caution: **Widen an operand by hand** (`I16::r.val + rhs.val`). An operation runs at its
 //< operands' width, and the wider parameter it is handed to does not change that, so
 //< `fit_ci8(r.val + rhs.val)` would wrap first and never see the overflow. `I64`/`U64` have no
-//< 128-bit type, so they compare against the limits first: for a signed type, computing the
-//< overflowing result is itself UB.
+//< wider type, so they compare the operands with the limits, or divide a wrapped product back.
 
 // ==========================================
 // Caution: **Do not try to merge the eight types' impls into one generic** (the grounds are in
@@ -232,13 +231,9 @@ impl Ci64
             throw .overflow
         if b == -1 && a == i64_min
             throw .overflow
-        // Caution: Do not compute a * b as a signed I64: overflow is undefined behaviour, and an
-        // optimizing compiler then removes the later result/b != a check. U64 wraps by definition
-        // and gives the same bit pattern, so the product is computed there and converted back.
-        ua: = U64::a
-        ub: = U64::b
-        uresult: U64 = ua * ub
-        result: = I64::uresult
+        // `*` wraps mod 2^64, so dividing back tells whether it overflowed. Only -1 times the
+        // minimum escapes that (the wrapped minimum divides back exactly), so it is refused above.
+        result: = a * b
         if result / b != a
             throw .overflow
         return Ci64::{ .val = result }

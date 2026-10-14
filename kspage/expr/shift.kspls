@@ -140,16 +140,25 @@ priv fn walk_refs(src: U8[], how: How, target: U8[], bare_hits: Bool, out: Str_b
         name: = addr.parse_table_name(c@)
         named: = c.pos - mark
         a: = addr.parse_addr(c@)
-        if addr.is_spot(a) && how.moves(name, target, bare_hits)
-            out.s(src.sub(mark, named))
+        if addr.is_spot(a)
             b: = read_span_end(c@)
-            if addr.is_spot(b)
+            out.s(src.sub(mark, named))
+            if !how.moves(name, target, bare_hits)
+                // Caution: **Copy a reference that stays as it was read, whole.** Stepped through
+                // a byte at a time, the `A2` of `detail!A2` reads again as a bare position.
+                out.s(src.sub(mark + named, c.pos - mark - named))
+            else if addr.is_spot(b)
                 put_span(a, b, how, out)
             else
                 put_addr(a, how, out)
             continue
-        // Caution: **Advance by one byte and copy.** Skipping what was read in one go misses a
-        // position inside it.
+        if named > 0
+            // A name with no position after it (`detail!#REF!`) is copied whole too.
+            out.s(src.sub(mark, named))
+            c.pos = mark + named
+            continue
+        // Caution: **Otherwise advance by one byte and copy.** Skipping what was read in one go
+        // misses a position inside it.
         c.pos = mark
         out.c(src[c.pos])
         c.pos += 1

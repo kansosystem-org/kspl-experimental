@@ -518,12 +518,13 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
 priv fn append_child_ksplc(list: List<|U8[]|>$@, arena: Arena$@) //<
     //< This ksplc as a child, with the options it needs to read the program as this one does
     //<
-    //< A value is joined with `=` (argp reads no other form). **The std directory is always
-    //< passed**: the child inherits no `--std-dir=`, and would look for "std" from the cwd and
-    //< fail. The package source directory likewise, **but not where none was given**: an empty one
-    //< reads as "a directory was set", and the child fails with `--pkg-src-dir: expected a
-    //< directory path`.
+    //< `--program` makes a missing `main` its diagnostic, not the linker's. A value is joined with
+    //< `=` (argp reads no other form). **The std directory is always passed**: the child inherits
+    //< no `--std-dir=`, and would look for "std" from the cwd and fail. The package source
+    //< directory likewise, **but not where none was given**: an empty one reads as "a directory
+    //< was set", and the child fails with `--pkg-src-dir: expected a directory path`.
     list.push(sys.args()[0])
+    list.push("--program")
     for d in base_core.config.defines
         list.push(arena.text().s("--define=").s(d).take())
     list.push(arena.text().s("--std-dir=").s(base_locate.std_dir()).take())
@@ -833,7 +834,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
 priv const build_opt_flags: U8[][2] = ::{ "-O2", "-g" } //<
     //< The defaults, as a program ships: optimised, and `-g`, without which no crash is located
     //<
-    //< `--cflags` goes after them, so its `-O0` or sanitiser wins (the C compiler takes the last).
+    //< `--cflags` goes after them, so its `-O0` wins (the C compiler takes the last).
 
 fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     //< It translates input to C beside output, then compiles and links output
@@ -876,6 +877,11 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     cc.push(run_cflags)
     for f in build_opt_flags
         cc.push(f)
+    // **`--sanitize` is the one way to ask**: `-fsanitize=` in `--cflags` is refused
+    // (`check_sanitize` in `../main.kspls`).
+    if base_core.config.sanitize.len > 0
+        cc
+            .push(arena.text().s("-fsanitize=").s(base_core.config.sanitize).take())
     for w in cflags.split(' ', arena)
         if w.len > 0
             cc.push(w)

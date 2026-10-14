@@ -176,6 +176,19 @@ impl Genllvm_ctx
         r.s("    %\{res_reg\} = load ").t(type_id).s(", ptr ").s(ptr).s("\n")
     fn op_store(r: Self$@, type_id: I32, val: U8[], ptr: U8[])
         r.s("    store ").t(type_id).s(" ").s(val).s(", ptr ").s(ptr).s("\n")
+    fn op_load_place(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[], place: Ast_node$@) //<
+        //< op_load from a place, told the alignment a `#packed` struct leaves it
+        //<
+        //< Caution: **A load or store with no `align` takes its type's own**, so a field of a
+        //< `#packed` struct read or written without one faults on a Cortex-M0.
+        r.s("    %\{res_reg\} = load ").t(type_id).s(", ptr ").s(ptr).place_align(place).s("\n")
+    fn op_store_place(r: Self$@, type_id: I32, val: U8[], ptr: U8[], place: Ast_node$@) //<
+        //< op_store to a place, told the alignment a `#packed` struct leaves it (op_load_place)
+        r.s("    store ").t(type_id).s(" ").s(val).s(", ptr ").s(ptr).place_align(place).s("\n")
+    priv fn place_align(r: Self$@, place: Ast_node$@): Self$@ //<
+        //< `, align N` where packing lowers it
+        align: = r.sema.packed_place_align(place)
+        return r.s(", align \{align\}") if align > 0 else r
     fn op_gep(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[], idx0: I32, idx1: I32)
         r.s("    %\{res_reg\} = getelementptr inbounds ").t(type_id).s(", ptr ").s(ptr)
             .s(", i32 \{idx0\}, i32 \{idx1\}\n")

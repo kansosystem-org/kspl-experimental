@@ -5,6 +5,7 @@
 //< It is the LLVM version of gen/c/ctx.kspls; the other gen/llvm/*.kspl files write the IR
 //< through this Ctx's methods.
 import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/c_name" // `is_made_name`
 import "ksplc/base/core" as base_core
 import "ksplc/base/literal" as base_literal
 import "ksplc/base/mangle" as _base_mangle // `has_kspl_prefix`
@@ -87,7 +88,7 @@ struct Genllvm_ctx
     extern_declared: Map<|U8[], I32|>$@ //<
         //< The names already emitted as a `declare` from an `extern "C"`, or defined by the module
         //<
-        //< Even where two files declare the same function (`kspl_stat` is in both std/io and
+        //< Even where two files declare the same function (`kspl_path_info` is in both std/io and
         //< std/fs), it may appear in the IR only once: C allows repeated prototypes, but LLVM
         //< rejects a second `declare` of the same name, or one beside a `define`, as a
         //< redefinition.
@@ -191,7 +192,7 @@ impl Genllvm_ctx
 
     fn has_local_slot(r: Self$@, name: U8[], decl: Ast_node$@): Bool //<
         //< Whether the local that decl declares already has its alloca (never for an MIR temporary)
-        if name.starts_with("_mir_")
+        if name.is_made_temp()
             return false
         return r.has_local_var_id(local_slot_key(decl))
 
@@ -199,9 +200,14 @@ impl Genllvm_ctx
         //< The slot of the local named name that decl declares: `%v_<name>_<id>`
         //<
         //< **Every declaration and every reference names a slot through here**, or the two disagree
-        //< and the IR reads an undefined register. An MIR temporary is already unique: `%v_<name>`.
-        r.clear_scratch().s("%v_").s(name)
-        if !name.starts_with("_mir_")
+        //< and the IR reads an undefined register. An MIR temporary is already unique:
+        //< `%v_.<stem>`. A made name's stem follows a `.`, which no name of the source holds.
+        r.clear_scratch().s("%v_")
+        if name.is_made_name()
+            r.scratch.c('.').s(name.made_stem())
+        else
+            r.scratch.s(name)
+        if !name.is_made_temp()
             r.scratch.s("_\{r.get_or_add_local_var_id(local_slot_key(decl))\}")
         return r.take_scratch()
 
@@ -231,6 +237,18 @@ impl Genllvm_ctx
 
     fn terminate(r: Self$@)
         r.is_terminated = true
+
+    fn emit_sanitize_attrs(r: Self$@) //<
+        //< It writes a function's mark for each sanitizer `--sanitize=` names (`sanitize_address `)
+        //<
+        //< **Every `define` carries it**: clang's `-fsanitize=` instruments only a function marked
+        //< so, which its front end does for C and nothing does for IR. `check_sanitize` in
+        //< `../../main.kspls` let through only names that are LLVM attributes.
+        if base_core.config.sanitize.len == 0
+            return
+        for name in base_core.config.sanitize.split(',', base_core.arena)
+            r.s("sanitize_").s(name).c(' ')
+
     fn emit_llvm_str_body(r: Self$@, s: U8[]) //<
         //< It emits the body of a string literal s in LLVM's c"..." escape form
         //<

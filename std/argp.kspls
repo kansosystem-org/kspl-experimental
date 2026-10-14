@@ -12,7 +12,7 @@
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/mem" { Arena }
+import "std/mem" + { Arena, Own_arena }
 import "std/str" { Str_builder }
 import "std/strnum" // `to_i64`
 import "std/sys"
@@ -96,21 +96,30 @@ pub struct Parser //< the declarations, and where the parsed values go
     pub command: U8[] //< the chosen command, or empty; the caller decides the default.
         //<
         //< A default kept in argp would drift from the declaration.
+    priv own: Own_arena //< the arena it lives in, when `create` was given null
 
 impl Parser
     pub fn create( //< a parser with nothing declared yet
         //<
-        //< Memory is freed with the arena, so there is no separate `free`.
+        //< With `null`, `defer p.free()` frees it and all it holds.
         prog: U8[], //< the program's name, used in the usage and in every error
         about: U8[], //< one line saying what the program is
-        arena: Arena$@, //< the arena the declarations and results are allocated in
+        arena: Arena$@, //< where the declarations go; null means an arena of its own and a `free()`
     ): Parser$@
-        opts: = List<|Opt|>.create(arena)
-        cmds: = List<|Cmd|>.create(arena)
-        rest: = List<|U8[]|>.create(arena)
+        work: = mem.scratch(arena)
+        opts: = List<|Opt|>.create(work.arena)
+        cmds: = List<|Cmd|>.create(work.arena)
+        rest: = List<|U8[]|>.create(work.arena)
         p: = Parser::{ .prog = prog, .about = about, .opts = opts, .cmds = cmds, .rest = rest,
-            .positional_help = "", .takes_positional = false }
-        return arena.create(p)
+            .positional_help = "", .takes_positional = false, .own = work.own }
+        return work.arena.create(p)
+
+    pub fn free(r: Self$@) //< lets go the parser and all it holds, when `create` was given null
+        //<
+        //< Made in the caller's arena, it frees nothing: that arena does. The values it stored stay
+        //< where the caller's variables hold them.
+        $own: = r.own
+        own.free()
 
     pub fn positional( //< declares that this CLI takes positional arguments
         //<
@@ -118,10 +127,10 @@ impl Parser
         //< reason as an unknown `--name`: a path's word-split fragments arrive **as positional
         //< arguments**, and dropping them silently hides the cause.
         r: Self$@,
-        usage: U8[], //< how they are written in the `Usage:` line (`<input.kspl> [output]`)
+        usage: U8[], //< how the `Usage:` line writes them (`<input.kspl> [output]`); kept as a copy
     )
         r.takes_positional = true
-        r.positional_help = usage
+        r.positional_help = r.opts.arena.dup_str(usage)
 
     priv fn add(r: Self$@, name: U8[], help: U8[], kind: Kind, required: Bool)
         r.opts
@@ -260,9 +269,10 @@ impl Parser
     pub fn parse( //< reads the process's own arguments, skipping the program name at the start
         r: Self$@,
         a: sys.Args, //< what `sys.args()` returned
-        arena: Arena$@, //< the arena the parsed values are allocated in
+        arena: Arena$@, //< where the arguments are listed while parsing (null: the heap)
     ): Void!Argp_error
         $argv: = List<|U8[]|>.new(arena)
+        defer argv.free() // the values are views into `a`, so the list is only work
         for $i: Sz = 1; i < a.len; i += 1
             argv.push(a[i])
         return r.parse_list(argv@)
@@ -409,7 +419,7 @@ impl Parser
         //< reading the output never takes a refusal for it.
         r: Self$@,
         a: sys.Args, //< what `sys.args()` returned
-        arena: Arena$@, //< the arena the parsed values are allocated in
+        arena: Arena$@, //< where the arguments are listed while parsing (null: the heap)
     )
         r.parse(a, arena) catch e
             switch e
@@ -420,6 +430,8 @@ impl Parser
                 io.err().s("\{r.prog\}: \{e\}\n")
                 r.print_usage(io.err())
                 sys.exit(2)
+
+impl Parser: Owned {} //< `free()` lets go the arena a parser made with null lives in
 
 impl Argp_error: Formattable //< so a failure can be written straight into a message
     pub fn fmt(r: Self, w: Writer): Writer //< writes the reason for a person to read

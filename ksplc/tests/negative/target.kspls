@@ -146,13 +146,13 @@ fn main() {}
 // EXPECT-NOT: 'Pod'
 
 pub trait S
-  fn a(r: Self$@): I32
+  fn a(r: Self): I32
 
 pub struct Q
   pub n: I32
 
 impl Q: S
-  pub fn a(r: Self$@): I32
+  pub fn a(r: Self@): I32
     return r.n
 
 pub enum Tagged
@@ -307,7 +307,9 @@ fn main()
 //< Unmatched, a misspelling such as `##lint(I004 = off)` is silently void, so a suppression
 //< believed in place is not. An unknown code must not pass with zero diagnostics
 //< (ksplc/docs/DESIGN.md "lint is configured per diagnostic code, not by a group name").
-// EXPECT: unknown diagnostic code 'I004'
+//< The refusal points at what its reader can open, never at the compiler's own source.
+// EXPECT: unknown diagnostic code 'I004': the codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-tools.md, and 'ksplc explain <code>' prints what one means
+// EXPECT-NOT: lint_codes.kspls
 // EXPECT: unknown lint level 'maybe'
 ##lint(I004 = off)
 ##lint(I0305 = maybe)
@@ -343,6 +345,36 @@ fn second(): I64
 
 fn main()
     return
+// ==== case main_absent_from_program
+//< A program built with `--program` (as `ksplc run` and `ksplc build` build one) needs a `main`
+//<
+//< Let it through and the linker's "undefined reference to `main'" reaches the user, naming no
+//< file of theirs.
+// ARGS: --program
+// EXPECT: this program has no main()
+fn helper(): I32
+  return 1
+// ==== case main_generic
+//< A generic `main` is refused: the start-up code names no type arguments, so no copy is made
+//<
+//< Let it through and the linker reports no `main` at all.
+// EXPECT: main() cannot take type parameters
+fn main<|T|>(): I32
+  return 0
+// ==== case main_not_a_function
+//< A `main` that names a constant is refused where a program is built
+// ARGS: --program
+// EXPECT: 'main' must be a function
+// EXPECT-NOT: has no main()
+const main: I32 = 3
+// ==== case main_parameters
+//< `main` takes no parameters; the command line is read with `sys.args()`
+//<
+//< Let it through and the C compiler's "too few arguments" reaches the user, pointing at the
+//< start-up code rather than at their `main`.
+// EXPECT: main() takes no parameters
+fn main(_x: I32): I32
+  return 0
 // ==== case main_priv
 //< A `priv` main is refused
 //<

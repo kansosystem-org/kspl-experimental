@@ -94,6 +94,12 @@ priv const cases: Case[_] = ::{
     // Skipped, a total alone would look right.
     Case::{ .cells = "1\n=A2\n=A1:A2.sum()", .row = 2, .column = 0, .want = "#CYCLE!",
         .why = "a broken cell's mark carries as far as the total" },
+    Case::{ .cells = "1\n=1/0\n3\n=A1:A3.sum()", .row = 3, .column = 0, .want = "#VALUE!",
+        .why = "a formula with no answer carries its mark as far as the total" },
+    Case::{ .cells = "1\n=1/0\n3\n=A1:A3.count()", .row = 3, .column = 0, .want = "#VALUE!",
+        .why = "and as far as the count" },
+    Case::{ .cells = "x\n=A1\n=A1:A2.sum()", .row = 2, .column = 0, .want = "#VALUE!",
+        .why = "a formula pointing at a text shows a mark, so it is no text to skip" },
     Case::{ .cells = "4\n1\n7\n=A1:A3.min()", .row = 3, .column = 0, .want = "1",
         .why = "the smallest value" },
     Case::{ .cells = "4\n1\n7\n=A1:A3.max()", .row = 3, .column = 0, .want = "7",
@@ -205,6 +211,21 @@ priv const cases: Case[_] = ::{
         .want = "#VALUE!", .why = "nor does a year that large" },
     Case::{ .cells = "1e300\t=A1*A1", .row = 0, .column = 1, .want = "#VALUE!",
         .why = "a product past an F64's range is no number" },
+    // Past 2 to the 53rd an F64 holds no fraction, so no decimal is written that it does not hold.
+    Case::{ .cells = "=123456789012345678", .row = 0, .column = 0, .want = "123456789012345680",
+        .why = "a large number shows no decimal the F64 does not hold" },
+    Case::{ .cells = "=1234567890123.45678", .row = 0, .column = 0, .want = "1234567890123.457",
+        .why = "the larger the number, the fewer the places" },
+    Case::{ .cells = "=0.3-0.1-0.2", .row = 0, .column = 0, .want = "0",
+        .why = "what rounds to 0 shows no minus sign" },
+    Case::{ .cells = "=Day.of(9000000000000000000, 1, 1)", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a year past the calendar's reach names no day, and wraps none" },
+    Case::{ .cells = "=Day.of(-9000000000000000000, 3, 1)", .row = 0, .column = 0,
+        .want = "#VALUE!", .why = "nor does one past it backwards" },
+    Case::{ .cells = "=Day.of(10000000000000, 12, 31).year()", .row = 0, .column = 0,
+        .want = "10000000000000", .why = "the furthest year names its day, which reads back" },
+    Case::{ .cells = "=Day.of(10000000000001, 1, 1)", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a year past the furthest names no day" },
     // A `.` with no digit after it starts a method.
     Case::{ .cells = "=1.round(0)", .row = 0, .column = 0, .want = "1",
         .why = "a method follows a whole number" },
@@ -214,6 +235,8 @@ priv const cases: Case[_] = ::{
         .why = "after a decimal point a second `.` starts a method" },
     Case::{ .cells = "=1.", .row = 0, .column = 0, .want = "#SYNTAX!",
         .why = "a `.` with nothing after it is not a decimal point" },
+    Case::{ .cells = "=.5", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a number starts with a digit, as in KSPL" },
 }
 
 priv fn table_of(d: Doc$@, cells: U8[]): Block$@ //< the table `cells` spells, added to `d`
@@ -509,6 +532,67 @@ fn test_a_table_without_a_name_cannot_be_reached(arena: Arena$@) //<
     calc.recalc(d, base.grid_sheet(arena))
     assert(cell_text(dst, 0, 0).equals("#NAME!"), "a table holding no name cannot be referred to")
     verdict.pass("a table with no name cannot be pointed at from any formula.")
+
+fn test_a_comparison_reaches_another_table(arena: Arena$@) //<
+    //< `<`, `>` and `=` end a name as the other operators do
+    //<
+    //< Read as part of the name, the `A1` of `=A1>other!A1` would make a table called `A1>other`.
+    verdict.start("[kspage/calc] a comparison with another table's cell test...")
+    formulas: = U8[][]::{ "=A1>other!A1", "=A1=other!B1", "=A1<other!A2", "=A1>=other!B1",
+        "=A1<>other!A1", "=1-(A1<=other!A1)" }
+    for one in formulas
+        d: = Doc.new(arena)
+        dst: = two_tables(d, "other", "20")
+        add_cell(dst.children.get(0), one)
+        calc.recalc(d, base.grid_sheet(arena))
+        assert(cell_text(dst, 0, 1).equals("1"), "the comparison reads the other table's cell")
+    verdict.pass("a comparison ends a name, as every other operator does.")
+
+priv const reached_names: U8[][_] = ::{ "Q1_sales", "売上", "Daylight", "A1", "if", "x.y" }
+priv const refused_names: U8[][_] = ::{ "Q1 sales", "my-table", "a<b", "2026", "#x", "Day", "Day2",
+    "x!y" }
+
+fn test_a_table_name_no_formula_reaches_is_refused(arena: Arena$@) //<
+    //< A table is named only where a formula can reach it by that name
+    //<
+    //< **The rule is the reader's own**: each name taken is reached by a formula, and each refused
+    //< one is not, so `calc.name_fault` and the reader cannot drift apart. A paragraph's name is
+    //< read by no formula, so it is held to nothing.
+    verdict.start("[kspage/calc] a table name a formula could not reach being refused test...")
+    sheet: = base.grid_sheet(arena)
+    for name in reached_names
+        d: = Doc.new(arena)
+        dst: =
+            two_tables(d, name, arena.text().s("=").s(name).s("!B2+1").take())
+        src: = d.blocks.get(0)
+        src.name = ""
+        ed: = edit.new_editor(d)
+        ed.caret = caret.at(src.children.get(0).children.get(0).inlines.get(0), 0)
+        page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+        assert(ed.set_name(page, name), "a name a formula can reach is taken")
+        calc.recalc(d, sheet)
+        assert(cell_text(dst, 0, 0).equals("41"), "a formula reaches the table by it")
+    for name in refused_names
+        d: = Doc.new(arena)
+        dst: =
+            two_tables(d, name, arena.text().s("=").s(name).s("!B2+1").take())
+        src: = d.blocks.get(0)
+        calc.recalc(d, sheet)
+        assert(!cell_text(dst, 0, 0).equals("41"), "the reader cannot reach a refused name")
+        src.name = ""
+        ed: = edit.new_editor(d)
+        ed.caret = caret.at(src.children.get(0).children.get(0).inlines.get(0), 0)
+        page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+        assert(!ed.name_fault_at(page, name).reachable(), "the fault is named")
+        assert(!ed.set_name(page, name), "the name is refused")
+        assert(src.name.len == 0, "the table keeps no name")
+    d: = Doc.new(arena)
+    p: = d.add_block("body").add_text("a figure")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(p, 0)
+    page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(ed.set_name(page, "Figure 1"), "a paragraph's name may hold a space")
+    verdict.pass("a table takes only a name a formula can reach, and says why it refuses.")
 
 fn test_a_cycle_across_tables_is_found(arena: Arena$@) //< a cycle is found across tables too
     verdict.start("[kspage/calc] going round in circles across the tables test...")

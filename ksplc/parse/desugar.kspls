@@ -7,6 +7,7 @@
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/parse/desugar_closure" as parse_desugar_closure
@@ -197,7 +198,7 @@ impl Ast_node
     priv fn desugar_for_in_loop(r: Ast_node$@, new_children: List<|Ast_node$@|>$@) //<
         //< It copies a `for … in`'s collection into a temporary and leaves the expansion to sema
         //<
-        //< _for_coll_N: = collection; for item; _for_coll_N; ; { ...the original body... }   <-
+        //< _%for_collN: = collection; for item; _%for_collN; ; { ...the original body... }   <-
         //< item is the marker; sema expands it
         loc: = r.loc
         coll_expr: = r.get_loop_cond()
@@ -208,7 +209,7 @@ impl Ast_node
         suffix.s("\{for_in_counter\}")
         // Caution: build_temp_name's copy into the arena is required: `suffix.slice()` points into
         // the builder's buffer, which is gone after `defer suffix.free()`.
-        coll_name: = build_temp_name("_for_coll", suffix.slice())
+        coll_name: = base_c_name.made_name(build_temp_name("for_coll", suffix.slice()))
 
         // The collection expression is copied into a temporary.
         // Caution: **Copy it here**, or an expression with side effects runs again every iteration;

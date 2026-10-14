@@ -396,6 +396,21 @@ priv fn f(): Shape!Err
 
 **Do not wrap only on an exact match.** Then no value needing conversion could pass under a Result, and `fn f(): Trait!Err` could only `throw`: its type writable, its success unreturnable (writable but ineffective). Diagnostics speak of the success type too: `return "str";` gives `expected 'I32'`, not `expected 'I32!E'`.
 
+### A cast to an enum gives one of its variants
+
+**An enum value is one of the variants its declaration lists.** An exhaustive `switch` names every variant and no `default`, and `variant_name` names each one; both read a value that is none of them as the last one they test. So a number cast to an enum (`E::x`) must be a tag, or the cast is refused. The rule is in [`docs/SPEC-language.md`, 6.4](SPEC-language.md).
+
+* **A constant is refused at translation time** (`cannot cast 300 to 'E'`), as a constant divisor of 0 is: what is fixed then is not left to run time.
+* **A value known only at run time is checked there**, and one that is no tag stops the program ([`docs/SPEC-language.md`, 13](SPEC-language.md)). The check costs a comparison per variant where a number becomes an enum, and nothing where an enum is only read.
+* **The value is compared as it is, before it narrows to the enum's base type.** Narrowed first, `E::300` of an `enum E: U8` would wrap to 44 and pass as a tag nobody wrote.
+* **Only an integer or another enum casts to a scalar enum.** A float or a `Bool` goes through an integer cast written out (`E::(I32::f)`), so the truncation shows where it happens. Nothing casts to an enum whose variants carry data, since no number holds a payload; a variant is built instead.
+
+**The cast stays, rather than being taken away.** A program reading an enum from a file or a wire format holds a number first. Without the cast, each such program writes a `switch` from numbers to variants by hand: a second copy of every tag, which a variant added later leaves behind with nothing to show it (Principle 4).
+
+**No second conversion returns `E?`.** It would be a second spelling of what `E::x` writes (Principle 6), and every caller would handle an absence even where the number came from `I32::e` a line before. A number from outside is checked as other input is, before the cast; the cast's own check then guards against a mistake, as the bounds check guards an index.
+
+**Raw memory can still hold a value that is no tag**: a write through a pointer cast, or a C function filling the enum. That is undefined, as a dangling pointer is ([`docs/SPEC-language.md`, 14.2](SPEC-language.md)); the cast is the one ordinary way a number becomes an enum, so the rule holds there (Principle 8).
+
 ### A slice is a std struct, and the rules for generics apply to it unchanged
 
 A slice (`U8[]`: a pointer plus a length) is not built into the compiler. It is an ordinary generic struct in the standard library, so what holds for generics holds for slices.
@@ -485,6 +500,8 @@ A method that declares **its own** type arguments (`fn m<|$T|>(…)`) can be wri
 
 The design already infers what is determined and asks for the rest. Where `T` is the parameter's type itself (`Arena.create<|T|>(init_val: T)`), working back is unique; where `T` appears only in the return (`alloc_as<|T|>()`), it must be written. No cheap part is left to cut.
 
+**The type a call's result is given does not fix a type argument**: `y: U8 = zero(5)` is refused, as `x: = zero(5)` is, and asks for `zero<|U8|>(5)`. Inference runs one way, from the arguments to the call, as for a function named as a value ("A generic function used as a value names its specialization"). Run the other way too, the same `zero(5)` would build a different copy depending on where it stands, which the call itself does not show, and it would still need the type arguments written wherever nothing fixes a type (a declaration with no type, an argument of another generic). Written once at the call, they read the same everywhere.
+
 **What is inferred is a function's own type arguments, however the function is reached**: `f(x)`, `h.to(x)` and `Holder<|I32|>.to(h, x)` alike. **A generic type's are not inferred from a call through it**: `Holder.mk(1)` is a compile error that says to write `Holder<|I32|>.mk(1)`. The type written before the `.` is what chooses the instance, as it is for a variable's type or a field's ("A mutability marker on the impl, and a type argument at the call site"). Many of a type's functions take nothing that would fix it (`List<|I32|>.new(null)`), so inferring it would add a second form that works for only some of them (Principle 6).
 
 **The price is that instantiation comes after the arguments' inference.** Right after instantiating, the actual arguments must be checked again against the substituted parameter types (["A generic call's arguments are checked against the parameter types after instantiation" in ksplc/docs/DESIGN.md](../ksplc/docs/DESIGN.md#a-generic-calls-arguments-are-checked-against-the-parameter-types-after-instantiation)). Skip that, and broken C comes out with zero diagnostics.
@@ -523,13 +540,18 @@ What may be written is in [`docs/SPEC-language.md`, "3.3 Structs (`struct`)"](SP
 
 **Arithmetic cannot be written in the argument position**, because the notation as written is the canonical name. Naming by the folded value would turn `true` into `1` and land a `Bool` type argument on a different type. Write the arithmetic in the `const`'s definition: a `Foo<|n|>` given `const n: Sz = 4 * 2;` is the same type as `Foo<|8|>`. The array-length position (`T[rows * cols]`) creates no canonical name, so arithmetic is accepted there: the only place two positions treat the same value differently.
 
-**A capacity on the type guarantees the memory's size only where the memory is embedded in the type.** Where it is passed separately (`std/ring.kspls`'s `Ring` receives the head address of a `U8[cap]`), a capacity that differs from the actual buffer goes unseen at translation time and writes out of bounds. A type argument protects only the index's wrapping; the memory's bounds are the caller's.
+**A parameter's kind is checked where the argument is written, a generic's own declaration included.** `fn f<|const N: Sz|>(h: Hold<|N|>@)` passes a value where `Hold` takes a type, and is refused at the declaration, whether or not anything calls `f`. Left to a call, the mistake would show as the call's argument failing to match, blaming the caller for the declaration's error, and a generic nobody calls yet would keep it hidden.
+
+**A capacity on the type fixes the memory's size at translation time only where the memory is embedded in the type.** Where the memory is passed separately, it is passed as a slice, whose length the receiver compares with the type argument when it is handed over: `std/ring.kspls`'s `Ring<|cap|>.new` takes a `U8$[]` and stops the program unless its length is `cap`. So the two guarantee different things: the type argument keeps the arithmetic constant (the wrap `% cap` needs no division at run time), and the slice carries the bounds, which every access then checks. A bare address would carry no length, and a capacity differing from the buffer would write out of bounds unseen.
+
+**A `const` parameter is read off the argument where it stands as an array's length or as a generic's value argument**: `sum(s)` with `s: I32[3]` makes `N` of `fn sum<|const N: Sz|>(v: I32[N])` 3, and `cap(b@)` with `b: Buf<|8|>` makes `N` of `fn cap<|const N: Sz|>(b: Buf<|N|>@)` 8. Each is part of the argument's type, so the argument determines the value as uniquely as it determines a type parameter standing bare ("Inferring a generic's type arguments from the actual arguments is kept"), and writing `sum<|3|>(s)` or `cap<|8|>(b@)` would repeat what the declaration of `s` or `b` already says. The two are one value to the rule: `fn fit<|const N: Sz|>(b: Buf<|N|>@, v: I32[N])` takes `N` from either argument. Where two arguments fix it to different values, the call is refused naming both: taking the first, as a type parameter does, would leave the instance refusing the second argument alone, though either may be the wrong one.
+
+**Nothing else gives a `const` parameter's value.** A slice's length is known only at run time, so it fixes nothing at translation time. A length written as arithmetic on the parameter (`I32[N + 1]`) is not solved for `N`. Where nothing gives the value, the call writes it (`sum<|3|>(I32[]::s)`), and a value written there decides as any written type argument does.
 
 **What is given up:**
 
 * **A separate body per value.** `Ring<|4|>` and `Ring<|8|>` are different types, so a type and its functions are emitted into the generated C once per value used.
 * **The declaration-synthesizing features skip it.** `variant_name` is not synthesized for an `enum` carrying a const generic, because the type arguments' notation is not reconstructed ([`ksplc/docs/DESIGN.md`, "Synthesizing an `enum`'s `variant_name`"](../ksplc/docs/DESIGN.md#synthesizing-an-enums-variant_name)). Every new declaration-synthesizing feature needs the same exception.
-* **No inference from the actual arguments ("Inferring a generic's type arguments from the actual arguments is kept").** An actual argument's type cannot determine a value type variable. So the call site writes the type arguments of a declaration containing a const generic.
 
 ### Whatever returns a view returns an immutable view
 
@@ -907,8 +929,9 @@ C++'s concepts check a template's constraints **before instantiation**. Without 
 | :-- | :-- | :-- |
 | 4.1 | Stops an accidental copy of an owning handle, such as a lock or a file (`Move_only`) | A duplicate made through a pointer |
 | 4.2 | Runs a `defer` on the variables as they are when the scope ends | Copying a value to keep it as it was at registration |
-| 4.3 | Stops a `return` of a pointer the compiler would make unseen | Returning `x@` of a local; an escape through a struct field |
+| 4.3 | Stops a pointer into the frame leaving by `return` / `throw`, and one the compiler would make unseen leaving by a store into a global or behind a pointer as well | Storing `x@` of a local; an escape through a call or a struct field set afterwards |
 | 4.4 | Warns where a block can be left before the `defer` that frees a value | A value with no `defer` at all |
+| 4.5 | Keeps a counted value a `switch` arm binds alive for the whole arm | A pointer to the binding (`a@`) kept past the arm |
 
 **Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-language.md §6.2.1), so C-level control need not move into a library.
 
@@ -962,13 +985,16 @@ Go's `defer` is immediate only in evaluating its arguments. Its block form, whic
 
 Caution: **Should freezing at registration ever be needed, do not spell it `defer a, b { … }`.** It could not be told from the existing `defer`, which reads on leaving, and would break silently. Give it its own notation.
 
-### Why dangling is stopped only on the paths that create an invisible pointer
+### Which pointers into a frame are stopped from leaving it
 
-Returning the address of a local variable (`return x@`) is not checked, because the danger is written on the page. Only two returns are stopped, where the compiler itself would make a hidden pointer to the function's local storage.
+A pointer *dangles* when what it points at is gone: here, a local variable after its function has returned and its frame (the function's local storage) is folded. Two ways out are checked, `return` / `throw` and a store into a place that outlives the frame, and a pointer is refused at each only where one function's code shows the danger and the refusal is always right.
 
-A pointer *dangles* when what it points at is gone: here, a local variable after its function has returned and its frame (the function's local storage) is folded. Returning a local's address to dangle, as in `return x@;`, is the writer's responsibility, with no diagnostic. Only two cases are stopped at `return` / `throw`: a trait value, and a slice descriptor built over a frame's array (`return U8[]::a;`, `return U8[]::{ … };`).
+| How the pointer leaves | A pointer the compiler makes unseen: a trait value, a slice over a local array | An address written with `@`: `x@`, `a[0]@`, `s.f@` |
+| :-- | :-- | :-- |
+| `return` / `throw` | Refused | Refused |
+| A store into a global or behind a pointer | Refused | The writer's |
 
-**The reason: no `@` appears in the source.** A trait value is an `{obj, vtable}` pair, so upcasting a value makes the compiler synthesize `&value`.
+**A pointer the compiler makes has no `@` in the source.** A trait value is an `{obj, vtable}` pair, so upcasting a value makes the compiler synthesize `&value`.
 
 ```kspls
 priv fn make(): Shape
@@ -976,26 +1002,52 @@ priv fn make(): Shape
     return s // <- not one pointer operation is written
 ```
 
-It lowers to `return (Shape){ .obj = (void*)&s, … };`, yet `Shape` looks like a value type and no `@` or `$@` is written. `return x@;` shows its danger on the page; here the language makes a pointer nobody sees. **Responsibility can only be assigned for what the writer can see.** A slice is the same: casting a fixed-length array to a slice, or building one from a run of elements, makes the compiler synthesize the descriptor's pointer.
+It lowers to `return (Shape){ .obj = (void*)&s, … };`, yet `Shape` looks like a value type and no `@` or `$@` is written. **Responsibility can only be assigned for what the writer can see.** A slice is the same: casting a fixed-length array to a slice, or building one from a run of elements, makes the compiler synthesize the descriptor's pointer. So both are refused wherever they leave.
 
-| Returned | Stopped? | Why |
+**At `return` / `throw`, a written `@` is refused too.** `return x@` hands the caller the address of storage that is folded as the function returns. No caller can use it, so the program is wrong whatever it does next, and the refusal turns away nothing that works. Left to the C compiler, the mistake would come out as its warning that a stack address is returned, which the build must not print (Principle 2), and then as garbage read from a dead frame.
+
+**A store of a written `@` stays the writer's.** Keeping a local's address in a place that outlives the frame is right when the place is cleared before the function returns. A compiler pass points a shared context at a cache that is its own local and takes the pointer back at the end of the pass; a kernel links a waiting function's own queue entry, a local, into a shared wait queue and unlinks it before the wait returns. Whether the place is cleared is a fact of control flow, which a check following names cannot see, so refusing the store would forbid both. The `@` on the page shows the danger, and the one who wrote it is the one to clear the place. An invisible pointer is refused at a store all the same: nobody wrote it there, so nobody knows to clear it.
+
+| Returned or thrown | Stopped? | Why |
 | :-- | :-- | :-- |
 | `s`, a local value, as a trait (`Shape`) | Yes | The compiler would write `&s` unseen |
 | `U8[]::a` or `U8[]::{ … }` over a local array | Yes | The compiler would write the descriptor's pointer unseen |
-| A local set from either of those forms | Yes | The mark follows the name (below) |
-| `x@`, `a[0]@`, `U8[]::{ .ptr = a[0]@, .len = 4 }` | No | The `@` shows the danger on the page |
+| `x@`, `a[0]@` or `s.f@` of a local, `v@` of a parameter passed by value | Yes | The address is of storage folded at the return |
+| `U8[]::{ .ptr = a[0]@, .len = 4 }`, `.some(x@)`, `a[0]@ + 1`, `U8@::x@` | Yes | The value carries such an address inside it |
+| A local set from any of those forms | Yes | The mark follows the name (below) |
 | `builder.slice()`, `arena.alloc()` | No | The compiler does not know where a call's result points |
-| A global, an upcast pointer, `p$` | No | None of them points into the frame |
+| A global or its address, an upcast pointer, `p$@`, `p.f@` through a pointer `p` | No | None of them points into the frame |
 
-**Put the line at this point only.** `return a[0]@;` and `return U8[]::{ .ptr = a[0]@, .len = 4 };` show their danger on the page, so they are the writer's responsibility and pass.
+Caution: **Do not reject a call's result, and do not widen the check to "do not return a slice" or "do not return a pointer".** The compiler does not know where `builder.slice()` or `arena.alloc()` points, and returning allocated memory or what a pointer parameter points at is legitimate.
 
-Caution: **Do not reject a call's result either, and do not widen the check to "do not return a slice".** The compiler does not know where `builder.slice()` or `arena.alloc()` points, and returning allocated memory is legitimate.
+**The forms are found anywhere inside the value**: a struct's field, an enum's payload, a `T!E`'s value, either branch of `a if c else b`, a pointer stepped by an integer, a cast between pointers or slices (`g = .some(c)`, `p.v = View::{ .s = U8[]::a }`, `return .some(x@)`). A store's place outlives the frame when it is a global, or lies behind a pointer (a field reached through a `T$@`, `p$`, a slice's element): a global outlives every frame, and where a pointer leads is not known, so the place is taken as outliving the frame.
 
-**Only `return` and `throw` are checked.** Both fold the frame, and at both the danger is easy to detect and always wrong. An indirect escape, such as storing into a struct field and returning that, needs real escape analysis and is out of scope ("Why there is no borrow checker, only a move-only marker"'s line: follow only what is cheap and certainly correct).
+**What is not checked** needs real escape analysis, and stays the writer's ("Why there is no borrow checker, only a move-only marker"'s line: follow only what is cheap and certainly correct):
 
-**A local variable carries the mark along names.** `t: Shape = s; return t` hides the upcast one line up, and is as invisible as `return s`. So a local set from one of the two forms, by its declaration or by `x = …` (from another marked local too), is refused at `return` / `throw` as well. The mark follows names, not control flow, and is never cleared: a marked local later set to heap memory is still refused, the safe side of a check that does not see which assignment ran last. A struct field assigned afterwards (`h.s = U8[]::a`), a call (`return id(s)`) and a pointer are not followed.
+* **A value handed to a call that stores it or returns it** (`list.push(c)`, `return id(x@)`). The callee sees a parameter, which may point anywhere, and the caller sees an ordinary argument.
+* **A local struct whose field is set afterwards**, then returned or stored (`h.s = U8[]::a; return h`, `h.p = x@; return h`). Assigning a field does not mark the struct.
+* **A written `@` stored** (`g = x@`), for the reason above.
 
-**Three forms pass**: a global (static storage), an upcast of a pointer (no `&` is synthesized), and what a pointer points at (`p$`, whose address lies in the heap or elsewhere).
+**What is given up: a pointer into this very frame counts as outliving it.** `q: = h@; q.c = …` is refused, as is a callback installed in a context reached through a pointer and removed before the function returns. Telling these apart would mean following where each pointer points. A closure that has to reach a callee is passed to it as an argument.
+
+**A local variable carries the mark along names.** `t: Shape = s; return t` hides the upcast one line up, and is as invisible as `return s`; `p: = x@; return p` hides the `@` as well. So a local set from one of the forms, by its declaration or by `x = …` (from another marked local too), is refused where that form is: at `return` / `throw`, and, set from an invisible pointer, at a store that outlives the frame as well. The mark follows names, not control flow, and is never cleared: a marked local later set to heap memory is still refused, the safe side of a check that does not see which assignment ran last. A struct field assigned afterwards (`h.s = U8[]::a`), a call (`return id(s)`) and a pointer are not followed.
+
+### Why a field `#packed` leaves under-aligned has no address
+
+**A field that `#packed` puts at an unaligned position can be read and written through any path, but nothing may take its address.** Where the program reads or writes the field through its path, the compiler knows the field's alignment and makes the access byte-wise. A pointer carries no such knowledge: an `I32@` promises four bytes, so every access through it is a word access. At an odd address that faults on a Cortex-M0, and C and LLVM leave it undefined everywhere (x86 merely tolerates it).
+
+| Way weighed | What it costs | Verdict |
+| :-- | :-- | :-- |
+| A pointer kind that carries the alignment | A second pointer kind through every signature, conversion and generic, for a layout used mainly for wire formats | Not taken: two pointer kinds for one purpose (Principles 1 and 6) |
+| A warning, as C compilers give | The program builds and still faults | Not taken: accepted but wrong (Principle 5) |
+| A hidden copy for a receiver that only reads | A method returning a pointer into its receiver (`Index_ref.at_ref`) would point into the copy, and nothing on the page says so | Not taken |
+| A compile error naming the fix | The writer copies the field into a local and assigns it back | **Taken** |
+
+**The implicit forms are refused along with `@`**: a method, an operator or a subscript whose receiver is a pointer, and a slice cast of an array field. Each makes the pointer with no `@` on the page, as the upcast in the section above does, so refusing `@` alone would leave the same fault a call away (Principle 8). ARC counts a field through its address on every copy and release, so an ARC-managed field left under-aligned is refused once, where the struct declares it.
+
+**The line is the alignment, not the attribute.** A one-byte field, a field of a nested `#packed` struct's type, and a field at a multiple of its alignment in a struct both `#packed` and `#align(N)` keep their type's alignment, so their address is as good as any other and passes.
+
+**What is given up**: calling a method on such a field directly. The copy costs a line or two where it happens, and for a method that writes its receiver (`Self$@`), assigning the copy back is the writer's to remember.
 
 ### Why an early exit before a `defer` is warned about, and how narrowly
 
@@ -1006,6 +1058,16 @@ Caution: **Do not reject a call's result either, and do not widen the check to "
 * **`Owned` says which values are asked about.** `Owned` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-language.md §8.4.5), so a type taking part in one takes part in the other.
 
 **What is given up**: a value with no later `defer` in the block, never freed at all, is not this warning's to find.
+
+### Why a binding a `switch` arm takes out of a value holds a count of its own
+
+A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload, so ARC counts it as any other copy: one retain where the arm starts, one release wherever it ends (docs/SPEC-language.md §8.4.2).
+
+**The alternative is a borrow**: the binding reads the payload in place and owns nothing. That costs no count, but the payload then lives only as long as the subject holds it, and an arm can let the subject go while the binding is still named (`s = .none`, a call that empties the container the subject came from). Proving that an arm never does so is a borrow checker's work, which KSPL does not do ("Why there is no borrow checker, only a move-only marker"). Unproven, one assignment in the arm frees the value under the binding, with nothing on the page to show it.
+
+**The same holds for every copy the writer does not spell out.** Each branch of `x if c else y` and a `catch`'s substitute hands over a count of its own, so the value is counted the same whichever way it was reached.
+
+**What is given up**: one retain and one release per counted binding per arm, atomic for an `Arc`. `for x in` already pays the same for each element it binds.
 
 ---
 
@@ -1065,6 +1127,7 @@ A `priv` type in a `pub` function's return (`pub fn open(): File_stream$@`) pass
 
 * **A parameter.** The outside cannot make a value of the narrow type, so it cannot call the function. That is inconvenient, but not a lie, and nothing leaks.
 * **A non-`pub` field.** Its access is checked at the use site, so the value does not leave, whatever its type. Only a `pub struct`'s `pub` field leaks.
+* **`main`'s return.** Only the start-up code receives it, and that code names no type: it turns the value into an exit status and a message. So `fn main(): Void!Er` with a `priv enum Er` leaks nothing, while the advice to narrow the function could not be followed, since `main` cannot be `priv`.
 
 **What is compared is effective visibility**: a member reaches no wider than what encloses it (docs/SPEC-language.md §9.4). Without that, every `pub` member of a type closed to its file would be a false report.
 
@@ -1166,7 +1229,7 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 
 **A `long` whose every value fits in 32 bits crosses with no C between.** A parameter is `Sz`: it has `long`'s width on LP64 and on 32-bit targets, and on LLP64 Windows both take one 8-byte register or stack slot, of which the callee reads the low half. A result is `I32`: it comes back in a register, whose low 32 bits are the value whatever `long`'s width. OpenSSL's `SSL_ctrl` crosses this way (`ksbind/tls.kspls`), and so a binding needs no C file of its own. A `long` that can pass 32 bits (`ftell`'s offset, a `time_t`) cannot, and stays with the third row's C.
 
-`kspl_file_size` / `kspl_mono_us` (`ksplc/gen/runtime/hosted.c`) and `kspl_stat` / `kspl_remove_path` (`ksplc/gen/runtime/hosted_fs.c`) take the third row's way out: only fixed-width types cross. Adding one needs its LLVM backend counterpart too (`ksplc/gen/llvm/module.kspls`; `make test-conventions` watches the pair).
+`kspl_file_size` / `kspl_mono_us` (`ksplc/gen/runtime/hosted.c`) and `kspl_path_info` / `kspl_remove_path` (`ksplc/gen/runtime/hosted_fs.c`) take the third row's way out: only fixed-width types cross. Adding one needs its LLVM backend counterpart too (`ksplc/gen/llvm/module.kspls`; `make test-conventions` watches the pair).
 
 **Do not receive a `char*` as `U8@`.** The declaration is stdio.h's when hosted and the one genc prints when freestanding. One of the two always differs in sign (`-Wpointer-sign`, against Principle 2).
 
@@ -1271,7 +1334,7 @@ An anonymous function (`fn(x: I32): Bool { … }`) is lifted to a top-level `pri
 
 **Captures are held by place (a pointer).** Copied by value, they would break as a `defer` frozen at registration does ("Why `defer` has no capture list"). Through a pointer, a call reads the body as it is then.
 
-**Escape is forbidden in exchange.** A captured place dangles once the environment leaves the function. With no borrow checker ("Why there is no borrow checker, only a move-only marker") that cannot be tracked. But a closure is a trait value, so "Why dangling is stopped only on the paths that create an invisible pointer"'s escape prohibition applies, and `check_ffi_safety` already stops it at the C boundary. Closures need no check of their own: the trait value's constraints are exactly the two needed.
+**Escape is forbidden in exchange.** A captured place dangles once the environment leaves the function. With no borrow checker ("Why there is no borrow checker, only a move-only marker") that cannot be tracked. But a closure is a trait value, so "Which pointers into a frame are stopped from leaving it"'s escape prohibition applies (at `return` / `throw` and at a store into a global or behind a pointer), and `check_ffi_safety` already stops it at the C boundary. Closures need no check of their own: the trait value's constraints are exactly the two needed.
 
 **An enclosing type argument reaches a closure, but not an anonymous function.** A closure's synthesized declarations copy across the ones its signature touches (ksplc/docs/DESIGN.md "Synthesizing a closure makes a KSPL source string and puts it through the same parser"). An anonymous function is a function-pointer value, and nothing fixes the instantiation where a value is passed. This follows from the `;` rule, which the text does not show, so the error asks for a capture list (the case `anon_fn_generic_param` in `ksplc/tests/negative/closure.kspls`).
 
@@ -1372,6 +1435,16 @@ A `fn` right behind a call's `)` is an error whose Note names both forms (`forbi
 **"The size of a function" has no one meaning.** It could be the size of a pointer to it, the size of its machine code, or, reading the name the way a call is read, the size of what it returns. Each answer is right for some reader and silently wrong for the others; the refusal costs one rewrite and leaves no reader with a wrong number.
 
 **What is given up**: nothing that cannot be written. The size of a pointer to a function is `sizeof` of a function type; the size of its result is `sizeof` of the result type.
+
+### A function value is not cast to another signature
+
+`(fn(x: I64): I64)::f` for an `f: fn(x: I32): I32` is a compile error, as is any `::` between function types whose parameters or result differ. A cast to the same signature, the parameters' names or an alias aside, is a copy.
+
+**A call through the result is undefined, and nothing would show it.** The caller lays out the arguments and reads the result as the new type says, while the function takes and gives them as it was written: an `I64` read where an `I32` was passed, a result read from a function that returns none. C compiles such a cast without a warning, and the program goes wrong only when the call runs, often far from the cast. A conversion that is right is a function of the wanted signature calling the original, which states what happens to each argument.
+
+**An address arriving from C stays reachable.** A function pointer handed over as `Void@` (a symbol looked up at run time, a slot in a C table) becomes a function type by a cast from `Void@`, since nothing on the KSPL side knows its signature to compare. That cast states that the writer vouches for the signature; a cast from another function type would state the opposite of what the compiler can see.
+
+**What is given up**: reinterpreting one function type as another directly. Where C code demands it (a callback slot typed for another signature), going through `Void@` spells the step out in two casts.
 
 ---
 
@@ -1513,7 +1586,7 @@ Whichever reading KSPL took, a writer from the other half would get a different 
 
 **Which `std` APIs are eager and which lazy**, what each costs, and why a chain can be driven any number of times are `std`'s own design ("Iteration has one notation" in [`../std/docs/DESIGN.md`](../std/docs/DESIGN.md)). (*Eager* builds the whole result at once; *lazy* produces one element each time the loop asks.) Do not add terminals, the methods that consume a chain and return one value. Counting, folding and searching are all written with `for x in`, so each terminal added is a second way of doing the same thing.
 
-**Nothing is eager because closures cannot be held.** A struct holding a predicate (a function that answers yes or no) can be written, since the closure's captured variables live in the caller's frame ("Why capture is made explicit and escape is forbidden"). The struct lives while the chain is built and consumed there. What cannot be written is a function that creates a closure and returns it ("Why dangling is stopped only on the paths that create an invisible pointer").
+**Nothing is eager because closures cannot be held.** A struct holding a predicate (a function that answers yes or no) can be written, since the closure's captured variables live in the caller's frame ("Why capture is made explicit and escape is forbidden"). The struct lives while the chain is built and consumed there. What cannot be written is a function that creates a closure and returns it ("Which pointers into a frame are stopped from leaving it").
 
 **The lazy chain rests on four properties of the language.** The first is the `Iter` above, which puts even a sequence with no `.len` onto `for x in`. The other three let the chain be written as method calls:
 
@@ -1601,7 +1674,7 @@ There are two grounds for allowing it.
 
 **"Is it a foldable constant" is the condition for entry, not the reason to enter.** The second test is whether the shorter call lies to the reader. `null` is a constant. But an arena parameter with `= null` would hide, behind the shorter call, "omit it and it allocates on the global heap, and the caller owns the free". (An *arena* is a block of memory that many allocations share and that is freed all at once.)
 
-**So an arena parameter carries no default, and a caller wanting the global heap writes `null`.** Compare `List<|I32|>.new(null)` with `List<|I32|>.new(arena)`; `mem.alloc_in(null, n)`, `base64.encode(data, null)` and `fs.read_dir(path, null)` read the same way. Where the elements go, and whether a `free()` is owed, is then on the call's line. The other shapes are not taken:
+**So an arena parameter carries no default, and a caller wanting the global heap writes `null`.** Compare `List<|I32|>.new(null)` with `List<|I32|>.new(arena)`; `base64.encode(data, null)`, `fs.read_dir(path, null)` and `json.parse(text, null)` read the same way. Where the elements go, and whether a `free()` is owed, is then on the call's line. The other shapes are not taken:
 
 | Shape not taken | Why not |
 | :-- | :-- |
@@ -2544,13 +2617,15 @@ Caution: **Get the order wrong and the seed is left holding a stale `std`.** `ma
 
 **Only the C a person reads is tidied.** Clang-Format runs on the generated C of `make debug-file` and `make commit-seed`. The C that the bootstrap and `make debug` leave is not tidied, since nobody reads it and tidying it costs more than compiling it.
 
+**So Clang-Format is optional everywhere but one step.** Where it is not installed, `make debug-file` leaves its C as generated and says so in one line: untidied C builds and debugs the same, so stopping F5 for it would cost the person more than it gives. `make commit-seed` stops instead, and says why: `ksplc/seed.c` is tidied in git, and a seed written untidied would change every one of its lines, burying the real change in the history.
+
 Caution: **Do not drop `-g`.** When a shipped executable dies, that is the only place a position comes from.
 
 ### Where CI's time goes, and what shrinks it
 
 CI's machines effectively have one core, so the only way to make the gates faster is to do less work in total.
 
-**Do not write the seconds here** (Principle 7). Each run lists its own seconds per stage at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)). The order of cost is test-suites > self-host ×2 > lint > perf-log, and those four stages are the bulk of it.
+**Do not write the seconds here** (Principle 7). Each run lists its own seconds per gate at its tail ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)), and `make ci-summary` prints the last run's list again. A one-core run (below) comes closer to a runner's figures than a local `-j` run. **The regression suites cost the most by far** (`test-suites`, dealt out as `suites_a`, `suites_b` and `suites_text`). Next come the gates that redo work under another build: `test-race`, `test-sanitize` and `self-host-ship` in the Linux job, and self-host ×2 in the shared ones. `lint` and `perf-log` follow, and those stages are the bulk of it.
 
 **`-j` barely takes effect on GitHub's runners.** (`-j` tells make how many jobs to run in parallel.) Only the gates given a `-j` (`test-suites` / `lint` / `lint-cfg` / `link_abi`) take several times as long as locally, and one core locally reproduces that. So a runner is effectively one core, and the only route to faster gates is less total work. The reproduction is `taskset -c 0 make -j1 test-suites`: `sys.cpu_count` follows the affinity, so the suites' own side-by-side runs drop to one as well.
 
@@ -2559,11 +2634,27 @@ CI's machines effectively have one core, so the only way to make the gates faste
 | self-host ×2 (C and LLVM) | **Do not attach `-B`.** It redoes even the seed's compilation, making the seed newer than the later stages, and `perf-log` rebuilds C's stage1 wholesale. `self-host`'s own recipe emits the verification marker on an incremental build too. Emitted from `$(DIFF_TXT)`'s recipe instead, a round that needs no rebuild would emit no marker, and the runner (`Gate.verdict` in `tools/ci_gates.kspls`) would return "passed without verifying" |
 | perf-log | **Measure both times**: on an empty cache (cold), then on the same cache (warm). Time differs severalfold and peak memory clearly, so one alone leaves the other half unchecked. The cache sits in a dedicated location, so the shared cache is not erased (which would make every following gate cold) |
 | test-suites | With the runner's cores full, **the total amount of work** fixes it, and a higher `-j` does not shrink it. What does is a smaller total, or dealing the suites out between the jobs that already stand. **No job is added for them**: every job pays its own start-up and its own billing, so another job raises the cost while the total work stays the same ("How CI runs" in [`SPEC-gates.md`](SPEC-gates.md)). The launch order sets the speed, so `SUITES` is kept longest first (the grounds are at `SUITES` in `mk/test.mk`) |
+| test-race / test-sanitize / self-host-ship | **They run in the Linux job alone** (`Shard.linux` in `tools/ci_gates.kspls`), so they lengthen that job and not the two shared ones. Each builds again what the shared jobs build once: race and sanitize rebuild tests under a sanitizer (sanitize through both backends) and run them, and self-host-ship builds the compiler once more at `-O2` and has it compile itself. In sanitize the run is the longer part, since std's tests start children and wait on sockets |
 | test-ksos-qemu | The demos that grab a fixed resource are serial ("How the gates are arranged" in [`SPEC-gates.md`](SPEC-gates.md)) |
 
 **Do not merge fine-grained suites "because there are many of them".** Merging runs not one byte less, so the wall clock does not shrink (the total fixes it), while a fine-grained name points straight at the cause when it fails. Only the same property inspected in two places may be merged.
 
 **When reducing the total, look at the heavy individuals, not the count.** The time is skewed per suite and per case. `ksplc/tests/negative/` is mostly a handful of cases that poke the depth safety valve. Their input must exceed the 1000 levels the compiler's walks over a type allow (`max_type_unwrap_depth` in `ksplc/sema/type/query.kspls` and its kind) and costs quadratically in the level count, so a large count does not mean a large amount of time.
+
+### A failed round says why in its last lines
+
+**A round prints thousands of lines, and each gate's cause sits in the middle of them**: a `FAIL` among hundreds of `pass` lines, a `panic:` inside a child's quoted output, a `SKIP` no row expects among thirty that are expected. A reader who opens the end of the log finds only make's last word, which names a target and not a reason. So a round ends by naming each fallen gate's causes, one line each, with the path of the gate's whole log; what each line shows is "How a run is read" in [`SPEC-gates.md`](SPEC-gates.md).
+
+* **The causes are the gate's own lines.** A gate's marks (`FAIL`, `panic:`, `RESULT:`) are spelt the same on every machine. make's message is in the language the person's machine speaks (`Error 1` reads `エラー 1` in Japanese), and says only which target stopped, so make's line is read by its `*** [` alone and shown after the gate's own.
+* **An expected SKIP is counted, not copied.** Thirty expected lines copied to the end bury the one that fails the gate, which looks like them. The one no row holds is listed among the causes and marked `UNEXPECTED`.
+* **Where no line names the cause, the log's last lines stand in** (a C compiler's error, a crash): a target's name alone sends the reader back into the log.
+* **A green round stays short**: one line per gate, and no cause.
+
+**The rows are held against the tree before a round meets them.** A reason one platform alone prints is otherwise first seen by that platform's round, after the whole round's wait. `make test-conventions` reads every reason the tree can print and refuses one no row of `tools/ci_gates.kspls` holds:
+
+* **A reason built at run time must carry, in one literal, the piece a row names.** An interpolation can put anything in, so a row matched across one proves nothing. A constant of the same file is read as its text, and a reason bound to a name in the same function, or returned by a function of the file, is read where it is written.
+* **A call written inside a string is not read.** It is a program a test runs as its child and reads itself, and no round prints its lines.
+* **A reason no platform should let through stays out of every row**, and the check lists it with its reason (`held_by_none` in `tests/support/conventions_skip.kspls`): a module only the Linux image is promised to hold, say.
 
 ### 'Supported' means someone uses it
 
@@ -2616,6 +2707,13 @@ Caution: **Do not raise a level because a CI job went green.** A new job places 
 | Their job | Drive the build: POSIX paths (`/c/Work/...`), fork, signals, wait statuses, and argv and the environment byte for byte. They never touch the bytes of what ships | Build what ships |
 
 Built by the POSIX tools instead, `ksplc.exe` would depend on `msys-2.0.dll`. `MSYSTEM=UCRT64` chooses only which native tools come first on the PATH, and the shell always comes from the POSIX tools (`/ucrt64/bin/bash` does not exist).
+
+**The packages both kinds come from are one list, `tools/msys2-packages.txt`, which CI and a person install alike**, as `.devcontainer/Dockerfile` is for Linux. CI's Windows jobs install it through one action of the repository's own, and the setup guide installs it with a `pacman` command that reads the same file.
+
+* **A list written twice drifts, and the drift shows only on a fresh machine.** Nothing runs a guide's own copy: CI installs its list, and a developer's machine already holds what it needs. So a package missing from the guide fails nobody until a person sets up a fresh MSYS2, and meets the missing command midway through `make ci` (without `diff`, the self-host cannot compare its stages).
+* **The source is a plain file, not the workflow.** A person cannot run a workflow's YAML, and a file that `pacman` reads runs the same in both places. `make test-conventions` refuses a workflow that sets MSYS2 up by itself.
+* **It holds what `make ci` needs and nothing more.** A tool only some work uses (`clang-format`, `lldb`, the ARM and wasm toolchains) is named in the guide beside that work, so a CI job does not pay to install what no gate uses. The gates that skip without such a tool are named per platform in `tools/ci_gates.kspls`, and a skip not named there fails its gate.
+* **`git` comes before the list.** The list sits in the repository, so the guide installs `git` by a command of its own to clone it.
 
 **What is given up**: the MSVC target is not what ships, and no CI job builds it, so it stands among the untested. Kanso's own build refuses it (`-dumpmachine` in the root `Makefile`), rather than keep a branch nothing runs. A user whose clang is LLVM's own Windows build still compiles their program's C for it, since ksplc answers its link words per target. Debug information from this toolchain is DWARF, not a PDB. So it is read with LLDB (as the release's bundled `.vscode/` does), not with Visual Studio's debugger.
 

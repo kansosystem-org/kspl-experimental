@@ -20,20 +20,12 @@ import "std/chars" // testing and slicing single characters
 import "std/ds" { List, Map }
 import "std/str"
 
-const lang_file_path: U8[] = "std/lang"
-
-fn lang_file(): U8[] //< `lang_file_path` under the name the file was found as
-    //<
-    //< Every file imports std/lang implicitly, so this must be the name its own declarations carry,
-    //< or a std name written in braces is looked up under another name (`name_as_found` in
-    //< `../../base/locate.kspls`).
-    return base_locate.name_as_found(lang_file_path)
-
 priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
     //<
     //< A kind with no name (an impl, an extern block and so on) returns empty.
     switch r.kind_id
-    case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_const, .k_decl_typedef {}
+    case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_fn, .k_decl_fn_proto, .k_decl_const,
+        .k_decl_typedef {}
     case .k_decl_var
         item: = r.find_child(.k_decl_var_item)
         if item != null
@@ -43,6 +35,16 @@ priv fn decl_name_of(r: Ast_node$@): U8[] //< the name of a declaration node
         return ""
     name_node: = r.find_child(.k_identifier)
     return name_node.text if name_node != null else ""
+
+priv fn decls_of(top: Ast_node$@, out: List<|Ast_node$@|>$@) //<
+    //< The declarations a top-level node holds: itself, or each function an `extern` block declares
+    out.len = 0
+    if top.kind_id != .k_decl_extern_block && top.kind_id != .k_decl_extern
+        out.push(top)
+        return
+    for item in top.children
+        if item.kind_id == .k_decl_fn_proto
+            out.push(item)
 
 fn import_key_name(key: U8[]): U8[] //< the name half of an import table key (`file::name`)
     if sep: = key.find_str("::")
@@ -64,8 +66,10 @@ fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
     defer seen_file.free()
     $declared: = Map<|U8[], Bool|>.new(null)
     defer declared.free()
+    $decls: = List<|Ast_node$@|>.new(null)
+    defer decls.free()
 
-    lang_name: = lang_file()
+    lang_name: = base_locate.lang_file()
     for top_node in r.children
         child: = top_node.unwrap_top_level()
         file: = child.loc.file()
@@ -74,16 +78,18 @@ fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
         if !(seen_file.get(file) catch false)
             seen_file.set(base_core.arena.dup_str(file), true)
             files.push(base_core.arena.dup_str(file))
-        name: = decl_name_of(child)
-        if name.len == 0
-            continue
-        if file.equals(lang_name)
-            if child.get_visibility() == sema_type_scope.Visibility.public
-                lang_names.push(base_core.arena.dup_str(name))
-            continue
-        declared.set(base_core.arena.dup_str(c.import_key(file, name)), true)
+        decls_of(child, decls@)
+        for d in decls
+            name: = decl_name_of(d)
+            if name.len == 0
+                continue
+            if file.equals(lang_name)
+                if d.get_visibility() == sema_type_scope.Visibility.public
+                    lang_names.push(base_core.arena.dup_str(name))
+                continue
+            declared.set(base_core.arena.dup_str(c.import_key(file, name)), true)
 
-    lang_alias: = lang_file_path.default_import_alias()
+    lang_alias: = base_locate.lang_file_path.default_import_alias()
     for file in files
         if file.equals(lang_name)
             continue
@@ -336,9 +342,9 @@ impl Ast_node
 
         // **This is an error, not a lint.** lang's names are already in every file, so allowing it
         // gives two ways to reach the same name ("One notation per purpose" in docs/DESIGN.md).
-        if clean_path.equals(lang_file_path)
-            c.clear_scratch()
-                .s("'\{lang_file_path\}' is imported into every file; remove this line.")
+        lang_path: = base_locate.lang_file_path
+        if clean_path.equals(lang_path)
+            c.clear_scratch().s("'\{lang_path\}' is imported into every file; remove this line.")
             c.err(r, c.scratch.slice())
             return
 

@@ -12,8 +12,10 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
 import "ksplc/gen/c/ctx" { Genc_ctx }
 import "ksplc/gen/c/expr" as gen_c_expr
+import "ksplc/gen/c/literal" as gen_c_literal
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/body/postfix" as sema_body_postfix
+import "ksplc/sema/type/display" // `display`
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
 import "std/str"
@@ -177,6 +179,17 @@ impl Ast_node
             gen_c_expr.emit_slice_cast_prefix(c, target_id, target_base_id)
             expr_node.emit_expr_as_receiver(c)
             c.s(".data, .len = \{c.env.array_len(expr_node.type_id)\} }")
+        else if def: = sema_body_postfix.enum_cast_needs_check(c.sema, r)
+            // The tags go as a compound literal array, so the operand is evaluated once.
+            c.s("(").t(target_id).s(")kspl_tag_check((int64_t)(")
+            expr_node.emit_expr(c)
+            c.s("), (const int64_t[]){ ")
+            for i in Range.asc(def.variants_list.len)
+                if i > 0
+                    c.s(", ")
+                gen_c_literal.emit_folded_i64(c, def.variants_list.get(i).tag_value)
+            c.s(" }, \{def.variants_list.len\}, \"").s(c.env.display(target_id))
+                .s("\", \"\{r.loc.file()\}\", \{c.last_line\})")
         else
             c.s("(").t(target_id).s(")")
 

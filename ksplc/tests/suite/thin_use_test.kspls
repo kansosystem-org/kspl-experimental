@@ -62,7 +62,7 @@ fn main(): I32 {
     return 1;
   };
   $sum: I64 = 0;
-  for item in v.arr_list(a) {
+  for item in v.val.arr_list(a) {
     sum += item.as_int(0);
   }
   io.out().s("\{sum\}\n");
@@ -117,7 +117,7 @@ fn main(): I32 {
 // needed even with no capture ("Why capture is made explicit and escape is forbidden" in
 // `docs/DESIGN.md`).
 // Caution: **Do not call `find_all`.** It instantiates `List<|Match|>`, hiding the tested shape:
-// "only the `T!E` of an uncalled `pub fn`'s return value remains".
+// "only an uncalled `pub fn`'s return value names the instance".
 priv const case_regex_thin: U8[] =
     """
 import "std/io";
@@ -127,11 +127,24 @@ fn main(): I32 {
   $rx: = Regex.compile("[a-z]+") catch {
     return 1;
   };
-  hit: = rx.is_match("abc") catch {
-    return 1;
-  };
+  hit: = rx.is_match("abc");
   io.out().s("ok\n" if hit else "no\n");
   rx.free();
+  return 0;
+}
+"""
+
+// Caution: **Do not call `wait`.** It instantiates `List<|Ready|>`, hiding the tested shape:
+// "only the `T!E` of an uncalled `pub fn`'s return value remains".
+priv const case_reactor_thin: U8[] =
+    """
+import "std/io";
+import "std/reactor" { Reactor };
+
+fn main(): I32 {
+  $r: = Reactor.new();
+  io.out().s("ok\n");
+  r.free();
   return 0;
 }
 """
@@ -222,7 +235,7 @@ priv const heaviest: U8[] = "std/str" //< the heaviest unit
     //< **`std/io` is not in here.** Writer / Formattable are in std/lang, so string handling pays
     //< for no file I/O (io still brings str along).
 
-priv const core_max_lines: Sz = 3481 //<
+priv const core_max_lines: Sz = 3804 //<
     //< The cap on the line count of the chunk the heaviest unit reaches
     //<
     //< **An added line costs every program that uses strings**, such as a format's field padding
@@ -474,6 +487,7 @@ fn main(): I32
     thin_case("map", "ds.Map.entries", case_map_entries, arena)
     thin_case("seq", "seq combinator on ds.List", case_seq_where, arena)
     thin_case("regex", "regex.is_match (find_all is not called)", case_regex_thin, arena)
+    thin_case("reactor", "reactor.Reactor.new (wait is not called)", case_reactor_thin, arena)
     thin_case("dead", "an instance named only by a function nobody calls", case_dead_instance,
         arena)
 

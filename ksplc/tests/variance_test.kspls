@@ -163,6 +163,29 @@ fn test_impl_on_one_instantiation()
         .pass("with an impl's target a concrete type alone, the methods attach to that one instance \
             (and the side one step of weakening reaches).")
 
+priv enum Pick<|$T|> //<
+    //< A generic enum matched by `switch` on its immutable version
+    //<
+    //< That version shares the plain instance's representation, its tags included, so the
+    //< `switch` must name the plain instance's tags. The C compiler failed on tags never declared.
+    one(v: T)
+    none
+
+priv fn pick_value(p: Pick<|I32|>): I32
+    switch p
+    case .one(v)
+        return v
+    case .none
+        return -1
+
+fn test_switch_on_shared_enum()
+    verdict.start("[Variance] a switch on a generic enum's immutable version test...")
+    some: Pick<|I32|> = .one(9)
+    assert(pick_value(some) == 9, "variance: a switch on the immutable version takes the payload")
+    nothing: Pick<|I32|> = .none
+    assert(pick_value(nothing) == -1, "variance: a switch on the immutable version tells the tags")
+    verdict.pass("a switch on an instance sharing its representation names the shared tags.")
+
 // ==========================================
 // A method declaring **its own** type arguments, the only ones a call site may write. With `$` the
 // body writes the pointee, without it that is rejected (the reverse of the case

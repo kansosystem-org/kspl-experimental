@@ -203,10 +203,19 @@ function kspageApi(ks) {
       draw();
       return true;
     },
-    // Adds a row or column after the cursor, or deletes the cursor's (false outside a table).
+    // Adds a row or column after the cursor: **empty if added, else the reason** (the rule of
+    // `setBlockStyle`).
     addLine(axis) {
-      return acted(w.kspage_web_add_line(axis === "column" ? 1 : 0));
+      const got = w.kspage_web_add_line(axis === "column" ? 1 : 0);
+      if (got === 1) {
+        draw();
+        return "";
+      }
+      if (got === -1) return "The document is open for reading alone";
+      if (got === -2) return "A merged cell here already covers 1000 columns, the most one may";
+      return "Click inside a table's cell";
     },
+    // Deletes the cursor's row or column (false outside a table).
     dropLine(axis) {
       return acted(w.kspage_web_drop_line(axis === "column" ? 1 : 0));
     },
@@ -270,6 +279,7 @@ function kspageApi(ks) {
         return "This document holds no slide style. A slide's size is set by its style";
       }
       if (end === -3) return "The document is open for reading alone";
+      if (end === -4) return "Slides inside slides go no deeper here: blocks nest 32 levels at most";
       return "Click in the body first, and the slide goes in after that paragraph";
     },
     // Inserts one image after the cursor's paragraph, **sized by the caller**, the document holding

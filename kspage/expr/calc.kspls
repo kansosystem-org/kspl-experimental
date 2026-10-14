@@ -215,7 +215,19 @@ priv fn take_span(g: Grid$@, f: Fold$@, a: Addr, b: Addr) //< folds the cells fr
         return
     for $r: Sz = r0; r <= r1; r += 1
         for $c: Sz = c0; c <= c1; c += 1
-            take(f, value_at(g, r, c))
+            v: = value_at(g, r, c)
+            if !v.ok && typed(g, r, c)
+                continue
+            take(f, v)
+
+priv fn typed(g: Grid$@, r: Sz, c: Sz): Bool //< whether cell (r, c) holds typed text, no formula
+    //<
+    //< **A range skips such a cell where it is no number** (a heading word, an empty cell: a range
+    //< means "the numbers around here"). A formula that fails shows a mark, so `take` carries it,
+    //< whatever the reason (`=1/0` as much as `#CYCLE!`); skipped, the total would look right.
+    if n: = cell_inline(g, r, c)
+        return !n.is_formula()
+    return false
 
 priv fn eat(p: P$@, c: U8): Bool //< advances where the next character is c
     //<
@@ -303,6 +315,9 @@ priv fn parse_place(p: P$@): Value //< a position or a range
             // An unknown name is rejected: taken as its own table, it would silently give another
             // cell.
             return Cell_error.no_name.failed()
+    // A named position removed by deleting its row or column (`detail!#REF!`).
+    if addr.at(p.c@) == '#'
+        return parse_broken(p)
     a: = addr.parse_addr(p.c@)
     switch a.kind
     case .unreadable
@@ -328,6 +343,16 @@ priv fn parse_place(p: P$@): Value //< a position or a range
         return Cell_error.no_cell.failed()
     return parse_fold(p, g, a, b)
 
+priv fn parse_broken(p: P$@): Value //< the mark of a removed position, `#REF!`
+    //<
+    //< **A broken reference's mark can be written inside a formula**, with its table's name or
+    //< without. Deleting a row or column rewrites a removed position to it (closed up, it would
+    //< silently point at the next cell).
+    if p.c.src.starts_with(broken_ref, p.c.pos)
+        p.c.pos += broken_ref.len
+        return Cell_error.no_cell.failed()
+    return Cell_error.syntax.failed()
+
 priv fn parse_primary(p: P$@): Value //< one value
     //<
     //< **Methods are not read here** (the loop outside reads them).
@@ -339,15 +364,11 @@ priv fn parse_primary(p: P$@): Value //< one value
         if !eat(p, ')')
             return Cell_error.syntax.failed()
         return v
-    if (c >= '0' && c <= '9') || c == '.'
+    // **A number starts with a digit**, as in KSPL (`.5` is not one: write `0.5`).
+    if c >= '0' && c <= '9'
         return parse_number(p)
-    // **A broken reference's mark can be written inside a formula.** Deleting a row or column
-    // rewrites a removed position to this (closed up, it would silently point at the next cell).
     if c == '#'
-        if p.c.src.starts_with(broken_ref, p.c.pos)
-            p.c.pos += broken_ref.len
-            return Cell_error.no_cell.failed()
-        return Cell_error.syntax.failed()
+        return parse_broken(p)
     // A value made from a type. **`Day` is a type's name, so it cannot be a table's name.**
     if c.is_lower() || c.is_upper()
         mark: = p.c.pos
@@ -359,6 +380,40 @@ priv fn parse_primary(p: P$@): Value //< one value
     // The rest is text pointing at a cell. **A table name starting with a non-letter comes here
     // too**, so do not branch on letters alone.
     return parse_place(p)
+
+enum Name_fault //< why a formula could not reach a table by a name, or `none`
+    //<
+    //< **It is the reader's rule** (`parse_primary`, `parse_place`), written out so that a name
+    //< is refused where it is set, not found broken where a formula uses it.
+    none
+    separator //< it holds a separator (`addr.is_break`), a `!` or a control character
+    leading //< it starts as a number (a digit) or a mark (`#`) does
+    type_name //< its leading letters are `Day`, the date type's name
+
+impl Name_fault
+    fn reachable(f: Self): Bool //< whether a formula can reach the name (no fault)
+        switch f
+        case .none
+            return true
+        default {}
+        return false
+
+fn name_fault(name: U8[]): Name_fault //< whether a table may carry this name
+    //<
+    //< **An empty name is fine** (it removes the name).
+    for c in name
+        if addr.is_break(c) || c == '!' || c < ' ' || c == 127
+            return .separator
+    if name.len <= 0
+        return .none
+    if name[0].is_digit() || name[0] == '#'
+        return .leading
+    $letters: Sz = 0
+    for letters < name.len && (name[letters].is_lower() || name[letters].is_upper())
+        letters += 1
+    if name.sub(0, letters).equals("Day")
+        return .type_name
+    return .none
 
 priv fn parse_method(p: P$@, v: Value): Value //< one method following a value
     //<

@@ -147,74 +147,77 @@ fn test_atomic_and_cond_var()
             confirmed.")
 
 // ==========================================
-// std/subproc with std/thread: children started from two threads at once. A start whose pipe ends
-// reached a child started meanwhile on the other thread would see its end of output only when that
-// child ends.
+// std/subproc with std/thread: children started from two threads at once. A pipe end reaching a
+// child the other thread started holds the end of output back until it ends: never, in this test.
+// Caution: **Judge by the read running out, not by a time limit.** A machine running other builds
+// beside the test (as CI does) makes a short child late with nothing held.
 // ==========================================
-priv const lingering_slots: Sz = 24 //< how many long-lived children the other thread keeps at once
-priv const lingering_gap_ms: I32 = 50 //< the time between its starts; a child lives 24 of them
-priv const quick_starts: Sz = 40 //< how many short children this thread reads to the end
-priv const late_us: I64 = 600000 //< longer than this, a short child's end waited for another's
+priv const paired_starts: Sz = 24 //< how many short children this thread reads to the end
+priv const end_wait_ms: I32 = 10000 //< a read's wait; only an end held elsewhere runs it out
 
 struct Lingering_ctx //< what the thread starting long-lived children reads
     ksplc: U8[]
+    asked: thread.Atomic_sz //< how many starts the main thread has made or is making
     stop: thread.Atomic_sz
 
 #export
 fn concurrency_start_lingering(arg: Lingering_ctx$@): Void$@
-    // `ksplc lsp` waits on its standard input, so a child lives until it is killed.
-    $kids: subproc.Piped_child[lingering_slots] = ::{}
-    $used: Bool[lingering_slots] = ::{}
-    $at: Sz = 0
+    // A start follows each of the main thread's at once, so the two overlap. `ksplc lsp` waits on
+    // its standard input, so a child lives until it is killed, after the main thread's reads.
+    $kids: subproc.Piped_child[paired_starts] = ::{}
+    $started: Sz = 0
     for arg.stop.load() == 0
-        if used[at]
-            kids[at].kill()
-        kids[at] = subproc.spawn_piped(U8[][]::{ arg.ksplc, "lsp" }, "")
-            catch panic("the lingering child must start")
-        used[at] = true
-        at = (at + 1) % lingering_slots
-        sys.sleep_ms(lingering_gap_ms)
-    for i in Range.asc(lingering_slots)
-        if used[i]
-            kids[i].kill()
+        if started < arg.asked.load()
+            kids[started] =
+                subproc.spawn_piped(U8[][]::{ arg.ksplc, "lsp" }, "")
+                catch panic("the lingering child must start")
+            started += 1
+        else
+            sys.sleep_ms(1)
+    for i in Range.asc(started)
+        kids[i].kill()
     return null
 
 fn test_spawn_from_threads(ksplc: U8[]) //<
-    //< That a short child's end of output arrives on time while another thread starts children
+    //< That a short child's end of output is not held by a child another thread starts meanwhile
     //<
     //< ksplc is both children (`run_std` passes it): `info keywords` prints and ends, `lsp`
     //< lingers.
     verdict
-        .start("[Thread] children started from two threads at once: each end of output arrives on \
-            time...")
+        .start("[Thread] children started from two threads at once: each end of output reaches its \
+            own reader...")
     ctx: = mem.alloc_as<|Lingering_ctx|>()
     ctx.ksplc = ksplc
+    ctx.asked = thread.Atomic_sz.new(0)
     ctx.stop = thread.Atomic_sz.new(0)
     t: =
         thread.Thread.spawn<|Lingering_ctx|>(concurrency_start_lingering, ctx)
         catch panic("thread spawn failed")
-    $late: Sz = 0
-    for _i in Range.asc(quick_starts)
-        began: = sys.mono_us()
+    $held: = false
+    for i in Range.asc(paired_starts)
+        ctx.asked.store(i + 1)
         $child: =
             subproc.spawn_piped(U8[][]::{ ksplc, "info", "keywords" }, "")
             catch panic("the short child must start")
         $buf: U8[1024] = ::{}
-        $ended: = false
-        for !ended
-            _n: = child.read(U8$[]::buf, 2000) catch
-                ended = true
+        $open: = true
+        for open
+            _n: = child.read(U8$[]::buf, end_wait_ms) catch e
+                assert(e != subproc.Read_end.failed,
+                    "reading the short child's output must not fail")
+                held = e == subproc.Read_end.timed_out
+                open = false
                 fallback 0
-        if sys.mono_us() - began > late_us
-            late += 1
         child.kill()
+        if held
+            break
     ctx.stop.store(1)
     t.join_and_free()
     dealloc(Void$@::ctx)
-    assert(late == 0, "no short child's end of output waits for a child started on another thread")
+    assert(!held, "no short child's end of output is held by a child started on another thread")
     verdict
-        .pass("While another thread kept starting children, every short child's end of output \
-            arrived at once.")
+        .pass("While another thread started children alongside, every short child's end of output \
+            reached its reader.")
 
 // ==========================================
 // Tests of a file lock (`std/fs`), and of a `Mutex` locked again or unlocked by another thread
@@ -335,7 +338,7 @@ fn test_mutex_misuse(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
 priv const test_margin: Sz = 64 * 1024 //< the room kept spare below where the walk stops
 
 priv fn dig( //< how many levels deeper it goes before the limit comes near
-    limit: Stack_limit@, //< where it stops
+    limit: Stack_limit$@, //< where it stops
     levels: Sz, //< the current depth
     above: U8$[], //< a buffer of the level above, which this level writes
 ): Sz
@@ -355,7 +358,7 @@ priv const floor_levels: Sz = 1000 //< the walk must get at least this deep
 
 fn test_stack_limit_on_main()
     verdict.start("[Stack] a walk that looks stops before the main thread's stack runs out...")
-    limit: = Stack_limit.new(test_margin)
+    $limit: = Stack_limit.new(test_margin)
     assert(!limit.near(), "at a test's head the stack is not near its end")
     $seed: U8[1] = ::{}
     levels: = dig(limit@, 0, U8$[]::seed)
@@ -364,7 +367,7 @@ fn test_stack_limit_on_main()
 
 #export
 fn stack_test_walk(arg: Sz$@): Void$@
-    limit: = Stack_limit.new(test_margin)
+    $limit: = Stack_limit.new(test_margin)
     $seed: U8[1] = ::{}
     arg$ = dig(limit@, 0, U8$[]::seed)
     return null
@@ -384,7 +387,7 @@ priv const close_margin: Sz = 4 * 1024 //< a margin smaller than the pages Windo
 
 fn test_stack_limit_close_to_the_end()
     verdict.start("[Stack] a walk with a margin of a page stops before the stack's real end...")
-    limit: = Stack_limit.new(close_margin)
+    $limit: = Stack_limit.new(close_margin)
     $seed: U8[1] = ::{}
     levels: = dig(limit@, 0, U8$[]::seed)
     assert(levels > floor_levels, "a small margin still lets the walk go deep, and stops it alive")
@@ -392,31 +395,23 @@ fn test_stack_limit_close_to_the_end()
 
 fn test_stack_limit_later()
     verdict.start("[Stack] a limit that asks late stops the walk as one that asks at once does...")
-    $limit: = Stack_limit.later(test_margin, 16)
-    assert(!limit.near_at(0), "above the depth it asks from, it answers without asking")
+    $limit: = Stack_limit.later(test_margin)
+    assert(!limit.near(), "where it was made, it answers without asking")
     $seed: U8[1] = ::{}
-    levels: = dig_at(limit@, 0, U8$[]::seed)
+    levels: = dig(limit@, 0, U8$[]::seed)
     assert(levels > floor_levels, "asked late, the walk still goes deeper than a thousand levels")
     verdict.pass("")
 
-priv fn dig_at(limit: Stack_limit$@, levels: Sz, above: U8$[]): Sz //< `dig`, asking by `near_at`
-    $pad: U8[64] = ::{}
-    above[0] = U8::(levels & 1)
-    if limit.near_at(levels)
-        return levels
-    deepest: = dig_at(limit, levels + 1, U8$[]::pad)
-    return deepest if pad[0] <= 1U8 else -1
-
 // ==========================================
 // The walks in std that read input stop before a short stack runs out. **The test leaves less
-// stack than they keep free** (they keep 64KB) and gives them input their counts allow, so only the
-// stack can stop them; without the check they crash.
+// stack than they keep free** (64KB), more than they walk before they ask where it ends, and gives
+// them input their counts allow, so only the stack can stop them; without the check they crash.
 // ==========================================
 
 priv const short_room: Sz = 60 * 1024 //< the stack left when the walk under test starts
 
 priv fn on_short_stack( //< runs `job` with about `short_room` of the stack left
-    limit: Stack_limit@, //< made with `short_room` as its margin
+    limit: Stack_limit$@, //< made with `short_room` as its margin
     levels: Sz,
     above: U8$[],
     job: fn(arena: Arena$@): Bool, //< true where the walk refused as it should
@@ -446,8 +441,8 @@ priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_d
 
 priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_nesting_depth`
     //<
-    //< **Compiling is the walk that recurses**, once per group level; matching keeps its
-    //< backtracking points on the heap, so only the pattern's nesting can reach the stack.
+    //< **Compiling is the walk that recurses**, once per group level; matching follows its ways
+    //< through a list on the heap, so only the pattern's nesting can reach the stack.
     $pattern: = Str_builder.new()
     defer pattern.free()
     for _i in Range.asc(400)
@@ -468,7 +463,7 @@ priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_n
 fn test_walks_stop_on_a_short_stack(arena: Arena$@)
     verdict
         .start("[Stack] JSON and regex refuse, rather than crash, on a stack shorter than kept...")
-    limit: = Stack_limit.new(short_room)
+    $limit: = Stack_limit.new(short_room)
     $seed: U8[1] = ::{}
     assert(on_short_stack(limit@, 0, U8$[]::seed, json_refuses, arena),
         "json.parse refuses nesting the stack left cannot hold, as too_deep")

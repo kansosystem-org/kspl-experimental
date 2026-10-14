@@ -6,6 +6,7 @@ import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/c_name" as base_c_name
 import "ksplc/lower/abi" as lower_abi
 import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
@@ -18,7 +19,6 @@ import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
-import "std/ds" { List }
 import "std/str"
 
 struct Unwrap_ctx
@@ -84,10 +84,15 @@ fn append_result_or_expr(block: Ast_node$@, name: U8$[], type_id: I32, value_nod
         block.add_child(Ast_node.build_assign_stmt(ident, value_node, loc))
 
 priv fn lower_into_block(lctx: Lowering_ctx$@, node: Ast_node$@, loc: base_ast.Loc): Ast_node$@ //<
-    //< It lowers node and returns a new block holding the statements that lowering hoisted
+    //< It lowers a branch's value and returns a new block holding the statements lowering hoisted
+    //<
+    //< A managed value leaves the branch with a count of its own: a place it reads is retained
+    //< there, so a ternary is a fresh value whichever way it went.
     start: = lctx.pre_stmts.len
     lctx.relocating += 1
+    take: = lower_arc.Arc_take.decide(node, lctx)
     node.lower(lctx)
+    take.retain(node, lctx)
     lctx.relocating -= 1
     block: = Ast_node.build_block(loc)
     lctx.flush_pre_stmts_to_node(start, block)
@@ -177,12 +182,15 @@ impl Ast_node
         loc: = r.loc
         recv_node: = r.get_catch_chain_expr()
         catch_node: = r.get_catch_chain_catch()
+        // A Result some binding still owns lends its success, which the catch's value then
+        // retains; a fresh one hands it over. Decided before lowering, as is_arc_fresh says.
+        recv_owned: = recv_node.is_arc_fresh(lctx)
         u: = setup_result_unwrap(recv_node, r.type_id, lctx, loc)
         val_name: = gen_result_placeholder(lctx, u.val_type_id, u.is_void, loc)
 
         $target_block: Ast_node$@ = null
         $target_expr: Ast_node$@ = null
-        $err_id_text: = "_e"
+        $err_id_text: = base_c_name.made_name("e")
         $err_id_node: Ast_node$@ = null
 
         if catch_node != null
@@ -220,8 +228,15 @@ impl Ast_node
         lctx.relocating += 1
         if target_block != null
             target_block.lower(lctx)
+        // The substitute hands over a count of its own, as a ternary's branch does; where the
+        // catch gives no value, a fresh one is released at once, as `fallback` does.
+        discard: = u.is_void && target_expr != null && target_expr.is_arc_fresh(lctx)
         if target_expr != null
+            take: = lower_arc.Arc_take.decide(target_expr if !u.is_void else null, lctx)
             target_expr.lower(lctx)
+            take.retain(target_expr, lctx)
+            if discard
+                lower_arc.arc_release_now(target_expr, lctx)
         lctx.relocating -= 1
 
         is_label_used: = lctx.fb.label_used
@@ -232,7 +247,7 @@ impl Ast_node
         if target_block != null
             for child in target_block.children
                 u.then_block.add_child(child)
-        else if target_expr != null
+        else if target_expr != null && !discard
             append_result_or_expr(u.then_block, val_name, u.val_type_id, target_expr, u.is_void, loc)
 
         if (target_block != null || target_expr != null) && is_label_used
@@ -248,12 +263,19 @@ impl Ast_node
                 loc))
             val_ident: = Ast_node.build_ident(val_name, u.val_type_id, loc)
             else_block.add_child(Ast_node.build_assign_stmt(val_ident, right_val, loc))
+            if !recv_owned
+                held: = Ast_node.build_ident(val_name, u.val_type_id, loc)
+                ops: = base_ast.new_ast_node_list()
+                lower_arc.emit_managed_op(lctx, held, u.val_type_id, "retain", ops, 0)
+                for op in ops
+                    else_block.add_child(op)
 
         if_node: = Ast_node.build_if_stmt(u.is_err_expr, u.then_block, else_block, loc)
         lctx.pre_stmts.push(if_node)
-        // A statement throwing the success value away (`maybe(2) catch {}`, lower_stmt_expr): the
-        // Result still owns it, and the Result's release frees it where it is a success.
-        if u.is_void && lctx.sema.env.type_is_managed(u.res_type_id)
+        // A statement throwing a fresh Result's success away (`maybe(2) catch {}`,
+        // lower_stmt_expr): the Result still owns it, and its release frees it on success. A Result
+        // a binding owns keeps it.
+        if u.is_void && recv_owned && lctx.sema.env.type_is_managed(u.res_type_id)
             res_ref: = Ast_node.build_ident(u.res_name, u.res_type_id, loc)
             lower_arc.emit_managed_op(lctx, res_ref, u.res_type_id, "release", lctx.pre_stmts, 0)
         r.finalize_or_void(val_name, u.val_type_id, u.is_void)
@@ -264,11 +286,15 @@ impl Ast_node
         //< The value goes into the temporary the catch chain set up (`lctx.fb`). The cleanups down
         //< to the chain's depth run before the jump.
         expr_node: = r.get_fallback_expr()
-        // Where the catch gives no value, a fresh managed substitute is released (lower_stmt_expr).
+        // Where the catch gives no value, a fresh managed substitute is released (lower_stmt_expr);
+        // where it does, the substitute hands over a count of its own.
         discard: =
             lctx.fb.target.len == 0 && expr_node != null && expr_node.is_arc_fresh(lctx)
+        take: = lower_arc.Arc_take
+            .decide(expr_node if lctx.fb.target.len > 0 else null, lctx)
         if expr_node != null
             expr_node.lower(lctx)
+            take.retain(expr_node, lctx)
 
         r.morph(.k_empty, "")
         r.type_id = I32::sema_type_env.Builtin_type_id.void_type
@@ -316,7 +342,7 @@ impl Ast_node
         if right != null && left != null && left.kind_id == .k_expr_postfix
             op_text: = left.postfix_op_text()
 
-            // A place-returning subscript (operator.Index_place) is not made a `set`: its `at(i)$`
+            // A place-returning subscript (`Index_place`) is not made a `set`: its `at(i)$`
             // is an lvalue, so lower_default treats it as an ordinary (or compound) assignment.
             if op_text.equals("[") && left.def_node.is_fn_decl() &&
                 !lctx.sema.env.is_place_index_node(left)
@@ -326,7 +352,7 @@ impl Ast_node
                 defer ops.free()
                 ops.add(left, 0, method_node.receiver_is_pointer(lctx.sema))
                 ops.add(left, 2, false)
-                ops.add(r, 2, false)
+                ops.add_value(r, 2, owed.type_id != 0, lctx)
                 ops.apply(lctx)
                 recv_node: = left.get_postfix_receiver()
                 index_node: = left.get_postfix_member()
@@ -334,6 +360,7 @@ impl Ast_node
                 recv_node.lower(lctx)
                 index_node.lower(lctx)
                 right.lower(lctx)
+                ops.finish(lctx)
 
                 args: = Ast_node.build_args(loc).add_child(index_node).add_child(right)
                 call_node: =
@@ -400,13 +427,14 @@ impl Ast_node
             r.lower_default(lctx)
             return
         op_text: = r.get_child(1).text
+        // A part read off a fresh value holds the value first, which also fixes the order.
+        if r.lower_arc_part_of_fresh(lctx)
+            return
         if op_text.equals("[")
             r.order_index_operands(lctx)
             r.hoist_index_receiver(lctx)
         if op_text.equals("!")
             r.lower_try_op(lctx)
-            return
-        if op_text.equals(".") && r.lower_arc_field_of_fresh(lctx)
             return
         if r.arc_needs_pointer_hoist(lctx)
             r.set_child(0, r.get_postfix_receiver().hoist_complex_expr(lctx, true))
@@ -416,15 +444,13 @@ impl Ast_node
         if op_text.equals("[") && r.def_node.is_fn_decl()
             r.lower_postfix_index_operator(lctx)
             return
-        $late: = List<|Sz|>.new(null)
-        defer late.free()
+        $ops: = Operand_order.new()
+        defer ops.free()
         if op_text.equals("(")
-            r.lower_arc_call_arg_retains(lctx, late@)
-            r.order_call_operands(lctx)
+            r.order_call_operands(lctx, ops@)
             r.hoist_method_receiver(lctx)
         r.lower_default(lctx)
-        if late.len > 0
-            r.arc_retain_late_args(lctx, late@)
+        ops.finish(lctx)
 
     priv fn hoist_index_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It copies a subscript's slice receiver with a side effect into a temporary
@@ -482,10 +508,10 @@ impl Ast_node
         ops.add(r, 2, false)
         ops.apply(lctx)
 
-    priv fn order_call_operands(r: Self$@, lctx: Lowering_ctx$@) //<
+    priv fn order_call_operands(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
         //< A call's operands in order: the receiver (or a callee that is a value), then arguments
-        $ops: = Operand_order.new()
-        defer ops.free()
+        //<
+        //< The caller lowers the call, then calls `ops.finish`.
         callee: = r.get_child(0)
         if callee.kind_id == .k_method_access || callee.kind_id == .k_generic_method
             obj: = callee.get_postfix_receiver()
@@ -496,7 +522,7 @@ impl Ast_node
             ops.add(callee, 0, by_address)
         else if !callee.is_path_or_ident() || callee.names_variable()
             ops.add(r, 0, false)
-        ops.add_args(r.safe_get_child(2))
+        r.add_arc_call_args(lctx, ops)
         ops.apply(lctx)
 
     fn lower_expr_upcast(r: Self$@, lctx: Lowering_ctx$@)
@@ -536,7 +562,7 @@ impl Ast_node
 
         r.finish_call_as_tmp(lctx, tmp_name, recv_node, method_node, args_node, res_type_id, loc)
     fn lower_user_cast(r: Ast_node$@, lctx: Lowering_ctx$@) //<
-        //< It turns a cast resolved through operator.Cast (`Dest::src_expr`) into a cast() call
+        //< It turns a cast resolved through `Cast` (`Dest::src_expr`) into a cast() call
         //<
         //< The cast is the prefix form, with the children [receiver, "::", type].
         loc: = r.loc

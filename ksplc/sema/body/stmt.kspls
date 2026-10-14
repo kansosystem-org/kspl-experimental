@@ -14,12 +14,13 @@ import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
 import "ksplc/sema/body/literal" as sema_body_literal
 import "ksplc/sema/body/resolve_path" as sema_body_resolve_path
-import "ksplc/sema/body/stmt_escape" { check_frame_escape, check_fn_value_binding,
-    note_frame_pointer }
+import "ksplc/sema/body/stmt_escape" { check_frame_escape, check_frame_store,
+    check_fn_value_binding, note_frame_pointer }
 import "ksplc/sema/body/switch" as sema_body_switch
 import "ksplc/sema/body/write_perm" as sema_body_write_perm
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
@@ -434,7 +435,7 @@ impl Ast_node
         recv_node: = left.get_postfix_receiver()
         recv_type_id: = recv_node.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!
 
-        // An operator.Index_place type's left-hand side is already an lvalue (no `set`).
+        // An `Index_place` type's left-hand side is already an lvalue (no `set`).
         // Caution: **Do not include `ref_place` here.** What `at_ref` points at is immutable, and
         // treated as an lvalue the rejection would mention only the element's type.
         route: = c.index_route(recv_node, recv_type_id)
@@ -551,8 +552,10 @@ impl Ast_node
         if is_simple_assign
             sema_body_lint_stmt.lint_type_given(c, right, type_id,
                 "The assigned place's type already gives it.")
-        if is_simple_assign && left != null && left.is_path_or_ident()
-            note_frame_pointer(c, left, right)
+        if is_simple_assign && left != null
+            if left.is_path_or_ident()
+                note_frame_pointer(c, left, right)
+            check_frame_store(c, left, right)
 
     priv fn infer_stmt_labeled_block(r: Self$@, c: Sema_ctx$@): Void!Sema_error
         $has_err: = false
@@ -654,8 +657,10 @@ impl Ast_node
             c.clear_scratch().s("cannot \{r.text\} to an outer scope from inside a defer block")
             c.err(r, c.scratch.slice())
             throw .analysis_failed
-        // The construct a `break` leaves is recorded **as this search resolved it**, so the flow
-        // checks read whether control continues after it rather than finding the target again.
+        // The construct a jump leaves is recorded **as this search resolved it**, so the flow
+        // checks read where it goes (which defers it runs, whether control continues after the
+        // construct) rather than finding the target again.
+        r.def_node = c.jump_stack.get(target_idx).stmt
         if r.kind_id == .k_stmt_break
             c.jump_stack.get(target_idx).stmt.mark_left_by_break()
 
@@ -782,6 +787,7 @@ priv fn infer_index_set(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@, recv
             "cannot assign through a read-only location. Take the receiver as 'T$@' (writable), or \
                 make the binding mutable ('$x')")
     left.def_node = method_sym.node
+    c.refuse_packed_receiver(recv_node, method_sym.node, "[]")
     left.type_id = method_sym.type_id
     index_node.infer_expr(c, c.operator_index_param_id(method_sym))!
     right.infer_expr(c, I32::sema_type_env.Builtin_type_id.unknown)!

@@ -134,7 +134,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # --- Windows (MSYS2 UCRT64 / mingw): the full make ci, as in the README's local setup ---
+  # --- Windows (MSYS2 UCRT64 / mingw): the full make ci, as docs/HOWTO-build.md sets it up ---
   windows-ucrt64:
     if: github.event_name != 'workflow_dispatch' || inputs['windows-ucrt64']
     runs-on: windows-latest
@@ -160,16 +160,8 @@ jobs:
         run: |
           Add-MpPreference -ExclusionPath "${env:GITHUB_WORKSPACE}" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "${env:RUNNER_TEMP}" -ErrorAction SilentlyContinue
-      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
-        with:
-          msystem: UCRT64
-          # Caution: **Do not add `update: true`**: a full upgrade each run moves the tools on a day
-          # nobody touched the sources.
-          cache: true
-          # The Makefile calls these by their unversioned names.
-          install: >-
-            git make python findutils diffutils grep coreutils
-            mingw-w64-ucrt-x86_64-clang
+      # The packages are tools/msys2-packages.txt's, the list a person installs by hand.
+      - uses: ./.github/actions/msys2-ucrt64
       - name: make ${{ matrix.target }}
         run: make ${{ matrix.target }}
       - name: Emit each gate's outcome to the summary

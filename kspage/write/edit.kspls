@@ -14,6 +14,7 @@
 import "kspage/expr/shift" + { Shift }
 import "kspage/lay/caret" + { Caret }
 import "kspage/model/doc" { Axis, Block, Doc }
+import "kspage/model/limit"
 import "kspage/model/run" + { Inline }
 import "kspage/write/field"
 import "kspage/write/record" { Block_op, Line_op, Op, Run_op, Size_op, Step, last_moved, new_step,
@@ -120,7 +121,9 @@ fn do_remove(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, len: Sz)
 fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz, v: F32?) //<
     //< Sets a column's width (or a row's height) while recording.
     //<
-    //< Caution: **Do not change the table directly, just as with text.**
+    //< Caution: **Do not change the table directly, just as with text.** **The size is brought
+    //< inside the lengths a document holds** (`limit.length_in`): a column fitted to a very long
+    //< text, kept as measured, would leave a saved file that does not load.
     if into != null
         // Moving the same position again and again adds nothing (the first saved setting undoes
         // it).
@@ -130,7 +133,10 @@ fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz,
                 .was = table.size_of(axis, index) }
             keep(e, into, .size(e.arena.create(op)))
 
-    table.set_size(axis, index, v)
+    $fitted: F32? = .none
+    if got: = v
+        fitted = .some(limit.length_in(got))
+    table.set_size(axis, index, fitted)
 
 fn do_line(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, put_back: Bool,
     blocks: List<|Block$@|>$@, spans: List<|Sz|>$@, size: F32?) //<

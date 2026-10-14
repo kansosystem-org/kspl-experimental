@@ -23,6 +23,7 @@ import "std/ds" { List, Map }
 import "std/str" { Str_builder }
 
 priv const max_errors: I32 = 50 //< the errors a run reports, the cap's own line counted
+priv const max_instance_notes: Sz = 8 //< the instantiations an error in a generic's body names
     //<
     //< "Compilation stops at 50 errors" in ksplc/docs/SPEC-tools.md fixes it; change both together.
 
@@ -181,6 +182,7 @@ impl Sema_ctx
                 .trait_insts = List<|Trait_inst|>.create(base_core.arena),
                 .args = base_core.arena.create(List<|Generic_arg|>.new(null)),
                 .pending = List<|Pending_inst|>.create(base_core.arena),
+                .analysing = -1,
             },
             .mono = Mono_state::{
                 .trait_inst_seen = base_core.arena
@@ -230,6 +232,9 @@ impl Sema_ctx
             .resolving = Resolving_state::{
                 .aliases = base_core.arena.create(List<|U8[]|>.new(null)),
                 .consts = base_core.arena.create(Map<|Sz, Bool|>.new(null)),
+                .cut_path = List<|Sz|>.create(base_core.arena),
+                .cut_reported = base_core.arena
+                    .create(Map<|Sz, Bool|>.new(base_core.arena)),
                 .registries = List<|I32|>.create(base_core.arena),
             },
         }
@@ -488,9 +493,50 @@ impl Sema_ctx
             r.diags.counts.hints += 1
 
         starts: = r.line_starts_for(file, src)
-        base_diag.print_diagnostic(file, src, offset, span, msg, eff_sev, starts)
+        // **An error in a generic's body names the instantiation that met it**: the line alone is
+        // the template's, and the mistake may be the type argument the caller gave.
+        $shown: = msg
+        if eff_sev == base_diag.Diagnostic_severity.error && r.in_generic_instance
+            shown = r.instance_notes(msg)
+        base_diag.print_diagnostic(file, src, offset, span, shown, eff_sev, starts)
         if code.len > 0 && base_lint_codes.is_known(code)
             r.note_code(code)
+
+    priv fn instance_notes(r: Self$@, msg: U8[]): U8[] //<
+        //< msg followed by a Note per instantiation the analysed body stands in, innermost first
+        //<
+        //< **Each names what asked for it** (`in 'f<|P|>', instantiated at a.kspls:12:5`), up to
+        //< max_instance_notes; the outermost is the caller's own line. An entry with no name is a
+        //< closure's body, which its function's entry stands for.
+        $at: = r.generics.analysing
+        if at < 0
+            return msg
+        out: = base_core.arena.text().s(msg)
+        $n: Sz = 0
+        for at >= 0 && at < r.generics.pending.len
+            p: = r.generics.pending.get(at)
+            at = p.from
+            if p.shown.len == 0
+                continue // a closure's body, named by the function that writes it
+            if n == max_instance_notes
+                out.s("\n  Note: … and more instantiations above it.")
+                break
+            out.s("\n  Note: in '").s(p.shown).s("'")
+            if p.site != null
+                out.s(", instantiated at ").s(r.place_of(p.site))
+            out.s(".")
+            n += 1
+        return out.take()
+
+    priv fn place_of(r: Self$@, node: Ast_node$@): U8[] //<
+        //< A node's `file:line:column`, counted as a diagnostic's heading counts, on the arena
+        file: = r.file_for_node(node)
+        src: = r.source_for_node(node)
+        offset: = node.get_span_offset().offset
+        info: = src.get_line_info(offset if offset <= src.len else src.len,
+            r.line_starts_for(file, src))
+        return base_core.arena.text().s(base_diag.shown_file(file))
+            .s(":\{info.line\}:\{info.disp_col\}").take()
 
     priv fn note_code(r: Self$@, code: U8[]) //< records an emitted code, once, for the summary
         //<
@@ -502,8 +548,10 @@ impl Sema_ctx
             r.diags.counts.codes.push(base_core.arena.dup_str(code))
 
     fn report_type_mismatch(r: Self$@, node: Ast_node$@, expected_id: I32, actual_id: I32)
-        // Either side Unknown means an error was already reported upstream.
-        if sema_type_env.is_unknown(expected_id) || sema_type_env.is_unknown(actual_id)
+        // Either side Unknown means an error was already reported upstream. **An alias of Unknown
+        // counts too**: a refused typedef (circular, too deep) leaves its aliases standing on it.
+        if sema_type_env.is_unknown(r.env.get_real_type(expected_id)) ||
+            sema_type_env.is_unknown(r.env.get_real_type(actual_id))
             return
         $exp: = r.env.display_str(expected_id)
         $act: = r.env.display_str(actual_id)
@@ -781,10 +829,7 @@ impl Ast_node
             if code_node == null || level_node == null
                 continue
             if !base_lint_codes.is_known(code_node.text)
-                c.clear_scratch()
-                    .s("unknown diagnostic code '\{code_node.text\}' (see \
-                        ksplc/base/lint_codes.kspls for the full list)")
-                c.err(code_node, c.scratch.slice())
+                c.err(code_node, base_lint_codes.unknown_code_msg(code_node.text))
                 continue
             switch base_lint_codes.Lint_level.parse(level_node.text)
             case .some(level)

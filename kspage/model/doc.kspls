@@ -359,7 +359,7 @@ impl Block
                 // end it goes at the row's end**, so no row is left short.
                 $put: = true
                 if fresh
-                    if slot.cell != null && slot.cols > 1
+                    if widens(slot)
                         slot.cell.span_cols = slot.cols + 1
                         put = false
                 else
@@ -372,6 +372,19 @@ impl Block
                     continue
                 row.children.insert(slot.index, blocks.get(k))
                 k += 1
+
+    fn widest_after_column(r: Self$@, at: Sz, arena: Arena$@): Sz //<
+        //< How many columns the widest merge covers once a new column goes in at `at`
+        //<
+        //< 1 where no merge widens. **It reads the rule `attach_line` widens by** (`widens`), so
+        //< the editor can refuse a column that would take a merge past what a document holds.
+        tiles: = r.tiles_of(arena)
+        $most: Sz = 1
+        for $i: Sz = 0; i < r.children.len; i += 1
+            slot: = slot_in(tiles, i, at)
+            if widens(slot) && slot.cols + 1 > most
+                most = slot.cols + 1
+        return most
 
     fn owner_of(r: Self$@, n: Inline$@): Owner //<
         //< The block holding n directly, and n's index within it
@@ -416,6 +429,9 @@ priv fn slot_in(tiles: List<|Tile|>$@, row: Sz, column: Sz): Slot //<
             continue
         return Slot::{ .index = index, .cell = t.block, .cols = t.cols }
     return Slot::{ .index = index, .cell = null, .cols = 0 }
+
+priv fn widens(slot: Slot): Bool //< whether a new column there widens a merge, not adding a cell
+    return slot.cell != null && slot.cols > 1
 
 struct Owner //< the block holding a run, and the run's index within it
     block: Block$@
@@ -576,6 +592,20 @@ impl Doc
             if got.found
                 return got
         return no_owner()
+
+    fn depth_of(r: Self$@, b: Block$@): Sz //< how deep b stands: 1 at the top level, 0 for null
+        //<
+        //< Null is the document itself (as `kin_of` reads it), so a block put under b stands at
+        //< `depth_of(b) + 1`.
+        $depth: Sz = 0
+        $at: = b
+        for at != null
+            depth += 1
+            up: = r.parent_of(at)
+            if !up.found
+                break
+            at = up.block
+        return depth
 
     fn kin_of(r: Self$@, parent: Block$@): List<|Block$@|>$@ //< parent's list of children
         //<

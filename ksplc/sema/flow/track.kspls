@@ -74,6 +74,11 @@ impl Df_set
 struct Df_state
     init_vars: Df_set$@ //< the initialized locals (must-be-initialized)
     freed_vars: Df_set$@ //< the locals possibly released (may-be-freed, for use-after-free)
+    gone_vars: Df_set$@ //<
+        //< The released locals possibly with nothing left to give back, not even to `dealloc`
+        //<
+        //< A pointer's `free()` releases what it points at and leaves the block, which only
+        //< `dealloc` may name afterwards; every other release puts the local here too.
     moved_vars: Df_set$@ //< the locals possibly moved (may-be-moved, for Move_only)
     reachable: Bool
 
@@ -81,16 +86,18 @@ impl Df_state
     fn new(): Df_state$@
         init_vars: = Df_set.new(true)
         freed_vars: = Df_set.new(false)
+        gone_vars: = Df_set.new(false)
         moved_vars: = Df_set.new(false)
         return base_core.arena
             .create(Df_state::{ .init_vars = init_vars, .freed_vars = freed_vars,
-            .moved_vars = moved_vars, .reachable = true })
+            .gone_vars = gone_vars, .moved_vars = moved_vars, .reachable = true })
 
     fn clone(r: Self$@): Df_state$@
         ns: = Df_state.new()
         ns.reachable = r.reachable
         ns.init_vars.copy_from(r.init_vars)
         ns.freed_vars.copy_from(r.freed_vars)
+        ns.gone_vars.copy_from(r.gone_vars)
         ns.moved_vars.copy_from(r.moved_vars)
         return ns
 
@@ -98,6 +105,7 @@ impl Df_state
         //< Writes a branch merge's result back into itself
         r.init_vars = merged.init_vars
         r.freed_vars = merged.freed_vars
+        r.gone_vars = merged.gone_vars
         r.moved_vars = merged.moved_vars
         r.reachable = merged.reachable
 
@@ -110,12 +118,17 @@ impl Df_state
     fn contains_freed(r: Self$@, v: Ast_node$@): Bool
         return r.freed_vars.contains(v)
 
-    fn add_freed(r: Self$@, v: Ast_node$@)
+    fn add_freed(r: Self$@, v: Ast_node$@) //< a release that leaves nothing to give back
+        r.freed_vars.add(v)
+        r.gone_vars.add(v)
+
+    fn add_contents_freed(r: Self$@, v: Ast_node$@) //< a pointer's `free()`: its block stays
         r.freed_vars.add(v)
 
     fn remove_freed(r: Self$@, v: Ast_node$@) //<
         //< Clears the released flag once a reassignment (x = ...) has stored a new value
         r.freed_vars.remove(v)
+        r.gone_vars.remove(v)
 
 struct Local_state
     node: Ast_node$@
@@ -139,9 +152,18 @@ struct Df_ctx
         //<
         //< Such a read is a receiver, or the target of `@` / `$` / `[`.
     pending_defers: List<|Ast_node$@|>$@ //<
-        //< The defer bodies the current block registered, analyzed at its end
+        //< The defer bodies the enclosing blocks registered, in the order they were registered
         //<
-        //< The reason is at df_stmt_block_scope.
+        //< A block analyzes its own at its end, and each early exit those it leaves
+        //< (df_stmt_block_scope and df_check_defers_on_exit).
+    exit_targets: List<|Df_exit_target|>$@ //<
+        //< the statements a `break`, `continue` or `fallback` leaves
+    exit_from: Ast_node$@ //< the early exit whose defer bodies are being analyzed, else null
+    reported_in_defers: Df_set$@ //< the reads in defer bodies already reported at an early exit
+
+struct Df_exit_target //< a statement a jump can leave, and the defers registered before it
+    stmt: Ast_node$@ //< a `for`, `if`, `switch` or labelled block, or a `catch` for `fallback`
+    defers_before: Sz //< pending_defers' length on entering it; leaving runs the bodies past it
 
 impl Ast_node
     fn get_assign_target_def(r: Self$@): Ast_node$@?
@@ -243,18 +265,24 @@ impl Ast_node
         case .k_expr_postfix
             r.df_expr_postfix(c, state)
         case .k_stmt_if, .k_stmt_switch
+            c.enter_exit_target(r)
             if r.kind_id == .k_stmt_if
                 r.df_stmt_if(c, state)
             else
                 r.df_stmt_switch(c, state)
+            c.exit_targets.len -= 1
             // **A `break` to its label leaves it**, so what follows can run whatever its branches
             // do (`is_left_by_break`, which the missing-return check reads too).
             if r.is_left_by_break()
                 state.reachable = true
         case .k_stmt_for
+            c.enter_exit_target(r)
             r.df_stmt_for(c, state)
+            c.exit_targets.len -= 1
         case .k_stmt_labeled_block
+            c.enter_exit_target(r)
             r.df_stmt_labeled_block(c, state)
+            c.exit_targets.len -= 1
         case .k_stmt_block
             r.df_stmt_block_scope(c, state)
         case .k_stmt_defer
@@ -308,9 +336,7 @@ impl Ast_node
         id_node: = r.get_var_decl_id()
         expr_node: = r.get_var_decl_expr()
         if id_node != null
-            c.locals
-                .push(Local_state::{ .node = r, .is_read = false, .is_reassigned = false,
-                .is_mutated = false })
+            c.add_local(r)
             r.get_var_decl_type_node().df_type_array_sizes(c, state)
             if expr_node != null && expr_node.kind_id != .k_empty
                 expr_node.analyze_df_node(c, state)
@@ -392,17 +418,17 @@ impl Ast_node
     fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@)
         catch_state: = state.clone()
         $target_block: Ast_node$@ = null
+        c.enter_exit_target(r) // the target of a `fallback`
         for ch in r.children
             if ch.kind_id == .k_identifier
-                c.locals
-                    .push(Local_state::{ .node = ch, .is_read = false, .is_reassigned = false,
-                    .is_mutated = false })
+                c.add_local(ch)
                 catch_state.add(ch)
             else if ch.kind_id == .k_stmt_block
                 target_block = ch
                 ch.analyze_df_node(c, catch_state)
             else if !ch.is_keyword("catch") && ch.kind_id != .k_literal
                 ch.analyze_df_node(c, catch_state)
+        c.exit_targets.len -= 1
         if target_block != null
             is_void: =
                 sema_type_env.is_void(r.type_id) || sema_type_env.is_unknown(r.type_id)
@@ -489,9 +515,25 @@ impl Ast_node
             if d: = freed_expr.get_addressed_local_def()
                 def = d
         if def != null && def.is_tracked_local(c)
-            state.add_freed(def)
+            // A pointer's `free()` releases what it points at; the block stays, for `dealloc`.
+            if !frees_the_pointer && c.sema.env.is_pointer(def.type_id)
+                state.add_contents_freed(def)
+            else
+                state.add_freed(def)
             if frees_the_pointer
                 r.warn_if_arena_handout(def, c)
+
+    priv fn release_kept_block_if_any(r: Self$@, state: Df_state$@) //<
+        //< Lets a `dealloc` name a pointer whose `free()` left its block, before the call is walked
+        //<
+        //< **Giving the block back is not a use of what `free()` released**: `p.free()` then
+        //< `dealloc(Void$@::p)` frees a list `create(null)` placed on the heap. The call's own
+        //< registration then puts `p` in gone_vars, so any later use is refused, another `dealloc`
+        //< included.
+        if name: = r.get_dealloc_of_name()
+            if d: = name.get_direct_local_def()
+                if d != null && state.contains_freed(d) && !state.gone_vars.contains(d)
+                    state.freed_vars.remove(d)
 
     priv fn warn_if_arena_handout(r: Self$@, def: Ast_node$@, c: Df_ctx$@) //<
         //< [W0104] Warns when a pointer an arena handed out is passed to a call that releases it
@@ -629,7 +671,11 @@ impl Ast_node
             for $i: = 1; i < r.children.len; i += 1
                 r.get_child(i).analyze_df_node(c, state)
         else
+            if op_text.equals("(")
+                r.release_kept_block_if_any(state)
             r.df_default_traverse(c, state)
+            if op_text.equals("!")
+                c.df_check_defers_on_exit(r, state, 0) // the error leaves the function
             if op_text.equals("(")
                 // Registers `dealloc(x)` and an argument to a function wrapping a release (one
                 // level).
@@ -654,10 +700,26 @@ fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
     ns.reachable = true
     ns.init_vars = Df_set.merged(s1.init_vars, s2.init_vars)
     ns.freed_vars = Df_set.merged(s1.freed_vars, s2.freed_vars)
+    ns.gone_vars = Df_set.merged(s1.gone_vars, s2.gone_vars)
     ns.moved_vars = Df_set.merged(s1.moved_vars, s2.moved_vars)
     return ns
 
 impl Df_ctx
+    fn add_local(r: Self$@, v: Ast_node$@) //<
+        //< Starts tracking a local binding, once
+        //<
+        //< A defer body is analyzed at each exit that leaves it, so its declarations come here
+        //< again; a second entry would never be marked read and would be reported unused.
+        if r.find_local(v) < 0
+            r.locals
+                .push(Local_state::{ .node = v, .is_read = false, .is_reassigned = false,
+                .is_mutated = false })
+
+    fn enter_exit_target(r: Self$@, stmt: Ast_node$@) //<
+        //< the matching leave is `exit_targets.len -= 1`
+        r.exit_targets
+            .push(Df_exit_target::{ .stmt = stmt, .defers_before = r.pending_defers.len })
+
     fn find_local(r: Self$@, v: Ast_node$@): I32
         if v == null
             return -1
@@ -692,15 +754,15 @@ impl Df_ctx
 fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: Ast_node$@): Bool
     $ctx: = Df_ctx::{ .sema = c, .locals = List<|Local_state|>.create(base_core.arena),
         .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
-        .pending_defers = null }
+        .pending_defers = List<|Ast_node$@|>.create(base_core.arena),
+        .exit_targets = List<|Df_exit_target|>.create(base_core.arena), .exit_from = null,
+        .reported_in_defers = Df_set.new(false) }
     state: = Df_state.new()
 
     param_list: = fn_node.get_fn_params()
     if param_list != null
         for p in base_ast_ext.Param_cursor.new(param_list, false)
-            ctx.locals
-                .push(Local_state::{ .node = p, .is_read = false, .is_reassigned = false,
-                .is_mutated = false })
+            ctx.add_local(p)
             state.add(p)
 
     block.analyze_df_node(ctx@, state)

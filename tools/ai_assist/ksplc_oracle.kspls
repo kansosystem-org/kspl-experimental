@@ -1,8 +1,8 @@
 //< The compiler oracle (shared)
 //<
 //< The smallest checker behind the main measure, "how often ksplc accepts the source with the
-//< completion inserted". ksplc writes the diagnostics to stderr and the summary "Finished with N
-//< error(s)" to stdout.
+//< completion inserted". ksplc runs under `--diagnostic-format=json`: each diagnostic is one JSON
+//< object on a line of stderr, and the closing object, the last line, gives the counts.
 //< Caution: **Do not turn the lint off for the whole package**: the decision is to keep `pub` out
 //< of every other file (`tools/ksplc.cfg`).
 ##lint(I0402 = off)
@@ -12,9 +12,8 @@ import "std/fs"
 import "std/io"
 import "std/json"
 import "std/mem" { Arena, dealloc }
-import "std/seq"
 import "std/str" { Str_builder }
-import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
+import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
 
@@ -30,14 +29,14 @@ fn close_or_die(f: io.File_stream$@, path: U8[]) //< closes a file, or stops the
         io.err().s("error: could not finish writing '\{path\}' (the file is incomplete)\n")
         sys.exit(1)
     f.free()
-pub const uncompilable: I32 = 999 //< the compiler could not be run at all (a timeout, say)
+pub const uncompilable: I32 = 999 //< no verdict: the run never started, timed out or ended early
 
 priv const compile_timeout_ms: I32 = 60000
 priv const output_cap: Sz = 1024 * 1024
 
 pub struct Compile_result //< what one run of the compiler said
-    pub error_count: I32 //< how many errors, or `uncompilable` if the compiler never ran
-    stderr_data: U8$[] //< the diagnostic text as printed, empty where the run never started.
+    pub error_count: I32 //< the closing object's `errors`, or `uncompilable` where there is none
+    stderr_data: U8$[] //< what the compiler wrote, a JSON object a line; empty if it never started
         //<
         //< Not `stderr`, which is a macro in the Windows (MSVC UCRT) headers (see
         //< std/sys.Run_result).
@@ -55,32 +54,27 @@ fn load_jsonl(path: U8[], arena: Arena$@): json.Val$[]!io.Io_error //< one JSON 
         if line.len == 0
             continue
         val: = json.parse(line, arena) catch panic("load_jsonl: invalid JSON line")
-        list.push(val)
+        list.push(val.val)
     return list.slice()
 
-priv fn parse_error_summary(stdout_data: U8[]): I32? //<
-    //< Reads N from stdout's "Finished with N error(s), M warning(s)" summary line
+fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
+    //< The `errors` of the closing object that ends the stream; `.none` where it does not end so
     //<
-    //< `.none` where a parse or syntax error exits with no summary (see ksplc/main.kspls).
-    $lines: = stdout_data.lines(null)
-    defer lines.free()
-    for line in lines
-        if line.find_str("error(s)").is_none()
-            continue
-        switch line.find_str("with")
-        case .none
-            continue
-        case .some(with_pos)
-            after_with: = line.sub_from(with_pos + 4)
-            switch after_with.find_str("error")
-            case .none
-                continue
-            case .some(err_pos)
-                num_str: = U8$[]::after_with.sub(0, err_pos).trim_spaces()
-                n: = num_str.parse_size() catch
-                    continue
-                return .some(I32::n)
-    return .none
+    //< **No closing object means the run ended before its verdict** (a crash, a cut-off, a line of
+    //< text saying why), so the diagnostics above it are not all there were and give no count
+    //< ("--diagnostic-format" in ksplc/docs/SPEC-tools.md). Nor does a verdict that disagrees with
+    //< its count: `failed` with no error, or `succeeded` with one.
+    lines: = stderr_data.trim_end().lines(arena)
+    if lines.len == 0
+        return .none
+    doc: = json.parse(lines.get(lines.len - 1), arena) catch
+        return .none
+    result: = doc.val.get("result").as_str()
+    n: = doc.val.get("errors").as_int(-1)
+    failed: = result.equals("failed")
+    if !(failed || result.equals("succeeded")) || n < 0 || failed != (n > 0)
+        return .none
+    return .some(n)
 
 pub fn compile_errors( //< runs one source through ksplc and counts the errors it reports
     //<
@@ -88,7 +82,7 @@ pub fn compile_errors( //< runs one source through ksplc and counts the errors i
     source: U8[], //< the program to compile; it is written to a file unchanged
     stem: U8[], //< names the temporary file, so two callers running at once do not collide
     arena: Arena$@, //< where the captured output is allocated
-): Compile_result //< the error count and the messages; `uncompilable` if it never ran
+): Compile_result //< the error count and the messages; `uncompilable` if it gave no verdict
     $src_path: = Str_builder.new()
     defer src_path.free()
     src_path.s(corpus_dir).c('/').s(stem).s(".kspls")
@@ -101,7 +95,8 @@ pub fn compile_errors( //< runs one source through ksplc and counts the errors i
     io.write_file(src_path.slice(), source) catch
         return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
 
-    argv: = U8[][]::{ ksplc_path, src_path.slice(), out_path.slice() }
+    argv: = U8[][]::{ ksplc_path, "--diagnostic-format=json", src_path.slice(),
+        out_path.slice() }
     // Caution: **Do not replace this with `subproc.run`.** A nonzero exit is what is counted here;
     // thrown as an error, every input meant to be counted would end up in the catch.
     r: = subproc.run_capture(argv, "", compile_timeout_ms, output_cap, arena)
@@ -112,33 +107,24 @@ pub fn compile_errors( //< runs one source through ksplc and counts the errors i
 
     if r.spawn_failed || r.timed_out
         return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
-
-    // Caution: **Check the exit code too.** The summary is trusted only where the count is positive
-    // or the exit code is 0. "0" with a failed exit means the run was cut off (code generation's
-    // `sys.exit` safety valve) and reads as "passed", so it falls through to counting stderr.
-    if n: = parse_error_summary(r.stdout_data)
-        if n > 0 || r.exit_code == 0
-            return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
-
-    // No summary: a parse or syntax error exited partway; count stderr's diagnostic lines.
-    err_lines: = r.stderr_data.lines(arena)
-    $n: = I32::err_lines.where(fn(line: U8[]; ): Bool {
-        return line.find_str(": error:").is_some();
-    }).count()
-    if n == 0 && r.exit_code != 0
-        n = uncompilable // an abnormal exit with no diagnostic either = unusable (a timeout or a crash)
+    n: = closing_errors(r.stderr_data, arena).unwrap_or(uncompilable)
     return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
 
 pub fn compiles(source: U8[], stem: U8[], arena: Arena$@): Bool //< whether it compiles cleanly
     return compile_errors(source, stem, arena).error_count == 0
 
-fn first_diagnostic(stderr_data: U8[]): U8[] //<
-    //< the first `error:` line, empty where there is none
+fn first_error(stderr_data: U8[], arena: Arena$@): U8[] //<
+    //< the first error as `file:line:column: message`, empty where there is none
     //<
-    //< The format is `file:line:col: error: ...`, as ksplc writes it.
-    $lines: = stderr_data.lines(null)
-    defer lines.free()
-    for line in lines
-        if line.find_str(": error:").is_some()
-            return line.trim_spaces()
+    //< A line that is no JSON object (the text a run that ended early leaves) is passed over.
+    for line in stderr_data.lines(arena)
+        doc: = json.parse(line, arena) catch
+            continue
+        d: = doc.val
+        if !d.get("severity").as_str().equals("error")
+            continue
+        file: = d.get("file").as_str()
+        ln: = d.get("line").as_int(0)
+        col: = d.get("column").as_int(0)
+        return arena.text().s("\{file\}:\{ln\}:\{col\}: ").s(d.get("message").as_str()).take()
     return ""

@@ -115,19 +115,63 @@ The name after `kspl_folded_for_` is the machine ksplc laid the number out for. 
 
 **It takes effect on a compile and on `ksplc lint`**: a folded size decides a static `if` and an `##error`, so lint judges the same program the compile does. `ksplc run` and `ksplc build` refuse it: they build for the machine ksplc runs on, and run or link the result there. So a cached build is never reused for another machine. The parse cache ([§2.7](#27-the-cache-of-the-parse-result)) holds nothing a machine decides, and serves every machine.
 
+#### 2.2.2 Watching a program with a sanitizer (`--sanitize`)
+
+`--sanitize=<names>` builds the program with clang's sanitizers: checks the C compiler builds into a program, which stop it at a fault the program itself cannot see and report where. The names are the C compiler's own (`-fsanitize=`), separated by commas:
+
+| Name | What stops the program |
+| :-- | :-- |
+| `address` | an access outside an allocation, through a raw pointer too (`(p + n)$`), a use after free, and at exit a leak |
+| `thread` | a data race |
+| `memory` | a read of memory never written |
+| `undefined` (`ksplc build` alone) | an operation C leaves undefined, such as a misaligned access or a floating-point value cast to an integer it does not fit |
+
+Two subcommands take it, and each does what the C compiler cannot do by itself:
+
+| Where | What it does |
+| :-- | :-- |
+| a compile with `--to=llvm` | **marks every function the IR defines** (`sanitize_address`, and so on), the program's and the ones ksplc writes by hand alike. clang's `-fsanitize=` instruments only a marked function; for C its front end marks them, and IR passes through none |
+| `ksplc build` ([§2.12](#212-building-one-executable-ksplc-build)) | hands the C compiler `-fsanitize=<names>` |
+
+```sh
+# LLVM IR: ksplc marks it, and clang instruments and links it
+ksplc --to=llvm --sanitize=address main.kspls main.ll
+ksplc emit-runtime kspl_runtime.c
+clang -fsanitize=address main.ll kspl_runtime.c -o main
+
+# one step through C
+ksplc build --sanitize=address,undefined main.kspls main.exe
+```
+
+**Name the same sanitizers to both** when building the IR yourself, as with `--machine` ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). The marks alone change nothing, and `-fsanitize=` alone watches only the runtime's C: a read past an allocation in the program's own code goes unseen.
+
+**Not marked by default**: a mark keeps LLVM from some optimisations (reading memory earlier or wider than the program does), so every program would run slower to serve the sanitized ones.
+
+| Refused | Why |
+| :-- | :-- |
+| a compile that writes C | its C compiler marks the C it reads; give that compiler `-fsanitize=<names>` |
+| `undefined` with `--to=llvm` | its checks are written into C by clang's front end, which LLVM IR does not pass through. KSPL's own checks stop an index, a shift, a divisor or an enum's tag out of range in either backend ("13. Conditions that stop execution at run time" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md)); a misaligned access or a floating-point cast out of range is watched only through C |
+| `--freestanding` | a sanitizer's runtime maps its shadow memory and writes its reports through the OS, and none is built for bare metal |
+| `ksplc build`'s `--cflags` holding `-fsanitize=` | `--sanitize` is the one way to ask there |
+| `ksplc run` | it caches one program a script; `ksplc build` makes a sanitized one |
+
+**Which machine has which sanitizer is the C compiler's to say**: clang refuses `-fsanitize=thread` for Windows and `-fsanitize=memory` for macOS, naming the target. **A report through LLVM names the function, not the `.kspls` line**: the IR carries no debug information ([`DESIGN.md` "Genllvm (LLVM IR): why the structure itself differs, and managing SSA"](DESIGN.md#genllvm-llvm-ir-why-the-structure-itself-differs-and-managing-ssa)). The reasons are [`DESIGN.md` "A sanitizer reaches LLVM IR through the marks ksplc writes"](DESIGN.md#a-sanitizer-reaches-llvm-ir-through-the-marks-ksplc-writes).
+
 ### 2.3 The other compiler options
 
 This table lists every option of a compile. Most have a section of their own, linked from their row.
 
 | The option | Description |
 | :-- | :-- |
-| `--stats` | prints how long each stage of the compiler took, an estimate of the syntax tree's (AST nodes') memory, the parser's (KSPEG's) profile and more. How the report is laid out, and what reads it, is [`DESIGN.md` "Measuring the compiler: `--stats` and the performance guard"](DESIGN.md#measuring-the-compiler---stats-and-the-performance-guard). |
+| `--stats` | prints on standard error how long each stage of the compiler took, an estimate of the syntax tree's (AST nodes') memory, the parser's (KSPEG's) profile and more. How the report is laid out, and what reads it, is [`DESIGN.md` "Measuring the compiler: `--stats` and the performance guard"](DESIGN.md#measuring-the-compiler---stats-and-the-performance-guard). |
 | `--freestanding` | generates code for bare metal (a chip with no operating system), depending on neither an OS nor a standard library, and sets the `#cfg()` flag `freestanding`. |
 | `--machine=<triple>` | the machine the output is for, whose widths every size is laid out by; the default is the machine ksplc runs on ([§2.2.1](#221-naming-the-machine-the-output-is-for---machine)). |
+| `--sanitize=<names>` | marks `--to=llvm`'s IR for the sanitizers named, which the C compiler's `-fsanitize=` then instruments; refused on a compile that writes C ([§2.2.2](#222-watching-a-program-with-a-sanitizer---sanitize)). |
 | `--define=<flag>` | defines a flag for `#cfg()` conditional compilation, which keeps or drops code by flag (`ksplc --define=debug main.kspls main.c`); it can be repeated. |
 | `--std-dir=<DIR>` | where to look for the standard library (`import "std/..."`) ([§2.9.1](#291-locating-the-standard-library---std-dir)). |
 | `--pkg-src-dir=<DIR>` | where to look for the **source** of a package other than `std` ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)). |
 | `--split=<N>` | splits the generated C into N translation units to compile in parallel (the default 1 is no split) ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). |
+| `--program` | says the output becomes a program, so an input with no `main` is refused with a diagnostic rather than left to the linker. A plain compile may lack `main`, since its C may be linked with one written elsewhere; `ksplc run` and `ksplc build` pass it to the compile they start. It cannot be combined with `--library`. |
 | `--library=<FILE>` | builds a library and writes its interface to `<FILE>`: a C header for a `.h`, an `extern "C"` block for a `.kspls` / `.kspl`. It can be repeated, so one compilation writes both forms. Only the library's `#export` functions are visible outside the generated C, and its runtime and std are its own ([§2.10.1](#2101-building-a-library---library), [§2.10.2](#2102-writing-its-interfaces---libraryfile)). |
 | `--emit-deps=<FILE>` | on success, writes the list of the sources read to `<FILE>` ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). |
 | `--emit-libs=<FILE>` | on success, writes the libraries the program names with `#link` to `<FILE>` as one line of `-l<name>` words, a response file for the C compiler (`@<FILE>`) ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)). |
@@ -139,7 +183,14 @@ This table lists every option of a compile. Most have a section of their own, li
 
 **An option's value is joined with `=`** (`--std-dir=std`), and `--std-dir std` is refused. An option has no short spelling, `--help` included: each option has one spelling (Principle 6 in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). [`std/argp`](../../std/README.md) parses them, and also refuses two subcommands at once (`ksplc fmt lint`).
 
-**A refused command line writes to standard error alone**: the reason, then the usage, and exit code 1. A script reading an answer (`$(ksplc info std-dir)`) so never takes a refusal for it. The line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`) goes with the summary on standard output; an error with no diagnostic before it (a file that cannot be read) goes to standard error.
+**Standard output holds only what was asked for, and every line about the run goes to standard error.** What is asked for is a program's own output under `ksplc run`, `info`'s answer, `fmt`'s text, `doc`'s Markdown, `explain`'s text and `--help`'s usage. Everything else is about the run:
+
+* a refused command line: the reason, then the usage, and exit code 1;
+* a compile's diagnostics, its summary (`Finished with 1 error(s), 0 warning(s).`) and the line closing a compile that printed its diagnostics (`sema/analysis_failed: compilation terminated (see diagnostics above)`);
+* an error with no diagnostic before it (a file that cannot be read);
+* `--stats`'s report, and the folder `ksplc clean` emptied.
+
+So `ksplc run script.kspls > out.txt` leaves in `out.txt` what the script printed and nothing else, whether it compiled or not, and a script reading an answer (`$(ksplc info std-dir)`) never takes a refusal for it.
 
 **Which subcommands each option acts on is what `ksplc --help` lists** ([§1](#1-introduction-ksplc-is-one-binary-holding-every-subcommand)).
 
@@ -178,6 +229,8 @@ It translates to C, links and runs in one step. What it rebuilds depends on what
 **Reuse is decided by the contents of the files read**, the list `--emit-deps` writes ([§2.9.3](#293-writing-out-the-list-of-sources-read---emit-deps)). It also compares `ksplc`'s own identity, the `--define` flags, what `--std-dir` and `--pkg-src-dir` resolve to, the C compiler's name, and whether a copy in the current folder now hides a package ([§2.9.2](#292-the-source-of-a-package-other-than-std---pkg-src-dir)).
 
 **The generated C is split into translation units and compiled in parallel** ([§2.6](#26-splitting-the-generated-c-into-several-translation-units---split)). Each object file (the C compiler's output for one unit) is kept in the script's slot under a name derived from its contents. So an unchanged one is not rebuilt, and the next build removes the objects it does not use.
+
+**Standard output is the program's alone.** The compile's diagnostics, its summary and its closing line go to standard error, as for every compile ([§2.3](#23-the-other-compiler-options)), so a program's output piped or redirected holds none of them.
 
 **Arguments**: `ksplc`'s own options go **before** the script name. Everything after it goes to the script uninterpreted, even an option such as `--stats` (as with `python x.py --foo`); no `--` is needed.
 
@@ -439,6 +492,7 @@ With `--library=`, **only the `#export` functions have external linkage** in the
 | The step in a KSPL program | In a library |
 | :-- | :-- |
 | ignoring SIGPIPE, and ending quietly when standard output loses its reader | left to the program: a write to a pipe that finds no reader is a failed write, unless the program's own handling ends it. A write to a socket whose peer has gone is a failed write either way |
+| a crash (a bad memory access, a stack run out) naming what happened in one line on standard error | left to the program: the fault ends it as the program's own handling says, with no line from the library |
 | storing `argc` / `argv` (as UTF-8 on Windows) | `sys.args()` is empty |
 | the Windows console's code page and attaching to a parent console | left to the program |
 | binary mode on Windows's standard output | left to the program, so `\n` lands as the program's own output does |
@@ -552,32 +606,46 @@ It writes the C runtime's source to `<output.c>` as one translation unit and exi
 
 ### 2.11 Diagnostics a program reads (`--diagnostic-format`)
 
-`--diagnostic-format=json` makes the compiler's messages easy for another program (an editor, a script, an AI agent) to read. A compile and `ksplc lint` then write **each diagnostic as one JSON object on one line of standard error**, in the order they are found. Nothing else changes: the exit code, and the summary on standard output.
+`--diagnostic-format=json` makes the compiler's messages easy for another program (an editor, a script, an AI agent) to read. A compile and `ksplc lint` then write **each diagnostic as one JSON object on one line of standard error**, in the order they are found, and **a closing object as the last line** once the compile reaches its verdict. The text form's summary and closing line are not written, since the closing object says what they say. The exit code is as in the text form.
 
 ```sh
 $ ksplc lint --diagnostic-format=json main.kspls
-{"severity":"warning","code":"W0207","message":"Nothing reads local variable or parameter 'v'. Prefix with '_' to ignore.","file":"main.kspls","line":5,"column":3,"end_column":4}
+{"severity":"warning","code":"W0207","kind":null,"message":"Nothing reads local variable or parameter 'v'. Prefix with '_' to ignore.","file":"main.kspls","line":5,"column":3,"end_column":4}
+{"result":"succeeded","errors":0,"warnings":1,"informations":0,"hints":0}
 ```
+
+A diagnostic's keys:
 
 | Key | What it holds |
 | :-- | :-- |
 | `severity` | `error`, `warning`, `information` or `hint` ([§5.2](#52-the-diagnostics-four-weights)) |
 | `code` | the diagnostic's code (`W0207`), which `ksplc explain` expands; `null` for an error, which has none |
+| `kind` | `"syntax"` for a syntax error: the text could not be read, so nothing after it was analysed and the run reports nothing else. `null` for every other diagnostic. A syntax error is an error and has no code, so this key is what tells it apart |
 | `message` | the text the text form prints after the severity, **without the `[CODE]` in front**; it may run over several lines |
 | `file` | the file as the text form names it; `null` for an error placed in no file |
 | `line` | the line, counted from 1; `null` where no place is known |
 | `column`, `end_column` | where the underline starts and where it stops (not included), counted in characters from 1 on that line: **the place the text form's carets mark**, at least one character wide. `null` where only a line is known (a mistake in `ksplc.cfg`) or none |
 
+The closing object's keys:
+
+| Key | What it holds |
+| :-- | :-- |
+| `result` | `failed` where the compile or the lint failed (exit code 1), `succeeded` otherwise |
+| `errors`, `warnings`, `informations`, `hints` | how many diagnostic objects of each severity came before it |
+
 * **Each line is read on its own**, so a reader can act on the first diagnostic before the compile ends.
+* **The closing object is told apart by its `result`**, a key no diagnostic has. It comes once, last, even for a clean compile.
+* **Its counts are those of the lines above it**, so a reader counting them gets the same numbers, a syntax error included.
 * **No byte offset is given.** A `.kspls` file is analysed after its indentation is turned into braces, so an offset would count bytes the file does not hold. The line and the columns are those of the file as written.
-* **A line that is not an object is not a diagnostic of the program**: a breakdown of `ksplc` itself, or of the machine it runs on, is still written as text.
+* **A run that stops before its verdict writes no closing object**, and its reason is a line of text: a refused command line, an input or output that cannot be read or written, a breakdown of `ksplc` itself. A stream that ends with no closing object ended early.
+* **`--stats` is refused beside it**: its report is text on standard error.
 
 ### 2.12 Building one executable (ksplc build)
 
 `ksplc build` turns a KSPL file into a finished executable in one command, calling the C compiler for you.
 
 ```sh
-ksplc build [--cflags="<words>"] [--define=...] <input.kspls> <output.exe>
+ksplc build [--cflags="<words>"] [--sanitize=<names>] [--define=...] <input.kspls> <output.exe>
 ```
 
 It translates to C and has the C compiler compile and link it, in one step: what `ksplc <input> <output.c>`, `--emit-libs`, `info exe-flags` and `info link-libs` do in four. **There is no cache**: the caller (a Makefile, say) decides when to build, and `ksplc run` is the command that caches ([§2.5](#25-running-as-a-script-ksplc-run)).
@@ -585,7 +653,8 @@ It translates to C and has the C compiler compile and link it, in one step: what
 | Where it comes from, in the order the C compiler sees it | What goes |
 | :-- | :-- |
 | ksplc: the C it writes is C99, and a program is built as it ships, `-g` included, without which no crash is located | `-std=c99 -O2 -g` |
-| the caller, split at spaces; **after ksplc's, so the last one wins** (`--cflags=-O0`, or a sanitiser) | the words of `--cflags` |
+| the caller's `--sanitize` ([§2.2.2](#222-watching-a-program-with-a-sanitizer---sanitize)), the one way to ask: `--cflags` does not take `-fsanitize=` | `-fsanitize=<names>` |
+| the caller, split at spaces; **after ksplc's, so the last one wins** (`--cflags=-O0`) | the words of `--cflags` |
 | the C just written | `<output's stem>.c` |
 | `#link` on an `extern` block ([§2.10.4](#2104-writing-out-the-libraries-the-program-names---emit-libs)), then `info link-libs` | the libraries the program names, then the common ones |
 | `info exe-flags` | the executable's build options |
@@ -622,6 +691,8 @@ ksplc fmt --to=kspls src/main.kspl      # the indentation notation to standard o
 | `--in-place` | the file itself is rewritten, in its own notation (either notation works) |
 | `--to=kspl` or `--to=kspls` | the formatted text, in the named notation, on standard output |
 | `--in-place` with a `--to` naming the other notation | refused |
+
+**Standard output holds the formatted text alone; every line about the run goes to standard error**: a file's diagnostics, the list of the files that failed and the closing `fmt/failed: …` line. So `ksplc fmt a.kspls > b.kspls` leaves nothing in `b.kspls` but formatted text, and the exit code says whether every file was formatted.
 
 **It cannot change the notation and write back**: `--in-place` writes to the same file, whose name would then contradict its contents.
 
@@ -730,7 +801,11 @@ flowchart LR
   * **Where the server finds nothing, nothing happens.** The VS Code extension does not search the text for a match instead: a search lands on another declaration of the same name, shown as surely as a real answer.
   * On a name where it is declared, it jumps to the definition of the variable's type.
 * **Finding references**: every place in the project that uses the name. It matches on the declaration a name points at, not on its spelling, so the same characters in a comment or a string do not match. The results are ordered by file name, line, then column. `context.includeDeclaration` is followed exactly as asked, and the declaration counts where the option is absent (the reason for both is "References and renaming are the same question, so they are gathered in one place" in [`DESIGN-tools.md`](DESIGN-tools.md)).
-* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns (the reason is "References and renaming are the same question, so they are gathered in one place" in [`DESIGN-tools.md`](DESIGN-tools.md)).
+* **Renaming**: renames a function or a variable across the project, without confusing it with a same-named declaration hidden further in. It changes the same places finding references returns (the reason is "References and renaming are the same question, so they are gathered in one place" in [`DESIGN-tools.md`](DESIGN-tools.md)). **A name a selective import brings in is renamed on the import line too**; an `as` name is a name of its own: in `import "lib" { helper as h }`, renaming `helper` changes the left side alone, and renaming `h` the right side and the uses of `h`.
+  * **It refuses, with a message, rather than write a program that no longer compiles or means something else** (the reasons are "A rename is refused where the new name cannot stand" in [`DESIGN-tools.md`](DESIGN-tools.md)):
+    * a new name the grammar does not read as one identifier (`1bad name`), or a keyword (`return`, `I32`, `true`);
+    * a name declared in a file outside the workspace: the standard library, or a package read from another folder. The workspace is what the server walks: the files under the folder the editor opened, outside the folders `.gitignore` names and those starting with a dot. Asked first (`textDocument/prepareRename`), the editor says so before a new name is typed;
+    * a new name already declared in a scope around a place the name is written bare: the same block, an enclosing block, the function's parameters, or the file's own declarations and imports. A field, a variant or a method is compared with the other members of its type instead.
 * **The call hierarchy**: a function's callers and callees across files, as a tree, following the operators and the methods to what they desugar into (the plain calls the compiler rewrites them to). Passing a function as a function pointer is an edge too, marked `(as fn pointer)` in `detail` to tell it from a call (the reason is "The call hierarchy also counts passing a function as a pointer as an edge" in [`DESIGN-tools.md`](DESIGN.md)).
 * **The outline**: it answers `textDocument/documentSymbol` with what the file declares, nested as written: functions, types with their fields and variants, an `impl` and a trait with their functions (as methods), constants and global variables. An `impl` is named by its header as written (`impl Editor`, `impl Align: Formattable`). It is read from the syntax tree already kept for the document, so it parses nothing again and resolves no import; nothing inside a body is listed. A document that does not parse lists the declarations parsed around the error, as the colouring does.
 * **Diagnostics**: the analysis runs as you type, and errors and warnings show as wavy underlines ([5. Static analysis and the linter](#5-static-analysis-and-the-linter-ksplc-lint)).
@@ -759,7 +834,7 @@ The `.vscode/extensions/kspl` extension provides these settings.
 | The setting | What it does |
 | :-- | :-- |
 | `kspl.serverPath` | the executable to start as the LSP server; empty means the one bundled with the extension. It has `machine` scope: only a person's own settings can set it, not a workspace's `.vscode/settings.json`. VS Code starts this executable when a folder is opened, so a workspace setting would let merely opening a repository run any program |
-| `kspl.trace.server` | how much of the traffic with the server to log (`off`, `messages`, `verbose`), for troubleshooting |
+| `kspl.trace.server` | how much of the traffic with the server to log in the "Kanso LSP" output panel (`off`, `messages`, `verbose`), for troubleshooting. `off` by default. The panel comes forward by itself only on an error (the server not found, or stopping) and when this setting is turned up; `verbose` logs every message whole |
 | `kspl.defines` | the `#cfg()` flags to raise during the analysis, as the compiler's `--define` does (for example `["blas"]`) |
 
 ### 4.3 How code covered by `#cfg()` is handled
@@ -890,7 +965,7 @@ A diagnostic code's letter gives the weight ([§5.2](#52-the-diagnostics-four-we
 
 **`ksplc explain <code>` prints that code's section** (the code in either case), so the explanation is available where the diagnostic appeared. A compile or lint that printed a coded diagnostic names the command under its summary. An error, having no code, has no section: its message explains itself.
 
-**Five shapes are errors with no code**, so no setting can silence them (only a coded diagnostic has a level, [§5.2](#52-the-diagnostics-four-weights)). The first four silently change what runs; the fifth is written but does nothing:
+**Six shapes are errors with no code**, so no setting can silence them (only a coded diagnostic has a level, [§5.2](#52-the-diagnostics-four-weights)). The first four silently change what runs; the fifth is written but does nothing; the sixth is a second way of writing what the notation already says:
 
 | The shape | What goes wrong |
 | :-- | :-- |
@@ -899,6 +974,7 @@ A diagnostic code's letter gives the weight ([§5.2](#52-the-diagnostics-four-we
 | an integer literal outside its range (`U8 = 300` and the like) | changes what runs |
 | a line in the indentation notation whose column matches no block | the reader and the compiler would disagree (the mechanism, and why any indent width works, is "The indentation notation (`.kspls`)" in [`../../docs/DESIGN.md`](../../docs/DESIGN.md)). `ksplc fmt` rebuilds the columns from the tree, so no formatted source meets it |
 | an `#export` on a `priv` | written but does nothing: `priv` makes the generated C `static`, so the exported name still links to nothing outside (the attribute-combination check refuses it) |
+| a `;` at the end of a statement's line in the indentation notation | a second way of writing the line's end, which already ends the statement. `ksplc fmt` drops it |
 
 The language rules are "2.3 Literals" and "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`../../docs/SPEC-language.md`](../../docs/SPEC-language.md), and for `#export`, "11.3 Exposing a KSPL function to C (`#export`)" in the same document.
 
@@ -919,7 +995,7 @@ A loop builds a number digit by digit and never checks that it stays under a lim
 * **Fix**: compare the variable against the permitted ceiling around the accumulation, and treat exceeding it as an error (see `parse_number` in `std/json.kspls` and `content_length` in `std/jsonrpc.kspls`).
 
 #### [W0104] A pointer the arena handed out is being handed to a free
-Memory from an arena (a block that hands out pieces and is freed all at once) is freed piece by piece. A pointer from `arena.alloc()` / `arena.alloc_as<|T|>()` / `arena.create<|T|>()` / `mem.alloc_in(arena, n)` is passed to `mem.dealloc()` (the free function that releases a byte run).
+Memory from an arena (a block that hands out pieces and is freed all at once) is freed piece by piece. A pointer from `arena.alloc()` / `arena.alloc_as<|T|>()` / `arena.create<|T|>()` is passed to `mem.dealloc()` (the free function that releases a byte run).
 * **Only the free function counts**: the method form (`x.free()`), which releases `x`'s contents rather than `x`'s address, is not reported.
 * **Only a binding that is never reassigned is tracked** (a `$p` reassigned to another allocation is not).
 * The verdict goes by the receiver's type (`std.mem.Arena` itself), so another type with a method of the same name is not caught.
@@ -1227,7 +1303,7 @@ Caution: **An outer file's setting does not reach a folder that has its own file
 A mistake in `ksplc.cfg` stops the compile, with the line it is on. An unknown section, key (diagnostic code) or value (level name) is refused as `ksplc.cfg:<line>: error: ...`, and compilation stops. Silently ignoring it would leave a setting that is written and does nothing ([`../../docs/DESIGN.md`](../../docs/DESIGN.md), Principle 5).
 
 ```
-ksplc.cfg:3: error: unknown diagnostic code (see ksplc/base/lint_codes.kspls for the full list)
+ksplc.cfg:3: error: unknown diagnostic code 'W9999': the codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-tools.md, and 'ksplc explain <code>' prints what one means
 ```
 
 The check runs for every source read, whether or not a diagnostic comes out, so a typo shows even in a file with no finding at all.
@@ -1300,7 +1376,7 @@ usage: ksplc info <std-dir|link-libs|exe-flags|cache-dir|keywords|machine|packag
 ksplc clean
 ```
 
-It empties the disk cache and prints the location it emptied. **It takes no subject**: the cache is the one thing it removes, and a word after it is refused with the usage, as it would change nothing. It is safe at any time (the cache is made afresh next time). It removes only the hex-named directories ksplc made; anything else in `KSPLC_CACHE_DIR` is left alone.
+It empties the disk cache and reports the location it emptied on standard error. **It takes no subject**: the cache is the one thing it removes, and a word after it is refused with the usage, as it would change nothing. It is safe at any time (the cache is made afresh next time). It removes only the hex-named directories ksplc made; anything else in `KSPLC_CACHE_DIR` is left alone.
 
 ### 7.3 ksplc info keywords: the list of reserved words
 

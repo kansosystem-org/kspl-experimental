@@ -181,7 +181,7 @@ The base under everything, and **the only folder that knows no other**.
 * [`kspage/model/doc.kspls`](model/doc.kspls) — `Doc` / `Block` / `Rect`. Read `Block`'s fields and `Block.add_text` first: **a block has no field for its kind**, only `style`, a name.
 * [`kspage/model/style.kspls`](model/style.kspls) — `Sheet` (from a name to a `Style`) and `Style`. Read `Arrange` (the three arrangements) and `Sheet.add` first. **What says "this is a table" is the style, not the document**: that is the idea the whole system rests on.
 * [`kspage/model/run.kspls`](model/run.kspls) — `Inline`: the row of characters and the decoration laid on it.
-* The rest (`font` / `fixed_font` / `paint` / `marker` / `collect` / `fence` / `ident` / `limit` / `number` / `over` / `paper` / `panel_paint` / `style_when` / `day` / `filter`) can wait until you need them.
+* The rest (`font` / `fixed_font` / `paint` / `marker` / `collect` / `fence` / `limit` / `number` / `over` / `paper` / `panel_paint` / `style_when` / `day` / `filter`) can wait until you need them.
 
 ### (2) Laying out — `lay/`
 

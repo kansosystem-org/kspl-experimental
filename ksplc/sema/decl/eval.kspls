@@ -20,26 +20,29 @@ import "std/ds" { List, Map }
 import "std/str"
 
 impl U8[]
-    priv fn parse_int_literal(r: U8[], node: Ast_node$@, c: Sema_ctx$@): I64!Sema_error //<
-        //< Reads an integer literal as I64; going outside I64's range is an immediate error
-        //<
-        //< Wrapped silently, an array size or a generic bound reaches Lower/Gen as a smaller, wrong
-        //< value. A per-type range (300 into a `U8`) is check_literal_bounds's job in
-        //< sema/body/literal.kspls. A leading `-` comes from substituting a const generic's value.
-        is_neg: = r.len > 0 && r.ptr$ == '-'
-        lit: = (r.sub_from(1) if is_neg else r).parse_int_literal_u64()
+    priv fn parse_int_literal(r: U8[], node: Ast_node$@, c: Sema_ctx$@, negated: Bool):
+        I64!Sema_error //<
+            //< Reads an integer literal, negated where `negated`, as I64; outside I64 is an error
+            //<
+            //< Wrapped silently, an array size or a generic bound reaches Lower/Gen as a smaller,
+            //< wrong value. A per-type range (300 into a `U8`) is check_literal_bounds's job in
+            //< sema/body/literal.kspls. A leading `-` comes from a substituted const generic.
+        is_neg: = negated != (r.len > 0 && r.ptr$ == '-')
+        lit: = (r.sub_from(1) if r.len > 0 && r.ptr$ == '-' else r).parse_int_literal_u64()
         // Set the upper limit by **the literal's type**: `0xFFFFFFFFFFFFFFFFU64` is correct past
-        // I64::MAX and is carried as I64's bit pattern.
+        // I64::MAX and is carried as I64's bit pattern. A negated one reaches I64::MIN, whose
+        // magnitude no I64 holds.
         is_u64: =
             c.env.get_primitive_bit_size(node.type_id) >= 64 &&
             c.env.is_unsigned(node.type_id)
-        limit: U64 = 18446744073709551615U64 if is_u64 else 9223372036854775807U64
+        $limit: U64 = 18446744073709551615U64 if is_u64 else 9223372036854775807U64
+        if is_neg && !is_u64
+            limit = 9223372036854775808U64
         if lit.overflow || lit.value > limit
             if !c.suppress_errors
                 c.err(node, "integer literal is too large for a compile-time constant expression")
             throw .invalid_argument
-        signed_val: = I64::lit.value
-        return -signed_val if is_neg else signed_val
+        return I64::(0U64 - lit.value) if is_neg else I64::lit.value
 
 impl Sema_ctx
     fn promoted_fold_type(r: Self$@, a: I32, b: I32): I32 //<
@@ -106,11 +109,10 @@ priv const i64_max_val: I64 = 9223372036854775807I64 //< i64's boundaries
     //< suffix keeps it clear of the rule for a `-`'s left-hand literal in sema/body/binary.kspls.
 priv const i64_min_val: I64 = -9223372036854775807I64 - 1
 
-// Fits the folded result of an addition, subtraction or multiplication into the operands' width.
+// Fits the folded result of an arithmetic operator or a left shift into the operands' width.
 // **A signed result that does not fit is an error** (`I32`'s `2147483647 + 1` fits i64; in C it
-// is undefined behaviour).
-// Caution: **Do not send a shift through here.** `1 << 31` is the correct way to set a bit (the
-// width is checked against the shift amount).
+// is undefined behaviour). A left shift counts too: `1 << 31` at `I32` is 2^31, which `I32` does
+// not hold. A bit pattern is written unsigned and cast (`I32::(1U32 << 31)`).
 priv fn fit_or_report(r: Ast_node$@, c: Sema_ctx$@, v: I64, bits: I32, is_uns: Bool):
     I64!Sema_error
     if is_uns
@@ -202,20 +204,48 @@ impl Ast_node
         //< Used elsewhere, a value that does not fit I32 would go through unchecked.
         return r.eval_constexpr_internal(c, 0)!
 
-    fn eval_constexpr_internal(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
+    fn eval_constexpr_internal(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error //<
+        //< Folds from `depth`; a fold's head (depth 0) reports a chain cut below it
+        if depth > 0
+            return r.fold_step(c, depth)!
+        v: = r.fold_step(c, 0) catch e
+            r.report_cut_chain(c)
+            throw e
+        return v
+
+    priv fn report_cut_chain(r: Self$@, c: Sema_ctx$@) //<
+        //< Reports, at the fold's head, a chain the depth limit cut, once per chain
+        //<
+        //< **At the head, not where the walk stopped**: the cut lands at whatever constant lies
+        //< max_constexpr_depth below the head, a line that says nothing of where the chain starts.
+        if !c.resolving.cut_waiting
+            return
+        c.resolving.cut_waiting = false
+        $seen: = false
+        for decl_key in c.resolving.cut_path
+            seen = seen || (c.resolving.cut_reported.get(decl_key) catch false)
+            c.resolving.cut_reported.set(decl_key, true)
+        c.resolving.cut_path.len = 0
+        if seen
+            return
+        c.clear_scratch()
+            .s("constant expression nesting too deep: folding this goes down a chain of constants \
+                defined by constants deeper than the compiler walks. The language guarantees \
+                \{guaranteed_const_chain\} levels of constant reference chaining; folding walks one \
+                native stack frame per level and deeper input would exhaust the stack")
+        c.err(r, c.scratch.slice())
+
+    priv fn fold_step(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error //<
+        //< Folds one node `depth` levels below the fold's head
         if r == null
             throw .not_constant
         if depth > max_constexpr_depth
-            // Caution: **Do not return with `not_constant`.** Under suppression this `err` is
-            // discarded, and report_init_overflow re-folds only what did not return `not_constant`,
-            // so the depth error would appear nowhere.
+            // Caution: **Do not return with `not_constant`.** Under suppression the report is
+            // dropped, and report_init_overflow re-folds only what did not return `not_constant`,
+            // so the depth error would appear nowhere. **A quiet fold leaves no cut to report**;
+            // the loud fold that follows it does.
             if !c.suppress_errors
-                c.clear_scratch()
-                    .s("constant expression nesting too deep. The language guarantees \
-                        \{guaranteed_const_chain\} levels of constant reference chaining; folding \
-                        walks one native stack frame per level and deeper input would exhaust the \
-                        stack")
-                c.err(r, c.scratch.slice())
+                c.resolving.cut_waiting = true
             throw .nesting_too_deep
 
         switch r.kind_id
@@ -271,7 +301,7 @@ impl Ast_node
         throw .not_constant
 
     fn eval_integer(r: Self$@, c: Sema_ctx$@, _depth: I32): I64!Sema_error
-        return r.text.parse_int_literal(r, c)!
+        return r.text.parse_int_literal(r, c, false)!
 
     fn check_i32_overflow(r: Self$@, c: Sema_ctx$@, wide: I64): I32!Sema_error //<
         //< A value outside I32's range is an error, like division_by_zero
@@ -304,7 +334,12 @@ impl Ast_node
     fn eval_unary(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error
         if r.children.len >= 2
             op: = r.get_unary_op().text
-            val: = r.get_unary_target().eval_constexpr_internal(c, depth + 1)!
+            target: = r.get_unary_target()
+            // A negated literal folds as one value, or I64's minimum could not be written.
+            negated_literal: = op.equals("-") && target.kind_id == .k_integer
+            val: =
+                (target.text.parse_int_literal(target, c, true)! if negated_literal
+                else target.eval_constexpr_internal(c, depth + 1)!)
             // Caution: **Fit the result to the operand's width**, as the binary operators do: at
             // I64's width `-(-128I8)` is 128, and `~0U8` is -1 rather than 255. A bare literal
             // has no width yet and folds at I64's.
@@ -313,6 +348,8 @@ impl Ast_node
             op_id: = c.env.scalar_repr_id(t) if known else 0
             bits: = c.env.get_portable_bit_size(op_id) if known else 64
             is_uns: = known && c.env.is_unsigned(op_id)
+            if negated_literal
+                return fit_or_report(r, c, val, bits, is_uns)!
             if op.equals("-")
                 // Caution: Negating the minimum silently wraps to itself (as in checked_neg in
                 // std/checked_int.kspls).
@@ -400,7 +437,8 @@ impl Ast_node
                 if !is_uns && left != 0 &&
                     (left > (i64_max_val >> right) || left < (i64_min_val >> right))
                     return r.report_overflow(c)!
-                return fit_result(I64::(ul << ur) if is_uns else left << right, bits, is_uns)
+                return fit_or_report(r, c, I64::(ul << ur) if is_uns else left << right, bits,
+                    is_uns)!
             if op.equals(">>")
                 if right < 0 || right >= I64::bits
                     return r.report_bad_shift(c)!
@@ -570,7 +608,12 @@ impl Ast_node
                     throw .not_constant
                 c.resolving.consts.set(decl_key, true)
                 defer c.resolving.consts.remove(decl_key)
-                return expr_node.eval_constexpr_internal(c, depth + 1)!
+                v: = expr_node.eval_constexpr_internal(c, depth + 1) catch e
+                    // A cut below is waiting to be reported: it went through this constant.
+                    if c.resolving.cut_waiting
+                        c.resolving.cut_path.push(decl_key)
+                    throw e
+                return v
         // **Name what was written and what would fold**: "path" is the compiler's word for a
         // dotted name, not the writer's.
         if !c.suppress_errors

@@ -6,6 +6,7 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/mem" { dealloc }
 import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt // the width and separator items of `test_io_stream_writes`
 import "std/subproc" + { Job }
 import "std/sys"
 import "std/tests/fs_test"
@@ -306,7 +307,7 @@ fn test_io_read_past_2gib(arena: Arena$@) //<
     grown: = subproc.run_capture(grow, "", 60000, 4096, arena)
     // A tool that answers 0 without growing it would let the read below pass on a 4-byte file.
     info: = fs.stat(path) catch
-        fallback fs.File_info::{ .size = 0, .is_dir = false, .mtime = 0 }
+        fallback fs.File_info::{ .size = 0, .kind = .other, .mtime = 0 }
     if grown.spawn_failed || grown.exit_code != 0 || info.size != 3221225472I64
         fs.remove_path(path) catch {}
         verdict.skip("this machine cannot grow a file past 2 GiB without writing it")
@@ -357,6 +358,24 @@ fn test_fs_read_only(arena: Arena$@) //<
     assert(removed, "a read-only file is removed")
     assert(renamed && body.equals("new"), "a rename replaces a read-only file")
     verdict.pass("A read-only file is removed, and a rename replaces one, as on POSIX.")
+
+fn test_io_stream_writes(arena: Arena$@) //<
+    //< a stream holds every byte its byte, string and number writes put
+    verdict.start("[Io] a stream's byte, string and number writes land as written...")
+    fs.mkdir_all("out/tmp") catch panic("out/tmp must be creatable")
+    path: = "out/tmp/kspl_test_stream_writes.txt"
+    $w: = io.open(path, "wb") catch panic("the file must open")
+    // A NUL byte lands like any other byte.
+    w.c('a').c('\0').c('b').s("|")
+    big: I64 = -1234567
+    w.s("\{0\}|\{7\}|\{12:,\}|\{999:,\}|\{1000:,\}|\{12345:,\}|\{123456:,\}|")
+        .s("\{big:,\}|\{big:12,\}|\{42:05\}")
+    w.sync() catch panic("the writes must reach the file")
+    w.free()
+    got: = io.read_file_capped(path, 256, arena) catch panic("the file must be readable")
+    want: = "a\0b|0|7|12|999|1,000|12,345|123,456|-1,234,567|  -1,234,567|00042"
+    assert(got.equals(want), "the file must hold each write as it was written")
+    verdict.pass("each byte, a NUL included, and each number's digits and separators land.")
 
 fn test_io_write_refused_at_close() //< a write the device refuses only at the flush is a failure
     verdict.start("[Io] write_file to a device that is always full...")
@@ -826,3 +845,27 @@ fn test_child_holds_no_file(ksplc: U8[], arena: Arena$@) //<
             .skip("this OS has neither Windows's sharing check nor /proc to look into a child with")
         return
     verdict.pass("A child started while a file was open does not hold it.")
+
+// ==========================================
+// std/fs: a FIFO is told from a regular file. Here, not in `fs_test.kspls`, as making one starts
+// a child (`mkfifo`).
+// ==========================================
+fn test_fs_stat_fifo() //<
+    //< A FIFO's metadata reports neither a file nor a directory
+    //<
+    //< **Served or copied as a file, its read waits for a writer that may never come.**
+    verdict.start("[Fs] stat tells a FIFO from a regular file...")
+    if sys.is_windows()
+        verdict.skip("Windows has no FIFO a path names")
+        return
+    fifo: = "out/tmp/kspl_test_fs_fifo"
+    fs.remove_path(fifo) catch {}
+    arena: = Arena.new(4096)
+    defer arena.free()
+    made: = subproc.run_capture(U8[][]::{ "mkfifo", fifo }, "", 10000, 4096, arena)
+    assert(!made.spawn_failed && made.exit_code == 0, "mkfifo should make a FIFO under out/tmp")
+    info: = fs.stat(fifo) catch panic("stat should succeed for a FIFO")
+    assert(info.kind == fs.File_kind.other, "a FIFO's metadata should report neither kind")
+    assert(!fs.is_dir(fifo), "a FIFO is no directory")
+    fs.remove_path(fifo) catch panic("a FIFO should be removable")
+    verdict.pass("stat reports a FIFO as neither a regular file nor a directory.")

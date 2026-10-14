@@ -249,16 +249,18 @@ fn main()
 //< A slice descriptor built from a stack frame's memory must not escape it
 //<
 //< A cast from a fixed-length array or a run of elements synthesises a pointer into the frame with
-//< not one `@` in the source, so it dangles after return. Only that invisible pointer is stopped: a
-//< written `@` is the writer's responsibility (docs/DESIGN.md "Why dangling is stopped only on the
-//< paths that create an invisible pointer"); a call's result passes.
+//< not one `@` in the source, so it dangles after return. A descriptor over a written `@` is
+//< refused as that address is (`frame_address_leaves` in `tests/negative/pointer.kspls`); a call's
+//< result passes (docs/DESIGN.md "Which pointers into a frame are stopped from leaving it").
 // EXPECT: cannot return a slice built from local storage
+// EXPECT: cannot return the address of local storage: 'a' lives in this function's frame
+// EXPECT: Finished with 4 error(s)
 // EXPECT-NOT: cannot throw a slice built from local storage
 import "std/io"
 import "std/str" { Str_builder }
 
 priv struct Holder
-  pub s: U8[]
+  s: U8[]
 
 priv fn from_local_array(): U8[]
   a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
@@ -271,7 +273,7 @@ priv fn wrapped_in_struct(): Holder
   a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
   return Holder::{ .s = U8[]::a } // the same when carried on a struct
 
-// A shape with an `@` written passes (the lifetime is the writer's responsibility).
+// A shape with an `@` written stops at its `@`.
 priv fn explicit_addr(): U8[]
   $a: U8[4] = ::{ 'a', 'b', 'c', 'd' }
   return U8[]::{ .ptr = a[1]@, .len = 2 }

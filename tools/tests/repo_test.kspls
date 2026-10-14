@@ -149,29 +149,195 @@ fn test_the_shards_part_ci() //< each gate of `ci` is in one shard, and `ci-linu
             "ci-linux is ci and what Linux alone runs")
     verdict.pass("the two shards part ci between them, and ci-linux adds Linux's.")
 
-priv fn outcome(log: U8[], ok: Bool, sec: I64, skip: U8[], arena: Arena$@): Outcome
-    $skips: = List<|U8[]|>.new(arena)
-    if skip.len > 0
-        skips.push(skip)
-    return Outcome::{ .log = log, .ok = ok, .sec = sec, .skips = skips }
+// ==========================================
+// Sample gate logs, each cut to a real round's shape, and the summary read back from them
+// **What a reader needs is the line that failed the gate, last**: each sample's cause sits among
+// lines that look alike (expected SKIPs, a `pass` line saying "panic", make's other `***`).
+// ==========================================
 
-fn test_the_summary_lists_what_needs_attention(arena: Arena$@) //<
-    //< a fall and a skip both stand out
-    verdict.start("[tools/ci_gates] the summary test...")
+priv const win: U8[] = "win32" //< the platform the samples are judged for
+
+priv const log_unexpected_skip: U8[] =
+    """
+pass extract-rest: kssrv builds and tests from a copy holding nothing else
+SKIP extract-rest: kssrv's own tests: kssrv: a link inside the root cannot get outside: a link cannot be made with `ln -s` in this environment
+SKIP extract-rest: kssrv's own tests: kssrv: a socket in the root is answered 404: Windows has no socket a path names
+SKIP extract-ksplc: ksplc's own tests: broken-pipe: writing when nobody is left to read it: Windows has no SIGPIPE
+RESULT: ALL PASS (3 skipped) -> kssrv's own tests, kssrv's own tests, ksplc's own tests
+# TEST SUITES (half A) PASSED (5 suites)
+"""
+
+priv const log_label: U8[] = //< a gate whose check's label names the word SKIP
+    """
+pass conventions: every SKIP reason the tree can print is held by a row
+RESULT: ALL PASS
+"""
+
+priv const log_fail: U8[] =
+    """
+pass extract-ksplc: ksplc's suite cli passes from the copy
+FAIL extract-ksplc: ksplc's suite spawn passes from the copy: FAIL spawn: a prompt to a terminal shows before the read: [harness] it could not start
+pass spawn: panic: the output before the panic remains
+pass conventions: every SKIP reason the tree can print is held by a row (68 reasons)
+RESULT: SOME FAILED (1) -> ksplc's suite spawn passes from the copy
+make[2]: *** [mk/test.mk:144: test-extract-ksplc] エラー 1
+make[2]: *** 未完了のジョブを待っています....
+"""
+
+priv const log_panic: U8[] =
+    """
+FAIL extract-rest: std builds and tests from a copy holding nothing else: --- its last 4 lines ---
+pass Sys: a crash is 139, a panic 134, exit(3) 3, and a child exiting -1 reads as finished.
+pass Net: read_for ends at its timeout on a quiet peer, and reads what the peer sends.
+panic: a write of 4 GiB should send a piece at std/tests/net_test:460
+make: *** [Makefile:20: test] Error 134
+"""
+
+priv const log_unread: U8[] =
+    """
+./out/ksplc_seed.exe ksplc/main.kspls out/stage1.c
+clang -std=c99 -O0 -g -c out/stage1.c -o out/stage1.o
+out/stage1.c:1234:5: error: use of undeclared identifier 'kspl_x'
+
+1 error generated.
+make: *** [Makefile:210: out/ksplc_stage1.exe] エラー 1
+"""
+
+priv const log_arm: U8[] =
+    """
+#   SKIP: test-ksos-link arm-none-eabi-gcc was not found.
+RESULT: SKIPPED (no ARM toolchain)
+"""
+
+priv fn gate_named(log: U8[]): ci_gates.Gate //< the table's row for a gate, by its log's name
+    $at: Sz = 0
+    for at < ci_gates.gates.len && !ci_gates.gates[at].log.equals(log)
+        at += 1
+    assert(at < ci_gates.gates.len, "the samples name gates of the table")
+    return ci_gates.gates[at]
+
+priv fn sample(log: U8[], text: U8[], ended: U8[], arena: Arena$@): Outcome //<
+    //< What one sample gate left, judged for Windows
+    j: = ci_gates.Judge::{ .platform = win, .relaxed = "" }
+    return ci_gates.outcome_of(gate_named(log), text, ended, j@, arena)
+
+priv fn summarised(outs: List<|Outcome|>@, arena: Arena$@): U8[] //< the screen's summary of them
+    j: = ci_gates.Judge::{ .platform = win, .relaxed = "" }
+    $b: = Str_builder.new()
+    defer b.free()
+    ci_gates.digest_plain(outs, 12I64, j@, b@)
+    return arena.dup_str(b.slice())
+
+priv fn after(text: U8[], first: U8[], then: U8[]): Bool //< whether `then` follows `first`
+    switch text.find_str(first)
+    case .some(at)
+        return text.sub_from(at + first.len).find_str(then).is_some()
+    case .none
+        return false
+
+fn test_a_green_round_stays_short(arena: Arena$@) //<
+    //< a green round names no cause, counts its skips
+    verdict.start("[tools/ci_gates] the summary of a green round test...")
     $outs: = List<|Outcome|>.new(arena)
-    outs.push(outcome("selfhost", true, 30I64, "", arena))
-    outs.push(outcome("link_abi", true, 5I64, "RESULT: SKIPPED (no ARM toolchain)", arena))
-    outs.push(outcome("debug", false, 7I64, "", arena))
-    $plain: = Str_builder.new()
-    defer plain.free()
-    ci_gates.digest_plain(outs@, 4I64, plain@)
-    p: = plain.slice()
-    assert(p.find_str("debug          FAIL 7s").is_some(),
-        "a fallen gate is marked FAIL with its time")
-    assert(p.find_str("#     RESULT: SKIPPED").is_some(),
-        "a skipping gate's line is shown under it")
-    closing: = "gates invoked: 3 (1 FAIL, SKIP lines in 1), gate seconds: 42, -j4"
-    assert(p.find_str(closing).is_some(), "the closing line counts them")
+    outs
+        .push(sample("selfhost", "RESULT: ALL PASS (self-hosting, c backend)\n", "0 30\n", arena))
+    outs.push(sample("link_abi", log_arm, "0 5\n", arena))
+    // A check's label may name the word: a line opening with `pass` is no skip.
+    outs.push(sample("docs", log_label, "0 1\n", arena))
+    p: = summarised(outs@, arena)
+    assert(p.find_str("#   selfhost       PASS 30s\n").is_some(), "a gate that passed is one line")
+    assert(p.find_str("#   docs           PASS 1s\n").is_some(),
+        "a pass line naming SKIP in its label counts as no skip")
+    assert(p.find_str("#   link_abi       PASS 5s      2 SKIP lines\n").is_some(),
+        "a skipping gate counts its SKIP lines on its own line")
+    // Caution: **An expected SKIP line is not copied**: thirty of them bury the one that failed.
+    assert(p.find_str("no ARM toolchain").is_none(), "an expected SKIP's text stays in its log")
+    assert(p.find_str("why it failed").is_none() && p.find_str("UNEXPECTED").is_none(),
+        "a green round names no cause")
+    assert(p.ends_with("# gates invoked: 3 (0 FAIL, SKIP lines in 1), gate seconds: 36, -j12\n"),
+        "the closing line counts them, and ends it")
+    verdict.pass("a green round lists its gates and counts its skips, and names no cause.")
+
+fn test_an_unexpected_skip_is_named_last(arena: Arena$@) //<
+    //< The SKIP that failed a gate is the summary's last word, marked apart from the expected ones
+    verdict.start("[tools/ci_gates] a gate failing on a SKIP no row holds test...")
+    $outs: = List<|Outcome|>.new(arena)
+    outs.push(sample("suites_a", log_unexpected_skip, "1 270\n", arena))
+    outs.push(sample("link_abi", log_arm, "0 9\n", arena))
+    p: = summarised(outs@, arena)
+    assert(p.find_str("#   suites_a       FAIL 270s    3 SKIP lines, 1 UNEXPECTED\n").is_some(),
+        "the gate's row counts the SKIP that failed it apart")
+    named: =
+        "# why it failed:\n#   suites_a: UNEXPECTED SKIP extract-rest: kssrv's own tests: kssrv: a \
+            socket in the root is answered 404: Windows has no socket a path names\n"
+    assert(after(p, "gates invoked:", named),
+        "the SKIP no row holds is named after the list, marked UNEXPECTED")
+    assert(p.find_str("Windows has no SIGPIPE").is_none(), "an expected SKIP is not")
+    assert(after(p, "UNEXPECTED SKIP", "#   suites_a: its whole log is out/log/ci/suites_a.log\n"),
+        "its whole log is named after its causes")
+    assert(p.ends_with("bring its tool back, or add the row where this platform cannot have it\n"),
+        "the last line says what to do about it")
+    verdict.pass("the SKIP no row holds is named last, marked UNEXPECTED, with the gate's log.")
+
+fn test_a_fail_line_is_named_last(arena: Arena$@) //<
+    //< A FAIL line comes first among a gate's causes
+    verdict.start("[tools/ci_gates] a gate failing on a FAIL line test...")
+    $outs: = List<|Outcome|>.new(arena)
+    outs.push(sample("suites_a", log_fail, "2 418\n", arena))
+    p: = summarised(outs@, arena)
+    first: =
+        "#   suites_a: FAIL extract-ksplc: ksplc's suite spawn passes from the copy: FAIL spawn: a \
+            prompt to a terminal shows before the read: [harness] it could not start\n#   suites_a: \
+            RESULT: SOME FAILED (1)"
+    assert(after(p, "# why it failed:\n", first), "the FAIL line comes first")
+    // make's own words are the locale's: only `*** [` is read, so `エラー` is found as `Error` is.
+    assert(p
+        .find_str("#   suites_a: make[2]: *** [mk/test.mk:144: test-extract-ksplc] エラー 1\n")
+        .is_some(), "make's line naming the target that stopped is read in any locale")
+    assert(p.find_str("未完了").is_none(), "make's waiting for the other jobs is no cause")
+    assert(p.find_str("the output before the panic").is_none(), "a pass line saying panic is none")
+    assert(p.find_str("UNEXPECTED").is_none(), "a pass line naming SKIP in its label is no skip")
+    verdict.pass("a FAIL line comes first, then the RESULT line and make's, in any locale.")
+
+fn test_a_panic_is_named_last(arena: Arena$@) //< a panic inside a quoted tail is found
+    verdict.start("[tools/ci_gates] a gate failing on a panic test...")
+    $outs: = List<|Outcome|>.new(arena)
+    outs.push(sample("suites_a", log_panic, "2 134\n", arena))
+    p: = summarised(outs@, arena)
+    first: =
+        "#   suites_a: panic: a write of 4 GiB should send a piece at std/tests/net_test:460\n#   \
+            suites_a: FAIL extract-rest"
+    assert(after(p, "# why it failed:\n", first),
+        "the panic comes first, before the FAIL line that quotes it")
+    assert(p.find_str("a crash is 139").is_none(), "a pass line naming a panic is no cause")
+    verdict.pass("a panic inside a quoted tail is named first.")
+
+fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
+    //< Where no line of the gate's own names a cause, its last lines stand in
+    verdict.start("[tools/ci_gates] a gate failing with nothing recognisable test...")
+    $outs: = List<|Outcome|>.new(arena)
+    outs.push(sample("selfhost", log_unread, "2 13\n", arena))
+    outs.push(sample("lint", "", "", arena))
+    p: = summarised(outs@, arena)
+    first: =
+        "#   selfhost: make: *** [Makefile:210: out/ksplc_stage1.exe] エラー 1\n#   selfhost: NO \
+            VERDICT: it printed no `RESULT: ALL PASS` line\n"
+    assert(after(p, "# why it failed:\n", first), "make's line and the missing verdict come first")
+    quoted: = "#   selfhost: | out/stage1.c:1234:5: error: use of undeclared identifier 'kspl_x'\n"
+    assert(p.find_str(quoted).is_some(),
+        "the log's last lines are quoted, where the C compiler's error is")
+    assert(p.find_str("#   selfhost: | \n").is_none(), "a blank line is not quoted")
+    // A gate cut short leaves a log and no `.end`: it fell, and says so with nothing else.
+    assert(p.find_str("#   lint: NO VERDICT").is_some(), "a gate cut short with an empty log fell")
+    verdict.pass("where nothing names a cause, the log's last lines stand in.")
+
+fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
+    //< The job's page marks a fall and lists a skipping gate, with no line of a log
+    verdict.start("[tools/ci_gates] the summary page test...")
+    $outs: = List<|Outcome|>.new(arena)
+    outs.push(sample("selfhost", "RESULT: ALL PASS\n", "0 30\n", arena))
+    outs.push(sample("link_abi", log_arm, "0 5\n", arena))
+    outs.push(sample("debug", log_fail, "1 7\n", arena))
     $md: = Str_builder.new()
     defer md.free()
     ci_gates.digest_md(outs@, 4I64, "linux ci-shard-core", md@)
@@ -182,16 +348,48 @@ fn test_the_summary_lists_what_needs_attention(arena: Arena$@) //<
     assert(m.find_str("\nSKIP:\n\n* `link_abi`\n").is_some(), "a skipping gate is listed by name")
     // Caution: **No log line goes in** (the reason is at `digest_md`).
     assert(m.find_str("no ARM toolchain").is_none(), "the page holds no line of a log")
-    verdict.pass("the summary marks a fall and lists a skip, on the screen and on the page.")
+    verdict.pass("the page marks a fall and lists a skip, with no line of a log.")
 
 fn test_a_skip_is_held_by_its_platform_alone() //<
     //< A SKIP a platform's rows hold passes there, and fails where no row holds it
     verdict.start("[tools/ci_gates] the lines a platform may skip on test...")
     arm: = "RESULT: SKIPPED (no ARM toolchain)"
-    assert(ci_gates.is_expected_skip(arm, "win32"), "Windows holds no ARM toolchain")
-    assert(!ci_gates.is_expected_skip(arm, "linux"), "Linux's image holds one, so it may not skip")
-    v6: = "SKIP Net: connecting over the IPv6 loopback: this machine has no IPv6 loopback"
+    assert(ci_gates.is_expected_skip(arm, "win32", ""), "Windows holds no ARM toolchain")
+    assert(!ci_gates.is_expected_skip(arm, "linux", ""),
+        "Linux's image holds one, so it may not skip")
+    v6: = "SKIP Net: connecting over the IPv6 loopback: this machine has no IPv6 at all"
     for p in U8[][]::{ "linux", "darwin", "win32" }
-        assert(ci_gates.is_expected_skip(v6, p), "a runner may lack an IPv6 loopback anywhere")
-    assert(!ci_gates.is_expected_skip(v6, "solaris"), "a platform with no rows holds no SKIP")
+        assert(ci_gates.is_expected_skip(v6, p, ""), "a host's kernel may lack IPv6 anywhere")
+    assert(!ci_gates.is_expected_skip(v6, "solaris", ""), "a platform with no rows holds no SKIP")
+    lo: = "SKIP Net: connecting over the IPv6 loopback: IPv6 is on, but the loopback holds no `::1`"
+    assert(!ci_gates.is_expected_skip(lo, "linux", ""),
+        "Linux's container has `::1`, so it may not skip")
+    for p in U8[][]::{ "darwin", "win32" }
+        assert(ci_gates.is_expected_skip(lo, p, ""), "elsewhere a loopback without `::1` may skip")
     verdict.pass("each platform holds its own reasons to skip, and nothing else passes in silence.")
+
+fn test_a_switch_turned_off_lets_its_own_skips_through() //<
+    //< On Linux a SKIP a switch makes a failure passes once that switch is off, and no other does
+    verdict.start("[tools/ci_gates] the lines a switch turned off lets through test...")
+    chown: =
+        "SKIP cli: cache: ksplc run refuses a cache folder another user owns: neither `chown` nor \
+            `sudo -n chown` can hand a folder to another user here"
+    assert(!ci_gates.is_expected_skip(chown, "linux", ""), "Linux requires it by default")
+    assert(ci_gates.is_expected_skip(chown, "linux", "KANSO_REQUIRE_CHOWN"),
+        "turned off, its skip passes")
+    assert(ci_gates.is_expected_skip(chown, "linux", "KANSO_REQUIRE_ASAN KANSO_REQUIRE_CHOWN"),
+        "among others, too")
+    assert(!ci_gates.is_expected_skip(chown, "linux", "KANSO_REQUIRE_ASAN"),
+        "another switch lets it through nowhere")
+    arm: = "RESULT: SKIPPED (no ARM toolchain)"
+    assert(ci_gates.is_expected_skip(arm, "linux", "KSOS_REQUIRE_ARM"), "each switch its own")
+    node: = "SKIP vscode: the extension's client side: node is not installed"
+    assert(!ci_gates.is_expected_skip(node, "linux", "KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM"),
+        "a tool no switch covers stays required")
+    a: = Arena.new(4096)
+    defer a.free()
+    assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM", a).is_none(),
+        "every switch `mk/test.mk` names has its rows")
+    assert(ci_gates.unknown_switch("KANSO_REQUIRE_CHOWN KANSO_REQUIRE_NOPE", a).unwrap_or("")
+        .equals("KANSO_REQUIRE_NOPE"), "a switch no row names is found, so the round refuses it")
+    verdict.pass("a switch turned off lets its own skips through, and nothing else.")

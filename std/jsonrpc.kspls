@@ -12,7 +12,7 @@
 // ==========================================
 import "std/chars" // `find_str` / `sub_from` / `trim_spaces`
 import "std/json" + { Json_builder }
-import "std/mem" { Arena, alloc, dealloc }
+import "std/mem" + { Arena, alloc, dealloc }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/strnum" as _strnum // `to_count`
@@ -39,11 +39,13 @@ pub enum Rpc_end //< why a response could not be read
 pub fn content_length( //< the length the header declares, or none if it is absent or unreadable
     //<
     //< The name matches at a line's start, in any case; the value is digits alone between spaces.
-    //< The first such line decides. A value past `limit` is unreadable, so the digits never
-    //< overflow.
+    //< **Every such line must name the same length**: one unreadable, or two that differ, give
+    //< none.
+    //< A value past `limit` is unreadable, so the digits never overflow.
     head: U8[], //< the header lines, without the blank line that ends them
     limit: Sz, //< the largest length the caller accepts
 ): Sz?
+    $found: Sz? = .none
     $at: Sz = 0
     for at < head.len
         $end: = at
@@ -53,8 +55,13 @@ pub fn content_length( //< the length the header declares, or none if it is abse
         at = end + 1
         if !line.sub(0, length_tag.len).equals_ignore_case(length_tag)
             continue
-        return line.sub_from(length_tag.len).trim_spaces().to_count(limit)
-    return .none
+        // Caution: **Do not let the first line decide**: a peer taking the last one cuts the frame
+        // elsewhere, and every frame after it is misread.
+        n: = line.sub_from(length_tag.len).trim_spaces().to_count(limit)
+        if n.is_none() || (found.is_some() && found.unwrap_or(0) != n.unwrap_or(0))
+            return .none
+        found = n
+    return found
 
 pub fn frame_into( //< writes the header and then the body to the destination
     //<
@@ -69,9 +76,12 @@ pub fn encode( //< assembles one JSON-RPC body
     method: U8[], //< the name of the method to call
     params: json.Val, //< the parameters sent with it
     id: I32, //< the request's id; a negative value makes a notification with no id
-    arena: Arena$@, //< where the text is built
+    arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): U8[] //< the body text, without the frame header
-    $b: = Json_builder.new(arena)
+    // The object is only work: built apart, it leaves the caller only the text to free.
+    $work: = mem.scratch(arena)
+    defer work.free()
+    $b: = Json_builder.new(work.arena)
     $obj: = b.obj().set("jsonrpc", b.str_val(version))
     if id >= 0
         obj = obj.set("id", b.int_val(id))
@@ -81,7 +91,8 @@ pub fn encode( //< assembles one JSON-RPC body
     obj.build().dump(out@)
     return arena.dup_str(out.slice())
 
-pub const max_head_bytes: Sz = 8192 //< the longest header taken before its end, so a lie ends
+pub const max_head_bytes: Sz = 8192 //<
+    //< the longest head taken, its blank line counted, so a lie ends
     //<
     //< A real header is a few dozen bytes. Without it, a peer that never ends one grows the buffer
     //< for good, and each read searches all of it again.
@@ -93,15 +104,17 @@ pub fn take_frame( //< cuts out one whole frame, or nothing if none is complete 
     //< this one waits for loses the frame boundary, and every frame after it is misread.
     acc: Str_builder$@, //< what has arrived so far; the frame cut out is removed from it
     max_body: Sz, //< the largest body waited for (`max_body_bytes` unless the reader takes more)
-    arena: Arena$@, //< where the body is copied to
+    arena: Arena$@, //< where the body is copied to; null means the heap, freed with `dealloc`
 ): U8[]?!Rpc_end //< the body, or none for now; a bad length header fails with broken
     text: = U8[]::acc.slice()
     $sep: Sz = 0
-    switch text.find_str(frame_sep)
+    // Caution: **Look for the head's end only within the limit.** Looked for further, a long head
+    // arriving in one read is taken, and the same head arriving a byte at a time is broken.
+    switch text.sub(0, max_head_bytes).find_str(frame_sep)
     case .some(i)
         sep = i
     case .none
-        if text.len > max_head_bytes
+        if text.len >= max_head_bytes
             acc.len = 0
             throw .broken
         return .none
@@ -196,9 +209,11 @@ impl Client
         method: U8[], //< the name of the method to call
         params: json.Val, //< the parameters sent with it
         timeout_ms: I32, //< how long the server may go without reading it
-        arena: Arena$@, //< where the text is built
+        arena: Arena$@, //< where the text is built while sending; null builds it on the heap
     ): Void!Rpc_end //< fails as `send_raw` does
-        r.send_raw(encode(method, params, -1, arena), timeout_ms)!
+        $work: = mem.scratch(arena)
+        defer work.free()
+        r.send_raw(encode(method, params, -1, work.arena), timeout_ms)!
 
     pub fn request( //< sends a request and reads until the response with that id arrives
         //<
@@ -210,32 +225,38 @@ impl Client
         method: U8[], //< the name of the method to call
         params: json.Val, //< the parameters sent with it
         timeout_ms: I32, //< how long the whole round trip may take
-        arena: Arena$@, //< where the text and the response are built
-    ): json.Val!Rpc_end
+        arena: Arena$@, //< where the reply goes; null means the reply's own arena and a `free()`
+    ): json.Doc!Rpc_end //< the reply, freed as `json.parse`'s document is
         id: = r.next_id
         r.next_id = id_after(id)
         // The write spends the same budget: the round trip's timeout bounds both halves.
         deadline: = sys.deadline_after_ms(timeout_ms)
-        r.send_raw(encode(method, params, id, arena), timeout_ms)!
+        $work: = mem.scratch(arena)
+        defer work.free()
+        r.send_raw(encode(method, params, id, work.arena), timeout_ms)!
         for sys.mono_us() <= deadline
             left_ms: = (deadline - sys.mono_us()) / 1000I64 + 1I64
             msg: = r.read_msg(I32::left_ms, arena)!
-            if msg.get("id").as_int(-1) == id
+            if msg.val.get("id").as_int(-1) == id
                 return msg
+            msg.free() // another message, such as a notification
         throw .timed_out
 
-    pub fn read_msg( //< reads one frame and returns it as JSON
+    pub fn read_msg( //< reads one frame and returns it as a JSON document
         //<
         //< Caution: **Keep draining standard error while waiting too** (the reason is at
         //< `read_slice_ms`). The timeout bounds **this one call**, even when data trickles in.
         r: Self$@,
         timeout_ms: I32, //< how long this one call may take
-        arena: Arena$@, //< where the response is built
-    ): json.Val!Rpc_end
+        arena: Arena$@, //< where the reply goes; null means the reply's own arena and a `free()`
+    ): json.Doc!Rpc_end //< the message, freed as `json.parse`'s document is
         deadline: = sys.deadline_after_ms(timeout_ms)
+        // The frame's text is work: only the value parsed from it is the caller's.
+        $work: = mem.scratch(arena)
+        defer work.free()
         for sys.mono_us() <= deadline
             r.drain_err()
-            taken: = take_frame(r.acc@, max_body_bytes, arena)!
+            taken: = take_frame(r.acc@, max_body_bytes, work.arena)!
             if body: = taken
                 return json.parse(body, arena) catch
                     throw .broken

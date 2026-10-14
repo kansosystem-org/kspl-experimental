@@ -11,7 +11,7 @@
 // proxy) allows request smuggling.
 // ==========================================
 import "std/chars"
-import "std/mem" { Arena }
+import "std/mem" + { Arena, Own_arena }
 import "std/net"
 import "std/str" { Str_builder }
 import "std/strnum" // `parse_size`
@@ -21,6 +21,10 @@ pub enum Http_error //< why a message could not be read, or cannot be trusted
     invalid_request_line //< the first line is not `METHOD target VERSION`
     invalid_status_line //< the first line is not `VERSION status reason`
     invalid_header //< a header line is not `name: value`
+    invalid_host //< `Host` is named twice, missing on HTTP/1.1 and later, or not a host and port
+        //<
+        //< RFC 9112 §3.2 asks a server to answer each with 400: two readers taking different ones,
+        //< or reading one value differently, would send one request to two hosts.
     unsupported_transfer_encoding //< the message has `Transfer-Encoding`, which is always refused.
         //<
         //< Ignoring it silently would let it disagree with Content-Length (request smuggling).
@@ -88,6 +92,53 @@ priv fn check_version(v: U8[]): Void!Http_error //<
     if !v[5].is_digit() || v[6] != '.' || !v[7].is_digit()
         throw .unsupported_version
 
+pub fn is_1_1_or_later( //< whether a message's version is HTTP/1.1 or later
+    //<
+    //< **This is the one place that decides it**: on 1.1 and later a request must name `Host`,
+    //< and a connection stays open unless `Connection: close` asks otherwise.
+    version: U8[], //< `HTTP/d.d`, as `Request.version` holds it; any other text is not later
+): Bool
+    check_version(version) catch
+        return false
+    return version[5] > '1' || (version[5] == '1' && version[7] >= '1')
+
+priv fn is_host_byte(c: U8): Bool //<
+    //< Whether a reg-name holds the byte as it is: RFC 3986's unreserved and sub-delims
+    return c.is_alnum() || "-.~!$&'()*+,;=".find_char(c).is_some()
+
+priv fn is_host_value(v: U8[]): Bool //<
+    //< Whether a `Host` value is `uri-host [":" port]` (RFC 9110 §7.2, RFC 3986 §3.2.2)
+    //<
+    //< The host is a bracketed IP literal or a name of host bytes and `%XX`; the port is digits up
+    //< to 65535. Caution: **Refuse `@` and `/`**: a reader taking `a@b` as userinfo and host, or
+    //< `a/b` as host and path, routes by another name than the one checked here.
+    $at: Sz = 0
+    if v.starts_with("[")
+        close: = v.find_char(']').unwrap_or(0)
+        if close < 2
+            return false
+        for i in Range.asc(close - 1)
+            c: = v[i + 1]
+            if !is_host_byte(c) && c != ':'
+                return false
+        at = close + 1
+    else
+        for at < v.len && v[at] != ':'
+            if v[at] == '%'
+                if at + 2 >= v.len || v[at + 1].hex_val() < 0 || v[at + 2].hex_val() < 0
+                    return false
+                at += 3
+            else if is_host_byte(v[at])
+                at += 1
+            else
+                return false
+    if at == v.len
+        return true
+    if v[at] != ':'
+        return false
+    port: = v.sub_from(at + 1)
+    return port.len == 0 || (port.len <= 5 && port.to_count(65535).is_some())
+
 priv const sz_max: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the largest `Sz`
 
 priv fn parse_digits(s: U8[]): Sz!Http_error //< it accepts only `1*DIGIT`, up to what `Sz` holds
@@ -106,8 +157,17 @@ pub struct Header //< one header, linked to the next in the order they arrived
     pub name: U8$[] //< the name as it arrived; its case has no meaning
     pub value: U8$[] //< the value as it arrived, with surrounding whitespace trimmed
     pub next: Header$@ //< the header after this one, or null
+    priv own: Own_arena //< in the first header of a list `headers(null)` built, the list's arena
 
 impl Header
+    pub fn free(r: Self$@) //< lets go the whole list, when `headers(null)` built it
+        //<
+        //< **Only the first header of such a list frees anything.** A list read from a message, or
+        //< built in an arena, owns nothing, and neither does a header further down.
+        if r != null
+            $own: = r.own
+            own.free()
+
     pub fn find( //< the first value with that name, or nothing; case is ignored
         r: Self$@,
         name: U8[], //< the header name to look for
@@ -121,6 +181,23 @@ impl Header
 
     priv fn has(r: Self$@, name: U8[]): Bool
         return r.find(name).is_some()
+impl Header: Owned {} //< `free()` lets go the arena a list from `headers(null)` lives in
+
+priv fn check_host(head: Header$@, version: U8[]): Void!Http_error //<
+    //< Refuses a `Host` named twice, missing on HTTP/1.1 and later, or not a host and port
+    //<
+    //< Caution: **Do not take the first `Host` and drop the rest.** A proxy in front that takes
+    //< another one routes the request by a name the server never checked.
+    $count: Sz = 0
+    $node: = head
+    for node != null
+        if node.name.equals_ignore_case("Host")
+            count += 1
+            if !is_host_value(node.value)
+                throw .invalid_host
+        node = node.next
+    if count > 1 || (count == 0 && is_1_1_or_later(version))
+        throw .invalid_host
 
 priv fn get_content_length(head: Header$@): Sz?!Http_error //<
     //< Parses the Content-Length header's value; none where it is absent
@@ -165,12 +242,15 @@ pub struct Header_builder //< builds a header list, keeping the order the header
     //<
     //< The same "list builder that tracks head/tail by value" pattern as json.kspls's
     //< Obj_builder/Array_builder.
-    pub arena: Arena$@ //< where the headers go
+    pub arena: Arena$@ //< where the headers go; null until `add` makes an arena of the list's own
     pub head: Header$@ //< the first header added, or null
     pub tail: Header$@ //< the last header added, so the next one is appended without a walk
 
 pub fn headers( //< an empty header builder
-    arena: Arena$@, //< where the headers go
+    //<
+    //< With `null`, the first `add` makes an arena the list keeps, and `defer h.free()` on what
+    //< `build` returns frees it all.
+    arena: Arena$@, //< where the headers go; null means an arena of the list's own and a `free()`
 ): Header_builder //< the builder; each add returns it again, for chaining
     return Header_builder::{ .arena = arena, .head = null, .tail = null }
 
@@ -180,8 +260,13 @@ impl Header_builder
         name: U8[], //< the header name
         value: U8[], //< its value
     ): Self
+        $own: Own_arena = ::{}
+        if r.arena == null
+            work: = mem.scratch(null)
+            r.arena = work.arena
+            own = work.own
         hdr: Header = ::{ .name = r.arena.dup_str(name), .value = r.arena.dup_str(value),
-            .next = null }
+            .next = null, .own = own }
         h: = r.arena.create(hdr)
         if r.head == null
             r.head = h
@@ -204,6 +289,15 @@ pub struct Request //< one received request, and how much of the buffer it used
     pub headers: Header$@ //< the headers in the order they arrived, or null
     pub body: U8$[] //< the body, of the length `Content-Length` gave
     pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
+    priv own: Own_arena //< the arena it lives in, when `parse_request` was given null
+
+impl Request
+    pub fn free(r: Self$@) //< lets go the request and all its parts, when made with a null arena
+        //<
+        //< Made in the caller's arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
+impl Request: Owned {} //< `free()` lets go the arena a request read with null lives in
 
 pub struct Response //< one received response, and how much of the buffer it used
     pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
@@ -212,6 +306,15 @@ pub struct Response //< one received response, and how much of the buffer it use
     pub headers: Header$@ //< the headers in the order they arrived, or null
     pub body: U8$[] //< the body, of the length `Content-Length` gave
     pub consumed: Sz //< how many bytes of the buffer this message used; the rest is the next one
+    priv own: Own_arena //< the arena it lives in, when it was read with a null arena
+
+impl Response
+    pub fn free(r: Self$@) //< lets go the response and all its parts, when read with a null arena
+        //<
+        //< Read into the caller's arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
+impl Response: Owned {} //< `free()` lets go the arena a response read with null lives in
 
 // ---------------------------------------------------------
 // The shared core of buffer parsing (the state of one CRLF-delimited scan)
@@ -308,10 +411,12 @@ priv fn parse_status_line(line: U8[]): Status_line!Http_error
             .reason = reason }
     throw .invalid_status_line
 
-priv fn build_request(arena: Arena$@, line: Request_line, head: Header$@, body: U8[], consumed: Sz):
-    Request$@ //<
-        //< parse_request's result, its parts copied into the arena
+priv fn build_request(work: mem.Scratch, line: Request_line, head: Header$@, body: U8[],
+    consumed: Sz): Request$@ //<
+        //< parse_request's result, its parts copied into the arena it then keeps
+    arena: = work.arena
     req: Request = ::{
+        .own = work.own,
         .method = arena.dup_str(line.method),
         .target = arena.dup_str(line.target),
         .version = arena.dup_str(line.version),
@@ -321,10 +426,12 @@ priv fn build_request(arena: Arena$@, line: Request_line, head: Header$@, body: 
     }
     return arena.create(req)
 
-priv fn build_response(arena: Arena$@, line: Status_line, head: Header$@, body: U8[], consumed: Sz):
-    Response$@ //<
-        //< Shared by parse_response/read_response.
+priv fn build_response(work: mem.Scratch, line: Status_line, head: Header$@, body: U8[],
+    consumed: Sz): Response$@ //<
+        //< Shared by parse_response/read_response; the response keeps the arena it is built in
+    arena: = work.arena
     resp: Response = ::{
+        .own = work.own,
         .version = arena.dup_str(line.version),
         .status = line.status,
         .reason = arena.dup_str(line.reason),
@@ -356,6 +463,20 @@ priv fn response_body_len(h: Head_parts, status: I32): Sz!Http_error //<
     if n: = h.length
         return n
     throw .unsupported_close_delimited
+
+priv struct Request_head //< a request's head, read and checked, with its first line parsed
+    parts: Head_parts
+    line: Request_line
+
+priv fn scan_request_head(src: U8[], max_body: Sz, arena: Arena$@): Request_head!Http_error //<
+    //< Reads a request's head as `scan_head` does, and checks its first line and its `Host`
+    //<
+    //< **Both request readers go through this**, so `request_length` refuses what `parse_request`
+    //< does.
+    h: = scan_head(src, max_body, arena)!
+    line: = parse_request_line(h.first_line)!
+    check_host(h.head, line.version)!
+    return Request_head::{ .parts = h, .line = line }
 
 priv fn scan_head(src: U8[], max_body: Sz, arena: Arena$@): Head_parts!Http_error //<
     //< Reads the head at the start of src, and checks both limits
@@ -398,13 +519,17 @@ pub fn parse_request( //< the one request at the start of the buffer; fails if i
     //< over `max_head_bytes` as soon as that much has arrived without its end.
     src: U8[], //< what has arrived so far
     max_body: Sz, //< the largest body accepted (`default_max_body_bytes` when the caller has none)
-    arena: Arena$@, //< where the parts are allocated
+    arena: Arena$@, //< where the parts go; null means an arena of the request's own and a `free()`
 ): Request$@!Http_error //< the request; fails with incomplete while more bytes are due
-    h: = scan_head(src, max_body, arena)!
-    req_line: = parse_request_line(h.first_line)!
-    body_len: = request_body_len(h)
-    body: = body_in(src, h, body_len)!
-    return build_request(arena, req_line, h.head, body, h.head_end + body_len)
+    $work: = mem.scratch(arena)
+    r: = scan_request_head(src, max_body, work.arena) catch e
+        work.free()
+        throw e
+    body_len: = request_body_len(r.parts)
+    body: = body_in(src, r.parts, body_len) catch e
+        work.free()
+        throw e
+    return build_request(work, r.line, r.parts.head, body, r.parts.head_end + body_len)
 
 pub fn request_length( //< how many bytes the request at the start of the buffer takes in all
     //<
@@ -413,22 +538,31 @@ pub fn request_length( //< how many bytes the request at the start of the buffer
     //< until the head's empty line arrives.
     src: U8[], //< what has arrived so far
     max_body: Sz, //< the largest body accepted, as `parse_request` takes it
-    arena: Arena$@, //< where the head's parts are allocated
+    arena: Arena$@, //< where the head's parts go while it reads them; null reads them on the heap
 ): Sz!Http_error //< the head's length plus the body's
-    h: = scan_head(src, max_body, arena)!
-    return h.head_end + request_body_len(h)
+    $work: = mem.scratch(arena)
+    defer work.free()
+    r: = scan_request_head(src, max_body, work.arena)!
+    return r.parts.head_end + request_body_len(r.parts)
 
 pub fn parse_response( //< the one response at the start of the buffer; fails if it is incomplete
     //<
     //< The body limit is `default_max_body_bytes`; the head's is `max_head_bytes`.
     src: U8[], //< what has arrived so far
-    arena: Arena$@, //< where the parts are allocated
+    arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
 ): Response$@!Http_error //< the response; fails with incomplete while more bytes are due
-    h: = scan_head(src, default_max_body_bytes, arena)!
+    $work: = mem.scratch(arena)
+    got: = response_in(src, work) catch e
+        work.free()
+        throw e
+    return got
+
+priv fn response_in(src: U8[], work: mem.Scratch): Response$@!Http_error //< parse_response's work
+    h: = scan_head(src, default_max_body_bytes, work.arena)!
     status_line: = parse_status_line(h.first_line)!
     body_len: = response_body_len(h, status_line.status)!
     body: = body_in(src, h, body_len)!
-    return build_response(arena, status_line, h.head, body, h.head_end + body_len)
+    return build_response(work, status_line, h.head, body, h.head_end + body_len)
 
 // ---------------------------------------------------------
 // Reading from a socket (reading until the header and the Content-Length body are all present)
@@ -476,27 +610,41 @@ priv fn read_body(stream: net.Tcp_stream$@, b: Str_builder$@, h: Head_parts, bod
 
 pub fn read_response( //< reads one whole response from a connection and splits it into its parts
     stream: net.Tcp_stream$@, //< the connection to read from, which blocks
-    arena: Arena$@, //< where the parts are allocated
+    arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
     timeout_ms: I32, //< how long the whole response may take to arrive; past it `.io(.timed_out)`
 ): Response$@!Http_error //< the response, held in `arena`; fails if the connection closes first
+    $work: = mem.scratch(arena)
+    got: = response_from(stream, work, max_body, timeout_ms) catch e
+        work.free()
+        throw e
+    return got
+
+priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch, max_body: Sz, timeout_ms: I32):
+    Response$@!Http_error //<
+        //< read_response's work, every part in `work`'s arena
     deadline: = sys.deadline_after_ms(timeout_ms)
     $b: = Str_builder.new()
     defer b.free()
-    h: = read_head(stream, b@, arena, max_body, deadline)!
+    h: = read_head(stream, b@, work.arena, max_body, deadline)!
     status_line: = parse_status_line(h.first_line)!
     body_len: = response_body_len(h, status_line.status)!
     body: = read_body(stream, b@, h, body_len, deadline)!
-    return build_response(arena, status_line, h.head, body, h.head_end + body_len)
+    return build_response(work, status_line, h.head, body, h.head_end + body_len)
 
 // ---------------------------------------------------------
 // Writing. **The builder refuses whatever the parser refuses** (is_token / is_field_value,
 // `Transfer-Encoding`), and the length is the body's: the builder adds `Content-Length` itself.
 // ---------------------------------------------------------
-priv fn write_header_lines(b: Str_builder$@, head: Header$@): Void!Http_error
+priv fn write_header_lines(b: Str_builder$@, head: Header$@): Void!Http_error //<
+    //< Writes each header as `name: value`, refusing one that would not read back as itself
+    //<
+    //< Caution: **Refuse a value with a space or a tab at either end** (RFC 9110 §5.5 has none):
+    //< the reader trims it, so it would read back as another value.
     $node: = head
     for node != null
-        if !is_token(node.name) || !is_field_value(node.value)
+        if !is_token(node.name) || !is_field_value(node.value) ||
+            node.value.trim_spaces().len != node.value.len
             throw .invalid_header
         b.s(node.name).s(": ").s(node.value).s("\r\n")
         node = node.next
@@ -531,24 +679,46 @@ priv fn write_framed_head(b: Str_builder$@, head: Header$@, length: Sz, names_le
         b.s("Content-Length: \{length\}\r\n")
     b.s("\r\n")
 
-pub fn write_request( //< sends one whole request: the first line, the headers and the body
-    stream: net.Tcp_stream$@, //< the connection to write to
+priv const written_version: U8[] = "HTTP/1.1" //< the version every request written here names
+
+pub fn format_request( //< builds one whole request as bytes: the first line, the headers, the body
+    //<
+    //< The buffer form of `write_request`, as `parse_response` is of `read_response`: for a sender
+    //< that cannot block. **It refuses what a reader refuses**, since a request it wrote would come
+    //< back as a 400. **On failure b is left as it was.**
+    b: Str_builder$@, //< where the message is built
     method: U8[], //< the method, such as `GET`
     target: U8[], //< the target, including the query string
-    head: Header$@, //< the headers, or null
-    body: U8[]): Void!Http_error
+    head: Header$@, //< the headers, `Host` among them once; `Content-Length` is added here
+    body: U8[], //< the whole body
+): Void!Http_error
     if !is_token(method) || !is_request_target(target)
         throw .invalid_request_line
     check_framing(head, body.len, true)!
+    check_host(head, written_version)!
+    start: = b.len
+    b.s(method).s(" ").s(target).c(' ').s(written_version).s("\r\n")
+    write_framed_head(b, head, body.len, true) catch e
+        b.len = start // as in `write_response_head`
+        throw e
+    b.s(body)
+
+pub fn write_request( //< sends one whole request: the first line, the headers and the body
+    //<
+    //< It refuses what `format_request` refuses, before anything is written.
+    stream: net.Tcp_stream$@, //< the connection to write to
+    method: U8[], //< the method, such as `GET`
+    target: U8[], //< the target, including the query string
+    head: Header$@, //< the headers, `Host` among them once
+    body: U8[]): Void!Http_error
     $b: = Str_builder.new()
     defer b.free()
-    b.s(method).s(" ").s(target).s(" HTTP/1.1\r\n")
-    write_framed_head(b@, head, body.len, true)!
-    b.s(body)
+    format_request(b@, method, target, head, body)!
     // Caution: write can stop partway and silently truncate the message. Use write_all (see the
     // note in std/net.kspls).
     stream.write_all(b.slice()) catch e
         throw .io(e)
+
 pub fn reason_phrase( //< the standard phrase for a status number, so the two cannot disagree
     //<
     //< RFC 9110's "reason-phrase"; empty for a number it does not know. The builders below write it

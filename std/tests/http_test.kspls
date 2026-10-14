@@ -122,12 +122,9 @@ fn test_http_parse_buffered()
     assert(!incomplete_ok, "parse_request must reject a headerless-but-truncated message")
 
     // The body may be only partly in; sliced without a check, the view points outside the buffer.
-    $short_body_ok: = true
-    _s: =
-        http.parse_request("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhi",
-        http.default_max_body_bytes, arena) catch
-        short_body_ok = false
-    assert(!short_body_ok, "parse_request must report incomplete while the body is still short")
+    short_body: = "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhi"
+    assert(parse_error(short_body, http.default_max_body_bytes, arena).equals("incomplete"),
+        "parse_request must report incomplete while the body is still short")
 
     // **Both limits hold before the bytes arrive**: waiting for them is what a flood wants.
     assert(parse_error("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhi", 4, arena)
@@ -141,11 +138,11 @@ fn test_http_parse_buffered()
         "a short head with no end yet is waited for")
 
     // consumed is "the number of bytes this message used", and what follows is the next message.
-    two: = "GET /a HTTP/1.1\r\n\r\nGET /b HTTP/1.1\r\n\r\n"
+    two: = "GET /a HTTP/1.1\r\nHost: h\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\n\r\n"
     first: = http.parse_request(two, http.default_max_body_bytes, arena)
         catch panic("the first of two pipelined requests must parse")
     assert(first.target.equals("/a"), "the first message must be the one parsed")
-    assert(first.consumed == 19, "consumed must cover exactly the first message")
+    assert(first.consumed == 28, "consumed must cover exactly the first message")
     second: =
         http.parse_request(two.sub_from(first.consumed), http.default_max_body_bytes, arena)
         catch panic("the remainder after consumed must be the next request")
@@ -177,6 +174,8 @@ priv fn parse_error(src: U8[], max_body: Sz, arena: Arena$@): U8[] //<
             return "head_too_large"
         case .body_too_large
             return "body_too_large"
+        case .invalid_host
+            return "invalid_host"
         default
             return "another error"
     return "accepted"
@@ -237,6 +236,25 @@ fn test_http_reject_smuggling()
     reject("a Content-Length that wraps to a negative Sz must be rejected",
         "POST / HTTP/1.1\r\nContent-Length: 10000000000000000000\r\n\r\n hi")
     // Empty input, and input with no line at all, must not crash.
+    // **A request names its host once** (RFC 9112 §3.2): a proxy in front taking another `Host`
+    // than the server routes the request by a name the server never checked.
+    arena_h: = Arena.new(1024)
+    defer arena_h.free()
+    for twice in U8[][]::{ "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: a\r\nhost: a\r\n\r\n",
+        "GET / HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n" }
+        assert(parse_error(twice, http.default_max_body_bytes, arena_h).equals("invalid_host"),
+            "a request naming Host twice must be refused as invalid_host")
+        $length_ok: = true
+        _n: = http.request_length(twice, http.default_max_body_bytes, arena_h) catch
+            length_ok = false
+        assert(!length_ok, "request_length must refuse what parse_request refuses")
+    assert(parse_error("GET / HTTP/1.1\r\n\r\n", http.default_max_body_bytes, arena_h)
+        .equals("invalid_host"), "an HTTP/1.1 request naming no Host must be refused")
+    // Caution: **HTTP/1.0 may leave it out**, which a refusal of every missing Host would break.
+    assert(parse_error("GET / HTTP/1.0\r\n\r\n", http.default_max_body_bytes, arena_h)
+        .equals("accepted"), "an HTTP/1.0 request naming no Host must be read")
+
     reject("an empty request must be rejected", "")
     reject("a request line with no terminator must be rejected", "GET / HTTP/1.1")
     reject("an empty header name must be rejected", "GET / HTTP/1.1\r\n: v\r\n\r\n")
@@ -269,12 +287,59 @@ fn test_http_reject_smuggling()
         http.headers(arena).add("Connection", "close").add("X", "a\r\nInjected: 1").build()) catch {}
     assert(out.slice().equals("an answer queued before\n"),
         "a refused build must leave the builder as it was")
+    // **A value with a space or tab at either end is refused too**: the reader trims it, so the
+    // value read back would not be the value written.
+    for padded in U8[][]::{ " a", "a ", "a\t" }
+        $response_kept: = true
+        http.format_response(out@, 200, http.headers(arena).add("X", padded).build(), "") catch
+            response_kept = false
+        $request_kept: = true
+        http.format_request(out@, "GET", "/",
+            http.headers(arena).add("Host", "h").add("X", padded).build(), "") catch
+            request_kept = false
+        assert(!response_kept && !request_kept,
+            "a header value with a space at either end must be refused when written")
+    assert(out.slice().equals("an answer queued before\n"),
+        "a refused build must leave the builder as it was")
 
     verdict
         .pass("A bare CR/LF, a header name that is not a token, a continuation line, a \
             Content-Length that is not 1*DIGIT, a status outside 100 to 599, a target with a tab or \
-            a control byte, and a CRLF slipped in while building are all refused, the builder left \
-            as it was.")
+            a control byte, a Host given twice or missing on HTTP/1.1, and a CRLF or a space at a \
+            value's end slipped in while building are all refused, the builder left as it was.")
+
+// ==========================================
+// std/http: a `Host` value is a host and an optional port, and nothing else (RFC 9112 §3.2).
+// Two readers reading one value differently route one request to two hosts.
+// ==========================================
+fn test_http_host_value()
+    verdict.start("[Http] the Host value test...")
+    arena: = Arena.new(4096)
+    defer arena.free()
+    for good in U8[][]::{ "example.com", "example.com:8080", "127.0.0.1:80", "[::1]:8080",
+        "[v1.fe]", "ex%41mple", "a-b_c.~!$&'()*+,;=", "host:", "" }
+        req: = arena.text().s("GET / HTTP/1.1\r\nHost: ").s(good).s("\r\n\r\n").take()
+        assert(parse_error(req, http.default_max_body_bytes, arena).equals("accepted"),
+            "a host, optionally with a port, must be read")
+    for bad in U8[][]::{ "user@example.com", "example.com/x", "a b", "a\"b", "host:http",
+        "host:65536", "host:1:2", "::1", "[::1", "[]", "[::1]x", "ex%4", "ex%zz" }
+        req: = arena.text().s("GET / HTTP/1.0\r\nHost: ").s(bad).s("\r\n\r\n").take()
+        assert(parse_error(req, http.default_max_body_bytes, arena).equals("invalid_host"),
+            "a Host value that is not a host and a port must be refused, on HTTP/1.0 too")
+        $length_ok: = true
+        _n: = http.request_length(req, http.default_max_body_bytes, arena) catch
+            length_ok = false
+        assert(!length_ok, "request_length must refuse what parse_request refuses")
+    // One answer to "HTTP/1.1 or later", which the Host rule and a connection's default share.
+    assert(http.is_1_1_or_later("HTTP/1.1") && http.is_1_1_or_later("HTTP/2.0"),
+        "1.1 and later versions are 1.1 or later")
+    assert(!http.is_1_1_or_later("HTTP/1.0") && !http.is_1_1_or_later("HTTP/0.9"),
+        "earlier versions are not")
+    assert(!http.is_1_1_or_later("HTTP/11") && !http.is_1_1_or_later(""),
+        "text that is not a version is not later")
+    verdict
+        .pass("A host with an optional port is read; userinfo, a path, a bad byte, a bad port and a \
+            broken IP literal are refused.")
 
 // ==========================================
 // std/http: the builder writes no length its own reader would cut elsewhere.
@@ -466,12 +531,25 @@ fn test_http_socket_roundtrip()
             mismatch = true
         default {}
     assert(mismatch, "write_request must refuse a Content-Length that is not the body's")
+    // **The writer refuses what the reader refuses**: no `Host`, two, or one that is not a host.
+    for bad_host in http.Header$@[]::{ null,
+        http.headers(arena).add("Host", "a").add("Host", "b").build(),
+        http.headers(arena).add("Host", "user@a").build() }
+        $host_refused: = false
+        http.write_request(client, "GET", "/", bad_host, "") catch e
+            switch e
+            case .invalid_host
+                host_refused = true
+            default {}
+        assert(host_refused,
+            "write_request must refuse a head naming Host other than once, or not as a host")
     req_headers: = http.headers(arena).add("Host", "example.com").build()
     http.write_request(client, "POST", "/echo", req_headers, "ping")
         catch panic("client write_request should succeed")
     resp: =
-        http.read_response(client, arena, http.default_max_body_bytes, 60000)
+        http.read_response(client, null, http.default_max_body_bytes, 60000)
         catch panic("client read_response should succeed")
+    defer resp.free()
     resp_ok: =
         resp.status == 200 && resp.reason.equals("OK") && resp.body.equals("pong")
     assert(resp_ok, "client must parse the server's response correctly")
@@ -538,6 +616,10 @@ fn test_jsonrpc_take_frame()
     assert(length_or("Content-Length: 1x") == -1, "digits alone")
     assert(length_or("Content-Length: 100") == 100, "the limit itself")
     assert(length_or("Content-Length: 101") == -1, "past the limit")
+    // **Two lengths that differ are none**: a reader taking the other one cuts the frame elsewhere.
+    assert(length_or("Content-Length: 2\r\nContent-Length: 4") == -1, "two lengths that differ")
+    assert(length_or("Content-Length: 2\r\ncontent-length: x") == -1, "a second length unreadable")
+    assert(length_or("Content-Length: 2\r\ncontent-length:  2") == 2, "the same length twice")
     verdict
         .pass("A frame that crosses a read's boundary, and two frames from one read, are both cut \
             out in order.")
@@ -569,6 +651,17 @@ fn test_jsonrpc_broken_frame()
     assert(acc.len == 0, "the head past its cap is dropped")
     acc.s("Content-Length: 2\r\n\r\nok")
     assert(taken_or(acc@, arena).equals("ok"), "the next frame must still be readable")
+    // **The cap counts the head's bytes, not a read's**: a head ending past it is broken when it
+    // arrives whole too, as it is when its bytes arrive one by one. At the cap it is read.
+    for over in Sz[]::{ 0, 1 }
+        tail: U8[] = "\r\nContent-Length: 2\r\n\r\n"
+        acc.len = 0
+        acc.s("X: ")
+        for _i in Range.asc(jsonrpc.max_head_bytes - 3 - tail.len + over)
+            acc.c('a')
+        acc.s(tail).s("ok")
+        assert(taken_or(acc@, arena).equals("ok" if over == 0 else "(broken)"),
+            "a head is read up to its cap, and past it is broken however it arrives")
 
     // **The reader's own limit decides**: a body past the default, under a reader's larger limit,
     // is taken whole, and the frame after it is read where it starts.
@@ -616,8 +709,9 @@ fn test_jsonrpc_encode()
     switch body
     case .some(text)
         doc: = json.parse(text, arena) catch panic("the framed body must parse as JSON")
-        assert(doc.get("id").as_int(-1) == 3, "the id must survive the round trip")
-        assert(doc.get("params").get("n").as_int(0) == 7, "the params must survive the round trip")
+        assert(doc.val.get("id").as_int(-1) == 3, "the id must survive the round trip")
+        assert(doc.val.get("params").get("n").as_int(0) == 7,
+            "the params must survive the round trip")
     case .none
         panic("a complete frame must be returned")
     verdict
@@ -655,7 +749,7 @@ fn test_jsonrpc_stderr_flood(ksplc: U8[]) //<
     defer c.free()
     // No frame comes. **The test checks that it ends with "closed"**; without draining, the peer
     // stalls on standard error and the timeout expires.
-    _frame: = c.read_msg(60000, arena) catch e
+    _frame: = c.read_msg(60000, null) catch e
         switch e
         case .closed
             kept: = c.err_tail().len
@@ -707,7 +801,9 @@ fn test_jsonrpc_notification_burst(ksplc: U8[]) //<
         panic("the burst child must start")
     defer c.free()
     $b: = Json_builder.new(arena)
-    got: = c.request("probe", b.obj().build(), 60000, arena) catch e
+    // Before the child answers it may already be gone, so a refused write is no failure here.
+    c.notify("note", b.obj().build(), 60000, null) catch {}
+    got: = c.request("probe", b.obj().build(), 60000, null) catch e
         switch e
         case .broken
             panic("the answer was given up on behind the notifications")
@@ -715,5 +811,7 @@ fn test_jsonrpc_notification_burst(ksplc: U8[]) //<
             panic("the answer did not arrive in time")
         case .closed
             panic("the peer closed before answering")
-    assert(got.get("result").get("ok").as_int(0) == 1I64, "the answer's own body must come back")
+    defer got.free()
+    assert(got.val.get("result").get("ok").as_int(0) == 1I64,
+        "the answer's own body must come back")
     verdict.pass("A request finds its answer however many notifications stand in front of it.")

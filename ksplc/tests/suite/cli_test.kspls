@@ -8,15 +8,17 @@
 //   * `ksplc info <subject>` answers one line, and rejects a wrong subject, naming the valid ones
 //   * `ksplc clean` answers with the directory it erased; `ksplc build`, a runnable program
 //   * `ksplc explain <code>` prints only that code's section, and rejects an unknown code
-//   * **an option that has no effect on that subcommand is an error** — silently ignored, it
-//     cannot be told from having worked (Principle 5 in docs/DESIGN.md) — and the error names the
-//     subcommands that accept it
+//   * **an option that has no effect on that subcommand is an error** (Principle 5 in
+//     docs/DESIGN.md), and the error names the subcommands that accept it
 //   * `ksplc --help`'s per-subcommand list agrees with the pairs really accepted
-//   * `--diagnostic-format=json` writes a JSON object per line, where the text form writes a line
+//   * `--diagnostic-format=json` writes an object per line and a closing one; standard output
+//     holds only what was asked for (`support/cli_streams.kspls`)
 // ==========================================
 
 // Caution: **Do not copy the per-subcommand list into here.** Its source is flag_faces in
 // ksplc/usage.kspls, which `--help` prints; the test checks that ksplc behaves as those lines say.
+import "ksplc/tests/support/cli_sanitize"
+import "ksplc/tests/support/cli_streams"
 import "ksplc/tests/support/harness"
 import "std/chars"
 import "std/ds" { List }
@@ -290,14 +292,11 @@ priv fn case_cache_others_can_write(arena: Arena$@) //<
     verdict.check(name_cc,
         built.code == 0 && built.out.find_str("not using the cache").is_some(), built.out)
     if !handed
-        why: = "neither `chown` nor `sudo -n chown` can hand a folder to another user here"
         // Caution: **Required where `KANSO_REQUIRE_CHOWN=1`**, which the repository sets where its
         // image gives the user sudo without a password: a skip there would never run the case.
-        if sys.get_env("KANSO_REQUIRE_CHOWN").unwrap_or("").equals("1")
-            verdict.check(name_foreign, false,
-                arena.text().s(why).s(", where `KANSO_REQUIRE_CHOWN=1` requires it").take())
-        else
-            verdict.skip_check(name_foreign, why)
+        harness.require_or_skip(name_foreign, "KANSO_REQUIRE_CHOWN",
+            "neither `chown` nor `sudo -n chown` can hand a folder to another user here (it takes \
+                root, or sudo without a password)")
         return
     verdict.check(name_foreign,
         theirs.code != 0 && theirs.out.find_str("belongs to another user").is_some(), theirs.out)
@@ -350,10 +349,7 @@ priv fn case_explain(arena: Arena$@) //<
     defer rx.free()
     // `off_by_default` names some codes again; only `codes`, before it, lists each once.
     listed: = reg.sub(0, reg.find_str("priv const off_by_default").unwrap_or(reg.len))
-    found: = rx.find_all(listed, arena) catch
-        verdict.check("explain prints each registered code's section alone", false,
-            "the registered codes cannot be read")
-        return
+    found: = rx.find_all(listed, arena)
     $bad: = Str_builder.new()
     defer bad.free()
     $seen: Sz = 0
@@ -419,6 +415,31 @@ priv fn case_build(arena: Arena$@) //<
     ng_case("build: an output its own C would overwrite is refused",
         U8[][]::{ "build", std_flag(arena), src, fs.join(dir, "prog.c", arena) }, "overwritten")
     ng_case("build: it takes an input and an output", U8[][]::{ "build", src }, "usage: ksplc build")
+    io.write_file(src, "fn helper(): I32\n  return 1\n") catch {}
+    ng_case("build: a program with no main() is refused by ksplc, not by the linker",
+        U8[][]::{ "build", std_flag(arena), src, exe }, "this program has no main()")
+
+priv fn case_main_failure_status(arena: Arena$@) //<
+    //< A failing `main` exits non-zero whatever its error: a number in 1..255 as it is, else 1
+    //<
+    //< **256 and an enum's first variant are the cases that read as success** were the status the
+    //< number's low bits or the variant's tag (both 0).
+    dir: = harness.sandbox("cli_main_failure")
+    src: = fs.join(dir, "fail.kspls", arena)
+    exe: = fs.join(dir, "fail.exe", arena)
+    bodies: = U8[][]::{ "fn main(): Void!I32\n  throw 200\n", "fn main(): Void!I32\n  throw 256\n",
+        "fn main(): Void!I64\n  throw -5I64\n",
+        "priv enum Er\n  bad\nfn main(): Void!Er\n  throw .bad\n" }
+    wants: = I32[]::{ 200, 1, 1, 1 }
+    for i in Range.asc(bodies.len)
+        io.write_file(src, bodies[i]) catch {}
+        name: = arena.text().s("a failing main exits with \{wants[i]\} (case \{i\})").take()
+        built: = cli(U8[][]::{ "build", std_flag(arena), src, exe })
+        if built.code != 0
+            verdict.check(name, false, built.out)
+            continue
+        ran: = harness.run(U8[][]::{ exe })
+        verdict.check(name, ran.code == wants[i], ran.out)
 
 priv fn case_output_language(arena: Arena$@) //<
     //< `--to` names what a compile writes, C or LLVM IR
@@ -462,6 +483,9 @@ priv fn case_library(arena: Arena$@) //<
     ng_case("--library= refuses one path named twice",
         U8[][]::{ std_flag(arena), lib_opt(h, arena), lib_opt(h, arena), src, out_c },
         "is named twice")
+    ng_case("--library refuses --program, since a library has no main()",
+        U8[][]::{ std_flag(arena), "--program", lib_opt(h, arena), src, out_c },
+        "--program cannot be combined")
 
 priv fn case_machine(arena: Arena$@) //<
     //< `--machine` names a machine from ksplc's table, and nothing else
@@ -557,6 +581,36 @@ priv fn case_bom(arena: Arena$@) //< checks that a leading BOM runs and survives
         back: = io.read_file(path) catch ""
         verdict.check(arena.text().s("BOM: the BOM survives formatting (").s(path).s(")").take(),
             f.code == 0 && back.starts_with(bom, 0), f.out)
+
+priv fn case_bad_utf8(arena: Arena$@) //< checks that a byte that is not UTF-8 stops the read
+    //<
+    //< A string's stray byte went on to C, and a comment's passed unseen. **Ask `fmt` too**: it
+    //< parses on its own path, and passing it would write the bytes back as if they were text.
+    dir: = fs.join(harness.tmp_dir(), "cli_bad_utf8", arena)
+    fs.mkdir_all(dir) catch {}
+    // A lone 0xFF in a string, and a surrogate's encoding (ED A0 80) in a comment.
+    in_string: = fs.join(dir, "s.kspls", arena)
+    in_comment: = fs.join(dir, "c.kspl", arena)
+    s_src: = arena.text().s("fn main(): I32\n    _x: = \"ab").c(0xFFU8).s("\"\n    return 0\n")
+        .take()
+    c_src: = arena.text().s("fn main(): I32 {\n    // a ").c(0xEDU8).c(0xA0U8).c(0x80U8)
+        .s("\n    return 0;\n}\n").take()
+    io.write_file(in_string, s_src) catch
+        verdict.check("UTF-8: the sample can be written", false, in_string)
+        return
+    io.write_file(in_comment, c_src) catch
+        verdict.check("UTF-8: the sample can be written", false, in_comment)
+        return
+    out_c: = fs.join(dir, "out.c", arena)
+    for want in U8[][]::{ "s.kspls:2:14: error: this byte (0xFF)",
+        "c.kspl:2:10: error: this byte (0xED)" }
+        path: = in_string if want.starts_with("s.") else in_comment
+        r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(arena), path, out_c }, dir)
+        verdict.check(arena.text().s("UTF-8: the compile stops at the byte (").s(want).s(")").take(),
+            r.code != 0 && r.out.find_str(want).is_some(), r.out)
+        f: = harness.run_in(U8[][]::{ harness.ksplc_exe(), "fmt", path }, dir)
+        verdict.check(arena.text().s("UTF-8: fmt stops at the byte too (").s(want).s(")").take(),
+            f.code != 0 && f.out.find_str(want).is_some(), f.out)
 
 priv fn case_surface_doc(arena: Arena$@) //<
     //< The record of the published API carries the documentation as a fourth column
@@ -766,13 +820,16 @@ priv fn case_entry_spelling(arena: Arena$@)
 priv fn json_lines(args: U8[][], arena: Arena$@): List<|json.Val|> //<
     //< Each line of what one run wrote to stderr, read as JSON (a line that is not is `null_val`)
     //<
-    //< **Only standard error**: `harness.ksplc` joins the two streams, and the summary stays on
-    //< stdout.
+    //< **Only standard error**: `harness.ksplc` joins the two streams, and json is promised on
+    //< standard error alone.
     r: = subproc.run_capture(harness.ksplc_argv(args), "", verdict.default_timeout_ms,
         4 * 1024 * 1024, arena)
     $rows: = List<|json.Val|>.new(arena)
     for line in r.stderr_data.lines(arena)
-        rows.push(json.parse(line, arena) catch .null_val)
+        doc: = json.parse(line, arena) catch
+            rows.push(.null_val)
+            continue
+        rows.push(doc.val)
     return rows
 
 priv fn is_null(v: json.Val): Bool
@@ -781,6 +838,18 @@ priv fn is_null(v: json.Val): Bool
         return true
     default
         return false
+
+priv fn closes(rows: List<|json.Val|>@, result: U8[], errors: I32, warnings: I32): Bool //<
+    //< Whether every line is an object, the last the closing one with this result and these counts
+    if rows.len == 0
+        return false
+    for row in rows
+        if is_null(row)
+            return false
+    last: = rows.get(rows.len - 1)
+    return !last.has_key("severity") && last.get("result").as_str().equals(result) &&
+        last.get("errors").as_int(-1I32) == errors &&
+        last.get("warnings").as_int(-1I32) == warnings
 
 priv fn case_diagnostic_json(arena: Arena$@) //<
     //< `--diagnostic-format=json`: one object per diagnostic, with its code apart from its message
@@ -799,14 +868,21 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
         verdict.check("json diagnostics: the sample can be written", false, warn)
         return
     errs: = json_lines(U8[][]::{ "--diagnostic-format=json", bad, out_c }, arena)
-    one: = errs.get(0) if errs.len == 1 else json.Val.null_val
+    one: = errs.get(0) if errs.len == 2 else json.Val.null_val
     verdict.check("json diagnostics: an error is one line of one object",
-        errs.len == 1 && one.get("severity").as_str().equals("error") &&
+        errs.len == 2 && one.get("severity").as_str().equals("error") &&
         one.get("line").as_int(0I32) == 2I32 && one.get("column").as_int(0I32) == 12I32 &&
         one.get("end_column").as_int(0I32) == 15I32,
         arena.text().s("\{errs.len\} lines").take())
+    // **Standard error holds objects alone, the closing one last**: the summary and the closing
+    // line are its text form, and would break a reader of the lines.
+    verdict.check("json diagnostics: a failed compile ends with the closing object",
+        closes(errs@, "failed", 1I32, 0I32),
+        arena.text().s("\{errs.len\} lines").take())
     verdict.check("json diagnostics: an error carries no code",
         one.has_key("code") && is_null(one.get("code")), "")
+    verdict.check("json diagnostics: an error the analysis found has no kind",
+        one.has_key("kind") && is_null(one.get("kind")), "")
     text: = harness.ksplc(U8[][]::{ bad, out_c })
     head: = arena.text().s(one.get("file").as_str()).c(':').s("\{one.get("line").as_int(0I32)\}")
         .c(':').s("\{one.get("column").as_int(0I32)\}").s(": error: ")
@@ -814,11 +890,19 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
     verdict.check("json diagnostics: the text form names the same place and says the same",
         head.len > 12 && text.out.find_str(head).is_some(), text.out)
     warns: = json_lines(U8[][]::{ "lint", "--diagnostic-format=json", warn }, arena)
-    w: = warns.get(0) if warns.len == 1 else json.Val.null_val
+    w: = warns.get(0) if warns.len == 2 else json.Val.null_val
     verdict.check("json diagnostics: a code has a key of its own, out of the message",
         w.get("code").as_str().equals("W0207") &&
         !w.get("message").as_str().starts_with("["),
         arena.text().s("\{warns.len\} lines").take())
+    verdict.check("json diagnostics: a lint that passes ends with the closing object",
+        closes(warns@, "succeeded", 0I32, 1I32),
+        arena.text().s("\{warns.len\} lines").take())
+    good: =
+        json_lines(U8[][]::{ "--diagnostic-format=json", "--lint=W0207=off", warn, out_c }, arena)
+    verdict.check("json diagnostics: a clean compile writes the closing object alone",
+        good.len == 1 && closes(good@, "succeeded", 0I32, 0I32),
+        arena.text().s("\{good.len\} lines").take())
     // **The underline is counted in characters, as the column is**: a byte count runs past a
     // string of three-byte characters.
     wide: = fs.join(dir, "wide.kspls", arena)
@@ -827,29 +911,33 @@ priv fn case_diagnostic_json(arena: Arena$@) //<
         return
     wides: = json_lines(U8[][]::{ "--diagnostic-format=json", wide, out_c }, arena)
     verdict.check("json diagnostics: a non-ASCII underline is counted in characters",
-        wides.len == 1 && wides.get(0).get("end_column").as_int(0I32) == 17I32,
+        wides.len == 2 && wides.get(0).get("end_column").as_int(0I32) == 17I32,
         arena.text().s("\{wides.len\} lines").take())
     ng_case("json diagnostics: an unknown format is refused",
         U8[][]::{ "--diagnostic-format=xml", bad, out_c }, "expected text or json")
-
-priv fn case_refusal_stream(arena: Arena$@) //<
-    //< A refused command line writes to standard error alone, `--help` to standard output
-    //<
-    //< Caution: **Read the two streams apart** (`run_capture`, not `harness.ksplc_bare`, which
-    //< joins them): a caller reading the answer (`$(ksplc info std-dir)`, a pipe) would otherwise
-    //< take a refusal, or the usage after it, for the answer.
-    refusals: U8[][][3] = ::{ U8[][]::{ "--typo", "a.kspl", "a.c" },
-        U8[][]::{ "info", "std-dirs" }, U8[][]::{ "a.kspl", "b.c", "c.kspl" } }
-    for args in refusals
-        r: = subproc.run_capture(harness.ksplc_argv(args), "", 60000, 65536, arena)
-        verdict.check(arena.text().s("a refusal of `").s(args[0])
-            .s("` writes to standard error alone").take(),
-            r.exit_code != 0 && r.stdout_data.len == 0 && r.stderr_data.len > 0,
-            arena.text().s("stdout: ").s(r.stdout_data).s("\nstderr: ").s(r.stderr_data).take())
-    h: = subproc.run_capture(U8[][]::{ harness.ksplc_exe(), "--help" }, "", 60000, 65536, arena)
-    verdict.check("--help writes the usage to standard output",
-        h.exit_code == 0 && h.stdout_data.starts_with("usage: ksplc") && h.stderr_data.len == 0,
-        h.stderr_data)
+    // `--stats` reports in text on standard error, the stream json leaves to its objects.
+    ng_case("json diagnostics: --stats is refused beside json",
+        U8[][]::{ "--diagnostic-format=json", "--stats", bad, out_c }, "cannot be combined")
+    // **A syntax error says so in `kind`**: it has no code, and nothing after it was analysed.
+    broken: = fs.join(dir, "broken.kspls", arena)
+    io.write_file(broken, "fn main(): I32\n  x: I32 = 1 1\n  return x\n") catch
+        verdict.check("json diagnostics: the sample can be written", false, broken)
+        return
+    syn: = json_lines(U8[][]::{ "--diagnostic-format=json", broken, out_c }, arena)
+    s0: = syn.get(0) if syn.len > 0 else json.Val.null_val
+    verdict.check("json diagnostics: a syntax error has the kind `syntax` and no code",
+        s0.get("kind").as_str().equals("syntax") && s0.has_key("code") &&
+        is_null(s0.get("code")) && s0.get("line").as_int(0I32) == 2I32,
+        arena.text().s("\{syn.len\} lines").take())
+    // **The closing object counts the objects above it**: the analysis's tally misses an error the
+    // parse stopped on.
+    verdict.check("json diagnostics: a syntax error ends with a closing object counting it",
+        syn.len == 2 && closes(syn@, "failed", 1I32, 0I32),
+        arena.text().s("\{syn.len\} lines").take())
+    // The command line's refusal of a code names where the codes are, not a compiler source file.
+    ng_case("an unknown --lint code points at the codes' lists and `ksplc explain`",
+        U8[][]::{ "--lint=W9999=off", bad, out_c },
+        "unknown diagnostic code 'W9999': the codes are listed under")
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
@@ -868,15 +956,18 @@ fn main(): I32
     case_cache_others_can_write(arena)
     case_emit_runtime(arena)
     case_build(arena)
+    case_main_failure_status(arena)
     case_explain(arena)
     case_summary_codes(arena)
     case_refusals()
-    case_refusal_stream(arena)
+    cli_streams.case_refusal_stream(arena)
     case_output_language(arena)
     case_library(arena)
     case_machine(arena)
+    cli_sanitize.case_sanitize(arena)
     case_help_matches_behavior(arena)
     case_bom(arena)
+    case_bad_utf8(arena)
     case_surface_doc(arena)
     case_emit_libs(arena)
     case_entry_spelling(arena)

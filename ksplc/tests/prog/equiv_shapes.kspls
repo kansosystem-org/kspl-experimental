@@ -1,7 +1,8 @@
 //< The shapes the backend-equivalence program checks that C leaves open or lays out its own way
 //<
-//< The evaluation order, tagged unions in arrays and globals, and nested `#align(N)` layout, each
-//< a function `equiv.kspls`'s `main` calls with the builder, with the declarations it alone reads.
+//< The evaluation order, tagged unions in arrays and globals, nested `#align(N)` and `#packed`
+//< layout, and 16-bit products, each a function `equiv.kspls`'s `main` calls with the builder,
+//< with the declarations it alone reads.
 import "std/mem"
 import "std/str" { Str_builder }
 
@@ -203,7 +204,8 @@ impl Narrow_tag
         case .wide(p, al)
             return p * 10 + al.a
 
-fn layout_lines(b: Str_builder$@) //< `#align(N)` nested, and a narrow tag, laid out alike
+fn layout_lines(b: Str_builder$@) //<
+    //< `#align(N)` nested, a narrow tag and `#packed`, laid out alike
     $h: Aligned_holder = ::{}
     h.y = 12345
     h.rows[1].a = 9
@@ -220,3 +222,55 @@ fn layout_lines(b: Str_builder$@) //< `#align(N)` nested, and a narrow tag, laid
     got: = rs[1] catch Aligned16::{}
     b.s(" result=\{Sz::rs[1]@ - Sz::rs[0]@\}/\{sizeof(Aligned16!Layout_err)\}/")
         .s("\{(Sz::rs[0]@) % 16\}/\{got.a\}/\{sizeof(U8!Layout_err)\}\n")
+    packed_lines(b)
+
+#packed
+priv struct Wire //< a wire record: `#packed` leaves every field but the first under-aligned
+    //<
+    //< Caution: **Reach the fields through a subscript.** The C backend fixes such a target's
+    //< address first, and an aligned pointer to the field makes the store a word store, which
+    //< faults on a Cortex-M0 (`make test-equiv` builds this C with C's alignment trap).
+    priv tag: U8
+    priv n: I32
+    priv big: I64
+    priv pair: Wire_pair
+    priv nums: I32[2]
+
+priv struct Wire_pair //< a struct at its own alignment, inside the packed one
+    priv a: I16
+    priv b: I64
+
+#noinline
+priv fn wire_fill(ws: Wire$[], i: Sz, v: I32) //< each field written and updated through `ws[i]`
+    ws[i].tag = U8::i
+    ws[i].n = v
+    ws[i].n *= 3
+    ws[i].big = I64::v << 40
+    ws[i].big -= 1
+    ws[i].pair = ::{ .a = I16::v, .b = I64::v * 7 }
+    ws[i].pair.b += 1
+    ws[i].nums[1] = v + 1
+
+priv fn packed_lines(b: Str_builder$@) //< `#packed` fields written, updated and read by subscript
+    $ws: Wire[3] = ::{}
+    wire_fill(Wire$[]::ws, 1, 5)
+    // The order holds through a field the subscript's receiver cannot point at.
+    eval_log = 0
+    ws[eval_idx() + 2].nums[eval_idx()] += eval_val()
+    b.s("packed=\{sizeof(Wire)\}/\{ws[1].tag\}/\{ws[1].n\}/\{ws[1].big\}/\{ws[1].pair.a\}/")
+        .s("\{ws[1].pair.b\}/\{ws[1].nums[1]\}/\{ws[2].nums[0]\}/\{eval_log\}\n")
+
+#noinline
+priv fn wrap16(u: U16, s: I16, b: Str_builder$@) //<
+    //< 16-bit products, which C would compute in `int`
+    $cu: = u
+    cu *= u
+    $cs: = s
+    cs *= s
+    b.s("/\{u * u\}/\{s * s\}/\{cu\}/\{cs\}")
+
+fn wrap16_lines(b: Str_builder$@) //< 16-bit products past `int`'s range, which wrap at 16 bits
+    b.s("wrap16")
+    wrap16(65535, -1, b)
+    wrap16(40000, 300, b)
+    b.s("\n")

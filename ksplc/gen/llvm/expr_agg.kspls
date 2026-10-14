@@ -7,6 +7,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/gen/llvm/ctx" { Genllvm_ctx }
 import "ksplc/gen/llvm/expr" as gen_llvm_expr
 import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -15,6 +16,7 @@ import "std/ds" { Map }
 priv struct Field_slot //< where one initializer's value is stored
     reg: I32 //< the register holding the slot's address
     type_id: I32 //< the type the store is emitted in (the reason is at Ctx.emit_numeric_coerce)
+    align: Sz //< what a `#packed` struct leaves of the field's alignment, 0 for the type's own
 
 priv fn named_field_index(child: Ast_node$@, by_name: Map<|U8[], I32|>$@, at: I32): I32 //<
     //< The field a struct literal's initializer writes: the one it names, else the one at `at`
@@ -206,7 +208,10 @@ impl Ast_node
                 current_field_idx = field_idx + 1
                 slot = r.struct_slot(cg, tmp_ptr, field_idx, val_expr.type_id)
             stored_reg: = cg.emit_numeric_coerce(val_reg, val_expr.type_id, slot.type_id)
-            cg.s("    store ").t(slot.type_id).s(" ").s(stored_reg).s(", ptr %\{slot.reg\}\n")
+            cg.s("    store ").t(slot.type_id).s(" ").s(stored_reg).s(", ptr %\{slot.reg\}")
+            if slot.align > 0
+                cg.s(", align \{slot.align\}")
+            cg.s("\n")
 
     priv fn array_slot(r: Ast_node$@, cg: Genllvm_ctx$@, tmp_ptr: U8[], child: Ast_node$@, at: I32,
         fallback_type_id: I32): Field_slot //<
@@ -235,15 +240,18 @@ impl Ast_node
         fallback_type_id: I32): Field_slot //<
             //< The field a struct literal's initializer fills
         $type_id: = fallback_type_id
+        $align: Sz = 0
         clean_name: = cg.env.base_type_name(cg.env.get_real_type(r.type_id))
         if sd: = cg.env.get_struct_def(clean_name)
             if field_idx >= 0 && field_idx < sd.fields_list.len
-                type_id = sd.fields_list.get(field_idx).type_id
+                field: = sd.fields_list.get(field_idx)
+                type_id = field.type_id
+                align = cg.sema.packed_field_align(r.type_id, field)
         reg: = cg.next_reg()
         cg.s("    %\{reg\} = getelementptr inbounds ")
         cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr)
             .s(", i32 0, i32 \{cg.field_index(r.type_id, field_idx)\}\n")
-        return Field_slot::{ .reg = reg, .type_id = type_id }
+        return Field_slot::{ .reg = reg, .type_id = type_id, .align = align }
 
     fn emit_llvm_result_wrap(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         inner: = r.get_child(0)

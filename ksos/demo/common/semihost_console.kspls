@@ -7,7 +7,7 @@ import "std/strfmt" as _strfmt // `\{}` on a number: the primitives' `Formattabl
 
 extern "C"
     fn ksos_console_char(c: U8) //< semihosting SYS_WRITEC (write one character)
-    fn ksos_qemu_exit() //< semihosting SYS_EXIT (end the run)
+    fn ksos_qemu_exit(failed: U32) //< semihosting SYS_EXIT: ends the run, failed when non-zero
 fn puts(s: U8[]) //< writes a string over semihosting, one character at a time
     for c in s
         ksos_console_char(c)
@@ -31,40 +31,77 @@ $the_out: Out = ::{}
 
 fn out(): Out$@ //< the console to write an interpolated string to
     return the_out@
-fn exit() //< ends the run (halts QEMU / tells the debugger it is over)
+fn exit() //< ends the run (halts QEMU / tells the debugger it is over), its verdict as the status
     //<
-    //< Caution: **If any check() was used, do not exit without printing the summary.** The gate
-    //< reads the outcome from the marks in the log (ksos_run_gate in `ksos/Makefile`), so a demo
-    //< that left partway has no failure mark, and "no check ran" would look the same as "all
-    //< passed".
-    if ok_count + fail_count > 0 && !summary_printed
-        puts("[FAIL] exited before the summary\n")
-        fail_count += 1
-        print_summary("exited early")
-    ksos_qemu_exit()
+    //< **A run passes only through `print_summary` with every check held** (`Tally.end`). The gate
+    //< reads both QEMU's exit status and the `RESULT:` line (`ksos_run_gate` in `ksos/Makefile`),
+    //< so a demo that left partway, or never checked anything, fails rather than looking the same
+    //< as "all passed".
+    ksos_qemu_exit(the_tally.end())
 fn on_panic(msg: U8$[]) //<
-    //< The panic handler set on panic_hook (shared by every Cortex-M demo)
+    //< The panic handler set on panic_hook (shared by every Cortex-M demo): the run fails at once
+    //<
+    //< Caution: **End the run here, as a failure.** Left to `panic`'s endless loop, a task that
+    //< panics under preemption gives the CPU to the others, and one of them may still print a
+    //< passing summary and exit.
     puts("PANIC: ")
     puts(msg)
     puts("\n")
+    the_tally.fail += 1
+    the_tally.summary("a panic stopped the run")
+    ksos_qemu_exit(1)
 
-// Prints a named check's outcome and counts it (the counters several probes share). The gate
-// reads these marks, not free text a demo prints.
-$ok_count: I32 = 0
-$fail_count: I32 = 0
-// Whether the summary was printed, so that exit() catches "it counted but left without
-// reporting".
-$summary_printed: Bool = false
-fn check(name: U8[], cond: Bool)
-    if cond
-        puts("[OK] ")
-        ok_count += 1
-    else
-        puts("[FAIL] ")
-        fail_count += 1
-    puts(name)
-    putc('\n')
-fn print_summary(label: U8[]) //<
-    //< prints check()'s totals together ("=== {label}: N OK, M FAIL ===\n")
-    summary_printed = true
-    out().s("=== \{label\}: \{ok_count\} OK, \{fail_count\} FAIL ===\n")
+// ==========================================
+// The checks a demo makes, and the verdict line the gate reads (not free text a demo prints)
+// ==========================================
+struct Tally //< a run's checks, counted, and whether its verdict line was printed
+    priv ok: I32
+    priv fail: I32
+    priv summarised: Bool //< so that `end` catches "it counted but left without reporting"
+
+impl Tally
+    fn new(): Tally //< nothing checked yet
+        return Tally::{ .ok = 0, .fail = 0, .summarised = false }
+
+    fn check(r: Self$@, name: U8[], cond: Bool) //< prints `[OK] <name>` or `[FAIL] <name>`
+        if cond
+            puts("[OK] ")
+            r.ok += 1
+        else
+            puts("[FAIL] ")
+            r.fail += 1
+        puts(name)
+        putc('\n')
+
+    fn summary(r: Self$@, label: U8[]) //< prints the run's verdict line
+        //<
+        //< `RESULT: ALL PASS (<label>, checks held: N)` when at least one check ran and none
+        //< failed; `RESULT: SOME FAILED (M) -> <label>` otherwise. **No check at all is a
+        //< failure**: a demo whose checks were never reached has confirmed nothing.
+        r.summarised = true
+        if r.ok + r.fail == 0
+            puts("[FAIL] no check ran\n")
+            r.fail = 1
+        if r.passed()
+            out().s("RESULT: ALL PASS (\{label\}, checks held: \{r.ok\})\n")
+        else
+            out().s("RESULT: SOME FAILED (\{r.fail\}) -> \{label\}\n")
+
+    fn passed(r: Self$@): Bool //< whether it passed: summarised, some check ran, none failed
+        return r.summarised && r.fail == 0 && r.ok > 0
+
+    fn end(r: Self$@): U32 //< the exit status the run ends with: 0 when it passed, 1 otherwise
+        //<
+        //< A run that never printed its summary gets a `[FAIL]` line and the summary here.
+        if !r.summarised
+            puts("[FAIL] exited before the summary\n")
+            r.fail += 1
+            r.summary("exited early")
+        return 0 if r.passed() else 1
+
+$the_tally: Tally = ::{ .ok = 0, .fail = 0, .summarised = false } //< the demo's own run
+
+fn check(name: U8[], cond: Bool) //< one check of the demo's run (`Tally.check`)
+    the_tally.check(name, cond)
+fn print_summary(label: U8[]) //< the demo's verdict line (`Tally.summary`)
+    the_tally.summary(label)

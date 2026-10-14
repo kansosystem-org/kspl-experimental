@@ -147,6 +147,30 @@ import "std/sys"
 fn main(): I32
   n: = sys.args().len()
   return I32::n
+// ==== case field_name_misspelt
+//< A field that does not exist names the nearest field, never the import of an extension method
+//<
+//< **Without a call only a field can stand there**, and no other file can add one, so the import
+//< note would send the writer the wrong way. A name with no field near it gets no guess, and the
+//< member of a type with no fields (`I32`) gets neither note.
+// EXPECT: field_name_misspelt.kspls:19:5: error: type 'field_name_misspelt.P' has no field or method named 'y'
+// EXPECT: Note: the field with the nearest name is 'x'.
+// EXPECT: has no field or method named 'totla'
+// EXPECT: Note: the field with the nearest name is 'total'.
+// EXPECT: type 'I32' has no field or method named 'z'
+// EXPECT: has no field or method named 'unrelated'
+// EXPECT-NOT: extension method
+priv struct P
+  x: I32
+  total: I32
+
+fn main(): I32
+  $p: = P::{ .x = 1, .total = 2 }
+  p.y = 3
+  p.totla = 4
+  p.x.z = 1
+  p.unrelated = 5
+  return p.x
 // ==== case field_type_less_visible
 //< A `priv` type in a `pub struct`'s `pub` field is rejected as less visible than the field
 //<
@@ -167,10 +191,11 @@ fn main()
 //< A field whose visibility is in balance with its type draws no visibility diagnostic
 //<
 //< A `priv` field is stopped from outside by the visibility check, and a `priv struct`'s `pub`
-//< field is held down to the struct's visibility, so neither leaks. The program fails on purpose
-//< for another reason (an undefined symbol), beside which the EXPECT-NOT finds no visibility one.
-// EXPECT: undefined path or identifier 'no_such_fn'
-// EXPECT-NOT: is less visible than the
+//< field is held down to the struct's visibility, so neither leaks. The case fails on purpose
+//< through the same check, at a return value rather than a field.
+// EXPECT: return type 'Leaked' is less visible than the function exposing it
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: than the field exposing it
 
 priv struct Hidden
   v: I32
@@ -182,14 +207,19 @@ priv struct Inner_holder
   slot: Hidden
 
 impl Holder
-  pub fn sum(r: Self$@): I32
+  pub fn sum(r: Self@): I32
     return r.slot.v
+
+priv struct Leaked
+  v: I32
+
+pub fn leak(): Leaked
+  return Leaked::{ .v = 3 }
 
 fn main()
   h: = Holder::{ .slot = Hidden::{ .v = 1 } }
   i: = Inner_holder::{ .slot = Hidden::{ .v = 2 } }
   _s: = h.sum() + i.slot.v
-  no_such_fn()
 // ==== case global_type_less_visible
 //< A `priv` type in a `pub` global's type annotation is rejected as less visible than the global
 //<
@@ -209,10 +239,10 @@ fn main()
 //< A global whose visibility is in balance with its type draws no visibility diagnostic
 //<
 //< A global with its type annotation omitted is always an I32 (no user-defined type is reached), so
-//< it is no hole in this check. The program fails on purpose for another reason (an undefined
-//< symbol), beside which the EXPECT-NOT finds no visibility one.
-// EXPECT: undefined path or identifier 'no_such_fn'
-// EXPECT-NOT: is less visible than the
+//< it is no hole in this check. The case fails on purpose through the same check, at a return value.
+// EXPECT: return type 'Leaked' is less visible than the function exposing it
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: than the declaration exposing it
 
 priv struct Hidden
   v: I32
@@ -220,9 +250,37 @@ priv struct Hidden
 priv $hidden_g: Hidden = ::{}
 pub const public_n: Sz = 4
 
+priv struct Leaked
+  v: I32
+
+pub fn leak(): Leaked
+  return Leaked::{ .v = 3 }
+
 fn main()
   hidden_g.v = I32::public_n
-  no_such_fn()
+// ==== case packed_managed_field
+//< An ARC-managed field `#packed` leaves under-aligned is refused where the struct declares it
+//<
+//< Its count is kept through the field's address, which a pointer could not give aligned. A struct
+//< holding one counts too; a raw pointer to one is not managed and passes.
+// EXPECT: field 'r' holds the ARC-managed 'std.refcount.Rc<|I32|>', whose count is kept through
+// EXPECT: field 'h' holds the ARC-managed 'packed_managed_field.Holder'
+// EXPECT: Finished with 2 error(s)
+import "std/refcount" { Rc }
+
+priv struct Holder
+  r: Rc<|I32|>
+
+#packed
+priv struct Wire
+  tag: U8
+  r: Rc<|I32|>
+  h: Holder
+  p: Rc<|I32|>@
+
+fn main(): I32
+  w: Wire = ::{ .r = Rc<|I32|>.new(1) }
+  return I32::w.tag
 // ==== case recursive_generic_instantiation
 //< A generic function that calls itself with **a deeper type argument**
 //<
@@ -242,9 +300,12 @@ fn main(): I32
 //< Sema clearly rejects a direct `::` value cast to a struct type
 //<
 //< Let through, a cast from a scalar or another struct becomes the invalid C `(StructType)value`
-//< (see ksplc/sema/body/postfix.kspls). A source type implementing operator.Cast (`ci.Ci32::10`)
+//< (see ksplc/sema/body/postfix.kspls). A source type implementing `Cast` (`ci.Ci32::10`)
 //< resolves to a cast() call and passes, so Ci32 to Ci64, with no Cast, is used here.
+//< The message names the trait as it is written, `std/lang`'s `Cast`, with the `impl` to add.
 // EXPECT: cannot cast to struct type
+// EXPECT: implements 'Cast<|std.checked_int.Ci64|>' (std/lang's trait: 'impl std.checked_int.Ci32: Cast<|std.checked_int.Ci64|>')
+// EXPECT-NOT: operator.Cast
 import "std/checked_int" as ci
 
 fn main()
@@ -275,6 +336,25 @@ import "std/mem" { Arena }
 fn main(): I32
   a: Arena = ::{}
   return I32::sizeof(Arena) - I32::sizeof(a)
+// ==== case struct_literal_written_twice
+//< A field or an array index written twice in one literal is refused, naming the first write
+//<
+//< C takes the later value and only warns, so the earlier one would vanish while the program
+//< builds. Each shape is a way to reach one place again: by name, by name after position, by index.
+// EXPECT: struct_literal_written_twice.kspls:14:24: error: field 'x' is written twice in this literal: first by name on line 14, then here
+// EXPECT: field 'x' is written twice in this literal: first by position on line 16, then here
+// EXPECT: index 0 is written twice in this literal: first by position on line 18, then here
+// EXPECT: Finished with 3 error(s)
+struct P
+    x: I32
+    y: I32
+
+fn case_name_twice(): P
+    return ::{ .x = 1, .x = 2 }
+fn case_name_after_position(): P
+    return ::{ 5, .x = 6 }
+fn case_index_after_position(): I32[3]
+    return ::{ 1, 2, [0] = 9 }
 // ==== case struct_too_many_initializers
 //< A struct literal with more initializers than fields names the struct and its field count
 //<

@@ -29,7 +29,7 @@ debug-file: $(STAGE1_EXE)
 	echo "# BUILDING $(SRC_KSPL) FOR DEBUGGING ($(BACKEND))"; \
 	echo "./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) \"$(SRC_KSPL)\" \"$$gen\""; \
 	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs="$$libf" "$(SRC_KSPL)" "$$gen"; \
-	if [ "$(BACKEND)" = "c" ]; then $(C_FMT) "$$gen"; fi; \
+	if [ "$(BACKEND)" = "c" ]; then $(call c_fmt,"$$gen"); fi; \
 	rt=""; if [ "$(BACKEND)" = "llvm" ]; then rt="$(OUT_DIR)/$$stem.runtime.c"; ./$(STAGE1_EXE) emit-runtime "$$rt"; fi; \
 	echo "$(CC) $(CFLAGS) \"$$gen\" $$rt \"@$$libf\" $(LDLIBS) -o \"$$exe\""; \
 	$(CC) $(CFLAGS) "$$gen" $$rt "@$$libf" $(LDLIBS) -o "$$exe"; \
@@ -107,12 +107,13 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
 # (`extract-ksplc`) runs apart from the other packages'**: it rebuilds itself and runs its suites,
 # the longest copy by far, so CI can start it beside them (`test-extract` below is both).
 SUITES := lsp-tree extract-ksplc extract-rest kspls-trip docref c-warnings docsnippet pilot-copy \
-  conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate \
+  conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate own-machine \
   $(PRIVATE_SUITES)
 
-# Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer): out of
-# `test-suites`, run by `ci-linux`.
-LINUX_SUITES := js-syntax race
+# Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer;
+# `sanitize`: its address, leak and undefined-behaviour sanitizers): out of `test-suites`, run by
+# `ci-linux`.
+LINUX_SUITES := js-syntax race sanitize
 
 ALL_SUITES := $(SUITES) $(LINUX_SUITES)
 
@@ -173,16 +174,23 @@ fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 	$(call pkg_make,ksplc) test-property PROPERTY_ARGS="--n=600 --seed=$(FUZZ_LONG_SEED)"
 .PHONY: fuzz-long
 
-# Caution: **The fuzzed readers' address sanitizer is mandatory on Linux**, whose image holds it: no
-# silent pass (each package's `test-fuzz`).
-export KANSO_REQUIRE_ASAN := $(if $(filter linux,$(PLATFORM)),1,)
-# The same for `test-race`'s ThreadSanitizer (`tests/suite/race_test.kspls`).
-export KANSO_REQUIRE_TSAN := $(if $(filter linux,$(PLATFORM)),1,)
-# The same for handing a folder to another user (`hand_over` in `ksplc/tests/suite/cli_test.kspls`),
-# which the image's passwordless `sudo` allows.
-export KANSO_REQUIRE_CHOWN := $(if $(filter linux,$(PLATFORM)),1,)
-# The same for the libraries `ksbind` binds (OpenSSL, SQLite), which its own `make test` links.
-export KSBIND_REQUIRE_LIBS := $(if $(filter linux,$(PLATFORM)),1,)
+# --- The switches that make a missing tool fail rather than skip ---
+# **Each is 1 on Linux**, where CI runs in the image of `.devcontainer/Dockerfile`, which holds
+# every tool: a skip there would mean the image lost one, so the gate fails. Elsewhere each is 0,
+# and the gate says SKIP. **On a Linux machine lacking a tool, set its switch to 0**: the gate then
+# skips, and `tools/ci.kspls` lets that skip through and names the switch as the round ends, since
+# such a round is not CI's verdict. Each reads 0 or 1 alone. What each requires, and what turning
+# it off gives up, is "The switches that require a tool" in `docs/SPEC-gates.md`.
+REQUIRE_SWITCHES := KANSO_REQUIRE_ASAN KANSO_REQUIRE_TSAN KANSO_REQUIRE_BOTH_CC \
+  KANSO_REQUIRE_CHOWN KSBIND_REQUIRE_LIBS KSOS_REQUIRE_ARM
+require_default := $(if $(filter linux,$(PLATFORM)),1,0)
+$(foreach v,$(REQUIRE_SWITCHES),$(eval $(v) ?= $(require_default)))
+$(foreach v,$(REQUIRE_SWITCHES),$(if $(filter 0 1,$($(v))),,\
+  $(error $(v)=$($(v)): only 0 or 1 is read (0 lets the gate skip where this machine lacks the tool))))
+export $(REQUIRE_SWITCHES)
+# The ones turned off where the platform requires them, for `tools/ci.kspls` (`--relaxed=`).
+require_relaxed := $(if $(filter 1,$(require_default)),$(foreach v,$(REQUIRE_SWITCHES),\
+  $(if $(filter 0,$($(v))),$(v))))
 
 # `times` into seconds, ASCII with `#` as `\#` (above Makefile's `include`); MSYS2's 0.00s gets
 # one line instead.

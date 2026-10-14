@@ -18,8 +18,10 @@ void ksos_console_char(unsigned char c) {
     semihost(0x03, (void*)&ch);
 }
 
-// Exits QEMU (SYS_EXIT = 0x18). In 32-bit ARM's classic form r1 is the reason code itself, not a
-// pointer; ADP_Stopped_ApplicationExit gives exit code 0.
-void ksos_qemu_exit(void) {
-    semihost(0x18, (void*)0x20026u);
+// Exits QEMU (SYS_EXIT = 0x18), with the run's verdict as its exit status. In 32-bit ARM's classic
+// form r1 is the reason code itself, not a pointer, and no status can be passed: QEMU exits with 0
+// for ADP_Stopped_ApplicationExit (0x20026) and with 1 for any other reason, so a failed run gives
+// ADP_Stopped_RunTimeErrorUnknown (0x20023).
+void ksos_qemu_exit(uint32_t failed) {
+    semihost(0x18, (void*)(failed ? 0x20023u : 0x20026u));
 }

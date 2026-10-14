@@ -6,6 +6,7 @@
 import "ksplc/base/ast" as base_ast + { Ast_node, build_anon_env_name, build_anon_fn_name }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/parse/desugar" { Desugar_ctx, closure_empty_field, next_anon_serial, build_temp_name,
@@ -114,7 +115,7 @@ impl Ast_node
             return
         // **Only inside a block**: the environment is a temporary on the caller's frame, declared
         // in a block. At the top level the user would see a name they never wrote:
-        // `undefined path or identifier '_anon_env_v_1'`.
+        // `undefined path or identifier '_%anon_env_v_1'`.
         if ctx.block_depth == 0
             r.desugar_err(ctx,
                 "a closure can only appear inside a function body (its captures live in the \
@@ -309,7 +310,7 @@ fn build_anon_env_ctor_name(serial: Sz): U8[] //< the names to synthesize
     return build_temp_name("_anon_env_new_", serial_str(serial))
 
 fn build_anon_env_val_name(serial: Sz): U8[]
-    return build_temp_name("_anon_env_v_", serial_str(serial))
+    return base_c_name.made_name(build_temp_name("anon_env_v_", serial_str(serial)))
 
 fn forwarded_gen_params(ctx: Desugar_ctx$@, sig: Ast_node$@, params: Ast_node$@,
     captures: Ast_node$@): List<|U8[]|>$@ //<

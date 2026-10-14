@@ -12,6 +12,7 @@ import "kspage/lay/flow"
 import "kspage/lay/page" { Page }
 import "kspage/model/collect" { Collect }
 import "kspage/model/doc" + { Block, Rect }
+import "kspage/model/limit"
 import "kspage/model/number"
 import "kspage/model/run"
 import "kspage/model/style" + { Align, Arrange, Sheet, Shape, Style }
@@ -31,6 +32,7 @@ enum Surface_end //< the result of inserting a slide
     in_cell //< the cursor is inside a table cell, where a slide cannot go
     nowhere //< the cursor is not inside a paragraph
     no_style //< the document has no style that arranges its children on a slide with a size
+    too_deep //< its frames would stand deeper than a document holds (`limit.most_nesting`)
 
 enum Sketch //< a slide's layout sketch
     //<
@@ -224,7 +226,7 @@ impl Editor
         if r.shut() || rows < 1 || cols < 1
             return false
         room: = r.room_after_caret(page)
-        if !room.found
+        if !room.found || !r.fits_below(room.block, 3) // the table, its rows and their cells
             return false
         r.break_group()
         st: = r.step()
@@ -281,6 +283,8 @@ impl Editor
         room: = r.room_after_caret(page)
         if !room.found
             return .nowhere
+        if !r.fits_below(room.block, 2) // the slide and its frames
+            return .too_deep
         // Nothing creates one here (the core does not decide the size).
         $s: Style$@ = null
         switch fitting(sheet, name, .absolute, true)
@@ -310,7 +314,7 @@ impl Editor
         if r.shut()
             return false
         room: = r.room_after_caret(page)
-        if !room.found
+        if !room.found || !r.fits_below(room.block, 1)
             return false
         r.break_group()
         st: = r.step()
@@ -339,19 +343,25 @@ impl Editor
         //< Inserts one image after the paragraph the cursor is in
         //<
         //< True if inserted. The caller decides the size (the core cannot read an image). It does
-        //< not hold the image itself, only its source. It gets one text, for a caption.
+        //< not hold the image itself, only its source. It gets one text, for a caption. **One
+        //< larger than a document holds is placed at the largest size it holds, its proportions
+        //< kept** (`limit.most_length`); kept as given, the saved file would not load.
         if r.shut()
             return false
         room: = r.room_after_caret(page)
-        if !room.found || src.len <= 0 || w <= 0.0 || h <= 0.0
+        if !room.found || src.len <= 0 || !(w > 0.0) || !(h > 0.0) ||
+            !r.fits_below(room.block, 1)
             return false
         r.break_group()
         st: = r.step()
         made: = doc.new_block("", r.arena)
         // Caution: Copy the source. What is passed in is the input field's current text.
         made.image = r.arena.dup_str(src)
-        made.image_w = w
-        made.image_h = h
+        most: = F32::limit.most_length
+        big: = w if w > h else h
+        scale: = most / big if big > most else 1.0F32
+        made.image_w = limit.length_in(w * scale)
+        made.image_h = limit.length_in(h * scale)
         made.add_text("")
         edit.do_block(r, st, room.block, room.index + 1, true, made)
         r.caret = caret.at(made.inlines.get(0), 0)
@@ -369,7 +379,7 @@ impl Editor
         if r.shut()
             return false
         room: = r.room_after_caret(page)
-        if !room.found || range.len <= 0 || !what.charted()
+        if !room.found || range.len <= 0 || !what.charted() || !r.fits_below(room.block, 1)
             return false
         r.break_group()
         st: = r.step()
@@ -473,7 +483,7 @@ impl Editor
             //< together.
             //< Caution: **Check that the container can hold them** (`holds_frames`); in a block
             //< that does not lay out children, the shape is never visible.
-        if slide == null || !holds_frames(sheet, slide.style)
+        if slide == null || !holds_frames(sheet, slide.style) || !r.fits_below(slide, 1)
             return false
         r.break_group()
         st: = r.step()
@@ -481,7 +491,7 @@ impl Editor
         if s: = r.styled(st, sheet, name, .flow)
             r.dressed(st, s, what)
             made: = doc.new_block(s.name, r.arena)
-            made.frame = .some(spot)
+            made.frame = .some(field.rect_in(spot))
             // Caution: **Add it at the end** (what comes later in the document is drawn on top).
             edit.do_block(r, st, slide, slide.children.len, true, made)
             // Leave the added shape selected, or the handles and number fields point at another

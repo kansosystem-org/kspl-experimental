@@ -71,6 +71,20 @@ fn record_layout_notes(file: U8[], notes: List<|parse_layout.Note|>$@) //<
         layout_notes = base_core.arena.create(fresh)
     layout_notes.set(base_core.arena.dup_str(file), notes)
 
+fn mend_as_read(raw: U8[], file: U8[], laid_out: Bool, notes: List<|parse_layout.Note|>$@):
+    parse_layout.Mended //<
+        //< The bytes an entry point read from disk, mended, and the text as written kept for `file`
+        //<
+        //< **Every entry point that prints a syntax error reads through here** (a compile, `ksplc
+        //< fmt`, `ksplc doc`): a diagnostic prints its line from what is kept
+        //< (`remember_as_written` in base/as_written.kspls), and mended without it shows a `;` and
+        //< a `}` nobody typed. `file` is the name the parse is handed. Text in braces is not
+        //< rewritten.
+    mended: = parse_layout.mend(raw, laid_out, notes, base_core.arena)
+    if laid_out
+        base_as_written.remember_as_written(file, base_core.arena.dup_str(mended.written))
+    return mended
+
 fn layout_noted_files(arena: Arena$@): List<|U8[]|> //<
     //< it returns the recorded file names in name order
     $out: = List<|U8[]|>.new(arena)
@@ -162,10 +176,10 @@ impl Profiler
         defer head.free()
         head.s("\n[KSPEG Rule] \{Sz::total:,\} rule invocations, ")
             .s("\{Sz::total_memo:,\} from memo, \{memo_off:,\} rules left it (Top 20 by calls)\n")
-        io.out().s(head.slice())
+        io.err().s(head.slice())
         // Caution: **Derive failed by subtraction** (the reason is at Rule_prof in
         // kspeg/engine.kspls).
-        io.out().s("        calls   memo hit     parsed     failed  rule\n")
+        io.err().s("        calls   memo hit     parsed     failed  rule\n")
         limit: = 20 if len > 20 else len
         for i in Range.asc(limit)
             p: = ranked.get(i)
@@ -174,7 +188,7 @@ impl Profiler
             defer sb.free()
             sb.s("      \{Sz::p.calls:7,\}\{Sz::p.memo_hits:11,\}\{Sz::p.parsed_ok:11,\}")
                 .s("\{Sz::failed:11,\}  \{p.name\}\n")
-            io.out().s(sb.slice())
+            io.err().s(sb.slice())
 fn init() //< the parse layer's initialization and release
     //<
     //< main calls this pair; `fin` releases kspeg_arena, which parse_raw_ast allocates lazily.
@@ -274,6 +288,19 @@ impl Parse_error
         return true
 
 fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@!Parse_error
+    // **A source is UTF-8 throughout, comments included**, and every parse starts here: the
+    // grammar reads bytes, so a stray byte in a string or a comment would pass on to C.
+    bad: = parse_source_fix.first_bad_utf8(src)
+    if bad >= 0
+        $msg: = Str_builder.new()
+        defer msg.free()
+        msg
+            .s("this byte (0x\{src[bad]:02X\}) begins no well-formed UTF-8 sequence; KSPL source is \
+                UTF-8 throughout, comments and strings included. Save the file as UTF-8, and write \
+                a byte that is not text as a number ('0xFFU8')")
+        base_diag.print_diagnostic(file_path, src, bad, 1, msg.slice(), .error,
+            src.line_starts(base_core.arena))
+        throw .syntax_error
     // The KSPEG arena is reused and rewound: one request to the OS, and each parse's garbage is
     // gone.
     if kspeg_arena == null
@@ -298,7 +325,7 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@
                 (target_parser.depth_exceeded_pos if target_parser.depth_exceeded
                 else target_parser.pos)
             starts: = src.line_starts(base_core.arena)
-            base_diag.print_diagnostic(file_path, src, fatal_pos, 1, fatal_msg, .error, starts)
+            base_diag.print_syntax_error(file_path, src, fatal_pos, fatal_msg, starts)
         case .mismatch
             max_pos: = target_parser.fail.max_fail_pos
             // Ask by how the file was opened (`reads_as_laid_out` in `../base/core.kspls`); asked
@@ -307,7 +334,8 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@
                 file_path.reads_as_laid_out())
             defer msg.free()
             starts: = src.line_starts(base_core.arena)
-            base_diag.print_diagnostic(file_path, src, max_pos, 1, msg.slice(), .error, starts)
+            at: = parse_syntax_msg.parse_error_at(src, max_pos)
+            base_diag.print_syntax_error(file_path, src, at, msg.slice(), starts)
         // **The diagnostic is printed; the lenient run below adds none**: a second one, taken from
         // a recovered tree, would list a dozen unrelated errors behind one missing bracket. **Only
         // the editor takes this path** (`recover_syntax` in `../base/core.kspls`).
@@ -345,6 +373,22 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@
     prof.ast_conv_us += t_ast_end - t_ast_start
 
     return raw_ast
+
+fn reads_whole(text: U8[], rule: U8[], parser: kspeg.Target$@): Bool //<
+    //< Whether the grammar's `rule` reads all of `text` and nothing more
+    //<
+    //< **A word is checked against the grammar itself** (`Identifier`, `_Keyword`), so a check on
+    //< a name the language server is handed cannot drift from what the parser accepts.
+    if kspeg_arena == null
+        kspeg_arena = Arena.new(1024 * 1024 * 16)
+    arena_state: = kspeg_arena.save()
+    defer kspeg_arena.restore(arena_state)
+    $target: = kspeg.Target.new(text, kspeg_arena)
+    defer target.free_memo()
+    target.share_grammar_from(parser)
+    _tree: = target.parse_rule(rule) catch
+        return false
+    return target.pos == text.len
 
 priv fn parse_leniently(src: U8[], file_path: U8[], parser: kspeg.Target$@): Ast_node$@? //<
     //< The second parse, with the recovery branches on
@@ -445,13 +489,7 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         raw: = read_source(file_path.slice())!
         // The notes are only collected (the reason is at `layout_notes` above).
         laid_notes: = List<|parse_layout.Note|>.create(base_core.arena)
-        mended: = parse_layout.mend(raw, laid_out, laid_notes, base_core.arena)
-        // **Remember the text as written**: a diagnostic prints its lines from here
-        // (`remember_as_written` in base/as_written.kspls), or shows a `;` and `}` nobody typed.
-        // Text written in braces is not converted, so it needs no copy.
-        if laid_out
-            base_as_written.remember_as_written(path_key,
-                base_core.arena.dup_str(mended.written))
+        mended: = mend_as_read(raw, path_key, laid_out, laid_notes)
         // Caution: **Put the converted text into `source_map`.** The later stages (a diagnostic's
         // column, hover, jump-to-definition) read the text there, using the tree's positions.
         record_layout_notes(path_key, laid_notes)
@@ -653,8 +691,8 @@ priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
     $names: = List<|U8[]|>.new(null)
     defer names.free()
     for p in gp.children
-        if p.find_child(.k_keyword) != null
-            return false // a type argument with `const`
+        if p.is_const_gen_param()
+            return false
         id: = p.find_text(.k_identifier)
         if id.len > 0
             names.push(id)

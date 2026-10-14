@@ -66,11 +66,14 @@ stateDiagram-v2
     delayed --> ready: its tick arrives
     ready --> suspended: Task.suspend
     suspended --> ready: Task.resume
+    suspended --> delayed: Task.resume, before its tick
     running --> done: its entry returns, or Task.delete
     done --> [*]
 ```
 
 `Task.suspend` works from any state but `done`, not only from `ready`.
+
+**A suspended task keeps what it was waiting for.** Suspending stops a task from running; it does not end its wait. A task paused in `Task.delay` or `Task.delay_until` goes back to its delay on `Task.resume` and wakes at the tick it asked for, or at once if that tick passed while it was paused (`make ksos-kernel-check`). Ending the delay at the resume would make `delay` return early with nothing to show it, so a settling time or a debounce built on it would be cut short in silence. FreeRTOS's `vTaskResume` makes the task ready, so its `vTaskDelay` returns early; Zephyr and RTEMS keep the timeout running under a suspension, as ksos does. A task paused while blocked becomes ready at the resume and checks its condition again, since a `give` made while it was paused passed it by; its timeout is an absolute deadline, so the recheck keeps it.
 
 ### Which task runs
 
@@ -206,6 +209,8 @@ Only Cortex-M has a handler mode (`IPSR`). POSIX's signal handler runs on top of
 
   The Task, the stack and a queue's buffer come from `heap.kspls`, and a delete returns them besides the slot and the context `Task.delete` returns, so create and delete repeat without running out (`make ksos-cm-heap-probe` makes and deletes 120 tasks against the port's 33 contexts, ending each of the three ways). **A task deleting itself cannot be freed at once**, since it still runs on that stack. `Task.current().delete_dyn()` leaves the reclaim to the next call another task makes into this file, or to the idle task above. Deleting another task reclaims at once.
 
+  **The table of dynamic tasks is read and written only inside a critical section**, as `Task.create` chooses its slot in one. A tick between choosing an entry and writing it would let another task take the same slot, free the same Task twice, or free a self-deleting task that has marked itself but not yet left its stack. So a self-deleting task is reaped only once `Task.delete` has made it `.done`, which happens inside the critical section that ends in the switch away. The allocations and the frees stay outside it: `heap_alloc`/`heap_free` take their own, and an entry is claimed in it before its memory is handed back (`make ksos-dyn-race` cuts the work with a tick every 100 µs).
+
   **The convention of passing `null` as the receiver to mean "myself" is not taken.** If the caller always spells out `Task.current()`, the reader needs no unwritten knowledge.
 
 ## 🔌 The ports
@@ -284,7 +289,7 @@ Caution: **The window reaches into a critical section an application holds itsel
 
 The timer is SysTick (the timer built into every Cortex-M core). PendSV is set to the lowest priority, so it does not interrupt SysTick and *tail-chains* behind it (runs straight after it, without returning to the task in between).
 
-**QEMU (`qemu-system-arm`, `mps2-an385`) checks it running as the real chip would.** The demos write to the console through ARM semihosting (a debug channel that lets bare-metal code ask the emulator to print), and end QEMU through it once every task is done.
+**QEMU (`qemu-system-arm`, `mps2-an385`) checks it running as the real chip would.** The demos write to the console through ARM semihosting (a debug channel that lets bare-metal code ask the emulator to print), and end QEMU through it once their checks are done. **The exit carries the verdict**: semihosting's exit on a 32-bit core takes a reason rather than a status, and QEMU exits with 0 only for "the application ended", so a run whose checks failed, that never reached its checks, or that panicked ends with another reason and QEMU exits with 1 (`exit` and `on_panic` in `ksos/demo/common/semihost_console.kspls`).
 
 ### The Cortex-M0/M0+ port (`port/cortex_m0/`)
 

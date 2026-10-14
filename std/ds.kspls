@@ -4,7 +4,7 @@
 //< all at once when that arena is reset.
 //< **`ds` never imports `std/io`** (the reason is at `grow_cap`).
 import "std/chars" as _chars // reaches the single-character tests and slicing
-import "std/mem" + { Arena, alloc_in, dealloc }
+import "std/mem" + { Arena, dealloc }
 
 pub enum Ds_error //< why a container lookup failed
     key_not_found //< there is no entry for that key
@@ -37,7 +37,7 @@ priv fn alloc_zeroed(bytes: Sz, arena: Arena$@): Void$@ //<
     //< Caution: **Do not skip the zeroing.** Storing an element is an ordinary assignment, so for
     //< ARC elements the compiler releases the old value being overwritten, and following garbage
     //< crashes.
-    p: = alloc_in(arena, bytes)
+    p: = arena.alloc(bytes)
     mem.zero(p, bytes)
     return p
 
@@ -48,7 +48,7 @@ priv fn grow_slot(slot: Void$@$@, cap: Sz$@, len: Sz, initial: Sz, arena: Arena$
     //< no call. Only the unused tail is zeroed (the reason is at `alloc_zeroed`); the copy fills
     //< the front.
     new_cap: Sz = grow_cap(cap$, initial)
-    new_ptr: = alloc_in(arena, checked_cap_bytes(new_cap, elem_size))
+    new_ptr: = arena.alloc(checked_cap_bytes(new_cap, elem_size))
     used_bytes: = len * elem_size if cap$ > 0 else 0
     if cap$ > 0
         mem.copy(new_ptr, slot$, used_bytes)
@@ -131,7 +131,10 @@ impl<|T|> List<|T|>
         return List<|T|>::{ .ptr = null, .len = 0, .cap = 0, .arena = arena }
 
     pub fn create( //< an empty list stored in the arena itself, to be passed around as a pointer
-        arena: Arena$@, //< where both the list and its elements go
+        //<
+        //< With `null`, `xs.free()` frees the elements and `mem.dealloc(Void$@::xs)` then the
+        //< list's own block.
+        arena: Arena$@, //< where both go; null means the global heap, a `free()` and a `dealloc`
     ): List<|T|>$@
         return arena.create(List<|T|>.new(arena))
 
@@ -189,10 +192,11 @@ impl<|T|> List<|T|>
 
     pub fn free(r: Self$@) //< frees the elements and the memory
         //<
-        //< Caution: **Release the elements' ownership before freeing the memory.** If T holds ARC
-        //< content, assigning the zero value releases the old value; without it all the contents
-        //< leak on every discard, where the caller cannot reach them. Without ARC it is a cheap
-        //< write.
+        //< **The list itself stays**: a second `free()` frees nothing, and the block `create(null)`
+        //< put it in is the caller's to give back with `mem.dealloc`.
+        //< Caution: **Release the elements' ownership before freeing the memory.** For ARC content,
+        //< assigning the zero value releases the old value; without it the contents leak on every
+        //< discard, where the caller cannot reach them.
         $empty: T[1] = ::{}
         for i in Range.asc(r.len)
             (r.ptr + i)$ = empty[0]
@@ -351,7 +355,16 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
             return true
         return false
 
-    priv fn resize(r: Self$@)
+    priv fn resize(r: Self$@) //<
+        //< Makes room once half the slots are used: drops the tombstones in place, or doubles
+        //<
+        //< **Where at most a quarter of the slots hold live pairs, the capacity stays.** Doubling
+        //< there would grow a map that holds a few pairs at a time without end, as different keys
+        //< are set and removed. The rehash leaves the table at most a quarter full, so a quarter
+        //< of its slots go before the next one, and each insertion pays O(1) for it.
+        if r.cap > 0 && r.len * 4 <= r.cap
+            r.drop_tombstones()
+            return
         old_cap: = r.cap
         old_entries: = r.entries
         new_cap: Sz = grow_cap(old_cap, 32)
@@ -373,10 +386,45 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         if old_cap > 0 && r.arena == null
             dealloc(Void$@::old_entries)
 
+    priv fn drop_tombstones(r: Self$@) //<
+        //< Rehashes the pairs within the slots they are in, leaving no tombstone
+        //<
+        //< The walk starts after a slot that was empty, so no pair's probe crosses where it starts.
+        //< Each live pair moves to the first free slot from its bucket, which is never past where
+        //< it stands: a pair already placed stays reachable while later ones move.
+        mask: = r.cap - 1
+        $start: Sz = 0
+        for
+            first: = r.entries + start
+            if !first.is_active && !first.is_tombstone
+                break
+            start += 1
+        for j in Range.asc(r.cap)
+            (r.entries + j).is_tombstone = false
+        // Caution: Release the ownership of the slot moved from, as resize does.
+        $empty: V[1] = ::{}
+        for k in Range.asc(r.cap)
+            at: = (start + 1 + k) & mask
+            e: = r.entries + at
+            if !e.is_active
+                continue
+            $to: Sz = Sz::e.hash & mask
+            for to != at && (r.entries + to).is_active
+                to = (to + 1) & mask
+            if to != at
+                dest: = r.entries + to
+                dest.key = e.key
+                dest.value = e.value
+                dest.hash = e.hash
+                dest.is_active = true
+                e.value = empty[0]
+                e.is_active = false
+        r.used = r.len
+
     priv fn set_with_hash(r: Self$@, key: K, value: V, h: U32) //<
         //< Takes the hash already known, so resize() does not hash each key again
         // A 50% load factor keeps clustering low under open addressing.
-        // Caution: Count the tombstones too (see used). Growth drops the tombstones, so used
+        // Caution: Count the tombstones too (see used). A resize drops the tombstones, so used
         // returns to len.
         if r.used * 2 >= r.cap
             r.resize()

@@ -127,9 +127,10 @@ priv fn read_jsonl(path: U8[], arena: Arena$@): List<|json.Val|> //< one JSON va
         n += 1
         if line.trim_spaces().len == 0
             continue
-        out.push(json.parse(line, arena) catch {
-            io.err().s("[error] \{path\}:\{n\} is not JSON\n"); sys.exit(1);
-        })
+        doc: = json.parse(line, arena) catch
+            io.err().s("[error] \{path\}:\{n\} is not JSON\n")
+            sys.exit(1)
+        out.push(doc.val)
     return out
 
 priv fn new_model(vocab: Sz, arena: Arena$@): ai_model.Mini_llama<|F32|>
@@ -142,18 +143,17 @@ priv struct Encoded //< the corpus as token sequences, laid end to end
 priv fn encode_corpus(corpus: U8[], at: Paths, ids: Fim_ids, keep: Arena$@): Encoded //<
     //< Every training example made a sequence, once
     //<
-    //< **The tokenizer's scratch memory lives on its own arena**, freed here: `encode` allocates
-    //< its result on the tokenizer's arena, and encoding again at every step would grow it without
-    //< limit.
+    //< **The tokenizer and every list it encodes live on `scratch`**, freed here: only `out`, on
+    //< `keep`, outlives the call.
     scratch: = Arena.new(64 * 1024 * 1024)
     defer scratch.free()
     $tok: = load_tokenizer(at, scratch)
     recs: = read_jsonl(corpus, scratch)
     $out: = Encoded::{ .tokens = List<|I32|>.new(keep), .starts = List<|Sz|>.new(keep) }
     for rec in recs
-        pre: = tok.encode(tail(rec.get("prefix").as_str()))
-        mid: = tok.encode(rec.get("middle").as_str())
-        suf: = tok.encode(head(rec.get("suffix").as_str()))
+        pre: = tok.encode(tail(rec.get("prefix").as_str()), scratch)
+        mid: = tok.encode(rec.get("middle").as_str(), scratch)
+        suf: = tok.encode(head(rec.get("suffix").as_str()), scratch)
         seq: = fim_sequence(pre, mid, suf, ids, scratch)
         out.starts.push(out.tokens.len)
         for t in seq
@@ -345,7 +345,7 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
             if tok.decode_one(pick).find_char('\n').is_some()
                 break
             logits = model.forward(pick, pos, work)
-        text: = tok.decode(mid@)
+        text: = tok.decode(mid@, work)
         out.push(text.sub(0, text.find_char('\n').unwrap_or(text.len)))
     return out
 
@@ -372,8 +372,8 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
     $text: = Str_builder.new()
     defer text.free()
     for hole in holes
-        pre: = tok.encode(tail(hole.get("prefix").as_str()))
-        suf: = tok.encode(head(hole.get("suffix").as_str()))
+        pre: = tok.encode(tail(hole.get("prefix").as_str()), work)
+        suf: = tok.encode(head(hole.get("suffix").as_str()), work)
         $prompt: = fim_prompt(pre, suf, ids, work)
         got: = candidates(model@, tok@, prompt@, ids, samples, rng@, work)
         $b: = Json_builder.new(work)

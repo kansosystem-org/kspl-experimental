@@ -57,7 +57,7 @@ priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
         lsp_client.read_ms, arena) catch e
         verdict.check("a hover beside a broken line still answers", false, end_text(e))
         return
-    text: = lsp_client.hover_text(got)
+    text: = lsp_client.hover_text(got.val)
     verdict.check("a hover beside a broken line still answers",
         text.find_str("how much it covers").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
@@ -69,7 +69,7 @@ priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
         lsp_client.read_ms, arena) catch e
         verdict.check("a jump beside a broken line still lands", false, end_text(e))
         return
-    def_line: = def_got.get("result").get("range").get("start").get("line").as_int(-1)
+    def_line: = def_got.val.get("result").get("range").get("start").get("line").as_int(-1)
     want: = decl_line(broken_src, "fn area(p: Point): I32 {", arena)
     landed: = arena.text().s("landed on line ").s("\{def_line\}").take()
     verdict.check("a jump beside a broken line still lands", def_line == want,
@@ -88,9 +88,9 @@ priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
     for _k in Range.asc(12)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        got: = msg.get("params")
+        got: = msg.val.get("params")
         if !got.get("uri").as_str().ends_with("recover_probe.kspl")
             continue
         list: = got.get("diagnostics").arr_list(arena)
@@ -125,7 +125,7 @@ priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
         lsp_client.read_ms, arena) catch e
         verdict.check("a block left unclosed does not take the file with it", false, end_text(e))
         return
-    text: = lsp_client.hover_text(got)
+    text: = lsp_client.hover_text(got.val)
     verdict.check("a block left unclosed does not take the file with it",
         text.find_str("how much it covers").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
@@ -205,13 +205,13 @@ priv fn recover(c: jsonrpc.Client$@, hook: U8[], open: Sz, id: I32, text: U8[], 
         wait: = I32::(watchdog_ms + I64::lsp_client.read_ms)
         msg: = c.read_msg(wait, arena) catch
             break
-        if msg.get("id").as_int(-1) == id
+        if msg.val.get("id").as_int(-1) == id
             out.ms = (sys.mono_us() - t0) / 1000I64
-            out.answered = lsp_client.hover_text(msg).find_str("first").is_some()
+            out.answered = lsp_client.hover_text(msg.val).find_str("first").is_some()
             continue
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        k: = copy_of(msg.get("params").get("uri").as_str(), open, arena)
+        k: = copy_of(msg.val.get("params").get("uri").as_str(), open, arena)
         if k >= 0 && !seen[k]
             seen[k] = true
             out.published += 1
@@ -229,7 +229,7 @@ priv fn open_copies(c: jsonrpc.Client$@, from: Sz, to: Sz, text: U8[], arena: Ar
     for left > 0
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             return false
-        if msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             left -= 1
     return true
 
@@ -249,8 +249,7 @@ fn check_first_answer(exe: U8[], arena: Arena$@) //<
         return
     defer c.free()
     _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
-        fallback .null_val
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
     if !verdict.check("the copy a recovery is measured on opens",
         open_copies(c@, 0, 1, text, arena), lsp_client.why(c@, "", arena))
         return
@@ -298,10 +297,8 @@ priv const poison_uri: U8[] = "kspl-test-poison:///poison.kspl" //<
     //< A name whose analysis crashes the worker (`test_poison_scheme` in `../../lsp/worker.kspls`)
 
 priv fn probe_hover(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): json.Val
-    got: =
-        c.request("textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena), lsp_client.read_ms,
-        arena) catch
-        fallback .null_val
+    got: = lsp_client.answer(c, "textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena),
+        lsp_client.read_ms, arena)
     return got
 
 fn check_quarantine(exe: U8[], arena: Arena$@) //<
@@ -316,8 +313,7 @@ fn check_quarantine(exe: U8[], arena: Arena$@) //<
         return
     defer c.free()
     _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
-        fallback .null_val
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
     for uri in kept_uris
         c.notify("textDocument/didOpen", lsp_client.did_open(uri, kept_src, arena),
             lsp_client.send_ms, arena) catch {}
@@ -366,8 +362,7 @@ priv fn def_uri(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[] //<
     //< Where `hit` is defined, asked from the user's document under that spelling
     pos: = lsp_client.at_pos(uri, decl_line(own_user, own_call, arena),
         col_in_line(own_user, own_call, "hit", arena) + 1, arena)
-    got: = c.request("textDocument/definition", pos, heavy_ms, arena) catch
-        fallback .null_val
+    got: = lsp_client.answer(c, "textDocument/definition", pos, heavy_ms, arena)
     return got.get("result").get("uri").as_str()
 
 priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
@@ -377,9 +372,9 @@ priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
     for _k in Range.asc(12)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        got: = msg.get("params")
+        got: = msg.val.get("params")
         if !got.get("uri").as_str().equals(uri)
             continue
         return I32::got.get("diagnostics").arr_list(arena).len
@@ -425,8 +420,7 @@ fn run_package(exe: U8[], arena: Arena$@)
     params: = b.obj()
         .set("textDocument", b.obj().set("uri", b.str_val("lib.kspls")).build())
         .set("position", at_hit).set("newName", b.str_val("tap")).build()
-    renamed: = c.request("textDocument/rename", params, heavy_ms, arena) catch
-        fallback .null_val
+    renamed: = lsp_client.answer(c@, "textDocument/rename", params, heavy_ms, arena)
     changes: = renamed.get("result").get("changes")
     verdict.check("a rename reaches the callers in its other folders",
         changes.has_key("lib.kspls") && changes.has_key("use/user.kspls"),
@@ -436,10 +430,8 @@ fn run_package(exe: U8[], arena: Arena$@)
     gated: = lsp_client.uri_of(top, "gated.kspls", arena)
     c.notify("textDocument/didOpen", lsp_client.did_open(gated, own_gated, arena),
         lsp_client.send_ms, arena) catch {}
-    why: =
-        c.request("textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena), lsp_client.read_ms,
-        arena) catch
-        fallback .null_val
+    why: = lsp_client.answer(c@, "textDocument/hover", lsp_client.at_pos(gated, 1, 8, arena),
+        lsp_client.read_ms, arena)
     said: = lsp_client.hover_text(why)
     verdict.check("what an unraised #cfg leaves out of it answers with the reason",
         said.find_str("not analyzed").is_some(),
@@ -484,9 +476,9 @@ fn check_template_bound(c: jsonrpc.Client$@, arena: Arena$@)
     for _k in Range.asc(8)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        p: = msg.get("params")
+        p: = msg.val.get("params")
         if !p.get("uri").as_str().ends_with("bound_probe.kspl")
             continue
         found = true

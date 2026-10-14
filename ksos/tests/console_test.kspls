@@ -8,7 +8,7 @@ import "std/verdict"
 // The two characters' worth of semihosting are stood in for here, so what the console writes is
 // read back on a host: `ksos_console_char` collects into `said` instead of trapping to a debugger.
 // ==========================================
-$said: U8[64] = ::{}
+$said: U8[256] = ::{}
 $said_len: Sz = 0
 
 #export
@@ -18,7 +18,7 @@ fn ksos_console_char(c: U8) //< the host's stand-in for semihosting's SYS_WRITEC
         said_len += 1
 
 #export
-fn ksos_qemu_exit() {} //< the host's stand-in for semihosting's SYS_EXIT; nothing to end
+fn ksos_qemu_exit(_failed: U32) {} //< the host's stand-in for SYS_EXIT; nothing to end
 
 priv fn said_text(): U8[]
     return U8[]::{ .ptr = said[0]@, .len = said_len }
@@ -33,7 +33,43 @@ fn test_console_prints_i32_min() //<
     said_len = 0
     con.out().s("\{min\}")
     assert(said_text().equals("-2147483648"), "I32's minimum is printed as -2147483648")
-    said_len = 0
-    con.print_summary("counts")
-    assert(said_text().equals("=== counts: 0 OK, 0 FAIL ===\n"), "the summary line keeps its shape")
     verdict.pass("the console prints every I32, its minimum included.")
+
+fn test_console_verdict() //<
+    //< A Cortex-M demo's run passes only with a check made, none failed, and its summary printed
+    //<
+    //< The gate reads the `RESULT:` line and QEMU's exit status (`Tally.end`), so a run whose
+    //< checks were never reached, or that left before its summary, has to fail on both.
+    verdict.start("[ksos/console] a demo's verdict line and exit status test...")
+    $held: = con.Tally.new()
+    said_len = 0
+    held.check("one", true)
+    held.summary("counts")
+    assert(said_text().equals("[OK] one\nRESULT: ALL PASS (counts, checks held: 1)\n"),
+        "a run whose every check held says ALL PASS")
+    assert(held.end() == 0, "a run whose every check held exits with 0")
+
+    $broke: = con.Tally.new()
+    said_len = 0
+    broke.check("one", true)
+    broke.check("two", false)
+    broke.summary("counts")
+    assert(said_text().equals("[OK] one\n[FAIL] two\nRESULT: SOME FAILED (1) -> counts\n"),
+        "a run with a failed check says SOME FAILED")
+    assert(broke.end() == 1, "a run with a failed check exits with 1")
+
+    $none: = con.Tally.new()
+    said_len = 0
+    none.summary("counts")
+    assert(said_text().equals("[FAIL] no check ran\nRESULT: SOME FAILED (1) -> counts\n"),
+        "a run that checked nothing fails")
+    assert(none.end() == 1, "a run that checked nothing exits with 1")
+
+    $left: = con.Tally.new()
+    left.check("one", true)
+    said_len = 0
+    assert(left.end() == 1, "a run that left before its summary exits with 1")
+    assert(said_text()
+        .equals("[FAIL] exited before the summary\nRESULT: SOME FAILED (1) -> exited early\n"),
+        "a run that left before its summary says so")
+    verdict.pass("only a run with a check made, none failed and its summary printed passes.")

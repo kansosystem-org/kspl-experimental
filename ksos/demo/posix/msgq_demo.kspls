@@ -2,9 +2,11 @@
 //<
 //< The small capacity shows the producer blocking on a full queue while the consumer is slow.
 //< Blocking in both directions is something a counting semaphore cannot express.
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
+import "std/verdict"
 
 $g_q: sync.Queue<|I32|>
 $g_qbuf: I32[3] // a small capacity, so the queue fills and the producer blocks
@@ -31,7 +33,7 @@ fn consumer(_arg: Void$@): Void
         Task.delay(2) // consume slowly
     io.out().s("[consumer] done\n")
 
-fn main()
+fn main(): I32
     io.out().s("=== Kanso OS (POSIX port) — message queue demo (cap=3) ===\n")
     g_q.init(g_qbuf[0]@, 3)
     // The producer has the higher priority (2), so it runs first, fills all 3 slots at once and
@@ -39,4 +41,6 @@ fn main()
     tcb_p.create(U8$[]::stack_p, producer, null, 2, "producer")
     tcb_c.create(U8$[]::stack_c, consumer, null, 1, "consumer")
     task.start_scheduler()
+    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    return verdict.finish()

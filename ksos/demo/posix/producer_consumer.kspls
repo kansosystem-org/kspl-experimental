@@ -2,9 +2,11 @@
 //<
 //< It shows priority, blocking and delay. On the POSIX port the context switches are real ones on
 //< Linux.
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
+import "std/verdict"
 
 $g_items: sync.Sem // counts the items available
 $g_buffer: I32[8]
@@ -37,7 +39,7 @@ fn consumer(_arg: Void$@): Void
         assert(v == n * 10, "sem: consumer read an item the producer had not made yet")
     io.out().s("[consumer] done\n")
 
-fn main()
+fn main(): I32
     io.out().s("=== Kanso OS (POSIX port) — producer/consumer demo ===\n")
     g_items.init(0)
     // The consumer has priority 2 and the producer 1. The consumer runs first and waits on the
@@ -45,4 +47,6 @@ fn main()
     tcb_c.create(U8$[]::stack_c, consumer, null, 2, "consumer")
     tcb_p.create(U8$[]::stack_p, producer, null, 1, "producer")
     task.start_scheduler()
+    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    return verdict.finish()

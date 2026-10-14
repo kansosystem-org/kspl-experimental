@@ -25,7 +25,7 @@
    | `.none` | `true` | macOS alone |
 
    A row no set runs, and `macos` with `par = .synced` (macOS's `make` has no `--output-sync`), are refused when the runner starts.
-3. **Name every SKIP it may print**: an `Expected_skip` row in the same file, with the platforms it is expected on and a piece of its line. An unnamed SKIP fails the gate with "a SKIP no row of `expected_skips` holds".
+3. **Name every SKIP it may print**: an `Expected_skip` row in the same file, with the platforms it is expected on and a piece of its line. An unnamed SKIP fails the gate with "a SKIP no row of `expected_skips` holds". **A tool Linux's image holds is required there instead**, through a switch: the gate fails without the tool where the switch reads 1, and skips where a person set it to 0. Its skip lines then go in `switch_skips` in the same file, and the switch in `REQUIRE_SWITCHES` in `mk/test.mk` ("The switches that require a tool" in [`SPEC-gates.md`](SPEC-gates.md)).
 4. **Give it a row in the platform table**, "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md): the row's first word is the target (with or without `test-`), or the target stands in the row's bracketed list. Left out, `make test-conventions` fails with "the platform table names every gate and suite CI runs".
 5. **A new shard** also needs a `Shard` and a `Set` variant, its place in `set_order`, and the job's matrix in `.github/workflows/ci.yml`; `make test-conventions` holds them together ("the CI's shards agree with the workflow's matrix"). A gate in an existing shard needs no change to the workflow.
 

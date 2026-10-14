@@ -8,7 +8,6 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
 import "ksplc/lower/root" as lower_root
-import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "std/str"
 
@@ -74,14 +73,7 @@ impl Ast_node
         // caller's release would free memory that is still alive.
         // Caution: **Decide it before lowering**, as a binding does: lowered, `return f()!` reads a
         // temporary's field and looks like a place, and the extra retain leaks.
-        $retain_src: Ast_node$@ = null
-        $through_call: = false
-        ret_type_id: = expr_node.type_id if expr_node != null else 0
-        if k == .k_stmt_return && expr_node != null && expr_node.kind_id != .k_empty &&
-            lctx.sema.env.type_is_managed(ret_type_id)
-            if rs: = expr_node.arc_bare_copy_source()
-                retain_src = rs.clone()
-            through_call = expr_node.arc_reads_through_call(lctx)
+        take: = lower_arc.Arc_take.decide(expr_node if k == .k_stmt_return else null, lctx)
 
         if expr_node != null
             expr_node.lower(lctx)
@@ -94,11 +86,7 @@ impl Ast_node
 
         // Caution: Emit the retain **before** the cleanup. After it, where the returned value is
         // the local binding itself, the cleanup's release drops the count to 0 and frees it.
-        if retain_src != null
-            lower_arc.emit_managed_op(lctx, retain_src, retain_src.type_id, "retain",
-                lctx.pre_stmts, 0)
-        if through_call
-            lower_arc.arc_retain_lowered(r.get_child(1), lctx)
+        take.retain(r.safe_get_child(1), lctx)
         if lctx.has_cleanups(0)
             lctx.inject_cleanups(0)
 

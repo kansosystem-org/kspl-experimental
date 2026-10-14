@@ -127,6 +127,15 @@ function kspageProbePaint(ks) {
     "sorted again the same way, the notice names the reason");
   undoKey();
   check(app.text() === sortWas, "the rows are put back after sorting");
+  // A table's name no formula could reach is refused, and the notice says which rule it broke.
+  // **This can be seen nowhere else**: the core's reason becomes words in the page alone.
+  openMenu("frame-name-apply");
+  const tableName = app.name();
+  document.getElementById("frame-name").value = "Q1 sales";
+  document.getElementById("frame-name-apply").click();
+  check(app.name() === tableName, "a table's name holding a space is refused");
+  check(note.textContent.indexOf("cannot hold a space") >= 0,
+    "the notice names the rule the name broke (" + note.textContent + ")");
 
   // 22'. The document's theme (wearing colours and typefaces in one set).
   //

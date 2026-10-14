@@ -40,7 +40,7 @@ pub enum Ksdb_error //< why an append or a read failed
     full //< the medium has no room left; the log only appends, so this lasts until a `reset`.
     too_large //< the content is longer than `max_payload`, or does not fit in one sector.
     write_failed //< the medium refused a write or an erase.
-    too_small //< the `dst` passed to `last` is shorter than the content.
+    too_small //< the `dst` passed to `last` or `Cursor.read` is shorter than the content.
     not_found //< no record of that kind exists.
         //<
         //< Caution: **Do not report "there is none" as length 0.** A record with empty content is
@@ -317,11 +317,18 @@ impl Cursor
     pub fn payload_at(r: Self$@): Sz //< where the current record's content begins
         return r.at + header_size
 
-    pub fn read( //< copies the current record's content out
+    pub fn read( //< copies the current record's content out and returns its length
+        //<
+        //< **A record longer than `dst` is refused, not cut**: a cut record reads as a whole
+        //< shorter
+        //< one, and nothing shows that its end is missing. `len` says beforehand how much room it
+        //< needs.
         r: Self$@,
-        dst: U8$[], //< the destination; it must hold at least `len` bytes
-    )
-        if r.len == 0
-            return
-        v: = dst.sub_mut(0, r.len)
-        r.store.read_at(r.payload_at(), v)
+        dst: U8$[], //< the destination; if it is shorter than the content, it throws `too_small`
+    ): Sz!Ksdb_error
+        n: = Sz::r.len
+        if n > dst.len
+            throw .too_small
+        if n > 0
+            r.store.read_at(r.payload_at(), dst.sub_mut(0, n))
+        return n

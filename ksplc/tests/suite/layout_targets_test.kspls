@@ -16,10 +16,13 @@ import "std/io"
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/strfmt" as _strfmt
+import "std/subproc"
 import "std/verdict"
 
 priv const probe: U8[] = "tests/prog/layout_probe.kspls"
 priv const probe_rt: U8[] = "tests/prog/layout_probe_rt.c"
+priv const probe_wide: U8[] = "tests/prog/layout_probe_wide.c" //<
+    //< a product only clang's builtins hold
 priv const clang: U8[] = "clang" //< the C compiler: `--target` names any machine to it alone
 priv const check_name: U8[] = "kspl_folded_for_" //<
     //< how a check's name begins, the machine after it
@@ -30,7 +33,7 @@ priv struct Answer //< one entry point of the probe and what it returns on wasm3
     name: U8[]
     want: U8[]
 
-priv const wasm_answers: Answer[10] = ::{
+priv const wasm_answers: Answer[11] = ::{
     Answer::{ .name = "two_ptrs", .want = "8" },
     Answer::{ .name = "word_bits_if", .want = "32" },
     Answer::{ .name = "word_bits_const", .want = "32" },
@@ -41,6 +44,7 @@ priv const wasm_answers: Answer[10] = ::{
     Answer::{ .name = "cast_len", .want = "2" },
     Answer::{ .name = "json_count", .want = "7" },
     Answer::{ .name = "json_after", .want = "99" },
+    Answer::{ .name = "wide_hi", .want = "-2" },
 } //<
     //< The numbers are wasm32's as clang lays it out (4-byte pointers and `Sz`, `I64` aligned to 8)
     //<
@@ -88,8 +92,6 @@ priv fn check_machines(dir: U8[], arena: Arena$@): U8[] //<
 priv const mismatched: U8[][2] = ::{ "thumbv7m-none-eabi", "x86_64-linux-gnu" } //<
     //< A 32-bit and a 64-bit machine, each one's C compiled for the other
 
-priv const wasm_tools: U8[][2] = ::{ "wasm-ld", "node" } //< what building and running wasm32 takes
-
 priv fn check_fires(dir: U8[], arena: Arena$@) //<
     //< A C folded for one machine and compiled for another fails at a check naming the first
     for i in Range.asc(2)
@@ -100,6 +102,19 @@ priv fn check_fires(dir: U8[], arena: Arena$@) //<
         named: = arena.text().s(check_name).s(folded.replace("-", "_", arena)).take()
         verdict.check(arena.text().s("\{folded\}'s C compiled for \{other\} fails at a check")
             .take(), r.code != 0 && r.out.find_str(named).is_some(), r.out)
+
+priv fn wasm_builtins(arena: Arena$@): U8[] //<
+    //< clang's builtins library for wasm32, empty if absent
+    //<
+    //< **A wasm32 module links it as a bare-metal ARM one links libgcc**: clang lowers what wasm32
+    //< has no instruction for (a 128-bit product) to calls only it defines. clang files it under
+    //< the `wasi` machine's folder, which serves `wasm32-unknown-unknown` too.
+    //< Caution: **Read its standard output alone.** clang 22 warns on standard error that the
+    //< `wasi` name is old, and the path read with that warning names no file.
+    r: = subproc.run_capture(U8[][]::{ clang, "--target=wasm32-wasi", "-rtlib=compiler-rt",
+        "-print-libgcc-file-name" }, "", 30000, 4096, arena)
+    path: = r.stdout_data.trim_spaces()
+    return path if !r.spawn_failed && r.exit_code == 0 && fs.exists(path) else ""
 
 priv fn has_tool(name: U8[]): Bool //< whether the tool answers `--version`
     return harness.run(U8[][]::{ name, "--version" }).code == 0
@@ -117,18 +132,29 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
     if wasm_c.len == 0
         verdict.check(name, false, "no wasm32 C to build")
         return
-    for tool in wasm_tools
-        if !has_tool(tool)
-            verdict.skip_check(name, arena.text().s("\{tool\} is not installed").take())
-            return
+    // Building and running wasm32 takes both. **Each skip's reason is one literal**, so a check
+    // reading the source sees the whole text a platform's round expects.
+    if !has_tool("wasm-ld")
+        verdict.skip_check(name, "wasm-ld is not installed")
+        return
+    if !has_tool("node")
+        verdict.skip_check(name, "node is not installed")
+        return
+    builtins: = wasm_builtins(arena)
+    if builtins.len == 0
+        verdict.skip_check(name, "clang's wasm32 builtins are not installed")
+        return
     rt_o: = fs.join(dir, "rt.o", arena)
+    wide_o: = fs.join(dir, "wide.o", arena)
     probe_o: = arena.text().s(wasm_c).s(".o").take()
     if !verdict.check("the wasm32 helpers compile",
-        compile_for(probe_rt, wasm_machine, rt_o).code == 0, "")
+        compile_for(probe_rt, wasm_machine, rt_o).code == 0 &&
+        compile_for(probe_wide, wasm_machine, wide_o).code == 0, "")
         return
     module: = fs.join(dir, "probe.wasm", arena)
     link: = harness
-        .run(U8[][]::{ "wasm-ld", "--no-entry", "--gc-sections", probe_o, rt_o, "-o", module })
+        .run(U8[][]::{ "wasm-ld", "--no-entry", "--gc-sections", probe_o, rt_o, wide_o, builtins,
+        "-o", module })
     if !verdict.check("the wasm32 module links, borrowing nothing", link.code == 0, link.out)
         return
     $argv: = List<|U8[]|>.new(arena)

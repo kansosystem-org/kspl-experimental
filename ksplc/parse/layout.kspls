@@ -40,6 +40,12 @@ enum Note_kind
         //<
         //< **A tab is not counted in the column** (the walk below counts only spaces), so that line
         //< is treated as column 0 and ends up outside the level around it.
+    terminator(col: Sz) //<
+        //< A statement's line ends in a written `;`, where the line's end already ends it
+        //<
+        //< `col` is the `;`'s byte within its line: nothing is inserted before it on that line.
+        //< **No `;` is added after it**, so the parse goes on and `fn f(): I32;` meets the
+        //< analysis's own "has no body" rather than a syntax error about an empty statement.
 
 priv const tab_byte: U8 = '\t' //< one level of indentation
     //<
@@ -597,7 +603,10 @@ fn to_braces(src: U8[], notes: List<|Note|>$@, arena: Arena$@): U8[] //<
             ins.push(Insert::{ .at = cur.code_end, .text = " {" })
             stack.push(Frame::{ .indent = cur.indent, .head = cur.head, .body = 0 })
         else if !cur.attr && !closes_inline_block(src, cur) && !arms_follow(cur, lines@, n)
-            ins.push(Insert::{ .at = cur.code_end, .text = ";" })
+            if src[cur.code_end - 1] == ';'
+                notes.push(written_terminator(src, cur))
+            else
+                ins.push(Insert::{ .at = cur.code_end, .text = ";" })
         last_end = cur.code_end
     for stack.len > 0
         top: = stack.get(stack.len - 1)
@@ -634,6 +643,17 @@ priv fn closes_inline_block(src: U8[], cur: Logical): Bool //<
     //< Caution: **Add no terminator**: `fn f() {};` is not in the grammar. The heading word tells
     //< it apart, as an `x: = T::{ … }` ends in a `}` too but is a value and needs one.
     return cur.code_end > 0 && src[cur.code_end - 1] == '}' && is_block_head(cur.head)
+
+priv fn written_terminator(src: U8[], cur: Logical): Note //<
+    //< The note for a `;` written at the end of `cur`, on the physical line that holds it
+    $line: = cur.line
+    for k in Range.new(cur.code_start, cur.code_end, 1)
+        if src[k] == '\n'
+            line += 1
+    $start: = cur.code_end - 1
+    for start > 0 && src[start - 1] != '\n'
+        start -= 1
+    return Note::{ .kind = .terminator(cur.code_end - 1 - start), .line = line }
 
 priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, n: Sz): Bool //<
     //< Whether `cur` (the `n`th line) is a `switch`'s head whose first `case` is the next line

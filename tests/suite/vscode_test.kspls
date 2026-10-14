@@ -5,6 +5,9 @@
 //< target fails only for whoever presses it (Principle 5 in `docs/DESIGN.md`). Two drifts show
 //< nothing at all: a name out of step with `${fileBasenameNoExtension}.exe` makes F5 silently start
 //< the last executable, and the release zip's build task naming another file does the same.
+//< **The extension's client side is run too**, under node, against a recording fake server
+//< (`../support/vscode_host.js`): what it tells the server about open documents is seen nowhere
+//< else, and a document it never closes makes every other file's answers stale.
 
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
@@ -64,7 +67,7 @@ priv fn is_obj(v: json.Val): Bool //< whether it is an object
     //<
     //< `get` returns `null_val` for a missing key too, so this tells "could not be read" apart.
     switch v
-    case .obj_val(_o)
+    case .obj_val
         return true
     default {}
     return false
@@ -73,8 +76,9 @@ priv fn load_jsonc(path: U8[], arena: Arena$@): json.Val
     text: = io.read_file(path) catch
         return .null_val
     defer dealloc(Void$@::text.ptr)
-    return json.parse(strip_line_comments(text, arena), arena) catch
+    doc: = json.parse(strip_line_comments(text, arena), arena) catch
         return .null_val
+    return doc.val
 
 priv struct Make_cmd //<
     //< The make target and the `VAR=` variable names read out of `command`'s literal text
@@ -176,9 +180,18 @@ priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena
             title: = arena.text().s("launch.json[\{name\}]: '\{rel\}' really exists").take()
             verdict.check(title, fs.exists(fs.join(root, rel, arena)), "")
 
-priv fn check_debug_file(root: U8[], arena: Arena$@) //<
-    //< That `make debug-file` makes `out/<name>.exe` and that it works
-    name: = "debug-file: the output name matches ${fileBasenameNoExtension}.exe (with a space)"
+priv const absent_fmt: U8[] = "C_FMT=kanso-absent-clang-format -i" //<
+    //< A formatter no machine has, standing in for a machine without clang-format
+
+priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
+    //< That `make debug-file` makes `out/<name>.exe` and that it works, given `fmt` (or none)
+    //<
+    //< **Clang-Format is optional** ("Requirements" in `docs/HOWTO-build.md`): without it, F5 still
+    //< builds, and one line says the C is left as generated.
+    $name: U8[] =
+        "debug-file: the output name matches ${fileBasenameNoExtension}.exe (with a space)"
+    if fmt.len > 0
+        name = "debug-file: without clang-format it builds, and says the C is untidied"
     src_dir: = fs.join(root, probe_dir, arena)
     fs.mkdir_all(src_dir) catch
         verdict.check(name, false, "the material's place cannot be made")
@@ -199,9 +212,18 @@ priv fn check_debug_file(root: U8[], arena: Arena$@) //<
         fs.remove_path(gen) catch {}
 
     src_arg: = arena.text().s("SRC_KSPL=\{rel\}").take()
-    r: = harness.make(U8[][]::{ "LOGGING=1", "debug-file", src_arg })
+    $args: = List<|U8[]|>.new(arena)
+    args.push("LOGGING=1")
+    args.push("debug-file")
+    args.push(src_arg)
+    if fmt.len > 0
+        args.push(fmt)
+    r: = harness.make(args.slice())
     if r.code != 0
         verdict.check(name, false, r.out.trim_end())
+        return
+    if fmt.len > 0 && !r.out.find_str("is left as generated").is_some()
+        verdict.check(name, false, "no line says the C is left untidied")
         return
     if !fs.exists(exe)
         why: = arena.text().s("the '\{exe\}' launch.json starts is not there").take()
@@ -340,6 +362,83 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
     verdict.check("extension: the laid-out notation's colouring merely takes source.kspl in",
         only_include && !laid.has_key("repository"), "the rules are copied out")
 
+// ==========================================
+// The extension's client side, run under node
+// ==========================================
+
+priv const host_js: U8[] = "tests/support/vscode_host.js"
+
+priv struct Sent //< one message the fake server read
+    method: U8[]
+    version: I32 //< -1 where the message carries none
+    text: U8[]
+
+priv fn sent_by_client(root: U8[], arena: Arena$@): json.Val //<
+    //< What `vscode_host.js` printed: the messages, and how often the panel came forward
+    out: = ksplc_harness
+        .run(U8[][]::{ "node", fs.join(root, host_js, arena),
+        fs.join(fs.join(root, ext_dir, arena), "extension.js", arena) })
+    if out.code != 0
+        verdict.check("extension client: the session runs under node", false, out.out)
+        return .null_val
+    doc: = json.parse(arena.dup_str(out.out), arena) catch
+        verdict.check("extension client: the session's record can be read", false, out.out)
+        return .null_val
+    return doc.val
+
+priv fn check_client(root: U8[], arena: Arena$@) //<
+    //< The lifecycle the extension tells the server, as the protocol orders it
+    if ksplc_harness.run(U8[][]::{ "node", "--version" }).code != 0
+        verdict.skip_check("extension client: the lifecycle it sends", "node is not installed")
+        return
+    got: = sent_by_client(root, arena)
+    $msgs: = List<|Sent|>.new(arena)
+    for m in got.get("sent").arr_list(arena)
+        msgs
+            .push(Sent::{ .method = m.get("method").as_str(),
+            .version = m.get("version").as_int(-1), .text = m.get("text").as_str() })
+    said: = arena.text().s("sent:").s(listed(msgs@, arena)).take()
+    verdict.check("extension client: `initialized` follows initialize before anything else",
+        msgs.len > 1 && msgs.get(0).method.equals("initialize") &&
+        msgs.get(1).method.equals("initialized"), said)
+    $closed_at: Sz = -1
+    $versions: = true
+    $discarded: = false
+    $reopened: = false
+    for i in Range.asc(msgs.len)
+        m: = msgs.get(i)
+        if m.method.equals("textDocument/didOpen") ||
+            m.method.equals("textDocument/didChange")
+            versions = versions && m.version >= 0
+        discarded = discarded || m.text.equals("unsaved")
+        if m.method.equals("textDocument/didClose")
+            closed_at = i
+        if closed_at >= 0 && i > closed_at && m.method.equals("textDocument/didOpen")
+            reopened = m.text.equals("from disk")
+    verdict.check("extension client: each didOpen and didChange carries the document's version",
+        versions, said)
+    verdict.check("extension client: closing a document tells the server", closed_at >= 0, said)
+    verdict.check("extension client: a change pending when its document closes is never sent",
+        !discarded, said)
+    verdict.check("extension client: a document opened again is announced again after its close",
+        reopened, said)
+    told: = got.get("refusal").as_str()
+    verdict.check("extension client: a rename the server refuses reaches the editor with its reason",
+        told.equals("refused by the fake server"),
+        arena.text().s("told '\{told\}'").take())
+    times: = got.get("shown").as_int(-1)
+    verdict.check("extension client: a start with the default settings keeps the output panel back",
+        times == 0, arena.text().s("brought forward \{times\} times").take())
+
+priv fn listed(msgs: List<|Sent|>@, arena: Arena$@): U8[] //< the messages, one word each
+    b: = arena.text()
+    for i in Range.asc(msgs.len)
+        m: = msgs.get(i)
+        b.s(" ").s(m.method.strip_prefix("textDocument/"))
+        if m.text.len > 0
+            b.s("(").s(m.text).s(")")
+    return b.take()
+
 priv fn note_missing(missing: List<|U8[]|>$@, dir: U8[], rel: U8[], arena: Arena$@)
     if rel.len == 0
         return
@@ -359,7 +458,9 @@ fn main(): I32
     check_make_targets(tasks, arena)
     $labels: = labels_of(tasks, arena)
     check_launch(launch, labels@, root, arena)
-    check_debug_file(root, arena)
+    check_debug_file(root, "", arena)
+    check_debug_file(root, absent_fmt, arena)
     check_release_assets(root, arena)
     check_extension(root, arena)
+    check_client(root, arena)
     return ksplc_harness.finish()

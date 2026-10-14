@@ -60,6 +60,16 @@ priv fn cfg_level_for(file_path: U8[], code: U8[]): Lint_level? //<
                 found = .some(level)
     return found
 
+fn unknown_code_msg(code: U8[]): U8[] //<
+    //< The refusal of a code that is not one, the same wherever a level is set
+    //<
+    //< **It points at what the writer can read**: the lists in the tools specification and
+    //< `ksplc explain`, not at this file, which only the compiler's own source holds.
+    return base_core.arena.text()
+        .s("unknown diagnostic code '\{code\}': the codes are listed under ")
+        .s("\"Diagnostic codes, and the errors that have none\" in ksplc/docs/SPEC-tools.md")
+        .s(", and 'ksplc explain <code>' prints what one means").take()
+
 priv fn lint_setting_level(setting: base_config_file.Setting): Lint_level? //<
     //< If one setting is a code's level in the `[lint]` section, it returns that level
     //<
@@ -68,8 +78,7 @@ priv fn lint_setting_level(setting: base_config_file.Setting): Lint_level? //<
     if !setting.section.equals("lint")
         return .none
     if !is_known(setting.key)
-        base_config_file.reject(setting,
-            "unknown diagnostic code (see ksplc/base/lint_codes.kspls for the full list)")
+        base_config_file.reject(setting, unknown_code_msg(setting.key))
     level: = Lint_level.parse(setting.value)
     if level.is_none()
         base_config_file.reject(setting, "unknown lint level (expected 'off', 'on', or 'error')")

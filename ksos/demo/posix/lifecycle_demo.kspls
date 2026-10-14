@@ -2,8 +2,10 @@
 //<
 //< A coordinator task suspends, resumes and deletes a worker task. It checks that the worker does
 //< not advance while suspended, advances again once resumed, and never advances after deletion.
+import "ksos/demo/common/task_end"
 import "ksos/kernel/task" + { Task }
 import "std/io"
+import "std/verdict"
 
 $g_counter: I32 = 0
 
@@ -46,8 +48,10 @@ fn coordinator(_arg: Void$@): Void
     io.out().s("[coord] worker stayed deleted (counter=\{after_delete2\})\n")
     io.out().s("=== done ===\n")
 
-fn main()
+fn main(): I32
     tcb_w.create(U8$[]::stack_w, worker, null, 1, "worker")
     tcb_c.create(U8$[]::stack_c, coordinator, null, 1, "coord")
     task.start_scheduler()
+    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    return verdict.finish()

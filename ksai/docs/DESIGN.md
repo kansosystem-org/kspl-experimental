@@ -157,6 +157,20 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 
 **One shape fits neither technique**: where the inner product runs along both rows (C = A·Bᵀ: `matmul_transb`, and `grad_matmul_input_into`'s dY·Wᵀ). Making it fit would need a transposed copy, and that copy would allocate in an `_into` (a function that writes into memory the caller gave). So `transb_kernel` in [`tensor.kspls`](../tensor.kspls) **sums four outputs side by side**. One running sum waits on its last addition at every step, but four independent ones overlap. Each still adds in ascending order, so the result is unchanged bit for bit. Under `cfg(blas)` it is `gemm` with B transposed, as `matmul_kernel` is.
 
+## What a call returns goes on the caller's arena
+
+**A tokenizer and a set of adapters live as long as the program, so whatever a call leaves on their arena is never freed.** A server keeps one tokenizer for its lifetime: an `encode` that put its result, or its working memory, on the tokenizer's own arena would grow it with every request, by about the size of the text.
+
+| What | Where it goes | Why |
+| :-- | :-- | :-- |
+| `encode`'s IDs and `decode`'s text | The arena the caller passes | The caller knows when it is done with them, and frees or resets that arena |
+| `decode_one`'s text | Nowhere: it is the vocabulary's own bytes | Printing each generated token allocates nothing |
+| A chunk's merging | The end of the list `encode` returns, merged in place | No working memory outlives the call |
+| The cache of merged chunks | The tokenizer's arena, up to `chunk_cache_cap` chunks | A text repeats its words, and the cap bounds an endless stream of new ones |
+| An adapter file's bytes (`load_qkv_lora_set` in [`model_file.kspls`](../model_file.kspls)) | The arena the adapters are allocated from | Every matrix is a view into them, so they go when the adapters go |
+
+**The result is not written into a buffer of the caller's fixed size.** How many IDs a text becomes is known only after merging, so a buffer that is too short means encoding the whole text again. An arena grows as the result does, and freeing it is one call.
+
 ## A byte sequence from outside is read on the assumption that it is broken
 
 Ksai checks every number a weights file or a vocabulary claims about itself, because someone else wrote that file.

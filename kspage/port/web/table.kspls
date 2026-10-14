@@ -18,19 +18,31 @@ import "std/chars"
 import "std/ds" { List }
 import "std/json" { Json_builder }
 
-// Adds one row (`axis` 0) or column (1) to the table the cursor is in. 1 if added.
+// Adds one row (`axis` 0) or column (1) to the table the cursor is in.
+// **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`):
+// 1 added, 0 the cursor is outside a cell, -1 open read-only, -2 the column would widen a merge
+// past what one may cover.
 #export
 fn kspage_web_add_line(axis: I32): I32
     if page == null
         return 0
     which: = Axis.column if axis != 0 else Axis.row
-    return 1 if ed.add_line(page, which) else 0
+    switch ed.add_line(page, which)
+    case .done
+        return 1
+    case .outside
+        return 0
+    case .shut
+        return -1
+    case .too_wide
+        return -2
 
 // Merges every cell the selection covers into its top-left cell (drag across, click once); one
 // undo restores them all.
 // **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`):
 // 1 merged, 0 the selection is outside a cell or spans two tables, -1 open read-only, -2 only one
-// cell is selected, -3 a merge inside extends outside the selection.
+// cell is selected, -3 a merge inside extends outside the selection, -4 it covers more rows or
+// columns than one merge may.
 #export
 fn kspage_web_merge_cells(): I32
     if page == null
@@ -44,6 +56,8 @@ fn kspage_web_merge_cells(): I32
         return -2
     case .ragged
         return -3
+    case .too_wide
+        return -4
     case .outside
         return 0
 

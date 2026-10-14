@@ -186,7 +186,7 @@ priv fn twice<|T|>(v: T, f: fn(T): T): T
   return f(f(v))
 
 fn main(): I32
-  return twice<|I32|>(1, inc)
+  return inc(1)
 // ==== case fn_ptr_signature_mismatch
 //< Sema catches a signature mismatch when a function is passed as a value
 //<
@@ -449,7 +449,7 @@ struct Box
   w: I32
 
 impl Box
-  pub fn area(r: Box): I32
+  fn area(r: Box): I32
 
 fn main(): I32
   return twice(Box::{ .w = 1 }.area())
@@ -595,16 +595,17 @@ fn main()
 //<
 //< Balanced visibility puts nothing out: a `priv` fn returning a `priv` type, a `priv struct`'s
 //< `pub` method (held down to the impl target), a narrow argument type (nothing leaks outward).
-//< An undefined symbol fails it on purpose; the EXPECT-NOT pins that no visibility error joins it.
-// EXPECT: undefined path or identifier 'no_such_fn'
-// EXPECT-NOT: is less visible than the
+//< The case fails on purpose through the same check, at a field rather than a return value.
+// EXPECT: field type 'Leaked' is less visible than the field exposing it
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: than the function exposing it
 
 priv struct Hidden
   v: I32
 
 impl Hidden
   // The impl target being priv, this `pub`'s effective visibility is file_private.
-  fn clone(r: Self$@): Hidden
+  fn clone(r: Self@): Hidden
     return Hidden::{ .v = r.v }
 
 priv fn make(): Hidden
@@ -613,7 +614,12 @@ priv fn make(): Hidden
 pub fn consume(h: Hidden): I32
   return h.v
 
+priv struct Leaked
+  v: I32
+
+pub struct Leaky
+  pub slot: Leaked
+
 fn main()
   h: = make()
   _c: = consume(h.clone())
-  no_such_fn()

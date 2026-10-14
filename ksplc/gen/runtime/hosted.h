@@ -44,17 +44,41 @@ static inline KSPL_UNUSED int64_t kspl_div_check(int64_t divisor, const char* fi
     return divisor;
 }
 
-static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width, const char* file, int line)
+/* `amount_unsigned` says the amount's own type is unsigned, so its 64 bits are printed as a `U64`:
+ * read as `int64_t`, 2^64-1 would be reported as -1. Either way such an amount is out of range. */
+static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width, int amount_unsigned,
+    const char* file, int line)
 {
     if (amount < 0 || amount >= width) {
         fflush(stdout); /* The same reason as kspl_bounds_check */
-        /* The format is %lld. The argument being int64_t, %td does not match. */
-        fprintf(stderr, "panic: shift amount out of range (amount: %lld, width: %lld) at %s:%d\n",
-            (long long)amount, (long long)width, file, line);
+        /* The formats are %lld and %llu. The argument being 64 bits, %td does not match. */
+        if (amount_unsigned) {
+            fprintf(stderr, "panic: shift amount out of range (amount: %llu, width: %lld) at %s:%d\n",
+                (unsigned long long)amount, (long long)width, file, line);
+        } else {
+            fprintf(stderr, "panic: shift amount out of range (amount: %lld, width: %lld) at %s:%d\n",
+                (long long)amount, (long long)width, file, line);
+        }
         fflush(stderr);
         abort();
     }
     return amount;
+}
+
+/* A cast to an enum from a number: the value must be one of the enum's `count` tags. The tags come
+ * as an array, so the cast's operand is evaluated once. */
+static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* tags, int64_t count,
+    const char* enum_name, const char* file, int line)
+{
+    for (int64_t i = 0; i < count; i++) {
+        if (tags[i] == value) {
+            return value;
+        }
+    }
+    fflush(stdout); /* The same reason as kspl_bounds_check */
+    fprintf(stderr, "panic: enum %s has no tag %lld at %s:%d\n", enum_name, (long long)value, file, line);
+    fflush(stderr);
+    abort();
 }
 
 /* std/libc.kspls's `get_stdin` / `get_stdout` / `get_stderr` (the substance is in hosted.c). genc

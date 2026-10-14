@@ -83,10 +83,8 @@ priv fn ask(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val
     //< Opens `src` and returns the answer to `documentSymbol` (null where none came)
     c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
         catch {}
-    got: =
-        c.request("textDocument/documentSymbol", lsp_client.at_doc(uri, arena), lsp_client.read_ms,
-        arena) catch
-        fallback .null_val
+    got: = lsp_client.answer(c, "textDocument/documentSymbol", lsp_client.at_doc(uri, arena),
+        lsp_client.read_ms, arena)
     lsp_client.close(c, uri, arena)
     return got
 
@@ -248,13 +246,13 @@ pub fn prepare_fn(c: jsonrpc.Client$@, rel: U8[], text: U8[], decl: U8[], arena:
     pos: = lsp_client.at_pos(rel, line, decl.len - 1, arena)
     msg: = c.request("textDocument/prepareCallHierarchy", pos, heavy_ms, arena) catch e
         return Prepared::{ .found = false, .item = .null_val, .raw = end_text(e) }
-    items: = msg.get("result")
+    items: = msg.val.get("result")
     list: = items.arr_list(arena)
     if list.len == 0
         return Prepared::{ .found = false, .item = .null_val,
-            .raw = lsp_client.dump(msg, arena) }
+            .raw = lsp_client.dump(msg.val, arena) }
     return Prepared::{ .found = true, .item = list.get(0),
-        .raw = lsp_client.dump(msg, arena) }
+        .raw = lsp_client.dump(msg.val, arena) }
 
 pub struct Incoming //< the result of incomingCalls: the array of callers
     //<
@@ -269,4 +267,4 @@ pub fn incoming(c: jsonrpc.Client$@, item: json.Val, arena: Arena$@): Incoming /
     params: = b.obj().set("item", item).build()
     msg: = c.request("callHierarchy/incomingCalls", params, heavy_ms, arena) catch
         return Incoming::{ .calls = List<|json.Val|>.new(arena), .timed_out = true }
-    return Incoming::{ .calls = msg.get("result").arr_list(arena), .timed_out = false }
+    return Incoming::{ .calls = msg.val.get("result").arr_list(arena), .timed_out = false }

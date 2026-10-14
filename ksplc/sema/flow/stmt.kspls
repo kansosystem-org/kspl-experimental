@@ -55,9 +55,7 @@ impl Ast_node
             if is_dup
                 continue
             bound_names.push(pchild.text)
-            c.locals
-                .push(sema_flow_track.Local_state::{ .node = pchild, .is_read = false,
-                .is_reassigned = false, .is_mutated = false })
+            c.add_local(pchild)
             case_state.add(pchild)
 
     fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
@@ -144,37 +142,30 @@ impl Ast_node
             state.reachable = false
 
     fn df_stmt_defer(r: Self$@, c: sema_flow_track.Df_ctx$@, _state: sema_flow_track.Df_state$@) //<
-        //< A defer body is not analyzed here
+        //< A defer body is not analyzed here, only registered
         //<
         //< Caution: **It must not be analyzed against the state at registration.** It runs when the
         //< scope is left, so `b.free();` after `defer b.free()` would pass with zero diagnostics.
         if def_block: = r.get_defer_block()
-            if c.pending_defers != null
-                c.pending_defers.push(def_block)
-            else
-                // A defer not wrapped in a block (not expected) is analyzed immediately.
-                def_block.analyze_df_node(c, _state)
+            c.pending_defers.push(def_block)
 
     fn df_stmt_block_scope(r: Self$@, c: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@) //<
-            //< Walks the block, then analyzes its defer bodies LIFO against the state at exit
+            //< Walks the block, then analyzes its defer bodies LIFO against the state at its end
             //<
             //< That is the order they run in. `reachable` is set meanwhile (a defer runs even after
-            //< a return).
-        saved: = c.pending_defers
-        $mine: = List<|Ast_node$@|>.new(null)
-        defer mine.free()
-        c.pending_defers = mine@
+            //< a return). An early exit analyzes them against its own state as well
+            //< (df_check_defers_on_exit).
+        mark: = c.pending_defers.len
         for child in r.children
             child.analyze_df_node(c, state)
-        c.pending_defers = saved
-
-        if mine.len == 0
+        if c.pending_defers.len == mark
             return
         was_reachable: = state.reachable
         state.reachable = true
-        for $i: = mine.len; i > 0; i -= 1
-            mine.get(i - 1).analyze_df_node(c, state)
+        for $i: = c.pending_defers.len; i > mark; i -= 1
+            c.pending_defers.get(i - 1).analyze_df_node(c, state)
+        c.pending_defers.len = mark
         state.reachable = was_reachable
 
     fn df_stmt_return_like(r: Self$@, c: sema_flow_track.Df_ctx$@,
@@ -187,4 +178,39 @@ impl Ast_node
 
         if expr != null
             expr.analyze_df_node(c, state)
+        c.df_check_defers_on_exit(r, state, r.defers_left_behind(c))
         state.reachable = false
+
+    priv fn defers_left_behind(r: Self$@, c: sema_flow_track.Df_ctx$@): Sz //<
+        //< How many of the registered defer bodies stay registered when this jump leaves
+        //<
+        //< `return` and `throw` leave them all. A `break` or `continue` leaves the statement sema
+        //< resolved it to (`def_node`, set by infer_stmt_break_continue in sema/body/stmt.kspls),
+        //< and a `fallback` the innermost `catch`.
+        if r.kind_id == .k_stmt_return || r.kind_id == .k_stmt_throw
+            return 0
+        for $i: = c.exit_targets.len; i > 0; i -= 1
+            t: = c.exit_targets.get(i - 1)
+            if (r.kind_id == .k_stmt_fallback && t.stmt.kind_id == .k_expr_catch) ||
+                (r.def_node != null && t.stmt == r.def_node)
+                return t.defers_before
+        // Not found (an erroneous jump sema already reported): only the block ends check them.
+        return c.pending_defers.len
+
+impl sema_flow_track.Df_ctx
+    fn df_check_defers_on_exit(r: Self$@, exit: Ast_node$@, state: sema_flow_track.Df_state$@,
+        keep: Sz) //<
+            //< Analyzes the defer bodies an exit runs, LIFO, against the state at that exit
+            //<
+            //< **Each exit has its own state**: checked only at the block's end, `defer use(x)`
+            //< before `if early { return; }` and `x = 4` would pass, and read `x` uninitialized on
+            //< the early path. A copy of the state is used, since the path ends here.
+        if r.pending_defers.len <= keep
+            return
+        exit_state: = state.clone()
+        exit_state.reachable = true
+        saved: = r.exit_from
+        r.exit_from = exit
+        for $i: = r.pending_defers.len; i > keep; i -= 1
+            r.pending_defers.get(i - 1).analyze_df_node(r, exit_state)
+        r.exit_from = saved

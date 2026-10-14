@@ -47,6 +47,9 @@ struct Pending_inst //<
     impl_name: U8[]
     bound_args: List<|Generic_arg|>$@ //< a copy of generics.args when it was queued
     depth: Sz //< its depth in the instantiation chain (see Generic_state.inst_chain_depth)
+    shown: U8[] //< the instance as a diagnostic names it (`app.count_over<|app.Pt|>`)
+    site: Ast_node$@ //< the call or type that first asked for it; null where none did
+    from: Sz //< the index in `pending` of the body that asked for it, or -1
 
 struct Pending_constraint //<
     //< A record for re-running, at a boundary, a type-argument constraint check that was deferred
@@ -71,6 +74,7 @@ struct Pending_methods //<
     //< mono.kspls).
     type_id: I32 //< the instance's, whose record (`Env.instance_of`) says what it instantiates
     inst_name: U8[] //< the instantiation's mangled name (the key for a violation record)
+    site: Ast_node$@ //< what the user wrote that made the instance, or null (Pending_inst.site)
     depth: Sz //<
         //< This entry's depth in the instantiation chain
         //<
@@ -140,6 +144,10 @@ struct Generic_state //< the generics' state
         //< Instantiated generic impls' trait conformances (see Trait_inst); lower builds vtables.
     args: List<|Generic_arg|>$@ //< the currently bound type arguments
     pending: List<|Pending_inst|>$@ //< monomorphization's pending queue
+    analysing: Sz //<
+        //< The index in `pending` of the body being analysed, or -1
+        //<
+        //< An error in that body names the instantiation it is in (`instance_notes` in ctx).
     inst_chain_depth: Sz //<
         //< The instantiation-chain depth of the body being analyzed or the table being built
         //<
@@ -273,6 +281,16 @@ struct Resolving_state //<
         //<
         //< Caution: **Do not make it a List.** The path is checked at every level, so a linear walk
         //< costs the square of the chain's length.
+    cut_waiting: Bool //<
+        //< Whether a fold was stopped at the depth limit and its head has not reported it yet
+        //<
+        //< The head reports it (`report_cut_chain` in `../decl/eval.kspls`).
+    cut_path: List<|Sz|>$@ //< the constants the waiting cut went through
+    cut_reported: Map<|Sz, Bool|>$@ //<
+        //< The constants on a chain already reported too deep
+        //<
+        //< **One chain is one error**: each constant down a long chain starts a fold of its own
+        //< that is cut the same way, and a cut through any of these is that chain again.
     registries: List<|I32|>$@ //<
         //< The struct / enum types whose fields or variants are being filled in
         //<

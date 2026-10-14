@@ -10,6 +10,7 @@
 // ==========================================
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
@@ -40,11 +41,11 @@ impl Ast_node
     priv fn build_index_loop(r: Self$@, item_id: Ast_node$@, coll_ref: Ast_node$@) //<
         //< The form that loops by index
         //<
-        //< `for _for_idx_N: = 0; _for_idx_N < coll.len; _for_idx_N += 1 { … }`, leaving the
+        //< `for _%for_idx_sN: = 0; _%for_idx_sN < coll.len; _%for_idx_sN += 1 { … }`, leaving the
         //< indexing to sema's index path. The index is untyped: an `I32` widening to `Sz` passes
         //< both the `.len` comparison and `get()`.
         loc: = r.loc
-        idx_name: = next_temp_name("_for_idx")
+        idx_name: = base_c_name.made_name(next_temp_name("for_idx"))
 
         coll_len: = Ast_node.build_field_access(coll_ref.text, 0, "len", 0, loc)
         // The shape treeify_expr (parse/normalize_stmt.kspls) makes: [left, op, right].
@@ -117,7 +118,7 @@ impl Ast_node
 
 priv fn next_temp_name(prefix: U8[]): U8[] //< the temporary variable's name
     //<
-    //< Numbered separately from parse's `_for_coll`.
+    //< Numbered separately from parse's `for_coll`.
     for_in_counter += 1
     b: = base_core.arena.text()
     b.s(prefix).s("_s").s("\{for_in_counter\}")

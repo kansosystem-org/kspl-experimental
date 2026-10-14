@@ -20,7 +20,7 @@ extern "C"
 #link("sqlite3")
 extern "C"
     fn sqlite3_open(filename: Void@, db: sqlite3$@$@): I32
-    fn sqlite3_close(db: sqlite3$@): I32
+    fn sqlite3_close_v2(db: sqlite3$@): I32
     fn sqlite3_prepare_v2(db: sqlite3$@, sql: Void@, n_byte: I32, stmt: sqlite3_stmt$@$@,
         tail: U8@$@): I32
     fn sqlite3_finalize(stmt: sqlite3_stmt$@): I32
@@ -143,7 +143,7 @@ impl Db
         // SQLite hands back a connection even when opening fails, to carry the message.
         if rc != sqlite_ok || handle == null
             if handle != null
-                sqlite3_close(handle)
+                sqlite3_close_v2(handle)
             throw .open_failed(rc if rc != sqlite_ok else sqlite_nomem)
         d: = mem.alloc_as<|Db|>()
         d.handle = handle
@@ -191,13 +191,14 @@ impl Db
     pub fn last_insert_rowid(r: Self$@): I64 //< the row id the last `INSERT` created
         return sqlite3_last_insert_rowid(r.handle)
 
-    pub fn free(r: Self$@) //< closes the database and frees it
+    pub fn free(r: Self$@) //<
+        //< frees it; the database closes once its statements are freed too
         //<
         //< Caution: **The name must be `free`.** The use-after-free check treats a call as a
         //< release when "the receiver's type conforms to `Owned` and the method called is `free`"
         //< (get_free_call_receiver in ksplc/sema/flow/track.kspls). Under a different name,
         //< `c.free(); c.query(…);` compiles with no diagnostics ([W0107] reports it).
-        sqlite3_close(r.handle)
+        sqlite3_close_v2(r.handle)
         dealloc(Void$@::r)
 
 impl Statement

@@ -36,6 +36,11 @@ fn run(ctx: Sema_ctx$@, root: Ast_node$@)
     $arc_memo: = Map<|I32, I32|>.new(null)
     defer arc_memo.free()
     ctx.env.arc_content_memo = arc_memo@
+    // Each type's name in the generated code is kept once spelled from here on, through code
+    // generation (the reason and the danger are at c_names_final in sema/type/env.kspls).
+    // Caution: **Turn it on here and nowhere else**, for arc_memo's reason: earlier, an instance's
+    // record may still be arriving.
+    ctx.env.c_names_final = true
     root.lower(lctx)
     // The ARC helpers (one per type, like Rust's and Swift's drop glue) are created during the walk
     // and added after it.
@@ -128,7 +133,7 @@ impl Ast_node
 
         // It pushes the release of an ARC-managed value argument onto the pending list (the body
         // block flushes it into its own scope).
-        lctx.arc_param_pending.len = 0
+        lctx.arc_scope_pending.len = 0
         lctx.register_arc_params(r)
 
         r.lower_default(lctx)
@@ -168,12 +173,12 @@ impl Ast_node
         outer_relocating: = lctx.relocating
         lctx.relocating = 0
 
-        // It flushes the argument releases that lower_decl_fn pushed into this scope, the function
-        // body's: the first block under decl_fn, so nested blocks never receive them.
-        if lctx.arc_param_pending.len > 0
-            for pending_stmt in lctx.arc_param_pending
+        // It flushes the releases pushed for this scope: the arguments' for a function body (the
+        // first block under decl_fn), an arm's bindings for a switch arm.
+        if lctx.arc_scope_pending.len > 0
+            for pending_stmt in lctx.arc_scope_pending
                 cleanup_scope.push(pending_stmt)
-            lctx.arc_param_pending.len = 0
+            lctx.arc_scope_pending.len = 0
 
         old_children: = r.children
         new_children: = base_ast.new_ast_node_list()
@@ -347,14 +352,22 @@ impl Ast_node
                 lctx.register_arc_release(tmp, cond.type_id)
             r.set_child(1, tmp)
 
+        // The pattern whose bindings the arm's block sees: the first after its `case`.
+        $arm_pattern: Ast_node$@ = null
         for $i: = 2; i < r.children.len; i += 1
             child: = r.get_child(i)
             if child.is_keyword("case") || child.is_keyword("default")
+                arm_pattern = null
                 continue
 
             if child.kind_id == .k_stmt_block
+                retains: = lctx.register_arc_arm_bindings(arm_pattern)
                 child.lower(lctx)
+                for $k: = retains.len; k > 0; k -= 1
+                    child.insert_child(0, retains.get(k - 1))
             else if child.kind_id == .k_case_pattern
+                if arm_pattern == null
+                    arm_pattern = child
                 if expr_node: = child.first_expr()
                     expr_node.lower(lctx)
 

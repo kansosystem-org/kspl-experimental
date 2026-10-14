@@ -7,7 +7,7 @@
 import "ksai/lora_set"
 import "ksai/safetensors" as st
 import "std/io"
-import "std/mem" { Arena }
+import "std/mem" + { Arena, dealloc }
 
 pub fn load_safetensors( //< reads and parses a model file; the result owns the bytes it read
     //<
@@ -18,7 +18,9 @@ pub fn load_safetensors( //< reads and parses a model file; the result owns the 
 ): st.Safetensors!st.Safetensors_error //< the parsed file; fails if it cannot be read or parsed
     file_data: = io.read_file(path) catch
         throw .read_failed
-    $s: = st.Safetensors.load_from_bytes(file_data, arena)!
+    $s: = st.Safetensors.load_from_bytes(file_data, arena) catch e
+        dealloc(Void$@::file_data.ptr)
+        throw e
     s.owns_data = true
     return s
 
@@ -33,12 +35,20 @@ pub fn save_safetensors( //< writes what a writer has collected as a model file
 
 pub fn load_qkv_lora_set<|T|>( //< reads every block's attention adapters directly from a file
     //<
-    //< The names read are "blocks.{i}.attn.{q,v}.lora_*".
+    //< The names read are "blocks.{i}.attn.{q,v}.lora_*". **The file's bytes are copied into
+    //< `arena`**, since every matrix is a view into them: freeing the arena frees the whole set.
+    //< A file refused halfway leaves nothing on the heap.
     path: U8[], //< the adapter file to read
     n_layers: Sz, //< how many blocks to look for; a missing one is an error
-    arena: Arena$@, //< the arena the array and every matrix in it are allocated from
+    arena: Arena$@, //< the arena the file's bytes, the array and every matrix are allocated from
 ): lora_set.Qkv_lora<|T|>$@!st.Safetensors_error //< one adapter per block, `n_layers` of them
-    s: = load_safetensors(path, arena)!
+    file_data: = io.read_file(path) catch
+        throw .read_failed
+    held: = U8$@::arena.alloc(file_data.len)
+    mem.copy(Void$@::held, Void$@::file_data.ptr, file_data.len)
+    dealloc(Void$@::file_data.ptr)
+    s: = st.Safetensors
+        .load_from_bytes(U8[]::{ .ptr = held, .len = file_data.len }, arena)!
     return lora_set.Qkv_lora<|T|>.load_set_from(s, n_layers, arena)!
 
 pub fn save_qkv_lora_set<|T|>( //< the inverse of `load_qkv_lora_set`: writes adapters to a file

@@ -529,6 +529,193 @@ KSPL_LINK void kspl_io_broken_pipe(void) {
 KSPL_LINK void kspl_io_broken_pipe(void) {}
 #endif
 
+/* ============================================================
+ * A crash says what happened (SIGSEGV / SIGBUS, Windows's access violation and stack overflow)
+ *
+ * Left to the OS, a program touching memory it may not ends **without a word**: a shell prints
+ * "Segmentation fault" at best, and a parent sees the code alone. So the runtime writes one line,
+ * `crash: null pointer dereference (SIGSEGV at address 0x0)`, and ends the program as the fault
+ * would have: POSIX puts the signal back to its default and raises it again (139, a core dump
+ * where one is enabled), Windows ends with the exception's code (read as 139, "A child's end is
+ * one code on every OS" in std/docs/DESIGN.md). A library takes nothing: its host owns the signals.
+ *
+ * Caution: **Only async-signal-safe calls in the handler** (write, signal, raise): the fault may
+ * strike inside malloc or stdio, holding their locks. So standard output is not flushed, and a
+ * program whose last lines matter is line-buffered ("A program does not lose its own output on an
+ * abnormal exit" in std/docs/DESIGN.md).
+ * Caution: **A stack overflow needs a stack of its own** (sigaltstack) for the handler to run on.
+ * The main thread's is set at start-up, a std/thread thread's as it starts; a thread C code starts
+ * has none, and its overflow ends with 139 and no line.
+ * ============================================================ */
+#if !defined(KSPL_LIBRARY)
+/* One crash line, built with no allocation and no stdio (either may be what broke). */
+typedef struct {
+    char text[160];
+    size_t len;
+} kspl_crash_line;
+
+static void kspl_crash_put(kspl_crash_line *l, const char *s) {
+    while (*s != '\0' && l->len < sizeof(l->text)) l->text[l->len++] = *s++;
+}
+
+static void kspl_crash_hex(kspl_crash_line *l, uintptr_t v) {
+    char digits[2 * sizeof(uintptr_t)];
+    size_t n = 0;
+    kspl_crash_put(l, "0x");
+    do {
+        digits[n++] = "0123456789abcdef"[v & 15u];
+        v >>= 4;
+    } while (v != 0);
+    while (n > 0 && l->len < sizeof(l->text)) l->text[l->len++] = digits[--n];
+}
+
+/* `crash: <what> (<why> at address <addr>)`; the address is left out where has_addr is 0. */
+static void kspl_crash_compose(kspl_crash_line *l, const char *what, const char *why, int has_addr,
+    uintptr_t addr) {
+    l->len = 0;
+    kspl_crash_put(l, "crash: ");
+    kspl_crash_put(l, what);
+    kspl_crash_put(l, " (");
+    kspl_crash_put(l, why);
+    if (has_addr) {
+        kspl_crash_put(l, " at address ");
+        kspl_crash_hex(l, addr);
+    }
+    kspl_crash_put(l, ")\n");
+}
+
+/* What a fault at addr was. An overflow's fault lands near the stack's end (floor; 0 where it is not
+ * known), in the guard below it, which on Linux's main thread is 1 MiB; an address in the first
+ * page is a null pointer with a field's offset added. */
+static const char *kspl_crash_what(uintptr_t addr, uintptr_t floor, const char *other) {
+    if (floor != 0 && (addr > floor ? addr - floor : floor - addr) < ((uintptr_t)1 << 20)) {
+        return "stack overflow";
+    }
+    return addr < 4096 ? "null pointer dereference" : other;
+}
+#endif
+
+#if !defined(_WIN32) && !defined(KSPL_LIBRARY)
+#include <sys/resource.h>
+KSPL_LINK Sz kspl_stack_floor(void);
+
+#define KSPL_ALT_STACK_SIZE 65536
+static char kspl_main_alt_stack[KSPL_ALT_STACK_SIZE];
+static int kspl_crash_taken = 0; /* whether the handler is in place, so a thread sets a stack */
+static KSPL_PER_THREAD uintptr_t kspl_crash_floor = 0; /* where this thread's stack ends, or 0 */
+
+static void kspl_crash_handler(int sig, siginfo_t *info, void *context) {
+    kspl_crash_line l;
+    const char *name = sig == SIGBUS ? "SIGBUS" : "SIGSEGV";
+    const char *p;
+    size_t left;
+    (void)context;
+    if (info->si_code == SI_USER) {
+        kspl_crash_compose(&l, "sent by another process", name, 0, 0);
+    } else {
+        uintptr_t addr = kspl_fault_addr(info);
+        const char *other = sig == SIGBUS ? "bus error" : "invalid memory access";
+        kspl_crash_compose(&l, kspl_crash_what(addr, kspl_crash_floor, other), name, 1, addr);
+    }
+    for (p = l.text, left = l.len; left > 0;) {
+        ssize_t n = write(2, p, left);
+        if (n <= 0) break;
+        p += n;
+        left -= (size_t)n;
+    }
+    /* Still blocked inside the handler, the signal is taken at its default once this returns. */
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+/* Gives the calling thread mem as its alternate stack, unless it has one; 1 where it took it. */
+static int kspl_crash_alt_stack(void *mem, size_t size) {
+    stack_t now, ss;
+    if (sigaltstack(NULL, &now) != 0 || (now.ss_flags & SS_DISABLE) == 0) return 0;
+    ss.ss_sp = mem;
+    ss.ss_size = size;
+    ss.ss_flags = 0;
+    return sigaltstack(&ss, NULL) == 0;
+}
+
+/* The main thread's stack end is its limit below this frame: asking the OS for it reads
+ * /proc/self/maps on Linux, too dear for every start (kspl_stack_floor in hosted_thread.c). What
+ * stands above this frame (the arguments, the environment) moves the guess by far less than the
+ * window kspl_crash_what allows. Before `main`, for the reason at kspl_sigpipe_init. */
+__attribute__((constructor)) static void kspl_crash_init(void) {
+    struct rlimit limit;
+    char here = 0;
+    uintptr_t top = (uintptr_t)&here;
+    kspl_crash_taken = kspl_take_default_fault(SIGSEGV, kspl_crash_handler);
+    kspl_crash_taken |= kspl_take_default_fault(SIGBUS, kspl_crash_handler);
+    if (!kspl_crash_taken) return;
+    (void)kspl_crash_alt_stack(kspl_main_alt_stack, sizeof(kspl_main_alt_stack));
+    if (getrlimit(RLIMIT_STACK, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY &&
+        (uintptr_t)limit.rlim_cur < top) {
+        kspl_crash_floor = top - (uintptr_t)limit.rlim_cur;
+    }
+}
+
+/* A std/thread thread's share as it starts: its stack's end, and an alternate stack to hand back
+ * to kspl_crash_thread_leave as it ends (NULL where none was set). */
+static void *kspl_crash_thread_enter(void) {
+    void *mem;
+    if (!kspl_crash_taken) return NULL;
+    kspl_crash_floor = (uintptr_t)kspl_stack_floor();
+    mem = malloc(KSPL_ALT_STACK_SIZE);
+    if (mem != NULL && !kspl_crash_alt_stack(mem, KSPL_ALT_STACK_SIZE)) {
+        free(mem);
+        mem = NULL;
+    }
+    return mem;
+}
+
+static void kspl_crash_thread_leave(void *mem) {
+    stack_t off;
+    if (mem == NULL) return;
+    off.ss_sp = NULL;
+    off.ss_size = 0;
+    off.ss_flags = SS_DISABLE;
+    (void)sigaltstack(&off, NULL);
+    free(mem);
+}
+#elif !defined(_WIN32)
+/* A library takes no signal (the heading above), so a thread has nothing to set. */
+static void *kspl_crash_thread_enter(void) { return NULL; }
+static void kspl_crash_thread_leave(void *mem) { (void)mem; }
+#endif
+
+#if defined(_WIN32) && !defined(KSPL_LIBRARY)
+/* Asked only where no handler took the exception, so a C library's own __try still sees its
+ * faults first; one this does not name goes on to the filter it replaced. No alternate stack is
+ * needed: Windows leaves the overflowing thread its guard's room to report in. */
+static LPTOP_LEVEL_EXCEPTION_FILTER kspl_crash_prev_filter = NULL;
+
+static LONG WINAPI kspl_crash_filter(EXCEPTION_POINTERS *info) {
+    EXCEPTION_RECORD *rec = info->ExceptionRecord;
+    kspl_crash_line l;
+    DWORD wrote = 0;
+    if (rec->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        kspl_crash_compose(&l, "stack overflow", "STATUS_STACK_OVERFLOW", 0, 0);
+    } else if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
+        uintptr_t addr = (uintptr_t)rec->ExceptionInformation[1];
+        kspl_crash_compose(&l, kspl_crash_what(addr, 0, "invalid memory access"),
+            "STATUS_ACCESS_VIOLATION", 1, addr);
+    } else {
+        return kspl_crash_prev_filter != NULL ? kspl_crash_prev_filter(info)
+                                              : EXCEPTION_CONTINUE_SEARCH;
+    }
+    WriteFile(GetStdHandle(STD_ERROR_HANDLE), l.text, (DWORD)l.len, &wrote, NULL);
+    kspl_restore_console_cp();
+    TerminateProcess(GetCurrentProcess(), rec->ExceptionCode);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+__attribute__((constructor)) static void kspl_crash_init(void) {
+    kspl_crash_prev_filter = SetUnhandledExceptionFilter(kspl_crash_filter);
+}
+#endif
+
 KSPL_LINK I32 argc = 0;
 KSPL_LINK U8 **argv = null;
 

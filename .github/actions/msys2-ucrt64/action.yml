@@ -1,0 +1,31 @@
+name: MSYS2 UCRT64
+description: MSYS2's UCRT64 shell with the packages tools/msys2-packages.txt lists
+
+# ci.yml's windows-ucrt64 job and release.yml's Windows build both set MSYS2 up through this, so
+# the one list (`tools/msys2-packages.txt`, which docs/HOWTO-build.md installs by hand too) is
+# what each of them gets. Run it after the checkout: it reads the list from the working tree.
+inputs:
+  extra:
+    description: "packages one workflow needs beyond the list, space-separated"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Git's bash, as MSYS2's shell does not exist yet; the `sed` is docs/HOWTO-build.md's. Taken
+    # apart from the `echo`, a missing list stops the step (bash runs it with `-e`).
+    - id: list
+      shell: bash
+      run: |
+        list=$(sed 's/#.*//' tools/msys2-packages.txt | xargs)
+        echo "packages=$list $EXTRA" >> "$GITHUB_OUTPUT"
+      env:
+        EXTRA: ${{ inputs.extra }}
+    - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+      with:
+        msystem: UCRT64
+        # Caution: **Do not add `update: true`**: a full upgrade each run moves the tools on a day
+        # nobody touched the sources.
+        cache: true
+        install: ${{ steps.list.outputs.packages }}

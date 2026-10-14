@@ -19,7 +19,7 @@ import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/mem" { Arena }
+import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/strnum" // `to_i64`
 import "std/subproc"
@@ -293,7 +293,7 @@ priv fn folded(r: subproc.Run_result@, arena: Arena$@): Run_out //< one run, as 
     //< **Where it could not start, the text says so too**: the code alone can look like "it ended
     //< non-zero".
     if r.spawn_failed
-        return Run_out::{ .code = -1, .out = "[harness] it could not start" }
+        return Run_out::{ .code = -1, .out = arena.dup_str("[harness] it could not start") }
     $text: = r.text(arena)
     if r.output_lost
         text = arena.text().s(text).s("\n[harness] its output could not be read back\n").take()
@@ -306,12 +306,16 @@ pub fn run_child( //< runs one child to its end, and returns how it ended and wh
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
     timeout_ms: I32, //< how long it may run before it is killed (-1 in `code`)
-    arena: Arena$@, //< where the text is kept
+    arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): Run_out
+    // The outputs and the folding are work; only the folded text is copied to the caller.
+    $work: = mem.scratch(arena)
+    defer work.free()
     t0: = sys.mono_us()
-    r: = subproc.run_capture(argv, cwd, timeout_ms, run_output_cap, arena)
+    r: = subproc.run_capture(argv, cwd, timeout_ms, run_output_cap, work.arena)
     note_near_cap(argv, (sys.mono_us() - t0) / 1000I64, timeout_ms, r.timed_out)
-    return folded(r@, arena)
+    o: = folded(r@, work.arena)
+    return Run_out::{ .code = o.code, .out = arena.dup_str(o.out) }
 
 priv fn note_near_cap(argv: U8[][], took_ms: I64, cap_ms: I32, timed_out: Bool) //<
     //< Says so where a child that ended took three quarters of its cap or more
@@ -347,18 +351,24 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
     //< of fixed names (`j<number>.out`), so two runs sharing one at once read each other's.
     items: subproc.Job[], //< what to run
     work_dir: U8[], //< where the outputs are collected; made where missing
-    arena: Arena$@, //< where the texts are kept
-): List<|Run_out|>$@
-    outs: = List<|Run_out|>.create(arena)
+    arena: Arena$@, //< where the list and the texts go; null means the heap, freed as below
+): List<|Run_out|> //< one run per item, in the input's order
+    //<
+    //< With `null`, free each `out` with `dealloc`, then the list with `free()`.
+    $outs: = List<|Run_out|>.new(arena)
     // Caution: **Say a work folder that cannot be made.** Its runs would fail to start, and each
     // would read as a child that could not be found.
     fs.mkdir_all(work_dir) catch
-        lost: = arena.text().s("[harness] the work folder \{work_dir\} cannot be made").take()
         for _item in items
+            lost: = arena.text().s("[harness] the work folder \{work_dir\} cannot be made").take()
             outs.push(Run_out::{ .code = -1, .out = lost })
         return outs
-    rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, arena)
+    // The outputs and the folding are work, as in `run_child`.
+    $work: = mem.scratch(arena)
+    defer work.free()
+    rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, work.arena)
     for i in Range.asc(rs.len)
         r: = rs.get(i)
-        outs.push(folded(r@, arena))
+        o: = folded(r@, work.arena)
+        outs.push(Run_out::{ .code = o.code, .out = arena.dup_str(o.out) })
     return outs

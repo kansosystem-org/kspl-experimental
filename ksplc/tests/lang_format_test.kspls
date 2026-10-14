@@ -44,6 +44,13 @@ fn test_string_format_spec()
     assert(b.slice().equals("1,234,567.25"), "fmt spec: float comma must group the integer part")
     b.clear().s("\{money:14,.2\}")
     assert(b.slice().equals("  1,234,567.25"), "fmt spec: float width must count the commas")
+    // With `0` and `,` together the padding zeros are digits: grouped, and no comma comes first.
+    b.clear().s("\{big:011,\}|\{big:012,\}|\{neg:06,\}")
+    assert(b.slice().equals("001,234,567|0,001,234,567|-0,005"),
+        "fmt spec: zero padding with grouping must group the zeros too")
+    b.clear().s("\{money:014,.2\}|\{neg_f:08,.2\}")
+    assert(b.slice().equals("001,234,567.25|-0,003.50"),
+        "fmt spec: float zero padding with grouping must group the zeros of the integer part")
     carry: F64 = 9.99
     b.clear().s("\{carry:1.1\}")
     assert(b.slice().equals("10.0"), "fmt spec: width is a minimum, so a carried digit stays")
@@ -110,6 +117,27 @@ fn test_float_spelling() //<
     f32_third: = F32::third
     b.clear().s("\{f32_tenth\}|\{f32_third\}")
     assert(b.slice().equals("0.1|0.33333334"), "fmt: F32 is shortest at F32 precision")
+    // Where the digits come from one power of ten (Schubfach, "One table of powers of ten serves
+    // both directions" in std/docs/DESIGN.md): the fewest significands, a gap halved below a power
+    // of 2, one digit fewer than the table's, and a value exactly between two decimals.
+    two_sub: F64 = 1.0e-323
+    three_sub: F64 = 1.5e-323
+    pow2_low: F64 = 4.450147717014403e-308
+    pow2_63: F64 = 9223372036854775808.0
+    one_fewer: F64 = 1.589197611825084e17
+    tie: F64 = 2132163508601201.25
+    b.clear().s("\{two_sub\}|\{three_sub\}|\{pow2_low\}|\{pow2_63\}")
+    assert(b.slice().equals("1e-323|1.5e-323|4.450147717014403e-308|9223372036854776000.0"),
+        "fmt: the shortest digits hold at the smallest subnormals and next to a power of 2")
+    b.clear().s("\{one_fewer\}|\{tie\}")
+    assert(b.slice().equals("158919761182508400.0|2132163508601201.2"),
+        "fmt: a decimal one digit shorter wins, and a tie between two goes to the even one")
+    f32_min: F32 = 1.0e-45F32
+    f32_four: F32 = 6.0e-45F32
+    f32_max: F32 = 3.4028235e38F32
+    b.clear().s("\{f32_min\}|\{f32_four\}|\{f32_max\}")
+    assert(b.slice().equals("1e-45|6e-45|3.4028235e+38"),
+        "fmt: F32's subnormals and its largest value are shortest at F32 precision")
     // The width, the zero fill and the separation apply to the shortest form too.
     b.clear().s("\{sum:22\}|\{hundred:07\}|\{big_int:,\}")
     assert(b.slice().equals("   0.30000000000000004|00100.0|123,456,789,012,345,680,000.0"),

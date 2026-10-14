@@ -66,6 +66,7 @@ To get the executable itself rather than `run` it, `build` it:
 | :-- | :-- |
 | The same in PowerShell | `.\ksplc.exe` and `hello.exe` in place of `./ksplc` and `./hello` |
 | To pass flags to the C compiler | `--cflags`, such as `--cflags=-O0` for the debugger |
+| To stop it at a bad memory access | `--sanitize=address`, the C compiler's address sanitizer |
 | To build from VS Code | the bundled build task, which runs the same command |
 
 ## Working in another folder

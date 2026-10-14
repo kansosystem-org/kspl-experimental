@@ -287,4 +287,5 @@ These are the places where the server does less than a client might expect.
 * **The steering policy is not saved.** It is trained again on every outward-facing startup. The seed is fixed, so the same version gives the same weights every time.
 * **`Range` and conditional requests (`If-Modified-Since` and the like) are not supported.** It always returns the whole thing.
 * **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served: a folder is checked together with its `index.html`.
+* **Only a regular file is served**: a FIFO or a device in the root answers 404, as if absent, since its read may never end and would hold the server.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception, since certificate issuance and other discovery read under it (RFC 8615).

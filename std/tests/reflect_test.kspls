@@ -145,7 +145,8 @@ priv fn roundtrip_flat(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
     parsed: = json.parse(out.slice(), arena)
         catch panic("json: what was written out has to be readable")
     $back: Sample = ::{}
-    json_struct.into_struct(parsed, back@, arena) catch panic("json: the round trip does not fail")
+    json_struct.into_struct(parsed.val, back@, arena)
+        catch panic("json: the round trip does not fail")
     assert(back.label.equals("cold"), "json: a string round-trips")
     assert(back.count == 7052I64, "json: an integer round-trips")
     assert(back.ratio > 1.24 && back.ratio < 1.26, "json: a fraction round-trips")
@@ -164,7 +165,7 @@ priv fn roundtrip_flat(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
     round: = json.parse(out.slice(), arena)
         catch panic("json: what a synthesized table wrote has to be readable")
     $derived_back: Derived = ::{}
-    json_struct.into_struct(round, derived_back@, arena)
+    json_struct.into_struct(round.val, derived_back@, arena)
         catch panic("json: the round trip does not fail under a synthesized table either")
     all_back: =
         derived_back.label.equals("cold") && derived_back.count == 7052I64 && derived_back.ok &&
@@ -178,7 +179,7 @@ priv fn refuse_missing_and_null(arena: Arena$@) //<
     $absent: U8[] = ""
     short: = json.parse("{\"label\":\"x\"}", arena) catch panic("json: the fixture must parse")
     $partial: Derived = ::{}
-    json_struct.into_struct(short, partial@, arena) catch e
+    json_struct.into_struct(short.val, partial@, arena) catch e
         switch e
         case .missing_field(which)
             absent = which
@@ -189,7 +190,7 @@ priv fn refuse_missing_and_null(arena: Arena$@) //<
     $nulled_at: U8[] = ""
     nulled: = json.parse("{\"label\":null}", arena) catch panic("json: the fixture must parse")
     $nulled_out: Derived = ::{}
-    json_struct.into_struct(nulled, nulled_out@, arena) catch e
+    json_struct.into_struct(nulled.val, nulled_out@, arena) catch e
         switch e
         case .field_type(which)
             nulled_at = which
@@ -212,7 +213,7 @@ priv fn roundtrip_nest(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
     assert(nested_keys, "json: a nest becomes a nested object")
     deep: = json.parse(out.slice(), arena) catch panic("json: what a nest wrote has to be readable")
     $both_back: Both = ::{}
-    json_struct.into_struct(deep, both_back@, arena)
+    json_struct.into_struct(deep.val, both_back@, arena)
         catch panic("json: the round trip does not fail under a nest either")
     all_deep: =
         both_back.tag.equals("t") && both_back.cold.ms == 1I64 && both_back.cold.bytes == 2I64 &&
@@ -225,7 +226,7 @@ priv fn roundtrip_nest(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
         json.parse("{\"tag\":\"t\",\"cold\":{\"ms\":1},\"warm\":{\"ms\":3,\"bytes\":4}}", arena)
         catch panic("json: the fixture must parse")
     $thin_out: Both = ::{}
-    json_struct.into_struct(thin, thin_out@, arena) catch e
+    json_struct.into_struct(thin.val, thin_out@, arena) catch e
         switch e
         case .missing_field(which)
             inner_missing = which
@@ -240,7 +241,7 @@ priv fn roundtrip_nest(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
         json.parse("{\"tag\":\"t\",\"cold\":5,\"warm\":{\"ms\":3,\"bytes\":4}}", arena)
         catch panic("json: the fixture must parse")
     $flat_out: Both = ::{}
-    json_struct.into_struct(flat, flat_out@, arena) catch e
+    json_struct.into_struct(flat.val, flat_out@, arena) catch e
         switch e
         case .field_type(which)
             not_obj = which
@@ -277,7 +278,7 @@ priv fn roundtrip_container(b: Json_builder$@, out: Str_builder$@, arena: Arena$
     wide: = json.parse(out.slice(), arena)
         catch panic("json: what a container wrote has to be readable")
     $doc_back: Doc = ::{}
-    json_struct.into_struct(wide, doc_back@, arena)
+    json_struct.into_struct(wide.val, doc_back@, arena)
         catch panic("json: the round trip does not fail under a container either")
     counts_back: = doc_back.nums.len == 2 && doc_back.items.len == 1
     assert(counts_back, "json: a container's length round-trips")
@@ -291,7 +292,7 @@ priv fn roundtrip_container(b: Json_builder$@, out: Str_builder$@, arena: Arena$
     scalar: = json.parse("{\"name\":\"d\",\"nums\":5,\"items\":[]}", arena)
         catch panic("json: the fixture must parse")
     $scalar_out: Doc = ::{}
-    json_struct.into_struct(scalar, scalar_out@, arena) catch e
+    json_struct.into_struct(scalar.val, scalar_out@, arena) catch e
         switch e
         case .field_type(which)
             not_arr = which
@@ -315,7 +316,7 @@ priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
     opt_round: = json.parse(out.slice(), arena)
         catch panic("json: a string holding only the fields present has to be readable")
     $spec_back: Spec = ::{}
-    json_struct.into_struct(opt_round, spec_back@, arena)
+    json_struct.into_struct(opt_round.val, spec_back@, arena)
         catch panic("json: the round trip does not fail under a field that resolves to present or \
             absent either")
     $got_family: U8[] = ""
@@ -335,7 +336,7 @@ priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
     $null_at: U8[] = ""
     explicit: = json.parse("{\"family\":null}", arena) catch panic("json: the fixture must parse")
     $null_out: Spec = ::{}
-    json_struct.into_struct(explicit, null_out@, arena) catch e
+    json_struct.into_struct(explicit.val, null_out@, arena) catch e
         switch e
         case .field_type(which)
             null_at = which
@@ -362,7 +363,7 @@ priv fn roundtrip_widths(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
     width_round: = json.parse(out.slice(), arena)
         catch panic("json: what a number with a width wrote has to be readable")
     $widths_back: Widths = ::{}
-    json_struct.into_struct(width_round, widths_back@, arena)
+    json_struct.into_struct(width_round.val, widths_back@, arena)
         catch panic("json: the round trip does not fail at any width")
     signed_back: =
         widths_back.tiny == -5 && widths_back.short_num == -300 && widths_back.mid == -70000 &&
@@ -395,7 +396,7 @@ priv fn roundtrip_narrow(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) 
     bag_round: = json.parse(out.slice(), arena)
         catch panic("json: what a narrow element wrote has to be readable")
     $bag_back: Narrow_bag = ::{}
-    json_struct.into_struct(bag_round, bag_back@, arena)
+    json_struct.into_struct(bag_round.val, bag_back@, arena)
         catch panic("json: the round trip does not fail under a narrow element either")
     codes_back: =
         bag_back.codes.len == 2 && bag_back.codes[0] == 60000 && bag_back.codes[1] == 1
@@ -461,7 +462,7 @@ priv fn refused_at(text: U8[], arena: Arena$@): U8[] //<
     //< The field `into_struct` refuses `text` at, or "" when it is accepted
     v: = json.parse(text, arena) catch panic("json: the fixture must parse")
     $back: Ranged = ::{}
-    json_struct.into_struct(v, back@, arena) catch e
+    json_struct.into_struct(v.val, back@, arena) catch e
         switch e
         case .field_type(which)
             return which
@@ -485,7 +486,7 @@ fn test_json_struct_out_of_range(arena: Arena$@)
     short: = json.parse("{\"codes\":[1,65536]}", arena) catch panic("json: the fixture must parse")
     $bag: Narrow_bag = ::{}
     $elem_at: U8[] = ""
-    json_struct.into_struct(short, bag@, arena) catch e
+    json_struct.into_struct(short.val, bag@, arena) catch e
         switch e
         case .field_type(which)
             elem_at = which

@@ -57,6 +57,45 @@ fn test_closure_wrapped_in_struct()
         .pass("a function value taken as an argument keeps its environment alive even wrapped in a \
             struct and returned (the lazy-chain shape).")
 
+// A closure or a frame's slice may be stored where the frame keeps it. A function pointer goes
+// into a global, and a closure the caller built is stored through the caller's pointer: the check
+// refuses only a value this frame made, stored where it outlives the frame
+// (`tests/negative/closure.kspls`, `tests/negative/pointer.kspls`).
+priv struct Frame_kept
+    c: Callable1<|I32, I32|>?
+    s: I32[]
+
+priv $stored_fn: fn(x: I32): I32
+
+priv fn install(k: Frame_kept$@, c: Callable1<|I32, I32|>)
+    k.c = .some(c)
+
+fn test_frame_store_kept_inside()
+    verdict.start("[Lang] a closure or a frame's slice stored inside the frame test...")
+    n: = 5
+    xs: I32[3] = ::{ 1, 2, 3 }
+    $k: Frame_kept = ::{ .c = .none }
+    k.c = .some(fn(x: I32; n: I32): I32 {
+        return x + n;
+    })
+    k.s = I32[]::xs
+    $other: Frame_kept = ::{ .c = .none }
+    install(other@, fn(x: I32; n: I32): I32 {
+        return x - n;
+    })
+    stored_fn = fn(x: I32): I32
+        return x * 2
+    $got: I32 = 0
+    if c: = k.c
+        got += c.call(1)
+    if c: = other.c
+        got += c.call(10)
+    got += stored_fn(4) + k.s[2]
+    assert(got == 22, "6 from the local struct's closure, 5 from the installed one, 8 and 3")
+    verdict
+        .pass("a closure and a slice stored into a local, a closure installed through the caller's \
+            pointer, and a function pointer stored into a global all run.")
+
 // ==========================================
 // The operators that apply to `Bool`, over every combination. The refused ones are
 // `tests/negative/bool_arithmetic.kspl`, which alone stays green if `&` is refused too.

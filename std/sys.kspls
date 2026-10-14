@@ -1,96 +1,18 @@
-//< The process itself: its arguments, its environment, the clock, signals and the error trace
+//< The process itself: its arguments, its environment, the clock and signals
 //<
 //< The path helpers are here too (`get_dir_name`, `last_ext`, `is_absolute` and the rest), because
 //< they read a path as text and never touch the filesystem; operations on the tree are in `std/fs`.
-//< **`panic` and `assert` are not here** but in `std/lang`: here, `mem` and `ds` would have to
-//< import `sys`, and the base layer could not be split into stages.
+//< **`panic`, `assert` and the error trace are not here** but in `std/lang`: here, `mem` and `ds`
+//< would have to import `sys`, and a failing `main` could print no trace without it.
 import "std/chars"
 import "std/libc"
 // **An import used on only one build carries the same `#cfg` on its import line**; without it,
 // `dealloc` is reported as unused on the freestanding build ([I0401]).
 #cfg(!freestanding)
 import "std/mem" { dealloc }
-import "std/str" + { Str_builder }
+#cfg(!freestanding)
+import "std/str"
 
-// ==========================================
-// The error trace
-// ==========================================
-
-extern "C"
-    pub fn kspl_error_trace_depth(): I32 //< how many frames the error trace holds
-    pub fn kspl_get_trace_frame_info( //< the file, function and line of the trace's frame at index
-        index: I32,
-        out_file: U8@$@,
-        out_func: U8@$@,
-        out_line: I32$@,
-    )
-
-priv fn demangle_fn_name(raw_func: U8[], file_path: U8[]): U8[] //<
-    //< The original function name from genc's symbol, "kspl_[priv_]<mod_with_underscores>_<func>"
-    $func_name: = raw_func
-    if func_name.starts_with("kspl_priv_")
-        func_name = func_name.strip_prefix("kspl_priv_")
-    else
-        func_name = func_name.strip_prefix("kspl_")
-
-    $mod_prefix: = Str_builder.new()
-    defer mod_prefix.free()
-    for k in Range.asc(file_path.len)
-        ch: = (file_path.ptr + k)$
-        mod_prefix.c('_' if ch == '.' else ch)
-    mod_prefix.s("_")
-
-    return (func_name.sub_from(mod_prefix.len) if func_name.starts_with(mod_prefix.slice())
-        else func_name)
-
-pub fn print_trace() //< writes the route this thread's last failure took to standard error
-    //<
-    //< Caution: **Do not use `io`.** Many files import `sys`, so importing `io` here would make all
-    //< of them carry the file-I/O implementation (bare metal has no standard output). The text is
-    //< built in a `Str_builder` and written with one libc `fwrite`, so it is less likely to mix
-    //< with other output.
-    depth: = kspl_error_trace_depth()
-    if depth > 0
-        $out: = Str_builder.new()
-        defer out.free()
-        out.s("stack backtrace:\n")
-        $frame_idx: I32 = 0
-        for $i: = depth - 1; i >= 0; i -= 1
-            $file_ptr: U8@ = null
-            $func_ptr: U8@ = null
-            $line: I32 = 0
-            kspl_get_trace_frame_info(i, file_ptr@, func_ptr@, line@)
-
-            raw_func: = str.from_cstr(U8$@::func_ptr)
-            raw_file: = str.from_cstr(U8$@::file_ptr)
-
-            out.s("  ")
-            if frame_idx < 10
-                out.s(" ")
-            out.s("\{frame_idx\}: ")
-            frame_idx += 1
-
-            if raw_func.equals("kspl_main")
-                out.s("main at \{raw_file\}:\{line\}\n")
-                continue
-
-            // **Cutting at `.kspl` handles both notations** (`.kspls` starts with it). If narrowed
-            // to `.kspls`, a file written in braces would keep its extension and the prefix would
-            // not match.
-            $file_path: = Str_builder.new()
-            defer file_path.free()
-            for k in Range.asc(raw_file.len)
-                if raw_file.starts_with(".kspl", k)
-                    break
-                ch: = (raw_file.ptr + k)$
-                file_path.c('.' if ch == '/' || ch == '\\' else ch)
-
-            func_name: = demangle_fn_name(raw_func, file_path.slice())
-            out.s("\{file_path.slice()\}.\{func_name\} at \{raw_file\}:\{line\}\n")
-        text: = out.slice()
-        err: = libc.get_stderr()
-        libc.fwrite(Void$@::text.ptr, 1, text.len, err)
-        libc.fflush(err)
 // ==========================================
 // Managing the process and its arguments
 // ==========================================

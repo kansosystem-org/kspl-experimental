@@ -16,7 +16,7 @@
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/mem" { Arena }
+import "std/mem" + { Arena }
 import "std/str" { Str_builder }
 import "std/sys"
 
@@ -47,6 +47,11 @@ priv const stdio_no_window: I32 = 8 //< no console window is shown for the child
     //< window, an unwanted black window beside the user's own. POSIX ignores the bit.
     //< Caution: **Only when both streams go to files.** With it, the child is not attached to the
     //< parent's console, so anything it writes to the console is lost.
+priv const stdio_group: I32 = 16 //< the child leads a process group of its own (a job on Windows)
+    //<
+    //< **Only for a child stopped at a time limit**: the kill then stops what it started too
+    //< ("A child stopped at its time limit is stopped with all it started" in
+    //< std/docs/DESIGN.md).
 
 priv fn pack_argv(argv: U8[][]): Str_builder //<
     //< Packs argv into the form the C code expects (one buffer with NUL separators)
@@ -74,7 +79,7 @@ impl Run_result
         //< `\r` is kept. **The two are joined end to end, not interleaved**, so a run reads the
         //< same every time; the cost is that you cannot tell which stream a line came from.
         r: Self@,
-        arena: Arena$@, //< where the text is stored
+        arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
     ): U8[]
         $b: = Str_builder.new()
         defer b.free()
@@ -88,9 +93,14 @@ priv fn fold_crlf_into(b: Str_builder$@, text: U8[]) //< appends text, with each
             continue
         b.c(text[i])
 
-priv fn spawn_failed_result(): Run_result
+priv fn spawn_failed_result(): Run_result //<
+    //< The result of a child that did not start
+    //<
+    //< Caution: **Empty with no memory, not `""`**: `dealloc` frees a null pointer as nothing,
+    //< where it stops the program on a literal, so a caller freeing heap outputs frees these too.
+    empty: = U8$[]::{ .ptr = null, .len = 0 }
     return Run_result::{ .spawn_failed = true, .timed_out = false, .exit_code = -1,
-        .stdout_data = "", .stderr_data = "", .output_lost = false }
+        .stdout_data = empty, .stderr_data = empty, .output_lost = false }
 
 priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
     //< Appends one read's bytes to the builder (bytes beyond the cap are discarded)
@@ -109,7 +119,7 @@ priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
 
 pub struct Run_result //< the outcome of one run: how it ended, and what it wrote
     pub spawn_failed: Bool //< if true, every other field is invalid
-    pub timed_out: Bool //< if true, the child was killed, so the exit code means nothing
+    pub timed_out: Bool //< if true, it was killed with all it started; the code means nothing
     pub exit_code: I32 //< the child's exit code; 0 means success.
         //<
         //< **A child that crashed or was killed gives 128 + the signal number on every OS** (the
@@ -133,13 +143,16 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     //< argv[0] is as for `spawn_wait`; stdout and stderr are collected separately, watched in one
     //< wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this
     //< it is cut"), not the size to allocate.
+    //< **Past the time limit, the child and all it started are killed.** Once the child itself
+    //< has ended, what it started may hold the outputs open: they are read for `pipe_grace_ms`
+    //< more, and what comes after is not kept.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
     timeout_ms: I32, //< how long it may run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
-    arena: Arena$@, //< where the collected output is copied
+    arena: Arena$@, //< where the outputs go; null means the heap, each freed with `dealloc`
 ): Run_result //< both outputs and how it ended; a failed start is a flag, not an error
-    h: = start(argv, cwd, stdio_out | stdio_err, "", "")
+    h: = start(argv, cwd, stdio_out | stdio_err | stdio_group, "", "")
     if h == 0
         return spawn_failed_result()
     $out: = Str_builder.new()
@@ -148,15 +161,29 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     defer err.free()
     $chunk: U8[4096] = ::{}
     deadline: = sys.deadline_after_ms(timeout_ms)
+    $until: = deadline // the deadline, or the end of the grace once the child has ended
     $out_open: = true
     $err_open: = true
     $timed_out: = false
+    $ended: = false
+    $exit_code: I32 = -1
+    $pause: I32 = 1
     for out_open || err_open
-        remaining_us: = deadline - sys.mono_us()
-        if remaining_us <= 0I64
-            timed_out = true
+        now: = sys.mono_us()
+        if !ended && kspl_proc_ended(h, exit_code@)
+            ended = true
+            grace_end: = now + I64::pipe_grace_ms * 1000I64
+            until = grace_end if grace_end < deadline else deadline
+        if now >= until
+            timed_out = !ended
             break
-        mask: = kspl_proc_poll(h, I32::((remaining_us + 999I64) / 1000I64))
+        // Caution: **Look at the child between the reads.** The outputs may stay open after it
+        // ends, and a wait on them alone would run to the deadline.
+        $wait_ms: = I32::((until - now + 999I64) / 1000I64)
+        if !ended && pause < wait_ms
+            wait_ms = pause
+            pause = next_pause(pause)
+        mask: = kspl_proc_poll(h, wait_ms)
         if mask < 0
             break // nothing left to watch (both streams were read to the end)
         if out_open && (mask & stdio_out) != 0
@@ -168,13 +195,14 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
                 kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap)
     // Caution: **Bound the wait after the pipes close too.** A child can close both and run on (a
     // daemon, or a grandchild holding nothing), and a bare wait would outlast every timeout.
-    $exit_code: I32 = -1
     if timed_out
         kspl_proc_kill(h)
+    else if ended
+        exit_code = kspl_proc_wait(h)
     else
-        ended: = wait_until(h, deadline)
-        timed_out = ended.is_none()
-        exit_code = ended.unwrap_or(-1)
+        got: = wait_until(h, deadline)
+        timed_out = got.is_none()
+        exit_code = got.unwrap_or(-1)
     return Run_result::{
         .spawn_failed = false,
         .timed_out = timed_out,
@@ -183,6 +211,12 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
         .stderr_data = arena.dup_str(err.slice()),
         .output_lost = false,
     }
+
+priv const pipe_grace_ms: I32 = 100 //< how long outputs are read once the child itself has ended
+    //<
+    //< **Everything the child wrote is in the pipes when it ends**, so this waits only for what it
+    //< started and left holding them ("A child's outputs are read a short while past its end" in
+    //< std/docs/DESIGN.md).
 
 pub struct Job //< one of many children to start
     pub argv: U8[][] //< the executable and its arguments
@@ -206,7 +240,7 @@ priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[]? //<
 // Starts one job; returns 0 on failure (the caller turns that into a spawn_failed result).
 #cfg(!freestanding)
 priv fn start_job(job: Job, index: Sz, work_dir: U8[], arena: Arena$@): I64
-    return start(job.argv, job.cwd, 0, job_path(work_dir, index, "out", arena),
+    return start(job.argv, job.cwd, stdio_group, job_path(work_dir, index, "out", arena),
         job_path(work_dir, index, "err", arena))
 
 priv const reap_pause_max_ms: I32 = 10 //< the longest pause between two looks at a running job
@@ -237,14 +271,14 @@ priv fn wait_until(handle: I64, deadline_us: I64): I32?
 // deadline the job is killed and marked `timed_out`, with what it wrote by then.
 #cfg(!freestanding)
 priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_dir: U8[],
-    arena: Arena$@): Run_result
+    work: Arena$@, arena: Arena$@): Run_result
     if handle == 0
         return spawn_failed_result()
     ended: = wait_until(handle, deadline_us)
     timed_out: = ended.is_none()
     code: = ended.unwrap_or(-1)
-    out: = read_capped(job_path(work_dir, index, "out", arena), output_cap, arena)
-    err: = read_capped(job_path(work_dir, index, "err", arena), output_cap, arena)
+    out: = read_capped(job_path(work_dir, index, "out", work), output_cap, arena)
+    err: = read_capped(job_path(work_dir, index, "err", work), output_cap, arena)
     empty: = U8$[]::{ .ptr = null, .len = 0 }
     return Run_result::{ .spawn_failed = false, .timed_out = timed_out, .exit_code = code,
         .stdout_data = out.unwrap_or(empty), .stderr_data = err.unwrap_or(empty),
@@ -253,7 +287,7 @@ priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_
 // Runs jobs at most max_parallel at a time and returns the results **in the input order**.
 // **The caller creates work_dir.** A file with the same name is truncated and rewritten.
 // **Each job has its own time limit**, counted from its own start, as `run_capture`'s; a job past
-// it is killed and comes back `timed_out`, and the rest run on.
+// it is killed with all it started and comes back `timed_out`, and the rest run on.
 // **A job that cannot start is `spawn_failed`** (`Run_error.spawn_failed` lists the causes), never
 // an exit code, so a program that itself exits 127 is not read as missing.
 #cfg(!freestanding)
@@ -263,29 +297,31 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
     timeout_ms: I32, //< how long each may run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
     work_dir: U8[], //< where the temporary files that collect the outputs go
-    arena: Arena$@, //< where the collected output is copied
-): List<|Run_result|>$@ //< one result per job; a job that fails is marked in its own result
-    results: = List<|Run_result|>.create(arena)
+    arena: Arena$@, //< where the list and the outputs go; null means the heap, freed as below
+): List<|Run_result|> //< one result per job; a job that fails is marked in its own result.
+    //<
+    //< With `null`, free each result's two outputs with `dealloc`, then the list with `free()`.
+    $results: = List<|Run_result|>.new(arena)
     slots: = max_parallel if max_parallel > 0 else 1
+    $work: = mem.scratch(arena)
+    defer work.free()
     // Each job's handle (0 once collected, or for one that did not start) and its deadline.
-    live: = List<|I64|>.create(arena)
-    deadlines: = List<|I64|>.create(arena)
+    $live: = List<|I64|>.new(work.arena)
+    $deadlines: = List<|I64|>.new(work.arena)
     $running: Sz = 0
     for i in Range.asc(jobs.len)
         for running >= slots
-            collect_one(live, deadlines, results, output_cap, work_dir, arena)
+            collect_one(live@, deadlines@, results@, output_cap, work_dir, work.arena, arena)
             running -= 1
-        h: = start_job(jobs[i], i, work_dir, arena)
+        h: = start_job(jobs[i], i, work_dir, work.arena)
         live.push(h)
         deadlines.push(sys.deadline_after_ms(timeout_ms))
         results.push(spawn_failed_result())
         if h != 0
             running += 1
     for running > 0
-        collect_one(live, deadlines, results, output_cap, work_dir, arena)
+        collect_one(live@, deadlines@, results@, output_cap, work_dir, work.arena, arena)
         running -= 1
-    live.free()
-    deadlines.free()
     return results
 
 // Waits for whichever running job ends first, or reaches its deadline first, and puts its result
@@ -294,7 +330,7 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
 // quicker job freed, so the jobs behind it start late.
 #cfg(!freestanding)
 priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
-    results: List<|Run_result|>$@, output_cap: Sz, work_dir: U8[], arena: Arena$@)
+    results: List<|Run_result|>$@, output_cap: Sz, work_dir: U8[], work: Arena$@, arena: Arena$@)
     $pause: I32 = 1
     for
         now: = sys.mono_us()
@@ -305,7 +341,7 @@ priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
             $code: I32 = 0
             if kspl_proc_ended(h, code@) || now >= deadlines.get(k)
                 results.set(k,
-                    reap_job(h, deadlines.get(k), k, output_cap, work_dir, arena))
+                    reap_job(h, deadlines.get(k), k, output_cap, work_dir, work, arena))
                 live.set(k, 0)
                 return
         sys.sleep_ms(pause)
@@ -313,7 +349,8 @@ priv fn collect_one(live: List<|I64|>$@, deadlines: List<|I64|>$@,
 
 pub enum Run_error //< why a run did not produce a result
     //<
-    //< **The text in `exited` points into the arena** and cannot be read after the arena is freed.
+    //< **The text in `exited` points into the arena** and cannot be read after the arena is freed;
+    //< with a null arena it is on the heap, freed with `dealloc`.
     spawn_failed //< it could not start; the causes are `Spawn_error.spawn_failed`'s
     timed_out //< the time ran out, so it was killed
     exited(code: I32, err: U8[]) //< it exited non-zero; the text is its standard error
@@ -352,16 +389,19 @@ pub fn run( //< runs one child and returns its standard output; any failure is t
     cwd: U8[], //< the working directory; empty inherits the caller's
     timeout_ms: I32, //< how long it may run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
-    arena: Arena$@, //< where the collected output is copied
+    arena: Arena$@, //< where the output goes; null means the heap, freed with `dealloc`
 ): U8$[]!Run_error //< the standard output, at most `output_cap` bytes
-    r: = run_capture(argv, cwd, timeout_ms, output_cap, arena)
+    // Both outputs are collected apart; only the one handed back is copied to the caller.
+    $work: = mem.scratch(arena)
+    defer work.free()
+    r: = run_capture(argv, cwd, timeout_ms, output_cap, work.arena)
     if r.spawn_failed
         throw .spawn_failed
     if r.timed_out
         throw .timed_out
     if r.exit_code != 0
-        throw .exited(r.exit_code, r.stderr_data)
-    return r.stdout_data
+        throw .exited(r.exit_code, arena.dup_str(r.stderr_data))
+    return arena.dup_str(r.stdout_data)
 
 // ==========================================
 // Running a subprocess (inheriting standard I/O and waiting for completion). How to choose among

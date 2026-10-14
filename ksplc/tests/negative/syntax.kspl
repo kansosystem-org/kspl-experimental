@@ -237,15 +237,29 @@ fn main(): I32 {
   return a - 1;
 }
 // ==== case parse_label_unclosed_string
-//< An unclosed string is refused as a "string" at the point the characters run out
+//< An unclosed string is reported at its opening quote, named as a string never closed
 //<
-//< Caution: **Do not take the `EXPECT-NOT` off.** Grammar-internal words in the list tell the user
-//< to type what cannot be typed (track_token_fail in `kspeg/engine.kspls`). Piled at the token's
-//< head, it reads "expecting an expression" at the opening quote, not naming what is unclosed.
-// EXPECT: expected a string
+//< The parser runs out of text only at the file's end, far below the quote (`parse_error_at` in
+//< `ksplc/parse/syntax_msg.kspls`). Grammar-internal words must not reach the list either
+//< (track_token_fail in `kspeg/engine.kspls`).
+// EXPECT: parse_label_unclosed_string.kspl:10:8: error: this string is never closed
 // EXPECT-NOT: character class
+// EXPECT-NOT: expected
 fn main(): I32 {
   s: = "never closed;
+  return 0;
+}
+// ==== case parse_unclosed_string_in_call
+//< A string left open inside a call is the string's mistake, not the bracket's
+//<
+//< The bracket around it is still open where the text runs out, so its note would name the
+//< wrong mark at the wrong line.
+// EXPECT: parse_unclosed_string_in_call.kspl:10:14: error: this string is never closed
+// EXPECT-NOT: is never closed, so what follows it
+import "std/io";
+
+fn main(): I32 {
+  io.out().s("abc);
   return 0;
 }
 // ==== case postfix_if_absent

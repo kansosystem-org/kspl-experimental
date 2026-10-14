@@ -112,13 +112,28 @@ fn err_node_var_name(err_node: Ast_node$@): U8[] //<
     return (err_node.text if err_node.kind_id == .k_identifier
         else (err_node.get_child(0).text if err_node.children.len > 0 else ""))
 
+priv fn report_scratch_at(c: sema_flow_track.Df_ctx$@, err_node: Ast_node$@) //<
+    //< Reports the message in scratch at err_node, naming the early exit where there is one
+    //<
+    //< A defer body is analyzed again at each early exit that leaves it (df_check_defers_on_exit
+    //< in sema/flow/stmt.kspls): the note shows which path reaches the read, and a read already
+    //< reported at one exit is not reported again at the next.
+    if c.exit_from != null
+        if c.reported_in_defers.contains(err_node)
+            return
+        c.reported_in_defers.add(err_node)
+        c.sema.scratch
+            .s(" (this `defer` body runs when line \{c.sema.line_of(c.exit_from.loc)\} leaves the \
+                scope)")
+    c.sema.err(err_node, c.sema.scratch.slice())
+    c.has_error = true
+
 fn report_uninit_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
     def: Ast_node$@, err_node: Ast_node$@)
     if !state.contains(def)
         var_name: = err_node_var_name(err_node)
         c.sema.clear_scratch().s("variable '\{var_name\}' may be used uninitialized here")
-        c.sema.err(err_node, c.sema.scratch.slice())
-        c.has_error = true
+        report_scratch_at(c, err_node)
         state.add(def)
 
 fn report_freed_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
@@ -131,8 +146,7 @@ fn report_freed_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df
         var_name: = err_node_var_name(err_node)
         c.sema.clear_scratch()
             .s("variable '\{var_name\}' may already be freed here (use-after-free or double free)")
-        c.sema.err(err_node, c.sema.scratch.slice())
-        c.has_error = true
+        report_scratch_at(c, err_node)
         state.remove_freed(def)
 
 fn report_moved_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
@@ -148,6 +162,5 @@ fn report_moved_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df
             'Move_only', so copying it would duplicate an owned handle and free it twice). Borrow \
             it with '\{var_name\}@' instead of passing it by value, or re-assign it before this \
             use.")
-    c.sema.err(err_node, c.sema.scratch.slice())
-    c.has_error = true
+    report_scratch_at(c, err_node)
     state.moved_vars.remove(def)

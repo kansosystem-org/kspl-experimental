@@ -1,11 +1,10 @@
 //< A lightweight regular-expression engine: compile a pattern, then match it against text
 //<
-//< A character matches itself; `\.` and `\*` write the ones that mean something else. **Going past
-//< any limit is refused, never silently truncated**: the group count, the counted repetition
-//< `{m,n}`, the nesting depth and the backtracking budget each have their own error, so
-//< catastrophic backtracking returns `too_complex` instead of never returning. **Matching does not
-//< recurse**: the pattern runs as a flat program whose backtracking points live in a list, so a
-//< long text is refused only by the budget, never by its length.
+//< A character matches itself; `\.` and `\*` write the ones that mean something else. **Matching
+//< takes time linear in the text, whatever the pattern**: every way through the pattern runs side
+//< by side, so no pattern or text can make a search hang. **Going past any limit is refused,
+//< never silently truncated**: the group count, the counted repetition `{m,n}`, the nesting depth
+//< and the compiled program's size each have their own error.
 
 // ==========================================
 // Caution: **Every notation must be either "carried" or "refused".** A notation in neither is
@@ -15,10 +14,11 @@ import "std/chars"
 import "std/ds" { List }
 import "std/mem" + { dealloc, Arena }
 import "std/regex_node" { byte_count, max_groups, max_repeat_count, Slots, reset_slots, Rx_kind,
-    Rx_node, new_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts }
+    Rx_node, new_node, new_group_node, new_class_node, set_range, free_rx_node, free_rx_alts, Inst,
+    Emitter }
 import "std/stack_limit" { Stack_limit }
 
-pub enum Regex_error //< why a pattern could not be compiled, or matched nothing
+pub enum Regex_error //< why a pattern could not be compiled, or `find` matched nothing
     unmatched_paren //< an opening parenthesis has no closing one, or the other way round
     unmatched_bracket //< a `[` has no `]`
     dangling_quantifier //< nothing quantifiable comes before `*`, `+`, `?` or `{`
@@ -27,7 +27,7 @@ pub enum Regex_error //< why a pattern could not be compiled, or matched nothing
     invalid_repeat //< `{` has no valid count, m > n, or the count exceeds `max_repeat_count`
     no_match //< nothing in the text matched
     too_deep //< the `(` nesting is deeper than its limit, or than the stack left can hold
-    too_complex //< matching went over its attempt budget
+    too_large //< the compiled program would hold more than `max_program_size` states
     too_many_groups //< there are more capturing groups than `max_groups`
     unsupported_backreference //< `\1`…`\9`, which refer to a captured string inside the pattern
 
@@ -37,28 +37,12 @@ priv const max_nesting_depth: Sz = 500 //<
     //< compile() walks group nesting recursively (parse_atom -> parse_alts -> parse_seq ->
     //< parse_atom_quant -> parse_atom). The limit exists for the same reason as json.kspls's
     //< max_nesting_depth (stack exhaustion).
-priv const max_match_steps: Sz = 2000000 //<
-    //< The match attempts one whole find() may make on top of `steps_per_byte` for each byte
-    //<
-    //< Plain backtracking can take exponential time with some quantifier combinations (ReDoS). Past
-    //< this limit, find() fails instead of hanging.
-priv const steps_per_byte: Sz = 64 //<
-    //< The attempts the budget grows by per byte of text, for the start positions a search tries
-    //<
-    //< Caution: **Let the budget grow with the text.** A fixed one counted across every start
-    //< refused a plain search through a long text, each start failing in a few attempts; a share
-    //< per byte keeps a pathological pattern bounded, linearly in the text.
 priv const stack_margin: Sz = 64 * 1024 //<
     //< The stack kept free below where compiling stops
     //<
     //< **The counts are sized for the main thread.** A thread's stack may be far smaller (512KB by
     //< default on macOS), so a walk also asks where its stack ends ("A walk that must not exhaust
     //< its stack asks where the stack ends" in `std/docs/DESIGN.md`).
-priv const stack_ask_depth: Sz = 64 //<
-    //< The depth from which a walk asks where its stack ends
-    //<
-    //< **Asking is not cheap**, while most patterns nest this shallowly and so never pay for it.
-    //< The levels above it need some 40KB unoptimised.
 
 priv fn is_word_byte(c: U8): Bool //< whether the byte is a word character (`\w` and `\b`)
     //<
@@ -280,7 +264,7 @@ impl Compiler
             return n
         if c == '('
             r.depth += 1
-            if r.depth > max_nesting_depth || r.stack.near_at(r.depth)
+            if r.depth > max_nesting_depth || r.stack.near()
                 // Caution: Stop recursing here; only recording the excess still exhausts the stack.
                 r.fail(.too_deep)
                 r.depth -= 1
@@ -401,181 +385,11 @@ impl Compiler
             alts.push(r.parse_seq())
         return alts
 
-// ==================== Matching (a flat program, backtracked without recursion) ====================
-// The tree compiles once into a program of steps, and a match runs it with its backtracking points
-// in a list on the heap. Caution: **Do not match by recursing over the tree.** A round of `(ab)*`
-// was one more native call, so a long text that plainly matches was refused at a depth limit or
-// would have exhausted the stack; here a round costs one entry in the list, and only the attempt
-// budget bounds a search.
-priv enum Op //< what one step of the program does
-    atom //< one byte against `node` (a literal, `.` or a class)
-    atom_repeat //<
-        //< `node`, a single atom repeated: its whole run at once, counts tried by backtracking
-    check //< a zero-width test, `node`'s kind: `^`, `$`, `\b` or `\B`
-    split //< go on at `x`, and keep `y` to try on failure
-    jump //< go on at `x`
-    save_start //< record where group `a` starts
-    save_end //< record where group `a` ends
-    enter //< a repeated group begins: its round count `a` to 0, its round start to none
-    round //< the head of each round of repeated group `node` (register `a`); body `x`, exit `y`
-    done //< the whole pattern matched
-
-priv struct Inst //< one step of the program; `op` decides which fields mean something
-    op: Op
-    node: Rx_node$@ //< the tree node read (shared with the tree, never freed through this)
-    x: Sz
-    y: Sz
-    a: Sz
-
-priv struct Emitter //< the program being written, and the next free register of a repeated group
-    prog: List<|Inst|>
-    regs: Sz
-
-impl Emitter
-    fn step(r: Self$@, op: Op, node: Rx_node$@, a: Sz): Sz //< appends a step; returns its place
-        //<
-        //< Its targets (`x`, `y`) are patched once the steps they name are written.
-        r.prog.push(Inst::{ .op = op, .node = node, .x = 0, .y = 0, .a = a })
-        return r.prog.len - 1
-
-    // The emitter walks the group nesting as the parse did, so it goes no deeper than
-    // `max_nesting_depth`, which compile() already held against the stack.
-    fn seq(r: Self$@, seq: List<|Rx_node$@|>$@) //< one alternative's atoms, in order
-        for k in Range.asc(seq.len)
-            r.node(seq.get(k))
-
-    fn node(r: Self$@, n: Rx_node$@)
-        switch n.kind
-        case .lit, .any, .class
-            r.step(.atom, n, 0)
-        case .repeat
-            r.step(.atom_repeat, n, 0)
-        case .start_anchor, .end_anchor, .word_boundary, .not_word_boundary
-            r.step(.check, n, 0)
-        case .group
-            r.group(n)
-        case .group_repeat
-            reg: = r.regs
-            r.regs += 1
-            r.step(.enter, n, reg)
-            head: = r.step(.round, n, reg)
-            r.prog.at(head).x = r.prog.len
-            r.group(n.sub)
-            back: = r.step(.jump, n, 0)
-            r.prog.at(back).x = head
-            r.prog.at(head).y = r.prog.len
-
-    fn group(r: Self$@, g: Rx_node$@) //< a group: its start, its alternatives in order, its end
-        if g.gidx >= 0
-            r.step(.save_start, g, g.gidx)
-        r.alts(g.alts@)
-        if g.gidx >= 0
-            r.step(.save_end, g, g.gidx)
-
-    fn alts(r: Self$@, alts: List<|List<|Rx_node$@|>|>$@) //< alternatives, tried first to last
-        $ends: = List<|Sz|>.new(null)
-        defer ends.free()
-        for i in Range.asc(alts.len)
-            last: = i + 1 == alts.len
-            $fork: Sz = 0
-            if !last
-                fork = r.step(.split, null, 0)
-                r.prog.at(fork).x = r.prog.len
-            $alt: = alts.get(i)
-            r.seq(alt@)
-            if !last
-                ends.push(r.step(.jump, null, 0))
-                r.prog.at(fork).y = r.prog.len
-        for e in ends.slice()
-            r.prog.at(e).x = r.prog.len
-
-priv enum Back //< what a backtracking entry does when a failure reaches it
-    resume //< go on at `pc` from `pos`
-    count_down //< a greedy atom run: go on at `pc` from `v`, then from one byte less, down to `a`
-    count_up //< a lazy atom run: go on at `pc` from `v`, then from one byte more, up to `a`
-    round //< a lazy repeated group's next round: begin it at `pos`, the round step being `pc`
-    undo_start //< put group `a`'s start back to `v`
-    undo_end //< put group `a`'s end back to `v`
-    undo_count //< put register `a`'s round count back to `v`
-    undo_mark //< put register `a`'s round start back to `v`
-
-priv struct Entry //< one backtracking entry; `kind` decides which fields mean something
-    kind: Back
-    pc: Sz
-    pos: Sz
-    a: Sz
-    v: Sz
-
-priv struct Match_run //<
-    //< What one whole find() shares across its start positions
-    //<
-    //< Caution: **The budget ends the whole find() as `too_complex`.** Answering only that start
-    //< with "no match" would let the search report a later match or none, a wrong answer rather
-    //< than a refusal.
-    text: U8[] //< the text being searched
-    end: Sz //< where the last successful run stopped
-    caps: Slots //< what the groups have captured on the path being tried
-    steps: Sz //< the steps taken so far, against `limit`
-    limit: Sz //< max_match_steps plus steps_per_byte for each byte of the text
-    trail: List<|Entry|>$@ //< the backtracking entries, newest last
-    counts: List<|Sz|>$@ //< each repeated group's rounds so far
-    marks: List<|Sz|>$@ //< where each repeated group's current round started; -1 before the first
-
-impl Match_run
-    fn spent(r: Self@): Bool //< whether the budget is used up, so the whole find() gives up
-        return r.steps > r.limit
-
-    fn keep(r: Self$@, kind: Back, pc: Sz, pos: Sz, a: Sz, v: Sz) //< pushes one entry
-        r.trail.push(Entry::{ .kind = kind, .pc = pc, .pos = pos, .a = a, .v = v })
-
-    fn begin_round(r: Self$@, reg: Sz, pos: Sz) //< one more round of a repeated group, from pos
-        //<
-        //< The old values go on the trail first, so stepping back past this round restores them.
-        r.keep(.undo_count, 0, 0, reg, r.counts.get(reg))
-        r.keep(.undo_mark, 0, 0, reg, r.marks.get(reg))
-        r.counts.set(reg, r.counts.get(reg) + 1)
-        r.marks.set(reg, pos)
-
-    fn back(r: Self$@, prog: List<|Inst|>$@, pc: Sz$@, pos: Sz$@): Bool //<
-        //< Steps back to the newest entry that tries something, undoing what lies above it
-        //<
-        //< false when nothing is left to try at this start.
-        for r.trail.len > 0
-            e: = r.trail.get(r.trail.len - 1)
-            r.trail.len -= 1
-            switch e.kind
-            case .undo_start
-                r.caps.start[e.a] = e.v
-            case .undo_end
-                r.caps.end[e.a] = e.v
-            case .undo_count
-                r.counts.set(e.a, e.v)
-            case .undo_mark
-                r.marks.set(e.a, e.v)
-            case .resume
-                pc$ = e.pc
-                pos$ = e.pos
-                return true
-            case .count_down
-                if e.v > e.a
-                    r.keep(.count_down, e.pc, 0, e.a, e.v - 1)
-                pc$ = e.pc
-                pos$ = e.v
-                return true
-            case .count_up
-                if e.v < e.a
-                    r.keep(.count_up, e.pc, 0, e.a, e.v + 1)
-                pc$ = e.pc
-                pos$ = e.v
-                return true
-            case .round
-                step: = prog.get(e.pc)
-                r.begin_round(step.a, e.pos)
-                pc$ = step.x
-                pos$ = e.pos
-                return true
-        return false
-
+// ==================== Matching (every way through the program at once) ====================
+// Every way through the program runs side by side, a byte at a time (a Pike VM). **Two ways at the
+// same state and byte go on alike**, so only the preferred one is kept: a byte costs at most one
+// visit per state. Caution: **Do not match by trying one way and stepping back.** That is
+// exponential in the text for `(a+)+$` or `(a|a)*b`, the shape that hangs a program.
 priv fn atom_matches(atom: Rx_node$@, c: U8): Bool
     switch atom.kind
     case .lit
@@ -586,7 +400,7 @@ priv fn atom_matches(atom: Rx_node$@, c: U8): Bool
         hit: = atom.set[c]
         return !hit if atom.neg else hit
     default
-        return false // not reached (a quantifier attaches only to lit/any/class)
+        return false // not reached (a byte step holds only lit/any/class)
 
 priv fn holds(kind: Rx_kind, text: U8[], ti: Sz): Bool //< whether a zero-width test holds at ti
     switch kind
@@ -599,107 +413,175 @@ priv fn holds(kind: Rx_kind, text: U8[], ti: Sz): Bool //< whether a zero-width 
     default
         return !is_word_edge(text, ti)
 
-// One atom repeated: its whole run is read at once, then backtracking takes it back one byte at a
-// time (the longest first) or gives one more (the shortest first).
-// **The order in which counts are tried is all that separates longest from shortest match**: this
-// changes **which match is found first** (`a.*?b` gives `axxb` from `axxbyyb`; `a.*b` gives the
-// whole).
-priv fn run_atom_repeat(n: Rx_node$@, pc: Sz, pos: Sz$@, run: Match_run$@): Bool
-    text: = run.text
-    from: = pos$
-    $max_j: = from
-    for max_j < text.len && (n.max_count < 0 || max_j - from < Sz::n.max_count) &&
-        atom_matches(n.sub, (text.ptr + max_j)$)
-        max_j += 1
-    lo: = from + Sz::n.min_count
-    if max_j < lo
-        return false
-    if n.lazy
-        if lo < max_j
-            run.keep(.count_up, pc + 1, 0, max_j, lo + 1)
-        pos$ = lo
-    else
-        if max_j > lo
-            run.keep(.count_down, pc + 1, 0, lo, max_j - 1)
-        pos$ = max_j
-    return true
-
-// The head of every round of a repeated group (`(…)*`, `(…)+`, `(…){m,n}`).
-// Caution: **A round that did not advance stops the repetition; it is not undone.** Undoing would
-// make `(a?)*b`'s group "did not take part" where others answer an empty match, and going on would
-// loop for good. Shortest match keeps "one more round" to try after the rest; longest match keeps
-// "stop here" to try after one more round.
-priv fn run_round(step: Inst, pc: Sz, pos: Sz, run: Match_run$@): Sz //< the step to go on at
-    n: = step.node
-    reg: = step.a
-    count: = run.counts.get(reg)
-    mark: = run.marks.get(reg)
-    if mark >= 0 && pos == mark
-        return step.y
-    if n.max_count >= 0 && count >= Sz::n.max_count
-        return step.y
-    if count < Sz::n.min_count
-        run.begin_round(reg, pos)
-        return step.x
-    if n.lazy
-        run.keep(.round, pc, pos, 0, 0)
-        return step.y
-    run.keep(.resume, step.y, pos, 0, 0)
-    run.begin_round(reg, pos)
-    return step.x
-
-priv fn run_at(prog: List<|Inst|>$@, start: Sz, run: Match_run$@): Bool //<
-    //< Runs the program from `start`, leaving the end in run.end
+priv struct Threads //< the ways alive at one byte, in priority order, each with its slots
     //<
-    //< false when nothing matches here, or the budget ran out (run.spent() tells which).
-    text: = run.text
-    run.trail.len = 0
-    $pc: Sz = 0
-    $pos: = start
-    for
-        run.steps += 1
-        if run.spent()
-            return false
-        step: = prog.get(pc)
-        $ok: = true
-        switch step.op
-        case .atom
-            ok = pos < text.len && atom_matches(step.node, (text.ptr + pos)$)
-            if ok
-                pos += 1
+    //< A sparse set: `has` and `put` cost one look each, and emptying it is `len = 0`.
+    len: Sz //< how many states are in it
+    order: Sz$@ //< the states, highest priority first; only the first `len` mean anything
+    place: Sz$@ //< per state, where it stands in `order` (stale entries fail `has`)
+    slots: Sz$@ //< per state, the way's slots (`Vm.width` of them)
+
+impl Threads
+    fn has(r: Self@, s: Sz): Bool
+        at: = (r.place + s)$
+        return at < r.len && (r.order + at)$ == s
+
+    fn put(r: Self$@, s: Sz)
+        (r.place + s)$ = r.len
+        (r.order + r.len)$ = s
+        r.len += 1
+
+priv struct Frame //< one entry of the walk through steps that read no byte
+    restore: Bool //<
+        //< true: put slot `pc` back to `v`; false: go on at step `pc` with `k` rounds open
+    pc: Sz
+    k: Sz
+    v: Sz
+
+priv struct Vm //< what one search needs besides the program, made once for find_all's every match
+    //<
+    //< **One block holds both generations, the walk and the slots**, so a search on a short line
+    //< costs one allocation, not one per table.
+    block: Sz$@
+    width: Sz //<
+        //< The slots a way holds: the match's start, its end, then each group's two
+        //<
+        //< 0 for `is_match`, which needs no position and stops at the first match it meets.
+    now: Threads
+    next: Threads
+    walk: Frame$@ //< the walk's entries, newest last; a state put pushes at most one
+    walk_len: Sz
+    slots: Sz$@ //< the slots of the way being walked
+    best: Sz$@ //< the slots of the match found so far
+    end: Sz //< where the match found so far ends
+    visits: Sz //< the states put into a generation so far: the search's work
+
+priv fn new_vm(states: Sz, width: Sz): Vm
+    part: = states * (2 + width)
+    frame: = (sizeof(Frame) + sizeof(Sz) - 1) / sizeof(Sz)
+    bytes: = (2 * part + 2 * width + frame * (states + 1)) * sizeof(Sz)
+    // Zeroed, so a `place` no state has written yet reads as a number, failing `has` alike.
+    base: = Sz$@::mem.alloc(bytes)
+    mem.zero(Void$@::base, bytes)
+    return Vm::{ .block = base, .width = width,
+        .now = Threads::{ .len = 0, .order = base, .place = base + states,
+        .slots = base + 2 * states },
+        .next = Threads::{ .len = 0, .order = base + part, .place = base + part + states,
+        .slots = base + part + 2 * states },
+        .walk = Frame$@::(Void$@::(base + 2 * part + 2 * width)), .walk_len = 0,
+        .slots = base + 2 * part, .best = base + 2 * part + width, .end = 0, .visits = 0 }
+
+priv fn copy_slots(to: Sz$@, from: Sz$@, width: Sz) //< a way's slots, a handful, copied in place
+    for $i: Sz = 0; i < width; i += 1
+        (to + i)$ = (from + i)$
+
+impl Vm
+    fn free(r: Self$@)
+        dealloc(Void$@::r.block)
+
+    fn push(r: Self$@, f: Frame)
+        (r.walk + r.walk_len)$ = f
+        r.walk_len += 1
+
+    fn add(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, text: U8[], p: Sz) //<
+        //< Adds the way at step pc0, with the slots in `r.slots`, and every way it reaches at p
+        //<
+        //< Through the steps that read no byte, by a list rather than recursion. A state already
+        //< there is passed by: one of higher priority reached it first.
+        $f: = Frame::{ .restore = false, .pc = pc0, .k = 0, .v = 0 }
+        for
+            if f.restore
+                (r.slots + f.pc)$ = f.v
+            else
+                r.follow(prog, to, f.pc, f.k, text, p)
+            if r.walk_len == 0
+                return
+            r.walk_len -= 1
+            f = (r.walk + r.walk_len)$
+
+    fn follow(r: Self$@, prog: List<|Inst|>$@, to: Threads$@, pc0: Sz, k0: Sz, text: U8[], p: Sz) //<
+        //< Follows one way from step pc0 to a byte step, the end, or a state already put
+        //<
+        //< Each other way a split offers, and each slot to put back, goes on the walk for `add`.
+        $pc: = pc0
+        $k: = k0
+        for
+            step: = prog.ptr + pc
+            s: = step.base + k
+            if to.has(s)
+                return
+            to.put(s)
+            r.visits += 1
+            if step.op == .byte || step.op == .done
+                copy_slots(to.slots + s * r.width, r.slots, r.width)
+                return
+            if step.op == .check && !holds(step.node.kind, text, p)
+                return
+            switch step.op
+            case .jump
+                pc = step.x
+            case .split
+                r.push(Frame::{ .restore = false, .pc = step.y, .k = k, .v = 0 })
+                pc = step.x
+            case .save
+                if step.a < r.width
+                    r
+                        .push(Frame::{ .restore = true, .pc = step.a, .k = 0,
+                        .v = (r.slots + step.a)$ })
+                    (r.slots + step.a)$ = p
                 pc += 1
-        case .atom_repeat
-            ok = run_atom_repeat(step.node, pc, pos@, run)
-            pc += 1
-        case .check
-            ok = holds(step.node.kind, text, pos)
-            pc += 1
-        case .split
-            run.keep(.resume, step.y, pos, 0, 0)
-            pc = step.x
-        case .jump
-            pc = step.x
-        case .save_start
-            run.keep(.undo_start, 0, 0, step.a, run.caps.start[step.a])
-            run.caps.start[step.a] = pos
-            pc += 1
-        case .save_end
-            run.keep(.undo_end, 0, 0, step.a, run.caps.end[step.a])
-            run.caps.end[step.a] = pos
-            pc += 1
-        case .enter
-            run.keep(.undo_count, 0, 0, step.a, run.counts.get(step.a))
-            run.keep(.undo_mark, 0, 0, step.a, run.marks.get(step.a))
-            run.counts.set(step.a, 0)
-            run.marks.set(step.a, -1)
-            pc += 1
-        case .round
-            pc = run_round(step, pc, pos, run)
+            case .round_in
+                k += 1
+                pc += 1
+            case .round_out
+                if k > 0
+                    k -= 1
+                    pc = step.x
+                else
+                    pc += 1
+            default
+                pc += 1 // .check that holds
+
+impl Vm: Owned {} //< it owns its block and frees it in `free()`.
+
+priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
+    //< Marks in `first` every byte a match can begin with; true when a match can be empty
+    //<
+    //< It follows every step that reads no byte, taking each test as passing: a byte left out
+    //< would skip a start that matches, while one too many only costs a look.
+    for i in Range.asc(byte_count)
+        first[i] = false
+    $seen: = List<|Bool|>.new_with_cap(prog.len, null)
+    defer seen.free()
+    seen.len = prog.len
+    $todo: = List<|Sz|>.new(null)
+    defer todo.free()
+    todo.push(0)
+    for todo.len > 0
+        pc: = todo.get(todo.len - 1)
+        todo.len -= 1
+        if seen.get(pc)
+            continue
+        seen.set(pc, true)
+        step: = prog.get(pc)
+        switch step.op
         case .done
-            run.end = pos
             return true
-        if !ok && !run.back(prog, pc@, pos@)
-            return false
+        case .byte
+            for c in Range.asc(byte_count)
+                if atom_matches(step.node, U8::c)
+                    first[c] = true
+        case .jump
+            todo.push(step.x)
+        case .split
+            todo.push(step.y)
+            todo.push(step.x)
+        case .round_out
+            todo.push(step.x)
+            todo.push(pc + 1)
+        default
+            todo.push(pc + 1)
+    return false
 
 // ==================== The public API ====================
 pub struct Match //< one matched span, and what its groups captured
@@ -735,11 +617,16 @@ impl Match
 pub struct Regex //< one compiled pattern, matched against any number of texts
     priv alts: List<|List<|Rx_node$@|>|> //< the tree, which the program's steps read
     priv prog: List<|Inst|> //< the program a match runs
-    priv regs: Sz //< how many repeated groups the program counts rounds for
+    states: Sz //< how many states the program holds: the most ways alive at one byte
+        //<
+        //< Package-wide, so `std/tests` can hold a search to its bound.
+    priv pc_of: List<|Sz|> //< per state, its step
     priv groups: Sz //<
         //< The number of capturing groups, **fixed at compile time**, not counted per find.
     priv anchored: Bool //<
         //< Whether every alternative starts with `^`, **fixed at compile time**.
+    priv first: Bool[byte_count] //< the bytes a match can begin with
+    priv may_be_empty: Bool //< whether a match can be empty, so no start may be skipped
 
 priv fn alts_all_anchored(alts: List<|List<|Rx_node$@|>|>$@): Bool //<
     //< Whether every alternative starts with `^`
@@ -763,7 +650,7 @@ impl Regex
         pattern: U8[], //< the pattern's text
     ): Regex$@!Regex_error
         $c: = Compiler::{ .pat = pattern, .pos = 0, .depth = 0,
-            .stack = Stack_limit.later(stack_margin, stack_ask_depth), .err = .none, .groups = 0 }
+            .stack = Stack_limit.later(stack_margin), .err = .none, .groups = 0 }
         $alts: = c.parse_alts()
         if c.pos < c.pat.len
             // a ')' is left over == there was no matching '('
@@ -771,94 +658,144 @@ impl Regex
         if e: = c.err
             free_rx_alts(alts@)
             throw e
+        $e: = Emitter::{ .prog = List<|Inst|>.new(null), .depth = 0, .states = 0 }
+        e.alts(alts@)
+        e.step(.done, null, 0)
+        if e.full()
+            e.prog.free()
+            free_rx_alts(alts@)
+            throw .too_large
         r: = mem.alloc_as<|Regex|>()
         r.alts = alts
+        r.prog = e.prog
+        r.states = e.states
+        r.pc_of = List<|Sz|>.new_with_cap(r.states, null)
+        for pc in Range.asc(r.prog.len)
+            step: = r.prog.get(pc)
+            next_base: =
+                r.states if pc + 1 == r.prog.len else r.prog.get(pc + 1).base
+            for _k in Range.asc(next_base - step.base)
+                r.pc_of.push(pc)
         r.groups = c.groups
         r.anchored = alts_all_anchored(alts@)
-        $e: = Emitter::{ .prog = List<|Inst|>.new(null), .regs = 0 }
-        e.alts(r.alts@)
-        e.step(.done, null, 0)
-        r.prog = e.prog
-        r.regs = e.regs
+        r.may_be_empty = first_bytes(r.prog@, Bool$[]::r.first)
         return r
 
-    priv fn find_from(r: Self$@, text: U8[], from: Sz): Match!Regex_error //<
-        //< Finds the first matched span in text, starting at `from`
+    priv fn width(r: Self@): Sz //<
+        //< the slots a way holds: the match's start and end, then the groups'
+        return 2 + 2 * r.groups
+
+    priv fn search(r: Self$@, text: U8[], from: Sz, vm: Vm$@): Bool //<
+        //< Searches text from `from`, leaving the match in `vm.best` and `vm.end`
         //<
-        //< **The returned position counts from the start of text.**
-        $trail: = List<|Entry|>.new(null)
-        defer trail.free()
-        $counts: = List<|Sz|>.new(null)
-        defer counts.free()
-        $marks: = List<|Sz|>.new(null)
-        defer marks.free()
-        for _i in Range.asc(r.regs)
-            counts.push(0)
-            marks.push(-1)
-        $run: = Match_run::{ .text = text, .end = 0, .caps = ::{}, .steps = 0,
-            .limit = max_match_steps + steps_per_byte * (text.len - from), .trail = trail@,
-            .counts = counts@, .marks = marks@ }
-        for $start: Sz = from; start <= text.len; start += 1
-            // Caution: **Initialize per start.** Otherwise **a group from a failed attempt** leaks
-            // into the next start's match, unnoticed, since the match itself is still correct.
-            reset_slots(run.caps@, r.groups)
-            if run_at(r.prog@, start, run@)
-                return Match::{ .start = start, .end = run.end, .caps = run.caps }
-            if run.spent()
-                throw .too_complex
-            // **A pattern starting with `^` cannot match by moving the start**; trying would waste
-            // a line's length of attempts per line scanned.
-            if r.anchored
-                break
-        throw .no_match
+        //< **Every start runs in the same pass**, a later start with lower priority than the ways
+        //< already alive: the match found is the leftmost, and among those the one the pattern's
+        //< order prefers. With `vm.width` 0 it stops at the first match it meets.
+        vm.now.len = 0
+        $found: = false
+        $p: = from
+        for
+            // **A pattern starting with `^` cannot match by moving the start**, nor can a start at
+            // a byte no match begins with; with no way alive, those bytes are passed over at once.
+            if !found && (p == from || !r.anchored)
+                if vm.now.len == 0 && !r.may_be_empty && !r.anchored
+                    for p < text.len && !r.first[(text.ptr + p)$]
+                        p += 1
+                if r.may_be_empty || p < text.len && r.first[(text.ptr + p)$]
+                    for $i: Sz = 0; i < vm.width; i += 1
+                        (vm.slots + i)$ = -1
+                    if vm.width > 0
+                        vm.slots$ = p
+                    vm.add(r.prog@, vm.now@, 0, text, p)
+            if vm.now.len == 0
+                return found
+            vm.next.len = 0
+            for $i: Sz = 0; i < vm.now.len; i += 1
+                s: = (vm.now.order + i)$
+                pc: = (r.pc_of.ptr + s)$
+                step: = r.prog.ptr + pc
+                row: = vm.now.slots + s * vm.width
+                if step.op == .done
+                    // **The ways after this one have lower priority**, so they are dropped; the
+                    // ones already carried to the next byte have higher, and may still match.
+                    found = true
+                    if vm.width == 0
+                        return true
+                    copy_slots(vm.best, row, vm.width)
+                    vm.end = p
+                    break
+                if step.op == .byte && p < text.len &&
+                    atom_matches(step.node, (text.ptr + p)$)
+                    copy_slots(vm.slots, row, vm.width)
+                    vm.add(r.prog@, vm.next@, pc + 1, text, p + 1)
+            swapped: = vm.now
+            vm.now = vm.next
+            vm.next = swapped
+            if p >= text.len
+                return found
+            p += 1
+
+    priv fn found(r: Self@, vm: Vm@): Match //< the match `search` left in vm
+        $m: = Match::{ .start = vm.best$, .end = vm.end, .caps = ::{} }
+        reset_slots(m.caps@, r.groups)
+        for g in Range.asc(r.groups)
+            m.caps.start[g] = (vm.best + 2 + 2 * g)$
+            m.caps.end[g] = (vm.best + 3 + 2 * g)$
+        return m
+
+    fn visits( //< how many states one search through the text visits: its work
+        //<
+        //< It is at most `states` for each byte, plus one; package-wide, so `std/tests` can hold
+        //< a search to that bound and check that the work grows linearly with the text.
+        r: Self$@,
+        text: U8[], //< the text to search
+    ): Sz
+        $vm: = new_vm(r.states, r.width())
+        defer vm.free()
+        _found: = r.search(text, 0, vm@)
+        return vm.visits
 
     pub fn find( //< the first matched span; fails when nothing matches
         r: Self$@,
         text: U8[], //< the text to search
     ): Match!Regex_error
-        return r.find_from(text, 0)
+        $vm: = new_vm(r.states, r.width())
+        defer vm.free()
+        if !r.search(text, 0, vm@)
+            throw .no_match
+        return r.found(vm@)
 
     pub fn find_all( //< every matched span; the search resumes past each one
         //<
-        //< Front to back; **even an empty match advances one byte.** The budget (max_match_steps)
-        //< restarts per match. An element holds a whole `Slots`. Why it is eager, and how it
-        //< differs from Python's `findall`, is in "Every match is returned in a `List`. No lazy
-        //< iterator is made" in `std/docs/DESIGN.md`.
+        //< Front to back; **even an empty match advances one byte**, and no match is an empty list.
+        //< An element holds a whole `Slots`. Why it is eager, and how it differs from Python's
+        //< `findall`, is in "Every match is returned in a `List`. No lazy iterator is made" in
+        //< `std/docs/DESIGN.md`.
         r: Self$@,
         text: U8[], //< the text to search
-        arena: Arena$@, //< the arena for the list
-    ): List<|Match|>!Regex_error
+        arena: Arena$@, //< where the list goes; null means the heap and a `free()`
+    ): List<|Match|>
         $out: = List<|Match|>.new(arena)
+        $vm: = new_vm(r.states, r.width())
+        defer vm.free()
         $from: Sz = 0
-        for from <= text.len
-            m: = r.find_from(text, from) catch e
-                switch e
-                case .no_match
-                    break
-                default
-                    out.free()
-                    throw e
+        for from <= text.len && r.search(text, from, vm@)
+            m: = r.found(vm@)
             out.push(m)
             from = m.end if m.end > m.start else m.start + 1
         return out
 
     pub fn is_match( //< whether anything in the text matches
-        //<
-        //< Caution: **Only `no_match` is "no".** `too_complex` is thrown, not read as false: the
-        //< budget ran out before the whole text was tried, so a match may still stand in it.
         r: Self$@,
         text: U8[], //< the text to search
-    ): Bool!Regex_error
-        _m: = r.find(text) catch e
-            switch e
-            case .no_match
-                return false
-            default
-                throw e
-        return true
+    ): Bool
+        $vm: = new_vm(r.states, 0)
+        defer vm.free()
+        return r.search(text, 0, vm@)
 
     pub fn free(r: Self$@) //< frees the compiled tree and its program
         r.prog.free() // the steps only point into the tree, which goes next, then the handle
+        r.pc_of.free()
         free_rx_alts(r.alts@)
         dealloc(Void$@::r)
 

@@ -13,9 +13,23 @@
 
 extern "C"
     fn kspl_stack_floor(): Sz
+    fn kspl_stack_here(): Sz
 
 priv fn stack_floor(): Sz //< where the calling thread's stack ends; 0 where nothing tells
     return kspl_stack_floor()
+
+priv fn stack_here(): Sz //< where the calling thread's stack is now
+    //<
+    //< Caution: **Not a local's address** (`Sz::here@`): the address sanitizer moves an
+    //< address-taken local onto a stack of its own on the heap, so it reads as past any floor.
+    return kspl_stack_here()
+
+priv const unasked_room: Sz = 32 * 1024 //<
+    //< How far below where a `later` limit was made its walk goes before it asks the OS
+    //<
+    //< **Counted in bytes, not levels**, as what a level costs moves with the build (the address
+    //< sanitizer's frames are several times the plain ones). Any thread's stack holds this much,
+    //< and a shallow walk never reaches it.
 
 pub struct Stack_limit //<
     //< where a walk on the calling thread stops, a margin before the end of its stack
@@ -24,7 +38,7 @@ pub struct Stack_limit //<
     //< thread's stack is somewhere else.
     floor: Sz //< the lowest address the walk may reach; 0 where the OS does not tell
     margin: Sz //< the room kept free, for a limit made by `later` that has not asked yet
-    ask_at: Sz //< the depth at which a `later` limit asks the OS; 0 once it has asked
+    start: Sz //< where a `later` limit was made, until it asks the OS; 0 once it has asked
 
 impl Stack_limit
     pub fn new( //< the limit for the calling thread
@@ -35,37 +49,28 @@ impl Stack_limit
     ): Stack_limit
         low: = stack_floor()
         return Stack_limit::{ .floor = 0 if low == 0 else low + margin, .margin = margin,
-            .ask_at = 0 }
+            .start = 0 }
 
     pub fn later( //< a limit that asks the OS only once a walk gets deep
         //<
         //< **For a walk run many times over mostly shallow input** (a regex per line of a file):
-        //< asking costs far more than a shallow walk, which never needs the answer. Check it with
-        //< `near_at`.
+        //< asking costs far more than a shallow walk, which never needs the answer. It asks once
+        //< the walk has gone a few tens of KB of stack below where it was made.
         margin: Sz, //< how many bytes to keep free below the point where the walk stops
-        deep: Sz, //< the depth from which it asks; the levels above it must fit in any stack at all
     ): Stack_limit
-        return Stack_limit::{ .floor = 0, .margin = margin, .ask_at = deep if deep > 0 else 1 }
-
-    pub fn near_at( //< `near` for a walk at `depth`, asking the OS first if this one has not yet
-        //<
-        //< A limit made by `new` has asked already, so this is `near`.
-        limit: Self$@,
-        depth: Sz, //< how deep the walk is now
-    ): Bool
-        if limit.ask_at > 0
-            if depth < limit.ask_at
-                return false
-            limit$ = Stack_limit.new(limit.margin)
-        return limit.near()
+        return Stack_limit::{ .floor = 0, .margin = margin, .start = stack_here() }
 
     pub fn near( //< whether the caller is within the margin of the stack's end
         //<
         //< **Always false where the OS does not tell** (bare metal), so a walk also keeps
-        //< its own depth count.
-        limit: Self@,
+        //< its own depth count. A limit made by `later` asks the OS here, once its walk is deep.
+        limit: Self$@,
     ): Bool
-        here: U8 = 0
-        // **Compare the difference**, not the two addresses: when the stack crosses the middle of
-        // the address space, the signed `Sz` changes sign between the two; the difference does not.
-        return limit.floor != 0 && Sz::here@ - limit.floor < 0
+        here: = stack_here()
+        // **Compare differences**, not two addresses: when the stack crosses the middle of the
+        // address space, the signed `Sz` changes sign between the two; the difference does not.
+        if limit.start != 0
+            if limit.start - here < unasked_room
+                return false
+            limit$ = Stack_limit.new(limit.margin)
+        return limit.floor != 0 && here - limit.floor < 0

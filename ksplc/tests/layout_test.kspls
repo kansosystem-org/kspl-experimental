@@ -114,6 +114,8 @@ priv struct Seen //< the number of notes, and the content of the first one
     count: Sz
     ragged: Sz
     tab: Sz
+    terminator: Sz
+    terminator_col: Sz
     first_line: Sz
     want: Sz
     got: Sz
@@ -134,6 +136,9 @@ priv fn look(src: U8[], arena: Arena$@): Seen
                 out.got = got
         case .tab
             out.tab += 1
+        case .terminator(col)
+            out.terminator += 1
+            out.terminator_col = col
     return out
 
 fn test_ragged_sibling_is_seen()
@@ -170,6 +175,23 @@ fn test_ragged_sibling_is_seen()
     assert(tidy.count == 0, "a block whose siblings line up must stay silent, whatever the width")
 
     verdict.pass("it named the shallowed sibling alone, with its line and its column.")
+
+fn test_written_terminator_is_seen()
+    verdict.start("[layout] a `;` written at a statement line's end is noted, not doubled test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    // **Only the written one stays**: a second `;` after it would read as an empty statement, a
+    // syntax error naming nothing the writer can see.
+    src: = "fn main(): I32\n    x: I32 = 0;\n    return x\n"
+    assert(mend(src, arena).equals("fn main(): I32 {\n    x: I32 = 0;\n    return x; }\n"),
+        "the written `;` must end the statement alone")
+    seen: = look(src, arena)
+    assert(seen.terminator == 1 && seen.first_line == 2 && seen.terminator_col == 14,
+        "the note must name the `;`'s line and its place in it")
+    // A `;` between two statements on one line is the notation's own, and stays silent.
+    assert(look("fn main()\n    a(); b()\n", arena).count == 0,
+        "a `;` between two statements on one line must not be noted")
+    verdict.pass("the written `;` was noted once, with its line and column.")
 
 fn test_mixed_width_stays_silent()
     verdict.start("[layout] differing widths per block stay silent test...")

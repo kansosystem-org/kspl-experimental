@@ -54,8 +54,8 @@ fn refuse_type_args_on_plain_type(c: Sema_ctx$@, w: sema_decl_name.Written_type)
     c.err(w.args, c.scratch.slice())
     return true
 
-priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
-    err_node: Ast_node$@)
+priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@,
+    gen_params: List<|Ast_node$@|>$@, err_node: Ast_node$@)
     w: = c.read_written_type(node)
     if w.spelled.len == 0
         return
@@ -79,7 +79,7 @@ priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@, gen_params: List<
         report_type_existence_error(c, kind, w.spelled, err_node)
 
 priv fn refuse_sizeof_of_value_name(c: Sema_ctx$@, target: Ast_node$@,
-    gen_params: List<|U8[]|>$@): Bool //<
+    gen_params: List<|Ast_node$@|>$@): Bool //<
         //< Reports a `sizeof` of a function's name or a type's member, and says whether it did
         //<
         //< **A function's size has no one meaning** (`sizeof(twice)`, `sizeof(same<|I32|>)`): the
@@ -164,7 +164,7 @@ impl Ast_node
                     name is the parameter's name, not its type. Write 'fn(name: Type): Ret'")
 
     priv fn report_bad_param_defaults(r: Ast_node$@, c: Sema_ctx$@,
-        gen_params: List<|U8[]|>$@, is_closure: Bool) //<
+        gen_params: List<|Ast_node$@|>$@, is_closure: Bool) //<
             //< Checks a parameter's default value at the declaration, once, not per instance
             //<
             //< **`k_type_fn_sig` is both a function's and a function pointer type's**; one
@@ -223,41 +223,77 @@ impl Ast_node
         for child in r.children
             child.check_spelled_out_sugar(c)
 
-    priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|U8[]|>$@): Bool //<
+    priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|Ast_node$@|>$@): Bool //<
         //< Whether the type's name names one of the type parameters currently in scope
         //<
         //< Caution: **Walk the tree**; checking only the outermost name misses `List<|T|>` and
         //< `T$@`.
-        if r.kind_id == .k_identifier || r.kind_id == .k_type_path
-            for i in Range.asc(gen_params.len)
-                if r.text.equals(gen_params.get(i))
-                    return true
+        if (r.kind_id == .k_identifier || r.kind_id == .k_type_path) &&
+            sema_decl_name.gen_param_named(gen_params, r.text).is_some()
+            return true
         for ch in r.children
             if ch.mentions_gen_param(gen_params)
                 return true
         return false
 
-    priv fn push_own_gen_params(r: Ast_node$@, gen_params: List<|U8[]|>$@): I32 //<
-        //< Pushes the names of the type parameters r declares, and returns how many
+    priv fn push_own_gen_params(r: Ast_node$@, gen_params: List<|Ast_node$@|>$@): I32 //<
+        //< Pushes the type parameters r declares, and returns how many
         gen_node: = r.find_child(.k_type_gen_params)
         if gen_node == null
             return 0
         $added: = 0
         for p in gen_node.children
-            if p.kind_id == .k_type_gen_param
-                $id_node: = p.find_child(.k_identifier)
-                if id_node == null && p.kind_id == .k_identifier
-                    id_node = p
-                if id_node != null
-                    gen_params.push(id_node.text)
-                    added += 1
-            else if p.kind_id == .k_identifier
-                gen_params.push(p.text)
+            if _id: = p.gen_param_id_node()
+                gen_params.push(p)
                 added += 1
         return added
 
-    fn validate_all_type_exprs(r: Ast_node$@, c: Sema_ctx$@, gen_params: List<|U8[]|>$@,
-        bound: List<|U8[]|>$@ = null) //<
+    priv fn check_type_arg_kinds(r: Ast_node$@, c: Sema_ctx$@, tmpl: Ast_node$@,
+        gen_params: List<|Ast_node$@|>$@, bound: List<|U8[]|>$@) //<
+            //< Checks each argument of a `<|…|>` in a generic's declaration against its parameter
+            //<
+            //< **Only in a generic's declaration**: a template is resolved only as its instances,
+            //< where its own parameters' names are already their arguments; elsewhere each is
+            //< judged where it is resolved (build_resolved_type_args in resolve.kspls). tmpl is
+            //< null where the declarations do not tell whose. An argument computing a value is
+            //< refused here too, once; an argument standing for a value is not read as a type.
+        params: = tmpl.find_child(.k_type_gen_params) if tmpl != null else null
+        $pos: Sz = 0
+        for arg in r.children
+            if arg.kind_id == .k_literal || arg.kind_id == .k_keyword || arg.kind_id == .k_empty
+                continue
+            own: = sema_decl_name.gen_param_named(gen_params, arg.bare_written_name())
+                .unwrap_or(null)
+            param: = params.gen_param_at(pos)
+            pos += 1
+            if sema_decl_resolve.refuses_arg_kind(c, arg, tmpl, param, own) ||
+                (own == null && sema_decl_resolve.refuses_computed_arg(c, arg))
+                continue
+            is_value: =
+                (own.is_const_gen_param() if own != null
+                else sema_decl_resolve.written_arg_is_value(arg, c))
+            if !is_value
+                arg.validate_all_type_exprs(c, gen_params, bound)
+
+    priv fn refuse_type_param_length(r: Ast_node$@, c: Sema_ctx$@,
+        gen_params: List<|Ast_node$@|>$@) //<
+            //< Reports an array's length that names a type parameter (`I32[T]` for `<|T|>`)
+        if !r.text.strip_prefix("$").starts_with("[") || r.children.len == 0
+            return
+        length: = r.get_child(0)
+        name: = length.bare_written_name()
+        switch sema_decl_name.gen_param_named(gen_params, name)
+        case .some(gp)
+            if gp.is_const_gen_param()
+                return
+            c.clear_scratch()
+                .s("'\{name\}' is a type parameter, but an array's length is a value\n  Hint: \
+                    declare it 'const \{name\}: Sz' to pass a value through it")
+            c.err(length, c.scratch.slice())
+        case .none {}
+
+    fn validate_all_type_exprs(r: Ast_node$@, c: Sema_ctx$@,
+        gen_params: List<|Ast_node$@|>$@, bound: List<|U8[]|>$@ = null) //<
             //< Reports each type expression under r naming no type
             //<
             //< bound lists the names a function binds (parameters and locals), once inside one.
@@ -312,6 +348,8 @@ impl Ast_node
             if path: = r.get_postfix_member().bare_type_path()
                 if path.children.len == 1 && c.names_module_only(path.get_child(0).text)
                     left_to_body = r.get_postfix_member()
+        if r.kind_id == .k_type_postfix
+            r.refuse_type_param_length(c, gen_params)
         for child in r.children
             // **A declared function's own signature is no function-pointer type**: its untyped
             // parameter is reported by the function's check, which names the parameter
@@ -319,7 +357,10 @@ impl Ast_node
             // errors.
             if child.kind_id == .k_type_fn_sig && r.kind_id != .k_decl_fn
                 child.report_untyped_fn_ptr_params(c)
-            if child != left_to_body
+            if child.kind_id == .k_type_args && gen_params.len > 0
+                child.check_type_arg_kinds(c,
+                    c.template_of_args(r, child).unwrap_or(null), gen_params, inner_bound)
+            else if child != left_to_body
                 child.validate_all_type_exprs(c, gen_params, inner_bound)
         if added_params > 0
             gen_params.len -= added_params

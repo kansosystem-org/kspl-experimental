@@ -30,12 +30,35 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # **A tag that exists already must name the commit this run builds.** On a manual trigger the
+  # run builds the head of the branch chosen in "Use workflow from", and `release` below keeps an
+  # existing tag where it is, so naming an old tag would attach zips built from another commit.
+  # It runs first, before a platform spends its minutes; a pushed tag passes by definition.
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The token stays out of .git/config, where any later step could read it.
+          persist-credentials: false
+          fetch-tags: true
+      - name: Refuse a tag that names another commit
+        run: |
+          set -e
+          if at=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}"); then
+            if [ "$at" != "$GITHUB_SHA" ]; then
+              echo "::error::the tag $TAG names $at, but this run builds $GITHUB_SHA: name a new tag, or re-run the tag's own run"
+              exit 1
+            fi
+          fi
+
   # The distributed files for three platforms, in one matrix: only the runner, the artifact's name,
   # the shell, and Windows's MSYS2 setup and zip making differ.
   #
   # Caution: Do not write the flags or libraries here. The Makefile's SHIP_CFLAGS and LDLIBS hold
   # them for `make install` and this alike; written twice, one gets fixed and the other forgotten.
   build:
+    needs: tag
     strategy:
       # One platform's failure does not cut the others short (a release wants every result).
       fail-fast: false
@@ -55,19 +78,12 @@ jobs:
         with:
           # The token stays out of .git/config, where any later step could read it.
           persist-credentials: false
-      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+      # tools/msys2-packages.txt's packages, as ci.yml's; llvm for `llvm-readobj`, which the DLL
+      # check below reads the imports with.
+      - uses: ./.github/actions/msys2-ucrt64
         if: runner.os == 'Windows'
         with:
-          msystem: UCRT64
-          # Caution: **Do not add `update: true`**, as in ci.yml: a full upgrade moves the tools on a
-          # day nobody touched the sources.
-          cache: true
-          # The Makefile's tools by their unversioned names, as in ci.yml; llvm for `llvm-readobj`,
-          # which the DLL check below reads the imports with.
-          install: >-
-            git make python findutils diffutils grep coreutils tar
-            mingw-w64-ucrt-x86_64-clang
-            mingw-w64-ucrt-x86_64-llvm
+          extra: mingw-w64-ucrt-x86_64-llvm
       - name: Build ksplc as make install does
         # **Ship stage2, not the seed**: the seed is the compiler as of its last re-bake. The output
         # goes under dist/: a "ksplc" at the repository's root collides with the ksplc/ directory.

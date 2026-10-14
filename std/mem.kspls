@@ -15,7 +15,7 @@ extern "C"
         //< Stores new_val if the value at ptr equals expected, and returns the old value
         //<
         //< **This declaration must match the one in `std/thread.kspls`.** Each std file declares
-        //< the C symbol itself, so importing just one of them is enough (as with `kspl_stat`).
+        //< the C symbol itself, so importing just one of them is enough (as with `kspl_path_info`).
 
 pub fn alloc_as<|T|>(): T$@ //< heap memory for one value, with no `sizeof` written by hand
     //<
@@ -333,11 +333,6 @@ pub fn heap_capacity_bytes(): Sz //< the size of the static buffer the heap uses
 pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up; never decreases
     return kspl_atomic_load(heap_total@)
 
-pub fn alloc_in( //< allocates from the arena, or from the global heap if there is none
-    arena: Arena$@, //< where to allocate from; null means the global heap
-    size: Sz, //< how many bytes to allocate
-): Void$@ //< the bytes; with no arena, the caller frees them with `dealloc`
-    return arena.alloc(size) if arena != null else alloc(size)
 // Caution: **A container whose elements can be ARC zeroes newly allocated memory with this
 // before using it.** Assigning to an element releases the old value, so following garbage as ARC
 // crashes; zero means "an empty handle that owns nothing" (see `Rc<|T|>`).
@@ -464,6 +459,7 @@ pub struct Arena //< a bump allocator: everything it allocated is freed at once
         //<
         //< from_buffer() sets 0: running out panics without calling malloc, and free() does nothing
         //< (the chunk and the Arena are the caller's memory).
+    priv resets: Sz //< how many times reset() has run, so restore() can refuse a mark from before
 priv const arena_initial_chunk: Sz = 256 * 1024 //<
     //< the first chunk's capacity; later ones grow from it
     //<
@@ -491,6 +487,7 @@ priv fn free_chunks(from: Arena_chunk$@, until: Arena_chunk$@): Sz //<
 pub struct Arena_state //< a mark to rewind the arena to
     priv chunk: Arena_chunk$@
     pub used: Sz //< how much of that chunk was used at the mark
+    priv resets: Sz //< the arena's count of resets at the mark
 
 impl Arena
     pub fn new( //< an arena on the global heap, growing chunk by chunk
@@ -503,6 +500,7 @@ impl Arena
         ptr: = alloc_as<|Arena|>()
         ptr.head = null
         ptr.default_chunk_size = chunk_size
+        ptr.resets = 0
         return ptr
     pub fn from_buffer( //< an arena over memory the caller owns, which never grows
         //<
@@ -520,7 +518,7 @@ impl Arena
         chunk.cap = size - pad - arena_chunk_header_size
         chunk.used = 0
         chunk.next = null
-        return Arena::{ .head = chunk, .default_chunk_size = 0 }
+        return Arena::{ .head = chunk, .default_chunk_size = 0, .resets = 0 }
     priv fn next_chunk_cap(r: Self$@, alloc_size: Sz): Sz //< decides the new chunk's capacity
         //<
         //< It doubles from a small first chunk up to default_chunk_size, so a small workload does
@@ -532,9 +530,15 @@ impl Arena
         return alloc_size if alloc_size > step else step
 
     pub fn alloc( //< allocates bytes; a fixed buffer that runs out panics instead of growing
-        r: Self$@,
+        //<
+        //< **A null arena is the global heap**, and the caller frees the bytes with `dealloc`.
+        //< Caution: **Keep this the one place an arena hands out memory**: `alloc_as`, `create`,
+        //< `dup_str` and `text` come here, so every std function taking an arena honours `null`.
+        r: Self$@, //< the arena, or null for the global heap
         size: Sz, //< how many bytes to allocate
     ): Void$@
+        if r == null
+            return alloc(size)
         if size < 0
             panic("Arena alloc size must be non-negative")
         alloc_size: = ((size + max_align - 1) / max_align) * max_align
@@ -569,11 +573,18 @@ impl Arena
         return Void$@::data_start
 
     pub fn save(r: Self$@): Arena_state //< a mark to rewind to later
-        return Arena_state::{ .chunk = r.head, .used = r.head.used if r.head != null else 0 }
+        return Arena_state::{ .chunk = r.head, .used = r.head.used if r.head != null else 0,
+            .resets = r.resets }
     pub fn restore( //< rewinds to a mark, freeing everything allocated since then at once
+        //<
+        //< **A mark it cannot place stops the program**, before anything is freed: one from another
+        //< arena, one from before `reset()`, and one past what its chunk now holds.
         r: Self$@,
-        state: Arena_state, //< what `save()` returned
+        state: Arena_state, //< what this arena's `save()` returned
     )
+        if !r.places(state)
+            panic("Arena.restore: the mark is not this arena's, or was saved before its reset() or \
+                before a restore() to an earlier mark")
         // Free the chunks allocated after the save point
         _freed: = free_chunks(r.head, state.chunk)
         r.head = state.chunk
@@ -586,6 +597,7 @@ impl Arena
         //< mark saved while empty returns every chunk to the OS, and the next round allocates them
         //< again, page by page. One chunk the size of the last round's use holds a round of that
         //< size, even above the limit (Zig's `ArenaAllocator.reset(.retain_capacity)`).
+        r.resets += 1
         if r.head == null || r.head.next == null
             if r.head != null
                 r.head.used = 0 // a fixed buffer stops here; its one chunk belongs to the caller
@@ -598,13 +610,29 @@ impl Arena
         r.head = one
 
     pub fn dup_str( //< a copy of the text in this arena, NUL-terminated for C
-        r: Self$@,
+        r: Self$@, //< the arena, or null for the heap: free the copy with `dealloc(Void$@::c.ptr)`
         src: U8[], //< the text to copy
     ): U8$[]
         ptr: = U8$@::r.alloc(src.len + 1)
         copy(Void$@::ptr, Void$@::src.ptr, src.len)
         (ptr + src.len)$ = 0U8
         return U8$[]::{ .ptr = ptr, .len = src.len }
+
+    priv fn places(r: Self@, state: Arena_state): Bool //< whether restore can rewind to the mark
+        //<
+        //< Caution: **Keep every check.** Freeing from the head down to a chunk this arena lacks
+        //< frees all its chunks and leaves the mark's as the head, so later allocations overlap
+        //< another arena's live data. A later chunk can take a freed one's address, so the count of
+        //< resets and the bytes the chunk holds catch a stale mark that the address alone passes.
+        if state.resets != r.resets
+            return false
+        $curr: = r.head
+        for curr != null
+            if curr == state.chunk
+                return state.used <= curr.used
+            curr = curr.next
+        // The mark of an empty arena is every growing arena's; a fixed buffer is never empty.
+        return state.chunk == null && r.default_chunk_size != 0
 
     pub fn get_total_allocated(r: Self@): Sz //< every byte in the chunks, used or not
         $total: Sz = 0
@@ -636,13 +664,53 @@ impl Arena
         return Arena_headroom::{ .free = free, .step = r.next_chunk_cap(0) }
 
     pub fn alloc_as<|T|>(r: Self$@): T$@ //< arena memory for one value, with no `sizeof` written
+        //<
+        //< With a null arena, heap memory the caller frees with `dealloc`.
         return T$@::r.alloc(sizeof(T))
 
     pub fn create<|T|>( //< allocates room for one value and writes it there
-        r: Self$@,
+        r: Self$@, //< the arena, or null for the heap, freed with `dealloc`
         init_val: T, //< the value to write
     ): T$@
         ptr: = r.alloc_as<|T|>()
         ptr$ = init_val
         return ptr
 impl Arena: Owned {} //< it owns its resources and releases them with `free()`.
+
+// ==========================================
+// Where a std function does work it does not return, and where a value of many blocks lives
+// ==========================================
+pub struct Own_arena //<
+    //< the arena of its own a value made with a null arena keeps, for its `free()`
+    //<
+    //< **Empty in a value made in the caller's arena**, and in a value read out of another, so
+    //< their `free()` lets nothing go. Only std makes one that is not empty.
+    arena: Arena$@ //< the arena, or null
+
+impl Own_arena
+    fn free(r: Self$@) //< frees the arena, if there is one, and leaves this empty
+        if r.arena != null
+            r.arena.free()
+            r.arena = null
+impl Own_arena: Owned {} //< `free()` releases the arena it holds
+
+struct Scratch //< the arena a function works in: the caller's, or one of its own
+    //<
+    //< **Given null, a function still frees the work it does not return**: the caller owes a
+    //< free only for the result ("A null arena is the heap, for every function that takes one" in
+    //< `std/docs/DESIGN.md`). A result of many blocks is built here and keeps `own`.
+    arena: Arena$@ //< where the work goes
+    own: Own_arena //< the arena made for a caller who passed null, or empty; `free` frees it
+
+priv const scratch_chunk: Sz = 64 * 1024 //< the largest chunk a scratch arena of its own takes
+
+fn scratch( //< the arena to work in, made here when the caller passed null
+    lent: Arena$@, //< the arena the caller passed
+): Scratch
+    own: = Arena.new(scratch_chunk) if lent == null else null
+    return Scratch::{ .arena = lent if lent != null else own, .own = ::{ .arena = own } }
+
+impl Scratch
+    fn free(r: Self$@) //< frees the arena made here; the caller's stays as it is
+        r.own.free()
+impl Scratch: Owned {} //< `free()` releases the arena made here

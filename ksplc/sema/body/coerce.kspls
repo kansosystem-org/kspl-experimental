@@ -84,7 +84,7 @@ impl Ast_node
         r.morph(.k_expr_postfix, "::")
         // r is now the cast's wrapper (the clone from snapshot_for_morph keeps the def_node). A
         // stale def_node would make lower/expr.kspls's "::" test misfire (it detects an explicit
-        // cast through operator.Cast).
+        // cast through `std/lang`'s `Cast`).
         r.def_node = null
         r.add_child(clone)
         r.add_child(kw_node)
@@ -130,13 +130,19 @@ impl Ast_node
         if real_type_id == real_expected_id
             return expected_id
 
-        switch c.env.get_info(real_expected_id)
+        // **An immutable trait value is a trait value too** (an element of `Shape[2]`), so the
+        // immutability is seen through as well as the alias. The upcast makes the trait value
+        // itself, which the place then holds as it holds any value; a trait value is not upcast.
+        clean_expected_id: = c.env.get_clean_real_type(expected_id)
+        switch c.env.get_info(clean_expected_id)
         case .trait_type(_d)
+            if c.env.get_clean_real_type(type_id) == clean_expected_id
+                return expected_id
             // **Finish building the instance's methods before making a trait value**, or the vtable
             // names a thunk with no instance (register_generic_trait_impls in mono.kspls; the test
             // is ksplc/tests/trait_test.kspls).
             c.ensure_instance_methods(type_id) catch {}
-            if c.check_trait_implementation(type_id, real_expected_id, r)
+            if c.check_trait_implementation(type_id, clean_expected_id, r)
                 if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) && !r.is_place_expr()
                     // Advising a binding is right only where it outlives the call; at a return it
                     // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspls
@@ -152,8 +158,8 @@ impl Ast_node
                 r.children = base_ast.new_ast_node_list()
                 r.morph(.k_expr_upcast, "upcast")
                 r.add_child(clone)
-                r.type_id = expected_id
-                return expected_id
+                r.type_id = clean_expected_id
+                return clean_expected_id
         default {}
 
         if sema_type_env.is_void(expected_id)
@@ -235,13 +241,17 @@ impl Ast_node
             r.add_child(clone)
             return expected_id
 
+        // **`[_]` takes the initializer's length alone**: its elements are then checked as
+        // against a written length, so an immutable array's row or a field (`m[1]`, `s.a`) copies
+        // in as it does into `I32[3]`, and the declaration gets the type a written length gives.
         switch c.env.get_info(real_expected_id)
         case .array(exp_b, exp_s)
             if exp_s == -1
-                switch c.env.get_info(real_type_id)
-                case .array(res_b, res_s)
-                    if exp_b == res_b && res_s != -1
-                        return type_id // Array size match
+                switch c.env.get_info(c.env.get_clean_real_type(type_id))
+                case .array(_res_b, res_s)
+                    if res_s != -1
+                        return r.apply_type_coercion(c, type_id,
+                            c.env.make_array(exp_b, res_s))
                 default {}
         default {}
 

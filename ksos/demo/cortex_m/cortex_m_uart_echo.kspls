@@ -23,6 +23,8 @@ fn uart_echo_task(_arg: Void$@): Void
     uart.init()
 
     $idle_rounds: Sz = 0
+    $got_newline: = false
+    $echoed_all: = true
     for
         switch uart.getc()
         case .none
@@ -34,10 +36,17 @@ fn uart_echo_task(_arg: Void$@): Void
             idle_rounds = 0 // each received byte restarts the count (a pause partway does not give up)
             uart.putc(c) catch
                 con.puts("[semihosting] UART0 putc() timed out\n")
+                echoed_all = false
             if c == '\n'
+                got_newline = true
                 break
 
     con.puts("[semihosting] UART0(RX) echo probe done.\n")
+    // The bytes themselves are matched outside (`tests/uart_probe.py`), which holds the verdict
+    // the gate reads; these say what the probe saw from its side.
+    con.check("the echo ran to the newline rather than giving up", got_newline)
+    con.check("every byte received went back out", echoed_all)
+    con.print_summary("UART0 RX echo, the probe's side")
 // The bare-metal entry called from startup.S.
 #export
 fn ksos_main()

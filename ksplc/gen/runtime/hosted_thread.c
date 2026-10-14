@@ -12,6 +12,15 @@
  * as an error number; Windows's SRWLOCK reports nothing, so the owner is kept beside it.
  * ============================================================ */
 
+/* On a thread's trampoline, which calls the entry std/thread hands over. **The entry's parameter is
+ * the thread function's own `T$@`**, reached through `void *(*)(void *)` as pthread_create and
+ * CreateThread reach it, so clang's `-fsanitize=function` would report the call it cannot see. */
+#if defined(__clang__)
+#define KSPL_CALLS_THREAD_ENTRY __attribute__((no_sanitize("function")))
+#else
+#define KSPL_CALLS_THREAD_ENTRY
+#endif
+
 /* Stops the program on a misused lock, as a panic does (the message, then abort()). */
 static void kspl_lock_misuse(const char *what) {
     fflush(stdout); /* The same reason as kspl_bounds_check in hosted.h */
@@ -30,11 +39,37 @@ static const char kspl_foreign_wait_msg[] = "Cond_var.wait: this thread does not
 
 typedef struct { pthread_t tid; } kspl_thread_t;
 
+/* What a new thread runs first: the crash report's share of it (hosted.c's "A crash says what
+ * happened"), around entry. */
+typedef struct {
+    void *(*entry)(void *arg);
+    void *arg;
+} kspl_thread_start_t;
+
+KSPL_CALLS_THREAD_ENTRY static void *kspl_thread_trampoline(void *p) {
+    kspl_thread_start_t start = *(kspl_thread_start_t *)p;
+    void *alt;
+    void *ret;
+    free(p);
+    alt = kspl_crash_thread_enter();
+    ret = start.entry(start.arg);
+    kspl_crash_thread_leave(alt);
+    return ret;
+}
+
 /* Starts entry on a new thread. 0 on failure */
 KSPL_LINK I64 kspl_thread_spawn(void *(*entry)(void *arg), void *arg) {
     kspl_thread_t *t = (kspl_thread_t *)malloc(sizeof(kspl_thread_t));
-    if (t == NULL) return 0;
-    if (pthread_create(&t->tid, NULL, entry, arg) != 0) {
+    kspl_thread_start_t *start = (kspl_thread_start_t *)malloc(sizeof(kspl_thread_start_t));
+    if (t == NULL || start == NULL) {
+        free(t);
+        free(start);
+        return 0;
+    }
+    start->entry = entry;
+    start->arg = arg;
+    if (pthread_create(&t->tid, NULL, kspl_thread_trampoline, start) != 0) {
+        free(start);
         free(t);
         return 0;
     }
@@ -129,7 +164,7 @@ KSPL_LINK void kspl_cond_destroy(I64 handle) {
 
 typedef struct { HANDLE h; void *(*entry)(void *arg); void *arg; void *result; } kspl_thread_t;
 
-static DWORD WINAPI kspl_thread_trampoline(LPVOID param) {
+KSPL_CALLS_THREAD_ENTRY static DWORD WINAPI kspl_thread_trampoline(LPVOID param) {
     kspl_thread_t *t = (kspl_thread_t *)param;
     t->result = t->entry(t->arg);
     return 0;

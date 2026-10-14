@@ -20,9 +20,13 @@ $storage: Sz[6144] = ::{}
 fn load_tensor(sf: st.Safetensors$@, name: U8[], arena: Arena$@): Tensor<|F32|> //<
     //< The one place for "stop if it cannot be loaded", shared by all 19 tensor loads
     //<
-    //< (It is a freestanding probe, so the catch just calls con.exit() and loops forever — a simple
-    //< stop-on-failure helper that does not return the error to the caller.)
+    //< A tensor that does not load fails the run there and ends it: the probe has nothing to check
+    //< without it, so the error is not returned to the caller.
     return sf.get_tensor<|F32|>(name, arena) catch
+        con.puts(name)
+        con.putc('\n')
+        con.check("the tensor above loads", false)
+        con.print_summary("AI embedded-weights probe stopped")
         con.exit()
         for {}
 
@@ -33,10 +37,11 @@ fn ksos_main()
     $arena: = Arena.from_buffer(Void$@::storage@, sizeof(Sz) * 6144)
 
     $sf: = st.Safetensors.load_from_bytes(model_bytes, arena@) catch
-        con.puts("safetensors load FAILED\n")
+        con.check("the embedded safetensors loads", false)
+        con.print_summary("AI embedded-weights probe stopped")
         con.exit()
         for {}
-    con.puts("safetensors load OK (embedded, zero file I/O)\n")
+    con.check("the embedded safetensors loads (zero file I/O)", true)
 
     $emb: = nn.Embedding<|F32|>.new(12, 4, arena@)
     emb.weight = load_tensor(sf@, "model.embed_tokens.weight", arena@)

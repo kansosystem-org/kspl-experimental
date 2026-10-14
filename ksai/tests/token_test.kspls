@@ -31,11 +31,11 @@ fn test_tokenizer_roundtrip(arena: Arena$@)
     tok.add_merge(9, 8, 10) // Kan + so -> Kanso
     text: = "Kanso AI"
     // Encodes with the space and AI split by hand (a real pre-pass splits at word boundaries first)
-    tokens: = tok.encode("Kanso")
+    tokens: = tok.encode("Kanso", arena)
     tokens.push(6) // Space
     tokens.push(11) // AI
 
-    assert(tok.decode(tokens).equals(text), "decode must invert encode")
+    assert(tok.decode(tokens, arena).equals(text), "decode must invert encode")
     verdict
         .pass("decoding a sequence encoded through the merge table gives the original text back.")
 
@@ -49,14 +49,51 @@ fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
     tok.add_token("a", 1)
     tok.add_token("b", 2)
     tok.add_token("ab", 3)
-    before: = tok.encode("ab")
+    before: = tok.encode("ab", arena)
     assert(before.len == 2, "with no rule, a and b stay apart")
-    again: = tok.encode("ab")
+    again: = tok.encode("ab", arena)
     assert(again.len == 2 && again[0] == 1 && again[1] == 2, "a repeat gives the same IDs")
     tok.add_merge(1, 2, 3)
-    after: = tok.encode("ab")
+    after: = tok.encode("ab", arena)
     assert(after.len == 1 && after[0] == 3, "the rule added after an encoding is taken")
     verdict.pass("a repeat is answered alike, and a rule added later is taken")
+
+fn test_tokenizer_keeps_its_size() //<
+    //< A tokenizer used for its lifetime grows only while its cache of chunks fills
+    //<
+    //< **Every result is on the caller's arena**, and a chunk past the cache's cap is merged in the
+    //< result itself: a server keeps one tokenizer for its lifetime, so anything else it put on its
+    //< own arena would grow without limit.
+    verdict.start("[Tokenizer] encoding and decoding leave the tokenizer's arena as it was...")
+    own: = Arena.new(1024 * 1024)
+    defer own.free()
+    $tok: = ai_tokenizer.Tokenizer.new(own)
+    tok.add_token("a", 1)
+    tok.add_token("b", 2)
+    tok.add_token("ab", 3)
+    tok.add_token(" ", 4)
+    tok.add_merge(1, 2, 3)
+    work: = Arena.new(64 * 1024)
+    defer work.free()
+    _warm: = tok.encode("ab ab", work)
+    held: = own.get_total_used()
+    for _i in Range.asc(1000)
+        ids: = tok.encode("ab ab", work)
+        assert(tok.decode(ids, work).equals("ab ab"), "the text decodes back")
+        assert(tok.decode_one(3).equals("ab"), "one ID decodes to its word")
+        work.reset()
+    assert(own.get_total_used() == held, "a cached text adds nothing to the tokenizer")
+    // More distinct words than the cache holds, then new ones once it is full.
+    $words: = str.Str_builder.new()
+    defer words.free()
+    for i in Range.asc(70000)
+        words.s(" \{I32::i\}")
+    _full: = tok.encode(words.slice(), work)
+    work.reset()
+    full: = own.get_total_used()
+    _past: = tok.encode(" 70000 70001 70002 123456789", work)
+    assert(own.get_total_used() == full, "a word past the cache's cap adds nothing")
+    verdict.pass("")
 
 priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
     //< The line `load` names as broken in the pair written out, or 0 where it takes them
@@ -90,9 +127,9 @@ fn test_tokenizer_load(arena: Arena$@) //<
     $tok: = ai_tokenizer.Tokenizer.new(arena)
     tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
         catch panic("the files train_bpe.kspls would write must load")
-    ids: = tok.encode("ab")
+    ids: = tok.encode("ab", arena)
     assert(ids.len == 1 && ids[0] == 3, "the merge loaded joins a and b into 3")
-    assert(tok.decode(ids).equals("ab"), "the word loaded decodes back")
+    assert(tok.decode(ids, arena).equals("ab"), "the word loaded decodes back")
     assert(broken_line("0\t\n1\t6\n", merges) == 2, "an odd hex digit is refused")
     assert(broken_line("0\t\n1x\t61\n", merges) == 2, "an ID with a letter in it is refused")
     assert(broken_line("0\t\n1 61\n", merges) == 2, "a line with no tab is refused")

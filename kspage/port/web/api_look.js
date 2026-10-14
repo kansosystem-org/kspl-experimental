@@ -312,11 +312,14 @@ function kspageApiLook(ks) {
       const len = w.kspage_web_name();
       return outText(len);
     },
-    // Names the current place; empty removes the name.
+    // Names the current place; empty removes the name. **A refusal comes back as its reason**:
+    // 0 "no place", -1 to -3 a table's name no formula could reach (`kspage_web_set_name`).
     setName(text) {
       const len = text.length > 0 ? stage(text) : 0;
-      if (len < 0) return false;
-      return acted(w.kspage_web_set_name(len));
+      if (len < 0) return 0;
+      const got = w.kspage_web_set_name(len);
+      if (got > 0) draw();
+      return got;
     },
     // Inserts at the cursor text that refers to the target by name. **Only a paragraph with a
     // running number can be referred to** (nothing else has text to show). The number is recounted
@@ -338,6 +341,7 @@ function kspageApiLook(ks) {
       if (got === -1) return "This document is open for reading alone";
       if (got === -2) return "Drag across two or more cells first";
       if (got === -3) return "A cell already merged reaches outside what was selected";
+      if (got === -4) return "One merge covers at most 1000 rows and 1000 columns";
       return "Select cells inside one table";
     },
     // Splits the merged cell the cursor is in; empty cells come back where it covered.

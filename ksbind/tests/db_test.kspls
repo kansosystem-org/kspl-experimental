@@ -304,3 +304,33 @@ fn test_db_error_codes()
     fs.remove_path(busy_path) catch {}
     assert(busy == 5, "a write against another connection's lock carries SQLITE_BUSY (5)")
     verdict.pass("A broken constraint, a syntax error and a busy database carry their own codes.")
+
+priv const db_base: U8[] = "out/tmp/ksbind_db" //< where a test that needs a database file makes it
+
+fn test_db_free_with_a_statement_open()
+    verdict.start("[Db] freeing the database while a statement is still open test...")
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(db_base, "db_", arena) catch panic("the scratch folder should be made")
+    path: = fs.join(dir, "t.db", arena)
+    // **In WAL mode the `-wal` file stands while a connection is open**, and the last one to close
+    // removes it, so the file tells whether the connection closed.
+    wal: = arena.text().s(path).s("-wal").take()
+    conn: = db.Db.open(path) catch panic("a database file should open")
+    conn.exec("PRAGMA journal_mode=WAL") catch panic("WAL mode should be set")
+    conn.exec("CREATE TABLE t (n INTEGER)") catch panic("create table should not fail")
+    conn.exec("INSERT INTO t (n) VALUES (7)") catch panic("insert should not fail")
+    stmt: = conn.prepare("SELECT n FROM t") catch panic("prepare should not fail")
+    conn.free()
+    // **The statement works until it is freed**, so the frees may come in either order.
+    row: = stmt.step() catch panic("a statement whose database was freed should still step")
+    assert(row == db.Step_result.row && stmt.column_i64(0) == 7I64,
+        "a statement whose database was freed should still read its row")
+    assert(fs.exists(wal), "the connection should stay open while its statement is")
+    stmt.free()
+    // Caution: **Check that it closed**: left open, the connection keeps its file and its lock for
+    // as long as the process runs.
+    assert(!fs.exists(wal), "freeing the last statement should close the connection")
+    fs.remove_path(path) catch {}
+    fs.remove_path(dir) catch {}
+    verdict.pass("A database freed with a statement open closes once that statement is freed.")

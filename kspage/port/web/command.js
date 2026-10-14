@@ -13,12 +13,13 @@ function kspageCommand(ui) {
   const app = ui.app;
   const say = ui.say, tell = ui.tell, deny = ui.deny;
   const putButton = ui.putButton, lineButton = ui.lineButton, whyButton = ui.whyButton;
-  lineButton("add-row", () => app.addLine("row"));
+  // Adding says which thing stopped it (outside a table, read-only, a merge at its widest).
+  whyButton("add-row", () => app.addLine("row"));
   lineButton("drop-row", () => app.dropLine("row"));
-  lineButton("add-col", () => app.addLine("column"));
+  whyButton("add-col", () => app.addLine("column"));
   lineButton("drop-col", () => app.dropLine("column"));
-  // Merging says which of four things stopped it (nothing selected, only one cell, a merge
-  // extending outside, read-only), so it writes its own refusal.
+  // Merging says which of five things stopped it (nothing selected, only one cell, a merge
+  // extending outside, too many rows or columns, read-only), so it writes its own refusal.
   whyButton("merge-cells", () => app.mergeCells());
   lineButton("split-cell", () => app.splitCell());
   lineButton("fill-down", () => app.fillAlong("down"));
@@ -96,11 +97,24 @@ function kspageCommand(ui) {
   // in `../../write/block.kspls`).
   // Caution: **Do not say only "the text inside a frame"** — someone who wants to name a table
   // reads that as impossible.
+  // **A table's name no formula could reach says why** (`kspage_web_set_name`): the rule is what a
+  // formula reads as the end of a name, as a number or as the date type.
   const frameNameBox = document.getElementById("frame-name");
+  const NAME_FAULTS = {
+    "-1": "A table's name cannot hold a space, a line break or any of + - * / ( ) , : < > = ! "
+      + "(a formula would end the name there). Join the words with _ (Q1_sales)",
+    "-2": "A table's name cannot start with a digit or # (a formula would read a number or a mark)",
+    "-3": "A table's name cannot start with Day (a formula reads that as the date type)",
+  };
   document.getElementById("frame-name-apply").addEventListener("click", () => {
-    tell(app.setName(frameNameBox.value), "Set the name",
-      "Click where the name is to be given and then set it (inside a cell it attaches to the table, "
-        + "inside a slide's frame to the frame, and otherwise to the paragraph you are in)");
+    const got = app.setName(frameNameBox.value);
+    if (got < 0) {
+      deny(NAME_FAULTS[String(got)]);
+    } else {
+      tell(got > 0, "Set the name",
+        "Click where the name is to be given and then set it (inside a cell it attaches to the "
+          + "table, inside a slide's frame to the frame, and otherwise to the paragraph you are in)");
+    }
     app.focus();
   });
   // Referring to a figure from the body. **Only the target's name is stored** (the number is

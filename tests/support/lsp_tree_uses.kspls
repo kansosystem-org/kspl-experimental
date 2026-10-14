@@ -45,8 +45,7 @@ priv fn refs_at(c: jsonrpc.Client$@, with_decl: Bool, arena: Arena$@): List<|jso
         .set("uri", b.str_val(lsp_client.uri_of(harness.root(), rename_file, arena))).build()
     ctx: = b.obj().set("includeDeclaration", b.bool_val(with_decl)).build()
     params: = b.obj().set("textDocument", doc).set("position", pos).set("context", ctx).build()
-    msg: = c.request("textDocument/references", params, heavy_ms, arena) catch
-        fallback .null_val
+    msg: = lsp_client.answer(c, "textDocument/references", params, heavy_ms, arena)
     return msg.get("result").arr_list(arena)
 
 fn check_references(c: jsonrpc.Client$@, arena: Arena$@) //<
@@ -171,7 +170,7 @@ fn check_rename(c: jsonrpc.Client$@, arena: Arena$@)
         verdict.check("a rename comes back", false,
             lsp_client.why(c, "could not wait it out", arena))
         return
-    changes: = msg.get("result").get("changes")
+    changes: = msg.val.get("result").get("changes")
     $files: = List<|U8[]|>.new(arena)
     $off: = List<|U8[]|>.new(arena)
     $spots: Sz = 0

@@ -393,17 +393,17 @@ impl Ast_node
                 ptr_reg: = left.emit_llvm_lvalue(cg)
                 val_reg: = right.emit_llvm_expr(cg)
                 store_type_id: = left.type_id if left.type_id != 0 else right.type_id
-                cg.op_store(store_type_id, val_reg, ptr_reg)
+                cg.op_store_place(store_type_id, val_reg, ptr_reg, left)
             else
                 ptr_reg: = left.emit_llvm_lvalue(cg)
                 left_val_reg: = cg.next_reg()
                 load_type_id: = left.type_id if left.type_id != 0 else right.type_id
-                cg.op_load(left_val_reg, load_type_id, ptr_reg)
+                cg.op_load_place(left_val_reg, load_type_id, ptr_reg, left)
                 div_op: = op.sub(0, 1) if op.equals("/=") || op.equals("%=") else ""
                 if sema_body_binary.takes_signed_div(cg.sema, div_op, left.type_id, right)
                     res: = gen_llvm_expr.emit_llvm_signed_div(cg, div_op,
                         cg.reg_str(left_val_reg), left.type_id, right, r.loc)
-                    cg.op_store(left.type_id, res, ptr_reg)
+                    cg.op_store_place(left.type_id, res, ptr_reg, left)
                     return
 
                 // The right-hand side of a `<<=` `>>=` is the shift amount, and of a `/=` `%=` the
@@ -425,7 +425,7 @@ impl Ast_node
                         r.ice_panic("Genllvm ICE: Unhandled pointer assign operator")
                     res: = gen_llvm_expr.emit_llvm_ptr_step(cg, type_id,
                         cg.reg_str(left_val_reg), right.type_id, right_val, op.equals("-="))
-                    cg.s("    store ptr ").s(res).s(", ptr ").s(ptr_reg).s("\n")
+                    cg.op_store_place(type_id, res, ptr_reg, left)
                 else
                     res_reg: = cg.next_reg()
                     cg.s("    %\{res_reg\} = ")
@@ -438,7 +438,7 @@ impl Ast_node
                     store_type_id2: = type_id if type_id != 0 else right.type_id
                     cg.t(store_type_id2).s(" %\{left_val_reg\}, ").s(right_val).s("\n")
                     cg.clear_scratch().s("%\{res_reg\}")
-                    cg.op_store(store_type_id2, cg.scratch.slice(), ptr_reg)
+                    cg.op_store_place(store_type_id2, cg.scratch.slice(), ptr_reg, left)
 
 priv fn arm_block(r: Ast_node$@, from: Sz): Ast_node$@? //<
     //< The block of the `switch` arm whose patterns start at `from`

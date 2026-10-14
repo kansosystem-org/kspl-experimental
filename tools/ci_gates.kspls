@@ -119,9 +119,9 @@ const gates: Gate[_] = ::{
     Gate::{ .log = "emit_runtime", .args = "test-emit-runtime", .par = .serial, .verdict = true,
         .shard = .none, .macos = true, .stops = false },
     // Each needs a tool only the devcontainer image holds: `<ucontext.h>`, `qemu-system-arm`, node,
-    // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer. **A browser and
-    // the validator are required here** (`KSPAGE_REQUIRE_*`): the image bundles them, so their
-    // absence is a fault, not the place.
+    // wasm-ld and a browser, `desktop-file-validate`, libopenblas, ThreadSanitizer, the address and
+    // leak sanitizers. **A browser and the validator are required here** (`KSPAGE_REQUIRE_*`): the
+    // image bundles them, so their absence is a fault, not the place.
     Gate::{ .log = "ksos_posix", .args = "test-ksos-posix", .par = .serial, .verdict = false,
         .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "ksos_qemu", .args = "test-ksos-qemu", .par = .serial, .verdict = false,
@@ -144,6 +144,10 @@ const gates: Gate[_] = ::{
         .macos = false, .stops = false },
     Gate::{ .log = "race", .args = "test-race", .par = .serial, .verdict = true, .shard = .linux,
         .macos = false, .stops = false },
+    // ksplc's and std's own tests build in seconds at `-O0`; std's run, which starts children and
+    // waits on sockets, is the longest part.
+    Gate::{ .log = "sanitize", .args = "test-sanitize", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false, .stops = false },
     // Needs no tool of the image's: it is here because Linux's minute costs least, and the release
     // checks each platform's own (`.github/workflows/release.yml`). It pays one `-O2` build.
     Gate::{ .log = "selfhost_ship", .args = "self-host-ship", .par = .serial, .verdict = true,
@@ -192,14 +196,15 @@ impl Set
 // a runner would otherwise pass in silence. A row names its platforms as make's `PLATFORM` spells
 // them, and a piece of the reason's line ("Some gates need a tool or a library that not every
 // machine has" in `docs/SPEC-gates.md`). **Linux is named least**: its image holds every tool but
-// the Windows cross-compiler and Wine.
+// the Windows cross-compiler and Wine, and its container has `::1`.
 // ==========================================
 struct Expected_skip //< one SKIP a platform's round may print
     on: U8[] //< the platforms it is expected on, space-separated: `linux`, `darwin`, `win32`
     says: U8[] //< a piece of the line that tells its reason apart
 
 const expected_skips: Expected_skip[_] = ::{
-    Expected_skip::{ .on = "linux win32 darwin", .says = "this machine has no IPv6 loopback" },
+    Expected_skip::{ .on = "linux win32 darwin", .says = "this machine has no IPv6 at all" },
+    Expected_skip::{ .on = "win32 darwin", .says = "the loopback holds no `::1`" },
     Expected_skip::{ .on = "linux win32 darwin",
         .says = "x86_64-w64-mingw32-gcc is not installed" },
     Expected_skip::{ .on = "linux win32 darwin", .says = "Wine is not installed" },
@@ -211,9 +216,13 @@ const expected_skips: Expected_skip[_] = ::{
     Expected_skip::{ .on = "win32 darwin", .says = "which only Linux has" },
     Expected_skip::{ .on = "win32", .says = "marks every new file executable" },
     Expected_skip::{ .on = "win32", .says = "POSIX-specific executable paths" },
+    Expected_skip::{ .on = "win32", .says = "it hands over shell command lines" },
     Expected_skip::{ .on = "win32", .says = "no POSIX mode" },
+    Expected_skip::{ .on = "win32", .says = "Windows has no FIFO a path names" },
+    Expected_skip::{ .on = "win32", .says = "Windows has no terminal `script` can give" },
     Expected_skip::{ .on = "win32 darwin", .says = "holds no sanitizer runtime" },
     Expected_skip::{ .on = "win32", .says = "cannot be made with `ln -s`" },
+    Expected_skip::{ .on = "win32", .says = "cannot be made with `mkfifo`" },
     Expected_skip::{ .on = "win32 darwin", .says = "do not link here" },
     Expected_skip::{ .on = "win32 darwin", .says = "the libraries ksbind binds are not installed" },
     Expected_skip::{ .on = "win32", .says = "test-ksos-link" },
@@ -226,6 +235,7 @@ const expected_skips: Expected_skip[_] = ::{
     Expected_skip::{ .on = "win32", .says = "cannot open the folder to everyone" },
     Expected_skip::{ .on = "win32 darwin", .says = "can hand a folder to another user" },
     Expected_skip::{ .on = "win32 darwin", .says = "wasm-ld is not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "clang's wasm32 builtins are not installed" },
     Expected_skip::{ .on = "win32 darwin", .says = "node is not installed" },
     Expected_skip::{ .on = "win32 darwin", .says = "does not take --target" },
     Expected_skip::{ .on = "win32", .says = "a drive is a root on Windows" },
@@ -240,21 +250,79 @@ const expected_skips: Expected_skip[_] = ::{
     Expected_skip::{ .on = "win32 darwin", .says = "it is not split" },
     Expected_skip::{ .on = "darwin", .says = "neither Windows's sharing check nor /proc" },
     Expected_skip::{ .on = "darwin", .says = "no browser" },
+    Expected_skip::{ .on = "darwin", .says = "no util-linux `script`" },
     Expected_skip::{ .on = "darwin", .says = "desktop-file-validate is not installed" },
 }
 
-fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that carry `SKIP`
+fn skip_lines(text: U8[], arena: Arena$@): List<|U8[]|> //< a log's lines that say a check skipped
+    //<
+    //< **A line skips when it opens with the mark**, past any `#` and spaces before it: `SKIP …`,
+    //< `#   SKIP: …` or `RESULT: SKIPPED …`. A line that only names the word, as a check's label
+    //< can (`pass conventions: every SKIP reason …`), is no skip.
     $out: = List<|U8[]|>.new(arena)
     for line in text.lines(arena)
-        if line.find_str("SKIP").is_some()
+        if is_skip_line(line)
             out.push(line)
     return out
 
-fn is_expected_skip(line: U8[], platform: U8[]): Bool //< whether a row holds this SKIP line
+fn is_skip_line(line: U8[]): Bool //< whether a log's line says a check skipped (`skip_lines`)
+    $i: Sz = 0
+    for i < line.len && (line[i] == '#' || line[i] == ' ')
+        i += 1
+    rest: = line.sub_from(i)
+    return rest.starts_with("SKIP") || rest.starts_with("RESULT: SKIPPED")
+
+// ==========================================
+// The SKIP lines a switch turned off lets through. **On Linux a switch makes a missing tool fail**
+// (`REQUIRE_SWITCHES` in `mk/test.mk`); a person whose machine lacks the tool turns it off, and the
+// gate skips instead. Such a skip is the person's own choice, so the round expects it, and names
+// the switch as it ends: it is not CI's verdict.
+// ==========================================
+struct Switch_skip //< one SKIP a gate prints where a switch is turned off and the tool is missing
+    name: U8[] //< the switch, as `mk/test.mk` names it
+    says: U8[] //< a piece of the line that tells its reason apart
+
+const switch_skips: Switch_skip[_] = ::{
+    Switch_skip::{ .name = "KANSO_REQUIRE_ASAN", .says = "holds no sanitizer runtime" },
+    Switch_skip::{ .name = "KANSO_REQUIRE_ASAN",
+        .says = "cannot build with the address and undefined-behaviour sanitizers" },
+    Switch_skip::{ .name = "KANSO_REQUIRE_TSAN", .says = "cannot build with ThreadSanitizer" },
+    Switch_skip::{ .name = "KANSO_REQUIRE_BOTH_CC",
+        .says = "only one of the two C compilers is installed" },
+    Switch_skip::{ .name = "KANSO_REQUIRE_CHOWN", .says = "can hand a folder to another user" },
+    Switch_skip::{ .name = "KSBIND_REQUIRE_LIBS",
+        .says = "the libraries ksbind binds are not installed" },
+    Switch_skip::{ .name = "KSBIND_REQUIRE_LIBS", .says = "do not link here" },
+    Switch_skip::{ .name = "KSOS_REQUIRE_ARM", .says = "no ARM toolchain" },
+    Switch_skip::{ .name = "KSOS_REQUIRE_ARM", .says = "test-ksos-link" },
+}
+
+fn is_expected_skip(line: U8[], platform: U8[], relaxed: U8[]): Bool //<
+    //< Whether a row holds this SKIP line: one of the platform's, or one of a switch turned off
+    //<
+    //< `relaxed` holds the switches turned off, space-separated (`--relaxed` in `tools/ci.kspls`).
     for e in expected_skips
         if lists(e.on, platform) && line.find_str(e.says).is_some()
             return true
+    for w in switch_skips
+        if lists(relaxed, w.name) && line.find_str(w.says).is_some()
+            return true
     return false
+
+fn unknown_switch(relaxed: U8[], arena: Arena$@): U8[]? //<
+    //< A switch named in `relaxed` that no row of `switch_skips` names, if any
+    //<
+    //< **Refused rather than ignored**: its gates' skips would fail the round with no row to blame.
+    for name in relaxed.split(' ', arena)
+        if name.len == 0
+            continue
+        $known: = false
+        for w in switch_skips
+            if w.name.equals(name)
+                known = true
+        if !known
+            return .some(name)
+    return .none
 
 priv fn lists(words: U8[], word: U8[]): Bool //< whether a space-separated list holds the word
     $at: Sz = 0
@@ -277,11 +345,21 @@ const log_dir: U8[] = "out/log/ci" //< where the gates' logs go
 const suite_log_dir: U8[] = "out/log/suite" //< where each suite's own log goes (`SUITE_LOG_DIR`)
 const end_ext: U8[] = ".end" //< the file beside a log holding `<exit code> <seconds>`
 
+struct Judge //< what a SKIP line is held against: the round's platform and the switches off
+    platform: U8[] //< make's `PLATFORM`; empty where it names none, and then no SKIP is judged
+    relaxed: U8[] //< the switches turned off, space-separated (`--relaxed` in `tools/ci.kspls`)
+
+impl Judge
+    fn unexpected(j: Self@, line: U8[]): Bool //< whether a SKIP line fails its gate here
+        return j.platform.len > 0 && !is_expected_skip(line, j.platform, j.relaxed)
+
 struct Outcome //< what one gate left
     log: U8[]
     ok: Bool
     sec: I64
-    skips: List<|U8[]|> //< its lines carrying `SKIP`: passing silently by their own account
+    skips: Sz //< its lines carrying `SKIP`: checks passing without running, by their own account
+    unexpected: Sz //< of those, the ones no row holds (`Judge.unexpected`)
+    causes: List<|Cause|> //< why it fell, empty where it passed (`causes`)
 
 fn log_path(log: U8[], arena: Arena$@): U8[] //< where a gate's log is
     return arena.text().s(log_dir).c('/').s(log).s(".log").take()
@@ -289,7 +367,8 @@ fn log_path(log: U8[], arena: Arena$@): U8[] //< where a gate's log is
 fn end_path(log: U8[], arena: Arena$@): U8[] //< where a gate's exit code and seconds are
     return arena.text().s(log_dir).c('/').s(log).s(end_ext).take()
 
-fn outcomes(arena: Arena$@): List<|Outcome|> //< what the gates left, in the table's order
+fn outcomes(j: Judge@, arena: Arena$@): List<|Outcome|> //<
+    //< What the gates left, in the table's order
     //<
     //< **A gate with no log did not run** and is left out; one with a log and no `.end` was cut
     //< short, and counts as fallen.
@@ -299,51 +378,209 @@ fn outcomes(arena: Arena$@): List<|Outcome|> //< what the gates left, in the tab
             continue
         held: = arena.dup_str(text)
         dealloc(Void$@::text.ptr)
-        $ok: = false
-        $sec: I64 = 0I64
         ended: = io.read_file(end_path(g.log, arena)) catch ""
+        out.push(outcome_of(g, held, arena.dup_str(ended), j, arena))
         if ended.len > 0
-            words: = arena.dup_str(ended).trim_spaces().split(' ', arena)
             dealloc(Void$@::ended.ptr)
-            if words.len == 2
-                rc: = words.get(0).to_i64() catch 1I64
-                ok = rc == 0I64
-                sec = words.get(1).to_i64() catch 0I64
-        out
-            .push(Outcome::{ .log = g.log, .ok = ok, .sec = sec,
-            .skips = skip_lines(held, arena) })
     return out
+
+fn outcome_of(g: Gate, text: U8[], ended: U8[], j: Judge@, arena: Arena$@): Outcome //<
+    //< What one gate left, read from its log's text and its `.end`'s (`<exit code> <seconds>`)
+    $ok: = false
+    $sec: I64 = 0I64
+    words: = ended.trim_spaces().split(' ', arena)
+    if words.len == 2
+        ok = (words.get(0).to_i64() catch 1I64) == 0I64
+        sec = words.get(1).to_i64() catch 0I64
+    skips: = skip_lines(text, arena)
+    $odd: Sz = 0
+    for line in skips
+        if j.unexpected(line)
+            odd += 1
+    $why: = List<|Cause|>.new(arena)
+    if !ok
+        why = causes(text, g.verdict, j, arena)
+    return Outcome::{ .log = g.log, .ok = ok, .sec = sec, .skips = skips.len, .unexpected = odd,
+        .causes = why }
+
+// ==========================================
+// Why a fallen gate fell, read from its log
+// **The summary ends with each cause**, so a round's last lines say why without a search through
+// thousands above ("How a run is read" in `docs/SPEC-gates.md`). The gate's own marks are read,
+// and make's `*** [`, the one part of make's line no locale translates (`Error 1` is `エラー 1` in
+// Japanese).
+// ==========================================
+
+enum Cause_kind //< what one line of a fallen gate's log says, in the order the summary lists them
+    panic //< `panic: ` at the line's head: a test stopped there
+    fail //< `FAIL ` or `[FAIL]` at the line's head: a check that did not hold
+    unexpected_skip //< a SKIP line no row holds for the platform and the switches off
+    no_verdict //< no `RESULT: ALL PASS` from a gate that must print one (`Gate.verdict`)
+    result //< `RESULT: SOME FAILED`
+    make //< make's `*** [<target>]`: the target that stopped, not why
+    tail //< one of the log's last lines, where no line of the gate's own names a cause
+
+struct Cause //< one line of a fallen gate's log that says why it fell
+    kind: Cause_kind
+    line: U8[]
+
+const cause_order: Cause_kind[_] = ::{ Cause_kind.panic, Cause_kind.fail,
+    Cause_kind.unexpected_skip, Cause_kind.result, Cause_kind.make } //<
+        //< The kinds read from the lines, most telling first
+        //<
+        //< `no_verdict` and `tail` are added after them, where the gate's own say nothing.
+
+const causes_shown: Sz = 6 //<
+    //< How many of a gate's causes the summary lists, the tail apart; its log holds the rest
+const tail_shown: Sz = 8 //< how many of a log's last lines stand in where nothing names a cause
+const cause_width: Sz = 400 //< the bytes of one line the summary keeps; its log holds it whole
+
+priv fn kind_of(line: U8[], j: Judge@): Cause_kind? //< the cause a line names, if any
+    t: = line.trim_spaces()
+    if t.starts_with("panic: ")
+        return .some(.panic)
+    if t.starts_with("FAIL ") || t.starts_with("[FAIL]")
+        return .some(.fail)
+    if t.starts_with("RESULT: SOME FAILED")
+        return .some(.result)
+    if t.find_str("*** [").is_some()
+        return .some(.make)
+    if is_skip_line(t) && j.unexpected(t)
+        return .some(.unexpected_skip)
+    return .none
+
+impl Cause_kind
+    fn own(k: Self): Bool //< whether a line of this kind is the gate's own word, not make's
+        return k != Cause_kind.make && k != Cause_kind.no_verdict && k != Cause_kind.tail
+
+fn causes(text: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List<|Cause|> //<
+    //< The lines of a fallen gate's log that say why, in `Cause_kind`'s order, each once
+    //<
+    //< **The log's last lines stand in where no line of the gate's own names a cause** (a C
+    //< compiler's error, a crash): make's line names only the target that stopped.
+    lines: = text.lines(arena)
+    $out: = List<|Cause|>.new(arena)
+    $own: = false
+    $passed: = false
+    for line in lines
+        passed = passed || line.trim_spaces().starts_with("RESULT: ALL PASS")
+    for k in cause_order
+        for line in lines
+            if got: = kind_of(line, j)
+                if got == k && !holds(out@, line.trim_spaces())
+                    out.push(Cause::{ .kind = k, .line = line.trim_spaces() })
+                    own = own || k.own()
+    if own
+        return out
+    if verdict && !passed
+        out
+            .push(Cause::{ .kind = .no_verdict, .line = "it printed no `RESULT: ALL PASS` line" })
+    $from: = lines.len
+    $kept: Sz = 0
+    for from > 0 && kept < tail_shown
+        from -= 1
+        if lines.get(from).trim_spaces().len > 0
+            kept += 1
+    for i in Range.new(from, lines.len, 1)
+        if lines.get(i).trim_spaces().len > 0 &&
+            !holds(out@, lines.get(i).trim_spaces())
+            out.push(Cause::{ .kind = .tail, .line = lines.get(i).trim_end() })
+    return out
+
+priv fn holds(found: List<|Cause|>@, line: U8[]): Bool //< whether a cause already says this line
+    for i in Range.asc(found.len)
+        if found.get(i).line.equals(line)
+            return true
+    return false
+
+fn put_cause(c: Cause, b: Str_builder$@) //< one cause as the summary marks it
+    //<
+    //< **A line keeps its own mark** (`FAIL`, `panic:`, `RESULT:`, make's `***`); a SKIP line
+    //< carries one no expected line does, and a line of the tail is set off as quoted.
+    if c.kind == Cause_kind.unexpected_skip
+        b.s("UNEXPECTED ")
+    if c.kind == Cause_kind.no_verdict
+        b.s("NO VERDICT: ")
+    if c.kind == Cause_kind.tail
+        b.s("| ")
+    $n: = c.line.len
+    if n > cause_width
+        n = cause_width
+        // Back to a character's first byte, so a cut never splits a UTF-8 sequence.
+        for n > 0 && (c.line[n] & 0xC0U8) == 0x80U8
+            n -= 1
+    b.s(c.line.sub(0, n))
+    if n < c.line.len
+        b.s(" …")
 
 priv struct Tally //< the counts both summaries open or close with
     failed: Sz
     skipping: Sz //< gates with one SKIP line or more
+    unexpected: Sz //< SKIP lines no row holds, over every gate
     sec: I64
 
 priv fn tally(outs: List<|Outcome|>@): Tally
-    $t: = Tally::{ .failed = 0, .skipping = 0, .sec = 0I64 }
+    $t: = Tally::{ .failed = 0, .skipping = 0, .unexpected = 0, .sec = 0I64 }
     for i in Range.asc(outs.len)
         o: = outs.get(i)
         if !o.ok
             t.failed += 1
-        if o.skips.len > 0
+        if o.skips > 0
             t.skipping += 1
+        t.unexpected += o.unexpected
         t.sec += o.sec
     return t
 
-fn digest_plain(outs: List<|Outcome|>@, jobs: I64, b: Str_builder$@) //< for the screen
+fn digest_plain(outs: List<|Outcome|>@, jobs: I64, j: Judge@, b: Str_builder$@) //<
+    //< For the screen: the gates, then why each fallen one fell, last, where a reader looks first
+    //<
+    //< **A SKIP line is counted, not copied**: thirty expected ones would bury the line that failed
+    //< the gate. Each is in the gate's log, and one no row holds is listed as a cause.
     t: = tally(outs)
-    b.s("# the gates that ran (one carrying a SKIP line is passing silently by its own account)\n")
+    b.s("# the gates that ran (a SKIP line is a check that did not run; each gate's whole log is ")
+        .s(log_dir).s("/<gate>.log)\n")
     for i in Range.asc(outs.len)
         o: = outs.get(i)
-        b.s("#   ").s(o.log)
+        $row: = Str_builder.new()
+        defer row.free()
+        row.s("#   ").s(o.log)
         for $k: Sz = o.log.len; k < 15; k += 1
-            b.c(' ')
-        b.s("PASS" if o.ok else "FAIL").s(" \{o.sec\}s\n")
-        for j in Range.asc(o.skips.len)
-            b.s("#     ").s(o.skips.get(j)).c('\n')
+            row.c(' ')
+        row.s("PASS" if o.ok else "FAIL").s(" \{o.sec\}s")
+        if o.skips > 0
+            for $k: = row.slice().len; k < 32; k += 1
+                row.c(' ')
+            row.s("\{o.skips\} SKIP line").s("" if o.skips == 1 else "s")
+            if o.unexpected > 0
+                row.s(", \{o.unexpected\} UNEXPECTED")
+        b.s(row.slice()).c('\n')
     b
         .s("# gates invoked: \{outs.len\} (\{t.failed\} FAIL, SKIP lines in \{t.skipping\}), gate \
             seconds: \{t.sec\}, -j\{jobs\}\n")
+    if t.failed == 0
+        return
+    b.s("# why it failed:\n")
+    for i in Range.asc(outs.len)
+        o: = outs.get(i)
+        if o.ok
+            continue
+        $named: Sz = 0
+        for k in Range.asc(o.causes.len)
+            c: = o.causes.get(k)
+            if c.kind != Cause_kind.tail
+                named += 1
+            if named > causes_shown
+                continue
+            b.s("#   ").s(o.log).s(": ")
+            put_cause(c, b)
+            b.c('\n')
+        if named > causes_shown
+            b.s("#   ").s(o.log).s(": … and \{named - causes_shown\} more in its log\n")
+        b.s("#   ").s(o.log).s(": its whole log is ").s(log_dir).c('/').s(o.log).s(".log\n")
+    if t.unexpected > 0
+        b.s("# UNEXPECTED: no row of `expected_skips` in tools/ci_gates.kspls holds that SKIP for ")
+            .s(j.platform).s("; bring its tool back, or add the row where this platform cannot ")
+            .s("have it\n")
 
 fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) //<
     //< For the job's summary page
@@ -362,7 +599,7 @@ fn digest_md(outs: List<|Outcome|>@, jobs: I64, title: U8[], b: Str_builder$@) /
         b.s("\nSKIP:\n\n")
         for i in Range.asc(outs.len)
             o: = outs.get(i)
-            if o.skips.len > 0
+            if o.skips > 0
                 b.s("* `").s(o.log).s("`\n")
     b.s("\na fallen gate's reason is in the per-gate log among the same round's artifacts, log-*\n")
 

@@ -34,7 +34,10 @@ fn test_fs_ops()
     io.write_file(f1, "hello")
         catch panic("write_file should succeed inside a freshly created directory")
     info: = fs.stat(f1) catch panic("stat should succeed for an existing file")
-    assert(info.size == 5 && !info.is_dir, "a.txt metadata should report size=5, is_dir=false")
+    assert(info.size == 5 && info.kind == fs.File_kind.file,
+        "a.txt metadata should report size=5, a file")
+    dir_info: = fs.stat(tmp_dir) catch panic("stat should succeed for an existing directory")
+    assert(dir_info.kind == fs.File_kind.dir, "a directory's metadata should report a directory")
 
     f2: = "out/tmp/kspl_test_debug_fs_dir/b.txt"
     fs.rename_path(f1, f2) catch panic("rename_path should succeed")
@@ -98,7 +101,8 @@ fn test_fs_wide_path() //<
     info: = fs.stat(one) catch panic("stat should succeed for a file under a wide path")
     // Caution: **Check the byte count** (`かんそ` is 9 bytes in UTF-8); a character count differs
     // per environment.
-    assert(info.size == 9 && !info.is_dir, "the wide-path file should report 9 bytes, is_dir=false")
+    assert(info.size == 9 && info.kind == fs.File_kind.file,
+        "the wide-path file should report 9 bytes, a file")
 
     fs.rename_path(one, two) catch panic("rename_path should succeed between two wide paths")
     assert(!fs.exists(one) && fs.exists(two), "rename_path should move, not copy, under a wide path")
@@ -161,7 +165,8 @@ fn test_fs_past_max_path() //<
     assert(fs.is_dir(deep), "the long path should exist as a directory")
     io.write_file(one, "past") catch panic("write_file should succeed under a long path")
     info: = fs.stat(one) catch panic("stat should succeed for a file under a long path")
-    assert(info.size == 4 && !info.is_dir, "the long-path file should report 4 bytes, is_dir=false")
+    assert(info.size == 4 && info.kind == fs.File_kind.file,
+        "the long-path file should report 4 bytes, a file")
     abs: = fs.absolute(one, arena) catch panic("the long path should be made absolute")
     assert(fs.exists(abs), "the absolute spelling should reach the same file")
 

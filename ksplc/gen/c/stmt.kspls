@@ -16,28 +16,30 @@ import "ksplc/gen/c/root" as gen_c_root
 import "ksplc/sema/body/binary" as sema_body_binary
 import "ksplc/sema/body/call" as sema_body_call
 import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
 import "std/str" { Str_builder }
 
-priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_text: U8[],
+priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
     right_node: Ast_node$@) //<
         //< It emits an assignment from its operator on, after the target was emitted
         //<
         //< For `<<=` `>>=` / `/=` `%=` it goes through the binary operators' check
         //< (emit_shift_amount / emit_divisor / open_signed_div), or run-time values would slip past
-        //< it. dst_seq names the target's temporary (`_kspl_dst_N`), 0 the target itself.
+        //< it. dst names the target through its temporary (`*_kspl_dst_N`), empty for the target
+        //< itself.
     div_op: =
         op_text.sub(0, 1) if op_text.equals("/=") || op_text.equals("%=") else ""
     if sema_body_binary.takes_signed_div(c.sema, div_op, left_node.type_id, right_node)
         c.s(" = ")
         gen_c_expr.open_signed_div(c, div_op, left_node.type_id)
-        emit_assign_target(c, left_node, dst_seq)
+        emit_assign_target(c, left_node, dst)
         right_node.close_signed_div(c)
         return
-    if emit_wrapped_compound(c, left_node, dst_seq, op_text, right_node)
+    if emit_wrapped_compound(c, left_node, dst, op_text, right_node)
         return
     c.s(" \{op_text\} ")
     if !c.env.is_integer(left_node.type_id)
@@ -51,19 +53,19 @@ priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_t
         return
     right_node.emit_expr(c)
 
-priv fn emit_wrapped_compound(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz, op_text: U8[],
+priv fn emit_wrapped_compound(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_text: U8[],
     right_node: Ast_node$@): Bool //<
-        //< Emits a signed `+=` `-=` `*=` `<<=` through the unsigned twin; false if it is not one
+        //< Emits a `+=` `-=` `*=` `<<=` through the unsigned twin; false if the type needs none
         //<
         //< Caution: **Do not leave it as C's `+=`.** KSPL wraps signed overflow (`mod 2^N`), C
         //< makes it undefined, and the optimizer relies on that: `i += 1` on `i > 0` never ends at
-        //< `-O2`. The binary operators go the same way (signed_wrap_twin in expr.kspls).
+        //< `-O2`. The binary operators go the same way (wrap_twin in expr.kspls).
     op: = op_text.sub(0, op_text.len - 1) if op_text.ends_with("=") else ""
     twin: = gen_c_expr.compound_wrap_twin(c, op, left_node.type_id)
     if twin.len == 0
         return false
     c.s(" = (").t(c.env.strip_const_deep(left_node.type_id)).s(")((\{twin\})(")
-    emit_assign_target(c, left_node, dst_seq)
+    emit_assign_target(c, left_node, dst)
     c.s(") \{op\} ")
     if op.equals("<<")
         right_node.emit_shift_amount(c, left_node.type_id)
@@ -74,9 +76,9 @@ priv fn emit_wrapped_compound(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz,
     c.s(")")
     return true
 
-priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst_seq: Sz)
-    if dst_seq > 0
-        c.s("*_kspl_dst_\{dst_seq\}")
+priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[])
+    if dst.len > 0
+        c.s(dst)
     else
         left_node.emit_expr(c)
 
@@ -214,16 +216,25 @@ impl Ast_node
             // caller can still be borrowing a name from it while this body is emitted.
             // **Take the type from the memory, not the target expression**: a KSPL `I32@` can point
             // at memory genc typed `I32 *`.
-            c.s("{ ").t(c.env.strip_const_deep(left_node.type_id)).s("* _kspl_dst_\{seq\} = &(")
+            dst_type: = c.env.strip_const_deep(left_node.type_id)
+            $dst: = base_core.arena.text().s("*_kspl_dst_\{seq\}").take()
+            // Caution: **A field of a `#packed` struct gets a packed pointer.** A plain `T*` to it
+            // tells C the address is aligned, and the store faults on a Cortex-M0.
+            if c.sema.packed_place_align(left_node) > 0
+                c.s("{ struct __attribute__((packed)) { ").t(dst_type)
+                    .s(" v; } *_kspl_dst_\{seq\} = (void *)&(")
+                dst = base_core.arena.text().s("_kspl_dst_\{seq\}->v").take()
+            else
+                c.s("{ ").t(dst_type).s("* _kspl_dst_\{seq\} = &(")
             left_node.emit_expr(c)
             c.s("); ")
-            emit_assign_target(c, left_node, seq)
-            emit_assign_tail(c, left_node, seq, op_text, right_node)
+            emit_assign_target(c, left_node, dst)
+            emit_assign_tail(c, left_node, dst, op_text, right_node)
             c.s("; }\n")
             return
 
         left_node.emit_expr(c)
-        emit_assign_tail(c, left_node, 0, op_text, right_node)
+        emit_assign_tail(c, left_node, "", op_text, right_node)
         c.s(";\n")
 
     priv fn emit_if_stmt(r: Ast_node$@, c: Genc_ctx$@)
@@ -336,7 +347,7 @@ impl Ast_node
                     step_left.emit_expr(c)
                     op_node: = step_ch.get_assign_op()
                     op_text: = op_node.text if op_node != null else ""
-                    emit_assign_tail(c, step_left, 0, op_text, step_ch.get_assign_right())
+                    emit_assign_tail(c, step_left, "", op_text, step_ch.get_assign_right())
                 else
                     step_ch.emit_expr(c)
         c.s(") ")
@@ -356,22 +367,26 @@ impl Ast_node
         if !cond_node.is_plain_name()
             r.ice_panic("genc: a switch's subject reached the backend as other than a plain name")
         $cond_slice: = cond_node.get_path_or_ident_name()
-        // Caution: **Emit a name that equals a reserved word in its escaped form.** The declaration
-        // is escaped (`../../base/c_name.kspls`), so the plain name here makes **the C compiler say
+        // Caution: **Emit the name as its declaration is emitted**, escaped or made
+        // (`../../base/c_name.kspls`). The plain name here makes **the C compiler say
         // "undeclared"**, which is no KSPL diagnostic and does not say what is wrong: a local named
         // `near` is declared as `near_kw`, and a `switch (near)` then fails.
-        if cond_slice.needs_c_escape()
-            $safe: = cond_slice.c_safe_name()
-            defer safe.free()
-            cond_slice = base_core.arena.dup_str(safe.slice())
+        $safe: = cond_slice.c_safe_name()
+        defer safe.free()
+        cond_slice = base_core.arena.dup_str(safe.slice())
         // A `Bool` subject is switched on as an `int`: clang warns on a boolean one
         // (-Wswitch-bool).
         is_bool: = c.env.is_bool(cond_node.type_id)
         c.s("    switch (").s("(int)" if is_bool else "").s(cond_slice)
 
         // The immutability mark stripped: `r$` of an `r: Self@` carries it (as in sema).
-        enum_name: = c.env.get_str(c.env.get_clean_real_type(cond_node.type_id))
-        $mangled_enum_name: = enum_name.mangle_c_identifier()
+        enum_id: = c.env.get_clean_real_type(cond_node.type_id)
+        enum_name: = c.env.get_str(enum_id)
+        // Caution: **Name the enum by its type's mangled name**, as its declaration and a variant's
+        // construction are. Spelled from its canonical string, an instance whose immutability is
+        // dropped (`Pick<|I32|>` of an `enum Pick<|$T|>`) names tags C never declared.
+        $mangled_enum_name: = Str_builder.new()
+        c.env.mangle_type_id_to(enum_id, mangled_enum_name)
         safe_enum_name: = mangled_enum_name.slice()
 
         enum_def_ptr: = c.env.get_enum_def(enum_name).unwrap_or(null)

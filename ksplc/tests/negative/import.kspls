@@ -177,6 +177,7 @@ fn main(): I32
 //< So a wrong name gets "lang is there, but does not export that name". **Say "the prefix is not
 //< known" and the alias is out:** `impl My_type: lang.Ref_counted` is unwritable, and a file that
 //< declares the same name cannot conform to a trait the compiler knows ("Why compiler-known traits are confined to `std/lang`" in docs/DESIGN.md).
+// EXPECT: error: undefined path or identifier 'lang.Nope'
 // EXPECT: 'lang' names a file, but it does not export 'Nope'
 // EXPECT-NOT: neither a known import alias nor a type
 import "std/io"
@@ -214,6 +215,7 @@ fn main()
 //< `import "p" { A }` binds `A` alone, so `p.x` is undefined. The interpolation after it calls the
 //< generic `put`, and instantiating it on a stand-in type would report errors inside `std/lang`
 //< the user never wrote: the mistake is one error.
+// EXPECT: error: undefined path or identifier 'io'
 // EXPECT: brings in only the names listed
 // EXPECT: import "std/io" + { ... }
 // EXPECT: Finished with 1 error(s)
@@ -244,14 +246,121 @@ fn main()
 
 // The declaration that has the release tracked (Owned in std/lang.kspls).
 impl Foo: Owned {}
+// ==== case use_after_free_before_block_dealloc
+//< A use between a pointer's `free()` and its block's `dealloc` is still a use after free
+//<
+//< Only the `dealloc` that gives the block back is let through, not a read of what `free()` released.
+// EXPECT: variable 'xs' may already be freed here
+// EXPECT: Finished with 1 error(s)
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  _n: = xs.len
+  mem.dealloc(Void$@::xs)
+// ==== case use_after_free_block_dealloc_ok
+//< A pointer's `free()` leaves its block, which `dealloc` may still give back
+//<
+//< A list `create(null)` placed on the heap is freed so, on the straight path, where only one
+//< branch freed the contents, and from two `defer`s. The case fails deliberately on another
+//< variable, by the same check: a type error elsewhere in the body would skip the check, and the
+//< EXPECT-NOT would then pass on nothing.
+// EXPECT: variable 'w' may already be freed here
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: variable 'xs'
+// EXPECT-NOT: variable 'ys'
+// EXPECT-NOT: variable 'zs'
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  mem.dealloc(Void$@::xs)
+
+  ys: = List<|I32|>.create(null)
+  if ys.len == 0
+    ys.free()
+  mem.dealloc(Void$@::ys)
+
+  zs: = List<|I32|>.create(null)
+  defer mem.dealloc(Void$@::zs)
+  defer zs.free()
+
+  w: = List<|I32|>.create(null)
+  w.free()
+  _n: = w.len
+// ==== case use_after_free_block_dealloc_then_use
+//< After the block's `dealloc` nothing is left, so any use is refused
+// EXPECT: variable 'xs' may already be freed here
+// EXPECT: Finished with 1 error(s)
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  mem.dealloc(Void$@::xs)
+  _n: = xs.len
+// ==== case use_after_free_block_dealloc_twice
+//< A second `dealloc` of the block is a double free
+//<
+//< Also where one branch gave the block back and the other only freed the contents.
+// EXPECT: variable 'xs' may already be freed here
+// EXPECT: variable 'ys' may already be freed here
+// EXPECT: Finished with 2 error(s)
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  mem.dealloc(Void$@::xs)
+  mem.dealloc(Void$@::xs)
+
+  ys: = List<|I32|>.create(null)
+  if ys.len == 0
+    mem.dealloc(Void$@::ys)
+  else
+    ys.free()
+  mem.dealloc(Void$@::ys)
+// ==== case use_after_free_block_dealloc_when_free_gave_it
+//< A `free()` whose body gives back its receiver leaves no block for `dealloc`
+//<
+//< Its body is followed one level, as for a wrapper, so the `dealloc` after it is a double free.
+// EXPECT: variable 'p' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct S
+  v: I32
+
+impl S
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
+
+fn main()
+  p: = mem.alloc_as<|S|>()
+  p.free()
+  dealloc(Void$@::p)
+
+// The declaration that has the release tracked (Owned in std/lang.kspls).
+impl S: Owned {}
 // ==== case use_after_free_receiver_ok
 //< The counterpart of the two cases above
 //<
 //< Where the release happens once, or where it is reassigned after the release, no diagnostic comes
-//< out. It is made to fail deliberately for a different reason (an undefined symbol), and an
-//< EXPECT-NOT pins down that not one use-after-free diagnostic comes out.
-// EXPECT: undefined path or identifier 'no_such_fn'
-// EXPECT-NOT: may already be freed here
+//< out. The case fails on purpose through the same check, on another variable after the rest.
+// EXPECT: variable 'w' may already be freed here
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: variable 'p'
+// EXPECT-NOT: variable 'b'
 import "std/mem"
 import "std/mem" { dealloc }
 import "std/str"
@@ -272,12 +381,14 @@ fn main()
   _y: = p.v
   p.free()
 
-  b: = Str_builder.new()
+  $b: = Str_builder.new()
   defer b.free()
   b.s("x")
   _n: = b.len
 
-  no_such_fn()
+  w: = mem.alloc_as<|S|>()
+  w.free()
+  _z: = w.v
 // ==== case use_after_free_via_dealloc_fn
 //< A release is not only the method form (`x.free()`)
 //<

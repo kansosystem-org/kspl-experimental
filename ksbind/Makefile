@@ -10,7 +10,7 @@ CC := clang
 endif
 export CC
 # 1 fails where the libraries do not link (Linux CI's image holds them); else the tests SKIP.
-KSBIND_REQUIRE_LIBS ?=
+KSBIND_REQUIRE_LIBS ?= 0
 
 # **The libraries are asked of ksplc** (`--emit-libs`, from the sources' `#link`), never copied
 # here. An empty program linked against them tells "not installed" from a binding that is wrong:
@@ -26,7 +26,9 @@ test:
 		"$(KSPLC)" run tests/main.kspls; \
 	elif [ "$(KSBIND_REQUIRE_LIBS)" = 1 ]; then \
 		echo "RESULT: SOME FAILED (1) -> $$(cat "$(OUT)/tests.libs") do not link here" \
-			"(KSBIND_REQUIRE_LIBS; $(OUT)/probe.log says why)"; exit 1; \
+			"($(OUT)/probe.log says why), and KSBIND_REQUIRE_LIBS=1 requires them." \
+			"On a machine without them, KSBIND_REQUIRE_LIBS=0 makes this a SKIP;" \
+			"such a round is not CI's verdict"; exit 1; \
 	else \
 		echo "SKIP ksbind's tests: $$(cat "$(OUT)/tests.libs") do not link here" \
 			"($(OUT)/probe.log says why)"; \

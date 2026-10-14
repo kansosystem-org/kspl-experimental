@@ -5,7 +5,7 @@
 //< the same tree give the same result.
 
 // ==========================================
-// Listing a directory and reading metadata (kspl_dir_*/kspl_stat/kspl_mkdir) use entirely
+// Listing a directory and reading metadata (kspl_dir_*/kspl_path_info/kspl_mkdir) use entirely
 // different APIs on POSIX and Windows, so the per-OS glue code is in
 // ksplc/gen/runtime/hosted_fs.c (the LLVM builds link the same C runtime, so the result does
 // not change with the backend).
@@ -13,7 +13,7 @@
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
-import "std/mem" + { Arena, alloc_in, dealloc }
+import "std/mem" + { Arena, dealloc }
 import "std/rand"
 import "std/seq" // `List.order_by`
 import "std/str" { Str_builder }
@@ -24,8 +24,8 @@ extern "C"
     fn kspl_dir_open(path_ptr: U8@, path_len: Sz): I64
     fn kspl_dir_read(handle: I64, buf: U8$@, cap: Sz): I32
     fn kspl_dir_close(handle: I64)
-    fn kspl_stat(path_ptr: U8@, path_len: Sz, size_out: I64$@, is_dir_out: I32$@,
-        mtime_out: I64$@): Bool
+    fn kspl_path_info(path_ptr: U8@, path_len: Sz, size_out: I64$@, kind_out: I32$@,
+        mtime_out: I64$@): Bool //< `kind_out` in `File_kind`'s order, from 0
     fn kspl_is_exec(path_ptr: U8@, path_len: Sz): Bool
     fn kspl_is_link(path_ptr: U8@, path_len: Sz): I32 //<
         //< 1=a link, 0=not a link, -1=cannot tell
@@ -33,8 +33,8 @@ extern "C"
         //< Caution: **Do not make it a Bool**: turning "cannot tell" into false lets an unreadable
         //< segment pass as "not a link" (has_link_on_path below).
     fn kspl_mkdir(path_ptr: U8@, path_len: Sz): I32
-    fn kspl_copy_mode(from_ptr: U8@, from_len: Sz, to_ptr: U8@, to_len: Sz): I32 //<
-        //< Gives `to` the permission bits `from` has: 0=done, -1=refused
+    fn kspl_copy_file(from_ptr: U8@, from_len: Sz, to_ptr: U8@, to_len: Sz): I32 //<
+        //< Copies `from` to a new `to` with its permission bits: 0=done, 1=no source, -1=refused
     fn kspl_create_owned(path_ptr: U8@, path_len: Sz, data: U8@, len: Sz): I32 //<
         //< 0=written, 1=the name is taken, -1=refused
     fn kspl_dir_trust(path_ptr: U8@, path_len: Sz): I32 //< `Dir_trust`'s order, from 0
@@ -66,9 +66,17 @@ pub enum Fs_error //< why a filesystem operation failed
         //< **Which segment it stopped at** tells a path problem from a permission problem. It is
         //< not a copy; to keep it longer than the caller's path, the caller copies it.
 
+pub enum File_kind //< what stands at a path
+    file //< a regular file, read through to its end
+    dir //< a directory
+    other //< anything else: a FIFO or a socket, whose read may wait for good, or a device
+        //<
+        //< Caution: **Do not serve or copy one as a file.** A FIFO's read waits for a writer that
+        //< may never come, and a device's never ends.
+
 pub struct File_info //< what the OS reports about one path
     pub size: I64 //< the size in bytes
-    pub is_dir: Bool //< whether it is a directory
+    pub kind: File_kind //< a regular file, a directory or anything else
     pub mtime: I64 //< the last modification time, in Unix epoch seconds, UTC
 
 pub const max_path_len: Sz = 4095 //< the longest path passed to the OS; a longer one fails
@@ -87,12 +95,21 @@ priv fn check_path(path: U8[]): Void!Fs_error //< refuses what the OS cannot tak
 pub fn stat(path: U8[]): File_info!Fs_error //< what the OS reports about a path, following links
     check_path(path)!
     $size: I64 = 0
-    $is_dir_flag: I32 = 0
+    $kind: I32 = 0
     $mtime: I64 = 0
-    ok: = kspl_stat(path.ptr, path.len, size@, is_dir_flag@, mtime@)
+    ok: = kspl_path_info(path.ptr, path.len, size@, kind@, mtime@)
     if !ok
         throw .not_found
-    return File_info::{ .size = size, .is_dir = is_dir_flag != 0, .mtime = mtime }
+    return File_info::{ .size = size, .kind = file_kind(kind), .mtime = mtime }
+
+priv fn file_kind(code: I32): File_kind //< `kspl_path_info`'s kind as the enum
+    switch code
+    case 0
+        return .file
+    case 1
+        return .dir
+    default
+        return .other
 
 pub fn is_executable(path: U8[]): Bool //< whether the owner's execute bit is set; Windows: false
     //<
@@ -113,7 +130,7 @@ pub fn can_run(path: U8[]): Bool //< whether it can actually be started on this 
     //< started on either.
     info: = stat(path) catch
         return false
-    if info.is_dir
+    if info.kind == .dir
         return false
     if !sys.is_windows()
         return is_executable(path)
@@ -131,7 +148,7 @@ pub fn exists(path: U8[]): Bool //< whether anything exists at that path
 pub fn is_dir(path: U8[]): Bool //< whether it is a directory; a link to one counts
     info: = stat(path) catch
         return false
-    return info.is_dir
+    return info.kind == .dir
 
 pub fn is_link(path: U8[]): Bool //< whether it is a link, without following it
     //<
@@ -228,7 +245,7 @@ pub fn read_dir( //< one directory's entries, without descending
             out.free()
             throw .operation_failed
         len: Sz = n
-        copy: = U8$@::alloc_in(arena, len)
+        copy: = U8$@::arena.alloc(len)
         mem.copy(Void$@::copy, Void$@::name_buf@, len)
         out.push(U8[]::{ .ptr = copy, .len = len })
     return out
@@ -244,7 +261,7 @@ pub fn join( //< a path with a segment appended (Python's `os.path.join`)
     //< Python, Go and Rust answer. To split a path, use `sys.get_dir_name` / `sys.get_file_name`.
     a: U8[], //< the leading part
     b: U8[], //< the segment to append
-    arena: Arena$@, //< where the joined path is allocated
+    arena: Arena$@, //< where the joined path goes; null means the heap, freed with `dealloc`
 ): U8[] //< the joined path; if one side is empty, a copy of the other
     if a.len == 0
         return arena.dup_str(b)
@@ -322,7 +339,7 @@ pub fn absolute( //< the full path from the root: a relative path joined to the 
     //< Caution: **Pass a path for a child through this** before starting it in another directory;
     //< a relative path is resolved from the child's directory, not the caller's.
     path: U8[], //< the path; empty and `.` both mean the working directory
-    arena: Arena$@, //< where the path goes
+    arena: Arena$@, //< where the path goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< the absolute path; fails if the working directory cannot be read
     if path.len > 0 && sys.is_absolute(path)
         return arena.dup_str(path)
@@ -432,13 +449,20 @@ pub fn walk_files( //< every file under a path, in one flat list (a narrower Pyt
     //< result grow by an order of magnitude.
     path: U8[], //< where the walk starts
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to enter; it gets only the name
-    arena: Arena$@, //< where the paths are allocated
+    arena: Arena$@, //< where the paths go; null uses the heap: free each path, then the list
 ): List<|U8[]|>!Fs_error //< the file paths in sorted order; fails if a directory cannot be read
-    $out: = List<|U8[]|>.new(arena)
-    walk_into(path, skip_dir, arena, out@, 0)!
-    return out.order_by(fn(a: U8[], b: U8[]; ): I32 {
+    // The walk works apart from the result, so a walk that fails leaves the caller nothing to free.
+    $work: = mem.scratch(arena)
+    defer work.free()
+    $found: = List<|U8[]|>.new(work.arena)
+    walk_into(path, skip_dir, work.arena, found@, 0)!
+    sorted: = found.order_by(fn(a: U8[], b: U8[]; ): I32 {
         return a.compare(b);
-    }, arena)
+    }, work.arena)
+    $out: = List<|U8[]|>.new(arena)
+    for p in sorted
+        out.push(arena.dup_str(p))
+    return out
 
 pub fn skip_none(_name: U8[]): Bool //< a `skip_dir` that enters every directory
     return false
@@ -487,16 +511,18 @@ pub fn mkdir_unique( //< creates a directory with a name nobody has used, and re
     //< `mkdtemp`). **Nothing removes it.** Its creator removes it, or the directory that holds it.
     base: U8[], //< where it goes; missing parent levels are created
     prefix: U8[], //< the start of its name
-    arena: Arena$@, //< where the path goes
+    arena: Arena$@, //< where the path goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< the new directory's path; fails if it cannot be created
     mkdir_all(base)!
+    $work: = mem.scratch(arena)
+    defer work.free()
     for _try in Range.asc(max_unique_tries)
         tail: = rand.u64() catch
             throw .operation_failed
         path: =
-            join(base, arena.text().s(prefix).s("\{tail:016x\}").take(), arena)
+            join(base, work.arena.text().s(prefix).s("\{tail:016x\}").take(), work.arena)
         if made(path)
-            return path
+            return arena.dup_str(path)
         // Caution: **Retry only if the name was taken.** If it failed for any other reason (no
         // permission, a file where `base` should be), every name would fail the same way.
         if !exists(path)
@@ -514,19 +540,21 @@ pub fn write_unique( //< writes a new file under a name nobody has used, readabl
     prefix: U8[], //< the start of its name
     suffix: U8[], //< the end of its name, such as an extension
     data: U8[], //< its whole content
-    arena: Arena$@, //< where the path goes
+    arena: Arena$@, //< where the path goes; null means the heap, freed with `dealloc`
 ): U8[]!Fs_error //< the new file's path; fails if it cannot be created or written
     mkdir_all(base)!
+    $work: = mem.scratch(arena)
+    defer work.free()
     for _try in Range.asc(max_unique_tries)
         tail: = rand.u64() catch
             throw .operation_failed
         path: =
             join(base,
-            arena.text().s(prefix).s("\{tail:016x\}").s(suffix).take(), arena)
+            work.arena.text().s(prefix).s("\{tail:016x\}").s(suffix).take(), work.arena)
         check_path(path)!
         switch kspl_create_owned(path.ptr, path.len, data.ptr, data.len)
         case 0
-            return path
+            return arena.dup_str(path)
         case 1
             continue
         default
@@ -541,15 +569,17 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
     dir: U8[], //< the top of the tree
     rels: U8[][], //< each file's name under `dir`, with `/` between its levels
     bodies: U8[][], //< each file's contents, in the same order
-    arena: Arena$@, //< where the joined paths go
+    arena: Arena$@, //< where the joined paths go while it works; null works on the heap
 ): Void!Fs_error
     if rels.len != bodies.len
         throw .invalid_path
     for rel in rels
         if !is_safe_relative(rel)
             throw .invalid_path
+    $work: = mem.scratch(arena)
+    defer work.free()
     for i in Range.asc(rels.len)
-        path: = join(dir, rels[i], arena)
+        path: = join(dir, rels[i], work.arena)
         parent: = sys.get_dir_name(path)
         if parent.len > 0
             mkdir_all(parent)!
@@ -558,16 +588,19 @@ pub fn write_tree( //< writes files under a directory, creating missing levels
 
 pub fn copy_tree( //< copies every file under one directory to a path that does not exist yet
     //<
-    //< The relative layout and each file's permission bits are kept; only one file at a time is in
-    //< memory. **A link is not copied**, to a file or a directory alike: followed, it would copy
-    //< what lies outside.
+    //< The relative layout and each file's permission bits are kept, **the bits from the copy's
+    //< first byte**, so a private file is never readable by others on the way. A file is copied a
+    //< piece at a time. **A link is not copied**, to a file or a directory alike: followed, it
+    //< would copy what lies outside. Anything but a directory or a regular file (a FIFO) fails it.
     //< Caution: **It fails if the destination already exists.** A copy mixed with files left by an
     //< earlier run is not a copy of the tree, and nothing in it would show that.
     from: U8[], //< the tree to copy
     to: U8[], //< where the copy goes; its parent is created if missing
     skip_dir: fn(name: U8[]): Bool, //< true for a directory not to copy; it gets only the name
-    arena: Arena$@, //< where the paths go
+    arena: Arena$@, //< where the paths go while it works; null works on the heap
 ): Void!Fs_error
+    $work: = mem.scratch(arena)
+    defer work.free()
     parent: = sys.get_dir_name(to)
     if parent.len > 0
         mkdir_all(parent)!
@@ -576,27 +609,29 @@ pub fn copy_tree( //< copies every file under one directory to a path that does 
     // its trailing separators trimmed, so measured by `from` as given, `a//` would cut one letter
     // off every name.
     top: = without_trailing_seps(from)
-    for path in walk_files(from, skip_dir, arena)!
+    for path in walk_files(from, skip_dir, work.arena)!
         if is_link(path) // the walk leaves out a link to a directory, not one to a file
             continue
         $k: = top.len
         for k < path.len && sys.is_path_sep(path[k])
             k += 1
-        dest: = join(to, path.sub_from(k), arena)
+        dest: = join(to, path.sub_from(k), work.arena)
         mkdir_all(sys.get_dir_name(dest))!
         copy_file(path, dest)!
 
 priv fn copy_file(from_path: U8[], to_path: U8[]): Void!Fs_error //<
-    //< Copies one file's contents and its permission bits
+    //< Copies one file's contents and its permission bits to a name that does not stand yet
     //<
-    //< **The mode goes too**: written fresh, a script copied with its tree would lose its execute
-    //< bit, and a file only its owner could read would become readable by others.
-    body: = io.read_file(from_path) catch e
-        throw .io(e)
-    defer dealloc(Void$@::body.ptr)
-    io.write_file(to_path, body) catch e
-        throw .io(e)
-    if kspl_copy_mode(from_path.ptr, from_path.len, to_path.ptr, to_path.len) != 0
+    //< **The mode goes too, from the first byte**: written fresh, a script would lose its execute
+    //< bit, and a file only its owner could read would stand readable by others while it is
+    //< written ("Making a directory refuses an existing name, and removing a tree is not offered"
+    //< in std/docs/DESIGN.md).
+    switch kspl_copy_file(from_path.ptr, from_path.len, to_path.ptr, to_path.len)
+    case 0
+        return
+    case 1
+        throw .not_found
+    default
         throw .operation_failed
 
 // ==========================================

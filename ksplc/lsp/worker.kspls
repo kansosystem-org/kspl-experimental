@@ -16,6 +16,7 @@ import "ksplc/lsp/hover" as lsp_hover
 import "ksplc/lsp/msg" as lsp_msg
 import "ksplc/lsp/nav" as lsp_nav
 import "ksplc/lsp/outline" as lsp_outline
+import "ksplc/lsp/rename" as lsp_rename
 import "ksplc/lsp/semtok" as lsp_semtok
 import "ksplc/lsp/state" { Doc_state, Server }
 import "ksplc/lsp/uses" as lsp_uses
@@ -273,7 +274,7 @@ impl Server
         //< Caution: **Do not route by a second list kept elsewhere.** Two lists naming the same
         //< methods drift, and a method on only one gets "not found" with nothing saying why.
         if method.equals("initialize")
-            answer_initialize(id_val, arena)
+            answer_initialize(params, id_val, arena)
         else if method.equals("textDocument/didOpen") ||
             method.equals("textDocument/didChange")
             r.handle_did_open_change(method, params)
@@ -298,11 +299,17 @@ impl Server
         else if method.equals("textDocument/documentSymbol")
             if st: = r.document_state(params, id_val, arena)
                 lsp_outline.handle(st, id_val, arena)
-        else if method.equals("textDocument/rename") ||
-            method.equals("textDocument/references")
+        else if method.equals("textDocument/prepareRename")
+            if st: = r.document_state(params, id_val, arena)
+                lsp_rename.handle_prepare(st, params, id_val, arena)
+        else if method.equals("textDocument/rename")
             ws: = r.workspace_state(params)
             defer r.drop_workspace_state(ws)
-            lsp_uses.handle(ws, method, params, id_val, arena)
+            lsp_rename.handle_rename(ws, r.base_parser, params, id_val, arena)
+        else if method.equals("textDocument/references")
+            ws: = r.workspace_state(params)
+            defer r.drop_workspace_state(ws)
+            lsp_uses.handle_references(ws, params, id_val, arena)
         else if method.equals("callHierarchy/incomingCalls") ||
             method.equals("callHierarchy/outgoingCalls")
             ws: = r.workspace_state(params)
@@ -461,14 +468,15 @@ impl Server
             if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
                 r.reset_current_state()
 
-priv fn answer_initialize(id_val: json.Val, arena: Arena$@)
+priv fn answer_initialize(params: json.Val, id_val: json.Val, arena: Arena$@)
     $b: = Json_builder.new(arena)
     // For stability CodeAction and InlayHint are disabled.
     // textDocumentSync=1 (Full): didChange's contentChanges[0].text is the whole document, so
     // handle_did_open_change looks only at index 0.
     cap: = b.obj().set("textDocumentSync", b.int_val(lsp_msg.sync_full))
         .set("hoverProvider", b.bool_val(true)).set("definitionProvider", b.bool_val(true))
-        .set("renameProvider", b.bool_val(true)).set("referencesProvider", b.bool_val(true))
+        .set("renameProvider", rename_options(params, b@))
+        .set("referencesProvider", b.bool_val(true))
         .set("codeActionProvider", b.bool_val(false))
         .set("inlayHintProvider", b.bool_val(false))
         .set("callHierarchyProvider", b.bool_val(true))
@@ -480,6 +488,19 @@ priv fn answer_initialize(id_val: json.Val, arena: Arena$@)
 
     result: = b.obj().set("capabilities", cap).build()
     lsp_msg.send_response(id_val, result, arena)
+
+priv fn rename_options(params: json.Val, b: Json_builder$@): json.Val //<
+    //< The rename capability: with `prepareProvider` where the client can ask it
+    //<
+    //< **Only a client that says it sends `prepareRename` is told it is answered**: the protocol
+    //< allows the options only then, and the method is handled whatever is declared.
+    said: = params.get("capabilities").get("textDocument").get("rename").get("prepareSupport")
+    switch said
+    case .bool_val(yes)
+        if yes
+            return b.obj().set("prepareProvider", b.bool_val(true)).build()
+    default {}
+    return b.bool_val(true)
 
 priv fn completion_options($b: Json_builder): json.Val //<
     //< The completion capability's options
@@ -528,7 +549,7 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
             lsp_msg.send_worker_done()
             continue
 
-        method: = doc.get("method").as_str()
+        method: = doc.val.get("method").as_str()
         // Test hooks for the supervisor's crash / hang recovery. A real client sends nothing in the
         // $/ksplTest* namespace, so they are harmless in production.
         if method.equals("$/ksplTestCrash")
@@ -538,8 +559,8 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
                 sys.mono_us()
 
         if method.equals("shutdown")
-            lsp_msg.send_null_response(doc.get("id"), msg_arena)
+            lsp_msg.send_null_response(doc.val.get("id"), msg_arena)
             lsp_msg.send_worker_done()
             break
-        server.dispatch(method, doc.get("params"), doc.get("id"), msg_arena)
+        server.dispatch(method, doc.val.get("params"), doc.val.get("id"), msg_arena)
         lsp_msg.send_worker_done()

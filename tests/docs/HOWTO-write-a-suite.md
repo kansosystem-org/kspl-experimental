@@ -46,15 +46,15 @@ These steps add a suite under `tests/suite/`. A suite of the compiler's own goes
 3. **Name it in the platform table**, "What each platform runs" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md), usually in a row's bracketed list. `make test-conventions` fails with "the platform table names every gate and suite CI runs" until it is there.
 4. **A new module of the conventions suite** (`tests/support/conventions_<x>.kspls`) is called from `main` in `tests/suite/conventions_test.kspls`, or from a module it already calls; one nothing calls checks nothing.
 5. **If the suite needs a fix you just made to the language or to code generation, re-bake the seed first**: run `make commit-seed`. The seed runs the suite, so a suite can use only the notations the seed knows. Without this step the suite passes on the stage1 just built, while `make test-<name>` alone fails.
-6. **Run it**: `make test-<name>`, then `make test-conventions`. You should see one line per check and a closing verdict:
+6. **Run it**: `make test-<name>`, then `make test-conventions`. You should see one line per check and a closing verdict, as in two of `make test-docref`'s lines and its last:
 
    ```
-   pass keywords: there is no unexpected line
-   pass keywords: the groups and the total line come out
+   pass docref: SPEC-*.md cites no PLAN.md
+   pass docref: numbered headings are unique and consecutive per document
    RESULT: ALL PASS
    ```
 
-   A failed check prints a `FAIL` line, the run goes on, and the last line reads `RESULT: SOME FAILED (<count>)`.
+   A failed check prints a `FAIL` line, the run goes on, and the last line reads `RESULT: SOME FAILED (<count>) -> <the failed checks>`.
 
 ## The manners for writing a suite
 
@@ -81,6 +81,7 @@ Each row below is one manner: what to use, and what goes wrong without it.
 | :-- | :-- | :-- |
 | End the suite | `return ksplc_harness.finish()` at the end of `main` | **The exit code carries the verdict.** The `RESULT:` line is for people and the log; the Makefile greps it as a marker for some targets only |
 | Report a case that could not be confirmed | `verdict.skip_check()` | Written as `check(.., true, ..)`, a case that confirmed nothing prints the same line as one that confirmed something, and the log cannot tell them apart |
+| Report a case whose tool is missing, where Linux's image holds that tool | `ksplc_harness.require_or_skip(name, switch, lacks)` | Where the switch reads 1 (Linux's default) the case fails, so an image that lost the tool cannot go green; the failure names `<switch>=0`, which a machine without the tool sets to skip instead ("The switches that require a tool" in [`docs/SPEC-gates.md`](../../docs/SPEC-gates.md)) |
 | Get a folder to write in | `harness.sandbox("<suite name>")` | It deletes the last runs' `out/tmp/<suite name>_…` folders and returns a fresh one, so their leftovers do not mix into this run's verdict |
 | Read a file the compiler generated | `ksplc_harness.read_generated` | ksplc writes in text mode, so on Windows the newlines become `\r\n` |
 | Read a file the repository holds | `harness.read_under_root` | `.gitattributes` pins the repository's files to LF, so nothing needs converting |

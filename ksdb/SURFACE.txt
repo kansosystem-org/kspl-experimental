@@ -7,12 +7,12 @@ ksdb/log	Cursor.kind	pub kind: U16	the tag the current record was appended with
 ksdb/log	Cursor.len	pub len: U16	the current record's content length
 ksdb/log	Cursor.next	pub fn next(r: Self$@): Bool	moves to the next record; false when none is left. Caution: **It must not stop at a garbled record.** A power cut can leave one half-written record, and stopping there would make everything appended after it (in the next sector) unreadable forever. **It must not stop at an erased region either.** Appending leaves a gap at a sector's end rather than span two sectors, so stopping at that gap misses the next sector's records.
 ksdb/log	Cursor.payload_at	pub fn payload_at(r: Self$@): Sz	where the current record's content begins
-ksdb/log	Cursor.read	pub fn read(r: Self$@, dst: U8$[])	copies the current record's content out
+ksdb/log	Cursor.read	pub fn read(r: Self$@, dst: U8$[]): Sz!Ksdb_error	copies the current record's content out and returns its length. **A record longer than `dst` is refused, not cut**: a cut record reads as a whole shorter one, and nothing shows that its end is missing. `len` says beforehand how much room it needs.
 ksdb/log	Ksdb_error	pub enum Ksdb_error	why an append or a read failed
 ksdb/log	Ksdb_error.full	full	the medium has no room left; the log only appends, so this lasts until a `reset`.
 ksdb/log	Ksdb_error.not_found	not_found	no record of that kind exists. Caution: **Do not report "there is none" as length 0.** A record with empty content is legitimate (see the caution on `Cursor`'s `started`). An empty record would then read as "there is none": the writer wrote it, cannot read it back, and nothing shows why.
 ksdb/log	Ksdb_error.too_large	too_large	the content is longer than `max_payload`, or does not fit in one sector.
-ksdb/log	Ksdb_error.too_small	too_small	the `dst` passed to `last` is shorter than the content.
+ksdb/log	Ksdb_error.too_small	too_small	the `dst` passed to `last` or `Cursor.read` is shorter than the content.
 ksdb/log	Ksdb_error.write_failed	write_failed	the medium refused a write or an erase.
 ksdb/log	Log	pub struct Log	an append-only log on one `Store` that can be read again after a power cut
 ksdb/log	Log.append	pub fn append(r: Self$@, kind: U16, payload: U8[]): Void!Ksdb_error	adds one record without crossing a sector boundary or erasing anything. **A record stays inside one sector**: if it spanned two, erasing one would leave only the header in the other. **No sector is erased here**, since erasing `tail`'s sector would take its finished records with it. A region not erased is only skipped; erasing is `reset`'s job.

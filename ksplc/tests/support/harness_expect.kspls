@@ -170,6 +170,28 @@ priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
                         '\{want\}', but got '\{want\}'").take()
     return ""
 
+priv fn unforeseen_errors(out: U8[], expect: U8[][], arena: Arena$@): U8[] //<
+    //< The error lines that no EXPECT names, or empty where every one is named
+    //<
+    //< **An error the case does not foresee can stop the check an EXPECT-NOT is about**: sema
+    //< skips the rest of a body's analysis after an error in it, and the EXPECT-NOT then holds
+    //< whatever the compiler does. So a case with an EXPECT-NOT names every error it reports.
+    b: = arena.text()
+        .s("an EXPECT-NOT case reports an error no EXPECT names, which may have stopped the check \
+            the EXPECT-NOT is about:\n")
+    $found: = 0
+    for ln in out.lines(arena)
+        if ln.find_str(": error: ").is_none()
+            continue
+        $named: = false
+        for want in expect
+            named = named || ln.find_str(want).is_some()
+        if !named
+            b.s(ln).s("\n")
+            found += 1
+    text: = b.take()
+    return text if found > 0 else ""
+
 priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, arena: Arena$@):
     U8[][] //<
         //< One fixture's argv. The lint suite prefixes `lint` and does not write the generated C.
@@ -258,5 +280,10 @@ fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow
         same: = self_contradictory(r.out, arena)
         if same.len > 0
             verdict.check(case_name, false, same)
+            continue
+        stray: =
+            unforeseen_errors(r.out, m.expect.slice(), arena) if m.deny.len > 0 else ""
+        if stray.len > 0
+            verdict.check(case_name, false, stray)
             continue
         harness_markers.check(case_name, m.expect.slice(), m.deny.slice(), r.out)

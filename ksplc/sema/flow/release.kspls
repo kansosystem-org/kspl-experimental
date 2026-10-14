@@ -110,25 +110,15 @@ impl Ast_node
         callee: = r.get_postfix_receiver()
         if callee == null
             return false
-        // The method form (`arena.alloc_as<|T|>()`).
         // Caution: **Look one level below the call parentheses**, at the receiver's
-        // k_method_access.
-        if callee.kind_id == .k_method_access
-            member: = callee.get_postfix_member()
-            if member == null || !is_arena_handout_name(member.text)
-                return false
-            recv: = callee.get_postfix_receiver()
-            return recv != null && is_arena_type(c, recv.type_id)
-        // The free-function form (`mem.alloc_in(arena, n)`). The first actual argument is the
-        // arena.
-        if !callee.is_path_or_ident() ||
-            !callee.get_path_or_ident_name().equals("alloc_in")
+        // k_method_access (`arena.alloc_as<|T|>()`).
+        if callee.kind_id != .k_method_access
             return false
-        args: = r.find_child(.k_expr_args)
-        if args == null || args.children.len == 0
+        member: = callee.get_postfix_member()
+        if member == null || !is_arena_handout_name(member.text)
             return false
-        first: = args.get_child(0)
-        return first != null && is_arena_type(c, first.type_id)
+        recv: = callee.get_postfix_receiver()
+        return recv != null && is_arena_type(c, recv.type_id)
 
     fn get_free_fn_arg(r: Self$@): Ast_node$@? //<
         //< The released argument node, where the call is to a free function like `dealloc(x)`
@@ -143,6 +133,24 @@ impl Ast_node
         if args_node == null || args_node.children.len != 1
             return .none
         return .some(args_node.get_child(0))
+
+    fn get_dealloc_of_name(r: Self$@): Ast_node$@? //<
+        //< The name a `dealloc` call gives back as it stands: `dealloc(p)` or `dealloc(Void$@::p)`
+        //<
+        //< Only a cast is stripped. **`dealloc(p@)` gives back the variable's own address**, not
+        //< the block `p` points at, so it is not this shape.
+        $curr: Ast_node$@ = null
+        if arg: = r.get_free_fn_arg()
+            curr = arg
+        for curr != null && curr.kind_id == .k_expr_postfix
+            op: = curr.get_postfix_op()
+            if op == null || !op.text.equals("::")
+                break
+            curr = curr.get_postfix_receiver()
+        if curr == null
+            return .none
+        return .some(curr)
+
     fn body_frees_param_directly(r: Self$@, param_name: U8[], c: Sema_ctx$@): Bool //<
         //< Whether the body's top-level statements always free the formal parameter param_name
         //<

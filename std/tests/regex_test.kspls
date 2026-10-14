@@ -38,36 +38,36 @@ fn test_regex_match()
     verdict.start("[Regex] compile/is_match/find test...")
     heap_before: = mem.heap_used_bytes()
     r: = regex.Regex.compile("[0-9]+-[0-9]+") catch panic("regex compile failed")
-    assert(decided(r, "order 2024-11 shipped"), "regex should match embedded pattern")
-    assert(!decided(r, "no numbers here"), "regex should not match unrelated text")
+    assert(r.is_match("order 2024-11 shipped"), "regex should match embedded pattern")
+    assert(!r.is_match("no numbers here"), "regex should not match unrelated text")
 
     m: = r.find("order 2024-11 shipped") catch panic("regex find should have succeeded")
     assert(m.start == 6 && m.end == 13, "find() should report the exact match span")
     r.free()
 
     r2: = regex.Regex.compile("^(cat|dog)s?$") catch panic("regex compile failed")
-    assert(decided(r2, "cat"), "alternation + optional 's' should match singular")
-    assert(decided(r2, "dogs"), "alternation + optional 's' should match plural")
-    assert(!decided(r2, "catfish"), "anchored pattern must not match a superstring")
+    assert(r2.is_match("cat"), "alternation + optional 's' should match singular")
+    assert(r2.is_match("dogs"), "alternation + optional 's' should match plural")
+    assert(!r2.is_match("catfish"), "anchored pattern must not match a superstring")
     r2.free()
 
     // **`\d` inside a class is a set**, not a plain 'd' (which would compile yet match no digit);
     // `[^\d]` does not match a digit.
     rcls: = regex.Regex.compile("^[\\d]+$") catch panic("regex compile failed")
-    assert(decided(rcls, "507"), "a class containing \\d must match digits")
-    assert(!decided(rcls, "ddd"), "a class containing \\d must not match the letter d")
+    assert(rcls.is_match("507"), "a class containing \\d must match digits")
+    assert(!rcls.is_match("ddd"), "a class containing \\d must not match the letter d")
     rcls.free()
     rncls: = regex.Regex.compile("^[^\\d]+$") catch panic("regex compile failed")
-    assert(decided(rncls, "abc"), "a negated class with \\d must match non-digits")
-    assert(!decided(rncls, "7"), "a negated class with \\d must reject digits")
+    assert(rncls.is_match("abc"), "a negated class with \\d must match non-digits")
+    assert(!rncls.is_match("7"), "a negated class with \\d must reject digits")
     rncls.free()
 
     // Caution: **Resolve an escape at a range's upper end too.** Otherwise the upper end becomes
     // `\` (0x5C), which is smaller than the lower end 'a' (0x61), so the range silently becomes
     // empty.
     rrange: = regex.Regex.compile("^[a-\\{]+$") catch panic("regex compile failed")
-    assert(decided(rrange, "mist"), "an escaped range endpoint must still form the range")
-    assert(!decided(rrange, "A1"), "the range must not swallow characters outside it")
+    assert(rrange.is_match("mist"), "an escaped range endpoint must still form the range")
+    assert(!rrange.is_match("A1"), "the range must not swallow characters outside it")
     rrange.free()
 
     // Caution: **Test a lazy match by "how far it matches", not by "whether it matches".**
@@ -125,21 +125,6 @@ fn test_regex_match()
     assert(err_heap_after == err_heap_before,
         "a failed Regex.compile must free the nodes it built before throwing")
 
-    // Catastrophic backtracking (ReDoS) is cut off as `too_complex`, neither hanging nor answering
-    // "no": the budget ran out before the whole text was tried.
-    r3: =
-        regex.Regex.compile("a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?b")
-        catch panic("regex compile failed")
-    $r3_cut: = false
-    _r3: = r3.is_match("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") catch e
-        switch e
-        case .too_complex
-            r3_cut = true
-        default {}
-        fallback false
-    assert(r3_cut, "catastrophic backtracking must be reported as too_complex, not as no match")
-    r3.free()
-
     verdict.pass("compile/is_match/find behave correctly against real input.")
 
 priv fn group_of(pattern: U8[], text: U8[], n: Sz): U8[] //<
@@ -167,8 +152,8 @@ priv fn group_count_of(pattern: U8[], text: U8[]): Sz //<
 
 // ==========================================
 // std/regex: capture groups.
-// Caution: **Always check that a group of an alternative dropped by backtracking keeps no
-// value.** The match is right, so a group holding the previous try's value looks plausible.
+// Caution: **Always check that a group of an alternative that failed keeps no value.** The
+// match is right, so a group holding the failed alternative's value looks plausible.
 // ==========================================
 fn test_regex_groups()
     verdict.start("[Regex] capture group test...")
@@ -200,10 +185,10 @@ fn test_regex_groups()
     top2: = group_of("(a)(b)|c", "c", 2)
     assert(top1.equals("-"), "group 1 of a dropped alternative does not stay behind")
     assert(top2.equals("-"), "group 2 of a dropped alternative does not stay behind")
-    // **After backtracking inside a group, the group holds the last string that matched**: `a`,
-    // then `ab`.
+    // **When a group's first alternative fails further on, the group holds the one that matched**:
+    // `a`, then `ab`.
     back: = group_of("(a|ab)c", "abc", 1)
-    assert(back.equals("ab"), "the string after backtracking inside a group")
+    assert(back.equals("ab"), "the string of the alternative that matched inside a group")
     // **A nested group filled inside a dropped alternative must keep no value either**: `(a)x`
     // fills group 2 and is dropped. An alternative inside a group is not reset per try, so these
     // two cases alone cover the saving and restoring.
@@ -236,8 +221,7 @@ priv fn spans_of(pattern: U8[], text: U8[], arena: Arena$@): U8[] //<
     r: = regex.Regex.compile(pattern) catch
         return "!"
     defer r.free()
-    ms: = r.find_all(text, arena) catch
-        return "!"
+    ms: = r.find_all(text, arena)
     b: = arena.text()
     for m in ms
         b.s("\{m.start\},\{m.end\} ")
@@ -248,8 +232,7 @@ priv fn nth_group(pattern: U8[], text: U8[], n: Sz, g: Sz, arena: Arena$@): U8[]
     r: = regex.Regex.compile(pattern) catch
         return "!"
     defer r.free()
-    ms: = r.find_all(text, arena) catch
-        return "!"
+    ms: = r.find_all(text, arena)
     if n >= ms.len
         return "-"
     return ms.get(n).group(g, text)
@@ -312,10 +295,7 @@ priv fn matches(pattern: U8[], text: U8[]): Bool
     r: = regex.Regex.compile(pattern) catch
         return false
     defer r.free()
-    return decided(r, text)
-
-priv fn decided(r: regex.Regex$@, text: U8[]): Bool //< `is_match`, where an error fails the test
-    return r.is_match(text) catch panic("regex: a test's pattern is decided within the budget")
+    return r.is_match(text)
 
 // ==========================================
 // std/regex: escapes for control characters (`\t` `\n` `\r`) and word boundaries (`\b` `\B`).
@@ -352,10 +332,9 @@ fn test_regex_escapes()
 
 priv fn late_match_start(): Sz //< whether a match further back can be found
     //<
-    //< **The test checks the answer, not the speed.** If a repetition that matches empty is not cut
-    //< off, it uses up the backtracking budget shared across the whole `find`, ends as
-    //< `too_complex`, and the real match further back is missed. The regex is freed inside, since
-    //< the caller compares the heap.
+    //< **The test checks the answer, not the speed.** A repetition that matches empty, not cut off,
+    //< loops at each start, and the real match further back is never reached. The regex is freed
+    //< inside, since the caller compares the heap.
     $long_text: = Str_builder.new()
     defer long_text.free()
     for _i in Range.asc(800)
@@ -403,8 +382,8 @@ fn test_regex_group_repeat()
     // The match further back tests the cut-off (the reason is at `late_match_start`).
     assert(late_match_start() == 800, "a match further back is found")
 
-    backtrack: = group_of("(a|ab)*c", "ababc", 1)
-    assert(backtrack.equals("ab"), "the last string backtracked to while going round")
+    last_round: = group_of("(a|ab)*c", "ababc", 1)
+    assert(last_round.equals("ab"), "the last round's string, of the alternative that matched")
 
     // The lazy form. **`is_match` shows no difference**, so the captured string tests it.
     lazy: = group_of("(?:[\\w]+\\s+)*?@(\\w+)", "call void @abort", 1)
@@ -453,6 +432,13 @@ fn test_regex_bounds()
     assert(rejected_with("a{3,2}", .invalid_repeat), "a lower bound above the upper one is refused")
     assert(rejected_with("a{1001}", .invalid_repeat), "a count above max_repeat_count is refused")
     assert(rejected_with("a{x}", .invalid_repeat), "a count that is not digits is refused")
+    // A count is written out round by round, so the program's size, not the count, is the limit.
+    assert(!compile_is_rejected("[a-z]{1,1000}"), "one count up to max_repeat_count compiles")
+    assert(!compile_is_rejected("(ab){1000}"), "a group's count up to max_repeat_count compiles")
+    assert(rejected_with("(a{1000}){1000}", .too_large), "a million states are refused")
+    // **Refused before it is written out**: a billion states would not fit in memory.
+    assert(rejected_with("((a{1000}){1000}){1000}", .too_large),
+        "a pattern of a billion states is refused, not written out")
     assert(rejected_with("{3}", .dangling_quantifier), "`{3}` with nothing to repeat is refused")
     assert(rejected_with("^{3}", .dangling_quantifier), "a count cannot be put on an anchor")
     assert(matches("a\\{3\\}", "a{3}"), "`\\{` is the literal `{`")
@@ -484,8 +470,8 @@ fn test_regex_bounds()
 
 fn test_regex_long_text() //< a search through a long text is no ReDoS, and is answered
     //<
-    //< **Each start fails in a couple of attempts**, but there are 1.5 million of them: a budget
-    //< counted across the starts without growing with the text refused this search.
+    //< **Each start fails at once**, but there are 1.5 million of them: a search whose work is
+    //< capped by a fixed amount, rather than by the text, refuses it.
     verdict.start("[Regex] a plain search through a long text test...")
     $text: = Str_builder.new()
     defer text.free()
@@ -498,11 +484,51 @@ fn test_regex_long_text() //< a search through a long text is no ReDoS, and is a
     assert(m.start == 1500000, "the match is found at the end")
     verdict.pass("A search failing cheaply at 1.5 million starts finds the match at the end.")
 
+priv fn work_of(r: regex.Regex$@, n: Sz): Sz //<
+    //< the states one search visits over n `a`s, then `!`
+    $text: = Str_builder.new()
+    defer text.free()
+    for _i in Range.asc(n)
+        text.c('a')
+    text.c('!')
+    return r.visits(text.slice())
+
+priv fn answered_no(r: regex.Regex$@, n: Sz): Bool //< whether n `a`s, then `!`, gets "no match"
+    $text: = Str_builder.new()
+    defer text.free()
+    for _i in Range.asc(n)
+        text.c('a')
+    text.c('!')
+    _m: = r.find(text.slice()) catch e
+        return e == .no_match
+    return false
+
+fn test_regex_linear() //<
+    //< the patterns that hang a backtracking matcher are answered in linear time
+    //<
+    //< **The work is counted, not timed**: a clock flakes on a loaded machine, while the states a
+    //< search visits are the same on every run. Each 5000 more bytes must add no more work than
+    //< the 5000 before them, within `states` a byte; stepping back multiplies it per byte instead.
+    verdict.start("[Regex] patterns that backtrack exponentially are answered in linear time...")
+    heap_before: = mem.heap_used_bytes()
+    for pat in U8[][]::{ "(a+)+$", "(a|a)*b", "(a*)*b", "(a|aa)+$", "^(\\w+\\s?)*$", "(.*a){12}$",
+        "(a?){30}a{30}$" }
+        r: = regex.Regex.compile(pat) catch panic("regex: the pattern must compile")
+        w1: = work_of(r, 5000)
+        w2: = work_of(r, 10000)
+        w3: = work_of(r, 15000)
+        assert(w3 - w2 <= w2 - w1 + r.states, "regex: the work grows linearly with the text")
+        assert(w3 <= r.states * 15002, "regex: a search visits at most `states` a byte")
+        assert(answered_no(r, 15000), "regex: the pattern is answered, with no match")
+        r.free()
+    heap_after: = mem.heap_used_bytes()
+    assert(heap_after == heap_before, "regex: a search frees what it made")
+    verdict.pass("Each pattern is answered over 15000 bytes, its work linear in the text.")
+
 fn test_regex_many_rounds() //< a repeated group over a long text is matched, not refused
     //<
-    //< Caution: **Test a text that only is long.** A round of `(ab)*` was one more native call, so
-    //< 1500 rounds already passed the depth limit and a plainly matching text came back
-    //< `too_complex`; now a round costs one backtracking entry on the heap.
+    //< Caution: **Test a text that only is long.** A matcher spending a native call or a kept
+    //< entry per round of `(ab)*` refuses, or exhausts its stack on, a text that plainly matches.
     verdict.start("[Regex] a repeated group over many rounds test...")
     $text: = Str_builder.new()
     defer text.free()
@@ -522,3 +548,23 @@ fn test_regex_many_rounds() //< a repeated group over a long text is matched, no
         "the group holds the last round, at the text's end")
     verdict
         .pass("A repeated group over 20000 rounds matches the whole text, its group the last round.")
+
+priv fn nested_groups(depth: Sz, arena: Arena$@): U8[] //< `a` inside `depth` nested `(?:`
+    t: = arena.text()
+    for _i in Range.asc(depth)
+        t.s("(?:")
+    t.c('a')
+    for _i in Range.asc(depth)
+        t.c(')')
+    return t.take()
+
+fn test_regex_nesting(arena: Arena$@) //<
+    //< deep group nesting compiles, and past the limit is too_deep
+    //<
+    //< **On every build, a sanitized one too**: the stack check beside the count must not refuse
+    //< what the main thread's stack holds.
+    verdict.start("[Regex] deep group nesting compiles, and too deep is refused...")
+    assert(!compile_is_rejected(nested_groups(400, arena)), "regex: 400 nested groups compile")
+    assert(rejected_with(nested_groups(600, arena), .too_deep),
+        "regex: 600 nested groups, past the limit, are refused as too_deep")
+    verdict.pass("400 nested groups compile, and 600 are refused as too_deep.")

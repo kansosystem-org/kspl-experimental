@@ -1,4 +1,4 @@
-//< Traits: a default body copied to an implementation, and a method reached only through a value
+//< Traits: copied default bodies, methods reached only through a value, trait values in arrays
 import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/verdict"
@@ -118,6 +118,35 @@ fn test_generic_vtable_only_method()
     assert(s1.say() != s2.say(), "each instantiation is a separate function (not merged into one)")
     verdict
         .pass("a generic method called only through a trait value is generated per instantiation.")
+
+// ==========================================
+// **An element of an immutable array or slice of trait values is a trait value too.** Its type
+// carries the immutability (`Shape[2]`'s element), which the method call and the upcast see
+// through (`trait_def_of_receiver` in `ksplc/sema/type/query.kspls`, apply_type_coercion in
+// `ksplc/sema/body/coerce.kspls`). Missed, the call names a function no type defines, and an
+// element is refused where a field takes the same value.
+// ==========================================
+priv trait Areal
+    fn area(r: Self): I32
+
+priv struct Square
+    priv n: I32
+
+impl Square: Areal
+    priv fn area(r: Self@): I32
+        return r.n * r.n
+
+fn test_trait_values_in_immutable_array()
+    verdict.start("[Trait] trait values held by an immutable array or slice test...")
+    two: = Square::{ .n = 2 }
+    three: = Square::{ .n = 3 }
+    held: Areal = two
+    shapes: Areal[2] = ::{ held, three }
+    assert(shapes[1].area() == 9, "an element built by an upcast dispatches through its table")
+    assert(shapes[0].area() == 4, "an element copied from a trait value dispatches too")
+    view: = Areal[]::shapes
+    assert(view[1].area() == 9, "an element of an immutable slice dispatches too")
+    verdict.pass("an immutable array's or slice's element is called through its trait table.")
 
 // ==========================================
 // The two shapes of a `for x in` loop: by subscript, or by an `Iter`'s `next()`

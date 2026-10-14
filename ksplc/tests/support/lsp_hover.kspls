@@ -83,7 +83,7 @@ priv fn hover_at(c: jsonrpc.Client$@, spot: Spot, arena: Arena$@): json.Val!json
     //< The hover at that spot
     col: = col_in_line(marks_src, spot.line, spot.needle, arena) + spot.step
     pos: = lsp_client.at_pos(marks_uri, decl_line(marks_src, spot.line, arena), col, arena)
-    return c.request("textDocument/hover", pos, lsp_client.read_ms, arena)
+    return c.request("textDocument/hover", pos, lsp_client.read_ms, arena)!.val
 
 fn check_hover_marks(c: jsonrpc.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(marks_uri, marks_src, arena),
@@ -225,7 +225,10 @@ priv fn request_at(c: jsonrpc.Client$@, method: U8[], ask: Ask, arena: Arena$@):
         .set("character", b.int_val(col)).build()
     ctx: = b.obj().set("includeDeclaration", b.bool_val(true)).build()
     params: = b.obj().set("textDocument", doc).set("position", pos).set("context", ctx).build()
-    return c.request(method, params, lsp_client.read_ms, arena)
+    // References walk the workspace, a hover only its own file.
+    wait: =
+        lsp_client.walk_ms if method.equals("textDocument/references") else lsp_client.read_ms
+    return c.request(method, params, wait, arena)!.val
 
 priv fn shown_line(text: U8[]): U8[] //< the answer's first line inside its code fence
     body: = text.strip_prefix("```kspl\n")
@@ -367,7 +370,7 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
         verdict.check("a hover carries the documentation the declaration holds", false,
             end_text(e))
         return
-    text: = lsp_client.hover_text(got)
+    text: = lsp_client.hover_text(got.val)
     verdict.check("a hover carries the documentation the declaration holds",
         text.find_str("one row of the table").is_some() &&
         text.find_str("not one line on the screen").is_some(),
@@ -386,7 +389,7 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
         lsp_client.read_ms, arena) catch e
         verdict.check("a head closing on a later line carries its run", false, end_text(e))
         return
-    w2_text: = lsp_client.hover_text(w2_got)
+    w2_text: = lsp_client.hover_text(w2_got.val)
     verdict.check("a head closing on a later line carries its run",
         w2_text.find_str("The summary of a head that closes on a later line").is_some() &&
         w2_text.find_str("The detail behind the parting mark.").is_some(),
@@ -407,7 +410,7 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
         verdict.check("a hover over a field carries that field's own sentence", false,
             end_text(e))
         return
-    f_text: = lsp_client.hover_text(f_got)
+    f_text: = lsp_client.hover_text(f_got.val)
     verdict.check("a hover over a field carries that field's own sentence",
         f_text.find_str("the text as the writer typed it").is_some() &&
         f_text.find_str("What a row stands for").is_none(),
@@ -431,7 +434,7 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
         lsp_client.read_ms, arena) catch e
         verdict.check("a hover lists the parameters that carry a description", false, end_text(e))
         return
-    text: = lsp_client.hover_text(got)
+    text: = lsp_client.hover_text(got.val)
     verdict.check("a hover lays a described parameter out on its own line",
         text.find_str("\n    at: Sz, //< which column it starts in Counted from 0, not 1.\n")
         .is_some(),
@@ -455,7 +458,7 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
         verdict.check("a one-line signature gives its summary to no parameter", false,
             end_text(e))
         return
-    w_text: = lsp_client.hover_text(w_got)
+    w_text: = lsp_client.hover_text(w_got.val)
     verdict.check("a one-line signature gives its summary to no parameter",
         w_text.find_str("the whole of it written on one line").is_some() &&
         w_text.find_str("//<").is_none(),
@@ -473,7 +476,7 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
         lsp_client.read_ms, arena) catch e
         verdict.check("a signature past the cap says how many were left out", false, end_text(e))
         return
-    m_text: = lsp_client.hover_text(m_got)
+    m_text: = lsp_client.hover_text(m_got.val)
     verdict.check("a signature past the cap says how many were left out",
         m_text.find_str("    a16: Sz,\n    // ... 1 more\n").is_some(),
         lsp_client.why(c, arena.text().s("\'").s(m_text).s("\'").take(), arena))
@@ -498,7 +501,7 @@ priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
         lsp_client.read_ms, arena) catch e
         verdict.check("a name the description points at becomes a link", false, end_text(e))
         return
-    text: = lsp_client.hover_text(got)
+    text: = lsp_client.hover_text(got.val)
     put_line: = decl_line(doc_src, "  fn put( //< writes one row out", arena)
     want: = arena.text().s("doc_probe.kspl#L").s("\{put_line + 1\}").s(")").take()
     verdict.check("a name the description points at becomes a link to its line",
@@ -513,7 +516,7 @@ priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
     got_q: = c.request("textDocument/hover", q_at, lsp_client.read_ms, arena) catch e
         verdict.check("a parameter hides the module's name in its function", false, end_text(e))
         return
-    quiet: = lsp_client.hover_text(got_q)
+    quiet: = lsp_client.hover_text(got_q.val)
     verdict.check("a parameter hides the module's name in its function",
         quiet.find_str("`io.out` here").is_some() && quiet.find_str("[`io.out`]").is_none(),
         lsp_client.why(c, arena.text().s("'").s(quiet).s("'").take(), arena))

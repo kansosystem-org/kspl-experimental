@@ -11,7 +11,7 @@
 // **`std/str` imports this file**, not the other way round; the split is "how a value is written"
 // here and "how a string is cut and joined" there (Principle 3 in `../docs/DESIGN.md`).
 // ==========================================
-import "std/bignat" + { Bignat, Binary_float }
+import "std/bignat" + { Bignat, Binary_float, Wide }
 #cfg(!freestanding)
 import "std/libc"
 
@@ -359,17 +359,34 @@ priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8,
     Writer //<
         //< Writes a finished string of digits with the alignment and the three-digit grouping
         //<
-        //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"); any other
-        //< fill pads before the sign (" -42"). It takes a string because an F64's integer part can
-        //< have 309 digits and does not fit in a U64.
+        //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"), and with
+        //< grouping those zeros are grouped too ("0,001,234"); any other fill pads before the sign
+        //< (" -42"). It takes a string because an F64's integer part can have 309 digits.
     sign_len: Sz = 1 if is_neg else 0
-    comma_count: Sz = (digits.len - 1) / 3 if comma && digits.len > 0 else 0
-    content_len: = sign_len + digits.len + comma_count
-    raw_pad_len: Sz = width - content_len if content_len < width else 0
     // width comes straight from the caller (possibly from an application's format specifier),
     // unchecked. A huge width as the loop count would keep the CPU busy for a very long time (a
     // DoS), so it is capped at a limit that is large enough in practice.
-    pad_len: Sz = max_pad_len if raw_pad_len > max_pad_len else raw_pad_len
+    room: Sz = max_pad_len if width > max_pad_len else width
+    if fill == '0' && comma
+        // The zeros are digits and are grouped too, so the digit count grows until the grouped
+        // number fills the room: n digits take n + (n - 1) / 3 places. A separator never comes
+        // first, so the result can be one place wider than asked.
+        need: = room - sign_len
+        $count: Sz = (3 * need + 4) / 4 if need > 0 else 0
+        if count < digits.len
+            count = digits.len
+        if is_neg
+            w.c('-')
+        for i in Range.asc(count)
+            at: = i - (count - digits.len)
+            w.c(digits[at] if at >= 0 else '0')
+            remain: = count - 1 - i
+            if remain % 3 == 0 && remain > 0
+                w.c(',')
+        return w
+    comma_count: Sz = (digits.len - 1) / 3 if comma && digits.len > 0 else 0
+    content_len: = sign_len + digits.len + comma_count
+    pad_len: Sz = room - content_len if content_len < room else 0
 
     if fill != '0'
         for _k in Range.asc(pad_len)
@@ -379,11 +396,12 @@ priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8,
     if fill == '0'
         for _k in Range.asc(pad_len)
             w.c('0')
-    for i in Range.asc(digits.len)
-        w.c(digits[i])
-        remain: = digits.len - 1 - i
-        if comma && remain % 3 == 0 && remain > 0
-            w.c(',')
+    // One write per run of digits between separators, not one per digit: a write to a file costs
+    // a call into C each.
+    head: = digits.len - 3 * comma_count
+    w.s(U8[]::{ .ptr = digits.ptr, .len = head })
+    for g in Range.asc(comma_count)
+        w.c(',').s(U8[]::{ .ptr = digits.ptr + head + 3 * g, .len = 3 })
     return w
 
 priv fn write_float_special(w: Writer, v: F64, width: Sz): Bool //< writes NaN and infinity
@@ -424,12 +442,6 @@ priv fn bit_length(v: U64): I32
         n += 1
     return n
 
-priv fn cmp_sum(r: Bignat@, m: Bignat@, s: Bignat@): I32 //<
-    //< Compares r + m with s (-1 / 0 / 1)
-    $t: = r$
-    t.add(m)
-    return t.cmp(s)
-
 priv fn next_digit(r: Bignat$@, s: Bignat@): U8 //<
     //< Extracts one digit: d = floor(r / s), and r becomes r mod s
     //<
@@ -463,40 +475,97 @@ priv fn increment_digits(d: Float_digits$@) //< adds 1 to the last digit
     d.n += 1
     d.k += 1
 
-priv fn generate_digits(bf: Binary_float, cutoff_mode: Bool, cutoff: I32): Float_digits //<
-    //< The decimal digits of the value f x 2^e (f > 0)
+fn floor_log10_pow2(e: I32, three_quarters: Bool): I32 //<
+    //< floor(log10(2^e)), or of (3/4) x 2^e, exact for e within ±1100
+    return I32::((I64::e * 661971961083I64 - (274743187321I64 if three_quarters else 0I64)) >> 41)
+
+priv fn round_to_odd(g: Wide, cp: U64): U64 //<
+    //< floor(g x cp / 2^127), its lowest bit set unless the 63 bits below the point are all 0
     //<
-    //< r / s is the value, and m- and m+ are the lower and upper margins (the distance to the
-    //< midpoint with the neighbouring value). After scaling by a power of 10, it multiplies by 10
-    //< one digit at a time and takes the integer part. In the shortest form it stops when either
-    //< the value truncated at the digits so far or the next value up is inside the margin (for an
-    //< even significand the boundary counts too, because the parser rounds exact halves to even).
-    $out: Float_digits = ::{}
+    //< It is Schubfach's r_o, with g split at bit 63 as the paper splits it.
+    //< Caution: **Do not let the bits further down set it.** g is 10^-k rounded up, and that
+    //< excess shows only there: counted, it turns a value exactly between two decimals into one
+    //< just above.
+    g1: = (g.hi << 1U64) | (g.lo >> 63U64)
+    g0: = g.lo & 0x7FFFFFFFFFFFFFFFU64
+    y: = bignat.mul_wide(g1, cp)
+    z: = (y.lo >> 1U64) + bignat.mul_wide(g0, cp).hi
+    return (y.hi + (z >> 63U64)) | (((z & 0x7FFFFFFFFFFFFFFFU64) + 0x7FFFFFFFFFFFFFFFU64) >> 63U64)
+
+priv fn digits_of(out: Float_digits$@, f: U64, e: I32) //<
+    //< Puts the digits of f x 10^e in out, which holds none yet, trailing 0s dropped
+    $len: Sz = 0
+    $x: = f
+    for x != 0U64
+        len += 1
+        x /= 10U64
+    $v: = f
+    for i in Range.desc(len)
+        d: = U8::(v % 10U64)
+        v /= 10U64
+        if out.n == 0 && d == 0U8
+            continue // a trailing 0 is left out
+        if out.n == 0
+            out.n = i + 1
+        out.digits[i] = d + '0'
+    out.k = e + I32::len
+
+priv fn shortest_digits(out: Float_digits$@, bf: Binary_float) //<
+    //< Puts in out the fewest digits that read back as f x 2^e (f > 0), the nearest, ties to even
+    //<
+    //< It is Raffaello Giulietti's Schubfach. Every decimal inside the rounding interval reads back
+    //< as the value; the interval is narrower than 10^(k+1) and at least 10^k wide. So of the
+    //< multiples of 10^(k+1) at most one is inside, and of the multiples of 10^k at least one: s
+    //< and t, either side of the value. A shorter one wins, else the nearer.
+    c: = bf.f
+    // An odd significand leaves the interval's ends out: the parser rounds a tie to even.
+    out_bit: = c & 1U64
+    cb: = c << 2U64
+    $cbl: = cb - 2U64
+    $k: = floor_log10_pow2(bf.e, false)
+    if bf.unequal // the gap below a power of 2 is half the gap above
+        cbl = cb - 1U64
+        k = floor_log10_pow2(bf.e, true)
+    h: = U64::(bf.e + bignat.floor_log2_pow10(-k) + 2)
+    // g is 10^-k at 126 bits, rounded up; times c x 4 x 2^h it is 4 x the value / 10^k.
+    p: = bignat.pow10_128(-k)
+    g_lo: = ((p.lo >> 2U64) | (p.hi << 62U64)) + 1U64
+    g: = Wide::{ .hi = (p.hi >> 2U64) + (1U64 if g_lo == 0U64 else 0U64), .lo = g_lo }
+    vb: = round_to_odd(g, cb << h)
+    vbl: = round_to_odd(g, cbl << h)
+    vbr: = round_to_odd(g, (cb + 2U64) << h)
+    s: = vb >> 2U64
+    if s >= 10U64
+        sp: = s / 10U64 * 10U64
+        tp: = sp + 10U64
+        sp_in: = vbl + out_bit <= sp << 2U64
+        tp_in: = (tp << 2U64) + out_bit <= vbr
+        if sp_in != tp_in
+            digits_of(out, sp if sp_in else tp, k)
+            return
+    t: = s + 1U64
+    s_in: = vbl + out_bit <= s << 2U64
+    t_in: = (t << 2U64) + out_bit <= vbr
+    if s_in != t_in
+        digits_of(out, s if s_in else t, k)
+        return
+    mid: = (s + t) << 1U64
+    digits_of(out, s if vb < mid || (vb == mid && (s & 1U64) == 0U64) else t, k)
+
+// `#noinline` keeps its multiple-precision values (some 2KB) out of the caller's frame, which
+// the shortest form shares.
+#noinline
+priv fn fixed_digits(out: Float_digits$@, bf: Binary_float, cutoff: I32) //<
+    //< Puts in out, which holds none yet, the digits of f x 2^e (f > 0) down to 10^cutoff
+    //<
+    //< r / s is the value in multiple precision. Scaled by a power of 10 to 0.1 <= r / s < 1, it
+    //< is multiplied by 10 one digit at a time, and the remainder rounds the last digit.
     $r: = Bignat.from_u64(bf.f)
     $s: = Bignat.from_u64(1U64)
-    $m_plus: = Bignat.from_u64(1U64)
-    $m_minus: = Bignat.from_u64(1U64)
     if bf.e >= 0
-        shift: Sz = bf.e
-        if bf.unequal
-            r.shl(shift + 2)
-            s.shl(2)
-            m_plus.shl(shift + 1)
-            m_minus.shl(shift)
-        else
-            r.shl(shift + 1)
-            s.shl(1)
-            m_plus.shl(shift)
-            m_minus.shl(shift)
+        r.shl(bf.e)
     else
-        shift: Sz = -bf.e
-        if bf.unequal
-            r.shl(2)
-            s.shl(shift + 2)
-            m_plus.shl(1)
-        else
-            r.shl(1)
-            s.shl(shift + 1)
+        s.shl(-bf.e)
     // Estimating k: log10(v) ~= (e + bits - 1) x log10(2). 1233 / 4096 approximates log10(2) from
     // below, and the adjustment below absorbs the +/-1 error.
     est_bits: I64 = I64::bf.e + I64::bit_length(bf.f) - 1I64
@@ -506,93 +575,40 @@ priv fn generate_digits(bf: Binary_float, cutoff_mode: Bool, cutoff: I32): Float
         s.mul_pow10(k)
     else
         r.mul_pow10(-k)
-        m_plus.mul_pow10(-k)
-        m_minus.mul_pow10(-k)
-    // The adjustment: make 0.1 <= (r + m+) / s < 1 (in the shortest form, high_ok decides whether
-    // the boundary is included). The fixed-precision form ignores the margins (the value itself
-    // decides where the digits are).
-    even: = (bf.f & 1U64) == 0U64
-    high_ok: = !cutoff_mode && even
-    low_ok: = !cutoff_mode && even
-    if cutoff_mode
-        m_plus = Bignat.zero()
-        m_minus = Bignat.zero()
     for
-        c: = cmp_sum(r@, m_plus@, s@)
-        if c > 0 || (c == 0 && (high_ok || cutoff_mode))
+        if r.cmp(s@) >= 0
             k += 1
             s.mul_small(10U32)
             continue
-        // When (r + m+) x 10 is less than s, k is too large (an exact match also moves down one,
-        // but only in the shortest form when the upper end is not included).
         $t: = r
-        t.add(m_plus@)
         t.mul_small(10U32)
-        c2: = t.cmp(s@)
-        if c2 < 0 || (c2 == 0 && !high_ok && !cutoff_mode)
+        if t.cmp(s@) < 0
             k -= 1
             r.mul_small(10U32)
-            m_plus.mul_small(10U32)
-            m_minus.mul_small(10U32)
             continue
         break
     out.k = k
-    if cutoff_mode
-        // Down to the 10^cutoff digit. When there is no digit in that range, it only rounds to 0
-        // or to 10^cutoff.
-        if k < cutoff
-            return out
-        if k == cutoff
-            $twice: = r
-            twice.shl(1)
-            if twice.cmp(s@) > 0
-                out.digits[0] = '1'
-                out.n = 1
-                out.k = cutoff + 1
-            return out
-        for _i in Range.asc(k - cutoff)
-            r.mul_small(10U32)
-            out.digits[out.n] = next_digit(r@, s@) + '0'
-            out.n += 1
-        // Rounds by the remainder: above half it carries, and exactly half rounds to the even
-        // digit.
+    // When there is no digit down to 10^cutoff, it only rounds to 0 or to 10^cutoff.
+    if k < cutoff
+        return
+    if k == cutoff
         $twice: = r
         twice.shl(1)
-        c: = twice.cmp(s@)
-        if c > 0 || (c == 0 && ((out.digits[out.n - 1] - '0') & 1U8) == 1U8)
-            increment_digits(out@)
-        return out
-    // The shortest form. For each digit written, it checks whether the truncated value (tc1) or the
-    // rounded-up value (tc2) is inside the rounding interval.
-    $done: = false
-    for !done
+        if twice.cmp(s@) > 0
+            out.digits[0] = '1'
+            out.n = 1
+            out.k = cutoff + 1
+        return
+    for _i in Range.asc(k - cutoff)
         r.mul_small(10U32)
-        m_plus.mul_small(10U32)
-        m_minus.mul_small(10U32)
-        d: = next_digit(r@, s@)
-        c_low: = r.cmp(m_minus@)
-        tc1: = c_low < 0 || (c_low == 0 && low_ok)
-        c_high: = cmp_sum(r@, m_plus@, s@)
-        tc2: = c_high > 0 || (c_high == 0 && high_ok)
-        $last: = d
-        if tc1 || tc2
-            done = true
-            if tc2 && !tc1
-                last += 1U8
-            else if tc1 && tc2
-                // Both are inside: take the nearer one. Exactly in the middle rounds to the even
-                // digit.
-                $twice: = r
-                twice.shl(1)
-                c: = twice.cmp(s@)
-                if c > 0 || (c == 0 && (d & 1U8) == 1U8)
-                    last += 1U8
-        out.digits[out.n] = last + '0'
+        out.digits[out.n] = next_digit(r@, s@) + '0'
         out.n += 1
-        if last == 10U8
-            out.digits[out.n - 1] = '9'
-            increment_digits(out@)
-    return out
+    // Rounds by the remainder: above half it carries, and exactly half rounds to the even digit.
+    $twice: = r
+    twice.shl(1)
+    c: = twice.cmp(s@)
+    if c > 0 || (c == 0 && ((out.digits[out.n - 1] - '0') & 1U8) == 1U8)
+        increment_digits(out)
 
 priv fn exponent_len(e: I32): Sz //< the number of exponent digits (the `21` of `e+21`)
     $n: Sz = 1
@@ -678,11 +694,11 @@ priv fn write_decomposed(w: Writer, bf: Binary_float, is_zero: Bool, is_neg: Boo
             d.n = 1
             d.k = 1
         else
-            d = generate_digits(bf, false, 0)
+            shortest_digits(d@, bf)
         return write_shortest(w, d@, is_neg, width, fill, comma)
     p: Sz = float_max_precision if precision > float_max_precision else precision
     if !is_zero
-        d = generate_digits(bf, true, -I32::p)
+        fixed_digits(d@, bf, -I32::p)
     return write_fixed(w, d@, p, is_neg, width, fill, comma)
 
 pub fn write_float( //< writes a floating-point number

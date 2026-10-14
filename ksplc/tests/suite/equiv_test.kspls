@@ -3,7 +3,8 @@
 //<
 //< It builds the same program (`tests/prog/equiv.kspls`) on the C and the LLVM backend, runs both
 //< and checks that their standard output agrees; the C is built under clang and gcc both, where
-//< both are installed, since each fills in what C leaves open (an evaluation order) its own way.
+//< both are installed, since each fills in what C leaves open (an evaluation order) its own way,
+//< and once more with C's traps for a misaligned access and a signed overflow.
 //< Caution: **Link through the harness's function.** List the libraries yourself and the two
 //< builds run under different conditions (Windows's stack size and the like), which shows as "a
 //< difference between the backends' output". The source is passed as a **relative path**
@@ -20,6 +21,41 @@ import "std/strfmt" as _strfmt
 import "std/verdict"
 
 priv const src: U8[] = "tests/prog/equiv.kspls"
+
+priv const trap_cflags: U8[][_] = ::{ "-std=c99", "-O0",
+    "-fsanitize=alignment,signed-integer-overflow",
+    "-fsanitize-trap=alignment,signed-integer-overflow" } //<
+        //< C's traps for what C leaves undefined and KSPL defines, which stop the program
+        //<
+        //< A trap needs no sanitizer library, so every C compiler the suite runs on can build it.
+        //< **At `-O0` a misaligned store or an `int` overflow still answers right**, so only a trap
+        //< shows that the C is undefined: a word store to a `#packed` field faults on a Cortex-M0.
+
+priv const trap_probe: U8[] =
+    """static int words[2];
+int main(void) {
+    volatile int one = 1;
+    int *q = (int *)((char *)words + one);
+    *q = 3;
+    return 0;
+}
+""" //< a misaligned store, which a build with trap_cflags must stop on
+
+priv const packed_fn: U8[] = "_wire_fill(" //<
+    //< how the IR names `wire_fill` (`tests/prog/equiv_shapes.kspls`)
+priv const packed_gep: U8[] = "_Wire, ptr " //< a GEP into `Wire` itself, not into `Wire_pair`
+
+priv const packed_ir_sample: U8[] =
+    """define void @x_wire_fill(ptr %ws) {
+    %1 = getelementptr inbounds %x_Wire, ptr %ws, i32 0, i32 1
+    store i32 7, ptr %1, align 1
+    %2 = getelementptr inbounds [2 x i32], ptr %1, i32 0, i32 1
+    store i32 8, ptr %2
+    store i8 1, ptr %1
+    %3 = load i32, ptr %1
+    store i32 9, ptr %ws
+}
+""" //< through `Wire`: two with no `align`, one with and a byte's; one access outside it
 
 priv struct Built //< the result of building and running
     //<
@@ -109,6 +145,64 @@ priv fn first_diff(a: U8[], b: U8[], arena: Arena$@): U8[] //< the first line th
                 .s(bl.get(i)).take()
     return arena.text().s("the line counts differ (C=\{al.len\} LLVM=\{bl.len\})").take()
 
+priv struct Packed_scan //< `packed_scan`'s answer
+    seen: Sz //< how many loads and stores went through a `Wire` field
+    bad: List<|U8[]|> //< those with no `align`, a line each
+
+priv fn ptr_operand(line: U8[]): U8[] //< the register a load, a store or a GEP reaches through
+    switch line.find_str(", ptr ")
+    case .some(at)
+        rest: = line.sub_from(at + 6)
+        switch rest.find_str(",")
+        case .some(end)
+            return rest.sub(0, end)
+        case .none
+            return rest.trim_spaces()
+    case .none
+        return ""
+
+priv fn defined_reg(line: U8[]): U8[] //< the register a line defines (`%5 = ...`), empty if none
+    switch line.find_str(" = ")
+    case .some(at)
+        return line.sub(0, at) if line.starts_with("%") else ""
+    case .none
+        return ""
+
+priv fn holds(regs: List<|U8[]|>@, reg: U8[]): Bool //< whether reg is one of regs
+    for r in regs
+        if r.equals(reg)
+            return true
+    return false
+
+priv fn packed_scan(ir: U8[], arena: Arena$@): Packed_scan //<
+    //< The loads and stores `wire_fill` makes through a `#packed` field, and those with no `align`
+    //<
+    //< One without an `align` takes its type's own alignment, which a `Wire` field lacks; x86 runs
+    //< it unharmed, so the IR is read. A one-byte access needs none.
+    $out: = Packed_scan::{ .seen = 0, .bad = List<|U8[]|>.new(arena) }
+    $held: = List<|U8[]|>.new(arena)
+    $inside: = false
+    for line in ir.lines(arena)
+        if line.starts_with("define ") || line.starts_with("}")
+            inside = line.starts_with("define ") && line.find_str(packed_fn).is_some()
+            continue
+        t: = line.trim_spaces()
+        if !inside || t.len == 0
+            continue
+        through: = holds(held@, ptr_operand(t))
+        if t.find_str("= getelementptr ").is_some()
+            if through || t.find_str(packed_gep).is_some()
+                held.push(defined_reg(t))
+            continue
+        is_access: = t.find_str("= load ").is_some() || t.starts_with("store ")
+        is_byte: = t.find_str("= load i8,").is_some() || t.starts_with("store i8 ")
+        if !is_access || is_byte || !through
+            continue
+        out.seen += 1
+        if t.find_str(", align ").is_none()
+            out.bad.push(t)
+    return out
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     dir: = harness.sandbox("equiv")
@@ -127,9 +221,11 @@ fn main(): I32
     for i in Range.asc(lits.len)
         found.s(", " if i > 0 else "").s(lits.get(i))
     verdict.check("there is no binary literal in the generated C", lits.len == 0, found.take())
+    check_traps(work, c_gen, c.out, arena)
     alt_cc: = other_cc()
+    // **Mandatory where `KANSO_REQUIRE_BOTH_CC=1`** (set on Linux, whose image holds both).
     if alt_cc.len == 0
-        verdict.skip_check("the C output agrees under gcc and clang",
+        harness.require_or_skip("the C output agrees under gcc and clang", "KANSO_REQUIRE_BOTH_CC",
             "only one of the two C compilers is installed")
     else
         alt_exe: = fs.join(work, "c_alt.exe", arena)
@@ -149,4 +245,42 @@ fn main(): I32
         return harness.finish()
     verdict.check("the C and LLVM output agree", c.out.equals(l.out),
         first_diff(c.out, l.out, arena))
+    check_packed_ir(fs.join(work, "l.ll", arena), arena)
     return harness.finish()
+
+priv fn check_traps(work: U8[], c_gen: U8[], want: U8[], arena: Arena$@) //<
+    //< The C built with trap_cflags prints what the plain build does, and the traps can fire
+    probe_c: = fs.join(work, "trap_probe.c", arena)
+    io.write_file(probe_c, trap_probe) catch
+        verdict.check("a misaligned store stops a build with C's traps", false,
+            "cannot write the probe")
+        return
+    probe_exe: = fs.join(work, "trap_probe.exe", arena)
+    pb: = harness_build.build_exe(U8[][]::{ probe_c }, probe_exe, U8[][]::trap_cflags)
+    verdict.check("a misaligned store stops a build with C's traps",
+        pb.code == 0 && harness.run(U8[][]::{ probe_exe }).code != 0, pb.out)
+    trap_exe: = fs.join(work, "c_trap.exe", arena)
+    tb: = harness_build.build_exe(U8[][]::{ c_gen }, trap_exe, U8[][]::trap_cflags)
+    if tb.code != 0
+        verdict.check("the C build with C's traps", false, tb.out)
+        return
+    t: = run_built(trap_exe, arena)
+    got: = t.out.lines(arena)
+    verdict.check("the C output agrees with C's traps for a misaligned access and a signed overflow",
+        t.out.equals(want),
+        arena.text().s("it ended with '").s(got.get(got.len - 1) if got.len > 0 else "")
+        .s("'; a trap stops it early, with a signal's exit code").take())
+
+priv fn check_packed_ir(ll: U8[], arena: Arena$@) //<
+    //< Every load and store genllvm makes through a `#packed` field carries the field's alignment
+    sample: = packed_scan(packed_ir_sample, arena)
+    verdict.check("the IR scan finds the accesses through a `#packed` field with no `align`",
+        sample.seen == 3 && sample.bad.len == 2,
+        arena.text().s("seen \{sample.seen\}, without `align` \{sample.bad.len\}").take())
+    ir: = io.read_file(ll) catch
+        verdict.check("a `#packed` field is loaded and stored at its alignment", false,
+            "cannot read the IR")
+        return
+    scan: = packed_scan(ir, arena)
+    verdict.check_list("a `#packed` field is loaded and stored at its alignment", scan.seen,
+        "accesses", scan.bad@, "give the load or store the field's `align` (op_load_place)")

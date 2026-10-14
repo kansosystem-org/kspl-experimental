@@ -18,6 +18,11 @@ import "std/subproc"
 
 pub const read_ms: I32 = 15000 //< how long the answer to a request that walks no files may take
 
+pub const walk_ms: I32 = 120000 //< how long a request that walks the workspace may take
+    //<
+    //< References and a rename read every file of the workspace, so a loaded machine (a Windows
+    //< `make ci` at `-j12`) takes many times `read_ms` over them.
+
 pub const send_ms: I32 = 15000 //< how long the server may go without reading what is sent to it
     //<
     //< A send that fails is not checked where it is made: the request after it then fails, and its
@@ -97,6 +102,17 @@ pub fn at_pos(uri: U8[], line: Sz, character: Sz, arena: Arena$@): json.Val //<
 pub fn empty_obj(arena: Arena$@): json.Val //< `{}`, the params of a request that takes none
     $b: = Json_builder.new(arena)
     return b.obj().build()
+
+pub fn answer( //< the reply to a request; `null` when none comes, so the check reading it fails
+    c: jsonrpc.Client$@,
+    method: U8[], //< the LSP method asked
+    params: json.Val, //< what it is asked with
+    timeout_ms: I32, //< how long the round trip may take
+    arena: Arena$@, //< where the reply goes
+): json.Val
+    got: = c.request(method, params, timeout_ms, arena) catch
+        return .null_val
+    return got.val
 
 pub fn hover_text(msg: json.Val): U8[] //< `result.contents.value` (the hover's body)
     //<

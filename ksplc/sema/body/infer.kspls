@@ -155,11 +155,14 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
                 expr_node.check_static_initializer(c)
 
     // pending.len is re-read on every iteration: infer_fn appends new instantiations to
-    // c.generics.pending, and a fixed length would drop them (the for-in sugar re-reads coll.len,
-    // which works while pending is a pointer). From here on the bodies are monomorphized templates.
+    // c.generics.pending, and a fixed length would drop them. From here on the bodies are
+    // monomorphized templates.
     c.set_in_generic_instance(true)
     defer c.set_in_generic_instance(false)
-    for pending in c.generics.pending
+    $pending_at: Sz = 0
+    for pending_at < c.generics.pending.len
+        pending: = c.generics.pending.get(pending_at)
+        pending_at += 1
         // Caution: **Drain the constraints before each body is checked.** Drained once outside the
         // loop, a violation by an instantiation made inside some body would be known only after its
         // method body is checked.
@@ -190,8 +193,11 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         // This body's depth in the chain; an instantiation made inside it is one deeper
         // (inst_chain_depth in sema/session/state.kspls).
         c.generics.inst_chain_depth = pending.depth
+        // What this body instantiates, and an error in it, name it (`Generic_state.analysing`).
+        c.generics.analysing = pending_at - 1
         pending.node.infer_fn(c) catch
             has_err = true
+        c.generics.analysing = -1
         c.generics.inst_chain_depth = 0
         c.generics.args.len = saved_args_len
 
@@ -233,7 +239,7 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
             c.generics.resolving_template_types = false
         child.mark_template_symbols_used(c)
 
-    c.check_import_symbols_exist()
+    c.bind_import_symbols()
     c.check_import_symbols_visible()
     c.check_redundant_import_alias()
     c.check_unused_imports()
@@ -286,7 +292,10 @@ impl Ast_node
                 c.check_ffi_safety(c.fn_ctx.ret_id, type_node)
         else
             c.fn_ctx.ret_id = I32::sema_type_env.Builtin_type_id.void_type
-        c.check_type_vis_leak(type_node, c.fn_ctx.effective_vis, "return type", "function")
+        // **`main`'s return reaches the start-up code alone**, which names no type, so a `priv`
+        // error type leaks to no code (and `main` itself cannot be narrowed to `priv`).
+        if !c.is_entry_main(r)
+            c.check_type_vis_leak(type_node, c.fn_ctx.effective_vis, "return type", "function")
 
         c.symtab.enter_scope()
         defer

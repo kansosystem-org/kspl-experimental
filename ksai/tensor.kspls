@@ -5,7 +5,7 @@
 //< auto-vectorization works, and it hands off to BLAS only in a `--define=blas` build. Read this
 //< file first.
 import "std/math"
-import "std/mem" { Arena, alloc_in, dealloc }
+import "std/mem" { Arena, dealloc }
 import "std/prng"
 import "std/str" { Str_builder }
 import "std/strfmt"
@@ -47,7 +47,7 @@ impl<|T|> Tensor<|T|>
         ndim: = shape.len
         $size: Sz = 1
 
-        shape_ptr: = Sz$@::alloc_in(arena, ndim * sizeof(Sz))
+        shape_ptr: = Sz$@::arena.alloc(ndim * sizeof(Sz))
         for $i: = I32::ndim - 1; i >= 0; i -= 1
             s: = shape[i]
             (shape_ptr + i)$ = s
@@ -76,14 +76,14 @@ impl<|T|> Tensor<|T|>
                 // To identify the caller: a panic has no call history (only `!` builds a trace),
                 // and several callers build the same shape. An arena's usage says which allocation
                 // this is (near the start means the first call).
-                // **Do not dereference a null arena**: null means "use the global heap"
-                // (mem.alloc_in).
+                // **Do not ask a null arena for its usage**: null means "use the global heap",
+                // which only `Arena.alloc` and the handouts built on it take.
                 arena_used: = arena.save().used if arena != null else -1
                 b.s(" arena_used=\{arena_used\}")
                 panic(b.slice())
             size *= s
 
-        data_ptr: = T$@::alloc_in(arena, size * sizeof(T))
+        data_ptr: = T$@::arena.alloc(size * sizeof(T))
         return Tensor<|T|>.from_raw_parts(data_ptr, shape_ptr, ndim, size, arena)
     pub fn free(r: Self$@) //< frees the elements and the shape
         // An arena's elements are freed with the arena, so there is no individual free.

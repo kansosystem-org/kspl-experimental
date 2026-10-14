@@ -35,6 +35,41 @@ fn test_const_copy_binding()
     verdict.pass("")
 
 // ==========================================
+// A row or an element of an immutable array, copied out, has the type a written one gives:
+// `r: I32[_] = m[1]` takes its length from the row (a field of array type too), and `P::ps[1]` is
+// a copy of a `P`. Each is the immutable form of its type, and compared with that mark both were
+// refused (`apply_type_coercion` in sema/body/coerce.kspls, `infer_cast_postfix` in
+// sema/body/postfix.kspls).
+// ==========================================
+priv struct Row_of_three //< a field of array type, read through an immutable value
+    a: I32[3]
+
+fn test_inferred_length_from_a_row()
+    verdict.start("[sema] a '[_]' length taken from an immutable row or a field test...")
+    m: I32[3][2] = ::{::{ 1, 2, 3 }, ::{ 4, 5, 6 } }
+    r: I32[_] = m[1]
+    $w: I32[_] = m[0]
+    w[0] = 10
+    h: = Row_of_three::{ .a = ::{ 7, 8, 9 } }
+    q: I32[_] = h.a
+    assert(r[2] == 6 && q[0] == 7, "'[_]' must copy the row and the field it is set to")
+    assert(w[0] == 10 && m[0][0] == 1, "writing the copy must not touch the original row")
+    assert(sizeof(r) == sizeof(I32[3]) && sizeof(q) == sizeof(I32[3]),
+        "'[_]' must take the length 3 from the row and the field")
+    verdict.pass("")
+
+fn test_cast_of_an_element_to_its_own_type()
+    verdict.start("[sema] a cast of an immutable element to its own type test...")
+    p: = Pair::pairs[1]
+    m: I32[3][2] = ::{::{ 1, 2, 3 }, ::{ 4, 5, 6 } }
+    $row: = I32[3]::m[1]
+    row[0] = 40
+    assert(p.a == 0.5, "the cast must copy the struct element")
+    assert(row[0] == 40 && row[2] == 6 && m[1][0] == 4,
+        "the cast copy of a row is writable and leaves the original alone")
+    verdict.pass("")
+
+// ==========================================
 // An immutable `F32` array holds the values as written. An LLVM `float` constant must round-trip
 // exactly through its decimal form, and `0.85` does not (format_f32_hex_literal in
 // gen/llvm/ctx.kspls writes it in hexadecimal). An element is `const_of(F32)`, so **a plain `F32`

@@ -84,46 +84,29 @@ priv fn char_class(c: U8): I32 //<
         return 2
     return 3
 
-priv fn pretokenize(text: U8[], arena: Arena$@): List<|U8[]|>$@ //<
-    //< The core of GPT-2's regular-expression splitting (a reduced ASCII version)
+priv fn chunk_end(text: U8[], start: Sz): Sz //<
+    //< Where the chunk starting at `start` ends: the core of GPT-2's regular-expression splitting
     //<
-    //< In a run of spaces, the last one is held back to join the next chunk as its leading space
-    //< (for example " foo" -> [" ", " foo"]).
-    //<
-    //< Otherwise a run of letters, of digits, or of other bytes makes one chunk; English
-    //< contractions ("'s") get no special handling (it matters little for code completion).
-    chunks: = List<|U8[]|>.create(arena)
+    //< A reduced ASCII version. In a run of spaces, the last one is held back to join the next
+    //< chunk as its leading space (" foo" -> [" ", " foo"]); otherwise a run of letters, of digits,
+    //< or of other bytes is one chunk. English contractions ("'s") get no special handling (it
+    //< matters little for code completion).
     n: = text.len
-    $i: Sz = 0
-    for i < n
-        if (text.ptr + i).is_space()
-            $j: = i
-            for j < n && (text.ptr + j).is_space()
-                j += 1
-            if j == n // trailing spaces become one chunk as they are
-                chunks.push(text.sub(i, j - i))
-                i = j
-                continue
-            if j - i > 1 // holds the last one back and makes the rest a space chunk
-                chunks.push(text.sub(i, j - i - 1))
-                i = j - 1
-            // here `i` is the one space held back (it becomes the next chunk's leading space)
-        // `start` uses the `i` that the space-run handling updated (which keeps the ranges from
-        // overlapping)
-        start: = i
-        $body: = i
-        if body < n && (text.ptr + body).is_space()
-            body += 1 // includes the single leading space
-        if body >= n
-            chunks.push(text.sub(start, n - start))
-            break
-        cls: = char_class((text.ptr + body)$)
-        $j: = body
-        for j < n && char_class((text.ptr + j)$) == cls
+    $body: = start
+    if (text.ptr + start).is_space()
+        $j: = start
+        for j < n && (text.ptr + j).is_space()
             j += 1
-        chunks.push(text.sub(start, j - start))
-        i = j
-    return chunks
+        if j == n // trailing spaces become one chunk as they are
+            return n
+        if j - start > 1 // the run but its last space
+            return j - 1
+        body = start + 1 // the one space leads the chunk after it
+    cls: = char_class((text.ptr + body)$)
+    $j: = body
+    for j < n && char_class((text.ptr + j)$) == cls
+        j += 1
+    return j
 
 pub struct Tokenizer //< the vocabulary and merge rules that turn text into token IDs
     pub vocab: Map<|U8[], I32|>$@ //< each word's byte sequence, mapped to its ID
@@ -131,7 +114,10 @@ pub struct Tokenizer //< the vocabulary and merge rules that turn text into toke
     priv merges: Map<|Bpe_key, I32|>$@
     priv merge_rank: Map<|Bpe_key, I32|>$@ //< a pair -> its rank (0 is first); true BPE needs it
     pub next_rank: I32 //< the rank the next `add_merge` gets; the call order is the rank
-    pub arena: Arena$@ //< the arena for every word and for what `encode` and `decode` return
+    pub arena: Arena$@ //< the arena for every word, every rule and every cached chunk
+        //<
+        //< **Nothing a call returns is put here** (`encode` and `decode` take the caller's arena),
+        //< so a tokenizer kept for a server's lifetime grows only up to `chunk_cache_cap`.
     priv chunk_cache: Map<|U8[], I32$[]|>$@ //< a chunk merged before -> its IDs
         //<
         //< **A text repeats its words**, and merging one again gives the same IDs; GPT-2's encoder
@@ -247,21 +233,27 @@ impl Tokenizer
                     continue
             throw .broken(name, i + 1)
 
-    pub fn encode( //< the token IDs for a text, allocated on the tokenizer's arena
+    pub fn encode( //< the token IDs for a text
         //<
-        //< Splits into chunks (pretokenize) and within each chunk merges the pair of the smallest
+        //< Splits into chunks (`chunk_end`) and within each chunk merges the pair of the smallest
         //< rank every time; no merge crosses a chunk, as during training.
         r: Self$@,
         text: U8[], //< the text; any byte sequence works, a byte the vocabulary lacks as `unk_id`
+        arena: Arena$@, //< the arena the list of IDs is allocated from; nothing else is
     ): List<|I32|>$@
-        tokens: = List<|I32|>.create(r.arena)
-        chunks: = pretokenize(text, r.arena)
-        for c in Range.asc(chunks.len)
-            r.bpe_chunk(chunks[c], tokens)
+        tokens: = List<|I32|>.create(arena)
+        $i: Sz = 0
+        for i < text.len
+            end: = chunk_end(text, i)
+            r.bpe_chunk(text.sub(i, end - i), tokens)
+            i = end
         return tokens
 
     priv fn bpe_chunk(r: Self$@, chunk: U8[], out: List<|I32|>$@) //<
         //< Merges one pre-split chunk by BPE, smallest rank first, and appends its token IDs to out
+        //<
+        //< **The merging is done in place at the end of `out`**, so a chunk not in the cache
+        //< allocates nothing on the tokenizer's arena unless the cache keeps it.
         // Otherwise a word or rule added since the cache started could merge a cached chunk anew.
         if r.cache_edits != r.edits
             r.chunk_cache = r.arena.create(Map<|U8[], I32$[]|>.new(r.arena))
@@ -272,56 +264,53 @@ impl Tokenizer
             for id in seen
                 out.push(id)
             return
-        ids: = List<|I32|>.create(r.arena)
+        first: = out.len
         for i in Range.asc(chunk.len)
             b: = U8[]::{ .ptr = chunk.ptr + i, .len = 1 }
-            ids.push(r.vocab.get(b) catch unk_id)
+            out.push(r.vocab.get(b) catch unk_id)
         for
-            if ids.len < 2
+            if out.len - first < 2
                 break
             $best_rank: I32 = -1
             $best_i: Sz = 0
-            for $i: Sz = 0; i < ids.len - 1; i += 1
-                key: = Bpe_key.of(ids[i], ids[i + 1])
+            for $i: Sz = first; i < out.len - 1; i += 1
+                key: = Bpe_key.of(out[i], out[i + 1])
                 rank: = r.merge_rank.get(key) catch -1
                 if rank != -1 && (best_rank == -1 || rank < best_rank)
                     best_rank = rank
                     best_i = i
             if best_rank == -1
                 break
-            key: = Bpe_key.of(ids[best_i], ids[best_i + 1])
+            key: = Bpe_key.of(out[best_i], out[best_i + 1])
             merged_id: = r.merges.get(key) catch -1
-            ids[best_i] = merged_id
-            for $j: Sz = best_i + 1; j < ids.len - 1; j += 1
-                ids[j] = ids[j + 1]
-            ids.len -= 1
-        for i in Range.asc(ids.len)
-            out.push(ids[i])
+            out[best_i] = merged_id
+            for $j: Sz = best_i + 1; j < out.len - 1; j += 1
+                out[j] = out[j + 1]
+            out.len -= 1
         // Caution: **Stop filling at the cap** instead of growing forever: a tokenizer kept for a
         // server's lifetime sees an endless stream of new words.
         if r.chunk_cache.len < chunk_cache_cap
-            r.chunk_cache.set(r.arena.dup_str(chunk), ids.slice())
+            $kept: = List<|I32|>.new_with_cap(out.len - first, r.arena)
+            for id in out.sub_from(first)
+                kept.push(id)
+            r.chunk_cache.set(r.arena.dup_str(chunk), kept.slice())
 
-    pub fn decode( //< the text for the IDs, allocated on the tokenizer's arena
+    pub fn decode( //< the text for the IDs
         r: Self$@,
         tokens: List<|I32|>$@, //< the IDs; an ID not in the vocabulary contributes nothing
+        arena: Arena$@, //< the arena the text is allocated from; nothing else is
     ): U8[]
-        $b: = Str_builder.new()
+        text: = arena.text()
         for id in tokens
-            s: = r.vocab_rev.get(Token_key::{ .val = id }) catch ""
-            b.s(s)
-        result: = r.arena.dup_str(b.slice())
-        b.free()
-        return result
+            text.s(r.decode_one(id))
+        return text.take()
 
     pub fn decode_one( //< the text for one ID, for printing each generated token as it comes
         //<
-        //< Sugar for calling `decode()` on a one-element list.
+        //< **It allocates nothing**: the result is the vocabulary's own bytes, which stay valid
+        //< while
+        //< the tokenizer's arena does. An ID not in the vocabulary gives an empty text.
         r: Self$@,
         id: I32, //< the single ID
     ): U8[]
-        arena: = Arena.new(1024)
-        defer arena.free()
-        list: = List<|I32|>.create(arena)
-        list.push(id)
-        return r.decode(list)
+        return r.vocab_rev.get(Token_key::{ .val = id }) catch ""

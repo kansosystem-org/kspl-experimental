@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 
 /* to_w is the side writing to the child's standard input, and from_w / from_err the sides reading
@@ -29,7 +30,71 @@ typedef struct {
     int pid; int to_w; int from_w; int from_err;
     int code; int reaped;
     int out_eof; int err_eof; /* The streams whose read returned EOF. poll skips them */
+    int group; /* 1 where the child leads a process group of its own (kspl_proc_start's 16) */
 } kspl_proc_t;
+
+/* ============================================================
+ * The groups a terminal's signals are passed on to.
+ * A child leading a group of its own is out of the terminal's foreground group, so the terminal's
+ * SIGINT, SIGQUIT and SIGHUP no longer reach it, and a starter they end would leave it running
+ * with nobody to stop it at its time limit. So while such a child runs, those and SIGTERM are
+ * passed on to every group held here, and the starter then ends by the signal as by default.
+ * Caution: **Take a signal only where it is at its default** (kspl_take_default_signal): a program
+ * that ignores or handles one has chosen. The blocks are never freed: the handler walks unlocked.
+ * ============================================================ */
+#define KSPL_GROUP_BLOCK 64
+typedef struct kspl_group_block {
+    volatile sig_atomic_t pid[KSPL_GROUP_BLOCK]; /* a group's number (its leader's pid), or 0 */
+    struct kspl_group_block *volatile next;
+} kspl_group_block;
+static kspl_group_block *volatile kspl_groups = NULL;
+static pthread_mutex_t kspl_group_lock = PTHREAD_MUTEX_INITIALIZER;
+static const int kspl_group_signals[4] = {SIGINT, SIGQUIT, SIGHUP, SIGTERM};
+
+static void kspl_group_pass_on(int sig) {
+    for (kspl_group_block *b = kspl_groups; b != NULL; b = b->next) {
+        for (int i = 0; i < KSPL_GROUP_BLOCK; i++) {
+            pid_t g = (pid_t)b->pid[i];
+            if (g > 0) kill(-g, sig);
+        }
+    }
+    /* Still blocked inside the handler, the signal is taken at its default once this returns. */
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+/* Puts `to` in the first slot holding `from`: a hold is 0 → pid, a release pid → 0. Where a hold
+ * finds every block full, a new block goes on the end, filled before it is linked, as the handler
+ * may walk it at any moment. Returns 0 where no block could be had. */
+static int kspl_group_swap(pid_t from, pid_t to) {
+    static int taken = 0;
+    kspl_group_block *b, *last = NULL;
+    int done = 0;
+    pthread_mutex_lock(&kspl_group_lock);
+    if (to != 0 && !taken) {
+        for (int k = 0; k < 4; k++) {
+            kspl_take_default_signal(kspl_group_signals[k], kspl_group_pass_on);
+        }
+        taken = 1;
+    }
+    for (b = kspl_groups; b != NULL && !done; b = b->next) {
+        for (int i = 0; i < KSPL_GROUP_BLOCK && !done; i++) {
+            if ((pid_t)b->pid[i] == from) {
+                b->pid[i] = (sig_atomic_t)to;
+                done = 1;
+            }
+        }
+        last = b;
+    }
+    if (!done && to != 0 && (b = (kspl_group_block *)calloc(1, sizeof(kspl_group_block))) != NULL) {
+        b->pid[0] = (sig_atomic_t)to;
+        if (last != NULL) last->next = b;
+        else kspl_groups = b;
+        done = 1;
+    }
+    pthread_mutex_unlock(&kspl_group_lock);
+    return done || to == 0;
+}
 
 /* Writes all len bytes to the child's standard input: 0 when all of it went, -1 when no byte went
  * for timeout_ms in a row (what went by then stays written), -2 when the child closed its standard
@@ -106,6 +171,14 @@ static int kspl_proc_status_code(int st) {
     return -1;
 }
 
+/* Marks it reaped, with the number where `st` holds one (`got`), and lets its group go from the
+ * signals passed on. */
+static void kspl_proc_reaped(kspl_proc_t *h, int st, int got) {
+    h->reaped = 1;
+    if (got) h->code = kspl_proc_status_code(st);
+    if (h->group) (void)kspl_group_swap((pid_t)h->pid, 0);
+}
+
 /* Closes the child's standard input to hand it an EOF.
    Caution: **Without this, "everything is handed over" cannot be told**; a filter waits for it
  * before answering. Calling it twice is harmless (-1 marks closed). */
@@ -118,15 +191,19 @@ KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     }
 }
 
-/* Stops and reaps it, and closes the pipes.
+/* Stops and reaps it, and closes the pipes. A child leading a group of its own is stopped with
+ * its whole group: what it started goes with it.
    Caution: **Do not send a signal to a child already reaped.** The OS may reuse the pid, and the
- * SIGKILL stops an unrelated process (kspl_proc_alive often reaps first). */
+ * SIGKILL stops an unrelated process (kspl_proc_alive often reaps first). Until it is reaped, its
+ * pid, and so its group's number, is still its own. */
 KSPL_LINK void kspl_proc_kill(I64 handle) {
     if (handle == 0) return;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (!h->reaped) {
-        kill(h->pid, SIGKILL);
-        waitpid(h->pid, NULL, 0);
+        int st = 0;
+        kill(h->group ? -h->pid : h->pid, SIGKILL);
+        while (waitpid(h->pid, &st, 0) < 0 && errno == EINTR) {}
+        kspl_proc_reaped(h, st, 1);
     }
     kspl_proc_free(h);
 }
@@ -140,8 +217,7 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
     if (!h->reaped) {
         int st = 0;
         while (waitpid(h->pid, &st, 0) < 0 && errno == EINTR) {}
-        h->reaped = 1;
-        h->code = kspl_proc_status_code(st);
+        kspl_proc_reaped(h, st, 1);
     }
     I32 code = (I32)h->code;
     kspl_proc_free(h);
@@ -180,8 +256,7 @@ KSPL_LINK Bool kspl_proc_alive(I64 handle) {
     if (r == 0) return true;
     /* It was reaped (or there is nobody to reap).
        Caution: **The number is remembered here** — asked next time, waitpid no longer answers. */
-    h->reaped = 1;
-    if (r > 0) h->code = kspl_proc_status_code(st);
+    kspl_proc_reaped(h, st, r > 0);
     return false;
 }
 #else
@@ -193,6 +268,7 @@ typedef struct {
     HANDLE proc; HANDLE to_w; HANDLE from_w; HANDLE from_err;
     int code; int reaped;
     int out_eof; int err_eof;
+    HANDLE job; /* the job object the child and what it starts are in, or NULL (the POSIX group) */
 } kspl_proc_t;
 
 /* The same contract as the POSIX side, the idle limit included. The end is put in PIPE_NOWAIT, so a
@@ -247,6 +323,7 @@ static I32 kspl_proc_read_end(HANDLE pipe, U8 *buf, Sz cap, I32 timeout_ms) {
 /* Closes the process handle and the pipe ends still open, and frees the handle. */
 static void kspl_proc_free(kspl_proc_t *h) {
     CloseHandle(h->proc);
+    if (h->job != NULL) CloseHandle(h->job); /* no kill on close: what is left runs on, as on POSIX */
     if (h->to_w != NULL) CloseHandle(h->to_w);
     if (h->from_w != NULL) CloseHandle(h->from_w);
     if (h->from_err != NULL) CloseHandle(h->from_err);
@@ -263,11 +340,16 @@ KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     }
 }
 
+/* The same contract as the POSIX side: a child in a job is stopped with the whole job, and one
+ * already seen to end is only tidied, as the POSIX side can no longer name its group. */
 KSPL_LINK void kspl_proc_kill(I64 handle) {
     if (handle == 0) return;
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
-    TerminateProcess(h->proc, 1);
-    WaitForSingleObject(h->proc, INFINITE);
+    if (!h->reaped) {
+        if (h->job != NULL) TerminateJobObject(h->job, 1);
+        else TerminateProcess(h->proc, 1);
+        WaitForSingleObject(h->proc, INFINITE);
+    }
     kspl_proc_free(h);
 }
 

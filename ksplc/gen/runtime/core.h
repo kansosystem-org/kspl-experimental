@@ -1,8 +1,9 @@
 /* The "declaration half" of the C runtime's preamble header (common to both targets).
  * **Only macros, typedefs, extern declarations and static inline functions**: this enters every
  * generated unit, so a definition with external linkage would be doubled (it goes in core.c).
- * **The four run-time checks** (`kspl_bounds_check`, `kspl_div_check`, `kspl_sdiv` / `kspl_smod`,
- * `kspl_shift_check`) differ per target only in what a breach does; the meaning is settled here.
+ * **The five run-time checks** (`kspl_bounds_check`, `kspl_div_check`, `kspl_sdiv` / `kspl_smod`,
+ * `kspl_shift_check`, `kspl_tag_check`) differ per target only in what a breach does; the meaning
+ * is settled here.
  * The signed pair is below, the rest in hosted.h and freestanding.h. **Signed `/` `%` never go
  * out bare**: a minimum by -1 is undefined in C, so `a / -1` wraps to -a and `a % -1` is 0.
  * **Widths are `int64_t`, not `ptrdiff_t`**: a 32-bit target truncates an `I64`, and a non-zero

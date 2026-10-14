@@ -10,7 +10,6 @@ import "std/chars"
 import "std/ds" { Map }
 import "std/mem" { Arena }
 import "std/str"
-import "std/sys"
 import "std/thread"
 import "std/verdict"
 
@@ -45,13 +44,13 @@ fn test_error_trace(arena: Arena$@)
     // The chain's length is 1 throw step + 2 `!` steps = 3. The 20 failures above must not appear
     // here.
     level1() catch
-        depth: = sys.kspl_error_trace_depth()
+        depth: = kspl_error_trace_depth()
         assert(depth == 3, "the trace must hold this error's chain only")
 
     // Raising it once more in a row does not add to it (the chain starts over).
     _ignored: = handled_misses(arena)
     level1() catch
-        depth: = sys.kspl_error_trace_depth()
+        depth: = kspl_error_trace_depth()
         assert(depth == 3, "a second chain must not stack onto the first")
 
     verdict
@@ -62,7 +61,7 @@ fn test_error_trace(arena: Arena$@)
 #export
 fn trace_on_other_thread(arg: I32$@): Void$@
     level1() catch
-        arg$ = sys.kspl_error_trace_depth()
+        arg$ = kspl_error_trace_depth()
     return null
 
 fn test_error_trace_per_thread()
@@ -72,7 +71,7 @@ fn test_error_trace_per_thread()
     t: = thread.Thread.spawn<|I32|>(trace_on_other_thread, theirs@)
         catch panic("thread spawn failed")
     t.join_and_free()
-    mine: = sys.kspl_error_trace_depth()
+    mine: = kspl_error_trace_depth()
     assert(theirs == 3, "the other thread records its own chain of three")
     assert(mine == 1, "this thread's route of one survives the other's")
     verdict.pass("each thread keeps its own failure's route.")
@@ -98,12 +97,12 @@ priv fn pinned1(): Void!Probe_error
 fn test_error_trace_lines()
     verdict.start("[trace] each frame of the route names the line of its throw or `!` test...")
     pinned1() catch
-        assert(sys.kspl_error_trace_depth() == 3, "the route has the three steps")
+        assert(kspl_error_trace_depth() == 3, "the route has the three steps")
         for i in Range.asc(3)
             $file: U8@ = null
             $func: U8@ = null
             $line: I32 = 0
-            sys.kspl_get_trace_frame_info(I32::i, file@, func@, line@)
+            kspl_get_trace_frame_info(I32::i, file@, func@, line@)
             assert(Sz::line == pinned_lines[i], "a frame names the line its step stands on")
     verdict.pass("the throw and each `!` are recorded at their own lines.")
 

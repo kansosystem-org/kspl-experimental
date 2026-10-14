@@ -38,8 +38,16 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         //< a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the
         //< round trip. A byte that is not well-formed UTF-8 is written as U+FFFD.
         r: Self$@,
-        src: U8[], //< the plain text, not yet escaped
+        src: U8[], //< the plain text, not yet escaped; it may be a view of this builder's bytes
     ): Self$@
+        // Caution: **Escape from a copy when `src` lies in this builder's memory.** A write can
+        // move the buffer out from under it, and what is written can land on bytes not yet read.
+        if r.holds(src)
+            copy: = U8$@::alloc(src.len)
+            mem.copy(Void$@::copy, Void$@::src.ptr, src.len)
+            r.escape_and_append(U8[]::{ .ptr = copy, .len = src.len })
+            dealloc(Void$@::copy)
+            return r
         $i: Sz = 0
         for i < src.len
             c: = (src.ptr + i)$
@@ -102,9 +110,15 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
 
     #inline
     pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
+        //<
+        //< `s` may be a view of this builder's own bytes (`b.s(b.slice())`).
         if s.len > 0
-            r.reserve(r.len + s.len)
-            mem.copy(Void$@::(r.ptr + r.len), Void$@::s.ptr, s.len)
+            // Caution: **Read `s` before the old buffer is freed, and with `move`.** It may be a
+            // view of this buffer: growing frees it, and a view taken before `clear()` can overlap
+            // where the bytes land.
+            old: = r.grow(r.len + s.len)
+            mem.move(Void$@::(r.ptr + r.len), Void$@::s.ptr, s.len)
+            dealloc(Void$@::old)
             r.len += s.len
         return r
 
@@ -123,8 +137,15 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         r: Self$@,
         new_cap: Sz, //< how many bytes must fit; a smaller value does nothing
     )
+        dealloc(Void$@::r.grow(new_cap))
+
+    priv fn grow(r: Self$@, new_cap: Sz): U8$@ //<
+        //< Makes room for new_cap bytes, and returns the old buffer for the caller to free
+        //<
+        //< Null when nothing was replaced. The caller frees it only after reading what it needs
+        //< from it.
         if r.cap >= new_cap
-            return
+            return null
         $cap: Sz = 8 if r.cap == 0 else r.cap
         for cap < new_cap
             doubled: = cap * 2
@@ -138,11 +159,17 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         new_ptr: = U8$@::alloc(cap)
         if r.len > 0
             mem.copy(Void$@::new_ptr, Void$@::r.ptr, r.len)
-        // Even at len 0 an old buffer (cap > 0) would leak, so the check uses cap, not len
-        if r.cap > 0
-            dealloc(Void$@::r.ptr)
+        // Caution: **Decide by cap, not by ptr or len.** `free()` leaves ptr behind with cap 0, and
+        // an old buffer at len 0 still has to be freed.
+        old: U8$@ = r.ptr if r.cap > 0 else null
         r.ptr = new_ptr
         r.cap = cap
+        return old
+
+    priv fn holds(r: Self@, s: U8[]): Bool //< whether `s` overlaps the memory this builder holds
+        at: = Sz::s.ptr
+        base: = Sz::r.ptr
+        return r.cap > 0 && s.len > 0 && at < base + r.cap && base < at + s.len
 
     pub fn slice(r: Self$@): U8$[] //< a view of what has been written, valid until it grows
         return U8$[]::{ .ptr = r.ptr, .len = r.len }
@@ -239,8 +266,7 @@ impl U8[]
             case .none
                 break
         b.s(r.sub_from(pos))
-        // `Arena.text` and `dup_str` need an arena; `alloc_in` takes null as the heap.
-        out: = U8$@::mem.alloc_in(arena, b.len + 1)
+        out: = U8$@::arena.alloc(b.len + 1)
         mem.copy(Void$@::out, Void$@::b.ptr, b.len)
         (out + b.len)$ = 0U8
         return U8[]::{ .ptr = out, .len = b.len }
@@ -272,7 +298,7 @@ impl U8[]
         //< taken; a List is a small struct.
         r: U8[],
         parts: List<|U8[]|>, //< the pieces, taken by value so a call's result can be passed directly
-        arena: Arena$@, //< where the joined string goes
+        arena: Arena$@, //< where the joined string goes; null means the heap, freed with `dealloc`
     ): U8[]
         b: = arena.text()
         for i in Range.asc(parts.len)
@@ -289,10 +315,18 @@ impl U8[]
         //< The reason is in "After `\`, an alphanumeric is accepted only in a defined escape" in
         //< std/docs/DESIGN.md.
         r: U8[],
-        arena: Arena$@, //< where the unescaped bytes go
+        arena: Arena$@, //< where the unescaped bytes go; null means the heap, freed with `dealloc`
     ): U8[]!Str_error
         // The output is never longer than the input, so r.len + 1 is enough.
         buf_ptr: = U8$@::arena.alloc(r.len + 1)
+        // A refused text leaves the caller nothing: on the heap the buffer goes back.
+        return r.unescape_into(buf_ptr) catch e
+            if arena == null
+                dealloc(Void$@::buf_ptr)
+            throw e
+
+    priv fn unescape_into(r: U8[], buf_ptr: U8$@): U8[]!Str_error //<
+        //< Writes the bytes the literal text means to buf_ptr, which has room for r.len + 1
         $w: Sz = 0
         // Caution: **`Sz`, as the length is.** Left to the literal's `I32`, it wraps past 2 GiB of
         // input, and the reads go before the start while `w` writes past the buffer's end.
@@ -430,13 +464,18 @@ impl Arena_text: Writer //< so it can be used anywhere a `Writer` is expected
 
 impl Arena_text
     pub fn take(r: Self$@): U8[] //< copies the text into the arena and frees the builder
+        //<
+        //< On the heap, the text is the caller's to free with `dealloc(Void$@::t.ptr)`.
         out: = U8[]::r.arena.dup_str(r.b.slice())
         r.b.free()
+        // On the heap the builder is a block of its own, which nothing else frees.
+        if r.arena == null
+            mem.dealloc(Void$@::r)
         return out
 
 impl Arena
     pub fn text(r: Self$@): Arena_text$@ //< a builder for one string in this arena
         //<
         //< The builder is in the arena too, so `.s(…)` can chain (a method's receiver must be a
-        //< place).
+        //< place). With a null arena both are on the heap, and `take` frees the builder.
         return r.create(Arena_text::{ .b = Str_builder.new(), .arena = r })

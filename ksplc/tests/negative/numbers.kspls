@@ -28,6 +28,41 @@ fn of_float(x: F64): Bool
 
 fn main(): I32
   return I32::of(2) + I32::of_float(0.5)
+// ==== case cast_to_enum
+//< A cast to an enum gives one of its variants, or is refused
+//<
+//< A constant that is none of the tags is refused here; a value known only at run time is checked
+//< there (the case enum_cast_from_no_tag in `../runtime/stops.kspls`). **Let it through and an
+//< exhaustive `switch` takes a value it never lists.** Only an integer or another enum converts to
+//< a scalar enum, and nothing to a tagged union.
+// EXPECT: cannot cast 300 to
+// EXPECT: cannot cast 8 to
+// EXPECT: cannot cast 'F64' to
+// EXPECT: cannot cast 'Bool' to
+// EXPECT: with payloads; such a value is built from one of its
+// EXPECT-NOT: cannot cast 1 to
+// EXPECT-NOT: cannot cast 200 to
+priv enum E
+  a
+  b
+
+priv enum Wide: U8
+  low = 7
+  high = 200
+
+priv enum T
+  some(x: I32)
+  empty
+
+fn main(): I32
+  _ok: = E::1
+  _bad: = E::300
+  _high: = Wide::200
+  _not_listed: = Wide::8
+  _from_float: = E::1.5
+  _from_bool: = E::true
+  _tagged: = T::1
+  return 0
 // ==== case compound_assign_operands
 //< That ksplc gives a compound assignment the operand checks `a = a op b` gets
 //<
@@ -60,6 +95,7 @@ pub fn main(): I32
 //< Caution: **Not the literal `0` alone**: a `const`, a fold and `/=` count, unsigned too.
 
 // EXPECT: division or modulo by zero
+// EXPECT: Finished with 6 error(s)
 // EXPECT-NOT: [W0
 import "std/io"
 
@@ -102,6 +138,7 @@ fn main(): I32
 //<
 //< An array is not a slice, and Rust and C convert one implicitly, so a reader from either writes
 //< `buf.sub(...)`. The note on importing an extension method points the wrong way there.
+// EXPECT: error: type 'U8$[8]' has no field or method named 'sub'
 // EXPECT: a fixed-length array is not a slice
 // EXPECT: '(U8$[]::x).sub(…)', with x the array
 // EXPECT-NOT: an extension method is visible only where
@@ -109,6 +146,32 @@ fn main(): I32
   $buf: U8[8] = ::{}
   n: = buf.sub(0, 4).len
   return I32::n
+// ==== case float_literal_out_of_range
+//< A floating-point literal its type holds only as infinity, or as zero though it is not, is refused
+//<
+//< C turns either into the other value with at most a warning, and none for a `float` at all. The
+//< type comes from the declaration, a constant, an argument; a subnormal and an exact zero pass.
+// EXPECT: float_literal_out_of_range.kspls:14:22: error: literal '1.0e39' becomes infinity in type 'F32'
+// EXPECT: literal '1.0e300' becomes infinity in type 'F32'
+// EXPECT: literal '1.0e400' becomes infinity in type 'F64'
+// EXPECT: literal '1.0e-400' becomes zero in type 'F64'
+// EXPECT: literal '1.0e-50' becomes zero in type 'F32'
+// EXPECT: Finished with 5 error(s)
+priv fn take(x: F32): F32
+  return x
+
+const too_big: F32 = 1.0e39
+
+fn main(): I32
+  big_arg: = take(1.0e300)
+  big: = -1.0e400
+  small: F64 = 1.0e-400
+  small_f32: F32 = 1.0e-50
+  subnormal: F32 = 1.0e-45
+  zero: F64 = 0.0e-400
+  largest: F64 = 1.7976931348623157e308
+  return I32::(F64::big_arg + big + small + F64::small_f32 + F64::subnormal + zero + largest +
+    F64::too_big)
 // ==== case float_remainder
 //< `%` and `%=` do not apply to a floating-point operand
 //<
@@ -148,6 +211,7 @@ fn main(): I32
 //<
 //< The grammar refuses the spelling, so every place a literal can stand refuses it alike; a check
 //< in the analysis would have to be repeated wherever a constant is folded.
+// EXPECT: error: expected a float
 // EXPECT: a decimal integer does not start with 0, and KSPL has no octal literal, so '09'
 // EXPECT-NOT: or '0x
 priv const table: U8[09] = ::{}
@@ -242,6 +306,7 @@ fn main(): I32
 // EXPECT: shift count 33 is out of range for the left-hand side type 'U32' (must be 0..31)
 
 // EXPECT: shift count 34 is out of range for the left-hand side type 'U32' (must be 0..31)
+// EXPECT: Finished with 8 error(s)
 // EXPECT-NOT: [W0
 import "std/io"
 

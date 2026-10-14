@@ -475,9 +475,71 @@ priv fn check_blas_home(arena: Arena$@)
         files.len, "files", bad@,
         "move it into ksai, or have `make test-blas` in `mk/test.mk` build its package too")
 
+// ==========================================
+// Windows's packages come from one list
+// **CI's Windows jobs and a person's setup install `tools/msys2-packages.txt`**, the counterpart
+// of `.devcontainer/Dockerfile`. A workflow that sets MSYS2 up by itself installs a list of its
+// own, and a person following `docs/HOWTO-build.md` meets a missing command CI never saw.
+// ==========================================
+priv const msys2_list: U8[] = "tools/msys2-packages.txt"
+priv const msys2_action: U8[] = ".github/actions/msys2-ucrt64/action.yml"
+priv const msys2_doc: U8[] = "docs/HOWTO-build.md"
+priv const msys2_reader: U8[] = "sed 's/#.*//' tools/msys2-packages.txt" //<
+    //< How the action and the document read the list, so the two read the same names
+
+priv fn sets_up_msys2(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a workflow's text uses the MSYS2 action directly, outside a comment
+    for line in text.lines(arena)
+        t: = line.trim_spaces()
+        rest: = t.strip_prefix("- ")
+        if rest.starts_with("uses: msys2/setup-msys2@")
+            return true
+    return false
+
+// Caution: **Keep a comment and the local action on the miss side**: a plain search hits both.
+priv const msys2_samples: Sample[_] = ::{
+    Sample::{ .text = "      - uses: msys2/setup-msys2@ec48f7c5 # v2\n", .hits = true },
+    Sample::{ .text = "      - name: MSYS2\n        uses: msys2/setup-msys2@v2\n", .hits = true },
+    Sample::{ .text = "      # msys2/setup-msys2@v2 sits behind the action\n", .hits = false },
+    Sample::{ .text = "      # - uses: msys2/setup-msys2@v2\n", .hits = false },
+    Sample::{ .text = "      - uses: ./.github/actions/msys2-ucrt64\n", .hits = false },
+}
+
+priv fn packages_in(list: U8[], arena: Arena$@): Sz //< how many packages the list names
+    $n: Sz = 0
+    for line in list.lines(arena)
+        for w in line.sub(0, line.find_char('#').unwrap_or(line.len)).split(' ', arena)
+            if w.trim_spaces().len > 0
+                n += 1
+    return n
+
+priv fn check_msys2_list(arena: Arena$@)
+    $bad: = scan.misjudged(Sample[]::msys2_samples, sets_up_msys2, arena)
+    if packages_in(harness.read_under_root(msys2_list), arena) == 0
+        bad.push(arena.text().s(msys2_list).s(" names no package").take())
+    action: = harness.read_under_root(msys2_action)
+    if !sets_up_msys2(action, arena)
+        bad.push(arena.text().s(msys2_action).s(" does not set MSYS2 up").take())
+    for rel in U8[][]::{ msys2_action, msys2_doc }
+        if harness.read_under_root(rel).find_str(msys2_reader).is_none()
+            bad
+                .push(arena.text().s(rel).s(" does not read the list as `").s(msys2_reader).s("`")
+                .take())
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::{ "*.yml", "*.yaml" })
+        if !rel.starts_with(".github/") || rel.equals(msys2_action)
+            continue
+        seen += 1
+        if sets_up_msys2(harness.read_under_root(rel), arena)
+            bad.push(arena.text().s(rel).s(" sets MSYS2 up by itself").take())
+    verdict.check_list("Windows's packages come from one list", seen, "workflow files", bad@,
+        arena.text().s("set MSYS2 up through ").s(msys2_action).s(", and add a package to ")
+        .s(msys2_list).take())
+
 fn run(arena: Arena$@) //< this section's entry point
     //<
     //< Caution: **Call it from `conventions_match.kspls`'s `run`** (there is one suite).
+    check_msys2_list(arena)
     check_dispatch_switches(arena)
     check_ci_shards(arena)
     check_platform_table(arena)

@@ -10,6 +10,7 @@
 //   Round 2, the outer one first: the same waits, released the other way round.
 //     Releasing m1 drops to 3 (mid still waits on m2), not to 1; releasing m2 returns 1.
 // ==========================================
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/verdict"
@@ -73,7 +74,7 @@ fn low(_arg: Void$@): Void
         .pass("releasing m1 first falls to 3 while mid waits on m2, not to 1; releasing m2 returns \
             1.")
 
-fn main()
+fn main(): I32
     g_m1.init()
     g_m2.init()
     tcb_low.create(U8$[]::stack_low, low, null, low_prio, "low")
@@ -82,3 +83,5 @@ fn main()
     tcb_high2.create(U8$[]::stack_high2, wait_m1, Void$@::g_round2@, high_prio, "high2")
     tcb_mid2.create(U8$[]::stack_mid2, wait_m2, Void$@::g_round2@, mid_prio, "mid2")
     task.start_scheduler()
+    task_end.require_all_ended()
+    return verdict.finish()

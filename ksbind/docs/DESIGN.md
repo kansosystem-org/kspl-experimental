@@ -69,8 +69,10 @@ Each binding closes off one well-known way that code using the library directly 
 | :-- | :-- | :-- | :-- |
 | `tls` | Calling OpenSSL directly | **Forgotten verification.** Not calling `SSL_CTX_set_verify`, or setting SNI (`SSL_set_tlsext_host_name`) without the host name check (`SSL_set1_host`), are the standard mistakes | A client context always verifies (`SSL_VERIFY_PEER`, the default CA store), at TLS 1.2 or above; SNI and the host name check are both set |
 | `tls` (the end of a stream) | `SSL_read` | **A cut stream read as a proper end.** `SSL_read` returns 0 both for the peer's close_notify and for a TCP connection dropped without one | `read` returns 0 only after a close_notify; a connection ending any other way is `io_failed` |
+| `tls` (a peer that is gone) | `SSL_set_fd`, OpenSSL writing to the socket itself | **A write to a peer that is gone kills the program.** OpenSSL writes with no `MSG_NOSIGNAL` and offers no way to ask for it, so SIGPIPE is raised; a program that has not set it aside dies. A KSPL program ignores it, but the program a KSPL library is linked into may not | OpenSSL reads and writes memory, and every byte crosses the socket through `std/net`, whose write never raises SIGPIPE: a write to a peer that is gone fails as `io_failed` |
 | `db` | SQLite's C API | **SQL injection.** An API building queries by concatenating strings gets misused | Only placeholders: `prepare` plus `bind_i64`/`bind_f64`/`bind_text`/`bind_null` |
 | `db` (several statements) | `sqlite3_prepare_v2` | **Every statement after the first dropped without a word.** It prepares one statement and points past it, so `exec` of two `CREATE TABLE`s would make only the first | `prepare` and `exec` refuse SQL holding a second statement (`several_statements`), before anything runs |
+| `db` (closing) | `sqlite3_close` | **A connection closed while a statement is open stays open.** It answers `SQLITE_BUSY` and closes nothing, so a caller that drops the answer leaks the connection, its file and its lock for as long as the process runs | `Db.free` closes with `sqlite3_close_v2`: the connection closes at once, or once its last statement is freed, so the two frees may come in either order |
 | `db` (a whole row) | `serde`'s derive / Swift's `Codable` / Jackson's annotations | **A column's name is written twice, once for the writer and once for the reader**, and fixing only one silently fills in the default | `Statement.bind_row` / `Statement.read_row` match a struct's fields to columns by name, and refuse what does not match |
 
 **`tls`: forgotten verification.** Verifying means checking that the server's certificate was signed by a trusted authority (a CA) and names the host you asked for. SNI tells the server which host name you want; it checks nothing by itself.
@@ -84,9 +86,21 @@ Each binding closes off one well-known way that code using the library directly 
 * `read` knows the close_notify came when `SSL_get_error` says `SSL_ERROR_ZERO_RETURN`.
 * **A cut is not told apart from a reset**: both leave what arrived unconfirmed, and telling them apart would mean reading OpenSSL's error codes, laid out differently in 1.1.1 and 3.x.
 
+**`tls`: a peer that is gone.** On Linux a write to a socket whose peer has gone raises SIGPIPE unless the call passes `MSG_NOSIGNAL`, and its default ends the process. `std/net` passes it (`SO_NOSIGPIPE` on the socket where the OS has no such flag), so the rule lives there once. So OpenSSL is handed two memory buffers rather than the socket, and the binding moves the bytes between them and the `std/net` connection: whatever OpenSSL sends goes out by `std/net`'s write.
+
+* **The process's signal setting is never touched.** It is the host program's: a library that set SIGPIPE aside, even for one call, would change it for every thread of a program that chose otherwise.
+* **Blocking SIGPIPE for the calling thread around each call is not used either.** It touches every OpenSSL call that may write (the handshake, a read answering the peer, the close as well as a write), and a signal blocked is not one ignored: it stays pending, and has to be drained without taking one another thread was owed.
+* **What it gives up**: each record is copied once more, through the memory buffer, and a read or write drives OpenSSL in a loop of its own rather than letting it wait on the socket.
+
 **`db`: SQL injection.** A query built by joining strings lets a value such as `'; DROP TABLE t; --` run as SQL. With a placeholder (`?` or `:name` in the SQL), the value is passed apart from the SQL text, so it is never read as SQL.
 
 **`db`: several statements.** The check of what follows the first statement allows only spaces, semicolons and comments. **SQLite's own parser judges the rest** (it is prepared, and must hold no statement), so no second reading of SQL's comments stands here. There is no call running several: each statement goes on its own.
+
+**`db`: closing.** KSPL has no borrow checker, so nothing stops a `Db` from being freed before a `Statement` it prepared, and two values freed at the end of a scope or held in one struct come apart in either order. So the order is made not to matter, rather than refused.
+
+* **A statement whose database was freed still works until it is freed**: SQLite keeps the connection until then. Nothing dangles, since the statement holds the connection, not the `Db`.
+* **`free` neither finalizes the statements nor fails.** Finalized behind the caller's back, a `Statement` would hold a handle already gone, and its own `free` would finalize it twice. A failure has nowhere to go: `free` returns nothing, and a `defer` could not act on it.
+* **What it gives up**: a statement never freed keeps its file open with nothing said, as any leaked value keeps what it owns.
 
 **`db`: a whole row.** `bind_row` and `read_row` walk `std/reflect`'s table (the list of a struct's fields), which ksplc synthesizes from an empty `impl X: reflect.Reflectable {}`.
 

@@ -6,6 +6,7 @@
 //< is added to the step, otherwise nothing is. A text argument is stored as given, so the caller
 //< passes a copy. Split off for the 1000-line-per-file cap (Principle 3).
 import "kspage/model/doc" { Block, Rect }
+import "kspage/model/limit"
 import "kspage/model/paper" { Paper }
 import "kspage/model/run" { Inline }
 import "kspage/model/style" + { Sheet, Style }
@@ -14,15 +15,23 @@ import "kspage/write/record" + { Paper_op, Step }
 import "kspage/write/record" { Aside_op, Block_face_op, Frame_op, Href_op, Look_op, Note_op,
     Refer_op, Remark_op, Name_op, Sheet_op, Span_op, Step_op, Style_op }
 
+fn rect_in(at: Rect): Rect //< the frame with each length brought inside `limit.length_in`
+    return Rect::{ .x = limit.length_in(at.x), .y = limit.length_in(at.y),
+        .w = limit.length_in(at.w), .h = limit.length_in(at.h) }
+
 fn do_set_frame(e: Editor$@, into: Step$@, b: Block$@, at: Rect?) //<
     //< Sets a slide frame's position, recording the change
     //<
-    //< As with text, do not change a block directly.
+    //< As with text, do not change a block directly. **The frame is brought inside the lengths a
+    //< document holds** (`rect_in`): dragged or nudged past them, the saved file would not load.
     if into != null
         if !record.last_framed(into, b)
             op: = Frame_op::{ .block = b, .was = b.frame }
             edit.keep(e, into, .frame(e.arena.create(op)))
-    b.frame = at
+    $fitted: Rect? = .none
+    if got: = at
+        fitted = .some(rect_in(got))
+    b.frame = fitted
 
 fn do_set_step(e: Editor$@, into: Step$@, b: Block$@, at: Sz) //<
     //< Sets the step at which a frame appears, recording the change

@@ -16,8 +16,10 @@ import "ksplc/gen/llvm/decl" as gen_llvm_decl
 import "ksplc/gen/llvm/types" as gen_llvm_types
 import "ksplc/gen/runtime" as gen_runtime
 import "ksplc/lower/prune" as lower_prune
+import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/chars"
 import "std/ds" { Map }
 import "std/str" { Str_builder }
 fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM backend's phases
@@ -151,9 +153,12 @@ priv fn emit_runtime_check_fns(cg: Genllvm_ctx$@) //< the run-time checks
         "panic: index out of bounds in array (idx: %lld, len: %lld) at %s:%d")
     emit_private_fmt(cg, "shift_panic_fmt",
         "panic: shift amount out of range (amount: %lld, width: %lld) at %s:%d")
+    emit_private_fmt(cg, "ushift_panic_fmt",
+        "panic: shift amount out of range (amount: %llu, width: %lld) at %s:%d")
     emit_private_fmt(cg, "div_panic_fmt", "panic: division by zero at %s:%d")
-    cg
-        .s("""
+    emit_private_fmt(cg, "tag_panic_fmt", "panic: enum %s has no tag %lld at %s:%d")
+    emit_by_hand(cg,
+        """
 
 define i64 @kspl_bounds_check(i64 %idx, i64 %len, ptr %file, i32 %line) {
 entry:
@@ -217,7 +222,33 @@ ok:
     ret i64 %divisor
 }
 
-define i64 @kspl_shift_check(i64 %amount, i64 %width, ptr %file, i32 %line) {
+define i64 @kspl_tag_check(i64 %value, ptr %tags, i64 %count, ptr %enum_name, ptr %file, i32 %line) {
+entry:
+    br label %test
+test:
+    %i = phi i64 [ 0, %entry ], [ %next, %step ]
+    %more = icmp slt i64 %i, %count
+    br i1 %more, label %read, label %panic
+read:
+    %at = getelementptr inbounds i64, ptr %tags, i64 %i
+    %tag = load i64, ptr %at
+    %hit = icmp eq i64 %tag, %value
+    br i1 %hit, label %ok, label %step
+step:
+    %next = add i64 %i, 1
+    br label %test
+panic:
+    %stdout_ptr = call ptr @get_stdout()
+    %flushed = call i32 @fflush(ptr %stdout_ptr)
+    %stderr_ptr = call ptr @get_stderr()
+    call i32 (ptr, ptr, ...) @fprintf(ptr %stderr_ptr, ptr @.tag_panic_fmt, ptr %enum_name, i64 %value, ptr %file, i32 %line)
+    call void @abort()
+    unreachable
+ok:
+    ret i64 %value
+}
+
+define i64 @kspl_shift_check(i64 %amount, i64 %width, i1 %amount_unsigned, ptr %file, i32 %line) {
 entry:
     %cmp1 = icmp slt i64 %amount, 0
     %cmp2 = icmp sge i64 %amount, %width
@@ -227,7 +258,8 @@ panic:
     %stdout_ptr = call ptr @get_stdout()
     %flushed = call i32 @fflush(ptr %stdout_ptr)
     %stderr_ptr = call ptr @get_stderr()
-    call i32 (ptr, ptr, ...) @fprintf(ptr %stderr_ptr, ptr @.shift_panic_fmt, i64 %amount, i64 %width, ptr %file, i32 %line)
+    %fmt = select i1 %amount_unsigned, ptr @.ushift_panic_fmt, ptr @.shift_panic_fmt
+    call i32 (ptr, ptr, ...) @fprintf(ptr %stderr_ptr, ptr %fmt, i64 %amount, i64 %width, ptr %file, i32 %line)
     call void @abort()
     unreachable
 ok:
@@ -235,6 +267,18 @@ ok:
 }
 
 """)
+
+priv fn emit_by_hand(cg: Genllvm_ctx$@, ir: U8[]) //<
+    //< It writes IR written by hand, each `define` marked as genllvm marks its own
+    //<
+    //< A `define` line ends in `{`, and the marks (`emit_sanitize_attrs`) go before it.
+    for line in ir.lines(base_core.arena)
+        if line.starts_with("define ") && line.ends_with("{")
+            cg.s(line.sub(0, line.len - 1))
+            cg.emit_sanitize_attrs()
+            cg.s("{\n")
+        else
+            cg.s(line).c('\n')
 
 priv fn emit_runtime_and_main(cg: Genllvm_ctx$@) //< hosted's preamble and `main`
     //<
@@ -260,11 +304,17 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     // The plan, the startup calls and the messages are shared with the C backend
     // (`gen/entry.kspls`).
     plan: = gen_entry.plan_of(cg.env, main_sym.type_id)
-    if plan.returns_result
-        emit_private_fmt(cg, "main_err_fmt",
-            gen_entry.failed_with_code if plan.err_is_number else gen_entry.failed)
+    if plan.returns_result()
+        emit_private_fmt(cg, "main_err_fmt", plan.failure_line())
+        if plan.err_variants != null
+            emit_private_name(cg, "main_err_name_none", "")
+            for i in Range.asc(plan.err_variants.len)
+                name: = base_core.arena.text().s("main_err_name_\{i\}").take()
+                emit_private_name(cg, name, plan.err_variants.get(i).name)
     // `argc` / `argv` live in the C runtime (hosted.c).
-    cg.s("define i32 @main(i32 %argc, ptr %argv) {\n")
+    cg.s("define i32 @main(i32 %argc, ptr %argv) ")
+    cg.emit_sanitize_attrs()
+    cg.s("{\n")
     cg.s("entry_block:\n")
     // Caution: **Keep the version symbol a call.** A runtime of another version lacks the symbol,
     // so the link stops; only code the program runs is sure to keep its reference. A declaration
@@ -277,7 +327,7 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
         cg.s("    call void @").s(call).s("()\n")
     // check_main_signature in sema/body/analyze.kspls limits the types a main may return.
     val_id: = cg.env.strip_result(main_sym.type_id)
-    if !plan.returns_result
+    if !plan.returns_result()
         if plan.exit_is_value
             ret_val: = cg.next_reg()
             cg.s("    %\{ret_val\} = call ")
@@ -308,31 +358,7 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     merge_lbl: = cg.next_label()
     cg.s("    br i1 %\{cond_i1\}, label %b\{then_lbl\}, label %b\{merge_lbl\}\n")
     cg.emit_b_label(then_lbl)
-    err_id: = cg.env.get_result_err_id(main_sym.type_id)
-    err_out: = cg.next_reg()
-    cg.s("    %\{err_out\} = call ptr @get_stderr()\n")
-    if plan.err_is_number
-        code_val: = cg.next_reg()
-        cg.s("    %\{code_val\} = extractvalue ")
-        cg.t(main_sym.type_id).s(" %\{tmp_res\}, \{cg.field_index(main_sym.type_id, 1)\}\n")
-        msg_code: = cg.emit_numeric_to_i32(cg.reg_str(code_val), err_id)
-        // Caution: **Allocate a number even for a call whose return value is discarded**, or LLVM
-        // uses an implicit one and the later `%N`s disagree.
-        put1: = cg.next_reg()
-        cg
-            .s("    %\{put1\} = call i32 (ptr, ptr, ...) @fprintf(ptr %\{err_out\}, ptr \
-                @.main_err_fmt, i32 ").s(msg_code).s(")\n")
-        if plan.trace_fn.len > 0
-            cg.s("    call void @").s(plan.trace_fn).s("()\n")
-        cg.s("    ret i32 ").s(msg_code).s("\n")
-    else
-        put2: = cg.next_reg()
-        cg
-            .s("    %\{put2\} = call i32 (ptr, ptr, ...) @fprintf(ptr %\{err_out\}, ptr \
-                @.main_err_fmt)\n")
-        if plan.trace_fn.len > 0
-            cg.s("    call void @").s(plan.trace_fn).s("()\n")
-        cg.s("    ret i32 1\n")
+    emit_main_failure(cg, plan, main_sym.type_id, cg.reg_str(tmp_res))
     // **Where a `ret` was emitted directly, call `terminate()`**, or the next emit_b_label adds a
     // `br` that LLVM numbers as a new block, and every later `%N` disagrees.
     cg.terminate()
@@ -348,6 +374,79 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     else
         cg.s("    ret i32 0\n")
     cg.s("}\n\n")
+
+priv fn emit_private_name(cg: Genllvm_ctx$@, name: U8[], body: U8[]) //< a NUL-ended constant
+    cg.s("@.").s(name).s(" = private unnamed_addr constant [\{body.len + 1\} x i8] c\"").s(body)
+        .s("\\00\"\n")
+
+priv fn emit_main_failure(cg: Genllvm_ctx$@, plan: gen_entry.Main_plan, main_type_id: I32,
+    res: U8[]) //<
+        //< The failure path where `main` returns a Result, from its loaded value `res`
+        //<
+        //< It prints the line and the propagation trace, and returns the exit code
+        //< (`gen_entry.Main_err` says which).
+    err_id: = cg.env.get_result_err_id(main_type_id)
+    err_out: = cg.next_reg()
+    cg.s("    %\{err_out\} = call ptr @get_stderr()\n")
+    err_val: = cg.next_reg()
+    cg.s("    %\{err_val\} = extractvalue ")
+    cg.t(main_type_id).s(" ").s(res).s(", \{cg.field_index(main_type_id, 1)\}\n")
+    $arg: U8[] = ""
+    $code: U8[] = ""
+    switch plan.err
+    case .number
+        wide_id: =
+            I32::(sema_type_env.Builtin_type_id.u64_type if plan.err_is_unsigned
+            else sema_type_env.Builtin_type_id.i64_type)
+        code = cg.emit_numeric_coerce(cg.reg_str(err_val), err_id, wide_id)
+        arg = base_core.arena.text().s("i64 ").s(code).take()
+    case .variant
+        $tag: U8[] = cg.reg_str(err_val)
+        tag_id: = cg.enum_tag_type(err_id)
+        if plan.err_has_payload
+            tag_reg: = cg.next_reg()
+            cg.s("    %\{tag_reg\} = extractvalue ").t(err_id).s(" ").s(tag).s(", 0\n")
+            tag = cg.reg_str(tag_reg)
+        tag64: = cg.emit_numeric_coerce(tag, tag_id,
+            I32::sema_type_env.Builtin_type_id.i64_type)
+        $name: U8[] = "@.main_err_name_none"
+        for i in Range.asc(plan.err_variants.len)
+            eq: = cg.next_reg()
+            cg.s("    %\{eq\} = icmp eq i64 ").s(tag64)
+                .s(", \{plan.err_variants.get(i).tag_value\}\n")
+            pick: = cg.next_reg()
+            cg.s("    %\{pick\} = select i1 %\{eq\}, ptr @.main_err_name_\{i\}, ptr ").s(name)
+                .s("\n")
+            name = cg.reg_str(pick)
+        arg = base_core.arena.text().s("ptr ").s(name).take()
+    default {}
+    // Caution: **Allocate a number even for a call whose return value is discarded**, or LLVM uses
+    // an implicit one and the later `%N`s disagree.
+    printed: = cg.next_reg()
+    cg
+        .s("    %\{printed\} = call i32 (ptr, ptr, ...) @fprintf(ptr %\{err_out\}, ptr \
+            @.main_err_fmt")
+    if arg.len > 0
+        cg.s(", ").s(arg)
+    cg.s(")\n")
+    if plan.trace_fn.len > 0
+        cg.s("    call void @").s(plan.trace_fn).s("()\n")
+    if code.len == 0
+        cg.s("    ret i32 1\n")
+        return
+    // The number where it is 1..`exit_code_max`, else 1 (`gen_entry.exit_code_max`).
+    sign: = "u" if plan.err_is_unsigned else "s"
+    lo: = cg.next_reg()
+    cg.s("    %\{lo\} = icmp \{sign\}ge i64 ").s(code).s(", 1\n")
+    hi: = cg.next_reg()
+    cg.s("    %\{hi\} = icmp \{sign\}le i64 ").s(code).s(", \{gen_entry.exit_code_max\}\n")
+    both: = cg.next_reg()
+    cg.s("    %\{both\} = and i1 %\{lo\}, %\{hi\}\n")
+    narrow: = cg.next_reg()
+    cg.s("    %\{narrow\} = trunc i64 ").s(code).s(" to i32\n")
+    status: = cg.next_reg()
+    cg.s("    %\{status\} = select i1 %\{both\}, i32 %\{narrow\}, i32 1\n")
+    cg.s("    ret i32 %\{status\}\n")
 
 priv fn emit_string_pool(cg: Genllvm_ctx$@)
     for str_i in Range.asc(cg.str_pool.list.len)

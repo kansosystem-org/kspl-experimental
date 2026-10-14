@@ -30,6 +30,7 @@ enum Named_value //< what a name written where a type goes names instead
     variable
     type_member //< `Point.x`, `Box<|I32|>.keep`
     value_member //< `g.x`, a global's member
+    const_param //< a generic's own `const` parameter (`N` of `<|const N: Sz|>`)
 
 impl Named_value
     fn word(r: Self$@): U8[] //< the noun the diagnostic uses
@@ -42,6 +43,8 @@ impl Named_value
             return "a member of a type"
         case .value_member
             return "a member of a value"
+        case .const_param
+            return "a const parameter, which stands for a value"
 
 enum Written_kind //< what the type a written path begins with is
     found //< a type this file reaches
@@ -270,6 +273,16 @@ priv fn lookup_bare_name(c: Sema_ctx$@, name: U8[]): Sema_symbol$@ //<
             sym = c.symtab.resolve(imported_fqn) catch null
     return sym
 
+fn gen_param_named(gen_params: List<|Ast_node$@|>$@, name: U8[]): Ast_node$@? //<
+    //< The type parameter in scope called name, the innermost where two are
+    if name.len == 0
+        return .none
+    for $i: = gen_params.len; i > 0; i -= 1
+        gp: = gen_params.get(i - 1)
+        if gp.gen_param_name().equals(name)
+            return .some(gp)
+    return .none
+
 priv fn template_named(c: Sema_ctx$@, name: U8[]): U8[] //<
     //< The FQN of the generic function a bare name names in this file, or "" for none
     //<
@@ -333,7 +346,7 @@ impl Sema_ctx
             w.member = parts.get(at)
         return w
 
-    fn type_kind_of(r: Self$@, w: Written_type, gen_params: List<|U8[]|>$@): Written_kind //<
+    fn type_kind_of(r: Self$@, w: Written_type, gen_params: List<|Ast_node$@|>$@): Written_kind //<
         //< What the type w reads is: a type this file reaches, or why not
         //<
         //< gen_params lists the type parameters in scope that nothing binds yet (a template's own
@@ -379,7 +392,7 @@ impl Sema_ctx
             return .names_value(what)
         return .found
 
-    priv fn bare_type_kind(r: Self$@, name: U8[], gen_params: List<|U8[]|>$@): Written_kind //<
+    priv fn bare_type_kind(r: Self$@, name: U8[], gen_params: List<|Ast_node$@|>$@): Written_kind //<
         //< What a name written alone where a type goes is, from this file
         //<
         //< The order is "Name resolution with no namespace goes through one function" in
@@ -387,9 +400,10 @@ impl Sema_ctx
         if name.equals("Self")
             return .found
         if gen_params != null
-            for gp_name in gen_params
-                if gp_name.equals(name)
-                    return .found
+            if gp: = gen_param_named(gen_params, name)
+                if gp.is_const_gen_param()
+                    return .names_value(.const_param)
+                return .found
         if r.find_generic_arg(name).is_some()
             return .found
         // A name brought in with no namespace by `import "path" { A };`.
@@ -513,6 +527,21 @@ impl Sema_ctx
     fn written_template(r: Self$@, w: Written_type): Ast_node$@ //<
         //< The template of the generic type w names, or null where it names no generic type
         return r.generics.templates.get(w.fqn) catch null
+
+    fn template_of_args(r: Self$@, path: Ast_node$@, args: Ast_node$@): Ast_node$@? //<
+        //< The generic type or function whose parameters the `<|…|>` args written in path fill
+        //<
+        //< none where the declarations alone do not tell: a method's own (`Box<|I32|>.keep<|U|>`,
+        //< `x.m<|U|>`) belong to whatever the type before them has, known only once it is.
+        w: = r.read_written_type(path)
+        if w.args != args
+            return .none
+        $tmpl: = r.written_template(w)
+        if tmpl == null && w.alias_file.len == 0
+            fqn: = template_named(r, w.name)
+            if fqn.len > 0
+                tmpl = r.generics.templates.get(fqn) catch null
+        return .some(tmpl) if tmpl != null else .none
 
     fn instance_written(r: Self$@, w: Written_type, args: I32[], site: Ast_node$@):
         Str_builder!Sema_error //<

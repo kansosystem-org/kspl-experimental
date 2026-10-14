@@ -67,16 +67,11 @@ impl Ast_node
         w: = c.clear_scratch()
         if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum ||
             r.kind_id == .k_decl_typedef || r.kind_id == .k_decl_trait
-            def_in: = sym.get_defined_in()
-            // Caution: **Write the file as a qualifier first (`s_path_as_dots`)**, as the type's
-            // own name is. Mangled straight from the path, a folder like `.hidden` loses its dot
-            // here but keeps it as `_` in the type's name, and the C declares one name and uses
-            // another.
-            if def_in.len > 0
-                $qual: = str.Str_builder.new()
-                defer qual.free()
-                qual.s_path_as_dots(def_in).slice().mangle_type_name_to(w).s("_")
-            sym.name.mangle_type_name_to(w)
+            // Caution: **A type's declaration takes its type's own name** (`mangle_type_id_to`),
+            // the one every use of the type is written with. Spelled again here from the file's
+            // path, a folder like `.hidden` lost its dot here and kept it as `_` in the type's
+            // name, and the C declared one name and used another.
+            c.env.mangle_type_id_to(sym.type_id, w)
         else
             get_c_identifier_for_sym_to(sym, id_node.text, w)
 

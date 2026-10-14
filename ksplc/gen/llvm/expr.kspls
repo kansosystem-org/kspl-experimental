@@ -5,6 +5,7 @@
 import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/c_name" // `is_made_temp`
 import "ksplc/base/core" as base_core
 import "ksplc/base/literal" as base_literal
 import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
@@ -15,6 +16,8 @@ import "ksplc/sema/body/binary" as sema_body_binary
 import "ksplc/sema/body/postfix" as sema_body_postfix
 import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/type/def" { Enum_def }
+import "ksplc/sema/type/display" // `display`
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -32,7 +35,7 @@ impl Ast_node
             name: = r.get_path_or_ident_name()
             $is_global: = false
             $verbatim_name: = false
-            if def_node != null && !name.starts_with("_mir_")
+            if def_node != null && !name.is_made_temp()
                 if def_node.sym_ptr != null
                     sym: = Sema_symbol$@::def_node.sym_ptr
                     is_global = sym.flags.is_global
@@ -214,7 +217,7 @@ impl Ast_node
 
     fn emit_llvm_ident(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         name: = r.get_path_or_ident_name()
-        is_mir: = name.starts_with("_mir_")
+        is_mir: = name.is_made_temp()
 
         $is_func_symbol: = false
         if !is_mir && r.def_node != null
@@ -249,8 +252,10 @@ impl Ast_node
             return emit_int_to_width(cg, emit_widen_to_i64(cg, amt_reg, amt_type), left_type_id)
         wide_reg: = emit_widen_to_i64(cg, amt_reg, amt_type)
         safe_reg: = cg.next_reg()
+        // The amount's own signedness says how a stop prints it.
+        unsigned_flag: = "true" if cg.env.is_unsigned(amt_type) else "false"
         cg.s("    %\{safe_reg\} = call i64 @kspl_shift_check(i64 ").s(wide_reg)
-            .s(", i64 \{cg.env.get_portable_bit_size(left_type_id)\}")
+            .s(", i64 \{cg.env.get_portable_bit_size(left_type_id)\}, i1 \{unsigned_flag\}")
         emit_check_loc(cg, r.loc)
         return emit_narrow_from_i64(cg, safe_reg, left_type_id)
 
@@ -388,7 +393,7 @@ impl Ast_node
         if op.equals(".") || op.equals("[") || op.equals("[]") || op.equals("$")
             ptr_reg: = r.emit_llvm_lvalue(cg)
             res_reg: = cg.next_reg()
-            cg.op_load(res_reg, r.type_id, ptr_reg)
+            cg.op_load_place(res_reg, r.type_id, ptr_reg, r)
             return cg.reg_str(res_reg)
         if op.equals("::")
             return r.emit_llvm_cast(cg)
@@ -435,7 +440,9 @@ impl Ast_node
             res_slice: = build_slice_value(cg, target_type, recv_ptr, len_operand)
             return cg.reg_str(res_slice)
 
-        recv_reg: = recv.emit_llvm_expr(cg)
+        $recv_reg: = recv.emit_llvm_expr(cg)
+        if def: = sema_body_postfix.enum_cast_needs_check(cg.sema, r)
+            recv_reg = emit_tag_check(cg, r, def, recv_reg)
 
         is_ptr_src: = cg.env.is_pointer(recv_type) || cg.env.is_fn_ptr(recv_type)
         is_ptr_dst: = cg.env.is_pointer(target_type) || cg.env.is_fn_ptr(target_type)
@@ -495,6 +502,27 @@ impl Ast_node
         cg.t(target_type).s("\n")
 
         return cg.reg_str(res_reg)
+priv fn emit_tag_check(cg: Genllvm_ctx$@, r: Ast_node$@, def: Enum_def$@, recv_reg: U8$[]): U8$[] //<
+    //< Passes a cast's operand through `@kspl_tag_check` against the enum's tags
+    //<
+    //< It returns the operand at its own width. The tags sit in a slot of the alloca group, so
+    //< a cast in a loop takes no more stack each time round.
+    src_id: = cg.env.scalar_repr_id(r.get_postfix_receiver().type_id)
+    wide_reg: = emit_widen_to_i64(cg, recv_reg, src_id)
+    n: = def.variants_list.len
+    tags_id: = cg.env.make_array(I32::sema_type_env.Builtin_type_id.i64_type, I32::n)
+    slot: = cg.get_or_alloc_tmp_slot(Void$@::r, tags_id)
+    cg.s("    store ").t(tags_id).s(" [")
+    for i in Range.asc(n)
+        cg.s(", " if i > 0 else "").s("i64 \{def.variants_list.get(i).tag_value\}")
+    cg.s("], ptr ").s(slot).s("\n")
+    name: = cg.get_or_add_raw_literal(cg.env.display(r.type_id))
+    safe_reg: = cg.next_reg()
+    cg.s("    %\{safe_reg\} = call i64 @kspl_tag_check(i64 ").s(wide_reg).s(", ptr ").s(slot)
+        .s(", i64 \{n\}, ptr @.str.\{name\}")
+    emit_check_loc(cg, r.loc)
+    return emit_narrow_from_i64(cg, safe_reg, src_id)
+
 priv fn extend_constant_text(cg: Genllvm_ctx$@, text: U8[], src_type: I32, is_zext: Bool): U8$[] //<
     //< A constant operand of a zext/sext, as the value the extension gives
     //<

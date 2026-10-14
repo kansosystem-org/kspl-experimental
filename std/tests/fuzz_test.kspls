@@ -104,12 +104,12 @@ fn test_fuzz_rounds(ksplc: U8[], arena: Arena$@) //< ksplc runs the subject
     for mode in U8[][]::{ "answer", "refuse", "stop", "fall" }
         t: = fuzz.run_trial(U8[][]::{ ksplc, "run", script, mode }, 300000, arena)
         assert(!t.got.spawn_failed && !t.got.timed_out, "the subject must start and come to an end")
-        fuzz.note(found, t@, 0, mode, mode, work_dir, ".txt", arena)
+        fuzz.note(found, t@, 0, mode, mode, work_dir, ".txt")
     // A round that also ran past the extended wait, as `run_trial` returns it.
     hung: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = true,
         .exit_code = 0, .stdout_data = "", .stderr_data = "", .output_lost = false },
         .slow = false }
-    fuzz.note(found, hung@, 1, "hung", "h", work_dir, ".txt", arena)
+    fuzz.note(found, hung@, 1, "hung", "h", work_dir, ".txt")
     assert(found.aborts.len == 1 && found.aborts.get(0).seed_name.equals("stop"),
         "a panic is a stop the program announced")
     assert(found.crashes.len == 1 && found.crashes.get(0).seed_name.equals("fall"),
@@ -135,7 +135,7 @@ fn main(): I32
   found: = fuzz.findings_new(arena)
   t: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = false,
     .exit_code = 139, .stdout_data = "", .stderr_data = "", .output_lost = false }, .slow = false }
-  fuzz.note(found, t@, 3, "seed.txt", "broken", "out/tmp/kspl_test_fuzz", ".txt", arena)
+  fuzz.note(found, t@, 3, "seed.txt", "broken", "out/tmp/kspl_test_fuzz", ".txt")
   o: = fuzz.Opts::{ .trials = 5I64, .seed = 9I64 }
   fuzz.report_all(found, o, "probe", 100, "run it", arena)
   none: = fuzz.Opts::{ .trials = 0I64, .seed = 9I64 }
@@ -171,8 +171,8 @@ fn test_fuzz_report(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
         .pass("Each way of ending has its line, the way to run it again follows, and none is none.")
 
 // A fuzz run over the subject: a seed the run built must read back, one found may be refused and
-// is dropped, a kind left with no seed is skipped, and a run the subject refuses throughout fails
-// the reach.
+// is dropped, one that stops the subject fails, a kind left with no seed fails, and a run the
+// subject refuses throughout fails the reach.
 priv const scatter_main: U8[] =
     """
 import "std/ds" { List }
@@ -181,8 +181,8 @@ import "std/mem" { Arena }
 import "std/sys"
 import "std/verdict"
 
-priv const kinds: fuzz.Input_kind[2] = ::{ fuzz.Input_kind::{ .name = "answer", .ext = ".a" },
-  fuzz.Input_kind::{ .name = "refuse", .ext = ".r" } }
+priv const kinds: fuzz.Input_kind[3] = ::{ fuzz.Input_kind::{ .name = "answer", .ext = ".a" },
+  fuzz.Input_kind::{ .name = "refuse", .ext = ".r" }, fuzz.Input_kind::{ .name = "stop", .ext = ".s" } }
 
 fn main(): I32
   verdict.begin("probe")
@@ -196,8 +196,9 @@ fn main(): I32
   all.push(fuzz.Sample::{ .kind = "answer", .name = "made", .data = "x", .built = true })
   all.push(fuzz.Sample::{ .kind = "refuse", .name = "made", .data = "x", .built = true })
   all.push(fuzz.Sample::{ .kind = "refuse", .name = "found", .data = "x", .built = false })
-  $live: = fuzz.check_seeds(c@, all@, arena)
-  fuzz.scatter(c@, live@, "bytes", fuzz.Opts::{ .trials = 2I64, .seed = 1I64 }, arena) catch why
+  all.push(fuzz.Sample::{ .kind = "stop", .name = "found", .data = "x", .built = false })
+  $live: = fuzz.check_seeds(c@, all@, null)
+  fuzz.scatter(c@, live@, "bytes", fuzz.Opts::{ .trials = 2I64, .seed = 1I64 }, null) catch why
     return verdict.fatal(why)
   $refused: = List<|fuzz.Sample|>.new(arena)
   refused.push(all.get(2))
@@ -207,23 +208,26 @@ fn main(): I32
 """
 priv const scatter_out: U8[] =
     """
-FAIL probe: probe itself can read back the seeds probe wrote (3 seeds): refuse: made: what was written cannot be read back
-    a seed the program wrote must parse back; the format's writer and reader have parted
-SKIP probe: scattering at the refuse input: no seed of it is left under the folders the seeds come from
+FAIL probe: probe answers every seed, and reads back the seeds probe wrote (4 seeds): refuse: made: what was written cannot be read back
+    stop: found: stops the program (exit code=134)
+    a seed that stops the program is a finding as it stands; one the program wrote must parse back, or the format's writer and reader have parted
+FAIL probe: scattering at the refuse input: no seed of it is left under the folders the seeds come from
+FAIL probe: scattering at the stop input: no seed of it is left under the folders the seeds come from
 
 # scattering broken bytes (2 trials, 1 seeds, rng seed 1)
 pass probe: some of the broken input is accepted and reaches deep into the reader
 pass probe: probe does not crash on broken input (2 rounds)
 pass probe: probe announces no stop on broken input (2 rounds)
 pass probe: probe ends on broken input (2 rounds)
-SKIP probe: scattering at the answer input: no seed of it is left under the folders the seeds come from
+FAIL probe: scattering at the answer input: no seed of it is left under the folders the seeds come from
+FAIL probe: scattering at the stop input: no seed of it is left under the folders the seeds come from
 
 # scattering broken bytes (2 trials, 1 seeds, rng seed 1)
 FAIL probe: some of the broken input is accepted and reaches deep into the reader: 0 of 2 rounds
 pass probe: probe does not crash on broken input (2 rounds)
 pass probe: probe announces no stop on broken input (2 rounds)
 pass probe: probe ends on broken input (2 rounds)
-RESULT: SOME FAILED (2) -> probe itself can read back the seeds probe wrote (3 seeds), some of the broken input is accepted and reaches deep into the reader
+RESULT: SOME FAILED (6) -> probe answers every seed, and reads back the seeds probe wrote (4 seeds), scattering at the refuse input, scattering at the stop input, scattering at the answer input, scattering at the stop input, some of the broken input is accepted and reaches deep into the reader
 """
 
 fn test_fuzz_scatter(ksplc: U8[], arena: Arena$@) //< ksplc runs the child and the subject
@@ -240,4 +244,6 @@ fn test_fuzz_scatter(ksplc: U8[], arena: Arena$@) //< ksplc runs the child and t
     if !got.equals(scatter_out) || r.exit_code != 1
         panic(U8$[]::arena.text().s("the fuzz run put out\n").s(got)
             .s("and ended on \{r.exit_code\}\n").s(r.stderr_data).take())
-    verdict.pass("A refused seed the run made fails, a found one is dropped, and no reach fails.")
+    verdict
+        .pass("A refused seed the run made fails, a found one is dropped, one that stops the \
+            subject fails, so does a kind left with no seed, and no reach fails.")

@@ -3,9 +3,10 @@
 //< The arena-backed `Json_builder` / `Array_builder` / `Obj_builder` build a head-and-tail chain
 //< by value, so nothing is copied twice. Parsing limits the nesting depth. An integer stays an
 //< integer, so one wider than 53 bits does not round on the way through.
+import "std/bignat" // `f64_to_bits`
 import "std/chars"
 import "std/ds" { List }
-import "std/mem" { Arena }
+import "std/mem" + { Arena, Own_arena }
 import "std/stack_limit" { Stack_limit }
 import "std/str" { Str_builder }
 import "std/strfmt"
@@ -57,6 +58,7 @@ priv fn append_member(head: Member$@$@, tail: Member$@$@, m: Member$@)
 // ---------------------------------------------------------
 pub struct Json_builder //< makes values, and the two builders that assemble them
     pub arena: Arena$@ //< the arena every value it makes is allocated in
+    priv own: Own_arena //< that arena, when the builder made it for itself; `free` lets it go
 
 pub struct Array_builder //< builds an array in the order elements are pushed
     pub builder: Json_builder //< the builder that allocates the elements
@@ -70,9 +72,16 @@ pub struct Obj_builder //< builds an object; setting a key again replaces it
 
 impl Json_builder
     pub fn new( //< a builder that allocates everything it makes from that arena
-        arena: Arena$@, //< the arena for the values
+        //<
+        //< With `null` it makes an arena of its own, so `defer b.free()` frees every value it made.
+        arena: Arena$@, //< where values go; null means an arena of the builder's own and a `free()`
     ): Json_builder
-        return Json_builder::{ .arena = arena }
+        work: = mem.scratch(arena)
+        return Json_builder::{ .arena = work.arena, .own = work.own }
+    pub fn free(r: Self$@) //< lets go every value it made, when it made its own arena
+        //<
+        //< Given an arena, it frees nothing: that arena does. A second `free()` frees nothing.
+        r.own.free()
     pub fn null_val(_r: Self$@): Val //< JSON's `null`
         return .null_val
     pub fn bool_val(_r: Self$@, b: Bool): Val //< `true` or `false`
@@ -90,6 +99,8 @@ impl Json_builder
         return Array_builder::{ .builder = r$, .head = null, .tail = null }
     pub fn obj(r: Self$@): Obj_builder //< an empty object builder
         return Obj_builder::{ .builder = r$, .head = null, .tail = null }
+
+impl Json_builder: Owned {} //< `free()` lets go the arena it made for itself
 
 impl Array_builder
     pub fn push( //< adds one element at the end
@@ -169,15 +180,10 @@ priv const stack_margin: Sz = 64 * 1024 //<
     //< by default on macOS), so a parse on one also asks where its stack ends ("A walk that must
     //< not exhaust its stack asks where the stack ends" in `std/docs/DESIGN.md`). Below the check
     //< run one level's calls and the throw, which need far less than this.
-priv const stack_ask_depth: Sz = 32 //<
-    //< The nesting from which a parse asks where its stack ends
-    //<
-    //< **Asking is not cheap**, and most documents never get this deep, so they never pay for it.
-    //< The levels above it need some 50KB unoptimised (about 1.5KB a level), which any stack holds.
 
 priv fn enter_nesting(ctx: Parse_ctx$@): Void!Json_error
     ctx.depth += 1
-    if ctx.depth > max_nesting_depth || ctx.stack.near_at(ctx.depth)
+    if ctx.depth > max_nesting_depth || ctx.stack.near()
         throw .too_deep
 
 priv fn exit_nesting(ctx: Parse_ctx$@)
@@ -396,20 +402,42 @@ priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
     exit_nesting(ctx)
     return .array_val(head)
 
-pub fn parse( //< the whole document as one value; anything left over is refused
+pub struct Doc //< a parsed document: its value, and the arena `parse` built it in given null
     //<
+    //< **Only the document frees anything.** Its `val`, and every part read out of that (`get`,
+    //< `get_at`, `arr_list`), is a `Val`, which has no `free`: freeing a part cannot tear the
+    //< whole.
+    pub val: Val //< the document's value
+    priv own: Own_arena //< the arena `parse` made for it given null, or empty; `free` lets it go
+
+impl Doc
+    pub fn free(r: Self) //< lets go all of the value, when `parse` was given null
+        //<
+        //< Parsed into the caller's arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
+impl Doc: Owned {} //< `free()` lets go the arena `parse` made for the document
+
+pub fn parse( //< the whole document; anything left over is refused
+    //<
+    //< Read its value as `doc.val`. With `null`, `defer doc.free()` frees all of it.
     //< Caution: **A document ends after one value.** Otherwise `1 2` **succeeds** as `1`, and two
     //< concatenated inputs silently pass as the first.
     src: U8[], //< the text to read
-    arena: Arena$@, //< the arena the values are allocated in
-): Val!Json_error //< the value; fails on bad syntax or on text after it
-    $ctx: = Parse_ctx::{ .src = src, .pos = 0, .arena = arena, .depth = 0,
-        .stack = Stack_limit.later(stack_margin, stack_ask_depth) }
-    v: = parse_value(ctx@)!
+    arena: Arena$@, //< where the values go; null means the document's own arena and a `free()`
+): Doc!Json_error //<
+    //< the document; fails on bad syntax or on text after it, leaving nothing behind
+    $work: = mem.scratch(arena)
+    $ctx: = Parse_ctx::{ .src = src, .pos = 0, .arena = work.arena, .depth = 0,
+        .stack = Stack_limit.later(stack_margin) }
+    v: = parse_value(ctx@) catch e
+        work.free()
+        throw e
     skip_ws(ctx@)
     if ctx.pos < src.len
+        work.free()
         throw .trailing_input
-    return v
+    return Doc::{ .val = v, .own = work.own }
 
 priv fn write_break(out: Str_builder$@, indent: Sz, depth: Sz) //< a newline with indentation
     if indent <= 0
@@ -609,3 +637,72 @@ impl Val
             return i
         default {}
         return default_val
+
+    pub fn equals( //< whether the two hold the same JSON value
+        //<
+        //< **A number equals only one of its own kind** (`1` is not `1.0`: the reader keeps them
+        //< apart), and a decimal only the same F64, bit for bit, so `-0.0` is not `0.0`. Objects
+        //< are equal when they hold the same members in any order, a repeated key counted each
+        //< time.
+        //< Caution: **It is quadratic in an object's members**, as `get` called for each key is.
+        r: Self,
+        o: Val, //< the value to compare with
+    ): Bool
+        if r.kind_rank() != o.kind_rank()
+            return false
+        switch r
+        case .null_val
+            return true
+        case .bool_val(b)
+            return b == o.as_bool(!b)
+        case .int_val(i)
+            return i == o.as_int64(0I64)
+        case .float_val(f)
+            return bignat.f64_to_bits(f) == bignat.f64_to_bits(o.as_f64(0.0))
+        case .str_val(s)
+            return s.equals(o.as_str())
+        case .array_val(head)
+            $a: = head
+            $b: = o.arr_head()
+            for a != null && b != null
+                if !a.val.equals(b.val)
+                    return false
+                a = a.next
+                b = b.next
+            return a == null && b == null
+        case .obj_val(own)
+            if count_members(own.head, null) != count_members(o.obj_head(), null)
+                return false
+            $m: = own.head
+            for m != null
+                if count_members(own.head, m) != count_members(o.obj_head(), m)
+                    return false
+                m = m.next
+            return true
+
+    priv fn kind_rank(r: Self): I32 //< which of the seven kinds it is, as a number
+        switch r
+        case .null_val
+            return 0
+        case .bool_val
+            return 1
+        case .int_val
+            return 2
+        case .float_val
+            return 3
+        case .str_val
+            return 4
+        case .array_val
+            return 5
+        case .obj_val
+            return 6
+
+priv fn count_members(head: Member$@, like: Member$@): Sz //<
+    //< How many members of the list hold the same key and value as `like`; null counts them all
+    $n: Sz = 0
+    $m: = head
+    for m != null
+        if like == null || (m.key.equals(like.key) && m.val.equals(like.val))
+            n += 1
+        m = m.next
+    return n

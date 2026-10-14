@@ -15,6 +15,7 @@ import "ksplc/tests/support/lsp_pick"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, from_names, has_name,
     is_missing }
 import "ksplc/tests/support/lsp_recover"
+import "ksplc/tests/support/lsp_rename"
 import "ksplc/tests/support/lsp_spell"
 import "std/chars"
 import "std/ds" { List }
@@ -101,7 +102,7 @@ priv fn check_hover_builtin_member(c: jsonrpc.Client$@, arena: Arena$@)
         got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
             verdict.check(label, false, end_text(e))
             continue
-        text: = lsp_client.hover_text(got)
+        text: = lsp_client.hover_text(got.val)
         verdict.check(label, text.find_str(builtin_wants[i]).is_some(),
             lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     // The worker is still the same one; a remade one would not know this document.
@@ -109,7 +110,7 @@ priv fn check_hover_builtin_member(c: jsonrpc.Client$@, arena: Arena$@)
     alive: = c.request("textDocument/hover", live, lsp_client.read_ms, arena) catch e
         verdict.check("the analysis side is still standing after them", false, end_text(e))
         return
-    a_text: = lsp_client.hover_text(alive)
+    a_text: = lsp_client.hover_text(alive.val)
     verdict.check("the analysis side is still standing after them",
         a_text.find_str("probe").is_some(),
         lsp_client.why(c, arena.text().s("'").s(a_text).s("'").take(), arena))
@@ -145,7 +146,7 @@ priv fn check_variant_through_alias(c: jsonrpc.Client$@, arena: Arena$@)
     got: = c.request("textDocument/hover", pos, lsp_client.read_ms, arena) catch e
         verdict.check(shown, false, end_text(e))
         return
-    text: = lsp_client.hover_text(got)
+    text: = lsp_client.hover_text(got.val)
     verdict.check(shown, text.find_str("line(len: I32)").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     jump: = "a jump from it lands on the enum's variant"
@@ -153,7 +154,7 @@ priv fn check_variant_through_alias(c: jsonrpc.Client$@, arena: Arena$@)
         c.request("textDocument/definition", pos, lsp_client.read_ms, arena) catch e
         verdict.check(jump, false, end_text(e))
         return
-    landed: = went.get("result").get("range").get("start").get("line").as_int(-1)
+    landed: = went.val.get("result").get("range").get("start").get("line").as_int(-1)
     verdict.check(jump, landed == I32::decl_line(alias_src, "  line(len: I32)", arena),
         lsp_client.why(c, arena.text().s("line \{landed\}").take(), arena))
 
@@ -203,9 +204,9 @@ priv fn published_for(c: jsonrpc.Client$@, tail: U8[], arena: Arena$@): Publishe
     for _k in Range.asc(8)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        p: = msg.get("params")
+        p: = msg.val.get("params")
         if !p.get("uri").as_str().ends_with(tail)
             continue
         return Published::{ .found = true,
@@ -241,9 +242,9 @@ priv fn check_wide_range(c: jsonrpc.Client$@, arena: Arena$@)
     for _k in Range.asc(12)
         msg: = c.read_msg(heavy_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        p: = msg.get("params")
+        p: = msg.val.get("params")
         if !p.get("uri").as_str().ends_with("wide_probe.kspl")
             continue
         got: = p.get("diagnostics").arr_list(arena)
@@ -283,9 +284,9 @@ priv fn check_ragged_reaches(c: jsonrpc.Client$@, arena: Arena$@)
     for _k in Range.asc(12)
         msg: = c.read_msg(heavy_ms, arena) catch
             break
-        if !msg.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
             continue
-        p: = msg.get("params")
+        p: = msg.val.get("params")
         if !p.get("uri").as_str().ends_with("ragged_probe.kspls")
             continue
         found = true
@@ -373,7 +374,7 @@ priv fn probe_hover(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[]
         c.request("textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena), lsp_client.read_ms,
         arena) catch
         return ""
-    return lsp_client.hover_text(got)
+    return lsp_client.hover_text(got.val)
 
 priv fn check_didclose(exe: U8[], arena: Arena$@)
     $c: =
@@ -383,8 +384,7 @@ priv fn check_didclose(exe: U8[], arena: Arena$@)
         return
     defer c.free()
     _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
-        fallback .null_val
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
     for uri in U8[][]::{ closed_uri, open_uri }
         c.notify("textDocument/didOpen", lsp_client.did_open(uri, close_src, arena),
             lsp_client.send_ms, arena) catch {}
@@ -406,10 +406,8 @@ priv fn check_cfg(c: jsonrpc.Client$@, exe: U8[], arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, cfg_uri, arena)
-    off: =
-        c.request("textDocument/hover", lsp_client.at_pos(cfg_uri, 3, 4, arena),
-        lsp_client.read_ms, arena) catch
-        fallback .null_val
+    off: = lsp_client.answer(c, "textDocument/hover",
+        lsp_client.at_pos(cfg_uri, 3, 4, arena), lsp_client.read_ms, arena)
     off_text: = lsp_client.hover_text(off)
     // Caution: **It must not return null.** A dropped declaration is not in the AST, so without a
     // reason it looks like "nothing at that position" and the feature seems dead.
@@ -427,14 +425,11 @@ priv fn check_cfg(c: jsonrpc.Client$@, exe: U8[], arena: Arena$@)
         return
     defer c2.free()
     _init: =
-        c2.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
-        fallback .null_val
+        c2.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
     c2.notify("textDocument/didOpen", lsp_client.did_open(cfg_uri, cfg_src, arena),
         lsp_client.send_ms, arena) catch {}
-    on: =
-        c2.request("textDocument/hover", lsp_client.at_pos(cfg_uri, 3, 4, arena),
-        lsp_client.read_ms, arena) catch
-        fallback .null_val
+    on: = lsp_client.answer(c2@, "textDocument/hover",
+        lsp_client.at_pos(cfg_uri, 3, 4, arena), lsp_client.read_ms, arena)
     on_text: = lsp_client.hover_text(on)
     detail2: = lsp_client.why(c2@,
         arena.text().s("'").s(on_text).s("'").take(), arena)
@@ -483,8 +478,7 @@ priv fn walk_changes(exe: U8[], dir: U8[], arena: Arena$@): json.Val //<
     doc: = b.obj().set("uri", b.str_val("pkg/lib.kspls")).build()
     params: = b.obj().set("textDocument", doc).set("position", pos)
         .set("newName", b.str_val("tap")).build()
-    return c.request("textDocument/rename", params, heavy_ms, arena) catch
-        fallback .null_val
+    return lsp_client.answer(c@, "textDocument/rename", params, heavy_ms, arena)
 
 priv fn check_walk(exe: U8[], arena: Arena$@)
     dir: = harness.sandbox("lsp_walk")
@@ -522,7 +516,7 @@ priv fn dropped_reason(c: jsonrpc.Client$@, arena: Arena$@): U8[] //<
         c.request("textDocument/hover", lsp_client.at_pos("cfg_walk.kspls", 1, 4, arena),
         lsp_client.read_ms, arena) catch
         return ""
-    return lsp_client.hover_text(got)
+    return lsp_client.hover_text(got.val)
 
 priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
     name: = "what sits under an unraised #cfg keeps its reason after a references request"
@@ -536,15 +530,13 @@ priv fn check_cfg_after_walk(exe: U8[], arena: Arena$@)
         return
     defer c.free()
     _init: =
-        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch
-        fallback .null_val
+        c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch {}
     c.notify("textDocument/didOpen",
         lsp_client.did_open("cfg_walk.kspls", cfg_walk_src, arena), lsp_client.send_ms, arena) catch {}
     before: = dropped_reason(c@, arena)
     _uses: =
         c.request("textDocument/references",
-        lsp_client.at_pos("cfg_walk.kspls", 4, 4, arena), heavy_ms, arena) catch
-        fallback .null_val
+        lsp_client.at_pos("cfg_walk.kspls", 4, 4, arena), heavy_ms, arena) catch {}
     after: = dropped_reason(c@, arena)
     d: = lsp_client.why(c@,
         arena.text().s("before '\{before\}', after '\{after\}'").take(), arena)
@@ -644,23 +636,21 @@ fn main(): I32
         c.request("initialize", lsp_client.empty_obj(arena), lsp_client.read_ms, arena) catch e
         return harness
             .fatal(arena.text().s("initialize does not return \{end_text(e)\}").take())
-    d15: = lsp_client.dump(init, arena)
-    ok3: = !is_missing(init.get("result").get("capabilities"))
+    d15: = lsp_client.dump(init.val, arena)
+    ok3: = !is_missing(init.val.get("result").get("capabilities"))
     verdict.check("initialize returns capabilities", ok3, d15)
 
     c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, src, arena),
         lsp_client.send_ms, arena) catch {}
     // A request discards didOpen's publishDiagnostics while waiting for its own id.
     probe_pos: = lsp_client.at_pos(probe_uri, 1, 8, arena)
-    hover1: =
-        c.request("textDocument/hover", probe_pos, lsp_client.read_ms, arena) catch
-        fallback .null_val
+    hover1: = lsp_client.answer(c@, "textDocument/hover", probe_pos, lsp_client.read_ms, arena)
     verdict.check("hover answers (before the injection)", !is_missing(hover1),
         lsp_client.why(c@, "", arena))
 
     // The source's colouring.
     // Caution: **Having announced it, answer**, or the editor waits.
-    caps: = init.get("result").get("capabilities").get("semanticTokensProvider")
+    caps: = init.val.get("result").get("capabilities").get("semanticTokensProvider")
     legend: = caps.get("legend")
     types_n: = legend.get("tokenTypes").arr_list(arena).len
     verdict.check("it names semanticTokens and puts the legend out",
@@ -668,10 +658,8 @@ fn main(): I32
     // Caution: **Test it on a source that parses.**
     c.notify("textDocument/didOpen", lsp_client.did_open(semtok_uri, semtok_src, arena),
         lsp_client.send_ms, arena) catch {}
-    sem: =
-        c.request("textDocument/semanticTokens/full", lsp_client.at_doc(semtok_uri, arena),
-        lsp_client.read_ms, arena) catch
-        fallback .null_val
+    sem: = lsp_client.answer(c@, "textDocument/semanticTokens/full",
+        lsp_client.at_doc(semtok_uri, arena), lsp_client.read_ms, arena)
     sem_data: = sem.get("result").get("data")
     toks: = read_tokens(sem_data, types_n, arena)
     d_sem: = lsp_client.dump(sem, arena)
@@ -686,7 +674,7 @@ fn main(): I32
     verdict.check("every token covers one whole name as written",
         off_words(sem_data, semtok_src, arena) == 0, d_sem)
     lsp_client.close(c@, semtok_uri, arena)
-    lsp_outline.run_outline(c@, init.get("result").get("capabilities"), arena)
+    lsp_outline.run_outline(c@, init.val.get("result").get("capabilities"), arena)
 
     // **A document that fails to parse is coloured as far as it parsed**: the editor reads it a
     // second time ("Only the editor's parse recovers from a syntax error" in
@@ -694,10 +682,8 @@ fn main(): I32
     // Caution: **The skipped text is still not coloured**, and nothing is guessed
     // (`lsp/semtok.kspls`'s header). The probe's `fn main` is valid and its `var x = 1;` is not, so
     // the answer is one token.
-    bad: =
-        c.request("textDocument/semanticTokens/full", lsp_client.at_doc(probe_uri, arena),
-        lsp_client.read_ms, arena) catch
-        fallback .null_val
+    bad: = lsp_client.answer(c@, "textDocument/semanticTokens/full",
+        lsp_client.at_doc(probe_uri, arena), lsp_client.read_ms, arena)
     bad_toks: = read_tokens(bad.get("result").get("data"), types_n, arena)
     verdict.check("a source that does not pass is coloured as far as it parsed",
         !is_missing(bad.get("result")) && bad_toks.count == 1 && !bad_toks.over && !bad_toks.back,
@@ -739,9 +725,7 @@ fn main(): I32
     lsp_recover.run_recover(c@, arena)
 
     c.notify("$/ksplTestCrash", lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
-    after_crash: =
-        c.request("textDocument/hover", probe_pos, lsp_client.read_ms, arena) catch
-        fallback .null_val
+    after_crash: = lsp_client.answer(c@, "textDocument/hover", probe_pos, lsp_client.read_ms, arena)
     d19: = lsp_client.why(c@, "", arena)
     verdict.check("the crash hook ends the worker", gave_up(c@, crash_log, arena), d19)
     verdict.check("a recovery has only the probe to restore",
@@ -750,9 +734,7 @@ fn main(): I32
     verdict.check("hover answers after a crash too (the supervisor remakes the worker)", ok2, d19)
 
     c.notify("$/ksplTestHang", lsp_client.empty_obj(arena), lsp_client.send_ms, arena) catch {}
-    after_hang: =
-        c.request("textDocument/hover", probe_pos, after_hang_ms, arena) catch
-        fallback .null_val
+    after_hang: = lsp_client.answer(c@, "textDocument/hover", probe_pos, after_hang_ms, arena)
     d20: = lsp_client.why(c@, "", arena)
     verdict.check("the hang hook trips the watchdog", gave_up(c@, hang_log, arena), d20)
     ok1: = !is_missing(after_hang)
@@ -763,6 +745,7 @@ fn main(): I32
     lsp_recover.run_restart(exe, arena)
     check_worker_alive(exe, top, ch_text, arena)
     check_walk(exe, arena)
+    lsp_rename.run_rename(exe, init.val.get("result").get("capabilities"), arena)
     check_cfg_after_walk(exe, arena)
     lsp_recover.run_package(exe, arena)
     lsp_pick.check_completion(c@, arena)

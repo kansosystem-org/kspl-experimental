@@ -57,6 +57,18 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
         nm_o: = arena.text().s("--local hands out no file but the page without a token: ").s(target)
             .take()
         verdict.check(nm_o, other.status == 401, client.shown(other, arena))
+    // **Without the token, a link answers as every other name does.** Resolved before the token is
+    // checked, a link answers 403 and any other name 401, so a client without the token learns
+    // which names under the root are links.
+    if make_link(root, "peek.txt", "../secret.txt", arena)
+        for target in U8[][]::{ "/peek.txt", "/no-such.txt", "/.hidden" }
+            r: = client.get(local_port, target, "", arena)!
+            nm_p: = arena.text().s("--local answers a name without the token as any other: ")
+                .s(target).take()
+            verdict.check(nm_p, r.status == 401, client.shown(r, arena))
+    else
+        verdict.skip_check("--local answers a link without the token as any other name",
+            "a link cannot be made with `ln -s` in this environment")
     with_token: = client.get(local_port, "/sub/one.txt", auth, arena)!
     verdict.check("--local hands out a file under the root to the token",
         with_token.status == 200 && with_token.body.equals("one\n"),
@@ -71,6 +83,17 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
         arena.text().s(rebound).s(auth).take(), arena)!
     verdict.check("--local refuses a Host other than the loopback: with the token, in JSON",
         r_api.status == 403 && client.is_json(r_api), client.shown(r_api, arena))
+
+    // **A second `Host` is refused whichever comes first.** Taking the first, a request naming the
+    // loopback and then another host would pass as this server's.
+    host_names: U8[][2] = ::{ "two names", "one name twice" }
+    host_heads: U8[][2] = ::{ "Host: 127.0.0.1\r\nHost: attacker.example\r\n",
+        "Host: 127.0.0.1\r\nHost: 127.0.0.1\r\n" }
+    for i in Range.asc(2)
+        r: = client.get(local_port, "/", host_heads[i], arena)!
+        nm_h: = arena.text().s("--local refuses a request naming Host twice: ").s(host_names[i])
+            .take()
+        verdict.check(nm_h, r.status == 400, client.shown(r, arena))
 
     // Caution: **Do not decide per endpoint whether a token is needed**, or a new endpoint forgets.
     // This also checks that the existing endpoints need one.

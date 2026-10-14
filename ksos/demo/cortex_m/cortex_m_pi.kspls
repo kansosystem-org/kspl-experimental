@@ -21,6 +21,7 @@ priv const cs_work: I32 = 5000000 // the critical section's work (well over one 
 $g_mutex: sync.Mutex
 $g_low_done: I32 = 0 // set once low completed its critical section
 $g_mid_ran: I32 = 0 // set once mid (the mid-priority hog) ran
+$g_low_prio_held: I32 = 0 // low's priority at the end of its section, while high waits
 
 $tcb_low: Task
 $tcb_mid: Task
@@ -40,6 +41,7 @@ fn low_task(_arg: Void$@): Void //<
     for $i: I32 = 0; i < cs_work; i += 1
         __kspl_asm_volatile("nop")
     g_low_done = 1
+    g_low_prio_held = tcb_low.get_prio()
     con.puts("[low] work done, releasing mutex\n")
     g_mutex.unlock()
     for
@@ -53,17 +55,18 @@ fn mid_task(_arg: Void$@): Void //< the mid-priority hog
 fn high_task(_arg: Void$@): Void //< the highest priority
     //<
     //< It requests the mutex after low and mid have started. low holds it, so it blocks, and
-    //< inheritance raises low. Once it gets the mutex, it reports the outcome and ends QEMU.
+    //< inheritance raises low. Once it gets the mutex, it checks the outcome and ends QEMU.
     Task.delay(5) // request after low has locked and mid has started
     g_mutex.lock() // low holds it -> it blocks (inheritance raises low to prio3)
     con.puts("=== Kanso OS (Cortex-M) priority-inheritance mutex ===\n")
-    if g_low_done == 1
-        con.puts("[high] acquired after low finished its section (boosted past mid)\n")
-    if g_mid_ran == 1
-        con.puts("[high] mid-priority hog was running -> real inversion pressure\n")
-    con.puts("[high] priority inheritance prevented unbounded inversion -> OK\n")
-    con.puts("=== done ===\n")
+    con.check("high got the mutex only once low had finished its section (mutual exclusion)",
+        g_low_done == 1)
+    con.check("the mid-priority hog was running (real inversion pressure)", g_mid_ran == 1)
+    con.check("low ran its section at high's priority (3), lent through the mutex",
+        g_low_prio_held == 3)
+    con.check("low is back at its own priority (1) once it let go", tcb_low.get_prio() == 1)
     g_mutex.unlock()
+    con.print_summary("Cortex-M priority inheritance")
     con.exit()
 // The bare-metal entry, called on the PSP from startup.S.
 #export

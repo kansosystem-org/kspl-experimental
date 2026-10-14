@@ -75,7 +75,13 @@ priv fn report_notes_of(sema: Sema_ctx$@, file: U8[], src: U8[],
             // **A tab gets no code**: a line at column 0 stops on a syntax error first, so a code
             // would never fire. `tests/layout_test.kspls` checks that it is found; the
             // reason is in "The indentation notation (`.kspls`)" in `../docs/DESIGN.md`.
-        }
+        } case .terminator(col)
+            // **No code either**: accepted, it would be a second spelling of the line's end
+            // (Principle 6), so no setting may let it pass.
+            sema.report_diagnostic_at(file, src, starts.get(nt.line - 1) + col, 1, .error,
+                "a statement in the indentation notation ends at the end of its line, so this ';' \
+                    is not written: delete it (a ';' stands only between two statements on one \
+                    line)")
 
 priv struct Read_file //< one file the compile read, under the name the loader used
     name: U8[]

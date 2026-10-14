@@ -60,6 +60,7 @@ The second line checks the result: it prints the `std/` folder `ksplc` uses.
 | A normal build | Nothing: it builds optimised, with `-g` (debug information) |
 | To pass flags to the C compiler | `--cflags=…`; they come after ksplc's own |
 | To step through it in a debugger | `--cflags=-O0` (no optimization) |
+| To stop it at a bad memory access, and name the line | `--sanitize=address` (the C compiler's address sanitizer; `--cflags` does not take `-fsanitize=`) |
 
 The steps it takes, and how to take them apart (to ship objects without the source, say), are in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 

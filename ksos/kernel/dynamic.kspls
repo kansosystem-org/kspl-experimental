@@ -5,6 +5,8 @@
 //     stack are freed at once, safely.
 //   - Deleting the current task: freeing is deferred, then Task.delete switches away for good.
 //     Another task frees it the next time it calls into this file (or the idle task does).
+//   - g_dyn is read and written only inside a critical section, as Task.create chooses its slot in
+//     one: a tick between choosing an entry and writing it lets another task take or free it too.
 // ==========================================
 import "ksos/kernel/heap"
 import "ksos/kernel/sync"
@@ -50,21 +52,47 @@ priv fn find_dyn_slot(): Sz //<
         return max_dyn
     return slot
 
+priv fn release_dyn(idx: Sz): Dyn_entry //< [Call it inside a critical section] frees the entry
+    //<
+    //< It returns what the entry held, for the caller to give back to the heap once the critical
+    //< section is over: claimed here, no other task can free the same memory.
+    e: = g_dyn[idx]
+    g_dyn[idx].tcb = null
+    g_dyn[idx].stack = null
+    g_dyn[idx].pending_reap = false
+    return e
+
+priv fn free_dyn(e: Dyn_entry) //< returns a released entry's stack and Task to the heap
+    heap.heap_free(Void$@::e.stack)
+    heap.heap_free(Void$@::e.tcb)
+
+priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry reap_pending frees
+    //<
+    //< If there is none it returns max_dyn.
+    //< Caution: **Wait for `.done`, not for the flag alone.** delete_dyn sets the flag before the
+    //< task's own delete, which a tick can hold off; `.done` is set inside that delete's critical
+    //< section, which ends in the switch away from the stack.
+    for i in Range.asc(g_dyn_count)
+        if g_dyn[i].pending_reap && g_dyn[i].tcb.get_state() == .done
+            return i
+    return max_dyn
+
 fn reap_pending(): Sz //<
-    //< Frees every pending_reap entry that is not g_current
+    //< Frees every entry whose task deleted itself and has since switched away
     //<
     //< Task.create_dyn and delete_dyn call it first; any task may call it too.
     $reaped: Sz = 0
-    cur: = Task.current()
-    for i in Range.asc(g_dyn_count)
-        if g_dyn[i].pending_reap && g_dyn[i].tcb != cur
-            heap.heap_free(Void$@::g_dyn[i].stack)
-            heap.heap_free(Void$@::g_dyn[i].tcb)
-            g_dyn[i].tcb = null
-            g_dyn[i].stack = null
-            g_dyn[i].pending_reap = false
-            reaped += 1
-    return reaped
+    for
+        s: = task.irq_save()
+        idx: = find_reapable()
+        $e: Dyn_entry = ::{}
+        if idx < max_dyn
+            e = release_dyn(idx)
+        task.irq_restore(s)
+        if idx >= max_dyn
+            return reaped
+        free_dyn(e)
+        reaped += 1
 
 priv fn reap_hook(): Void //<
     //< Adapts reap_pending to task.Idle_hook's shape (fn(): Void)
@@ -86,23 +114,27 @@ impl Task
             //< It frees both and returns none when max_tasks in task.kspls, the port's contexts or
             //< max_dyn run out (an allocation failure panics inside heap_alloc).
         reap_pending()
-        slot: = find_dyn_slot()
-        if slot >= max_dyn
-            return .none
+        // Allocated before a slot is taken, so the heap is never entered with interrupts held off
+        // here: a full table gives them straight back.
         tcb: = heap.heap_alloc_as<|Task|>()
         stack: = U8$@::heap.heap_alloc(stack_size)
         // Caution: **Record it before create.** A new task that outranks the caller runs inside
         // create, and a delete_dyn it calls there must find its entry.
-        g_dyn[slot].tcb = tcb
-        g_dyn[slot].stack = stack
-        g_dyn[slot].pending_reap = false
-        if slot == g_dyn_count
-            g_dyn_count += 1
+        s: = task.irq_save()
+        slot: = find_dyn_slot()
+        if slot < max_dyn
+            g_dyn[slot] = Dyn_entry::{ .tcb = tcb, .stack = stack, .pending_reap = false }
+            if slot == g_dyn_count
+                g_dyn_count += 1
+        task.irq_restore(s)
+        if slot >= max_dyn
+            free_dyn(Dyn_entry::{ .tcb = tcb, .stack = stack, .pending_reap = false })
+            return .none
         if !tcb.create(U8$[]::{ .ptr = stack, .len = stack_size }, entry, arg, prio, name)
-            g_dyn[slot].tcb = null
-            g_dyn[slot].stack = null
-            heap.heap_free(Void$@::stack)
-            heap.heap_free(Void$@::tcb)
+            s2: = task.irq_save()
+            e: = release_dyn(slot)
+            task.irq_restore(s2)
+            free_dyn(e)
             return .none
         return .some(tcb)
 
@@ -114,21 +146,25 @@ impl Task
         //< come from create_dyn it does nothing, so no wrong pointer is freed.
         assert(r != null, "Task.delete_dyn: receiver must not be null")
         reap_pending()
+        s: = task.irq_save()
         idx: = find_dyn_by_tcb(r)
         if idx >= max_dyn
+            task.irq_restore(s)
             return // it did not come from create_dyn (a static task, for example): do nothing
         if r == Task.current()
             // Deleting the current task: it still runs on this stack, so freeing is deferred.
             g_dyn[idx].pending_reap = true
+            // Caution: **Leave the critical section before the delete.** On Cortex-M the switch
+            // away is taken as the outermost one ends; inside this one, the delete would return.
+            task.irq_restore(s)
             r.delete() // the schedule() inside switches to another task and never returns
             return // unreachable (spelled out for the flow analysis)
-        // Deleting another task: on a single core r is not running, so it is freed at once.
+        // Deleting another task: on a single core r is not running. The entry is claimed first, so
+        // r deleting itself meanwhile finds nothing, and r is freed only once it is deleted.
+        e: = release_dyn(idx)
+        task.irq_restore(s)
         r.delete()
-        heap.heap_free(Void$@::g_dyn[idx].stack)
-        heap.heap_free(Void$@::g_dyn[idx].tcb)
-        g_dyn[idx].tcb = null
-        g_dyn[idx].stack = null
-        g_dyn[idx].pending_reap = false
+        free_dyn(e)
 
 // ============================ The semaphore, mutex and event ============================
 // None of these structs owns a buffer, so creating and destroying only wrap

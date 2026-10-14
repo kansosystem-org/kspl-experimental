@@ -101,6 +101,7 @@ fn main(): I32
 //<
 //< **The `else` is there, one line down**, so "a postfix condition has no `else`" must
 //< not be what is said.
+// EXPECT: error: expected 'else'
 // EXPECT: a conditional value split across lines goes in parentheses
 // EXPECT-NOT: KSPL has no postfix condition
 fn pick(c: Bool): I32
@@ -191,6 +192,29 @@ fn main(): I32
   io.out().s("A\n")
 　io.out().s("B\n")
   return 0
+// ==== case laid_name_outside_ascii
+//< A name in another script names the ASCII rule, and the list names the notation's own marks
+//<
+//< Python, Rust, Swift, Java and C++ all take `かんそ` as a name, so the bare list would not say why
+//< it is refused. The indentation notation writes no `}`, so the list names the block's end.
+// EXPECT: laid_name_outside_ascii.kspls:9:5: error: expected the end of the block, an identifier
+// EXPECT: Note: a name is written with the ASCII letters, digits and '_' alone, so 'か' cannot stand in one.
+// EXPECT-NOT: '}'
+fn main(): I32
+    かんそ: I32 = 3
+    return かんそ
+// ==== case laid_prototype_without_body
+//< A function ending in `;` gets the same "has no body" as in the brace notation
+//<
+//< The written `;` alone ends the line, so the parse goes on to the analysis's message, the one a
+//< `.kspl` file gets, beside the refusal of the `;` itself.
+// EXPECT: laid_prototype_without_body.kspls:8:1: error: 'f' has no body
+// EXPECT: laid_prototype_without_body.kspls:8:12: error: a statement in the indentation notation ends at the end of its line
+// EXPECT-NOT: expected
+fn f(): I32;
+
+fn main(): I32
+    return 0
 // ==== case laid_ragged_sibling
 //< In the indentation notation, siblings in one block whose columns do not line up are rejected
 //<
@@ -198,7 +222,7 @@ fn main(): I32
 //< `4 columns` line reads as outside the `if` yet is inside it: two readings, two programs, which
 //< Principle 8 in `../../../docs/DESIGN.md` refuses. **It carries no code**, so none can switch it.
 // EXPECT: but its siblings sit
-// EXPECT-NOT: [W0105]
+// EXPECT-NOT: error: [
 import "std/io"
 
 fn main(): I32
@@ -257,6 +281,18 @@ fn main(): I32
   big: = count_over(xs) fn(x: I32; floor: I32): Bool
     return x > floor
   return I32::big
+// ==== case laid_trailing_semicolon
+//< A `;` written at a statement's line end is refused on the `;`, naming the notation's rule
+//<
+//< Converted with a second `;` after it, it read as an empty statement and listed `'}'` and
+//< `';'`, which this notation never writes (`written_terminator` in `parse/layout.kspls`).
+// EXPECT: laid_trailing_semicolon.kspls:9:16: error: a statement in the indentation notation ends at the end of its line, so this ';' is not written: delete it (a ';' stands only between two statements on one line)
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: expected '}'
+fn main(): I32
+    $x: I32 = 0;
+    x += 1; x += 2
+    return x
 // ==== case laid_value_below_return
 //< A value on the line below a lone `return`
 //<
@@ -313,17 +349,17 @@ fn main()
 //< The counterpart of the case above
 //<
 //< A local and a local const may omit the annotation: the rule is the top level's alone, not a
-//< stop on inference. An undefined symbol fails it on purpose, and the EXPECT-NOT pins that no
-//< annotation diagnostic joins it.
-// EXPECT: undefined path or identifier 'no_such_fn'
-// EXPECT-NOT: requires a type annotation
+//< stop on inference. The case fails on purpose through the same check, on a top-level variable.
+// EXPECT: top-level declaration 'g_bare' requires a type annotation
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: 'local_
 
 g_f: F64 = 2.5
 const c_n: Sz = 8
+g_bare: = 1
 
 fn main()
   local_f: = 2.5
   const local_n = 8
   _x: = local_f + g_f
   _y: = local_n + c_n
-  no_such_fn()

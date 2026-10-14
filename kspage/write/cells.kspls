@@ -12,6 +12,7 @@ import "kspage/lay/caret"
 import "kspage/lay/page" { Page }
 import "kspage/model/day"
 import "kspage/model/doc" + { Axis, Block, Tile }
+import "kspage/model/limit"
 import "kspage/write/edit" + { Editor }
 import "kspage/write/field"
 import "kspage/write/record" { Step }
@@ -154,6 +155,15 @@ enum Merge_end //< the result of merging the selected cells
     shut //< the document is open read-only
     alone //< only one cell is selected, so there is nothing to merge it with
     ragged //< an already merged cell extends outside the selection
+    too_wide //< the selection covers more rows or columns than one merge may (`limit.most_span`)
+
+enum Line_end //< the result of adding a row or a column
+    //<
+    //< Caution: **Do not merge the refusals into one** (the same rule as `Sort_end`).
+    done
+    outside //< the cursor is not inside a table cell
+    shut //< the document is open read-only
+    too_wide //< the column would widen a merge past what one may cover (`limit.most_span`)
 
 priv fn same_order(order: List<|Sz|>$@): Bool //< whether a sort would leave the order unchanged
     //<
@@ -221,17 +231,24 @@ priv fn index_on(spot: Cell_at, axis: Axis): Sz
         return spot.column
 
 impl Editor
-    fn add_line(r: Self$@, page: Page$@, axis: Axis): Bool //<
+    fn add_line(r: Self$@, page: Page$@, axis: Axis): Line_end //<
         //< Adds one row (or column) at the cell the cursor is in
         //<
-        //< True if added. It is added after the cursor's row (or column).
+        //< It is added after the cursor's row (or column). **A column landing on a merge widens it,
+        //< so one that would take it past `limit.most_span` is refused**: saved, the file would not
+        //< load, and adding a cell instead would change the table's shape.
         //< Caution: **Call it after layout** (the layout tells which cell the cursor is in).
         if r.shut()
-            return false
+            return .shut
         spot: = ask.cell_of(page, r.caret)
         if !spot.found
-            return false
-        return r.add_line_at(spot.table, axis, index_on(spot, axis) + 1)
+            return .outside
+        at: = index_on(spot, axis) + 1
+        if axis == Axis.column &&
+            !limit.span_fits(spot.table.widest_after_column(at, r.arena))
+            return .too_wide
+        r.add_line_at(spot.table, axis, at)
+        return .done
 
     priv fn add_line_at(r: Self$@, table: Block$@, axis: Axis, at: Sz): Bool //<
         //< Adds one empty row (or column) to `table` at `at`, in one step
@@ -402,6 +419,9 @@ impl Editor
             return .outside
         if span.rows <= 1 && span.cols <= 1
             return .alone
+        // A merge past what a document holds would save a file that never loads again.
+        if !limit.span_fits(span.rows) || !limit.span_fits(span.cols)
+            return .too_wide
         tiles: = span.table.tiles_of(r.arena)
         head: = tile_at(tiles, span.row, span.column)
         if head.block == null

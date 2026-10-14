@@ -166,6 +166,25 @@ priv fn link_cases(root: U8[], arena: Arena$@): Void!client.Http_end //<
         verdict.skip_check("a link inside the root cannot get outside",
             "a link cannot be made with `ln -s` in this environment")
 
+priv fn make_fifo(at: U8[], arena: Arena$@): Bool //< a FIFO at `at`; false where none can be made
+    //<
+    //< Windows has no `mkfifo`, so the cases using one become a `skip` there.
+    r: = subproc.run_capture(U8[][]::{ "mkfifo", at }, "", 10000, 4096, arena)
+    return !r.spawn_failed && r.exit_code == 0 && fs.exists(at)
+
+priv fn fifo_cases(root: U8[], arena: Arena$@): Void!client.Http_end //<
+    //< Checks that a FIFO in the root is answered 404, not read
+    //<
+    //< **Its read waits for a writer that never comes**, so a server that opens it stops answering.
+    name: = "a FIFO in the root is answered 404, not read"
+    fifo: = fs.join(root, "pipe.txt", arena)
+    if !make_fifo(fifo, arena)
+        verdict.skip_check(name, "a FIFO cannot be made with `mkfifo` in this environment")
+        return
+    r: = client.get(port, "/pipe.txt", "", arena)!
+    fs.remove_path(fifo) catch {}
+    verdict.check(name, r.status == 404, client.shown(r, arena))
+
 priv fn serve_run(name: U8[], at: Placed, arena: Arena$@) //< runs the server run `name` (`runs`)
     //<
     //< Caution: **Each mode is a server of its own**: the mode is fixed at start, and each run
@@ -217,6 +236,8 @@ priv fn serve_outward_and_check(at: Placed, arena: Arena$@) //< the outward-faci
             srv.failed("kssrv goes on answering requests", e.reason(), arena)
         link_cases(at.root, arena) catch e2
             srv.failed("kssrv answers the link's request", e2.reason(), arena)
+        fifo_cases(at.root, arena) catch e4
+            srv.failed("kssrv answers the FIFO's request", e4.reason(), arena)
         // Last: its check on one address's cap holds that many slots while it runs.
         guard.cases(port, arena) catch e3
             srv.failed("kssrv answers what the guard asks", e3.reason(), arena)
@@ -373,6 +394,36 @@ priv fn serve_page_and_check(exe: U8[], root: U8[], tmp: U8[], arena: Arena$@) /
     if c2: = missing.child
         $bad: = c2
         bad.kill()
+    // **Nor must naming a folder**: it would be a second root that the refusals do not cover, and
+    // `/` would answer 404 with nobody told why.
+    out3: = fs.join(tmp, "kssrv-page-folder.out", arena)
+    err3: = fs.join(tmp, "kssrv-page-folder.err", arena)
+    folder: =
+        start_server(exe, root, out3, err3, page_port,
+        U8[][]::{ arena.text().s("--page=\{fs.join(tmp, "ui", arena)\}").take() }, arena)
+    said_folder: = read_log(out3, err3, arena)
+    verdict.check("naming a folder as the page does not come up",
+        !folder.child.is_some() && said_folder.find_str("not a folder").is_some(), said_folder)
+    if c3: = folder.child
+        $bad3: = c3
+        bad3.kill()
+    // **Nor a FIFO**: its read would wait for a writer that never comes.
+    fifo: = fs.join(tmp, "ui/page.fifo", arena)
+    if !make_fifo(fifo, arena)
+        verdict.skip_check("naming a FIFO as the page does not come up",
+            "a FIFO cannot be made with `mkfifo` in this environment")
+        return
+    out4: = fs.join(tmp, "kssrv-page-fifo.out", arena)
+    err4: = fs.join(tmp, "kssrv-page-fifo.err", arena)
+    piped: =
+        start_server(exe, root, out4, err4, page_port,
+        U8[][]::{ arena.text().s("--page=\{fifo\}").take() }, arena)
+    said_fifo: = read_log(out4, err4, arena)
+    verdict.check("naming a FIFO as the page does not come up",
+        !piped.child.is_some() && said_fifo.find_str("not a pipe or a device").is_some(), said_fifo)
+    if c4: = piped.child
+        $bad4: = c4
+        bad4.kill()
 
 priv fn page_cases(arena: Arena$@): Void!client.Http_end //<
     //< The answers when `--page` is given
@@ -466,6 +517,11 @@ priv fn serve_cases(arena: Arena$@): Void!client.Http_end
     ok8: = plus.status == 200 && plus.body.equals("plus and space\n")
     d9: = client.shown(plus, arena)
     verdict.check("a '+' in a path stays a '+'", ok8, d9)
+    // **HTTP/1.1 names its host** (RFC 9112 §3.2), so a request without one is malformed.
+    hostless: = client.request(port, "GET / HTTP/1.1\r\nConnection: close\r\n\r\n", 1,
+        client.default_timeout_ms, false, arena)!
+    verdict.check("an HTTP/1.1 request naming no Host is a 400",
+        hostless.get(0).status == 400, client.shown(hostless.get(0), arena))
     broken: = client.get(port, "/%zz", "", arena)!
     d10: = arena.text().s("\{broken.status\}").take()
     verdict.check("a broken %XX is a 400", broken.status == 400, d10)

@@ -81,7 +81,9 @@ static void kspl_child_fail(int done) {
 
 /* Starts one child (the one function; the section heading says why). The KSPL side
  * (std/subproc.kspls) holds the combinations.
- *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone).
+ *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone),
+ *     16 = the child leads a process group of its own (a job object on Windows), so a kill stops
+ *     what it started too (hosted_proc.c's "The groups a terminal's signals are passed on to").
  *   out_len / err_len > 0 … that stream to that file (created truncated); else it inherits.
  * Returns hosted_proc.c's handle (0 = failure); a stream with no pipe has end -1 (I/O returns -2).
  * Caution: **Do not specify both a file and a pipe for the same stream** (the file wins).
@@ -104,6 +106,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     int pipe_in = (stdio & 1) != 0;
     int pipe_out = (stdio & 2) != 0 && out_len == 0;
     int pipe_err = (stdio & 4) != 0 && err_len == 0;
+    int group = (stdio & 16) != 0;
 
     kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
     if (h == NULL) return 0;
@@ -120,6 +123,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     if (pid == 0) {
         int done = exec_p[1];
         kspl_child_restore_signals();
+        if (group && setpgid(0, 0) != 0) kspl_child_fail(done);
         if (pipe_in && dup2(in_p[0], 0) < 0) kspl_child_fail(done);
         if (pipe_out && dup2(out_p[1], 1) < 0) kspl_child_fail(done);
         if (pipe_err && dup2(err_p[1], 2) < 0) kspl_child_fail(done);
@@ -148,9 +152,13 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     {
         char why;
         ssize_t got;
+        /* Held from here, so a signal passed on reaches it from its exec on. */
+        int held = !group || kspl_group_swap(0, pid);
         while ((got = read(exec_p[0], &why, 1)) < 0 && errno == EINTR) {}
-        if (got > 0) {
+        if (got > 0 || !held) {
+            if (got <= 0) kill(-pid, SIGKILL);
             while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+            if (group && held) (void)kspl_group_swap(pid, 0);
             goto fail;
         }
     }
@@ -161,7 +169,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     if (out_p[1] >= 0) close(out_p[1]);
     if (err_p[1] >= 0) close(err_p[1]);
     h->pid = pid; h->to_w = in_p[1]; h->from_w = out_p[0]; h->from_err = err_p[0];
-    h->code = -1; h->reaped = 0; h->out_eof = 0; h->err_eof = 0;
+    h->code = -1; h->reaped = 0; h->out_eof = 0; h->err_eof = 0; h->group = group;
     return (I64)(intptr_t)h;
 fail:
     kspl_close_pipe_pair(in_p); kspl_close_pipe_pair(out_p); kspl_close_pipe_pair(err_p);
@@ -462,11 +470,19 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     sa.bInheritHandle = TRUE;
 
     HANDLE in_r = NULL, in_w = NULL, out_r = NULL, out_w = NULL, err_r = NULL, err_w = NULL;
-    HANDLE oh = NULL, eh = NULL;
+    HANDLE oh = NULL, eh = NULL, job = NULL;
     kspl_proc_t *h = (kspl_proc_t *)malloc(sizeof(kspl_proc_t));
     if (h == NULL) {
         free(wcmd);
         return 0;
+    }
+    /* 16: a job object of its own, the POSIX side's group. The child starts suspended and runs
+     * only once it is in the job, so nothing it starts can begin outside. No kill on close: a
+     * kill is kspl_proc_kill's, and what is left at the end runs on, as on POSIX. */
+    if ((stdio & 16) != 0) {
+        job = CreateJobObjectW(NULL, NULL);
+        if (job == NULL) goto fail;
+        flags |= CREATE_SUSPENDED;
     }
     if (pipe_in && !CreatePipe(&in_r, &in_w, &sa, 0)) goto fail;
     if (pipe_out && !CreatePipe(&out_r, &out_w, &sa, 0)) goto fail;
@@ -511,9 +527,17 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     free(wcmd);
     wcmd = NULL;
     if (!ok) goto fail;
+    if (job != NULL && (!AssignProcessToJobObject(job, pi.hProcess) ||
+            ResumeThread(pi.hThread) == (DWORD)-1)) {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        goto fail;
+    }
     CloseHandle(pi.hThread);
     h->proc = pi.hProcess; h->to_w = in_w; h->from_w = out_r; h->from_err = err_r;
-    h->code = -1; h->reaped = 0; h->out_eof = 0; h->err_eof = 0;
+    h->code = -1; h->reaped = 0; h->out_eof = 0; h->err_eof = 0; h->job = job;
     return (I64)(intptr_t)h;
 fail:
     if (in_r != NULL) CloseHandle(in_r);
@@ -524,6 +548,7 @@ fail:
     if (err_w != NULL) CloseHandle(err_w);
     if (oh != NULL) CloseHandle(oh);
     if (eh != NULL && !one_file) CloseHandle(eh);
+    if (job != NULL) CloseHandle(job);
     free(wcmd);
     free(h);
     return 0;

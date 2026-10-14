@@ -6,11 +6,13 @@
 //< I/O such as io.out(), no allocation): only try_send and a counter update. Raising the
 //< "interrupt" 10 times against a queue of capacity 4 also shows the price of never blocking: once
 //< the queue is full, values are dropped, and drop_count shows it.
+import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
 import "std/libc"
 import "std/sys"
+import "std/verdict"
 
 const sigusr1: I32 = 10 // assumes Linux (30 on macOS/BSD; this demo only runs on a POSIX host)
 
@@ -71,10 +73,12 @@ fn consumer(_arg: Void$@): Void
     io.out().s("[consumer] ISR->task signaling via msgq_try_send verified\n")
     io.out().s("=== done ===\n")
 
-fn main()
+fn main(): I32
     g_q.init(g_qbuf[0]@, 4)
     libc.signal(sigusr1, on_ext_irq)
     tcb_driver.create(U8$[]::stack_driver, driver, null, 1, "driver")
     tcb_consumer.create(U8$[]::stack_consumer, consumer, null, 1, "consumer")
     task.start_scheduler()
+    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    return verdict.finish()

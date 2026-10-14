@@ -164,6 +164,23 @@ priv fn case_unknown_style_key(arena: Arena$@) //<
     verdict.check(name, good.code == 0,
         arena.text().s("the correct 'IndentWidth' was rejected\n\{good.out\}").take())
 
+priv fn case_syntax_error_as_written(arena: Arena$@) //<
+    //< A syntax error `ksplc fmt` meets shows the line as written, as a compile shows it
+    //<
+    //< Caution: **The formatter reads the indentation notation through the conversion to braces**,
+    //< so a line taken from the converted text shows a `;` nobody typed (`mend_as_read` in
+    //< `ksplc/parse/load.kspls`).
+    name: = "a syntax error shows its line as written"
+    path: =
+        write_src("aswritten", "a.kspls", "fn main(): I32\n    x: I32 = \"a\" \"b\"\n", arena)
+    if path.len == 0
+        verdict.check(name, false, "cannot place the material")
+        return
+    r: = fmt(path)
+    verdict.check(name,
+        r.code != 0 && r.out.find_str("2 |     x: I32 = \"a\" \"b\"\n").is_some(),
+        arena.text().s("the line is not shown as written\n\{r.out\}").take())
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     io.out().s("# ksplc fmt\n")
@@ -260,5 +277,6 @@ fn main(): I32
         "--style=AllowShortFunctions: true")
     case_bare_line(arena)
     case_unknown_style_key(arena)
+    case_syntax_error_as_written(arena)
     fmt_cache.run(arena)
     return harness.finish()

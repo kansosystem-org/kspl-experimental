@@ -464,3 +464,75 @@ fn test_a_fence_cannot_be_closed_from_inside(arena: Arena$@) //<
     assert(!base.has(out, "javascript:"), "a picture's address is checked as a link's is")
     verdict
         .pass("code stays inside its fence whatever it holds, and a picture's address is checked.")
+
+fn test_a_list_item_and_the_contents_escape_like_a_line_start(arena: Arena$@) //<
+    //< What follows a list's `- ` starts a block of its own, so it is escaped as a line's start
+    //<
+    //< Unescaped, `- # x` is a heading inside the item and `- 1. x` a numbered list inside it.
+    verdict.start("[kspage/markdown] an item's text escaped as a line's start test...")
+    sheet: = sample_sheet(arena)
+    toc: = sheet.add("toc", paint.inherit_all())
+    toc.collect = .contents
+    d: = Doc.new(arena)
+    d.add_block("toc")
+    d.add_block("h1").add_text("2026. A year")
+    d.add_block("item").add_text("# Not a heading")
+    d.add_block("item").add_text("1. not a number")
+    d.add_block("item").add_text("> not a quote")
+    d.add_block("item").add_text("    four spaces in an item")
+    out: = md_of(d, sheet, arena)
+    assert(base.has(out, "- \\# Not a heading\n"), "a hash after a bullet is escaped")
+    assert(base.has(out, "- 1\\. not a number\n"), "a number after a bullet is escaped")
+    assert(base.has(out, "- \\> not a quote\n"), "a quote mark after a bullet is escaped")
+    assert(base.has(out, "- &#32;&#32;&#32;&#32;four spaces"),
+        "spaces leading an item open no code block")
+    assert(base.has(out, "- 2026\\. A year\n"), "an entry of the contents is escaped too")
+    verdict.pass("what follows a list's marker is escaped as the start of a line.")
+
+fn test_what_commonmark_reads_as_markup_is_escaped(arena: Arena$@) //<
+    //< What CommonMark reads as markup in a plain text is escaped
+    //<
+    //< A fence of `~`, a line led by four spaces, a character reference, emphasis by a bracket,
+    //< and a heading's trailing `#`s each read as markup unless escaped.
+    verdict.start("[kspage/markdown] fences, indents, references and emphasis escaped test...")
+    d: = Doc.new(arena)
+    d.add_block("body").add_text("~~~ not a fence")
+    d.add_block("body").add_text("the rest of the document")
+    d.add_block("body").add_text("    four spaces")
+    d.add_block("body").add_text("Fish &amp; chips &#169; & co (_x_) snake_case")
+    d.add_block("h1").add_text("Item #")
+    out: = md_of(d, sample_sheet(arena), arena)
+    assert(base.has(out, "\\~\\~\\~ not a fence\n"), "a tilde fence is escaped")
+    assert(base.has(out, "\n&#32;&#32;&#32;&#32;four spaces\n"),
+        "spaces leading a line are kept as references, opening no code block")
+    assert(base.has(out, "Fish \\&amp; chips \\&#169; & co"),
+        "an ampersand is escaped only where it starts a character reference")
+    assert(base.has(out, "(\\_x\\_) snake_case"),
+        "an underscore beside a bracket is escaped, and one inside a word is not")
+    assert(base.has(out, "Item \\#\n"), "a heading's trailing hash is kept as its text")
+    verdict.pass("what CommonMark would read as markup is escaped, and only that.")
+
+fn test_an_export_leaves_the_document_as_large_as_it_was(arena: Arena$@) //<
+    //< What the writing gathers goes in an arena thrown away at the end
+    //<
+    //< Gathered in the document's, every export would grow the open document for good.
+    verdict.start("[kspage/markdown] an export not growing the document test...")
+    sheet: = sample_sheet(arena)
+    d: = Doc.new(Arena.new(64 * 1024))
+    defer d.arena.free()
+    d.add_block("h1").add_text("A heading")
+    d.add_block("body").add_text("Some words")
+    t: = d.add_block("table")
+    row: = t.add_child("row")
+    row.add_child("cell").add_text("a")
+    row.add_child("cell").add_text("b")
+    $sb: = Str_builder.new()
+    defer sb.free()
+    markdown.write(d, sheet, sb@)
+    was: = d.arena.get_total_used()
+    for _i in Range.asc(20)
+        sb.clear()
+        markdown.write(d, sheet, sb@)
+    assert(d.arena.get_total_used() == was,
+        "twenty more exports take nothing from the document's arena")
+    verdict.pass("an export takes nothing from the document's own memory.")
