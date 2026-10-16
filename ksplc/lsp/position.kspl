@@ -1,0 +1,184 @@
+//< Which node a position in a document stands on
+//<
+//< **Every request that names a position starts here**: hover, the jump, references, the call
+//< hierarchy and completion each take the path from the file down to the node this walk picks,
+//< then decide what that node means (`nav.kspl`). Only the choice of node lives here.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as _base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/lsp/msg" as lsp_msg
+import "ksplc/lsp/state" { Doc_state }
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "std/chars"
+import "std/ds" { List }
+import "std/json"
+import "std/str"
+
+const max_walk_depth: Sz = 2000 //<
+    //< The depth limit on recursive AST walks, shared with nav, call_hier and uses
+
+priv fn is_source_text(node: Ast_node$@, src: U8[]): Bool //<
+    //< Whether that node's text is the text at its own position in the source
+    //<
+    //< **A monomorphized copy borrows the template's position** ("A diagnostic points at" in
+    //< `../docs/DESIGN-diagnostics.md` names the rule) while its identifier carries the internal
+    //< name, so both cover the offset; the editor asks about the one matching the text on screen.
+    if src.len == 0 || node.text.len == 0
+        return true
+    if node.loc.offset + node.text.len > src.len
+        return false
+    return src.sub(node.loc.offset, node.text.len).equals(node.text)
+
+priv struct Pick_walk //< one walk for the node at a position, and the best it has found so far
+    offset: Sz //< the position asked about
+    target_file: U8[] //< the file it is in
+    src: U8[] //< that file's text, or empty when it is not held
+    current_path: List<|Ast_node$@|> //< the nodes from the root down to the one visited
+    best_path: List<|Ast_node$@|>$@ //< the path to the best node so far: the walk's answer
+    best_score: Sz //< the best node's score; lower wins
+    best_is_src: Bool //< whether the best node's text is the text on screen
+
+impl Pick_walk
+    fn visit(r: Self$@, node: Ast_node$@, depth: Sz) //< walks node and below it
+        // **Compiler-generated nodes are not clickable** (`made_by_compiler` in
+        // `../base/ast_ext.kspl`).
+        if node == null || depth > max_walk_depth || node.made_by_compiler()
+            return
+
+        if node.loc.file().len > 0 && !node.loc.file().equals(r.target_file)
+            if node.kind_id != .k_file && node.kind_id != .k_decl_import
+                return
+
+        r.current_path.push(node)
+
+        // A variable or constant declaration is the last resort for a click on the declarator ':',
+        // which normalization drops from the AST. Its span is the declarator's (`declarator_span`),
+        // since its text.len is the synthesized keyword's. **A declaration the compiler wrote has
+        // no `:`** (`var_synth`, the `_for_coll` a `for … in` copies its collection into): it would
+        // answer on `for w in` with its internal name.
+        is_decl_marker: =
+            (node.kind_id == .k_decl_var && !node.text.equals("var_synth")) ||
+            node.kind_id == .k_decl_const
+        // **A node whose text is not the text on screen covers only its own position.** Its length
+        // measures nothing there: the `Slice` a `U8[]` is read as would answer on the `]|>` after
+        // it.
+        here_is_src: = is_source_text(node, r.src)
+        start: = node.loc.offset
+        span: Sz =
+            (declarator_span(node) if is_decl_marker else node.text.len if here_is_src else 0)
+        end: = start + span
+
+        if r.offset >= start && r.offset <= end
+            // The 'var' / 'let' keyword child is synthesized with decl_var's own loc and has no
+            // text in the source, so it is not a click target; the ':' goes to is_decl_marker
+            // instead.
+            is_fake_var_kw: =
+                node.kind_id == .k_keyword &&
+                (node.text.equals("var") || node.text.equals("let"))
+            // A generic method call's member name (`x.create<|T|>(...)`) is a k_generic_method.
+            // **A mark is not a target** (a bracket, a comma, an operator: `k_literal`). It names
+            // nothing, and the node around it would answer for it (a call's `)` read `fn )()`).
+            is_path: =
+                node.kind_id == .k_expr_path || node.kind_id == .k_type_path ||
+                node.kind_id == .k_generic_path
+            is_valid: =
+                node.kind_id == .k_identifier ||
+                (node.kind_id == .k_keyword && !is_fake_var_kw) ||
+                node.kind_id == .k_primitive_type || node.kind_id == .k_string ||
+                node.kind_id == .k_char || node.kind_id == .k_integer || node.kind_id == .k_float ||
+                node.kind_id == .k_bool || node.kind_id == .k_null ||
+                (is_path && !has_own_names(node)) || node.kind_id == .k_generic_method ||
+                is_decl_marker
+
+            if is_valid
+                $score: = span
+                // Where they overlap at a boundary, an identifier or a path is chosen over a
+                // literal.
+                if node.kind_id == .k_identifier || node.kind_id == .k_expr_path ||
+                    node.kind_id == .k_type_path || node.kind_id == .k_generic_path ||
+                    node.kind_id == .k_generic_method || node.kind_id == .k_primitive_type
+                    // score is unsigned: a plain subtraction below 10000 wraps and inverts the
+                    // preference.
+                    score = score - 10000 if score >= 10000 else 0
+                // A tie still goes to the later node, except where that one is not the text on
+                // screen.
+                takes_it: =
+                    score < r.best_score ||
+                    (score == r.best_score && (here_is_src || !r.best_is_src))
+                if takes_it
+                    r.best_score = score
+                    r.best_is_src = here_is_src
+                    r.best_path.len = 0
+                    for path_node in r.current_path
+                        r.best_path.push(path_node)
+
+        for child in node.children
+            r.visit(child, depth + 1)
+
+        r.current_path.len -= 1
+
+priv fn declarator_span(decl: Ast_node$@): Sz //<
+    //< How far a declaration's head reaches: up to where its type or value begins
+    //<
+    //< Spanning the whole, it answered for the marks in its value (the `,` of `n: = f(xs@, x)`).
+    whole: = decl.get_span_offset().span
+    $end: = decl.loc.offset + whole
+    for n in Ast_node$@[2]::{ decl.get_var_decl_type_node(), decl.get_var_decl_expr() }
+        if n != null && n.kind_id != .k_empty && n.loc.offset > decl.loc.offset &&
+            n.loc.offset < end
+            end = n.loc.offset
+    return end - decl.loc.offset
+
+priv fn has_own_names(path: Ast_node$@): Bool //<
+    //< Whether a path's names stand in the tree as nodes of their own
+    //<
+    //< **Such a path is not a target itself; its names are.** Its text spans its marks too, so it
+    //< would answer on the `<|` and `|>` of `List<|U8[]|>.new` with the whole path as the name.
+    for child in path.children
+        if child.kind_id == .k_identifier || child.kind_id == .k_generic_method
+            return true
+    return false
+
+fn find_path_at_offset(root_file: Ast_node$@, sema: Sema_ctx$@, offset: Sz, target_file: U8$[],
+    path: List<|Ast_node$@|>$@)
+    if sema != null && target_file.len > 0
+        sema.set_current_file(target_file)
+
+    $src: U8[] = ""
+    if sema != null
+        held: = base_core.source_of(sema.source_map,
+            U8[]::{ .ptr = target_file.ptr, .len = target_file.len })
+        src = U8[]::{ .ptr = held.ptr, .len = held.len }
+    $walk: = Pick_walk::{ .offset = offset, .target_file = target_file, .src = src,
+        .current_path = List<|Ast_node$@|>.new(null), .best_path = path, .best_score = 99999999,
+        .best_is_src = false }
+    defer walk.current_path.free()
+
+    if root_file != null
+        walk.visit(root_file, 0)
+
+    if path.len == 0 && sema != null
+        for entry in sema.generics.templates.items()
+            walk.visit(entry.value, 0)
+
+    // A click exactly at a declared name's end (the ':' position) takes the whole declaration,
+    // jumping to the type; a click inside the name is unaffected.
+    if path.len >= 2
+        last: = path.get(path.len - 1)
+        decl_p: = path.get(path.len - 2)
+        if last.kind_id == .k_identifier &&
+            (decl_p.kind_id == .k_decl_var || decl_p.kind_id == .k_decl_const) &&
+            decl_p.get_var_decl_id() == last && offset == last.loc.offset + last.text.len
+            path.len -= 1
+
+    if path.len > 0 && sema != null
+        target_node: = path.get(path.len - 1)
+        if target_node.loc.file().len > 0
+            sema.set_current_file(target_node.loc.file())
+
+fn find_path_at_params(state: Doc_state$@, params: json.Val): List<|Ast_node$@|>$@ //<
+    //< The AST path to the position in an LSP request's params; the caller frees its buffer
+    path: = base_core.arena.create(List<|Ast_node$@|>.new(null))
+    find_path_at_offset(state.root_file, state.sema,
+        lsp_msg.offset_at(state.src_perm, params), state.mod_name_perm, path)
+    return path

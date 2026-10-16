@@ -1,0 +1,309 @@
+#!/usr/bin/env -S ksplc run
+//< The way to redirect a child's standard output and standard error to named files
+//<
+//< `spawn_redirect` in `std/subproc`, and a long argument and environment value reaching a child
+//< whole.
+//< Caution: **Do not check only "it does not fail"** — the check is that **both streams remain**.
+//< | Environment | How it breaks when the same path is passed twice |
+//< | :-- | :-- |
+//< | Windows | **it fails at start** (`FILE_SHARE_READ` does not allow two writers) |
+//< | POSIX | it does not fail, but **the positions are independent** so one overwrites the other |
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+// The child that writes to both streams and ends.
+// Caution: **Fix the order it writes them in** (the check is that both remain).
+priv const child_src: U8[] =
+    """import "std/io"
+
+fn main()
+  io.out().s("this is standard output\n")
+  io.err().s("this is standard error\n")
+
+"""
+
+priv const kana_count: Sz = 2800 //< the long argument's length in `か`, one UTF-16 unit each
+priv const long_value_len: Sz = 5000 //< the long environment value's length, past 4096 units
+
+// The child that says whether its argument and an environment value arrived whole: 2800 `か` are
+// 8400 bytes, which a cut or a code page's `!` would change.
+priv const long_child_src: U8[] =
+    """import "std/io"
+import "std/sys"
+
+fn main()
+  a: = sys.args()
+  arg_ok: = a.len == 2 && a.get(1).len == 8400
+  $env_ok: = false
+  if v: = sys.get_env("KSPL_SPAWN_LONG")
+    env_ok = v.len == 5000
+
+  io.out().s("arg ok\n" if arg_ok else "arg cut\n").s("env ok\n" if env_ok else "env cut\n")
+
+"""
+
+priv fn build_child(work: U8[], name: U8[], source: U8[], arena: Arena$@): U8[] //<
+    //< it builds a child from source as name
+    //<
+    //< Empty if it cannot be built.
+    src: = fs.join(work, arena.text().s("\{name\}.kspl").take(), arena)
+    gen: = fs.join(work, arena.text().s("\{name\}.c").take(), arena)
+    exe: = fs.join(work, arena.text().s("\{name\}.exe").take(), arena)
+    io.write_file(src, source) catch
+        verdict.check("the child's source can be written", false, src)
+        return ""
+    c: = harness.run(harness.ksplc_argv(U8[][]::{ src, gen }))
+    if c.code != 0
+        verdict.check("the child translates to C", false, c.out)
+        return ""
+    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+    if b.code != 0
+        verdict.check("the child builds", false, b.out)
+        return ""
+    return exe
+
+priv fn ran(exe: U8[], out_path: U8[], err_path: U8[]): U8[] //<
+    //< It starts exe, waits until it ends, and returns what out_path holds
+    //<
+    //< It returns empty where exe cannot be started or the file cannot be read.
+    argv: = U8[][]::{ exe }
+    $child: = subproc.spawn_redirect(argv, "", out_path, err_path) catch
+        return ""
+    child.wait()
+    return io.read_file(out_path) catch
+        return ""
+
+fn main(): I32
+    arena: = harness.begin(64 * 1024 * 1024)
+    run_output_flush(arena)
+    work: = fs.join(harness.tmp_dir(), "spawn", arena)
+    fs.mkdir_all(work) catch
+        verdict.check("the place can be made", false, work)
+        return harness.finish()
+    exe: = build_child(work, "twostreams", child_src, arena)
+    if exe.len == 0
+        return harness.finish()
+
+    // 1. The same path is passed twice (as `make kspage` does).
+    one: = fs.join(work, "one.log", arena)
+    said: = ran(exe, one, one)
+    // Caution: **Do not check only that it started.** Windows fails here while POSIX loses one
+    // stream; **only the content catches both with the same check**.
+    verdict.check("it starts even with both outputs pointed at the same record", said.len > 0, one)
+    verdict.check("standard output remains in the same record",
+        said.find_str("this is standard output").is_some(), said)
+    verdict.check("standard error remains in the same record too",
+        said.find_str("this is standard error").is_some(), said)
+
+    // 2. Different paths go to their own targets (**merged into one, this fails**).
+    two_out: = fs.join(work, "two_out.log", arena)
+    two_err: = fs.join(work, "two_err.log", arena)
+    split_out: = ran(exe, two_out, two_err)
+    split_err: = io.read_file(two_err) catch
+        return harness.finish()
+    verdict.check("pointed at separate records, only standard output enters one",
+        split_out.find_str("this is standard output").is_some() &&
+        split_out.find_str("this is standard error").is_none(), split_out)
+    verdict.check("pointed at separate records, only standard error enters the other",
+        split_err.find_str("this is standard error").is_some() &&
+        split_err.find_str("this is standard output").is_none(), split_err)
+    check_long(work, arena)
+    return harness.finish()
+
+priv fn check_long(work: U8[], arena: Arena$@) //<
+    //< 3. A long argument and a long environment value reach the child whole
+    //<
+    //< Windows counts both in UTF-16 units: a command line to 32767, a value past 4096. Counted in
+    //< UTF-8 bytes, the kana (three bytes a unit) would be refused at a third of the limit.
+    exe: = build_child(work, "longargs", long_child_src, arena)
+    if exe.len == 0
+        return
+    $kana: = Str_builder.new()
+    defer kana.free()
+    for _i in Range.asc(kana_count)
+        kana.s("か")
+    $value: = Str_builder.new()
+    defer value.free()
+    for _i in Range.asc(long_value_len)
+        value.c('a')
+    $long_set: = true
+    sys.set_env("KSPL_SPAWN_LONG", value.slice()) catch
+        long_set = false
+    verdict.check("a long environment value can be set", long_set, "")
+    r: = harness.run(U8[][]::{ exe, kana.slice() })
+    sys.unset_env("KSPL_SPAWN_LONG") catch panic("KSPL_SPAWN_LONG could not be unset")
+    verdict.check("an argument of 2800 kana starts the child and arrives whole",
+        r.code == 0 && r.out.find_str("arg ok").is_some(), r.out)
+    verdict.check("an environment value of 5000 characters reaches the child whole",
+        r.out.find_str("env ok").is_some(), r.out)
+
+// ==========================================
+// The test that "a program's own output" is not lost on an abnormal exit
+// Where stdout is a pipe (CI's log collection, `| tee`) the C standard library makes it fully
+// buffered.
+// ==========================================
+// The properties pinned down:
+//   * panic flushes stdout before the abort (the output before the panic remains)
+//   * io.set_line_buffered() keeps the output even when a signal kills the program (no panic)
+//   * standard output and standard error carry the bytes written (no "\r\r\n" from text mode)
+//   * a prompt written to a terminal shows before the program waits to read
+// ==========================================
+
+priv const lines: Sz = 300 //< the number of lines printed
+    //<
+    //< Caution: **Make it more than one full buffer**, or a loss cannot be told from everything
+    //< happening to stay in the buffer.
+
+// A SIGSEGV from a null dereference. A signal does not flush stdio, so without line buffering the
+// output is all lost (as with macOS's abort()).
+priv const crash: U8[] = """    p: I32$@ = null
+    p$ = 1
+"""
+
+priv const panic_call: U8[] = """    panic("boom")
+"""
+
+priv const prog_head: U8[] = """import "std/io"
+
+fn main(): I32
+"""
+
+// Caution: Keep it a raw string, so the interpolation's characters reach the program as typed.
+priv const prog_print: U8[] = """        io.out().s("line \{i\}").c('\n')
+"""
+
+priv const prog_tail: U8[] = """    return 0
+
+"""
+
+priv fn program(prologue: U8[], death: U8[], arena: Arena$@): U8[] //<
+    //< The program that prints lines and then ends abnormally with the code in death
+    return arena.text().s(prog_head).s(prologue).s("    for $i: = 0; i < \{lines\}; i += 1\n")
+        .s(prog_print).s(death).s(prog_tail).take()
+
+priv fn check_flush_case(slot: U8[], name: U8[], prologue: U8[], death: U8[], want_all: Bool,
+    want_text: U8[], arena: Arena$@) //<
+        //< One case; want_all demands every one of lines remain.
+        //<
+        //< Caution: Take the directory's name as `slot`. The case name as it is makes a directory
+        //< holding a `:`, which cannot be made on Windows.
+    work: = harness.sandbox(arena.text().s("flush_\{slot\}").take())
+    src: = fs.join(work, "p.kspl", arena)
+    io.write_file(src, program(prologue, death, arena)) catch
+        verdict.check(name, false, "cannot write the material")
+        return
+    b: = harness_build.build_and_run(src, work, "p", U8[][]::{})
+    if !b.built
+        verdict.check(name, false, b.out)
+        return
+    seen: = b.out.count_str("line ")
+    if want_all && seen != lines
+        verdict.check(name, false,
+            arena.text().s("the count of lines seen is short\n\{b.out\}").take())
+        return
+    if !want_all && seen >= lines
+        verdict.check(name, false, "all of it is visible (under full buffering it should be lost)")
+        return
+    if want_text.len > 0 && b.out.find_str(want_text).is_none()
+        verdict.check(name, false,
+            arena.text().s("\{want_text\} did not come out\n\{b.out\}").take())
+        return
+    verdict.check(name, true, "")
+
+// Both streams end their line with "\r\n" written by hand.
+priv const prog_crlf: U8[] =
+    """import "std/io"
+
+fn main(): I32
+    io.out().s("out\r\n")
+    io.err().s("err\r\n")
+    return 0
+
+"""
+
+priv fn check_bytes(arena: Arena$@) //<
+    //< Standard output and standard error land as written, each "\r\n" once
+    //<
+    //< The run's text folds each "\r\n" to "\n" and keeps a lone "\r", so a "\r\r\n" shows as one.
+    name: = "standard output and standard error carry the bytes written"
+    work: = harness.sandbox("flush_crlf")
+    src: = fs.join(work, "p.kspl", arena)
+    io.write_file(src, prog_crlf) catch
+        verdict.check(name, false, "cannot write the material")
+        return
+    b: = harness_build.build_and_run(src, work, "p", U8[][]::{})
+    verdict.check(name,
+        b.built && b.out.find_str("out\n").is_some() && b.out.find_str("err\n").is_some() &&
+        b.out.find_char('\r').is_none(), b.out)
+
+// A prompt, a read, then a death by signal: only what was written before the death remains, so a
+// prompt in the output went out before the program waited to read.
+priv const prompt_src: U8[] =
+    """import "std/io"
+
+fn main(): I32
+    io.out().s("Name? ")
+    c: = io.getchar()
+    p: I32$@ = null
+    p$ = c
+    return 0
+
+"""
+
+priv fn run_prompt(exe_cmd: U8[], arena: Arena$@): verdict.Run_out //<
+    //< Runs exe_cmd (a shell command) on a terminal `script` makes, with one line to read
+    return harness.run_capped(U8[][]::{ "/bin/sh", "-c",
+        arena.text().s("printf 'x\\n' | script -qec \"\{exe_cmd\}\" /dev/null").take() }, "", 5000)
+
+priv fn check_prompt(arena: Arena$@) //<
+    //< A prompt written to a terminal shows before the program waits to read
+    //<
+    //< The terminal is util-linux's `script`. Where there is none (macOS's takes other options),
+    //< the case is a skip, and on Windows too: MSYS2's `script` makes a pseudo-terminal a native
+    //< program sees as a pipe, and `/bin/sh` is no path a native program can start.
+    name: = "a prompt to a terminal shows before the read"
+    if sys.is_windows()
+        verdict.skip_check(name, "Windows has no terminal `script` can give a native program")
+        return
+    // Feed the probe too: inherited terminal input belongs to the foreground process group,
+    // and `script` in the harness's background group is suspended when it touches that terminal.
+    probe: = run_prompt("true", arena)
+    if probe.code < 0
+        verdict.check(name, false, probe.out)
+        return
+    if probe.code != 0
+        verdict.skip_check(name, "no util-linux `script` to give the program a terminal")
+        return
+    exe: = build_child(harness.sandbox("flush_prompt"), "prompt", prompt_src, arena)
+    if exe.len == 0
+        return
+    // The premise: into a pipe the prompt waits in the buffer, and the death loses it. Unless it
+    // is lost there, the next case passing proves nothing about the terminal.
+    piped: = run_prompt(arena.text().s("'\{exe\}' | cat").take(), arena)
+    // Caution: **Check that it ran.** A run that could not start prints no prompt either.
+    verdict.check("a prompt into a pipe is lost on a death by signal (confirming the premise)",
+        piped.code == 0 && piped.out.find_str("Name? ").is_none(), piped.out)
+    on_tty: = run_prompt(arena.text().s("'\{exe\}'").take(), arena)
+    verdict.check(name, on_tty.code == 139 && on_tty.out.find_str("Name? ").is_some(), on_tty.out)
+
+priv fn run_output_flush(arena: Arena$@) //< the output kept on an abnormal exit
+    io.out().s("# keeping the output on an abnormal exit: 6\n")
+    check_flush_case("panic", "panic: the output before the panic remains", "", panic_call, true,
+        "panic: boom", arena)
+    // The premise: unless the output is lost with no line buffer, the next case passing proves
+    // nothing about set_line_buffered.
+    check_flush_case("nobuf",
+        "no line buffer: the output is lost on a death by signal (confirming the premise)", "",
+        crash, false, "", arena)
+    check_flush_case("linebuf", "set_line_buffered: the output remains even on a death by signal",
+        "    io.set_line_buffered()\n", crash, true, "", arena)
+    check_bytes(arena)
+    check_prompt(arena)

@@ -1,0 +1,226 @@
+//< Round-trips a whole struct to and from JSON by walking `std/reflect`'s field table
+//<
+//< **The key names are written nowhere**: a key is the field's own name (the grounds are in
+//< "a trait returning a table" in `../docs/DESIGN-language.md`).
+
+// ==========================================
+// **Kept apart from `std/json`**, which is JSON itself, so a client that never round-trips does
+// not import `std/reflect`.
+// ==========================================
+import "std/ds" { List }
+import "std/json" { Json_builder, Val, Obj_builder, Array_builder, Json_error, max_nesting_depth }
+import "std/mem" { Arena }
+import "std/reflect"
+
+priv const list_ptr_off: Sz = offsetof(List<|U8|>, ptr) //< the positions inside a `List<|T|>`
+    //<
+    //< **They do not depend on T**, so the ones for `U8` serve for all. The check is
+    //< `tests/reflect_test.kspl`'s "reflect: a container's ptr position does not depend on the
+    //< element's type", and the same for `len` (`make debug`).
+priv const list_len_off: Sz = offsetof(List<|U8|>, len)
+priv const list_cap_off: Sz = offsetof(List<|U8|>, cap)
+priv const list_arena_off: Sz = offsetof(List<|U8|>, arena)
+
+priv fn element_field($f: reflect.Field_info): reflect.Field_info //<
+    //< a container's value descriptor
+    f.kind = f.extra.elem
+    f.extra.width = f.extra.elem_size
+    return f
+
+pub fn from_struct<|T: reflect.Reflectable|>( //< copies a reflectable value into a JSON object
+    //<
+    //< `v` is a `T@`: passed by value, the field offsets would point into a temporary.
+    //< **A `U64` past the largest `I64` is refused** (`field_type`), not written as a negative
+    //< number: `I64` is the widest integer a `Val` holds.
+    v: T@, //< the value to read; pointed at, not copied
+    b: Json_builder$@, //< holds the object being built
+): Val!Json_error //< the object
+    return obj_of(U8@::v, v.fields(), b, 0)!
+
+priv fn obj_of(base: U8@, tbl: reflect.Field_info[], b: Json_builder$@, depth: Sz): Val!Json_error //<
+    //< Walks one table and builds one object
+    //<
+    //< **Nesting is handled by calling itself**; a nested struct arrives as bytes and a table, not
+    //< as a type.
+    if depth > max_nesting_depth
+        throw .too_deep
+    $ob: Obj_builder = b.obj()
+    for f in tbl
+        $at: = base + f.offset
+        $field: = f
+        switch f.kind
+        case .opt_field
+            // **`.none` writes no key**, or "absent" would have two forms (see the file header).
+            tag: = I32@::at
+            if tag$ != f.extra.some_tag
+                continue
+            at += f.extra.payload_offset
+            field = element_field(f)
+        default {}
+        ob = ob.set(f.name, value_of(at, field, b, depth + 1)!)
+    return ob.build()
+
+priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): Val!Json_error //<
+    //< Reads a field or container value through the same descriptor
+    switch f.kind
+    case .int_field
+        return b.int_val(reflect.load_int(at, f.extra.width))
+    case .uint_field
+        // Caution: **Read an unsigned value through its own function**, or a `U32`'s `0xFFFFFFFF`
+        // is written as `-1` (`../std/reflect.kspl`'s `load_uint`).
+        got: = reflect.load_uint(at, f.extra.width)
+        // **A `U64` past the largest `I64` comes back negative**, and would be written so.
+        if !reflect.fits_int(f.kind, f.extra.width, got)
+            throw .field_type(f.name)
+        return b.int_val(got)
+    case .float_field
+        return b.float_val(reflect.load_float(at, f.extra.width))
+    case .bool_field
+        p: = Bool@::at
+        return b.bool_val(p$)
+    case .str_field
+        p: U8[]@ = (U8[]@)::at
+        return b.str_val(p$)
+    case .struct_field
+        return obj_of(at, f.nested, b, depth)!
+    case .list_field
+        if depth > max_nesting_depth
+            throw .too_deep
+        ptr_slot: Void@@ = (Void@@)::(at + list_ptr_off)
+        len_slot: = Sz@::(at + list_len_off)
+        elems: = U8@::ptr_slot$
+        $ar: Array_builder = b.arr()
+        elem: = element_field(f)
+        for $i: Sz = 0; i < len_slot$; i += 1
+            cell: = elems + i * f.extra.elem_size
+            ar = ar.push(value_of(cell, elem, b, depth + 1)!)
+        return ar.build()
+    default {}
+    return .null_val
+
+pub fn into_struct<|T: reflect.Reflectable|>( //< copies a JSON object into a reflectable value
+    //<
+    //< **A field whose key is missing or of another kind is refused** (why is at `Json_error`), and
+    //< so is an integer the field cannot hold: 70000 into a `U16`. With `null`, free each string it
+    //< wrote with `dealloc` and each list with `free()`; a refusal leaves those written before it.
+    //< Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena;
+    //< freeing that first leaves the written value pointing at freed memory.
+    v: Val, //< the object to read from
+    out: T$@, //< the value to write into, field by field
+    arena: Arena$@, //< where strings and lists go; null means the heap, freed as above
+): Void!Json_error
+    fill_from(U8$@::out, out.fields(), v, arena, 0)!
+
+priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@, depth: Sz):
+    Void!Json_error //<
+        //< Walks one table and writes from one object; it calls itself for nesting.
+    if depth > max_nesting_depth
+        throw .too_deep
+    switch v
+    case .obj_val {}
+    default
+        throw .field_type("<root>")
+    for f in tbl
+        got: = v.get(f.name)
+        $at: = base + f.offset
+        $field: = f
+        // `get` returns null for both an absent key and an explicit null; only an absent
+        // optional becomes `.none`. A refused explicit null leaves its tag untouched.
+        switch got
+        case .null_val
+            if v.has_key(f.name)
+                throw .field_type(f.name)
+            switch f.kind
+            case .opt_field
+                tag: = I32$@::at
+                tag$ = f.extra.none_tag
+                continue
+            default
+                throw .missing_field(f.name)
+        default {}
+        switch f.kind
+        case .opt_field
+            tag: = I32$@::at
+            tag$ = f.extra.some_tag
+            at += f.extra.payload_offset
+            field = element_field(f)
+        default {}
+        fill_value(at, field, got, arena, depth + 1)!
+
+priv fn fill_value(at: U8$@, f: reflect.Field_info, got: Val, arena: Arena$@, depth: Sz):
+    Void!Json_error
+    // **Signed and unsigned share one path** (`../std/reflect.kspl`'s `store_int`).
+    switch f.kind
+    case .int_field, .uint_field
+        switch got
+        case .int_val(n)
+            // Caution: **Refuse a value the field cannot hold, never narrow it**: narrowed, 70000
+            // reads as 4464 in a `U16`, and -1 as 255 in a `U8`.
+            if !reflect.fits_int(f.kind, f.extra.width, n)
+                throw .field_type(f.name)
+            reflect.store_int(at, f.extra.width, n)
+        default
+            throw .field_type(f.name)
+    case .float_field
+        // Caution: Accept the integer variant too, or success depends on the sender's decimal
+        // point.
+        switch got
+        case .float_val(fv)
+            reflect.store_float(at, f.extra.width, fv)
+        case .int_val(iv)
+            reflect.store_float(at, f.extra.width, F64::iv)
+        default
+            throw .field_type(f.name)
+    case .bool_field
+        p: = Bool$@::at
+        switch got
+        case .bool_val(bv)
+            p$ = bv
+        default
+            throw .field_type(f.name)
+    case .str_field
+        p: U8[]$@ = (U8[]$@)::at
+        switch got
+        case .str_val(sv)
+            p$ = arena.dup_str(sv)
+        default
+            throw .field_type(f.name)
+    case .list_field
+        switch got
+        case .array_val {}
+        default
+            throw .field_type(f.name)
+        if depth > max_nesting_depth
+            throw .too_deep
+        $items: = got.arr_list(arena)
+        defer items.free() // only work: the elements are copied into `room`
+        count: = items.len
+        // Caution: **Check the product before allocating.** Where `Sz` is 32 bits, a long array of
+        // large elements wraps to a small size, and the writes below run past it with the input's
+        // data.
+        bytes: = I64::count * I64::f.extra.elem_size
+        if I64::(Sz::bytes) != bytes
+            throw .too_large
+        room: = arena.alloc(Sz::bytes) if count > 0 else null
+        ptr_slot: Void$@$@ = (Void$@$@)::(at + list_ptr_off)
+        len_slot: = Sz$@::(at + list_len_off)
+        cap_slot: = Sz$@::(at + list_cap_off)
+        arena_slot: Arena$@$@ = (Arena$@$@)::(at + list_arena_off)
+        ptr_slot$ = room
+        len_slot$ = count
+        cap_slot$ = count
+        arena_slot$ = arena
+        elem: = element_field(f)
+        $i: Sz = 0
+        for e in items
+            cell: = (U8$@::room) + i * f.extra.elem_size
+            i += 1
+            fill_value(cell, elem, e, arena, depth + 1)!
+    case .struct_field
+        switch got
+        case .obj_val {}
+        default
+            throw .field_type(f.name)
+        fill_from(at, f.nested, got, arena, depth)!
+    default
+        throw .field_type(f.name)

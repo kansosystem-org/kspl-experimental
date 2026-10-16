@@ -1,0 +1,185 @@
+//< Checks that `!`'s propagation path records the one error reported and no more
+//<
+//< Caution: **Do not count a failure already handled.** A failure caught by `catch` and then
+//< handled normally, such as `Map.get`'s missing key, is a `throw` as well. Left in the chain, it
+//< sits under a later, unrelated error's path (ksplc uses Maps heavily as caches, so the frames
+//< reach the limit and the real path is lost with them). Both backends record the route (genc's
+//< `KSPL_START_TRACE` / `KSPL_RECORD_TRACE`, genllvm's calls to the same runtime), and each frame's
+//< line is the line of its `throw` or `!`, read off `caller_line` beside it, not copied in.
+import "std/chars"
+import "std/ds" { Map }
+import "std/mem" { Arena }
+import "std/str"
+import "std/thread"
+import "std/verdict"
+
+enum Probe_error
+    deep
+
+priv fn level3(): Void!Probe_error //< the chain's origin
+    //<
+    //< The three steps below it propagate with `!`.
+    throw .deep
+priv fn level2(): Void!Probe_error
+    level3()!
+priv fn level1(): Void!Probe_error
+    level2()!
+
+priv fn handled_misses(arena: Arena$@): I32 //<
+    //< Raises and handles a failure, again and again, outside the chain
+    $m: = Map<|U8[], I32|>.new(arena)
+    m.set("present", 1)
+    $found: I32 = 0
+    for _i in Range.asc(20)
+        found += m.get("absent") catch 0
+    return found
+
+fn test_error_trace(arena: Arena$@)
+    verdict
+        .start("[trace] a failure already dealt with does not mix into `!`'s propagation route \
+            test...")
+
+    assert(handled_misses(arena) == 0, "a missing key must yield the catch value")
+
+    // The chain's length is 1 throw step + 2 `!` steps = 3. The 20 failures above must not appear
+    // here.
+    level1() catch
+        depth: = kspl_error_trace_depth()
+        assert(depth == 3, "the trace must hold this error's chain only")
+
+    // Raising it once more in a row does not add to it (the chain starts over).
+    _ignored: = handled_misses(arena)
+    level1() catch
+        depth: = kspl_error_trace_depth()
+        assert(depth == 3, "a second chain must not stack onto the first")
+
+    verdict
+        .pass("a failure already dealt with does not stay in the chain, and the chain's length \
+            matches the propagation's steps.")
+
+// The other thread's route: three frames, recorded while this thread's route is one.
+#export
+fn trace_on_other_thread(arg: I32$@): Void$@
+    level1() catch
+        arg$ = kspl_error_trace_depth()
+    return null
+
+fn test_error_trace_per_thread()
+    verdict.start("[trace] another thread's failure does not overwrite this thread's route test...")
+    level3() catch {}
+    $theirs: I32 = -1
+    t: = thread.Thread.spawn<|I32|>(trace_on_other_thread, theirs@)
+        catch panic("thread spawn failed")
+    t.join_and_free()
+    mine: = kspl_error_trace_depth()
+    assert(theirs == 3, "the other thread records its own chain of three")
+    assert(mine == 1, "this thread's route of one survives the other's")
+    verdict.pass("each thread keeps its own failure's route.")
+
+// Each frame names the line its `throw` or `!` stands on. **A statement Lower expands into several
+// C lines drifts without a `#line` before each** (emit_stmt in `ksplc/gen/c/stmt.kspl`): `!` on
+// line 12 was reported as 14.
+priv fn line_here(line: Sz = caller_line): Sz
+    return line
+
+$pinned_lines: Sz[3] = ::{} //< the line of each level's `throw` / `!`, set as it runs
+
+priv fn pinned3(): Void!Probe_error
+    pinned_lines[0] = line_here() + 1
+    throw .deep
+priv fn pinned2(): Void!Probe_error
+    pinned_lines[1] = line_here() + 1
+    pinned3()!
+priv fn pinned1(): Void!Probe_error
+    pinned_lines[2] = line_here() + 1
+    pinned2()!
+
+fn test_error_trace_lines()
+    verdict.start("[trace] each frame of the route names the line of its throw or `!` test...")
+    pinned1() catch
+        assert(kspl_error_trace_depth() == 3, "the route has the three steps")
+        for i in Range.asc(3)
+            $file: U8@ = null
+            $func: U8@ = null
+            $line: I32 = 0
+            kspl_get_trace_frame_info(I32::i, file@, func@, line@)
+            assert(Sz::line == pinned_lines[i], "a frame names the line its step stands on")
+    verdict.pass("the throw and each `!` are recorded at their own lines.")
+
+// ==========================================
+// The default values that carry the caller's position (`caller_file` / `caller_line`)
+// **This checks that the value "differs per call".** Called from only one place, the values cannot
+// tell whether the declaration's position or the call's position went in.
+// ==========================================
+priv struct Site
+    file: U8[]
+    line: Sz
+
+priv fn here(file: U8[] = caller_file, line: Sz = caller_line): Site
+    return Site::{ .file = file, .line = line }
+
+priv fn relayed_without_forwarding(): Site //< a relay that shows the position goes back one step
+    //<
+    //< It does not forward, so this function becomes "the caller".
+    return here()
+
+priv fn relayed_with_forwarding(file: U8[] = caller_file, line: Sz = caller_line): Site //<
+    //< A forwarding relay
+    //<
+    //< The caller's position reaches all the way in.
+    return here(file, line)
+
+priv trait Sited //<
+    //< A trait whose declared default values the compiler passes on to each implementation
+    //<
+    //< **This checks that it works on both paths** (a call on the concrete type resolves to the
+    //< implementation's declaration, and a call through a trait value to the trait's declaration,
+    //< so it is easy to make it work on only one).
+    fn where_from(r: Self, file: U8[] = caller_file, line: Sz = caller_line): Site
+
+priv struct Marker
+    unused: I32
+
+// The implementation writes the parameter but not the default value (a negative test pins the
+// shape that writes it).
+impl Marker: Sited
+    fn where_from(_r: Self, file: U8[], line: Sz): Site
+        return Site::{ .file = file, .line = line }
+
+fn test_trait_declaration_defaults()
+    verdict.start("[Caller] a default value written on a trait's declaration test...")
+    m: Marker = ::{ .unused = 0 }
+    direct: = m.where_from()
+    t: Sited = m
+    via_trait: = t.where_from()
+    own_file: = direct.file.ends_with("error_trace_test")
+    assert(own_file, "trait: a call on the concrete type passes in the caller's file")
+    assert(direct.line + 2 == via_trait.line, "trait: both routes put in the line of their own call")
+    verdict
+        .pass("a default value written on a trait's declaration takes effect for a call against the \
+            concrete type and for a call through a trait value alike.")
+
+fn test_caller_location_defaults()
+    verdict.start("[Caller] the default values conveying the caller's position test...")
+    a: = here()
+    b: = here()
+    assert(a.line + 1 == b.line, "caller_line: a different line goes in per call")
+    own_file: = a.file.ends_with("error_trace_test")
+    assert(own_file, "caller_file: the caller's file is passed in")
+
+    // With a relay that does not forward, the position becomes **the relay's line** (it goes back
+    // one step only).
+    no_fwd: = relayed_without_forwarding()
+    assert(no_fwd.line < a.line, "caller_line: without forwarding it becomes the relay's line")
+
+    // With forwarding, the caller's line reaches.
+    fwd: = relayed_with_forwarding()
+    assert(fwd.line > a.line, "caller_line: with forwarding, the caller's line gets through")
+
+    // Written explicitly, it can be overridden (the same rule as an ordinary default argument).
+    spelled: = here("other.kspl", 4242)
+    overridden: = spelled.file.equals("other.kspl") && spelled.line == 4242
+    assert(overridden, "caller: an explicitly passed value wins")
+    verdict
+        .pass("the position of each call goes in, and going back one step and an explicit overwrite \
+            both take effect.")

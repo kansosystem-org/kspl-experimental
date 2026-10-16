@@ -1,7 +1,7 @@
 // ==========================================
 // kspage's page — the wiring of the commands that change the document: a table's rows and
 // columns, inserted things, find and replace, notes, comments. **It is not the JS counterpart of
-// [`../../write/edit.kspls`](../../write/edit.kspls)** (that is [`api.js`](api.js)); it only
+// [`../../write/edit.kspl`](../../write/edit.kspl)** (that is [`api.js`](api.js)); it only
 // connects the menu's buttons to the core's entry points, as [`file.js`](file.js) does for files,
 // [`form.js`](form.js) for styles and [`paper.js`](paper.js) for paper.
 // Caution: **Route every click result through one path** (`ui.putButton` / `ui.lineButton`);
@@ -32,7 +32,7 @@ function kspageCommand(ui) {
   // The items holding the settings for inserting; the chosen text shows right of the item.
   // Caution: **The text must be a name the core knows** — an unknown name becomes number 0, so a
   // typo silently inserts something else (`make test-conventions` checks it). **Keep the list in
-  // the core's numbering** (`state.kspls`'s `*_order`). **Do not go back to a `<select>`** — a
+  // the core's numbering** (`state.kspl`'s `*_order`). **Do not go back to a `<select>`** — a
   // closed field hides the choice, so it cannot be read until opened (the header of `fly.js`).
   const SKETCH_PICKS = [["whole", "One frame"], ["titled", "A title and a body"],
     ["halved", "A title and two columns"]];
@@ -43,7 +43,7 @@ function kspageCommand(ui) {
     ["fall_arrow_back", "Arrow, down-right reversed"],
     ["rise_arrow_back", "Arrow, up-right reversed"]];
   const CHART_PICKS = [["bars", "Bar chart"], ["lines", "Line chart"]];
-  // How a filter matches a cell (`keep_order` in `state.kspls`).
+  // How a filter matches a cell (`keep_order` in `state.kspl`).
   const KEEP_PICKS = [["is", "is"], ["is_not", "is not"], ["holds", "contains"],
     ["above", "is above"], ["below", "is below"], ["blank", "is empty"], ["filled", "is not empty"]];
   // Builds an item that holds one setting (`fly.js` holds the value).
@@ -67,7 +67,7 @@ function kspageCommand(ui) {
   // Inserting a table and a slide. **This page decides the style's name** (a name in the document's
   // style table); a slide is sized by its style, so without a name it is not inserted.
   // **Do not rely on the name too much** — the core finds the style **by role** (`role_of` in
-  // `../../write/insert.kspls`); the name only picks between two with the same role.
+  // `../../write/insert.kspl`); the name only picks between two with the same role.
   // **The size grid and the button are one path** — the grid sets the size and clicks the button,
   // so the refusal and the focus are only `putButton`'s (Principle 6).
   const tableSize = kspageGridPick(document.getElementById("table-picks"), {
@@ -94,7 +94,7 @@ function kspageCommand(ui) {
     "A shape is placed inside a slide. Click a slide and then insert it");
   // The name of one thing, **separate from a style's name.**
   // **Write what it attaches to into the refusal** — it depends on where the cursor is (`named_at`
-  // in `../../write/block.kspls`).
+  // in `../../write/block.kspl`).
   // Caution: **Do not say only "the text inside a frame"** — someone who wants to name a table
   // reads that as impossible.
   // **A table's name no formula could reach says why** (`kspage_web_set_name`): the rule is what a

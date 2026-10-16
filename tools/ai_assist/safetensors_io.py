@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The shared implementation of reading and writing safetensors.
 
-It handles the same format as `Safetensors_writer` / `Safetensors` in `ksai/safetensors.kspls`:
+It handles the same format as `Safetensors_writer` / `Safetensors` in `ksai/safetensors.kspl`:
 [8B LE header length][the JSON header (right-padded with spaces to an 8-byte boundary)]
 [each tensor's raw bytes joined in order].
 Both `export_qwen_to_kspl.py` and `lora_finetune_external.py` share it

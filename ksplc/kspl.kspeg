@@ -1,8 +1,8 @@
 // Kanso Language Grammar
 
-// === Only these three marks change in the notation written by indentation (`.kspls`) ===
+// === Only these three marks change in the notation written by indentation (`.kspl`) ===
 // Indentation, outdentation and a newline say the `{` `}` `;`, mended to them before the
-// analyser (`parse/layout.kspls`). **A check reads the rosters** (`make test-kspls`): mend them.
+// analyser (`parse/layout.kspl`). **A check reads the rosters** (`make test-kspls`): mend them.
 // [opens] decl_extern_block decl_trait decl_struct decl_enum decl_impl stmt_block
 // [value] decl_import_selector_list String_content
 // [uses] decl_fn stmt_defer stmt_if stmt_for stmt_switch stmt_labeled_block expr_catch
@@ -57,7 +57,7 @@ decl_top =
     | decl_directive
 
 // Caution: **Write no directive names here**: their one origin is `directive_shape` in
-// `sema/decl/attrs.kspls`. `##` opens one (`#!` is a shebang's); both argument shapes are taken
+// `sema/decl/attrs.kspl`. `##` opens one (`#!` is a shebang's); both argument shapes are taken
 // and sema refuses a mismatch — a named choice would wrap each argument in a node to peel.
 decl_directive = Directive_prefix "(" ( lint_setting | expr ) ( "," ( lint_setting | expr ) )* ")"Stmt_end
 lint_setting = Identifier "=" Identifier
@@ -82,7 +82,7 @@ type_constraint = type_path ( "+" type_path )*
 
 decl_typedef = 'typedef' Identifier "=" type_expr Stmt_end
 
-// A method is a declaration alone or holds a default body (`sema/decl/trait_default.kspls`).
+// A method is a declaration alone or holds a default body (`sema/decl/trait_default.kspl`).
 // Caution: **The declaration-alone side goes first**: `decl_fn` swallows the `;` too, and
 // swapped, what looks for `decl_fn_proto` (the vtable's assembly) silently sees nothing.
 decl_trait =
@@ -90,7 +90,7 @@ decl_trait =
     Block_open ( attribute_list? visibility? ( decl_fn_proto Stmt_end | decl_fn ) )* Block_close
 
 // A `struct S;` is a C type an `extern` block names, held by pointer; outside one it is refused
-// (check_struct_decl_shape in sema/decl/collect.kspls). **No empty body**: `struct S {}` would be
+// (check_struct_decl_shape in sema/decl/collect.kspl). **No empty body**: `struct S {}` would be
 // a second spelling of it.
 decl_struct =
     'struct' Identifier type_gen_params?
@@ -99,7 +99,7 @@ decl_struct =
 struct_field = visibility? Identifier ":" type_expr Stmt_end
 
 // The values close with `;` as fields do; **a `,` is not let through** ("Every item in a
-// declaration block ends with `;`" in `../docs/DESIGN.md`). **No empty body**: C refuses it
+// declaration block ends with `;`" in `../docs/DESIGN-principles.md`). **No empty body**: C refuses it
 // after sema.
 decl_enum =
     'enum' Identifier type_gen_params? ( ":" type_expr )?
@@ -142,7 +142,7 @@ stmt_fallback = 'fallback' expr Stmt_end
 stmt_break    = 'break' Identifier? Stmt_end
 stmt_continue = 'continue' Identifier? Stmt_end
 // A statement or a block; the normalizer gives both the block shape
-// (`normalize_defer_stmt` in parse/normalize_stmt.kspls).
+// (`normalize_defer_stmt` in parse/normalize_stmt.kspl).
 stmt_defer    = 'defer' ( stmt_block | stmt_expr Stmt_end )
 
 // A condition is an expression or **an Option binding, tried first** (else `expr` eats the name
@@ -187,7 +187,7 @@ expr_mul   = expr_unary ( ( "*" | "/" | "%" | "&" !"&" | "<<" | ">>" ) expr_unar
 
 // Caution: **Do not gather `sizeof`'s two lines into one choice**: a PEG keeps the branch that
 // succeeded, so on `sizeof(n + 1)` `type_expr` takes `n` and the `+` sinks it (`case .choice`
-// in `kspeg/engine.kspls`); the memo spares the reread.
+// in `kspeg/engine.kspl`); the memo spares the reread.
 expr_unary =
     "-" expr_unary
     | "!" expr_unary
@@ -223,7 +223,7 @@ expr_primary =
     | "(" expr ")"
 
 // A function literal: no name after `fn`, and a body. **A `;` after the arguments makes it a
-// closure** (even `fn(x: I32; )`; parse/desugar.kspls); its own rule keeps captures off a type.
+// closure** (even `fn(x: I32; )`; parse/desugar.kspl); its own rule keeps captures off a type.
 expr_fn_lit = 'fn' expr_fn_lit_sig stmt_block
 expr_fn_lit_sig = "(" param_list? ( ";" capture_list? )? ")" ( ":" type_expr )?
 
@@ -242,7 +242,7 @@ expr_field_init = ( ( "." Identifier | "[" expr "]" ) "=" )? expr
 
 type_expr = type_atom type_postfix*
 // A `$` before a sized `[N]` parses so that sema refuses it naming the fix (the binding carries
-// the writability, `$name: U8[N]`; `ksplc/sema/decl/resolve.kspls`).
+// the writability, `$name: U8[N]`; `ksplc/sema/decl/resolve.kspl`).
 type_postfix = ( "!" type_expr ) | "?" | ( "$"? "[" expr? "]" ) | ( "$"? "@" )
 
 type_atom =
@@ -258,7 +258,7 @@ attribute_list = attribute+
 attribute = Attribute_prefix ( "(" expr ( "," expr )* ")" )?
 
 // === Lexical tokens ===
-// **A syntax error names these rules** (`track_token_fail` in `kspeg/expected.kspls`):
+// **A syntax error names these rules** (`track_token_fail` in `kspeg/expected.kspl`):
 // `Primitive_type` reads `a primitive type`, and a one-spelling rule reads its spelling.
 // Caution: **Do not abbreviate; make them ordinary words separated by `_`**.
 
@@ -280,13 +280,13 @@ Attribute_prefix = "#" _Name
 Directive_prefix = "##" _Name
 
 // **The grammar says only that a backslash and one character are one unit**: the roster is
-// `literal_escape_byte` / `is_known_escape` in `ksplc/base/literal.kspls`, and sema refuses.
+// `literal_escape_byte` / `is_known_escape` in `ksplc/base/literal.kspl`, and sema refuses.
 String  = "\"\"\"" ( !"\"\"\"" . )* "\"\"\"" | ["] String_part* ["]
 
 String_part = String_expr | String_content
 String_expr = "\\{" _Space expr ( ":" Format_spec )? _Space "\\}"
 String_content = ( "\\" !"{" !"}" . | !["\\] . )+
-// **Any text up to the `\}` is a spec**, even none: `ksplc/parse/format_spec.kspls` reads it and
+// **Any text up to the `\}` is a spec**, even none: `ksplc/parse/format_spec.kspl` reads it and
 // names what it cannot read. A character class here made `\{n:q\}` and `\{n:\}` a syntax error
 // far away ("'(' is never closed").
 Format_spec = ( !"\\}" ![ \t"] . )*
@@ -294,7 +294,7 @@ Format_spec = ( !"\\}" ![ \t"] . )*
 Literal = Float | Integer | String | Char | Bool | Null
 
 // **A decimal integer does not start with `0`** unless it is `0`: C reads `0755` as octal, and
-// KSPL has none (`append_leading_zero_hint` in `ksplc/parse/syntax_msg.kspls` says so).
+// KSPL has none (`append_leading_zero_hint` in `ksplc/parse/syntax_msg.kspl` says so).
 Integer = ( "0x" [0-9A-Fa-f_]+ | "0b" [01_]+ | "0" ![0-9_] | [1-9] [0-9_]* ) ( ( "I" | "U" ) ( "8" | "16" | "32" | "64" )? | 'Sz' )?
 Float   = [0-9] [0-9_]* "." [0-9_]+ ( [eE] [+\-]? [0-9_]+ )? ( "F32" | "F64" )?
 Bool    = 'true' | 'false'
@@ -304,7 +304,7 @@ Char    = ['] ( "\\" . | !['\\] . )+ [']
 Primitive_type = 'I8' | 'I16' | 'I32' | 'I64' | 'U8' | 'U16' | 'U32' | 'U64' | 'F32' | 'F64' | 'Bool' | 'Void' | 'Sz'
 
 // === Meta and transparent rules (where undefined, the engine's default values are adopted) ===
-// Caution: **kanso_space_skipper in ksplc/parse/load.kspls reads past**; this only declares the
+// Caution: **kanso_space_skipper in ksplc/parse/load.kspl reads past**; this only declares the
 // engine's default. Mend one alone and they disagree.
 _Space         = ( [ \t] | _New_line | _Line_comment )*
 _Boundary      = [A-Za-z0-9_]

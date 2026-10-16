@@ -12,14 +12,14 @@ all: server
 # `ksplc build` compiles and links, optimised by default, with the C compiler `CC` names (or clang).
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.
 server:
-	"$(KSPLC)" build main.kspls "$(OUT)/kssrv.exe"
+	"$(KSPLC)" build main.kspl "$(OUT)/kssrv.exe"
 
 # Caution: **Empty the workshop first**: the tests link out of it, and `rm -rf` follows no link.
 test: server
 	rm -rf "$(OUT)/test"
-	"$(KSPLC)" run tests/main.kspls "$(OUT)/kssrv.exe" "$(OUT)/test"
+	"$(KSPLC)" run tests/main.kspl "$(OUT)/kssrv.exe" "$(OUT)/test"
 
 check-pilot-copy: server
 	@test -n "$(COPY)" || { echo "name the copy: make check-pilot-copy COPY=<file>"; exit 2; }
 	rm -rf "$(OUT)/copy"
-	"$(KSPLC)" run tests/copy.kspls "$(OUT)/kssrv.exe" "$(COPY)" "$(OUT)/copy"
+	"$(KSPLC)" run tests/copy.kspl "$(OUT)/kssrv.exe" "$(COPY)" "$(OUT)/copy"

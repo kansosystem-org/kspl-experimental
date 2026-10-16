@@ -5,8 +5,8 @@
 // prevents it** (on the canvas alone, a drop on a panel or the ribbon escapes to the browser). The
 // functions that take the file are borrowed ([`file.js`](file.js)'s `takeChosen`, and
 // [`command.js`](command.js)'s `takeImage` for an image); a separate reader here would make
-// dropping alone behave differently (Principle 4). Where a handle is available, Ctrl+S writes back
-// to the dropped file; otherwise a save downloads a copy (`file.js`'s `canBind`).
+// dropping alone behave differently (Principle 4). A dropped document is imported; its first
+// save chooses a path inside the served folder.
 // ==========================================
 function kspageDrop(ui) {
   const canvas = ui.canvas;
@@ -68,16 +68,6 @@ function kspageDrop(ui) {
     dress(false);
     const files = Array.from(e.dataTransfer.files);
     if (files.length <= 0) return;
-    // Caution: **Ask for the handles in the same turn** (the dropped list empties after an await).
-    const asking = [];
-    const items = e.dataTransfer.items;
-    if (items) {
-      for (const one of Array.from(items)) {
-        asking.push(one.kind === "file" && typeof one.getAsFileSystemHandle === "function"
-          ? one.getAsFileSystemHandle()
-          : Promise.resolve(null));
-      }
-    }
     // An image goes where it is dropped; **only a drop on the body moves the cursor** (no jumps).
     const pictures = files.filter(isPicture);
     if (pictures.length > 0) {
@@ -93,14 +83,7 @@ function kspageDrop(ui) {
     }
     const papers = files.filter((f) => !isPicture(f));
     if (papers.length <= 0) return;
-    const got = await Promise.all(asking);
-    // Caution: **Match the handles by the dropped order** (without the images it is off by one).
-    const handleOf = (f) => {
-      const at = files.indexOf(f);
-      const one = at >= 0 && at < got.length ? got[at] : null;
-      return one && one.kind === "file" ? one : null;
-    };
     // **A window holds one document**, so the first dropped opens.
-    ui.takeChosen(papers[0], handleOf(papers[0]));
+    ui.takeChosen(papers[0]);
   });
 }

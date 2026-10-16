@@ -1,0 +1,25 @@
+#!/usr/bin/env -S ksplc run
+//< It pins down that the public and internal negative fixtures fail with the expected error
+//<
+//< `tests/support/harness_expect.kspl` runs them, shared with `tests/lint/`.
+//< Caution: **Do not merge this entry point with that one.** The input and ksplc decide
+//< `ksplc run`'s directory, so the same script run at once with other arguments contends for it.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_expect"
+import "std/fs"
+import "std/io"
+import "std/verdict"
+
+fn main(): I32
+    arena: = harness.begin(256 * 1024 * 1024)
+    harness_expect.run_suite("negative", "tests/negative", true, false, true, arena)
+    parser_exe: = fs.join(harness.tmp_dir(), "raw_parse.exe", arena)
+    built: = harness.ksplc(U8[][]::{ "build", "tests/prog/raw_parse.kspl", parser_exe })
+    if verdict.check("the internal parser probe builds", built.code == 0, built.out)
+        valid: = fs.join(harness.tmp_dir(), "valid.ksplb", arena)
+        io.write_file(valid, "fn main(): I32 { return 0; }\n") catch
+            return harness.fatal("cannot write the parser's valid fixture")
+        parsed: = harness.run(U8[][]::{ parser_exe, valid })
+        verdict.check("the internal parser accepts a valid program", parsed.code == 0, parsed.out)
+        harness_expect.run_suite("parse", "tests/parse", true, false, false, arena, parser_exe)
+    return harness.finish()

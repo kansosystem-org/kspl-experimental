@@ -1,0 +1,144 @@
+//< A demo of the "task manager"
+//<
+//< It shows each task's CPU share, priority and state, and the heap in use (`Task.cpu_percent`
+//< in ksos/kernel/task.kspl), and the idle task reaping deleted Tasks and stacks
+//< (enable_idle_task in ksos/kernel/task.kspl, install_idle_reap in ksos/kernel/dynamic.kspl).
+//< It checks both: by each refresh the idle task has given the churner's stack back to the heap,
+//< and at the end the busier task shows the larger CPU share, and the lighter one more than 0.
+//< Before the scheduler starts, it creates and destroys each synchronization primitive on the heap
+//< (`init_dyn` / `destroy_dyn` in ksos/kernel/dynamic.kspl) and checks every byte comes back.
+import "ksos/kernel/dynamic" as dyn
+import "ksos/kernel/heap"
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/io"
+import "std/mem"
+import "std/sys"
+import "std/verdict"
+
+$tcb_heavy: Task
+$tcb_light: Task
+$stack_heavy: U8[65536]
+$stack_light: U8[65536]
+$stack_idle: U8[65536]
+
+$g_refresh_count: I32 = 0
+const max_refresh: I32 = 4
+const refresh_period: U64 = 300 // ticks (about 300ms with enable_preemption's 1ms period)
+const churner_stack: Sz = 65536
+fn heavy_task(_arg: Void$@): Void //<
+    //< A task that nearly hogs the CPU but is briefly not ready at a fixed interval
+    //<
+    //< Task.delay(1) does that. If it were always ready, idle (prio=0) would starve forever.
+    for
+        start: = task.current_tick()
+        for task.current_tick() < start + 3 {}
+        Task.delay(1)
+
+fn light_task(_arg: Void$@): Void //<
+    //< A task that repeats a small heap allocate/free and a short burst of work between delays
+    //<
+    //< The burst is measured in ticks (current_tick()), not iterations, which a fast host finishes
+    //< within one tick. Its CPU share shows below heavy's but above 0.
+    for
+        p: = heap.heap_alloc(256)
+        start: = task.current_tick()
+        for task.current_tick() < start + 2 {}
+        heap.heap_free(p)
+        Task.delay(4)
+
+fn churner_task(_arg: Void$@): Void //<
+    //< A task that deletes itself once it has done one piece of work
+    //<
+    //< monitor_task creates a new one on every refresh, so the heap in use shows the cycle: create,
+    //< delete itself, reaped by the idle task.
+    start: = task.current_tick()
+    for task.current_tick() < start + 1 {}
+    Task.current().delete_dyn()
+
+fn print_table(): Void
+    io.out().s("\n==================== Kanso OS Task Manager ====================\n")
+    io.out().s("tick=\{I32::task.current_tick()\}\n")
+    io.out().s("NAME       STATE       PRIO  CPU%\n")
+    for $i: Sz = 0; i < Task.count(); i += 1
+        t: = Task.at(i)
+        if t != null
+            name: = t.get_name()
+            state_name: = t.get_state().name()
+            prio: = t.get_prio()
+            cpu: = t.cpu_percent()
+            io.out().s(name).s("       ").s(state_name).s("       prio=\{prio\}  cpu=\{cpu\}%\n")
+    io.out().s("-----------------------------------------------------------------\n")
+    io.out()
+        .s("heap: used=\{I32::mem.heap_used_bytes()\}B peak=\{I32::mem.heap_peak_used_bytes()\}B\n")
+    io.out().s("=================================================================\n")
+
+fn monitor_task(_arg: Void$@): Void //<
+    //< The monitoring task, itself created by Task.create_dyn beside the static heavy/light
+    //<
+    //< It creates a new churner_task on every refresh.
+    verdict.start("[ksos] the idle task reaps a task that deleted itself")
+    // Taken before any churner exists. Only light's 256-byte block comes and goes beside it, so a
+    // churner reaped leaves the heap well within half a churner's stack of this.
+    base: = mem.heap_used_bytes()
+    for g_refresh_count < max_refresh
+        switch Task.create_dyn(churner_task, null, 1, "churner", churner_stack)
+        case .some {}
+        case .none
+            panic("task-manager: could not create churner (heap or task slots exhausted)")
+        Task.delay(refresh_period)
+        print_table()
+        // The churner deleted itself long ago; only the idle task frees it before the next
+        // create_dyn (which would reap it too).
+        assert(mem.heap_used_bytes() < base + churner_stack / 2,
+            "task-manager: the idle task did not give a deleted churner's stack back to the heap")
+        g_refresh_count += 1
+    verdict.pass("by every refresh, the churner that deleted itself is back on the heap.")
+    check_cpu_shares()
+    // heavy/light never end, so after max_refresh refreshes the process ends explicitly, with the
+    // verdict line the gate reads.
+    sys.exit(verdict.finish())
+
+priv fn check_cpu_shares() //< heavy is ready more than light, and light more than never
+    verdict.start("[ksos] the CPU shares follow how much each task asks for")
+    heavy: = tcb_heavy.cpu_percent()
+    light: = tcb_light.cpu_percent()
+    assert(light > 0, "task-manager: a task that ran shows a CPU share of 0")
+    assert(heavy > light, "task-manager: the busier task does not show the larger CPU share")
+    $sum: I32 = 0
+    for i in Range.asc(Task.count())
+        t: = Task.at(i)
+        if t != null
+            sum += t.cpu_percent()
+    assert(sum <= 100, "task-manager: the CPU shares add up to more than 100%")
+    verdict.pass("heavy shows more than light, light more than 0, and they add up to 100 at most.")
+
+priv fn check_sync_dyn() //< creates and destroys each primitive on the heap; nothing may stay
+    before: = mem.heap_used_bytes()
+    s: = sync.Sem.init_dyn(1)
+    m: = sync.Mutex.init_dyn()
+    e: = sync.Event.init_dyn()
+    q: = sync.Queue<|I32|>.init_dyn(8)
+    q.destroy_dyn()
+    e.destroy_dyn()
+    m.destroy_dyn()
+    s.destroy_dyn()
+    if mem.heap_used_bytes() != before
+        panic("task-manager: a synchronization primitive's init_dyn / destroy_dyn leaked heap bytes")
+
+fn main()
+    check_sync_dyn()
+    // All three at priority 1, round-robined by the SIGALRM time slice; a higher heavy would starve
+    // the others and hang.
+    tcb_heavy.create(U8$[]::stack_heavy, heavy_task, null, 1, "heavy")
+    tcb_light.create(U8$[]::stack_light, light_task, null, 1, "light")
+    switch Task.create_dyn(monitor_task, null, 1, "monitor", 65536)
+    case .some {}
+    case .none
+        panic("task-manager: could not create monitor task")
+    // Enable the idle task (prio=0); otherwise a deleted churner_task is reaped only at the next
+    // dynamic.kspl call.
+    dyn.install_idle_reap(U8$[]::stack_idle)
+    // SIGALRM/setitimer with a 1ms period (like posix_preempt_demo.kspl).
+    task.enable_preemption(1000)
+    task.start_scheduler()

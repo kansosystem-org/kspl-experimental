@@ -4,7 +4,7 @@
 # ==========================================
 
 # The opener looks for `kspage_web/kspage.html` beside itself (`page_rel` in
-# `tools/kspage_open.kspls`).
+# `tools/kspage_open.kspl`).
 KSPAGE_WEB := $(OUT_DIR)/kspage_web
 
 # Caution: **Relative paths only**: the repository's place may hold what Windows's linker garbles.
@@ -12,8 +12,7 @@ kspage_make = $(call pkg_make,kspage) OUT=../$(OUT_DIR)/kspage WEB=../$(KSPAGE_W
 
 ## Run|kspage-web|Build the wasm for the browser
 ## Gates|test-kspage-wasm|Run the browser's wasm under node
-## Gates|test-kspage-browser|Look at the input plumbing in a real browser
-kspage-web test-kspage-wasm test-kspage-browser: $(STAGE1_EXE)
+kspage-web test-kspage-wasm: $(STAGE1_EXE)
 	@$(kspage_make) $(subst kspage-,,$@)
 
 ## Gates|test-kspage-served|Look at the page `kssrv --local` served
@@ -23,7 +22,7 @@ test-kspage-served: $(STAGE1_EXE) kssrv
 # ==========================================
 # Making sure by touching it (`make kspage-serve`)
 # ==========================================
-# Caution: **The URL is `tools/kspage_open.kspls`'s alone** (a root and a document that do not
+# Caution: **The URL is `tools/kspage_open.kspl`'s alone** (a root and a document that do not
 # line up give an empty page, nothing said); **keep `--show`**, or a run with no screen waits.
 KSPAGE_DOC ?= kspage/content/manual.kspage
 KSPAGE_SERVE_PORT ?= 8080
@@ -31,7 +30,7 @@ KSPAGE_SERVE_PORT ?= 8080
 ## Run|kspage-serve|Serve one document and put out the URL (`KSPAGE_DOC=` / `KSPAGE_SERVE_PORT=`)
 kspage-serve: kspage-web kssrv
 	@echo "# SERVING kspage"
-	./$(STAGE1_EXE) run tools/kspage_open.kspls "$(KSPAGE_DOC)" --root=. \
+	./$(STAGE1_EXE) run tools/kspage_open.kspl "$(KSPAGE_DOC)" --root=. \
 		--port=$(KSPAGE_SERVE_PORT) --show
 
 KSPAGE_OPEN_EXE := $(OUT_DIR)/kspage_open.exe
@@ -39,7 +38,7 @@ KSPAGE_OPEN_EXE := $(OUT_DIR)/kspage_open.exe
 # **The association points at this executable**, not `ksplc run`: a double-click stands elsewhere.
 $(KSPAGE_OPEN_EXE): $(STAGE1_EXE)
 	@echo "# BUILDING the opener (out/kspage_open.exe)"
-	$(call kspl_build,tools/kspage_open.kspls,kspage_open,,$(GUI_LDFLAGS))
+	$(call kspl_build,tools/kspage_open.kspl,kspage_open,,$(GUI_LDFLAGS))
 	@echo "# built -> $(KSPAGE_OPEN_EXE)"
 
 ## Run|kspage-open|Open one document (`FILE=` is wanted)
@@ -51,7 +50,7 @@ KSPAGE_SAMPLE := $(OUT_DIR)/sample.kspage
 
 $(KSPAGE_SAMPLE): $(STAGE1_EXE)
 	@echo "# WRITING a document to double-click"
-	./$(STAGE1_EXE) run tools/kspage_doc.kspls $(KSPAGE_SAMPLE)
+	./$(STAGE1_EXE) run tools/kspage_doc.kspl $(KSPAGE_SAMPLE)
 
 # ==========================================
 # Making it open on a double-click (`make kspage`)
@@ -123,4 +122,4 @@ kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE) test-kspage-desktop
 	@echo "# (the other platforms, and what to do if nothing opens: the last section of docs/HOWTO-set-up-a-project.md)"
 
 .PHONY: kspage kspage-serve kspage-open kspage-web \
-	test-kspage-wasm test-kspage-browser test-kspage-served test-kspage-desktop
+	test-kspage-wasm test-kspage-served test-kspage-desktop

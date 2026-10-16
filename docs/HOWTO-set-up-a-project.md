@@ -12,10 +12,10 @@ The commands are written for the unpacked folder (`./ksplc`). With `ksplc` on th
 
 ## Running a program
 
-**`ksplc run` turns a `.kspls` file into a program and runs it, in one command.**
+**`ksplc run` turns a `.kspl` file into a program and runs it, in one command.**
 
 ```sh
-./ksplc run hello.kspls            # on Windows, .\ksplc.exe run hello.kspls
+./ksplc run hello.kspl            # on Windows, .\ksplc.exe run hello.kspl
 ```
 
 `run` translates the program to C, compiles, links and runs it. It caches the build, so an unchanged source starts at once (the cache is in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
@@ -27,10 +27,10 @@ The commands are written for the unpacked folder (`./ksplc`). With `ksplc` on th
 Arguments after the script name go to the program:
 
 ```sh
-./ksplc run hello.kspls --name=Kanso    # --name=Kanso is received by hello.kspls
+./ksplc run hello.kspl --name=Kanso    # --name=Kanso is received by hello.kspl
 ```
 
-**A first line `#!/usr/bin/env -S ksplc run` makes the script executable** once `ksplc` is on the PATH: you can then start it as `./hello.kspls`. That first line (a *shebang*) does nothing in Windows's native shell, so write `ksplc run <script.kspls>` there.
+**A first line `#!/usr/bin/env -S ksplc run` makes the script executable** once `ksplc` is on the PATH: you can then start it as `./hello.kspl`. That first line (a *shebang*) does nothing in Windows's native shell, so write `ksplc run <script.kspl>` there.
 
 ## Working in another folder
 
@@ -48,7 +48,7 @@ The second line checks the result: it prints the `std/` folder `ksplc` uses.
 **To get the executable itself rather than `run` it, `build` it:**
 
 ```sh
-./ksplc build hello.kspls hello     # hello.c and hello.libs are left beside it
+./ksplc build hello.kspl hello     # hello.c and hello.libs are left beside it
 ./hello
 ```
 
@@ -71,22 +71,22 @@ The steps it takes, and how to take them apart (to ship objects without the sour
 | Where the file is | Write |
 | :-- | :-- |
 | In the standard library | `import "std/io"` |
-| Beside the importing file (`hw.kspls` beside `main.kspls`) | `import "hw"` (`as` only to rename) |
+| Beside the importing file (`hw.kspl` beside `main.kspl`) | `import "hw"` (`as` only to rename) |
 | At the top of a project that names itself | `import "myapp/hw"` (below) |
 
 **When an import is not found, the error lists every folder searched**, which shows the starting point.
 
-**A project that names itself is found from any folder.** Put a `ksplc.cfg` holding `[package]` and `name = myapp` at its top, and `import "myapp/hw"` finds `hw.kspls` in that top folder. `ksplc info package` names the package of the current folder. The details are in "A package that names itself (`[package]`)" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
+**A project that names itself is found from any folder.** Put a `ksplc.cfg` holding `[package]` and `name = myapp` at its top, and `import "myapp/hw"` finds `hw.kspl` in that top folder. `ksplc info package` names the package of the current folder. The details are in "A package that names itself (`[package]`)" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 
 Note: **A library can also be handed over without its KSPL source**, built with `--library=` and used through the C interface the compiler writes beside it ("Shipping a library and using it" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 ## VS Code (syntax highlighting, the Language Server, debugging)
 
-**VS Code builds and debugs in the unpacked folder without setup; the Kanso extension adds colouring and code help.** The unpacked folder holds `.vscode/` (build tasks, LLDB settings) and, at its top, `kspl_lldb.py`: the LLDB pretty printer that makes slices, `Result` types and structs readable in the debugger. The Kanso extension adds `.kspls` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
+**VS Code builds and debugs in the unpacked folder without setup; the Kanso extension adds colouring and code help.** The unpacked folder holds `.vscode/` (build tasks, LLDB settings) and, at its top, `kspl_lldb.py`: the LLDB pretty printer that makes slices, `Result` types and structs readable in the debugger. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
 
 1. **Install the extension**
 
-  Install `kspl-*.vsix` from the Releases page. It bundles the LSP server for all three OSes and activates when a `.kspls` is opened.
+  Install `kspl-*.vsix` from the Releases page. It bundles the LSP server for all three OSes and activates when a `.kspl` is opened.
 
   ```sh
   code --install-extension kspl-x.y.z.vsix
@@ -96,16 +96,16 @@ Note: **A library can also be handed over without its KSPL source**, built with 
 
 2. **Open the unpacked folder and build**
 
-  Open the folder where `ksplc` and `std/` sit side by side. The bundled `.vscode/tasks.json` takes effect, and `Ctrl+Shift+B` compiles and links the open `.kspls`.
+  Open the folder where `ksplc` and `std/` sit side by side. The bundled `.vscode/tasks.json` takes effect, and `Ctrl+Shift+B` compiles and links the open `.kspl`.
   * Caution: **For a project elsewhere, set `KSPLC_STD_DIR` before starting VS Code.** The Language Server analyzes in a child process, and the CLI's `--std-dir=` does not reach it.
 
 3. **Debug with LLDB (optional)**
 
-  With [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) installed (third-party, not in the release artifacts), `F5` on an open `.kspls` runs everything from the build to the debugger's launch.
+  With [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) installed (third-party, not in the release artifacts), `F5` on an open `.kspl` runs everything from the build to the debugger's launch.
 
 ## Opening a `.kspage` document on a double-click
 
-**This section makes a `.kspage` document open in your browser when you double-click it in the file manager.** It needs a clone of this repository that builds from source ([`HOWTO-build.md`](HOWTO-build.md)), not only the unpacked folder. `make kspage` builds the three programs it uses: the opener, the server and the page ("Where the double-click opener lives" in [`tools/docs/DESIGN.md`](../tools/docs/DESIGN.md)).
+**This section makes a `.kspage` document open in your browser when you double-click it in the file manager.** It needs a clone of this repository that builds from source ([`HOWTO-build.md`](HOWTO-build.md)), not only the unpacked folder. `make kspage` builds the three programs it uses: the opener, the server and the page ("Where the double-click opener lives" in [`tools/docs/DESIGN-tools.md`](../tools/docs/DESIGN-tools.md)).
 
 The diagram shows what happens on a double-click.
 
@@ -117,7 +117,7 @@ flowchart LR
     Browser -->|loads the page from| Server
 ```
 
-A `.kspage` file double-clicked in a file manager opens in a browser through `out/kspage_open.exe`, built from [`tools/kspage_open.kspls`](../tools/kspage_open.kspls) (what `make kspage-open FILE=…` runs). It starts the local server, or reuses the one serving the same folder, and passes the URL to a browser.
+A `.kspage` file double-clicked in a file manager opens in a browser through `out/kspage_open.exe`, built from [`tools/kspage_open.kspl`](../tools/kspage_open.kspl) (what `make kspage-open FILE=…` runs). It starts the local server, or reuses the one serving the same folder, and passes the URL to a browser.
 
 **The server stays up for the next document**, and stops by itself once no kspage tab has held it for a while.
 
@@ -146,7 +146,7 @@ A `.kspage` file double-clicked in a file manager opens in a browser through `ou
   xdg-mime default kspage.desktop application/x-kspage
   ```
 
-3. **Double-click `out/sample.kspage`**, the one way to confirm the association works. It holds [`tools/kspage_doc.kspls`](../tools/kspage_doc.kspls)'s content, **not the document shown at start-up**.
+3. **Double-click `out/sample.kspage`**, the one way to confirm the association works. It holds [`tools/kspage_doc.kspl`](../tools/kspage_doc.kspl)'s content, **not the document shown at start-up**.
 
 **Do not skip the first of the four lines.** Linux ties an application to a MIME type (a name for a kind of file), not to an extension. Undeclared, `.kspage` reads as `application/octet-stream`, which the last line cannot tie.
 
@@ -168,7 +168,7 @@ Caution: **A double-click shows that refusal nowhere.** Run the opener once by h
 Each association below runs `out/kspage_open.exe` with one file's path. **No gate runs either of them**, so only your environment can say whether it works.
 
 * **Windows** — right-click a `.kspage` file, choose "Open with ▸ Choose another app ▸ Look for another app on this PC", pick `out\kspage_open.exe`, and tick "Always use this app".
-  * **Do not tie `.json` to it.** Every settings and data file on the machine would open in kspage ("The extension is kspage's own, and does not name the format inside" in [`kspage/docs/DESIGN.md`](../kspage/docs/DESIGN.md)).
+  * **Do not tie `.json` to it.** Every settings and data file on the machine would open in kspage ("The extension is kspage's own, and does not name the format inside" in [`kspage/docs/DESIGN-application.md`](../kspage/docs/DESIGN-application.md)).
 * **macOS** — Finder's "Get Info ▸ Open with" needs an application bundle (`.app`). Make one in Automator's "Application" running `out/kspage_open.exe "$1"`, and tie that.
 
 ### When a double-click shows nothing

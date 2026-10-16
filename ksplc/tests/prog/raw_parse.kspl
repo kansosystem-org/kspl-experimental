@@ -1,0 +1,31 @@
+//< Parses an internal brace fixture directly, without the public compiler's source loader
+import "kspeg/notation"
+import "ksplc/base/core"
+import "ksplc/base/setup"
+import "ksplc/parse/load"
+import "std/io"
+import "std/mem" { dealloc }
+import "std/sys"
+
+embed "ksplc/kspl.kspeg" as grammar
+
+fn main(): I32
+    setup.init()
+    defer setup.fin()
+    load.init()
+    defer load.fin()
+    args: = sys.args()
+    if args.len != 2
+        return 2
+    path: = args.get(1)
+    src: = io.read_file(path) catch
+        return 2
+    defer dealloc(Void$@::src.ptr)
+    $meta: = notation.Meta.new(grammar, core.arena)
+    parser: = meta.parse_grammar() catch
+        return 2
+    defer parser.free_memo()
+    load.parse_raw_ast(src, path, parser, false) catch
+        io.err().s("parse/syntax_error: compilation terminated (see diagnostics above)\n")
+        return 1
+    return 0

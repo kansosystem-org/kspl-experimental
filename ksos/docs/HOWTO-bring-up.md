@@ -86,7 +86,7 @@ flowchart LR
 | [5b](#stage-5b--ir-receiving) | IR receiving (NEC) | The Serial Monitor |
 | [5c](#stage-5c--i2c--the-led-matrix) | I2C (the VK16K33 LED matrix) | By eye |
 | [6a](#stage-6a--usb-ethernet--cdc-ncm) | USB Ethernet (CDC-NCM) as a network adapter | Device Manager |
-| [6b](#stage-6b--passing-8023-frames--ping) | 802.3 frames through `Link` in `ksos/net/link.kspls` | ping from the PC |
+| [6b](#stage-6b--passing-8023-frames--ping) | 802.3 frames through `Link` in `ksos/net/link.kspl` | ping from the PC |
 | [6c](#stage-6c--running-the-upper-layers-tcp--http-on-real-hardware) | TCP / HTTP | A server on the PC |
 | [6d](#stage-6d--the-heap-and-the-atomics-on-armv6-m) | The heap and the atomics (`alloc` / `Arc` / `std/http`) | The `[heap]` lines |
 | [6e](#stage-6e--running-a-closed-loop-with-the-pcs-kssrv) | A **closed loop** with the PC's kssrv | The wheels move / kssrv's `/api/status` |
@@ -99,13 +99,13 @@ flowchart LR
 
 **"Tuning line following", after stage 12, is not a stage**: it holds what stages 7, 9, 11 and 12 share when the car follows a line.
 
-**Wireless is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN.md`](DESIGN.md)).
+**Wireless is not among the stages** ("WiFi (CYW43439) — not implemented in this design" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
-**`make ksos-rp2040-board` is one firmware for stages 2b, 4, 5c, 6d, 8 and 10.** It prints lines tagged `[tag]` for each stage in turn, one lap in about 20 seconds (how to read them: the heading of [`demo/rp2040/rp2040_board_probe.kspls`](../demo/rp2040/rp2040_board_probe.kspls)). `make ksos-rp2040-net` is one firmware for 6a, 6b and 6c.
+**`make ksos-rp2040-board` is one firmware for stages 2b, 4, 5c, 6d, 8 and 10.** It prints lines tagged `[tag]` for each stage in turn, one lap in about 20 seconds (how to read them: the heading of [`demo/rp2040/rp2040_board_probe.kspl`](../demo/rp2040/rp2040_board_probe.kspl)). `make ksos-rp2040-net` is one firmware for 6a, 6b and 6c.
 
 Caution: **Do not add the stages that turn the wheels (3, 6e, 7, 9, 12) to the board firmware**: they need the wheels lifted before writing, and it runs connected on the desk.
 
-**Stage 2 is split** because USB cannot enumerate until the clock is right ("The clocks and the µs timer" in [`DESIGN.md`](DESIGN.md)), and 2a checks the clock by the buzzer's pitch. **Stage 5 is split** by the tools each part needs. IR (5b) comes before I2C (5c) because I2C needs the ultrasonic module swapped for the LED matrix, while the IR receiver stays on GPIO 3.
+**Stage 2 is split** because USB cannot enumerate until the clock is right ("The clocks and the µs timer" in [`DESIGN-rtos.md`](DESIGN-rtos.md)), and 2a checks the clock by the buzzer's pitch. **Stage 5 is split** by the tools each part needs. IR (5b) comes before I2C (5c) because I2C needs the ultrasonic module swapped for the LED matrix, while the IR receiver stays on GPIO 3.
 
 ## Stage 1 — the buzzer sounds
 
@@ -144,7 +144,7 @@ The program stays in the flash and beeps at every power-on. **To silence it**, c
 2. Measure the pitch with a phone's frequency-counter app or a tuner. Expected: **2000Hz, within about 1%.**
 3. Count the beeps for 10 seconds by a clock. Expected: **20** (0.25 seconds on, 0.25 off).
 
-**Silence where stage 1 sounded, or a pitch far off, means the clock set-up failed**: what `clocks.init()` must do is "The clocks and the µs timer" in [`DESIGN.md`](DESIGN.md).
+**Silence where stage 1 sounded, or a pitch far off, means the clock set-up failed**: what `clocks.init()` must do is "The clocks and the µs timer" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 ## Stage 2b — USB CDC
 
@@ -163,7 +163,7 @@ The program stays in the flash and beeps at every power-on. **To silence it**, c
 
 `[2]` is 91 bytes, more than one USB packet, so `<END` shows a line split across packets arrives whole. `[2]` cut short, or only `[1]` arriving, means the send queue is broken.
 
-**When enumeration fails, the car beeps N, how far it got, again and again**: every 3 seconds during the 8 seconds it waits, then at the head of each lap. What each step needs from the device is "USB CDC" in [`DESIGN.md`](DESIGN.md).
+**When enumeration fails, the car beeps N, how far it got, again and again**: every 3 seconds during the 8 seconds it waits, then at the head of each lap. What each step needs from the device is "USB CDC" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 | N | How far it got |
 |---|---|
@@ -226,7 +226,7 @@ Caution: **Confirm that each value moves.** A fixed value looks the same as a pi
 
 Caution: **Cover the leftmost line sensor and check that the left character changes.** Some units have the outer sensors mounted swapped; if the right one changes, flip `board.line_sensor_swapped` ("Line tracking" in [`SPEC-board.md`](SPEC-board.md)). All three characters stuck the same usually means the sensor board's sensitivity trimmer (a small adjustable resistor) needs turning.
 
-**No lines and N beeps at the head of each lap** means USB did not enumerate: back to stage 2b. **`bat=` at about a quarter of the real voltage** means the 12-bit resolution was mixed up with Arduino's 10 ("The ADC" in [`DESIGN.md`](DESIGN.md)).
+**No lines and N beeps at the head of each lap** means USB did not enumerate: back to stage 2b. **`bat=` at about a quarter of the real voltage** means the 12-bit resolution was mixed up with Arduino's 10 ("The ADC" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 ## Stage 5a — the HC-SR04 ultrasonic
 
@@ -297,7 +297,7 @@ Caution: **Put the ultrasonic module back afterwards**, or stages 4, 5a and 5b r
 
 ## Stage 6a — USB Ethernet / CDC-NCM
 
-**Goal: the car shows up on the PC as a network adapter (CDC-NCM)** beside stage 2b's serial port, both on one cable. It needs stage 2b working. One firmware serves stages 6a, 6b and 6c (what it runs, in order: "What the USB-Ethernet probe does, and what it needs on the PC" in [`DESIGN.md`](DESIGN.md)).
+**Goal: the car shows up on the PC as a network adapter (CDC-NCM)** beside stage 2b's serial port, both on one cable. It needs stage 2b working. One firmware serves stages 6a, 6b and 6c (what it runs, in order: "What the USB-Ethernet probe does, and what it needs on the PC" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 1. Build the network firmware, and write `out/ksos_rp2040/ksos_rp2040_net.uf2` as in stage 1:
 
@@ -346,7 +346,7 @@ By Windows's default this puts the PC at 192.168.137.1.
 
 `rx` far above `arp + ping` is normal (the car ignores the PC's broadcast and multicast), and so is `arp=1` staying put (Windows caches a resolved MAC).
 
-Caution: **The car's address is fixed at 192.168.137.50, with no DHCP.** `rx=` growing while `arp=` does not means the shared subnet is another one: change `init_addrs` in `ksos/demo/rp2040/common/net_client.kspls`, or set 192.168.137.1/24 on the USB adapter by hand in place of sharing.
+Caution: **The car's address is fixed at 192.168.137.50, with no DHCP.** `rx=` growing while `arp=` does not means the shared subnet is another one: change `init_addrs` in `ksos/demo/rp2040/common/net_client.kspl`, or set 192.168.137.1/24 on the USB adapter by hand in place of sharing.
 
 ## Stage 6c — running the upper layers (TCP / HTTP) on real hardware
 
@@ -390,7 +390,7 @@ Caution: **The car's address is fixed at 192.168.137.50, with no DHCP.** `rx=` g
 
 ## Stage 6d — the heap and the atomics on Armv6-M
 
-**Goal: the heap and the atomic operations work on this chip**, whose CPU has no atomic instructions (how they are supplied: "Armv6-M has no atomic instructions — the port supplies them" in [`DESIGN.md`](DESIGN.md)).
+**Goal: the heap and the atomic operations work on this chip**, whose CPU has no atomic instructions (how they are supplied: "Armv6-M has no atomic instructions — the port supplies them" in [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 1. Write the board firmware and open the Serial Monitor:
 
@@ -504,7 +504,7 @@ What the report line's fields count:
 
 ## Stage 7 — receiving a policy, then disconnecting and deciding for itself
 
-**Here the car receives a whole policy once at start-up, disconnects, and decides alone** ("What the self-driving probe does" in [`DESIGN.md`](DESIGN.md)). Where stage 6e asks the PC on every lap, this car asks once and then needs no PC.
+**Here the car receives a whole policy once at start-up, disconnects, and decides alone** ("What the self-driving probe does" in [`DESIGN-rtos.md`](DESIGN-rtos.md)). Where stage 6e asks the PC on every lap, this car asks once and then needs no PC.
 
 ```mermaid
 sequenceDiagram
@@ -587,7 +587,7 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 
 | The car sees | It | `car-loop` (6e) | `car-pilot` (7, 9) | `car-ir` (12) | How it comes back |
 | :-- | :-- | :--: | :--: | :--: | :-- |
-| The battery under `battery_low_mv` on `low_rounds` **consecutive** laps (`ksos/demo/rp2040/common/battery.kspls`) (a motor's inrush dips it for an instant) | Stops; `car-loop` also sends no more requests | ✅ | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
+| The battery under `battery_low_mv` on `low_rounds` **consecutive** laps (`ksos/demo/rp2040/common/battery.kspl`) (a motor's inrush dips it for an instant) | Stops; `car-loop` also sends no more requests | ✅ | ✅ | — | Switch the battery off and on ("Bringing it back when the battery stopped it" above) |
 | The distance under `emergency_mm` (100mm) | Backs off | ✅ | ✅ | — | By itself, once the distance grows |
 | No valid reply within `reply_deadline_ms` (300ms) | Stops | ✅ | — | — | By itself, at the next valid reply |
 | No policy received, and none in the record | Never moves | — | ✅ | — | Receive one from kssrv (stage 9) |
@@ -628,7 +628,7 @@ The only path to the wheels (`apply`) is `one_round` inside `if ready && !halted
 
 **The region is erased only the first time**, when the marker record (`ksdb1`) is missing (`no marker -> erased the region`). If that line keeps appearing, the writes do not take effect. That first time the log stops for about a second (16 sectors erased with interrupts and USB polling stopped).
 
-**Rewriting the firmware keeps the record** ("The code that runs in RAM, and the region left for the record" in [`DESIGN.md`](DESIGN.md)); a whole-chip erase (`picotool erase`, or erasing everything from BOOTSEL) removes it. Writing stops interrupts (hundreds of µs to a few ms; a sector erase longer), so keep records infrequent against the control period.
+**Rewriting the firmware keeps the record** ("The code that runs in RAM, and the region left for the record" in [`DESIGN-rtos.md`](DESIGN-rtos.md)); a whole-chip erase (`picotool erase`, or erasing everything from BOOTSEL) removes it. Writing stops interrupts (hundreds of µs to a few ms; a sector erase longer), so keep records infrequent against the control period.
 
 ## Stage 9 — leaving the policy and the observations inside the car, and starting up with no PC
 
@@ -737,7 +737,7 @@ car t=700 ... n=599 ... run=1 rec=95
 car t=710 ... n=609 ... run=11 rec=95        <- n is growing
 ```
 
-**The speed cap rewrites the policy's output**, so the report line and the record show the instruction really sent. It is set in one place, `cap` in `ksos/boards/freenove_4wd_pico/motor.kspls`, and applies to the close-range reverse too.
+**The speed cap rewrites the policy's output**, so the report line and the record show the instruction really sent. It is set in one place, `cap` in `ksos/boards/freenove_4wd_pico/motor.kspl`, and applies to the close-range reverse too.
 
 ### Seeing the state as light while it drives itself
 
@@ -752,7 +752,7 @@ On the battery alone the LEDs are the only window. Only the first two elements a
 | Yellow | Stopped at the run-time limit | `HALTED: run time limit` |
 | Purple | No policy, or unreadable | `HALTED: no policy` and the like |
 
-**The blinking is the evidence that the loop is turning.** Steadily lit or dark means it stopped, whatever the colour (that is just the last one sent). The colour and the report's text come from one place, `State` in `ksos/boards/freenove_4wd_pico/status.kspls`; add a new state to that enum.
+**The blinking is the evidence that the loop is turning.** Steadily lit or dark means it stopped, whatever the colour (that is just the last one sent). The colour and the report's text come from one place, `State` in `ksos/boards/freenove_4wd_pico/status.kspl`; add a new state to that enum.
 
 **Starting up takes a dozen seconds or so** (5 for the link, 8 for the console), with cyan blinking. If nothing lights, `status.init` failed (six beeps).
 
@@ -823,7 +823,7 @@ Caution: **Read the correction's strength from `line`**, not `lon`/`rot`: those 
 
 **The report line's `n=` and `trk=` count one run** and do not match the record's count (`rec=` is what that run left). A short run can leave `trk=` at 0, which alone does not show mid-lap steering failing.
 
-**The record is not sampled at a fixed interval**: it keeps only laps where the triple changed, plus a heartbeat every `sample_every` laps. How long something lasted is not in it; see the report line's `emerg=`. Why the record as it stands is no training set for the policy is in "🤖 The AI on bare metal" in [`DESIGN.md`](DESIGN.md).
+**The record is not sampled at a fixed interval**: it keeps only laps where the triple changed, plus a heartbeat every `sample_every` laps. How long something lasted is not in it; see the report line's `emerg=`. Why the record as it stands is no training set for the policy is in "🤖 The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 **Old lines carry two traps.** A line with no origin bit reads `safety=0` (mark a boundary by changing the marker and erasing once, losing the policy too). A line written under another `cap.cap` has different `lon/lat/rot` magnitudes.
 
@@ -831,7 +831,7 @@ Caution: **Read the correction's strength from `line`**, not `lon`/`rot`: those 
 
 While printing it ignores the remote (harmless: the wheels are stopped). **Saving the output is the Serial Monitor's job**, as the car holds no file.
 
-Note: Only `ksos/demo/rp2040/common/sample.kspls` knows the columns' order, and the header line names them in that order.
+Note: Only `ksos/demo/rp2040/common/sample.kspl` knows the columns' order, and the header line names them in that order.
 
 ## Stage 10 — showing the state as light with WS2812 (a display needing no cable)
 
@@ -852,12 +852,12 @@ Note: Only `ksos/demo/rp2040/common/sample.kspls` knows the columns' order, and 
 | Then | All off |
 | The Serial Monitor | `[led] all red` and the rest, in step with the colours |
 
-**Judge by eye**: right colours prove the timing and its window for the write (the WS2812 section of [`DESIGN.md`](DESIGN.md)).
+**Judge by eye**: right colours prove the timing and its window for the write (the WS2812 section of [`DESIGN-rtos.md`](DESIGN-rtos.md)).
 
 | The symptom | The likely cause | What to do |
 | :-- | :-- | :-- |
 | Nothing lights | The pin's function (FUNCSEL) is not PWM, or `clocks.init()` failed (the divisor is then 19 times off) | Check the pin's function, then stage 2a |
-| Wrong colours (green for red, and so on) | Not sent in G, R, B order | Check `fill_wire` in `ksos/drivers/rp2040/ws2812.kspls`: a colour is given as 0xRRGGBB, and each LED's three bytes must go out green, red, blue |
+| Wrong colours (green for red, and so on) | Not sent in G, R, B order | Check `fill_wire` in `ksos/drivers/rp2040/ws2812.kspl`: a colour is given as 0xRRGGBB, and each LED's three bytes must go out green, red, blue |
 | Colours shifted per element | The 24-bit boundaries do not line up | Check that each element gets exactly 24 bits |
 | Flicker, or wrong colours at times | The window for the write is missed (interrupts not stopped, or the loop not in RAM) | Check both |
 
@@ -869,7 +869,7 @@ If the colours do start going wrong, doubling `bit_counts` doubles the window fo
 
 **This stage brings the mechanism up; it does not show the prediction coming right.** Whether it beats "the same as last time" on the floor is "What has been checked on real hardware" in [ksos](../README.md).
 
-The policy (stage 7) decides what to do; this stage adds a small net that predicts **what happens then** (`ksos/demo/common/car_model.kspls`). Each lap it learns a little from its own mistake:
+The policy (stage 7) decides what to do; this stage adds a small net that predicts **what happens then** (`ksos/demo/common/car_model.kspl`). Each lap it learns a little from its own mistake:
 
 ```mermaid
 flowchart LR
@@ -882,7 +882,7 @@ flowchart LR
 * **One step per control lap** (`loop_interval_ms` = 100ms). Do not learn on every 10ms steering tick: a step does not fit, the lap stretches to 230ms, and line following dulls.
 * **It predicts the line, not the ultrasonic distance.**
 
-Why it learns this way (the line and not the distance, no teacher, the policy not trained on its own record, what is refused) is in "🤖 The AI on bare metal" in [`DESIGN.md`](DESIGN.md).
+Why it learns this way (the line and not the distance, no teacher, the policy not trained on its own record, what is refused) is in "🤖 The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 The report line gains these fields:
 
@@ -895,8 +895,8 @@ car t=300 dist= 612mm line=3 bat=7.980V drive=(20,7,12) n=300 us=9210 emerg=0 dr
 | `pred=` | The predicted next-lap bits (0 to 7), to compare with the next line's `line=`. `-` is no prediction (stopped, or not one step learned) |
 | `perr=` | A moving average of the share of bits predicted wrong, in % (not the loss). `--` is not one step learned |
 | `base=` | The share wrong for "the same as the previous tick", in %. **`perr=` below it is the only evidence of learning** (both over the same steps and window, so `[dump]` need not be recounted). A draw is not a win: it means only "no change" was learned |
-| `v` | The weights' layout version (`state_version` in `demo/common/car_model.kspls`). If it differs from the local source, the other numbers still look plausible: check it first when the counting changes |
-| `lus=` | One learning step's time in µs, apart from `us=` (the policy alone). A lap that sent a stop skips the forward pass (the net's calculation from input to output) and reads small: read it where `drive=` is non-zero. Do not rely on the absolute value; to shorten it, shrink `hidden` in `demo/common/car_model.kspls` |
+| `v` | The weights' layout version (`state_version` in `demo/common/car_model.kspl`). If it differs from the local source, the other numbers still look plausible: check it first when the counting changes |
+| `lus=` | One learning step's time in µs, apart from `us=` (the policy alone). A lap that sent a stop skips the forward pass (the net's calculation from input to output) and reads small: read it where `drive=` is non-zero. Do not rely on the absolute value; to shorten it, shrink `hidden` in `demo/common/car_model.kspl` |
 | `st,` | Steps learned. **It accumulates across power cycles** (read back from the record), so a run's steps are the difference. One per lap (fewer than `n=` when steering was redone mid-lap), only on laps the wheels moved |
 | `sv` | Saves of the weights to the record. If it stays 0, the next start-up does not resume from here |
 | `resumed the forward model — N steps learned, missed E per mille of bits vs B for no-change` | The previous weights were read. Whether E is below B says whether it was learning last time (E alone says nothing) |
@@ -905,7 +905,7 @@ car t=300 dist= 612mm line=3 bat=7.980V drive=(20,7,12) n=300 us=9210 emerg=0 dr
 
 ### Nothing can be learned unless the wheels move
 
-**A stopped lap asks no question**: with 0 steps `perr=` shows `--`. A lap not driven (stopped, or HALTED) and a lap whose steering was redone mid-lap teach nothing either. Why is in "🤖 The AI on bare metal" in [`DESIGN.md`](DESIGN.md).
+**A stopped lap asks no question**: with 0 steps `perr=` shows `--`. A lap not driven (stopped, or HALTED) and a lap whose steering was redone mid-lap teach nothing either. Why is in "🤖 The AI on bare metal" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 **At `line=7` the car does not move** (the policy stops at "a junction or an end"). On a stand all three sensors read black, so `st,` never grows and a hand does not help. Put it down on the floor.
 
@@ -945,7 +945,7 @@ On the floor, read these three **from the top** (a lower one means something onl
 
 ### Tell the version written by `v`, not by `st,`
 
-**`st,` accumulates across power cycles** and restarts from 0 when `load` refuses another version's weights, so one value can mean "resumed" or "restarted". Read `v` first: if it differs from `state_version` in the local `demo/common/car_model.kspls`, the version written is old. Then one run's steps are the difference in `st,` from the start-up `resumed ...` line.
+**`st,` accumulates across power cycles** and restarts from 0 when `load` refuses another version's weights, so one value can mean "resumed" or "restarted". Read `v` first: if it differs from `state_version` in the local `demo/common/car_model.kspl`, the version written is old. Then one run's steps are the difference in `st,` from the start-up `resumed ...` line.
 
 ## Stage 12 — driving it from the IR remote alone
 
@@ -1025,7 +1025,7 @@ Caution: **Run `make ksos-rp2040-car-pilot` once with kssrv up first.** With no 
 
 They share GPIO 4/5 ("The ultrasonic and the LED matrix cannot be used at once" in [`SPEC-board.md`](SPEC-board.md)), and this stage assumes the matrix, so **obstacle dodging (`6`) prints one line of reason and refuses**. Do not ignore the key silently: with nothing happening, "broken" and "no such key" look the same.
 
-The face is `ksos/boards/freenove_4wd_pico/face.kspls`; its expressions advance dark, eyes rolling, a blink, a smile, a cry, each on its own interval.
+The face is `ksos/boards/freenove_4wd_pico/face.kspl`; its expressions advance dark, eyes rolling, a blink, a smile, a cry, each on its own interval.
 
 **The display is mounted turned 90 degrees**: pictures are held upright and turned 90 degrees anticlockwise just before sending (`face.turned_row`). Do not bake the tilt into the table (the board's business). An upside-down, mirrored picture means the turn is reversed (180 degrees off).
 
@@ -1035,7 +1035,7 @@ Stage 7's firmware (`rp2040_car_pilot_probe`) **stops on any button** because it
 
 ### The speed is slower than the tutorial's
 
-The tutorial drives at 50 to 80%. `motor.cap` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `motor.kspls`.
+The tutorial drives at 50 to 80%. `motor.cap` is the only cap, held to **a speed one can catch on foot**. To raise it, change that one place in `motor.kspl`.
 
 ## Tuning line following
 
@@ -1052,7 +1052,7 @@ Which manoeuvre each line reading gives is in the server's own documents; this h
 | On `ksos-rp2040-board`'s sensor line, cover only the physically leftmost sensor: the left character of `line=B.W.B` must change | `board.line_sensor_swapped` does not match the unit |
 | That holds, yet it turns the wrong way | `motor.drive`'s turning term: with only `rot` positive, the left two wheels must go forward and the right two back (clockwise from above) |
 
-**The distance is read every control lap (`loop_interval_ms` = 100ms), and the line every `line_interval_ms` (10ms).** Why is in "What the self-driving probe does, and where its judgement lives" in [`DESIGN.md`](DESIGN.md). When the line moves mid-lap, only the steering is redone, counted in the report line's `trk=` apart from `n=`. If `trk=` does not grow, the line is not moving or the sensors are not answering.
+**The distance is read every control lap (`loop_interval_ms` = 100ms), and the line every `line_interval_ms` (10ms).** Why is in "What the self-driving probe does, and where its judgement lives" in [`DESIGN-rtos.md`](DESIGN-rtos.md). When the line moves mid-lap, only the steering is redone, counted in the report line's `trk=` apart from `n=`. If `trk=` does not grow, the line is not moving or the sensors are not answering.
 
 ### If it does not start moving, raise the kick, not the speed cap
 

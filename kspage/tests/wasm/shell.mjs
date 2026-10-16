@@ -41,7 +41,7 @@ export function check(ok, what) {
 
 export const near = (a, b) => Math.abs(a - b) < 0.001;
 
-// The same settlement as kspage/model/fixed_font.kspls.
+// The same settlement as kspage/model/fixed_font.kspl.
 export function widthOf(text, sizePx) {
   let em = 0;
   for (const ch of text) em += ch.codePointAt(0) < 128 ? 0.5 : 1.0;
@@ -51,7 +51,7 @@ export function widthOf(text, sizePx) {
 // Hand one text over and an entry point that makes one instance comes back.
 //
 // **The measures are settled values put in** (the same settlement as
-// kspage/model/fixed_font.kspls). The browser's own measuring moves with the machine and the
+// kspage/model/fixed_font.kspl). The browser's own measuring moves with the machine and the
 // version, and the check would fall with nothing broken.
 export function opener(wasm) {
   return async () => {
@@ -116,7 +116,7 @@ function entryPoints(host) {
   // It lays a text into the loading arena and returns its length, or 0 where it does not fit.
   // **Take the place and then peek** — taking memory grows it, and a window made earlier goes
   // stale.
-  // Caution: **Do not write where it was refused** (null back, `kspage/port/web/inout.kspls`).
+  // Caution: **Do not write where it was refused** (null back, `kspage/port/web/inout.kspl`).
   // Address 0 is C's stack, so writing there **breaks the page's inside and it never returns**
   // (the same promise as `kspage.js`'s `handOver` on the page's side).
   const feed = (t) => {
@@ -220,14 +220,14 @@ function entryPoints(host) {
 // It builds the documents the sections load themselves.
 //
 // Caution: **Do not make the document at start-up the material.** That is the product's sample
-// (`kspage/content/sample.kspls`), and it changes when what is to be shown changes: **changing one
+// (`kspage/content/sample.kspl`), and it changes when what is to be shown changes: **changing one
 // paragraph of the sample makes a check sticking to it fall**, and the fallen side does not tell
 // whether "a settlement broke" or "the sample changed". Held here, the material moves only with
 // the checks.
 //
 // **Do not copy the key names over here.** What is taken is dropped into JSON as it stands, so a
 // field growing in the shape saved leaves nothing here to change (the canon is
-// `kspage/share/store.kspls`).
+// `kspage/share/store.kspl`).
 // **Do not share one document between sections** — a paragraph added for one section moves
 // another's measures (the same way of breaking as sticking to the sample). The tools that build
 // them are what is shared.
@@ -255,6 +255,6 @@ export const grid = (head, ...rows) =>
   group(head, ...rows.map((cells) => group("", ...cells)));
 
 // One text a section loads. **The version is the version of the shape saved**
-// (`kspage/share/store.kspls`).
+// (`kspage/share/store.kspl`).
 export const material = ({ root, styles, blocks }) =>
   JSON.stringify({ kspage: 6, sheet: { root: root, styles: styles }, blocks: blocks });

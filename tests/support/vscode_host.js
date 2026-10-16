@@ -1,6 +1,6 @@
 // A stand-in for VS Code's extension host: it runs the KSPL extension's client side under node
 //
-// Not a suite; `tests/suite/vscode_test.kspls` runs it as `node vscode_host.js <extension.js>`.
+// Not a suite; `tests/suite/vscode_test.kspl` runs it as `node vscode_host.js <extension.js>`.
 // **The `vscode` module and the language server are both fakes**: the module answers only what the
 // extension asks of it, and the server records every message the extension writes, answering each
 // request with nothing, but `prepareRename` with a refusal. It plays one editing session and
@@ -16,6 +16,22 @@ const { EventEmitter } = require('events');
 
 const extPath = path.resolve(process.argv[2]);
 const extDir = path.dirname(extPath);
+// Function declarations, function types and closures share the keyword scope.
+const grammar = require(path.join(extDir, 'tmLanguage.json')).repository.functions;
+const fnPattern = new RegExp(grammar.match);
+for (const [source, name] of [
+    ['pub typedef Erase_sector = fn(at: Sz): Bool', undefined],
+    ['fn(x: I32;): I32 { return x; }', undefined],
+    ['pub fn erase(at: Sz): Bool', 'erase'],
+]) {
+    const match = fnPattern.exec(source);
+    if (!match || match[1] !== 'fn' || match[2] !== name ||
+        grammar.captures['1'].name !== 'storage.type.function.kspl')
+        throw Error('function keyword or declaration name lost its scope: ' + source);
+}
+if (fnPattern.test('fn_extra') || fnPattern.test('myfn(x)'))
+    throw Error('an identifier was mistaken for the fn keyword');
+
 const root = path.resolve('/workspace');
 
 // The settings are the extension's own defaults, from its `package.json`, as a fresh install has.
@@ -27,9 +43,10 @@ settings['kspl.serverPath'] = extPath;
 
 const seen = { sent: [], shown: 0, refusal: '' };
 const refusal = 'refused by the fake server';
+let definitionUri;
 
-function frame(obj) {
-    const body = JSON.stringify(obj);
+function frame(obj, tail = '') {
+    const body = JSON.stringify(obj) + tail;
     return Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 }
 
@@ -55,8 +72,13 @@ function fakeServer() {
                     const answer = { jsonrpc: '2.0', id: msg.id,
                         result: msg.method === 'initialize' ? { capabilities: {} } : null };
                     if (msg.method === 'textDocument/prepareRename') {
+                        proc.stdout.emit('data', frame({ jsonrpc: '2.0', id: msg.id, result: null }, '\0'));
                         delete answer.result;
                         answer.error = { code: -32803, message: refusal };
+                    }
+                    if (msg.method === 'textDocument/definition') {
+                        answer.result = { uri: definitionUri, range: {
+                            start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } };
                     }
                     setTimeout(() => proc.stdout.emit('data', frame(answer)), 20);
                 }
@@ -119,8 +141,8 @@ Module._load = function (request, ...rest) {
 };
 
 function doc(name, version, text) {
-    return { uri: Uri.file(path.join(root, name)), languageId: 'kspls', version,
-        getText: () => text };
+    return { uri: Uri.file(path.join(root, name)), languageId: 'kspl', version,
+        getText: () => text, lineAt: () => ({ text }) };
 }
 const fire = (kind, arg) => listeners[kind].forEach((fn) => fn(arg));
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -132,20 +154,28 @@ const token = { isCancellationRequested: false, onCancellationRequested: () => d
 async function session() {
     const ext = require(extPath);
     ext.activate({ extensionPath: extDir, subscriptions: [] });
-    fire('open', doc('a.kspls', 1, 'first'));
+    fire('open', doc('a.kspl', 1, 'first'));
     await wait(100);
-    fire('change', { document: doc('a.kspls', 2, 'second') });
-    await providers.registerHoverProvider.provideHover(doc('a.kspls', 2, 'second'),
+    fire('change', { document: doc('a.kspl', 2, 'second') });
+    await providers.registerHoverProvider.provideHover(doc('a.kspl', 2, 'second'),
         { line: 0, character: 0 }, token);
     try {
-        await providers.registerRenameProvider.prepareRename(doc('a.kspls', 2, 'second'),
+        await providers.registerRenameProvider.prepareRename(doc('a.kspl', 2, 'second'),
             { line: 0, character: 0 }, token);
     } catch (err) {
         seen.refusal = String(err && err.message);
     }
-    fire('change', { document: doc('a.kspls', 3, 'unsaved') });
-    fire('close', doc('a.kspls', 3, 'unsaved'));
-    fire('open', doc('a.kspls', 1, 'from disk'));
+    const outside = path.resolve(root, '..', 'outside.kspl');
+    for (const [uri, expected] of [['lib.kspl', path.join(root, 'lib.kspl')],
+        [outside, outside], [Uri.file(outside).toString(), outside]]) {
+        definitionUri = uri;
+        const location = await providers.registerDefinitionProvider.provideDefinition(
+            doc('a.kspl', 2, 'second'), { line: 0, character: 0 }, token);
+        if (location.args[0].fsPath !== expected) throw Error('definition resolved to another file');
+    }
+    fire('change', { document: doc('a.kspl', 3, 'unsaved') });
+    fire('close', doc('a.kspl', 3, 'unsaved'));
+    fire('open', doc('a.kspl', 1, 'from disk'));
     await wait(2000);
     ext.deactivate();
     const sent = seen.sent.map((m) => {

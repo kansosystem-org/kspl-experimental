@@ -1,7 +1,7 @@
 // kspage — the bridge to a browser, JS side. It does only three things: passes the wasm the sizes
 // the canvas's measureText gives, draws the laid-out boxes with fillText, and passes on the click,
 // the key and the text being composed. Layout and editing decisions are the wasm's.
-// Caution: Do not make it an ES module; to open on file://, it is embedded whole into one page.
+// Embedded into the served page alongside the wasm.
 
 function kspageBoot(canvas, wasmBytes) {
   const utf8 = new TextDecoder("utf-8");
@@ -113,11 +113,11 @@ function kspageBoot(canvas, wasmBytes) {
       api: {},
     };
     // The handler for exhausted memory — **the last safety net**: the core stops once the arena
-    // runs out (`panic` in `../../../std/lang.kspls`), so unhandled **the screen freezes**. It
+    // runs out (`panic` in `../../../std/lang.kspl`), so unhandled **the screen freezes**. It
     // returns the call's result, or `null` when memory ran out. **Run every call that lays out or
     // loads through it, and keep it the only net** (with two, one forgets the cleanup).
     // Caution: **Always clean up** — the chunk being built is referenced by nobody, and unfreed the
-    // arena shrinks **forever** (`bridge.kspls`'s `kspage_web_recover`). **Report only running out
+    // arena shrinks **forever** (`bridge.kspl`'s `kspage_web_recover`). **Report only running out
     // of memory, and throw any other error on** (a fault in the page's code said to be "memory used
     // up" sends the reader to the wrong cause, and is logged nowhere).
     ks.cramps = (run) => {

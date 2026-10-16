@@ -16,7 +16,7 @@
    ```
 
    The group must be one of `HELP_GROUPS` in `mk/help.mk`. A target missing from `.PHONY` or the help line fails `make test-recipe-bytes`. The closing `RESULT: ALL PASS` line is what the CI runner reads ("How a run is read" in [`SPEC-gates.md`](SPEC-gates.md)).
-2. **Add its row** to `gates` in `tools/ci_gates.kspls`. The row's place is its order in the run. Where it runs follows from two fields:
+2. **Add its row** to `gates` in `tools/ci_gates.kspl`. The row's place is its order in the run. Where it runs follows from two fields:
 
    | `shard` | `macos` | Where it runs |
    | :-- | :-- | :-- |
@@ -35,7 +35,7 @@
 
 **A suite of the compiler's own** goes under `ksplc/tests/suite/`:
 
-1. **The file**: `ksplc/tests/suite/<stem>_test.kspls`. Its name is the stem with `-` for `_` (`std_dir_test.kspls` is `std-dir`).
+1. **The file**: `ksplc/tests/suite/<stem>_test.kspl`. Its name is the stem with `-` for `_` (`std_dir_test.kspl` is `std-dir`).
 2. **List it** in `SUITES` in `ksplc/Makefile`. It runs through `make test-extract-ksplc`; macOS runs it only with a gate row of its own. A suite file in no list, or a name with no file, stops make at once with a message saying which.
 3. **Name it in the platform table** (step 4 of the gate): the suites usually join a bracketed list such as "The other suites (…)".
 4. **Run it**:

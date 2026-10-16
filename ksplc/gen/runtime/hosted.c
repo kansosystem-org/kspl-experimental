@@ -4,7 +4,7 @@
  * **The substance half is split per subject.** This side holds the includes and the shared
  * small pieces alone, and hosted_proc / hosted_thread / hosted_fs / hosted_spawn / hosted_net
  * join behind it **in that order** to make one translation unit (the order
- * is held by write_impl in ksplc/gen/runtime.kspls).
+ * is held by write_impl in ksplc/gen/runtime.kspl).
  * **The standard for splitting is the
  * subject on std's side** — cut by line count and reading one subject means going back and forth
  * between two files.
@@ -15,11 +15,49 @@
  * linkage). The macros and static functions the generated body calls directly are on hosted.h.
  *
  * WIN32_LEAN_AND_MEAN keeps windows.h from pulling in winsock.h (the old API), which collides in
- * types and macros with the winsock2.h further down (for std/net.kspls). Defined before the first
+ * types and macros with the winsock2.h further down (for std/net.kspl). Defined before the first
  * windows.h, it holds for the whole file. */
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #endif
+
+#include <stdarg.h>
+
+/* Keep buffered output before a check stops the program, on either backend. */
+static __attribute__((noreturn)) void kspl_check_fail(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    fflush(stdout);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fflush(stderr);
+    abort();
+}
+
+KSPL_LINK __attribute__((noreturn)) void kspl_bounds_fail(int64_t idx, int64_t len, const char* file, int line)
+{
+    kspl_check_fail("panic: index out of bounds in array (idx: %lld, len: %lld) at %s:%d\n", (long long)idx, (long long)len, file, line);
+}
+KSPL_LINK __attribute__((noreturn)) void kspl_div_fail(const char* file, int line)
+{
+    kspl_check_fail("panic: division by zero at %s:%d\n", file, line);
+}
+KSPL_LINK __attribute__((noreturn)) void kspl_shift_fail(int64_t amount, int64_t width, int amount_unsigned, const char* file, int line)
+{
+    /* The formats are %lld and %llu. The argument being 64 bits, %td does not match. */
+    if (amount_unsigned) {
+        kspl_check_fail("panic: shift amount out of range (amount: %llu, width: %lld) at %s:%d\n",
+            (unsigned long long)amount, (long long)width, file, line);
+    } else {
+        kspl_check_fail("panic: shift amount out of range (amount: %lld, width: %lld) at %s:%d\n",
+            (long long)amount, (long long)width, file, line);
+    }
+}
+KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, const char* enum_name, const char* file, int line)
+{
+    kspl_check_fail("panic: enum %s has no tag %lld at %s:%d\n", enum_name, (long long)value, file, line);
+}
 
 #include <time.h>
 /* The monotonically increasing real time (in microseconds). The origin is not settled — only a
@@ -80,7 +118,7 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
  * Caution: **Mark it in the call that opens it** (SOCK_CLOEXEC, accept4, pipe2, O_CLOEXEC,
  * WSA_FLAG_NO_HANDLE_INHERIT). Marked afterwards, a child started from another thread in between
  * takes the copy. Only where the OS has no such call (a socket or a pipe on macOS, an accepted
- * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN.md.
+ * socket on Windows) is it marked right after. The decision is in std/docs/DESIGN-core.md.
  * ============================================================ */
 #ifndef _WIN32
 #include <errno.h>
@@ -124,7 +162,7 @@ KSPL_UNUSED static void kspl_fd_cloexec(int fd) {
  * of a program with a narrow `main` copies the UTF-16 command line to the current code page, a
  * character it cannot express collapses to `?`, and the tool fails with `Invalid argument`. So the
  * paths handed to cc / ld are made relative and the place is handed over by cwd (`under_slot` in
- * `ksplc/tools/run.kspls`).
+ * `ksplc/tools/run.kspl`).
  * ============================================================ */
 #ifdef _WIN32
 #include <windows.h>
@@ -205,7 +243,7 @@ KSPL_UNUSED static char *kspl_win_utf8_dup(const wchar_t *w) {
  * Caution: **Do not take it apart again by hand** — the rules for the quotes and the backslashes
  * are the reverse of the assembling side's (kspl_win_build_cmdline), and copied, only
  * one gets fixed.
- * **Put it through once only** (inside the generated main; gen/c/root.kspls). Put it through
+ * **Put it through once only** (inside the generated main; gen/c/root.kspl). Put it through
  * on every `sys.args()` and the allocations pile up per call.
  * POSIX is UTF-8 from the start, so it passes straight through. */
 KSPL_LINK char **kspl_os_argv(int argc, char **argv) {
@@ -271,7 +309,7 @@ KSPL_LINK Bool kspl_is_windows(void) { return false; }
 
 /* The machine this program was compiled for, as a triple built from the C compiler's own macros
  * (its architecture, then its OS), into buf; returns the length, or 0 where cap is too small.
- * ksplc looks it up in its table of machines (`ksplc/base/target.kspls`) and refuses, naming it, a
+ * ksplc looks it up in its table of machines (`ksplc/base/target.kspl`) and refuses, naming it, a
  * machine the table has no row for. A part the macros do not tell is `unknown`.
  * Caution: **Spell each part as the table's rows do**, or a machine the table holds is refused
  * (every gate compiles with the default, on each platform CI runs). */
@@ -311,8 +349,8 @@ KSPL_LINK Sz kspl_host_machine(U8 *buf, Sz cap) {
 #undef KSPL_HOST_ARCH
 #undef KSPL_HOST_OS
 
-/* The OS's random source for std/rand.kspls's CSPRNG (fill/bytes/u64). POSIX reads /dev/urandom;
- * Windows has none, so rand_s() (UCRT/MSVCRT, CNG's RNG inside; its premise is ctx.kspls's
+/* The OS's random source for std/rand.kspl's CSPRNG (fill/bytes/u64). POSIX reads /dev/urandom;
+ * Windows has none, so rand_s() (UCRT/MSVCRT, CNG's RNG inside; its premise is ctx.kspl's
  * _CRT_RAND_S definition) is called four bytes at a time. Not bcrypt.h: under <windows.h> alone
  * some environments lack its types (LONG/ULONG/PUCHAR), and rand_s needs no extra link. */
 #ifndef _WIN32
@@ -347,7 +385,7 @@ KSPL_LINK Bool kspl_rand_fill(U8 *buf, Sz len) {
  * behind the program's back — so a "\r\n" the program wrote itself lands as "\r\r\n".
  * Content-Length framing holds raw "\r\n" in its headers and is destroyed by it, and any other
  * program handing bytes to a stream is too. Every generated program calls this once before
- * kspl_main (emit_main_function in gen/c/root.kspls), so what a KSPL program writes is what lands,
+ * kspl_main (emit_main_function in gen/c/root.kspl), so what a KSPL program writes is what lands,
  * on standard error as on standard output. */
 #ifdef _WIN32
 #include <io.h>
@@ -387,7 +425,7 @@ KSPL_LINK int64_t kspl_file_size(void* stream) {
 
 /* Lines the console's output and input code pages up with UTF-8, and on Windows sets how an
  * abort() ends (kspl_end_on_abort). The generated main calls it once before kspl_main
- * (emit_main_function in gen/c/root.kspls).
+ * (emit_main_function in gen/c/root.kspl).
  *
  * Caution: **A KSPL string literal is a run of UTF-8 bytes**, and Windows's CRT hands it to
  * WriteConsoleA, which reads it in the console's code page (under CP932 `ソースを整形する`
@@ -416,7 +454,7 @@ static void kspl_restore_console_cp(void) {
 }
 /* abort() raises SIGABRT first, in msvcrt and UCRT alike, and this ends the process there with
  * the code __fastfail gives (STATUS_STACK_BUFFER_OVERRUN), which a parent reads as SIGABRT's 134
- * ("A child's end is one code on every OS" in std/docs/DESIGN.md).
+ * ("A child's end is one code on every OS" in std/docs/DESIGN-system.md).
  * Caution: **Do not leave the end to the CRT.** msvcrt's abort() exits 3, which an exit(3) gives
  * too, and UCRT's depends on its fault-reporting setting; a panic and the run-time checks would
  * read differently per CRT. TerminateProcess raises no error-report dialog, as __fastfail can. */
@@ -442,7 +480,7 @@ KSPL_LINK void kspl_io_init_console(void) {}
 
 /* Joins the console the program was started from, where the program has none of its own. The
  * generated main calls it once, before kspl_io_init_console (emit_main_function in
- * gen/c/root.kspls), because the code page can only be set on a console that is there.
+ * gen/c/root.kspl), because the code page can only be set on a console that is there.
  *
  * A windowing-subsystem program shows no console on a double-click, which is the point, but **run
  * from a terminal it would say nothing at all**: it starts with no standard output.
@@ -498,7 +536,7 @@ KSPL_LINK void kspl_io_attach_console(void) {}
 #include <errno.h> /* the EPIPE judgement below */
 
 /* Caution: **Make it take effect before `main`.** Called from the generated `main`, it would miss
- * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspls); both join this runtime.
+ * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspl); both join this runtime.
  * **A library leaves the signal to the program that links it** (KSPL_LIBRARY): its handling is
  * process-wide, and that program has chosen it for its own writes. */
 #if !defined(KSPL_LIBRARY)
@@ -537,12 +575,12 @@ KSPL_LINK void kspl_io_broken_pipe(void) {}
  * `crash: null pointer dereference (SIGSEGV at address 0x0)`, and ends the program as the fault
  * would have: POSIX puts the signal back to its default and raises it again (139, a core dump
  * where one is enabled), Windows ends with the exception's code (read as 139, "A child's end is
- * one code on every OS" in std/docs/DESIGN.md). A library takes nothing: its host owns the signals.
+ * one code on every OS" in std/docs/DESIGN-system.md). A library takes nothing: its host owns the signals.
  *
  * Caution: **Only async-signal-safe calls in the handler** (write, signal, raise): the fault may
  * strike inside malloc or stdio, holding their locks. So standard output is not flushed, and a
  * program whose last lines matter is line-buffered ("A program does not lose its own output on an
- * abnormal exit" in std/docs/DESIGN.md).
+ * abnormal exit" in std/docs/DESIGN-system.md).
  * Caution: **A stack overflow needs a stack of its own** (sigaltstack) for the handler to run on.
  * The main thread's is set at start-up, a std/thread thread's as it starts; a thread C code starts
  * has none, and its overflow ends with 139 and no line.
@@ -720,7 +758,7 @@ KSPL_LINK I32 argc = 0;
 KSPL_LINK U8 **argv = null;
 
 /* stdin / stdout / stderr being macros, they are wrapped in functions (get_stdin / get_stdout /
- * get_stderr in std/libc.kspls).
+ * get_stderr in std/libc.kspl).
  * Caution: They must have external linkage (the reason is on hosted.h's declaration
  * side). */
 KSPL_LINK void* get_stdin(void) { return (void*)stdin; }

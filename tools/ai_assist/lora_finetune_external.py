@@ -4,7 +4,7 @@
 This repository's sandbox has neither a GPU nor a route to Hugging Face, so this script cannot be run
 here (a genuine constraint, and no way around it is taken). It is provided as a template that "runs as
 it stands", meant to be run on a machine with a GPU (your own, Colab, and the like). Of its logic,
-only the part that converts into `ksai/lora.kspls`'s format (`convert_peft_state_dict`) is unit-checked
+only the part that converts into `ksai/lora.kspl`'s format (`convert_peft_state_dict`) is unit-checked
 even in this sandbox, on synthesized data (see the self-test under __main__ below; it needs neither a
 GPU nor the network).
 
@@ -16,8 +16,8 @@ How to use it (on the GPU side):
       --out out/kanso_lora.safetensors
 
 What comes out is safetensors the KSPL side reads as it stands: `Qkv_lora.load_set` in
-`ksai/lora.kspls` (which calls `lora_load_from` inside), `Mini_llama.load_lora_set` in
-`ksai/examples/llama_engine/model.kspls` and `Qwen_model.load_lora_set` in `ksai/examples/qwen_infer/main.kspls` all share
+`ksai/lora.kspl` (which calls `lora_load_from` inside), `Mini_llama.load_lora_set` in
+`ksai/examples/llama_engine/model.kspl` and `Qwen_model.load_lora_set` in `ksai/examples/qwen_infer/main.kspl` all share
 the same naming convention.
 The name convention: "blocks.{i}.attn.{q,v}.lora_{a,b,scale}"
   lora_a: [in, rank]   lora_b: [rank, out] (with alpha/rank's scale already baked in)
@@ -36,7 +36,7 @@ def load_jsonl(path):
     """Reads JSONL (one record per line).
 
     Caution: This script stays on the PyTorch side (the outside ML ecosystem), so the KSPL version
-    (`load_jsonl` in `tools/ai_assist/ksplc_oracle.kspls`) cannot be called from here. It is three
+    (`load_jsonl` in `tools/ai_assist/ksplc_oracle.kspl`) cannot be called from here. It is three
     lines, so it is copied.
     """
     with open(path, encoding="utf-8") as f:
@@ -53,7 +53,7 @@ def convert_peft_state_dict(state_dict, rank, alpha):
 
     peft's (HuggingFace's) custom: y = x @ W^T + scale * (x @ lora_A^T @ lora_B^T)
       lora_A.*.weight: [rank, in]   lora_B.*.weight: [out, rank]
-    The KSPL side's convention (`ksai/lora.kspls`): delta = x @ A @ B  (A:[in,rank], B:[rank,out])
+    The KSPL side's convention (`ksai/lora.kspl`): delta = x @ A @ B  (A:[in,rank], B:[rank,out])
       = peft's A^T and B^T. And scale=alpha/rank is baked into the B side
       (the KSPL side only has to hold a one-element lora_scale tensor as the identity 1.0).
 

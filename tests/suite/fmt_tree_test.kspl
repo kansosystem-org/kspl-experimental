@@ -1,0 +1,107 @@
+//< Checks that every tracked source is already formatted
+//<
+//< Every tracked source goes through `ksplc fmt` and must come out byte for byte: it is the tree's
+//< formatting gate. **It reads the whole tree**, so it lives here; ksplc's own `fmt` and `kspls`
+//< suites test the formatter and the notation themselves.
+//< Caution: **The files run as batches** (`ksplc_harness.run_all`); one process at a time is far
+//< too slow.
+import "ksplc/tests/support/harness" as ksplc_harness
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/verdict"
+import "tests/support/harness"
+
+priv fn fmt_job(rel: U8[], arena: Arena$@): subproc.Job //< the child that formats `rel`
+    $argv: = List<|U8[]|>.new(arena)
+    argv.push(ksplc_harness.ksplc_exe())
+    argv.push("fmt")
+    argv.push(rel)
+    return subproc.Job::{ .argv = argv.slice(), .cwd = harness.root() }
+
+priv fn first_difference(a: U8[], b: U8[]): Sz //<
+    //< The first line (1-based) where two texts differ, or 0 where they are the same
+    $line: Sz = 1
+    for i in Range.asc(a.len if a.len < b.len else b.len)
+        if a[i] != b[i]
+            return line
+        if a[i] == '\n'
+            line += 1
+    return 0 if a.len == b.len else line
+
+priv fn line_of(text: U8[], n: Sz, arena: Arena$@): U8[] //<
+    //< line `n` (1-based), empty past the end
+    $k: Sz = 1
+    for line in text.lines(arena)
+        if k == n
+            return line
+        k += 1
+    return ""
+
+priv struct Parting //< a pair showing that the verdict on where two texts differ can fire
+    a: U8[]
+    b: U8[]
+    line: Sz
+
+// Caution: **List pairs that differ beside the pair that does not**, or a verdict answering "the
+// same" to everything passes (Principle 5 in `../../docs/DESIGN-principles.md`). The third differs
+// only in its last line end.
+priv const partings: Parting[_] = ::{
+    Parting::{ .a = "x: = 1\n", .b = "x: = 1\n", .line = 0 },
+    Parting::{ .a = "a\n} // c\n", .b = "a // c\n}\n", .line = 1 },
+    Parting::{ .a = "a\nb\n", .b = "a\nb", .line = 2 },
+    Parting::{ .a = "a\nb\nc\n", .b = "a\nb\nd\n", .line = 3 },
+}
+
+priv fn check_parting(arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    for p in partings
+        got: = first_difference(p.a, p.b)
+        if got != p.line
+            bad.push(arena.text().s("line \{got\} where \{p.line\} was wanted").take())
+    verdict.check_list("the verdict on where two texts part can fire", partings.len, "pairs", bad@,
+        "the judgment misreads its own samples: mend the judgment, not the table")
+
+// ==========================================
+// Every tracked source is a fixed point of the formatter
+// ==========================================
+
+priv const fmt_specs: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!ksplc/tests/lint/" } //<
+    //< The sources formatted
+    //<
+    //< Caution: **Leave out the deliberately broken files** (`ksplc/tests/negative/` unreadable,
+    //< `ksplc/tests/lint/` misaligned on purpose, which formatting **realigns**), as `make fmt`
+    //< does in `mk/lint.mk`.
+
+priv fn check_formatted(arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    rels: = harness.tracked_matching(U8[][]::fmt_specs)
+    $jobs: = List<|subproc.Job|>.new(arena)
+    for rel in rels
+        jobs.push(fmt_job(rel, arena))
+    rs: = ksplc_harness.run_all(jobs.slice(), "fmt_tree")
+    // Caution: **Compare with the source itself, not with a second formatting**; a wrong reading
+    // is as stable as a right one, so a fixed point of the output passes a moved comment.
+    for k in Range.asc(rels.len)
+        rel: = rels.get(k)
+        r: = rs.get(k)
+        if r.code != 0
+            bad.push(arena.text().s(rel).s(": it does not format").take())
+            continue
+        src: = harness.read_under_root(rel)
+        at: = first_difference(src, r.out)
+        if at > 0
+            bad
+                .push(arena.text().s(rel).s(":\{at\}: it formats as `")
+                .s(line_of(r.out, at, arena)).s("`").take())
+    verdict.check_list("a source is already formatted", rels.len, "sources", bad@,
+        "a file not yet formatted: run `make fmt`. It formats with the seed and this check with the \
+            compiler under test, so after a change to ksplc's formatter run `make commit-seed` \
+            first")
+
+fn main(): I32
+    arena: = harness.begin(64 * 1024 * 1024)
+    check_parting(arena)
+    check_formatted(arena)
+    return ksplc_harness.finish()

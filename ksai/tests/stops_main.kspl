@@ -1,0 +1,51 @@
+//< ksai's checks that stop a program on purpose (`make test`)
+//<
+//< **A check that stops the program cannot run in the tests' own process**, since it would end
+//< it: each stop in [`stops.kspl`](stops.kspl) runs as a child (`ksplc run`, the stop's name its
+//< argument), and must exit non-zero, say why, and never reach the line after the stop. The stops
+//< the compiler inserts (a bounds check, a division by zero) are tested with the compiler; these
+//< are ksai's own. Usage: `ksplc run tests/stops_main.kspl <ksplc>`, from this folder.
+import "std/chars"
+import "std/mem" { Arena }
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+
+priv struct Stop //< one stop's name, and the reason it must give for stopping
+    name: U8[]
+    says: U8[]
+
+priv const stops: Stop[_] = ::{
+    Stop::{ .name = "tensor-null-arena", .says = "ksai: an explicit arena is required" },
+    Stop::{ .name = "header-null-arena", .says = "ksai: an explicit arena is required" },
+    Stop::{ .name = "adapters-null-arena", .says = "ksai: an explicit arena is required" },
+    Stop::{ .name = "view-null-arena", .says = "ksai: an explicit arena is required" },
+    Stop::{ .name = "quant-null-arena", .says = "ksai: an explicit arena is required" },
+    Stop::{ .name = "argmax-empty-logits", .says = "argmax: logits' final dimension is 0" },
+    Stop::{ .name = "tensor-shape-product-overflow", .says = "Tensor shape product overflow" },
+    Stop::{ .name = "updater-weight-count",
+        .says = "a step handed over another number of weights" },
+    Stop::{ .name = "gqa-uneven-heads", .says = "n_kv_heads must be positive and divide n_heads" },
+    Stop::{ .name = "gqa-odd-head-dim", .says = "head_dim must be even and positive" },
+    Stop::{ .name = "gqa-several-rows", .says = "forward takes one token" },
+    Stop::{ .name = "grad-small-out", .says = "grad_matmul_input: out is not [m, k]" },
+}
+
+priv const past_the_stop: U8[] = "must not get here" //< what each program writes past its stop
+
+fn main(): I32
+    verdict.begin("stops")
+    args: = sys.args()
+    if args.len != 2
+        return verdict.fatal("usage: ksplc run tests/stops_main.kspl <ksplc>")
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    for s in stops
+        r: = subproc.run_capture(U8[][]::{ args.get(1), "run", "tests/stops.kspl", s.name }, "",
+            300000, 1 << 20, arena)
+        out: = r.text(arena)
+        stopped: = !r.spawn_failed && !r.timed_out && r.exit_code != 0
+        verdict.check(s.name,
+            stopped && out.find_str(s.says).is_some() &&
+            out.find_str(past_the_stop).is_none(), out)
+    return verdict.finish()

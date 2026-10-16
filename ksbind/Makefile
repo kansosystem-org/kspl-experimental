@@ -19,11 +19,11 @@ KSBIND_REQUIRE_LIBS ?= 0
 .PHONY: test
 test:
 	@mkdir -p "$(OUT)"
-	"$(KSPLC)" --emit-libs="$(OUT)/tests.libs" tests/main.kspls "$(OUT)/tests.c"
+	"$(KSPLC)" --emit-libs="$(OUT)/tests.libs" tests/main.kspl "$(OUT)/tests.c"
 	@printf 'int main(void) { return 0; }\n' > "$(OUT)/probe.c"
 	@if "$(CC)" "$(OUT)/probe.c" "@$(OUT)/tests.libs" -o "$(OUT)/probe.exe" \
 		2> "$(OUT)/probe.log"; then \
-		"$(KSPLC)" run tests/main.kspls; \
+		"$(KSPLC)" run tests/main.kspl; \
 	elif [ "$(KSBIND_REQUIRE_LIBS)" = 1 ]; then \
 		echo "RESULT: SOME FAILED (1) -> $$(cat "$(OUT)/tests.libs") do not link here" \
 			"($(OUT)/probe.log says why), and KSBIND_REQUIRE_LIBS=1 requires them." \

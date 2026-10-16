@@ -1,0 +1,271 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that every `make <target>` a published document writes is a target make has
+//<
+//< **make itself is asked** (`make -pRrq`, which prints the rules it read and runs nothing), at the
+//< root and in every package with its own `Makefile`. A document inside such a package may name
+//< that `Makefile`'s targets too, and `make -C <dir>` names that folder's.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+import "tests/support/conventions_ci" as ci_layout
+import "tests/support/conventions_scan" as scan
+import "tests/support/harness"
+
+priv const suite_found: U8[] = "suite_found := " //< how make's dump writes a folder's suite names
+priv const not_target: U8[] = "# Not a target:" //<
+    //< what make's dump writes above a file it only knows
+
+priv struct Forward //< a pattern the root forwards to a package's `Makefile`
+    pattern: U8[] //< as the root's dump writes it
+    dir: U8[] //< the folder it forwards to
+    suites: Bool //< the names are that `Makefile`'s `suite_found`, not its targets
+
+// Caution: **Add a pattern here when the root gains one**, or its names read as missing; the check
+// below fails on a pattern this table does not hold.
+priv const forwards: Forward[_] = ::{ Forward::{ .pattern = "test-%", .dir = "ksplc",
+    .suites = true }, Forward::{ .pattern = "ksos-%", .dir = "ksos", .suites = false },
+    Forward::{ .pattern = "ci-shard-%", .dir = "", .suites = false } }
+
+priv struct Rules //< what one `Makefile` defines
+    targets: List<|U8[]|>$@
+    patterns: List<|U8[]|>$@
+    suites: List<|U8[]|>$@ //< the suite names its `suite_found` holds
+
+priv struct Mention //< one `make` line of a document
+    rel: U8[]
+    line: Sz
+    dir: U8[] //< `-C`'s folder, or empty
+    target: U8[]
+    family: Bool //< written `<prefix>*` or `<prefix><…>`: any target of that prefix
+    owned: Bool //< the prose names it a package's (`ksbind's own`), so any package's targets count
+
+priv fn rules_of(dir: U8[], arena: Arena$@): Rules //< what make reads in `dir` (empty: the root)
+    out: = Rules::{ .targets = List<|U8[]|>.create(arena),
+        .patterns = List<|U8[]|>.create(arena), .suites = List<|U8[]|>.create(arena) }
+    $args: = List<|U8[]|>.new(arena)
+    if dir.len > 0
+        args.push("-C")
+        args.push(dir)
+    // Caution: **Pass `LOGGING=1`.** Without it the root reads only its `%:` wrapper, which takes
+    // every name.
+    for a in U8[][]::{ "--no-print-directory", "-pRrq", "LOGGING=1", ":" }
+        args.push(a)
+    r: = harness.make(args.slice())
+    $file_only: = false
+    for ln in r.out.lines(arena)
+        if ln.starts_with(not_target)
+            file_only = true
+            continue
+        if ln.len == 0
+            file_only = false
+            continue
+        if ln.starts_with(suite_found)
+            for name in ln.sub_from(suite_found.len).split(' ', arena)
+                if name.len > 0
+                    out.suites.push(name)
+            continue
+        colon: = ln.find_char(':').unwrap_or(0)
+        if colon == 0 || file_only || ln[0] == '.' || ln[0] == '#' || ln[0] == '\t'
+            continue
+        if colon + 1 < ln.len && ln[colon + 1] == '='
+            continue
+        name: = ln.sub(0, colon)
+        if name.find_char(' ').is_some() || name.find_char('/').is_some() ||
+            name.find_char('$').is_some()
+            continue
+        if name.find_char('%').is_some()
+            out.patterns.push(name)
+        else
+            out.targets.push(name)
+    return out
+
+priv fn mention_of(text: U8[], arena: Arena$@): List<|Mention|> //<
+    //< The targets a `make` command line names, `-C`'s folder with them; empty for no command
+    $out: = List<|Mention|>.new(arena)
+    t: = text.trim_spaces().strip_prefix("$ ")
+    if !t.starts_with("make ")
+        return out
+    $dir: U8[] = ""
+    $after_c: = false
+    for w in t.sub_from(5).split(' ', arena)
+        if w.len == 0
+            continue
+        if after_c
+            dir = w
+            after_c = false
+            continue
+        // A shell operator or a redirection ends the command.
+        if w.equals("|") || w.equals("&&") || w.equals(";") || w.equals("||") || w.equals("#") ||
+            w.find_char('>').is_some()
+            break
+        if w.equals("-C")
+            after_c = true
+            continue
+        if w[0] == '-' || w.find_char('=').is_some() || !w[0].is_lower()
+            continue
+        $end: Sz = 0
+        for end < w.len && (w[end].is_alnum() || w[end] == '-' || w[end] == '_')
+            end += 1
+        family: = end < w.len && (w[end] == '*' || w[end] == '<')
+        if end < w.len && !family
+            break
+        out
+            .push(Mention::{ .rel = "", .line = 0, .dir = dir, .target = w.sub(0, end),
+            .family = family, .owned = false })
+    return out
+
+priv fn read_mentions(rel: U8[], text: U8[], out: List<|Mention|>$@, arena: Arena$@) //<
+    //< Every `make` command of a document: a code span opening with it, or a fenced line
+    $inside: = false
+    $lineno: Sz = 0
+    for ln in text.lines(arena)
+        lineno += 1
+        if ln.trim_spaces().starts_with("```")
+            inside = !inside
+            continue
+        // The odd pieces are inside a span (a span of double backticks reads the same way), and the
+        // piece before each is the prose that may name its package.
+        parts: = ln.split('`', arena)
+        for i in Range.asc(parts.len)
+            if !inside && i % 2 == 0
+                continue
+            owned: = i > 0 && !inside && is_owned(parts.get(i - 1))
+            for m in mention_of(ln if inside else parts.get(i), arena)
+                out
+                    .push(Mention::{ .rel = rel, .line = lineno, .dir = m.dir, .target = m.target,
+                    .family = m.family, .owned = owned })
+            if inside
+                break
+
+priv fn is_owned(before: U8[]): Bool //< whether the prose before a span makes it a package's
+    t: = before.trim_end().strip_suffix(" own")
+    return t.ends_with("'s") || t.ends_with(" its")
+
+priv fn names(list: List<|U8[]|>@, t: U8[], family: Bool): Bool
+    for n in list
+        hit: = n.starts_with(t) if family else n.equals(t)
+        if hit
+            return true
+    return false
+
+priv fn package_of(rel: U8[], dirs: List<|U8[]|>@): U8[] //<
+    //< the package with a `Makefile` it is in
+    for d in dirs
+        if rel.starts_with(d) && rel.len > d.len && rel[d.len] == '/'
+            return d
+    return ""
+
+priv fn shard_target(t: U8[], arena: Arena$@): Bool //<
+    //< a section named by the CI's canonical table
+    if !t.starts_with("ci-shard-")
+        return false
+    for v in ci_layout.set_variants(harness.read_under_root("tools/ci_gates.kspl"), arena)
+        if v.starts_with("ci_shard_") && v.replace("_", "-", arena).equals(t)
+            return true
+    return false
+
+priv fn makes(r: Rules@, t: U8[], family: Bool, arena: Arena$@): Bool //<
+    //< whether these rules make the target
+    if names(r.targets, t, family)
+        return true
+    if names(r.patterns, "ci-shard-%", false) && shard_target(t, arena)
+        return true
+    if !family
+        return false
+    for p in r.patterns
+        if p.starts_with(t)
+            return true
+    return false
+
+priv const mention_samples: scan.Sample[_] = ::{
+    scan.Sample::{ .text = "make test-docref", .hits = true },
+    scan.Sample::{ .text = "$ make -k lint test-docref 2>&1 | tail", .hits = true },
+    scan.Sample::{ .text = "make LLVM=1 debug", .hits = true },
+    scan.Sample::{ .text = "make debug-*", .hits = true },
+    scan.Sample::{ .text = "make -C ksos test", .hits = true },
+    // A variable alone names no target, and a word that only begins with it is no command.
+    scan.Sample::{ .text = "makefile", .hits = false },
+    scan.Sample::{ .text = "make PREFIX=/usr/local", .hits = false },
+    scan.Sample::{ .text = "the make help listing", .hits = false } //<
+        //< What reads as a `make` command naming a target
+}
+
+priv fn names_a_target(text: U8[], arena: Arena$@): Bool
+    return mention_of(text, arena).len > 0
+
+fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref_test.kspl`
+    shard_samples: scan.Sample[_] = ::{
+        scan.Sample::{ .text = "ci-shard-core", .hits = true },
+        scan.Sample::{ .text = "ci-shard-rest", .hits = true },
+        scan.Sample::{ .text = "ci-shard-linux", .hits = false },
+        scan.Sample::{ .text = "ci-shard-unknown", .hits = false },
+        scan.Sample::{ .text = "ci-linux-only", .hits = false },
+    }
+    scan.check_samples("the reading of a CI section's target can fire",
+        scan.Sample[]::shard_samples, "shard_samples", shard_target, arena)
+    tracked: = harness.tracked()
+    $dirs: = List<|U8[]|>.new(arena)
+    for rel in tracked
+        if rel.ends_with("/Makefile") && rel.count_str("/") == 1
+            dirs.push(rel.sub(0, rel.len - 9))
+    root: = rules_of("", arena)
+    $bad: = List<|U8[]|>.new(arena)
+    for p in root.patterns
+        $known: = false
+        for f in forwards
+            known = known || f.pattern.equals(p)
+        if !known
+            bad
+                .push(arena.text().s("Makefile: the pattern ").s(p)
+                .s(" forwards to nothing `forwards` in tests/support/docref_make.kspl holds").take())
+    private: = harness.private_docs()
+    $mentions: = List<|Mention|>.new(arena)
+    for rel in tracked
+        $skip: = !rel.ends_with(".md") || rel.starts_with("private/")
+        for p in private
+            skip = skip || sys.get_file_name(rel).equals(p)
+        if !skip
+            read_mentions(rel, harness.read_under_root(rel), mentions@, arena)
+    $seen_dirs: = List<|U8[]|>.new(arena)
+    $seen_rules: = List<|Rules|>.new(arena)
+    for m in mentions
+        $places: = List<|U8[]|>.new(arena)
+        places.push(m.dir)
+        own: = package_of(m.rel, dirs@)
+        if m.dir.len == 0 && own.len > 0
+            places.push(own)
+        for f in forwards
+            if m.dir.len == 0 &&
+                m.target.starts_with(f.pattern.sub(0, f.pattern.len - 1))
+                places.push(f.dir)
+        if m.owned
+            for d in dirs
+                places.push(d)
+        $ok: = false
+        for place in places
+            $k: Sz = seen_dirs.len
+            for i in Range.asc(seen_dirs.len)
+                if seen_dirs.get(i).equals(place)
+                    k = i
+            if k == seen_dirs.len
+                seen_dirs.push(place)
+                seen_rules.push(rules_of(place, arena))
+            r: = seen_rules.get(k)
+            ok = ok || makes(r@, m.target, m.family, arena)
+            // A forwarded suite is one the folder it goes to finds (`suite_found`).
+            for f in forwards
+                if f.suites && f.dir.equals(place) && m.target.starts_with("test-")
+                    ok = ok || names(r.suites, m.target.sub_from(5), m.family)
+        if !ok
+            bad
+                .push(arena.text().s(m.rel).s(":\{m.line\}: `make ").s(m.target)
+                .s("` is no target make has").take())
+    verdict.check_list("every `make <target>` a document writes is a target make has",
+        mentions.len, "mentions", bad@,
+        "the targets are what `make help` lists, and a package's own")
+    scan.check_samples("the reading of a `make` command can fire",
+        scan.Sample[]::mention_samples, "mention_samples", names_a_target, arena)

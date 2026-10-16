@@ -18,7 +18,7 @@ CFLAGS ?= -std=c99 -Wall -g -O0
 test: test-answers test-suites
 
 test-answers:
-	"$(KSPLC)" run tests/main.kspls
+	"$(KSPLC)" run tests/main.kspl
 
 # --- The checks that drive the compiler from outside (`make test-suites`) ---
 # A suite is a program `RUNNER` (the ksplc handed over) runs, inspecting `UNDER` (this folder's
@@ -32,18 +32,18 @@ test-answers:
 RUNNER ?= $(KSPLC)
 UNDER ?= $(OUT)/ksplc_stage1.exe
 SCRATCH ?= $(or $(TMPDIR),/tmp)/ksplc-suites
-# A suite's name is its file's stem under `tests/suite/` with `-` for `_` (`std_dir_test.kspls` is
+# A suite's name is its file's stem under `tests/suite/` with `-` for `_` (`std_dir_test.kspl` is
 # `std-dir`).
-suite_file = tests/suite/$(subst -,_,$(1))_test.kspls
-suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
-  $(wildcard tests/suite/*_test.kspls))))
+suite_file = tests/suite/$(subst -,_,$(1))_test.kspl
+suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
+  $(wildcard tests/suite/*_test.kspl))))
 # `--n=N` / `--seed=N` replace the draw's count and its start (`make fuzz-long` hands a fresh seed).
 PROPERTY_ARGS ?=
 suite_args_property = --n=60 $(PROPERTY_ARGS)
 # **List them by how long they take, the longest first**: `make -j` starts them in this order.
 # Caution: **Keep `make test SUITES=` the whole rest of `make test`.** A check that runs each suite
 # apart, under a time limit of its own, runs that first and then `make test-<name>` per name here.
-SUITES := lsp run generic-matrix thin-use negative runtime std-dir emit-runtime ship \
+SUITES := lsp run run-source generic-matrix thin-use negative runtime std-dir emit-runtime ship \
   property limits lint cli kspls split equiv ast-cache broken-pipe config ext-import \
   debug-line decl-macros spawn file-path place visibility fmt doc \
   layout-targets
@@ -62,7 +62,7 @@ $(error there are suite files missing from SUITES: $(suite_unlisted))
 endif
 suite_missing := $(filter-out $(suite_found),$(SUITES))
 ifneq ($(suite_missing),)
-$(error there are names in SUITES with no tests/suite/<name>_test.kspls: $(suite_missing))
+$(error there are names in SUITES with no tests/suite/<name>_test.kspl: $(suite_missing))
 endif
 endif
 
@@ -81,7 +81,7 @@ test-%: $(UNDER)
 # code (`info exe-flags`, `info link-libs`), the stack size Windows wants among them.
 # Each step runs in `RUN_FROM` (this folder unless named), every path it is handed relative to it.
 RUN_FROM ?= .
-ENTRY_FILE ?= main.kspls
+ENTRY_FILE ?= main.kspl
 # What the compiler is handed besides the entry file.
 FLAGS ?= $(if $(filter llvm,$(TARGET)),--to=llvm)
 

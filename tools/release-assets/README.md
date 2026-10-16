@@ -18,9 +18,9 @@ You need one thing besides this folder: a C compiler, `clang`, on the PATH. KSPL
 
 Then:
 
-1. Make a `hello.kspls` inside the unpacked folder:
+1. Make a `hello.kspl` inside the unpacked folder:
 
-   ```kspls
+   ```kspl
    import "std/io"
 
    fn main()
@@ -30,7 +30,7 @@ Then:
 2. Run it:
 
    ```sh
-   ./ksplc run hello.kspls            # on Windows, .\ksplc.exe run hello.kspls
+   ./ksplc run hello.kspl            # on Windows, .\ksplc.exe run hello.kspl
    ```
 
    It prints `Hello, Kanso!`. `run` translates, compiles, links and runs the program in one command. Building an executable yourself uses the same C compiler ("Making an executable" below).
@@ -45,7 +45,7 @@ Then:
 | `import "hw"` / `"./hw"` / `"../hw"` (no `/`, or starting with `.`) | from **beside the file containing the import** |
 | `import "src/hw"` (holds a `/` and does not start with `.`) | from **the folder `ksplc` was run in** |
 
-So with `hw.kspls` beside `main.kspls`, `main.kspls` writes `import "hw"`. `import "src/hw"` looks in `src/` and fails if nothing is there; the error lists every folder it looked in.
+So with `hw.kspl` beside `main.kspl`, `main.kspl` writes `import "hw"`. `import "src/hw"` looks in `src/` and fails if nothing is there; the error lists every folder it looked in.
 
 **`as` changes only the name**: `import "hw"` alone lets you write `hw.say()`. `import "hw" as hw` means the same, and `ksplc lint` reports that the `as` adds nothing.
 
@@ -56,7 +56,7 @@ A function used only inside its own folder needs no `pub`; only what another fol
 To get the executable itself rather than `run` it, `build` it:
 
 ```sh
-./ksplc build hello.kspls hello     # hello.c and hello.libs are left beside it
+./ksplc build hello.kspl hello     # hello.c and hello.libs are left beside it
 ./hello
 ```
 

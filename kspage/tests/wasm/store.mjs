@@ -53,6 +53,16 @@ export function run(ks) {
   // Caution: **Put it back where it was** (leaving the document the sections after this look at).
   check(load(wasDoc) === 1, "the document from before the blank reads back over it");
 
+  // Empty text is one editable line, with or without an extension declaring its language.
+  for (const spoken of ["", "txt"]) {
+    check(w.kspage_web_load_plain_text(ks.feed(spoken), spoken.length) === 1,
+      "an empty text form loads (" + spoken + ")");
+    const boxes = w.kspage_web_layout(300);
+    check(boxes > 0 && textOf(boxes - 1) === "" && w.kspage_web_plain_text() === 0,
+      "an empty text form lays out and writes back empty");
+  }
+  check(load(wasDoc) === 1, "the document from before the empty text reads back over it");
+
   // --- Taking it in and out ---
   // **A text crosses the boundary as a pointer and a length** (the entry points are shell.mjs's).
   type("Y");
@@ -139,7 +149,7 @@ export function run(ks) {
   //
   // **A ceiling in bytes cannot guard it**: the cost per byte swings with the shape by well over
   // an order of magnitude (a table of empty cells worst), so what refuses is the count of
-  // sections (`port/web/state.kspls`'s `room_per_block`).
+  // sections (`port/web/state.kspl`'s `room_per_block`).
   // Caution: **Return it apart from "unreadable"** (-1; the two are fixed the opposite way).
   // **Look at the document now staying after it refuses too.**
   const kept = save();
@@ -165,7 +175,7 @@ export function run(ks) {
     "refused as unplaceable, the document now is still there");
   check(w.kspage_web_layout(300) > 0, "it can be placed afresh after being refused too");
   // Caution: **Do not refuse too much** — ordinary documents must pass. **Do not look at a grid
-  // and a flow by the same value** (`port/web/state.kspls`'s `room_per_flow` / `room_per_grid`),
+  // and a flow by the same value** (`port/web/state.kspl`'s `room_per_flow` / `room_per_grid`),
   // or **ordinary prose gets a fraction of its ceiling**. So prose of about the table's bytes
   // has to pass.
   const plainOf = (n) => '{"kspage":6,"sheet":{"styles":[{"name":"body"}]},"blocks":['
@@ -196,7 +206,7 @@ export function run(ks) {
   // **What is looked at is that it does not freeze**: the core's JS entry point throws through
   // the wasm's frame (`shell.mjs`'s `kspage_js_gave_up`); unhanded, it spins in a `for {}`.
   // Caution: **Look at the arena coming back on the clearing up too** (what happens if it does not
-  // is in `bridge.kspls`'s `kspage_web_recover` at its head).
+  // is in `bridge.kspl`'s `kspage_web_recover` at its head).
   const safe = save();
   const packed = '{"kspage":6,"sheet":{},"blocks":[' + rep("{}", 150000) + "]}";
   let said = "";
@@ -214,7 +224,7 @@ export function run(ks) {
   check(w.kspage_web_heap_used() < room,
     `after handing it back there is room to spare `
       + `(${Math.round(w.kspage_web_heap_used() / 1048576)} / ${Math.round(room / 1048576)} MiB)`);
-  // **Look at the document now staying** (swapped only once read; `port/web/inout.kspls`).
+  // **Look at the document now staying** (swapped only once read; `port/web/inout.kspl`).
   check(save() === safe, "used up and refused, the document now is still there");
   check(w.kspage_web_layout(300) === placed,
     "after the clearing up it can be placed afresh just as far");
@@ -223,7 +233,7 @@ export function run(ks) {
   //
   // Caution: **Do not measure the whole document afresh** — a measure calls across the boundary,
   // so a grown document would make every keystroke wait. An unchanged run keeps its width
-  // (`kspage/model/doc.kspls`'s `wide`). **Do not look at it by time**: a count is the same for
+  // (`kspage/model/doc.kspl`'s `wide`). **Do not look at it by time**: a count is the same for
   // the same input on any machine (as `make perf-log`). **Look at two sizes of one shape** (one
   // cannot show it does not grow), **and at a document that wraps too** (else a wrapping run's
   // remembrance is never hit). No table is mixed in (its columns are measured apart).

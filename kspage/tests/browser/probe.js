@@ -3,8 +3,7 @@
 // focus, whether an element counts as visible, how often one keystroke goes in); a headless
 // browser has no input method, so only "can composition begin here" is asked of it.
 // It opens the built-up page with each section's text pasted behind it (`kspage/Makefile`'s
-// `KSPAGE_PROBE`) and reads the marks: the `file://` side by `--dump-dom`, the served side by what
-// `handBack` below writes back. **Fall over while the text is read and not one mark comes out**
+// `KSPAGE_PROBE`) and reads the marks that `handBack` below writes back. **Fall over while the text is read and not one mark comes out**
 // (the DOM still does, so suspect a misspelling first).
 // Caution: **Each section is to make its own**: relying on what an earlier one left, a settlement
 // acting and an earlier section differing cannot be told apart; **the tools come in one bag**.
@@ -14,10 +13,7 @@
   let failed = 0;
 
   // The other way the page speaks: one line at a time, through the browser's standard error.
-  // Caution: **The `file://` side hands nothing back** and its DOM comes out at the end alone, so a
-  // cut round leaves not one line; standard error is its one channel (`kspage/Makefile` cuts the
-  // marks out of it). **Open every line with the name** (the gate tells the page's trace from the
-  // browser's by it alone) and **flatten the newlines** (a split stack loses the name).
+  // Prefix every console mark so the runner can recover progress if no result file arrives.
   function speak(line) {
     console.log("kspage-probe: " + line.split("\n").join(" | "));
   }
@@ -77,39 +73,6 @@
         report();
       }
     };
-  }
-
-  // A wait on work done off the page's thread (the wasm's compile, IndexedDB, reading a `Blob`):
-  // it returns a promise that settles as `work` does, keeping the page's thread fed meanwhile.
-  // Caution: **Wait on such work through here, never on a timer nor bare.** The dumping side's
-  // virtual clock jumps to the next timer whenever the page's thread has nothing to run, and it
-  // does not see work off that thread: unfed, a cap counted on it, or the whole budget, runs out in
-  // a moment of real time on a busy machine, and the dump comes before the answer. **Fed** (one
-  // message after another) **it stands still** until the answer comes; real time is capped outside
-  // (`kspage/Makefile`'s `timeout`), and a round cut there names its wait as its last line.
-  let feeding = 0;
-  let flowing = false;
-  const feed = new MessageChannel();
-  feed.port1.onmessage = () => {
-    flowing = feeding > 0;
-    if (flowing) feed.port2.postMessage(0);
-  };
-  function fed(work) {
-    feeding += 1;
-    if (!flowing) {
-      flowing = true;
-      feed.port2.postMessage(0);
-    }
-    const off = () => {
-      feeding -= 1;
-    };
-    return Promise.resolve(work).then((got) => {
-      off();
-      return got;
-    }, (e) => {
-      off();
-      throw e;
-    });
   }
 
   // A wait that looks until it comes out, and a safety net that says it could not be waited out.
@@ -184,7 +147,7 @@
   // The local server's address, as one place: **the token, the address and the header restate
   // `../../../docs/SPEC-local-server.md`** for `handBack` and every section asking for a file
   // (written per caller, one lags when the header moves, reading as a real refusal). The token is
-  // empty from `file://` (no server), so callers look at `token` first.
+  // empty if storage is unavailable, so callers check it first.
   function localHere() {
     let token = "";
     try {
@@ -348,7 +311,7 @@
       return 0;
     };
     // It hunts for a paragraph with a named style and presses it, as `findCell` does (y, or -1).
-    // Caution: **Do not rely on the start-up document's rows** (`kspage/content/sample.kspls`: a
+    // Caution: **Do not rely on the start-up document's rows** (`kspage/content/sample.kspl`: a
     // paragraph added at the head moves the press, failing as "0 pixels").
     const findBlock = (name) => {
       const tall = canvas.getBoundingClientRect().height;
@@ -420,7 +383,6 @@
       // The wait and the safety net; **no milliseconds in a section** (why: `waitFor`'s comment).
       waitFor: waitFor, netFor: netFor,
       // The wait on work off the page's thread (why: its own comment).
-      fed: fed,
       pickFile: pickFile,
     };
   }
@@ -466,8 +428,7 @@
   }
 
   // It starts when the page says it has stood up (`window.kspageReady`, `port/web/page.js`), and
-  // marks the reason where the start failed. **Through `fed`**: the wasm compiles off the page's
-  // thread, so a cap on the clock fails a slow start as a broken one (why: `fed`'s comment).
+  // marks the reason where the start failed.
   // Caution: **Turn the sections in a task of their own, not in the promise's `then`**: a section
   // that throws inside a `then` never reaches the `error` listener above, and its marks stop.
   if (!window.kspageReady) {
@@ -479,6 +440,6 @@
     waiting("");
     setTimeout(() => runProbe(app, why), 0);
   };
-  fed(window.kspageReady).then((app) => stood(app, ""),
+  window.kspageReady.then((app) => stood(app, ""),
     (e) => stood(null, String((e && e.message) || e)));
 })();

@@ -215,7 +215,7 @@ function kspageForm(ui) {
   // the third would show one "choose one" in two forms. A group in a panel does not close on a
   // click (a `details` stays open; the header of `fly.js`). **The list lives here** (copied into
   // `page.html`, it would be two), **its values match the core's** (`menu_pairs` in
-  // `tests/support/conventions_bound.kspls` checks them).
+  // `tests/support/conventions_bound.kspl` checks them).
   const ITALIC_PICKS = [["", "Italic as the parent's"], ["1", "Italic"], ["0", "Not italic"]];
   const DATED_PICKS = [["none", "As a number"], ["plain", "2026-08-18"],
     ["long", "18 August 2026"]];
@@ -456,7 +456,7 @@ function kspageForm(ui) {
       collect: collectBox.now(),
     });
     // **A separate entry point** (an added argument lets a caller's wrong order pass the type check
-    // — `face_edit.kspls`'s `kspage_web_style_breaks`).
+    // — `face_edit.kspl`'s `kspage_web_style_breaks`).
     const chaptered = app.setStyleInChapters(at, chaptersBox.now() === "1");
     const whened = app.setStyleWhen(at, {
       how: whenBox.now(),

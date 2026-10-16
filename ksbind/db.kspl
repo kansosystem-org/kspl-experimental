@@ -1,0 +1,433 @@
+//< Access to SQLite: one connection, prepared statements, bound values and rows read back
+//<
+//< **A thin layer over prepare / bind / step / column on a single connection**, with none of the
+//< features of an ORM. A value is an `I64`, an `F64` or text; a BLOB reads as text.
+
+// ==========================================
+// SQLite's own C API, called directly; `#link` names its library, so no build file does. sqlite3.h
+// is in no translation unit, so these declarations are the only ones the C compiler sees.
+// ==========================================
+import "std/chars"
+import "std/mem" + { dealloc, Arena }
+import "std/reflect"
+import "std/str"
+
+// The connection and the statement, whose contents only SQLite reads.
+extern "C"
+    struct sqlite3
+    struct sqlite3_stmt
+
+#link("sqlite3")
+extern "C"
+    fn sqlite3_open(filename: Void@, db: sqlite3$@$@): I32
+    fn sqlite3_close_v2(db: sqlite3$@): I32
+    fn sqlite3_prepare_v2(db: sqlite3$@, sql: Void@, n_byte: I32, stmt: sqlite3_stmt$@$@,
+        tail: U8@$@): I32
+    fn sqlite3_finalize(stmt: sqlite3_stmt$@): I32
+    fn sqlite3_step(stmt: sqlite3_stmt$@): I32
+    fn sqlite3_reset(stmt: sqlite3_stmt$@): I32
+    fn sqlite3_bind_int64(stmt: sqlite3_stmt$@, idx: I32, val: I64): I32
+    fn sqlite3_bind_double(stmt: sqlite3_stmt$@, idx: I32, val: F64): I32
+    fn sqlite3_bind_text(stmt: sqlite3_stmt$@, idx: I32, val: Void@, n_byte: I32, destructor: Sz):
+        I32
+    fn sqlite3_bind_null(stmt: sqlite3_stmt$@, idx: I32): I32
+    fn sqlite3_bind_parameter_index(stmt: sqlite3_stmt$@, name: Void@): I32
+    fn sqlite3_column_count(stmt: sqlite3_stmt$@): I32
+    fn sqlite3_column_type(stmt: sqlite3_stmt$@, col: I32): I32
+    fn sqlite3_column_int64(stmt: sqlite3_stmt$@, col: I32): I64
+    fn sqlite3_column_double(stmt: sqlite3_stmt$@, col: I32): F64
+    fn sqlite3_column_text(stmt: sqlite3_stmt$@, col: I32): U8@
+    fn sqlite3_column_bytes(stmt: sqlite3_stmt$@, col: I32): I32
+    fn sqlite3_column_name(stmt: sqlite3_stmt$@, col: I32): Void@
+    fn sqlite3_last_insert_rowid(db: sqlite3$@): I64
+    fn sqlite3_db_handle(stmt: sqlite3_stmt$@): sqlite3$@
+    fn sqlite3_errcode(db: sqlite3$@): I32
+
+priv const sqlite_transient: Sz = -1 //<
+    //< SQLITE_TRANSIENT, "copy the bytes now": the macro `((void(*)(void*))-1)`, a function pointer
+    //<
+    //< Received as `Sz`, which is pointer-width on every target, it arrives as that pointer: every
+    //< C ABI KSPL builds for passes an integer and a pointer of one width in the same register or
+    //< slot.
+priv const max_c_int: Sz = 2147483647 //<
+    //< The longest SQL or text SQLite's `int` length takes
+    //<
+    //< Caution: **Refuse a longer one, never cast it.** Cast, it can turn negative, which SQLite
+    //< reads as "NUL-terminated" and searches past the caller's range.
+priv const sqlite_ok: I32 = 0 //< what every call returns on success
+priv const sqlite_error: I32 = 1 //< SQLITE_ERROR, the generic code: here, SQL holding no statement
+priv const sqlite_nomem: I32 = 7 //< SQLITE_NOMEM: an allocation inside SQLite failed
+priv const sqlite_cantopen: I32 = 14 //< SQLITE_CANTOPEN, for a path refused before SQLite sees it
+priv const sqlite_toobig: I32 = 18 //< SQLITE_TOOBIG, for a length refused before SQLite sees it
+priv const sqlite_row: I32 = 100 //<
+    //< sqlite3_step()'s SQLITE_ROW and SQLITE_DONE
+priv const sqlite_done: I32 = 101
+priv const sqlite_integer: I32 = 1 //<
+    //< sqlite3_column_type()'s constants; any other value is NULL (5)
+priv const sqlite_float: I32 = 2
+priv const sqlite_text: I32 = 3
+priv const sqlite_blob: I32 = 4
+
+pub enum Db_error //< why a database operation failed
+    //<
+    //< **A variant SQLite decided carries SQLite's primary result code** (`code`), so a caller
+    //< tells a busy database (5, SQLITE_BUSY) from a broken constraint (19, SQLITE_CONSTRAINT).
+    //< A refusal made here, before SQLite is asked, carries the code SQLite gives for the same one.
+    open_failed(code: I32) //< the file could not be opened: a bad path, no permission, or similar
+    prepare_failed(code: I32) //< the SQL could not be prepared: a syntax error or similar
+    several_statements //< the SQL holds a second statement after the first.
+        //<
+        //< Caution: **`prepare` and `exec` take one statement**; run each on its own. Taken, the
+        //< rest would be dropped without a word.
+    bind_failed(code: I32) //< a parameter could not be bound: an index out of range or similar
+    step_failed(code: I32) //< the step returned something other than a row or the end
+    column_failed(code: I32) //< SQLite could not produce a column's value (7: out of memory)
+    buffer_too_small //< the buffer for a text column is shorter than `column_bytes`
+    missing_column(missing: U8[]) //< no column or parameter matches a field in the table.
+        //<
+        //< Only `bind_row` / `read_row` return this and the next error.
+        //< Caution: **These two errors keep a default from being filled in silently** (the reason
+        //< is in "a trait returning a table" in `../docs/DESIGN-language.md`).
+    column_type(mismatched: U8[]) //< the column's kind or value does not fit the field.
+        //<
+        //< A value fits when the field's width and sign hold it unchanged: 300 does not fit a `U8`.
+
+pub enum Column_kind //< what kind of value a column of the current row holds
+    integer //< a whole number
+    float //< a floating-point number
+    text //< text
+    blob //< raw bytes
+    null_value //< SQL's NULL
+
+pub enum Step_result //< the result of one step of a statement
+    row //< a row is ready, and its columns can be read
+    done //< the statement ran to the end, and there is no current row
+
+priv fn holds_no_statement(db: sqlite3$@, sql: U8@, len: Sz): Bool //<
+    //< Whether SQL holds no statement: nothing, or only spaces, semicolons and comments
+    //<
+    //< **SQLite's own parser decides**, as preparing such SQL succeeds with no statement; a second
+    //< reading of SQL's comments here could disagree with it.
+    if len <= 0
+        return true
+    $handle: sqlite3_stmt$@ = null
+    rc: = sqlite3_prepare_v2(db, Void@::sql, I32::len, handle@, null)
+    if handle != null
+        sqlite3_finalize(handle)
+    return rc == sqlite_ok && handle == null
+
+priv fn bound(rc: I32): Void!Db_error //< the check every bind_* makes on SQLite's answer
+    if rc != sqlite_ok
+        throw .bind_failed(rc)
+
+pub struct Db //< one open database, which prepares statements
+    priv handle: sqlite3$@ //< never null: `open` refuses a null one, so no call checks again
+
+pub struct Statement //< one prepared statement, which is bound, stepped and read
+    priv handle: sqlite3_stmt$@ //< never null: `prepare` refuses a null one
+
+impl Db
+    pub fn open( //< opens a database, creating the file if it does not exist
+        path: U8[], //< the file; `":memory:"` keeps the whole database in memory
+    ): Db$@!Db_error
+        // Caution: **A path holding a NUL is refused, not cut at it** (the reason is at `to_cstr`).
+        $c_path: U8$@ = null
+        switch path.to_cstr()
+        case .some(p)
+            c_path = p
+        case .none
+            throw .open_failed(sqlite_cantopen)
+        defer dealloc(Void$@::c_path)
+        $handle: sqlite3$@ = null
+        rc: = sqlite3_open(Void@::c_path, handle@)
+        // SQLite hands back a connection even when opening fails, to carry the message.
+        if rc != sqlite_ok || handle == null
+            if handle != null
+                sqlite3_close_v2(handle)
+            throw .open_failed(rc if rc != sqlite_ok else sqlite_nomem)
+        d: = mem.alloc_as<|Db|>()
+        d.handle = handle
+        return d
+
+    pub fn prepare( //< prepares one statement from SQL; a second statement after it is refused
+        //<
+        //< Caution: The caller frees it with `stmt.free()`.
+        r: Self$@,
+        sql: U8[], //< the SQL, with parameters written as `:name` or `?`
+    ): Statement$@!Db_error
+        if sql.len > max_c_int
+            throw .prepare_failed(sqlite_toobig)
+        $handle: sqlite3_stmt$@ = null
+        $rest: U8@ = null
+        rc: =
+            sqlite3_prepare_v2(r.handle, Void@::sql.ptr, I32::sql.len, handle@, rest@)
+        if rc != sqlite_ok
+            throw .prepare_failed(rc)
+        // SQL holding no statement (blank, or a comment alone) succeeds with no statement.
+        if handle == null
+            throw .prepare_failed(sqlite_error)
+        // Caution: **Refuse what follows the first statement, never drop it**: dropped, `exec` of
+        // two `CREATE TABLE`s would succeed with the second table never made.
+        if !holds_no_statement(r.handle, rest, sql.len - (rest - sql.ptr))
+            sqlite3_finalize(handle)
+            throw .several_statements
+        s: = mem.alloc_as<|Statement|>()
+        s.handle = handle
+        return s
+
+    pub fn exec( //< prepares, steps and frees in one call, for SQL with no parameters and no rows
+        //<
+        //< Use it for one `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`; SQL holding a second
+        //< statement is refused, as by `prepare`.
+        r: Self$@,
+        sql: U8[], //< the SQL to run
+    ): Void!Db_error
+        stmt: = r.prepare(sql)!
+        defer stmt.free()
+        stmt.step()!
+
+    pub fn last_insert_rowid(r: Self$@): I64 //< the row id the last `INSERT` created
+        return sqlite3_last_insert_rowid(r.handle)
+
+    pub fn free(r: Self$@) //<
+        //< frees it; the database closes once its statements are freed too
+        //<
+        //< Caution: **The name must be `free`.** The use-after-free check treats a call as a
+        //< release when "the receiver's type conforms to `Owned` and the method called is `free`"
+        //< (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name,
+        //< `c.free(); c.query(…);` compiles with no diagnostics ([W0107] reports it).
+        sqlite3_close_v2(r.handle)
+        dealloc(Void$@::r)
+
+impl Statement
+    pub fn bind_i64( //< binds an integer to a parameter
+        r: Self$@,
+        idx: I32, //< which parameter, counting from 1
+        val: I64, //< the value to bind
+    ): Void!Db_error
+        bound(sqlite3_bind_int64(r.handle, idx, val))!
+
+    pub fn bind_f64( //< binds a floating-point number to a parameter
+        r: Self$@,
+        idx: I32, //< which parameter, counting from 1
+        val: F64, //< the value to bind
+    ): Void!Db_error
+        bound(sqlite3_bind_double(r.handle, idx, val))!
+
+    pub fn bind_text( //< binds text to a parameter
+        r: Self$@,
+        idx: I32, //< which parameter, counting from 1
+        val: U8[], //< the text to bind, which sqlite copies
+    ): Void!Db_error
+        if val.len > max_c_int
+            throw .bind_failed(sqlite_toobig)
+        bound(sqlite3_bind_text(r.handle, idx, Void@::val.ptr, I32::val.len, sqlite_transient))!
+
+    pub fn bind_null( //< binds SQL's NULL to a parameter
+        r: Self$@,
+        idx: I32, //< which parameter, counting from 1
+    ): Void!Db_error
+        bound(sqlite3_bind_null(r.handle, idx))!
+
+    pub fn step(r: Self$@): Step_result!Db_error //< runs to the next row, or to the end
+        rc: = sqlite3_step(r.handle)
+        if rc == sqlite_row
+            return .row
+        if rc == sqlite_done
+            return .done
+        throw .step_failed(rc)
+
+    pub fn reset(r: Self$@): Void!Db_error //< rewinds to run again, keeping the bound values
+        //<
+        //< It fails as `step_failed` with the code of the last step, if that step failed.
+        rc: = sqlite3_reset(r.handle)
+        if rc != sqlite_ok
+            throw .step_failed(rc)
+
+    pub fn column_count(r: Self$@): I32 //< how many columns a row of this statement has
+        return sqlite3_column_count(r.handle)
+
+    pub fn column_kind( //< what kind of value that column of the current row holds
+        r: Self$@,
+        col: I32, //< which column, counting from 0
+    ): Column_kind
+        t: = sqlite3_column_type(r.handle, col)
+        if t == sqlite_integer
+            return .integer
+        if t == sqlite_float
+            return .float
+        if t == sqlite_text
+            return .text
+        if t == sqlite_blob
+            return .blob
+        return .null_value
+
+    pub fn column_i64( //< that column of the current row, as an integer
+        r: Self$@,
+        col: I32, //< which column, counting from 0
+    ): I64
+        return sqlite3_column_int64(r.handle, col)
+
+    pub fn column_f64( //< that column of the current row, as a floating-point number
+        r: Self$@,
+        col: I32, //< which column, counting from 0
+    ): F64
+        return sqlite3_column_double(r.handle, col)
+
+    pub fn column_bytes( //< the length of that text column, for allocating a buffer of that size
+        r: Self$@,
+        col: I32, //< which column, counting from 0
+    ): Sz
+        return sqlite3_column_bytes(r.handle, col)
+
+    pub fn column_text( //< copies that text column out, and returns how many bytes it copied
+        r: Self$@,
+        col: I32, //< which column, counting from 0
+        buf: U8$[], //< where the text goes; a buffer shorter than `column_bytes` is refused
+    ): Sz!Db_error
+        // Caution: **Ask for the text before its length**: the text call may convert the value, and
+        // the length is that of the converted text.
+        text: = sqlite3_column_text(r.handle, col)
+        n: = Sz::sqlite3_column_bytes(r.handle, col)
+        // Caution: **A null pointer is SQL's NULL or an allocation that failed**, and only the
+        // connection's code tells which (SQLite's documentation of sqlite3_column_text). Taken
+        // as NULL, a lost value would read as empty text.
+        if text == null && sqlite3_errcode(sqlite3_db_handle(r.handle)) == sqlite_nomem
+            throw .column_failed(sqlite_nomem)
+        if text == null || n <= 0
+            return 0
+        if n > buf.len
+            throw .buffer_too_small
+        mem.copy(Void$@::buf.ptr, Void$@::text, n)
+        return n
+
+    pub fn free(r: Self$@) //< frees the prepared statement
+        sqlite3_finalize(r.handle)
+        dealloc(Void$@::r)
+
+impl Db: Owned {} //< it owns its memory and releases it with `free()`
+impl Statement: Owned {} //< it owns its memory and releases it with `free()`
+
+// ---------------------------------------------------------
+// The round trip between a struct and one row, walking `std/reflect`'s table.
+// ---------------------------------------------------------
+
+impl Statement
+    pub fn bind_row<|T: reflect.Reflectable|>( //< binds a whole table type to `:field` parameters
+        //<
+        //< **It matches by name** (`:field`, and the column's name when reading).
+        //< Caution: **If it matched by position, swapping two columns in the SQL would silently
+        //< read the wrong one** for as long as their types agree.
+        //< `v` is a `T@`: passed by value, the field offsets would point into a temporary.
+        r: Self$@,
+        v: T@, //< the value to read, passed by pointer rather than copied
+    ): Void!Db_error
+        base: = U8@::v
+        for f in v.fields()
+            idx: = r.bind_index(f.name)
+            if idx == 0
+                throw .missing_column(f.name)
+            switch f.kind
+            case .int_field
+                r.bind_i64(idx, reflect.load_int(base + f.offset, f.extra.width))!
+            case .uint_field
+                // Caution: **Read an unsigned value with the unsigned function**, or a `U32`'s
+                // `0xFFFFFFFF` goes in as `-1` (`../std/reflect.kspl`'s `load_uint`).
+                got: = reflect.load_uint(base + f.offset, f.extra.width)
+                // **A `U64` past SQLite's signed integer comes back negative**, and would be stored
+                // so.
+                if !reflect.fits_int(f.kind, f.extra.width, got)
+                    throw .column_type(f.name)
+                r.bind_i64(idx, got)!
+            case .float_field
+                r.bind_f64(idx, reflect.load_float(base + f.offset, f.extra.width))!
+            case .bool_field
+                p: = Bool@::(base + f.offset)
+                // SQLite has no boolean type: 0/1 in both directions.
+                r.bind_i64(idx, 1I64 if p$ else 0I64)!
+            case .str_field
+                p: U8[]@ = (U8[]@)::(base + f.offset)
+                r.bind_text(idx, p$)!
+            case .struct_field, .list_field, .opt_field
+                // **One row is flat.** Skipping a nested field would silently drop it; for such a
+                // type, write the table by hand.
+                throw .column_type(f.name)
+
+    pub fn read_row<|T: reflect.Reflectable|>( //< reads the current row into a whole table type
+        //<
+        //< **If no column matches a field, it fails** (the reason is at `Db_error`).
+        //< Caution: **Copy a text column's value into `arena`.** The text sqlite returns becomes
+        //< invalid on the next `step()`.
+        r: Self$@,
+        out: T$@, //< the value to write into, field by field
+        arena: Arena$@, //< where the text values are copied to, so they outlive the next `step()`
+    ): Void!Db_error
+        base: = U8$@::out
+        for f in out.fields()
+            col: = r.find_column(f.name)!
+            kind: = r.column_kind(col)
+            switch kind
+            case .null_value
+                throw .column_type(f.name)
+            default {}
+            // **Signed and unsigned are not split** (`../std/reflect.kspl`'s `store_int`).
+            switch f.kind
+            case .int_field, .uint_field
+                got: = r.expect_i64(col, kind, f.name)!
+                // Caution: **Refuse a value the field cannot hold, never narrow it**: narrowed,
+                // 5000000000 reads as 705032704 in an `I32`, and 300 as 44 in a `U8`.
+                if !reflect.fits_int(f.kind, f.extra.width, got)
+                    throw .column_type(f.name)
+                reflect.store_int(base + f.offset, f.extra.width, got)
+            case .float_field
+                // Caution: Accept an integer column too, or success depends on whether `1` or `1.0`
+                // was stored (sqlite stores both in one column).
+                switch kind
+                case .float, .integer
+                    reflect.store_float(base + f.offset, f.extra.width, r.column_f64(col))
+                default
+                    throw .column_type(f.name)
+            case .bool_field
+                p: = Bool$@::(base + f.offset)
+                p$ = r.expect_i64(col, kind, f.name)! != 0I64
+            case .struct_field, .list_field, .opt_field
+                // Refused for the same reason as when writing (see `bind_row`).
+                throw .column_type(f.name)
+            case .str_field
+                p: U8[]$@ = (U8[]$@)::(base + f.offset)
+                switch kind
+                case .text {}
+                default
+                    throw .column_type(f.name)
+                n: = r.column_bytes(col)
+                buf: = U8$[]::{ .ptr = U8$@::arena.alloc(n), .len = n }
+                r.column_text(col, buf)!
+                p$ = buf
+
+    priv fn find_column(r: Self$@, name: U8[]): I32!Db_error //<
+        //< The index of the column with that name; **a missing name is refused**
+        count: = r.column_count()
+        for $col: I32 = 0; col < count; col += 1
+            got: = sqlite3_column_name(r.handle, col)
+            if got != null && str.from_cstr(U8$@::got).equals(name)
+                return col
+        throw .missing_column(name)
+
+    priv fn bind_index(r: Self$@, name: U8[]): I32 //<
+        //< The position of the parameter `:name`, or 0 if there is none (a name holding a NUL too)
+        if name.contains_nul()
+            return 0
+        buf: = U8$@::mem.alloc(name.len + 2)
+        defer dealloc(Void$@::buf)
+        buf$ = ':'
+        mem.copy(Void$@::(buf + 1), Void$@::name.ptr, name.len)
+        (buf + name.len + 1)$ = 0U8
+        return sqlite3_bind_parameter_index(r.handle, Void@::buf)
+
+    priv fn expect_i64(r: Self$@, col: I32, kind: Column_kind, name: U8[]): I64!Db_error //<
+        //< Reads it as an integer, and refuses any other kind with the name attached
+        switch kind
+        case .integer
+            return r.column_i64(col)
+        default {}
+        throw .column_type(name)

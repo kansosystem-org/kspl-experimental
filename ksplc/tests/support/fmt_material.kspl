@@ -1,0 +1,652 @@
+//< The material `../suite/fmt_test.kspl` formats: each input, and the shape it must come out in
+//<
+//< Not a suite. **Each constant is data its case reads**, written by hand in the shape the
+//< formatter must give: `make fmt` does not reach inside a string, so it cannot put one right.
+
+// The formatted shape.
+// Caution: It is also the expected value, so format it by hand.
+const src_unary: U8[] =
+    """pub fn g(x: I32): I32
+    return x
+
+pub fn f(c: Bool): I32
+    a: I32$[2] = ::{ -1, -2 }
+    b: = -1 if c else -2
+    d: = (-1)
+    k: = g(-1)
+    if -1 < 0
+        return -1
+    for $i: I32 = -1; -1 < i; i += 1 {}
+    return -3
+"""
+
+const src_binary: U8[] =
+    """pub fn f(v: I32$[2]): I32
+    m: = 3 - 1
+    n: = v[0] - 1
+    return m - n
+"""
+
+const src_empty_block: U8[] = """pub fn e1() {}
+
+pub fn e2(c: Bool)
+    if c {}
+    for c {}
+"""
+
+// One attribute per line: joined into `#export #cfg(x)` they cannot be read one at a time, and
+// adding one changes the whole line in a difference.
+const src_attrs: U8[] =
+    """#export
+#cfg(hosted)
+pub fn f(a: I32): I32
+    return a
+
+#align(8)
+#export
+pub struct S
+    pub n: I32
+"""
+
+// The input for a character literal written with a backslash and a brace.
+//
+// Caution: **Do not read it as the start of an interpolation.** Read that way, the closing `'`
+// counts as "a quote inside an interpolation", the span runs to the file's end, and the formatter
+// loses the character (get_string_span in `ksplc/fmt/measure.kspl`). An interpolation opens only
+// inside double quotes.
+const src_brace_char: U8[] =
+    """pub fn f(): U8
+    a: U8 = '\{'
+    b: U8 = '\}'
+    return a + b
+"""
+
+// The input for a comment inside the braces.
+// Caution: **Include both a branch with an empty body and a comment at the body's end.** With only
+// the empty branch, a comment just before the `}` moving one level out passes unnoticed.
+const src_inner_comment_in: U8[] =
+    """pub fn f(c: Bool, d: Bool): I32
+    if c {
+        // the reason it is left empty.
+        // this is the second line.
+    }
+    $n: = 0
+    if d
+        n += 1
+        // the comment placed at the body's end.
+    return n
+"""
+
+// The input for blank lines.
+// Caution: **Always include a blank line after `}`.** A block's two ends test only "dropping",
+// so also dropping a paragraph's separator passes unnoticed.
+const src_blank_in: U8[] =
+    """pub fn f(c: Bool): I32
+
+    $n: = 0
+    if c
+
+        n += 1
+
+
+    n += 2
+    return n
+
+"""
+
+// The above's expected value: only the blank lines at the block's head and tail go.
+const src_blank_out: U8[] =
+    """pub fn f(c: Bool): I32
+    $n: = 0
+    if c
+        n += 1
+
+    n += 2
+    return n
+"""
+
+// The input for `import`'s reordering.
+// Caution: **Always include a heading, a comment right above, an attribute and a second set.**
+// With only a flat list, a heading moving into the middle of a set passes unnoticed.
+const src_imports_in: U8[] =
+    """// the file's heading. this must not move.
+#cfg(debug)
+import "std/str" as _str
+// this comment belongs to the import below and moves with it.
+import "std/io" as io
+#cfg(blas)
+import "std/time" as _time
+import "std/ds" { List }
+
+// the second set's heading. it stays at the set's head even under reordering.
+#cfg(debug)
+import "std/sys" as _sys
+import "std/fs" as _fs
+
+pub fn main(): I32
+    return 0
+"""
+
+// The above's expected value: no reordering across sets, and the heading stays.
+// Caution: **An attribute moves with its import, the first of a set's too**: left behind it
+// would bind to whichever import comes to stand under it.
+const src_imports_out: U8[] =
+    """// the file's heading. this must not move.
+import "std/ds" { List }
+// this comment belongs to the import below and moves with it.
+import "std/io" as io
+#cfg(debug)
+import "std/str" as _str
+#cfg(blas)
+import "std/time" as _time
+
+// the second set's heading. it stays at the set's head even under reordering.
+import "std/fs" as _fs
+#cfg(debug)
+import "std/sys" as _sys
+
+pub fn main(): I32
+    return 0
+"""
+
+// The input for `AllowShortBlocks: true`.
+// Caution: **Always include a branch with a comment.** Without one, folding a comment in (its first
+// line onto the `{` line, the rest across the brace) passes unnoticed.
+const src_short_in: U8[] =
+    """pub fn f(n: I32): I32
+    if n < 0
+        return -1
+    if n == 0
+        // 0 is not treated as a number.
+        return 0
+    return n
+"""
+
+// The above's expected value: only the branch with no comment is folded.
+const src_short_out: U8[] =
+    """pub fn f(n: I32): I32
+    if n < 0 { return -1 }
+    if n == 0
+        // 0 is not treated as a number.
+        return 0
+    return n
+"""
+
+// The input for `AllowShortFunctions: true`.
+// Caution: **Always include the four shapes that are not folded.** With only shapes that fold,
+// folding what must not be folded passes unnoticed.
+const src_short_fn_in: U8[] =
+    """pub fn one(x: I32): I32
+    return x + 1
+
+pub fn two(x: I32): I32
+    y: = x + 1
+    return y
+
+pub fn noted(x: I32): I32
+    // add 1.
+    return x + 1
+
+pub fn guarded(n: I32): I32
+    if n < 0
+        return -1
+    return n
+
+pub fn wide_enough_that_the_folded_form_would_not_fit(first: I32, second: I32): I32
+    return first * second + first - second + second * first + first - second
+
+pub struct S
+    n: I32
+
+impl S
+    fn get(r: Self@): I32
+        return r.n
+"""
+
+// The above's expected value: only `one` and `S.get` fold. **The one-statement `if` inside
+// `guarded` stays too** — this setting covers only a `fn`'s body; a control structure's block
+// belongs to AllowShortBlocks.
+const src_short_fn_out: U8[] =
+    """pub fn one(x: I32): I32 { return x + 1 }
+
+pub fn two(x: I32): I32
+    y: = x + 1
+    return y
+
+pub fn noted(x: I32): I32
+    // add 1.
+    return x + 1
+
+pub fn guarded(n: I32): I32
+    if n < 0
+        return -1
+    return n
+
+pub fn wide_enough_that_the_folded_form_would_not_fit(first: I32, second: I32): I32
+    return first * second + first - second + second * first + first - second
+
+pub struct S
+    n: I32
+
+impl S
+    fn get(r: Self@): I32 { return r.n }
+"""
+
+// A closure's `;` separates its parameters from its captures and stays on the signature's line,
+// even with no capture after it.
+// Caution: **A closure bound to a name is the case to keep.** A call's argument list already keeps
+// newlines out, so only a closure as a statement's value shows the difference.
+const src_closure_sep: U8[] =
+    """pub fn f(): I32
+    bound: = 2
+    by_rank: = fn(a: I32, b: I32; ): I32
+        return a - b
+    over: = fn(x: I32; bound: I32): Bool
+        return x > bound
+    return 0
+"""
+
+// Idempotence means something only from a broken input (a formatted shape does not move at all),
+// hence the newline in an empty block and the space in a unary minus.
+const src_messy: U8[] =
+    """pub fn f( c : Bool ) : I32
+    a : I32$[2] = ::{ - 1 , - 2 }
+    b : = - 1 if c else - 2
+    if c {
+    }
+    for $i : I32 = - 1 ; i < 0 ; i += 1 {
+    }
+    return - 3
+"""
+
+// A value too long for its line, where a line break alone would not be read back.
+// **The three shapes split three ways.** A conditional value outside every bracket gets
+// parentheses and breaks between its choices (never after its `if`); one below its `=` too; a
+// `return`'s value stays on its line, with a string carried on.
+const src_choice_in: U8[] =
+    """pub fn rank(op: I32): I32
+    return 10 if op == 42 || op == 47 || op == 37 else 9 if op == 43 || op == 45 else 8 if op == 60 || op == 62 else 7 if op == 61 else 0
+
+pub fn long_choice(a: I32, b: I32): I32
+    total: = a * 1000000 + b * 1000 + a * b + 123456789 + a * a * 7 if a > b else b * 1000000 + a * 1000 + 987654321 + b * b * 3
+    return total
+
+pub fn message(): U8[]
+    return "a message written out long enough that the formatter has to carry it onto the next line at a space"
+"""
+
+const src_choice_out: U8[] =
+    """pub fn rank(op: I32): I32
+    return (10 if op == 42 || op == 47 || op == 37 else 9 if op == 43 || op == 45
+        else 8 if op == 60 || op == 62 else 7 if op == 61 else 0)
+
+pub fn long_choice(a: I32, b: I32): I32
+    total: =
+        (a * 1000000 + b * 1000 + a * b + 123456789 + a * a * 7 if a > b
+        else b * 1000000 + a * 1000 + 987654321 + b * b * 3)
+    return total
+
+pub fn message(): U8[]
+    return "a message written out long enough that the formatter has to carry it onto the next line \
+        at a space"
+"""
+
+// Every arm goes on a line of its own at the `switch`'s column, an empty one (`{}`) and the arm
+// after it included.
+// Caution: **Keep the arm whose pattern fills the line.** One level in, the arm after it is not the
+// next arm but a statement of the block above, and the file fails to parse.
+// **Keep the comments too**: the one after `{}` stays on that arm's line, the one over an arm
+// above it.
+const src_empty_arm_in: U8[] =
+    """priv enum Pick
+    near_enough_to_walk_there
+    near_enough_to_cycle_there
+    far_enough_to_drive_there
+    far
+
+pub fn is_near(p: Pick, q: I32): Bool
+    switch p
+    case .near_enough_to_walk_there, .near_enough_to_cycle_there, .far_enough_to_drive_there {} default
+        switch q case 1 {} case 2 {} // two is near too
+        // so is three
+        case 3 {} default {}
+        return false
+    return true
+"""
+
+const src_empty_arm_out: U8[] =
+    """priv enum Pick
+    near_enough_to_walk_there
+    near_enough_to_cycle_there
+    far_enough_to_drive_there
+    far
+
+pub fn is_near(p: Pick, q: I32): Bool
+    switch p
+    case .near_enough_to_walk_there, .near_enough_to_cycle_there, .far_enough_to_drive_there {}
+    default
+        switch q
+        case 1 {}
+        case 2 {} // two is near too
+        // so is three
+        case 3 {}
+        default {}
+        return false
+    return true
+"""
+
+// A `switch`'s first arm goes on a line of its own at the `switch`'s column, a labelled one and
+// one inside an arm included.
+// Caution: **Keep the comment after the first arm's pattern.** It must stay on the arm's line,
+// not move up to the `switch`'s.
+const src_first_arm_in: U8[] =
+    """pub fn f(p: I32, q: I32): I32
+    outer: switch p case 1 // the near arm
+        switch q case 2
+            break outer
+        default {}
+    default
+        return 1
+    return 0
+"""
+
+const src_first_arm_out: U8[] =
+    """pub fn f(p: I32, q: I32): I32
+    outer: switch p
+    case 1 // the near arm
+        switch q
+        case 2
+            break outer
+        default {}
+    default
+        return 1
+    return 0
+"""
+
+// A `defer` holding one statement is written bare, whatever block it was typed in.
+// Caution: **Test the two blocks that stay too.** A block of two statements and one holding a
+// comment stay below the `defer`; joined to it, the comment would lose the line it describes.
+// **A statement ending in a block is still one statement** (`defer f() catch {}`).
+const src_defer_in: U8[] =
+    """pub fn f(): I32
+    $a: = 1
+    defer
+        a = 0
+    $b: = 2
+    defer
+        b = 0
+    defer
+        a = 1
+        b = 1
+    defer
+        // put back last
+        a = 2
+    defer risky() catch {}
+    if a > 0
+        a = 3
+    defer cleanup() catch e
+        a = 4
+    return a + b
+"""
+
+const src_defer_out: U8[] =
+    """pub fn f(): I32
+    $a: = 1
+    defer a = 0
+    $b: = 2
+    defer b = 0
+    defer
+        a = 1
+        b = 1
+    defer
+        // put back last
+        a = 2
+    defer risky() catch {}
+    if a > 0
+        a = 3
+    defer cleanup() catch e
+        a = 4
+    return a + b
+"""
+
+// A comment between the elements of a compound literal keeps its line and its level. **The broken
+// shape is idempotent too.** **A row whose own text holds a `//` is data**; read as a comment, it
+// forces a multi-line layout. A comment after a row is included too: it is as easily displaced.
+
+const src_list_comment: U8[] =
+    """priv struct Row
+    text: U8[]
+    hits: Bool
+
+priv const rows: Row[_] = ::{
+    // Why the first row is here, written out long enough that packing cannot fold it away.
+    Row::{ .text = "the first row's value, long enough to stand on its own line", .hits = true },
+    // \u26a0\ufe0f A row whose own text holds a `// comment` and a `{`. It is data, not a comment.
+    Row::{ .text = "// a { is masked", .hits = false },
+    Row::{ .text = "the third", .hits = true } // trailing on the row, not opening a line
+}
+
+fn main(): I32
+    return 0
+"""
+
+// A comment above a **short** element of a compound literal keeps its line.
+// Caution: **Being short is the whole point.** The formatter displaces a comment only where it
+// packs the elements, and it packs only what fits: `src_list_comment`'s rows are too long for that.
+const src_list_short: U8[] =
+    """priv const rows: U8[][4] = ::{
+    // The first reason.
+    "aaaa/bbbb/cccc.kspl:first",
+    // The second reason.
+    "aaaa/bbbb/cccc.kspl:second",
+    // The third reason, covering the two that follow.
+    "aaaa/bbbb/cccc.kspl:third", "aaaa/bbbb/cccc.kspl:fourth"
+}
+
+fn main(): I32
+    return I32::rows.len
+"""
+
+// A signature broken one parameter per line keeps its indentation.
+// **The trailing comma keeps one parameter per line**; without it the parameters pack onto one
+// line and their comments have nowhere to go. The return's comment stays on the line that closes
+// the signature.
+const src_doc_params: U8[] =
+    """priv fn demangle( //< strips the mangling off a symbol
+    raw: U8[], //< the mangled symbol as genc wrote it
+    file: U8[], //< the source this symbol came from
+): U8[] //< the original name, or the input unchanged
+    // Works back from "kspl_<mod>_<func>" to the name the writer gave it.
+    _ = file
+    return raw
+
+fn main(): I32
+    return I32::demangle("a", "b").len - 1
+"""
+
+// A string literal too long for the line, written out on one line.
+const src_carried_in: U8[] =
+    """import "std/io"
+fn main(): I32
+    long: U8[] = "a message written out at a length no line can hold, so the formatter carries it onto the next line at the seam of a space, the mark standing for no byte at all"
+    runs: U8[] = "a run of spaces must never be cut in the middle of itself:      six of them stand there, and the seam goes behind the last"
+    tight: U8[] = "a_word_far_longer_than_the_whole_column_limit_with_nowhere_at_all_in_it_for_a_seam_to_be_put"
+    io.out().s("an interpolation holds \{ 1 + 2 \} and the spaces inside it are an expression's, so no seam may be put among them\n")
+    return I32::(long.len + runs.len + tight.len) - 373
+"""
+
+// The expected result.
+// Caution: **Test the three shapes that must not break, beside the one that must.** A break inside
+// a run of spaces loses one to the indent the mark swallows, one inside `\{ … \}` lands in code,
+// and a word longer than the line has nowhere to break and is written as is. The continuation is
+// one level in from the line that opened it.
+const src_carried_string: U8[] =
+    """import "std/io"
+fn main(): I32
+    long: U8[] =
+        "a message written out at a length no line can hold, so the formatter carries it onto the \
+            next line at the seam of a space, the mark standing for no byte at all"
+    runs: U8[] =
+        "a run of spaces must never be cut in the middle of itself:      six of them stand there, \
+            and the seam goes behind the last"
+    tight: U8[] =
+        "a_word_far_longer_than_the_whole_column_limit_with_nowhere_at_all_in_it_for_a_seam_to_be_put"
+    io.out()
+        .s("an interpolation holds \{ 1 + 2 \} and the spaces inside it are an expression's, so no \
+            seam may be put among them\n")
+    return I32::(long.len + runs.len + tight.len) - 373
+"""
+
+// A chain holding a string carried onto two lines that fits on one once joined.
+// Caution: **The chain is measured by the joined string, as it is written.** Measured by its source
+// span, the line break and the indent counted, the `.` kept its break and only a second run joined
+// it.
+const src_rejoined_in: U8[] =
+    """import "std/io"
+fn main(): I32
+    io.out()
+        .s("a message once carried onto two lines, and now short enough \
+            for one line\n")
+    return 0
+"""
+
+// The expected result.
+const src_rejoined_out: U8[] =
+    """import "std/io"
+fn main(): I32
+    io.out().s("a message once carried onto two lines, and now short enough for one line\n")
+    return 0
+"""
+
+// A value that starts on the line below its `=`, with the declaration's summary after the `=`.
+// **The value keeps its one level of indent.** At column 0 the indentation notation reads it as a
+// declaration of its own (`breaks_off_a_value` in `ksplc/parse/line_cont.kspl`).
+const src_value_below: U8[] =
+    """const record_head: U8[] = //< the record\'s header
+    "a header long enough that it is not folded back onto the line that opened it"
+
+fn main(): I32
+    return I32::record_head.len - 78
+"""
+
+// A description too long for its line, and the three that must not move: one short enough, one
+// already carrying its description below, and one after a return type on the line where a wrapped
+// head ends (it describes the return; moved below, it would read as the declaration's own).
+const src_summary_in: U8[] =
+    """priv struct Row //< one row
+    text: U8[] //< the text as the writer typed it, kept exactly as it came in with neither end trimmed
+    hits: Bool //< short enough, so it stays
+
+priv fn already(a: Sz): Sz //<
+    //< it carries its description below already, and this line must not move
+    return a
+
+priv fn wrapped(a: Sz, b: Sz, c: Sz, d: Sz, e: Sz, f: Sz, g: Sz, h: Sz, i: Sz, j: Sz, k: Sz, l: Sz):
+    Sz //< what comes back, described on the line a wrapped head closes, and long with it
+    return a + b + c + d + e + f + g + h + i + j + k + l
+
+fn main(): I32
+    r: Row = ::{ .text = "a", .hits = true }
+    return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1
+"""
+
+// The expected result: the one over the width leaves its mark and moves its text one level in;
+// the other three stay.
+const src_summary_out: U8[] =
+    """priv struct Row //< one row
+    text: U8[] //<
+        //< the text as the writer typed it, kept exactly as it came in with neither end trimmed
+    hits: Bool //< short enough, so it stays
+
+priv fn already(a: Sz): Sz //<
+    //< it carries its description below already, and this line must not move
+    return a
+
+priv fn wrapped(a: Sz, b: Sz, c: Sz, d: Sz, e: Sz, f: Sz, g: Sz, h: Sz, i: Sz, j: Sz, k: Sz, l: Sz):
+    Sz //< what comes back, described on the line a wrapped head closes, and long with it
+    return a + b + c + d + e + f + g + h + i + j + k + l
+
+fn main(): I32
+    r: Row = ::{ .text = "a", .hits = true }
+    return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1
+"""
+
+// A block on one line: its last `;` is left out.
+const src_bare_line_in: U8[] =
+    """pub fn one(x: I32): I32 { return x + 1; }
+
+pub fn f(n: I32): I32
+    if n < 0 { return -1 }
+    return n
+"""
+
+const src_bare_line_out: U8[] =
+    """pub fn one(x: I32): I32 { return x + 1 }
+
+pub fn f(n: I32): I32
+    if n < 0 { return -1 }
+    return n
+"""
+
+// A comment line past the column limit: cut at its last space that fits, the cut words joining the
+// paragraph's next line; a caution, a table row, a list item, a long address, a trailing comment
+// and a line of wide characters within its columns are left as written.
+const src_comment_cut_in: U8[] =
+    """//< Comments that cross the column limit, cut at the last space that fits
+//<
+//< This detail paragraph has one line that runs far past the hundredth column because a name in it grew.
+//< The next line of the same paragraph takes the carried words at its start.
+//< This line runs past the limit too, and the line below it is a caution, so its words stand alone here.
+//< Caution: a caution opens a paragraph of its own and takes no words carried from above it.
+// | a | table row far too wide for one hundred columns of text keeps its cells exactly as written by hand |
+// - a list item far too wide for one hundred columns of text keeps its own line exactly as it was written by hand
+// https://example.com/a/very/long/address/that/is/one/word/and/wider/than/the/column/limit/itself/x/y/z/w
+// 漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな
+// 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字
+fn main(): I32
+    // An ordinary comment in a body whose one line is far too long for the formatter's column limit.
+    x: = 1 // a trailing comment stays as it is even where its line grows well past one hundred columns
+    return x
+"""
+
+// The above's expected value.
+const src_comment_cut_out: U8[] =
+    """//< Comments that cross the column limit, cut at the last space that fits
+//<
+//< This detail paragraph has one line that runs far past the hundredth column because a name in it
+//< grew. The next line of the same paragraph takes the carried words at its start.
+//< This line runs past the limit too, and the line below it is a caution, so its words stand alone
+//< here.
+//< Caution: a caution opens a paragraph of its own and takes no words carried from above it.
+// | a | table row far too wide for one hundred columns of text keeps its cells exactly as written by hand |
+// - a list item far too wide for one hundred columns of text keeps its own line exactly as it was written by hand
+// https://example.com/a/very/long/address/that/is/one/word/and/wider/than/the/column/limit/itself/x/y/z/w
+// 漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな漢字かな
+// 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字 漢字かな漢字
+// 漢字かな漢字 漢字かな漢字
+fn main(): I32
+    // An ordinary comment in a body whose one line is far too long for the formatter's column
+    // limit.
+    x: = 1 // a trailing comment stays as it is even where its line grows well past one hundred columns
+    return x
+"""
+
+// `catch <value>` whose line would pass the limit: the break goes before `catch`, and one that fits
+// stays.
+const src_catch_wide_in: U8[] =
+    """fn f(style_str: U8[], config: Config$@)
+    for i in Range.asc(style_str.len)
+        config.allow_short_blocks = match_style_bool(style_str, i, short_blocks_key) catch config.allow_short_blocks
+        k_view: = r.k_cache.view_rows(0, seq_len, compute_arena) catch panic("Self_attention: view_rows failed")
+        n: = s.read(buf) catch 0
+"""
+
+const src_catch_wide_out: U8[] =
+    """fn f(style_str: U8[], config: Config$@)
+    for i in Range.asc(style_str.len)
+        config.allow_short_blocks = match_style_bool(style_str, i, short_blocks_key)
+            catch config.allow_short_blocks
+        k_view: = r.k_cache.view_rows(0, seq_len, compute_arena)
+            catch panic("Self_attention: view_rows failed")
+        n: = s.read(buf) catch 0
+"""

@@ -17,10 +17,10 @@ ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 
 .PHONY: test test-fuzz
 test:
-	KSPLC_STD_DIR=. "$(KSPLC)" run tests/main.kspls "$(KSPLC_EXE)"
+	KSPLC_STD_DIR=. "$(KSPLC)" run tests/main.kspl "$(KSPLC_EXE)"
 
 # Caution: **Quote every path** — a folder whose name holds a space splits an unquoted one.
-fuzz_build = KSPLC_STD_DIR=. "$(KSPLC)" build $(1) tests/read_prog.kspls \
+fuzz_build = KSPLC_STD_DIR=. "$(KSPLC)" build $(1) tests/read_prog.kspl \
   "$(OUT)/fuzz/read_prog.exe"
 # Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
 test-fuzz:
@@ -30,6 +30,6 @@ test-fuzz:
 		echo "# the reader: with the address sanitizer"; \
 	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
 		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
-	KSPLC_STD_DIR=. "$(KSPLC)" run tests/fuzz_main.kspls "$(OUT)/fuzz/read_prog.exe" \
+	KSPLC_STD_DIR=. "$(KSPLC)" run tests/fuzz_main.kspl "$(OUT)/fuzz/read_prog.exe" \
 		"$(OUT)/fuzz/work" "$(FUZZ_SEEDS)" $$asan \
 		$(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)

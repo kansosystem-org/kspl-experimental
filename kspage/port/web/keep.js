@@ -27,7 +27,7 @@ function kspageKeep(ui) {
   // Caution: **Unique per startup and per window** (by number alone, a reload or a second window
   // would overwrite a draft); forgotten, it leaves the previous startup's drafts to restore.
   const bootId = "b" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  // **Keyed by the document's identity** (`file.js`'s `mintDoc`): numbers are reused.
+  // **Keyed by the document's identity** (`file.js`'s `documentState`): numbers are reused.
   const keyOf = (id) => bootId + "/" + id;
 
   // The last text written, per number: **never the same twice** (not every redraw is typing).

@@ -1,0 +1,823 @@
+//< kspage: formulas in table cells, and the bounds on how deep one computation goes
+import "kspage/expr/calc"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/doc" { Block, Doc }
+import "kspage/model/fixed_font" as fixed
+import "kspage/tests/base"
+import "kspage/write/block"
+import "kspage/write/edit"
+import "kspage/write/typing"
+import "std/chars"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+// ==========================================
+// kspage: checks a table's calculation (a golden test).
+// A formula becomes its value, dependencies are resolved in any order, and what cannot be
+// resolved shows as a mark that says how to fix it.
+// ==========================================
+
+fn add_row(t: Block$@): Block$@ //< adds a row of cells with one text each
+    return t.add_child("")
+
+fn add_cell(row: Block$@, text: U8[])
+    row.add_child("").add_text(text)
+
+fn cell_text(t: Block$@, r: Sz, c: Sz): U8[] //< the text shown in a cell
+    //<
+    //< Caution: **Read the shown text, not the typed text** (in a formula cell the typed text is
+    //< the formula).
+    return t.children.get(r).children.get(c).inlines.get(0).showing()
+
+fn cell_source(t: Block$@, r: Sz, c: Sz): U8[] //< the text typed into a cell
+    return t.children.get(r).children.get(c).inlines.get(0).text()
+
+fn one_row(d: Doc$@, a: U8[], b: U8[]): Block$@ //< a table with one row
+    t: = d.add_block("table")
+    r: = add_row(t)
+    add_cell(r, a)
+    add_cell(r, b)
+    return t
+
+// ---- what a formula shows ----
+
+priv struct Case //< one table solved, and what one of its cells shows
+    cells: U8[] //< the table, its rows split by a newline and a row's cells by a tab
+    row: Sz
+    column: Sz
+    want: U8[] //< the text that cell shows once solved
+    why: U8[] //< what the case is about, named where it fails
+
+priv const cases: Case[_] = ::{
+    Case::{ .cells = "=1+2*3", .row = 0, .column = 0, .want = "7",
+        .why = "the multiplication acts first" },
+    Case::{ .cells = "=(1+2)*3", .row = 0, .column = 0, .want = "9",
+        .why = "the brackets change what comes first" },
+    Case::{ .cells = "=1/4", .row = 0, .column = 0, .want = "0.25",
+        .why = "a fraction is left (the trailing 0 is dropped)" },
+    Case::{ .cells = "=-(1+2)*3", .row = 0, .column = 0, .want = "-9",
+        .why = "the one-sided minus and the brackets act" },
+    Case::{ .cells = "2\t=A1*3", .row = 0, .column = 0, .want = "2",
+        .why = "a plain text is not rewritten" },
+    Case::{ .cells = "2\t=A1*3", .row = 0, .column = 1, .want = "6",
+        .why = "the value referred to goes in" },
+    // Solved in dependency order, not row order: a row may depend on one after it.
+    Case::{ .cells = "=A2+1\n=A3+1\n1", .row = 1, .column = 0, .want = "2",
+        .why = "a cell is solved after the one it reads" },
+    Case::{ .cells = "=A2+1\n=A3+1\n1", .row = 0, .column = 0, .want = "3",
+        .why = "a cell that comes first is solved too" },
+    // If it looped here, the test itself would never end.
+    Case::{ .cells = "=B1\t=A1", .row = 0, .column = 0, .want = "#CYCLE!",
+        .why = "a reference that comes back to itself becomes a mark" },
+    Case::{ .cells = "x\t=A1", .row = 0, .column = 1, .want = "#VALUE!",
+        .why = "point at a cell that is no number and it is #VALUE!" },
+    Case::{ .cells = "=Z9", .row = 0, .column = 0, .want = "#REF!",
+        .why = "point at a cell that is not there and it is #REF!" },
+    Case::{ .cells = "=1+", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a formula that cannot be read through is #SYNTAX!" },
+    Case::{ .cells = "=1/0", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "divide by 0 and it is #VALUE!" },
+    // Read partway and let through, a typo would pass silently.
+    Case::{ .cells = "=1 2", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a formula with something left unread is #SYNTAX! too" },
+    // Folding a range.
+    Case::{ .cells = "1\n2\n=A1:A2.sum()", .row = 2, .column = 0, .want = "3",
+        .why = "the numbers inside the range are added" },
+    Case::{ .cells = "head\n\n5\n=A1:A3.sum()", .row = 3, .column = 0, .want = "5",
+        .why = "only the numbers in a range are added" },
+    Case::{ .cells = "head\n\n5\n=A1:A3.count()", .row = 3, .column = 0, .want = "1",
+        .why = "only the numbers in a range are counted" },
+    // Skipped, a total alone would look right.
+    Case::{ .cells = "1\n=A2\n=A1:A2.sum()", .row = 2, .column = 0, .want = "#CYCLE!",
+        .why = "a broken cell's mark carries as far as the total" },
+    Case::{ .cells = "1\n=1/0\n3\n=A1:A3.sum()", .row = 3, .column = 0, .want = "#VALUE!",
+        .why = "a formula with no answer carries its mark as far as the total" },
+    Case::{ .cells = "1\n=1/0\n3\n=A1:A3.count()", .row = 3, .column = 0, .want = "#VALUE!",
+        .why = "and as far as the count" },
+    Case::{ .cells = "x\n=A1\n=A1:A2.sum()", .row = 2, .column = 0, .want = "#VALUE!",
+        .why = "a formula pointing at a text shows a mark, so it is no text to skip" },
+    Case::{ .cells = "4\n1\n7\n=A1:A3.min()", .row = 3, .column = 0, .want = "1",
+        .why = "the smallest value" },
+    Case::{ .cells = "4\n1\n7\n=A1:A3.max()", .row = 3, .column = 0, .want = "7",
+        .why = "the largest value" },
+    Case::{ .cells = "4\n1\n7\n=A1:A3.count()", .row = 3, .column = 0, .want = "3",
+        .why = "the count of numbers" },
+    Case::{ .cells = "x\n=A1:A1.sum()", .row = 1, .column = 0, .want = "0",
+        .why = "with nothing added the total is 0" },
+    Case::{ .cells = "x\n=A1:A1.min()", .row = 1, .column = 0, .want = "#VALUE!",
+        .why = "with no number the smallest value is none" },
+    // A sum of separate parts is written with `+` (a formula's own form is not a function).
+    Case::{ .cells = "1\t2\n=A1:B1.sum() + 10 + A1*3", .row = 1, .column = 0, .want = "16",
+        .why = "an addition carries on from a range's sum" },
+    Case::{ .cells = "1\t2\n=A1:B1.sum(10)", .row = 1, .column = 0, .want = "#SYNTAX!",
+        .why = "no argument goes to anything that folds" },
+    Case::{ .cells = "1\n2\n=A2:A1.sum()", .row = 2, .column = 0, .want = "3",
+        .why = "written bottom to top it is the same range" },
+    Case::{ .cells = "1\n=A1:Z9.sum()", .row = 1, .column = 0, .want = "#REF!",
+        .why = "a range sticking out past the cells is #REF!" },
+    Case::{ .cells = "1\n=A1.nope()", .row = 1, .column = 0, .want = "#NAME!",
+        .why = "a method name it does not know is #NAME!" },
+    // A name that is no fold is refused, so it does not mix with a value's methods.
+    Case::{ .cells = "1\n2\n=A1:A2.nope()", .row = 2, .column = 0, .want = "#NAME!",
+        .why = "a fold a range does not have is #NAME!" },
+    Case::{ .cells = "1\n=A1.sum()", .row = 1, .column = 0, .want = "#NAME!",
+        .why = "a fold cannot be written on a value" },
+    // An address too large: nothing caps its digits, so plain arithmetic would overflow.
+    // 2^64 + 1: wrapped around, it would point at A1 (= 7).
+    Case::{ .cells = "7\t=A18446744073709551617", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a row number that overflows is no cell" },
+    Case::{ .cells = "7\t=ZZZZZZZZZZZZZZZZ1", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a column number that overflows is no cell" },
+    // The same mistake must not become another mark with the number's size.
+    Case::{ .cells = "7\t=A999", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a number merely large gives the same mark" },
+    Case::{ .cells = "7\t=A1:A18446744073709551617.sum()", .row = 0, .column = 1, .want = "#REF!",
+        .why = "a range whose end overflows" },
+    // Comparing, choosing and rounding. A comparison gives 1 (true) or 0 (false).
+    Case::{ .cells = "3\t=A1>2", .row = 0, .column = 1, .want = "1", .why = "larger, it is 1" },
+    Case::{ .cells = "3\t=A1<2", .row = 0, .column = 1, .want = "0",
+        .why = "not smaller, it is 0" },
+    Case::{ .cells = "3\t=A1>=3", .row = 0, .column = 1, .want = "1",
+        .why = "at least can be compared" },
+    Case::{ .cells = "3\t=A1<=2", .row = 0, .column = 1, .want = "0",
+        .why = "at most can be compared" },
+    Case::{ .cells = "3\t=A1<>3", .row = 0, .column = 1, .want = "0",
+        .why = "not equal can be compared" },
+    Case::{ .cells = "3\t=A1=3", .row = 0, .column = 1, .want = "1",
+        .why = "equal can be compared" },
+    Case::{ .cells = "3\t=A1==3", .row = 0, .column = 1, .want = "#SYNTAX!",
+        .why = "equal has one spelling, not KSPL's `==` too" },
+    Case::{ .cells = "1\t=1<2<3", .row = 0, .column = 1, .want = "#SYNTAX!",
+        .why = "comparisons written in a chain cannot be read" },
+    Case::{ .cells = "0\t=10 if A1>0 else 20", .row = 0, .column = 1, .want = "20",
+        .why = "false, it is the third value" },
+    Case::{ .cells = "0\t=0 if A1=0 else 1/A1", .row = 0, .column = 1, .want = "0",
+        .why = "the error on the side not picked does not come out" },
+    Case::{ .cells = "0\t=1 if Z9=1 else 2", .row = 0, .column = 1, .want = "#REF!",
+        .why = "an error in the condition comes out as it stands" },
+    // Without `else`, the value for a false condition would be undefined.
+    Case::{ .cells = "0\t=1 if A1>0", .row = 0, .column = 1, .want = "#SYNTAX!",
+        .why = "with no `else` it is refused" },
+    // The same syntax as KSPL's: one form to remember.
+    Case::{ .cells = "2\t=10 if A1 < 1 else 20 if A1 < 5 else 30", .row = 0, .column = 1,
+        .want = "20", .why = "the second condition can pick" },
+    Case::{ .cells = "2\t=10 if A1 < 1 else 20 if A1 > 5 else 30", .row = 0, .column = 1,
+        .want = "30", .why = "none matching, the last value" },
+    Case::{ .cells = "1.4\t1.6\n=A1:B1.sum().round(0)", .row = 1, .column = 0, .want = "3",
+        .why = "a rounding carries on from a fold" },
+    // Taking a part of a day is a method too; the value holds a day count.
+    Case::{ .cells = "=Day.of(2026, 8, 18).year()", .row = 0, .column = 0, .want = "2026",
+        .why = "the year of a day made from the type" },
+    Case::{ .cells = "=Day.of(2026, 8, 18).month()", .row = 0, .column = 0, .want = "8",
+        .why = "the month of a day" },
+    Case::{ .cells = "=Day.of(2026, 8, 18).day()", .row = 0, .column = 0, .want = "18",
+        .why = "the day of a day" },
+    // `round` rounds the value itself, a half away from 0.
+    Case::{ .cells = "=1.2345.round(2)", .row = 0, .column = 0, .want = "1.23",
+        .why = "it rounds at the decimal place" },
+    Case::{ .cells = "=2.5.round(0)", .row = 0, .column = 0, .want = "3",
+        .why = "a half goes to the side further from 0" },
+    Case::{ .cells = "=-2.5.round(0)", .row = 0, .column = 0, .want = "-3",
+        .why = "the negative side goes further from 0 too" },
+    // Unlike the digits shown, a rounded value reaches the formulas that read it.
+    Case::{ .cells = "=1.4.round(0)*10", .row = 0, .column = 0, .want = "10",
+        .why = "the value rounded goes on into the reckoning" },
+    Case::{ .cells = "=1.0.round(10)", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a place it cannot hold is refused" },
+    // With no places set, a number is written rounded at its last digit; truncated, F64's 1.23
+    // would show as `1.229999`.
+    Case::{ .cells = "=123/100", .row = 0, .column = 0, .want = "1.23",
+        .why = "the answer of a division reads as it stands" },
+    Case::{ .cells = "=0.1+0.2", .row = 0, .column = 0, .want = "0.3",
+        .why = "no stray fraction comes out of an addition" },
+    Case::{ .cells = "=1/3", .row = 0, .column = 0, .want = "0.333333",
+        .why = "a number that does not divide out runs to the last place" },
+    Case::{ .cells = "=42/1", .row = 0, .column = 0, .want = "42",
+        .why = "a whole number gets no decimal point" },
+    // Past an I64's range nothing is converted to a whole number (the answer would be undefined).
+    Case::{ .cells = "=10000000000*10000000000", .row = 0, .column = 0,
+        .want = "100000000000000000000", .why = "a number past an I64 is written as it stands" },
+    Case::{ .cells = "=-10000000000*10000000000", .row = 0, .column = 0,
+        .want = "-100000000000000000000", .why = "so is a negative one, with one minus sign" },
+    Case::{ .cells = "=(10000000000*10000000000).round(0)", .row = 0, .column = 0,
+        .want = "100000000000000000000", .why = "a number that large has nothing to round" },
+    Case::{ .cells = "=(10000000000*10000000000).year()", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a count of days that large names no day" },
+    Case::{ .cells = "=Day.of(10000000000*10000000000, 1, 1)", .row = 0, .column = 0,
+        .want = "#VALUE!", .why = "nor does a year that large" },
+    Case::{ .cells = "1e300\t=A1*A1", .row = 0, .column = 1, .want = "#VALUE!",
+        .why = "a product past an F64's range is no number" },
+    // Past 2 to the 53rd an F64 holds no fraction, so no decimal is written that it does not hold.
+    Case::{ .cells = "=123456789012345678", .row = 0, .column = 0, .want = "123456789012345680",
+        .why = "a large number shows no decimal the F64 does not hold" },
+    Case::{ .cells = "=1234567890123.45678", .row = 0, .column = 0, .want = "1234567890123.457",
+        .why = "the larger the number, the fewer the places" },
+    Case::{ .cells = "=0.3-0.1-0.2", .row = 0, .column = 0, .want = "0",
+        .why = "what rounds to 0 shows no minus sign" },
+    Case::{ .cells = "=Day.of(9000000000000000000, 1, 1)", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a year past the calendar's reach names no day, and wraps none" },
+    Case::{ .cells = "=Day.of(-9000000000000000000, 3, 1)", .row = 0, .column = 0,
+        .want = "#VALUE!", .why = "nor does one past it backwards" },
+    Case::{ .cells = "=Day.of(10000000000000, 12, 31).year()", .row = 0, .column = 0,
+        .want = "10000000000000", .why = "the furthest year names its day, which reads back" },
+    Case::{ .cells = "=Day.of(10000000000001, 1, 1)", .row = 0, .column = 0, .want = "#VALUE!",
+        .why = "a year past the furthest names no day" },
+    // A `.` with no digit after it starts a method.
+    Case::{ .cells = "=1.round(0)", .row = 0, .column = 0, .want = "1",
+        .why = "a method follows a whole number" },
+    Case::{ .cells = "=2026.year()", .row = 0, .column = 0, .want = "1975",
+        .why = "a whole number is a count of days" },
+    Case::{ .cells = "=1.5.round(0)", .row = 0, .column = 0, .want = "2",
+        .why = "after a decimal point a second `.` starts a method" },
+    Case::{ .cells = "=1.", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a `.` with nothing after it is not a decimal point" },
+    Case::{ .cells = "=.5", .row = 0, .column = 0, .want = "#SYNTAX!",
+        .why = "a number starts with a digit, as in KSPL" },
+}
+
+priv fn table_of(d: Doc$@, cells: U8[]): Block$@ //< the table `cells` spells, added to `d`
+    t: = d.add_block("table")
+    $row: Block$@ = add_row(t)
+    $from: Sz = 0
+    for $i: Sz = 0; i <= cells.len; i += 1
+        if i == cells.len || cells[i] == '\n' || cells[i] == '\t'
+            add_cell(row, cells.sub(from, i - from))
+            if i < cells.len && cells[i] == '\n'
+                row = add_row(t)
+            from = i + 1
+    return t
+
+fn test_each_formula_shows_what_it_should(arena: Arena$@) //<
+    //< Each case's table, solved, shows its text in the cell named, or a mark saying how to fix it
+    verdict.start("[kspage/calc] what each formula shows test...")
+    $wrong: Sz = 0
+    for one in cases
+        d: = Doc.new(arena)
+        t: = table_of(d, one.cells)
+        calc.recalc(d, base.grid_sheet(arena))
+        got: = cell_text(t, one.row, one.column)
+        if !got.equals(one.want)
+            io.out().s("calc: ").s(one.why).s(": \"").s(one.cells).s("\" shows \"").s(got)
+                .s("\", not \"").s(one.want).s("\"\n")
+            wrong += 1
+    assert(wrong == 0, "every case shows what it should (the lines above name each that does not)")
+    verdict
+        .pass(arena.text().s("all \{cases.len\} cases show what they should.").take())
+
+fn test_a_nested_table_calculates_on_its_own(arena: Arena$@)
+    verdict.start("[kspage/calc] a table inside a cell being solved on its own test...")
+    d: = Doc.new(arena)
+    outer: = d.add_block("table")
+    row: = add_row(outer)
+    cell: = row.add_child("")
+    cell.add_text("10")
+    inner: = cell.add_child("table")
+    inner_row: = add_row(inner)
+    add_cell(inner_row, "4")
+    add_cell(inner_row, "=A1+1")
+    add_cell(row, "=A1*2")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    // The inner A1 is the inner table's cell, not the outer A1.
+    assert(cell_text(inner, 0, 1).equals("5"), "the inner formula looks at the inner table")
+    assert(cell_text(outer, 0, 1).equals("20"), "the outer formula looks at the outer table")
+    verdict.pass("each table is solved with cells of its own.")
+
+fn test_typing_edits_the_formula_itself(arena: Arena$@) //<
+    //< what is typed into is the typed text (the formula)
+    verdict.start("[kspage/calc] typing changing the formula itself test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1*3")
+    sheet: = base.grid_sheet(arena)
+    calc.recalc(d, sheet)
+
+    ed: = edit.new_editor(d)
+    target: = t.children.get(0).children.get(1).inlines.get(0)
+    ed.caret = caret.at(target, target.text().len)
+    ed.insert("9")
+    calc.recalc(d, sheet)
+    assert(cell_source(t, 0, 1).equals("=A1*39"), "the text typed stays the formula")
+    assert(cell_text(t, 0, 1).equals("78"), "it is worked out afresh with the formula changed")
+    verdict.pass("what is typed is the formula itself, and the value is worked out afresh.")
+
+fn test_undo_after_a_recalc_restores_the_typed_text(arena: Arena$@) //<
+    //< Type over it after a recalculation and undo still restores the typed text
+    //<
+    //< **Put the value into the document and the record's offsets get out of step with the shown
+    //< text**; the restored text would break (the formula is longer than its value).
+    verdict.start("[kspage/calc] undoing after a recalculation test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1:A1.sum()*3")
+    sheet: = base.grid_sheet(arena)
+    calc.recalc(d, sheet)
+    assert(cell_text(t, 0, 1).equals("6"), "first the value is seen")
+
+    ed: = edit.new_editor(d)
+    target: = t.children.get(0).children.get(1).inlines.get(0)
+    // It types mid-formula; counted against the one-digit value, the offset would land outside.
+    ed.caret = caret.at(target, 4)
+    ed.insert("99")
+    calc.recalc(d, sheet)
+    assert(cell_source(t, 0, 1).equals("=A1:99A1.sum()*3"), "it goes in where it was typed")
+
+    ed.undo()
+    calc.recalc(d, sheet)
+    assert(cell_source(t, 0, 1).equals("=A1:A1.sum()*3"), "the text typed returns to what it was")
+    assert(cell_text(t, 0, 1).equals("6"), "the value returns too")
+    verdict.pass("a recalculation does not move the text typed, so an undo does not mix them.")
+
+fn test_undo_brings_the_formula_back(arena: Arena$@)
+    verdict.start("[kspage/calc] the formula coming back when it is put back test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1*3")
+    sheet: = base.grid_sheet(arena)
+    calc.recalc(d, sheet)
+
+    ed: = edit.new_editor(d)
+    target: = t.children.get(0).children.get(1).inlines.get(0)
+    ed.caret = caret.at(target, target.text().len)
+    ed.insert("9")
+    ed.undo()
+    calc.recalc(d, sheet)
+    assert(cell_text(t, 0, 1).equals("6"), "the formula comes back and is worked out again")
+    verdict.pass("put back what was typed and the formula comes back with it.")
+
+fn test_the_source_of_a_cell_is_its_formula(arena: Arena$@) //<
+    //< The value is what shows, but the typed text (the formula) can be read as it is
+    verdict.start("[kspage/calc] the formula being left behind the value seen test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1*3")
+    calc.recalc(d, base.grid_sheet(arena))
+
+    computed: = t.children.get(0).children.get(1).inlines.get(0)
+    assert(computed.showing().equals("6"), "what is seen is the value")
+    assert(computed.text().equals("=A1*3"), "the text typed stays the formula")
+    plain: = t.children.get(0).children.get(0).inlines.get(0)
+    bare: = plain.showing().equals("2")
+    assert(bare, "in a cell with no formula the text seen is the text typed as it stands")
+    verdict.pass("what is seen is the value, and the text typed can be taken apart from it.")
+
+fn test_the_cell_being_typed_in_keeps_its_value(arena: Arena$@) //<
+    //< Only the screen lays out the formula being typed in; the document still reads its value
+    //<
+    //< Export, sorting and printing read `showing`, so a cleared value would hand them the formula.
+    verdict.start("[kspage/calc] the cell being typed in keeping its value test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1*3")
+    sheet: = base.grid_sheet(arena)
+    typed: = t.children.get(0).children.get(1).inlines.get(0)
+    calc.recalc(d, sheet, typed)
+    assert(typed.showing().equals("6"), "the document reads its value")
+    assert(typed.face().equals("=A1*3"), "the screen lays out the formula")
+    calc.recalc(d, sheet)
+    assert(typed.face().equals("6"), "left, the screen lays out the value again")
+    verdict.pass("the cell being typed in keeps its value; only the screen shows the formula.")
+
+fn test_a_cells_source_can_be_replaced(arena: Arena$@) //< a formula can be replaced whole
+    //<
+    //< **It is one step, undone in one.**
+    verdict.start("[kspage/calc] a formula being swapped whole test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "2", "=A1*3")
+    sheet: = base.grid_sheet(arena)
+    calc.recalc(d, sheet)
+
+    ed: = edit.new_editor(d)
+    computed: = t.children.get(0).children.get(1).inlines.get(0)
+    ed.caret = caret.at(computed, 0)
+    ed.set_source("=A1+10")
+    calc.recalc(d, sheet)
+    assert(cell_text(t, 0, 1).equals("12"), "it is worked out afresh with the formula swapped in")
+    assert(computed.text().equals("=A1+10"), "the text typed is swapped too")
+
+    ed.undo()
+    calc.recalc(d, sheet)
+    assert(cell_text(t, 0, 1).equals("6"), "in one it returns to the formula it had")
+    verdict.pass("a formula is swapped whole, and put back in one.")
+
+fn test_what_takes_a_formula(arena: Arena$@) //<
+    //< Only a cell, or a text that already holds a formula, may be replaced whole
+    verdict.start("[kspage/calc] where a formula may be swapped test...")
+    d: = Doc.new(arena)
+    body: = d.add_block("body")
+    prose: = body.add_text("ordinary prose")
+    computed: = body.add_text("=1+1")
+    t: = one_row(d, "2", "=A1*3")
+    sheet: = base.grid_sheet(arena)
+
+    calc.recalc(d, sheet)
+    cell: = t.children.get(0).children.get(1).inlines.get(0)
+    assert(calc.takes_formula(d, sheet, cell), "a cell opens even with no formula yet")
+    // It does not open on plain prose, where one click would replace a whole paragraph.
+    assert(!calc.takes_formula(d, sheet, prose), "it does not open on plain prose")
+    assert(calc.takes_formula(d, sheet, computed), "prose that holds a formula can be changed")
+    assert(!calc.takes_formula(d, sheet, null), "pointing nowhere, it does not open")
+    verdict.pass("what opens is a cell, and a text that already holds a formula, and nothing else.")
+
+fn test_a_recalc_does_not_move_the_caret(arena: Arena$@) //<
+    //< A recalculation does not change the typed text, so the cursor does not move either
+    //<
+    //< **Put the value into the text and it shrinks, and the cursor lands outside.**
+    verdict.start("[kspage/calc] a recalculation not moving the caret test...")
+    d: = Doc.new(arena)
+    t: = one_row(d, "=1+2", "x")
+
+    ed: = edit.new_editor(d)
+    target: = t.children.get(0).children.get(0).inlines.get(0)
+    ed.caret = caret.at(target, target.text().len)
+    assert(ed.caret.offset == 4, "the end of typing is at the formula's end")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    ed.clamp()
+    assert(target.text().equals("=1+2"), "the text typed does not move")
+    assert(target.showing().equals("3"), "what is seen is the value")
+    assert(ed.caret.offset == 4, "the cursor does not move either")
+    verdict.pass("a recalculation does not move the text typed, so the cursor is not left behind.")
+// ---- references across tables ----
+
+priv fn two_tables(d: Doc$@, name: U8[], ref_text: U8[]): Block$@ //<
+    //< A table with a name, and a table pointing at it
+    src: = d.add_block("table")
+    src.name = name
+    r: = add_row(src)
+    add_cell(r, "10")
+    add_cell(r, "20")
+    r2: = add_row(src)
+    add_cell(r2, "30")
+    add_cell(r2, "40")
+
+    dst: = d.add_block("table")
+    dst.name = "here"
+    dr: = add_row(dst)
+    add_cell(dr, ref_text)
+    return dst
+
+fn test_a_formula_reaches_another_table_by_name(arena: Arena$@)
+    verdict.start("[kspage/calc] pointing at another table by name test...")
+    d: = Doc.new(arena)
+    dst: = two_tables(d, "other", "=other!B2+1")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(dst, 0, 0).equals("41"), "a cell of the table the name points at can be read")
+    verdict.pass("a formula can point at another table's cell by name.")
+
+fn test_naming_from_a_cell_lands_on_the_table(arena: Arena$@) //<
+    //< A name can be given to a table from the screen
+    //<
+    //< **Checked nowhere else**, from setting the name to a formula using it (the section above
+    //< writes the name into the source).
+    verdict.start("[kspage/calc] a name put on the table from inside a cell test...")
+    d: = Doc.new(arena)
+    sheet: = base.grid_sheet(arena)
+    src: = d.add_block("table")
+    row: = add_row(src)
+    cell: = row.add_child("")
+    n: = cell.add_text("10")
+    add_cell(row, "20")
+    dst: = d.add_block("table")
+    add_cell(add_row(dst), "=detail!B1+1")
+
+    // Caution: **First check that it cannot be referred to while there is no name.** Otherwise
+    // nobody could tell whether the value came from the name or was there all along.
+    calc.recalc(d, sheet)
+    assert(cell_text(dst, 0, 0).equals("#NAME!"), "with no name it cannot be referred to")
+
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(n, 0)
+    // **Lay it out before setting the name** (only layout decides whether it is a cell).
+    page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(ed.set_name(page, "detail"), "a name can be put on from inside a cell")
+    assert(src.name.equals("detail"), "the name goes on the table itself")
+    assert(cell.name.len == 0, "it does not go on the cell")
+    assert(ed.name_at(page).equals("detail"), "read back, the table's name comes back")
+
+    calc.recalc(d, sheet)
+    assert(cell_text(dst, 0, 0).equals("21"), "the name put on points at the other table")
+    verdict.pass("a name put on from inside a cell goes on the table, and a formula refers to it.")
+
+fn test_an_unknown_table_name_is_reported(arena: Arena$@) //<
+    //< where a name cannot be resolved it is #NAME!
+    //<
+    //< It is not treated as pointing at its own table.
+    verdict.start("[kspage/calc] a table name it does not know becoming a mark test...")
+    d: = Doc.new(arena)
+    dst: = two_tables(d, "other", "=elsewhere!A1")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(dst, 0, 0).equals("#NAME!"),
+        "a name that cannot be referred to comes out as a mark")
+    verdict.pass("a table name it does not know comes out as #NAME!.")
+
+fn test_a_span_can_cross_tables(arena: Arena$@) //< a range can span tables too
+    //<
+    //< The name applies to the whole range.
+    verdict.start("[kspage/calc] a range crossing the tables test...")
+    d: = Doc.new(arena)
+    dst: = two_tables(d, "other", "=other!A1:B2.sum()")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(dst, 0, 0).equals("100"), "another table's range can be folded")
+    verdict.pass("a range can point at another table by name too.")
+
+fn test_a_table_without_a_name_cannot_be_reached(arena: Arena$@) //<
+    //< a table with no name cannot be referred to
+    verdict.start("[kspage/calc] a table with no name not being pointed at test...")
+    d: = Doc.new(arena)
+    dst: = two_tables(d, "", "=other!A1")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(dst, 0, 0).equals("#NAME!"), "a table holding no name cannot be referred to")
+    verdict.pass("a table with no name cannot be pointed at from any formula.")
+
+fn test_a_comparison_reaches_another_table(arena: Arena$@) //<
+    //< `<`, `>` and `=` end a name as the other operators do
+    //<
+    //< Read as part of the name, the `A1` of `=A1>other!A1` would make a table called `A1>other`.
+    verdict.start("[kspage/calc] a comparison with another table's cell test...")
+    formulas: = U8[][]::{ "=A1>other!A1", "=A1=other!B1", "=A1<other!A2", "=A1>=other!B1",
+        "=A1<>other!A1", "=1-(A1<=other!A1)" }
+    for one in formulas
+        d: = Doc.new(arena)
+        dst: = two_tables(d, "other", "20")
+        add_cell(dst.children.get(0), one)
+        calc.recalc(d, base.grid_sheet(arena))
+        assert(cell_text(dst, 0, 1).equals("1"), "the comparison reads the other table's cell")
+    verdict.pass("a comparison ends a name, as every other operator does.")
+
+priv const reached_names: U8[][_] = ::{ "Q1_sales", "売上", "Daylight", "A1", "if", "x.y" }
+priv const refused_names: U8[][_] = ::{ "Q1 sales", "my-table", "a<b", "2026", "#x", "Day", "Day2",
+    "x!y" }
+
+fn test_a_table_name_no_formula_reaches_is_refused(arena: Arena$@) //<
+    //< A table is named only where a formula can reach it by that name
+    //<
+    //< **The rule is the reader's own**: each name taken is reached by a formula, and each refused
+    //< one is not, so `calc.name_fault` and the reader cannot drift apart. A paragraph's name is
+    //< read by no formula, so it is held to nothing.
+    verdict.start("[kspage/calc] a table name a formula could not reach being refused test...")
+    sheet: = base.grid_sheet(arena)
+    for name in reached_names
+        d: = Doc.new(arena)
+        dst: =
+            two_tables(d, name, arena.text().s("=").s(name).s("!B2+1").take())
+        src: = d.blocks.get(0)
+        src.name = ""
+        ed: = edit.new_editor(d)
+        ed.caret = caret.at(src.children.get(0).children.get(0).inlines.get(0), 0)
+        page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+        assert(ed.set_name(page, name), "a name a formula can reach is taken")
+        calc.recalc(d, sheet)
+        assert(cell_text(dst, 0, 0).equals("41"), "a formula reaches the table by it")
+    for name in refused_names
+        d: = Doc.new(arena)
+        dst: =
+            two_tables(d, name, arena.text().s("=").s(name).s("!B2+1").take())
+        src: = d.blocks.get(0)
+        calc.recalc(d, sheet)
+        assert(!cell_text(dst, 0, 0).equals("41"), "the reader cannot reach a refused name")
+        src.name = ""
+        ed: = edit.new_editor(d)
+        ed.caret = caret.at(src.children.get(0).children.get(0).inlines.get(0), 0)
+        page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+        assert(!ed.name_fault_at(page, name).reachable(), "the fault is named")
+        assert(!ed.set_name(page, name), "the name is refused")
+        assert(src.name.len == 0, "the table keeps no name")
+    d: = Doc.new(arena)
+    p: = d.add_block("body").add_text("a figure")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(p, 0)
+    page: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    assert(ed.set_name(page, "Figure 1"), "a paragraph's name may hold a space")
+    verdict.pass("a table takes only a name a formula can reach, and says why it refuses.")
+
+fn test_a_cycle_across_tables_is_found(arena: Arena$@) //< a cycle is found across tables too
+    verdict.start("[kspage/calc] going round in circles across the tables test...")
+    d: = Doc.new(arena)
+    first: = d.add_block("table")
+    first.name = "x"
+    fr: = add_row(first)
+    add_cell(fr, "=y!A1")
+    second: = d.add_block("table")
+    second.name = "y"
+    sr: = add_row(second)
+    add_cell(sr, "=x!A1")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(first, 0, 0).equals("#CYCLE!"),
+        "a formula that goes and comes back is going round in circles")
+    assert(cell_text(second, 0, 0).equals("#CYCLE!"), "the other table becomes the same mark")
+    verdict.pass("going round in circles is found across the tables too.")
+
+fn test_a_table_may_point_forward(arena: Arena$@) //<
+    //< a table written first may refer to a table written later
+    verdict.start("[kspage/calc] pointing at a table written later test...")
+    d: = Doc.new(arena)
+    first: = d.add_block("table")
+    first.name = "earlier"
+    fr: = add_row(first)
+    add_cell(fr, "=later!A1*2")
+    later: = d.add_block("table")
+    later.name = "later"
+    lr: = add_row(later)
+    add_cell(lr, "21")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(first, 0, 0).equals("42"), "a table not solved yet can be pointed at")
+    verdict.pass("the order the tables were written does not change what can be pointed at.")
+// ---- a formula in prose ----
+
+fn test_a_formula_in_prose_is_solved(arena: Arena$@) //< a formula in prose is resolved too
+    //<
+    //< Prose has no table of its own, so it refers by name.
+    verdict.start("[kspage/calc] a formula in prose being solved test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    t.name = "data"
+    r: = add_row(t)
+    add_cell(r, "40")
+    add_cell(r, "=A1+2")
+
+    body: = d.add_block("body")
+    body.add_text("all told it is ")
+    got: = body.add_text("=data!B1*2")
+    body.add_text(".")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(got.showing().equals("84"), "a formula in prose becomes its value too")
+    assert(got.text().equals("=data!B1*2"), "the text typed (the formula) is left")
+    verdict.pass("a formula in prose is solved too, pointing at a table's cell by name.")
+
+fn test_prose_cannot_use_a_bare_address(arena: Arena$@) //< prose has no table of its own
+    //<
+    //< An address written without a table name cannot be resolved.
+    verdict.start("[kspage/calc] prose not being able to point at a bare address test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    t.name = "data"
+    r: = add_row(t)
+    add_cell(r, "7")
+
+    body: = d.add_block("body")
+    bare: = body.add_text("=A1")
+    folded: = body.add_text("=A1:A1.sum()")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(bare.showing().equals("#REF!"), "an address with no name cannot be pointed at")
+    assert(folded.showing().equals("#REF!"), "a range with no name cannot be folded either")
+    verdict.pass("a formula in prose cannot point without writing which table by name.")
+
+fn test_a_second_run_in_a_cell_is_prose(arena: Arena$@) //<
+    //< A cell's second inline onward is prose (the table resolves only the first inline)
+    verdict.start("[kspage/calc] a cell's second run being prose test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    t.name = "data"
+    r: = add_row(t)
+    cell: = r.add_child("")
+    cell.add_text("5")
+    // The cell's second inline is not a table cell, so it refers by name.
+    second: = cell.add_text("=data!A1*3")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell.inlines.get(0).text().equals("5"), "the cell's text does not move")
+    assert(second.showing().equals("15"), "the second run is solved as prose too")
+    verdict.pass("a cell is its first inline alone, and the rest is prose.")
+
+// ==========================================
+// kspage: a computation deeper than one pass holds (`max_depth` and `max_nest` in
+// `kspage/expr/calc.kspl`). Each level is a call, so without the bounds a few kilobytes of
+// document ran the stack out, and on wasm wrote over the page's memory.
+// ==========================================
+
+priv const long_chain: Sz = 3000 //< rows in a running total, far past one pass's depth
+
+fn test_a_long_running_total_computes(arena: Arena$@) //<
+    //< A chain of thousands of cells (`=A2+1`, `=A3+1`, …) computes, not refused
+    verdict.start("[kspage/calc] a running total thousands of rows long test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(long_chain - 1)
+        add_cell(add_row(t), arena.text().s("=A\{i + 2\}+1").take())
+    add_cell(add_row(t), "1")
+    calc.recalc(d, base.grid_sheet(arena))
+    want: = arena.text().s("\{long_chain\}").take()
+    assert(cell_text(t, 0, 0).equals(want), "the first row adds up the whole chain")
+    assert(cell_text(t, long_chain / 2, 0)
+        .equals(arena.text().s("\{long_chain - long_chain / 2\}").take()),
+        "a row partway holds its own sum")
+    verdict.pass("a chain far deeper than one pass is settled from its end and comes out whole.")
+
+fn test_a_long_cycle_is_reported(arena: Arena$@) //<
+    //< A cycle longer than one pass (`=A2`, …, `=A1`) still reads as a cycle, and ends
+    verdict.start("[kspage/calc] a cycle longer than one pass coming out as a mark test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    for i in Range.asc(long_chain - 1)
+        add_cell(add_row(t), arena.text().s("=A\{i + 2\}").take())
+    add_cell(add_row(t), "=A1")
+    // If it set the chain aside for ever, the test itself would never end.
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("#CYCLE!"), "the start of the cycle is a cycle")
+    assert(cell_text(t, long_chain - 1, 0).equals("#CYCLE!"), "so is its end")
+    verdict.pass("a cycle too long for one pass is found, not chased for ever.")
+
+priv fn nested(open: Sz, arena: Arena$@): U8[] //< `=` and `open` parentheses around a 1
+    b: = arena.text().c('=')
+    for _i in Range.asc(open)
+        b.c('(')
+    b.c('1')
+    for _i in Range.asc(open)
+        b.c(')')
+    return b.take()
+
+fn test_nesting_past_the_cap_is_refused(arena: Arena$@) //<
+    //< A formula nested 64 deep computes; past it, it reads as a syntax error rather than recursing
+    verdict.start("[kspage/calc] a formula nested past the cap test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    r: = add_row(t)
+    // `parse_pick` counts one level itself, so 63 parentheses inside it make 64.
+    add_cell(r, nested(63, arena))
+    add_cell(r, nested(2000, arena))
+    minus: = arena.text().c('=')
+    for _i in Range.asc(100000)
+        minus.c('-')
+    add_cell(r, minus.c('1').take())
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("1"), "64 levels are read")
+    assert(cell_text(t, 0, 1).equals("#SYNTAX!"), "2000 parentheses are refused")
+    assert(cell_text(t, 0, 2).equals("#SYNTAX!"), "100000 minus signs are refused")
+    verdict.pass("nesting is read to Excel's depth of 64, and refused past it.")
+
+// ==========================================
+// kspage: checks that a formula's error shows as a mark **inside an argument** too.
+// A function and a method pass an argument's error straight through; silently turned into a
+// number, a typo would become a value (`Day.of(x, 1, 1)` becoming some date).
+// ==========================================
+
+fn test_a_missing_paren_or_comma_is_a_syntax_error(arena: Arena$@) //<
+    //< The closing `)` and the separating `,` cannot be left out
+    //<
+    //< Left out, a formula read partway would pass with another meaning.
+    verdict
+        .start("[kspage/calc] leaving out the closing bracket and the parting mark being refused \
+            test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    r: = add_row(t)
+    add_cell(r, "=1.5.round(1")
+    add_cell(r, "=Day.of(2026, 8 18)")
+    add_cell(r, "=Day.of(2026, 8, 18")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 0, 0).equals("#SYNTAX!"), "leaving out a method's `)` gives #SYNTAX!")
+    assert(cell_text(t, 0, 1).equals("#SYNTAX!"), "leaving out an argument's `,` gives #SYNTAX!")
+    assert(cell_text(t, 0, 2).equals("#SYNTAX!"), "leaving out a function's `)` gives #SYNTAX!")
+    verdict
+        .pass("neither the bracket nor the parting mark can be left out, and a formula that leaves \
+            one out becomes #SYNTAX!.")
+
+fn test_a_broken_argument_of_day_of_is_carried_out(arena: Arena$@) //<
+    //< Whichever of `Day.of`'s three arguments holds the error, that error comes out
+    verdict.start("[kspage/calc] a mistake in Day.of's argument coming straight out test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    r0: = add_row(t)
+    add_cell(r0, "text")
+    r1: = add_row(t)
+    add_cell(r1, "=Day.of(A1, 1, 1)")
+    add_cell(r1, "=Day.of(2026, Z9, 1)")
+    add_cell(r1, "=Day.of(2026, 1, Z9)")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 1, 0).equals("#VALUE!"), "a year that is no number gives #VALUE!")
+    assert(cell_text(t, 1, 1).equals("#REF!"),
+        "a month pointing at a cell that is not there gives #REF!")
+    assert(cell_text(t, 1, 2).equals("#REF!"),
+        "a day pointing at a cell that is not there gives #REF!")
+    verdict.pass("Day.of does not make a mistaken argument a date; it puts that mistake out.")
+
+fn test_a_method_on_a_broken_value_is_carried_out(arena: Arena$@) //<
+    //< A method on a value that holds an error returns that error
+    //<
+    //< This covers both rounding and the operations that read a part out of a date.
+    verdict.start("[kspage/calc] a method on a mistaken value putting that mistake out test...")
+    d: = Doc.new(arena)
+    t: = d.add_block("table")
+    r0: = add_row(t)
+    add_cell(r0, "text")
+    r1: = add_row(t)
+    add_cell(r1, "=A1.round(0)")
+    add_cell(r1, "=A1.year()")
+    add_cell(r1, "=Z9.month()")
+
+    calc.recalc(d, base.grid_sheet(arena))
+    assert(cell_text(t, 1, 0).equals("#VALUE!"), "rounding a value that is no number gives #VALUE!")
+    assert(cell_text(t, 1, 1).equals("#VALUE!"),
+        "the year of a value that is no number gives #VALUE!")
+    assert(cell_text(t, 1, 2).equals("#REF!"), "the month of a cell that is not there gives #REF!")
+    verdict.pass("a method does not make a mistaken value a number; it puts that mistake out.")

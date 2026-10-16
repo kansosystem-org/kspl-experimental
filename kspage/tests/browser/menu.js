@@ -40,8 +40,7 @@ function kspageProbeMenu(ks) {
   check(carried !== null, "the falling text is built");
   if (carried !== null) {
     const done = ks.hold();
-    // **Through `ks.fed`**: a `Blob` is read off the page's thread (why: `fed` in `probe.js`).
-    ks.fed(carried.text()).then((text) => {
+    Promise.resolve(carried.text()).then((text) => {
       // **Both the names lined up and the document's styles go in** (the drift is there).
       check(text.indexOf("The document's styles:") >= 0
         && text.indexOf("The paragraph styles listed in the menu:") >= 0,
@@ -410,7 +409,7 @@ function kspageProbeMenu(ks) {
 
 // The frame of the cell it is in, and dragging a column's boundary.
 //
-// Note: The decoration style names (`decoration-…`) are assembled by `kspage/model/paint.kspls`, so
+// Note: The decoration style names (`decoration-…`) are assembled by `kspage/model/paint.kspl`, so
 // they stay as they are until that side moves.
 
 function kspageProbeCell(ks) {

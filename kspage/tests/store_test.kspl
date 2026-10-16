@@ -1,0 +1,737 @@
+//< kspage: saving and loading a document, and the names an enum's value is saved by
+import "kspage/lay/ask"
+import "kspage/lay/caret"
+import "kspage/lay/flow"
+import "kspage/model/collect" + { Collect }
+import "kspage/model/day"
+import "kspage/model/doc" + { Doc, Rect }
+import "kspage/model/filter"
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/paint"
+import "kspage/model/style" + { Sheet }
+import "kspage/model/style_when"
+import "kspage/share/store"
+import "kspage/tests/base"
+import "kspage/write/cells"
+import "kspage/write/edit"
+import "kspage/write/insert"
+import "kspage/write/shape"
+import "std/chars"
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" + { Str_builder }
+import "std/verdict"
+
+// ==========================================
+// kspage: checks saving and loading a document and its styles (a golden test).
+// **One sample sets every field the text holds**, so written, read and written again, a field the
+// reader drops or misreads changes the text; a check holds the sample to every field.
+// **The result of laying it out again is checked separately**, since the reader could put the
+// same text in another place. The other tests are about meaning: what is not written comes back
+// unwritten, and what layout counts is not saved.
+// ==========================================
+
+embed "kspage/share/store.kspl" as store_source //<
+    //< the writer and the reader, for their field names
+
+priv fn sample_sheet(arena: Arena$@): Sheet$@ //<
+    //< A sheet setting every field of a style and of the paper away from its default
+    //<
+    //< A field that holds one choice (a marker, a way of collecting) gets a style per choice.
+    sheet: = Sheet.new(base.root_font(), arena)
+
+    $big: paint.Font_spec = paint.inherit_all()
+    big.size_px = .some(28.0)
+    big.weight = .some(700U16)
+    h1: = sheet.add("h1", big)
+    h1.space_before = 4.0
+    h1.space_after = 8.0
+    h1.outline = 1
+    h1.next = "body"
+    h1.break_before = true
+    h1.ink.color = .some(0x102030U32)
+    h1.ink.background = .some(0xfffffeU32)
+    // **`false` is written too**: dropped, a line the parent draws could not be taken off.
+    h1.ink.underline = .some(false)
+    h1.ink.strike = .some(true)
+    h1.rule_width = 2.0
+    h1.rule_color = 0xccccccU32
+    h1.fill = .some(0xeeeeeeU32)
+    h1.shape = .round_box
+    h1.line_spacing = 1.5
+    h1.pad = 3.0
+    h1.align = .center
+    h1.in_chapters = false
+    h1.marker = .outline(".", ". ")
+
+    body: = sheet.add("body", paint.inherit_all())
+    body.space_after = 12.0
+
+    $slanted: paint.Font_spec = paint.inherit_all()
+    slanted.family = .some("serif")
+    slanted.italic = .some(true)
+    sheet.add("em", slanted)
+
+    item: = sheet.add("item", paint.inherit_all())
+    item.indent = 24.0
+    item.marker = .bullet("• ")
+    sheet.add("step", paint.inherit_all()).marker = .number(")")
+    sheet.add("caption", paint.inherit_all()).marker = .serial("Figure ", ". ")
+
+    code: = sheet.add("code", paint.inherit_all())
+    code.wrap = false
+    two: = sheet.add("two", paint.inherit_all())
+    two.columns = 2
+    two.column_gap = 10.0
+
+    money: = sheet.add("money", paint.inherit_all())
+    money.number.places = .some(2)
+    money.number.grouped = true
+    money.number.prefix = "$"
+    money.number.suffix = " USD"
+    money.when.how = .above
+    money.when.than = 100.0
+    money.when.then = "h1"
+    share: = sheet.add("share", paint.inherit_all())
+    share.number.percent = true
+    share.number.dated = .long
+
+    ways: = Collect[4]::{ Collect.contents, Collect.notes, Collect.bars, Collect.lines }
+    for way in ways
+        sheet.add(way.variant_name(), paint.inherit_all()).collect = way
+
+    t: = base.table_style(sheet)
+    t.space_before = 6.0
+    slide: = sheet.add("slide", paint.inherit_all())
+    slide.arrange = .absolute
+    slide.width = 320.0
+    slide.height = 240.0
+    sheet.paper.width = 794.0
+    sheet.paper.height = 1123.0
+    sheet.paper.left = 76.0
+    sheet.paper.top = 30.0
+    sheet.paper.right = 50.0
+    sheet.paper.bottom = 40.0
+    sheet.paper.reading = 620.0
+    return sheet
+
+priv fn sample_doc(arena: Arena$@): Doc$@ //<
+    //< A document setting every field of a block and of a run away from its default
+    d: = Doc.new(arena)
+    d.add_block("h1").add_text("title")
+
+    p: = d.add_block("body")
+    p.add_text("ordinary characters and ")
+    slanted: = p.add_text("slanted characters", "em")
+    slanted.href = "https://example.com/"
+    slanted.note = "the note's text"
+    slanted.remark = "words about it"
+    slanted.remark_by = "Alice"
+    p.add_text("see ").refers = "detail"
+
+    list: = d.add_block("body")
+    list.add_child("item").add_text("an item")
+
+    t: = d.add_block("table")
+    t.name = "detail"
+    // **An unset column is kept in the list too**; dropped, every column after it would shift.
+    t.set_size(.column, 0, .some(40.0))
+    t.set_size(.column, 1, .none)
+    t.set_size(.row, 0, .some(30.0))
+    r: = t.add_child("")
+    r.add_child("").add_text("a")
+    r.add_child("").add_text("=A1&1")
+    wide: = t.add_child("")
+    merged: = wide.add_child("")
+    merged.add_text("c")
+    merged.span_cols = 2
+    merged.span_rows = 2
+
+    shot: = d.add_block("body")
+    shot.image = "picture.png"
+    shot.image_w = 80.0
+    shot.image_h = 40.0
+    shot.add_text("")
+
+    d.add_block("bars").chart = "detail!A1:A2"
+
+    slide: = d.add_block("slide")
+    slide.aside = "pause here"
+    at: = Rect::{ .x = 10.0, .y = 20.0, .w = 100.0, .h = 50.0 }
+    framed: = doc.add_framed_child(slide, "frame", at)
+    framed.add_text("a frame")
+    framed.step = 1
+
+    // The page's header and footer, which walking `blocks` does not reach.
+    d.header.inlines.get(0).insert(0, "confidential")
+    d.footer.inlines.get(0).insert(0, "{page}/{pages}")
+    return d
+
+fn test_a_document_survives_the_round_trip(arena: Arena$@)
+    verdict.start("[kspage/store] the text not changing over the round trip test...")
+    sheet: = sample_sheet(arena)
+    d: = sample_doc(arena)
+
+    $first: = Str_builder.new()
+    defer first.free()
+    store.save(d, sheet, first@)
+    back: = store.load(first.slice(), arena) catch _e
+        panic("the text just written cannot be read")
+    $again: = Str_builder.new()
+    defer again.free()
+    store.save(back.doc, back.sheet, again@)
+
+    same: = first.slice().equals(again.slice())
+    assert(same, "written, read and written again it comes out the same text")
+    verdict.pass("over a round trip the text does not change by one character.")
+
+priv fn field_names(src: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< Every field name the store writes or reads by its spelling (`set("…"` and `get("…"`)
+    //<
+    //< A name made at run time (a way of comparing) is not among them; the names test pins those.
+    $out: = List<|U8[]|>.new(arena)
+    for mark in U8[][2]::{ "set(\"", "get(\"" }
+        $i: Sz = 0
+        for i < src.len
+            if at: = src.sub_from(i).find_str(mark)
+                from: = i + at + mark.len
+                $end: Sz = from
+                for end < src.len && (src[end].is_lower() || src[end] == '_')
+                    end += 1
+                if end < src.len && src[end] == '"' && end > from
+                    name: = src.sub(from, end - from)
+                    if !held(out@, name)
+                        out.push(name)
+                i = end
+            else
+                break
+    return out
+
+priv fn held(names: List<|U8[]|>@, name: U8[]): Bool //< whether `names` holds that name already
+    for i in Range.asc(names.len)
+        if names.get(i).equals(name)
+            return true
+    return false
+
+priv fn unwritten(names: List<|U8[]|>@, saved: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The names among `names` the saved text holds no field of
+    $out: = List<|U8[]|>.new(arena)
+    for i in Range.asc(names.len)
+        key: = arena.text().s("\"").s(names.get(i)).s("\":").take()
+        if saved.find_str(key).is_none()
+            out.push(names.get(i))
+    return out
+
+fn test_the_sample_sets_every_field(arena: Arena$@) //<
+    //< The round trip's sample writes every field the store knows
+    //<
+    //< **A field left at its default is not written**, so the round trip could not see it lost.
+    verdict.start("[kspage/store] the round trip's sample setting every field test...")
+    // It can fire: a name in the source the text lacks is reported, and only that one.
+    probe: = field_names("ob.set(\"alpha\", x).get(\"beta_two\") get(\"Not\")", arena)
+    assert(probe.len == 2, "both spellings are read, and nothing else")
+    missing_probe: = unwritten(probe@, "{\"alpha\": 1}", arena)
+    assert(missing_probe.len == 1 && missing_probe.get(0).equals("beta_two"),
+        "a field the text lacks is named")
+
+    names: = field_names(store_source, arena)
+    assert(names.len > 40, "the store's field names are read")
+    $sb: = Str_builder.new()
+    defer sb.free()
+    store.save(sample_doc(arena), sample_sheet(arena), sb@)
+    missing: = unwritten(names@, sb.slice(), arena)
+    for i in Range.asc(missing.len)
+        io.out().s("the sample leaves this field unwritten: ").s(missing.get(i)).s("\n")
+    assert(missing.len == 0, "the sample writes every field the store writes or reads")
+    verdict
+        .pass(arena.text().s("the sample writes all \{names.len\} fields the store knows.").take())
+
+fn test_the_reloaded_document_lays_out_the_same(arena: Arena$@)
+    verdict.start("[kspage/store] being laid in the same places after a reading back test...")
+    sheet: = sample_sheet(arena)
+    d: = sample_doc(arena)
+    back: = base.round_trip(d, sheet, arena)
+
+    before: = flow.layout(d, sheet, fixed.make(), 200.0, arena)
+    after: = flow.layout(back.doc, back.sheet, fixed.make(), 200.0, arena)
+    assert(before.boxes.len == after.boxes.len, "the count of boxes is the same")
+    assert(base.near(before.height, after.height), "the height is the same too")
+    for $i: Sz = 0; i < before.boxes.len; i += 1
+        a: = before.boxes.get(i)
+        b: = after.boxes.get(i)
+        assert(a.text.equals(b.text), "the boxes of the same texts come out in the same order")
+        assert(base.near(a.rect.x, b.rect.x) && base.near(a.rect.y, b.rect.y),
+            "they are laid in the same places")
+        assert(base.near(a.font.size_px, b.font.size_px), "the size is inherited too")
+        assert(a.font.italic == b.font.italic, "the italic is inherited too")
+        assert(a.font.family.equals(b.font.family), "the face's name is inherited too")
+    verdict.pass("a document read back is laid out the same as the one it came from.")
+
+priv fn family_is_unset(sheet: Sheet$@, name: U8[]): Bool //<
+    //< An unset field comes back unset (it is not filled with the current value)
+    if s: = sheet.find(name)
+        switch s.font.family
+        case .none
+            return true
+        case .some(_v)
+            return false
+    return false
+
+fn test_unset_fields_stay_unset(arena: Arena$@) //<
+    //< What was not written comes back not written, not filled with the current value
+    //<
+    //< **Filled in, the inheritance from the parent would be cut.**
+    verdict.start("[kspage/store] what was unwritten coming back unwritten test...")
+    sheet: = sample_sheet(arena)
+    back: = base.round_trip(sample_doc(arena), sheet, arena)
+
+    // h1 sets only the size and the weight, and inherits the typeface from the parent.
+    assert(family_is_unset(sheet, "h1"), "it was unwritten to begin with")
+    assert(family_is_unset(back.sheet, "h1"), "read back it is unwritten still")
+    // em sets the typeface, so that one is kept.
+    assert(!family_is_unset(back.sheet, "em"), "a field that was written stays written")
+    plain: = back.sheet.find("body").unwrap_or(null)
+    assert(plain != null, "the style comes back")
+    if _v: = plain.ink.color
+        assert(false, "a style with nothing written keeps its colour unwritten")
+    if _v: = plain.fill
+        assert(false, "a style with nothing written keeps its fill unwritten too")
+    // **A style that names none writes nothing**, so it comes back naming none, not itself.
+    assert(plain.next.len == 0, "a style that names no next style carries none back")
+    verdict
+        .pass("what was unwritten is not filled with what stands, and the inheritance comes back \
+            alive.")
+
+fn test_an_empty_band_comes_back_ready_to_type_into(arena: Arena$@) //<
+    //< A band with no text is not written, but reads back as a shape that can be typed into
+    verdict.start("[kspage/store] an empty header and footer coming back test...")
+    plain: = base.round_trip(Doc.new(arena), sample_sheet(arena), arena)
+    assert(plain.doc.header.inlines.len == 1, "an empty band holds one text too")
+    assert(plain.doc.footer.inlines.get(0).text().len == 0, "an empty band comes back empty")
+    assert(plain.doc.header.style.equals("header"), "the band's style name is there too")
+    verdict.pass("an empty band comes back ready to type into.")
+
+fn test_a_formula_survives_the_round_trip(arena: Arena$@) //<
+    //< Only the typed text is stored, nothing else
+    //<
+    //< With the value written in, an old value would be left behind after the formula changes.
+    verdict.start("[kspage/store] a formula being left over the round trip test...")
+    before: = sample_doc(arena)
+    cell_was: = before.blocks.get(3).children.get(0).children.get(1).inlines.get(0)
+    cell_was.show_value("999", .some(999.0), false, arena)
+    back: = base.round_trip(before, sample_sheet(arena), arena)
+
+    table: = back.doc.blocks.get(3)
+    cell: = table.children.get(0).children.get(1).inlines.get(0)
+    assert(cell.text().equals("=A1&1"), "the text typed (the formula) is left")
+    assert(!cell.shows_value(), "the value worked out does not go in")
+    verdict.pass("what goes into what is saved is the text typed and nothing else.")
+
+fn test_an_empty_document_round_trips(arena: Arena$@)
+    verdict.start("[kspage/store] an empty document going round the trip test...")
+    d: = Doc.new(arena)
+    sheet: = Sheet.new(base.root_font(), arena)
+    back: = base.round_trip(d, sheet, arena)
+    assert(back.doc.blocks.len == 0, "there is no block")
+    assert(back.sheet.styles.len == 0, "there is no style either")
+    assert(base.near(back.sheet.root.size_px, 16.0),
+        "the place the inheritance sets off from is left")
+    verdict.pass("an empty document goes round the trip without crashing.")
+
+fn test_broken_text_is_rejected(arena: Arena$@)
+    verdict.start("[kspage/store] a broken text being refused test...")
+    store.load("{ this is not JSON", arena) catch e
+        switch e
+        case .broken {}
+        case .unknown_version, .out_of_range
+            panic("a broken text is to be refused as broken")
+        verdict.pass("a text that cannot be solved as JSON is not read.")
+        return
+    panic("a broken text must not be readable")
+
+fn test_an_unknown_version_is_rejected(arena: Arena$@)
+    verdict.start("[kspage/store] a version it does not know being refused test...")
+    // Valid JSON is still not read where the version differs.
+    store.load("{\"kspage\":99,\"sheet\":{},\"blocks\":[]}", arena) catch e
+        switch e
+        case .unknown_version {}
+        case .broken, .out_of_range
+            panic("a version that differs is to be refused as unknown_version")
+        verdict.pass("a text of a version it does not know is not even read in part.")
+        return
+    panic("a version it does not know must not be readable")
+
+fn test_only_the_one_name_opens(arena: Arena$@) //< only the one version field opens a text
+    //<
+    //< The version field's name is the product's own, so a document saved under an earlier name
+    //< does not open. **A different version number is a separate test** (above).
+    verdict.start("[kspage/store] only the one version field opening a text test...")
+    named: =
+        "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"runs\":[{\"text\":\"a\"}]}]}"
+    got: = store.load(named, arena) catch _e
+        panic("a text naming the version field is to be readable")
+    assert(got.doc.blocks.len == 1, "the contents are read too")
+    $out: = Str_builder.new()
+    defer out.free()
+    store.save(got.doc, got.sheet, out@)
+    assert(out.slice().find_str("\"kspage\"").is_some(),
+        "what is written back carries the version field")
+    // **A version under another field name is refused**, not opened as version 0.
+    store.load("{\"kswrite\":6,\"sheet\":{},\"blocks\":[]}", arena) catch e
+        switch e
+        case .unknown_version {}
+        case .broken, .out_of_range
+            panic("a version under another field name is to be refused as unknown_version")
+        verdict.pass("the one version field reads, and a version under another name is refused.")
+        return
+    panic("a version under another field name must not be readable")
+
+fn test_a_number_out_of_range_is_rejected(arena: Arena$@) //<
+    //< A text with a number outside the range is refused
+    //<
+    //< **It is about how many times loops run.** A merge's column count, a column count and a
+    //< heading's depth each decide how much work there is, so a ten-byte text with 2 billion loops
+    //< until the layout exhausts memory (`Block.tiles_of` creates that many covering columns).
+    verdict.start("[kspage/store] a number outside the range being refused test...")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"table\",\"children\":[{\"style\":\"line\",\"children\":[{\"style\":\"cell\",\"span_cols\":2000000000}]}]}]}",
+        "a merge of too many columns")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_rows\":100000}]}",
+        "a merge of too many rows")
+    // **A merge of 0 is refused too** (the layout could not count the columns to skip).
+    refused(arena, "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":0}]}",
+        "a merge of 0")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"cols\",\"columns\":900000}]},\"blocks\":[]}",
+        "too many columns")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"head\",\"outline\":40}]},\"blocks\":[]}",
+        "a heading too deep")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"num\",\"places\":99}]},\"blocks\":[]}",
+        "a decimal place too deep")
+    // **Converted to `Sz` first, a negative number becomes the largest there is**; refuse it
+    // before.
+    refused(arena, "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":-1}]}",
+        "a merge that goes negative")
+    // **A length decides work too**: the page count is the height over the page's height, and a
+    // band is drawn per page; a page of a pixel's fraction made billions.
+    refused(arena, "{\"kspage\":6,\"sheet\":{\"page_height\":1e-30},\"blocks\":[]}",
+        "a page a fraction of a pixel high")
+    refused(arena, "{\"kspage\":6,\"sheet\":{\"page_width\":1e38},\"blocks\":[]}",
+        "a page wider than any paper")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"big\",\"size_px\":1e38}]},\"blocks\":[]}",
+        "a font too large")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{\"styles\":[{\"name\":\"gap\",\"space_before\":1e30}]},\"blocks\":[]}",
+        "a gap past any paper")
+    refused(arena,
+        "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\",\"image_w\":-1e20}]}",
+        "a picture's width past any paper")
+    // **Nesting decides work too**: layout descends a call per level, and a deep one ran out of
+    // stack after it had replaced the open document.
+    $deep: = Str_builder.new()
+    defer deep.free()
+    deep.s("{\"kspage\":6,\"sheet\":{},\"blocks\":[")
+    for _i in Range.asc(40)
+        deep.s("{\"style\":\"body\",\"children\":[")
+    for _i in Range.asc(40)
+        deep.s("]}")
+    deep.s("]}")
+    refused(arena, deep.slice(), "blocks nested 40 deep")
+    // Inside the range it reads as before.
+    got: =
+        store.load("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"cell\",\"span_cols\":3,\"span_rows\":2}]}",
+        arena) catch _e
+        panic("a merge inside the range is to be readable")
+    assert(got.doc.blocks.get(0).span_cols == 3, "columns inside the range are read as they stand")
+    assert(got.doc.blocks.get(0).span_rows == 2, "rows inside the range are read as they stand")
+    verdict.pass("a number outside the range is refused rather than rounded.")
+
+priv fn refused(arena: Arena$@, text: U8[], what: U8[]) //<
+    //< Checks that it refused, and refused with `out_of_range`
+    store.load(text, arena) catch e
+        switch e
+        case .out_of_range {}
+        case .broken, .unknown_version
+            io.out().s("the refusal differs: ").s(what).s("\n")
+            panic("a number outside the range is to be refused as out_of_range")
+        return
+    io.out().s("it was read after all: ").s(what).s("\n")
+    panic("a number outside the range must not be readable")
+
+fn test_the_saved_text_reads_as_a_diff(arena: Arena$@) //<
+    //< The saved text is split into lines, so two versions one word apart differ by one line too
+    //<
+    //< **Not packed onto one line**: there, one changed word is the whole document to git's diff,
+    //< its merge and `grep`. **The indent width is not copied** — only whether it splits into lines
+    //< and how many differ.
+    verdict.start("[kspage/store] the text saved reading as a diff test...")
+    sheet: = sample_sheet(arena)
+    $was: = Str_builder.new()
+    defer was.free()
+    store.save(worded(arena, "the first text"), sheet, was@)
+    $now: = Str_builder.new()
+    defer now.free()
+    store.save(worded(arena, "the later text"), sheet, now@)
+
+    assert(lines_in(was.slice()) > 1, "the text is parted into rows")
+    assert(lines_in(now.slice()) == lines_in(was.slice()), "the count of rows does not change")
+    assert(unlike_lines(was.slice(), now.slice()) == 1, "a difference of one word is one row")
+    msg: = arena.text()
+        .s("a difference of one word is one row, and does not become the whole document (rows \
+            \{lines_in(was.slice())\} / rows that differ ")
+        .s("\{unlike_lines(was.slice(), now.slice())\})").take()
+    verdict.pass(msg)
+
+priv fn worded(arena: Arena$@, word: U8[]): Doc$@ //<
+    //< A small document, for making two versions one word apart
+    d: = Doc.new(arena)
+    d.add_block("h1").add_text("title")
+    p: = d.add_block("body")
+    p.add_text(word)
+    p.add_text("the text behind")
+    return d
+
+priv fn lines_in(text: U8[]): Sz //< the number of lines in a text
+    $n: Sz = 1
+    for $i: Sz = 0; i < text.len; i += 1
+        if (text.ptr + i)$ == 0x0aU8
+            n += 1
+    return n
+
+priv fn unlike_lines(a: U8[], b: U8[]): Sz //<
+    //< Over two texts with the same line count, how many lines differ
+    $n: Sz = 0
+    $ai: Sz = 0
+    $bi: Sz = 0
+    for ai < a.len || bi < b.len
+        a_end: = line_end(a, ai)
+        b_end: = line_end(b, bi)
+        if !a.sub(ai, a_end - ai).equals(b.sub(bi, b_end - bi))
+            n += 1
+        ai = a_end + 1
+        bi = b_end + 1
+    return n
+
+priv fn line_end(text: U8[], at: Sz): Sz //<
+    //< The end of the line starting at `at` (the newline's position, or the text's end)
+    $i: Sz = at
+    for i < text.len && (text.ptr + i)$ != 0x0aU8
+        i += 1
+    return i
+
+fn test_a_note_number_is_not_saved(arena: Arena$@) //<
+    //< A note's text is saved, and its number is not
+    //<
+    //< **The number is counted where notes are listed**; written, one added note would leave every
+    //< number after it stale.
+    verdict.start("[kspage/store] a note's number staying out of the text test...")
+    $sb: = Str_builder.new()
+    defer sb.free()
+    store.save(sample_doc(arena), sample_sheet(arena), sb@)
+    written: = sb.slice()
+    // **The text's packing is not copied** (`spacing` in `share/store.kspl`).
+    assert(written.find_str("\"the note's text\"").is_some(), "the note's text is written out")
+    assert(written.find_str("\"note_number\"").is_none(), "the number is not written out")
+    verdict.pass("a note's text goes into the text, and its number does not.")
+
+// ==========================================
+// kspage: pins the names a saved text, or the page, reads an enum's value by (a golden test).
+// **Each name is the variant's own** (`variant_name`), so a renamed variant would change what is
+// saved and what the page reads, in silence; here it fails instead.
+// Caution: **List a new variant's name here with the variant**, spelled as it is saved.
+// ==========================================
+
+priv const arranges: U8[][3] = ::{ "flow", "grid", "absolute" }
+priv const shapes: U8[][11] = ::{ "box", "round_box", "ellipse", "triangle", "diamond", "fall_line",
+    "rise_line", "fall_arrow", "rise_arrow", "fall_arrow_back", "rise_arrow_back" }
+priv const aligns: U8[][4] = ::{ "left", "center", "right", "justify" }
+priv const collects: U8[][5] = ::{ "none", "contents", "notes", "bars", "lines" }
+priv const compares: U8[][4] = ::{ "none", "above", "below", "equal" }
+priv const datings: U8[][3] = ::{ "none", "plain", "long" }
+priv const keeps: U8[][8] = ::{ "is", "is_not", "holds", "above", "below", "blank", "filled",
+    "one_of" }
+priv const sketches: U8[][3] = ::{ "whole", "titled", "halved" }
+
+priv fn arrange_back(name: U8[]): U8[]
+    return style.arrange_from(name).variant_name()
+
+priv fn shape_back(name: U8[]): U8[]
+    return style.shape_from(name).variant_name()
+
+priv fn align_back(name: U8[]): U8[]
+    return style.align_from(name).variant_name()
+
+priv fn collect_back(name: U8[]): U8[]
+    return collect.collect_from(name).variant_name()
+
+priv fn compare_back(name: U8[]): U8[] //<
+    //< The way of comparing `read_when` finds by that name (`none` where it finds none)
+    for how in style_when.comparisons
+        if how.variant_name().equals(name)
+            return how.variant_name()
+    return "none"
+
+priv fn dating_back(name: U8[]): U8[]
+    return day.dating_from(name).variant_name()
+
+priv fn keep_back(name: U8[]): U8[]
+    return filter.keep_from(name).variant_name()
+
+priv fn sketch_back(name: U8[]): U8[]
+    return insert.sketch_from(name).variant_name()
+
+priv fn read_back(what: U8[], names: U8[][], back: fn(name: U8[]): U8[]): Bool //<
+    //< Whether every name reads back as the variant of that very name, saying which does not
+    $all: = true
+    for name in names
+        got: = back(name)
+        if !got.equals(name)
+            io.out().s(what).s(": \"").s(name).s("\" reads back as \"").s(got).s("\"\n")
+            all = false
+    return all
+
+fn test_every_saved_name_reads_back_as_its_variant() //<
+    //< Each name a saved text or the page holds reads back as the variant spelled the same
+    //<
+    //< **Both sides are checked at once**: the reader (`*_from`) and the writer (`variant_name`).
+    verdict.start("[kspage/names] every saved name reading back as its own variant test...")
+    assert(read_back("Arrange", U8[][]::arranges, arrange_back), "a way of laying out reads back")
+    assert(read_back("Shape", U8[][]::shapes, shape_back), "a shape reads back")
+    assert(read_back("Align", U8[][]::aligns, align_back), "an alignment reads back")
+    assert(read_back("Collect", U8[][]::collects, collect_back), "a way of collecting reads back")
+    assert(read_back("Compare", U8[][]::compares, compare_back), "a way of comparing reads back")
+    assert(read_back("Dating", U8[][]::datings, dating_back), "a way of showing a date reads back")
+    assert(read_back("Keep", U8[][]::keeps, keep_back), "a filter's kind reads back")
+    assert(read_back("Sketch", U8[][]::sketches, sketch_back), "a slide's sketch reads back")
+    verdict.pass("each name read back is the variant spelled the same.")
+
+// ==========================================
+// Checks the manual that ships with kspage (`content/manual.kspage`)
+// **It is an ordinary saved document**, so the checks are the ones any document passes: it reads,
+// it lays out, and it is in the form kspage writes.
+// ==========================================
+embed "kspage/content/manual.kspage" as manual_text //< the same file the page opens
+
+fn test_the_manual_opens_and_lays_out(arena: Arena$@) //<
+    //< the manual reads, and lays out with its chapters
+    verdict.start("[kspage/manual] the manual opening and being laid out test...")
+    got: = store.load(manual_text, arena) catch _e
+        panic("the manual does not read")
+    page: = flow.layout(got.doc, got.sheet, fixed.make(), 600.0, arena)
+    assert(page.boxes.len > 0, "the manual lays out")
+    // **The chapters are counted by layout**, so a heading lost on the way shows here.
+    assert(page.headings.len >= 10, "the manual's headings come out")
+    verdict.pass("the manual opens and lays out with its headings.")
+
+fn test_the_manual_is_in_the_saved_form(arena: Arena$@) //<
+    //< saving the manual again changes not one byte
+    //<
+    //< **Edited in kspage, it stays the same file**: a hand edit in another shape would turn every
+    //< later save into a diff over the whole file.
+    verdict.start("[kspage/manual] the manual being in the form kspage writes test...")
+    got: = store.load(manual_text, arena) catch _e
+        panic("the manual does not read")
+    $again: = Str_builder.new()
+    defer again.free()
+    store.save(got.doc, got.sheet, again@)
+    assert(again.slice().equals(manual_text), "written again, the manual is the same bytes")
+    verdict.pass("the manual is in the form kspage writes.")
+
+priv fn reloads(d: Doc$@, sheet: Sheet$@, arena: Arena$@): Bool //< whether d, saved, loads back
+    $sb: = Str_builder.new()
+    defer sb.free()
+    store.save(d, sheet, sb@)
+    _got: = store.load(sb.slice(), arena) catch _e
+        return false
+    return true
+
+fn test_what_the_editor_makes_always_reloads(arena: Arena$@) //<
+    //< A length the editor makes itself stays inside what the loader takes
+    //<
+    //< **An image's size, a fitted column and a frame placed by number each enter by their own
+    //< path**; one left at what it was given saves a file that never opens again.
+    verdict.start("[kspage/store] what the editor makes reloading test...")
+    sheet: = base.grid_sheet(arena)
+    slide: = sheet.add("slide", paint.inherit_all())
+    slide.arrange = .absolute
+    d: = Doc.new(arena)
+    p: = d.add_block("body").add_text("hello")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(p, 0)
+    page: = flow.layout(d, sheet, fixed.make(), 600.0, arena)
+    assert(ed.insert_image(page, "wide.png", 150000.0, 30.0), "a very wide image goes in")
+    img: = d.blocks.get(1)
+    assert(base.near(img.image_w, 100000.0) && base.near(img.image_h, 20.0),
+        "it takes the largest size a document holds, its proportions kept")
+    assert(reloads(d, sheet, arena), "the document holding it loads back")
+
+    $long: = Str_builder.new()
+    defer long.free()
+    for _i in Range.asc(30000)
+        long.c('W')
+    t: = d.add_block("table")
+    t.add_child("row").add_child("cell").add_text(arena.dup_str(long.slice()))
+    wide: = flow.layout(d, sheet, fixed.make(), 600.0, arena)
+    edge: = ask.Edge::{ .table = t, .axis = .column, .index = 0, .found = true }
+    assert(ed.fit_edge(wide, edge), "the column fits its text")
+    assert(reloads(d, sheet, arena), "a column fitted to a very long text loads back")
+
+    held: = d.add_block("slide")
+    framed: = doc.add_framed_child(held, "",
+        Rect::{ .x = 0.0, .y = 0.0, .w = 10.0, .h = 10.0 })
+    framed.add_text("")
+    ed.pick_only(framed)
+    assert(ed.place_frame(200000.0, -200000.0, 10.0, 10.0), "the frame is placed by number")
+    assert(reloads(d, sheet, arena), "a frame placed far out loads back")
+    verdict.pass("what the editor makes stays inside the lengths a saved document holds.")
+
+fn test_what_the_editor_merges_and_nests_always_reloads(arena: Arena$@) //<
+    //< A merge or a nesting the editor would take past what the loader takes is refused
+    //<
+    //< **Refused, not brought inside**: a smaller merge or a shallower slide would change the
+    //< document's shape. Each path that widens a merge or nests a block is tried up to its limit.
+    verdict.start("[kspage/store] a merge and a nesting past the loader's limits refused test...")
+    sheet: = base.grid_sheet(arena)
+    slide: = sheet.add("slide", paint.inherit_all())
+    slide.arrange = .absolute
+    slide.width = 160.0
+    slide.height = 240.0
+    d: = Doc.new(arena)
+    p: = d.add_block("body").add_text("x")
+    ed: = edit.new_editor(d)
+    ed.caret = caret.at(p, 0)
+    page: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+    assert(ed.insert_table(page, sheet, "table", 1, 1001), "a table of 1001 columns goes in")
+    row: = d.blocks.get(1).children.get(0)
+    ed.caret = caret.at(row.children.get(0).inlines.get(0), 0)
+    ed.caret.anchor = row.children.get(1000).inlines.get(0)
+    laid: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+    assert(ed.merge_range(laid) == cells.Merge_end.too_wide, "a merge of 1001 columns is refused")
+    ed.caret.anchor = row.children.get(999).inlines.get(0)
+    assert(ed.merge_range(laid) == cells.Merge_end.done, "a merge of 1000 columns is made")
+    again: = flow.layout(d, sheet, fixed.make(), 300.0, arena)
+    assert(ed.add_line(again, .column) == cells.Line_end.too_wide,
+        "a column that would widen it to 1001 is refused")
+    assert(reloads(d, sheet, arena), "the widest merge the editor makes loads back")
+
+    nest: = Doc.new(arena)
+    top: = nest.add_block("body").add_text("x")
+    deep: = edit.new_editor(nest)
+    deep.caret = caret.at(top, 0)
+    $made: Sz = 0
+    $last: = insert.Surface_end.done
+    for made < 40 && last == insert.Surface_end.done
+        last = deep.insert_surface(flow.layout(nest, sheet, fixed.make(), 300.0, arena), sheet,
+            "slide", .whole)
+        if last == insert.Surface_end.done
+            made += 1
+    assert(last == insert.Surface_end.too_deep, "a slide whose frames stand too deep is refused")
+    assert(made == 31, "slides nest until their frames stand at the deepest level a document holds")
+    assert(reloads(nest, sheet, arena), "the deepest nesting the editor makes loads back")
+    verdict
+        .pass("a merge past 1000 and a nesting past 32 are refused, and what is made loads back.")

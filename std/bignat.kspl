@@ -1,0 +1,282 @@
+//< Natural numbers of a fixed, generous width, the powers of ten at 128 bits, and a float's bits
+//<
+//< **It holds only what an exact decimal/binary round trip needs**: multiplying by a 32-bit
+//< integer or by a power of 10 or 2, adding, subtracting and comparing, and the powers of ten at
+//< 128 bits. Both `std/strnum`'s `to_f64` and `std/strfmt`'s floating-point output use it.
+pub const bignat_limbs: Sz = 120 //< how many 32-bit limbs one holds (3840 bits).
+    //<
+    //< `to_f64`'s correct rounding sets this size: with up to 768 decimal digits against the power
+    //< of 2, the largest value is `2^56 x 10^1098 ~= 2^3704` (std/strnum's `cmp_scaled`).
+
+pub struct Bignat //< a natural number of a fixed, generous width, held by value
+    //<
+    //< Caution: **The unused limbs must be 0.** `add` and `cmp` read limbs past the other value's
+    //< `len`; only `sub` and `trim` shrink `len`, and only over limbs that became 0.
+    priv limbs: U32[bignat_limbs] //< ordered from the lowest limb up
+    priv len: Sz //< the number of limbs in use, not counting leading 0s; 0 means the value 0
+
+impl Bignat
+    pub fn zero(): Bignat //< the value 0
+        r: Bignat = ::{}
+        return r
+
+    pub fn from_u64(v: U64): Bignat //< the same value, widened
+        $r: Bignat = ::{}
+        r.limbs[0] = U32::v
+        r.limbs[1] = U32::(v >> 32U64)
+        r.len = 2
+        r.trim()
+        return r
+
+    priv fn trim(r: Self$@)
+        for r.len > 0 && r.limbs[r.len - 1] == 0
+            r.len -= 1
+
+    priv fn push_limb(r: Self$@, v: U32)
+        assert(r.len < bignat_limbs, "Bignat: the value does not fit in bignat_limbs")
+        r.limbs[r.len] = v
+        r.len += 1
+
+    pub fn mul_small(r: Self$@, m: U32) //< multiplies in place by a value that fits in one limb
+        if m == 0
+            for i in Range.asc(r.len)
+                r.limbs[i] = 0
+            r.len = 0
+            return
+        $carry: U64 = 0
+        for i in Range.asc(r.len)
+            cur: U64 = r.limbs[i] * U64::m + carry
+            r.limbs[i] = U32::cur
+            carry = cur >> 32U64
+        if carry != 0
+            r.push_limb(U32::carry)
+
+    pub fn mul(r: Self$@, o: Self@) //< multiplies in place by another value of the same width
+        //<
+        //< Long multiplication, from o's top limb down. The other value is `10^n`, which
+        //< `std/strnum` keeps so it need not rebuild it on each call.
+        $acc: = Bignat.zero()
+        for $i: Sz = o.len; i > 0; i -= 1
+            acc.shl(32)
+            $part: = r$
+            part.mul_small(o.limbs[i - 1])
+            acc.add(part@)
+        r$ = acc
+
+    pub fn add_small(r: Self$@, v: U32) //< adds, in place, a value that fits in one limb
+        $carry: U64 = v
+        for i in Range.asc(r.len)
+            if carry == 0
+                return
+            cur: U64 = r.limbs[i] + carry
+            r.limbs[i] = U32::cur
+            carry = cur >> 32U64
+        if carry != 0
+            r.push_limb(U32::carry)
+
+    pub fn mul_pow10(r: Self$@, n: Sz) //< multiplies in place by 10 to the power of `n`
+        //<
+        //< It multiplies by 10^9 at a time, the largest power of 10 that fits in a U32.
+        $rest: = n
+        for rest >= 9
+            r.mul_small(1000000000U32)
+            rest -= 9
+        for rest > 0
+            r.mul_small(10U32)
+            rest -= 1
+
+    pub fn shl(r: Self$@, bits: Sz) //< shifts left in place, which multiplies by 2 to that power
+        if r.len == 0 || bits == 0
+            return
+        words: Sz = bits / 32
+        rem: = U32::(bits % 32)
+        new_len: = r.len + words + (1 if rem != 0 else 0)
+        assert(new_len <= bignat_limbs, "Bignat: the shifted value does not fit in bignat_limbs")
+        // Caution: Write from the top limb down, or a limb not yet read is overwritten.
+        if rem == 0
+            for $i: Sz = r.len; i > 0; i -= 1
+                r.limbs[i - 1 + words] = r.limbs[i - 1]
+        else
+            r.limbs[new_len - 1] = r.limbs[r.len - 1] >> (32U32 - rem)
+            for $i: Sz = r.len; i > 0; i -= 1
+                low: U32 = r.limbs[i - 1] << rem
+                high: U32 = r.limbs[i - 2] >> (32U32 - rem) if i >= 2 else 0U32
+                r.limbs[i - 1 + words] = low | high
+        for i in Range.asc(words)
+            r.limbs[i] = 0
+        r.len = new_len
+        r.trim()
+
+    pub fn add(r: Self$@, o: Self@) //< adds another value in place
+        n: = r.len if r.len > o.len else o.len
+        $carry: U64 = 0
+        for i in Range.asc(n)
+            cur: U64 = r.limbs[i] + U64::o.limbs[i] + carry
+            r.limbs[i] = U32::cur
+            carry = cur >> 32U64
+        r.len = n
+        if carry != 0
+            r.push_limb(U32::carry)
+
+    pub fn sub(r: Self$@, o: Self@) //< subtracts another value in place
+        //<
+        //< Caution: r >= o must hold, because a natural number never goes negative.
+        $borrow: I64 = 0
+        for i in Range.asc(r.len)
+            $cur: I64 = I64::r.limbs[i] - I64::o.limbs[i] - borrow
+            if cur < 0
+                cur += 4294967296I64
+                borrow = 1
+            else
+                borrow = 0
+            r.limbs[i] = U32::cur
+        assert(borrow == 0 && o.len <= r.len, "Bignat.sub: the subtrahend is larger than the value")
+        r.trim()
+
+    pub fn cmp(r: Self@, o: Self@): I32 //< returns -1, 0 or 1 for less, equal or greater
+        if r.len != o.len
+            return 1 if r.len > o.len else -1
+        for $i: Sz = r.len; i > 0; i -= 1
+            a: = r.limbs[i - 1]
+            b: = o.limbs[i - 1]
+            if a != b
+                return 1 if a > b else -1
+        return 0
+
+// ==========================================
+// The powers of ten at 128 bits, read by `std/strfmt`'s shortest digits (Schubfach) and
+// `std/strnum`'s nearest F64 (Eisel-Lemire). **Each entry is exact**, 10^q's top 128 bits
+// truncated, as both proofs assume; `test_pow10_table` in `make debug` rebuilds every one. Why a
+// table, and why held compressed: "One table of powers of ten serves both directions" in
+// std/docs/DESIGN-core.md.
+// ==========================================
+struct Wide //< a 128-bit unsigned number, as two halves
+    hi: U64 //< the upper 64 bits
+    lo: U64 //< the lower 64 bits
+
+const pow10_q_min: I32 = -342 //< the smallest power `pow10_128` gives
+    //<
+    //< Below it, even 19 digits of significand stay under half the smallest subnormal.
+const pow10_q_max: I32 = 324 //< the largest power `pow10_128` gives
+    //<
+    //< The shortest digits of the smallest subnormal need 10^324.
+priv const pow10_step: I32 = 27 //< one entry in this many is held
+    //<
+    //< Caution: **Keep it at 27 or below**: an entry is rebuilt by 5^r with r below it, which must
+    //< fit a U64 (5^27 does not).
+// 10^q for q = pow10_q_min and then every pow10_step, each as its upper half and its lower.
+priv const pow10_bases: U64[_] = ::{ 0xEEF453D6923BD65AU64, 0x113FAA2906A13B3FU64,
+    0xC1069CD4EABE89F8U64, 0x999EC0BB696E840AU64, 0x9BECCE62836AC577U64, 0x4EE367F9430AEC32U64,
+    0xFBE9141915D7A922U64, 0x4BF1FF9F0062BAA8U64, 0xCB7DDCDDA26DA268U64, 0xA9942F5DCF7DFD09U64,
+    0xA46116538D0DEB78U64, 0x52D9BE85F074E608U64, 0x84C8D4DFD2C63F3BU64, 0x29ECD9F40041E073U64,
+    0xD686619BA27255A2U64, 0xC80A537B0EFEFEBDU64, 0xAD4AB7112EB3929DU64, 0x86C16C98D2C953C6U64,
+    0x8BFBEA76C619EF36U64, 0x57EB4EDB3C55B65AU64, 0xE2280B6C20DD5232U64, 0x25C6DA63C38DE1B0U64,
+    0xB6B00D69BB55C8D1U64, 0x3D607B97C5FD0D22U64, 0x9392EE8E921D5D07U64, 0x3AFF322E62439FCFU64,
+    0xEE6B280000000000U64, 0x0000000000000000U64, 0xC097CE7BC90715B3U64, 0x4B9F100000000000U64,
+    0x9B934C3B330C8577U64, 0x63CC55F49F88EB2FU64, 0xFB5878494ACE3A5FU64, 0x04AB48A04065C723U64,
+    0xCB090C8001AB551CU64, 0x5CADF5BFD3072CC5U64, 0xA402B9C5A8D3A6E7U64, 0x5F16206C9C6209A6U64,
+    0x847C9B5D7C2E09B7U64, 0x69956135FEBADA11U64, 0xD60B3BD56A5586F1U64, 0x8A71E223D8D3B074U64,
+    0xACE73CBFDC0BFB7BU64, 0x636CC64D1001550BU64, 0x8BAB8EEFB6409C1AU64, 0x1AD089B6C2F7548EU64,
+    0xE1A63853BBD26451U64, 0x5E7873F8A0396973U64, 0xB6472E511C81471DU64, 0xE0133FE4ADF8E952U64 }
+// What each rebuilt entry lacks, 2 bits per q from pow10_q_min up, the lowest bits first.
+priv const pow10_fixes: U64[_] = ::{ 0x1505101015155440U64, 0x5145400045450501U64,
+    0x4010000144545545U64, 0x0105540544504101U64, 0x5555551596510050U64, 0x4014514545154145U64,
+    0x0400445050140155U64, 0x5040550400000000U64, 0x0000000004455455U64, 0x0101100100000000U64,
+    0x1555500001000050U64, 0x0000000000000000U64, 0x4455500000000000U64, 0x5555145454141101U64,
+    0x0000155004055505U64, 0x0111100000400400U64, 0x5415541114514540U64, 0x4555050555545455U64,
+    0x0010010550155515U64, 0x5414555550400141U64, 0x0015550051001556U64 }
+// 5^0 to 5^13: two of them make any 5^r below 5^27.
+priv const pow5_small: U64[_] = ::{ 1U64, 5U64, 25U64, 125U64, 625U64, 3125U64, 15625U64, 78125U64,
+    390625U64, 1953125U64, 9765625U64, 48828125U64, 244140625U64, 1220703125U64 }
+
+fn mul_wide(a: U64, b: U64): Wide //< the whole 128-bit product of two U64s
+    a0: = a & 0xFFFFFFFFU64
+    a1: = a >> 32U64
+    b0: = b & 0xFFFFFFFFU64
+    b1: = b >> 32U64
+    p00: = a0 * b0
+    p01: = a0 * b1
+    p10: = a1 * b0
+    mid: = (p00 >> 32U64) + (p01 & 0xFFFFFFFFU64) + (p10 & 0xFFFFFFFFU64)
+    return Wide::{ .hi = a1 * b1 + (p01 >> 32U64) + (p10 >> 32U64) + (mid >> 32U64),
+        .lo = (mid << 32U64) | (p00 & 0xFFFFFFFFU64) }
+
+fn floor_log2_pow10(q: I32): I32 //< floor(log2(10^q)), exact for q within ±4000
+    return I32::((I64::q * 913124641741I64) >> 38)
+
+priv fn floor_log2_pow5(q: I32): I32 //< floor(log2(5^q)), exact for q within ±4000
+    return I32::((I64::q * 1217359I64) >> 19)
+
+fn pow10_128(q: I32): Wide //< the top 128 bits of 10^q, truncated, so the top bit is set
+    //<
+    //< 10^q is that value times 2^(floor_log2_pow10(q) - 127). q runs from pow10_q_min to
+    //< pow10_q_max. The held entry below q is multiplied by 5^r (10^q / 10^(q - r), less the
+    //< power of 2), shifted back to 128 bits and corrected by the bits `pow10_fixes` holds.
+    assert(q >= pow10_q_min && q <= pow10_q_max, "pow10_128: the power is outside the table")
+    i: = q - pow10_q_min
+    j: = Sz::(i / pow10_step)
+    r: = i % pow10_step
+    $out: = Wide::{ .hi = pow10_bases[2 * j], .lo = pow10_bases[2 * j + 1] }
+    if r > 0
+        part: = r if r < pow5_small.len else pow5_small.len - 1
+        m: = pow5_small[part] * pow5_small[r - part]
+        low: = mul_wide(out.lo, m)
+        high: = mul_wide(out.hi, m)
+        mid: = low.hi + high.lo
+        top: = high.hi + (1U64 if mid < low.hi else 0U64)
+        shift: = U64::(floor_log2_pow5(q) - floor_log2_pow5(q - r))
+        out.hi = (top << (64U64 - shift)) | (mid >> shift)
+        out.lo = (mid << (64U64 - shift)) | (low.lo >> shift)
+    fix: = (pow10_fixes[i / 32] >> (i % 32 * 2)) & 3U64
+    out.lo += fix
+    if out.lo < fix
+        out.hi += 1U64
+    return out
+
+// ==========================================
+// Reinterpreting a floating-point number's bit pattern.
+// Caution: **Do not copy by casting a pointer.** `(U64@::x@)$` breaks C's strict aliasing
+// (optimization can reorder the read and the write).
+// ==========================================
+priv fn copy_bytes(dst: U8$@, src: U8@, n: Sz)
+    for i in Range.asc(n)
+        (dst + i)$ = (src + i)$
+
+pub const f64_sign_bit: U64 = 0x8000000000000000U64 //< an F64's sign, in its bits
+pub const f64_mantissa_mask: U64 = 0x000FFFFFFFFFFFFFU64 //< an F64's stored significand bits
+pub const f64_hidden_bit: U64 = 0x0010000000000000U64 //< the 1 a normal F64 does not store
+
+pub struct Binary_float //< a floating-point value split into f × 2^e, without the sign
+    //<
+    //< std/strfmt writes a number's digits from it, and std/strnum steps a parsed value by an ulp.
+    pub f: U64 //< the significand, the hidden 1 included where there is one
+    pub e: I32 //< the power of two f is scaled by
+    pub unequal: Bool //< an exact power of two, where the gap below is half the gap above
+
+pub fn decompose_f64(mag: U64): Binary_float //< an F64's bits, without the sign, as f × 2^e
+    //<
+    //< A subnormal has no hidden 1, and its exponent is fixed at the minimum.
+    exp_field: = mag >> 52U64
+    mant: = mag & f64_mantissa_mask
+    if exp_field == 0U64
+        return Binary_float::{ .f = mant, .e = -1074, .unequal = false }
+    return Binary_float::{ .f = mant | f64_hidden_bit, .e = I32::exp_field - 1075,
+        .unequal = mant == 0U64 && exp_field > 1U64 }
+
+pub fn f64_to_bits(v: F64): U64 //< the same bits read as an integer; no numeric conversion
+    $x: = v
+    $bits: U64 = 0
+    copy_bytes(U8$@::bits@, U8@::x@, 8)
+    return bits
+
+pub fn f64_from_bits(bits: U64): F64 //< the same bits read as a float; no numeric conversion
+    $x: = bits
+    $v: F64 = 0.0
+    copy_bytes(U8$@::v@, U8@::x@, 8)
+    return v
+
+pub fn f32_to_bits(v: F32): U32 //< the same bits read as an integer; no numeric conversion
+    $x: = v
+    $bits: U32 = 0
+    copy_bytes(U8$@::bits@, U8@::x@, 4)
+    return bits

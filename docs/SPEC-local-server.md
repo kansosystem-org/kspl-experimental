@@ -2,7 +2,7 @@
 
 **This document sets the protocol a page in a browser uses to ask a small program on the same machine, the *local server*, to read and write files for it, and what that program must refuse.** By design, a browser lets a page open a file only through a window a person chooses, and a page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule (a browser lets a page freely call only the server the page came from) does not block them. **It starts no program**: a server that starts programs on a page's request is one whose every guard must hold, for what a page can ask for there is running code.
 
-**It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "A page asks the local machine through one protocol" in [`DESIGN.md`](DESIGN.md).
+**It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "A page asks the local machine through one protocol" in [`DESIGN-repository.md`](DESIGN-repository.md).
 
 **Both ends are built**: `kssrv --local` answers everything below, and the page asks from `kspage/port/web/local.js`.
 
@@ -157,21 +157,13 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 
 ## When it is not connected
 
-A page may be opened with no local server behind it. Then it hides the tools that need one and keeps the rest.
+A client checks `/api/status` once at startup. The response must declare `local: true`; an ordinary outward-facing server is not a local file service. A 401 means the server is present but the token is missing or refused.
 
-**Do not present the unconnected state as a separate mode**: the screen then could not say why a path cannot be typed.
-
-**The page asks once whether the server is present, and hides the path tools if it is not.** No tool stays on screen that does nothing when pressed.
-
-**Do not read "an answer came back" as "it is present"**: the same server facing outward answers too. The server states whether it is local-facing, and the page checks that.
-
-**Do not probe endpoints to find out.**
-
-A page opened from `file://` has no server, so it keeps only the document tools. **It is the same page**: no second version is shipped.
+A client that requires file access stops startup and tells the user to open the URL printed by `kssrv --local`. It does not substitute a browser file handle or a plain file fetch. The same page is shipped for every supported browser.
 
 ## Further reading
 
 * [`README.md`](README.md) — which reader each document here is for.
-* [`DESIGN.md`](DESIGN.md) — the Development Principles, which many rules here follow from, and the grounds for this protocol.
+* [`DESIGN-principles.md`](DESIGN-principles.md) — the Development Principles, which many rules here follow from, and the grounds for this protocol.
 * [kssrv](../kssrv/README.md) — the server that answers.
 * [kspage](../kspage/README.md) — the editing system that is the client.

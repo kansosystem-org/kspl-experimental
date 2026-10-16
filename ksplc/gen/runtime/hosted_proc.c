@@ -1,14 +1,14 @@
 /* Part of the C runtime for an environment with an OS.
    Caution: **It does not build on its own** — it
  * joins behind hosted.c (the preamble) to make one translation unit. The joining order is held by
- * write_impl in ksplc/gen/runtime.kspls. */
+ * write_impl in ksplc/gen/runtime.kspl. */
 /* ============================================================
- * Going back and forth with a child process joined by pipes (for std/sys.kspls's Piped_child).
+ * Going back and forth with a child process joined by pipes (for std/sys.kspl's Piped_child).
  * Whether the partner crashes or hangs, this side survives.
  *
  * Caution: **A read always has a timeout**, returned as a value (-1). Do not add one without —
  * the caller could no longer see why it stopped ("Three ways to start a child process, split by
- * where its output goes" in std/docs/DESIGN.md).
+ * where its output goes" in std/docs/DESIGN-system.md).
  * What starts one is kspl_proc_start in hosted_spawn.c (the tool assembling argv is there).
  * ============================================================ */
 #ifndef _WIN32
@@ -228,7 +228,7 @@ KSPL_LINK I32 kspl_proc_wait(I64 handle) {
  * Returns the sum of the bits (2 = stdout, 4 = stderr, as kspl_proc_start's stdio), 0 on timeout,
  * -1 where no stream is piped or all read EOF.
  * Caution: **Look at the two in one go.** One at a time, the other waits out the silent one's
- * timeout too (run_capture in std/subproc.kspls gathers everything). */
+ * timeout too (run_capture in std/subproc.kspl gathers everything). */
 KSPL_LINK I32 kspl_proc_poll(I64 handle, I32 timeout_ms) {
     timeout_ms = kspl_wait_ms(timeout_ms);
     if (handle == 0) return -1;
@@ -357,7 +357,7 @@ KSPL_LINK void kspl_proc_kill(I64 handle) {
  * NTSTATUS is 128 + the signal POSIX raises for the same fault, and any other code is its own.
  * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal**: make
  * test-conventions compares this table with the one in "A child's end is one code on every OS" in
- * std/docs/DESIGN.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives it too. */
+ * std/docs/DESIGN-system.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives it too. */
 static int kspl_proc_status_code(DWORD st) {
     switch (st) {
     case 0xC0000005u: /* STATUS_ACCESS_VIOLATION */

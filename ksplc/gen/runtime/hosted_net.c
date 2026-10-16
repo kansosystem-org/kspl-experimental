@@ -1,10 +1,10 @@
 /* Part of the C runtime for an environment with an OS.
    Caution: **It does not build on its own** — it
  * joins behind hosted.c (the preamble) to make one translation unit. The joining order is held by
- * write_impl in ksplc/gen/runtime.kspls. */
+ * write_impl in ksplc/gen/runtime.kspl. */
 /* ============================================================
- * The TCP socket and asynchronous-I/O reactor primitives (for std/net.kspls and
- * std/reactor.kspls). Names and address letters both go through `getaddrinfo`, IPv4 and IPv6
+ * The TCP socket and asynchronous-I/O reactor primitives (for std/net.kspl and
+ * std/reactor.kspl). Names and address letters both go through `getaddrinfo`, IPv4 and IPv6
  * alike. Like kspl_proc_*, a handle is opaque in an I64 (a raw fd could be 0, which means failure).
  *
  * Caution: **Only one body is written.** Winsock2 is shaped as a copy of POSIX's socket API, so
@@ -463,7 +463,7 @@ KSPL_LINK I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, S
 }
 
 /* The most bytes one send or recv is handed. A call moves a piece and returns its count, as a short
- * one may anyway, and the caller's loop (`write_all` in std/net.kspls) asks for the rest.
+ * one may anyway, and the caller's loop (`write_all` in std/net.kspl) asks for the rest.
  * Caution: **Hand no more in one call.** Windows takes the length as an int, but an int's worth is
  * not enough to stay under: Winsock takes a non-blocking send whole or refuses it with WSAENOBUFS,
  * so a send of 1 GiB failed on Windows 11 where Wine had sent a piece. 64 KiB is the piece
@@ -490,9 +490,9 @@ KSPL_LINK void kspl_tcp_close(I64 handle) {
 }
 
 /* ============================================================
- * The asynchronous-I/O reactor primitives (for std/reactor.kspls). Every socket is a
+ * The asynchronous-I/O reactor primitives (for std/reactor.kspl). Every socket is a
  * kspl_socket_t{fd}, so non-blocking mode and polling work on any of them. Opt-in; the blocking
- * API of std/net.kspls stays as it is.
+ * API of std/net.kspl stays as it is.
  * ============================================================ */
 
 KSPL_LINK Bool kspl_net_set_nonblocking(I64 handle) {
@@ -515,8 +515,8 @@ KSPL_LINK Bool kspl_net_would_block(void) {
 /* Looks at the read/write readiness of handles[0..n) together in one poll. interest[i] /
  * revents_out[i] are bit0 = readable, bit1 = writable, bit2 = unusable, bit3 = the partner closed
  * its sending side.
- * **The mark values must line up with `std/reactor.kspls`** (the matching is
- * `tests/support/conventions_win.kspls`). Returns the number of fds ready (0 = timeout, negative =
+ * **The mark values must line up with `std/reactor.kspl`** (the matching is
+ * `tests/support/conventions_win.kspl`). Returns the number of fds ready (0 = timeout, negative =
  * poll failed).
  * Caution: **Do not fold `POLLHUP` into `POLLERR`'s mark.** `WSAPoll` returns `POLLHUP` on a FIN
  * alone, where POSIX returns `POLLIN`; folded, Windows treats a half-closed connection as broken.

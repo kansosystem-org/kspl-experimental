@@ -1,6 +1,6 @@
 # ai_assist — the coding assistant
 
-This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code, and measures how often the compiler accepts what it writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN.md`](../docs/DESIGN.md); what is left is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code, and measures how often the compiler accepts what it writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN-tools.md`](../docs/DESIGN-tools.md); what is left is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 Note: If how an AI works is new to you, read [`../../ksai/README.md`](../../ksai/README.md) (the introduction to the KSPL-native AI engine) first.
 
@@ -16,7 +16,7 @@ make fim-eval     # the model's held-out loss, then the rate at which ksplc acce
 
 The held-out loss is the model's error on validation files it never trained on.
 
-Each KSPL tool also runs alone: `./out/ksplc_stage1.exe run tools/ai_assist/<tool>.kspls`, with the usage in the file's header.
+Each KSPL tool also runs alone: `./out/ksplc_stage1.exe run tools/ai_assist/<tool>.kspl`, with the usage in the file's header.
 
 The picture shows what each step makes and what the next one reads.
 
@@ -37,16 +37,16 @@ flowchart LR
 
 | File | What it does |
 | :-- | :-- |
-| `ksplc_oracle.kspls` | The compiler oracle's shared parts: an error count plus the diagnostics, and reading JSONL (one JSON value per line). Evaluation, generation and filtering all use it; it has no executable of its own. |
-| `build_corpus.kspls` / `corpus_count.kspls` | Normalizes every source through `fmt` (KSPL's formatter), removes duplicates, splits train/val and counts, writing to `corpus/`. `corpus_count.kspls` holds the counting rules (the folders left out; words, tokens and lines), split off so it can be tested. |
-| `make_fim.kspls` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source is self-hosted code that compiles, so the middle is the correct completion by definition and no example needs recompiling. |
-| `eval_fim.kspls` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `ksai/examples/fim_coder` as its own process. A file that does not compile on its own gives no holes. |
-| `train_bpe.kspls` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspls` reads. (BPE, byte-pair encoding, builds the vocabulary by merging the pairs of pieces that occur most often.) |
+| `ksplc_oracle.kspl` | The compiler oracle's shared parts: an error count plus the diagnostics, and reading JSONL (one JSON value per line). Evaluation, generation and filtering all use it; it has no executable of its own. |
+| `build_corpus.kspl` / `corpus_count.kspl` | Normalizes every source through `fmt` (KSPL's formatter), removes duplicates, splits train/val and counts, writing to `corpus/`. `corpus_count.kspl` holds the counting rules (the folders left out; words, tokens and lines), split off so it can be tested. |
+| `make_fim.kspl` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source is self-hosted code that compiles, so the middle is the correct completion by definition and no example needs recompiling. |
+| `eval_fim.kspl` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `ksai/examples/fim_coder` as its own process. A file that does not compile on its own gives no holes. |
+| `train_bpe.kspl` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspl` reads. (BPE, byte-pair encoding, builds the vocabulary by merging the pairs of pieces that occur most often.) |
 | `lora_finetune_external.py` | Fine-tunes a LoRA (a small set of added weights trained on top of a model) outside KSPL, on a GPU machine (from scratch, or continued with `--continue-from`), and writes it as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
 | `export_qwen_to_kspl.py` / `export_qwen_tokenizer.py` | Convert Hugging Face Qwen's weights and tokenizer into the files `ksai` reads. |
 | `qwen_logit_parity.py` | Prints Hugging Face's logits (the scores for each next token) for the same input, to compare with KSPL's. |
 | `safetensors_io.py` | Writes safetensors, for `export_qwen_to_kspl.py` and `lora_finetune_external.py`. |
-| `tests/` | `ai_assist_test.kspls`: counting the corpus, and the oracle, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
+| `tests/` | `ai_assist_test.kspl`: counting the corpus, and the oracle, which starts the real compiler; `make debug-tools` runs them with the rest of the tools' tests. |
 
 **`corpus/` and `tokenizer/` are generated and reproducible**, and git ignores them; the scripts and the tools are the product.
 
@@ -102,7 +102,7 @@ Decoding is greedy (it always takes the top-scoring token), with no repetition p
 
 ## Further reading
 
-* [`tools/docs/DESIGN.md`](../docs/DESIGN.md) — why the assistant is built this way: what is KSPL and what is borrowed, how a completion is scored, why it runs outside the language server.
+* [`tools/docs/DESIGN-tools.md`](../docs/DESIGN-tools.md) — why the assistant is built this way: what is KSPL and what is borrowed, how a completion is scored, why it runs outside the language server.
 * The "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md) — what is left of the coding assistant.
 * [ksai](../../ksai/README.md) — the engine the assistant's tools feed, with the examples that load what it makes.
 * [`../README.md`](../README.md) — the other tools, and the one test file per tool they keep in `tools/tests/`.

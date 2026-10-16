@@ -1,0 +1,317 @@
+//< The indentation notation's layout: the blocks it closes, and the indentation it reads
+import "ksplc/parse/layout" as parse_layout
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+// ==========================================
+// Checks that a one-line block in the indentation notation gets back the `;` it leaves out
+// **This calls a function inside the compiler directly** (`to_braces` in `parse/layout.kspl`),
+// so it checks the rewritten text itself: where the `;` lands, and what is left alone.
+// ==========================================
+priv fn mend(src: U8[], arena: Arena$@): U8[]
+    $notes: = List<|parse_layout.Note|>.new(arena)
+    return parse_layout.to_braces(src, notes@, arena)
+
+fn test_one_line_block_gets_its_semicolon()
+    verdict.start("[layout] a block written on one line gets back the `;` it leaves out test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+
+    // **The `;` stands where the space before the `}` was**, so no column after it moves.
+    assert(mend("fn f(): I32 { return 1 }\n", arena).equals("fn f(): I32 { return 1;}\n"),
+        "a one-line body's last statement must get its `;` in place of the space")
+    assert(mend("fn t(): I32 {return 1}\n", arena).equals("fn t(): I32 {return 1;}\n"),
+        "with no space before the `}`, the `;` is inserted")
+    // A statement ending in a block gets none, and one ending in a value's `}` gets one: the same
+    // rule as at a line's end.
+    assert(mend("fn g(c: Bool) { if c { note() } }\n", arena)
+        .equals("fn g(c: Bool) { if c { note();} }\n"),
+        "an `if` ending the outer block takes no `;`, its own body's statement does")
+    assert(mend("fn h(): P { return P::{ .a = 1 } }\n", arena)
+        .equals("fn h(): P { return P::{ .a = 1 };}\n"),
+        "a statement ending in a value's `}` takes a `;`")
+    assert(mend("fn w() { a(); b() }\n", arena).equals("fn w() { a(); b();}\n"),
+        "the `;` between two statements stays and the last one gets its own")
+
+    // Left alone: a `;` already there, an empty block, and the braces of a value or an import list.
+    assert(mend("fn k(): I32 { return 1; }\n", arena).equals("fn k(): I32 { return 1; }\n"),
+        "a `;` already written is kept as it is")
+    assert(mend("fn e() {}\n", arena).equals("fn e() {}\n"), "an empty block takes no `;`")
+    assert(mend("import \"std/ds\" { List }\n", arena).equals("import \"std/ds\" { List };\n"),
+        "an import's list is not a block; only the statement's own terminator comes")
+
+    verdict
+        .pass("a one-line block got its last `;` back, a value's and an import's braces did not.")
+
+fn test_statements_share_a_line()
+    verdict.start("[layout] statements and declarations on one line, split at a `;` test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    // **The heading is the last statement's**: the `fn` after an `import` keeps its block's `;`
+    // and takes no terminator, as on a line of its own.
+    assert(mend("import \"std/io\"; fn main() { io.out().s(\"hi\") }\n", arena)
+        .equals("import \"std/io\"; fn main() { io.out().s(\"hi\");}\n"),
+        "two declarations on one line must each end as on a line of their own")
+    // An import's list after a `;` is still a value, and a block after it still a block.
+    assert(mend("import \"std/ds\" { List }; fn f() { g() }\n", arena)
+        .equals("import \"std/ds\" { List }; fn f() { g();}\n"),
+        "an import's list stays a value, the `fn`'s braces a block")
+    // A deeper line belongs to the last statement: the `for` opens it and closes with no `;`.
+    assert(mend("fn main()\n    n: = 0; for i in r\n        g(i)\n", arena)
+        .equals("fn main() {\n    n: = 0; for i in r {\n        g(i); } }\n"),
+        "a block below a line belongs to the line's last statement")
+    // A C-style loop heading's `;` belongs to the `for`, not to a statement of its own.
+    assert(mend("fn main()\n    for $i: Sz = 0; i < 3; i += 1\n        g(i)\n", arena)
+        .equals("fn main() {\n    for $i: Sz = 0; i < 3; i += 1 {\n        g(i); } }\n"),
+        "a C-style loop heading must stay one `for`")
+    assert(mend("fn main()\n    for $i: Sz = 0; i < 3; i += 1 { g(i) } h(); k()\n", arena)
+        .equals("fn main() {\n    for $i: Sz = 0; i < 3; i += 1 { g(i);} h(); k(); }\n"),
+        "after the loop's block has closed, a `;` ends a statement again")
+    verdict.pass("each statement on a shared line ended as on a line of its own.")
+
+fn test_semicolon_after_block_is_seen()
+    verdict
+        .start("[layout] a `;` after a block closed on one line is noted and read as a space \
+            test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    // **It becomes a space**, so the parse goes on and the note is the one report.
+    src: = "fn main()\n    for i in r { g(i) }; h()\n"
+    assert(mend(src, arena).equals("fn main() {\n    for i in r { g(i);}  h(); }\n"),
+        "the `;` after the loop's block must be read as a space")
+    seen: = look(src, arena)
+    assert(seen.block_end == 1 && seen.count == 1 && seen.first_line == 2 &&
+        seen.block_end_col == 23, "the note must name the `;`'s line and its place in it")
+    // At the line's end it is the same `;`, noted once and given no terminator after it.
+    end: = look("fn main()\n    if c { g() };\n", arena)
+    assert(end.block_end == 1 && end.count == 1,
+        "a `;` after a block ending the line must be noted once, not as a terminator too")
+    // Inside a block written on one line, and after the `fn` it follows on a shared line.
+    assert(look("fn main() { if c { g() }; h() }\n", arena).block_end == 1,
+        "a `;` after an inner block must be noted")
+    // **A block inside a value takes its `;`**: `catch`'s block ends no statement.
+    assert(look("fn main()\n    x: = f() catch { 0 }; g(x)\n", arena).count == 0,
+        "a `;` after a `catch` block inside a value must stay silent")
+    verdict.pass("the `;` after a block was noted once and read as a space; a value's stayed.")
+
+priv fn arm_of(e: I32): I32 //< a `switch` written with its first `case` below it, run for real
+    ui: switch e
+    // a comment over the first arm
+    case 1
+        return 10
+    case 2, 3
+        if e == 3
+            break ui
+        return 20
+    default
+        return 30
+    return 40
+
+fn test_first_arm_below_switch()
+    verdict.start("[layout] a `switch` whose first `case` stands below it is one statement test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+
+    // **The two layouts are one statement**: the head takes no `;`, so the braces are the one-line
+    // form's but for the line break.
+    below: =
+        mend("fn f(e: I32): I32\n  switch e\n  case 1\n    return 10\n  default\n    return 20\n",
+        arena)
+    want_below: =
+        "fn f(e: I32): I32 {\n  switch e\n  case 1 {\n    return 10; }\n  default {\n    return 20; \
+            } }\n"
+    assert(below.equals(want_below), "the head of a `switch` must take no `;` before its first arm")
+    same_line: =
+        mend("fn f(e: I32): I32\n  switch e case 1\n    return 10\n  default\n    return 20\n",
+        arena)
+    want_same_line: =
+        "fn f(e: I32): I32 {\n  switch e case 1 {\n    return 10; }\n  default {\n    return 20; } \
+            }\n"
+    assert(same_line.equals(want_same_line), "the one-line form must convert as before")
+    // A comment line or a blank line between the head and its arm is no logical line.
+    assert(mend("fn g(e: I32)\n  ui: switch e\n  // why\n\n  case 1\n    break ui\n", arena)
+        .equals("fn g(e: I32) {\n  ui: switch e\n  // why\n\n  case 1 {\n    break ui; } }\n"),
+        "a labelled head, a comment and a blank line between must change nothing")
+
+    // Refused as before: a deeper `case` opens a block, a shallower one leaves the head ended, and
+    // a `default` cannot be the first arm.
+    assert(mend("fn d(e: I32)\n  switch e\n    case 1\n      a()\n", arena)
+        .equals("fn d(e: I32) {\n  switch e {\n    case 1 {\n      a(); } } }\n"),
+        "a deeper `case` must still open a block under the head")
+    assert(mend("fn s(e: I32)\n  if e > 0\n    switch e\n  case 1\n    a()\n", arena)
+        .equals("fn s(e: I32) {\n  if e > 0 {\n    switch e; }\n  case 1 {\n    a(); } }\n"),
+        "a shallower `case` must leave the head ended")
+    assert(mend("fn t(e: I32)\n  switch e\n  default\n    a()\n", arena)
+        .equals("fn t(e: I32) {\n  switch e;\n  default {\n    a(); } }\n"),
+        "a `default` below the head must not continue it")
+
+    // **It runs as it reads**, on either backend: each arm, the labelled escape, and `default`.
+    assert(arm_of(1) == 10 && arm_of(2) == 20 && arm_of(3) == 40 && arm_of(9) == 30,
+        "a `switch` laid out with its first `case` below it must take the arm its value names")
+
+    verdict.pass("a `switch` head took its first `case` from the line below, and only there.")
+
+// ==========================================
+// Checks that the fix-up pass finds a misaligned column in the indentation notation
+// **This calls a function inside the compiler directly**: the note is not a diagnostic yet
+// (that waits on "The indentation notation (`.kspl`)" in `../../docs/DESIGN-language.md`), so the C
+// output cannot show it. `parse/layout.kspl` imports only std, so the compiler stays out.
+// ==========================================
+priv struct Seen //< the number of notes, and the content of the first one
+    //<
+    //< **The line number is checked too**; if it were wrong, the note would lie.
+    count: Sz
+    ragged: Sz
+    tab: Sz
+    terminator: Sz
+    terminator_col: Sz
+    block_end: Sz
+    block_end_col: Sz
+    first_line: Sz
+    want: Sz
+    got: Sz
+
+priv fn look(src: U8[], arena: Arena$@): Seen
+    $notes: = List<|parse_layout.Note|>.new(arena)
+    _fixed: = parse_layout.to_braces(src, notes@, arena)
+    $out: Seen = ::{}
+    out.count = notes.len
+    for nt in notes.slice()
+        if out.first_line == 0
+            out.first_line = nt.line
+        switch nt.kind
+        case .ragged(want, got)
+            out.ragged += 1
+            if out.want == 0
+                out.want = want
+                out.got = got
+        case .tab
+            out.tab += 1
+        case .terminator(col)
+            out.terminator += 1
+            out.terminator_col = col
+        case .block_end(col)
+            out.block_end += 1
+            out.block_end_col = col
+    return out
+
+fn test_ragged_sibling_is_seen()
+    verdict.start("[layout] a sibling in the same block not lining its column up is found test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+
+    // **This passes with zero diagnostics**: `if` at column 2, body at 6, and a line at 4 joins the
+    // block as "deeper than the heading" (only the heading's column is stacked).
+    ragged: =
+        look("""fn main()
+  if 1 < 0
+      io.out().s("A")
+    io.out().s("B")
+  io.out().s("C")
+""",
+        arena)
+    assert(ragged.ragged == 1,
+        "a sibling at a column that matches no enclosing block must be reported")
+    assert(ragged.first_line == 4, "the note must name the line the author wrote")
+    assert(ragged.want == 6 && ragged.got == 4,
+        "the note must carry both the sibling column and this one")
+
+    // Aligned, it says nothing. **The indent width is not fixed**, so a block aligned at width 4
+    // must be silent too.
+    tidy: =
+        look("""fn main()
+  if 1 < 0
+      io.out().s("A")
+      io.out().s("B")
+  io.out().s("C")
+""",
+        arena)
+    assert(tidy.count == 0, "a block whose siblings line up must stay silent, whatever the width")
+
+    verdict.pass("it named the shallowed sibling alone, with its line and its column.")
+
+fn test_written_terminator_is_seen()
+    verdict.start("[layout] a `;` written at a statement line's end is noted, not doubled test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    // **Only the written one stays**: a second `;` after it would read as an empty statement, a
+    // syntax error naming nothing the writer can see.
+    src: = "fn main(): I32\n    x: I32 = 0;\n    return x\n"
+    assert(mend(src, arena).equals("fn main(): I32 {\n    x: I32 = 0;\n    return x; }\n"),
+        "the written `;` must end the statement alone")
+    seen: = look(src, arena)
+    assert(seen.terminator == 1 && seen.first_line == 2 && seen.terminator_col == 14,
+        "the note must name the `;`'s line and its place in it")
+    // A `;` between two statements on one line is the notation's own, and stays silent.
+    assert(look("fn main()\n    a(); b()\n", arena).count == 0,
+        "a `;` between two statements on one line must not be noted")
+    verdict.pass("the written `;` was noted once, with its line and column.")
+
+fn test_mixed_width_stays_silent()
+    verdict.start("[layout] differing widths per block stay silent test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+
+    // **The width is deliberately left free** (`Frame` in `parse/layout.kspl`): each block aligned
+    // in itself is not misaligned.
+    mixed: =
+        look("""fn main()
+  if 1 < 0
+      io.out().s("a 4-column block")
+  if 1 < 0
+    io.out().s("a 2-column block")
+""",
+        arena)
+    assert(mixed.count == 0,
+        "different widths in different blocks are allowed; only ragged siblings are not")
+
+    verdict.pass("a width-4 block and a width-2 block side by side were not called a disorder.")
+
+fn test_tab_indent_is_seen()
+    verdict.start("[layout] a line indented with a tab is found test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+
+    // **A tab is not counted as a column**, so this line is treated as column 0 and leaves the
+    // enclosing block.
+    tabbed: = look("fn main()\n  io.out().s(\"A\")\n\tio.out().s(\"B\")\n", arena)
+    assert(tabbed.tab == 1,
+        "a line indented with a tab must be reported: the tab is not counted as a column")
+    assert(tabbed.first_line == 3, "the note must name the line the author wrote")
+
+    // A tab-only line is a blank line: **say nothing**.
+    blank: = look("fn main()\n  io.out().s(\"A\")\n\t\n  io.out().s(\"B\")\n", arena)
+    assert(blank.count == 0,
+        "a whitespace-only line is blank; reporting it would name a line with nothing to fix")
+
+    verdict
+        .pass("it named the tab lines holding content alone, and did not count the tab-only blank \
+            line.")
+
+fn test_carried_string_leaves_the_lines_below()
+    verdict
+        .start("[layout] a string carried onto the next line does not move the lines below test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+
+    // A `\` at a line's end carries a string onto the next line, so the string is still open there
+    // -- but the **physical line ends where the file's does**.
+    // Caution: **Check the note's line number, not the count.** Skipping the line terminator after
+    // the `\` makes every line below one short, and the count alone passes green.
+    carried: =
+        look("""fn main()
+  s: = "one \
+    two"
+  if 1 < 0
+      io.out().s("A")
+    io.out().s("B")
+  io.out().s(s)
+""",
+        arena)
+    assert(carried.ragged == 1, "the shallowed sibling must still be reported")
+    assert(carried.first_line == 6,
+        "the note must name the line the author wrote, counting the carried line as its own")
+
+    verdict.pass("the line below a carried string kept its number.")

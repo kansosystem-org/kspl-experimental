@@ -1,8 +1,8 @@
 # ==========================================
 # Kanso Makefile -- **`make help` lists what can be typed; do not copy it here.** Options are in
-# docs/CONTRIBUTING.md. **Three layers**: the log wrapper just below (every target calls make once
-# more, into out/log/make.log), then configuration and targets (the `LOGGING=1` side).
-# Caution: **Put real work on the `LOGGING=1` side**: above, it misses the log and hits `%:` twice.
+# docs/CONTRIBUTING.md. **Three layers**: the log wrapper just below (all requested build goals share
+# one child make and one log), then configuration and targets (the `LOGGING=1` side).
+# Caution: **Put real work on the `LOGGING=1` side**, so it belongs to the shared build graph and log.
 # ==========================================
 
 # ==================================================================
@@ -33,29 +33,9 @@ endif
 # Caution: **Open a piped recipe line with `set -o pipefail`**: make 3.81 (macOS) drops .SHELLFLAGS.
 SHELL := bash
 .SHELLFLAGS := -o pipefail -c
-
-ifndef LOGGING
 .DEFAULT_GOAL := all
 
-# Caution: **Do not take `FORCE` off.** For a name that exists as a file or directory (`ksos`,
-# `kssrv`), a `%:` with no prerequisite answers "up to date" and silently runs nothing.
-.PHONY: clean FORCE
-clean:
-	@$(MAKE) --no-print-directory clean LOGGING=1
-%: FORCE
-	@mkdir -p out/gen out/log/ci out/log/lint out/log/suite out/tmp
-	@echo "=> Executing 'make $@' (Output saved to out/log/make.log)..."
-	@set -o pipefail; $(MAKE) --no-print-directory $@ LOGGING=1 2>&1 | tee out/log/make.log
-FORCE:
-# Empty recipes stop `%: FORCE` remaking the makefiles (two rules: make refuses one mixing kinds).
-Makefile: ;
-mk/%.mk: ;
-else
-
-# ==================================================================
-# 1. Configuration
-# ==================================================================
-# --- Paths --- **Only what a user names and uses sits directly under out/**: the documents name it.
+# --- Paths --- shared by the log wrapper and the build it starts
 OUT_DIR     := out
 GEN_DIR     := $(OUT_DIR)/gen
 LOG_DIR     := $(OUT_DIR)/log
@@ -63,6 +43,27 @@ TMP_DIR     := $(OUT_DIR)/tmp
 CI_LOG_DIR    := $(LOG_DIR)/ci
 LINT_LOG_DIR  := $(LOG_DIR)/lint
 SUITE_LOG_DIR := $(LOG_DIR)/suite
+make_dirs = mkdir -p "$(GEN_DIR)" "$(CI_LOG_DIR)" "$(LINT_LOG_DIR)" "$(SUITE_LOG_DIR)" "$(TMP_DIR)"
+.PHONY: clean
+
+ifndef LOGGING
+logging_goals := $(filter-out clean,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),$(.DEFAULT_GOAL)))
+clean:
+	@$(MAKE) --no-print-directory clean LOGGING=1
+# Phony goals run even when a folder has their name; the first forwards all build goals once.
+.PHONY: $(logging_goals)
+ifneq ($(logging_goals),)
+$(filter-out $(firstword $(logging_goals)),$(logging_goals)): $(firstword $(logging_goals))
+$(firstword $(logging_goals)):
+	@$(make_dirs); \
+	  echo "=> Executing 'make $(logging_goals)' (Output saved to $(LOG_DIR)/make.log)..."; \
+	  set -o pipefail; $(MAKE) --no-print-directory $(logging_goals) LOGGING=1 2>&1 | tee "$(LOG_DIR)/make.log"
+endif
+else
+
+# ==================================================================
+# 1. Configuration
+# ==================================================================
 SEED_C      := ksplc/seed.c
 EXT_BIN_DIR := .vscode/extensions/kspl/bin
 LSP_EXE     := ksplc_server.exe
@@ -70,8 +71,8 @@ LSP_EXE     := ksplc_server.exe
 # nothing, and the old compiler passes the tests (`make test-deps` holds this list to ksplc's).
 # The `tests` folders are left out: ksplc reads none of them, and listed, a new test case rebuilt
 # the compiler twice over.
-KSPL_SRCS    := $(shell find ksplc std kspeg -type d -name tests -prune -o \( -name "*.kspls" \
-               -o -name "*.kspl" -o -name ksplc.cfg \) -print) \
+KSPL_SRCS    := $(shell find ksplc std kspeg -type d -name tests -prune -o \( -name "*.kspl" \
+               -o -name ksplc.cfg \) -print) \
                ksplc/kspl.kspeg ksplc/docs/SPEC-tools.md \
                $(wildcard ksplc/gen/runtime/*.c) $(wildcard ksplc/gen/runtime/*.h)
 
@@ -171,7 +172,7 @@ else
     endif
 endif
 
-# --- Linking pthread (for std/thread.kspls) --- In libpthread below glibc 2.34; macOS has none.
+# --- Linking pthread (for std/thread.kspl) --- In libpthread below glibc 2.34; macOS has none.
 ifeq ($(PLATFORM),linux)
     LDLIBS += -lpthread
 endif
@@ -190,10 +191,10 @@ ifneq ($(PLATFORM),win32)
     CFLAGS += -ffunction-sections -fdata-sections $(GC_SECTIONS_FLAG)
 endif
 
-# --- Linking Winsock (for std/net.kspls) --- Windows's TCP/UDP go through winsock2.
+# --- Linking Winsock (for std/net.kspl) --- Windows's TCP/UDP go through winsock2.
 # --- Linking shell32 (for taking the generated main's argv again) --- CommandLineToArgvW is in it;
 # mingw resolves it unasked, and it stays because ksplc names it (`make test-link-rules`).
-# --- The main thread's stack size (for max_parse_depth in kspeg/rule.kspls) ---
+# --- The main thread's stack size (for max_parse_depth in kspeg/rule.kspl) ---
 # The KSPEG parser recurses on the C stack, its depth assuming Linux's 8MB; Windows reserves 1MB.
 # The windowing subsystem for the artifact a person opens by a double-click: none but on win32.
 # **Only UCRT64's own compiler builds here** (its triple holds `-w64-`): the MSYS layer's makes a
@@ -208,9 +209,8 @@ $(error Build this project's artifacts with MSYS2 UCRT64's own compiler [$(CC)'s
     GUI_LDFLAGS := -mwindows
 endif
 
-# Caution: **A target an `mk/*.mk` declares is not listed again here** (`ci-*`, `surface`,
-# `lint-cfg`); each `.PHONY` names the rules in its own file. `clean` and `FORCE` are declared
-# above, beside their rules.
+# A `.PHONY` declaration in an included makefile is not repeated here. `clean` is shared with
+# the logging wrapper above; these are the remaining root declarations.
 .PHONY: all \
 	stage1 self-host self-host-ship commit-seed \
 	fmt lint debug debug-file \
@@ -225,8 +225,7 @@ endef
 
 # Caution: **Make them all at once**: a recipe that only writes a log makes no folder first.
 $(OUT_DIR):
-	@mkdir -p $(OUT_DIR) $(GEN_DIR) $(LOG_DIR) $(TMP_DIR) \
-	  $(CI_LOG_DIR) $(LINT_LOG_DIR) $(SUITE_LOG_DIR)
+	@$(make_dirs)
 
 # ==================================================================
 # 2. The compiler's bootstrap (seed -> stage1 -> stage2 -> self-hosting)
@@ -235,19 +234,19 @@ $(OUT_DIR):
 all: self-host
 
 # Caution: **Write a rule for every name in `.PHONY`**: a bare name answers "Nothing to be done",
-# not a failure (`tests/suite/recipe_bytes_test.kspls` §5).
+# not a failure (`tests/suite/recipe_bytes_test.kspl` §5).
 ## Build-and-install|stage1|Build ksplc with the ksplc the seed built (the seed first, where it is not there)
 stage1: $(STAGE1_EXE)
 
 # **The verdict is emitted here, not in $(DIFF_TXT)'s recipe** (run only when remaking), or an
-# incremental build passes `Gate.verdict` in `tools/ci_gates.kspls` unverified. **No `-B`**: it
+# incremental build passes `Gate.verdict` in `tools/ci_gates.kspl` unverified. **No `-B`**: it
 # redoes the seed.
 # **A change to how ksplc generates code differs here until the seed is re-baked**: the seed's
 # stage1 still generates the old way. Its steps are named on a fall.
 define self_host_help
 #   If you changed how ksplc generates code, the seed still generates the old way:
 #   run `make commit-seed`, then this again ("The bootstrap, and keeping the seed in step"
-#   in ksplc/docs/DESIGN.md). `git checkout ksplc/seed.c` undoes the re-bake.
+#   in ksplc/docs/DESIGN-compiler.md). `git checkout ksplc/seed.c` undoes the re-bake.
 endef
 self-host: export SELF_HOST_HELP := $(self_host_help)
 ## Gates|self-host|See that the notation stage1 and stage2 emit does not differ by one byte
@@ -263,14 +262,14 @@ self-host: $(DIFF_TXT)
 perf-log: $(STAGE1_EXE) $(SEED_EXE) | $(OUT_DIR)
 	@rm -rf $(TMP_DIR)/perf_cache
 	@echo "# MEASURING cold (empty cache)"
-	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspls \
+	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspl \
 		$(TMP_DIR)/perf_cold.c 2> $(LOG_DIR)/perf_cold.log; \
 		rc=$$?; cat $(LOG_DIR)/perf_cold.log; exit $$rc
 	@echo "# MEASURING warm (same cache, 2nd run)"
-	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspls \
+	@KSPLC_CACHE_DIR=$(TMP_DIR)/perf_cache ./$(STAGE1_EXE) $(KSPL_FLAGS) --stats ksplc/main.kspl \
 		$(TMP_DIR)/perf_measure.c 2> $(LOG_DIR)/perf.log; \
 		rc=$$?; cat $(LOG_DIR)/perf.log; exit $$rc
-	./$(SEED_EXE) run tests/tools/perf_guard.kspls --cold=$(LOG_DIR)/perf_cold.log \
+	./$(SEED_EXE) run tests/tools/perf_guard.kspl --cold=$(LOG_DIR)/perf_cold.log \
 	  --warm=$(LOG_DIR)/perf.log
 
 $(SEED_EXE): $(SEED_C) | $(OUT_DIR)
@@ -280,7 +279,7 @@ $(SEED_EXE): $(SEED_C) | $(OUT_DIR)
 # **Each step of the chain is ksplc's own** (`ksplc/Makefile`), run from here (`RUN_FROM=..`): a
 # debugger joins `#line`'s `std` to the folder the C compiler ran in, or `std` frames lose source.
 ksplc_step = $(call pkg_make,ksplc) RUN_FROM=.. CC='$(CC)' CFLAGS='$(BOOT_CFLAGS)' \
-  ENTRY_FILE=ksplc/main.kspls FLAGS='$(KSPL_FLAGS) $(TARGET_FLAG)'
+  ENTRY_FILE=ksplc/main.kspl FLAGS='$(KSPL_FLAGS) $(TARGET_FLAG)'
 
 # Caution: **Do not tidy this C**: `$(C_FMT)` is slow on it and nobody reads it; the seed is tidied.
 $(STAGE1_OUT): $(SEED_EXE) $(KSPL_SRCS)
@@ -325,7 +324,7 @@ $(DIFF_TXT): $(STAGE1_OUT) $(STAGE2_OUT)
 
 # Strips `#line` from stage2's C into the seed (C backend only): one added source line would shift
 # every later one in git's history. **`cmp` compares the stripped side**; then run `make self-host`.
-# Caution: **Read `$(STAGE2_OUT)` by name, not as `$<`** (`tests/suite/recipe_bytes_test.kspls` §4).
+# Caution: **Read `$(STAGE2_OUT)` by name, not as `$<`** (`tests/suite/recipe_bytes_test.kspl` §4).
 define seed_fmt_help
 ERROR: make commit-seed needs clang-format, and this machine has none.
   ksplc/seed.c in git is tidied by it, so a seed written untidied would change every line of it.
@@ -345,7 +344,7 @@ ifeq ($(BACKEND),c)
 	@awk '!/^#line /' $(TMP_DIR)/seed_fmt.c > $(TMP_DIR)/seed_stripped.c
 	@cmp -s $(TMP_DIR)/seed_stripped.c $(SEED_C) \
 		|| (cp $(TMP_DIR)/seed_stripped.c $(SEED_C) \
-			&& ./$(STAGE1_EXE) run tools/repo_stat.kspls \
+			&& ./$(STAGE1_EXE) run tools/repo_stat.kspl \
 			&& echo "Seed updated successfully.")
 else
 	@echo "Cannot update seed.c from LLVM output. Run without LLVM=1."
@@ -355,7 +354,7 @@ endif
 # 3. Development tools (formatter / linter / LSP / debugging)
 # ==================================================================
 # **Includes, not a recursive make**: they share this run's variables. **The checks come from
-# these lines** (`make_files` in `tests/suite/recipe_bytes_test.kspls`): a note on one hides it.
+# these lines** (`make_files` in `tests/suite/recipe_bytes_test.kspl`): a note on one hides it.
 # **A recipe line (and what expands into one) is ASCII only**: the shell rereads it in its locale
 # (CP932 under MSYS2), garbling text or eating a `"`; **hand text over as an environment variable**.
 # **Only a leading tab marks a recipe line**, for make and the checks: a `$(foreach)` body starts
@@ -386,16 +385,16 @@ endef
 ## Run|run|Build the AI engine (`ksai/examples/llama_engine`) and run it
 run: $(STAGE1_EXE)
 	@echo "# RUNNING AI ENGINE (Release Build, BLAS=$(BLAS))"
-	$(call kspl_build,ksai/examples/llama_engine/main.kspls,llama_engine,$(AI_KSPL_FLAGS))
+	$(call kspl_build,ksai/examples/llama_engine/main.kspl,llama_engine,$(AI_KSPL_FLAGS))
 	./$(OUT_DIR)/llama_engine.exe
 
-# --- Generating the corpus for KSPL FIM (tools/ai_assist/build_corpus.kspls -> make_fim.kspls) ---
+# --- Generating the corpus for KSPL FIM (tools/ai_assist/build_corpus.kspl -> make_fim.kspl) ---
 ## Run|fim-corpus|Make the material for teaching completion
 fim-corpus: $(STAGE1_EXE)
 	@echo "# BUILDING FIM TRAINING CORPUS (tools/ai_assist, KSPL native)"
-	$(call kspl_build,tools/ai_assist/build_corpus.kspls,build_corpus,)
+	$(call kspl_build,tools/ai_assist/build_corpus.kspl,build_corpus,)
 	./$(OUT_DIR)/build_corpus.exe
-	$(call kspl_build,tools/ai_assist/make_fim.kspls,make_fim,)
+	$(call kspl_build,tools/ai_assist/make_fim.kspl,make_fim,)
 	./$(OUT_DIR)/make_fim.exe
 
 # --- The KSPL-native coding model (ksai/examples/fim_coder), scored by the compiler ---
@@ -414,9 +413,9 @@ FIM_AI := tools/ai_assist
 FIM_ENV := OPENBLAS_NUM_THREADS=1
 ## Run|fim-model|Train the KSPL-native coding model on the FIM corpus (`FIM_STEPS=`, `FIM_BATCH=`, `FIM_OPTIMIZER=`, `BLAS=1`)
 fim-model: fim-corpus
-	$(call kspl_build,$(FIM_AI)/train_bpe.kspls,train_bpe,)
+	$(call kspl_build,$(FIM_AI)/train_bpe.kspl,train_bpe,)
 	./$(OUT_DIR)/train_bpe.exe --vocab=2000
-	$(call kspl_build,ksai/examples/fim_coder/main.kspls,fim_coder,$(AI_KSPL_FLAGS))
+	$(call kspl_build,ksai/examples/fim_coder/main.kspl,fim_coder,$(AI_KSPL_FLAGS))
 	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe train --corpus=$(FIM_AI)/corpus/fim_train.jsonl \
 		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
 		--out=$(OUT_DIR)/fim_coder.safetensors --steps=$(FIM_STEPS) --batch=$(FIM_BATCH) \
@@ -424,7 +423,7 @@ fim-model: fim-corpus
 
 ## Run|fim-eval|Score the coding model: its held-out loss, then the rate at which ksplc accepts its completions
 fim-eval: $(STAGE1_EXE)
-	$(call kspl_build,$(FIM_AI)/eval_fim.kspls,eval_fim,)
+	$(call kspl_build,$(FIM_AI)/eval_fim.kspl,eval_fim,)
 	$(FIM_ENV) ./$(OUT_DIR)/fim_coder.exe loss --corpus=$(FIM_AI)/corpus/fim_val.jsonl \
 		--vocab=$(FIM_AI)/tokenizer/vocab.txt --merges=$(FIM_AI)/tokenizer/merges.txt \
 		--weights=$(OUT_DIR)/fim_coder.safetensors
@@ -434,14 +433,14 @@ fim-eval: $(STAGE1_EXE)
 ## Run|qwen|Build native inference for the Qwen family (`ksai/examples/qwen_infer`)
 qwen: $(STAGE1_EXE)
 	@echo "# BUILDING QWEN NATIVE INFERENCE (BLAS=$(BLAS))"
-	$(call kspl_build,ksai/examples/qwen_infer/main.kspls,qwen_infer,$(AI_KSPL_FLAGS))
+	$(call kspl_build,ksai/examples/qwen_infer/main.kspl,qwen_infer,$(AI_KSPL_FLAGS))
 	@echo "# built -> $(OUT_DIR)/qwen_infer.exe"
 
 # --- The static file server (kssrv/) --- Build only (it stays resident, so make does not run it).
 ## Run|kssrv|Build the HTTP server that serves static files
 kssrv: $(STAGE1_EXE)
 	@echo "# BUILDING KSSRV (static file HTTP server)"
-	$(call kspl_build,kssrv/main.kspls,kssrv,)
+	$(call kspl_build,kssrv/main.kspl,kssrv,)
 	@echo "# built -> $(OUT_DIR)/kssrv.exe (try: ./$(OUT_DIR)/kssrv.exe 8080 .)"
 
 # --- Kanso OS (RTOS): `ksos/Makefile`'s own targets, called here by the same names ---
@@ -460,9 +459,9 @@ ksos_make = $(call pkg_make,ksos) OUT=../$(OUT_DIR) TEST_JOBS=$(TEST_JOBS)
 ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ksos-posix: $(STAGE1_EXE)
 	@$(ksos_make) $@
 
-## Run|ksos-*|One POSIX host demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
-## Run|ksos-cm-*|One Cortex-M demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
-## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN.md`)
+## Run|ksos-*|One POSIX host demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-cm-*|One Cortex-M demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
 ## Per-item|ksos-linkcheck-*|One target's worth of `test-ksos-link`
 ## Per-item|ksos-qemugate-*|One target's worth of `test-ksos-qemu`
 ## Per-item|ksos-posixgate-*|One target's worth of `test-ksos-posix`
@@ -483,7 +482,7 @@ include mk/help.mk
 # **Only $(OUT_DIR) is removed**: nothing built is placed outside it, the served page included.
 ## Build-and-install|clean|Remove `out/`
 clean:
-	@rm -rf $(OUT_DIR)
+	@rm -rf "$(OUT_DIR)"
 	@echo "Cleaned $(OUT_DIR)"
 
 endif

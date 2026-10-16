@@ -1,14 +1,14 @@
 /* Part of the C runtime for an environment with an OS.
    Caution: **It does not build on its own** — it
  * joins behind hosted.c (the preamble) to make one translation unit. The joining order is held by
- * write_impl in ksplc/gen/runtime.kspls. */
+ * write_impl in ksplc/gen/runtime.kspl. */
 /* ============================================================
- * The thread / mutex primitives (for std/thread.kspls)
+ * The thread / mutex primitives (for std/thread.kspl)
  * As with kspl_proc_*, a handle is opaque in an I64.
  *
  * **A mutex is not re-entrant, and misusing one stops the program** on every OS: locking it on the
  * thread that holds it, unlocking it or waiting on it from a thread that does not ("A mutex is
- * locked once, by one thread" in std/docs/DESIGN.md). POSIX's error-checking mutex reports each
+ * locked once, by one thread" in std/docs/DESIGN-system.md). POSIX's error-checking mutex reports each
  * as an error number; Windows's SRWLOCK reports nothing, so the owner is kept beside it.
  * ============================================================ */
 
@@ -264,7 +264,7 @@ KSPL_LINK void kspl_cond_destroy(I64 handle) {
 #endif
 
 /* ============================================================
- * Where the calling thread's stack ends (for std/stack_limit.kspls)
+ * Where the calling thread's stack ends (for std/stack_limit.kspl)
  * The lowest address the stack may grow down to, above the guard the thread's bounds carry; 0
  * where the OS does not say. A level's cost moves with the backend, so a walk compares its
  * position with this rather than counting levels.

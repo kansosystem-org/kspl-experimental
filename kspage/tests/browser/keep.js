@@ -46,7 +46,6 @@ function kspageProbeKeep(ks) {
 
   // ---- From here on it does not touch the document ----
   // **Borrow the page's connection** (IndexedDB orders transactions only inside one connection).
-  // Caution: **Do not go and look until it comes out**, and **wait through `ks.fed`**: IndexedDB
   // answers off the page's thread, which the drawing-out side's clock does not see (why: `fed` in
   // `probe.js`).
   const done = ks.hold();
@@ -62,7 +61,7 @@ function kspageProbeKeep(ks) {
 
   // **A page that cannot remember passes too** (a private window can refuse IndexedDB), but not
   // remembering and a broken holding back look the same, so **it looks for the arena first**.
-  ks.fed(store.keepDraft({ at: PLANT, when: Date.now(), kind: "json", name: "the round that fell",
+  Promise.resolve(store.keepDraft({ at: PLANT, when: Date.now(), kind: "json", name: "the round that fell",
     from: notAPath + "/probe.kspage", text: planted })
     .then(() => store.takeDrafts())
     .then((got) => {

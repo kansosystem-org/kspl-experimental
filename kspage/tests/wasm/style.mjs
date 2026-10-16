@@ -310,7 +310,7 @@ export function run(ks) {
   check(w.kspage_web_style_count() === hadStyles, "one step returns to before it was made");
 
   // A name holding a space is turned away, **and the reason comes back as its own number** (it
-  // would cut a Markdown fence's language short; `kspage/docs/DESIGN.md`'s "A style name holds no
+  // would cut a Markdown fence's language short; `kspage/docs/DESIGN-document.md`'s "A style name holds no
   // whitespace").
   // Caution: **Look at -2 and not merely at "below zero"** — the number says which refusal it is,
   // or the screen asks for a name already typed in.
@@ -476,7 +476,7 @@ export function run(ks) {
   //
   // **The core carries the list** (no names or count copied here), **the colours and the
   // typefaces alone** — sizes would change the count of pages per theme.
-  // Note: The theme's name (`Standard`) is the core's (`kspage/write/theme.kspls`), so that needle
+  // Note: The theme's name (`Standard`) is the core's (`kspage/write/theme.kspl`), so that needle
   // stays as it is until that side moves.
   const names = [];
   for (let i = 0; i < w.kspage_web_theme_count(); i += 1) {

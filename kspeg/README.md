@@ -19,7 +19,7 @@ It is for whoever writes a grammar for a format or a language, and for whoever c
 
 **Read the grammar once, then make one `Target` for each input text.** A `Target` is one input being parsed. It borrows the rules and the memo table from the grammar you read. Calling `parse_grammar` again for each input would rebuild the rule table and a memo table every time.
 
-```kspls
+```kspl
 import "kspeg/engine" as kspeg
 import "kspeg/notation" as kspeg_notation
 
@@ -44,7 +44,7 @@ node: = t.parse_rule("program")!
 
 **`make test` runs the tests from this folder** with only a `ksplc` ([`kspeg/Makefile`](Makefile)). kspeg names itself in [`kspeg/ksplc.cfg`](ksplc.cfg), so a copy of this folder alone runs them the same way.
 
-The engine adds two default rules, `_Space` (the whitespace it skips) and `_Boundary` (what ends a word). A grammar that defines `_Space` and `_Boundary` itself never runs these defaults, so only [`kspeg/tests/engine_test.kspls`](tests/engine_test.kspls) tests them.
+The engine adds two default rules, `_Space` (the whitespace it skips) and `_Boundary` (what ends a word). A grammar that defines `_Space` and `_Boundary` itself never runs these defaults, so only [`kspeg/tests/engine_test.kspl`](tests/engine_test.kspl) tests them.
 
 Three complete grammars sit in `kspeg/docs/`: [`json.kspeg`](docs/json.kspeg), JSON, the shortest, so read it first; [`script.kspeg`](docs/script.kspeg), a small scripting language with keywords, comments, operator precedence and string interpolation; and [`kspeg.kspeg`](docs/kspeg.kspeg), the notation written in itself, the normative grammar `SPEC-notation.md` refers to.
 
@@ -66,27 +66,27 @@ Caution: The dependencies run one way, downward; do not add an `import` in the r
 
 | File | Role |
 | :-- | :-- |
-| [`kspeg/notation.kspls`](notation.kspls) | **Reads a `.kspeg` text** into the rule tree and returns a `Target`. |
-| [`kspeg/engine.kspls`](engine.kspls) | **Applies the rule tree to input** — backtracking, memoization (filling and reading the memo table), whitespace skipping, the profile (a count of how often each rule runs). |
-| [`kspeg/memo.kspls`](memo.kspls) | **What each rule answered at each position** — one table for every input of a grammar. It is emptied by starting a new generation, not by writing zeros over it: each slot carries the generation that wrote it, and a slot from an older one reads as empty. |
-| [`kspeg/expected.kspls`](expected.kspls) | The position where the parse failed and **what could have been written** there; it never advances the input. |
-| [`kspeg/rule.kspls`](rule.kspls) | **The rule tree's representation**, and the operations on it alone. |
+| [`kspeg/notation.kspl`](notation.kspl) | **Reads a `.kspeg` text** into the rule tree and returns a `Target`. |
+| [`kspeg/engine.kspl`](engine.kspl) | **Applies the rule tree to input** — backtracking, memoization (filling and reading the memo table), whitespace skipping, the profile (a count of how often each rule runs). |
+| [`kspeg/memo.kspl`](memo.kspl) | **What each rule answered at each position** — one table for every input of a grammar. It is emptied by starting a new generation, not by writing zeros over it: each slot carries the generation that wrote it, and a slot from an older one reads as empty. |
+| [`kspeg/expected.kspl`](expected.kspl) | The position where the parse failed and **what could have been written** there; it never advances the input. |
+| [`kspeg/rule.kspl`](rule.kspl) | **The rule tree's representation**, and the operations on it alone. |
 
 ## Pitfalls
 
-* **Do not mix the two readers.** kspeg reads two different things. [`kspeg/notation.kspls`](notation.kspls) reads a `.kspeg` grammar file; it is a recursive descent parser written by hand (one function per piece of the notation). [`kspeg/engine.kspls`](engine.kspls) reads your input by following a grammar. They are separate code.
+* **Do not mix the two readers.** kspeg reads two different things. [`kspeg/notation.kspl`](notation.kspl) reads a `.kspeg` grammar file; it is a recursive descent parser written by hand (one function per piece of the notation). [`kspeg/engine.kspl`](engine.kspl) reads your input by following a grammar. They are separate code.
 * **kspeg reaches only what `std` publishes.** The compiler rejects a name under `std/` that is not marked `pub` (`cannot access symbol`). Making one `pub` in `std` is a decision to weigh: an engine that only interprets a grammar cannot be swapped out once it depends on `std/`'s internals.
-* **Inside the grammar, only `try_parse` in `kspeg/engine.kspls` swallows a backtracking signal** ("A backtracking signal may be swallowed, a real failure may not" in [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). A backtracking signal means "this alternative did not match, try the next"; a real failure must reach the caller. The one other place is the top: a first run that skips rules by the next byte takes a mismatch as a cue to run again without skipping, which then reports it.
+* **Inside the grammar, only `try_parse` in `kspeg/engine.kspl` swallows a backtracking signal** ("A backtracking signal may be swallowed, a real failure may not" in [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). A backtracking signal means "this alternative did not match, try the next"; a real failure must reach the caller. The one other place is the top: a first run that skips rules by the next byte takes a mismatch as a cue to run again without skipping, which then reports it.
 
 ## Files near the limit and how they split
 
-No file in kspeg exceeds 900 lines; the nearest is [`kspeg/engine.kspls`](engine.kspls). **Before adding to it, write here what will be split out and where it goes** (`make test-conventions` checks this). How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md). How kspeg's files are split is "How the engine is split across files" in [`kspeg/docs/DESIGN.md`](docs/DESIGN.md).
+No file in kspeg exceeds 900 lines; the nearest is [`kspeg/engine.kspl`](engine.kspl). **Before adding to it, write here what will be split out and where it goes** (`make test-conventions` checks this). How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). How kspeg's files are split is "How the engine is split across files" in [`kspeg/docs/DESIGN-engine.md`](docs/DESIGN-engine.md).
 
 ## Further reading
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
 | [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md) | The notation, and the requirements an engine has to meet. | Whoever writes a grammar (Part I alone); whoever writes an engine (the rest) |
-| [`kspeg/docs/DESIGN.md`](docs/DESIGN.md) | Why the engine took this shape, and what each choice gives up. | Whoever changes kspeg |
+| [`kspeg/docs/DESIGN-engine.md`](docs/DESIGN-engine.md) | Why the engine took this shape, and what each choice gives up. | Whoever changes kspeg |
 | [`kspeg/SURFACE.txt`](SURFACE.txt) | The record of the published API, remade by `make surface` and held against the tree by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)). | Whoever changes kspeg |
 | [std](../std/README.md) | The standard library kspeg builds on; `ksplc doc std` lists every file it publishes. | Whoever changes kspeg |

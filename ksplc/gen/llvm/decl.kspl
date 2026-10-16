@@ -1,0 +1,796 @@
+//< Generates LLVM IR for top-level declarations
+//<
+//< Extern declarations, global variables, embed data and function definitions (the signature,
+//< with the body delegated to stmt.kspl / expr.kspl).
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/core" as base_core
+import "ksplc/base/literal" as base_literal
+import "ksplc/gen/embed" as gen_embed
+import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
+import "ksplc/gen/llvm/expr" as gen_llvm_expr
+import "ksplc/gen/llvm/stmt" as gen_llvm_stmt
+import "ksplc/gen/llvm/types" as gen_llvm_types
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/decl/layout" as sema_decl_layout
+import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/naming" as sema_type_naming
+import "ksplc/sema/type/query" as sema_type_query
+import "ksplc/sema/type/scope" { Sema_symbol }
+import "std/ds" { List }
+import "std/mem" { dealloc }
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/strnum"
+
+priv const max_laid_depth: Sz = 1000 //< how deep holds_laid_value looks into fields
+    //<
+    //< A type holding itself by value is refused before codegen; this only stops a broken input.
+
+priv const max_float_fold_depth: Sz = 256 //< how deep fold_float follows nested expressions
+
+priv fn rounded_as(cg: Genllvm_ctx$@, folded: F64?, type_id: I32): F64? //<
+    //< A folded value rounded to `F32` where the node's type is one
+    switch folded
+    case .some(v)
+        if cg.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
+            narrowed: = F32::v
+            return .some(narrowed)
+        return .some(v)
+    case .none
+        return .none
+
+impl Ast_node
+    fn emit_llvm_extern_block(r: Ast_node$@, cg: Genllvm_ctx$@)
+        if r == null
+            return
+        for child in r.children
+            if child.kind_id == .k_decl_fn_proto
+                name: = child.find_text(.k_identifier)
+                // What hosted's preamble emits itself is skipped (`is_preamble_fn`); every other
+                // `kspl_*` gets a `declare` and its body from the C runtime (`ksplc emit-runtime`).
+                if !base_core.config.is_freestanding && gen_llvm_ctx.is_preamble_fn(name)
+                    continue
+                // One `declare` per name even across files (the reason is ctx's extern_declared).
+                _seen: = cg.extern_declared.get(name) catch
+                    cg.extern_declared.set(name, 1)
+                    fallback -1
+                if _seen >= 0
+                    continue
+                cg.s("declare ")
+                type_node: = child.get_decl_type_node()
+                if type_node != null
+                    cg.t(type_node.type_id)
+                else
+                    cg.s("void")
+                cg.s(" @").s(name).s("(")
+                // An `#ext` is a C function, so it keeps the C ABI (kspl_abi=false); sema's
+                // check_ffi_safety rejects aggregates by value there.
+                child.get_fn_params()
+                    .emit_llvm_param_list(cg,
+                    gen_llvm_ctx.Param_list_opts::{ .with_names = false, .emit_variadic = true,
+                    .kspl_abi = false, .emitted_before = false })
+                cg.s(")\n")
+            else if child.kind_id == .k_decl_var
+                name: = child.get_decl_id_text()
+                type_node: = child.get_decl_type_node()
+                cg.s("@").s(name).s(" = external global ")
+                if type_node != null
+                    cg.t(type_node.type_id)
+                else
+                    cg.s("i32")
+                cg.s("\n")
+
+    fn emit_llvm_global_var(r: Ast_node$@, cg: Genllvm_ctx$@)
+        name: = r.get_decl_id_text()
+        type_node: = r.get_decl_type_node()
+        $verbatim_name: = false
+        if r.sym_ptr != null
+            sym: = Sema_symbol$@::r.sym_ptr
+            verbatim_name = sym.uses_verbatim_c_name()
+        // An `#align(N)` struct needs `, align N` here, as at every use (get_struct_align).
+        align_val: = cg.get_struct_align(type_node.type_id) if type_node != null else 0
+
+        init_expr: = r.get_var_decl_expr()
+        is_const: = r.kind_id == .k_decl_const
+        c_type: = " = constant " if is_const else " = global "
+
+        if gen_llvm_ctx.is_kspl_prefixed_or_ext(name, verbatim_name)
+            cg.s("@").s(name).s(c_type)
+        else
+            cg.s("@kspl_").s(name).s(c_type)
+        // A tagged union's LLVM type is a tag and raw words, which no constant can fill field by
+        // field; a value holding one is written as packed bytes at ksplc's own layout instead.
+        laid: =
+            type_node != null && init_expr != null && init_expr.kind_id != .k_empty &&
+            cg.holds_laid_value(type_node.type_id, 0)
+        if laid
+            init_expr.emit_llvm_laid_const(cg, type_node.type_id, true)
+            cg.s(" ")
+            init_expr.emit_llvm_laid_const(cg, type_node.type_id, false)
+            if align_val == 0
+                cg.s(", align \{cg.sema.type_layout(type_node.type_id).align\}")
+            cg.s("\n")
+            return
+        if type_node != null
+            cg.t(type_node.type_id)
+        else
+            cg.s("i32")
+
+        // A const and a `$var` both get the initializer (a mutable `global` takes one too; without
+        // it, `$n: I32 = 42;` would start at 0).
+        if init_expr != null && init_expr.kind_id != .k_empty
+            init_type_id: = type_node.type_id if type_node != null else init_expr.type_id
+            cg.s(" ")
+            init_expr.emit_llvm_const_init(cg, init_type_id)
+        else
+            cg.s(" zeroinitializer")
+        // The LangRef's order is initializer -> section -> align; otherwise llvm-as rejects it.
+        if section_attr: = r.get_attribute("section")
+            cg.s(", section \"").s(section_attr.section_name()).s("\"")
+        if align_val > 0
+            cg.s(", align \{align_val\}")
+        cg.s("\n")
+
+    priv fn emit_llvm_fn_attributes(r: Ast_node$@, cg: Genllvm_ctx$@) //<
+        //< It lowers a function's attributes to LLVM function attributes
+        //<
+        //< Caution: Keep it one to one with genc's emit_attributes (gen/c/decl.kspl). An attribute
+        //< that only one backend interprets is written but has no effect on the other.
+        //< The attributes that cannot be lowered to LLVM (an `#interrupt`, and an `#align(N)` on a
+        //< function) are errors in `ksplc/sema/decl/attrs.kspl`. The output order follows the
+        //< LangRef's define syntax (fn attrs -> section); reversed, llvm-as reports a syntax error.
+        if r == null
+            return
+        // inlinehint, like C's `inline`; alwaysinline would force it even at -O0, unlike genc.
+        if r.has_attribute("inline")
+            cg.s("inlinehint ")
+        if r.has_attribute("noreturn")
+            cg.s("noreturn ")
+        // `noinline` with it, as clang adds: inlined, the body's own `ret` would leave the caller.
+        if r.has_attribute("naked")
+            cg.s("naked noinline ")
+        if r.has_attribute("noinline")
+            cg.s("noinline ")
+        // Only a name sema let through (`section_name`), so it needs no escaping.
+        if section_attr: = r.get_attribute("section")
+            cg.s("section \"").s(section_attr.section_name()).s("\" ")
+
+    priv fn emit_llvm_const_init(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
+        //< It lowers a global declaration's initializer to an LLVM static constant expression
+        //<
+        //< Caution: Never silently replace a shape that cannot be lowered with a zeroinitializer,
+        //< which starts a written value at 0 with no warning ("Failing fast through an exception or
+        //< an ICE" in ksplc/docs/DESIGN-compiler.md). It is an error with a position.
+        if r == null || r.kind_id == .k_empty || r.is_typed_null()
+            cg.s("zeroinitializer")
+            return
+        switch r.kind_id
+        case .k_null
+            cg.s("zeroinitializer")
+        case .k_bool
+            cg.s("1" if r.text.equals("true") else "0")
+        case .k_integer
+            // Folding works in I64 and cannot hold a `U64` above I64's maximum, so a single
+            // literal's text is converted directly (as emit_llvm_integer_literal in expr.kspl
+            // does).
+            cg.s(r.emit_llvm_integer_literal(cg))
+        case .k_float
+            r.emit_llvm_const_float(cg, type_id)
+        case .k_string
+            r.emit_llvm_const_string(cg, type_id)
+        case .k_struct_literal
+            r.emit_llvm_const_aggregate(cg, type_id)
+        case .k_expr_postfix
+            r.emit_llvm_const_postfix(cg, type_id)
+        case .k_identifier, .k_expr_path, .k_type_path, .k_generic_path
+            // A function pointer's initial value is a function's address and does not go through
+            // the integer constant folding (emit_llvm_const_scalar_expr). Build the name the same
+            // way as a run-time reference.
+            // Caution: Adding the `@` yourself doubles the `kspl_` and misses an `#export`'s name
+            // (gen_llvm_ctx.is_kspl_prefixed_or_ext decides that).
+            if cg.env.is_fn_ptr(cg.env.get_clean_real_type(type_id))
+                cg.s(r.emit_llvm_lvalue(cg))
+                return
+            r.emit_llvm_const_scalar_expr(cg)
+        default
+            r.emit_llvm_const_scalar_expr(cg)
+
+    priv fn is_typed_null(r: Ast_node$@): Bool //<
+        //< Whether it is `null` itself, or an expression only casting a null (`Panic_hook::null`)
+        //<
+        //< Both are all zero bits, which eval_constexpr does not detect.
+        if r == null
+            return false
+        if r.kind_id == .k_null
+            return true
+        if r.kind_id == .k_expr_postfix && r.text.equals("::") && r.children.len > 0
+            return r.get_child(0).is_typed_null()
+        return false
+
+    priv fn emit_llvm_const_float(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32)
+        val_type_id: = type_id if type_id != 0 else r.type_id
+        // Strip the immutability qualifier: `const S: F32[_]`'s element is `const_of(F32)`, which
+        // unstripped stays decimal, and LLVM rejects 0.85 as "floating point constant invalid for
+        // type" (emit_llvm_const_aggregate strips it for the same reason).
+        real_id: = cg.env.get_clean_real_type(val_type_id)
+        if real_id == (I32::sema_type_env.Builtin_type_id.f32_type)
+            // An F32 is always written in hexadecimal (the reason is at
+            // gen_llvm_ctx.format_f32_hex_literal).
+            cg.s(gen_llvm_ctx.format_f32_hex_literal(r.text))
+            return
+        $clean_str: = Str_builder.new()
+        defer clean_str.free()
+        r.text.append_clean_number(clean_str@, "Ff")
+        cg.s(clean_str.slice())
+
+    priv fn emit_llvm_const_string(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
+        //< It adds a string literal to the string pool and emits a constant pointing at its bytes
+        //<
+        //< For a pointer type it is the address itself; for a slice type it becomes the two-element
+        //< struct {ptr, len} (the same shape as an embed's).
+        str_id: = cg.get_or_add_str_literal(r.text)
+        // The length is computed as at run time (emit_llvm_string in expr.kspl); if the two
+        // disagree, NULs get mixed in.
+        byte_len: = r.text.literal_span().byte_len
+        if cg.env.is_pointer(cg.env.get_real_type(type_id))
+            cg.s("@.str.\{str_id\}")
+            return
+        cg.s("{ ptr @.str.\{str_id\}, i64 \{I32::byte_len\} }")
+
+    priv fn emit_llvm_const_postfix(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
+        //< A postfix expression appearing in a constant's initializer
+        //<
+        //< Only `T[]::<constant array>` is lowered here; the rest goes to integer folding.
+        //< Caution: **Build the descriptor.** Folded, the array's name gives `0` and reports "not a
+        //< constant". Take the length **from the type**.
+        op: = r.get_postfix_op()
+        target: = r.safe_get_child(0)
+        real_id: = cg.env.get_clean_real_type(type_id)
+        // Caution: **Recognize a slice by its spelling.** A `T[]` is a `Slice<|T|>` instance, so
+        // dispatching on the constructor sends it down the same path as a plain struct, where it
+        // fails because it cannot be evaluated as a constant expression (a reflection table has a
+        // `U8[]` field; `../../sema/decl/reflect.kspl`).
+        if op == null || !op.is_literal("::") || target == null || !cg.env.is_slice(real_id)
+            r.emit_llvm_const_scalar_expr(cg)
+            return
+        src_id: = cg.env.get_clean_real_type(target.type_id)
+        switch cg.env.get_info(src_id)
+        case .array(_base_id, size)
+            cg.s("{ ptr ").s(target.emit_llvm_lvalue(cg)).s(", i64 \{size\} }")
+            return
+        default {}
+        r.emit_llvm_const_scalar_expr(cg)
+
+    priv fn emit_llvm_const_scalar_expr(r: Ast_node$@, cg: Genllvm_ctx$@)
+        // A general constant expression (an enum variant, arithmetic, a cast and so on).
+        // Caution: Use the version that does not narrow to I32; register definitions such as
+        // `1U32 << 31` would overflow it.
+        // **A float is folded here** (`pi * 2.0`, `F64::3`), as C's compiler folds the same text
+        // for genc; sema folds integers only. A float cast to an integer (`I32::2.9`) truncates to
+        // zero.
+        if cg.env.is_float(r.type_id)
+            switch r.fold_float(cg, 0)
+            case .some(f)
+                cg.s(gen_llvm_ctx.format_f64_hex(f))
+                return
+            case .none {}
+        switch cg.sema.try_eval_constexpr_wide(r)
+        case .some(v)
+            cg.s("\{v\}")
+            return
+        case .none {}
+        if cg.env.is_integer(r.type_id) && r.is_explicit_cast()
+            switch r.get_postfix_receiver().fold_float(cg, 0)
+            case .some(f)
+                cg.s("\{I64::f\}")
+                return
+            case .none {}
+        // Caution: Make it a diagnostic with a position; an ICE does not say which declaration to
+        // fix ("A diagnostic points at 'the position the user wrote'" in
+        // ksplc/docs/DESIGN-diagnostics.md).
+        cg.sema
+            .err(r,
+            "this global initializer is not a compile-time constant the LLVM backend can lower. \
+                Compile this file with --to=c, or replace the initializer with a literal")
+        cg.had_error = true
+        cg.s("0")
+
+    priv fn fold_float(r: Ast_node$@, cg: Genllvm_ctx$@, depth: Sz): F64? //<
+        //< The value of a constant floating-point expression, or none where it is not one
+        //<
+        //< A literal, a constant's name, `-`, `+ - * /`, parentheses and a cast from a number. An
+        //< `F32` node rounds to `F32` at each step, as its operation would.
+        if r == null || depth >= max_float_fold_depth
+            return .none
+        $v: F64 = 0.0
+        switch r.kind_id
+        case .k_float
+            $clean: = Str_builder.new()
+            defer clean.free()
+            _stop: = r.text.append_clean_number(clean@, "Ff")
+            v = clean.slice().to_f64() catch
+                return .none
+        case .k_expr_primary
+            return r.get_primary_inner_expr().fold_float(cg, depth + 1)
+        case .k_identifier, .k_expr_path
+            switch r.const_init_expr(cg.sema)
+            case .some(init)
+                return rounded_as(cg, init.fold_float(cg, depth + 1), r.type_id)
+            case .none
+                return .none
+        case .k_expr_unary
+            if !r.get_unary_op().text.equals("-")
+                return .none
+            switch r.get_unary_target().fold_float(cg, depth + 1)
+            case .some(a)
+                v = -a
+            case .none
+                return .none
+        case .k_expr
+            return r.fold_float_binary(cg, depth)
+        case .k_expr_postfix
+            if !r.is_explicit_cast()
+                return .none
+            src: = r.get_postfix_receiver()
+            if cg.env.is_float(src.type_id)
+                return rounded_as(cg, src.fold_float(cg, depth + 1), r.type_id)
+            switch cg.sema.try_eval_constexpr_wide(src)
+            case .some(n)
+                v = F64::n
+            case .none
+                return .none
+        default
+            return .none
+        return rounded_as(cg, .some(v), r.type_id)
+
+    priv fn fold_float_binary(r: Ast_node$@, cg: Genllvm_ctx$@, depth: Sz): F64? //<
+        //< fold_float's `+ - * /`
+        $a: F64 = 0.0
+        $b: F64 = 0.0
+        switch r.get_binary_left().fold_float(cg, depth + 1)
+        case .some(x)
+            a = x
+        case .none
+            return .none
+        switch r.get_binary_right().fold_float(cg, depth + 1)
+        case .some(y)
+            b = y
+        case .none
+            return .none
+        op: = r.get_binary_op().text
+        $v: F64 = 0.0
+        if op.equals("+")
+            v = a + b
+        else if op.equals("-")
+            v = a - b
+        else if op.equals("*")
+            v = a * b
+        else if op.equals("/")
+            v = a / b
+        else
+            return .none
+        return rounded_as(cg, .some(v), r.type_id)
+
+    priv fn emit_llvm_const_aggregate(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32) //<
+        //< A compound literal `::{ ... }`
+        //<
+        //< LLVM needs every element in declaration order, so they are reordered here and the
+        //< positions not written get a zeroinitializer (genc leaves it to C).
+        $has_init: = false
+        for child in r.children
+            if child.kind_id == .k_expr_field_init
+                has_init = true
+                break
+        if !has_init
+            // A `::{}` is all zero bits whatever the type.
+            cg.s("zeroinitializer")
+            return
+        // Strip the immutability qualifier: `const Row[_]`'s element is `const_of(Row)`, which
+        // unstripped is neither struct nor array and ends in an ICE. The layout is the base type's.
+        real_id: = cg.env.get_clean_real_type(type_id)
+        switch cg.env.get_info(real_id)
+        case .array(elem_id, size)
+            r.emit_llvm_const_array(cg, elem_id, size)
+        case .struct_type(s_def)
+            r.emit_llvm_const_struct(cg, s_def)
+        case .named
+            // A name with no field table is a vtable that lower built (ksplc/lower/root.kspl),
+            // already in method order; its values are thunk names, emitted as addresses (@name).
+            r.emit_llvm_const_vtable(cg)
+        default
+            r.ice_panic("genllvm: unsupported aggregate type for a global initializer")
+
+    priv fn emit_llvm_const_vtable(r: Ast_node$@, cg: Genllvm_ctx$@)
+        cg.s("{ ")
+        $is_first: = true
+        for f in r.children
+            if f.kind_id != .k_expr_field_init
+                continue
+            if !is_first
+                cg.s(", ")
+            is_first = false
+            val: = f.get_field_init_expr()
+            if val == null
+                cg.s("ptr null")
+                continue
+            r.ice_assert(val.kind_id == .k_identifier || val.kind_id == .k_expr_path,
+                "genllvm: vtable field initializer must be a function name")
+            cg.s("ptr @").s(val.text)
+        cg.s(" }")
+
+    priv fn const_array_slots(r: Ast_node$@, cg: Genllvm_ctx$@, size: I32): List<|Ast_node$@|> //<
+        //< An array literal's element initializers by index, null where none is written
+        //<
+        //< The caller frees the list.
+        $slots: = List<|Ast_node$@|>.new(null)
+        for _i in Range.asc(size)
+            slots.push(null)
+        if r == null || r.kind_id != .k_struct_literal
+            return slots
+        $next_idx: = 0
+        for child in r.children
+            if child.kind_id != .k_expr_field_init
+                continue
+            $idx: = next_idx
+            if idx_node: = child.get_field_init_index()
+                idx = idx_node.eval_constexpr(cg.sema) catch
+                    r.ice_panic("genllvm: array global initializer index is not a constant")
+                    fallback 0
+            r.ice_assert(idx >= 0 && idx < size,
+                "genllvm: array global initializer index is out of range")
+            slots.set(idx, child.get_field_init_expr())
+            next_idx = idx + 1
+        return slots
+
+    priv fn emit_llvm_const_array(r: Ast_node$@, cg: Genllvm_ctx$@, elem_id: I32, size: I32)
+        $slots: = r.const_array_slots(cg, size)
+        defer slots.free()
+        cg.s("[")
+        for i in Range.asc(size)
+            if i > 0
+                cg.s(",")
+            cg.s(" ").t(elem_id).s(" ")
+            slots.get(i).emit_llvm_const_init(cg, elem_id)
+        cg.s(" ]")
+
+    priv fn const_struct_slots(r: Ast_node$@, s_def: sema_type_def.Struct_def$@):
+        List<|Ast_node$@|> //<
+            //< A struct literal's field initializers in declaration order, null where none is given
+            //<
+            //< The caller frees the list.
+        n: = s_def.fields_list.len
+        $slots: = List<|Ast_node$@|>.new(null)
+        for _i in Range.asc(n)
+            slots.push(null)
+        if r == null || r.kind_id != .k_struct_literal
+            return slots
+        $next_idx: Sz = 0
+        for child in r.children
+            if child.kind_id != .k_expr_field_init
+                continue
+            $idx: = next_idx
+            name_node: = child.get_field_init_name().unwrap_or(null)
+            if name_node != null && name_node.kind_id == .k_identifier
+                idx = field_index_named(s_def, name_node.text)
+                r.ice_assert(idx < n, "genllvm: unknown field name in a global struct initializer")
+            r.ice_assert(idx < n, "genllvm: too many fields in a global struct initializer")
+            slots.set(idx, child.get_field_init_expr())
+            next_idx = idx + 1
+        return slots
+
+    priv fn emit_llvm_const_struct(r: Ast_node$@, cg: Genllvm_ctx$@,
+        s_def: sema_type_def.Struct_def$@)
+        n: = s_def.fields_list.len
+        $slots: = r.const_struct_slots(s_def)
+        defer slots.free()
+        cg.s("{")
+        for i in Range.asc(n)
+            if i > 0
+                cg.s(",")
+            field: = s_def.fields_list.get(i)
+            cg.s(" ").t(field.type_id).s(" ")
+            slots.get(i).emit_llvm_const_init(cg, field.type_id)
+        cg.s(" }")
+
+    priv fn emit_llvm_laid_const(r: Ast_node$@, cg: Genllvm_ctx$@, type_id: I32, as_type: Bool) //<
+        //< A global initializer holding a tagged union, as a packed struct at ksplc's layout
+        //<
+        //< `as_type` writes the type, otherwise the value; the two walk the same shape, since a
+        //< variant decides its own bytes. Each piece sits at sema's offset with explicit `i8`
+        //< padding, so what the code reads through the named types finds its bytes.
+        if !cg.holds_laid_value(type_id, 0) || r == null || r.kind_id == .k_empty
+            if as_type
+                cg.t(type_id)
+            else if r == null || r.kind_id == .k_empty
+                cg.s("zeroinitializer")
+            else
+                r.emit_llvm_const_init(cg, type_id)
+            return
+        real_id: = cg.env.get_clean_real_type(type_id)
+        lay: = cg.sema.type_layout(real_id)
+        $parts: = Laid_parts.new(cg, as_type)
+        switch cg.env.get_info(real_id)
+        case .array(elem_id, size)
+            $slots: = r.const_array_slots(cg, size)
+            defer slots.free()
+            elem_size: = cg.sema.type_layout(elem_id).size
+            for i in Range.asc(size)
+                parts.at(i * elem_size)
+                parts.piece(slots.get(i), elem_id, elem_size)
+        case .struct_type(s_def)
+            $slots: = r.const_struct_slots(s_def)
+            defer slots.free()
+            for i in Range.asc(s_def.fields_list.len)
+                f: = s_def.fields_list.get(i)
+                off: = cg.sema.field_offset_of(real_id, f.name, r) catch
+                    r.ice_panic("genllvm: a field of a global initializer has no offset")
+                    fallback 0
+                parts.at(off)
+                parts.piece(slots.get(i), f.type_id, cg.sema.type_layout(f.type_id).size)
+        case .enum_type(e_def)
+            r.emit_llvm_laid_variant(cg, e_def, real_id, parts@)
+        default
+            r.ice_panic("genllvm: a laid global initializer of a type that holds no tagged union")
+        parts.at(lay.size)
+        parts.finish()
+
+    priv fn emit_llvm_laid_variant(r: Ast_node$@, cg: Genllvm_ctx$@,
+        e_def: sema_type_def.Enum_def$@, enum_id: I32, parts: Laid_parts$@) //<
+            //< A tagged union's constant: the tag, then the payload at ksplc's offsets
+            //<
+            //< The code reads each field there too (`payload_field_ptr` in `types.kspl`).
+        $inner: = r
+        if r.kind_id == .k_enum_init_call
+            inner = r.get_child(0)
+        r.ice_assert(inner.kind_id == .k_enum_init,
+            "genllvm: a tagged union in a global initializer is not a variant")
+        $v_def: sema_type_def.Enum_variant$@ = null
+        switch e_def.get_variant(inner.last_child().text)
+        case .some(v)
+            v_def = v
+        case .none
+            r.ice_panic("genllvm: a global initializer names a variant its enum lacks")
+        parts.tag(cg, cg.enum_tag_type(enum_id), v_def.tag_value)
+        args: = r.find_child(.k_expr_args) if r.kind_id == .k_enum_init_call else null
+        payload_at: = cg.sema.enum_payload_offset(enum_id)
+        $k: Sz = 0
+        if args != null
+            for arg in args.children
+                if arg.is_literal(",")
+                    continue
+                f: = v_def.payload_fields.get(k)
+                parts.at(payload_at + cg.sema.payload_field_offset(v_def, f.name))
+                parts.piece(arg, f.type_id, cg.sema.type_layout(f.type_id).size)
+                k += 1
+
+    fn emit_llvm_embed_decl(r: Ast_node$@, cg: Genllvm_ctx$@)
+        id_node: = r.get_embed_id()
+        r.ice_assert(id_node != null, "emit_llvm_embed_decl: embed_decl missing Identifier")
+        id: = id_node.text
+        $file_data: U8[] = ""
+        switch gen_embed.read(r, cg.source_map)
+        case .some(d)
+            file_data = d
+        default
+            cg.had_error = true
+            return
+        if file_data.ptr != null
+            $verbatim_name: = false
+            if r.sym_ptr != null
+                sym: = Sema_symbol$@::r.sym_ptr
+                verbatim_name = sym.uses_verbatim_c_name()
+            $global_name: U8[] = ""
+            if gen_llvm_ctx.is_kspl_prefixed_or_ext(id, verbatim_name)
+                global_name = id
+            else
+                cg.clear_scratch().s("kspl_").s(id)
+                global_name = cg.take_scratch()
+
+            $f_len: = file_data.len
+            if f_len == 0
+                f_len = 1
+
+            cg.s("@.embed_data_").s(global_name)
+                .s(" = private unnamed_addr constant [\{f_len\} x i8] ")
+            if file_data.len > 0
+                cg.s("c\"")
+                for bi in Range.asc(file_data.len)
+                    b: = (file_data.ptr + bi)$
+                    cg.s("\\").c((b >> 4).to_hex_upper()).c((b & 15U8).to_hex_upper())
+                cg.s("\"\n")
+            else
+                cg.s("zeroinitializer\n")
+
+            cg.s("@").s(global_name).s(" = global %Const_U8_Slice { ptr @.embed_data_")
+                .s(global_name).s(", i64 \{file_data.len\} }\n\n")
+            dealloc(Void$@::file_data.ptr)
+
+    fn emit_llvm_fn_def(r: Ast_node$@, cg: Genllvm_ctx$@, owner_type_id: I32)
+        cg.reset_fn_state()
+        fn_name: = r.get_decl_id_text()
+        type_node: = r.get_decl_type_node()
+        block: = r.find_child(.k_stmt_block)
+        cg.current_ret_id = type_node.type_id if type_node != null else 0
+
+        $verbatim_name: = false
+        $use_kspl_abi: = true
+        if r.sym_ptr != null
+            sym: = Sema_symbol$@::r.sym_ptr
+            verbatim_name = sym.uses_verbatim_c_name()
+            // A function called from C (an `#export`) keeps the C ABI, and everything else uses the
+            // internal ABI, where an aggregate return value goes through a hidden sret pointer
+            // (ret_needs_sret in gen/llvm/types.kspl).
+            use_kspl_abi = !sym.uses_c_abi()
+        cg.current_ret_is_sret = use_kspl_abi && cg.ret_needs_sret(cg.current_ret_id)
+
+        // Sema refuses a function without a body (collect_fn_def in sema/decl/collect.kspl).
+        r.ice_assert(block != null,
+            "emit_llvm_fn_def: a function without a body reached the backend")
+        cg.s("define ")
+        if cg.current_ret_is_sret
+            cg.s("void")
+        else if type_node != null
+            cg.t(type_node.type_id)
+        else
+            cg.s("void")
+
+        $sym_name: = Str_builder.new()
+        defer sym_name.free()
+        if owner_type_id != 0
+            sym_name.s("kspl_")
+            cg.env.mangle_type_id_to(owner_type_id, sym_name@)
+            sym_name.s("_").s(fn_name)
+        else if fn_name.equals("main") || fn_name.equals("kspl_main")
+            sym_name.s("kspl_main")
+        else if gen_llvm_ctx.is_kspl_prefixed_or_ext(fn_name, verbatim_name)
+            sym_name.s(fn_name)
+        else
+            sym_name.s("kspl_").s(fn_name)
+        cg.current_fn_name = base_core.arena.dup_str(sym_name.slice())
+        cg.s(" @").s(cg.current_fn_name).s("(")
+
+        params: = r.get_fn_params()
+        if cg.current_ret_is_sret
+            cg.emit_agg_param_type().s(" ").s(gen_llvm_ctx.sret_param_name)
+        params.emit_llvm_param_list(cg,
+            gen_llvm_ctx.Param_list_opts::{ .with_names = true, .emit_variadic = false,
+            .kspl_abi = use_kspl_abi, .emitted_before = cg.current_ret_is_sret })
+        cg.s(") ")
+        cg.emit_sanitize_attrs()
+        r.emit_llvm_fn_attributes(cg)
+        cg.s("{\n")
+        cg.s("entry_block:\n")
+        cg.emit.target = .body
+        cg.emit.body_out.len = 0
+        cg.emit.alloca_out.len = 0
+        cg.is_terminated = false
+        // A naked function's arguments stay in their registers for the assembly to read; a spill
+        // would be the very prologue it has none of.
+        if !r.has_attribute("naked")
+            for param in base_ast_ext.Param_cursor.new(params, false)
+                param.spill_llvm_param(cg, use_kspl_abi)
+        block.emit_llvm_stmt(cg)
+        if !cg.is_terminated
+            if cg.env.is_result(cg.current_ret_id)
+                // A Result's success case has is_err=0, so the zeroinitializer works.
+                cg.emit_ret_value("zeroinitializer")
+            else if (type_node == null || sema_type_env.is_void(type_node.type_id)) &&
+                !r.has_attribute("naked")
+                cg.s("    ret void\n")
+            else
+                cg.s("    unreachable\n")
+            cg.terminate()
+        cg.emit.target = .direct
+        emit_in_chunks(cg, cg.emit.alloca_out.slice())
+        emit_in_chunks(cg, cg.emit.body_out.slice())
+        cg.s("}\n\n")
+
+    priv fn spill_llvm_param(r: Ast_node$@, cg: Genllvm_ctx$@, use_kspl_abi: Bool) //<
+        //< It copies one parameter into a local slot of its own, where the body reads it
+        //<
+        //< An internal-ABI aggregate argument arrives as a pointer, so the memory it points at is
+        //< copied into the local slot. That memory is a copy the caller made for this call only, so
+        //< a write after the copy does not reach the caller (by-value semantics hold). An
+        //< identifier always resolves to `%v_<name>_<id>` (gen/llvm/expr.kspl), so the slot keeps
+        //< that name.
+        id_node: = r.find_child(.k_identifier)
+        p_name: = id_node.text if id_node != null else "unknown"
+        decl: = (id_node.def_node if id_node != null && id_node.def_node != null else r)
+        slot: = cg.local_slot_name(p_name, decl)
+        p_type_id: = r.type_id
+        cg.emit_alloca(slot, p_type_id)
+        $src_reg: = base_core.arena.dup_str("")
+        if use_kspl_abi && cg.is_llvm_aggregate(p_type_id)
+            load_reg: = cg.next_reg()
+            cg.s("    %\{load_reg\} = load ").t(p_type_id).s(", ptr %").s(p_name).s("\n")
+            src_reg = cg.reg_str(load_reg)
+        else
+            cg.clear_scratch().s("%").s(p_name)
+            src_reg = cg.take_scratch()
+        cg.s("    store ").t(p_type_id).s(" ").s(src_reg).s(", ptr ").s(slot).s("\n")
+
+priv fn emit_in_chunks(cg: Genllvm_ctx$@, data: U8[]) //<
+    //< It copies alloca_out / body_out to the output in 4096-byte pieces, not one huge cg.s()
+
+    $offset: Sz = 0
+    for offset < data.len
+        $chunk_size: Sz = 4096
+        if offset + chunk_size > data.len
+            chunk_size = data.len - offset
+        cg.s(U8[]::{ .ptr = data.ptr + offset, .len = chunk_size })
+        offset += chunk_size
+
+priv struct Laid_parts //< the pieces of one packed constant, written in offset order
+    cg: Genllvm_ctx$@
+    as_type: Bool //< whether the types are written, else the values
+    pos: Sz //< the byte the next piece starts at
+    count: Sz //< how many pieces are written
+
+impl Laid_parts
+    fn new(cg: Genllvm_ctx$@, as_type: Bool): Laid_parts
+        cg.s("<{ ")
+        return Laid_parts::{ .cg = cg, .as_type = as_type, .pos = 0, .count = 0 }
+
+    fn sep(r: Self$@)
+        if r.count > 0
+            r.cg.s(", ")
+        r.count += 1
+
+    fn at(r: Self$@, off: Sz) //< it pads with zero bytes up to off
+        if off <= r.pos
+            return
+        r.sep()
+        r.cg.s("[\{off - r.pos\} x i8]")
+        if !r.as_type
+            r.cg.s(" zeroinitializer")
+        r.pos = off
+
+    fn tag(r: Self$@, cg: Genllvm_ctx$@, tag_id: I32, v: I64) //<
+        //< a tagged union's tag, its base type
+        r.sep()
+        cg.t(tag_id)
+        if !r.as_type
+            cg.s(" \{v\}")
+        r.pos += cg.sema.type_layout(tag_id).size
+
+    fn piece(r: Self$@, node: Ast_node$@, type_id: I32, size: Sz) //< one initializer at its type
+        r.sep()
+        node.emit_llvm_laid_const(r.cg, type_id, true)
+        if !r.as_type
+            r.cg.s(" ")
+            node.emit_llvm_laid_const(r.cg, type_id, false)
+        r.pos += size
+
+    fn finish(r: Self$@)
+        r.cg.s(" }>")
+
+impl Genllvm_ctx
+    fn holds_laid_value(r: Self$@, type_id: I32, depth: Sz): Bool //<
+        //< Whether a value of the type holds a tagged union or a laid struct, in a field or element
+        if depth >= max_laid_depth
+            return false
+        real_id: = r.env.get_clean_real_type(type_id)
+        if r.is_laid(real_id, 0)
+            return true // its named type is packed with padding no field-by-field constant fills
+        switch r.env.get_info(real_id)
+        case .enum_type(def)
+            return !def.is_scalar()
+        case .struct_type(def)
+            for f in def.fields_list
+                if r.holds_laid_value(f.type_id, depth + 1)
+                    return true
+            return false
+        case .array(elem_id, _size)
+            return r.holds_laid_value(elem_id, depth + 1)
+        default
+            return false
+
+priv fn field_index_named(s_def: sema_type_def.Struct_def$@, name: U8[]): Sz //<
+    //< The index of the struct's field called name, or the field count where none is
+    for f in Range.asc(s_def.fields_list.len)
+        if s_def.fields_list.get(f).name.equals(name)
+            return f
+    return s_def.fields_list.len

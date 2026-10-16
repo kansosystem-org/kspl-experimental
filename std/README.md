@@ -4,9 +4,9 @@
 
 ## Run it
 
-Save this as `first.kspls`, then run `ksplc run first.kspls`. It prints `first = 42`.
+Save this as `first.kspl`, then run `ksplc run first.kspl`. It prints `first = 42`.
 
-```kspls
+```kspl
 import "std/ds" { List }
 import "std/io"
 
@@ -27,7 +27,7 @@ fn main()
 
 ### Nothing to install
 
-**Every file builds with the toolchain alone**: the compiler and a C compiler, with no library to install. `std/net`, `std/http`, `std/reactor`, `std/subproc` and `std/fs` reach the operating system through the C runtime every program links, and no file binds a C library from outside the toolchain ("The standard library reaches only itself" in [`../docs/DESIGN.md`](../docs/DESIGN.md)).
+**Every file builds with the toolchain alone**: the compiler and a C compiler, with no library to install. `std/net`, `std/http`, `std/reactor`, `std/subproc` and `std/fs` reach the operating system through the C runtime every program links, and no file binds a C library from outside the toolchain ("The standard library reaches only itself" in [`../docs/DESIGN-repository.md`](../docs/DESIGN-repository.md)).
 
 ### How many files one import brings along
 
@@ -52,15 +52,15 @@ Caution: **Do not add line counts to this table**: every edit changes them, and 
 | `io` | 9 |
 | `sys` `json` `fs` and the like, which use those above | 9+ |
 
-Why the tiers hold, and what keeps them from collapsing, is "Why one import brings few files along" in [`std/docs/DESIGN.md`](docs/DESIGN.md).
+Why the tiers hold, and what keeps them from collapsing, is "Why one import brings few files along" in [`std/docs/DESIGN-core.md`](docs/DESIGN-core.md).
 
 ### `std/tests/`
 
-std's own tests live here, in no listing above. Their entry point is `run_std` in `std/tests/all.kspls`, which `make debug` calls. Where a test goes is "A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN.md`](../docs/DESIGN.md).
+std's own tests live here, in no listing above. Their entry point is `run_std` in `std/tests/all.kspl`, which `make debug` calls. Where a test goes is "A test inspecting the inside of a unit goes inside that unit" in [`docs/DESIGN-repository.md`](../docs/DESIGN-repository.md).
 
 **`make test` runs them from this folder** with nothing but a `ksplc`, against the `std` this folder holds, so a copy of the folder tests itself ([`std/Makefile`](Makefile)).
 
-**`make test-fuzz` feeds broken input to std's readers** (the JSON reader and the like) through `std/tests/read_prog.kspls`, which checks that what it read comes back the same through std's writer where one exists. How a round is judged is "Fuzzing watches the program from outside" in [`std/docs/DESIGN.md`](docs/DESIGN.md). The broken inputs are made from seeds: std's own writers, and the JSON files in the folder `FUZZ_SEEDS` names. That is this folder unless set; the repository passes its root (`make test-std-fuzz`).
+**`make test-fuzz` feeds broken input to std's readers** (the JSON reader and the like) through `std/tests/read_prog.kspl`, which checks that what it read comes back the same through std's writer where one exists. How a round is judged is "Fuzzing watches the program from outside" in [`std/docs/DESIGN-system.md`](docs/DESIGN-core.md). The broken inputs are made from seeds: std's own writers, and the JSON files in the folder `FUZZ_SEEDS` names. That is this folder unless set; the repository passes its root (`make test-std-fuzz`).
 
 ## Pitfalls
 
@@ -74,7 +74,7 @@ std's own tests live here, in no listing above. Their entry point is `run_std` i
 
 The same arena, given to `new` and to `create`:
 
-```kspls
+```kspl
 import "std/ds" { List }
 import "std/io"
 import "std/mem" { Arena }
@@ -94,24 +94,24 @@ fn main()
     io.out().s("\{mine[0]\} \{shared[0]\}\n")
 ```
 
-Where the arena goes among the parameters, and when a function takes one, is "A constructor's name says where the returned thing goes" in [`std/docs/DESIGN.md`](docs/DESIGN.md).
+Where the arena goes among the parameters, and when a function takes one, is "A constructor's name says where the returned thing goes" in [`std/docs/DESIGN-core.md`](docs/DESIGN-core.md).
 
 ---
 
 ## Files near the limit and how they split
 
-One file here has its split planned before it reaches the line limit for a file, and this section says what moves out of it and where. How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN.md`](../docs/DESIGN.md). What follows is std's plan and the constraints of std alone.
+One file here has its split planned before it reaches the line limit for a file, and this section says what moves out of it and where. How to choose where to cut is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). What follows is std's plan and the constraints of std alone.
 
-* [`std/strfmt.kspls`](strfmt.kspls): **the exact assembly of decimal digits from a binary value** moves to a new `strfmt_digits.kspls` under `std/`. That is `Binary_float` and the decomposition, the loop that runs `Bignat` and emits one digit at a time, the carry, and fixing the digit count.
+* [`std/strfmt.kspl`](strfmt.kspl): **the exact assembly of decimal digits from a binary value** moves to a new `strfmt_digits.kspl` under `std/`. That is `Binary_float` and the decomposition, the loop that runs `Bignat` and emits one digit at a time, the carry, and fixing the digit count.
   * The cut lies between making the digits and writing them out. `write_float` / `write_float32` stay, since moving them too would make both files need `Writer`.
 
-**Name a new file with a word no value uses.** `rc.kspls` for the reference-counting handles would make its alias collide with the variable name `rc`, hence [`std/refcount.kspls`](refcount.kspls).
+**Name a new file with a word no value uses.** `rc.kspl` for the reference-counting handles would make its alias collide with the variable name `rc`, hence [`std/refcount.kspl`](refcount.kspl).
 
-**Do not cut a folder.** What is split out goes directly under `std/` too ("A folder is made only for a unit with its own README" in [`std/docs/DESIGN.md`](docs/DESIGN.md)).
+**Do not cut a folder.** What is split out goes directly under `std/` too ("A folder is made only for a unit with its own README" in [`std/docs/DESIGN-core.md`](docs/DESIGN-core.md)).
 
-**Names the compiler holds do not move alone.** `Arena` stays in `std/mem.kspls`, since `ksplc/sema/flow/release.kspls` names `std.mem.Arena`. The trait names in [`std/lang.kspls`](lang.kspls) are matched by their exact FQN, the fully qualified name such as `std.lang.Ref_counted` (`ksplc/sema/type/arc.kspls` and `ksplc/sema/type/env.kspls`), so renaming or moving one means a change in `ksplc/`.
+**Names the compiler holds do not move alone.** `Arena` stays in `std/mem.kspl`, since `ksplc/sema/flow/release.kspl` names `std.mem.Arena`. The trait names in [`std/lang.kspl`](lang.kspl) are matched by their exact FQN, the fully qualified name such as `std.lang.Ref_counted` (`ksplc/sema/type/arc.kspl` and `ksplc/sema/type/env.kspl`), so renaming or moving one means a change in `ksplc/`.
 
-Note: The reference-counting handles can move freely. The compiler recognizes an ARC type (one whose owners are counted automatically) by `Ref_counted`'s FQN in [`std/lang.kspls`](lang.kspls), not by where the handles live.
+Note: The reference-counting handles can move freely. The compiler recognizes an ARC type (one whose owners are counted automatically) by `Ref_counted`'s FQN in [`std/lang.kspl`](lang.kspl), not by where the handles live.
 
 ---
 
@@ -119,5 +119,6 @@ Note: The reference-counting handles can move freely. The compiler recognizes an
 
 The first is for anyone choosing a file; the rest are for whoever changes std.
 
-* [`std/docs/DESIGN.md`](docs/DESIGN.md) — the known problems of earlier implementations and how each file handles them, then the grounds of std's API choices.
+* [`std/docs/DESIGN-core.md`](docs/DESIGN-core.md) — the known problems of earlier implementations and how each file handles them, then the grounds of std's core: memory and ownership, containers and iteration, strings, numbers and bytes, regular expressions, failures and the log, and the package's shape.
+* [`std/docs/DESIGN-system.md`](docs/DESIGN-system.md) — the grounds of what reaches outside the program: the process, its children and the clock, files and paths, threads, networking and the data formats.
 * [`std/SURFACE.txt`](SURFACE.txt) — the record of the API this package publishes, remade by `make surface` and held against the tree by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).

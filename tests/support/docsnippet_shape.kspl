@@ -1,0 +1,280 @@
+#!/usr/bin/env -S ksplc run
+//< A document's KSPL fragment, and the files the compiler reads it as
+//<
+//< The marks a fragment carries are "A code block compiles, or says why not" in
+//< `docs/SPEC-documents.md`. **Both checks of `suite/docsnippet_test.kspl` lay a fragment out
+//< here**, so the syntax check and the compile check read one fragment the same way.
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+const fence_laid: U8[] = "```kspl" //< the fences collected, and the notation each names
+    //<
+    //< **Both are here**, or the brace fragments (` ```ksplb `) rot unread.
+const fence_braced: U8[] = "```ksplb"
+priv const fence_close: U8[] = "```"
+const snippet_fn: U8[] = "_doc_snippet" //< the function a fragment's statements are wrapped in
+
+// The keywords that start a declaration when they open a line; `#` (an attribute or a directive)
+// starts one too.
+priv const top_level: U8[][] = U8[][]::{ "import", "embed", "pub", "priv", "fn", "struct", "enum",
+        "trait", "impl", "typedef", "extern", "const",
+}
+
+priv const elision: U8[][] = U8[][]::{ "...", "…" } //< the mark of the writer's omission
+
+priv const beside_mark: U8[] = "is beside it" //< a first line naming the file a program needs
+
+priv const error_mark: U8[] = "error" //< a trailing comment opening with it marks a refused line
+
+const added_line: Sz = -1 //< `Shape.from` for a line the wrapping added
+
+struct Snippet //< one fragment
+    //<
+    //< `line` is the starting line in the document (1-based).
+    doc: U8[]
+    line: Sz
+    body: U8[]
+    laid: Bool //< the fence named the indentation notation
+
+struct Shape //< a fragment laid out as a file the compiler reads
+    lines: List<|U8[]|>$@ //< the file's lines
+    from: List<|Sz|>$@ //< for each, the fragment's line it is (from 0), or `added_line`
+
+fn collect(doc: U8[], text: U8[], out: List<|Snippet|>$@, arena: Arena$@) //<
+    //< Collects the KSPL fences from one document, in either notation
+    $body: = Str_builder.new()
+    defer body.free()
+    $inside: = false
+    $laid: = false
+    $fence_col: Sz = 0
+    $start: Sz = 0
+    $lineno: Sz = 0
+    for raw in text.lines(arena)
+        lineno += 1
+        t: = raw.trim_spaces()
+        if !inside
+            if t.equals(fence_laid) || t.equals(fence_braced)
+                inside = true
+                laid = t.equals(fence_laid)
+                // Caution: **Remove the fence's own indentation from every body line.** A fence in
+                // a list item carries its indentation, which the indentation notation reads as
+                // structure: a block never opened.
+                fence_col = raw.len - raw.trim_start().len
+                start = lineno
+                body.clear()
+            continue
+        if t.equals(fence_close)
+            inside = false
+            out
+                .push(Snippet::{ .doc = doc, .line = start,
+                .body = arena.dup_str(body.slice()), .laid = laid })
+            continue
+        body.s(raw.sub_from(fence_col) if raw.len >= fence_col else raw).c('\n')
+
+// ==========================================
+// Reading a line
+// ==========================================
+
+fn comment_at(ln: U8[]): I32 //<
+    //< Where the line comment starts, or -1: the first `//` outside a string or a character literal
+    $in_str: = false
+    $i: Sz = 0
+    for i < ln.len
+        c: = ln[i]
+        if in_str
+            if c == '\\' && i + 1 < ln.len
+                i += 2
+                continue
+            in_str = c != '"'
+            i += 1
+            continue
+        if c == '"'
+            in_str = true
+        else if c == '\'' && i + 2 < ln.len
+            // A character literal, `'{'` or `'\n'`, holds a byte no bracket count may see.
+            shut: = i + 3 if ln[i + 1] == '\\' else i + 2
+            if shut < ln.len && ln[shut] == '\''
+                i = shut + 1
+                continue
+        else if c == '/' && i + 1 < ln.len && ln[i + 1] == '/'
+            return I32::i
+        i += 1
+    return -1
+
+fn code_of(ln: U8[]): U8[] //< the line without its line comment
+    at: = comment_at(ln)
+    return ln if at < 0 else ln.sub(0, at)
+
+fn comment_text(ln: U8[]): U8[] //< the line comment's text, after `//` and the spaces
+    at: = comment_at(ln)
+    return "" if at < 0 else ln.sub_from(at + 2).trim_spaces()
+
+priv fn opens_word(text: U8[], word: U8[]): Bool //< whether the text opens with the whole word
+    if !text.starts_with(word)
+        return false
+    return text.len == word.len || !text[word.len].is_alnum()
+
+fn is_mark(ln: U8[]): Bool //< whether the line is code that ends in `// error`
+    return code_of(ln).trim_spaces().len > 0 && opens_word(comment_text(ln), error_mark)
+
+fn is_stray_mark(ln: U8[]): Bool //<
+    //< Whether the line looks like a mark the check cannot read
+    //<
+    //< A comment on a line of its own (it names no line), or `// Error` at a line's end.
+    text: = comment_text(ln)
+    if code_of(ln).trim_spaces().len == 0
+        t: = text.strip_prefix("✗").trim_spaces()
+        return opens_word(t, error_mark) || opens_word(t, "Error")
+    return opens_word(text, "Error")
+
+priv fn indent_of(ln: U8[]): Sz
+    return ln.len - ln.trim_start().len
+
+priv fn depth_of(ln: U8[]): Sz //< what the line leaves open of `(` `[` `{`, less what it closes
+    $d: Sz = 0
+    $in_str: = false
+    code: = code_of(ln)
+    $i: Sz = 0
+    for i < code.len
+        c: = code[i]
+        if in_str
+            if c == '\\'
+                i += 1
+            in_str = c != '"'
+        else if c == '"'
+            in_str = true
+        else if c == '(' || c == '[' || c == '{'
+            d += 1
+        else if c == ')' || c == ']' || c == '}'
+            d -= 1
+        i += 1
+    return d
+
+fn block_end(lines: List<|U8[]|>@, at: Sz): Sz //<
+    //< Where the block line `at` opens ends: past its deeper lines and the brackets it leaves open
+    //<
+    //< Trailing blank lines are not its own, so the end stops before them.
+    ind: = indent_of(lines.get(at))
+    $depth: = depth_of(lines.get(at))
+    $j: = at + 1
+    for j < lines.len
+        ln: = lines.get(j)
+        if depth <= 0 && ln.trim_spaces().len > 0 && indent_of(ln) <= ind
+            break
+        depth += depth_of(ln)
+        j += 1
+    for j > at + 1 && lines.get(j - 1).trim_spaces().len == 0
+        j -= 1
+    return j
+
+fn has_elision(lines: List<|U8[]|>@): Bool //<
+    //< Whether the writer left something out (`...` / `…` outside a comment)
+    //<
+    //< Caution: **Do not drop the string literals.** An omission such as `b.s("...")` is marked
+    //< inside one.
+    for raw in lines
+        code: = code_of(raw)
+        for e in elision
+            if code.find_str(e).is_some()
+                return true
+    return false
+
+fn names_a_sibling(lines: List<|U8[]|>@): Bool //<
+    //< Whether the first line is a comment naming a file the program needs beside it
+    for raw in lines
+        t: = raw.trim_spaces()
+        if t.len == 0
+            continue
+        return t.starts_with("//") && t.find_str(beside_mark).is_some()
+    return false
+
+fn is_whole(lines: List<|U8[]|>@): Bool //< whether it holds `main`, so it is a whole program
+    for raw in lines
+        t: = raw.strip_prefix("pub ")
+        if raw.len > 0 && raw[0] != ' ' && t.starts_with("fn main") &&
+            (t.len == 7 || t[7] == '(')
+            return true
+    return false
+
+// ==========================================
+// Laying a fragment out
+// ==========================================
+
+priv fn starts_top_level(ln: U8[]): Bool
+    t: = ln.trim_spaces()
+    if t.starts_with("#")
+        return true
+    for kw in top_level
+        if !t.starts_with(kw)
+            continue
+        rest: = t.sub_from(kw.len)
+        // Caution: Check up to the word boundary, or `constant:` is picked up as `const`.
+        if rest.len == 0 || !rest[0].is_alpha() && !rest[0].is_digit()
+            return true
+    return false
+
+fn as_written(lines: List<|U8[]|>@, arena: Arena$@): Shape //< the fragment as it stands
+    out: = Shape::{ .lines = List<|U8[]|>.create(arena), .from = List<|Sz|>.create(arena) }
+    for i in Range.asc(lines.len)
+        out.lines.push(lines.get(i))
+        out.from.push(i)
+    return out
+
+fn wrapped(lines: List<|U8[]|>@, laid: Bool, arena: Arena$@): Shape //<
+    //< The fragment with its outermost statements moved into a function, its declarations kept
+    //<
+    //< Caution: **"The outermost" differs by notation**: brace depth 0, or column 0 in the
+    //< indentation notation. A blank line belongs to whatever is open.
+    $decls: = List<|Sz|>.new(arena)
+    $stmts: = List<|Sz|>.new(arena)
+    $depth: Sz = 0
+    $to_decls: = false
+    $picked: = false
+    for i in Range.asc(lines.len)
+        raw: = lines.get(i)
+        blank: = raw.trim_spaces().len == 0
+        outermost: = (blank || raw[0] != ' ') if laid else depth == 0
+        if outermost && !picked && !blank
+            to_decls = starts_top_level(raw)
+            picked = true
+        if to_decls
+            decls.push(i)
+        else
+            stmts.push(i)
+        if laid
+            picked = picked && (blank || raw[0] == ' ')
+            continue
+        depth += depth_of(raw)
+        picked = picked && depth > 0
+    out: = Shape::{ .lines = List<|U8[]|>.create(arena), .from = List<|Sz|>.create(arena) }
+    for i in decls
+        out.lines.push(lines.get(i))
+        out.from.push(i)
+    $any: = false
+    for i in stmts
+        any = any || lines.get(i).trim_spaces().len > 0
+    if !any
+        return out
+    out.lines
+        .push(arena.text().s("fn \{snippet_fn\}()").s("" if laid else " {").take())
+    out.from.push(added_line)
+    for i in stmts
+        ln: = lines.get(i)
+        out.lines.push(arena.text().s("  ").s(ln).take() if ln.len > 0 else "")
+        out.from.push(i)
+    if !laid
+        out.lines.push("}")
+        out.from.push(added_line)
+    return out
+
+fn text_without(s: Shape@, dropped: List<|Bool|>@, arena: Arena$@): U8[] //<
+    //< The shape's file with the fragment's dropped lines left blank, so no line number moves
+    b: = arena.text()
+    for i in Range.asc(s.lines.len)
+        at: = s.from.get(i)
+        if at == added_line || !dropped.get(at)
+            b.s(s.lines.get(i))
+        b.c('\n')
+    return b.take()

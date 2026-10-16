@@ -1,0 +1,147 @@
+//< What a client facing the server from outside cannot take from it
+//<
+//< The names it does not hand out, the memory a large file costs, and the slots one address may
+//< hold. Run by `kssrv/tests/main.kspl` against the outward-facing server.
+import "kssrv/tests/client"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/sys"
+import "std/verdict"
+
+// The names served or not, placed by `place`. **A name starting with a dot is answered as absent,
+// `.well-known` aside** (`hides_name` in `kssrv/main.kspl`).
+priv const dot_rels: U8[][4] = ::{ ".env", ".git/config", "sub/.hidden.txt",
+    ".well-known/acme.txt" }
+priv const dot_bodies: U8[][4] = ::{ "SECRET=1\n", "[core]\n", "hidden\n", "well known\n" }
+priv const hidden_targets: U8[][4] = ::{ "/.env", "/.git/config", "/sub/.hidden.txt", "/%2eenv" }
+
+priv const big_rel: U8[] = "big.bin" //< larger than the chunks the server sends a file in
+priv const big_bytes: Sz = 3 * 1024 * 1024 + 7 //< not a multiple of a chunk, so the last is short
+
+priv const readers: Sz = 4 //< how many readers hold the large file unread at once
+
+priv const alone_poll_ms: I32 = 10 //< how often `alone` asks again
+
+priv const per_peer: Sz = 16 //< `max_conns_per_peer` in `kssrv/conn.kspl`
+    //<
+    //< The server is driven from outside, so the figure is stated here; a change there fails the
+    //< check on the cap rather than passing it silently.
+
+fn place(root: U8[], arena: Arena$@): Bool //< puts this file's fixtures under the root
+    fs.write_tree(root, U8[][]::dot_rels, U8[][]::dot_bodies, arena) catch
+        return false
+    io.write_file(fs.join(root, big_rel, arena), client.filler(big_bytes, arena)) catch
+        return false
+    return true
+
+fn cases(port: I32, arena: Arena$@): Void!client.Http_end //< every check in this file, in turn
+    dot_cases(port, arena)!
+    big_cases(port, arena)!
+    trickle_cases(port, arena)!
+    peer_cases(port, arena)!
+
+priv fn dot_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< A name starting with a dot is a 404, and `.well-known` is served
+    for target in hidden_targets
+        r: = client.get(port, target, "", arena)!
+        nm: = arena.text().s("a name starting with a dot is not served: \{target\}").take()
+        verdict.check(nm, r.status == 404 && r.body.find_str("SECRET").is_none(),
+            client.shown(r, arena))
+    wk: = client.get(port, "/.well-known/acme.txt", "", arena)!
+    verdict.check("`.well-known` is still served",
+        wk.status == 200 && wk.body.equals("well known\n"), client.shown(wk, arena))
+
+priv fn big_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< A file sent in chunks arrives whole, and its length is the one the head names
+    r: = client.get(port, arena.text().c('/').s(big_rel).take(), "", arena)!
+    want: = client.filler(big_bytes, arena)
+    named: = client.header(r.head, "content-length")
+    d: = arena.text().s("\{r.status\}, \{r.body.len\} bytes, Content-Length ").s(named).take()
+    verdict.check("a file larger than a chunk arrives whole and in order",
+        r.status == 200 && r.body.equals(want), d)
+    // **A download nobody reads holds a chunk, not the file.** Held whole, `readers` slow readers
+    // hold `readers` copies, and enough of them run the server out of memory.
+    before: = heap_of(port, arena)!
+    $slow: = List<|client.Conn$@|>.new(arena)
+    defer free_all(slow@)
+    for _i in Range.asc(readers)
+        one: = client.Conn.open_in(port, arena)!
+        one
+            .send(client.raw("GET", arena.text().c('/').s(big_rel).take(), "", "", arena))!
+        slow.push(one)
+    sys.sleep_ms(300)
+    during: = heap_of(port, arena)!
+    grown: = during - before
+    bound: = I64::big_bytes
+    verdict.check("a large file held unread by several readers costs less than one copy of it",
+        before > 0I64 && grown < bound,
+        arena.text().s("the heap grew by \{grown\} bytes; one copy is \{bound\}").take())
+
+priv fn trickle_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< A request sent a byte at a time is answered; a bare LF is still refused at once
+    //<
+    //< Caution: **Split the head's end between sends too**: the server looks for it only where it
+    //< can newly be (`head_decided` in `kssrv/main.kspl`).
+    $conn: = client.Conn.open(port)!
+    defer conn.free()
+    raw: = client.raw("GET", "/style.css", "", "", arena)
+    for i in Range.asc(raw.len)
+        conn.send(raw.sub(i, 1))!
+        sys.sleep_ms(1)
+    got: = conn.next(false, client.default_timeout_ms, arena)!
+    verdict.check("a request sent a byte at a time is answered",
+        got.status == 200 && got.body.equals("body{}\n"), client.shown(got, arena))
+    bare: = client.request(port, "GET / HTTP/1.1\nHost: 127.0.0.1\n\n", 1,
+        client.default_timeout_ms, false, arena)!
+    verdict.check("a head ending in bare LFs is still refused with a 400",
+        bare.len == 1 && bare.get(0).status == 400, client.shown(bare.get(0), arena))
+
+priv fn peer_cases(port: I32, arena: Arena$@): Void!client.Http_end //<
+    //< One address holds at most `per_peer` connections; one closing makes room again
+    //<
+    //< Caution: **Start from none held**: one left from an earlier case takes a place among them.
+    verdict.check("the server holds nothing from earlier cases before the cap is filled",
+        alone(port, arena)!, "a connection from an earlier case stayed open")
+    $held: = List<|client.Conn$@|>.new(arena)
+    defer free_all(held@)
+    for _i in Range.asc(per_peer)
+        held.push(client.Conn.open_in(port, arena)!)
+    // The connections are idle, but the server counts each it accepted.
+    sys.sleep_ms(200)
+    $over: = client.Conn.open(port)!
+    defer over.free()
+    over.send(client.raw("GET", "/style.css", "", "", arena)) catch {}
+    none: client.Resp = ::{ .status = 0, .head = "", .body = "" }
+    refused: = over.next(false, 2000, arena) catch none
+    nm: = arena.text().s("the connection past \{per_peer\} from one address is refused").take()
+    verdict.check(nm, refused.status == 0, client.shown(refused, arena))
+    held.get(0).free()
+    held.set(0, held.get(held.len - 1))
+    held.len -= 1
+    sys.sleep_ms(200)
+    again: = client.get(port, "/style.css", "", arena)!
+    verdict.check("once one closes, a new connection from it is served", again.status == 200,
+        client.shown(again, arena))
+
+priv fn alone(port: I32, arena: Arena$@): Bool!client.Http_end //<
+    //< Whether the server comes to hold only the connection asking, within the usual timeout
+    deadline: = sys.mono_us() + I64::client.default_timeout_ms * 1000I64
+    for sys.mono_us() < deadline
+        st: = client.get(port, "/api/status", "", arena)!
+        if client.doc_of(st, arena).get("connections_open").as_int64(-1I64) == 1I64
+            return true
+        sys.sleep_ms(alone_poll_ms)
+    return false
+
+priv fn heap_of(port: I32, arena: Arena$@): I64!client.Http_end //< the heap `/api/status` names
+    st: = client.get(port, "/api/status", "", arena)!
+    return client.doc_of(st, arena).get("heap_bytes").as_int64(-1I64)
+
+priv fn free_all(held: List<|client.Conn$@|>$@) //< closes every connection still held
+    for c in held@
+        c.free()

@@ -34,7 +34,7 @@ KSPL_LINK void kspl_trace_start(const char* file, const char* func, int line) {
     kspl_trace_record(file, func, line);
 }
 
-/* The two readers std/sys.kspls declares, which gives them their prototypes.
+/* The two readers std/sys.kspl declares, which gives them their prototypes.
  * Caution: **Spell the types as it does** (`U8@$@` is `const U8**`), or it is `conflicting types`. */
 KSPL_LINK int kspl_error_trace_depth(void) {
     return kspl_error_trace_count;
@@ -54,8 +54,8 @@ KSPL_LINK Sz kspl_stack_here(void) {
     return (Sz)(intptr_t)__builtin_frame_address(0);
 }
 
-/* The atomic operations (std/mem.kspls's Arc<T> and the freestanding heap's spinlock,
- * std/thread.kspls's Atomic_sz) on the clang/gcc builtins, needing no <stdatomic.h> at -std=c99.
+/* The atomic operations (std/mem.kspl's Arc<T> and the freestanding heap's spinlock,
+ * std/thread.kspl's Atomic_sz) on the clang/gcc builtins, needing no <stdatomic.h> at -std=c99.
  * Caution: On a core holding no LDREX/STREX (Armv6-M: Cortex-M0+, the RP2040) they are **not
  * defined**: the builtin would become a library call, and only the port layer knows the chip's
  * inter-core exclusion. POINTER_LOCK_FREE judges it (Sz is pointer-wide; 2 = always lock-free),

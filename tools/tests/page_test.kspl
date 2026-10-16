@@ -1,0 +1,544 @@
+//< The URL that opens kspage, the page handing it to a browser, and the running-server note
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" + { Str_builder }
+import "std/tests/tree_test"
+import "std/verdict"
+import "tools/kspage_aim" as aim
+import "tools/surface_rows" as surface
+import "tools/tour_page" as tour
+
+// ==========================================
+// Tests the URL that opens kspage, the page that hands it to a browser, and the paths in the note
+// (`tools/kspage_aim.kspl`).
+//
+// It is tested because **a mistake here breaks nothing visible**: a badly built URL opens the page,
+// which stays blank and says nothing, and a token on a command line shows only to someone else's
+// `ps`. `make kspage` uses the same code, so this also keeps the building from moving back into
+// the Makefile.
+// ==========================================
+
+priv const scratch: U8[] = "out/tmp/kspl_test_aim" //< where the checks that write files work
+
+priv const secret_url: U8[] = "http://127.0.0.1:8080/?doc=a.kspage#t=secret0123" //<
+    //< a URL whose token a check looks for
+
+priv fn holding(path: U8[], want: U8[]): Bool //< whether the file at path holds want
+    got: = io.read_file(path) catch
+        return false
+    defer dealloc(Void$@::got.ptr)
+    return got.find_str(want).is_some()
+
+priv fn owner_only(path: U8[], arena: Arena$@): Bool //< whether only its owner may read it
+    //<
+    //< **True where the system shows no mode** (Windows, or a filesystem without one): there the
+    //< folder decides, and this cannot tell.
+    shown: = tree_test.mode_shown(path, arena)
+    return shown.len == 0 || shown.equals("-rw-------")
+
+fn test_the_url_keeps_the_token_last() //< the query goes before the fragment, the token last
+    verdict.start("[tools/kspage_aim] building the URL that opens test...")
+    $sb: = Str_builder.new()
+    defer sb.free()
+    got: = aim.url_for("http://127.0.0.1:8080/#t=abc123", "kspage/model/filter.kspl", false, sb@)
+    assert(got.equals("http://127.0.0.1:8080/?doc=kspage/model/filter.kspl#t=abc123"),
+        "the query goes before the fragment")
+    // Caution: **The token must stay last**, or the page opens but no file can be read.
+    assert(aim.token_in_url(got).equals("abc123"), "the token is still readable after building")
+    sb.clear()
+    // The query is added even to a URL with no fragment (kssrv printed no token).
+    bare: = aim.url_for("http://127.0.0.1:8080/", "a.kspl", false, sb@)
+    assert(bare.equals("http://127.0.0.1:8080/?doc=a.kspl"), "it builds with no fragment")
+    sb.clear()
+    // **`#`, `!` and a space must be escaped** (or the name is cut off there).
+    odd: = aim.url_for("http://h:1/#t=k", "my doc#2?.kspl", false, sb@)
+    assert(odd.equals("http://h:1/?doc=my%20doc%232%3F.kspl#t=k"),
+        "#, ? and a space in a name are escaped")
+    sb.clear()
+    // Caution: **A Windows separator (`out\sample.kspage`) must become `/`**, or the URL keeps a
+    // byte that is not a separator there.
+    won: = aim.url_for("http://h:1/#t=k", "out\\sample.kspage", true, sb@)
+    assert(won.equals("http://h:1/?doc=out/sample.kspage#t=k"), "a Windows separator becomes /")
+    sb.clear()
+    // **On POSIX it is part of the name** (`\` can be in a file name), so it is escaped.
+    kept: = aim.url_for("http://h:1/#t=k", "out\\sample.kspage", false, sb@)
+    assert(kept.equals("http://h:1/?doc=out%5Csample.kspage#t=k"),
+        "on POSIX \\ is escaped as part of the name")
+    sb.clear()
+    // **Every mark the page's query reader would turn into something else is escaped**, or it
+    // opens, and Save overwrites, another file: `+` reads as a space, `%2F` as a separator, `&` and
+    // `=` start a setting of their own.
+    marks: = aim.url_for("http://h:1/#t=k", "notes%2Fa+b&read=1.kspage", false, sb@)
+    assert(marks.equals("http://h:1/?doc=notes%252Fa%2Bb%26read%3D1.kspage#t=k"),
+        "%, +, & and = in a name are escaped")
+    verdict
+        .pass("the query goes before the fragment, the token is left last, marks in a name are \
+            escaped.")
+
+fn test_what_the_server_printed() //< the URL, port and token come out of the start-up line
+    verdict.start("[tools/kspage_aim] reading the line put out at start-up test...")
+    log: =
+        "kssrv: I: listening on 127.0.0.1:8080, root=.\nkssrv: I: open \
+            http://127.0.0.1:8080/#t=zz\nkssrv: I: ready\n"
+    got: = aim.url_in_log(log)
+    assert(got.equals("http://127.0.0.1:8080/#t=zz"), "only the line with the URL to open is taken")
+    assert(aim.port_in_url(got).equals("8080"), "the port comes out of the URL")
+    assert(aim.token_in_url(got).equals("zz"), "the token comes out of the URL")
+    // Caution: **Do not guess where there is none**; before the line arrives, the result is empty.
+    assert(aim.url_in_log("kssrv: I: listening on 127.0.0.1:8080\n").len == 0,
+        "where there is none yet it is empty")
+    assert(aim.token_in_url("http://127.0.0.1:8080/").len == 0,
+        "where there is no token it is empty")
+    // **Look for the port only after the `://` and before the first `/`** (the reason is at
+    // `port_in_url`).
+    assert(aim.port_in_url("http://127.0.0.1/#t=a:b").len == 0, "where there is no port it is empty")
+    assert(aim.port_in_url("http://h:99/#t=a:b").equals("99"),
+        "a `:` in the fragment is not made the port")
+    verdict
+        .pass("the URL comes out of the line that opens, then the port and the token; none gives \
+            empty.")
+
+fn test_a_port_that_cannot_be_waited_on() //< a string that is not a port becomes 0
+    verdict.start("[tools/kspage_aim] refusing a port that cannot be waited on test...")
+    assert(aim.port_num("8080") == 8080, "an ordinary port becomes a number")
+    assert(aim.port_num("1") == 1, "the low end gets through")
+    assert(aim.port_num("65535") == 65535, "the high end gets through")
+    assert(aim.port_num("") == 0, "empty is refused")
+    assert(aim.port_num("80a") == 0, "a non-numeric string is refused")
+    // Caution: **Check the range too.** Truncated to 16 bits, 65536 silently becomes another port.
+    assert(aim.port_num("65536") == 0, "outside the high end is refused")
+    assert(aim.port_num("0") == 0, "port 0 is refused")
+    assert(aim.port_num("-1") == 0, "a negative number is refused too")
+    verdict
+        .pass("only a port that gets through becomes a number; out of range and non-numeric give 0.")
+
+fn test_the_note_lists_the_running_servers() //< the note is a run of records, newest first
+    verdict.start("[tools/kspage_aim] the note of the running servers test...")
+    $one: = Str_builder.new()
+    defer one.free()
+    first: = aim.state_text("http://127.0.0.1:8080/#t=k9", ".", "", one@)
+    assert(aim.state_count(first) == 1, "start one and there is one record")
+    a: = aim.state_record(first, 0)
+    assert(a[0].equals("http://127.0.0.1:8080/#t=k9"), "a record holds the URL to open")
+    assert(a[1].equals("."), "a record holds the folder being served")
+    // A server for a different folder is **added**, not written over (written over, the first one
+    // is lost, holding its port with nobody able to reuse it).
+    $two: = Str_builder.new()
+    defer two.free()
+    both: = aim.state_text("http://127.0.0.1:8081/#t=zz", "/home/me/docs", first, two@)
+    assert(aim.state_count(both) == 2, "a different folder makes two records")
+    assert(aim.state_record(both, 0)[1].equals("/home/me/docs"), "the newer one comes first")
+    assert(aim.state_record(both, 1)[1].equals("."), "the one started first is left too")
+    // Serving the same folder again drops the old record.
+    $again: = Str_builder.new()
+    defer again.free()
+    fresh: = aim.state_text("http://127.0.0.1:8082/#t=n1", ".", both, again@)
+    assert(aim.state_count(fresh) == 2, "records for the same folder do not grow")
+    assert(aim.state_record(fresh, 0)[0].equals("http://127.0.0.1:8082/#t=n1"),
+        "the newer one is left")
+    assert(aim.state_record(fresh, 1)[1].equals("/home/me/docs"),
+        "a record for a different folder is left")
+    verdict
+        .pass("the note is a newest-first run of records, and only the same folder's old record \
+            drops.")
+
+fn test_a_note_that_was_cut_short() //< a note cut off partway is read as far as it goes
+    //<
+    //< Caution: **Do not abort on it.**
+    verdict.start("[tools/kspage_aim] reading a note that was cut short test...")
+    assert(aim.state_count("") == 0, "an empty note has no record")
+    // A note with one line (a run that died mid-write) holds no record.
+    assert(aim.state_count("http://h:1/#t=k\n") == 0, "a note with only a URL is not a record")
+    assert(aim.state_count("http://h:1/#t=k\n.\n") == 1, "two lines together make one record")
+    assert(aim.state_record("http://h:1/#t=k\n", 0)[1].len == 0, "a line that is not there is empty")
+    assert(aim.state_record("http://h:1/#t=k\n.\n", 9)[0].len == 0, "a record not there is empty")
+    // **Do not let it grow without limit**: past the cap, the oldest records go first.
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    $body: = Str_builder.new()
+    defer body.free()
+    $dir: = Str_builder.new()
+    defer dir.free()
+    $had: U8[] = ""
+    for $i: Sz = 0; i < 12; i += 1
+        dir.clear()
+        dir.s("/dir/\{i\}")
+        body.clear()
+        made: = aim.state_text("http://h:1/#t=k", dir.slice(), had, body@)
+        // Caution: **Copy it**; the next pass rebuilds the same buffer.
+        keep: = arena.text()
+        keep.s(made)
+        had = keep.take()
+    assert(aim.state_count(had) == 8, "it stops at the cap of 8")
+    assert(aim.state_record(had, 0)[1].equals("/dir/11"), "the newest record is left")
+    verdict.pass("a cut-short note does not stop it, and records are cut off at the cap of 8.")
+
+fn test_a_note_rebuilt_from_its_records() //< records put back one by one read back the same
+    //<
+    //< **Listing and stopping rebuild the note this way**, keeping only the servers still
+    //< answering.
+    verdict.start("[tools/kspage_aim] rebuilding the note record by record test...")
+    had: = "http://h:1/#t=a\n/one\nhttp://h:2/#t=b\n/two\nhttp://h:3/#t=c\n/my docs\n"
+    $kept: = Str_builder.new()
+    defer kept.free()
+    // The second server stopped answering, so only the first and the third are put back.
+    for i in Sz[]::{ 0, 2 }
+        one: = aim.state_record(had, i)
+        aim.state_put(kept@, one[0], one[1])
+    got: = kept.slice()
+    assert(aim.state_count(got) == 2, "the records put back are all there is")
+    assert(aim.state_record(got, 0)[1].equals("/one"), "the order is kept")
+    assert(aim.state_record(got, 1)[0].equals("http://h:3/#t=c"), "the URL comes back whole")
+    // A folder with a space in it stays one folder.
+    assert(aim.state_record(got, 1)[1].equals("/my docs"), "a space in a folder does not split it")
+    verdict.pass("a note put back record by record reads back the records, in order, unchanged.")
+
+fn test_a_folder_named_with_a_separator_at_its_end() //< `devel/` is the same folder as `devel`
+    verdict.start("[tools/kspage_aim] a separator after a folder's name test...")
+    assert(aim.trim_end_sep("/home/me/devel/").equals("/home/me/devel"), "a trailing `/` drops")
+    assert(aim.trim_end_sep("/home/me/devel//").equals("/home/me/devel"), "every trailing `/` drops")
+    assert(aim.trim_end_sep("C:\\work\\").equals("C:\\work"), "a trailing `\\` drops too")
+    assert(aim.trim_end_sep("/home/me/devel").equals("/home/me/devel"),
+        "without one it is unchanged")
+    // Caution: **A root keeps its separator**, or `/` becomes empty and `C:\` a drive's current
+    // folder.
+    assert(aim.trim_end_sep("/").equals("/"), "the root keeps its `/`")
+    assert(aim.trim_end_sep("C:\\").equals("C:\\"), "a drive's root keeps its `\\`")
+    verdict.pass("the separators after a folder's name drop, and a root keeps its own.")
+
+fn test_climbing_up_from_a_file() //< a path goes up one folder, absolute or not
+    verdict.start("[tools/kspage_aim] the path climbing up test...")
+    assert(aim.parent_of("kspage/model").equals("kspage"), "it goes one tier up")
+    assert(aim.parent_of("kspage").equals("."), "with no tier it is where we are")
+    assert(aim.parent_of(".").len == 0, "above where we are there is nothing")
+    assert(aim.parent_of("/home/me").equals("/home"), "even absolute it goes one tier up")
+    assert(aim.parent_of("/home").equals("/"), "one below the root goes up to the root")
+    // **The parent of the root is the root** (the caller stops on it).
+    assert(aim.parent_of("/").equals("/"), "above the root is the root")
+    assert(aim.parent_of("C:\\work\\a").equals("C:\\work"), "it goes up with `\\` too")
+    verdict.pass("it climbs a tier at a time, and stops at the root.")
+
+fn test_the_path_the_server_will_see() //< the path the server sees for a document
+    verdict.start("[tools/kspage_aim] the path as seen from the folder served test...")
+    got: = aim.doc_under("/home/me/devel", "/home/me/devel/kspage/model/filter.kspl")
+    assert(got.equals("kspage/model/filter.kspl"), "the root part drops")
+    assert(aim.doc_under(".", "kspage/model/filter.kspl").equals("kspage/model/filter.kspl"),
+        "serving where we are, it is left as it stands")
+    assert(aim.doc_under("/other", "/home/me/a.kspl").equals("/home/me/a.kspl"),
+        "not under the root, it is left as it stands")
+    assert(aim.doc_under("/", "/home/me/a.kspl").equals("home/me/a.kspl"),
+        "it drops even for the root itself")
+    assert(aim.doc_under("/home/me", "/home/me").equals("/home/me"),
+        "handed the root itself, it is kept")
+    verdict
+        .pass("the root part drops, and what is not under the root and the root itself are kept.")
+
+fn test_where_the_file_lives() //< a path splits into its folder and its name
+    verdict.start("[tools/kspage_aim] how a path splits test...")
+    a: = aim.split_path("kspage/model/filter.kspl")
+    assert(a[0].equals("kspage/model") && a[1].equals("filter.kspl"), "it splits at `/`")
+    b: = aim.split_path("C:\\work\\a.kspl")
+    assert(b[0].equals("C:\\work") && b[1].equals("a.kspl"), "it splits at `\\` too")
+    c: = aim.split_path("filter.kspl")
+    assert(c[0].equals(".") && c[1].equals("filter.kspl"), "with no container it is where we are")
+    d: = aim.split_path("C:\\work/a.kspl")
+    assert(d[0].equals("C:\\work") && d[1].equals("a.kspl"),
+        "mixed in, it splits at the separator further back")
+    verdict.pass("a path splits at both separators, and with no container it becomes where we are.")
+
+fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the command line
+    //<
+    //< **A command line is open to every user on the machine** (`ps`), so the browser is started on
+    //< a page that moves on to the URL, and only its owner may read that page.
+    verdict.start("[tools/kspage_aim] handing the browser a page, not the URL test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(scratch, "page_", arena)
+        catch panic("cannot create the working directory")
+    page: = aim.write_page(secret_url, dir, arena) catch panic("the page should be written")
+    for win in Bool[2]::{ false, true }
+        way: = aim.browser_argv("xdg-open", page, win, arena)
+        for one in way
+            assert(one.find_str("#t=").is_none() && one.find_str("secret0123").is_none(),
+                "no argument handed to the browser's starter holds the token")
+        assert(!win || way[1].find_char('/').is_none(),
+            "on Windows the page's path is written with `\\`")
+    moving: = arena.text().s("content=\"0;url=").s(secret_url).c('"').take()
+    assert(holding(page, moving), "the page moves on to the URL")
+    linked: = arena.text().s("href=\"").s(secret_url).c('"').take()
+    assert(holding(page, linked), "and offers it as a link too")
+    assert(owner_only(page, arena), "only its owner may read the page")
+    // **The URL is written as an attribute's value**, so a `"` cannot end it.
+    $text: = Str_builder.new()
+    defer text.free()
+    quoted: = aim.page_text("http://h:1/?doc=a\"b<c>&d#t=k", text@)
+    assert(quoted.find_str("a&quot;b&lt;c&gt;&amp;d").is_some() &&
+        quoted.find_str("a\"b").is_none(), "a mark in the URL is escaped")
+    fs.remove_path(page) catch {}
+    fs.remove_path(dir) catch {}
+    verdict
+        .pass("the browser is handed a page only its owner reads, and no argument holds the token.")
+
+fn test_a_page_handed_long_ago_is_removed() //< a page goes once a browser has had time to read it
+    verdict.start("[tools/kspage_aim] removing the pages handed long ago test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(scratch, "sweep_", arena)
+        catch panic("cannot create the working directory")
+    page: = aim.write_page(secret_url, dir, arena) catch panic("the page should be written")
+    other: = fs.join(dir, "other.html", arena)
+    io.write_file(other, "x") catch panic("the probe file must be writable")
+    at: = (fs.stat(page) catch panic("the page should stand")).mtime
+    aim.sweep_pages(dir, at + aim.page_keep_s, arena)
+    assert(fs.exists(page), "a page within its time is kept")
+    aim.sweep_pages(dir, at + aim.page_keep_s + 1, arena)
+    assert(!fs.exists(page), "a page past its time is removed")
+    assert(fs.exists(other), "a file whose name the opener does not give is left alone")
+    fs.remove_path(other) catch {}
+    fs.remove_path(dir) catch {}
+    verdict.pass("a page past its time goes, and nothing the opener did not name is touched.")
+
+fn test_the_note_is_written_for_its_owner() //< the note and the log hold the token too
+    verdict.start("[tools/kspage_aim] writing the note for its owner alone test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(scratch, "note_", arena)
+        catch panic("cannot create the working directory")
+    note: = fs.join(dir, "kspage_open.state", arena)
+    // **A note written before stands with the mode it was made with**, which must not carry over.
+    io.write_file(note, "old") catch panic("the probe file must be writable")
+    aim.write_owned(note, "new", arena) catch panic("the note should be written")
+    assert(holding(note, "new") && !holding(note, "old"), "the note holds what was written last")
+    assert(owner_only(note, arena), "only its owner may read the note")
+    names: = fs.read_dir(dir, arena) catch panic("the folder should be readable")
+    assert(names.len == 1, "nothing is left beside the note")
+    fs.remove_path(note) catch {}
+    fs.remove_path(dir) catch {}
+    verdict.pass("the note is replaced by one only its owner reads, with nothing left beside it.")
+
+// ==========================================
+// Tests the functions that read the record of the published API and compare it
+// (`tools/surface_rows.kspl`).
+// Note: It is tested because **a mistake here breaks nothing visible**: `make test-surface` passes
+// on 0 differences, so a reader that keeps no row or a comparer that always returns 0 stays green
+// and silent when the API changes, and it is noticed only after shipping.
+// ==========================================
+
+fn test_reading_the_record(arena: Arena$@) //< the record's text becomes a list of rows
+    //<
+    //< The header and a broken row are dropped, and the columns are split on tabs.
+    verdict.start("[tools/surface] turning the record into a list of rows test...")
+    // Caution: **Test both the rows kept and the rows dropped**; with only one side, "keeps
+    // everything" and "keeps nothing" both pass. **Put a tab in the header sample**: the
+    // column-count check drops a row with no tab too, so without one, removing the `#` check still
+    // passes.
+    data: =
+        "# a header\twith\ttabs\n\nksplc/base/locate\tfn package_of\tfn package_of(file_path: \
+            U8[]): U8[]\nstd/ds\tstruct List\tstruct List<|T|>\na row with no tab at all\na row \
+            with one tab only\tthat is all\n"
+    rows: = surface.rows_of(data, arena)
+    assert(rows.len == 2, "only the rows with their columns complete are picked up")
+    assert(rows.get(0).key.equals("ksplc/base/locate\tfn package_of"),
+        "the key is the logical name joined to the key")
+    assert(rows.get(0).text.equals("fn package_of(file_path: U8[]): U8[]"),
+        "the text is the third column")
+    assert(rows.get(1).key.equals("std/ds\tstruct List"),
+        "the second row's key comes out in the same shape")
+    // Caution: **Do not split on a tab inside the text**; only the first two tabs split.
+    wide: = surface.rows_of("a/b\tk\tv1\tv2\n", arena)
+    assert(wide.len == 1 && wide.get(0).text.equals("v1\tv2"),
+        "from the third column on it stays as the text")
+    verdict
+        .pass("the header and short rows are dropped; complete rows split into a key and a text.")
+
+fn test_telling_the_difference(arena: Arena$@) //< it counts the removed, changed and added
+    //<
+    //< It compares the record with the package as it is now.
+    verdict.start("[tools/surface] counting the API's differences test...")
+    // Caution: **Keep the three marks out of the rows' text**, or `find_str` matches the sample and
+    // removing `write_row` still passes.
+    old: = "# a header\np/a\tk1\tunchanged\np/b\tk2\tbefore\np/c\tk3\tabout to go\n"
+    now: = "# a header\np/a\tk1\tunchanged\np/b\tk2\tafter\np/d\tk4\tbrand new\n"
+    $o: = surface.rows_of(old, arena)
+    $w: = surface.rows_of(now, arena)
+    $b: = Str_builder.new()
+    defer b.free()
+    n: = surface.classify(o@, w@, b@)
+    // One removed, one changed, one added; k1 is unchanged.
+    assert(n == 3, "the removed, the changed and the added are counted one each")
+    out: = b.slice()
+    assert(out.find_str("removed").is_some() && out.find_str("changed").is_some() &&
+        out.find_str("added").is_some(), "all three marks come out")
+    // **Removals come first** (the reason is at `surface.classify`); the assertion above has
+    // found both marks.
+    if removed: = out.find_str("removed")
+        if added: = out.find_str("added")
+            assert(removed < added, "the removed side comes out first")
+    // **Two identical records give 0**; otherwise an unchanged API fails and people stop reading
+    // the marks.
+    $s1: = surface.rows_of(old, arena)
+    $s2: = surface.rows_of(old, arena)
+    b.clear()
+    assert(surface.classify(s1@, s2@, b@) == 0, "two identical records hold no difference")
+    verdict
+        .pass("removed/changed/added are counted, removed comes first, and identical records give \
+            0.")
+
+fn test_an_entry_that_says_nothing(arena: Arena$@) //< the rows carrying no summary are counted
+
+    verdict.start("[tools/surface] the entries that say nothing of themselves test...")
+    // Caution: **Test both sides here too**: with only one side, counting every row passes as
+    // silently as counting none.
+    data: =
+        "kspeg/rule\tRule\tpub enum Rule\tone node of the rule \
+            tree\nkspeg/rule\tRule.wildcard\twildcard\nksdb/log\tLog.used\tpub fn used(r: Self$@): \
+            Sz\n"
+    $rows: = surface.rows_of(data, arena)
+    $b: = Str_builder.new()
+    defer b.free()
+    n: = surface.undocumented(rows@, b@)
+    assert(n == 2, "the two rows with no fourth column are counted, and the one with it is not")
+    out: = b.slice()
+    assert(out.find_str("Rule.wildcard").is_some() && out.find_str("Log.used").is_some(),
+        "each one that says nothing is named")
+    // **A described entry is not listed** (or the reader looks for a sentence already there).
+    assert(out.find_str("pub enum Rule").is_none(),
+        "the entry that says what it is stays out of the list")
+    // With every entry described the count is 0, or a finished package fails and the gate gets
+    // turned off.
+    said: = "a/b\tk\tpub fn k()\twhat it does\n"
+    $ok: = surface.rows_of(said, arena)
+    b.clear()
+    assert(surface.undocumented(ok@, b@) == 0, "a record where every entry speaks holds nothing")
+    verdict.pass("the rows with no summary are counted and named, and a finished record gives 0.")
+
+fn test_taking_a_row_apart(arena: Arena$@) //< a row becomes its four fields
+    //<
+    //< **A row with no fourth column is valid**: its documentation is empty, not the declaration
+    //< run on.
+    verdict.start("[tools/surface] taking a row apart into its fields test...")
+    data: =
+        "std/argp\tParser.flag\tpub fn flag(r: Self$@)\ta switch taking no \
+            value\nstd/argp\tCmd.name\tname: U8[]\n"
+    rows: = surface.rows_of(data, arena)
+    assert(rows.len == 2, "both rows are read")
+    a: = surface.parts_of(rows.get(0))
+    assert(a.file.equals("std/argp"), "the file's logical name comes out")
+    assert(a.key.equals("Parser.flag"), "and the key within it")
+    assert(a.text.equals("pub fn flag(r: Self$@)"), "and the spelling")
+    assert(a.doc.equals("a switch taking no value"), "and what it says of itself")
+    b: = surface.parts_of(rows.get(1))
+    assert(b.text.equals("name: U8[]"), "a row with no fourth column keeps its spelling whole")
+    assert(b.doc.len == 0, "and says nothing of itself")
+    verdict.pass("a row comes apart into its file, key, spelling and what it says.")
+
+fn test_a_drifted_twin_is_named(arena: Arena$@) //< twins per `#cfg` differing by more than a mark
+    //<
+    //< **Twins that differ only by a parameter's unused mark agree** (an argument is passed by
+    //< place); any other difference is named, once.
+    verdict.start("[tools/surface] a drifted #cfg twin is named test...")
+    $b: = Str_builder.new()
+    defer b.free()
+    same: =
+        "std/lang\tpanic #cfg(!freestanding)\tpub fn panic(msg: U8$[], file: U8[])\nstd/lang\tpanic \
+            #cfg(freestanding)\tpub fn panic(msg: U8$[], _file: U8[])\n"
+    $agree: = surface.rows_of(same, arena)
+    assert(surface.drifted_twins(agree@, b@, arena) == 0, "a mark alone is no difference")
+    apart: =
+        "std/math\tsqrt #cfg(!freestanding)\tpub fn sqrt(x: F64): F64\nstd/math\tsqrt \
+            #cfg(freestanding)\tpub fn sqrt(x: F32): F32\nstd/math\tother\tpub fn other()\n"
+    $drift: = surface.rows_of(apart, arena)
+    assert(surface.drifted_twins(drift@, b@, arena) == 1, "a changed type is named, once")
+    assert(b.slice().find_str("sqrt #cfg(freestanding)").is_some(), "by the twin that differs")
+    verdict.pass("only twins that really differ are named.")
+
+fn test_a_part_row_is_told_from_an_entry(arena: Arena$@) //<
+    //< A parameter's row and the return value's are told apart from the declaration's
+    //<
+    //< Caution: **The record and the reference read the same rows and keep different ones.** Told
+    //< apart wrongly, the record fills with prose or the reference loses what a reader needs, and
+    //< nothing fails.
+    verdict.start("[tools/surface] telling a part's row from a declaration's test...")
+    data: =
+        "std/subproc\trun\tpub fn run(argv: U8[][])\truns one \
+            child\nstd/subproc\trun~00.argv\targv\tthe executable and its \
+            arguments\nstd/subproc\trun~~\treturn\tits standard output\n"
+    rows: = surface.rows_of(data, arena)
+    assert(rows.len == 3, "all three rows are read")
+    assert(surface.is_declaration(rows.get(0)), "the declaration's row is one")
+    assert(!surface.is_declaration(rows.get(1)) && !surface.is_declaration(rows.get(2)),
+        "the other two are parts of it")
+
+    one: = surface.parts_of(rows.get(1))
+    assert(one.owner.equals("run"), "a parameter names the declaration it belongs to")
+    assert(one.part.equals("argv"), "and its own name, with the place it stands in taken off")
+    back: = surface.parts_of(rows.get(2))
+    assert(back.owner.equals("run"), "what comes back names its declaration too")
+    // **Empty means two things, and `owner` tells them apart.**
+    assert(back.part.len == 0, "and carries no name of its own")
+    plain: = surface.parts_of(rows.get(0))
+    assert(plain.owner.len == 0, "a declaration's row names no owner")
+    verdict.pass("a parameter's row and the return's are told from a declaration's by their owner.")
+
+fn test_what_a_file_says_of_itself(arena: Arena$@) //<
+    //< A file's own row is told apart from a declaration's, and is not a declaration
+    //<
+    //< **The mark alone is the file's row.** Read as a declaration, it would become an entry named
+    //< `~` and put the file's purpose into the record that versions are compared by.
+    verdict.start("[tools/surface] what a file says of itself test...")
+    data: =
+        "std/mem\t~\tfile\tthe arena, and the heap under it\nstd/mem\tArena\tpub struct Arena\ta \
+            bump allocator\n"
+    rows: = surface.rows_of(data, arena)
+    first: = surface.parts_of(rows.get(0))
+    assert(first.of_file, "the row under the mark alone is the file's own")
+    assert(first.doc.equals("the arena, and the heap under it"), "and it carries the description")
+    assert(!surface.is_declaration(rows.get(0)), "it is no declaration")
+    assert(surface.is_declaration(rows.get(1)), "the one below it is")
+    assert(!surface.parts_of(rows.get(1)).of_file, "and is not the file's own")
+    verdict.pass("a file's own row is told from a declaration's, and counts as no declaration.")
+
+// ==========================================
+// Tests the tool that writes the language tour (`tools/tour_page.kspl`)
+// **A mistake here gives a page that says less than the program does** (a step dropped, a block
+// cut short), and `make test-docs` stays green, since the page matches the same broken writer.
+// ==========================================
+priv const laid_sample: U8[] =
+    "import \"std/io\"\n\npriv const limit: Sz = 4 //< a name for a value\n  //<\n  //< it cannot \
+        be assigned to.\n\npriv fn twice_of<|T|>(v: T): T //< generics\n  //<\n  //< a type the \
+        caller picks.\n  return v\n\npriv fn helper(): I32\n  return 0\n\npriv $seen: Sz = 0 //< a \
+        global\n\nfn main(): I32\n  return 0\n"
+
+fn test_a_step_per_described_declaration(arena: Arena$@) //<
+    //< One step per top-level `//<`, with its name, its prose and its code
+    verdict.start("[tools/tour] the walk's steps test...")
+    steps: = tour.walk_steps(laid_sample, arena)
+    assert(steps.len == 3, "the three that carry a description, and not the helper")
+    assert(steps.get(0).name.equals("limit"), "a `const` names the word after the keyword")
+    assert(steps.get(0).title.equals("a name for a value"), "the title is the words after the mark")
+    assert(steps.get(0).prose.equals("it cannot be assigned to."),
+        "the prose is the run below the parting, joined into one paragraph")
+    assert(steps.get(0).code.equals("priv const limit: Sz = 4"), "the code carries no `//<`")
+    assert(steps.get(1).code.equals("priv fn twice_of<|T|>(v: T): T\n  return v"),
+        "a body comes with its declaration, and the prose does not")
+    // A top-level mutable starts with its own name (see `page.declared_name`).
+    assert(steps.get(2).name.equals("seen"), "a global's name is its own first word")
+    verdict.pass("a described top-level declaration becomes one step, code and prose apart.")
+
+fn test_the_page_holds_the_steps(arena: Arena$@) //<
+    //< The page carries a section per step and the printout
+    verdict.start("[tools/tour] the page's shape test...")
+    text: = tour.render(laid_sample, "hello", arena)
+    // **The link that climbs out of docs/ is checked by its shape, not written out whole**
+    // (`make test-docref` would resolve it from this file, not from the page).
+    assert(text.find_str("[`../README").is_some(), "a link climbs out of docs/ first")
+    assert(text.find_str("](SPEC-language.md)").is_some(),
+        "a link inside docs/ keeps its bare name")
+    assert(text.find_str("\n## a name for a value\n").is_some(), "a heading per step")
+    assert(text.find_str("```kspl\npriv const limit: Sz = 4\n```").is_some(),
+        "the step's own code in its fence")
+    assert(text.find_str("```\nhello\n```").is_some(),
+        "the printout in a plain fence, closed on its own line")
+    verdict.pass("the page holds a section per step and the printout.")

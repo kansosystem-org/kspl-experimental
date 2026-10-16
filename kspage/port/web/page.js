@@ -3,7 +3,7 @@
 // closing menus, the shared wiring, the redraw notification, startup).
 // Caution: **The parts reach each other only through `ui`**, and only for what the others need; a
 // field grabbed directly silently breaks the day the setup order changes. Not an ES module
-// (embedded whole into one page, it opens on file://). **The inclusion order is the template's**
+// (embedded whole into one served page). **The inclusion order is the template's**
 // (`page.html`'s `__KSPAGE_FILE:…__`); this file sets up the parts, so it goes last.
 // ==========================================
 
@@ -21,7 +21,7 @@
   // start failed.
   // Caution: **Do not make a waiter look for `window.kspage` on a timer instead**: the wasm is
   // compiled, and the server asked, off this thread, so no length of wait is ever the right one.
-  window.kspageReady = kspageBoot(canvas, bytes).then((app) => {
+  window.kspageReady = kspageBoot(canvas, bytes).then(async (app) => {
     const side = document.getElementById("side");
     const sideRoom = () => (side.hidden ? 0 : side.getBoundingClientRect().width);
     const fit = () => {
@@ -54,7 +54,6 @@
     fit();
 
     const note = document.getElementById("note");
-    const file = document.getElementById("file");
     // The notice of a click's result, **only in the status bar**; empty text removes it.
     // Caution: **Give a refusal a different color**, or a click that did nothing goes unnoticed.
     // The log keeps every notice (what came before is the clue), capped, with no content.
@@ -151,7 +150,7 @@
       });
     };
     // The read-only look **only hides the entry points that change the document**; the core refuses
-    // (`kspage/write/edit.kspls`'s `shut`), shortcuts and pasting too.
+    // (`kspage/write/edit.kspl`'s `shut`), shortcuts and pasting too.
     // Caution: **Put the class on the root** (`page.css`'s `[data-edit]` hides), **measure the
     // width again**, and **work in both directions** (or the tools stay hidden after read-only).
     const dressRead = () => {
@@ -201,7 +200,10 @@
     // connections leave each other's writes unordered: `keep.js`'s `keepStore`).
     ui.handles = kspageHandles();
     // **Set up the local server before the files** (they use its entry points).
+    app.setReadOnly(true);
     Object.assign(ui, kspageLocal(ui));
+    if (!(await ui.localReady)) throw new Error("Open the URL shown by kssrv --local");
+    app.setReadOnly(false);
     Object.assign(ui, kspageFile(ui));
     // Caution: **After the files** (it borrows from them; they call `ui.keepSync` only if present).
     Object.assign(ui, kspageKeep(ui));

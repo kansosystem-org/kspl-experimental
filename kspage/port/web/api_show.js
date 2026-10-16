@@ -33,7 +33,7 @@ function kspageApiShow(ks) {
       const was = paperOf();
       const bare = was.width <= 0 || was.height <= 0;
       if (bare) {
-        // Caution: **Do not write the numbers here** (`a4_portrait` in `../../model/paper.kspls`
+        // Caution: **Do not write the numbers here** (`a4_portrait` in `../../model/paper.kspl`
         // holds them; `printPaper` decides what to borrow).
         const use = this.printPaper();
         w.kspage_web_set_paper(use.width, use.height, use.left, use.top, use.right, use.bottom,

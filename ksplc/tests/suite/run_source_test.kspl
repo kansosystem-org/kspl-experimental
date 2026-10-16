@@ -1,0 +1,84 @@
+#!/usr/bin/env -S ksplc run
+//< The test that pins down `ksplc run` for a program with no file: `ksplc run -` and `--eval=`
+//<
+//< It is read as a file named `-` in the current folder (`run_source` in `ksplc/tools/run.kspl`),
+//< so a relative import resolves from there and a diagnostic names it `-`. Split from
+//< `run_test.kspl`, which pins a script's build and its cache.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/run_case"
+import "ksplc/tests/support/run_progs"
+import "std/chars" // `find_str`
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+
+// ==========================================
+
+priv const eval_args_src: U8[] =
+    "import \"std/io\"; import \"std/sys\"; fn main() { a: = sys.args(); for i in Range.new(1, \
+        a.len, 1) { io.out().s(\"[\\{a[i]\\}]\") } io.out().s(\"\\n\") }" //<
+            //< A program on one line that prints its arguments, each in brackets
+
+priv fn case_eval_runs(work: U8[], arena: Arena$@): run_case.Result //<
+    //< `--eval=` runs the text, and every argument after it goes to the program as it is
+    _unused: = work
+    flag: = arena.text().s("--eval=").s(eval_args_src).take()
+    r: = run_case.ksplc_run(U8[][]::{ flag, "x", "--stats" }, arena)
+    return run_case.expect_out(r, "[x][--stats]",
+        "the program given with --eval= did not run with its arguments", arena)
+
+priv fn case_eval_imports_beside(work: U8[], arena: Arena$@): run_case.Result //<
+    //< A relative import in `--eval=`'s text resolves from the current folder
+    if !run_case.write_script(work, "unused.kspl", run_progs.script_src, 5, arena)
+        return run_case.failed("cannot place the material")
+    src: =
+        "--eval=import \"std/io\"; import \"helper\"; fn main() { \
+            io.out().s(\"h=\\{helper.value()\\}\\n\") }"
+    r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "run", src }), work)
+    return run_case.expect_out(r, "h=5", "the import beside the current folder was not found",
+        arena)
+
+priv fn case_eval_error_names_dash(work: U8[], arena: Arena$@): run_case.Result //<
+    //< A diagnostic in `--eval=`'s text names the program `-`, with no extension added
+    _unused: = work
+    r: = run_case.ksplc_run(U8[][]::{ "--eval=fn main() { x: I32 = \"a\" }" }, arena)
+    if r.code == 0 || r.out.find_str("-:1:22: error").is_none()
+        return run_case.broke("the diagnostic does not name the program `-` at its column", r.out,
+            arena)
+    return run_case.ok_result()
+
+priv fn case_stdin_runs(work: U8[], arena: Arena$@): run_case.Result //<
+    //< `ksplc run -` reads the program from standard input; it writes a file to show it ran
+    src: = "import \"std/io\"\nfn main()\n    io.write_file(\"fed.txt\", \"fed\") catch {}\n"
+    code: =
+        subproc.spawn_feed(harness.ksplc_argv(U8[][]::{ "run", "-" }), work, src, 60000) catch
+        return run_case.failed("ksplc could not be started")
+    got: = io.read_file(fs.join(work, "fed.txt", arena)) catch ""
+    if code != 0 || !got.equals("fed")
+        return run_case
+            .failed(arena.text()
+            .s("the program on standard input did not run (code=\{code\}, wrote '\{got\}')").take())
+    return run_case.ok_result()
+
+priv fn case_eval_only_for_run(work: U8[], arena: Arena$@): run_case.Result //<
+    //< A compile refuses `--eval=`: its output is named after a file, which the text has none of
+    _unused: = work
+    r: = harness.ksplc(U8[][]::{ "--eval=fn main() {}", "out.c" })
+    if r.code == 0 || r.out.find_str("does not take effect on this subcommand").is_none()
+        return run_case.broke("--eval= is not turned away from a compile", r.out, arena)
+    return run_case.ok_result()
+
+fn main(): I32
+    arena: = harness.begin(64 * 1024 * 1024)
+    run_case.run("--eval= runs its text with the arguments after it", "run_eval", case_eval_runs,
+        arena)
+    run_case.run("--eval='s relative import resolves from the current folder", "run_eval_import",
+        case_eval_imports_beside, arena)
+    run_case.run("--eval='s diagnostic names the program -", "run_eval_error",
+        case_eval_error_names_dash, arena)
+    run_case.run("run - reads the program from standard input", "run_stdin", case_stdin_runs, arena)
+    run_case.run("--eval= is refused on a compile", "run_eval_compile", case_eval_only_for_run,
+        arena)
+    return harness.finish()

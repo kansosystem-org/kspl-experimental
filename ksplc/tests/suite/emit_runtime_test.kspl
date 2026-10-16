@@ -1,0 +1,344 @@
+#!/usr/bin/env -S ksplc run
+//< It checks `ksplc emit-runtime` writes the same C runtime the generated C embeds
+//<
+//< When the runtime written alone and the one embedded at the generated C's head disagree, **both
+//< pass on their own**; an LLVM artefact linked with the one would run other code than the C one
+//< ("The runtime written alone, and its version symbol" in `ksplc/docs/DESIGN-compiler.md`).
+//< Caution: **Do not copy the content into this file.** A copy misses the embedded and the
+//< distributed runtime breaking the same way; compare against the generated C itself.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+priv const abi_def: U8[] = "\nvoid kspl_runtime_abi_" //<
+    //< The version symbol's body, present only at the end of the distributed runtime
+    //<
+    //< It is where it joins the runtime itself.
+
+priv const impl_mark: U8[] = "/* ---- kspl runtime implementation half ---- */\n" //<
+    //< The mark for the start of the definition half
+    //<
+    //< The source is `impl_half_mark` in `ksplc/gen/runtime.kspl`.
+
+// Keep it using the runtime: an empty generated C makes "the head agrees" pass trivially.
+priv const prog: U8[] = """import "std/io"
+fn main() { io.out().s("hi\n"); }
+"""
+
+priv struct Text //< the result of one generation
+    ok: Bool
+    body: U8[]
+    why: U8[]
+
+priv fn missing(why: U8[]): Text
+    return Text::{ .ok = false, .body = "", .why = why }
+
+priv fn emit(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
+    //< It reads `ksplc emit-runtime`'s output
+    path: = fs.join(dir, arena.text().s("kspl_runtime_\{tag\}.c").take(), arena)
+    $args: = List<|U8[]|>.new(arena)
+    for e in extra
+        args.push(e)
+    args.push("emit-runtime")
+    args.push(path)
+    r: = harness.ksplc_bare(args.slice())
+    if r.code != 0
+        return missing(arena.text().s("the output failed: \{r.out\}").take())
+    text: = harness.read_generated(path)
+    if text.len == 0
+        return missing(arena.text().s("the file has not been made: \{path\}").take())
+    return Text::{ .ok = true, .body = text, .why = "" }
+
+priv fn in_order(first: Sz?, then: Sz?, last: Sz?): Bool //< whether all three are found, in order
+    if a: = first
+        if b: = then
+            if c: = last
+                return a < b && b < c
+    return false
+
+priv fn place(at: Sz?, arena: Arena$@): U8[] //< where a search found its text, for a message
+    if i: = at
+        return arena.text().s("\{i\}").take()
+    return "none"
+
+priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
+    //< The calls the generated `main` must make before `kspl_main`
+    //<
+    //< **This is the only gate either one has on this machine.** Both are empty outside Windows, so
+    //< nothing here runs what they do — this pins down that the generated `main` still calls them,
+    //< in that order, before the program's own code (`startup_calls` in `../../gen/entry.kspl`).
+    if !gen.ok
+        return
+    name: = arena.text().s("\{tag\}'s generated main sets up the console and the byte mode first")
+        .take()
+    if tag.equals("freestanding")
+        // A freestanding artefact holds no `main` and no C runtime.
+        verdict.check(name, gen.body.find_str("kspl_io_set_stdio_binary();").is_none(),
+            "a freestanding artefact must not carry the hosted startup calls")
+        return
+    // Caution: **Search only inside `main`.** `kspl_main` is declared further up the file, so a
+    // search over the whole text finds that declaration and reports the order as wrong.
+    $entry: Sz = 0
+    switch gen.body.find_str("int main(int _argc, char **_argv) {")
+    case .some(at)
+        entry = at
+    case .none
+        verdict.check(name, false, "the generated C holds no hosted entry point")
+        return
+    body: = gen.body.sub_from(entry)
+    console_at: = body.find_str("kspl_io_init_console();")
+    binary_at: = body.find_str("kspl_io_set_stdio_binary();")
+    call_at: = body.find_str("kspl_main(")
+    verdict.check(name, in_order(console_at, binary_at, call_at),
+        arena.text().s("inside main: console at \{place(console_at, arena)\}, ")
+        .s("byte mode at \{place(binary_at, arena)\}, kspl_main at \{place(call_at, arena)\}; ")
+        .s("every one must be found, in that order").take())
+
+priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
+    //< It reads the generated C made under the same settings
+    src: = fs.join(dir, arena.text().s("rt_prog_\{tag\}.kspl").take(), arena)
+    out_c: = fs.join(dir, arena.text().s("rt_prog_\{tag\}.c").take(), arena)
+    io.write_file(src, prog) catch
+        return missing("cannot write the material")
+    $args: = List<|U8[]|>.new(arena)
+    for e in extra
+        args.push(e)
+    args.push(src)
+    args.push(out_c)
+    r: = harness.ksplc(args.slice())
+    if r.code != 0
+        return missing(arena.text().s("the generation failed: \{r.out\}").take())
+    text: = harness.read_generated(out_c)
+    if text.len == 0
+        return missing("the generated C cannot be read")
+    return Text::{ .ok = true, .body = text, .why = "" }
+
+priv fn target_probe(dir: U8[], arena: Arena$@): verdict.Run_out //<
+    //< Whether the C compiler takes `--target` (code 0), building one small file for ELF
+    //<
+    //< Caution: On a tool that cannot (a C compiler with no `--target`), print a SKIP rather than
+    //< passing silently: not failing is not the same as having checked.
+    probe_c: = fs.join(dir, "target_probe.c", arena)
+    io.write_file(probe_c, "int kspl_probe(void) { return 0; }\n") catch {}
+    return harness
+        .run(U8[][]::{ harness.cc(),
+        arena.text().s("--target=\{lock_free_triples[2]\}").take(), "-std=c99", "-c", probe_c, "-o",
+        fs.join(dir, "target_probe.o", arena) })
+
+priv const atomic_names: U8[][4] = ::{ "kspl_atomic_add(", "kspl_atomic_cas(", "kspl_atomic_load(",
+    "kspl_atomic_store(" } //< the four atomics the runtime defines, as they open a definition
+
+priv const lock_free_triples: U8[][5] = ::{ "x86_64-pc-windows-msvc", "x86_64-w64-mingw32",
+    "x86_64-pc-linux-gnu", "x86_64-apple-darwin", "thumbv7m-none-eabi" } //<
+        //< Targets whose pointer atomics are lock-free, so the runtime defines the four itself
+        //<
+        //< **MSVC is the one that matters**: clang there defines only `__CLANG_ATOMIC_*`, and a
+        //< guard asking `__GCC_ATOMIC_*` alone left the four out, seen only at the link on Windows.
+
+priv const no_lock_free_triple: U8[] = "thumbv6m-none-eabi" //<
+    //< Armv6-M, with no LDREX/STREX: the four are left to the port layer
+    //<
+    //< Caution: **Always test it**: a guard that lets everything through passes the list above.
+
+priv fn atomics_block(body: U8[], arena: Arena$@): U8[] //<
+    //< The `#if` … `#endif` around the atomics' definitions, cut from the runtime, or ""
+    //<
+    //< The innermost `#if` opened before the first definition is the guard itself.
+    $block: = List<|U8[]|>.new(arena)
+    $inside: = false
+    $found: = false
+    for line in body.lines(arena)
+        if line.starts_with("#if")
+            block = List<|U8[]|>.new(arena)
+            inside = true
+        if inside
+            block.push(line)
+        if line.find_str(atomic_names[0]).is_some() && line.ends_with("{")
+            found = inside
+        if line.starts_with("#endif")
+            if found
+                text: = arena.text()
+                for l in block
+                    text.s(l).s("\n")
+                return text.take()
+            inside = false
+    return ""
+
+priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
+    //< The atomics' guard, run through the preprocessor for each target: kept, or left out
+    on_name: = "the runtime defines the atomics wherever pointer atomics are lock-free"
+    off_name: = "the runtime leaves the atomics out on a core without them"
+    block: = atomics_block(body, arena)
+    if block.len == 0
+        verdict.check(on_name, false, "the atomics' guard cannot be cut out of the runtime")
+        verdict.check(off_name, false, "the atomics' guard cannot be cut out of the runtime")
+        return
+    src: = fs.join(dir, "atomics_frag.c", arena)
+    io.write_file(src, block) catch
+        verdict.check(on_name, false, "the fragment cannot be written")
+        return
+    probe: = target_probe(dir, arena)
+    if probe.code != 0
+        why: = arena.text().s("the C compiler does not take --target\n\{probe.out\}").take()
+        verdict.skip_check(on_name, why)
+        verdict.skip_check(off_name, why)
+        return
+    $bad: = List<|U8[]|>.new(arena)
+    for t in lock_free_triples
+        r: = harness
+            .run(U8[][]::{ harness.cc(), arena.text().s("--target=\{t\}").take(), "-E", "-P", src })
+        for n in atomic_names
+            if r.code != 0 || r.out.find_str(n).is_none()
+                bad.push(arena.text().s("\{t\}: no \{n\}").take())
+    why: = arena.text()
+    for b in bad
+        why.s(b).s("\n")
+    verdict.check(on_name, bad.len == 0, why.take())
+    off: = harness
+        .run(U8[][]::{ harness.cc(),
+        arena.text().s("--target=\{no_lock_free_triple\}").take(), "-E", "-P", src })
+    verdict.check(off_name, off.code == 0 && off.out.find_str("kspl_atomic_").is_none(),
+        arena.text().s("under \{no_lock_free_triple\}:\n\{off.out\}").take())
+
+fn main(): I32
+    arena: = harness.begin(512 * 1024 * 1024)
+    dir: = harness.sandbox("emit_runtime")
+    work: = dir
+    cc: = harness.cc()
+    io.out().s("# ksplc emit-runtime\n")
+
+    // The LLVM artefact holds no runtime and links with `emit-runtime`'s output.
+    // Caution: **Pin down `kspl_*`'s bodies in the IR as "no define, only a declare"** (the
+    // reference to the version symbol is checked the same way).
+    llvm_src: = fs.join(work, "rt_llvm.kspl", arena)
+    llvm_ll: = fs.join(work, "rt_llvm.ll", arena)
+    io.write_file(llvm_src, prog) catch
+        return harness.fatal("cannot write the material")
+    llvm: = harness.ksplc(U8[][]::{ "--to=llvm", llvm_src, llvm_ll })
+    verdict.check("the LLVM IR can be generated", llvm.code == 0, llvm.out)
+    if llvm.code == 0
+        ir: = harness.read_generated(llvm_ll)
+        declares_only: =
+            ir.find_str("declare void @kspl_io_init_console()").is_some() &&
+            ir.find_str("declare void @kspl_runtime_abi_").is_some() &&
+            ir.find_str("define i64 @kspl_thread_spawn").is_none() &&
+            ir.find_str("define ptr @kspl_os_argv").is_none()
+        verdict.check("the LLVM IR only declares the runtime and does not define it", declares_only,
+            "kspl_*'s bodies are left in the IR, or there is no reference to the version symbol")
+        // The LLVM entry point makes the C entry point's startup calls, in the same order.
+        $entry_ir: U8[] = ""
+        if main_at: = ir.find_str("define i32 @main(")
+            entry_ir = ir.sub_from(main_at)
+        console_at: = entry_ir.find_str("call void @kspl_io_init_console()")
+        binary_at: = entry_ir.find_str("call void @kspl_io_set_stdio_binary()")
+        call_at: = entry_ir.find_str("@kspl_main(")
+        verdict.check("the LLVM main sets up the console and the byte mode first, as C's does",
+            ir.find_str("declare void @kspl_io_set_stdio_binary()").is_some() &&
+            in_order(console_at, binary_at, call_at),
+            arena.text().s("inside main: console at \{place(console_at, arena)\}, ")
+            .s("byte mode at \{place(binary_at, arena)\}, kspl_main at \{place(call_at, arena)\}; ")
+            .s("every one must be declared and found, in that order").take())
+        llvm_exe: = fs.join(work, "rt_llvm.exe", arena)
+        built: = harness_build.build_llvm_exe(U8[][]::{ llvm_ll }, llvm_exe,
+            U8[][]::harness_build.llvm_cflags)
+        $ran_ok: = false
+        if built.code == 0
+            ran: = harness.run(U8[][]::{ llvm_exe })
+            ran_ok = ran.code == 0
+        verdict.check("the LLVM artefact links with emit-runtime's runtime and runs",
+            built.code == 0 && ran_ok, built.out)
+
+    $hosted: = missing("")
+    for i in Range.asc(2)
+        tag: = "hosted" if i == 0 else "freestanding"
+        extra: = U8[][]::{ .ptr = null, .len = 0 } if i == 0 else U8[][]::{ "--freestanding" }
+        rt: = emit(work, tag, extra, arena)
+        verdict.check(arena.text().s("\{tag\}'s runtime can be written out").take(), rt.ok, rt.why)
+        if i == 0
+            hosted = rt
+        if !rt.ok
+            continue
+        gen: = generated(work, tag, extra, arena)
+        verdict.check(arena.text().s("the generated C can be made under \{tag\}").take(), gen.ok,
+            gen.why)
+        if !gen.ok
+            continue
+        check_startup_calls(tag, gen, arena)
+        // Caution: Check **the position** rather than "it contains", or the declaration half moving
+        // after the generated body, or the definition half slipping into the middle, goes
+        // unnoticed. In the distributed runtime the halves are contiguous, the version symbol's
+        // body at the end.
+        runtime: = rt.body.sub(0, rt.body.find_str(abi_def).unwrap_or(rt.body.len))
+        mark: = runtime.find_str(impl_mark)
+        verdict.check(arena.text().s("\{tag\}'s distributing side has the body half's mark").take(),
+            mark.is_some(), arena.text().s("not found: \{impl_mark\}").take())
+        $mark_at: Sz = 0
+        switch mark
+        case .some(at)
+            mark_at = at
+        case .none
+            continue
+        decls: = runtime.sub(0, mark_at)
+        impl_half: = runtime.sub(mark_at, runtime.len - mark_at)
+        verdict.check(arena.text()
+            .s("\{tag\}'s distributing side's declaration half agrees with the generated C's head")
+            .take(), gen.body.starts_with(decls),
+            arena.text().s("distributing \{decls.len\} bytes / embedded \{gen.body.len\} bytes")
+            .take())
+        verdict.check(arena.text()
+            .s("\{tag\}'s distributing side's body half agrees with the generated C's tail").take(),
+            gen.body.len >= impl_half.len &&
+            gen.body.sub(gen.body.len - impl_half.len, impl_half.len).equals(impl_half),
+            arena.text().s("distributing \{impl_half.len\} bytes / embedded \{gen.body.len\} bytes")
+            .take())
+
+    // **Without the version symbol's body at the end, "it agrees with the head" above loses where
+    // to cut and passes trivially.** It holds under every object format.
+    if !hosted.ok
+        return harness.finish()
+    verdict.check("the version symbol is present in the runtime written out",
+        hosted.body.find_str(abi_def).is_some(),
+        arena.text().s("not found: \{abi_def\}").take())
+
+    // The receiver builds only this one file, so it must build on its own.
+    rt_c: = fs.join(work, "kspl_runtime_hosted.c", arena)
+    rt_o: = fs.join(work, "kspl_runtime_hosted.o", arena)
+    standalone: = harness.run(U8[][]::{ cc, "-std=c99", "-c", rt_c, "-o", rt_o })
+    verdict.check("the runtime written out becomes a .o on its own", standalone.code == 0,
+        standalone.out)
+    check_atomics(work, hosted.body, arena)
+
+    // If the two are the same, `--freestanding` is not taking effect on the runtime's selection.
+    free_text: = harness.read_generated(fs.join(work, "kspl_runtime_freestanding.c", arena))
+    verdict.check("--freestanding changes the content",
+        free_text.len > 0 && !hosted.body.equals(free_text),
+        "the hosted and bare-metal versions have become the same content")
+
+    // --- the version symbol stops a runtime of another version ---
+    //
+    // Caution: **Test the mismatching versions too.** The matching link above alone lets through a
+    // version symbol that is not actually referenced (`--gc-sections` dropping the reference, say).
+    // **A check that waits on a failed one fails with it**, naming it: a SKIP says the machine
+    // lacks something, and a round would read this one as a missing tool.
+    if llvm.code != 0
+        verdict.check("the LLVM artefact does not link with a runtime of a different version",
+            false, "it needs the LLVM IR, whose generation failed above")
+        return harness.finish()
+    // A runtime of a different version (standing for another ksplc's); only the symbol names
+    // change.
+    other_rt: = fs.join(work, "kspl_runtime_other.c", arena)
+    io.write_file(other_rt,
+        hosted.body.replace(abi_def, arena.text().s("\{abi_def\}x").take(), arena)) catch
+        return harness.fatal("the stand-in runtime cannot be written")
+    bad: = harness_build.build_exe(U8[][]::{ llvm_ll, other_rt },
+        fs.join(work, "rt_llvm_bad.exe", arena), U8[][]::harness_build.llvm_cflags)
+    verdict.check("the LLVM artefact does not link with a runtime of a different version",
+        bad.code != 0, "the link passed (the version symbol is not referenced)")
+    return harness.finish()

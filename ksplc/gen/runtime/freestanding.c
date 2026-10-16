@@ -5,7 +5,7 @@
 
 /* The AAPCS runtime calls clang generates for a struct's zero initialization (`::{}`) or copy
  * at a 4/8-byte boundary. libgcc does not hold them, so they are provided here.
- * Caution: They must not be implemented as KSPL functions in std/mem.kspls. Where std/mem is
+ * Caution: They must not be implemented as KSPL functions in std/mem.kspl. Where std/mem is
  * unreachable ksplc does not put it out, and __aeabi_memclr4 and the like become undefined
  * symbols (clang calls them implicitly, unseen by KSPL's reachability). The C runtime is taken
  * into every freestanding compilation unconditionally. */

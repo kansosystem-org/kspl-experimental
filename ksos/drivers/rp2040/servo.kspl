@@ -1,0 +1,44 @@
+//< An RC servo (the angle is set by a PWM pulse width at 50Hz)
+//<
+//< A 0.5ms High pulse in a 20ms period is 0°, 2.5ms is 180°: a PWM duty of **2.5% to 12.5%**.
+//< **Call `clocks.init()` first**: the period comes from clk_sys.
+//< Caution: **Do not put it on the same slice as a PWM with another period.** The period is per
+//< slice, so a motor's 500Hz would break one of them.
+//< The range a mechanism allows is the board's, not this driver's (the car's head:
+//< `ksos/boards/freenove_4wd_pico/head.kspl`).
+
+// ==========================================
+// How it is used:
+// ==========================================
+
+//   servo.init(13);
+//   servo.set_angle(13, 90);
+import "ksos/drivers/rp2040/clocks"
+import "ksos/drivers/rp2040/pwm"
+
+// The two ends of the duty, in parts per thousand. **The pulse width sets them, not the angle.**
+priv const duty_min_permille: U32 = 25 // 2.5% = 0.5ms / 20ms
+priv const duty_max_permille: U32 = 125 // 12.5% = 2.5ms / 20ms
+const angle_max: I32 = 180 //< the angle of the longest pulse; 0 is the shortest
+
+// **50Hz = clk_sys / (DIV × (TOP+1))**. DIV's integer part has only 8 bits, so TOP takes the rest.
+priv const pwm_div_int: U32 = 250
+priv const period_hz: U32 = 50
+priv const pwm_top: U32 = clocks.sys_hz / (pwm_div_int * period_hz) - 1
+
+fn init(pin: U32) //< sets up one pin for a servo
+    //<
+    //< **The period is per slice**, shared with the slice's other channel.
+    pwm.init_pin(pin)
+    pwm.config_slice(pwm.slice_of(pin), pwm_div_int, 0, pwm_top)
+
+fn set_angle(pin: U32, angle: I32) //< sets an angle in degrees
+    //<
+    //< **An angle outside 0 to `angle_max` is clamped first.** A mechanism that allows less
+    //< clamps before calling this.
+    a: = U32::(0 if angle < 0 else (angle_max if angle > angle_max else angle))
+    span: = duty_max_permille - duty_min_permille
+    permille: = duty_min_permille + (a * span / U32::angle_max)
+    // **Compute in parts per thousand**; in percent, 180 degrees get only 10 steps.
+    level: = (pwm_top + 1) * permille / 1000
+    pwm.set_level(pin, level)

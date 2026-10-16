@@ -1,0 +1,494 @@
+#!/usr/bin/env -S ksplc run
+//< The generic matrix: each shape a generic takes, reached each way, written in each position
+//<
+//< A cell compiles and prints its value on both backends, or is refused at the user's line with
+//< the language's words; the table and the rules deciding which are
+//< `tests/support/generic_matrix_table.kspl`. **ksplc's output always compiles**: a C compiler or
+//< LLVM refusing it, or the two backends printing different values, fails the cell whatever was
+//< expected, since only ksplc can be wrong there. A cell the language leaves open may do either,
+//< and is listed (`# left open`) for a decision.
+//< Caution: **The cells are batched, one program per shape and way of reaching it for those that
+//< run, and one for those refused**; a batch that does not hold is taken apart and each of its
+//< cells judged alone, so a fault is named by its cell and no cell hides another's.
+
+// ==========================================
+//   make test-generic-matrix   … this suite
+//   KANSO_TEST_JOBS=1          … one child at a time, to read a failure
+// ==========================================
+import "ksplc/tests/support/generic_matrix_table"
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/verdict"
+
+priv struct Cell //< one shape, reached one way, in one position, and what it must do
+    s: Sz
+    a: Sz
+    p: Sz
+    o: generic_matrix_table.Outcome
+
+priv struct Unit //< one program: a batch of cells, or one cell alone
+    dir: U8[]
+    runs: Bool //< its cells run (else they are refused)
+    cells: List<|Sz|> //< indices into the cells
+    marks: List<|Sz|> //< each cell's line a refusal must point at, in the program's file
+    named: List<|Sz|> //<
+        //< the lines writing the library's name, for a refusal of the way reaching it
+
+priv struct Ran //< what one program came to
+    stage: U8[] //< the step that failed, empty where it built and ran on both backends
+    detail: U8[] //< that step's output
+    said: U8[] //< ksplc's output for the C backend
+    code: I32 //< ksplc's exit code for the C backend
+    out_c: U8[] //< what the C backend's executable printed
+    out_l: U8[] //< what the LLVM backend's executable printed
+
+priv const main_rel: U8[] = "app/main.kspl" //< the program's own file, as diagnostics name it
+priv const mangled_mark: U8[] = "_kspl_" //<
+    //< What every mangled name of the cells' files holds (`app_lib_kspl_Box_I64`)
+    //<
+    //< The files are `.kspl`, whose extension stays in their logical name.
+
+// ==========================================
+// Writing a program
+// ==========================================
+
+priv struct Lines //< a file being written, which remembers where `@@` marked a line
+    all: List<|U8[]|>
+    mark: Sz //< the last line marked, counted from 1 (0: none yet)
+
+priv fn add(f: Lines$@, text: U8[], arena: Arena$@, indent: U8[] = "") //<
+    //< Appends text, each line after `indent`, its `@@` taken off and noted
+    for line in text.lines(arena)
+        if line.starts_with("@@")
+            f.all.push(arena.text().s(indent).s(line.sub_from(2)).take())
+            f.mark = f.all.len
+        else
+            f.all
+                .push(arena.text().s(indent if line.len > 0 else "").s(line).take())
+
+priv fn fill(text: U8[], c: Cell@, arena: Arena$@): U8[] //< a position's text, for this cell
+    //<
+    //< The subject's texts are spelt as a probe's body sees them, the function type as the top.
+    s: = generic_matrix_table.shapes[c.s]@
+    a: = generic_matrix_table.accesses[c.a]@
+    p: = generic_matrix_table.positions[c.p]@
+    in_impl: = a.via == generic_matrix_table.Via.self_type
+    return text
+        .replace("{TY}", generic_matrix_table.spell(s.ty, a, s, false, arena), arena)
+        .replace("{VO}", generic_matrix_table.spell(s.vo, a, s, true, arena), arena)
+        .replace("{VT}", generic_matrix_table.spell(s.vt, a, s, true, arena), arena)
+        .replace("{V}", generic_matrix_table.spell(s.v, a, s, true, arena), arena)
+        .replace("{A}", s.a, arena).replace("{RV}", s.rv, arena).replace("{MW}", s.mw, arena)
+        .replace("{MI}", s.mi, arena).replace("{AV}", s.av, arena)
+        .replace("{INIT}", generic_matrix_table.spell(s.init, a, s, true, arena), arena)
+        .replace("{RD}", s.rd, arena).replace("{ADDR}", s.addr, arena)
+        .replace("{H}", "Self." if in_impl else "", arena).replace("{N}", p.name, arena)
+
+priv fn setup(s: generic_matrix_table.Shape@, a: generic_matrix_table.Access@, arena: Arena$@):
+    U8[] //< the receivers it needs
+    switch s.owner
+    case .box
+        return generic_matrix_table.spell("priv recv: {B} = {B}::{ .a = 1, .v = 7 }\n", a, s, false,
+            arena)
+    case .plain
+        return generic_matrix_table.spell("priv precv: {P} = {P}::{ .a = 1 }\n", a, s, false, arena)
+    case .gf
+        return ""
+
+priv fn write_unit(dir: U8[], runs: Bool, idx: List<|Sz|>, cells: List<|Cell|>@, arena: Arena$@):
+    Unit //<
+        //< Writes the program holding the cells idx names, all of one shape and one way of reaching
+    first: = cells.get(idx.get(0))
+    s: = generic_matrix_table.shapes[first.s]@
+    a: = generic_matrix_table.accesses[first.a]@
+    in_impl: = a.via == generic_matrix_table.Via.self_type
+    $f: = Lines::{ .all = List<|U8[]|>.new(arena), .mark = 0 }
+    $marks: = List<|Sz|>.new(arena)
+    add(f@, "import \"std/io\"", arena)
+    add(f@, generic_matrix_table.import_lines(a, s, arena), arena)
+    if a.home == generic_matrix_table.Home.here
+        add(f@, generic_matrix_table.library_text(a.vis, false, arena), arena)
+    add(f@, setup(s, a, arena), arena)
+    for q in Range.asc(idx.len)
+        i: = idx.get(q)
+        f.mark = 0
+        c: = cells.get(i)
+        add(f@, fill(generic_matrix_table.positions[c.p].top, c@, arena), arena)
+        marks.push(f.mark)
+    if in_impl
+        add(f@,
+            arena.text().s("impl ").s(generic_matrix_table.owner_type(a, s, arena)).take(), arena)
+    for k in Range.asc(idx.len)
+        f.mark = 0
+        c: = cells.get(idx.get(k))
+        // Inside an `impl` the probes stand one level in.
+        add(f@, fill(generic_matrix_table.positions[c.p].fns, c@, arena), arena,
+            "  " if in_impl else "")
+        if f.mark > 0
+            marks.set(k, f.mark)
+    add(f@, "fn main()", arena)
+    caller: =
+        (arena.text().s(generic_matrix_table.owner_type(a, s, arena)).s(".").take() if in_impl
+        else "")
+    for q in Range.asc(idx.len)
+        i: = idx.get(q)
+        name: = generic_matrix_table.positions[cells.get(i).p].name
+        add(f@,
+            arena.text().s("  io.out().s(\"").s(name).s("=\\{").s(caller).s("probe_").s(name)
+            .s("()\\}\\n\")").take(), arena)
+    // The lines writing the library's name, where a refusal of the way reaching it may point.
+    $named: = List<|Sz|>.new(arena)
+    spelt: = generic_matrix_table.base_name(a, s.owner, arena)
+    for n in Range.asc(f.all.len)
+        if f.all.get(n).find_str(spelt).is_some()
+            named.push(n + 1)
+    $rels: = List<|U8[]|>.new(arena)
+    $bodies: = List<|U8[]|>.new(arena)
+    rels.push(main_rel)
+    bodies.push(arena.text().s("\n".join(f.all, arena)).s("\n").take())
+    lib: = generic_matrix_table.library_path(a)
+    if lib.len > 0
+        rels.push(arena.text().s(lib).s(".kspl").take())
+        bodies.push(generic_matrix_table.library_text(a.vis, false, arena))
+    switch a.decoy
+    case .pub_pkg
+        rels.push("third/lib.kspl")
+        bodies.push(generic_matrix_table.library_text("pub ", true, arena))
+    case .priv_sib
+        rels.push("app/third.kspl")
+        bodies.push(generic_matrix_table.library_text("priv ", true, arena))
+    default {}
+    fs.write_tree(dir, rels.slice(), bodies.slice(), arena) catch
+        panic(U8$[]::arena.text().s("cannot write the cells in ").s(dir).take())
+    return Unit::{ .dir = dir, .runs = runs, .cells = idx, .marks = marks, .named = named }
+
+// ==========================================
+// Running programs: translate on both backends, build both, run both, each step side by side
+// ==========================================
+
+priv fn job(argv: U8[][], cwd: U8[], arena: Arena$@): subproc.Job //< a child to run later
+    //<
+    //< Caution: **The argv is copied into the arena**: a literal's array lives in the caller's
+    //< frame, and every job kept would see the last one's.
+    $kept: = List<|U8[]|>.new(arena)
+    for w in argv
+        kept.push(w)
+    return subproc.Job::{ .argv = kept.slice(), .cwd = cwd }
+
+priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|> //<
+    //< Runs every program, and returns what each came to, in order
+    $jobs: = List<|subproc.Job|>.new(arena)
+    for q in Range.asc(units.len)
+        u: = units.get(q)
+        jobs
+            .push(job(harness.ksplc_argv(U8[][]::{ main_rel, "c.c" }), u.dir, arena))
+        if u.runs
+            llvm: = harness.ksplc_argv(U8[][]::{ "--to=llvm", main_rel, "l.ll" })
+            jobs.push(job(llvm, u.dir, arena))
+    gen: = harness.run_all(jobs.slice(), arena.text().s("gen_\{round\}").take())
+    $ran: = List<|Ran|>.new(arena)
+    $builds: = List<|subproc.Job|>.new(arena)
+    $k: Sz = 0
+    for q in Range.asc(units.len)
+        u: = units.get(q)
+        c: = gen.get(k)
+        k += 1
+        $r: = Ran::{ .stage = "", .detail = "", .said = c.out, .code = c.code, .out_c = "",
+            .out_l = "" }
+        if u.runs
+            l: = gen.get(k)
+            k += 1
+            if c.code != 0
+                r.stage = "ksplc refused it (C backend)"
+                r.detail = c.out
+            else if l.code != 0
+                r.stage = "ksplc refused it (LLVM backend)"
+                r.detail = l.out
+            else
+                bc: = harness_build.exe_job(fs.join(u.dir, "c.c", arena),
+                    fs.join(u.dir, "c.exe", arena), false)
+                bl: = harness_build.exe_job(fs.join(u.dir, "l.ll", arena),
+                    fs.join(u.dir, "l.exe", arena), true)
+                if bc.why.len > 0 || bl.why.len > 0
+                    r.stage = "the build could not be composed"
+                    r.detail = arena.text().s(bc.why).s(bl.why).take()
+                else
+                    builds.push(bc.job)
+                    builds.push(bl.job)
+        ran.push(r)
+    built: = harness.run_all(builds.slice(), arena.text().s("cc_\{round\}").take())
+    $runs: = List<|subproc.Job|>.new(arena)
+    k = 0
+    for i in Range.asc(units.len)
+        if !units.get(i).runs || ran.get(i).stage.len > 0
+            continue
+        bc: = built.get(k)
+        bl: = built.get(k + 1)
+        k += 2
+        $r: = ran.get(i)
+        if bc.code != 0
+            r.stage = "the C compiler refused ksplc's C"
+            r.detail = bc.out
+        else if bl.code != 0
+            r.stage = "LLVM refused ksplc's IR"
+            r.detail = bl.out
+        else
+            dir: = units.get(i).dir
+            runs.push(job(U8[][]::{ fs.join(dir, "c.exe", arena) }, dir, arena))
+            runs.push(job(U8[][]::{ fs.join(dir, "l.exe", arena) }, dir, arena))
+        ran.set(i, r)
+    outs: = harness.run_all(runs.slice(), arena.text().s("run_\{round\}").take())
+    k = 0
+    for i in Range.asc(units.len)
+        if !units.get(i).runs || ran.get(i).stage.len > 0
+            continue
+        oc: = outs.get(k)
+        ol: = outs.get(k + 1)
+        k += 2
+        $r: = ran.get(i)
+        r.out_c = oc.out
+        r.out_l = ol.out
+        if oc.code != 0 || ol.code != 0
+            r.stage = "a built program did not end with 0"
+            r.detail = arena.text().s("C: exit \{oc.code\}\n\{oc.out\}\nLLVM: exit \{ol.code\}\n")
+                .s(ol.out).take()
+        ran.set(i, r)
+    return ran
+
+// ==========================================
+// Judging a cell
+// ==========================================
+
+priv fn printed(out: U8[], name: U8[], arena: Arena$@): U8[] //< the value a probe printed
+    head: = arena.text().s(name).s("=").take()
+    for line in out.lines(arena)
+        if line.starts_with(head)
+            return line.sub_from(head.len)
+    return "(nothing)"
+
+priv fn excerpt(text: U8[], arena: Arena$@): U8[] //< the head of a long output
+    lines: = text.lines(arena)
+    if lines.len <= 12
+        return text
+    b: = arena.text()
+    for i in Range.asc(12)
+        b.s(lines.get(i)).c('\n')
+    return b.s("…").take()
+
+priv fn judge_run(c: Cell@, r: Ran@, arena: Arena$@): U8[] //< why a running cell fails, or empty
+    if r.stage.len > 0
+        return arena.text().s(r.stage).c('\n').s(excerpt(r.detail, arena)).take()
+    name: = generic_matrix_table.positions[c.p].name
+    vc: = printed(r.out_c, name, arena)
+    vl: = printed(r.out_l, name, arena)
+    if !vc.equals(vl)
+        return arena.text().s("the backends disagree: C printed ").s(vc).s(", LLVM ").s(vl).take()
+    if !vc.equals(c.o.want)
+        return arena.text().s("printed ").s(vc).s(", not ").s(c.o.want).take()
+    return ""
+
+priv fn at_line(line: U8[], n: Sz, arena: Arena$@): Bool //< whether a diagnostic stands at line n
+    return line.starts_with(arena.text().s(main_rel).s(":\{n\}:").take())
+
+priv fn says_one(line: U8[], says: U8[], arena: Arena$@): Bool //<
+    //< Whether a diagnostic's line holds one of the texts, parted by a tab, a refusal may say
+    for one in says.split('\t', arena)
+        if line.find_str(one).is_some()
+            return true
+    return false
+
+priv fn judge_refusal(c: Cell@, mark: Sz, named: List<|Sz|>@, r: Ran@, arena: Arena$@): U8[] //<
+    //< Why a refused cell fails, or empty
+    if r.code == 0
+        return arena.text().s("ksplc accepted it; expected '").s(c.o.says).s("'").take()
+    if r.said.find_str("[ICE]").is_some()
+        return arena.text().s("ksplc stopped on an internal error\n")
+            .s(excerpt(r.said, arena)).take()
+    // A diagnostic names a type as the source spells it, never by its mangled name
+    // (`other_lib_kspl_Box_I64`), which the reader cannot match to a line.
+    for line in r.said.lines(arena)
+        if line.find_str("error:").is_some() && line.find_str(mangled_mark).is_some()
+            return arena.text().s("a diagnostic spells a mangled name\n").s(line).take()
+    $elsewhere: = false
+    for line in r.said.lines(arena)
+        if line.find_str("error:").is_none() || !says_one(line, c.o.says, arena)
+            continue
+        if c.o.any_line
+            for q in Range.asc(named.len)
+                n: = named.get(q)
+                if at_line(line, n, arena)
+                    return ""
+        else if at_line(line, mark, arena)
+            return ""
+        elsewhere = true
+    $where: = "a line writing the name"
+    if !c.o.any_line
+        where = arena.text().s(main_rel).s(":\{mark\}").take()
+    lead: = "the refusal points elsewhere" if elsewhere else "the refusal's words are missing"
+    return arena.text().s(lead).s(": expected '").s(c.o.says).s("' at ").s(where).c('\n')
+        .s(excerpt(r.said, arena)).take()
+
+priv fn judge_open(c: Cell@, mark: Sz, r: Ran@, arena: Arena$@): U8[] //<
+    //< Why a cell the language leaves open fails: neither a run nor a refusal at its line
+    if r.code == 0
+        return judge_run(c, r, arena)
+    if r.said.find_str("[ICE]").is_some()
+        return arena.text().s("ksplc stopped on an internal error\n")
+            .s(excerpt(r.said, arena)).take()
+    for line in r.said.lines(arena)
+        if line.find_str("error:").is_some() && at_line(line, mark, arena)
+            return ""
+    return arena.text().s("refused, but not at ").s(main_rel).s(":\{mark\}\n")
+        .s(excerpt(r.said, arena)).take()
+
+priv fn judge(c: Cell@, u: Unit@, k: Sz, r: Ran@, arena: Arena$@): U8[] //< why a cell fails
+    if c.o.open.len > 0
+        return judge_open(c, u.marks.get(k), r, arena)
+    if c.o.runs
+        return judge_run(c, r, arena)
+    return judge_refusal(c, u.marks.get(k), u.named@, r, arena)
+
+// ==========================================
+// The matrix
+// ==========================================
+
+priv fn refused_here(ci: Sz, units: List<|Unit|>@, ran: List<|Ran|>@): Bool //<
+    //< Whether ksplc refused the program holding that cell alone
+    for ui in Range.asc(units.len)
+        u: = units.get(ui)
+        if u.cells.len == 1 && u.cells.get(0) == ci
+            return ran.get(ui).code != 0
+    return false
+
+fn main(): I32
+    arena: = harness.begin(512 * 1024 * 1024)
+    work: = harness.sandbox("generic_matrix")
+    $cells: = List<|Cell|>.new(arena)
+    $units: = List<|Unit|>.new(arena)
+    $ran_cells: Sz = 0
+    $open_cells: = List<|Sz|>.new(arena) //< the cells the language leaves open, each alone
+    for si in Range.asc(generic_matrix_table.shapes.len)
+        for ai in Range.asc(generic_matrix_table.accesses.len)
+            $runs: = List<|Sz|>.new(arena)
+            $refused: = List<|Sz|>.new(arena)
+            for pi in Range.asc(generic_matrix_table.positions.len)
+                o: = generic_matrix_table.outcome(generic_matrix_table.shapes[si]@,
+                    generic_matrix_table.accesses[ai]@, generic_matrix_table.positions[pi]@)
+                if !o.applies
+                    continue
+                cells.push(Cell::{ .s = si, .a = ai, .p = pi, .o = o })
+                if o.open.len > 0
+                    open_cells.push(cells.len - 1)
+                else if o.runs
+                    runs.push(cells.len - 1)
+                else
+                    refused.push(cells.len - 1)
+            if runs.len > 0
+                ran_cells += runs.len
+                dir: = fs.join(work, arena.text().s("b\{units.len\}").take(), arena)
+                units.push(write_unit(dir, true, runs, cells@, arena))
+            if refused.len > 0
+                dir: = fs.join(work, arena.text().s("b\{units.len\}").take(), arena)
+                units.push(write_unit(dir, false, refused, cells@, arena))
+    // A cell left open may run or be refused, so it is built alone, as a running one.
+    for q in Range.asc(open_cells.len)
+        $one: = List<|Sz|>.new(arena)
+        one.push(open_cells.get(q))
+        dir: = fs.join(work, arena.text().s("b\{units.len\}").take(), arena)
+        units.push(write_unit(dir, true, one, cells@, arena))
+    io.out()
+        .s("# the generic matrix: \{generic_matrix_table.shapes.len\} shapes x \
+            \{generic_matrix_table.accesses.len\} ways x ")
+        .s("\{generic_matrix_table.positions.len\} positions: \{cells.len\} cells (\{ran_cells\} \
+            run, ").s("\{cells.len - ran_cells - open_cells.len\} refused, \{open_cells.len\} ")
+        .s("left open) in \{units.len\} programs, ").s("\{verdict.jobs()\} in parallel\n")
+    ran: = run_units(units@, "batch", arena)
+    // A cell's verdict, empty where it holds; a batch that does not hold is taken apart.
+    $why: = List<|U8[]|>.new(arena)
+    $where: = List<|U8[]|>.new(arena)
+    for _i in Range.asc(cells.len)
+        why.push("")
+        where.push("")
+    // A running batch that built and ran names each cell's value on its own line, so its verdicts
+    // stand; a refused cell is judged alone unless its batch already shows its refusal.
+    $alone: = List<|Unit|>.new(arena)
+    for ui in Range.asc(units.len)
+        u: = units.get(ui)
+        r: = ran.get(ui)
+        for k in Range.asc(u.cells.len)
+            ci: = u.cells.get(k)
+            c: = cells.get(ci)
+            if !u.runs || r.stage.len == 0 || c.o.open.len > 0
+                bad: = judge(c@, u@, k, r@, arena)
+                if u.runs || bad.len == 0
+                    why.set(ci, bad)
+                    where.set(ci, u.dir)
+                    continue
+            $one: = List<|Sz|>.new(arena)
+            one.push(ci)
+            dir: = fs.join(work, arena.text().s("c\{ci\}").take(), arena)
+            alone.push(write_unit(dir, u.runs, one, cells@, arena))
+    if alone.len > 0
+        io.out().s("# \{alone.len\} cells taken out of their batch, to be judged alone\n")
+        ran_alone: = run_units(alone@, "alone", arena)
+        for ui in Range.asc(alone.len)
+            u: = alone.get(ui)
+            ci: = u.cells.get(0)
+            c: = cells.get(ci)
+            r: = ran_alone.get(ui)
+            why.set(ci, judge(c@, u@, 0, r@, arena))
+            where.set(ci, u.dir)
+    // What the language leaves open is listed for a decision, each question once, with what this
+    // compiler does.
+    $asked: = List<|U8[]|>.new(arena)
+    for q in Range.asc(open_cells.len)
+        c: = cells.get(open_cells.get(q))
+        $seen: = false
+        for a in Range.asc(asked.len)
+            seen = seen || asked.get(a).equals(c.o.open)
+        if seen
+            continue
+        asked.push(c.o.open)
+        $refused_n: Sz = 0
+        $n: Sz = 0
+        for r in Range.asc(open_cells.len)
+            d: = cells.get(open_cells.get(r))
+            if d.o.open.equals(c.o.open)
+                n += 1
+                if refused_here(open_cells.get(r), units@, ran@)
+                    refused_n += 1
+        io.out().s("# left open for a decision (\{n\} cells, \{refused_n\} refused here): ")
+            .s(c.o.open).c('\n')
+    // One verdict per shape and way of reaching it, naming each cell that does not hold.
+    for si in Range.asc(generic_matrix_table.shapes.len)
+        for ai in Range.asc(generic_matrix_table.accesses.len)
+            $n: Sz = 0
+            $failed: Sz = 0
+            detail: = arena.text()
+            for ci in Range.asc(cells.len)
+                c: = cells.get(ci)
+                if c.s != si || c.a != ai
+                    continue
+                n += 1
+                if why.get(ci).len == 0
+                    continue
+                failed += 1
+                p: = generic_matrix_table.positions[c.p]@
+                detail.s("\n  ").s(p.name).s(", ").s(p.what).s(" (SPEC-language ").s(c.o.rule)
+                    .s(", ").s(where.get(ci)).s("): ").s(why.get(ci))
+            if n == 0
+                continue
+            s: = generic_matrix_table.shapes[si]@
+            a: = generic_matrix_table.accesses[ai]@
+            verdict.check(arena.text().s(s.name).s(" / ").s(a.name).s(": ").s(s.what).s(", ")
+                .s(a.what).s(" (\{n\} cells)").take(), failed == 0,
+                arena.text().s("\{failed\} cells do not hold").s(detail.take()).take())
+    return harness.finish()

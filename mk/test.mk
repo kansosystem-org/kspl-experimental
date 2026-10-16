@@ -2,11 +2,11 @@
 # mk/test.mk — running the tests (debug / test-suites / test-simd and others)
 # Taken in by the root Makefile; the rule for including is in the header of its `include mk/ci.mk`.
 # ==================================================================
-## Local-cycle|debug|Run the tests `tests/debug/main.kspls` calls, in one executable
+## Local-cycle|debug|Run the tests `tests/debug/main.kspl` calls, in one executable
 DEBUG_RT := $(if $(filter 1,$(LLVM)),$(GEN_DIR)/test_debug_runtime.c,)
 debug: $(STAGE1_EXE)
 	@echo "# RUNNING DEBUG TESTS ($(BACKEND), BLAS=$(BLAS))"
-	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs=$(DEBUG_LIBS) tests/debug/main.kspls $(DEBUG_OUT)
+	./$(STAGE1_EXE) $(KSPL_FLAGS) $(TARGET_FLAG) $(AI_KSPL_FLAGS) --emit-libs=$(DEBUG_LIBS) tests/debug/main.kspl $(DEBUG_OUT)
 	$(if $(DEBUG_RT),./$(STAGE1_EXE) emit-runtime $(DEBUG_RT))
 	$(CC) $(CFLAGS) $(DEBUG_OUT) $(DEBUG_RT) @$(DEBUG_LIBS) $(LDLIBS) -o $(DEBUG_EXE)
 	./$(DEBUG_EXE)
@@ -15,11 +15,11 @@ debug: $(STAGE1_EXE)
 # Caution: **The output's name agrees with launch.json's `${fileBasenameNoExtension}.exe`**, or F5
 # silently starts the previous executable. It is the shell's basename of $(SRC_KSPL), **quoted**.
 export DEBUG_FILE_USAGE_NOTE := (normally called from VS Code's F5 / the task "build-current-file")
-## Local-cycle|debug-file|Build one `.kspls` with debug information (`SRC_KSPL=`; VS Code's F5 calls this)
+## Local-cycle|debug-file|Build one `.kspl` with debug information (`SRC_KSPL=`; VS Code's F5 calls this)
 debug-file: $(STAGE1_EXE)
 	@set -e; \
 	if [ -z "$(SRC_KSPL)" ]; then \
-		echo "Usage: make debug-file SRC_KSPL=path/to/file.kspls"; \
+		echo "Usage: make debug-file SRC_KSPL=path/to/file.kspl"; \
 		printf '  %s\n' "$$DEBUG_FILE_USAGE_NOTE"; \
 		exit 1; \
 	fi; \
@@ -38,11 +38,10 @@ debug-file: $(STAGE1_EXE)
 # --- One package's worth of tests (`make debug-<name>`) ---
 # A package with its own `Makefile` runs its `make test` (below). `tools/` is the one folder of
 # tests with none, so its rule is written here; the $(error) catches a second such folder, which
-# would otherwise only say "no such target". Both notations are looked at.
+# would otherwise only say "no such target".
 OWN_MAKE_PKGS := $(sort $(patsubst %/Makefile,%,$(wildcard */Makefile)))
 NO_MAKE_TESTED := $(filter-out $(OWN_MAKE_PKGS), \
-                    $(sort $(patsubst %/tests/all.kspls,%,$(wildcard */tests/all.kspls)) \
-                           $(patsubst %/tests/all.kspl,%,$(wildcard */tests/all.kspl))))
+                    $(sort $(patsubst %/tests/all.kspl,%,$(wildcard */tests/all.kspl))))
 ifneq ($(NO_MAKE_TESTED),tools)
 $(error a folder holding tests/all has no Makefile: $(filter-out tools,$(NO_MAKE_TESTED)) (give it one, as ksdb/Makefile does))
 endif
@@ -55,7 +54,7 @@ C_FMT_OFF := C_FMT=:
 ## Local-cycle|debug-*|Run only that package's tests (the names are `OWN_MAKE_PKGS` in `mk/test.mk`)
 ## Local-cycle|debug-tools|Run only the tests of `tools/`
 debug-tools: $(STAGE1_EXE)
-	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tools/tests/main.kspls OUT_STEM=debug_tools \
+	@$(MAKE) --no-print-directory debug-file SRC_KSPL=tools/tests/main.kspl OUT_STEM=debug_tools \
 		$(C_FMT_OFF)
 	./$(OUT_DIR)/debug_tools.exe
 
@@ -66,13 +65,13 @@ debug-tools: $(STAGE1_EXE)
 # libraries, where elsewhere ksbind's own tests skip.
 ## Gates|test-llvm-pkgs|Build kssrv and ksbind's tests through the LLVM backend, and run kssrv's and ksbind's tests on them
 test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
-	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=kssrv/main.kspls OUT_STEM=kssrv_llvm
+	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm
 	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
 	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
-		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspls)" \
+		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspl)" \
 		"$(abspath $(OUT_DIR))/kssrv_llvm.exe" \
 		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
-	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=ksbind/tests/main.kspls \
+	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=ksbind/tests/main.kspl \
 		OUT_STEM=ksbind_llvm
 	./$(OUT_DIR)/ksbind_llvm.exe
 
@@ -95,10 +94,10 @@ $(foreach p,$(OWN_MAKE_PKGS),$(eval $(call own_make_rule,$(p))))
 .PHONY: debug-tools $(addprefix debug-,$(OWN_MAKE_PKGS))
 
 # --- The test suites ---
-# A suite's name is its file's stem with `-` for `_` (`suite/lsp_tree_test.kspls` is `lsp-tree`).
-suite_file = suite/$(subst -,_,$(1))_test.kspls
-suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
-  $(wildcard tests/suite/*_test.kspls))))
+# A suite's name is its file's stem with `-` for `_` (`suite/lsp_tree_test.kspl` is `lsp-tree`).
+suite_file = suite/$(subst -,_,$(1))_test.kspl
+suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
+  $(wildcard tests/suite/*_test.kspl))))
 
 # Caution: **Longest first, by CPU time** (not wall clock, a cold-cache round or Windows's 0.0x):
 # `make -j` starts them in this order, and a heavy one at the back runs alone; `make test-suites`
@@ -106,7 +105,7 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspls,%, \
 # `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`). **The compiler's copy
 # (`extract-ksplc-core` / `extract-ksplc-rest`) runs apart from the other packages'**: each copy
 # rebuilds itself and takes a share of the suites; the other packages overlap the core share.
-SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest kspls-trip docref c-warnings docsnippet pilot-copy \
+SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest fmt-tree docref c-warnings docsnippet pilot-copy \
   conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate own-machine \
   $(PRIVATE_SUITES)
 
@@ -124,12 +123,12 @@ $(error there are suite files listed in neither SUITES nor LINUX_SUITES: $(suite
 endif
 suite_missing := $(filter-out $(suite_found),$(ALL_SUITES))
 ifneq ($(suite_missing),)
-$(error there are names listed with no tests/suite/<name>_test.kspls: $(suite_missing))
+$(error there are names listed with no tests/suite/<name>_test.kspl: $(suite_missing))
 endif
 
 suite_cmd = ./$(SEED_EXE) run tests/$(1)
 
-# Caution: **Not in $(CI_LOG_DIR)**, whose logs `tools/ci.kspls` counts as the gates that ran.
+# Caution: **Not in $(CI_LOG_DIR)**, whose logs `tools/ci.kspl` counts as the gates that ran.
 suite_times = $(SUITE_LOG_DIR)/$(1).times
 
 # KANSO_SUITE labels each per-item line; **the table above is its sole origin**, not the suite side.
@@ -178,7 +177,7 @@ fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 # **Each is 1 on Linux**, where CI runs in the image of `.devcontainer/Dockerfile`, which holds
 # every tool: a skip there would mean the image lost one, so the gate fails. Elsewhere each is 0,
 # and the gate says SKIP. **On a Linux machine lacking a tool, set its switch to 0**: the gate then
-# skips, and `tools/ci.kspls` lets that skip through and names the switch as the round ends, since
+# skips, and `tools/ci.kspl` lets that skip through and names the switch as the round ends, since
 # such a round is not CI's verdict. Each reads 0 or 1 alone. What each requires, and what turning
 # it off gives up, is "The switches that require a tool" in `docs/SPEC-gates.md`.
 REQUIRE_SWITCHES := KANSO_REQUIRE_ASAN KANSO_REQUIRE_TSAN KANSO_REQUIRE_BOTH_CC \
@@ -188,7 +187,7 @@ $(foreach v,$(REQUIRE_SWITCHES),$(eval $(v) ?= $(require_default)))
 $(foreach v,$(REQUIRE_SWITCHES),$(if $(filter 0 1,$($(v))),,\
   $(error $(v)=$($(v)): only 0 or 1 is read (0 lets the gate skip where this machine lacks the tool))))
 export $(REQUIRE_SWITCHES)
-# The ones turned off where the platform requires them, for `tools/ci.kspls` (`--relaxed=`).
+# The ones turned off where the platform requires them, for `tools/ci.kspl` (`--relaxed=`).
 require_relaxed := $(if $(filter 1,$(require_default)),$(foreach v,$(REQUIRE_SWITCHES),\
   $(if $(filter 0,$($(v))),$(v))))
 
@@ -219,7 +218,7 @@ test-suites: $(addprefix test-,$(SUITES))
 # answer for its minutes (a Windows minute is billed double): CI runs them on Linux alone, as one
 # set (`test-suites-text`). Caution: **Keep a suite out of here when it builds, links or runs what
 # the platform decides** (`link-rules` reads `ksplc info link-libs`, which is the platform's).
-SUITES_TEXT := kspls-trip conventions docref spec-claims textrip docsnippet vscode recipe-bytes \
+SUITES_TEXT := fmt-tree conventions docref spec-claims textrip docsnippet vscode recipe-bytes \
   lint-gate deps pytools
 
 suites_text_unknown := $(filter-out $(SUITES),$(SUITES_TEXT))
@@ -269,18 +268,18 @@ test-extract-ksplc: test-extract-ksplc-core test-extract-ksplc-rest
 ## Gates|test-llvm-abi|See in the IR whether the direct caller's argument types agree with the `define` side
 test-llvm-abi: $(STAGE1_EXE) $(SEED_EXE)
 	@echo "# VERIFYING LLVM IR CALL SIGNATURES (caller vs callee)"
-	./$(STAGE1_EXE) --to=llvm ksplc/main.kspls $(TMP_DIR)/abi_check_ksplc.ll
-	./$(STAGE1_EXE) --to=llvm tests/debug/main.kspls $(TMP_DIR)/abi_check_debug.ll
-	./$(STAGE1_EXE) --to=llvm ksplc/tests/runtime/main_result_without_sys.kspls \
+	./$(STAGE1_EXE) --to=llvm ksplc/main.kspl $(TMP_DIR)/abi_check_ksplc.ll
+	./$(STAGE1_EXE) --to=llvm tests/debug/main.kspl $(TMP_DIR)/abi_check_debug.ll
+	./$(STAGE1_EXE) --to=llvm ksplc/tests/runtime/main_result_without_sys.kspl \
 	  $(TMP_DIR)/abi_check_main_result.ll
-	./$(SEED_EXE) run tests/tools/llvm_ir_abi_check.kspls $(TMP_DIR)/abi_check_ksplc.ll \
+	./$(SEED_EXE) run tests/tools/llvm_ir_abi_check.kspl $(TMP_DIR)/abi_check_ksplc.ll \
 	  $(TMP_DIR)/abi_check_debug.ll $(TMP_DIR)/abi_check_main_result.ll
 
 # --- Comparing std/math's freestanding version numerically against the real libm ---
 ## Gates|test-freestanding-math|Whether the math functions of the OS-less configuration give the same answers as hosted
 test-freestanding-math: $(STAGE1_EXE)
 	@echo "# RUNNING freestanding std/math vs libm numerical test"
-	./$(STAGE1_EXE) --freestanding tests/freestanding/probe.kspls $(TMP_DIR)/fm_probe.c
+	./$(STAGE1_EXE) --freestanding tests/freestanding/probe.kspl $(TMP_DIR)/fm_probe.c
 	$(CC) -std=c99 -O2 -ffreestanding -ffunction-sections -fdata-sections -c $(TMP_DIR)/fm_probe.c -o $(TMP_DIR)/fm_probe.o
 	$(CC) -std=c99 -O2 tests/freestanding/harness.c $(TMP_DIR)/fm_probe.o -lm \
 		$(GC_SECTIONS_FLAG) -o $(TMP_DIR)/fm_test.exe
@@ -290,7 +289,7 @@ test-freestanding-math: $(STAGE1_EXE)
 # **Each loop is checked at its own place**, found by the comment on the line before it naming
 # `make test-simd`: a function holding a loop that vectorizes would otherwise pass for another.
 # **The place is where the generated C's `for` sits as `#line` counts it**, which can fall past the
-# `.kspls` line of the loop, so it is read from the C; the record (`-g`) says which places vectorized.
+# `.kspl` line of the loop, so it is read from the C; the record (`-g`) says which places vectorized.
 simd_prog := FILENAME == src && index($$0, "`make test-simd`") { want[FNR + 1] = 1; n++ } \
   FILENAME == gen && /^\#line / { at = 0; \
     if ($$3 == "\"" src "\"" && ($$2 in want) && !($$2 in place)) { at = $$2; p = $$2 - 1 }; next } \
@@ -305,7 +304,7 @@ simd_prog := FILENAME == src && index($$0, "`make test-simd`") { want[FNR + 1] =
       print "RESULT: SOME FAILED (1) -> the loop at " src ":" l " no longer auto-vectorizes at -O3" } \
     if (bad) exit 1; \
     print "  -> " n " loops in " src " auto-vectorize at -O3" }
-# $(call simd_check,<program>,<the .kspls its loops are in>,<stem>): builds it, then checks them
+# $(call simd_check,<program>,<the .kspl its loops are in>,<stem>): builds it, then checks them
 define simd_check
 	./$(STAGE1_EXE) $(1) $(TMP_DIR)/$(3).c
 	@$(CC) -std=c99 -O3 -g -c $(TMP_DIR)/$(3).c -o $(TMP_DIR)/$(3).o -fsave-optimization-record \
@@ -317,8 +316,8 @@ endef
 ## Gates|test-simd|Whether the loops that should vectorize appear vectorized in the optimization record
 test-simd: $(STAGE1_EXE)
 	@echo "# VERIFYING ksai's hot loops auto-vectorize (-O3 loop vectorizer)"
-	$(call simd_check,ksai/examples/llama_engine/main.kspls,ksai/tensor.kspls,simd_check)
-	$(call simd_check,ksai/examples/qwen_infer/main.kspls,ksai/nn.kspls,simd_check_qwen)
+	$(call simd_check,ksai/examples/llama_engine/main.kspl,ksai/tensor.kspl,simd_check)
+	$(call simd_check,ksai/examples/qwen_infer/main.kspl,ksai/nn.kspl,simd_check_qwen)
 	@# Caution: **Do not remove this line.** It is the gate's verdict (`Gate.verdict`).
 	@echo "RESULT: ALL PASS (every loop naming make test-simd auto-vectorizes at -O3)"
 
@@ -330,14 +329,14 @@ SURFACE_PKGS := std ksai kspeg ksdb ksbind
 ## Measure-and-inspect|surface|Rewrite each package's API record (`SURFACE.txt`), and write its reference to browse under `out/docs/`
 surface: $(STAGE1_EXE)
 	@echo "# UPDATING THE PUBLISHED API'S RECORDS, AND WRITING THE REFERENCE UNDER out/docs/"
-	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls write $(p) --ksplc=$(STAGE1_EXE)$(nl))
-	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls pages $(p) --ksplc=$(STAGE1_EXE)$(nl))
+	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspl write $(p) --ksplc=$(STAGE1_EXE)$(nl))
+	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspl pages $(p) --ksplc=$(STAGE1_EXE)$(nl))
 
 # **This is the only `RESULT:` line**; it also refuses a published declaration that says nothing.
 ## Gates|test-surface|Whether the published API matches its record, and every entry says what it is
 test-surface: $(STAGE1_EXE)
 	@echo "# CHECKING THE PUBLISHED API'S RECORDS (run 'make surface' to update)"
-	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspls check $(p) --ksplc=$(STAGE1_EXE)$(nl))
+	$(foreach p,$(SURFACE_PKGS),./$(STAGE1_EXE) run tools/surface.kspl check $(p) --ksplc=$(STAGE1_EXE)$(nl))
 	@echo "RESULT: ALL PASS ($(words $(SURFACE_PKGS)) package record(s) match)"
 
 .PHONY: surface test-surface
@@ -346,12 +345,12 @@ test-surface: $(STAGE1_EXE)
 ## Measure-and-inspect|tour|Rewrite the tour of the language (`docs/TOUR.md`) from its program
 tour: $(STAGE1_EXE)
 	@echo "# WRITING THE TOUR OF THE LANGUAGE"
-	./$(STAGE1_EXE) run tools/tour.kspls write --ksplc=$(STAGE1_EXE)
+	./$(STAGE1_EXE) run tools/tour.kspl write --ksplc=$(STAGE1_EXE)
 
 ## Gates|test-docs|Whether the tour of the language matches its program and what it prints
 test-docs: $(STAGE1_EXE)
 	@echo "# CHECKING THE TOUR OF THE LANGUAGE (run 'make tour' to update)"
-	./$(STAGE1_EXE) run tools/tour.kspls check --ksplc=$(STAGE1_EXE)
+	./$(STAGE1_EXE) run tools/tour.kspl check --ksplc=$(STAGE1_EXE)
 	@echo "RESULT: ALL PASS (the tour matches its program)"
 
 .PHONY: tour test-docs

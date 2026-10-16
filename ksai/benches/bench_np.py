@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # A numpy reference: the same three training matrix products (fwd/dW/dX) and sizes as KSPL's
-# bench, outputs reused (np.matmul's out=), real time (perf_counter), min-of-7. run_bench.kspls
+# bench, outputs reused (np.matmul's out=), real time (perf_counter), min-of-7. run_bench.kspl
 # sets the thread count (OPENBLAS_NUM_THREADS and the like). numpy uses its bundled OpenBLAS,
 # not the system one the KSPL and C references use.
 import time

@@ -1,13 +1,13 @@
 # ksai/benches
 
-**This folder times one training step of ksai's simplest layer, a Linear layer (one that multiplies its input by a weight matrix), written four ways, so you can see how fast KSPL's matrix code is beside C and numpy on your own machine.** That step is three matrix products: forward `Y=X@W`, and backward `dW=Xᵀ@dY` and `dX=dY@Wᵀ` (`ᵀ` is the transpose, the matrix flipped over its diagonal). It runs pure KSPL, KSPL passing `matmul` to OpenBLAS, a C reference and numpy on exactly the same work, at the same sizes, in float32. It is an indirect check of "training faster means finishing the same work on less energy". Once `make` has built the compiler, one command runs it from the repository's root: `ksplc run ksai/benches/run_bench.kspls 1`.
+**This folder times one training step of ksai's simplest layer, a Linear layer (one that multiplies its input by a weight matrix), written four ways, so you can see how fast KSPL's matrix code is beside C and numpy on your own machine.** That step is three matrix products: forward `Y=X@W`, and backward `dW=Xᵀ@dY` and `dX=dY@Wᵀ` (`ᵀ` is the transpose, the matrix flipped over its diagonal). It runs pure KSPL, KSPL passing `matmul` to OpenBLAS, a C reference and numpy on exactly the same work, at the same sizes, in float32. It is an indirect check of "training faster means finishing the same work on less energy". Once `make` has built the compiler, one command runs it from the repository's root: `ksplc run ksai/benches/run_bench.kspl 1`.
 
 ## Run it
 
 ```sh
 make                                         # build the stage1 compiler first (out/ksplc_stage1.exe)
-ksplc run ksai/benches/run_bench.kspls 1     # pinned to one core (a fair kernel comparison)
-ksplc run ksai/benches/run_bench.kspls 4     # 4 cores (how each library scales with threads)
+ksplc run ksai/benches/run_bench.kspl 1     # pinned to one core (a fair kernel comparison)
+ksplc run ksai/benches/run_bench.kspl 4     # 4 cores (how each library scales with threads)
 ```
 
 Run it from the repository's root. It prints μs per step for each size and each backend. Without `python3` or numpy, it says so and skips the numpy reference.
@@ -24,7 +24,7 @@ flowchart LR
     N[numpy] --> O[numpy's own OpenBLAS]
 ```
 
-`run_bench.kspls` is shaped to keep a shared machine's noise out.
+`run_bench.kspl` is shaped to keep a shared machine's noise out.
 
 | Measure | What it keeps out |
 | :-- | :-- |
@@ -38,8 +38,8 @@ flowchart LR
 
 | File | What it is |
 | :-- | :-- |
-| [`run_bench.kspls`](run_bench.kspls) | The harness: it pins cores, sets the thread count, and builds and runs every backend. |
-| [`bench_train.kspls`](bench_train.kspls) | The KSPL training bench (`*_into` reuse; pure KSPL by default, BLAS with `--define=blas`). |
+| [`run_bench.kspl`](run_bench.kspl) | The harness: it pins cores, sets the thread count, and builds and runs every backend. |
+| [`bench_train.kspl`](bench_train.kspl) | The KSPL training bench (`*_into` reuse; pure KSPL by default, BLAS with `--define=blas`). |
 | [`bench_ref.c`](bench_ref.c) | The C reference, calling the system OpenBLAS directly. |
 | [`bench_np.py`](bench_np.py) | The numpy reference. |
 
@@ -51,9 +51,9 @@ flowchart LR
 - **KSPL+BLAS scales with the core count as the others do** on the same OpenBLAS, and the larger the matrix, the better it scales.
 - **Pure KSPL `matmul` is about an order of magnitude slower than BLAS** (about ten times). That is the difference a hand-tuned SIMD kernel makes (code that has each CPU instruction work on several numbers at once).
 
-Which backend to pick, and why, is "The matrix backend is chosen where it is deployed" in [`ksai/docs/DESIGN.md`](../docs/DESIGN.md).
+Which backend to pick, and why, is "The matrix backend is chosen where it is deployed" in [`ksai/docs/DESIGN-learning.md`](../docs/DESIGN-learning.md).
 
 ## Further reading
 
 * [ksai](../README.md) — the package's entry point. `make BLAS=1`, explained under "Reading order" there, works on the examples too.
-* [`ksai/docs/DESIGN.md`](../docs/DESIGN.md) — why `matmul` is pure KSPL by default and BLAS on request.
+* [`ksai/docs/DESIGN-learning.md`](../docs/DESIGN-learning.md) — why `matmul` is pure KSPL by default and BLAS on request.

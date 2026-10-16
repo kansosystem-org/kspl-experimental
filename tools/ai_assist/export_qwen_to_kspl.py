@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 3  Turns a real Qwen2.5 (Llama-family) model into safetensors KSPL's native side can read.
 
-It puts it into the format `Qwen_model.load` in `ksai/examples/qwen_infer/main.kspls` expects:
+It puts it into the format `Qwen_model.load` in `ksai/examples/qwen_infer/main.kspl` expects:
 - naming: embed.weight / norm.weight / lm_head.weight /
         layers.{i}.attn_norm.weight / .ffn_norm.weight /
         layers.{i}.attn.{wq,wk,wv,wo}.weight (+ wq/wk/wv.bias) /

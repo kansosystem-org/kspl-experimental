@@ -2,7 +2,7 @@
 
 **This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Every piece is code that the gates compile and run.
 
-The whole program is [`../ksplc/tests/kspls/tour.kspls`](../ksplc/tests/kspls/tour.kspls), and the same program written with braces is [`../ksplc/tests/kspls/tour.kspl`](../ksplc/tests/kspls/tour.kspl); `make test-kspls` holds the two to one C.
+The whole program is [`../ksplc/tests/kspls/tour.kspl`](../ksplc/tests/kspls/tour.kspl).
 
 **To run it, or anything of your own, the quick start is in the root [`../README.md`](../README.md)** — it fetches `ksplc`, writes a first file and runs it in three steps. Nothing on this page needs more than that.
 
@@ -48,7 +48,7 @@ The whole program is [`../ksplc/tests/kspls/tour.kspls`](../ksplc/tests/kspls/to
 
 **A `const` cannot be assigned to.** `Sz` is the type for sizes and counts. At the top of a file the type is written out rather than inferred, because a top-level name is the file's interface: a reader of another file has only this line to go on. Inside a function the type may be left off.
 
-```kspls
+```kspl
 priv const limit: Sz = 4
 ```
 
@@ -56,7 +56,7 @@ priv const limit: Sz = 4
 
 **`io.out()` returns the writer for the terminal**, and `.s(…)` sends a string to it. A parameter's type comes after its name; `U8[]` is a string. This function returns nothing, so no return type is written.
 
-```kspls
+```kspl
 priv fn greet(who: U8[])
     io.out().s("hello, ").s(who).s(".\n")
 ```
@@ -65,7 +65,7 @@ priv fn greet(who: U8[])
 
 **A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of three shapes: `for a; b; c` counts, `for x in …` walks what it is given, and a bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
 
-```kspls
+```kspl
 priv fn count_up(n: Sz): Sz
     $total: Sz = 0
     for $i: Sz = 0; i < n; i += 1
@@ -82,7 +82,7 @@ priv fn count_up(n: Sz): Sz
 
 **A struct is its fields and nothing else**: in memory it holds `x` and `y`, with no hidden header and no method table. It is built with `Point::{ .x = …, .y = … }`, and where the type is already known the name can be left off (`p: Point = ::{ … }`).
 
-```kspls
+```kspl
 priv struct Point
     x: I32
     y: I32
@@ -92,7 +92,7 @@ priv struct Point
 
 **The receiver (the value a method is called on) is written out as the first parameter**, so whether a method may change the value is read off its signature: `Self@` is a pointer that only reads, `Self$@` one that may write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a module's (`Arena.new(…)`, `io.out()`): **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
 
-```kspls
+```kspl
 impl Point
     fn moved(r: Self@, by: I32): Point
         return Point::{ .x = r.x + by, .y = r.y + by }
@@ -102,7 +102,7 @@ impl Point
 
 **A trait is a list of function signatures that a type promises to have**, as an interface is in Java. Whoever asks for a `Sized_thing` may call `area` and knows nothing else about the value. `Self` stands for whichever type keeps the promise.
 
-```kspls
+```kspl
 trait Sized_thing
     fn area(r: Self): I32
 ```
@@ -111,7 +111,7 @@ trait Sized_thing
 
 **The promise is kept in a block of its own**, named for the trait (`impl Point: Sized_thing`). Leave a signature out and the compiler refuses here, at the place that claimed to keep it, rather than at the call.
 
-```kspls
+```kspl
 impl Point: Sized_thing
     fn area(r: Self@): I32
         return r.x * r.y
@@ -121,7 +121,7 @@ impl Point: Sized_thing
 
 **A description stands behind what it describes, on that thing's own line, marked `//<`**: a field's on the field, a parameter's on the parameter, the whole's on the opening line. The first line is the summary an editor's hover and `ksplc doc` open with; a `//<` with nothing after it parts the summary from the detail. **`///` and `//!` are not read**: in other languages they describe the next thing and the enclosing one, so the compiler warns rather than guess which is meant.
 
-```kspls
+```kspl
 priv struct Span
     from: Sz //< where it begins
     to: Sz //< just past where it ends
@@ -131,7 +131,7 @@ priv struct Span
 
 **An enum is one of a fixed list of values, and a variant may carry values**, so `mid(level: I32)` is "mid, and how mid". An enum is not a number: there is no arithmetic on it, and a value not listed cannot be made.
 
-```kspls
+```kspl
 priv enum Shade
     dark
     mid(level: I32)
@@ -142,7 +142,7 @@ priv enum Shade
 
 **A `case` binds what its variant carries**: `.mid(level)` names the payload (the value the variant carries) for that arm alone. `default` takes the rest. The `if … else` here is the expression form: it stands where a value is wanted, not where a statement is.
 
-```kspls
+```kspl
 priv fn shade_name(s: Shade): U8[]
     switch s
     case .dark
@@ -157,7 +157,7 @@ priv fn shade_name(s: Shade): U8[]
 
 **`<|T|>` is a type the caller chooses**, so one definition serves every type (a generic). The type is chosen at the call (`twice_of<|I32|>`). The second parameter is a function value: its type is its signature, so any function of that shape may be passed.
 
-```kspls
+```kspl
 priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T
     return add(v, v)
 ```
@@ -166,7 +166,7 @@ priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T
 
 **What a function may fail with is an enum like any other.** A caller can `switch` on it, so there is no message text or error number to match on.
 
-```kspls
+```kspl
 priv enum Step_error
     too_far
 ```
@@ -175,7 +175,7 @@ priv enum Step_error
 
 **`I32!Step_error` reads "an `I32`, or a `Step_error`".** `throw` hands the error back to the caller as the result; nothing unwinds the stack. The failure is in the signature, so a caller cannot ignore it by accident: nothing quietly returns 0 instead.
 
-```kspls
+```kspl
 priv fn step(n: I32): I32!Step_error
     if n > 100
         throw .too_far
@@ -186,7 +186,7 @@ priv fn step(n: I32): I32!Step_error
 
 **A `!` after a call says "if this failed, give up here and hand the failure to my caller".** It needs this function to be able to fail too, which its return type says. A `!` at a line's end does not carry the line on: the `return` below it is a statement of its own.
 
-```kspls
+```kspl
 priv fn step_twice(n: I32): I32!Step_error
     once: = step(n)!
     return step(once)!
@@ -196,7 +196,7 @@ priv fn step_twice(n: I32): I32!Step_error
 
 **`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or a `!` that leaves early. It takes one statement that names what it cleans up (`defer b.free()` in `main` below), so it sits on the line after the binding; a cleanup of more than one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
 
-```kspls
+```kspl
 priv fn pick_builder(ok: Bool): Str_builder!Step_error
     if !ok
         throw .too_far
@@ -207,7 +207,7 @@ priv fn pick_builder(ok: Bool): Str_builder!Step_error
 
 **A line holding `return` alone ends the function.** A returned value always starts on the `return`'s own line, so a line below is never read as one; a long value is split inside parentheses.
 
-```kspls
+```kspl
 priv fn note(on: Bool)
     if !on
         return
@@ -218,7 +218,7 @@ priv fn note(on: Bool)
 
 **A block holding only a comment cannot be written by indentation**: a comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it.
 
-```kspls
+```kspl
 priv fn tally(s: Shade)
     switch s
     case .dark
@@ -233,7 +233,7 @@ priv fn tally(s: Shade)
 
 **A top-level `$` is a global variable: mutable, and shared by the whole program.** It is here so the steps above have somewhere to leave a mark; a program of your own is better off handing the count along than reaching for one of these.
 
-```kspls
+```kspl
 priv $seen: Sz = 0
 ```
 
@@ -241,7 +241,7 @@ priv $seen: Sz = 0
 
 **An arena hands out memory and takes it all back at once**, so a `List` (a list that grows) built on one is let go with it, and nothing is freed one by one. A label on a `for` (`outer:`) lets `break` name which loop it leaves.
 
-```kspls
+```kspl
 priv fn gather(arena: Arena$@): List<|U8[]|>
     $out: = List<|U8[]|>.new(arena)
     for w in U8[][]::{ "a", "b", "c" }
@@ -258,7 +258,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
 
 **`main` is where a program starts, and what it returns is the exit code.** `catch` handles the failure a call may return. With a value after it, that value is used instead; with a block, the block runs and `fallback` gives the value. `\{…\}` puts a value into a string.
 
-```kspls
+```kspl
 fn main(): I32
     arena: = Arena.new(1024 * 1024)
     defer arena.free()
@@ -303,25 +303,6 @@ fn main(): I32
     io.out().s("twice=\{step_twice(1) catch -1\}/\{step_twice(999) catch -1\}\n")
     return 0
 ```
-
-## The same program, written with braces
-
-**KSPL can be written with indentation or with braces, and the two are one language.** A `.kspls` file is laid out by indentation, like Python; a `.kspl` file uses braces and `;`, like C. `ksplc fmt --to=` converts one into the other, and the compiler puts out the same C for both. Here is one step in the other spelling:
-
-```kspl
-priv fn shade_name(s: Shade): U8[] {
-    switch s
-    case .dark {
-        return "dark";
-    } case .mid(level) {
-        return "mid" if level > 0 else "mid0";
-    } default {
-        return "light";
-    }
-}
-```
-
-The whole of it that way is [`../ksplc/tests/kspls/tour.kspl`](../ksplc/tests/kspls/tour.kspl).
 
 ## What it prints
 

@@ -3,7 +3,7 @@
  * FLASH is the 2MB at the XIP base 0x10000000; RAM, the 264KB of main SRAM from 0x20000000.
  * The flash's first 256 bytes are the stage 2 bootloader's alone (boot2_generic_03h.S, as .boot2):
  * the boot ROM runs it from SRAM, and once QSPI is in XIP mode it jumps through VTOR to ksos's
- * vector table at Flash+0x100 (the details are in boot2_generic_03h.S and ksos/docs/DESIGN.md).
+ * vector table at Flash+0x100 (the details are in boot2_generic_03h.S and ksos/docs/DESIGN-rtos.md).
  * ========================================== */
 ENTRY(Reset_Handler)
 
@@ -19,7 +19,7 @@ _thread_stack_top = _estack - 4096;
 
 SECTIONS
 {
-    /* Stage 2, 256 bytes (the binary .incbin'ed with pad_checksum.kspls's padding and checksum),
+    /* Stage 2, 256 bytes (the binary .incbin'ed with pad_checksum.kspl's padding and checksum),
      * **always at the flash's head**. */
     .boot2 0x10000000 : {
         KEEP(*(.boot2))
@@ -44,7 +44,7 @@ SECTIONS
         /* The code run while XIP is stopped (`#section(".ram_text")`), inside .data so that the
          * start-up copies it to RAM (a copy of its own would be a second place).
          * Caution: **Call nothing outside it in that window**: no flash instruction can be read
-         * there, so such a call has no way back (ksos/drivers/rp2040/flash.kspls). */
+         * there, so such a call has no way back (ksos/drivers/rp2040/flash.kspl). */
         . = ALIGN(4);
         *(.ram_text .ram_text.*)
         . = ALIGN(4);
@@ -55,7 +55,7 @@ SECTIONS
 
     /* The flash's last 64KB, left free for the record (the append-only place).
      * Caution: **The firmware's image must not reach here**, or it steps on the record written.
-     * The same value is region_base in ksos/drivers/rp2040/flash.kspls (`make test-conventions`
+     * The same value is region_base in ksos/drivers/rp2040/flash.kspl (`make test-conventions`
      * looks at their agreement). */
     _flash_image_end = LOADADDR(.data) + SIZEOF(.data);
     ASSERT(_flash_image_end <= ORIGIN(FLASH) + 0x1f0000,

@@ -5,4 +5,4 @@ KSPLC ?= ksplc
 
 .PHONY: test
 test:
-	"$(KSPLC)" run tests/main.kspls
+	"$(KSPLC)" run tests/main.kspl

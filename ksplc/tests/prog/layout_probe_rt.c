@@ -1,4 +1,4 @@
-/* What a wasm32 module built from `layout_probe.kspls` borrows from a libc it does not have.
+/* What a wasm32 module built from `layout_probe.kspl` borrows from a libc it does not have.
  * clang lowers a struct copy or a zero fill to these calls even under -ffreestanding, and wasm has
  * no library to resolve them from. Byte by byte: the probe copies a few hundred bytes. */
 #include <stddef.h>

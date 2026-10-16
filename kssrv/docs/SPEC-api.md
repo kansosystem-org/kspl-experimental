@@ -2,9 +2,9 @@
 
 **This document is the agreement between the kssrv server and whoever calls it over HTTP: every request the server answers and what each answer holds, what the JSON API under `/api/` holds, and the limits a caller has to write against.** A *client* is any program that sends the server HTTP requests: a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
 
-How to start it is in [`kssrv/README.md`](../README.md), and why the server is shaped this way is in [`DESIGN.md`](DESIGN.md). The five endpoints a page opened in a browser may use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
+How to start it is in [`kssrv/README.md`](../README.md), and why the server is shaped this way is in [`DESIGN-server.md`](DESIGN-server.md). The five endpoints a page opened in a browser may use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
 
-**The server runs in one of two modes, picked when it starts**, and several answers below depend on the mode. Why one flag decides all of this is "Local use and outward-facing use are split by one decision" in [`DESIGN.md`](DESIGN.md).
+**The server runs in one of two modes, picked when it starts**, and several answers below depend on the mode. Why one flag decides all of this is "Local use and outward-facing use are split by one decision" in [`DESIGN-server.md`](DESIGN-server.md).
 
 | Mode | Started as | Who can reach it | What it offers besides the files |
 | :-- | :-- | :-- | :-- |
@@ -161,7 +161,7 @@ sequenceDiagram
 
 **The token is not taken as a parameter.** Anyone on the same machine can see a program's command line through `ps` (the command that lists running programs), so a token passed in has already leaked. kssrv makes it from the OS's source of randomness and prints it once; no endpoint returns it on request.
 
-There is no `HEAD /api/file`. `/api/stat` returns the size and whether the file exists, so the same thing is not done two ways (Principle 6 in [`docs/DESIGN.md`](../../docs/DESIGN.md): one means to one purpose).
+There is no `HEAD /api/file`. `/api/stat` returns the size and whether the file exists, so the same thing is not done two ways (Principle 6 in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md): one means to one purpose).
 
 **`GET /api/file` returns `application/octet-stream`** (plain bytes, with no type claimed). The type is not guessed from the content, since a receiver believes a guessed type and reads the content by it. Reading it as a UTF-8 string is the client's business.
 
@@ -171,7 +171,7 @@ A write **goes to a different name and is then swapped in**, so a failure partwa
 
 Facing outward, kssrv can drive a small robot car over the network. The car sends what its sensors measure, and the server answers with the next move.
 
-Send **the values measured at that moment** to `POST /api/car`, and it returns one next manoeuvre. The small MLP in `kssrv/pilot.kspls` decides it. (An MLP, a multi-layer perceptron, is the simplest kind of neural network: layers of weighted sums. This one has 394 weights.)
+Send **the values measured at that moment** to `POST /api/car`, and it returns one next manoeuvre. The small MLP in `kssrv/pilot.kspl` decides it. (An MLP, a multi-layer perceptron, is the simplest kind of neural network: layers of weighted sums. This one has 394 weights.)
 
 ```console
 $ curl -s -X POST localhost:8080/api/car -d '{"dist_mm":250,"line":2,"seq":17}'
@@ -260,7 +260,7 @@ $ python3 -c "import json,struct; d=open('pilot.safetensors','rb').read(); \
 | `__metadata__.far_mm` | — | the cap [mm] used when the distance is normalized |
 | `__metadata__.kspl_pilot` | — | the format's version. Always confirm it before reading |
 
-* **The weights are not sent alone.** A receiver holding its own copy of how the features are made (`far_mm`) and of the manoeuvres' meaning cannot notice when the server's code is fixed. So the file holds everything needed to give the same answer as `POST /api/car` (`kssrv/tests/car.kspls` matches them at 968 points).
+* **The weights are not sent alone.** A receiver holding its own copy of how the features are made (`far_mm`) and of the manoeuvres' meaning cannot notice when the server's code is fixed. So the file holds everything needed to give the same answer as `POST /api/car` (`kssrv/tests/car.kspl` matches them at 968 points).
 * **`valid_ms` is not in it.** It is how long a car that asks may wait for an answer, and it means nothing to a car that carries the policy.
 * Caution: **Check `__metadata__.kspl_pilot` before using the weights, and refuse a version the reader was not written for.** A reader written for an older version still loads a newer file without any error, then steers wrongly. The version rises when one of three things changes: the order of the five features (whether the distance was measured, the distance, then the left, centre and right line sensors), the activation (SiLU), or what each row of `maneuvers` means. None of these changes a tensor's shape, so a reader that checks only the shapes cannot notice. For example, if left and right swapped places among the features, every weight would still fit, and the old reader would turn the wrong way on every correction.
 

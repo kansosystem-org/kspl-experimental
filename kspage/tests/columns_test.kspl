@@ -1,0 +1,382 @@
+//< kspage: laying children out in columns, and measuring text widths
+import "kspage/lay/flow"
+import "kspage/lay/page" { Page }
+import "kspage/model/doc" { Doc, Rect }
+import "kspage/model/fixed_font" as fixed
+import "kspage/model/font" { Font, Font_source }
+import "kspage/model/paint" + { Ink }
+import "kspage/model/style" { Sheet }
+import "kspage/tests/base"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt
+import "std/verdict"
+
+// Layout needs metrics. Why these are fixed: the header of `kspage/model/fixed_font.kspl`.
+
+// ==========================================
+// kspage: checks columns.
+// **Columns are one block**, not a break between sections, so their range is its children. **The
+// heights are balanced** (filled in order, the right column would be empty for short contents).
+// The metrics are fixed (`kspage/model/fixed_font`): ASCII 8px, a line 19.2px.
+// ==========================================
+
+priv fn column_sheet(arena: Arena$@): Sheet$@ //<
+    //< A two-column style, and the style of a paragraph not in columns
+    //<
+    //< **The gap is 10px**, so in a region of width 210 one column is 100px.
+    sheet: = Sheet.new(base.root_font(), arena)
+    two: = sheet.add("two", paint.inherit_all())
+    two.columns = 2
+    two.column_gap = 10.0
+    sheet.add("body", paint.inherit_all())
+    return sheet
+
+priv fn filled(doc: Doc$@, n: Sz) //< puts `n` one-line children into the column block
+    b: = doc.add_block("two")
+    for $i: Sz = 0; i < n; i += 1
+        b.add_child("body").add_text("ab")
+
+fn test_children_split_into_columns(arena: Arena$@)
+    verdict.start("[kspage/columns] the children parting into columns test...")
+    doc: = Doc.new(arena)
+    filled(doc, 4)
+
+    page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+    assert(page.boxes.len == 4, "all four children are laid")
+    assert(base.near(page.boxes.get(0).rect.x, 0.0), "the first is in the left column")
+    assert(base.near(page.boxes.get(1).rect.x, 0.0), "the second is in the left column too")
+    assert(base.near(page.boxes.get(2).rect.x, 110.0),
+        "the third is in the right column (width 100 + gap 10)")
+    assert(base.near(page.boxes.get(3).rect.x, 110.0), "the fourth is in the right column too")
+    assert(base.near(page.boxes.get(2).rect.y, page.boxes.get(0).rect.y),
+        "every column starts from the same top")
+    assert(base.near(page.height, 38.4), "the height is the tallest column's (two rows)")
+    verdict.pass("four children are evened across two columns.")
+
+fn test_one_child_stays_in_the_first_column(arena: Arena$@) //<
+    //< **It is still columns with fewer children than columns**
+    //<
+    //< Collapsed, applying columns would show nothing.
+    verdict.start("[kspage/columns] laying it at the column's width even with one child test...")
+    doc: = Doc.new(arena)
+    filled(doc, 1)
+
+    page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+    assert(page.boxes.len == 1, "there is one box")
+    assert(base.near(page.boxes.get(0).rect.x, 0.0), "it is in the left column")
+    assert(base.near(page.height, 19.2), "the height is one row")
+    verdict.pass("the column left over stays empty, and the column's width does not change.")
+
+fn test_measuring_leaves_nothing_behind(arena: Arena$@) //<
+    //< What was laid out to measure the heights is not left on the screen
+    //<
+    //< Caution: **Do not leave the measured layout on the screen.** Measuring the heights is "lay
+    //< out, measure, roll back", so a missed rollback shows the same text twice.
+    verdict.start("[kspage/columns] what was laid to measure the height not being left test...")
+    doc: = Doc.new(arena)
+    filled(doc, 3)
+
+    page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+    assert(page.boxes.len == 3,
+        "there are as many boxes as children (what was laid to measure is not left)")
+    verdict.pass("what was laid in order to measure is wound back.")
+
+fn test_without_columns_nothing_changes(arena: Arena$@) //<
+    //< **A style without columns lays out as before**
+    //<
+    //< Splitting even one style without a column count would change how existing documents look.
+    verdict.start("[kspage/columns] a style with no count of columns not changing test...")
+    doc: = Doc.new(arena)
+    b: = doc.add_block("body")
+    b.add_child("body").add_text("ab")
+    b.add_child("body").add_text("cd")
+
+    page: = flow.layout(doc, column_sheet(arena), fixed.make(), 210.0, arena)
+    assert(page.boxes.len == 2, "there are two boxes")
+    assert(base.near(page.boxes.get(1).rect.x, 0.0), "the second starts from the left edge too")
+    assert(base.near(page.boxes.get(1).rect.y, 19.2), "the second is below the first")
+    verdict.pass("a style with no count of columns written on it only stacks them.")
+
+// ==========================================
+// kspage: checks that the font-metrics interface works through a replaceable implementation.
+// **The metrics are the table of fixed values (`kspage/fixed_font`)**: a real font's answer
+// changes with the machine and the version, making "a test that fails while nothing is broken".
+// ==========================================
+
+priv fn font_at(size_px: F32): Font
+    return Font::{ .family = "sans", .size_px = size_px, .weight = 400U16, .italic = false }
+
+fn test_width_counts_ascii_as_half_an_em() //< ASCII is half an em, and everything else one em
+    verdict.start("[kspage] ASCII counting as half an em test...")
+    src: = fixed.make()
+    f: = font_at(16.0)
+    assert(base.near(src.measure_width(f, "abc"), 24.0), "3 characters = 1.5em = 24px")
+    assert(base.near(src.measure_width(f, "a"), 8.0), "1 character = 0.5em = 8px")
+    verdict.pass("one ASCII character counts as half an em.")
+
+fn test_width_counts_multibyte_as_one_em()
+    verdict.start("[kspage] a character of many bytes counting as one em test...")
+    src: = fixed.make()
+    f: = font_at(16.0)
+    // "あ" is three bytes in UTF-8.
+    // Caution: Count characters, not bytes.
+    assert(base.near(src.measure_width(f, "あ"), 16.0), "1 character = 1em = 16px")
+    assert(base.near(src.measure_width(f, "あい"), 32.0), "2 characters = 2em = 32px")
+    // Mixed, each character is counted in its own way and the widths add up.
+    assert(base.near(src.measure_width(f, "あa"), 24.0), "1em + 0.5em = 24px")
+    verdict.pass("a character of many bytes counts as one em, and adds up mixed with ASCII.")
+
+fn test_width_scales_with_size() //< the width is proportional to the em size
+    verdict.start("[kspage] the width being in proportion to the em's size test...")
+    src: = fixed.make()
+    small: = src.measure_width(font_at(16.0), "abc")
+    large: = src.measure_width(font_at(32.0), "abc")
+    assert(base.near(large, small * 2.0F32), "doubling the em doubles the width")
+    verdict.pass("doubling the em doubles the width.")
+
+fn test_empty_text_has_no_width() //< an empty text has no width
+    verdict.start("[kspage] an empty text holding no width test...")
+    src: = fixed.make()
+    assert(base.near(src.measure_width(font_at(16.0), ""), 0.0), "empty is 0px")
+    verdict.pass("an empty text is 0px.")
+
+fn test_line_height_adds_the_gap() //< a line's height is ascent + descent + line_gap
+    verdict.start("[kspage] a row's height taking the line gap in test...")
+    src: = fixed.make()
+    f: = font_at(16.0)
+    m: = src.vmetrics_of(f)
+    assert(m.ascent > 0.0 && m.descent > 0.0, "both above and below come back a positive value")
+    h: = src.line_height(f)
+    // The three added together; drop `line_gap` and the lines crowd together.
+    assert(base.near(h, m.ascent + m.descent + m.line_gap), "it is the three added")
+    assert(h > m.ascent + m.descent, "larger than ascent+descent by the line gap")
+    verdict.pass("a row's height is ascent + descent + line_gap.")
+
+fn test_line_height_scales_with_size() //< a line's height is proportional to the em size
+    verdict.start("[kspage] a row's height being in proportion to the em's size test...")
+    src: = fixed.make()
+    small: = src.line_height(font_at(16.0))
+    large: = src.line_height(font_at(32.0))
+    assert(base.near(large, small * 2.0F32), "doubling the em doubles the row's height")
+    verdict.pass("doubling the em doubles the row's height.")
+
+fn test_source_is_swappable() //<
+    //< Replacing the source does not change how the caller writes its code
+    verdict.start("[kspage] the source of the measurements being swappable test...")
+    // A source that always answers width 0, built on the spot: **the exposed structs must be enough
+    // to build one**.
+    $blank: Font_source = fixed.make()
+    blank.measure_width = zero_width
+    f: = font_at(16.0)
+    assert(base.near(blank.measure_width(f, "abc"), 0.0), "the side swapped in is called")
+    kept: = blank.line_height(f)
+    original: = fixed.make().line_height(f)
+    assert(base.near(kept, original), "the side not swapped stays as it was")
+    verdict.pass("the source can be swapped per function.")
+
+priv fn zero_width(_font: Font, _text: U8[]): F32
+    return 0.0
+
+// ==========================================
+// Checks that laying out again gives the same result as laying out the whole document
+// **It is not a speed test** (that is `kspage/tests/wasm/store.mjs`): laid out again from partway
+// through, the result is byte for byte the full layout's.
+// Caution: **Do not write the values out one by one.** The result is copied into a text and
+// matched whole; as a list of values, a field added to `Box` would be left out and nobody notices.
+// ==========================================
+priv const width: F32 = 300.0
+
+// ==========================================
+// Copying the layout result into a text
+// ==========================================
+
+priv fn put_rect(b: Str_builder$@, r: Rect) //<
+    //< Writes a rectangle's position and size into `b`
+    //<
+    //< Caution: **Copy every exposed field**; a forgotten one stays green while out of step.
+    b.s(" \{r.x\},\{r.y\},\{r.w\},\{r.h\}")
+
+priv fn put_u32(b: Str_builder$@, v: U32?)
+    switch v
+    case .some(x)
+        b.s(" \{x\}")
+    case .none
+        b.s(" -")
+
+priv fn put_bool(b: Str_builder$@, v: Bool?)
+    switch v
+    case .some(x)
+        b.s(" 1" if x else " 0")
+    case .none
+        b.s(" -")
+
+priv fn put_ink(b: Str_builder$@, ink: Ink)
+    put_u32(b, ink.color)
+    put_u32(b, ink.background)
+    put_bool(b, ink.underline)
+    put_bool(b, ink.strike)
+
+priv fn put_font(b: Str_builder$@, f: Font)
+    b.s(" \{f.family\}/\{f.size_px\}/\{f.weight\}/")
+    b.s("i" if f.italic else "r")
+
+priv fn dump_page(page: Page$@, arena: Arena$@): U8[] //<
+    //< Copies a laid-out page into a text, one line per box, cell and surface
+    //<
+    //< Caution: **Copy the address too.** Change which `Inline` a box came from and a click goes to
+    //< another text.
+    $b: = Str_builder.new()
+    defer b.free()
+    b.s("height \{page.height\}\n")
+    for i in Range.asc(page.boxes.len)
+        x: = page.boxes.get(i)
+        b.s("box \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" [\{x.text\}]")
+        put_font(b@, x.font)
+        put_ink(b@, x.ink)
+        b.s(" \{Sz::x.inline\} \{x.offset\} \{x.spacing\}")
+        b.s(" c" if x.composing else " -")
+        b.c('\n')
+    for i in Range.asc(page.cells.len)
+        x: = page.cells.get(i)
+        b.s("cell \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" \{Sz::x.block\} \{Sz::x.table\}\n")
+    for i in Range.asc(page.surfaces.len)
+        x: = page.surfaces.get(i)
+        b.s("surface \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" \{Sz::x.block\}\n")
+    for i in Range.asc(page.frames.len)
+        x: = page.frames.get(i)
+        b.s("frame \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" \{Sz::x.block\}\n")
+    for i in Range.asc(page.pictures.len)
+        x: = page.pictures.get(i)
+        b.s("picture \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" \{Sz::x.block\}\n")
+    for i in Range.asc(page.regions.len)
+        x: = page.regions.get(i)
+        b.s("region \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" \{x.kind.variant_name()\}\n")
+    for i in Range.asc(page.panels.len)
+        x: = page.panels.get(i)
+        b.s("panel \{i\}")
+        put_rect(b@, x.rect)
+        b.s(" \{Sz::x.block\} \{x.width\} \{x.color\}")
+        put_u32(b@, x.fill)
+        b.s(" \{x.shape.variant_name()\}\n")
+    for i in Range.asc(page.toc_lines.len)
+        x: = page.toc_lines.get(i)
+        b.s("toc \{i\} \{x.top\} \{x.bottom\} \{x.head\}\n")
+    for i in Range.asc(page.note_lines.len)
+        x: = page.note_lines.get(i)
+        b.s("noteline \{i\} \{x.top\} \{x.bottom\} \{x.note\}\n")
+    b.s("notes \{page.notes.len\} serials \{page.serials.len\}")
+    b.s(" headings \{page.headings.len\}\n")
+    return arena.dup_str(b.slice())
+
+// ==========================================
+// Matching: whether laying the same document out twice gives the same output.
+// The name is not a parameter: `assert`'s message is a `U8$[]`, which a built text cannot be.
+// ==========================================
+priv fn same_twice(doc: Doc$@, sheet: Sheet$@, arena: Arena$@): Bool
+    a: = dump_page(flow.layout(doc, sheet, fixed.make(), width, arena), arena)
+    c: = dump_page(flow.layout(doc, sheet, fixed.make(), width, arena), arena)
+    if !a.equals(c)
+        io.out().s(" -> first time:\n\{a\}\n -> second time:\n\{c\}\n")
+    return a.equals(c)
+
+priv fn text_of(head: U8[], i: Sz, arena: Arena$@): U8[] //< the built text
+    //<
+    //< **Interpolation can only be written inside `Writer`'s `.s()`**.
+    b: = arena.text()
+    b.s(head).s("\{i\}")
+    return b.take()
+
+// ==========================================
+// The documents matched
+// ==========================================
+
+priv fn flat_doc(arena: Arena$@): Doc$@ //<
+    //< A document of plain paragraphs long enough to wrap
+    //<
+    //< Caution: **Always include something that reads the whole document** (a table of contents, a
+    //< list of notes, a chart, a reference): with those, "what came before is safe" breaks.
+    doc: = Doc.new(arena)
+    for i in Range.asc(6)
+        line: =
+            text_of("A paragraph. A text long enough to wrap is laid here. The number is ", i, arena)
+        doc.add_block("body").add_text(line)
+    return doc
+
+priv fn nested_doc(arena: Arena$@): Doc$@
+    doc: = Doc.new(arena)
+    item: = doc.add_block("body")
+    item.add_text("the parent's item")
+    for i in Range.asc(3)
+        item.add_child("body").add_text(text_of("child ", i, arena))
+    doc.add_block("body").add_text("the paragraph behind")
+    return doc
+
+priv fn toc_doc(sheet: Sheet$@, arena: Arena$@): Doc$@
+    sheet.add("heading", paint.inherit_all()).outline = 1
+    sheet.add("contents", paint.inherit_all()).collect = .contents
+    doc: = Doc.new(arena)
+    // Caution: **Put the table of contents before the headings**, so a change after it changes what
+    // is before it.
+    doc.add_block("contents")
+    for i in Range.asc(3)
+        doc.add_block("heading").add_text(text_of("chapter ", i, arena))
+        doc.add_block("body").add_text(text_of("paragraph ", i, arena))
+    return doc
+
+priv fn note_doc(sheet: Sheet$@, arena: Arena$@): Doc$@
+    sheet.add("footnote", paint.inherit_all()).collect = .notes
+    doc: = Doc.new(arena)
+    for i in Range.asc(3)
+        b: = doc.add_block("body")
+        marked: = b.add_text(text_of("paragraph ", i, arena))
+        marked.note = text_of("the note's contents ", i, arena)
+    doc.add_block("footnote")
+    return doc
+
+// ==========================================
+// The tests
+// ==========================================
+
+priv fn one_letter_shows(arena: Arena$@): Bool //<
+    //< A document differing by one character is written out differently too
+    //<
+    //< **Without this the check above passes even when empty** (writing nothing, every match
+    //< silently agrees).
+    sheet: = Sheet.new(base.root_font(), arena)
+    a: = Doc.new(arena)
+    a.add_block("body").add_text("abc")
+    c: = Doc.new(arena)
+    c.add_block("body").add_text("abd")
+    da: = dump_page(flow.layout(a, sheet, fixed.make(), width, arena), arena)
+    dc: = dump_page(flow.layout(c, sheet, fixed.make(), width, arena), arena)
+    return !da.equals(dc) && da.len > 0
+
+fn test_layout_is_the_same_twice(arena: Arena$@)
+    verdict
+        .start("[kspage/relayout] laying the same document out twice putting the same thing out \
+            test...")
+    assert(same_twice(flat_doc(arena), Sheet.new(base.root_font(), arena), arena), "a flat document")
+    assert(same_twice(nested_doc(arena), Sheet.new(base.root_font(), arena), arena),
+        "a document with nesting")
+    toc_sheet: = Sheet.new(base.root_font(), arena)
+    assert(same_twice(toc_doc(toc_sheet, arena), toc_sheet, arena),
+        "a document with a table of contents")
+    note_sheet: = Sheet.new(base.root_font(), arena)
+    assert(same_twice(note_doc(note_sheet, arena), note_sheet, arena), "a document with notes")
+    assert(one_letter_shows(arena),
+        "differ by one character and the answer differs too (the answer is not empty)")
+    verdict.pass("laying out is a pure function (the ground for comparing a laying-out again).")

@@ -1,8 +1,5 @@
 // It confirms what asks the local server (`kssrv --local`) for a file.
 //
-// **The same section looks at two cases**: from `file://` there is no server and the tools do not
-// come out; served by `kssrv --local`, they do. **The side with none is a check too** — only there
-// shows that nothing pressable is put out that does not act.
 // Caution: **Do not call an entry point directly** — press a button like a person (calling alone
 // lets an unwired button walk past). **Read back with its own `fetch`** — through the page's
 // wrapper, a wrapper wrong the same way on both sides passes.
@@ -80,34 +77,6 @@ function kspageProbeLocal(ks) {
   const asEmbedded = "data:image/png;base64," + btoa(
     String.fromCharCode.apply(null, Array.from(onePixelPng)));
 
-  // A page with no server there. **`file://` comes here.**
-  //
-  // **The side with none is a check too.** A picture from a file at hand **goes in by the same
-  // shape** whether the server is there or not (embedded); the served side looks at it below.
-  if (row.hidden) {
-    ks.check(token === "", "with no server there there is no token either");
-    ks.check(location.protocol === "file:" || token === "",
-      "on a page that is not served the path field is not put out");
-    ks.check(saveKey(), "Ctrl+S is taken over");
-    (async function () {
-      ks.pressAt(8);
-      clear();
-      pickImage("mårk.png");
-      // Caution: **Say how large what was embedded is.** Unsaid, a few photographs hit the cap that
-      // can be opened, and nobody sees what is heavy.
-      ks.check(await untilSays("into the document"),
-        "with no server there it embeds into the document");
-      ks.check(ks.app.save().indexOf(asEmbedded) >= 0,
-        "the picture itself goes into the text saved");
-      ks.undoKey();
-    })().then(done, (e) => {
-      ks.check(false,
-        "the section finishes without falling (" + String((e && e.stack) || e) + ")");
-      done();
-    });
-    return;
-  }
-
   // --- From here, a page served by `kssrv --local` ---
   ks.check(token !== "", "the token is picked up from the URL's fragment");
   // Caution: **It must be deleted from the URL.** Undeleted, it stays in the history.
@@ -128,7 +97,7 @@ function kspageProbeLocal(ks) {
     ks.check(saveKey(), "Ctrl+S is taken over");
     // **Match as far as the extension, not the closing bracket** (a document with a history
     // declares that arena along with it). The default is `.kspage` (the settlement is
-    // `kspage/docs/DESIGN.md`'s "The extension is kspage's own, and does not name the format
+    // `kspage/docs/DESIGN-application.md`'s "The extension is kspage's own, and does not name the format
     // inside").
     ks.check(await untilSays("Saved (firstsave.kspage"),
       "with the path empty it writes directly under the folder by the menu bar's name");
@@ -208,66 +177,17 @@ function kspageProbeLocal(ks) {
     ks.check(await untilSays("Enter the place to open"),
       "opening with the path empty says where the field is");
 
-    // ---- "Open" pops the window even with the server there, and the save follows the file ----
-    // **The window cannot be driven from here**, so a stand-in returns a handle whose writing is
-    // caught, and the save after it must go to that handle, not the path (**where it opened is
-    // where it writes back**). A place is left in the field first, so the window is seen to win.
-    const realOpen = window.showOpenFilePicker;
-    let gotByHandle = null;
-    const text = ks.app.save();
-    // What the stand-in's file holds now; **writing changes it**, as a real file's does.
-    let onDisk = text;
-    const fake = {
-      kind: "file", name: "picked.kspage",
-      getFile: async () => new File([onDisk], "picked.kspage", { type: "application/json" }),
-      queryPermission: async () => "granted",
-      requestPermission: async () => "granted",
-      createWritable: async () => ({
-        write: async (d) => { gotByHandle = d; onDisk = String(d); }, close: async () => {} }),
-    };
-    window.showOpenFilePicker = async () => [fake];
-    try {
-      box.value = "saved.kspage";
-      box.dispatchEvent(new Event("change", { bubbles: true }));
-      clear();
-      document.getElementById("open").click();
-      ks.check(await untilSays("Loaded it"), "\"Open\" pops the window even with a place standing");
-      ks.check(box.value === "", "a document opened by the window clears the place field");
-      ks.check(document.getElementById("doc-name").value === "picked",
-        "the window's file names the document");
-      clear();
-      document.getElementById("save").click();
-      ks.check(await untilSays("Saved (picked.kspage"),
-        "the save goes to the file opened by the window, not to the place");
-      ks.check(gotByHandle !== null && String(gotByHandle).length > 0,
-        "the handle received the text");
-      // ---- Writing back through the handle to a file that changed outside after it was read ----
-      // Caution: **Do not overwrite silently through a handle either.** The same file can be chosen
-      // in two windows; what plays "outside" is the stand-in's file changing under the page.
-      const written = onDisk;
-      const byOther = "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
-        + "\"inlines\":[{\"text\":\"a text another window wrote through its own handle\"}]}]}";
-      onDisk = byOther;
-      clear();
-      document.getElementById("save").click();
-      ks.check(await untilSays("has been changed outside"),
-        "where the file behind the handle changed outside it says so");
-      ks.check(onDisk === byOther, "the outside text behind the handle stays as it is");
-      // **Do not refuse where nothing changed.** Put back to what the page last wrote, it writes.
-      onDisk = written;
-      clear();
-      document.getElementById("save").click();
-      ks.check(await untilSays("Saved (picked.kspage"),
-        "where the file behind the handle is as it was written, it writes");
-    } finally {
-      window.showOpenFilePicker = realOpen;
-    }
+    // Open and Enter use the same server path.
+    box.value = "saved.kspage";
+    clear();
+    document.getElementById("open").click();
+    ks.check(await untilSays("Loaded it (saved.kspage)"), "Open reads the path field");
+    ks.check(ks.app.pathNow() === "saved.kspage", "Open retains the server path");
 
     // ---- Pointing at a document by text and opening it (the same way as `kspage.html?doc=…`)
     // ----
     //
-    // **This can be seen nowhere else**: what reads is a plain `fetch`, which a page opened from
-    // `file://` cannot run.
+    // This exercises the page's path reader through the authenticated server API.
     // Caution: **Do not shape it as standing the page up afresh with a `?doc=` URL** — every other
     // section would run on a different document; `openDoc` calls the same way with one text.
     // **Point at a text no other section holds open.** One already open is shown where it is
@@ -482,6 +402,16 @@ function kspageProbeLocal(ks) {
         + src.length + " -> " + srcGot.length + " bytes)");
     ks.check(srcGot.indexOf("\"kspage\"") < 0, "it does not write back as JSON");
 
+    // An empty file is a known baseline too; another window's first text must survive.
+    await fetch(at("empty.txt"), { method: "PUT", headers: head, body: "" });
+    ks.check(await ks.app.openDoc("empty.txt"), "an empty text file can be opened");
+    await fetch(at("empty.txt"), { method: "PUT", headers: head, body: "written outside" });
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("has been changed outside"), "an empty baseline still guards a save");
+    ks.check(await (await fetch(at("empty.txt"), { headers: head })).text() === "written outside",
+      "a formerly empty file keeps the text written outside");
+
     // ---- The file open comes out on the band ----
     //
     // **This can be seen nowhere else** (what opens and the adornment's rules in step): **the name
@@ -565,58 +495,26 @@ function kspageProbeLocal(ks) {
     ks.check(ks.app.pathNow() === "" && box.value === "",
       "a draft brought back lives in no file (" + ks.app.pathNow() + ")");
 
-    // ---- Opening through the window, over a document with something to lose ----
-    //
-    // **This can be seen nowhere else**: the window hands a file to the page, so what it opens over
-    // and where the document then lives are the page's to keep in step.
-    // Caution: **Plan it the same as opening by a place.** Laid over the document now, it crushes
-    // what was typed and keeps the earlier place — the band names the wrong file and the draft is
-    // levelled against the wrong text.
+    // Opening another server path preserves the outgoing draft.
     clear();
-    ks.check(await ks.app.openDoc("keepme.kspl"),
-      "a document is open by a place before the window");
+    ks.check(await ks.app.openDoc("keepme.kspl"), "a document is open before replacement");
     typeAtEnd("yy");
     const byPlace = ks.app.keepCount();
-    const chosenText = "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
-      + "\"inlines\":[{\"text\":\"a document the window chose\"}]}]}";
-    let chosenOnDisk = chosenText;
-    const chosen = {
-      kind: "file", name: "chosen.kspage",
-      getFile: async () => new File([chosenOnDisk], "chosen.kspage", { type: "application/json" }),
-      queryPermission: async () => "granted",
-      requestPermission: async () => "granted",
-      createWritable: async () => ({
-        write: async (d) => { chosenOnDisk = String(d); }, close: async () => {} }),
-    };
-    const openWas = window.showOpenFilePicker;
-    window.showOpenFilePicker = async () => [chosen];
-    try {
-      clear();
-      document.getElementById("open").click();
-      ks.check(await untilSays("Loaded it"), "the window opens a document over one being typed in");
-      ks.check(ks.app.text().indexOf("a document the window chose") >= 0,
-        "the document the window chose is the one shown");
-      ks.check(ks.app.keepCount() === byPlace + 1,
-        "the document typed in is set aside as a draft (" + ks.app.keepCount() + ")");
-      ks.check(ks.app.pathNow() === "",
-        "a document the window chose has no path (" + ks.app.pathNow() + ")");
-      const chosenName = document.getElementById("file-at").querySelector(".name").textContent;
-      ks.check(chosenName === "chosen.kspage",
-        "the band names the file the window chose (" + chosenName + ")");
-      ks.check(box.value === "", "the place field is empty for a document the window chose");
-      // **A save through the handle levels what the draft compares against**, or the saved document
-      // comes back as unsaved at the next start.
-      clear();
-      document.getElementById("save").click();
-      ks.check(await untilSays("Saved (chosen.kspage"),
-        "the document the window chose saves through its handle");
-      ks.app.keepSync();
-      const heldChosen = await heldWith("a document the window chose");
-      ks.check(!canKeep || heldChosen.length === 0,
-        "a document saved through the window is not held back (" + heldChosen.length + ")");
-    } finally {
-      window.showOpenFilePicker = openWas;
-    }
+    const chosenText = JSON.stringify({ kspage: 6, sheet: {},
+      blocks: [{ style: "body", inlines: [{ text: "a document the path chose" }] }] });
+    await fetch(at("chosen.kspage"), { method: "PUT", headers: head, body: chosenText });
+    box.value = "chosen.kspage";
+    clear();
+    document.getElementById("open").click();
+    ks.check(await untilSays("Loaded it (chosen.kspage)"), "Open replaces the edited document");
+    ks.check(ks.app.keepCount() === byPlace + 1, "the edited document is kept as a draft");
+    ks.check(ks.app.pathNow() === "chosen.kspage", "the replacement keeps its own path");
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("Saved (chosen.kspage"), "the replacement saves to its path");
+    ks.app.keepSync();
+    const heldChosen = await heldWith("a document the path chose");
+    ks.check(!canKeep || heldChosen.length === 0, "the saved replacement is not kept as a draft");
     const keptYy = await heldWith("yy");
     ks.check(!canKeep || keptYy.some((one) => one.from === "keepme.kspl"),
       "what was typed before the window opened is held back ("
@@ -626,14 +524,24 @@ function kspageProbeLocal(ks) {
     typeAtEnd("ww");
     const byMd = ks.app.keepCount();
     clear();
-    ks.pickFile(document.getElementById("file"),
-      new TextEncoder().encode("# Taken in\n\nA line taken in.\n"), "taken.md", "text/markdown");
+    const dropped = new DataTransfer();
+    dropped.items.add(new File(["# Taken in\n\nA line taken in.\n"], "taken.md",
+      { type: "text/markdown" }));
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: dropped, cancelable: true }));
     ks.check(await untilSays("Loaded it"), "a .md opens through the file field over typing");
     ks.check(ks.app.plainText() === "# Taken in\n\nA line taken in.\n",
       "a .md chosen there opens as plain text (" + ks.app.plainText().slice(0, 12) + ")");
     ks.check(ks.app.keepCount() === byMd + 1,
       "the document typed in is set aside when a .md opens (" + ks.app.keepCount() + ")");
     ks.check(ks.app.pathNow() === "" && box.value === "", "a .md from the file field lives in no file");
+    ks.check(document.getElementById("doc-name").value === "taken.md",
+      "an imported text keeps its extension for its first save");
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("Saved (taken.md)"), "the imported text saves under its full name");
+    const imported = await fetch(at("taken.md"), { headers: head });
+    ks.check(imported.ok && await imported.text() === "# Taken in\n\nA line taken in.\n",
+      "the first server save preserves imported text");
     // **The manual sets aside the same way, and asks nothing** (a panel that asks stops a checking
     // browser for good). Laid over under the earlier naming, it crushes that draft, and a save
     // writes the manual into the earlier file.

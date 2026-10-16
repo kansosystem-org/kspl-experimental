@@ -1,7 +1,7 @@
 // ==========================================
 // Kanso OS — the POSIX host port. It does a real context switch in Linux user space, using
 // ucontext.
-// It implements the ksos_port_* ABI the kernel core (ksos/kernel/task.kspls) declares.
+// It implements the ksos_port_* ABI the kernel core (ksos/kernel/task.kspl) declares.
 // A new task enters the KSPL side's #export function ksos_trampoline by way of ksos_task_start.
 // ==========================================
 #define _GNU_SOURCE

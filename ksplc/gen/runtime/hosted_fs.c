@@ -1,9 +1,9 @@
 /* Part of the C runtime for an environment with an OS.
    Caution: **It does not build on its own** — it
  * joins behind hosted.c (the preamble) to make one translation unit. The joining order is held by
- * write_impl in ksplc/gen/runtime.kspls. */
+ * write_impl in ksplc/gen/runtime.kspl. */
 /* ============================================================
- * The filesystem's extension primitives (for std/fs.kspls). Enumeration and metadata differ
+ * The filesystem's extension primitives (for std/fs.kspl). Enumeration and metadata differ
  * wholly between POSIX (opendir/readdir, stat) and Windows (FindFirstFileW/FindNextFileW,
  * _wstat64), so like kspl_proc_* a handle is opaque in an I64. Where the destination exists,
  * POSIX's rename() replaces it but Windows UCRT's fails with EEXIST.
@@ -76,7 +76,7 @@ KSPL_LINK void kspl_dir_close(I64 handle) {
     closedir((DIR *)(intptr_t)handle);
 }
 
-/* What stands at a path, following links (for std/fs.kspls's stat): size_out = the byte count,
+/* What stands at a path, following links (for std/fs.kspl's stat): size_out = the byte count,
  * kind_out = `File_kind`'s order (0 a regular file, 1 a directory, 2 anything else: a FIFO, a
  * device, a socket), mtime_out = the modification time (Unix epoch seconds). False where nothing
  * can be read there. */
@@ -92,10 +92,10 @@ KSPL_LINK Bool kspl_path_info(const U8 *path_ptr, Sz path_len, I64 *size_out, I3
     return true;
 }
 
-/* Whether the owner's execute bit is up (for std/fs.kspls's is_executable).
+/* Whether the owner's execute bit is up (for std/fs.kspl's is_executable).
  * The owner's bit, not access(X_OK), which is nearly always true under root.
- * Caution: It must not be shaped as adding an output argument to kspl_path_info, which std/io.kspls
- * and std/fs.kspls both declare: disagreeing with the seed's old one breaks the bootstrap's link.
+ * Caution: It must not be shaped as adding an output argument to kspl_path_info, which std/io.kspl
+ * and std/fs.kspl both declare: disagreeing with the seed's old one breaks the bootstrap's link.
  * An addition is always a separate function. */
 KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
     char path[4096];
@@ -108,7 +108,7 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
 /* Whether that path itself is a symbolic link. 1 = a link, 0 = not a link, -1 = unknown.
  * **Use lstat, not stat**, which follows the link and answers "not a link".
  * Caution: **Do not mix -1 with 0.** A step that could not be peeked passing as "not a link" opens
- * a road out of the root; refusing is the caller's part (has_link_on_path in std/fs.kspls).
+ * a road out of the root; refusing is the caller's part (has_link_on_path in std/fs.kspl).
  * A path that is not there is 0 (the function that creates one comes through here). */
 KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
     char path[4096];
@@ -121,7 +121,7 @@ KSPL_LINK I32 kspl_is_link(const U8 *path_ptr, Sz path_len) {
 }
 
 /* Copies one file to a name that does not stand yet, with the source's permission bits (for
- * std/fs.kspls's copy_tree): 0 = done, 1 = the source cannot be opened, -1 = refused.
+ * std/fs.kspl's copy_tree): 0 = done, 1 = the source cannot be opened, -1 = refused.
  * **The bits are the copy's from its first byte**: created wider and narrowed afterwards, a private
  * file would stand readable by others while it is written, and for good where the narrowing fails.
  * O_EXCL makes it new, so a link planted at the name is not followed; the umask can only narrow
@@ -178,7 +178,7 @@ KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
 }
 
 /* Creates a file that did not stand, readable and writable by its owner alone, and writes data
- * into it (for std/fs.kspls's write_unique): 0 = written, 1 = the name is taken, -1 = refused.
+ * into it (for std/fs.kspl's write_unique): 0 = written, 1 = the name is taken, -1 = refused.
  * **O_EXCL decides that it is new**, so a link planted at the name is not followed, and 0600 is
  * the mode from the first byte (a chmod after creating leaves a moment others could open it).
  * What fails partway is removed, so no half-written file stands under the name. */
@@ -205,7 +205,7 @@ KSPL_LINK I32 kspl_create_owned(const U8 *path_ptr, Sz path_len, const U8 *data,
     return 0;
 }
 
-/* Who besides the current user could change what a directory holds (for std/fs.kspls's
+/* Who besides the current user could change what a directory holds (for std/fs.kspl's
  * dir_trust): 0 = no one, 1 = not a directory or unreadable, 2 = another user owns it, 3 = its
  * group or everyone may write it, 4 = not checked here (the Windows side).
  * It follows a link, so a cache folder linked onto another disk is judged by what it reaches. */
@@ -261,7 +261,7 @@ KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
     return (void *)f;
 }
 
-/* A lock on a file, the handle an fd plus one (0 = failure), for std/fs.kspls's File_lock.
+/* A lock on a file, the handle an fd plus one (0 = failure), for std/fs.kspl's File_lock.
    **flock, not fcntl's lock**: fcntl's goes the moment the process closes any fd on the file, and
  * a second fd in the same process never waits on it. O_CLOEXEC keeps a child from holding it on. */
 KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {
@@ -441,7 +441,7 @@ KSPL_LINK Bool kspl_is_exec(const U8 *path_ptr, Sz path_len) {
  *
  * Caution: **Do not change it to the shape resolving with `GetFinalPathNameByHandleW`.** That needs
  * an opened handle, which means opening it first in order to refuse it ("A path is kept under the
- * root by refusing, not by resolving and comparing" in std/docs/DESIGN.md). */
+ * root by refusing, not by resolving and comparing" in std/docs/DESIGN-system.md). */
 #ifndef IO_REPARSE_TAG_NAME_SURROGATE_BIT
 #define IO_REPARSE_TAG_NAME_SURROGATE_BIT 0x20000000UL
 #endif
@@ -521,7 +521,7 @@ KSPL_LINK I32 kspl_mkdir(const U8 *path_ptr, Sz path_len) {
 
 /* The POSIX side's meanings. **CREATE_NEW decides that it is new.** Who may read it is the ACL it
  * takes from its folder, which this does not set (the reason is at write_unique in
- * std/fs.kspls). No security attributes, so the handle is not inheritable (hosted.c's "Nothing the
+ * std/fs.kspl). No security attributes, so the handle is not inheritable (hosted.c's "Nothing the
  * runtime opens passes to a child unasked"), as O_CLOEXEC on the POSIX side. */
 KSPL_LINK I32 kspl_create_owned(const U8 *path_ptr, Sz path_len, const U8 *data, Sz len) {
     wchar_t path[KSPL_WPATH_CAP];
@@ -634,7 +634,7 @@ KSPL_LINK void *kspl_fopen_cstr(const U8 *path_cstr, const U8 *mode_cstr) {
     return (void *)_wfopen(path, mode);
 }
 
-/* A lock on a file, the handle a HANDLE (0 = failure), for std/fs.kspls's File_lock.
+/* A lock on a file, the handle a HANDLE (0 = failure), for std/fs.kspl's File_lock.
    Every sharing flag is given, so the file itself is never what blocks: only the lock does. The
  * handle is not inheritable, so a child does not hold it on. */
 KSPL_LINK I64 kspl_lock_open(const U8 *path_ptr, Sz path_len) {

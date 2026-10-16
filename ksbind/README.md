@@ -2,7 +2,7 @@
 
 **Bindings to C libraries that come from outside the toolchain (KSPL's compiler and the C compiler it uses): a TLS client over OpenSSL, and SQLite.** A *binding* lets KSPL code call a library written in C. TLS is the encryption behind `https://`; SQLite is a small database kept in one file. Each binding is KSPL calling the library's own functions, with no C of its own; the library has to be installed where the program is built.
 
-They are for whoever needs an encrypted connection or a SQL database from KSPL. They are not in `std`, which builds anywhere with nothing installed. Why they stand apart, and how OpenSSL's macros are reached without a header, is [`ksbind/docs/DESIGN.md`](docs/DESIGN.md).
+They are for whoever needs an encrypted connection or a SQL database from KSPL. They are not in `std`, which builds anywhere with nothing installed. Why they stand apart, and how OpenSSL's macros are reached without a header, is [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md).
 
 ## Run it
 
@@ -10,7 +10,7 @@ They are for whoever needs an encrypted connection or a SQL database from KSPL. 
 
 A program uses a binding like this: it opens an in-memory database, makes a table, stores 42 and reads it back, printing `n=42`. `ksplc run` links the library the binding names.
 
-```kspls
+```kspl
 import "ksbind/db"
 import "std/io"
 
@@ -36,8 +36,8 @@ Each file is one binding, and the table says what you must install to use it.
 
 | File | Content | What it needs installed |
 | :-- | :-- | :-- |
-| [`ksbind/tls.kspls`](tls.kspls) | A TLS client on top of a `std/net` connection, verifying the certificate and the host name | OpenSSL 1.1.0 or later (`libssl-dev`) |
-| [`ksbind/db.kspls`](db.kspls) | One SQLite connection: prepared statements, bound values, rows read back, and a struct bound or read as a whole row | SQLite 3 (`libsqlite3-dev`) |
+| [`ksbind/tls.kspl`](tls.kspl) | A TLS client on top of a `std/net` connection, verifying the certificate and the host name | OpenSSL 1.1.0 or later (`libssl-dev`) |
+| [`ksbind/db.kspl`](db.kspl) | One SQLite connection: prepared statements, bound values, rows read back, and a struct bound or read as a whole row | SQLite 3 (`libsqlite3-dev`) |
 | [`ksbind/tests/`](tests/) | The tests, on the loopback and an in-memory database; the TLS peer makes its own certificate in memory | OpenSSL 1.1.1 or later, for the peer's Ed25519 key |
 
 What each file publishes is what `ksplc doc ksbind/<file>` prints.
@@ -51,6 +51,6 @@ Both traps concern linking: the step after compiling, where the C compiler joins
 
 ## Further reading
 
-* [`ksbind/docs/DESIGN.md`](docs/DESIGN.md) — why the bindings stand apart from `std`, how KSPL reaches a C macro and C's `long` type, and what each binding guards against.
+* [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md) — why the bindings stand apart from `std`, how KSPL reaches a C macro and C's `long` type, and what each binding guards against.
 * [`ksbind/SURFACE.txt`](SURFACE.txt) — the record of the published API, written by `make surface` and checked by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).
 * [std](../std/README.md) — the way in to `ksbind`'s only KSPL dependency; every file it publishes is listed by `ksplc doc std`.

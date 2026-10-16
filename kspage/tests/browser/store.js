@@ -8,7 +8,7 @@ function kspageProbeStore(ks) {
   const typed = app.text();
   const written = app.save();
   // Caution: **Do not hunt in a packed shape** (the save's shape is one value per line, with one
-  // space after the key. `kspage/share/store.kspls`'s `spacing`).
+  // space after the key. `kspage/share/store.kspl`'s `spacing`).
   check(written.indexOf("\"kspage\": 6") >= 0, "the version goes into the text written out");
   // **The answer is the reason rather than a true or false** (`api.js`'s `load`): an empty
   // text is "it could be read", and a refusal names its reason, as "it cannot be read" and "too
@@ -29,12 +29,6 @@ function kspageProbeStore(ks) {
   // document, and git's differences, its joins and `grep` say nothing.
   check(written.split("\n").length > 1,
     "the text saved is split into lines (" + written.split("\n").length + " lines)");
-
-  // **The file field shows what "Open" opens** (a browser without the picker chooses through it,
-  // and an extension left off hides the file until "all files" is picked).
-  const accepts = document.getElementById("file").accept.split(",");
-  const hidden = [".kspage", ".md", ".txt"].filter((ext) => accepts.indexOf(ext) < 0);
-  check(hidden.length === 0, "the file field offers every kind \"Open\" opens (" + hidden + ")");
 
   // Read only. **This can be seen nowhere else**: folding the tools and stopping the shortcut keys
   // are the DOM's side (it breaks as "it can be written to through the folded tools' gaps").
@@ -90,66 +84,25 @@ function kspageProbeStore(ks) {
   ks.flyPick("mode-picks", "Edit");
   check(app.load(written) === "", "it can go back to the original text");
 
-  // 9. The arena that remembers where the document a tab has in view lives.
-  //
-  // **This can be seen nowhere else**: a handle cannot be made text, so remembering it is the
-  // browser's arena (IndexedDB) itself. **A made-up handle cannot be used** — structured cloning
-  // refuses a plain object holding functions (`could not be cloned`). **A real handle needs no
-  // window**: the private file arena per origin (`navigator.storage.getDirectory()`) wants neither
-  // a chooser nor a permission.
-  //
-  // **The same section looks at two cases** (the same settlement as `local.js`). From `file://` the
-  // origin is opaque and neither arena opens — **that side is a check too**: an answer must come
-  // back where it cannot remember (gone silently quiet, the press of save never returns).
+  // Tab locations persist as paths and remain bounded.
   const done = ks.hold();
-  // **Borrow the page's connection** (the page opens one only: `ui.handles` in `port/web/page.js`).
   const store = app.keepStore;
   const TAB = "probe-tab";
-  // A page that cannot remember. **`file://` comes here.**
-  // **Wait through `ks.fed`**: the arena answers off the page's thread (why: `fed` in `probe.js`).
-  if (location.protocol === "file:") {
-    ks.fed(store.keepWhere(TAB, null).then(() => store.takeWhere(TAB)))
-      .then((was) => {
-        check(was === null, "on a page that cannot remember nothing comes back");
-        done();
-      }, (e) => {
-        check(false,
-          "an answer comes back even on a page that cannot remember ("
-            + String(e && e.message) + ")");
-        done();
-      });
-    return;
-  }
-  // A page that was served: a tab's record comes back with its handle and place, can be forgotten,
-  // a non-handle does not come back as one, and **shut tabs' records do not pile up** (nothing says
-  // a tab is shut, so the cap bounds them). **Then a page is read again for real** (`again` below),
-  // after the cap, which would otherwise let its record go.
-  const nowhere = { path: "", bodyAt: null, pastAt: null };
   (async function () {
-    const dir = await navigator.storage.getDirectory();
-    const live = await dir.getFileHandle("kspage-probe.kspage", { create: true });
-    await store.keepWhere(TAB, { path: "", bodyAt: live, pastAt: null });
-    let was = await store.takeWhere(TAB);
-    check(was !== null && was.bodyAt !== null && was.bodyAt.name === "kspage-probe.kspage",
-      "a tab's record comes back with its handle ("
-        + (was === null || was.bodyAt === null ? "none" : was.bodyAt.name) + ")");
     const place = ks.notAPath + "/kept.kspage";
-    await store.keepWhere(TAB, { path: place, bodyAt: null, pastAt: null });
-    was = await store.takeWhere(TAB);
-    check(was !== null && was.path === place && was.bodyAt === null,
+    await store.keepWhere(TAB, { path: place });
+    let was = await store.takeWhere(TAB);
+    check(was !== null && was.path === place,
       "a tab's record comes back with its place (" + (was === null ? "none" : was.path) + ")");
     await store.keepWhere(TAB, null);
     check((await store.takeWhere(TAB)) === null, "having it remember null forgets it");
-    // Caution: **Do not bring back something that is not a handle as one** (with the arena
-    // broken, the reader would call it).
-    await store.keepWhere(TAB, { path: "", bodyAt: "a text that is not a handle", pastAt: null });
-    was = await store.takeWhere(TAB);
-    check(was !== null && was.bodyAt === null, "something that is not a handle does not come back");
+    await store.keepWhere(TAB, { path: "", bodyAt: "obsolete handle" });
+    check((await store.takeWhere(TAB)) === null, "an old record without a path is ignored");
     await store.keepWhere(TAB, null);
     // More tabs than the cap, one after another: the newest stays, and not all of them do.
     const many = 20;
     for (let i = 0; i < many; i += 1) {
-      await store.keepWhere("probe-cap-" + i, { path: place, bodyAt: null, pastAt: null });
+      await store.keepWhere("probe-cap-" + i, { path: place });
     }
     let kept = 0;
     for (let i = 0; i < many; i += 1) {
@@ -159,8 +112,7 @@ function kspageProbeStore(ks) {
     check((await store.takeWhere("probe-cap-" + (many - 1))) !== null,
       "the tab laid down last is the one that stays");
     for (let i = 0; i < many; i += 1) await store.keepWhere("probe-cap-" + i, null);
-    await dir.removeEntry("kspage-probe.kspage");
-    await again(dir);
+    await again();
     await letGo();
   })().then(done, (e) => {
     check(false, "the handles' arena answers (" + String((e && e.stack) || e) + ")");
@@ -188,7 +140,7 @@ function kspageProbeStore(ks) {
       ask.onerror = () => go("failed");
     });
     check(how === "let go", "the page lets its storage go for a later version (" + how + ")");
-    await store.keepWhere(TAB, { path: "after.kspage", bodyAt: null, pastAt: null });
+    await store.keepWhere(TAB, { path: "after.kspage" });
     const was = await store.takeWhere(TAB);
     check(was !== null && was.path === "after.kspage", "and opens it again at its next use");
     await store.keepWhere(TAB, null);
@@ -200,7 +152,7 @@ function kspageProbeStore(ks) {
   // with a memory at hand. A window this page opens stands for a tab.
   // Caution: **Look at what a save writes, not only at what is shown.** Come up on the sample with
   // the earlier file still attached, the first save writes the sample over that file.
-  async function again(dir) {
+  async function again() {
     const server = ks.local();
     const lay = (path, text) =>
       fetch(server.at(path), { method: "PUT", headers: server.head, body: text });
@@ -271,47 +223,26 @@ function kspageProbeStore(ks) {
       check(kept === shown && kept.indexOf(placeMark) >= 0,
         "what it writes is the document it came up on, not the sample");
 
-      // ---- A document opened by the browser's window (a handle) ----
-      const handMark = "the handle read again";
-      const inner = await child.navigator.storage.getDirectory();
-      const picked = await inner.getFileHandle("kspage-again.kspage", { create: true });
-      const out = await picked.createWritable();
-      await out.write(docOf(handMark));
-      await out.close();
-      // **The window cannot open headless**, so what it returns is stood in for by a real handle
-      // (the private arena's).
-      child.showOpenFilePicker = async () => [picked];
-      child.document.getElementById("open").click();
-      check(await until(() => child.kspage.text().indexOf(handMark) >= 0, "the file to open"),
-        "the other window opens the file chosen");
-      check(await readAgain(child), "the other window is read again after opening a file");
-      check(await until(() => child.kspage.text().indexOf(handMark) >= 0, "the file reopened"),
-        "a page read again comes up on the file it had open, through its handle ("
-          + child.kspage.text() + ")");
-      check(child.document.title.indexOf("kspage-again.kspage") === 0,
-        "the band names the file it writes back to (" + child.document.title + ")");
-      check(child.document.getElementById("local-path").value === "",
-        "a document living in a handle leaves the path field empty");
+      // A save retains its baseline even when the same path is reopened while its read waits.
+      const beforeRace = child.fetch;
+      let releaseRead = null;
+      child.fetch = (url, opts) => {
+        if (releaseRead === null && String(url).startsWith("/api/stat?")) {
+          return new Promise((go) => { releaseRead = () => go(beforeRace(url, opts)); });
+        }
+        return beforeRace(url, opts);
+      };
       child.document.getElementById("save").click();
-      check(await until(() => saidThere(child, "Saved (kspage-again.kspage"),
-        "the save through the handle after reading again"),
-      "a save after reading again writes back through the handle");
-      const onDisk = await (await (await dir.getFileHandle("kspage-again.kspage")).getFile()).text();
-      check(onDisk.indexOf(handMark) >= 0, "what it writes through the handle is that file's document");
-      // **A file that has gone does not come back**: the page stays on the sample, carrying no
-      // file, and says why (recent files that break only when pressed are the complaint against
-      // other products).
-      // Caution: **Remove it through this page's own arena** — what the other window handed out
-      // belongs to the page before the reading again, and a call on it never answers.
-      await dir.removeEntry("kspage-again.kspage");
-      check(await readAgain(child), "the other window is read again after its file went");
-      check(await until(() => saidThere(child, "no longer there"), "the reason the file is gone"),
-        "a file that has gone is said to be gone");
-      // **Read the band's place, not the title** (with no file the title is the name field, not
-      // where it writes).
-      const placeNow = child.document.getElementById("file-at").textContent || "";
-      check(child.kspage.text().indexOf(handMark) < 0 && placeNow.indexOf("No save target") >= 0,
-        "and the page stays on the sample, carrying no file (" + placeNow + ")");
+      check(await until(() => releaseRead !== null, "the save's read to wait"),
+        "the save can wait while its path is reopened");
+      const outside = docOf("changed while the save waited");
+      await lay("again.kspage", outside);
+      check(await child.kspage.openDoc("again.kspage"), "the same path reopens with changed text");
+      if (releaseRead) releaseRead();
+      check(await until(() => saidThere(child, "changed outside"), "the old save to refuse"),
+        "the old save retains its original comparison text");
+      check(await readBack("again.kspage") === outside, "reopening does not authorize the old save");
+      child.fetch = beforeRace;
 
       // ---- A save still writing while the document in view changes ----
       //
@@ -343,7 +274,17 @@ function kspageProbeStore(ks) {
       child.fetch = passOn;
     } finally {
       child.close();
-      await dir.removeEntry("kspage-again.kspage").catch(() => null);
+    }
+    const refused = window.open(location.pathname + "#t=invalid-probe-token", "kspage-refused");
+    check(refused !== null, "the startup-refusal window opens");
+    if (refused !== null) {
+      try {
+        check(await until(() => saidThere(refused, "The page could not start"),
+          "startup to refuse the invalid token"), "a refused server connection stops startup");
+        check(!refused.kspage, "the editor is not published after failed startup");
+      } finally {
+        refused.close();
+      }
     }
   }
 }

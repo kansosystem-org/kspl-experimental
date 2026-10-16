@@ -1,7 +1,7 @@
 // Copying to paper, a page's header and footer, and the letter spacing of justification.
 //
 // The style names (`body`, `code`) are the document's and the placeholders `{page}` / `{pages}` are
-// the core's (`kspage/port/web/paper.kspls`), so those needles follow those sides.
+// the core's (`kspage/port/web/paper.kspl`), so those needles follow those sides.
 
 function kspageProbePaper(ks) {
   const { check, app, canvas, press, keyIn, ime } = ks;
@@ -284,7 +284,7 @@ function kspageProbePaper(ks) {
   // 23'''''. A document with no paper settled becomes a page with margins in printing too.
   //
   // **This can be seen nowhere else**: guessing the page borrowed is the JS's side (`api_show.js`'s
-  // `paintPages`); the numbers are the core's (`../../model/paper.kspls`'s `a4_portrait`, watched
+  // `paintPages`); the numbers are the core's (`../../model/paper.kspl`'s `a4_portrait`, watched
   // in `../wasm/paper.mjs`). **Borrow the size alone and a page with 0 margin comes out** — the
   // bands have nowhere to lay, and the body sticks to the page's break, so **the text looks cut off
   // at the break**. Plain text (a program's source), Markdown and a fresh document all have no

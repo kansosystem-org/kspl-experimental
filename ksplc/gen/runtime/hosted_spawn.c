@@ -1,9 +1,9 @@
 /* Part of the C runtime for an environment with an OS.
    Caution: **It does not build on its own** — it
  * joins behind hosted.c (the preamble) to make one translation unit. The joining order is held by
- * write_impl in ksplc/gen/runtime.kspls. */
+ * write_impl in ksplc/gen/runtime.kspl. */
 /* ============================================================
- * Starting a child process (for std/subproc.kspls).
+ * Starting a child process (for std/subproc.kspl).
  *
  * **The one function that starts one is kspl_proc_start.** Gathering, lining up, keeping it
  * running and talking back and forth differ only in where the three standard streams go (inherit
@@ -80,7 +80,7 @@ static void kspl_child_fail(int done) {
 }
 
 /* Starts one child (the one function; the section heading says why). The KSPL side
- * (std/subproc.kspls) holds the combinations.
+ * (std/subproc.kspl) holds the combinations.
  *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone),
  *     16 = the child leads a process group of its own (a job object on Windows), so a kill stops
  *     what it started too (hosted_proc.c's "The groups a terminal's signals are passed on to").
@@ -460,7 +460,7 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
      * fresh black window of its own (CREATE_NO_WINDOW; ignored for a non-console program).
      * Caution: **Do not ask for it where the child's output is meant to reach the parent's
      * console** — its writes land nowhere, so the KSPL side asks only where both streams go to
-     * files (spawn_redirect in std/subproc.kspls). Ctrl+C in the parent's console no longer
+     * files (spawn_redirect in std/subproc.kspl). Ctrl+C in the parent's console no longer
      * reaches the child either, which is why it is not the default. */
     DWORD flags = ((stdio & 8) != 0) ? CREATE_NO_WINDOW : 0;
 
@@ -569,7 +569,7 @@ static I32 kspl_bits_set(unsigned long long x) {
 int sched_getaffinity(pid_t pid, size_t size, void *mask);
 #endif
 
-/* The number of CPUs this process may run on (for std/sys.kspls's cpu_count). Returns 1 where it
+/* The number of CPUs this process may run on (for std/sys.kspl's cpu_count). Returns 1 where it
  * is unknown.
  * Caution: Do not return 0 or a negative; the caller divides by it.
  * **Ask the affinity first** (`taskset`, a job object, `start /affinity`): the online count says
@@ -577,7 +577,7 @@ int sched_getaffinity(pid_t pid, size_t size, void *mask);
  * quota is not read.
  * `_SC_NPROCESSORS_ONLN` is not a POSIX.1 constant but an extension. It is visible on macOS
  * because the preamble header raises `_DARWIN_C_SOURCE`, and dropping that breaks this (the
- * reason is write_decls in ksplc/gen/runtime.kspls). */
+ * reason is write_decls in ksplc/gen/runtime.kspl). */
 KSPL_LINK I32 kspl_cpu_count(void) {
 #ifdef _WIN32
     /* Both masks are 0 where the process spans processor groups; then every group is counted. */
@@ -603,7 +603,7 @@ KSPL_LINK I32 kspl_cpu_count(void) {
 }
 
 /* Writes the working directory's path into buf and returns the length written (for
- * std/sys.kspls's cwd). Returns 0 where it cannot be taken or does not fit.
+ * std/sys.kspl's cwd). Returns 0 where it cannot be taken or does not fit.
  * Caution: The terminating NUL is not counted in the length (the KSPL side takes a slice).
  * The separator is the OS's own (`\` on Windows); comparing paths must absorb it. */
 KSPL_LINK Sz kspl_cwd(U8 *buf, Sz cap) {
@@ -629,7 +629,7 @@ KSPL_LINK Sz kspl_cwd(U8 *buf, Sz cap) {
 #endif
 
 /* Writes this process's executable path, its links resolved, into buf and returns the length
- * written (for std_dir in ksplc/base/locate.kspls). 0 where it cannot be taken or does not fit,
+ * written (for std_dir in ksplc/base/locate.kspl). 0 where it cannot be taken or does not fit,
  * and on a POSIX system other than Linux and macOS.
  * Caution: **Do not take it from argv[0].** Started through PATH it holds the bare name, and
  * through a link it names the link's folder, not the one the executable stands in.
@@ -671,11 +671,11 @@ KSPL_LINK Sz kspl_exe_path(U8 *buf, Sz cap) {
     return n;
 }
 
-/* Sets an environment variable (for std/sys.kspls's set_env). true on success.
+/* Sets an environment variable (for std/sys.kspl's set_env). true on success.
  * POSIX's setenv and Windows's _wputenv_s differ in name and argument order; absorbed here.
- * name/value arrive NUL-terminated (std/sys.kspls refuses an input holding a NUL).
+ * name/value arrive NUL-terminated (std/sys.kspl refuses an input holding a NUL).
  * Caution: **It is never called with an empty value.** Windows's CRT reads an assignment of an
- * empty value as "erase it", so the caller (set_env in std/sys.kspls) refuses an empty one. */
+ * empty value as "erase it", so the caller (set_env in std/sys.kspl) refuses an empty one. */
 KSPL_LINK Bool kspl_set_env(const U8 *name, const U8 *value) {
 #ifdef _WIN32
     /* Place it through the wide side. UTF-8 handed to the narrow side is read as the
@@ -701,11 +701,11 @@ static SRWLOCK kspl_env_lock = SRWLOCK_INIT;
 static kspl_env_held *kspl_env_list = NULL;
 #endif
 
-/* Reads an environment variable (for std/sys.kspls's env). NULL where there is none. name
+/* Reads an environment variable (for std/sys.kspl's env). NULL where there is none. name
  * arrives NUL-terminated.
  * Caution: **Do not call `libc.getenv` directly from the KSPL side.** Windows's narrow side returns
  * the current code page, mixing two encodings; Windows takes the wide API here and converts.
- * **What it returns stays readable after the next read**, the guarantee std/sys.kspls's get_env
+ * **What it returns stays readable after the next read**, the guarantee std/sys.kspl's get_env
  * states: POSIX lends the environment's own string, which a read does not move, and Windows
  * converts into a copy it never frees. A copy freed at the next read would leave a caller holding
  * two values (`CC` in a link's argv, then `CC` again) with one pointing into freed memory. */
@@ -750,9 +750,9 @@ KSPL_LINK const U8 *kspl_get_env(const U8 *name) {
 #endif
 }
 
-/* Erases an environment variable (for std/sys.kspls's unset_env). true on success, also where it
+/* Erases an environment variable (for std/sys.kspl's unset_env). true on success, also where it
  * is absent. POSIX's unsetenv and Windows's _wputenv_s(name, L"") are absorbed here.
- * Caution: **This is the only road that erases.** set_env in std/sys.kspls refuses an empty
+ * Caution: **This is the only road that erases.** set_env in std/sys.kspl refuses an empty
  * value, so "assign an empty value to erase it" passes on no platform. name arrives NUL-terminated.
  */
 

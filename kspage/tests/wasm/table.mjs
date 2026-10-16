@@ -242,7 +242,7 @@ export function run(ks) {
   check(grown > geom(find("Qty"))[3],
     `as far as it was drawn becomes the row's height (${grown})`);
   // **A row's fitting is the naming going away**, so a row dragged taller comes back to the height
-  // the laying out gives it unasked (the reason is on `Fit` in `kspage/lay/ask.kspls`).
+  // the laying out gives it unasked (the reason is on `Fit` in `kspage/lay/ask.kspl`).
   check(w.kspage_web_fit_edge(20, rowLine + 30) === 1, "a row's seam can be fitted too");
   const shrunk = geom(find("3"))[1] - cellTop;
   check(shrunk < grown, `fitting takes the row back to its contents (${grown} -> ${shrunk})`);

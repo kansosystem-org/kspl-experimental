@@ -1,0 +1,686 @@
+//< Queries on a type ID
+//<
+//< An extension on `Env` in `sema/type/env.kspl`, holding no type table: stripping and testing
+//< immutability, pointers, slices, arrays and Results, and the numeric checks and promotion.
+//< The table registers types; this file only asks about registered ones.
+//< **A caller of these methods must import this file**, as with `sema/type/arc.kspl`.
+import "ksplc/base/ast" { Ast_node, variance_names_mut }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
+import "ksplc/base/target" as base_target
+import "ksplc/sema/type/def" { Fn_sig, Trait_def }
+import "ksplc/sema/type/env" as sema_type_env
+import "std/str"
+
+priv const max_const_add_depth: I32 = 1 //<
+    //< The deepest level at which an implicit conversion may add a `const` (is_const_compatible)
+    //<
+    //< 1 = the outermost level of the pointee or element: `U8$[]` → `U8[]` is allowed, `U8$[]$[]`
+    //< → `U8[]$[]` is not.
+priv const unlimited_const_add_depth: I32 = 1000 //<
+    //< The bound for when needs_deep_const_add asks "would it be allowed if the depth were ignored"
+
+priv const max_type_unwrap_depth: Sz = 1000 //<
+    //< The bound on how often get_clean_real_type strips an alias and an immutability qualifier
+    //<
+    //< It strips them alternately.
+    //< A safety limit against a broken type table whose shape loops back to itself.
+
+const max_alias_chain_depth: Sz = 1000 //<
+    //< The bound on how many levels of a type-alias chain (`typedef A = B; ...`) are followed
+    //<
+    //< Both the stripping code (get_real_type) and the resolver (sema/decl/resolve.kspl) use it.
+
+fn is_result_inner_field(name: U8[]): Bool //<
+    //< Whether the name is one of the three fields inside a Result
+    //<
+    //< **These are names not on KSPL's surface** — they are used only under `!` and `catch`, and
+    //< user code can neither write nor read them. The code that rejects them (`../body/dot.kspl`
+    //< and `../body/struct_literal.kspl`) asks here.
+    //< Note: The fields' order itself is in `../../gen/c/decl.kspl`. Here only the names are
+    //< checked.
+    return name.equals("is_err") || name.equals("error_code") || name.equals("val")
+
+struct Receiver_permission //<
+    //< The permission a method's receiver type demands of the caller
+    ptr: Bool //< demands a place (a pointer)
+    mut_ptr: Bool //< also demands writing what it points at (`Self$@`)
+
+impl sema_type_env.Env
+    fn is_const(r: Self$@, id: I32): Bool //<
+        //< Whether this type itself is immutability-qualified (its outermost node is const_of)
+        //<
+        //< The element's or pointee's immutability is on the base type, so strip first
+        //< (`is_const(slice_elem(id))`).
+        return r.get_info(id).is_const_of()
+
+    fn strip_const(r: Self$@, id: I32): I32 //<
+        //< Strips one level of the immutability qualifier on this type itself
+        //<
+        //< The element's or pointee's is kept.
+        switch r.get_info(id)
+        case .const_of(b)
+            return b
+        default
+            return id
+
+    fn copy_value_type(r: Self$@, id: I32): I32 //<
+        //< The type of a place that holds a value by **copying** it
+        //<
+        //< Caution: **Drop the outermost immutability qualifier.** The place a read-only value was
+        //< copied to can be written. What a slice or a pointer points at is untouched — it is still
+        //< the original value, whose immutability stays.
+        stripped: = r.strip_const(id)
+        switch r.get_info(r.get_real_type(stripped))
+        case .array(b, sz)
+            return r.make_array(r.copy_value_type(b), sz)
+        default
+            return stripped
+
+    fn same_shape_ignoring_const(r: Self$@, a: I32, b: I32): Bool //<
+        //< Whether they are the same shape ignoring the immutability qualifier
+        //<
+        //< **Ask "same type if immutability is ignored" through this** (the ternary's unification,
+        //< the implicit conversion to immutable).
+        //< Caution: **An inner alias must not be resolved** : an alias is transparent only at the
+        //< level it names; resolving inwards makes `B[]` (`typedef B = U8`) and `U8[]` one type,
+        //< sema accepts it and the C for genc's `Const_B_Slice` / `kspl_U8_Slice` fails to compile.
+        return r.strip_const_deep(r.get_clean_real_type(a)) == r
+            .strip_const_deep(r.get_clean_real_type(b))
+
+    fn strip_const_deep(r: Self$@, id: I32): I32 //<
+        //< It returns the type with the immutability qualifiers stripped at every nested level
+        //<
+        //< Aliases are not resolved (the reason is in same_shape_ignoring_const).
+        switch r.get_info(id)
+        case .const_of(b)
+            return r.strip_const_deep(b)
+        case .pointer(b)
+            sb: = r.strip_const_deep(b)
+            return id if sb == b else r.make_ptr(sb)
+        case .array(b, sz)
+            sb: = r.strip_const_deep(b)
+            return id if sb == b else r.make_array(sb, sz)
+        default
+            return id
+
+    fn is_const_compatible(r: Self$@, act: I32, exp: I32): Bool //<
+        //< Whether the implicit conversion from act to exp keeps the immutability, level by level
+        //<
+        //< It walks the structure: has_const_deep and is_const cannot tell `U8[]` from "the
+        //< descriptor immutable too", a safe downgrade.
+        return r.is_const_compatible_at(act, exp, 0, max_const_add_depth)
+
+    fn needs_deep_const_add(r: Self$@, act: I32, exp: I32): Bool //<
+        //< Whether it was rejected for the sole reason that the level is too deep
+        //<
+        //< For the diagnostic's hint: the shape agrees, so "the type differs" alone says nothing.
+        return !r.is_const_compatible_at(act, exp, 0, max_const_add_depth) &&
+            r.is_const_compatible_at(act, exp, 0, unlimited_const_add_depth)
+
+    priv fn is_const_compatible_at(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
+        //< depth is the level counted from the outermost
+        //<
+        //< Adding a `const` is allowed only at depth <= limit, even where a deeper add is sound: a
+        //< nested view type is a different C struct and codegen emits no conversion, so it would be
+        //< broken C (not rejected on LLVM). To relax it, prepare codegen first.
+        a: = r.get_real_type(act)
+        e: = r.get_real_type(exp)
+        // **The outermost layer's (depth 0's) immutability is not matched.** It is a copied value,
+        // whose writability the copy's binding decides (as with `.array` below). Matching it
+        // rejects passing a read-only **value**, with the useless `expected 'T@', but got 'T@'`
+        // (that layer has no surface notation, `sema/type/display.kspl`).
+        if depth > 0 && r.is_const(a) && !r.is_const(e)
+            return false // the direction that loses immutability; never allowed at an inner level
+        if !r.is_const(a) && r.is_const(e) && depth > limit
+            return false
+        ab: = r.strip_const(a)
+        eb: = r.strip_const(e)
+        switch r.get_info(ab)
+        case .pointer(b1)
+            switch r.get_info(eb)
+            case .pointer(b2)
+                return r.is_const_compatible_at(b1, b2, depth + 1, limit)
+            default
+                return false
+        case .array(b1, s1)
+            switch r.get_info(eb)
+            case .array(b2, s2)
+                // A fixed-length array's **elements**' immutability is not matched: an array is
+                // always copied, so the copy's binding decides it ("The two axes of mutability" in
+                // docs/SPEC-language.md).
+                // Caution: The elements' **inside** (the T@ of `array(T@,N)`) is not stripped.
+                // Relaxing there would let a read-only pointer be moved into an array of mutable
+                // pointers.
+                return s1 == s2 &&
+                    r.is_const_compatible_at(r.strip_const(b1), r.strip_const(b2), depth + 1, limit)
+            default
+                return false
+        case .fn_type(s1)
+            switch r.get_info(eb)
+            case .fn_type(s2)
+                return r.same_signature(s1, s2)
+            default
+                return false
+        default
+            // A one-level weakening at a type-argument position the declaration named as mutable
+            // (`Box<|$I32|>` → `Box<|I32|>`), the same rule as a pointer's and a slice's with the
+            // position chosen by the declaration.
+            if r.generic_arg_weakens(ab, eb, depth, limit)
+                return true
+            // Caution: Do not compare bare ids. An alias reaches here with only one side resolved
+            // (`M$@` points at `alias M`, `M@` at `const_of(alias M)`, whose inside get_real_type
+            // leaves), and the downgrade from `M$@` to `M@` is rejected as "the type differs".
+            return r.get_clean_real_type(ab) == r.get_clean_real_type(eb)
+
+    priv fn same_signature(r: Self$@, a: Fn_sig$@, b: Fn_sig$@): Bool //<
+        //< Whether two function types are one, an alias seen through as at a pointer's level
+        //<
+        //< **Each part is matched both ways**: a function value is called with what either type
+        //< says, so a parameter or the result may not weaken or strengthen immutability either way.
+        //< An alias reaches here inside a parameter (`fn(r: Ints@)` beside `fn(r: Box<|I64|>@)`),
+        //< which the two types' ids keep apart ("A typedef is only another name" in
+        //< docs/SPEC-language.md).
+        if a.params.len != b.params.len
+            return false
+        for i in Range.asc(a.params.len)
+            if !r.same_part(a.params.get(i), b.params.get(i))
+                return false
+        return r.same_part(a.ret_id, b.ret_id)
+
+    priv fn same_part(r: Self$@, a: I32, b: I32): Bool //< one part of two signatures, both ways
+        return a == b || (r.is_const_compatible(a, b) && r.is_const_compatible(b, a))
+
+    priv fn generic_arg_weakens(r: Self$@, act: I32, exp: I32, depth: I32, limit: I32): Bool //<
+        //< Whether `act` and `exp` differ **only where the declaration named mutability**, weaker
+        //<
+        //< They are instances of one generic base, and the difference weakens the immutability.
+        //< **Only the positions the declaration named may differ.** An unnamed position can really
+        //< differ between `T` and `T immut` (substitution carries an outer immutability in), so
+        //< skipping the mark check makes the user's generics silently covariant.
+        a_base: = r.instance_base(act)
+        if a_base.len == 0 || !a_base.equals(r.instance_base(exp))
+            return false
+        mask: = r.variance_masks.get(a_base) catch 0
+        if mask == 0
+            return false
+        a_args: = r.instance_args(act)
+        e_args: = r.instance_args(exp)
+        if a_args.len != e_args.len
+            return false
+        $diffs: Sz = 0
+        for i in Range.asc(a_args.len)
+            a_id: = a_args[i]
+            e_id: = e_args[i]
+            if a_id == e_id
+                continue
+            diffs += 1
+            if diffs > 1 || !variance_names_mut(mask, i)
+                return false
+            if a_id == 0 || e_id == 0 ||
+                !r.is_const_compatible_at(a_id, e_id, depth + 1, limit)
+                return false
+        return diffs == 1
+
+    fn has_const_deep(r: Self$@, id: I32): Bool //<
+        //< Whether there is an immutability qualifier at any nested level
+        //<
+        //< It is the check for whether a view is read-only.
+        switch r.get_info(id)
+        case .const_of(_b)
+            return true
+        case .pointer(b)
+            return r.has_const_deep(b)
+        case .array(b, _sz)
+            return r.has_const_deep(b)
+        default
+            return false
+
+    fn get_clean_real_type(r: Self$@, id: I32): I32 //<
+        //< Resolves aliases (get_real_type), strips immutability (strip_const) till neither applies
+        //<
+        //< The two steps run **alternately**.
+        //< The numeric-kind checks (is_float / is_unsigned / get_primitive_bit_size ...) need it;
+        //< one pass of each does not suffice.
+        $cur: = r.get_real_type(id)
+        for _d in Range.asc(max_type_unwrap_depth)
+            stripped: = r.strip_const(cur)
+            if stripped == cur
+                return cur
+            cur = r.get_real_type(stripped)
+        return cur
+
+    fn strip_ptr(r: Self$@, id: I32): I32 //<
+        //< Strips one pointer level, seeing through an immutability qualifier on the outside
+        //<
+        //< The view types' checks and strips below all see through it this way.
+        //< "An immutable slice is a slice too": is_slice / strip_slice hold for
+        //< `const_of(slice(U8))`.
+        //< Caution: **`strip_ptr(x) != x` must not be used as the check for "is x a pointer".**
+        //< Seeing through drops an immutability qualifier too, so an immutable non-pointer such as
+        //< `U8 immut` comes out true as well.
+        r_id: = r.get_clean_real_type(id)
+        switch r.get_info(r_id)
+        case .pointer(b)
+            return b
+        default
+            return r_id
+    fn trait_cmp_base(r: Self$@, tid: I32, self_ref: I32, target: I32): I32 //<
+        //< It returns the base real-type id for comparing a trait's and an impl's method types
+        //<
+        //< It maps self_ref (that side's Self: the trait type, or the impl's target type) onto
+        //< `target`, so both Selfs and a generic Output bound to target compare equal. Pointers are
+        //< stripped (a thunk bridges value and pointer); ask is_pointer separately.
+        real: = r.get_real_type(tid)
+        inner: = r.strip_ptr(real)
+        base: = r.strip_const(inner) if inner != real else real
+        return target if base == self_ref else base
+    fn ptr_depth(r: Self$@, id: I32): I32 //<
+        //< it returns the number of stacked pointers (the depth)
+        //<
+        //< Foo=0, Foo@=1, Foo@@=2, … lower and both backends share it for the automatic
+        //< dereference.
+        $depth: I32 = 0
+        $cur: = id
+        for r.is_pointer(cur)
+            cur = r.strip_ptr(cur)
+            depth += 1
+        return depth
+    fn strip_ptr_full(r: Self$@, id: I32): I32 //<
+        //< Returns the base type id with every pointer level stripped
+        //<
+        //< Foo@@ becomes Foo; strip_ptr strips one level.
+        $cur: = id
+        for r.is_pointer(cur)
+            cur = r.strip_ptr(cur)
+        return cur
+    fn base_type_name(r: Self$@, id: I32): U8[] //<
+        //< The canonical name of the base type after receiver_base_id, for a lookup by name
+        return r.get_str(r.receiver_base_id(id))
+
+    fn receiver_base_id(r: Self$@, id: I32): I32 //<
+        //< The base type a value is looked up on, with aliases, pointers and immutability stripped
+        //<
+        //< They are stripped alternately until none is left.
+        //< It is **the one and only implementation point** of the convention that `.`/`[]`
+        //< dereference a pointer automatically ("Member access and indexing through a pointer" in
+        //< docs/SPEC-language.md), and the type a table, a vtable or a definition is looked up by.
+        $cur: = r.get_real_type(id)
+        for _d in Range.asc(max_type_unwrap_depth)
+            switch r.get_info(cur)
+            case .pointer(b), .const_of(b)
+                cur = r.get_real_type(b)
+            default
+                return cur
+        return cur
+    fn is_place_index_node(r: Self$@, node: Ast_node$@): Bool //<
+        //< Whether a subscript node (`a[i]`) resolved to "a subscript returning a place"
+        //<
+        //< Such a subscript is `Index_place.at` or `Index_ref.at_ref`.
+        //< **Strip the immutability qualifier from both sides.** `at_ref` returns an `Output@`, so
+        //< the node's type turns immutable and is stripped later where used as a value (`return
+        //< xs[0];`; the check is in lower/expr.kspl).
+        if node == null || !node.is_trait_index_access()
+            return false
+        ret_node: = node.def_node.get_decl_type_node()
+        if ret_node == null
+            return false
+        ret_id: = ret_node.type_id
+        if !r.is_pointer(ret_id)
+            return false
+        return r.strip_const(r.strip_ptr(ret_id)) == r.strip_const(node.type_id)
+
+    fn method_receiver_permission(r: Self$@, def_node: Ast_node$@): Receiver_permission? //<
+        //< The permission the method declared at `def_node` demands of its receiver
+        //<
+        //< None where `def_node` has no signature with a first parameter. The call's check (`v.m()`
+        //< on a read-only `v` is rejected) and [I0601] (`v.m()` needs `$v` only for a `Self$@` `m`)
+        //< both read it here, so the two cannot disagree.
+        sig_node: = def_node.find_child(.k_type_fn_sig) if def_node != null else null
+        if sig_node == null
+            return .none
+        $params: = base_ast_ext.Param_cursor.new(sig_node.find_child(.k_param_list), false)
+        if first_param: = params.next()
+            need: = r.receiver_permission(first_param.get_decl_type_node())
+            return .some(need)
+        return .none
+
+    priv fn receiver_permission(r: Self$@, p_type: Ast_node$@): Receiver_permission //<
+        //< Reads the permission a method demands of its receiver from the type annotation `p_type`
+        //<
+        //< `p_type` is the first parameter's type annotation.
+        //<
+        //< Caution: **When the type is unresolved (type_id <= 0, as for `Self` in `impl U8`), read
+        //< the spelling, both `@` and `$@`** (parse/load.kspl's k_type_expr normalization keeps
+        //< the `$`). Checking `@` alone, a `Self$@` method reads as demanding no pointer and passes
+        //< the check.
+        if p_type == null
+            return Receiver_permission::{ .ptr = true, .mut_ptr = false }
+        p_type_id: = p_type.type_id
+        if p_type_id > 0
+            is_ptr: = r.is_pointer(p_type_id)
+            return Receiver_permission::{ .ptr = is_ptr,
+                .mut_ptr = is_ptr && !r.is_const(r.strip_ptr(p_type_id)) }
+        for tc in p_type.children
+            if tc.kind_id != .k_type_postfix
+                continue
+            if tc.text.equals("@")
+                return Receiver_permission::{ .ptr = true, .mut_ptr = false }
+            if tc.text.equals("$@")
+                return Receiver_permission::{ .ptr = true, .mut_ptr = true }
+        return Receiver_permission::{ .ptr = false, .mut_ptr = false }
+
+    fn field_type_of(r: Self$@, base_tid: I32, name: U8[]): I32 //<
+        //< A struct type's field's declared type id, found from the type alone (unknown if none)
+        //<
+        //< Note: It does not touch the AST at all. The write check in sema/body/stmt.kspl needs a
+        //< mid-path pointer's immutability in `a.b.c = v`, and infer_expr there would change the
+        //< node (see reject_write_through_const_ptr).
+        $t: = r.get_clean_real_type(base_tid)
+        for r.is_pointer(t)
+            t = r.get_clean_real_type(r.strip_ptr(t))
+        switch r.get_info(t)
+        case .struct_type(def)
+            switch def.get_field(name)
+            case .some(f)
+                return f.type_id
+            default
+                return I32::sema_type_env.Builtin_type_id.unknown
+        default
+            return I32::sema_type_env.Builtin_type_id.unknown
+    fn slice_elem(r: Self$@, id: I32): I32 //< the element type of a borrowed contiguous region
+        //<
+        //< Caution: **Do not name it like the `strip_*` family.** Those strip one level of
+        //< structure; a slice is a struct in `std/lang`, recognized by name (`slice_struct_elem`).
+        r_id: = r.get_clean_real_type(id)
+        elem: = r.slice_struct_elem(r_id)
+        return elem if elem != 0 else r_id
+    fn strip_result(r: Self$@, id: I32): I32 //<
+        //< The value type of a Result type, or the cleaned type itself where it is no Result
+        //<
+        //< Caution: As with the family, strip the outer immutability qualifier first ("How
+        //< immutability marks are expressed in a type, and the API that asks about them" in
+        //< ksplc/docs/DESIGN-compiler.md), or `is_result` is true (via get_clean_real_type) while
+        //< `strip_result` strips nothing.
+        r_id: = r.get_clean_real_type(id)
+        switch r.get_info(r_id)
+        case .result(b, _e)
+            return b
+        default
+            return r_id
+    fn strip_array(r: Self$@, id: I32): I32
+        r_id: = r.get_clean_real_type(id)
+        switch r.get_info(r_id)
+        case .array(b, _s)
+            return b
+        default
+            return r_id
+
+    fn get_result_err_id(r: Self$@, id: I32): I32 //<
+        //< Transparent to the outer immutability qualifier, as strip_result is
+        switch r.get_info(r.get_clean_real_type(id))
+        case .result(_b, e)
+            return e
+        default
+            return I32::sema_type_env.Builtin_type_id.i32_type
+
+    fn is_pointer(r: Self$@, id: I32): Bool
+        r_id: = r.get_clean_real_type(id)
+        return (true if r_id == I32::sema_type_env.Builtin_type_id.void_ptr
+            else r.get_info(r_id).is_pointer())
+    fn is_slice(r: Self$@, id: I32): Bool
+        return r.slice_struct_elem(id) != 0
+    fn is_array(r: Self$@, id: I32): Bool
+        return r.get_info(r.get_clean_real_type(id)).is_array()
+    fn is_result(r: Self$@, id: I32): Bool
+        return r.get_info(r.get_clean_real_type(id)).is_result()
+    fn array_len(r: Self$@, id: I32): I32 //< a fixed-length array's element count (else 0)
+        switch r.get_info(r.get_clean_real_type(id))
+        case .array(_b, size)
+            return size
+        default
+            return 0
+    fn is_scalar_enum(r: Self$@, id: I32): Bool //< whether it is an enum with no payload anywhere
+        //<
+        //< Both backends carry one as an integer, not as a `{ tag, payload }`.
+        switch r.get_info(r.get_clean_real_type(id))
+        case .enum_type(def)
+            return def.is_scalar()
+        default
+            return false
+    fn scalar_repr_id(r: Self$@, id: I32): I32 //< the type a value is carried as
+        //<
+        //< The real type, where a scalar enum stands for its base type.
+        real_id: = r.get_clean_real_type(id)
+        switch r.get_info(real_id)
+        case .enum_type(def)
+            if def.is_scalar()
+                return r.get_clean_real_type(def.base_type_id)
+        default {}
+        return real_id
+    fn trait_def_of_receiver(r: Self$@, id: I32): Trait_def$@? //<
+        //< The trait a method call's receiver of type id is, through any pointer levels
+        //<
+        //< None where it is not a trait: then the call is a direct one, not through a vtable.
+        //< Caution: **See through immutability too**: an immutable array's element (`Shape[2]`) is
+        //< a trait value, and read as none its call names a function no type defines.
+        switch r.get_info(r.get_clean_real_type(r.strip_ptr_full(id)))
+        case .trait_type(d)
+            return .some(d)
+        default
+            return .none
+
+    fn const_elem_of(r: Self$@, id: I32): Bool //<
+        //< Whether the element descended to by a subscript (`[i]`) is immutable
+        //<
+        //< The one check at the element's level (for place_crosses_const_elem in
+        //< `ksplc/sema/decl/access.kspl`).
+        //< Caution: **Strip the pointer levels first.** `[` dereferences any number of them, so
+        //< `p[0] = v` on a `p: U8[]@` reaches here; unstripped, it reads "not immutable" and a
+        //< write to a read-only slice is let through.
+        $base_id: = id
+        for r.is_pointer(base_id)
+            base_id = r.strip_ptr(base_id)
+        $elem_id: = r.slice_elem(base_id)
+        if elem_id == base_id
+            elem_id = r.strip_array(base_id)
+        return elem_id != base_id && r.is_const(elem_id)
+    fn is_fn_ptr(r: Self$@, id: I32): Bool //<
+        //< Whether a value of this type is called directly
+        //<
+        //< That is a function type, or the mark a bare function name gets in a generic call
+        //< (generic_fn_value_type_id).
+        real_id: = r.get_clean_real_type(id)
+        if real_id <= 0 || sema_type_env.is_unknown(real_id)
+            return false
+        if _sig: = r.fn_sig_of(real_id)
+            return true
+        return real_id == r.generic_fn_value_type_id()
+
+    fn resolve_null_type(r: Self$@, expected_id: I32): I32
+        if !sema_type_env.is_unknown(expected_id)
+            target_id: = r.strip_result(expected_id)
+            if target_id == (I32::sema_type_env.Builtin_type_id.void_ptr) ||
+                r.is_fn_ptr(target_id) || r.strip_ptr(target_id) != target_id
+                return target_id
+        return I32::sema_type_env.Builtin_type_id.void_ptr
+
+    fn is_float(r: Self$@, id: I32): Bool
+        real_id: = r.get_clean_real_type(id)
+        return real_id == I32::sema_type_env.Builtin_type_id.f32_type ||
+            real_id == I32::sema_type_env.Builtin_type_id.f64_type
+
+    fn is_unsigned(r: Self$@, id: I32): Bool
+        real_id: = r.get_clean_real_type(id)
+        return real_id == I32::sema_type_env.Builtin_type_id.u8_type ||
+            real_id == I32::sema_type_env.Builtin_type_id.u16_type ||
+            real_id == I32::sema_type_env.Builtin_type_id.u32_type ||
+            real_id == I32::sema_type_env.Builtin_type_id.u64_type ||
+            real_id == I32::sema_type_env.Builtin_type_id.bool_type
+
+    fn get_portable_bit_size(r: Self$@, id: I32): I32 //<
+        //< The bit count of a value that holds on any target
+        //<
+        //< **codegen must not use this**: it uses get_primitive_bit_size, or `Sz`'s conversions
+        //< come out at the wrong width.
+        //< Caution: Checking with the host's 64 bits lets through an expression undefined only on a
+        //< 32-bit target, such as `1Sz << 40`.
+        if r.get_clean_real_type(id) == (I32::sema_type_env.Builtin_type_id.size_type)
+            return 32
+        return r.get_primitive_bit_size(id)
+
+    fn get_primitive_bit_size(r: Self$@, id: I32): I32 //<
+        //< The bit count of a value on the machine this compile is for (`Sz`'s is the machine's)
+        real_id: = r.get_clean_real_type(id)
+        switch real_id
+        case I32::sema_type_env.Builtin_type_id.size_type
+            return I32::(base_target.current().sz_bytes * 8)
+        case I32::sema_type_env.Builtin_type_id.i64_type,
+            I32::sema_type_env.Builtin_type_id.u64_type,
+            I32::sema_type_env.Builtin_type_id.f64_type
+            return 64
+        case I32::sema_type_env.Builtin_type_id.i32_type,
+            I32::sema_type_env.Builtin_type_id.u32_type,
+            I32::sema_type_env.Builtin_type_id.f32_type
+            return 32
+        case I32::sema_type_env.Builtin_type_id.i16_type,
+            I32::sema_type_env.Builtin_type_id.u16_type
+            return 16
+        case I32::sema_type_env.Builtin_type_id.i8_type,
+            I32::sema_type_env.Builtin_type_id.u8_type,
+            I32::sema_type_env.Builtin_type_id.bool_type
+            return 8
+        default
+            return 32
+
+    fn is_bool(r: Self$@, id: I32): Bool //< whether it is a `Bool`
+        //<
+        //< Caution: **Go through `get_clean_real_type`.** A bare type-ID comparison misses a
+        //< `Bool[4]`'s element (`Bool const`) and a `type Flag = Bool`.
+        return r.get_clean_real_type(id) == I32::sema_type_env.Builtin_type_id.bool_type
+
+    fn is_integer(r: Self$@, id: I32): Bool //<
+        //< Whether it is an integer type (`is_numeric` without F32/F64)
+        //<
+        //< Caution: Use this one for a check that "means nothing unless it is an integer", such as
+        //< a process's exit code (checking it with is_numeric lets code returning an F64 as an exit
+        //< code go unreported).
+        real_id: = r.get_clean_real_type(id)
+        return real_id >= I32::sema_type_env.Builtin_type_id.i8_type &&
+            real_id <= I32::sema_type_env.Builtin_type_id.size_type
+
+    fn is_numeric(r: Self$@, id: I32): Bool
+        real_id: = r.get_clean_real_type(id)
+
+        if real_id >= I32::sema_type_env.Builtin_type_id.i8_type &&
+            real_id <= I32::sema_type_env.Builtin_type_id.f64_type
+            return true
+
+        entry: = r.id_to_type.get(real_id)
+        if entry != null
+            switch entry.info
+            case .enum_type(def)
+                if def.is_scalar()
+                    return true
+            default {}
+        return false
+
+    fn get_promoted_numeric_type(r: Self$@, type1: I32, type2: I32): I32 //<
+        //< The type two numeric operands are computed in, or unknown where neither holds the other
+        //<
+        //< It is always one of the two: the one the other widens into without loss
+        //< (is_lossless_numeric). So `U8 + I16` is `I16`, while `I32 + U32`, `I8 + U8`, `Sz + U32`
+        //< and any integer with a float have none ("Type conversion (`::`) and implicit casts" in
+        //< docs/SPEC-language.md).
+        if type1 == type2
+            return type1
+        t1: = r.scalar_base(r.strip_const(r.get_real_type(type1)))
+        t2: = r.scalar_base(r.strip_const(r.get_real_type(type2)))
+        if r.is_lossless_numeric(t2, t1)
+            return t1
+        if r.is_lossless_numeric(t1, t2)
+            return t2
+        return I32::sema_type_env.Builtin_type_id.unknown
+
+    priv fn scalar_base(r: Self$@, id: I32): I32
+        switch r.get_info(id)
+        case .enum_type(d)
+            if d.is_scalar()
+                return r.get_real_type(d.base_type_id)
+        default {}
+        return id
+
+    fn is_lossless_numeric(_r: Self$@, act: I32, exp: I32): Bool //<
+        //< Whether every value of the numeric type `act` is a value of `exp`
+        //<
+        //< The one relation behind both an implicit conversion (apply_type_coercion in
+        //< sema/body/coerce.kspl) and a binary operation's promotion. `Sz` counts at its 32-bit
+        //< lower bound and holds at most 64 bits, so `I32` fits it and it fits `I64`, but `U32`
+        //< does not.
+        if act == exp
+            return true
+
+        t_i64: = I32::sema_type_env.Builtin_type_id.i64_type
+        t_u64: = I32::sema_type_env.Builtin_type_id.u64_type
+        t_size: = I32::sema_type_env.Builtin_type_id.size_type
+        t_i32: = I32::sema_type_env.Builtin_type_id.i32_type
+        t_u32: = I32::sema_type_env.Builtin_type_id.u32_type
+        t_i16: = I32::sema_type_env.Builtin_type_id.i16_type
+        t_u16: = I32::sema_type_env.Builtin_type_id.u16_type
+        t_i8: = I32::sema_type_env.Builtin_type_id.i8_type
+        t_u8: = I32::sema_type_env.Builtin_type_id.u8_type
+        t_f64: = I32::sema_type_env.Builtin_type_id.f64_type
+        t_f32: = I32::sema_type_env.Builtin_type_id.f32_type
+
+        if exp == t_i64
+            return act == t_i32 || act == t_i16 || act == t_i8 || act == t_size || act == t_u32 ||
+                act == t_u16 || act == t_u8
+        if exp == t_size || exp == t_i32
+            return act == t_i32 || act == t_i16 || act == t_i8 || act == t_u16 || act == t_u8
+        if exp == t_i16
+            return act == t_i8 || act == t_u8
+        if exp == t_u64
+            return act == t_u32 || act == t_u16 || act == t_u8
+        if exp == t_u32
+            return act == t_u16 || act == t_u8
+        if exp == t_u16
+            return act == t_u8
+        if exp == t_f64
+            return act == t_f32
+        return false
+
+    priv fn strip_alias(r: Self$@, id: I32): I32
+        switch r.get_info(id)
+        case .alias_type(b)
+            return b
+        default
+            return id
+
+    fn alias_chain_len(r: Self$@, id: I32): Sz //<
+        //< How many levels of aliases must be followed to reach the real type
+        //<
+        //< It stops at the bound (so even on a cycle), and returning the bound means "at or above".
+        $current: = id
+        $n: Sz = 0
+        for n < max_alias_chain_depth
+            next: = r.strip_alias(current)
+            if next == current
+                break
+            current = next
+            n += 1
+        return n
+
+    fn get_real_type(r: Self$@, id: I32): I32 //< it strips the aliases and returns the real type
+        //<
+        //< Caution: **The bound has to be the same value as the resolver's in
+        //< sema/decl/resolve.kspl.** Cutting off a chain the resolver accepted returns a
+        //< half-stripped type, and the user sees "a type mismatch" with no word of the depth.
+        $current: = id
+        $max_depth: = max_alias_chain_depth
+        for max_depth > 0
+            max_depth -= 1
+            next: = r.strip_alias(current)
+            if next == current
+                break
+            current = next
+        return current

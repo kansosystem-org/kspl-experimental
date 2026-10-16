@@ -234,7 +234,7 @@ function kspageProbeNote(ks) {
   check(calls() === markOnly, "one undo deletes the calling text");
   // Caution: **Give the borrowed mark back.** A heading holds no indent, so with the mark left the
   // body's left edge moves right by the mark (the settlement in
-  // [`../../lay/flow.kspls`](../../lay/flow.kspls)); the next section, pressing the heading's head,
+  // [`../../lay/flow.kspl`](../../lay/flow.kspl)); the next section, pressing the heading's head,
   // lands on the mark and fails as "press it and the style does not land".
   app.setStyleMark(h1At, { kind: "none" });
 

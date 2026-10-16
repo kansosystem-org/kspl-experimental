@@ -3,7 +3,7 @@
 # checks on it want more, named above each.
 #   make test / test-fuzz [KSPLC=/path/to/ksplc]  # the tests; broken documents fuzzed at opening
 #   make web / test-wasm                          # the page (out/web/kspage.html); its wasm in node
-#   make test-browser / test-served KSSRV=<kssrv> # the input plumbing in a real browser; as served
+#   make test-served KSSRV=<kssrv> # the input plumbing in a real browser; as served
 # Caution: **Keep this file standing alone**: a copy of the folder, nothing more, is tested by it.
 # **Keep a recipe to ASCII, and quote every path**: MSYS2's shell rereads a line outside UTF-8
 # (wording goes over in an `export`), and a folder whose name holds a space splits an unquoted path.
@@ -24,12 +24,12 @@ ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
 # Where the page is written: one `kspage.html` that opens alone, beside the `kspage.wasm` bound in.
 WEB ?= $(OUT)/web
 
-.PHONY: test test-fuzz web test-wasm test-browser test-served
+.PHONY: test test-fuzz web test-wasm test-served
 
 test:
-	"$(KSPLC)" run tests/main.kspls
+	"$(KSPLC)" run tests/main.kspl
 
-fuzz_build = "$(KSPLC)" build $(1) tests/open_prog.kspls "$(OUT)/fuzz/open_prog.exe"
+fuzz_build = "$(KSPLC)" build $(1) tests/open_prog.kspl "$(OUT)/fuzz/open_prog.exe"
 # Caution: **Make the folder first**: the sanitizer's log is redirected into it before the build.
 test-fuzz:
 	@mkdir -p "$(OUT)/fuzz"
@@ -38,7 +38,7 @@ test-fuzz:
 		echo "# the reader: with the address sanitizer"; \
 	else asan=; echo "# the reader: without the address sanitizer ($(OUT)/fuzz/asan.log says why)"; \
 		$(call fuzz_build,--cflags=-O0) || exit 1; fi; \
-	"$(KSPLC)" run tests/fuzz_main.kspls "$(OUT)/fuzz/open_prog.exe" "$(OUT)/fuzz/work" \
+	"$(KSPLC)" run tests/fuzz_main.kspl "$(OUT)/fuzz/open_prog.exe" "$(OUT)/fuzz/work" \
 		"$(FUZZ_SEEDS)" $$asan $(if $(filter 1,$(KANSO_REQUIRE_ASAN)),--require-asan) $(FUZZ_ARGS)
 
 # ==========================================
@@ -77,7 +77,7 @@ export KSPAGE_IMPORTS_NOTE := what is borrowed from outside is the two in port/w
 web:
 	@echo "# BUILDING kspage for the browser (wasm32, freestanding)"
 	@mkdir -p "$(OUT)/gen" "$(WEB)"
-	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) $(WEB_SRC)/bridge.kspls \
+	"$(KSPLC)" --freestanding --machine=$(WASM_MACHINE) $(WEB_SRC)/bridge.kspl \
 		"$(OUT)/gen/kspage_bridge.c"
 	$(WASM_CC) -c "$(OUT)/gen/kspage_bridge.c" -o "$(OUT)/gen/kspage_bridge.o"
 	$(WASM_CC) -c $(WEB_SRC)/rt.c -o "$(OUT)/gen/kspage_rt.o"
@@ -88,7 +88,7 @@ web:
 		-o "$(WEB)/kspage.wasm"
 	# Caution: **Do not line the sources' names up here**: the template names what is bound
 	#    (`__KSPAGE_FILE:...__` in `port/web/page.html`); a list here lets one drop silently.
-	"$(KSPLC)" run $(WEB_SRC)/bundle.kspls $(WEB_SRC)/page.html "$(WEB)/kspage.wasm" \
+	"$(KSPLC)" run $(WEB_SRC)/bundle.kspl $(WEB_SRC)/page.html "$(WEB)/kspage.wasm" \
 		"$(WEB)/kspage.html"
 	@printf 'OUTPUT: %s %s\n' "$(WEB)/kspage.html" "$$KSPAGE_OPEN_NOTE"
 
@@ -148,33 +148,14 @@ KSPAGE_BROWSER_FLAGS := --headless --no-sandbox --disable-gpu --disable-dev-shm-
 # ==========================================
 # The browser's held-back place, for the side that served alone (`--user-data-dir`)
 # ==========================================
-# Caution: **The side that served is to hand the held-back place over by name.** Unhanded, Chrome's
-# throwaway one keeps IndexedDB in memory, and reading a grip (`FileSystemFileHandle`) back there
-# **makes the browser spill a core** (`port/web/handle.js`): only a SQLite-backed IndexedDB fails,
-# so **CI alone can fail**. **Do not hand it to the side that dumps** (its own requests cut it),
-# and **delete it every round**, or the next round reads its state.
+# Give each run a fresh on-disk browser profile so storage and reload checks use real IndexedDB.
 KSPAGE_UDD := $(OUT)/kspage_udd
-
-# The options for the side that dumps and quits alone (not for `test-served`).
-# `--dump-dom`: read the markers inside `<pre id="kspage-probe">` alone (the script's strings are
-# in the DOM too). `--virtual-time-budget`: the checks are asynchronous, so the dump waits for them.
-# Caution: **This is a virtual time**: a section that waits on real time cannot wait, and the dump
-# cuts before the marker is written; so the side that served runs on the real clock. **Work off the
-# page's thread** (the wasm's compile, IndexedDB) **is waited on through `fed`** in
-# `tests/browser/probe.js`, which holds this clock still until it answers.
-KSPAGE_DUMP_FLAGS := --dump-dom --virtual-time-budget=300000
 
 # What the page itself said, cut back out of the browser's stderr (`--enable-logging=stderr` puts
 # it there): $(call kspage_said,<file>). **Both readers cut it here, the same way**: worded twice,
 # the day the name moves one reads nothing (`make test-conventions` holds it to the page's opening).
 KSPAGE_SAID := kspage-probe
 kspage_said = sed -n 's/^.*"$(KSPAGE_SAID): //p' "$(1)" | sed 's/", source: .*$$//'
-
-# $(call kspage_said_agrees,<marks file>,<err file>): what the page said against the ordinary marks.
-# Caution: **A road taken only in an emergency has to be walked on the ordinary round**: the day
-# Chrome's line shape moves, a green round falls rather than a cut one going quiet.
-kspage_said_agrees = $(call kspage_said,$(2)) | grep -v '^\.\.\.\. waiting: ' > "$(2).said"; \
-  diff -u "$(1)" "$(2).said" > "$(2).said.diff" 2>&1
 
 # $(call kspage_err_summary,<file>) sums up the browser's stderr when it fails.
 # Caution: **Do not put out the tail alone**: the lines naming the cause come early, so they are
@@ -193,8 +174,7 @@ kspage_err_summary = mine=$$(grep -c '$(KSPAGE_SAID): ' "$(1)" || true); \
 KSPAGE_PROBE := probe input store menu insert find paint paper note ribbon open local keep
 KSPAGE_PROBE_JS := $(patsubst %,tests/browser/%.js,$(KSPAGE_PROBE))
 
-# Caution: **Both checks are to use this page with the checks pasted in**: built apart, the
-# `file://` side alone goes through on an old shape of the source.
+# The served page carries the browser checks.
 KSPAGE_PROBE_PAGE := $(OUT)/kspage_probe.html
 # The page's start held back on purpose (why: its own header), pasted in **ahead of the page's
 # texts**, right after the line below: behind them, the start has already begun.
@@ -212,57 +192,19 @@ $(KSPAGE_PROBE_PAGE): web $(KSPAGE_PROBE_JS) $(KSPAGE_PROBE_LATE)
 		sed '1,\#$(KSPAGE_PROBE_AFTER)#d' "$(WEB)/kspage.html"; \
 		echo '<script>'; cat $(KSPAGE_PROBE_JS); echo '</script>'; } > "$@"
 
-# **Settle pass and fail by the markers alone**; the exit code says only that it hit the cap (124).
-# The dump goes **into a file** (piped, `|| true` swallows the status), and **stderr is kept**: it
-# holds why it could not start. **One shell runs the recipe** (an `exit 0` ends only its own line).
-# Caution: **Cut the marks at the tags, not at the line** (the `<pre>` shares its line with markup),
-# and **bring the three escapes back, `&amp;` last** (undone first, `&amp;lt;` is read twice over).
-# The page is opened by its absolute path: a `file://` URL holds no relative one.
-test-browser: $(KSPAGE_PROBE_PAGE)
-	@echo "# CHECKING kspage's input plumbing in a real browser"
-	@set -o pipefail; \
-	$(kspage_no_browser); \
-	probe="$$(cd "$(OUT)" && pwd)/kspage_probe.html"; \
-	rc=0; \
-	timeout $(KSPAGE_BROWSER_LIMIT) $(KSPAGE_BROWSER) $(KSPAGE_BROWSER_FLAGS) \
-		$(KSPAGE_DUMP_FLAGS) "file://$$probe" > "$(OUT)/kspage_probe.dom" \
-		2> "$(OUT)/kspage_probe.err" || rc=$$?; \
-	sed -n '/<pre id="kspage-probe">/,/<\/pre>/p' "$(OUT)/kspage_probe.dom" \
-		| sed 's,^.*<pre id="kspage-probe">,,; s,</pre>.*$$,,' \
-		| sed 's,&lt;,<,g; s,&gt;,>,g; s,&amp;,\&,g' > "$(OUT)/kspage_probe.txt"; \
-	if [ ! -s "$(OUT)/kspage_probe.txt" ]; then \
-		$(call kspage_said,$(OUT)/kspage_probe.err) > "$(OUT)/kspage_probe.txt"; fi; \
-	cat "$(OUT)/kspage_probe.txt"; \
-	grep -q "BROWSER-RESULT: ALL PASS" "$(OUT)/kspage_probe.txt" \
-		|| { if [ "$$rc" = 124 ]; then \
-		       echo "NOTE: the browser did not finish in $(KSPAGE_BROWSER_LIMIT)s;" \
-		            "timeout killed it, so no DOM was drawn"; \
-		       echo "  the list above is what the page said on the standard error instead," \
-		            "and its last line is as far as the round got"; \
-		       echo "  the virtual time budget does not expire while loads are pending" \
-		            "or while the page waits fed (probe.js's fed)"; \
-		     fi; \
-		     echo "RESULT: SOME FAILED (1) -> the browser checks did not reach the marker"; \
-		     $(call kspage_err_summary,$(OUT)/kspage_probe.err); exit 1; }; \
-	$(call kspage_said_agrees,$(OUT)/kspage_probe.txt,$(OUT)/kspage_probe.err) \
-		|| { echo "RESULT: SOME FAILED (1) -> what the page said does not match the marks;" \
-		          "the road the check falls back on when no DOM comes is broken"; \
-		     head -20 "$(OUT)/kspage_probe.err.said.diff"; exit 1; }; \
-	echo "RESULT: ALL PASS"
-
 # ==========================================
 # The page `kssrv --local` served
 # ==========================================
 # **The server is handed in** (`KSSRV=<path>`, another package's).
 # Caution: **Take the token in as a fragment (`#t=`)**: on the query (`?`) it rides the request's
 # line (docs/SPEC-local-server.md). The URL is taken whole from the line `kssrv: I: open `, and
-# `kssrv/main.kspls` names this waiter where it puts that line out.
+# `kssrv/main.kspl` names this waiter where it puts that line out.
 # **Do not let the number fall on another check's** (they run alongside each other).
 KSPAGE_SERVED_PORT := 18393
 # **Lay a file inside a folder too**: path folding shows nowhere else, and writing makes no folder.
 KSPAGE_SERVED_ROOT := $(OUT)/kspage_served
 
-# **Run on the real clock** (the reason is at `KSPAGE_DUMP_FLAGS`) and **settle the end by the
+# **Run on the real clock** and **settle the end by the
 # markers written back** (`handBack` in `tests/browser/probe.js`), never by the DOM: none comes out.
 # **The outer `timeout` outlasts this side's wait** (equal, a round that hit the cap goes unnamed);
 # it is the net for a make killed hard, when `trap` does not run.

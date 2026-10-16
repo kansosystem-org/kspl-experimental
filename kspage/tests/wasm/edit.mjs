@@ -201,7 +201,7 @@ export function run(ks) {
   check(w.kspage_web_find(stage("a text not to be found"), 0) === 0,
     "a text that is not there returns 0");
   // Counting merely counts, and moves neither the cursor nor what is chosen.
-  // **Do not count what overlaps** (the reason is at `count_matches` in `kspage/lay/find.kspls`).
+  // **Do not count what overlaps** (the reason is at `count_matches` in `kspage/lay/find.kspl`).
   const before = w.kspage_web_selection_count();
   const many = w.kspage_web_count(stage("document"));
   check(many > 0, `the count found comes back (${many})`);
@@ -274,7 +274,7 @@ export function run(ks) {
   check(w.kspage_web_surface_count() === wasSurfaces, "one step returns it to what it was");
   // Caution: **The document's slide style has to be found by role even under a name it does not
   // know.** Hunt by name alone and the inserting quietly stops biting the day the document changes
-  // a style's name (`write/insert.kspls`'s `role_of`).
+  // a style's name (`write/insert.kspl`'s `role_of`).
   // The name settles only which of two of the same role to choose.
   w.kspage_web_click(0, 10, 0);
   const beforeUnknown = w.kspage_web_surface_count();

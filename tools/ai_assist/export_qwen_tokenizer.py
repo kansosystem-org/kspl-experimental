@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 3  Turns a Qwen tokenizer into the format the KSPL side's
-`Tokenizer.load` in `ksai/tokenizer.kspls` can read (vocab.txt / merges.txt, the same format as
-`train_bpe.kspls`).
+`Tokenizer.load` in `ksai/tokenizer.kspl` can read (vocab.txt / merges.txt, the same format as
+`train_bpe.kspl`).
 
 The Qwen/GPT-2 family's byte-level BPE saves vocab.json/merges.txt as text through the
 "byte-to-unicode" trick, which temporarily swaps a raw byte (0-255) for a printable Unicode
@@ -21,7 +21,7 @@ How to use it:
       --out-dir out/qwen_tokenizer
 
 What comes out: out/qwen_tokenizer/{vocab.txt,merges.txt}
-  (`Tokenizer.load(vocab_path, merges_path)` in `ksai/tokenizer.kspls` reads it as it stands)
+  (`Tokenizer.load(vocab_path, merges_path)` in `ksai/tokenizer.kspl` reads it as it stands)
 """
 import argparse
 import json

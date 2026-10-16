@@ -1,0 +1,580 @@
+//< Every reason a test can skip for is held by a row of `tools/ci_gates.kspl` (not the suite)
+//<
+//< **A SKIP no row holds fails its gate on the platform that prints it** (`expected_skips`), and
+//< a reason printed only on Windows or macOS is first seen by that platform's round. This check
+//< reads each reason where it is written, so a new one gets its row in the same change.
+//< **It reads the forms in `forms` and the make files' lines**: a SKIP written another way is
+//< still printed, and goes unread (Principle 8 in `docs/DESIGN-principles.md`).
+import "std/chars"
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+
+priv const gates_src: U8[] = "tools/ci_gates.kspl" //< where the rows are
+priv const says_head: U8[] = ".says = " //< what opens a row's piece, in both of its tables
+
+struct Form //< a call that prints a SKIP line, and which of its arguments is the reason
+    name: U8[] //< the function, called as `<receiver>.<name>(`
+    receiver: U8[] //< the module it is called through; empty takes any (an import's alias)
+    reason_at: Sz //< the reason's place among the arguments, from 0
+
+const forms: Form[_] = ::{ Form::{ .name = "skip", .receiver = "verdict", .reason_at = 0 },
+    Form::{ .name = "skip_check", .receiver = "verdict", .reason_at = 1 },
+    Form::{ .name = "require_or_skip", .receiver = "", .reason_at = 2 },
+    Form::{ .name = "skipped", .receiver = "run_case", .reason_at = 0 } } //<
+        //< The calls whose reason a SKIP line prints (`std/verdict.kspl`, and the suites' helpers)
+
+struct Relay //< a function that hands on a reason written elsewhere, which is read there
+    file: U8[]
+    fn_name: U8[]
+    why: U8[] //< where the reason it hands on is written, and so read
+
+const relays: Relay[_] = ::{
+    Relay::{ .file = "ksplc/tests/support/harness.kspl", .fn_name = "require_or_skip",
+        .why = "its callers' `lacks`" },
+    Relay::{ .file = "ksplc/tests/support/run_case.kspl", .fn_name = "report",
+        .why = "`skipped`'s callers'" },
+    Relay::{ .file = "tests/support/extract.kspl", .fn_name = "relay_skips",
+        .why = "a package's own test's, a SKIP line that package's run printed" },
+}
+
+struct Held_by_none //< a reason no platform's round lets through, on purpose
+    says: U8[] //< a piece of the reason, as a row would name it
+    why: U8[] //< why every round that prints it should fail
+
+const held_by_none: Held_by_none[_] = ::{
+    Held_by_none::{ .says = " is absent (put it in this environment and it runs)",
+        .why = "pytools runs in the Linux round alone, whose image holds every module it needs" },
+}
+
+// ==========================================
+// A source read for its calls: the literals and comments blanked, each literal kept apart
+// Caution: **A call inside a string is not the file's own**: it is a program a test writes and runs
+// as its child (std's `verdict_test`), whose SKIP lines that test reads and no round prints.
+// **The source is LF** (`.gitattributes`); a stray `\r` stays in the code, where `trim_spaces`
+// drops it.
+// ==========================================
+
+struct Lit //< one string literal of a source
+    at: Sz //< its opening quote's offset
+    end: Sz //< the offset past its closing quote
+    parts: List<|U8[]|> //< its text, cut at each interpolation and each `\n`
+    holes: List<|U8[]|> //< what stands between two parts: the interpolated text, empty for `\n`
+
+struct Source //< a source with each literal and comment turned to spaces, its newlines kept
+    code: U8[] //< the text the calls are found in; a literal keeps its opening `"`
+    lits: List<|Lit|>
+    consts: List<|U8[]|> //< `name`, then its text, for each `const name: U8[] = "<text>"`
+
+priv fn blank(b: str.Arena_text$@, src: U8[], from: Sz, to: Sz) //<
+    //< Spaces for a span, its newlines kept
+    for i in Range.new(from, to, 1)
+        b.c('\n' if src[i] == '\n' else ' ')
+
+priv fn literal_at(src: U8[], at: Sz, arena: Arena$@): Lit //<
+    //< the ordinary literal opening at `at`
+    //<
+    //< `\{…\}` and `\n` cut a part; a `\` before a line's end joins the next line past its indent.
+    $parts: = List<|U8[]|>.new(arena)
+    $holes: = List<|U8[]|>.new(arena)
+    $cur: = arena.text()
+    $i: = at + 1
+    for i < src.len && src[i] != '"'
+        if src[i] != '\\' || i + 1 >= src.len
+            cur.c(src[i])
+            i += 1
+            continue
+        e: = src[i + 1]
+        if e == '{' || e == 'n'
+            parts.push(cur.take())
+            cur = arena.text()
+            if e == 'n'
+                holes.push("")
+                i += 2
+                continue
+            $j: = i + 2
+            for j + 1 < src.len && !(src[j] == '\\' && src[j + 1] == '}')
+                j += 1
+            holes.push(src.sub(i + 2, j - i - 2).trim_spaces())
+            i = j + 2
+            continue
+        if e == '\n'
+            i += 2
+            for i < src.len && (src[i] == ' ' || src[i] == '\t')
+                i += 1
+            continue
+        cur.c(e)
+        i += 2
+    parts.push(cur.take())
+    return Lit::{ .at = at, .end = i + 1, .parts = parts, .holes = holes }
+
+priv fn to_line_end(src: U8[], from: Sz): Sz //<
+    //< the offset of the `\n` ending the line, or the end
+    $i: = from
+    for i < src.len && src[i] != '\n'
+        i += 1
+    return i
+
+priv fn blanked_to(src: U8[], i: Sz): Sz //<
+    //< Where a comment, a raw string or a character literal opening at `i` ends; `i` for none
+    $to: = i
+    if src.starts_with("//", i)
+        to = to_line_end(src, i)
+    else if src.starts_with("\"\"\"", i)
+        to = i + 6 + src.sub_from(i + 3).find_str("\"\"\"").unwrap_or(src.len)
+    else if src[i] == '\'' && i + 2 < src.len
+        to = i + (4 if src[i + 1] == '\\' else 3)
+    return src.len if to > src.len else to
+
+fn read_source(src: U8[], arena: Arena$@): Source //< the source's code, literals and constants
+    b: = arena.text()
+    $lits: = List<|Lit|>.new(arena)
+    $i: Sz = 0
+    for i < src.len
+        $to: = blanked_to(src, i)
+        if to == i && src[i] == '"'
+            lit: = literal_at(src, i, arena)
+            lits.push(lit)
+            to = src.len if lit.end > src.len else lit.end
+            b.c('"')
+            blank(b, src, i + 1, to)
+        else if to == i
+            b.c(src[i])
+            to = i + 1
+        else
+            blank(b, src, i, to)
+        i = to
+    code: = b.take()
+    return Source::{ .code = code, .lits = lits, .consts = consts_of(code, lits@, arena) }
+
+priv fn consts_of(code: U8[], lits: List<|Lit|>@, arena: Arena$@): List<|U8[]|> //<
+    //< Each `const <name>: U8[] = "<text>"` of a file, as `name` then its text
+    $out: = List<|U8[]|>.new(arena)
+    for k in Range.asc(lits.len)
+        l: = lits.get(k)
+        if l.holes.len > 0
+            continue
+        head: = code.sub(0, l.at).trim_end()
+        if !head.ends_with(": U8[] =")
+            continue
+        decl: = head
+            .sub(line_start(code, head.len), head.len - line_start(code, head.len)).trim_start()
+            .strip_prefix("priv ").strip_prefix("pub ")
+        if decl.starts_with("const ")
+            out.push(decl.sub(6, decl.find_char(':').unwrap_or(6) - 6))
+            out.push(l.parts.get(0))
+    return out
+
+priv fn const_text(s: Source@, name: U8[]): U8[]? //< the text a file's constant holds, if any
+    for $k: Sz = 0; k + 1 < s.consts.len; k += 2
+        if s.consts.get(k).equals(name)
+            return .some(s.consts.get(k + 1))
+    return .none
+
+priv fn pieces_of(s: Source@, l: Lit@, arena: Arena$@): List<|U8[]|> //<
+    //< A literal's text as the pieces a row may stand whole in
+    //<
+    //< **A constant of the file interpolated is its text** (`\{cross_cc\}`); any other
+    //< interpolation could be anything, so it cuts the text there.
+    $out: = List<|U8[]|>.new(arena)
+    $cur: = arena.text().s(l.parts.get(0))
+    for k in Range.asc(l.holes.len)
+        switch const_text(s, l.holes.get(k))
+        case .some(text)
+            cur.s(text).s(l.parts.get(k + 1))
+        case .none
+            out.push(cur.take())
+            cur = arena.text().s(l.parts.get(k + 1))
+    out.push(cur.take())
+    return out
+
+// ==========================================
+// The reasons a source's calls print, each as the literal pieces a row may name
+// **A reason with no literal at its call is followed one step**: to the name it is bound to in
+// the same function (`why: = …`), or to the `return` lines of the file's function it calls.
+// Anything else is read only where `relays` says it is written.
+// ==========================================
+
+struct Reason //< one reason a call prints
+    line: Sz //< its call's line, from 1
+    fn_name: U8[] //< the function the call stands in
+    pieces: List<|U8[]|> //< its literal text; empty where none could be read
+    relayed: Bool //< handed on from where `relays` says it is written, and read there
+
+priv struct Span //< a stretch of a source, by offsets
+    from: Sz
+    to: Sz
+
+priv fn word_before(code: U8[], at: Sz): U8[] //< the identifier ending before `at`, past spaces
+    $e: = at
+    for e > 0 && code[e - 1].is_space()
+        e -= 1
+    $s: = e
+    for s > 0 && code[s - 1].is_alnum()
+        s -= 1
+    return code.sub(s, e - s)
+
+priv fn args_of(code: U8[], open: Sz, arena: Arena$@): List<|Span|> //<
+    //< The spans of the arguments of the call whose `(` is at `open`
+    $out: = List<|Span|>.new(arena)
+    $depth: Sz = 1
+    $from: = open + 1
+    for $i: = open + 1; i < code.len && depth > 0; i += 1
+        c: = code[i]
+        if c == '(' || c == '[' || c == '{'
+            depth += 1
+        else if c == ')' || c == ']' || c == '}'
+            depth -= 1
+            if depth == 0
+                out.push(Span::{ .from = from, .to = i })
+        else if c == ',' && depth == 1
+            out.push(Span::{ .from = from, .to = i })
+            from = i + 1
+    return out
+
+priv fn pieces_in(s: Source@, sp: Span, arena: Arena$@): List<|U8[]|> //< the literals' pieces
+    $out: = List<|U8[]|>.new(arena)
+    for k in Range.asc(s.lits.len)
+        l: = s.lits.get(k)
+        if l.at >= sp.from && l.end <= sp.to
+            for p in pieces_of(s, l@, arena)
+                out.push(p)
+    return out
+
+priv fn line_start(code: U8[], at: Sz): Sz //< where the line holding `at` starts
+    $s: = at
+    for s > 0 && code[s - 1] != '\n'
+        s -= 1
+    return s
+
+priv fn indent_of(code: U8[], ls: Sz): Sz //< the spaces opening the line that starts at `ls`
+    $n: Sz = 0
+    for ls + n < code.len && code[ls + n] == ' '
+        n += 1
+    return n
+
+priv fn next_line(code: U8[], ls: Sz): Sz //< where the line after the one at `ls` starts
+    return to_line_end(code, ls) + 1
+
+priv fn statement_at(code: U8[], ls: Sz): Span //<
+    //< The statement opening the line at `ls`: up to the next line indented no deeper
+    $at: = next_line(code, ls)
+    for at < code.len
+        t: = code.sub(at, next_line(code, at) - at).trim_spaces()
+        if t.len > 0 && indent_of(code, at) <= indent_of(code, ls)
+            break
+        at = next_line(code, at)
+    if at > code.len
+        at = code.len
+    return Span::{ .from = ls, .to = at }
+
+priv fn fn_name_at(code: U8[], ls: Sz): U8[] //< the function a line declares, or empty
+    t: = code.sub(ls, next_line(code, ls) - ls).trim_start()
+    rest: = t.strip_prefix("pub ").strip_prefix("priv ")
+    if !rest.starts_with("fn ")
+        return ""
+    name: = rest.sub_from(3)
+    return name.sub(0, name.find_char('(').unwrap_or(0))
+
+priv fn enclosing_fn(code: U8[], at: Sz): Sz //<
+    //< where the line declaring the function holding `at` starts
+    ls: = line_start(code, at)
+    $up: = ls
+    for up > 0
+        up = line_start(code, up - 1)
+        if fn_name_at(code, up).len > 0 && indent_of(code, up) < indent_of(code, ls)
+            return up
+    return 0
+
+priv fn binding_in(code: U8[], top: Sz, to: Sz, name: U8[], arena: Arena$@): Sz? //<
+    //< The last line of the function opening at `top`, before `to`, binding `name` (`name: = …`)
+    //<
+    //< **The search starts past the parameters**, which look like a binding and are the caller's.
+    $found: Sz? = .none
+    args: =
+        args_of(code, top + code.sub_from(top).find_char('(').unwrap_or(0), arena)
+    $ls: = next_line(code, top)
+    if args.len > 0
+        ls = next_line(code, line_start(code, args.get(args.len - 1).to))
+    for ls < to
+        t: = code.sub(ls, next_line(code, ls) - ls).trim_start().strip_prefix("$")
+        if t.starts_with(name) && t.sub_from(name.len).starts_with(":")
+            found = .some(ls)
+        ls = next_line(code, ls)
+    return found
+
+priv fn returns_of(s: Source@, name: U8[], arena: Arena$@): List<|List<|U8[]|>|> //<
+    //< The literal pieces of each `return` line of the file's function `name`
+    $out: = List<|List<|U8[]|>|>.new(arena)
+    code: = s.code
+    $ls: Sz = 0
+    for ls < code.len && !fn_name_at(code, ls).equals(name)
+        ls = next_line(code, ls)
+    if ls >= code.len
+        return out
+    body: = statement_at(code, ls)
+    $at: = next_line(code, ls)
+    for at < body.to
+        if code.sub(at, next_line(code, at) - at).trim_start().starts_with("return")
+            out.push(pieces_in(s, statement_at(code, at), arena))
+        at = next_line(code, at)
+    return out
+
+priv fn is_relay(path: U8[], fn_name: U8[]): Bool
+    for r in relays
+        if r.file.equals(path) && r.fn_name.equals(fn_name)
+            return true
+    return false
+
+priv fn read_at(path: U8[], s: Source@, sp: Span, at: Sz, arena: Arena$@): List<|Reason|> //<
+    //< The reasons one call's argument at `sp` prints, the call standing at `at`
+    $out: = List<|Reason|>.new(arena)
+    code: = s.code
+    $r: = Reason::{ .line = code.sub(0, at).count_str("\n") + 1, .fn_name = "",
+        .pieces = pieces_in(s, sp, arena), .relayed = false }
+    top: = enclosing_fn(code, at)
+    r.fn_name = fn_name_at(code, top)
+    expr: = code.sub(sp.from, sp.to - sp.from).trim_spaces()
+    $n: Sz = 0
+    for n < expr.len && expr[n].is_alnum()
+        n += 1
+    head: = expr.sub(0, n)
+    // A function the file does not hold has no `return` read: the reason stays unread.
+    alts: = returns_of(s, head, arena)
+    if r.pieces.len == 0 && expr.sub_from(n).starts_with("(") && alts.len > 0
+        for alt in alts
+            r.pieces = alt
+            out.push(r)
+        return out
+    if r.pieces.len == 0
+        if bound: = binding_in(code, top, line_start(code, at), head, arena)
+            r.pieces = pieces_in(s, statement_at(code, bound), arena)
+        else
+            r.relayed = is_relay(path, r.fn_name)
+    out.push(r)
+    return out
+
+fn reasons_in(path: U8[], src: U8[], arena: Arena$@): List<|Reason|> //<
+    //< The reasons the calls of `forms` in one KSPL source print
+    s: = read_source(src, arena)
+    code: = s.code
+    $out: = List<|Reason|>.new(arena)
+    for f in forms
+        needle: = arena.text().c('.').s(f.name).c('(').take()
+        $at: Sz = 0
+        for
+            hit: = code.sub_from(at).find_str(needle)
+            if hit.is_none()
+                break
+            pos: = at + hit.unwrap_or(0)
+            at = pos + needle.len
+            recv: = word_before(code, pos)
+            if recv.len == 0 || f.receiver.len > 0 && !recv.equals(f.receiver)
+                continue
+            args: = args_of(code, pos + needle.len - 1, arena)
+            if args.len > f.reason_at
+                for r in read_at(path, s@, args.get(f.reason_at), pos, arena)
+                    out.push(r)
+    return out
+
+// ==========================================
+// The make files' SKIP lines
+// ==========================================
+
+priv const make_marks: U8[][_] = ::{ "SKIP ", "SKIP:", "SKIPPED (" } //<
+    //< What opens a SKIP line a recipe prints; `a SKIP;` in a sentence opens none
+
+fn make_reasons(src: U8[], arena: Arena$@): List<|Reason|> //<
+    //< The SKIP lines a make file's recipes print: each from its mark to the line's end
+    //<
+    //< A comment line (`#` first) prints nothing.
+    $out: = List<|Reason|>.new(arena)
+    lines: = src.lines(arena)
+    for i in Range.asc(lines.len)
+        t: = lines.get(i).trim_start()
+        if t.starts_with("#")
+            continue
+        for m in make_marks
+            if at: = t.find_str(m)
+                if at == 0 || !t[at - 1].is_alnum()
+                    $p: = List<|U8[]|>.new(arena)
+                    p.push(t.sub_from(at))
+                    out
+                        .push(Reason::{ .line = i + 1, .fn_name = "", .pieces = p,
+                        .relayed = false })
+                    break
+    return out
+
+// ==========================================
+// The judgment, and the rows it holds the reasons against
+// ==========================================
+
+fn holder(r: Reason@, rows: U8[][]): U8[] //<
+    //< The row or `held_by_none` piece holding a reason, empty where none does
+    //<
+    //< **A row is held whole inside one piece**: an interpolation can stand for anything, so a row
+    //< matched across one holds nothing.
+    for p in r.pieces
+        for row in rows
+            if p.find_str(row).is_some()
+                return row
+        for h in held_by_none
+            if p.find_str(h.says).is_some()
+                return h.says
+    return ""
+
+fn unheld(path: U8[], reasons: List<|Reason|>@, rows: U8[][], arena: Arena$@): List<|U8[]|> //<
+    //< One finding per reason no row holds, and per reason that cannot be read
+    $bad: = List<|U8[]|>.new(arena)
+    for i in Range.asc(reasons.len)
+        r: = reasons.get(i)
+        if r.relayed
+            continue
+        if r.pieces.len == 0
+            bad
+                .push(arena.text().s(path).s(":\{r.line\}: its reason cannot be read here; write ")
+                .s("it at the call, or bind it to a name in the same function").take())
+        else if holder(r@, rows).len == 0
+            // `…` stands where an interpolation could put anything.
+            said: = arena.text()
+            for k in Range.asc(r.pieces.len)
+                said.s("…" if k > 0 else "").s(r.pieces.get(k))
+            bad
+                .push(arena.text().s(path).s(":\{r.line\}: no row holds \"").s(said.take()).s("\"")
+                .take())
+    return bad
+
+fn rows_of(src: U8[], arena: Arena$@): List<|U8[]|> //< every row's piece, of both tables
+    s: = read_source(src, arena)
+    $out: = List<|U8[]|>.new(arena)
+    $at: Sz = 0
+    for
+        hit: = s.code.sub_from(at).find_str(says_head)
+        if hit.is_none()
+            break
+        at = at + hit.unwrap_or(0) + says_head.len
+        for k in Range.asc(s.lits.len)
+            l: = s.lits.get(k)
+            if l.at == at && l.holes.len == 0
+                out.push(l.parts.get(0))
+    return out
+
+// Caution: **Keep the call inside a raw string on the miss side**: a program a test writes is no
+// round's, and a plain search hits it. The rows these samples are held against are `sample_rows`.
+priv const sample_rows: U8[][_] = ::{ "Windows has no FIFO a path names", "node is not installed",
+    "does not take --target", "no ARM toolchain" }
+
+priv const reason_samples: Sample[_] = ::{
+    Sample::{ .text = "fn t()\n    verdict.skip(\"a reason no row names\")\n", .hits = true },
+    Sample::{ .text = "fn t()\n    verdict.skip(\"Windows has no FIFO a path names\")\n",
+        .hits = false },
+    Sample::{ .text =
+        "fn t()\n    verdict\n        .skip(\"so Windows has no FIFO a path names\")\n",
+        .hits = false },
+    Sample::{ .text =
+        "fn t()\n    verdict.skip_check(n, a.text().s(\"\\{t\\} is not installed\").take())\n",
+        .hits = true },
+    Sample::{ .text =
+        "fn t()\n    verdict.skip_check(n, a.text().s(\"node is not installed: \\{t\\}\").take())\n",
+        .hits = false },
+    Sample::{ .text =
+        "fn t()\n    why: = a.text().s(\"cc does not take --target\").take()\n    \
+            verdict.skip_check(n, why)\n", .hits = false },
+    Sample::{ .text =
+        "fn t()\n    why: = a.text().s(\"cc has no target\").take()\n    verdict.skip_check(n, \
+            why)\n", .hits = true },
+    Sample::{ .text =
+        "fn f(): U8[]\n    return \"node is not installed\"\nfn t()\n    verdict.skip(f())\n",
+        .hits = false },
+    Sample::{ .text =
+        "fn f(): U8[]\n    if x\n        return \"node is not installed\"\n    return \"no \
+            node\"\nfn t()\n    verdict.skip(f())\n", .hits = true },
+    Sample::{ .text = "fn t(r: R)\n    verdict.skip(r.why)\n", .hits = true },
+    Sample::{ .text = "fn t()\n    verdict.skip(elsewhere())\n", .hits = true },
+    Sample::{ .text = "fn t()\n    h.require_or_skip(n, \"S\", \"a tool is missing\")\n",
+        .hits = true },
+    Sample::{ .text =
+        "priv const p: U8[] =\n    \"\"\"\n  verdict.skip(\"a fixture's own\")\n\"\"\"\n",
+        .hits = false },
+    Sample::{ .text =
+        "fn t()\n    // verdict.skip(\"a reason no row names\")\n    x: = nums.skip(2, null)\n",
+        .hits = false },
+}
+
+priv const make_samples: Sample[_] = ::{
+    Sample::{ .text = "\t@echo \"RESULT: SKIPPED (no ARM toolchain)\"\n", .hits = false },
+    Sample::{ .text = "\t@echo \"SKIP x: a reason no row names\"\n", .hits = true },
+    Sample::{ .text = "\t@printf '#   SKIP: a reason no row names'\n", .hits = true },
+    Sample::{ .text = "# SKIP x: a reason no row names\n", .hits = false },
+    Sample::{ .text = "\t\"KSBIND_REQUIRE_LIBS=0 makes this a SKIP;\" \\\n", .hits = false },
+}
+
+priv fn misses_kspl(text: U8[], arena: Arena$@): Bool
+    reasons: = reasons_in("sample.kspl", text, arena)
+    return unheld("sample.kspl", reasons@, U8[][]::sample_rows, arena).len > 0
+
+priv fn misses_make(text: U8[], arena: Arena$@): Bool
+    reasons: = make_reasons(text, arena)
+    return unheld("Makefile", reasons@, U8[][]::sample_rows, arena).len > 0
+
+priv fn check_reasons_held(arena: Arena$@) //<
+    //< Every SKIP reason the tree can print is held by a row, so no platform's round meets it first
+    $rows: = rows_of(harness.read_under_root(gates_src), arena)
+    $bad: = List<|U8[]|>.new(arena)
+    $seen: Sz = 0
+    $used: = List<|U8[]|>.new(arena)
+    $files: = harness.tracked_matching(U8[][]::scan.kspl_specs)
+    for rel in harness.tracked_matching(U8[][]::{ "*.mk", "*Makefile" })
+        files.push(rel)
+    for rel in files
+        src: = harness.read_under_root(rel)
+        $reasons: = List<|Reason|>.new(arena)
+        if rel.ends_with("Makefile") || rel.ends_with(".mk")
+            reasons = make_reasons(src, arena)
+        else
+            reasons = reasons_in(rel, src, arena)
+        seen += reasons.len
+        for i in Range.asc(reasons.len)
+            r: = reasons.get(i)
+            if r.relayed
+                used.push(arena.text().s(rel).c(' ').s(r.fn_name).take())
+            else if r.pieces.len > 0
+                used.push(holder(r@, rows.slice()))
+        for f in unheld(rel, reasons@, rows.slice(), arena)
+            bad.push(f)
+    // An entry no reason needs any more holds nothing up: it goes, as a row would stay unread.
+    for h in held_by_none
+        if !scan_has(used@, h.says)
+            bad
+                .push(arena.text().s("`held_by_none`'s \"").s(h.says).s("\" holds no reason (")
+                .s(h.why).s("): remove it").take())
+    for r in relays
+        if !scan_has(used@,
+            arena.text().s(r.file).c(' ').s(r.fn_name).take())
+            bad
+                .push(arena.text().s("`relays`' ").s(r.file).c(' ').s(r.fn_name)
+                .s(" hands on no reason, where it said it hands on ").s(r.why).s(": remove it")
+                .take())
+    if rows.len == 0
+        bad
+            .push(arena.text().s(gates_src).s(" holds no `").s(says_head).s("` row to read").take())
+    verdict.check_list("every SKIP reason the tree can print is held by a row", seen, "reasons",
+        bad@,
+        "add its row to `expected_skips` (or `switch_skips`) in tools/ci_gates.kspl, for each \
+            platform that prints it")
+
+priv fn scan_has(list: List<|U8[]|>@, want: U8[]): Bool
+    for i in Range.asc(list.len)
+        if list.get(i).equals(want)
+            return true
+    return false
+
+fn run(arena: Arena$@) //< this section's entry point
+    scan.check_samples("the reading of a test's SKIP reasons fires on its samples",
+        Sample[]::reason_samples, "reason_samples", misses_kspl, arena)
+    scan.check_samples("the reading of a make file's SKIP lines fires on its samples",
+        Sample[]::make_samples, "make_samples", misses_make, arena)
+    check_reasons_held(arena)

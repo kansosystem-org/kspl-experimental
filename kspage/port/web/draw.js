@@ -111,12 +111,12 @@ function kspageDraw(ks) {
 
   // The shapes a band is drawn as. **A list of numbers, not the list offered to choose from** (that
   // is the menu's: `ribbon.js`'s `SHAPES`). **The list is the wasm's exactly**
-  // (`port/web/state.kspls`'s `shape_order`, separate from the enum's order in the source).
+  // (`port/web/state.kspl`'s `shape_order`, separate from the enum's order in the source).
   // **Do not move an existing entry** — a saved document is read by name, but this bridge passes by
   // number (`make test-conventions` checks that both sides match).
   const SHAPES = ["box", "ellipse", "fall_line", "rise_line", "fall_arrow", "rise_arrow",
     "fall_arrow_back", "rise_arrow_back", "round_box", "triangle", "diamond"];
-  // How a filter matches a cell (`keep_order` in `state.kspls`, `Keep` in `model/filter.kspls`).
+  // How a filter matches a cell (`keep_order` in `state.kspl`, `Keep` in `model/filter.kspl`).
   // The same rule as the shapes: **do not move an existing entry.**
   const KEEPS = ["is", "is_not", "holds", "above", "below", "blank", "filled"];
   // The closed shapes (the inside is painted). **The rest are lines along the band's diagonal.**
@@ -515,7 +515,7 @@ function kspageDraw(ks) {
     const height = Math.max(w.kspage_web_height(), 24);
 
     // **One document unit is one CSS pixel**; another scale would need the click-mapping division
-    // in four more places (`kspage/docs/DESIGN.md`'s "Whether the browser or the page holds the
+    // in four more places (`kspage/docs/DESIGN-application.md`'s "Whether the browser or the page holds the
     // zoom"). Only the pixel density is multiplied.
     canvas.width = Math.ceil(ks.width * dpr);
     canvas.height = Math.ceil(height * dpr);

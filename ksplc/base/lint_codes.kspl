@@ -1,0 +1,150 @@
+//< The canonical source of the diagnostic codes
+//<
+//< It alone says which codes exist. A `##lint(CODE = level)` and a profile both reject a code
+//< not listed here, or a typo such as `##lint(I004 = off)` would silently do nothing
+//< (docs/DESIGN-principles.md Principle 5). **An error-severity diagnostic gets no code**: only a
+//< code can be configured, so a project setting cannot silence a real defect. Add each new
+//< diagnostic.
+
+import "ksplc/base/config_file" as base_config_file
+import "ksplc/base/core" as base_core
+import "std/ds" { List }
+import "std/str"
+
+priv struct Global_setting //<
+    //< The level setting for every file, given on the command line (`--lint=CODE=level`)
+    //<
+    //< A per-file `##lint(...)` overrides it.
+    //< A global like base_core.config: argument parsing (main.kspl) writes it before any Ctx
+    //< exists.
+    code: U8[]
+    level: Lint_level
+
+priv $global_settings: List<|Global_setting|>$@ = null
+
+fn set_global_level(code: U8[], level: Lint_level) //<
+    //< It registers one level setting from the command line
+    //<
+    //< The caller (main.kspl) rejects an unknown code or level, since the command line words that
+    //< error differently from `##lint`.
+    if global_settings == null
+        // The element buffer comes from perm_arena too: the heap (`new()`) would leak it, and the
+        // LSP rewinds base_core.arena.
+        global_settings = List<|Global_setting|>.create(base_core.perm_arena)
+    global_settings.push(Global_setting::{ .code = code, .level = level })
+
+fn base_level_for(file_path: U8[], code: U8[]): Lint_level //<
+    //< The level where there is no `##lint(...)` in the source
+    //<
+    //< Strongest first: the command line (`--lint=`) > the nearest `ksplc.cfg` > the default here.
+    //< The command line wins so CI can override. It runs only when a diagnostic is reported;
+    //< validate_config_for_file checks the file itself.
+    if global_settings != null
+        $i: = global_settings.len
+        for i > 0
+            i -= 1
+            e: = global_settings.get(i)
+            if e.code.equals(code)
+                return e.level
+    if level: = cfg_level_for(file_path, code)
+        return level
+    return .on if is_default_on(code) else .off
+
+priv fn cfg_level_for(file_path: U8[], code: U8[]): Lint_level? //<
+    //< It reads the level that applies to this file from the `[lint]` section of `ksplc.cfg`
+    //<
+    //< Where the file names the same code twice, the later line wins.
+    $found: Lint_level? = .none
+    for setting in base_config_file.settings_for_file(file_path)
+        if level: = lint_setting_level(setting)
+            if setting.key.equals(code)
+                found = .some(level)
+    return found
+
+fn unknown_code_msg(code: U8[]): U8[] //<
+    //< The refusal of a code that is not one, the same wherever a level is set
+    //<
+    //< **It points at what the writer can read**: the lists in the tools specification and
+    //< `ksplc explain`, not at this file, which only the compiler's own source holds.
+    return base_core.arena.text()
+        .s("unknown diagnostic code '\{code\}': the codes are listed under ")
+        .s("\"Diagnostic codes, and the errors that have none\" in ksplc/docs/SPEC-tools.md")
+        .s(", and 'ksplc explain <code>' prints what one means").take()
+
+priv fn lint_setting_level(setting: base_config_file.Setting): Lint_level? //<
+    //< If one setting is a code's level in the `[lint]` section, it returns that level
+    //<
+    //< It always checks the setting (unknown section, code or level), whatever code is asked for,
+    //< or `I0305 = maybe` passes silently where I0305 does not fire (docs/DESIGN-principles.md
+    //< Principle 5).
+    if !setting.section.equals("lint")
+        return .none
+    if !is_known(setting.key)
+        base_config_file.reject(setting, unknown_code_msg(setting.key))
+    level: = Lint_level.parse(setting.value)
+    if level.is_none()
+        base_config_file.reject(setting, "unknown lint level (expected 'off', 'on', or 'error')")
+    return level
+
+fn validate_config_for_file(file_path: U8[]) //<
+    //< It reads the `ksplc.cfg` that applies to this file and checks every setting
+    //<
+    //< A file with no diagnostic never calls cfg_level_for, so call this for every loaded source
+    //< before the checks run (ksplc/pipeline.kspl). **An `error` level turns the checks on**, as
+    //< the other two ways of setting a level do, or a plain build rejects nothing.
+    for setting in base_config_file.settings_for_file(file_path)
+        if level: = lint_setting_level(setting)
+            switch level
+            case .error
+                base_core.config.run_lint_checks = true
+            default {}
+
+enum Lint_level //< the levels a user can write into a `##lint(...)`
+    off //< not reported
+    on //< reported at the default severity
+    error //< raised to an error (a setting may only add rejections, never remove them)
+
+impl Lint_level
+    fn parse(name: U8[]): Lint_level?
+        if name.equals("off")
+            return .some(.off)
+        if name.equals("on")
+            return .some(.on)
+        if name.equals("error")
+            return .some(.error)
+        return .none
+
+fn lookup(code: U8[]): Bool? //< the list of every code: whether it is on by default
+    //<
+    //< None for a code that does not exist.
+    //< Caution: **Do not return a description.** Nothing reads one, and it would bloat the
+    //< executable.
+    for c in codes
+        if c.equals(code)
+            for o in off_by_default
+                if o.equals(code)
+                    return .some(false)
+            return .some(true)
+    return .none
+
+priv const codes: U8[][52] = ::{ "H0301", "H0302", "H0801", "H0802", "H0701", "H0803", "H0804",
+    "H0805", "I0501", "I0502", "I0601", "I0301", "I0302", "I0303", "I0304", "I0701", "I0305",
+    "I0306", "I0307", "I0308", "I0309", "W0105", "I0602", "I0401", "W0106", "W0107", "W0109",
+    "I0310", "I0402", "W0108", "W0201", "W0701", "W0202", "W0203", "W0204", "W0205", "W0101",
+    "W0102", "W0702", "W0206", "W0207", "W0208", "W0209", "W0210", "W0211", "W0212", "W0213",
+    "W0103", "W0601", "W0501", "W0502", "W0104" } //<
+        //< Every diagnostic code
+        //<
+        //< Add each new diagnostic here. The checks read this file's quoted codes as the registry
+        //< (`make test-conventions`, `make test-cli`).
+
+priv const off_by_default: U8[][3] = ::{ "I0602", "I0402", "W0601" } //<
+    //< The codes not checked by default; the rest of `codes` are
+
+fn is_known(code: U8[]): Bool
+    return lookup(code).is_some()
+
+fn is_default_on(code: U8[]): Bool //< whether it is a code checked by default
+    //<
+    //< A code not in the table counts as on (the caller has already rejected it).
+    return lookup(code).unwrap_or(true)

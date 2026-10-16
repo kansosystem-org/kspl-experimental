@@ -1,0 +1,212 @@
+//< Dynamic task, semaphore, mutex, event and queue creation using the heap
+
+// ==========================================
+//   - Deleting another task: that task is not running (a single core is assumed), so its Task and
+//     stack are freed at once, safely.
+//   - Deleting the current task: freeing is deferred, then Task.delete switches away for good.
+//     Another task frees it the next time it calls into this file (or the idle task does).
+//   - g_dyn is read and written only inside a critical section, as Task.create chooses its slot in
+//     one: a tick between choosing an entry and writing it lets another task take or free it too.
+// ==========================================
+import "ksos/kernel/heap"
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+
+priv struct Dyn_entry
+    tcb: Task$@ //< null = a free slot
+    stack: U8$@
+    pending_reap: Bool //< true: waiting to be freed after the current task deleted itself
+priv const max_dyn: Sz = 32 // as task.kspl's max_tasks: at most this many dynamic tasks at once
+
+priv const max_queue_bytes: Sz = 16777216 //< the limit [bytes] on a queue's element buffer
+    //<
+    //< **It keeps `cap * sizeof(T)` from overflowing `Sz`** (signed, so an overflow is undefined
+    //< and cannot be tested for afterwards).
+    //< Caution: **Keep it a value that fits even where `Sz` is 32-bit.** At 2^31 or more the
+    //< guarantee is gone.
+priv $g_dyn: Dyn_entry[32]
+priv $g_dyn_count: Sz = 0
+
+priv fn find_dyn_by_tcb(t: Task$@): Sz //< returns t's index in g_dyn
+    //<
+    //< If there is none it returns max_dyn.
+    $idx: Sz = max_dyn
+    $found: = false
+    for i in Range.asc(g_dyn_count)
+        if !found && g_dyn[i].tcb == t
+            idx = i
+            found = true
+    return idx
+
+priv fn find_dyn_slot(): Sz //<
+    //< Returns the index of a free slot (tcb==null), or else the end of the array
+    //<
+    //< The end is max_dyn when the capacity is exceeded.
+    $slot: Sz = g_dyn_count
+    $found: = false
+    for i in Range.asc(g_dyn_count)
+        if !found && g_dyn[i].tcb == null
+            slot = i
+            found = true
+    if !found && g_dyn_count >= max_dyn
+        return max_dyn
+    return slot
+
+priv fn release_dyn(idx: Sz): Dyn_entry //< [Call it inside a critical section] frees the entry
+    //<
+    //< It returns what the entry held, for the caller to give back to the heap once the critical
+    //< section is over: claimed here, no other task can free the same memory.
+    e: = g_dyn[idx]
+    g_dyn[idx].tcb = null
+    g_dyn[idx].stack = null
+    g_dyn[idx].pending_reap = false
+    return e
+
+priv fn free_dyn(e: Dyn_entry) //< returns a released entry's stack and Task to the heap
+    heap.heap_free(Void$@::e.stack)
+    heap.heap_free(Void$@::e.tcb)
+
+priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry reap_pending frees
+    //<
+    //< If there is none it returns max_dyn.
+    //< Caution: **Wait for `.done`, not for the flag alone.** delete_dyn sets the flag before the
+    //< task's own delete, which a tick can hold off; `.done` is set inside that delete's critical
+    //< section, which ends in the switch away from the stack.
+    for i in Range.asc(g_dyn_count)
+        if g_dyn[i].pending_reap && g_dyn[i].tcb.get_state() == .done
+            return i
+    return max_dyn
+
+fn reap_pending(): Sz //<
+    //< Frees every entry whose task deleted itself and has since switched away
+    //<
+    //< Task.create_dyn and delete_dyn call it first; any task may call it too.
+    $reaped: Sz = 0
+    for
+        s: = task.irq_save()
+        idx: = find_reapable()
+        $e: Dyn_entry = ::{}
+        if idx < max_dyn
+            e = release_dyn(idx)
+        task.irq_restore(s)
+        if idx >= max_dyn
+            return reaped
+        free_dyn(e)
+        reaped += 1
+
+priv fn reap_hook(): Void //<
+    //< Adapts reap_pending to task.Idle_hook's shape (fn(): Void)
+    reap_pending()
+
+fn install_idle_reap(stack: U8$[]) //<
+    //< Turns on an idle task that frees what waits after a delete
+    //<
+    //< It calls task.enable_idle_task(stack, reap_hook); the caller allocates stack
+    //< statically. Without it, freeing waits until some task next calls into this file.
+    task.enable_idle_task(stack, reap_hook)
+
+// ============================ Tasks ============================
+impl Task
+    fn create_dyn(entry: task.Task_fn, arg: Void$@, prio: I32, name: U8[], stack_size: Sz):
+        Task$@? //<
+            //< Allocates the Task and the stack from the heap and creates a task
+            //<
+            //< It frees both and returns none when max_tasks in task.kspl, the port's contexts or
+            //< max_dyn run out (an allocation failure panics inside heap_alloc).
+        reap_pending()
+        // Allocated before a slot is taken, so the heap is never entered with interrupts held off
+        // here: a full table gives them straight back.
+        tcb: = heap.heap_alloc_as<|Task|>()
+        stack: = U8$@::heap.heap_alloc(stack_size)
+        // Caution: **Record it before create.** A new task that outranks the caller runs inside
+        // create, and a delete_dyn it calls there must find its entry.
+        s: = task.irq_save()
+        slot: = find_dyn_slot()
+        if slot < max_dyn
+            g_dyn[slot] = Dyn_entry::{ .tcb = tcb, .stack = stack, .pending_reap = false }
+            if slot == g_dyn_count
+                g_dyn_count += 1
+        task.irq_restore(s)
+        if slot >= max_dyn
+            free_dyn(Dyn_entry::{ .tcb = tcb, .stack = stack, .pending_reap = false })
+            return .none
+        if !tcb.create(U8$[]::{ .ptr = stack, .len = stack_size }, entry, arg, prio, name)
+            s2: = task.irq_save()
+            e: = release_dyn(slot)
+            task.irq_restore(s2)
+            free_dyn(e)
+            return .none
+        return .some(tcb)
+
+    fn delete_dyn(r: Self$@) //<
+        //< Deletes an instance created by create_dyn and returns the Task and the stack to the heap
+        //<
+        //< To delete the current task, call Task.current().delete_dyn() (null does not mean
+        //< "myself" as in FreeRTOS's vTaskDelete(NULL), which is tacit knowledge). If r did not
+        //< come from create_dyn it does nothing, so no wrong pointer is freed.
+        assert(r != null, "Task.delete_dyn: receiver must not be null")
+        reap_pending()
+        s: = task.irq_save()
+        idx: = find_dyn_by_tcb(r)
+        if idx >= max_dyn
+            task.irq_restore(s)
+            return // it did not come from create_dyn (a static task, for example): do nothing
+        if r == Task.current()
+            // Deleting the current task: it still runs on this stack, so freeing is deferred.
+            g_dyn[idx].pending_reap = true
+            // Caution: **Leave the critical section before the delete.** On Cortex-M the switch
+            // away is taken as the outermost one ends; inside this one, the delete would return.
+            task.irq_restore(s)
+            r.delete() // the schedule() inside switches to another task and never returns
+            return // unreachable (spelled out for the flow analysis)
+        // Deleting another task: on a single core r is not running. The entry is claimed first, so
+        // r deleting itself meanwhile finds nothing, and r is freed only once it is deleted.
+        e: = release_dyn(idx)
+        task.irq_restore(s)
+        r.delete()
+        free_dyn(e)
+
+// ============================ The semaphore, mutex and event ============================
+// None of these structs owns a buffer, so creating and destroying only wrap
+// heap_alloc_as/heap_free. Do not destroy one that a task still waits on or holds.
+
+impl sync.Sem
+    fn init_dyn(initial: I32): sync.Sem$@
+        s: = heap.heap_alloc_as<|sync.Sem|>()
+        s.init(initial)
+        return s
+    fn destroy_dyn(r: Self$@)
+        heap.heap_free(Void$@::r)
+
+impl sync.Mutex
+    fn init_dyn(): sync.Mutex$@
+        m: = heap.heap_alloc_as<|sync.Mutex|>()
+        m.init()
+        return m
+    fn destroy_dyn(r: Self$@)
+        heap.heap_free(Void$@::r)
+
+impl sync.Event
+    fn init_dyn(): sync.Event$@
+        e: = heap.heap_alloc_as<|sync.Event|>()
+        e.init()
+        return e
+    fn destroy_dyn(r: Self$@)
+        heap.heap_free(Void$@::r)
+
+// ============================ The message queue ============================
+impl<|T|> sync.Queue<|T|>
+    fn init_dyn(cap: Sz): sync.Queue<|T|>$@ //<
+        //< Allocates from the heap both the Queue<|T|> itself and its element buffer (a T[cap])
+        // Caution: **Check before multiplying.** An overflowed `cap * sizeof(T)` is small, so the
+        // allocation succeeds while `init` writes `cap` elements past the buffer. Division cannot
+        // overflow, so test with it.
+        assert(sizeof(T) > 0 && cap <= max_queue_bytes / sizeof(T),
+            "Queue.init_dyn: needs sizeof(T) > 0 and cap * sizeof(T) within Sz")
+        q: = heap.heap_alloc_as<|sync.Queue<|T|>|>()
+        buf: = T$@::heap.heap_alloc(cap * sizeof(T))
+        q.init(buf, cap)
+        return q
+    fn destroy_dyn(r: Self$@)
+        heap.heap_free(Void$@::r.get_buf())
+        heap.heap_free(Void$@::r)

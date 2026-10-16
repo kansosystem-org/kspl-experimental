@@ -3,11 +3,7 @@
 // comes back to it) and **the saved draft** (so what was written does not vanish). **This file only
 // holds the storage**; which tab, when to reload and what to say belong to [`file.js`](file.js)
 // and [`save.js`](save.js), the drafts' timing to [`keep.js`](keep.js).
-// A handle cannot be turned into text, so IndexedDB stores it, with the path in the same record.
-// Caution: **It must work where IndexedDB will not open** (then nothing is remembered). A store
-// that lives only in memory (a private window, a headless profile not passed in: `KSPAGE_UDD` in
-// `kspage/Makefile`) accepts a handle and then **the browser fails when reading it back**, beyond
-// the page's reach; only a handle fails (a draft is plain text).
+// Storage failure answers with no record so opening and saving never wait indefinitely.
 // ==========================================
 function kspageHandles() {
   const DB_NAME = "kspage";
@@ -15,7 +11,7 @@ function kspageHandles() {
   // version a draft silently fails where it is written (`NotFoundError`).
   const DB_VERSION = 3;
   // Where each tab's document lives, keyed by the tab's name.
-  const STORE = "handles";
+  const STORE = "handles"; // Keep the old store name so existing tab paths survive.
   // Caution: **Cap the number of tabs remembered** — nothing tells a closed tab from a reload, so
   // records would pile up one per tab. Past the cap the oldest go (that tab reopens on the sample).
   const KEPT_TABS = 16;
@@ -117,11 +113,10 @@ function kspageHandles() {
   });
 
   return {
-    // Remembers where tab `tab`'s document lives: `where` holds the path (`path`) and the handle
-    // (`bodyAt`); **null forgets it**, and past the cap the oldest tabs go.
+    // Remembers a tab's path; null forgets it, and past the cap the oldest tabs go.
     keepWhere(tab, where) {
       if (!where) return inStore(STORE, "readwrite", (store) => store.delete(tab));
-      const one = { path: where.path, bodyAt: where.bodyAt, when: Date.now() };
+      const one = { path: where.path, when: Date.now() };
       return inStore(STORE, "readwrite", (store) => {
         store.put(one, tab);
         // Caution: **Never drop the record just written** (it is the current tab); records in the
@@ -141,13 +136,11 @@ function kspageHandles() {
         return null;
       });
     },
-    // Returns where that tab's document lives, as it was stored (null if none), **never a
-    // non-handle as a handle**; whether the file still exists is left to reading it.
+    // Returns the stored path, ignoring obsolete handle-only records.
     takeWhere(tab) {
       return inStore(STORE, "readonly", (store) => store.get(tab)).then((one) => {
-        if (!one || typeof one.path !== "string") return null;
-        const handle = (at) => (at && typeof at.getFile === "function" ? at : null);
-        return { path: one.path, bodyAt: handle(one.bodyAt) };
+        if (!one || typeof one.path !== "string" || !one.path) return null;
+        return { path: one.path };
       });
     },
     // Stores one draft, **which must carry an `at`** (the key).

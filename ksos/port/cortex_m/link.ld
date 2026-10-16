@@ -52,7 +52,7 @@ SECTIONS
         _ebss = .;
     } > RAM
 
-    /* The crash record from a panic (see `take_panic_record` in std/lang.kspls). (NOLOAD),
+    /* The crash record from a panic (see `take_panic_record` in std/lang.kspl). (NOLOAD),
      * outside .bss: nothing zeroes or reloads it, so after a warm reset the next start-up reads
      * the previous panic by its magic value. */
     .noinit_panic (NOLOAD) : {

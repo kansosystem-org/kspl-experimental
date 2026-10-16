@@ -10,7 +10,7 @@ on:
   schedule:
     - cron: "30 19 * * 6"
   # By hand the jobs can be chosen; **every default is true**, the scheduled round's range.
-  # Caution: **Name an input as its job** (tests/support/conventions_ci.kspls holds them one to
+  # Caution: **Name an input as its job** (tests/support/conventions_ci.kspl holds them one to
   # one), read it as `inputs['<name>']` (`github.event.inputs` gives the string 'false', and a
   # `-` outside brackets subtracts), and keep the `github.event_name` side: a schedule has none.
   workflow_dispatch:
@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 # Which check runs in which job is "What each platform runs" in docs/SPEC-gates.md; the gates and
-# their order are `tools/ci_gates.kspls`'s table, run by a make target (`ci`, `ci-macos`,
+# their order are `tools/ci_gates.kspl`'s table, run by a make target (`ci`, `ci-macos`,
 # `ci-shard-*`), so the same target runs locally.
 jobs:
   # --- Linux: every gate, in the devcontainer image of .devcontainer/Dockerfile ---
@@ -53,8 +53,8 @@ jobs:
       # **Do not cut one short**: one shard's fall would leave the others unknown, green or unrun.
       fail-fast: false
       matrix:
-        # What runs is the gate table's (`Set` and `gates` in tools/ci_gates.kspls); a shard
-        # missing here stops running unseen (tests/support/conventions_ci.kspls guards it).
+        # What runs is the gate table's (`Set` and `gates` in tools/ci_gates.kspl); a shard
+        # missing here stops running unseen (tests/support/conventions_ci.kspl guards it).
         target: [ci-shard-core, ci-shard-rest, ci-linux-only]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,7 +83,7 @@ jobs:
             workflow_dispatch
           # The matrix gives the target's name as it stands; do not assemble it here.
           runCmd: make ${{ matrix.target }}
-      # Each gate's outcome goes to the job summary (`digest_md` in `tools/ci_gates.kspls`):
+      # Each gate's outcome goes to the job summary (`digest_md` in `tools/ci_gates.kspl`):
       # `always()`, since the round that fell is the point, and `LOGGING=1`, since
       # out/log/make.log may be unwritable outside the container.
       - name: Emit each gate's outcome to the summary
@@ -91,7 +91,7 @@ jobs:
         run: make ci-summary LOGGING=1
         env:
           TITLE: linux ${{ matrix.target }}
-      # A log per gate (`tools/ci.kspls` keeps `out/log/ci/<name>.log`); `always()` for the round
+      # A log per gate (`tools/ci.kspl` keeps `out/log/ci/<name>.log`); `always()` for the round
       # that fell. `warn` marks a round that left no log, which fell before its first gate
       - name: Keep a log per gate
         if: always()
@@ -107,11 +107,11 @@ jobs:
           retention-days: 14
 
   # --- macOS: every gate runnable on real hardware (Xcode's clang/make) ---
-  # What runs and what is excluded has its one origin in `tools/ci_gates.kspls`'s table. Its
-  # minute costs ten times Linux's ("Where CI's time goes" in docs/DESIGN.md).
+  # What runs and what is excluded has its one origin in `tools/ci_gates.kspl`'s table. Its
+  # minute costs ten times Linux's ("Where CI's time goes" in docs/DESIGN-repository.md).
   # Caution: **There is no shape that thins it out of the scheduled rounds** (the caution at
   # `schedule:` above). To skip one, write the negation of that round's cron: a match stops the
-  # job for good the day the text drifts (tests/support/conventions_ci.kspls).
+  # job for good the day the text drifts (tests/support/conventions_ci.kspl).
   macos:
     if: github.event_name != 'workflow_dispatch' || inputs['macos']
     runs-on: macos-latest
@@ -151,7 +151,7 @@ jobs:
       fail-fast: false
       matrix:
         # **No Linux-only shard here**: no qemu, wasm or browser on this runner (`Shard.linux` in
-        # tools/ci_gates.kspls); and no finer split, as start-up costs about a shard at a multiplier
+        # tools/ci_gates.kspl); and no finer split, as start-up costs about a shard at a multiplier
         # of two.
         target: [ci-shard-core, ci-shard-rest]
     steps:

@@ -2,7 +2,7 @@
 
 This file sets the rules every document in this repository follows: which words it uses, what the file is called, how the text is worded and laid out, and which other documents it may point at. Read it before you add or change a document.
 
-It is a specification: it states the rules, and does not argue for them. Two gates (checks that CI runs and that can fail the build) check the parts a machine can see: `make test-docref` checks references, and `make test-conventions` checks names and layout. Why each rule was chosen is in [`DESIGN.md`](DESIGN.md); which document to read for what is in [`README.md`](README.md).
+It is a specification: it states the rules, and does not argue for them. Two gates (checks that CI runs and that can fail the build) check the parts a machine can see: `make test-docref` checks references, and `make test-conventions` checks names and layout. Why each rule was chosen is in [`DESIGN-principles.md`](DESIGN-principles.md); which document to read for what is in [`README.md`](README.md).
 
 ## Terms of art
 
@@ -15,7 +15,7 @@ Caution: **Do not reach for a synonym.** If one thing has two names, the reader 
 | **canonical source** | The single place a fact lives. Every other place points at it and never copies it |
 | **rule** | A settled decision. It is not a suggestion, and not a description of how things happen to be |
 | **gate** | One check that CI runs and that can fail the build |
-| **fire** | What a check does when it catches a violation. A check that cannot fire guarantees nothing (Principle 8 in [`DESIGN.md`](DESIGN.md)) |
+| **fire** | What a check does when it catches a violation. A check that cannot fire guarantees nothing (Principle 8 in [`DESIGN-principles.md`](DESIGN-principles.md)) |
 | **guard** | What a check does for a rule: it watches for the rule being broken |
 | **pass silently** | What a gate does when it runs but checks nothing, or skips itself. **It looks exactly like a real pass (green)**, which is why it gets its own word |
 | **reject** | What the compiler does to a program it refuses to translate. This is different from a program that fails while it runs |
@@ -36,7 +36,7 @@ Four words name the units that code is organized in. Every document and source c
 
 | Word | What it names |
 | :-- | :-- |
-| file | One `.kspls` source file. It is what `import` names, and `priv` keeps a name visible inside it only |
+| file | One `.kspl` source file. It is what `import` names, and `priv` keeps a name visible inside it only |
 | folder | One directory. Inside one folder, files may import each other in a circle |
 | package | Each of `ksplc/` `std/` … listed under "implementation" in the layer table below. It is the unit that is distributed, and a name with no visibility keyword is visible inside its package. **Packages do not nest**: only a top-level folder is one, and `kspage/lay/` is a folder (Java's and Python's packages nest; that is the one difference) |
 | all | Everywhere: what `pub` opens a name to |
@@ -56,7 +56,7 @@ The rules for visibility and `import` are in [`SPEC-language.md`](SPEC-language.
 
 **Which spelling is picked matters less than that a check guards it.** Where no build tool fixes a folder's name, every project spells it its own way, and a reader has to look before they can guess. So `make test-conventions` guards the rule, not anyone's memory.
 
-**Do not give a folder and a file beside it the same name** (a `verdict/` beside `verdict.kspls`). An import finds a file by adding the extension to the name, so both resolve and nothing refuses them. But `ls` shows two `verdict` entries, and the reader cannot tell which is which.
+**Do not give a folder and a file beside it the same name** (a `verdict/` beside `verdict.kspl`). An import finds a file by adding the extension to the name, so both resolve and nothing refuses them. But `ls` shows two `verdict` entries, and the reader cannot tell which is which.
 
 **A folder inside a package may share a name with one at the root** (`std/tests/` beside `tests/`, `std/docs/` beside `docs/`), and that is intended: one word means one thing wherever it is written. So code that reads a path takes its first folder from where the path begins, not from the first folder name it recognises.
 
@@ -67,13 +67,13 @@ The rules for visibility and `import` are in [`SPEC-language.md`](SPEC-language.
 | Name | The kind — what the reader does with it | Who reads it | What it holds | What it does not hold |
 | :-- | :-- | :-- | :-- | :-- |
 | `README.md` | **Route.** Arrive, and find the way | Everyone arriving; the one kind that greets all of them at once | What is here, the smallest usage example, further reading | An explanation, a manual, a rule of its own — it routes to the document that holds them |
-| `TOUR.md` | **Learn.** Read the whole once | Whoever is learning to write KSPL | A walk through the language, generated from a program the gates compile and run in both notations | Anything written by hand |
+| `TOUR.md` | **Learn.** Read the whole once | Whoever is learning to write KSPL | A walk through the language, generated from a program the gates compile and run | Anything written by hand |
 | `HOWTO-<task>.md` | **Do.** Carry out one task | Varies with the task, so its first sentence says what you must already have | The steps in order, each with its command line and what it prints | Why a step is what it is, past the one sentence that stops the reader skipping it |
 | `SPEC-<subject>.md` | **Look up.** Rely on an agreement | Whoever relies on the subject and cannot change it — the language, a tool's options, a board's wiring | The rules others can rely on, which change only with care | The reason a rule was chosen; anything that does not exist yet |
-| `DESIGN.md`, `DESIGN-<subject>.md` | **Understand.** Change it without breaking what it protects | Whoever changes Kanso | Decisions, their grounds, and what each gives up, in the present tense | A rule's statement, a roadmap, a history |
+| `DESIGN-<subject>.md` | **Understand.** Change it without breaking what it protects | Whoever changes Kanso | Decisions, their grounds, and what each gives up, in the present tense | A rule's statement, a roadmap, a history |
 | `PLAN.md` | **See what is left.** Know what is not done, and in what order | Whoever changes Kanso | The stages ahead, what marks each as done, and what is still undecided. **One for the repository**, [`PLAN.md`](PLAN.md) here: a section per package with work left, and one for what spans packages | Anything done — a done stage is deleted, and its result goes into the document of its kind |
 
-**The name is written in capitals. A subject follows the kind only where one folder can hold several documents of that kind** (`SPEC-language.md`, `HOWTO-bring-up.md`). **A `DESIGN.md` too long to read through splits its largest self-contained chapters into `DESIGN-<subject>.md` beside it**; the `DESIGN.md` stays the entry, keeps the chapter's heading with one paragraph saying where it went, and the package's `README.md` lists each file. The subject may be any number of words. Choose the form the reader will understand ([`SPEC-local-server.md`](SPEC-local-server.md)): a name that does not say what the document is fails as an entry point, however short it is.
+**The name is written in capitals. A subject follows every kind that can stand more than once in a folder** (`SPEC-language.md`, `HOWTO-bring-up.md`, `DESIGN-compiler.md`), even where the folder holds one: a name that says only the kind does not say what the document is about. **A folder's design is split by theme**: each `DESIGN-<subject>.md` holds the decisions on one theme a reader comes to understand, a theme stands in one file, and a file holds as few themes as stay readable through. There is no entry document among them; the folder's `README.md` lists each one with what it holds. The subject may be any number of words. Choose the form the reader will understand ([`SPEC-local-server.md`](SPEC-local-server.md)): a name that does not say what the document is fails as an entry point, however short it is.
 
 **One file, one kind.** A passage written for another kind moves to that kind's document once it is longer than a sentence. A `README.md` keeps the smallest usage example, but not a manual. A `HOWTO-` keeps a sentence of why, but not a chapter. The gates guard two things: every tracked `.md` carries one of the six names or one fixed from outside (`make test-conventions`), and a `SPEC-<subject>.md` cites no `PLAN.md` (`make test-docref`).
 
@@ -131,7 +131,7 @@ A few documents have names chosen by a tool or a convention outside this reposit
 
 ### Where a file's splitting plan is written
 
-**When a file comes near the line cap (the most lines a source file may have), the `README.md` of its top-level folder says how the file will be split**, under the heading "Files near the limit and how they split". The reason for the cap is Principle 3 in [`DESIGN.md`](DESIGN.md). How to choose the cut is "Choosing where to split a file" in [`DESIGN.md`](DESIGN.md), and what counts as near is "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md). The check is `make test-conventions`.
+**When a file comes near the line cap (the most lines a source file may have), the `README.md` of its top-level folder says how the file will be split**, under the heading "Files near the limit and how they split". The reason for the cap is Principle 3 in [`DESIGN-principles.md`](DESIGN-principles.md). How to choose the cut is "Choosing where to split a file" in [`DESIGN-principles.md`](DESIGN-principles.md), and what counts as near is "Principle 3 - what is counted, and how" in [`SPEC-gates.md`](SPEC-gates.md). The check is `make test-conventions`.
 
 **A top-level folder's README with no file near the cap may say so in one line**, in the form "No file in `<folder>` exceeds 900 lines". `make test-conventions` checks that line against the tree. It fails if a file under the named folder is over 900 lines, or if the number in the line differs from the check's number.
 
@@ -139,7 +139,7 @@ A few documents have names chosen by a tool or a convention outside this reposit
 
 Caution: **Read the plan before touching a file it names.** A file named there is touched only once "what is split out" and "where it goes" are written for it.
 
-**Write where it goes as a name plus the folder it will sit in**, not as a path: "a new `locate.kspls` under `ksplc/base/`". A path reads as pointing at a file that exists, and `make test-docref` reports one that does not. The destination is a file nobody has made yet, so there is nothing to point at.
+**Write where it goes as a name plus the folder it will sit in**, not as a path: "a new `locate.kspl` under `ksplc/base/`". A path reads as pointing at a file that exists, and `make test-docref` reports one that does not. The destination is a file nobody has made yet, so there is nothing to point at.
 
 ## Wording and formatting rules
 
@@ -157,7 +157,7 @@ These rules keep every document written the same way. **Adding to the documents 
 
 ### Caution markers go only on things that break if ignored
 
-Two labels can open a paragraph: `Caution:` for something that breaks if the reader ignores it, and `Note:` for a pointer to somewhere the reader can go. Everything else carries no label. **This rule applies to source comments too**, with the same scope as Principle 7 in [`DESIGN.md`](DESIGN.md) (comments, README, DESIGN, SPEC: all of them).
+Two labels can open a paragraph: `Caution:` for something that breaks if the reader ignores it, and `Note:` for a pointer to somewhere the reader can go. Everything else carries no label. **This rule applies to source comments too**, with the same scope as Principle 7 in [`DESIGN-principles.md`](DESIGN-principles.md) (comments, README, DESIGN, SPEC: all of them).
 
 Both labels are plain ASCII.
 
@@ -203,7 +203,7 @@ Caution: **Do not put a label on every assertion.** Then the reader cannot pick 
 
 #### No gate counts the labels
 
-**Whoever writes and whoever reviews keeps this rule.** A green run says nothing about it (Principle 8 in [`DESIGN.md`](DESIGN.md)).
+**Whoever writes and whoever reviews keeps this rule.** A green run says nothing about it (Principle 8 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
 ### A trap is written as why it is dangerous
 
@@ -261,7 +261,7 @@ table cell  `Option<\|T\|>`
 
 ### A code block compiles, or says why not
 
-**A ` ```kspls ` or ` ```kspl ` block is KSPL, and `make test-docsnippet` compiles it.** It compiles the block inside a copy of the package whose documents hold it, so a name the package keeps to itself resolves as it does for the package's own files. A reader copies what a document shows, and a model takes it for the language.
+**A ` ```kspl ` or ` ```kspl ` block is KSPL, and `make test-docsnippet` compiles it.** It compiles the block inside a copy of the package whose documents hold it, so a name the package keeps to itself resolves as it does for the package's own files. A reader copies what a document shows, and a model takes it for the language.
 
 | The block | What it must do |
 | :-- | :-- |
@@ -284,11 +284,11 @@ table cell  `Option<\|T\|>`
 **Two marks excuse a whole program, or a block carrying `// error`, that does not compile.** Each is written where the reader sees it:
 
 * **An elision**: `...` or `…` outside a comment, where the writer left part out.
-* **A first line naming the file it needs beside it**: `// app.kspls (the KSPL customer; greet_api.kspls is beside it)`. A block with this line that compiles alone fails, since the line no longer says anything true.
+* **A first line naming the file it needs beside it**: `// app.kspl (the KSPL customer; greet_api.kspl is beside it)`. A block with this line that compiles alone fails, since the line no longer says anything true.
 
 **A tour's blocks are steps of one program.** `make test-docs` compiles and runs that program, so the blocks are not compiled one by one.
 
-There is a gap: a fragment that does not compile is taken as leaning on the prose, whatever the reason, so a refusal in it goes unseen unless the fragment carries a mark. A form that escapes the check is still a violation (Principle 8 in [`DESIGN.md`](DESIGN.md)).
+There is a gap: a fragment that does not compile is taken as leaning on the prose, whatever the reason, so a refusal in it goes unseen unless the fragment carries a mark. A form that escapes the check is still a violation (Principle 8 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
 ## Reference direction between documents
 
@@ -325,13 +325,13 @@ flowchart BT
 
 Caution: **Do not create sideways references between packages.** A pointer from `std/` to `ksplc/` or `ksos/` has no dependency behind it, so moving either end goes unnoticed. The same holds between `ksplc/`, `kssrv/` and the other packages.
 
-**No edge goes from implementation to leaf, data included.** A package's examples and benchmarks stand inside it, so whatever is built on its parts goes with them ("A package's examples and benchmarks stand inside it" in [`DESIGN.md`](DESIGN.md)). The `ksos` Cortex-M demo embeds the weights in `ksai/examples/` through `ksos→ksai`, an arrow in the table. Do not copy the weights into `ksos/`: a copy makes two sets, and only the retrained one is current.
+**No edge goes from implementation to leaf, data included.** A package's examples and benchmarks stand inside it, so whatever is built on its parts goes with them ("A package's examples and benchmarks stand inside it" in [`DESIGN-repository.md`](DESIGN-repository.md)). The `ksos` Cortex-M demo embeds the weights in `ksai/examples/` through `ksos→ksai`, an arrow in the table. Do not copy the weights into `ksos/`: a copy makes two sets, and only the retrained one is current.
 
 **Do not build a documentation signpost from implementation toward leaf.** "Which tool is built on these parts" and "which suite runs them" belong to the leaf (which may point upward) and to the index (which may point downward). If a package held them, a lower layer would know the names of its users, and would need editing every time a user is added.
 
-**When adding an edge of this shape, fix both the table and the check.** `make test-conventions` checks that they agree; the machine-readable list the check holds is `layer_to` in `tests/suite/docref_test.kspls`.
+**When adding an edge of this shape, fix both the table and the check.** `make test-conventions` checks that they agree; the machine-readable list the check holds is `layer_to` in `tests/suite/docref_test.kspl`.
 
-Note: **The code is read against the same table.** `embed` (baking a file's contents into the program) is a reference between packages just as `import` is. So the check "import's and embed's directions are as the convention says too" in `make test-docref` reads both, and only those two, in `.kspls`. A path string opened at run time (one passed to `io.read_file`) and names written in build files escape it. A form that escapes is still a violation (Principle 8).
+Note: **The code is read against the same table.** `embed` (baking a file's contents into the program) is a reference between packages just as `import` is. So the check "import's and embed's directions are as the convention says too" in `make test-docref` reads both, and only those two, in `.kspl`. A path string opened at run time (one passed to `io.read_file`) and names written in build files escape it. A form that escapes is still a violation (Principle 8).
 
 ### Naming is not depending
 
@@ -356,15 +356,15 @@ Note: `make test-docref` checks that what is named exists, so a deleted name can
 
 ### What a SPEC may point at
 
-**`SPEC-<subject>.md` does not point at the `DESIGN.md` / `SPEC-*.md` of a folder below or beside it.** Once a specification depends on an implementation's design, replacing the implementation means editing the specification, and nothing decides which is canonical. Only the three references below are allowed, and `make test-docref` accepts exactly these.
+**`SPEC-<subject>.md` does not point at the `DESIGN-principles.md` / `SPEC-*.md` of a folder below or beside it.** Once a specification depends on an implementation's design, replacing the implementation means editing the specification, and nothing decides which is canonical. Only the three references below are allowed, and `make test-docref` accepts exactly these.
 
 | Allowed reference | Reason |
 | :-- | :-- |
 | To an index (`README.md`) | Where things are is outside the specification's concern |
 | Upward (to the language specification or design rationale in `docs/`) | A specification may rely only on agreements above it |
-| **To the `DESIGN.md` in the same folder** | They are edited together, so the same person notices when they drift |
+| **To the `DESIGN-principles.md` in the same folder** | They are edited together, so the same person notices when they drift |
 
-Even within one folder, **do not copy the rule itself.** The specification holds the rule, and `DESIGN.md` holds why that rule was chosen. Written in both, the rule sooner or later loses an exception in only one of them.
+Even within one folder, **do not copy the rule itself.** The specification holds the rule, and `DESIGN-principles.md` holds why that rule was chosen. Written in both, the rule sooner or later loses an exception in only one of them.
 
 **A `SPEC-<subject>.md` cites no `PLAN.md`, in any folder.** A specification relies only on what exists, and a plan holds only what does not exist yet; `make test-docref` refuses the reference.
 
@@ -407,7 +407,7 @@ A mention anywhere else does not count because a document mentions its partner's
 
 **A document points at the source by file and symbol name, and no marker in the source points back at a document.** References are needed not only between documents but also **between a document and the source**: from a design document to its implementation, from a specification to its check.
 
-Caution: **Do not make it a round trip.** The grounds, and what is given up, are in [`DESIGN.md`](DESIGN.md), "Linking a design document to the source"; what lives here is only the rules.
+Caution: **Do not make it a round trip.** The grounds, and what is given up, are in [`DESIGN-repository.md`](DESIGN-repository.md), "Linking a design document to the source"; what lives here is only the rules.
 
 * **The canonical source is the source, and there is one.** A document points at it and never copies it.
 * **The direction is document → source only.** No marker on a symbol names a document.
@@ -418,9 +418,9 @@ Caution: **Do not make it a round trip.** The grounds, and what is given up, are
 
 **Do not add markers in the source.** Markers are for things only a machine can tell (the origin of a generated file, and a few others like it).
 
-**What the check reads of a name** is a name in backticks tied to a file in backticks: `` `name` in `file` `` (or `of` / `inside`), a run `` `a` / `b` in `file` ``, and `` `name`(`file`) ``, in documents and comments alike. The file must exist and hold the name as a word; for `` `Owner.member` `` it must hold the member as well as the owner (why is "A comment that points is checked as a document is" in [`DESIGN.md`](DESIGN.md)). A form that escapes is still a violation: a name joined by "and", or a file named without backticks, is not read, but the rule applies to it all the same.
+**What the check reads of a name** is a name in backticks tied to a file in backticks: `` `name` in `file` `` (or `of` / `inside`), a run `` `a` / `b` in `file` ``, and `` `name`(`file`) ``, in documents and comments alike. The file must exist and hold the name as a word; for `` `Owner.member` `` it must hold the member as well as the owner (why is "A comment that points is checked as a document is" in [`DESIGN-repository.md`](DESIGN-repository.md)). A form that escapes is still a violation: a name joined by "and", or a file named without backticks, is not read, but the rule applies to it all the same.
 
-**In a comment, the compiler reads a dotted name tied to no file** as the code beside the comment would read it. A dotted name is an owner and a member joined by a dot, such as `List.push` or `io.out()`. The compiler looks the owner up among the names the commenting file can see (its own declarations, its imports, and `std/lang`, which every file sees), then looks for the member in that owner. Where the owner is found and the member is not, as with a method since renamed, the name leads nowhere and gets a warning (`[W0211]`; `ksplc explain W0211` gives what is read and what is left alone). The editor's hover reads the name the same way and links it to its declaration (why is "A pointer that names no file is read through the commenting file's own scope" in [`DESIGN.md`](DESIGN.md)). Write a name another product owns with its owner in front ("Python's `` `json.dumps` ``"). That is the one wording both readers, the compiler and `make test-docref`, leave alone.
+**In a comment, the compiler reads a dotted name tied to no file** as the code beside the comment would read it. A dotted name is an owner and a member joined by a dot, such as `List.push` or `io.out()`. The compiler looks the owner up among the names the commenting file can see (its own declarations, its imports, and `std/lang`, which every file sees), then looks for the member in that owner. Where the owner is found and the member is not, as with a method since renamed, the name leads nowhere and gets a warning (`[W0211]`; `ksplc explain W0211` gives what is read and what is left alone). The editor's hover reads the name the same way and links it to its declaration (why is "A pointer that names no file is read through the commenting file's own scope" in [`DESIGN-repository.md`](DESIGN-principles.md)). Write a name another product owns with its owner in front ("Python's `` `json.dumps` ``"). That is the one wording both readers, the compiler and `make test-docref`, leave alone.
 
 **A dotted name in a document tied to no file is read against the declarations of the whole tree**, as `ksplc doc --surface-scope=all` lists them. A document imports nothing, so it has no smaller set of names to be read against. `make test-docref` judges the name by its first part:
 
@@ -430,7 +430,7 @@ Caution: **Do not make it a round trip.** The grounds, and what is given up, are
 | The name of a standard library file directly under `std/` | `io.out` | That file declares no such name |
 | Anything else | `root.children` | Never: a lower-case word is as often a variable the prose speaks of |
 
-A member that the document's own KSPL blocks declare counts too, so a document can name what its example declares. The spellings a comment's reading leaves alone are left alone here as well: a name tied to its file (checked against that file instead, as described above), a name introduced as another product's, a file's name (`edit.kspls`), and a code fragment (`io.out().s("x")`).
+A member that the document's own KSPL blocks declare counts too, so a document can name what its example declares. The spellings a comment's reading leaves alone are left alone here as well: a name tied to its file (checked against that file instead, as described above), a name introduced as another product's, a file's name (`edit.kspl`), and a code fragment (`io.out().s("x")`).
 
 **A `make` command in a document names a target make has.** A code span opening with `make`, or a line of a fence, is read, and `make test-docref` asks make itself for its rules. A document inside a package with its own `Makefile` may name that file's targets, and so may a sentence that names the target a package's (``ksbind's own `make test` ``).
 

@@ -22,7 +22,7 @@ function kspageRibbon(ui) {
   };
   // ---- The ribbon ---- (the rules are in the header; the menu side handles the notice and the
   // focus.) **This table's order is "the order of use"**: `…`
-  // takes from the end, so it is the order they survive a narrow screen (`../../docs/DESIGN.md`'s
+  // takes from the end, so it is the order they survive a narrow screen (`../../docs/DESIGN-application.md`'s
   // "The band's right side is not left empty"). A contextual group (`when`: `"cells"` in a table,
   // `"frame"` on a selected frame) goes before the others, so it stays when it appears. The shapes:
   // **a shortcut, not the list** (the menu's `shape-kind`; the numbers are `draw.js`'s `SHAPES`).
@@ -167,7 +167,7 @@ function kspageRibbon(ui) {
       }));
     }
     // The step at which it appears. 0 means "always shown", which also removes the setting.
-    // Caution: **Do not call it "stage"** — everywhere else says "step" (`../../docs/DESIGN.md`'s
+    // Caution: **Do not call it "stage"** — everywhere else says "step" (`../../docs/DESIGN-application.md`'s
     // "The vocabulary is one").
     const step = numBox("frame-step", "Step", "Which step to show it at (0 shows it always)", (num) => {
       tell(app.setFrameStep(Number(num.value) || 0),

@@ -1,0 +1,262 @@
+//< Builds and tests packages from a copy; the extract suites share this body
+//<
+//< **Each suite is a file of its own**, as every other name in `mk/test.mk`'s table is.
+//< They share this body rather than one file taking flags.
+//<
+//< **A package's suites run apart**, side by side, each a run of its own under the usual time limit
+//< (`verdict.default_timeout_ms`): one limit over the whole `make test` grows too short as the
+//< package grows. A package names them as `ksplc/Makefile` does: `SUITES` lists them, `make
+//< test-<name>` runs one, and `make test SUITES=` runs the rest of `make test`.
+import "ksplc/tests/support/harness" as ksplc_harness
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" // `arena.text()` and `trim_spaces`
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tests/support/harness"
+
+priv const alone_dir: U8[] = "alone" //<
+    //< The folder name of the copy
+    //<
+    //< Caution: **Never the package's own name**, or a package found by its folder passes too and
+    //< the one thing this suite checks goes unseen.
+
+enum Part //< two shares of the package's longest-first suite list
+    all
+    core
+    rest
+
+fn in_part(index: Sz, part: Part): Bool //< each suite belongs to exactly one half
+    core: = index % 4 == 0 || index % 4 == 3
+    return part == .all || (core if part == .core else !core)
+
+priv fn packages_with_make(arena: Arena$@): List<|U8[]|> //< the top folders carrying a `Makefile`
+    $out: = List<|U8[]|>.new(arena)
+    for rel in harness.tracked_matching(U8[][]::{ "*/Makefile" })
+        dir: = sys.get_dir_name(rel)
+        if dir.find_char('/').is_none()
+            out.push(dir)
+    return out
+
+priv fn declared(dir: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< What `ksplc info package` answers in that folder: the name first, then what it uses
+    //<
+    //< **The compiler answers**, so this suite cannot disagree with it. Empty: no package is named.
+    r: = ksplc_harness.run_in(U8[][]::{ ksplc_harness.ksplc_exe(), "info", "package" },
+        fs.join(harness.root(), dir, arena))
+    $out: = List<|U8[]|>.new(arena)
+    lines: = r.out.lines(arena)
+    if r.code != 0 || lines.len == 0 || lines.get(0).trim_spaces().len == 0
+        return out
+    out.push(lines.get(0).trim_spaces())
+    if lines.len > 1
+        for u in lines.get(1).split(' ', arena)
+            if u.len > 0
+                out.push(u)
+    return out
+
+priv fn copy_package(dir: U8[], to: U8[]): Bool //<
+    //< the package's own files, and no others, into to
+    arena: = ksplc_harness.arena()
+    $rels: = List<|U8[]|>.new(arena)
+    $bodies: = List<|U8[]|>.new(arena)
+    for rel in harness.tracked_matching(U8[][]::{ dir })
+        rels.push(rel.sub_from(dir.len + 1))
+        bodies.push(harness.read_under_root(rel))
+    fs.write_tree(to, rels.slice(), bodies.slice(), arena) catch
+        return false
+    return rels.len > 0
+
+priv fn make_in(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Arena$@):
+    verdict.Run_out //< runs the copy's own `make <target>` (`make_args`)
+    return harness.make(make_args(copy, deps, target, more, arena))
+
+priv fn make_args(copy: U8[], deps: U8[], target: U8[], more: U8[][], arena: Arena$@): U8[][] //<
+    //< The arguments for the copy's own `make <target>`
+    //<
+    //< They pass make the compiler, `std`, where its dependencies are, a scratch folder beside the
+    //< copy (a folder inside it would belong to the package), and `more`.
+    //<
+    //< Caution: **Set both paths again every time**, or the caller's leftovers let a run that
+    //< should find nothing pass.
+    sys.set_env("KSPLC_STD_DIR", ksplc_harness.std_dir())
+        catch panic("KSPLC_STD_DIR could not be set")
+    if deps.len > 0
+        sys.set_env("KSPLC_PKG_SRC_DIR", deps) catch panic("KSPLC_PKG_SRC_DIR could not be set")
+    else
+        sys.unset_env("KSPLC_PKG_SRC_DIR") catch panic("KSPLC_PKG_SRC_DIR could not be unset")
+    scratch: = fs.join(sys.get_dir_name(copy), "scratch", arena)
+    $args: = List<|U8[]|>.new(arena)
+    // `--no-print-directory`: make's "Entering directory" line would be the first of a failed
+    // run's output, the line its FAIL and the CI's mark quote.
+    for a in U8[][]::{ "-C", copy, "--no-print-directory", target }
+        args.push(a)
+    args.push(arena.text().s("KSPLC=\{ksplc_harness.ksplc_exe()\}").take())
+    args.push(arena.text().s("SCRATCH=\{scratch\}").take())
+    for a in more
+        args.push(a)
+    return args.slice()
+
+priv const suites_mk: U8[] = "kanso-extract-suites: ; @echo $(SUITES)\n" //<
+    //< The makefile read after the copy's own, to ask it for its `SUITES`
+
+priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The suites the copy's `Makefile` names in `SUITES`; empty where it names none
+    //<
+    //< **make answers**, reading a second makefile placed beside the copy (one inside it would
+    //< belong to the package).
+    $out: = List<|U8[]|>.new(arena)
+    mk: = fs.join(sys.get_dir_name(copy), "suites.mk", arena)
+    io.write_file(mk, suites_mk) catch
+        return out
+    r: = harness
+        .make(U8[][]::{ "-C", copy, "--no-print-directory", "-s", "-f", "Makefile", "-f", mk,
+        "kanso-extract-suites" })
+    if r.code != 0
+        return out
+    for w in r.out.trim_spaces().split(' ', arena)
+        if w.trim_spaces().len > 0
+            out.push(w.trim_spaces())
+    return out
+
+priv fn offers(copy: U8[], target: U8[]): Bool //< whether the copy's `Makefile` holds that target
+    //<
+    //< **make answers, with a dry run** ("No rule to make target" where it is absent).
+    return harness.make(U8[][]::{ "-C", copy, "-n", target }).code == 0
+
+priv const tail_lines: Sz = 30 //< how much of a failed run's end is shown after its own FAIL lines
+priv const log_dir: U8[] = "out/log/extract" //< where a failed run's whole output is kept
+
+priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
+    //< A failed run's output cut to what explains it: its own `FAIL` lines, then its last lines
+    //<
+    //< **The whole output goes to a log** named at the end (CI keeps it): printed whole, the `FAIL`
+    //< that matters sits thousands of lines above the verdict.
+    lines: = out.lines(arena)
+    b: = arena.text()
+    for line in lines
+        if line.starts_with("FAIL ") || line.starts_with("RESULT:")
+            b.s(line).c('\n')
+    from: = lines.len - tail_lines if lines.len > tail_lines else 0
+    b.s("--- its last \{lines.len - from\} lines ---\n")
+    for i in Range.new(from, lines.len, 1)
+        b.s(lines.get(i)).c('\n')
+    dir: = fs.join(harness.root(), log_dir, arena)
+    path: = fs.join(dir, arena.text().s(what).s(".log").take(), arena)
+    fs.mkdir_all(dir) catch {}
+    io.write_file(path, out) catch
+        return b.s("(the whole output could not be written to ").s(path).s(")").take()
+    return b.s("the whole output: ").s(path).take()
+
+priv fn check_run(name: U8[], what: U8[], code: I32, out: U8[], arena: Arena$@): Bool //<
+    //< One run's check: on a failure the detail is its `digest`
+    if code == 0
+        return verdict.check(name, true, "")
+    return verdict.check(name, false, digest(what, out, arena))
+
+priv fn relay_skips(dir: U8[], out: U8[], arena: Arena$@) //<
+    //< The checks a package's own tests skipped, reported again as this gate's own
+    //<
+    //< Caution: **Do not leave them inside a passing run's output**, shown only on failure; where
+    //< this gate is the one running them in CI, a skipped check would pass silently.
+    for line in out.lines(arena)
+        if line.starts_with("SKIP ")
+            verdict.skip_check(arena.text().s("\{dir\}'s own tests").take(), line.sub_from(5))
+
+priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
+    //< One package: its copy passes its own tests, and fails without what finds it
+    //<
+    //< **The second run is what gives the first its meaning**: if it still passes without its name,
+    //< it finds its files some other way. `std` loses `lang` instead, which every program reads.
+    is_std: = fs.join(harness.root(), dir, arena).equals(ksplc_harness.std_dir())
+    decl: = declared(dir, arena)
+    name: = arena.text().s("\{dir\} builds and tests from a copy holding nothing else").take()
+    if decl.len == 0 && !is_std
+        verdict.check(name, false,
+            arena.text().s("\{dir\} carries a Makefile but names no package in its ksplc.cfg")
+            .take())
+        return
+    label: = arena.text().s("\{dir\}_\{part.variant_name()\}").take()
+    work: = harness.sandbox(arena.text().s("extract_\{label\}").take())
+    copy: = fs.join(work, alone_dir, arena)
+    deps: = fs.join(work, "deps", arena)
+    $placed: = copy_package(dir, copy)
+    for i in Range.asc(decl.len)
+        if i > 0
+            placed =
+                placed &&
+                copy_package(decl.get(i), fs.join(deps, decl.get(i), arena))
+    if !placed
+        verdict.check(name, false, "cannot copy the package or what it uses")
+        return
+    uses: = "" if decl.len <= 1 else deps
+    // **A package that rebuilds itself is checked for that too** (`self-host`). It goes first: the
+    // compiler it rebuilds is the one the checks then inspect.
+    if offers(copy, "self-host")
+        h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
+        check_run(arena.text().s("\{dir\} rebuilds itself from the copy").take(),
+            arena.text().s("\{label\}_self-host").take(), h.code, h.out, arena)
+    // **The rest of `make test` goes first, then the suites side by side** (CI runs ksplc's suites
+    // here, the longest wait otherwise), each its own run and check.
+    jobs: = arena.text().s("-j\{verdict.jobs()\}").take()
+    r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
+    if check_run(name, arena.text().s("\{label\}_test").take(), r.code, r.out, arena)
+        relay_skips(dir, r.out, arena)
+    $suites: = List<|U8[]|>.new(arena)
+    all: = suites_of(copy, arena)
+    for i in Range.asc(all.len)
+        if in_part(i, part)
+            suites.push(all.get(i))
+    if part != .all
+        verdict.check("the compiler's suite share is not empty", suites.len > 0,
+            "the copy must expose its SUITES list")
+    $items: = List<|subproc.Job|>.new(arena)
+    for s in suites
+        target: = arena.text().s("test-\{s\}").take()
+        items
+            .push(subproc.Job::{ .argv = harness
+            .make_argv(make_args(copy, uses, target, U8[][]::{}, arena)), .cwd = "" })
+    outs: = ksplc_harness.run_all(items.slice(),
+        arena.text().s("extract_\{label\}").take())
+    for i in Range.asc(outs.len)
+        o: = outs.get(i)
+        passed: = arena.text().s("\{dir\}'s suite \{suites.get(i)\} passes from the copy").take()
+        what: = arena.text().s("\{label\}_\{suites.get(i)\}").take()
+        if check_run(passed, what, o.code, o.out, arena)
+            relay_skips(dir, o.out, arena)
+    // The seeds are the repository's files, as `make test-<name>-fuzz` passes them, so a finding
+    // repeats from the same two numbers.
+    if offers(copy, "test-fuzz")
+        seeds: = arena.text().s("FUZZ_SEEDS=\{harness.root()\}").take()
+        f: = make_in(copy, uses, "test-fuzz", U8[][]::{ seeds }, arena)
+        fuzzed: = arena.text().s("\{dir\} scatters broken input from the copy").take()
+        if check_run(fuzzed, arena.text().s("\{label\}_fuzz").take(), f.code, f.out, arena)
+            relay_skips(dir, f.out, arena)
+    taken: = "lang.kspl" if is_std else "ksplc.cfg"
+    proof: =
+        ("and without its own lang the copy does not build" if is_std
+        else "and without its declaration the copy does not build")
+    fs.remove_path(fs.join(copy, taken, arena)) catch
+        verdict.check(proof, false, arena.text().s("cannot take \{taken\} away").take())
+        return
+    lost: = make_in(copy, uses, "test", U8[][]::{ "SUITES=" }, arena)
+    verdict.check(proof, lost.code != 0, lost.out)
+
+fn run(only: U8[], except: U8[], part: Part): I32 //<
+    //< Every package with its own `Makefile`, or only `only`, minus `except`; the suite's exit code
+    arena: = harness.begin(64 * 1024 * 1024)
+    $pkgs: = List<|U8[]|>.new(arena)
+    for dir in packages_with_make(arena)
+        if (only.len == 0 || dir.equals(only)) && !dir.equals(except)
+            pkgs.push(dir)
+    // **Seeing none is a failure, not a pass**, or it goes green having looked at nothing.
+    verdict.check("a package carries its own Makefile", pkgs.len > 0,
+        "no top folder holds a Makefile" if only.len == 0
+        else arena.text().s("\{only\} holds no Makefile").take())
+    for dir in pkgs
+        case_alone(dir, part, arena)
+    return ksplc_harness.finish()

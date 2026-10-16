@@ -13,11 +13,11 @@ make ci-linux    # every gate on Linux: run it before you propose a change
 | :-- | :-- |
 | Build the compiler and have it rebuild itself, format, lint and test, on Linux, macOS or Windows without Docker | [`HOWTO-build.md`](HOWTO-build.md) |
 | Know what every gate checks, and on which platform | [`SPEC-gates.md`](SPEC-gates.md) |
-| Write code and documents this repository's way | [`DESIGN.md`](DESIGN.md) |
+| Write code and documents this repository's way | [`DESIGN-principles.md`](DESIGN-principles.md) |
 | Add or change a document (its name is its kind) | [`SPEC-documents.md`](SPEC-documents.md) |
 | Find a package; each carries its own `README.md` | ["Repository layout" in `../README.md`](../README.md#-repository-layout) |
 | See what is left, package by package | [`PLAN.md`](PLAN.md) |
-| Change the compiler | [`../ksplc/README.md`](../ksplc/README.md), then [`../ksplc/docs/DESIGN.md`](../ksplc/docs/DESIGN.md) |
+| Change the compiler | [`../ksplc/README.md`](../ksplc/README.md), then [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md) |
 | Propose a change, as an issue or a pull request | "How a change gets in" below |
 | Report a security problem | [`SECURITY.md`](SECURITY.md) |
 
@@ -25,7 +25,7 @@ make ci-linux    # every gate on Linux: run it before you propose a change
 
 **`make help` lists the targets.** Every target you can type has a one-line description, because `make test-recipe-bytes` fails on a typable target without one. How to write a description is in the header of `mk/help.mk`.
 
-Caution: **Do not copy the list into this document.** It goes out of date as soon as one target is added (Principle 4 in [`DESIGN.md`](DESIGN.md)).
+Caution: **Do not copy the list into this document.** It goes out of date as soon as one target is added (Principle 4 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
 The list names targets only. A variable (a setting passed as `NAME=value`) is described beside the task it serves: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
 
@@ -90,7 +90,7 @@ sequenceDiagram
 
 Caution: **Read it yourself before submitting.** Generated code can closely resemble somebody else's, and once it is merged, nobody looks at it.
 
-Review covers more than whether it works: the conventions in [`DESIGN.md`](DESIGN.md) and [`SPEC-documents.md`](SPEC-documents.md) apply to what AI wrote as well. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
+Review covers more than whether it works: the conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md) apply to what AI wrote as well. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
 
 ## Further reading
 

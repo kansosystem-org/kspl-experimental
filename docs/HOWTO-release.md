@@ -20,7 +20,7 @@ Caution: **Pushing the tag starts the workflow**, which builds on three platform
    ```
 
 3. **Pick the version.** The tag's name (`v0.1.5` and so on) is the only version: it goes into the files' names, and nothing in the source holds it. The extensions' own `package.json` keep `"version": "0.1.0"` whatever the tag; nothing checks it.
-4. **What the zip carries is listed in two places that change together**: the packing steps of `release.yml` and `released` in `tests/support/conventions_notice.kspls`. The zip's `README.md` is `tools/release-assets/README.md`, and each of its code blocks must stand whole in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) or the root [`README.md`](../README.md); `make test-conventions` checks both.
+4. **What the zip carries is listed in two places that change together**: the packing steps of `release.yml` and `released` in `tests/support/conventions_notice.kspl`. The zip's `README.md` is `tools/release-assets/README.md`, and each of its code blocks must stand whole in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) or the root [`README.md`](../README.md); `make test-conventions` checks both.
 
 ## The tag
 

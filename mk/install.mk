@@ -73,7 +73,7 @@ install: export ABS_HELP := $(install_abs_help)
 # build emits stage2's notation to the byte (`self-host-ship`). It neither formats the tree nor
 # re-bakes the seed: each rewrites files, and the seed is re-baked when the seed's rules call for
 # it, by `make commit-seed` ("The bootstrap, and keeping the seed in step" in
-# `ksplc/docs/DESIGN.md`).
+# `ksplc/docs/DESIGN-compiler.md`).
 ## Build-and-install|install|Check that ksplc reproduces itself, then put it in as `ksplc` (the place is `PREFIX=`)
 install: self-host self-host-ship install-lsp
 	@echo "# INSTALLING ksplc FOR $(PLATFORM)..."

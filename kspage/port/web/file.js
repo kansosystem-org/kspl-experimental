@@ -27,39 +27,31 @@ function kspageFile(ui) {
   const KIND_JSON = "json";
   const KIND_TEXT = "text";
 
-  // The identity per document. **A number cannot stand in for it** (a closed number is reused, and
-  // the next document's draft would overwrite it); minted **only when the document is replaced**.
+  // Each replacement owns its format, location and comparison text. Saves hold this record,
+  // so reopening a path cannot change the baseline of a save already waiting on a read.
+  // The draft's identity differs even when a closed document number is reused by the core.
   let idAt = 0;
-  const mintDoc = () => {
-    idAt += 1;
-    return "d" + idAt;
-  };
-  // What saving and loading **share, kept under one name** (scattered over the four paths, the
-  // state could not be followed). `seenAt` holds, per handle, the text last read or written through
-  // it, which writing back compares against (`save.js`'s `writeTo`); a handle restored after a
-  // reload has nothing seen and is not guarded.
-  // Caution: **Replace `seen` whole** — location and text change as a pair ("saved, yet changed").
-  const kf = { openKind: KIND_JSON, docId: mintDoc(), bodyAt: null, aside: "",
-    seen: { path: "", body: "" }, seenAt: new WeakMap() };
+  const documentState = (kind, where, read) => ({ id: "d" + (++idAt), kind: kind,
+    path: where.path, body: "", read: read });
+  const kf = { doc: documentState(KIND_JSON, { path: "" }, ""), aside: "" };
   // Decides from the name how to open (**a new document is kspage's JSON format**) — **in one
   // place**, or the format opened and the format written back differ per path (Principle 4). **An
   // unknown extension is plain text** (`.md` included: Markdown is edited as the text it is); the
-  // core decides whether it is text (`../../share/text.kspls`'s `texty`).
+  // core decides whether it is text (`../../share/text.kspl`'s `texty`).
   const kindOf = (name) => ((name || "").toLowerCase().endsWith(".kspage") ? KIND_JSON : KIND_TEXT);
   // The language the name declares (the extension itself); **no list here** — any name passes, and
-  // the core only names the style after it (`sheet_for` in `../../share/text.kspls`).
+  // the core only names the style after it (`sheet_for` in `../../share/text.kspl`).
   const spokenOf = (name) => {
     const at = (name || "").lastIndexOf(".");
     return at < 0 ? "" : name.slice(at + 1).toLowerCase();
   };
   // Reads the text in that format, **returning the reason for refusing as it is**.
-  const readAs = (kind, text, name) => {
-    return kind === KIND_TEXT ? app.loadPlainText(text, spokenOf(name)) : app.load(text);
-  };
+  const readAs = (kind, text, name) =>
+    kind === KIND_TEXT ? app.loadPlainText(text, spokenOf(name)) : app.load(text);
   // **Only this function decides the saved extension** (scattered, the default name and the
   // picker's declaration would split: "saved, yet cannot be opened"). **Plain text adds none**:
-  // `.kspls.txt` would no longer be the file the compiler reads.
-  const bodyExt = () => (kf.openKind === KIND_TEXT ? "" : ".kspage");
+  // `.kspl.txt` would no longer be the file the compiler reads.
+  const bodyExt = () => (kf.doc.kind === KIND_TEXT ? "" : ".kspage");
   const keepName = () => {
     try {
       localStorage.setItem(NAME_KEY, docName.value.trim());
@@ -75,46 +67,17 @@ function kspageFile(ui) {
   const takeName = (file) => {
     if (!file || !file.name) return;
     const cut = file.name.lastIndexOf(".");
-    docName.value = cut > 0 ? file.name.slice(0, cut) : file.name;
+    docName.value = cut > 0 && kindOf(file.name) === KIND_JSON
+      ? file.name.slice(0, cut) : file.name;
     keepName();
   };
 
-  // ---- Where it writes back ----
-  // Saving is **writing back to the opened (or chosen) file**; with no handle, the user picks one.
-  // **Few browsers can write back** (only desktop Chromium); elsewhere a copy is downloaded.
-  // Caution: **Say so** — the same click overwriting in one place and creating a "name (1)" in
-  // another is the most common complaint about other products. **Call the picker within the click's
-  // user activation** (otherwise it does not open), so the text is built before any await.
-  const canBind = typeof window.showSaveFilePicker === "function"
-    && typeof window.showOpenFilePicker === "function";
-  const BODY_KIND = { description: "A kspage document",
-    accept: { "application/json": [".kspage"] } };
-  // **No full list of extensions**: plain text can have any name, and the picker always offers
-  // "all files" (`kindOf` decides how it is read). `.md` is named beside `.txt`, the text people
-  // open most, so a browser without the picker does not hide it behind "all files".
-  const TEXT_KIND = { description: "Plain text", accept: { "text/plain": [".txt", ".md"] } };
-  const kindPick = (kind) => (kind === KIND_TEXT ? TEXT_KIND : BODY_KIND);
-  const typeOf = (kind) => (kind === KIND_TEXT ? "text/plain" : "application/json");
-  // What "Open" offers, **one list for the picker and the file field** (written twice, the field
-  // of a browser without the picker hid what the picker opens).
-  const OPEN_KINDS = [BODY_KIND, TEXT_KIND];
-  file.accept = OPEN_KINDS.flatMap((k) => Object.entries(k.accept)
-    .flatMap(([type, exts]) => [...exts, type])).join(",");
-  // Where the current document writes back.
-  // Caution: **Clear it when a new name is typed** (`save.js`'s `renamed`).
-  // **Keep the assignment here**: the tab's record is told when the handles change (`keepWhere`),
-  // and a place that forgets would sometimes reopen something else after a reload.
+  // Locations and drafts share one persistent store.
   const handles = ui.handles;
-  // **A held target is a location too** (a chosen file has no path), so the status is updated.
-  const bindBody = (at) => {
-    kf.bodyAt = at;
-    keepWhere();
-    if (ui.showPlace) ui.showPlace();
-  };
 
   // ---- Where the shown document lives, across reloads ----
   // **It is remembered per tab** (`sessionStorage` survives a reload, and no other tab sees it):
-  // under the tab's name `handle.js` stores the path and the handles. **Only a reload and going
+  // under the tab's name `handle.js` stores the path. **Only a reload and going
   // back keep the name**; a page opened fresh starts on the sample.
   const TAB_KEY = "kspage.tab";
   const tabName = (() => {
@@ -132,7 +95,7 @@ function kspageFile(ui) {
   // What the tab's record held when the page started (null if none), **requested before anything
   // is stored**; `save.js`'s `reopen` takes it.
   const recalled = tabName ? handles.takeWhere(tabName) : Promise.resolve(null);
-  let keptWhere = { path: "", bodyAt: null };
+  let keptWhere = { path: "" };
   let keeping = false;
   // Stores where the document lives, **when that changed**, once per turn.
   const keepWhere = () => {
@@ -140,15 +103,15 @@ function kspageFile(ui) {
     keeping = true;
     queueMicrotask(() => {
       keeping = false;
-      const now = { path: kf.seen.path, bodyAt: kf.bodyAt };
-      if (now.path === keptWhere.path && now.bodyAt === keptWhere.bodyAt) return;
+      const now = { path: kf.doc.path };
+      if (now.path === keptWhere.path) return;
       keptWhere = now;
-      handles.keepWhere(tabName, now.path.length > 0 || now.bodyAt ? now : null);
+      handles.keepWhere(tabName, now.path.length > 0 ? now : null);
     });
   };
   // Forgets the tab's record (a location that could not be reopened).
   const forgetWhere = () => {
-    keptWhere = { path: "", bodyAt: null };
+    keptWhere = { path: "" };
     if (tabName) handles.keepWhere(tabName, null);
   };
 
@@ -156,17 +119,12 @@ function kspageFile(ui) {
   // With the local server present, where it writes back is **a path** (relative to the served
   // folder). **The field is the state**, not stored separately (a reloaded page starts with its
   // document's path, `recalled` above).
-  // Caution: **Call it a path**, the word Explorer and VS Code show (`../../docs/DESIGN.md`'s
+  // Caution: **Call it a path**, the word Explorer and VS Code show (`../../docs/DESIGN-application.md`'s
   // "The established term stays the term"), not a word of our own.
   const pathRow = document.getElementById("local-row");
   const pathBox = document.getElementById("local-path");
   // **Empty when there is no server** (read unchecked, it would write to a path with no server).
   const pathOf = () => (ui.localHere && ui.localHere() ? pathBox.value.trim() : "");
-  // The path's last part, shaped as a file for `takeName` (which drops the extension).
-  const nameInPath = (path) => {
-    const cut = path.lastIndexOf("/");
-    return { name: cut < 0 ? path : path.slice(cut + 1) };
-  };
   // Enter opens the typed path, **the one way to open by path** (`save.js`'s `openFromPath`).
   pathBox.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -177,11 +135,11 @@ function kspageFile(ui) {
   // same file can be open in two windows): it is read back first and refused where it differs.
   // Caution: **Do not compare the time and the size** — that refuses where nothing changed (as VS
   // Code's "The content of the file is newer" can). **This is the one place that changes
-  // `kf.seen`** (elsewhere, the status or the tab's record would keep the older path).
-  const remember = (path, body) => {
-    kf.seen = { path: path, body: body };
+  // comparison text** (elsewhere, the status or the tab's record would keep the older path).
+  const remember = (path, body, read = body) => {
+    Object.assign(kf.doc, { path: path, body: body, read: read });
     // **Redraw the whole status bar, not the place alone**: its "Unsaved" compares against
-    // `kf.seen`, and after a save no redraw of the document follows to clear it.
+    // `kf.doc`, and after a save no redraw of the document follows to clear it.
     if (ui.restatus) ui.restatus();
     else if (ui.showPlace) ui.showPlace();
     keepWhere();
@@ -190,7 +148,7 @@ function kspageFile(ui) {
     if (ui.keepSync) ui.keepSync();
   };
   // The current document as text **in the format it was opened in**, for writing back and compare.
-  const bodyText = () => (kf.openKind === KIND_TEXT ? app.plainText() : app.save());
+  const bodyText = () => (kf.doc.kind === KIND_TEXT ? app.plainText() : app.save());
   // ---- Replacing the document ----
   // **A window holds one document**, so opening another replaces it, and **nothing typed is lost
   // by that**: the outgoing document's unsaved text is set aside as a draft, which "Bring the draft
@@ -199,20 +157,18 @@ function kspageFile(ui) {
   // Caution: **Take the draft before reading** (reading replaces the text), and **set it aside only
   // once the new document is in**: a refused read leaves the document as it was, drafted as before.
   const planOpen = () => (ui.draftNow ? ui.draftNow() : null);
-  const NOWHERE = { path: "", bodyAt: null };
+  const NOWHERE = { path: "" };
   // Makes the just-loaded document the current one: a new identity, where it lives (`where`), and
   // what the draft compares against, then sets `out` (`planOpen`'s) aside. **Every path that
   // replaces the document ends here** (per path, one would skip a step and lose a draft or save
   // into the previous document's file). The notice's tail for what was set aside is `kf.aside`.
-  // Caution: **Mint the identity before `remember`**; **a path compares with the text read from
+  // Caution: **Replace the state before `remember`**; **a path compares with the text read from
   // it**, the rest with their own text, so a text form does not look changed on opening.
   const settleIn = (out, kind, where, read) => {
-    kf.openKind = kind;
-    kf.docId = mintDoc();
+    kf.doc = documentState(kind, where, read);
     app.forgetPlaces();
-    if (kf.bodyAt !== where.bodyAt) bindBody(where.bodyAt);
     pathBox.value = where.path;
-    remember(where.path, where.path.length > 0 ? read : bodyText());
+    remember(where.path, bodyText(), read);
     kf.aside = ui.keepAside ? ui.keepAside(out) : "";
   };
   // Loads a read document over the current one: "" if it could, else the reason (the current one
@@ -225,10 +181,10 @@ function kspageFile(ui) {
   };
 
   // Whether the text changed since it was read (the status bar's "Unsaved"). **A document in no
-  // file is "not changed"**; a handle is a location as much as a path.
+  // file is "not changed"**.
   const unsaved = () => {
-    if (kf.seen.path.length === 0 && !kf.bodyAt) return false;
-    return bodyText() !== kf.seen.body;
+    if (kf.doc.path.length === 0) return false;
+    return bodyText() !== kf.doc.body;
   };
   // The cap is the core's (`app.docLimit`); a number written here would drift when the arena grows.
   const kb = (n) => (n / 1024).toFixed(0) + " KB";
@@ -251,25 +207,19 @@ function kspageFile(ui) {
 
   // Caution: **Put the entry points on `kf` before passing it to `save.js`** (that file touches
   // nothing except through `kf`).
-  Object.assign(kf, { KIND_JSON, KIND_TEXT, app, bindBody, bodyExt, bodyText, canBind,
-    deny, forgetWhere, keepName, kindOf, kindPick, layIn, nameInPath, nameOf, pathBox, pathOf,
-    planOpen, recalled, remember, say, takeChosen, takeName, typeOf, ui, whyNotRead });
+  Object.assign(kf, { KIND_JSON, KIND_TEXT, app, bodyExt, bodyText,
+    deny, forgetWhere, keepName, kindOf, layIn, nameOf, pathBox, pathOf,
+    planOpen, recalled, remember, say, takeChosen, takeName, ui, whyNotRead });
   kspageSave(kf);
   const { download, openDoc, openFromUrl, renamed, saveToFile, why } = kf;
 
-  // Caution: **Show it after asking whether the server is there** (before, the no-server layout
-  // flashes for an instant), **and not at all where there is none**. A `file://` page lands here.
-  if (ui.localReady) {
-    ui.localReady.then((there) => {
-      if (there) pathRow.hidden = false;
-    });
-  }
+  pathRow.hidden = false;
 
   // ---- Choosing a file and reading it ----
   // **Every one of them replaces the current document** (inserting is in [`inout.js`](inout.js)).
 
   // Opens the manual, **replacing the document the same way as every other opening** ("A document
-  // is replaced by another only when nothing would be lost" in `../../docs/DESIGN.md`).
+  // is replaced by another only when nothing would be lost" in `../../docs/DESIGN-application.md`).
   document.getElementById("open-manual").addEventListener("click", () => {
     const out = planOpen();
     const made = app.loadManual();
@@ -289,7 +239,7 @@ function kspageFile(ui) {
 
   // ---- Starting from a blank page ----
   // Caution: **Do not lose the current document** — what is unsaved is set aside as a draft first
-  // (`settleIn`), as on every opening (`../../docs/DESIGN.md`'s "How a blank document is started").
+  // (`settleIn`), as on every opening (`../../docs/DESIGN-application.md`'s "How a blank document is started").
   // **Do not keep where it writes back**, or a save overwrites the earlier file with a blank page.
   // **Undo the read-only look** the core takes off.
   const newDoc = () => {
@@ -310,67 +260,20 @@ function kspageFile(ui) {
 
   document.getElementById("doc-new").addEventListener("click", newDoc);
 
-  // With a picker that can keep a handle, where it opened is where it writes back; without, the
-  // file field chooses (it depends on the browser; one click runs one of them).
-  document.getElementById("open").addEventListener("click", async () => {
-    // **"Open" is the browser's own dialog, server or not**; where it opened is where it writes
-    // back (`save.js`'s `saveToFile`); opening by path is the path field's Enter and `?doc=`.
-    if (!canBind) {
-      file.click();
-      return;
-    }
-    let got = null;
-    try {
-      got = await window.showOpenFilePicker({ types: OPEN_KINDS });
-    } catch (e) {
-      // Caution: **Report a cancel too** (silent, it looks as if clicking does nothing).
-      if (e && e.name === "AbortError") {
-        say("Stopped the load");
-      } else {
-        deny("The file could not be chosen (" + why(e) + ")");
-      }
-      app.focus();
-      return;
-    }
-    // Caution: **Do not ask for the handle again where it could not be read** — obtained within the
-    // click's user activation, once dropped it cannot be obtained again.
-    let body = null;
-    try {
-      body = await got[0].getFile();
-    } catch (e) {
-      // Caution: **Say so** (a file removed or locked after it was chosen, a permission withdrawn):
-      // a rejection no one catches reaches only the console, and the click looks as if it did
-      // nothing.
-      deny("The file could not be read (" + why(e) + ")");
-      app.focus();
-      return;
-    }
-    takeChosen(body, got[0]);
-  });
-  // Cleared so that choosing the same file again still fires a change.
-  file.addEventListener("change", () => {
-    const chosen = file.files[0];
-    file.value = "";
-    if (chosen) takeChosen(chosen, null);
-  });
-  // The function that takes a file the browser passed in, **one for the picker, the file field and
-  // a drop**; `bodyAt` is its handle where the browser gave one (null otherwise).
-  // Caution: **Bind the handle only once its document is loaded**: bound before, an unreadable
-  // file leaves its handle on the current document, and the next save writes into a file it did not
-  // come from ("A document is written back where it was opened" in `../../docs/DESIGN.md`).
-  function takeChosen(body, bodyAt) {
+  document.getElementById("open").addEventListener("click", () => kf.openFromPath());
+
+  // Dropped documents are imported without a location. Saving chooses a server path.
+  function takeChosen(body) {
     return body.text().then((t) => {
       // Caution: **Take the draft just before loading**, as `openDoc` does. **The name decides the
       // text's format.**
       const out = planOpen();
-      const why = layIn(out, kindOf(body.name), t, body.name, { path: "", bodyAt: bodyAt });
+      const why = layIn(out, kindOf(body.name), t, body.name, NOWHERE);
       if (why !== "") {
         deny(whyNotRead(why, t));
         app.focus();
         return false;
       }
-      // **Keep the text read through the handle**; saving compares the file with it.
-      if (bodyAt) kf.seenAt.set(bodyAt, t);
       // The file's name becomes the document's name (the next save goes back to it).
       takeName(body);
       say("Loaded it" + kf.aside);
@@ -378,7 +281,7 @@ function kspageFile(ui) {
       return true;
     }, (e) => {
       // A file that cannot be read after it was chosen (removed, locked, a permission withdrawn)
-      // is refused out loud, for the picker, the file field and a drop alike.
+      // is refused out loud, when importing a drop.
       deny("The file could not be read (" + why(e) + ")");
       app.focus();
       return false;
@@ -406,8 +309,8 @@ function kspageFile(ui) {
     // in the opened format, with the identity even when there is nothing to lose.
     draftNow: () => {
       const text = bodyText();
-      return { id: kf.docId, kind: kf.openKind, path: kf.seen.path, name: docName.value,
-        text: text === kf.seen.body ? null : text };
+      return { id: kf.doc.id, kind: kf.doc.kind, path: kf.doc.path, name: docName.value,
+        text: text === kf.doc.body ? null : text };
     },
     // Restores a draft over the current document, **unbound** ("" or the reason): the draft can be
     // older than the file, so if bound, one click of save could revert the file to an older
@@ -426,17 +329,15 @@ function kspageFile(ui) {
       return "";
     },
     // The text open now (empty if none), **not the path field** (that can be retyped).
-    pathNow: () => kf.seen.path,
+    pathNow: () => kf.doc.path,
     // The function that takes a file the browser passed in (dropping borrows it).
     takeChosen: takeChosen,
     // An error's reason as text, **one wording for every refusal** ([`inout.js`](inout.js)
     // borrows it).
     why: why,
-    // Where the current document lives: "path" (through the server) / "pick" (chosen in a browser,
-    // the name only) / "none" — **never mixed** (shown as a path, a bare name would look like one).
+    // A saved path or no destination yet.
     placeNow: () => {
-      if (kf.seen.path.length > 0) return { kind: "path", at: kf.seen.path };
-      if (kf.bodyAt) return { kind: "pick", at: kf.bodyAt.name };
+      if (kf.doc.path.length > 0) return { kind: "path", at: kf.doc.path };
       return { kind: "none", at: "" };
     },
   };

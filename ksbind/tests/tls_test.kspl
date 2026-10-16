@@ -1,0 +1,381 @@
+//< Tests of the TLS client, against a peer on the loopback (no internet)
+//<
+//< **The peer is made here**: its keys and certificates are built through OpenSSL in memory, so no
+//< key stands in the repository and no tool is started. Only a test CA's certificate (no key) is
+//< written to a scratch file for the length of a test, since OpenSSL's default store reads a file.
+import "ksbind/tls"
+import "std/chars" // `sub_mut`
+import "std/fs"
+import "std/libc"
+import "std/mem" { dealloc, Arena }
+import "std/net"
+import "std/str" // `to_cstr`, `equals`
+import "std/sys"
+import "std/thread"
+import "std/verdict"
+
+// What only the tests need: the server half on a socket, keys and certificates, and writing a
+// certificate out.
+// Ed25519 asks for no parameters, so no `ctrl` macro stands between (OpenSSL 1.1.1 or later).
+// `long` crosses as in `../tls.kspl`.
+extern "C"
+    struct EVP_PKEY
+    struct EVP_PKEY_CTX
+    struct EVP_MD
+    struct X509
+    struct X509_NAME
+    struct ASN1_INTEGER
+    struct ASN1_TIME
+
+#link("ssl")
+#link("crypto")
+extern "C"
+    fn TLS_server_method(): tls.SSL_METHOD@
+    fn SSL_CTX_use_certificate(ctx: tls.SSL_CTX$@, x: X509$@): I32
+    fn SSL_CTX_use_PrivateKey(ctx: tls.SSL_CTX$@, pkey: EVP_PKEY$@): I32
+    fn SSL_accept(ssl: tls.SSL$@): I32
+    fn EVP_PKEY_CTX_new_id(id: I32, engine: Void$@): EVP_PKEY_CTX$@
+    fn EVP_PKEY_keygen_init(ctx: EVP_PKEY_CTX$@): I32
+    fn EVP_PKEY_keygen(ctx: EVP_PKEY_CTX$@, out: EVP_PKEY$@$@): I32
+    fn EVP_PKEY_CTX_free(ctx: EVP_PKEY_CTX$@)
+    fn EVP_PKEY_free(pkey: EVP_PKEY$@)
+    fn X509_new(): X509$@
+    fn X509_free(x: X509$@)
+    fn X509_get_serialNumber(x: X509$@): ASN1_INTEGER$@
+    fn ASN1_INTEGER_set(a: ASN1_INTEGER$@, v: Sz): I32
+    fn X509_getm_notBefore(x: X509$@): ASN1_TIME$@
+    fn X509_getm_notAfter(x: X509$@): ASN1_TIME$@
+    fn X509_gmtime_adj(t: ASN1_TIME$@, adj: Sz): ASN1_TIME$@
+    fn X509_set_pubkey(x: X509$@, pkey: EVP_PKEY$@): I32
+    fn X509_get_subject_name(x: X509$@): X509_NAME$@
+    fn X509_NAME_add_entry_by_txt(name: X509_NAME$@, field: Void@, kind: I32, bytes: Void@,
+        len: I32, loc: I32, set: I32): I32
+    fn X509_set_issuer_name(x: X509$@, name: X509_NAME$@): I32
+    fn X509_sign(x: X509$@, pkey: EVP_PKEY$@, md: EVP_MD@): I32
+    fn BIO_new_file(filename: Void@, mode: Void@): tls.BIO$@
+    fn PEM_write_bio_X509(bp: tls.BIO$@, x: X509$@): I32
+    fn SSL_set_fd(ssl: tls.SSL$@, fd: I32): I32
+
+priv const evp_pkey_ed25519: I32 = 1087 //< EVP_PKEY_ED25519 (NID_ED25519)
+priv const mbstring_asc: I32 = 0x1001 //< MBSTRING_ASC
+
+priv enum Peer_act //< what the peer does once a client connects
+    no_tls //< reads the ClientHello and closes, speaking no TLS
+    refused //< offers its certificate, which the client refuses
+    echo_then_close //< answers `ping` with `pong`, then closes with a close_notify
+    echo_then_cut //< answers `ping` with `pong`, then drops the connection with no close_notify
+    gone //< completes the handshake, then drops the connection without reading a byte
+
+priv struct Tls_peer //<
+    //< what the peer's thread is handed: where to listen, what to answer with, and how to end
+    listener: net.Tcp_listener$@
+    ctx: tls.SSL_CTX$@ //< null for `.no_tls`
+    act: Peer_act
+
+priv const ping: U8[] = "ping" //< what the client sends
+priv const pong: U8[] = "pong" //< what the peer answers
+
+#export
+fn tls_test_peer(peer: Tls_peer$@): Void$@
+    conn: = peer.listener.accept() catch panic("accept should succeed once a client connects")
+    switch peer.act
+    case .no_tls
+        // Reads and discards the client's ClientHello, acting as a peer that speaks no TLS.
+        buf: U8[256] = ::{}
+        conn.read(U8$[]::buf) catch {}
+    default
+        ssl: = tls.SSL_new(peer.ctx)
+        assert(ssl != null, "the peer's SSL should be made")
+        assert(SSL_set_fd(ssl, conn.raw_fd()) == 1, "the peer's socket should be set")
+        switch peer.act
+        case .refused
+            // The client refuses the certificate, so the handshake ends here, on the peer's side
+            // too.
+            SSL_accept(ssl)
+        case .gone
+            assert(SSL_accept(ssl) == 1, "the peer's handshake should succeed")
+        default
+            assert(SSL_accept(ssl) == 1, "the peer's handshake should succeed")
+            // Reads the whole `ping` first: a byte left unread would turn the close into a reset.
+            $got: U8[4] = ::{}
+            $have: I32 = 0
+            for have < 4
+                n: = tls.SSL_read(ssl, Void$@::(got@ + have), 4 - have)
+                assert(n > 0, "the peer should read the client's ping")
+                have += n
+            assert((U8$[]::got).equals(ping), "the peer should read ping")
+            assert(tls.SSL_write(ssl, Void@::pong.ptr, 4) == 4, "the peer should answer pong")
+            switch peer.act
+            case .echo_then_close
+                tls.SSL_shutdown(ssl)
+            default {} // `.echo_then_cut` sends no close_notify: the socket closes under it.
+        tls.SSL_free(ssl)
+    conn.free()
+    return null
+
+priv fn new_key(): EVP_PKEY$@ //< a fresh Ed25519 key, which the caller frees
+    kctx: = EVP_PKEY_CTX_new_id(evp_pkey_ed25519, null)
+    assert(kctx != null && EVP_PKEY_keygen_init(kctx) == 1, "an Ed25519 key generator should start")
+    $pkey: EVP_PKEY$@ = null
+    assert(EVP_PKEY_keygen(kctx, pkey@) == 1, "an Ed25519 key should be made")
+    EVP_PKEY_CTX_free(kctx)
+    return pkey
+
+priv fn new_cert( //< a certificate for `key`, valid for an hour, which the caller frees
+    key: EVP_PKEY$@, //< the key it certifies
+    cn: U8[], //< its subject's CN, the name a client checks
+    serial: Sz, //< its serial number, distinct under one issuer
+    issuer: X509$@, //< the certificate of the CA signing it; null for one signed by `key` itself
+    signer: EVP_PKEY$@, //< the key that signs it: the issuer's, or `key` itself
+): X509$@
+    x: = X509_new()
+    assert(x != null, "a certificate should be made")
+    name: = X509_get_subject_name(x)
+    issuer_name: = name if issuer == null else X509_get_subject_name(issuer)
+    ok: =
+        ASN1_INTEGER_set(X509_get_serialNumber(x), serial) == 1 &&
+        X509_gmtime_adj(X509_getm_notBefore(x), 0) != null &&
+        X509_gmtime_adj(X509_getm_notAfter(x), 3600) != null && X509_set_pubkey(x, key) == 1 &&
+        X509_NAME_add_entry_by_txt(name, "CN", mbstring_asc, Void@::cn.ptr, I32::cn.len, -1, 0) == 1
+        && X509_set_issuer_name(x, issuer_name) == 1 && X509_sign(x, signer, null) > 0
+    assert(ok, "the certificate should be filled in and signed")
+    return x
+
+priv fn server_ctx(cert: X509$@, key: EVP_PKEY$@): tls.SSL_CTX$@ //<
+    //< A server context answering with that certificate and key, holding references of its own
+    ctx: = tls.SSL_CTX_new(TLS_server_method())
+    assert(ctx != null, "a server context should be made")
+    assert(SSL_CTX_use_certificate(ctx, cert) == 1 && SSL_CTX_use_PrivateKey(ctx, key) == 1,
+        "the server context should take the certificate and its key")
+    return ctx
+
+priv fn self_signed_ctx(): tls.SSL_CTX$@ //<
+    //< A server context holding a fresh key and a certificate it signed itself, for "127.0.0.1"
+    //<
+    //< **No client trusts it**, since no CA in the default store signed it.
+    key: = new_key()
+    x: = new_cert(key, "127.0.0.1", 1, null, key)
+    ctx: = server_ctx(x, key)
+    X509_free(x)
+    EVP_PKEY_free(key)
+    return ctx
+
+priv const ca_base: U8[] = "out/tmp/ksbind_tls" //< where a test CA's certificate is written
+
+priv struct Test_ca //< a CA made for one test, which the client trusts while it stands
+    key: EVP_PKEY$@
+    cert: X509$@
+    dir: U8[] //< the scratch folder holding `file`
+    file: U8[] //< the certificate as PEM, which `SSL_CERT_FILE` names
+
+impl Test_ca
+    fn trusted(arena: Arena$@): Test_ca //<
+        //< Makes a CA and points OpenSSL's default store at it alone (`SSL_CERT_FILE`)
+        //<
+        //< **The client is left as it is**: it loads the default store, where OpenSSL reads the
+        //< variable, so the test runs the code a program runs.
+        key: = new_key()
+        cert: = new_cert(key, "Kanso test CA", 1, null, key)
+        dir: = fs.mkdir_unique(ca_base, "ca_", arena)
+            catch panic("the scratch folder should be made")
+        file: = fs.join(dir, "ca.pem", arena)
+        $c_file: U8$@ = null
+        switch file.to_cstr()
+        case .some(p)
+            c_file = p
+        case .none
+            panic("the scratch path holds no NUL")
+        bio: = BIO_new_file(Void@::c_file, "w")
+        dealloc(Void$@::c_file)
+        assert(bio != null && PEM_write_bio_X509(bio, cert) == 1, "the CA should be written out")
+        tls.BIO_free(bio)
+        sys.set_env("SSL_CERT_FILE", file) catch panic("SSL_CERT_FILE should be set")
+        return ::{ .key = key, .cert = cert, .dir = dir, .file = file }
+
+    fn issue_ctx(r: Self, host: U8[]): tls.SSL_CTX$@ //<
+        //< A server context answering with a fresh key and a certificate this CA issued for `host`
+        key: = new_key()
+        x: = new_cert(key, host, 2, r.cert, r.key)
+        ctx: = server_ctx(x, key)
+        X509_free(x)
+        EVP_PKEY_free(key)
+        return ctx
+
+    fn free(r: Self) //< stops trusting it, and removes what it wrote
+        sys.unset_env("SSL_CERT_FILE") catch panic("SSL_CERT_FILE could not be unset")
+        fs.remove_path(r.file) catch {}
+        fs.remove_path(r.dir) catch {}
+        X509_free(r.cert)
+        EVP_PKEY_free(r.key)
+
+priv enum Tls_seen //< how a connection to the test's peer ended
+    connected
+    handshake_failed
+    cert_verify_failed
+    other
+
+priv fn listen_on(): net.Tcp_listener$@ //< a listener on a port of the loopback the OS chose
+    return net.Tcp_listener.bind("127.0.0.1", 0) catch panic("bind should succeed on a free port")
+
+priv fn connect_to_peer(ctx: tls.SSL_CTX$@, act: Peer_act, host: U8[]): Tls_seen //<
+    //< Starts a peer answering with `ctx`, connects to it by `host`, and says how it went
+    listener: = listen_on()
+    port: = listener.port() catch panic("a bound socket knows its port")
+    $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = act }
+    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    $seen: = Tls_seen.connected
+    s: = tls.Tls_stream.connect(host, port) catch e
+        switch e
+        case .handshake_failed
+            seen = .handshake_failed
+        case .cert_verify_failed
+            seen = .cert_verify_failed
+        default
+            seen = .other
+        fallback null
+    if s != null
+        s.free()
+    t.join_and_free()
+    listener.free()
+    return seen
+
+priv enum After_pong //< what a read after the peer's last byte gives
+    end //< 0: the peer closed
+    error //< a `Tls_error`
+    more //< more bytes, which the peer never sent
+
+impl Peer_act
+    fn round_trip_then(r: Self, arena: Arena$@): After_pong //<
+        //< Connects to a peer a test CA vouches for, trades `ping` for `pong`, and reads once more
+        ca: = Test_ca.trusted(arena)
+        defer ca.free()
+        ctx: = ca.issue_ctx("localhost")
+        defer tls.SSL_CTX_free(ctx)
+        listener: = listen_on()
+        defer listener.free()
+        port: = listener.port() catch panic("a bound socket knows its port")
+        $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = r }
+        t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@)
+            catch panic("thread spawn failed")
+        s: = tls.Tls_stream.connect("localhost", port)
+            catch panic("a certificate the trusted CA issued for this host should connect")
+        sent: = s.write(ping) catch panic("the client's write should succeed")
+        assert(sent == 4, "the client's ping should go out whole")
+        $got: U8[4] = ::{}
+        $have: Sz = 0
+        for have < 4
+            n: = s.read((U8$[]::got).sub_mut(have, 4 - have))
+                catch panic("the client should read the pong")
+            assert(n > 0, "the pong should arrive before the end")
+            have += n
+        assert((U8$[]::got).equals(pong), "the client should read pong")
+        $after: = After_pong.end
+        $rest: U8[8] = ::{}
+        n: = s.read(U8$[]::rest) catch
+            after = .error
+            fallback 0
+        if n > 0
+            after = .more
+        s.free()
+        t.join_and_free()
+        return after
+
+fn test_tls_handshake_failure_against_non_tls_peer()
+    verdict.start("[Tls] the handshake failing and cleaning up against a non-TLS peer test...")
+    seen: = connect_to_peer(null, .no_tls, "127.0.0.1")
+    assert(seen == Tls_seen.handshake_failed,
+        "TLS against a plain TCP peer must fail as handshake_failed")
+    verdict.pass("Against a non-TLS peer it becomes handshake_failed correctly and cleans up.")
+
+fn test_tls_untrusted_certificate_is_refused()
+    verdict.start("[Tls] a certificate no CA signed being refused as such test...")
+    ctx: = self_signed_ctx()
+    seen: = connect_to_peer(ctx, .refused, "127.0.0.1")
+    tls.SSL_CTX_free(ctx)
+    assert(seen == Tls_seen.cert_verify_failed,
+        "a self-signed certificate must fail as cert_verify_failed, not as a broken handshake")
+    verdict.pass("A self-signed certificate is refused, and the error says it was the certificate.")
+
+fn test_tls_other_host_is_refused()
+    verdict.start("[Tls] a trusted certificate issued for another host being refused test...")
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    // **The CA is trusted, so only the host name check stands between**: without it, this connects.
+    ctx: = ca.issue_ctx("other.test")
+    seen: = connect_to_peer(ctx, .refused, "localhost")
+    tls.SSL_CTX_free(ctx)
+    assert(seen == Tls_seen.cert_verify_failed,
+        "a certificate for another host must fail as cert_verify_failed")
+    verdict
+        .pass("A certificate a trusted CA issued for another host is refused as the certificate.")
+
+fn test_tls_round_trip_ends_at_close_notify()
+    verdict.start("[Tls] a verified connection carrying bytes both ways, then ending test...")
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    after: = Peer_act.echo_then_close.round_trip_then(arena)
+    assert(after == After_pong.end, "a read after the peer's close_notify must give 0")
+    verdict.pass("A certificate the trusted CA issued connects, carries both ways, and ends at 0.")
+
+fn test_tls_cut_connection_is_an_error()
+    verdict
+        .start("[Tls] a connection cut without a close_notify being an error, not an end test...")
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    // **Read as an end, a cut would pass for the whole of what was sent**: whoever can drop the TCP
+    // connection could cut a reply short unnoticed.
+    after: = Peer_act.echo_then_cut.round_trip_then(arena)
+    assert(after == After_pong.error, "a read after a cut with no close_notify must fail")
+    verdict.pass("A connection cut without a close_notify fails, rather than reading as an end.")
+
+priv const sigpipe: I32 = 13 //< SIGPIPE's number on Linux and macOS
+priv const write_tries: Sz = 50 //< the cap on writes to a peer that is gone before one fails
+priv const write_gap_ms: I32 = 20 //< the wait between them, for the peer's reset to arrive
+
+priv $sigpipes_seen: I32 = 0 //< how many SIGPIPEs reached `count_sigpipe`
+
+priv fn count_sigpipe(_sig: I32): Void //< a SIGPIPE handler that only counts
+    sigpipes_seen += 1
+    // Registered again: under SysV semantics one delivery puts the default back.
+    libc.signal(sigpipe, count_sigpipe)
+
+fn test_tls_write_to_a_gone_peer_raises_no_sigpipe()
+    verdict.start("[Tls] writing to a peer that is gone failing with no SIGPIPE test...")
+    if sys.is_windows()
+        verdict.skip("Windows has no SIGPIPE")
+        return
+    arena: = Arena.new(4 * 1024)
+    defer arena.free()
+    ca: = Test_ca.trusted(arena)
+    defer ca.free()
+    ctx: = ca.issue_ctx("localhost")
+    defer tls.SSL_CTX_free(ctx)
+    listener: = listen_on()
+    defer listener.free()
+    port: = listener.port() catch panic("a bound socket knows its port")
+    $peer: = Tls_peer::{ .listener = listener, .ctx = ctx, .act = .gone }
+    t: = thread.Thread.spawn<|Tls_peer|>(tls_test_peer, peer@) catch panic("thread spawn failed")
+    s: = tls.Tls_stream.connect("localhost", port)
+        catch panic("a certificate the trusted CA issued for this host should connect")
+    t.join_and_free()
+    // **This program ignores SIGPIPE, as every KSPL program does, but the program a library is
+    // linked into may not**: a handler stands in for that program, and counts what the default
+    // would have killed it with.
+    sigpipes_seen = 0
+    before: = libc.signal(sigpipe, count_sigpipe)
+    $failed: Sz = 0
+    for _try in Range.asc(write_tries)
+        s.write(ping) catch
+            failed += 1
+        if failed >= 2
+            break
+        sys.sleep_ms(write_gap_ms)
+    // `free` sends a close_notify, one more write to the peer that is gone.
+    s.free()
+    seen: = sigpipes_seen
+    libc.signal(sigpipe, before)
+    assert(failed >= 2, "a write to a peer that is gone should fail")
+    assert(seen == 0, "a write to a peer that is gone should fail as a value, raising no SIGPIPE")
+    verdict.pass("A write to a peer that is gone fails as a value, and raises no SIGPIPE.")

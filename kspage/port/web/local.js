@@ -3,9 +3,8 @@
 // folder being served).
 //
 // **A page inside a browser cannot touch the OS** (walk folders, start a process), so it asks a
-// program started locally; the contract is `../../../docs/SPEC-local-server.md`. **Its absence is
-// normal** (a page opened from `file://` has no server): then the path tools are **not shown**,
-// and it is not a separate mode (two versions are not served).
+// program started locally; the contract is `../../../docs/SPEC-local-server.md`. The page
+// requires this service before enabling editing.
 // ==========================================
 function kspageLocal(ui) {
   const say = ui.say, deny = ui.deny;
@@ -67,7 +66,7 @@ function kspageLocal(ui) {
     try {
       got = await fetch("/api/status", { headers: head() });
     } catch (_) {
-      // It does not connect. **This is normal** (a page opened from `file://` is this case).
+      // Startup reports how to connect.
       return;
     }
     if (got.status === 401) {
@@ -173,7 +172,7 @@ function kspageLocal(ui) {
 
   // **Wait until the check is done**, or the tools flash on for an instant with no server.
   const ready = ask().then(() => {
-    if (told) deny(told);
+    if (!here) deny(told || "Open the URL shown by kssrv --local to use kspage");
     if (here) holdOn();
     return here;
   });

@@ -128,7 +128,7 @@ DEMANGLE_FN_CASES = [
 
 
 # Caution: **The mark for a failure is `FAIL`** (the source is the table in
-# `tests/support/conventions_line.kspls`).
+# `tests/support/conventions_line.kspl`).
 # `mk/ci.mk`'s summary picks up that spelling; spelt otherwise, the failure misses the summary.
 # This runs inside LLDB, so a test's harness cannot be borrowed — only the shape is matched.
 def _selftest():
@@ -261,7 +261,7 @@ def kspl_ast_node_summary(valobj, internal_dict):
     return format_summary(valobj, "")
 
 # How a trait's value is represented ({obj: void*, vtable: const kspl_vtable_X*}; see
-# `emit_trait_decl` in `ksplc/gen/c/types.kspls`). Unlike a vtable type, this struct itself
+# `emit_trait_decl` in `ksplc/gen/c/types.kspl`). Unlike a vtable type, this struct itself
 # carries no "kspl_" prefix, so it matches none of the other type summary patterns
 # (kspl_struct_summary and the rest). It works the implementing type's name back out of the symbol
 # name the vtable pointer points at (for example kspl_vtable_impl_std_io_File_stream_std_io_Writer)
@@ -406,9 +406,8 @@ def panic_breakpoint_callback(frame, bp_loc, dict):
         bt_str += f"  ${kspl_count:<2} {demangled}() at {filename}:{line}\n"
         kspl_count += 1
         
-        # Both notations: a file written in braces is the user's too. A suffix test on ".kspl"
-        # alone passes over every ".kspls" and lands the selection on a std frame.
-        if filename.endswith((".kspl", ".kspls")) and kspl_frame_idx == -1:
+        # The first frame in a KSPL source is the user's.
+        if filename.endswith(".kspl") and kspl_frame_idx == -1:
             kspl_frame_idx = i
             
     bt_str += "═"*60 + "\n"

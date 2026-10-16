@@ -1,0 +1,320 @@
+//< Where a type is written: given by its place, written once or twice
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case type_given_by_place
+//< An enum's type written at its variant where the place already gives it
+//<
+//< The places that fix the expected type: a declaration's written type, the place `=` assigns to,
+//< a parameter, a payload, a field or element, what a `catch` replaces, the return and error types.
+//< Deleting each name dimmed below leaves `.variant`, the same value. A generic's line counts once.
+// EXPECT: type_given_by_place.kspl:44:21: hint: [H0302] Unnecessary type name. The declared type already gives it.
+// EXPECT: type_given_by_place.kspl:45:20: hint: [H0302] Unnecessary type name. The declared type already gives it.
+// EXPECT: type_given_by_place.kspl:49:12: hint: [H0302] Unnecessary type name. The return type already gives it.
+// EXPECT: type_given_by_place.kspl:50:10: hint: [H0302] Unnecessary type name. The return type already gives it.
+// EXPECT: type_given_by_place.kspl:54:11: hint: [H0302] Unnecessary type name. The function's error type already gives it.
+// EXPECT: type_given_by_place.kspl:55:10: hint: [H0302] Unnecessary type name. The return type already gives it.
+// EXPECT: type_given_by_place.kspl:59:12: hint: [H0302] Unnecessary type name. The return type already gives it.
+// EXPECT: type_given_by_place.kspl:60:10: hint: [H0302] Unnecessary type name. The return type already gives it.
+// EXPECT: type_given_by_place.kspl:75:16: hint: [H0302] Unnecessary type name. The declared type already gives it.
+// EXPECT: type_given_by_place.kspl:76:14: hint: [H0302] Unnecessary type name. The parameter's type already gives it.
+// EXPECT: type_given_by_place.kspl:78:14: hint: [H0302] Unnecessary type name. The parameter's type already gives it.
+// EXPECT: type_given_by_place.kspl:79:26: hint: [H0302] Unnecessary type name. The parameter's type already gives it.
+// EXPECT: type_given_by_place.kspl:81:16: hint: [H0302] Unnecessary type name. The parameter's type already gives it.
+// EXPECT: type_given_by_place.kspl:88:11: hint: [H0302] Unnecessary type name. The assigned place's type already gives it.
+// EXPECT: type_given_by_place.kspl:89:23: hint: [H0302] Unnecessary type name. The payload's type already gives it.
+// EXPECT: type_given_by_place.kspl:90:27: hint: [H0302] Unnecessary type name. The field's type already gives it.
+// EXPECT: type_given_by_place.kspl:90:46: hint: [H0302] Unnecessary type name. The field's type already gives it.
+// EXPECT: type_given_by_place.kspl:91:27: hint: [H0302] Unnecessary type name. The type of the value it stands in for already gives it.
+// EXPECT: type_given_by_place.kspl:92:22: hint: [H0302] Unnecessary type name. The element's type already gives it.
+// EXPECT: type_given_by_place.kspl:92:34: hint: [H0302] Unnecessary type name. The element's type already gives it.
+// EXPECT: type_given_by_place.kspl:95:14: hint: [H0302] Unnecessary type name. The type of the value it stands in for already gives it.
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+enum Kind
+  small
+  big(n: I32)
+
+typedef Sort = Kind
+
+enum Fault
+  lost
+
+struct Slot
+  kind: Kind
+  at: I32?
+
+const usual: Kind = Kind.small
+$last_seen: I32? = Option<|I32|>.none
+
+priv fn positive(n: I32): I32? //< n where it is above 0
+  if n > 0
+    return Option<|I32|>.some(n)
+  return Option<|I32|>.none
+
+priv fn sized(n: I32): Kind!Fault //< big where n is not negative; a `!E` gives its success side
+  if n < 0
+    throw Fault.lost
+  return Kind.big(n)
+
+priv fn first<|T|>(xs: List<|T|>@): T? //< the first element, if any
+  if xs.len > 0
+    return Option<|T|>.some(xs.get(0))
+  return Option<|T|>.none
+
+priv fn same<|T|>(v: T): T //< v itself
+  return v
+
+priv fn count(o: I32?): I32 //< the value held, or 0
+  switch o
+  case .some(v)
+    return v
+  case .none
+    return 0
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  sort: Sort = Kind.small
+  n: = count(Option<|I32|>.some(4)) + count(positive(2)) + count(last_seen)
+  $kinds: = List<|Kind|>.new(arena)
+  kinds.push(Kind.small)
+  picked: = same<|Kind|>(Kind.small)
+  keep: fn(k: Kind): Kind = same<|Kind|>
+  kept: = keep(Kind.big(1))
+  kinds.push(sized(n) catch usual)
+  $ints: = List<|I32|>.new(arena)
+  ints.push(n)
+  _a: = first<|I32|>(ints@)
+  _b: = first<|Kind|>(kinds@)
+  $again: = positive(1)
+  again = Option<|I32|>.some(5)
+  held: Kind? = .some(Kind.small)
+  slot: = Slot::{ .kind = Kind.big(2), .at = Option<|I32|>.none }
+  lost: = sized(-1) catch Kind.small
+  row: Kind[2] = ::{ Kind.small, Kind.big(9) }
+  kept_too: = sized(-1) catch e
+    io.out().s("\{e.variant_name()\}").c('\n')
+    fallback Kind.small
+  if kinds.len > 0
+    io.out().s("\{kinds.len\} \{sort.variant_name()\} \{picked.variant_name()\}").c('\n')
+  io.out().s("\{kept.variant_name()\} \{count(again)\} \{held.is_some()\}").c('\n')
+  io.out().s("\{slot.kind.variant_name()\} \{lost.variant_name()\} \{kept_too.variant_name()\}")
+    .c('\n')
+  io.out().s("\{row[1].variant_name()\}").c('\n')
+  return 0
+// ==== case type_given_through_if_else
+//< An `if … else` in a place that fixes the type passes it to both sides, so [H0302] dims each
+//<
+//< A `return`, a written type and `=` each give the type, to a nested `if … else` too. A variant in
+//< the condition is no side, and an inferred declaration gives no type, so their names stay.
+// EXPECT: type_given_through_if_else.kspl:20:10: hint: [H0302]
+// EXPECT: type_given_through_if_else.kspl:20:55: hint: [H0302]
+// EXPECT: type_given_through_if_else.kspl:23:10: hint: [H0302]
+// EXPECT: type_given_through_if_else.kspl:23:36: hint: [H0302]
+// EXPECT: type_given_through_if_else.kspl:23:62: hint: [H0302]
+// EXPECT: type_given_through_if_else.kspl:26:17: hint: [H0302]
+// EXPECT: type_given_through_if_else.kspl:28:10: hint: [H0302]
+// EXPECT-NOT: type_given_through_if_else.kspl:29:
+// EXPECT-NOT: type_given_through_if_else.kspl:30:
+
+enum Kind
+  small
+  big(n: I32)
+
+priv fn tenfold(n: I32, want: I32): I32?
+  return Option<|I32|>.some(n * 10) if n == want else Option<|I32|>.none
+
+priv fn kind_of(n: I32): Kind
+  return Kind.small if n < 3 else (Kind.big(n) if n < 9 else Kind.small)
+
+fn main(): I32
+  first: I32? = Option<|I32|>.some(1) if true else .none
+  $kind: = kind_of(1)
+  kind = Kind.big(2) if first.is_some() else .small
+  kind = kind_of(5) if Kind.small.variant_name().len > 0 else kind
+  picked: = Kind.small if kind_of(2).variant_name().len > 0 else Kind.big(3)
+  return I32::picked.variant_name().len + I32::kind.variant_name().len +
+    tenfold(1, 1).unwrap_or(0) + first.unwrap_or(0)
+// ==== case type_needed_by_place
+//< An enum's type written at its variant where no place gives it, or another fix already does
+//<
+//< None of these names can go: nothing else fixes the type (an inferred declaration, a generic
+//< argument the value decides, a comparison, either side of an `if … else` in an inferred
+//< declaration). A payload, an assignment, a `throw`, a field, a `catch` substitute and the sides
+//< of an `if … else` a `return` gives its type, written short, stay so. Where a declaration writes
+//< its type twice, the annotation is the one reported, so the line has one fix.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT-NOT: [H0302] Unnecessary type name.
+import "std/io"
+
+enum Kind
+  small
+  big(n: I32)
+
+enum Fault
+  lost
+
+enum Mode
+  on
+  off
+
+struct Slot
+  kind: Kind
+
+priv fn same<|T|>(v: T): T //< v itself
+  return v
+
+priv fn pick(wide: Bool): Kind //< big or small, as asked
+  return .big(2) if wide else .small
+
+priv fn wrapped(k: Kind): Kind? //< k held in an Option
+  return .some(.small) if is_small(k) else .some(k)
+
+priv fn sized(n: I32, k: Kind): Kind!Fault //< k, or a fault where n is negative
+  if n < 0
+    throw .lost
+  return k
+
+priv fn is_small(k: Kind): Bool //< whether it is `small` (a tagged union has no built-in `==`)
+  switch k case .small
+    return true
+  default
+    return false
+
+fn main(): I32
+  mode: = same(Mode.on)
+  first: = Kind.small
+  either: = Kind.big(2) if is_small(first) else Kind.small
+  $held: = same(Option<|I32|>.none)
+  held = .some(3)
+  slot: = Slot::{ .kind = .big(1) }
+  twice: Kind = Kind.small
+  got: = sized(1, first) catch .small
+  if mode == Mode.on && is_small(first) && is_small(pick(false)) && is_small(got) &&
+    is_small(twice) && !is_small(either)
+    io.out().s("\{slot.kind.variant_name()\} \{wrapped(first).is_some()\}").c('\n')
+  switch held
+  case .some(v)
+    io.out().s("\{v\}").c('\n')
+  case .none {}
+  return 0
+// ==== case type_written_once
+//< Annotations that do work, or are the one place the type shows: none is a type written twice
+//<
+//< Deleting any of these would change the variable's type or leave the reader without it. The
+//< widening cast is [I0301]'s alone: deleting the annotation as well would leave the value's own
+//< type. A call in a generic is left alone, its return type being the callee's to settle.
+// EXPECT: [I0301] Unnecessary '::' cast. This numeric conversion is safe and happens implicitly.
+// EXPECT-NOT: [H0302]
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+struct Point
+  x: I32
+  y: I32
+
+typedef Spot = Point
+
+enum Kind
+  small
+  big(n: I32)
+
+priv fn is_small(k: Kind): Bool //< whether it is `small` (a tagged union has no built-in `==`)
+  switch k case .small
+    return true
+  default
+    return false
+
+origin: Point = Point::{ .x = 0, .y = 0 }
+
+priv fn gather<|T|>(arena: Arena$@, v: T): List<|T|>
+  $out: List<|T|> = List<|T|>.new(arena)
+  out.push(v)
+  return out
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  $i: Sz = 0
+  f: F32 = 1.5
+  small: I32 = 7
+  wide: I64 = small
+  widened: I64 = I64::small
+  buf: U8$[] = arena.dup_str("kanso")
+  view: U8[] = buf
+  count: Sz = view.len
+  spot: Spot = Point::{ .x = 1, .y = 2 }
+  near: Point = ::{ .x = 3, .y = 4 }
+  k: Kind = .small
+  flag: Bool = count > 2
+  i += 1
+  got: = gather<|I32|>(arena, small)
+  if flag && is_small(k)
+    io.out().s("\{i\} \{f\} \{wide + widened\} \{spot.x + near.y + origin.x\} \{got.len\}").c('\n')
+  return 0
+// ==== case type_written_twice
+//< A local's type written again at the start of its initializer, and `Bool` over `true` / `false`
+//<
+//< Deleting each annotation below leaves the variable's type as it is. The generic's line is one
+//< place however many instantiations analyse it.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. The initializer already names the type.
+// EXPECT: [H0302] Unnecessary type annotation. 'true' and 'false' are always 'Bool'.
+// EXPECT: [H0302] Unnecessary type annotation. 'true' and 'false' are always 'Bool'.
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+
+struct Point
+  x: I32
+  y: I32
+
+impl Point
+  fn origin(): Point
+    return Point::{ .x = 0, .y = 0 }
+
+enum Kind
+  small
+  big(n: I32)
+
+priv fn is_small(k: Kind): Bool //< whether it is `small` (a tagged union has no built-in `==`)
+  switch k case .small
+    return true
+  default
+    return false
+
+priv fn scale<|T|>(v: F64): T
+  k: T = T::v
+  return k
+
+fn main(): I32
+  arena: = Arena.new(4096)
+  defer arena.free()
+  p: Point = Point::{ .x = 1, .y = 2 }
+  q: Point = Point.origin()
+  k: Kind = Kind.small
+  big: Kind = Kind.big(3)
+  n: U8 = U8::300
+  $xs: List<|I32|> = List<|I32|>.new(arena)
+  $names: List<|U8[]|> = List<|U8[]|>.new(arena)
+  pair: U8[][] = U8[][]::{ "a", "b" }
+  const unit: Kind = Kind.small
+  on: Bool = true
+  $off: Bool = false
+  xs.push(p.x + q.y + I32::n)
+  names.push(pair[0])
+  off = is_small(k) == is_small(unit) && !is_small(big)
+  if on && !off
+    io.out().s("\{xs.len + names.len\} \{scale<|F32|>(1.5)\} \{scale<|F64|>(2.5)\}").c('\n')
+  return 0

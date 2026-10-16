@@ -1,0 +1,174 @@
+//< The text of the tutorial page
+//<
+//< One section per step, written from the program the gates run and from what it prints.
+//< It is kept apart from its caller `tools/tour.kspl`, for the same reason as
+//< `tools/surface_rows.kspl`.
+import "std/chars" // `starts_with` / `find_str` / `trim_spaces`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+
+priv const point_mark: U8[] = "//<" //< the mark that starts a declaration's own description
+
+priv const page_dir: U8[] = "docs/" //< the page's folder, as a path from the root
+priv const language_doc: U8[] = "docs/SPEC-language.md"
+priv const project_doc: U8[] = "docs/HOWTO-set-up-a-project.md"
+priv const front_door: U8[] = "README.md"
+priv const laid_src: U8[] = "ksplc/tests/kspls/tour.kspl"
+
+struct Step //< one step of the walk: its name, its prose, and its code
+    name: U8[]
+    title: U8[]
+    prose: U8[]
+    code: U8[]
+
+priv fn from_page(target: U8[], arena: Arena$@): U8[] //<
+    //< A link target, relative to the page's own folder, for a file named from the repo's root
+    //<
+    //< A name inside the page's folder stays bare; any other climbs to the root, with one `../` per
+    //< folder in `page_dir`.
+    if target.starts_with(page_dir)
+        return target.sub_from(page_dir.len)
+    b: = arena.text()
+    for c in page_dir
+        if c == '/'
+            b.s("../")
+    return b.s(target).take()
+
+priv fn link_to(b: Str_builder$@, target: U8[], arena: Arena$@) //< ``[`target`](relative)``
+    rel: = from_page(target, arena)
+    b.s("[`").s(rel).s("`](").s(rel).c(')')
+
+priv fn declared_name(head: U8[]): U8[] //<
+    //< The name a top-level declaration's line declares
+    //<
+    //< It is the word after `fn` / `struct` / `impl` and the other keywords, with the visibility
+    //< dropped, cut at the first `(`, `<`, `:` or space.
+    $s: = head.trim_spaces()
+    s = s.strip_prefix("priv ")
+    s = s.strip_prefix("pub ")
+    // **A top-level mutable starts with its name** (`$seen: Sz = 0`), the others with a keyword.
+    if s.len > 0 && s[0] == '$'
+        $end: Sz = 1
+        for end < s.len && s[end] != ':' && s[end] != ' '
+            end += 1
+        return s.sub(1, end - 1)
+    switch s.find_char(' ')
+    case .none
+        return s
+    case .some(sp)
+        rest: = s.sub_from(sp + 1).trim_spaces()
+        $end: Sz = 0
+        for end < rest.len && rest[end] != '(' && rest[end] != '<' && rest[end] != ':' &&
+            rest[end] != ' '
+            end += 1
+        return rest.sub(0, end)
+
+priv fn is_head_line(line: U8[]): Bool //< whether a line opens a top-level declaration
+    //<
+    return line.len > 0 && line[0] != ' ' && !line.starts_with("//") &&
+        !line.starts_with("import ")
+
+fn walk_steps(laid: U8[], arena: Arena$@): List<|Step|> //<
+    //< One step per top-level declaration carrying a `//<`, in the order the file writes them
+    //<
+    //< A declaration with no `//<` is a helper the walk does not stop at. An indented `//<` is the
+    //< step's prose, not a step.
+    $out: = List<|Step|>.new(arena)
+    ls: = laid.lines(arena)
+    $i: Sz = 0
+    for i < ls.len
+        line: = ls.get(i)
+        if !is_head_line(line)
+            i += 1
+            continue
+        switch line.find_str(point_mark)
+        case .none
+            i += 1
+            continue
+        case .some(at)
+            title: = line.sub_from(at + point_mark.len).trim_spaces()
+            $prose: = Str_builder.new()
+            defer prose.free()
+            $code: = Str_builder.new()
+            defer code.free()
+            code.s(line.sub(0, at).trim_end()).c('\n')
+            $j: = i + 1
+            for j < ls.len && !is_head_line(ls.get(j))
+                body: = ls.get(j)
+                t: = body.trim_spaces()
+                if t.starts_with(point_mark)
+                    rest: = t.sub_from(point_mark.len).trim_spaces()
+                    if rest.len > 0
+                        (prose.s(rest) if prose.len == 0 else prose.c(' ').s(rest))
+                else
+                    code.s(body).c('\n')
+                j += 1
+            if title.len > 0
+                out
+                    .push(Step::{ .name = declared_name(line.sub(0, at)),
+                    .title = arena.dup_str(title),
+                    .prose = arena.dup_str(prose.slice().trim_spaces()),
+                    .code = arena.dup_str(code.slice().trim_end()) })
+            i = j
+    return out
+
+priv fn fenced(b: Str_builder$@, tag: U8[], body: U8[]) //< one code fence, closed on its own line
+    b.s("```").s(tag).c('\n').s(body)
+    if !body.ends_with("\n")
+        b.c('\n')
+    b.s("```\n")
+
+priv fn page_head(b: Str_builder$@, arena: Arena$@) //<
+    //< the title, what the page is, how to run what is on it, and the notice
+    b.s("# A tour of KSPL\n\n")
+        .s("**This page teaches KSPL by walking through one small program, one declaration at a ")
+        .s("time.** It is for programmers who know another language, such as Python, JavaScript ")
+        .s("or C. Each section shows one piece of the program and says what that piece teaches. ")
+        .s("At the end, `main` puts the pieces together, and the page shows what the program ")
+        .s("prints. Every piece is code that the gates compile and run.\n\n")
+        .s("The whole program is ")
+    link_to(b, laid_src, arena)
+    b.s(".\n\n").s("**To run it, or anything of your own, the quick start is in the root ")
+    link_to(b, front_door, arena)
+    b.s("** — it fetches `ksplc`, writes a first file and runs it in three steps. Nothing on ")
+        .s("this page needs more than that.\n\n")
+        .s("**Do not edit this page.** It is written by `make tour` from the program and the ")
+        .s("program's own output, and `make test-docs` refuses a page older than its program.\n\n")
+        .s("## The types you will meet\n\n")
+        .s("**A type is written after a name, with a colon**: `n: I32`. These are the ones the ")
+        .s("walk uses before it explains them.\n\n").s("| Written | What it is |\n| :-- | :-- |\n")
+        .s("| `I32` | A 32-bit signed integer |\n")
+        .s("| `Sz` | A size or an index: a signed integer as wide as a pointer |\n")
+        .s("| `Bool` | `true` or `false` |\n")
+        .s("| `U8[]` | A string: a read-only slice (a view onto memory) of bytes |\n")
+        .s("| `T@` / `T$@` | A pointer to a `T` that only reads / that may write |\n")
+        .s("| `T!E` | A `T`, or the error `E` when the function fails |\n\n").s("## The steps\n\n")
+
+priv fn page_foot(b: Str_builder$@, arena: Arena$@) //< where to go on from the walk
+    b.s("## Where to go from here\n\n").s("| You want to | Read |\n| :-- | :-- |\n")
+        .s("| Look a rule up: the language rule by rule, not for reading through | ")
+    link_to(b, language_doc, arena)
+    b.s(" |\n| Set a project of your own up: an executable to hand out, a program split over ")
+        .s("files, VS Code with the language server and the debugger | ")
+    link_to(b, project_doc, arena)
+    b.s(" |\n")
+
+fn render(laid: U8[], printed: U8[], arena: Arena$@): U8[] //<
+    //< The whole page: the steps in order and the printout
+    $b: = Str_builder.new()
+    defer b.free()
+    page_head(b@, arena)
+    steps: = walk_steps(laid, arena)
+    for s in steps
+        b.s("1. **").s(s.title).s("** — `").s(s.name).s("`\n")
+    for s in steps
+        b.s("\n## ").s(s.title).s("\n\n")
+        if s.prose.len > 0
+            b.s(s.prose).s("\n\n")
+        fenced(b@, "kspl", s.code)
+    b.s("\n## What it prints\n\n")
+    fenced(b@, "", printed)
+    b.c('\n')
+    page_foot(b@, arena)
+    return arena.dup_str(b.slice())

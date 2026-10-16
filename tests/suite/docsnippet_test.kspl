@@ -1,0 +1,121 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that the KSPL code fragments in the documents read as KSPL, and compile as they say
+//<
+//< **The syntax** of every fragment is checked (`ksplc fmt` fails on a syntax error, not on an
+//< undefined name, which a fragment without its context usually has); an unreadable one is excused
+//< only where it holds a `...` / `…`. **The grammar's canonical source is `ksplc/kspl.kspeg`**,
+//< read by the compiler itself. Then every fragment is compiled, and a whole program and an
+//< `// error` mark are held to the result (`tests/support/docsnippet_compile.kspl`).
+import "ksplc/tests/support/harness" as ksplc_harness
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/verdict"
+import "tests/support/conventions_scan" as scan
+import "tests/support/docsnippet_compile" as compile
+import "tests/support/docsnippet_shape" as shape
+import "tests/support/harness"
+
+priv fn parses(path: U8[], src: U8[]): Bool //<
+    //< Has `ksplc fmt` read it and checks only whether it passes as syntax
+    //<
+    //< **The file name decides the notation ksplc reads**, so the fragment is written under the
+    //< name its fence names (`snippet_path`); under a `.kspl` name every indentation one reads as
+    //< broken.
+    io.write_file(path, src) catch
+        return false
+    return ksplc_harness.ksplc_bare(U8[][]::{ "fmt", path }).code == 0
+
+priv const mark_samples: scan.Sample[_] = ::{
+    scan.Sample::{ .text = "x: U8[] = \"n\" // error: it cannot build a value", .hits = true },
+    scan.Sample::{ .text = "cs.bump() // error (bump takes Self$@)", .hits = true },
+    // Not a mark: a word that only begins with it, a mark inside a string, a comment alone.
+    scan.Sample::{ .text = "f(x) // errors are counted", .hits = false },
+    scan.Sample::{ .text = "s: = \"a // error\"", .hits = false },
+    scan.Sample::{ .text = "// error: n is not visible", .hits = false },
+    scan.Sample::{ .text = "f(n@) // OK", .hits = false } //<
+        //< What reads as a line marked refused
+}
+
+priv const stray_samples: scan.Sample[_] = ::{ scan.Sample::{ .text = "// error: n is not visible",
+    .hits = true }, scan.Sample::{ .text = "// ✗ error: a call on the left", .hits = true },
+    scan.Sample::{ .text = "v: = raw[0] // Error: no length", .hits = true },
+    scan.Sample::{ .text = "v: = raw[0] // error: no length", .hits = false },
+    scan.Sample::{ .text = "// the error path", .hits = false } } //<
+        //< What reads as a mark spelt so that it names no line
+
+priv fn marks(text: U8[], _arena: Arena$@): Bool
+    return shape.is_mark(text)
+
+priv fn strays(text: U8[], _arena: Arena$@): Bool
+    return shape.is_stray_mark(text)
+
+priv fn check_marks_fire(arena: Arena$@) //< the reading of a mark can fire, on both sides
+    scan.check_samples("the reading of a `// error` mark can fire",
+        scan.Sample[]::mark_samples, "mark_samples", marks, arena)
+    scan.check_samples("the reading of a mark that names no line can fire",
+        scan.Sample[]::stray_samples, "stray_samples", strays, arena)
+
+priv fn first_line(body: U8[], arena: Arena$@): U8[]
+    for raw in body.lines(arena)
+        t: = raw.trim_spaces()
+        if t.len > 0
+            return t if t.len <= 70 else t.sub(0, 70)
+    return ""
+
+priv fn check_syntax(snippets: List<|shape.Snippet|>@, dir: U8[], arena: Arena$@) //<
+    //< Every fragment reads as KSPL, as it stands or with its statements wrapped in a function
+    laid_path: = fs.join(dir, "snippet.kspl", arena)
+    braced_path: = fs.join(dir, "snippet.kspl", arena)
+    $checked: Sz = 0
+    $skipped: Sz = 0
+    $bad: = Str_builder.new()
+    defer bad.free()
+    $bad_count: Sz = 0
+    for s in snippets
+        path: = laid_path if s.laid else braced_path
+        $lines: = List<|U8[]|>.new(arena)
+        for ln in s.body.lines(arena)
+            lines.push(ln)
+        $none: = List<|Bool|>.new(arena)
+        for _i in Range.asc(lines.len)
+            none.push(false)
+        wrapped: = shape.wrapped(lines@, s.laid, arena)
+        if parses(path, s.body) ||
+            parses(path, shape.text_without(wrapped@, none@, arena))
+            checked += 1
+            continue
+        if shape.has_elision(lines@)
+            skipped += 1
+            continue
+        bad_count += 1
+        if bad_count <= 20
+            bad.s("\n    \{s.doc\}:\{s.line\}: \{first_line(s.body, arena)\}")
+    $name: = Str_builder.new()
+    defer name.free()
+    name.s("a document's KSPL fragments read as KSPL (\{checked\} checked / ")
+    name.s("\{skipped\} carrying an ellipsis)")
+    verdict.check(name.slice(), bad_count == 0, bad.slice())
+
+fn main(): I32
+    arena: = harness.begin(256 * 1024 * 1024)
+    root: = harness.root()
+    dir: = harness.sandbox("docsnippet")
+    docs: = harness.tracked()
+    $snippets: = List<|shape.Snippet|>.new(arena)
+    for rel in docs
+        if !rel.ends_with(".md")
+            continue
+        text: = io.read_file(fs.join(root, rel, arena)) catch
+            continue
+        shape.collect(rel, text, snippets@, arena)
+    // Not one item means the check looks at nothing.
+    if snippets.len == 0
+        return ksplc_harness.fatal("not one KSPL fence in the documents")
+    check_syntax(snippets@, dir, arena)
+    check_marks_fire(arena)
+    compile.run(snippets@, dir, arena)
+    return ksplc_harness.finish()

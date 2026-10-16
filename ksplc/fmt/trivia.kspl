@@ -1,0 +1,270 @@
+//< What the formatter does with what stands between two tokens: comments and blank lines
+//<
+//< **`printer.kspl` writes the tokens; this file handles what lies between them.** A comment keeps
+//< the line and level it was written on, a blank line the author placed stays as one, and a `//<`
+//< too long for its line moves its text to the line below.
+import "ksplc/base/lines" { line_end, opens_its_line }
+import "ksplc/fmt/comment" as fmt_comment
+import "ksplc/fmt/printer" { Formatter }
+import "ksplc/fmt/source" as fmt_source
+import "std/chars"
+import "std/str" { Str_builder }
+
+impl Formatter
+    fn pull_trailing_comment(r: Self$@, open_offset: Sz, close_offset: Sz) //<
+        //< The comment after an inserted `}` belongs to the line before it
+        //<
+        //< The conversion to braces moves no line or column, so where a block's last line ends in a
+        //< comment, the only place left for the `}` is after it.
+        //< Caution: **Only for an inserted `}`.** An inserted `}` lands after a line's code, so a
+        //< `}` that starts its line was typed (a value's, or a block's the notation keeps), and the
+        //< comment after it stays as written. In the brace notation the author placed everything.
+        if !r.from_layout || opens_its_line(r.src, close_offset)
+            return
+        // Caution: **Skip the inserted marks** (`fmt_source.past_mended_marks`). Stop at the first
+        // of a run of `}` and `;` and the comment goes to the outermost close, landing on a `}`
+        // line rather than on the line whose code it describes.
+        after: = fmt_source.past_mended_marks(r.src, close_offset)
+        if r.last_offset <= close_offset && r.src.starts_with("//", after)
+            r.write_one_comment(after)
+        r.pull_tail_comment_lines(open_offset, close_offset, after)
+
+    priv fn pull_tail_comment_lines(r: Self$@, open_offset: Sz, close_offset: Sz, after: Sz) //<
+        //< It writes the comment lines below the inserted `}`, still inside its block
+        //<
+        //< `merge` in `../parse/layout.kspl` walks only code lines, so the `}` lands above them.
+        //< Caution: **Skip past the inserted marks, then let the ordinary trivia code write the
+        //< lines.** Only that code keeps the author's blank lines; a second copy here would break
+        //< Principle 6 in `../../docs/DESIGN-principles.md`.
+        // **A container that closes on anything but `}` has no recorded opening** (`scan_body`
+        // notes only `{` and a compound sigil): a `)` comes with 0, read from the file's start.
+        if open_offset == 0 || open_offset >= close_offset
+            return
+        body: = fmt_source.body_indent_after(r.src, open_offset, close_offset)
+        end: = fmt_source.tail_comment_end(r.src, close_offset, after, body)
+        if end == 0
+            return
+        // The level is still the block's inner one — the caller lowers it once this returns.
+        r.seek_to(after)
+        r.catch_up_trivia(end, false)
+
+    priv fn write_one_comment(r: Self$@, at: Sz) //<
+        //< It writes one line comment, from `at` to the line's end
+        //<
+        //< It moves the position past the comment, so the comment is not written twice.
+        e: = line_end(r.src, at)
+        r.write_space()
+        r.write_comment_text(U8[]::{ .ptr = r.src.ptr + at, .len = e - at }, true)
+        r.write_nl()
+        r.seek_to(e)
+
+    priv fn write_comment_text(r: Self$@, text: U8[], trailing: Bool) //<
+        //< It writes a line comment's text, moving a `//<` too long for its line below the mark
+        //<
+        //< Caution: **Every comment the printer writes goes through here.** The comment after an
+        //< inserted `}` takes another path than the one after a typed `}`, and a width rule on one
+        //< path alone moves a description in one notation and not in the other.
+        if r.carries_summary_down(text, trailing)
+            r.write_summary_below(text)
+        else
+            r.write_raw(text)
+
+    fn write_blank_line(r: Self$@) //< it outputs one blank line
+        //<
+        //< Partway through a line it ends the line first.
+        r.write_nl()
+        r.out.c('\n')
+        r.flags.is_line_start = true
+        r.current_col = 0
+        r.last_char = '\n'
+        r.flags.wrap_indent = false
+        // The run of `//<` is contiguous, so the blank line closes it.
+        r.summary_run_open = false
+
+    fn blank_groups_nothing(r: Self$@, next_char: U8): Bool //<
+        //< Whether a blank line touches a block's edge
+        //<
+        //< That is right after the `{` or right before the `}`. With nothing on one side, it
+        //< separates no groups.
+        //< Caution: **Do not drop the blank line on the line *after* a `}`.** It is the author's
+        //< paragraph break, the last way of grouping that the formatter leaves.
+        return r.last_char == '{' || next_char == '}'
+
+    fn write_pre_comment_sep(r: Self$@, new_lines: Sz, is_suppressed: Bool) //<
+        //< It chooses and writes the separator before a comment
+        //<
+        //< That is a kept blank line, a kept newline, or plain whitespace. A blank line before the
+        //< comment (new_lines > 1) is kept as one; the next character is not known yet, so only the
+        //< block's start is checked.
+        // **A pending newline wins over the suppression**, and its flag is cleared once written. A
+        // comment on the token's line (new_lines == 0) trails and stays.
+        if r.flags.force_next_nl && new_lines > 0
+            // Caution: **Keep the blank line the author placed**, or the heading of a second import
+            // group joins the group above.
+            if new_lines > 1 && !r.blank_groups_nothing(0)
+                r.write_blank_line()
+            else
+                r.write_nl()
+            // Caution: **Ask whether the line continues; do not just clear the flag.** A comment
+            // among a bracket's wrapped elements takes their indent; at column 0 the indentation
+            // notation reads a new top-level item and inserts a `{` where the element was.
+            r.flags.wrap_indent = r.carries_on(true)
+            r.flags.force_next_nl = false
+            return
+        if new_lines > 1 && !is_suppressed && !r.blank_groups_nothing(0)
+            r.write_blank_line()
+        else if new_lines > 0 && !is_suppressed
+            r.write_nl()
+            // **A comment on its own line partway through a value takes the value's indent**, as
+            // the code after it does (`carries_on` in `printer.kspl`).
+            r.flags.wrap_indent = r.carries_on(true)
+        else if !r.flags.is_line_start
+            r.write_space()
+
+    priv fn carries_summary_down(r: Self$@, text: U8[], trailing: Bool): Bool //<
+        //< Whether a trailing `//<` should move its text to the line below
+        //<
+        //< The rule for a description too long for its line ("The documentation a declaration
+        //< carries" in `../../docs/DESIGN-language.md`): the width decides.
+        //< Caution: **Only on the line where the declaration opens.** A mark after a return type,
+        //< on the line where a wrapped heading closes, describes the return; moved down it would
+        //< read as the declaration's own (`mark_offset` in `../base/ast_doc.kspl`). `line_wrapped`
+        //< tells them apart.
+        if !trailing || r.flags.is_line_start || !text.starts_with("//<")
+            return false
+        if text.sub_from(3).trim_spaces().len == 0
+            return false
+        if r.line_wrapped
+            return false
+        return r.current_col + text.len > r.config.column_limit
+
+    priv fn write_summary_below(r: Self$@, text: U8[]) //<
+        //< It leaves the mark on the line and writes its text on the line below, one step in
+        //<
+        //< The mark is written trailing, so `track_summary_run` opens the run here and `indent_for`
+        //< takes the column from it — the same column a hand-written continuation uses.
+        r.write_raw("//<")
+        r.write_nl()
+        $line: = Str_builder.new()
+        defer line.free()
+        line.s("//< ").s(text.sub_from(3).trim_spaces())
+        r.write_raw(line.slice())
+
+    priv fn write_own_comment(r: Self$@, text: U8[], carry: Str_builder$@) //<
+        //< It writes a comment standing on a line of its own, cut where it crosses the limit
+        //<
+        //< What does not fit goes into `carry`, for the paragraph's next line to take up or for
+        //< `flush_carry` to write on lines of its own (`cut_at` in `comment.kspl`).
+        if !r.flags.is_line_start || fmt_comment.keeps_layout(text)
+            r.write_comment_text(text, false)
+            return
+        room: = r.config.column_limit - r.indent_for(text)
+        cut: =
+            fmt_comment.cut_at(text, room) if fmt_comment.disp_width(text) > room else -1
+        if cut < 0
+            r.write_comment_text(text, false)
+            return
+        r.write_comment_text(text.sub(0, cut), false)
+        carry.s(text.sub_from(cut + 1).trim_start())
+
+    priv fn flush_carry(r: Self$@, mark: U8[], carry: Str_builder$@) //<
+        //< It writes the text carried from a cut comment on lines of its own, as many as it needs
+        //<
+        //< Each line goes through the same cut, so carried text never crosses the limit either.
+        $line: = Str_builder.new()
+        defer line.free()
+        for carry.len > 0
+            line.clear().s(mark).s(" ").s(carry.slice())
+            carry.clear()
+            r.write_own_comment(line.slice(), carry)
+            r.write_nl()
+
+    fn catch_up_trivia(r: Self$@, target_offset: Sz, force_no_nl: Bool)
+        if target_offset <= r.last_offset
+            return
+
+        $i: = r.last_offset
+        $end: = target_offset
+        if end > r.src.len
+            end = r.src.len
+
+        $new_lines: Sz = 0
+        is_suppressed: = r.suppress_nl_depth > 0 || force_no_nl
+        // The words cut off a comment line, waiting for the paragraph's next line or for a line of
+        // their own (`write_own_comment`).
+        $carry: = Str_builder.new()
+        defer carry.free()
+        $carry_mark: U8[] = ""
+        $joined: = Str_builder.new()
+        defer joined.free()
+
+        for i < end
+            c: = (r.src.ptr + i)$
+            if c == '\n'
+                new_lines += 1
+                i += 1
+            else if c == ' ' || c == '\t' || c == '\r'
+                i += 1
+            else if c == '/' && i + 1 < end
+                nc: = (r.src.ptr + i + 1)$
+                if nc == '/'
+                    c_start: = i
+                    for i < end && (r.src.ptr + i)$ != '\n'
+                        i += 1
+                    comment_slice: = U8[]::{ .ptr = r.src.ptr + c_start, .len = i - c_start }
+                    // **Carried words join the next line only within one paragraph**: the line
+                    // right below, with the same mark, opening no paragraph of its own.
+                    joins: =
+                        carry.len > 0 && new_lines == 1 && !is_suppressed &&
+                        fmt_comment.mark_of(comment_slice).equals(carry_mark) &&
+                        !fmt_comment.opens_paragraph(comment_slice)
+                    if carry.len > 0 && !joins
+                        r.flush_carry(carry_mark, carry@)
+                    r.write_pre_comment_sep(new_lines, is_suppressed)
+                    $text: = comment_slice
+                    if joins
+                        body: = comment_slice.sub_from(carry_mark.len).trim_start()
+                        joined.clear().s(carry_mark).s(" ").s(carry.slice()).s(" ").s(body)
+                        carry.clear()
+                        text = joined.slice()
+                    if r.flags.is_line_start
+                        carry_mark = fmt_comment.mark_of(text)
+                        r.write_own_comment(text, carry@)
+                    else
+                        r.write_comment_text(text, true)
+                    new_lines = 0
+                    r.write_nl()
+                else
+                    i += 1
+            else
+                break
+
+        if carry.len > 0
+            r.flush_carry(carry_mark, carry@)
+        next_char: U8 = (r.src.ptr + i)$ if i < r.src.len else 0
+        // No whitespace from trivia goes before a '.' (calc_spacing_requirement adds it for
+        // 'return .Ok'). An empty block gets none even with the newline folded, or two passes give
+        // `{ }` then `{}` and fmt is not idempotent.
+        no_space_before: =
+            (next_char == ')' || next_char == ']' || next_char == '>' || next_char == ',' ||
+            next_char == ';' || next_char == '.') || (next_char == '}' && r.last_char == '{')
+        no_space_after: = (r.last_char == '(' || r.last_char == '[' || r.last_char == '<')
+
+        // `end_with_one_nl` ends the file (doing it here as well would double the newline).
+        if new_lines > 1
+            if !is_suppressed && r.blank_groups_nothing(next_char)
+                // A blank line that separates nothing is dropped; only the line is ended (or the
+                // `}` moves up).
+                r.write_nl()
+            else if !is_suppressed
+                r.write_blank_line()
+            else if !r.flags.is_line_start && !no_space_after && !no_space_before
+                r.write_space()
+        else if new_lines == 1
+            if !is_suppressed && !r.flags.is_line_start && !r.flags.force_next_nl &&
+                !no_space_after && !no_space_before
+                r.write_space()
+            else if is_suppressed && !r.flags.is_line_start && !no_space_after && !no_space_before
+                r.write_space()
+
+        r.seek_to(target_offset)

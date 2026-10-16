@@ -16,13 +16,13 @@
 // back after releasing it.
 //
 // It protects one read-modify-write alone: mem.alloc from an ISR while std/mem's heap spinlock is
-// held still freezes, which is why ksos/kernel/heap.kspls puts irq_save/irq_restore around it.
+// held still freezes, which is why ksos/kernel/heap.kspl puts irq_save/irq_restore around it.
 // ==========================================
 #include <stdint.h>
 #include <stddef.h>
 
 // Caution: It **has to be the same width** as the `Sz` (= ptrdiff_t) in the C ksplc generates. The
-// KSPL side's extern "C" declarations (std/mem.kspls, std/thread.kspls) are written with Sz.
+// KSPL side's extern "C" declarations (std/mem.kspl, std/thread.kspl) are written with Sz.
 typedef ptrdiff_t Sz;
 
 // It asks by the same condition as ksplc/gen/runtime/core.c, the side it stands in for.

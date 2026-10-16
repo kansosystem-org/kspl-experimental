@@ -1,0 +1,46 @@
+//< ARM Cortex-M (mps2-an385) bare metal: a probe showing an interrupt-driven UART0 RX echo
+//<
+//< What it verifies: the `wait-with-wfi` loop never returns, and hangs, if the NVIC/ISR does not
+//< work (WFI really halts the core, and there is no busy-polling fallback). Like the other
+//< Cortex-M demos it runs as one task on ksos/kernel/task's scheduler (so that the link includes
+//< the ksos_tick that SysTick_Handler needs), but it uses no blocking synchronization such as a
+//< semaphore on purpose (the reason is at the top of ksos/drivers/mps2/uart_irq.kspl).
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/mps2/uart_irq" as uart
+import "ksos/kernel/task" + { Task }
+import "std/strfmt" as _strfmt // `:02x`
+
+extern "C"
+    fn ksos_port_wfi()
+
+$tcb_probe: Task
+$stack_probe: U8[4096]
+
+fn uart_irq_echo_task(_arg: Void$@): Void
+    con.puts("[semihosting] Kanso OS UART0 interrupt-driven RX echo probe starting...\n")
+
+    uart.init()
+    con.puts("[IRQ] waiting for a byte via WFI (real interrupt-driven wait; hangs forever\n")
+    con.puts("[IRQ] here if NVIC/ISR is not actually wired correctly)...\n")
+
+    for !uart.has_byte()
+        ksos_port_wfi()
+    byte: = uart.take_byte()
+
+    con.out().s("[IRQ] received byte: 0x\{byte:02x\} (ISR fire count: \{uart.irq_count()\})\n")
+    con.puts("[IRQ] echoing it back...\n")
+    $echoed: = true
+    uart.putc(byte) catch
+        con.puts("[IRQ] UART0 putc() timed out\n")
+        echoed = false
+
+    con.puts("[semihosting] UART0 interrupt-driven RX echo probe done.\n")
+    // The byte itself is matched outside (`tests/uart_probe.py`), which holds the verdict the gate
+    // reads; these say what the probe saw from its side.
+    con.check("the byte came in through the RX interrupt", uart.irq_count() > 0)
+    con.check("it went back out", echoed)
+    con.print_summary("UART0 RX interrupt echo, the probe's side")
+// The bare-metal entry called from startup.S.
+#export
+fn ksos_main()
+    task.run_single_task(tcb_probe@, U8$[]::stack_probe, uart_irq_echo_task, "uart-irq", con.exit)

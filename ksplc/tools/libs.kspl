@@ -1,0 +1,70 @@
+//< The libraries a program names (`#link` on an `extern` block)
+//<
+//< A compile writes them with `--emit-libs=` (`write_libs_file`), and `ksplc run` and `ksplc build`
+//< read them back for the link (`append_named_libs`). Split from `run.kspl` for length.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as _base_ast_ext // `link_name` / `is_attribute_named`
+import "ksplc/base/core" as _base_core // `is_one_of`
+import "std/chars" // `trim_spaces`
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" { Str_builder }
+
+fn write_libs_file(libs_path: U8[], root: Ast_node$@): Void!io.Io_error //<
+    //< It writes the libraries the kept `extern` blocks name into the libs file (`--emit-libs=`)
+    //<
+    //< One line of `-l<name>` words (the shape `info link-libs` answers in), empty where none is
+    //< named; the reader is append_named_libs below.
+    $names: = List<|U8[]|>.new(null)
+    defer names.free()
+    append_program_libs(root, names@)
+    $out: = Str_builder.new()
+    defer out.free()
+    for i in Range.asc(names.len)
+        out.s(" " if i > 0 else "").s("-l").s(names.get(i))
+    out.c('\n')
+    io.write_file(libs_path, out.slice())!
+
+fn append_program_libs(root: Ast_node$@, names: List<|U8[]|>$@) //<
+    //< It appends the libraries the kept `extern` blocks name, in the order a link needs them
+    //<
+    //< **A file's names come before those of the files it imports**, as a linker reading once from
+    //< the left needs, each name once at its first place. A block `#cfg` dropped is absent, so a
+    //< library follows the flag that keeps its declarations.
+    // root holds each file's declarations together, a file after the files it imports ("dependency
+    // -> self" in `../parse/load.kspl`), so the files are walked from the last.
+    decls: = root.children
+    $end: = decls.len
+    for end > 0
+        file: = decls.get(end - 1).loc.file()
+        $start: = end - 1
+        for start > 0 && decls.get(start - 1).loc.file().equals(file)
+            start -= 1
+        for i in Range.new(start, end, 1)
+            append_link_names(decls.get(i), names)
+        end = start
+
+priv fn append_link_names(decl: Ast_node$@, names: List<|U8[]|>$@) //<
+    //< It adds the names in an `extern` block's `#link`s that are not yet in names
+    attrs: =
+        decl.find_child(.k_attribute_list) if decl.kind_id == .k_decl_extern_block else null
+    if attrs == null
+        return
+    for attr in attrs.children
+        name: = attr.link_name() if attr.is_attribute_named("link") else ""
+        if name.len > 0 && !name.is_one_of(names.slice())
+            names.push(name)
+
+fn append_named_libs(libs_path: U8[], list: List<|U8[]|>$@, arena: Arena$@): Bool //<
+    //< It appends to list the libraries the compile wrote (`--emit-libs`)
+    //<
+    //< False where the file cannot be read: the compile always writes it, and linking without it
+    //< fails on undefined names, far from the cause.
+    text: = io.read_file(libs_path) catch
+        return false
+    defer dealloc(Void$@::text.ptr)
+    for word in text.trim_spaces().split(' ', arena)
+        if word.len > 0
+            list.push(arena.dup_str(word))
+    return true

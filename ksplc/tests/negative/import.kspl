@@ -1,0 +1,547 @@
+//< Imports, `use`, visibility and cycles
+//<
+//< Each case below is compiled alone, as the file its head names.
+// ==== case circular_enum_payload
+//< A cycle through an enum's payload is of infinite size too
+//<
+//< Only one variant is live at run time, but the size is settled by the largest payload among all
+//< variants.
+// EXPECT: recursive data structure with infinite size detected
+enum E
+  a(v: E)
+  b
+fn main()
+  _x: E = E.b
+// ==== case circular_struct_by_value
+//< A struct embedding itself as a value field is a compile error, not a crash
+//<
+//< Such a struct has an infinite size. The compiler refuses it rather than crashing on native stack
+//< exhaustion (a segfault). This fixture reaches it through a position that needs the size (a
+//< global); the case `circular_struct_unused` covers a type that is never used.
+// EXPECT: recursive data structure with infinite size detected
+struct S
+  f: S
+$g: S
+fn main()
+  _x: = g.f
+// ==== case circular_struct_mutual
+//< A cycle where two structs hold each other by value
+//<
+//< Measured from either declaration it goes round the same ring, so the report stays at one item
+//< (the same cause is not lined up once per type).
+// EXPECT: recursive data structure with infinite size detected
+struct A
+  b: B
+struct B
+  a: A
+fn main()
+  _x: A
+// ==== case circular_struct_unused
+//< A struct of infinite size is rejected even where nothing needs its size
+//<
+//< With a local's declaration alone (no global and no sizeof) the layout computation used not to
+//< run, and the generated C it passed through into had the C compiler saying incomplete type.
+// EXPECT: recursive data structure with infinite size detected
+struct S
+  f: S
+fn main()
+  _x: S
+// ==== case circular_struct_via_array
+//< A cycle through a fixed-length array field is of infinite size too
+//<
+//< Whatever the element count, an array embeds its elements by value, so `S[2]` holds two `S`.
+// EXPECT: recursive data structure with infinite size detected
+struct S
+  f: S[2]
+fn main()
+  _x: S
+// ==== case circular_struct_via_generic
+//< A cycle through one generic wrapper is of infinite size too
+//<
+//< The field of a monomorphised `W<|A|>` is an `A` by value, so `A` holds itself.
+// EXPECT: recursive data structure with infinite size detected
+struct W<|T|>
+  v: T
+struct A
+  w: W<|A|>
+fn main()
+  _x: A
+// ==== case export_on_method
+//< `#export` cannot be written on a method
+//<
+//< **Unrefused, C that does not build comes out with zero diagnostics** (the caller alone gets
+//< `type.method`, not a C identifier). A method's name is unique only with its type, so it cannot
+//< be the symbol as written; to call it from C, wrap it in a free function (as in `tests/prog/`).
+// EXPECT: attribute '#export' cannot be written on a method
+import "std/io"
+
+pub struct Thing
+  pub v: I32
+
+impl Thing
+  #export
+  pub fn bump(r: Self@): I32
+    return r.v + 1
+
+fn main(): I32
+  t: = Thing::{ .v = 1 }
+  io.out().s("\{t.bump()\}\n")
+  return 0
+// ==== case import_absolute_path
+//< An absolute `import` path is refused before anything is opened
+//<
+//< It fits none of the three rules (its first segment is empty, not a package). On Windows,
+//< opening `//host/share/x` offers that host the user's credentials, so the refusal comes before
+//< the file is looked for (`refused_written` in `ksplc/base/package.kspl`).
+// EXPECT: '//evilhost/share/mod' is an absolute path
+// EXPECT-NOT: import not found
+import "//evilhost/share/mod" as remote
+
+fn main(): I32
+  return 0
+// ==== case import_lang_is_rejected
+//< `std/lang` is in every file without an import line, so writing one for it is an error
+//<
+//< **An error, not a lint:** writable, it gives two ways to the same name, "implicitly" and "by an
+//< import line" (docs/DESIGN-principles.md "One notation per purpose"); mend one alone and the other passes in
+//< silence. The analysis goes on as though the line were absent, so the `Option` below has to
+//< resolve.
+// EXPECT: is imported into every file
+// EXPECT-NOT: undefined path or identifier 'Option'
+import "std/lang"
+
+fn find(): I32?
+  return .some(1)
+
+fn main(): I32
+  return find().unwrap_or(0)
+// ==== case import_not_found
+//< Checks that an unreadable `import` is reported where it was written
+//<
+//< **The paths searched alone are not enough.** Which file asked for it is not known, and finding
+//< out wants a full-text search. Every other diagnostic holds `file:line:column`, a body and an
+//< underline.
+// EXPECT: import not found: 'std/no_such_file_here'
+// EXPECT-NOT: parse/io/file_not_found
+import "std/no_such_file_here" as gone
+
+fn main(): I32
+  return 0
+// ==== case import_path_interpolated
+//< An import's path cannot hold an interpolation
+//<
+//< The grammar allows a general `String` in an import's path, so this passes as syntax. Without
+//< refusing it, it proceeds with `k_string`'s child absent and becomes an ICE.
+// EXPECT: an import path must be a plain string literal
+import "std/\{1\}"
+
+fn main(): I32
+  return 0
+// ==== case import_path_raw_string
+//< An import's path cannot be written as a raw string (`"""`)
+//<
+//< Caution: Without refusing it, the
+//< handling that strips the quotes one character at a time makes a different path, `""std/io""`,
+//< and goes hunting for that file in silence.
+// EXPECT: an import path must be a plain string literal
+import """std/io"""
+
+fn main(): I32
+  return 0
+// ==== case import_selectors_need_plus
+//< An import that gives a name with `as` but has no `+`
+//<
+//< **The spelling disagrees with itself:** `as` asks for a name while braces with no `+` say "bare
+//< only". Unrefused, "a name is given yet `m.` cannot be written" passes in silence. **Only the
+//< writer knows which to remove**, so the diagnostic offers both adding `+` and dropping `as`.
+// EXPECT: 'as' names the file, so the selector list needs '+'
+// EXPECT: Drop the 'as' to bring in only the selected names
+import "std/mem" as m { Arena }
+
+fn main(): I32
+  return 0
+// ==== case import_symbol_missing
+//< A selective import naming something the target lacks is rejected at the import line
+//<
+//< Unchecked, a misspelling in `import "p" { A };` passes the import line in silence, showing up
+//< at the use as `undefined path or identifier` or, never used, nowhere at all
+//< ("Name resolution with no namespace goes through one function" in `ksplc/docs/DESIGN-diagnostics.md`).
+// EXPECT: has no symbol named 'Ci33'
+import "std/checked_int" { Ci33 }
+
+fn main(): I32
+  return 0
+// ==== case lang_prefix_unknown_member
+//< `std/lang`'s import alias is present in every file implicitly
+//<
+//< So a wrong name gets "lang is there, but does not export that name". **Say "the prefix is not
+//< known" and the alias is out:** `impl My_type: lang.Ref_counted` is unwritable, and a file that
+//< declares the same name cannot conform to a trait the compiler knows ("Why compiler-known traits are confined to `std/lang`" in docs/DESIGN-language.md).
+// EXPECT: error: undefined path or identifier 'lang.Nope'
+// EXPECT: 'lang' names a file, but it does not export 'Nope'
+// EXPECT-NOT: neither a known import alias nor a type
+import "std/io"
+
+pub fn main(): I32
+  io.out().s("\{lang.Nope\}").c('\n')
+  return 0
+// ==== case qualified_generic_variant_not_in_file
+//< A generic enum's enumerators have their alias prefix checked too, just as types do
+//<
+//< Silence a path with type arguments across the board and the qualification is ignored, making a
+//< spelling that passes whatever alias is prefixed (the generated C becomes identical to the
+//< unqualified case, so no clue that a mistake was made comes out anywhere).
+// EXPECT: undefined path or identifier 'str.Option<|I32|>'
+import "std/str"
+
+fn main()
+  _x: I32? = str.Option<|I32|>.none
+// ==== case qualified_type_not_in_file
+//< Once a name has an alias prefix, it is looked up only behind that alias
+//<
+//< A generic template is registered under its short name too, so drawing by the short name as well
+//< makes even a name absent from that file count as found. Nothing comes out at the declaration's
+//< position, and it falls far away at the place of use as "another type has no such method".
+// EXPECT: undefined type 'io.List'
+import "std/io"
+
+fn take(_l: io.List<|I32|>) {}
+
+fn main()
+  io.out().s("unreachable\n")
+// ==== case selective_import_file_name
+//< The file name a selective import leaves out is suggested, with the `+` that brings it in
+//<
+//< `import "p" { A }` binds `A` alone, so `p.x` is undefined. The interpolation after it calls the
+//< generic `put`, and instantiating it on a stand-in type would report errors inside `std/lang`
+//< the user never wrote: the mistake is one error.
+// EXPECT: error: undefined path or identifier 'io'
+// EXPECT: brings in only the names listed
+// EXPECT: import "std/io" + { ... }
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: 'io.err'
+// EXPECT-NOT: std/lang
+import "std/io" { File_stream }
+import "std/sys"
+
+fn main(): I32
+  path: = sys.args()[0]
+  io.err().s("wc: \{path\}\n")
+  return 0
+// ==== case use_after_free
+//< Use after free: a local that has been .free()d is passed as a value
+//<
+//< A use of the whole thing rather than a field access.
+// EXPECT: may already be freed here
+struct Foo
+  priv other: I32
+impl Foo
+  priv fn free($r: Self$@)
+    r.other = 0
+fn takes(x: Foo) {}
+fn main()
+  $f: = Foo::{ .other = 2 }
+  f.free()
+  takes(f)
+
+// The declaration that has the release tracked (Owned in std/lang.kspl).
+impl Foo: Owned {}
+// ==== case use_after_free_before_block_dealloc
+//< A use between a pointer's `free()` and its block's `dealloc` is still a use after free
+//<
+//< Only the `dealloc` that gives the block back is let through, not a read of what `free()` released.
+// EXPECT: variable 'xs' may already be freed here
+// EXPECT: Finished with 1 error(s)
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  _n: = xs.len
+  mem.dealloc(Void$@::xs)
+// ==== case use_after_free_block_dealloc_ok
+//< A pointer's `free()` leaves its block, which `dealloc` may still give back
+//<
+//< A list `create(null)` placed on the heap is freed so, on the straight path, where only one
+//< branch freed the contents, and from two `defer`s. The case fails deliberately on another
+//< variable, by the same check: a type error elsewhere in the body would skip the check, and the
+//< EXPECT-NOT would then pass on nothing.
+// EXPECT: variable 'w' may already be freed here
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: variable 'xs'
+// EXPECT-NOT: variable 'ys'
+// EXPECT-NOT: variable 'zs'
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  mem.dealloc(Void$@::xs)
+
+  ys: = List<|I32|>.create(null)
+  if ys.len == 0
+    ys.free()
+  mem.dealloc(Void$@::ys)
+
+  zs: = List<|I32|>.create(null)
+  defer mem.dealloc(Void$@::zs)
+  defer zs.free()
+
+  w: = List<|I32|>.create(null)
+  w.free()
+  _n: = w.len
+// ==== case use_after_free_block_dealloc_then_use
+//< After the block's `dealloc` nothing is left, so any use is refused
+// EXPECT: variable 'xs' may already be freed here
+// EXPECT: Finished with 1 error(s)
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  mem.dealloc(Void$@::xs)
+  _n: = xs.len
+// ==== case use_after_free_block_dealloc_twice
+//< A second `dealloc` of the block is a double free
+//<
+//< Also where one branch gave the block back and the other only freed the contents.
+// EXPECT: variable 'xs' may already be freed here
+// EXPECT: variable 'ys' may already be freed here
+// EXPECT: Finished with 2 error(s)
+import "std/ds" + { List }
+import "std/mem"
+
+fn main()
+  xs: = List<|I32|>.create(null)
+  xs.push(1)
+  xs.free()
+  mem.dealloc(Void$@::xs)
+  mem.dealloc(Void$@::xs)
+
+  ys: = List<|I32|>.create(null)
+  if ys.len == 0
+    mem.dealloc(Void$@::ys)
+  else
+    ys.free()
+  mem.dealloc(Void$@::ys)
+// ==== case use_after_free_block_dealloc_when_free_gave_it
+//< A `free()` whose body gives back its receiver leaves no block for `dealloc`
+//<
+//< Its body is followed one level, as for a wrapper, so the `dealloc` after it is a double free.
+// EXPECT: variable 'p' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct S
+  v: I32
+
+impl S
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
+
+fn main()
+  p: = mem.alloc_as<|S|>()
+  p.free()
+  dealloc(Void$@::p)
+
+// The declaration that has the release tracked (Owned in std/lang.kspl).
+impl S: Owned {}
+// ==== case use_after_free_receiver_ok
+//< The counterpart of the two cases above
+//<
+//< Where the release happens once, or where it is reassigned after the release, no diagnostic comes
+//< out. The case fails on purpose through the same check, on another variable after the rest.
+// EXPECT: variable 'w' may already be freed here
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: variable 'p'
+// EXPECT-NOT: variable 'b'
+import "std/mem"
+import "std/mem" { dealloc }
+import "std/str"
+import "std/str" { Str_builder }
+
+priv struct S
+  v: I32
+
+impl S
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
+
+fn main()
+  $p: = mem.alloc_as<|S|>()
+  p.v = 1
+  p.free()
+  p = mem.alloc_as<|S|>()
+  _y: = p.v
+  p.free()
+
+  $b: = Str_builder.new()
+  defer b.free()
+  b.s("x")
+  _n: = b.len
+
+  w: = mem.alloc_as<|S|>()
+  w.free()
+  _z: = w.v
+// ==== case use_after_free_via_dealloc_fn
+//< A release is not only the method form (`x.free()`)
+//<
+//< A `dealloc(x)` is a release too, and its actual argument ordinarily carries a cast to `Void$@`,
+//< so the wrappings (`@` / `::`) are peeled off and it is walked back to the original local
+//< (ksplc/docs/DESIGN-diagnostics.md "Measuring what suppression costs").
+// EXPECT: variable 'p' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct S
+  v: I32
+
+fn main()
+  p: = mem.alloc_as<|S|>()
+  dealloc(Void$@::p)
+  _x: = p.v
+// ==== case use_after_free_via_dealloc_wrapper
+//< A release wrapper whose body uses the `dealloc(x)` form is followed one level
+//<
+//< `free()`'s last line is mostly this rather than the method form, so without looking here not one
+//< release wrapped under another name can be followed (ksos's heap_free is exactly this shape).
+// EXPECT: variable 'q' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct P
+  v: I32
+
+// The name is not `free`, and the type does not conform to `Owned` either. Even so, the body
+// releases the parameter itself, so the caller's actual argument is treated as released.
+pub fn release(p: P$@)
+  dealloc(Void$@::p)
+
+fn main()
+  q: = mem.alloc_as<|P|>()
+  release(q)
+  _x: = q.v
+// ==== case use_after_free_via_method_wrapper
+//< Use after free (across a function boundary, method form)
+//<
+//< A method call's receiver heads the parameters but is absent from the argument list; without
+//< mending that offset, a release wrapped in a method under a name other than `free` passes whole.
+// EXPECT: may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct S
+  v: I32
+
+impl S
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
+
+  // The method's name not being `free`, a decision looking at the name alone does not count it
+  // as a release.
+  fn close_it(r: Self$@)
+    r.free()
+
+fn main()
+  p: = mem.alloc_as<|S|>()
+  p.close_it()
+  _x: = p.v
+
+// The declaration that has the release tracked (Owned in std/lang.kspl).
+impl S: Owned {}
+// ==== case use_after_free_via_receiver
+//< A use in the receiver position after a release is a use after free too
+//<
+//< The access may be a field read, a field write or a method call. Suppress the check itself at the
+//< receiver position and all that can be detected is the most harmless whole copy
+//< (ksplc/docs/DESIGN-diagnostics.md "Measuring what suppression costs").
+// EXPECT: variable 'p' may already be freed here
+import "std/mem"
+import "std/mem" { dealloc }
+
+priv struct S
+  v: I32
+
+impl S
+  priv fn free(r: Self$@)
+    dealloc(Void$@::r)
+
+fn main()
+  p: = mem.alloc_as<|S|>()
+  p.free()
+  _x: = p.v
+
+// The declaration that has the release tracked (Owned in std/lang.kspl).
+impl S: Owned {}
+// ==== case use_after_free_via_wrapper
+//< Use after free (across a function boundary)
+//<
+//< It is detected where a wrapper function under another name .free()s internally.
+// EXPECT: may already be freed here
+struct Foo
+  priv other: I32
+impl Foo
+  priv fn free($r: Self$@)
+    r.other = 0
+fn close_it(x: Foo$@)
+  x.free()
+fn takes(x: Foo) {}
+fn main()
+  $f: = Foo::{ .other = 2 }
+  close_it(f@)
+  takes(f)
+
+// The declaration that has the release tracked (Owned in std/lang.kspl).
+impl Foo: Owned {}
+// ==== case vis_wider_than_impl_target
+//< An `impl`'s methods do not reach wider than the target type either
+// EXPECT: widens nothing
+// EXPECT-NOT: [
+struct Unit_local
+  n: I32
+
+impl Unit_local
+  pub fn get(r: Self): I32
+    return r.n
+
+fn main(): I32
+  u: = Unit_local::{ .n = 1 }
+  return u.get()
+// ==== case vis_wider_than_struct
+//< A field visibility wider than its type's widens nothing, and is reported
+//<
+//< Code that cannot name the type cannot reach the fields either (Principle 5). Let it pass in
+//< silence and whoever wrote it is left believing they published it.
+// EXPECT: widens nothing
+// EXPECT-NOT: [
+priv struct Hidden
+  pub x: I32
+
+fn main(): I32
+  h: = Hidden::{ .x = 1 }
+  return h.x
+// ==== case vis_wider_than_trait
+//< The same holds for a trait's methods
+//<
+//< The other direction (a `priv fn` inside a `pub trait`) narrows, so it passes.
+// EXPECT: widens nothing
+// EXPECT-NOT: [
+priv trait Hidden_trait
+  pub fn m(r: Self): I32
+
+pub struct Box
+  pub n: I32
+
+impl Box: Hidden_trait
+  pub fn m(r: Self): I32
+    return r.n
+
+fn main(): I32
+  b: = Box::{ .n = 1 }
+  return b.m()

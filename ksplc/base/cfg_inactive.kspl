@@ -1,0 +1,54 @@
+//< The ranges a `#cfg()` left out, kept so the editor can say why nothing is there
+//<
+//< The normalization records each range (`../parse/normalize.kspl`), the AST cache carries them
+//< across a compile (`../parse/ast_cache.kspl`), and a hover and the pointer check read them
+//< back. They live on base_core.arena, so the LSP's rewind of that arena forgets them too.
+import "ksplc/base/core" as base_core
+import "ksplc/base/locate" as base_locate
+import "std/ds" { List }
+
+struct Cfg_inactive //< a range left unanalysed because its `#cfg()` did not hold
+    //<
+    //< A dropped declaration is gone from the AST, so a hover asks here why nothing shows.
+    file: U8$[]
+    offset: Sz
+    span: Sz
+    flag: U8$[]
+    is_neg: Bool
+
+$cfg_inactive: List<|Cfg_inactive|> = ::{}
+
+fn clear() //< discards the ranges before their arena is rewound, keeping the list's capacity
+    cfg_inactive.len = 0
+
+fn record_cfg_inactive(file: U8[], offset: Sz, span: Sz, flag: U8[], is_neg: Bool) //<
+    //< It stores a dropped range
+    //<
+    //< The strings live on base_core.arena, for the document's lifetime (like print_diagnostic's).
+    //<
+    //< Caution: **A compile collects them too**, though it reads none: the editor reads back the
+    //< AST cache entry a compile wrote (`../parse/ast_cache.kspl`), which would otherwise hold
+    //< none.
+    if base_core.arena == null
+        return
+    region: = Cfg_inactive::{ .file = base_core.arena.dup_str(file), .offset = offset, .span = span,
+        .flag = base_core.arena.dup_str(flag), .is_neg = is_neg }
+    cfg_inactive.push(region)
+
+fn find_cfg_inactive(file: U8[], offset: Sz): Cfg_inactive? //<
+    //< It returns the dropped range that holds offset
+    //<
+    //< Where ranges nest, it returns **the innermost** (the declaration pointed at, not its
+    //< `impl`).
+    if base_core.arena == null
+        return .none
+    $best: Cfg_inactive = ::{ .file = "", .offset = 0, .span = 0, .flag = "", .is_neg = false }
+    $found: = false
+    for region in cfg_inactive
+        if !base_locate.is_same_file(region.file, file) || offset < region.offset ||
+            offset >= region.offset + region.span
+            continue
+        if !found || region.span < best.span
+            best = region
+            found = true
+    return .some(best) if found else .none

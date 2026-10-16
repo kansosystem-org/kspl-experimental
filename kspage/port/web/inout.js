@@ -1,7 +1,7 @@
 // ==========================================
 // kspage's page — import and export in other formats: Markdown and CSV, **separate
 // from the reloadable save** (these texts hold no styles, so reading them back does not restore the
-// document: the header of [`inout.kspls`](inout.kspls)).
+// document: the header of [`inout.kspl`](inout.kspl)).
 // Caution: **Put nothing here that replaces the current document.** This file only downloads or
 // inserts into the current document; opening (JSON or text), where to write back and the
 // document's name belong to [`file.js`](file.js). Split off for the 1000-line-per-file cap

@@ -34,7 +34,7 @@ function kspageApi(ks) {
     // Where the slide list is shown, **set by the page** (unset, no list); redrawn each time.
     slideStrip: null,
     // Sets the width and redraws. **Pass the container's width as it is** — one document unit is
-    // one CSS pixel (`kspage/docs/DESIGN.md`'s "Whether the browser or the page holds the zoom").
+    // one CSS pixel (`kspage/docs/DESIGN-application.md`'s "Whether the browser or the page holds the zoom").
     resize(cssWidth) { ks.width = cssWidth; draw(); },
     // The viewer's overrides, **not document settings**: the colors fitted to the screen, and
     // whether outside images are read in.
@@ -104,7 +104,7 @@ function kspageApi(ks) {
     // reported apart**, with opposite fixes); **not copied into the page** (the two would drift).
     docLimit() { return w.kspage_web_doc_limit(); },
     // Whether it is open read-only, **not a property of the document** (neither saved nor exported).
-    // Caution: **Not just a flag for hiding the tools** — the core refuses (`write/edit.kspls`'s
+    // Caution: **Not just a flag for hiding the tools** — the core refuses (`write/edit.kspl`'s
     // `shut`), stopping what gets past the hidden tools (shortcuts, pasting).
     readOnly() { return w.kspage_web_read_only() !== 0; },
     setReadOnly(on) { w.kspage_web_set_read_only(on ? 1 : 0); },

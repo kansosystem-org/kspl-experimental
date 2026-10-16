@@ -1,0 +1,178 @@
+//< Tokens in and out: the tokenizer's round trips, and the sampler's pick of the next token
+import "ksai/sampler" as ai_sampler
+import "ksai/tensor" { Tensor }
+import "ksai/tokenizer" as ai_tokenizer
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/prng"
+import "std/str"
+import "std/verdict"
+
+fn test_tokenizer_roundtrip(arena: Arena$@)
+    verdict.start("[Tokenizer] decoding is symmetrical with encoding test...")
+    $tok: = ai_tokenizer.Tokenizer.new(arena)
+
+    tok.add_token("K", 1)
+    tok.add_token("a", 2)
+    tok.add_token("n", 3)
+    tok.add_token("s", 4)
+    tok.add_token("o", 5)
+    tok.add_token(" ", 6)
+    tok.add_token("an", 7)
+    tok.add_token("so", 8)
+    tok.add_token("Kan", 9)
+    tok.add_token("Kanso", 10)
+    tok.add_token("AI", 11)
+
+    tok.add_merge(2, 3, 7) // a + n -> an
+    tok.add_merge(4, 5, 8) // s + o -> so
+    tok.add_merge(1, 7, 9) // K + an -> Kan
+    tok.add_merge(9, 8, 10) // Kan + so -> Kanso
+    text: = "Kanso AI"
+    // Encodes with the space and AI split by hand (a real pre-pass splits at word boundaries first)
+    tokens: = tok.encode("Kanso", arena)
+    tokens.push(6) // Space
+    tokens.push(11) // AI
+
+    assert(tok.decode(tokens, arena).equals(text), "decode must invert encode")
+    verdict
+        .pass("decoding a sequence encoded through the merge table gives the original text back.")
+
+fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
+    //< A text encoded again after a rule is added uses the rule, and a repeat gives the same IDs
+    //<
+    //< Caution: **Encode before the addition too**: the cache is filled by the first encoding, so a
+    //< cache kept past an addition would answer with the IDs from before it.
+    verdict.start("[Tokenizer] the cache of merged chunks follows added rules")
+    $tok: = ai_tokenizer.Tokenizer.new(arena)
+    tok.add_token("a", 1)
+    tok.add_token("b", 2)
+    tok.add_token("ab", 3)
+    before: = tok.encode("ab", arena)
+    assert(before.len == 2, "with no rule, a and b stay apart")
+    again: = tok.encode("ab", arena)
+    assert(again.len == 2 && again[0] == 1 && again[1] == 2, "a repeat gives the same IDs")
+    tok.add_merge(1, 2, 3)
+    after: = tok.encode("ab", arena)
+    assert(after.len == 1 && after[0] == 3, "the rule added after an encoding is taken")
+    verdict.pass("a repeat is answered alike, and a rule added later is taken")
+
+fn test_tokenizer_keeps_its_size() //<
+    //< A tokenizer used for its lifetime grows only while its cache of chunks fills
+    //<
+    //< **Every result is on the caller's arena**, and a chunk past the cache's cap is merged in the
+    //< result itself: a server keeps one tokenizer for its lifetime, so anything else it put on its
+    //< own arena would grow without limit.
+    verdict.start("[Tokenizer] encoding and decoding leave the tokenizer's arena as it was...")
+    own: = Arena.new(1024 * 1024)
+    defer own.free()
+    $tok: = ai_tokenizer.Tokenizer.new(own)
+    tok.add_token("a", 1)
+    tok.add_token("b", 2)
+    tok.add_token("ab", 3)
+    tok.add_token(" ", 4)
+    tok.add_merge(1, 2, 3)
+    work: = Arena.new(64 * 1024)
+    defer work.free()
+    _warm: = tok.encode("ab ab", work)
+    held: = own.get_total_used()
+    for _i in Range.asc(1000)
+        ids: = tok.encode("ab ab", work)
+        assert(tok.decode(ids, work).equals("ab ab"), "the text decodes back")
+        assert(tok.decode_one(3).equals("ab"), "one ID decodes to its word")
+        work.reset()
+    assert(own.get_total_used() == held, "a cached text adds nothing to the tokenizer")
+    // More distinct words than the cache holds, then new ones once it is full.
+    $words: = str.Str_builder.new()
+    defer words.free()
+    for i in Range.asc(70000)
+        words.s(" \{I32::i\}")
+    _full: = tok.encode(words.slice(), work)
+    work.reset()
+    full: = own.get_total_used()
+    _past: = tok.encode(" 70000 70001 70002 123456789", work)
+    assert(own.get_total_used() == full, "a word past the cache's cap adds nothing")
+    verdict.pass("")
+
+priv fn broken_line(vocab: U8[], merges: U8[]): Sz //<
+    //< The line `load` names as broken in the pair written out, or 0 where it takes them
+    dir: = "out/tmp/ksai_tokenizer_load"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
+    io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
+    scratch: = Arena.new(1024 * 1024)
+    defer scratch.free()
+    $tok: = ai_tokenizer.Tokenizer.new(scratch)
+    tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
+        catch e
+        switch e
+        case .broken(_path, line)
+            return line
+        default
+            panic("the files written must be readable")
+    return 0
+
+fn test_tokenizer_load(arena: Arena$@) //<
+    //< `load` reads what `train_bpe.kspl` writes, and refuses a damaged line by its number
+    //<
+    //< **A line skipped in silence** would make every text it touches encode to other IDs.
+    verdict.start("[Tokenizer] load reads the two files, and names a damaged line...")
+    vocab: = "0\t\n1\t61\n2\t62\n3\t6162\n"
+    merges: = "1 2 3\n"
+    dir: = "out/tmp/ksai_tokenizer_load"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    io.write_file("out/tmp/ksai_tokenizer_load/vocab.txt", vocab) catch panic("vocab must write")
+    io.write_file("out/tmp/ksai_tokenizer_load/merges.txt", merges) catch panic("merges must write")
+    $tok: = ai_tokenizer.Tokenizer.new(arena)
+    tok.load("out/tmp/ksai_tokenizer_load/vocab.txt", "out/tmp/ksai_tokenizer_load/merges.txt")
+        catch panic("the files train_bpe.kspl would write must load")
+    ids: = tok.encode("ab", arena)
+    assert(ids.len == 1 && ids[0] == 3, "the merge loaded joins a and b into 3")
+    assert(tok.decode(ids, arena).equals("ab"), "the word loaded decodes back")
+    assert(broken_line("0\t\n1\t6\n", merges) == 2, "an odd hex digit is refused")
+    assert(broken_line("0\t\n1x\t61\n", merges) == 2, "an ID with a letter in it is refused")
+    assert(broken_line("0\t\n1 61\n", merges) == 2, "a line with no tab is refused")
+    assert(broken_line("1\t9999999999\n9999999999\t61\n", merges) == 2, "an ID past I32 is refused")
+    assert(broken_line(vocab, "\n1 2\n") == 2, "a merge with two IDs is refused")
+    assert(broken_line("0\t\r\n1\t61\r\n", "1 1 2\r\n") == 0, "CRLF line ends are taken")
+    $bare: = ai_tokenizer.Tokenizer.new(arena)
+    $named: U8[] = ""
+    bare.load_text("0\t\n1\t61\n", "1 2\n") catch e
+        switch e
+        case .broken(path, _line)
+            named = path
+        default {}
+    assert(named.equals("merges"), "load_text names the text a damaged line is in")
+    verdict.pass("the two files load into working rules, and each damaged line is named.")
+
+// ==========================================
+// ksai/sampler: tests where the next token is picked.
+//
+// **The random numbers themselves are not tested here**: that a fixed seed repeats its sequence
+// and that the OS's randomness can be read are `std`'s tests. Here the only question is whether,
+// from the same logits, the settings pick the expected token.
+// ==========================================
+fn test_sampler(arena: Arena$@)
+    verdict.start("[Sampler] argmax/temperature/top-k test...")
+    // logits = [1.0, 3.0, 2.0, 0.5] → the largest is index 1
+    shape: Sz[1] = ::{ 4 }
+    logits: = Tensor<|F32|>.new(Sz[]::shape, arena)
+    (logits.data + 0)$ = F32::1.0
+    (logits.data + 1)$ = F32::3.0
+    (logits.data + 2)$ = F32::2.0
+    (logits.data + 3)$ = F32::0.5
+
+    assert(ai_sampler.argmax(logits) == 1, "Sampler: argmax must pick the max index")
+
+    $rng: = prng.Prng.new(7U64)
+    // A temperature of 0 or below reduces to the greedy method (argmax)
+    greedy: = ai_sampler.Sample_config.greedy()
+    tok: = ai_sampler.sample(logits, greedy, rng@, arena)
+    assert(tok == 1, "Sampler: temperature<=0 must fall back to argmax")
+    // top_k=1 leaves only the largest value as a candidate → it always returns the argmax
+    top1: = ai_sampler.Sample_config::{ .temperature = 1.0, .top_k = 1, .top_p = 1.0 }
+    for _i in Range.asc(20)
+        top1_tok: = ai_sampler.sample(logits, top1, rng@, arena)
+        assert(top1_tok == 1, "Sampler: top_k=1 must always return the argmax token")
+    verdict.pass("")

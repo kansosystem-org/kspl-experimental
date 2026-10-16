@@ -4,7 +4,7 @@
 
 **"The car" is a palm-sized commercial kit carrying one Pico W**, not one a person rides in. The Pico W is a small board holding the RP2040 microcontroller (a computer on one chip) and a CYW43439 WiFi chip.
 
-**Nothing here is ksos's to decide.** These are facts about a board somebody else made, matched against the vendor's material and never the code. Where they disagree, the board is right. What ksos does with them is in [`DESIGN.md`](DESIGN.md), and the bring-up order is in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
+**Nothing here is ksos's to decide.** These are facts about a board somebody else made, matched against the vendor's material and never the code. Where they disagree, the board is right. What ksos does with them is in [`DESIGN-rtos.md`](DESIGN-rtos.md), and the bring-up order is in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 
 ## Words used in this document
 
@@ -106,7 +106,7 @@ The left goes front then rear, the right rear then front (the board's connectors
 
 ### The direction of rotation differs from unit to unit
 
-The motors' wiring differs per unit (on the unit here, all four are reversed). The Arduino version expresses it with commented-out `#define`s, `REVERSE_MOTOR1` to `4` in `Freenove_4WD_Car_For_Pico_W.h`. How ksos holds it is "What is in `boards/freenove_4wd_pico/`" in [`DESIGN.md`](DESIGN.md).
+The motors' wiring differs per unit (on the unit here, all four are reversed). The Arduino version expresses it with commented-out `#define`s, `REVERSE_MOTOR1` to `4` in `Freenove_4WD_Car_For_Pico_W.h`. How ksos holds it is "What is in `boards/freenove_4wd_pico/`" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 ## The servos
 
@@ -145,7 +145,7 @@ Three sensors under the front of the car tell a dark line from a light floor.
 * Three GPIO inputs. **White = 0 / black = 1**.
 * They pack into the three bits left<<2 | centre<<1 | right, which are branched on (`010` = only the centre is black = go straight).
 * **The sensors sit 20 to 25mm apart, about 100mm ahead of the point the car turns about.** Measured on this unit: a 20mm line cannot cover two neighbours, and a 50mm line covers all three.
-* **Some units have the left and right sensors mounted swapped.** Where ksos corrects it is "What is in `boards/freenove_4wd_pico/`" in [`DESIGN.md`](DESIGN.md).
+* **Some units have the left and right sensors mounted swapped.** Where ksos corrects it is "What is in `boards/freenove_4wd_pico/`" in [`DESIGN-rtos.md`](DESIGN-rtos.md).
 
 ## The WS2812 LEDs
 
@@ -161,7 +161,7 @@ Flashing means writing the program (the firmware) into the Pico's storage. The d
 * Writing it takes **the BOOTSEL button plus a UF2** copied to USB mass storage; no SWD probe is needed.
 * **A standard Pico / Pico W carries 2MB of QSPI Flash**, a W25Q16JVxQ or equivalent. The part fitted on this unit is not checked against its marking.
 * **Semihosting cannot be used here.** Semihosting is printing through an attached debugger: it needs a debugger attached, and with no SWD probe the output halts the instruction that produces it.
-* Reaching the Arduino IDE's Serial Monitor takes a USB CDC driver for the RP2040's USB controller: `ksos/drivers/rp2040/usb_cdc.kspls`.
+* Reaching the Arduino IDE's Serial Monitor takes a USB CDC driver for the RP2040's USB controller: `ksos/drivers/rp2040/usb_cdc.kspl`.
   * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** (Enumeration is the exchange in which the PC learns what a newly plugged-in USB device is.) What each beep count means is stage 2b in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 * **USB takes no GPIO.** The RP2040's dedicated pins (`USB_DP` / `USB_DM`) go straight to the micro-USB connector, not the 40-pin header (whose `VBUS` is USB's 5V supply, not a data line). So USB Ethernet can provide the link layer with zero extra parts and zero extra GPIO.
 * **The Serial Monitor's COM port is USB CDC (a virtual serial port), not the UART on GPIO 0/1.** The car has two serial paths, USB's virtual serial and the physical UART (a serial port on two wires) on connector P7, and only the first is in use. The `[0]`, `[1]`, `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins.

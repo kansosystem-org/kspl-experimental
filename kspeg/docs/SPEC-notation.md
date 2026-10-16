@@ -1,6 +1,6 @@
 # The KSPEG grammar definition specification
 
-**This document defines how to write a `.kspeg` grammar, and what the engine that reads one must do.** A grammar is a file of named rules that describe what valid input looks like; the engine (`engine.kspls`) follows those rules to read input and build a tree from it. Part I is for whoever writes a `.kspeg` file (a grammar's author). Part II is for whoever implements or revises the engine. KSPL's own grammar is written in KSPEG, so everything here applies to the KSPL compiler's parser. Why a requirement is what it is lives in [`DESIGN.md`](DESIGN.md).
+**This document defines how to write a `.kspeg` grammar, and what the engine that reads one must do.** A grammar is a file of named rules that describe what valid input looks like; the engine (`engine.kspl`) follows those rules to read input and build a tree from it. Part I is for whoever writes a `.kspeg` file (a grammar's author). Part II is for whoever implements or revises the engine. KSPL's own grammar is written in KSPEG, so everything here applies to the KSPL compiler's parser. Why a requirement is what it is lives in [`DESIGN-engine.md`](DESIGN-engine.md).
 
 These words come up throughout:
 
@@ -263,7 +263,7 @@ This part takes Part I's "what happens" as given and states only how the engine 
 
 ### 7. The AST node the engine builds
 
-**Every node the engine returns has the same four fields** (`engine.kspls`'s `Node` struct), whatever rule built it.
+**Every node the engine returns has the same four fields** (`engine.kspl`'s `Node` struct), whatever rule built it.
 
 ```json
 {
@@ -353,7 +353,7 @@ The engine refuses two things: **a bad grammar, and input that does not fit the 
 * **Where the confirmation goes**: after the engine has added the rules it synthesizes (`_Space` / `_Boundary` / `_Keyword`; [section 5](#5-the-automatic-rules-_space--_boundary--_keyword)). Done earlier, references to them look undefined.
 * **The granularity of the report**: the refusal must hold the undefined name and the name of the rule referring to it. The line and column inside the `.kspeg` are not required.
 
-Why the check runs when the grammar is read, and why the report holds what it holds, is "A grammar is checked when it is read" in [`DESIGN.md`](DESIGN.md).
+Why the check runs when the grammar is read, and why the report holds what it holds, is "A grammar is checked when it is read" in [`DESIGN-engine.md`](DESIGN-engine.md).
 
 #### 11.2 Tracking the furthest failure
 
@@ -391,7 +391,7 @@ One recursive entry point (`Rule.parse`) throws either, so the receiver can mist
 
 #### 12.1 Packrat memoization
 
-A PEG backtracks, so a naive implementation re-parses the same position under the same rule, exponentially in a deeply nested expression. The engine caches each result by **packrat memoization**: a table that remembers each rule's answer at each position, keyed on `(rule_id, pos, syntax/lexical mode)`. It holds the end position and AST node on success, and the bare fact on failure. A revisit returns it at once. Lexical-mode rules (an upper-case initial; section 4) are not memoized ("Lexical rules are not memoized" in [`DESIGN.md`](DESIGN.md)).
+A PEG backtracks, so a naive implementation re-parses the same position under the same rule, exponentially in a deeply nested expression. The engine caches each result by **packrat memoization**: a table that remembers each rule's answer at each position, keyed on `(rule_id, pos, syntax/lexical mode)`. It holds the end position and AST node on success, and the bare fact on failure. A revisit returns it at once. Lexical-mode rules (an upper-case initial; section 4) are not memoized ("Lexical rules are not memoized" in [`DESIGN-engine.md`](DESIGN-engine.md)).
 
 #### 12.2 The recursion depth guard
 
@@ -429,11 +429,11 @@ Caution: Keep the marker at one byte, so the shift is just the number of markers
 
 **Narrow `_Space` first.** The default `_Space` is `[ \t\r\n]*` and consumes newlines, but where the column decides the structure, a newline and a line's leading whitespace are both syntax. Define `_Space = [ \t]*` in the grammar and consume newlines explicitly in a rule (the grammar's definition replaces the default; section 5).
 
-Why the column is erased outside the engine, and the one shape of syntax this does not carry, are "Indentation becomes markers before the parse" in [`DESIGN.md`](DESIGN.md).
+Why the column is erased outside the engine, and the one shape of syntax this does not carry, are "Indentation becomes markers before the parse" in [`DESIGN-engine.md`](DESIGN-engine.md).
 
 ## Appendix A: KSPEG's own grammar definition (the normative grammar)
 
-**The grammar is [`kspeg.kspeg`](kspeg.kspeg)**, beside this document. It defines the `.kspeg` format itself, in the format itself, and doubles as the complete reference for the rules stated in Parts I and II. `kspeg/tests/engine_test.kspls` reads it with itself and reads [`json.kspeg`](json.kspeg) and [`script.kspeg`](script.kspeg) with it, so it cannot drift unnoticed from what the engine accepts.
+**The grammar is [`kspeg.kspeg`](kspeg.kspeg)**, beside this document. It defines the `.kspeg` format itself, in the format itself, and doubles as the complete reference for the rules stated in Parts I and II. `kspeg/tests/engine_test.kspl` reads it with itself and reads [`json.kspeg`](json.kspeg) and [`script.kspeg`](script.kspeg) with it, so it cannot drift unnoticed from what the engine accepts.
 
 A fixed helper parser skips the whitespace between definitions in a `.kspeg` file; it recognizes only the `//` line comment, and a grammar's author cannot change it. When parsing **the language a `.kspeg` file describes** (JSON with [`json.kspeg`](json.kspeg), say), `_Space` and `_Boundary` take the engine's defaults below where the grammar does not define them ([section 5](#5-the-automatic-rules-_space--_boundary--_keyword)).
 

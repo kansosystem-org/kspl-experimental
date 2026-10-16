@@ -41,14 +41,14 @@ let openedUris = new Set();
 // in order, and goes out after `initialized`; null once the answer has come.
 let heldMessages = null;
 
-// Whether this is a document to send to the language server.
-// **Send the indented notation (.kspls) too.** ksplc fixes the source into the brace notation
-// right after reading it, with the line numbers unmoved, so this side treats them as one language;
-// this is the one place the notations are split.
-const KSPL_LANGS = new Set(['kspl', 'kspls']);
+// The language a KSPL source is opened as (`languages` in package.json).
+const KSPL_LANG = 'kspl';
+// The documents the providers serve.
+const KSPL_SELECTOR = [{ scheme: 'file', language: KSPL_LANG }];
 
+// Whether this is a document to send to the language server.
 function isKsplDoc(document) {
-    return KSPL_LANGS.has(document.languageId);
+    return document.languageId === KSPL_LANG;
 }
 
 function sendDidOpenOnce(document) {
@@ -150,10 +150,6 @@ function flushPendingChanges() {
 }
 
 function resolveUri(uriStr) {
-    let normalizedUri = uriStr.replace(/\\/g, '/');
-    if (normalizedUri.startsWith("src/")) {
-        normalizedUri = "ksplc/" + normalizedUri.substring(4);
-    }
     for (const doc of vsc.workspace.textDocuments) {
         if (getRelativeUri(doc.uri) === uriStr || doc.uri.toString() === uriStr) {
             return doc.uri;
@@ -226,7 +222,7 @@ function startLspServer(context) {
         settlePendingRequests();
     });
     // Caution: **Take the legend from the answer; do not copy it here.** A token's number means
-    // what `initialize`'s legend says (`ksplc/lsp/semtok.kspls`); a copied roster puts the colours
+    // what `initialize`'s legend says (`ksplc/lsp/semtok.kspl`); a copied roster puts the colours
     // on the wrong names the day a kind is added, with nothing saying so.
     heldMessages = [];
     sendRequest("initialize", {
@@ -253,10 +249,7 @@ function startLspServer(context) {
 // kinds in another order paints every name the wrong colour.
 function registerSemanticTokens(said) {
     const legend = new vsc.SemanticTokensLegend(said.tokenTypes, said.tokenModifiers || []);
-    const selector = [...KSPL_LANGS].map(function (id) {
-        return { scheme: 'file', language: id };
-    });
-    track(vsc.languages.registerDocumentSemanticTokensProvider(selector, {
+    track(vsc.languages.registerDocumentSemanticTokensProvider(KSPL_SELECTOR, {
         async provideDocumentSemanticTokens(document, token) {
             const result = await sendRequest("textDocument/semanticTokens/full", {
                 textDocument: { uri: getRelativeUri(document.uri) }
@@ -295,33 +288,14 @@ function processBuffer() {
         const bodyBuf = messageBuffer.subarray(headerLen, totalMsgLen);
         messageBuffer = messageBuffer.subarray(totalMsgLen);
         
-        let bodyStr = bodyBuf.toString('utf8');
-        let msg = null;
+        let msg;
+        // A frame holds one JSON value. Repairing bytes can settle a request with a damaged
+        // reply before the server's real answer arrives.
         try {
-            msg = JSON.parse(bodyStr);
+            msg = JSON.parse(bodyBuf.toString('utf8'));
         } catch (e) {
-            bodyStr = bodyStr.replace(/\0/g, '').trim();
-            const firstBrace = bodyStr.indexOf('{');
-            const lastBrace = bodyStr.lastIndexOf('}');
-            
-            if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
-                let cleanJson = bodyStr.substring(firstBrace, lastBrace + 1);
-                while (cleanJson.length > 0) {
-                    try {
-                        msg = JSON.parse(cleanJson);
-                        break;
-                    } catch (err) {
-                        const nextLastBrace = cleanJson.lastIndexOf('}', cleanJson.length - 2);
-                        if (nextLastBrace === -1) {
-                            logMessage(`[JSON Parse Failed] ${err.message}. Raw: ${bodyStr}`, 'messages');
-                            break;
-                        }
-                        cleanJson = cleanJson.substring(0, nextLastBrace + 1);
-                    }
-                }
-            } else {
-                logMessage(`[JSON Parse Failed] Invalid payload. Raw: ${bodyStr}`, 'messages');
-            }
+            logMessage(`[JSON Parse Failed] ${e.message}`, 'messages');
+            continue;
         }
         
         if (msg) {
@@ -366,7 +340,7 @@ function dispatchMessage(msg) {
 }
 
 // Answers everything still waiting with nothing. **One function does it**, so a new way for the process
-// to go does not have to remember the table (Principle 6 in `docs/DESIGN.md`).
+// to go does not have to remember the table (Principle 6 in `docs/DESIGN-principles.md`).
 function settlePendingRequests() {
     const waiting = pendingRequests;
     pendingRequests = new Map();
@@ -377,7 +351,7 @@ function settlePendingRequests() {
 
 // Caution: **Do not put a deadline of our own on a request.** The supervisor counts *silence*
 // against a 10-second window, with a liveness marker during a long answer (10.2 of
-// `ksplc/docs/DESIGN.md`); a timer counts elapsed time and cannot tell slow from hung, while a
+// `ksplc/docs/DESIGN-compiler.md`); a timer counts elapsed time and cannot tell slow from hung, while a
 // workspace call hierarchy legitimately runs tens of seconds and a discarded answer draws as "no
 // results". `vscode-languageclient` holds no per-request deadline either.
 function sendRequest(method, params, token) {
@@ -497,13 +471,8 @@ exports.activate = function (context) {
         }))
     );
     startLspServer(context);
-    // **Register for both notations.** A provider is looked up per language, so with one alone
-    // the indented notation gets neither hover nor a definition's destination.
-    const selector = [...KSPL_LANGS].map(function (id) {
-        return { scheme: 'file', language: id };
-    });
     context.subscriptions.push(
-        track(vsc.languages.registerHoverProvider(selector, {
+        track(vsc.languages.registerHoverProvider(KSPL_SELECTOR, {
             async provideHover(document, position, token) {
                 const myRequestId = ++hoverRequestSeq;
                 const result = await sendRequest("textDocument/hover", {
@@ -522,7 +491,7 @@ exports.activate = function (context) {
             }
         })),
 
-        track(vsc.languages.registerDefinitionProvider(selector, {
+        track(vsc.languages.registerDefinitionProvider(KSPL_SELECTOR, {
             async provideDefinition(document, position, token) {
                 const lineText = document.lineAt(position.line).text;
                 const importMatch = lineText.match(/import\s+["']([^"']+)["']/);
@@ -530,10 +499,8 @@ exports.activate = function (context) {
                     const importPath = importMatch[1];
                     const stringStart = lineText.indexOf(importPath);
                     if (position.character >= stringStart && position.character <= stringStart + importPath.length) {
-                        // **Both notations**: an import writes no extension, so `.kspls` is
-                        // looked for first, then the brace notation, as ksplc resolves
-                        // (`base/locate.kspls`).
-                        const searchPattern = `**/${importPath}.{kspls,kspl}`;
+                        // An import writes no extension; ksplc adds `.kspl` (`base/locate.kspl`).
+                        const searchPattern = `**/${importPath}.kspl`;
                         const files = await vsc.workspace.findFiles(searchPattern, '**/out/**');
                         if (files.length > 0) return new vsc.Location(files[0], new vsc.Position(0, 0));
                     }
@@ -545,14 +512,7 @@ exports.activate = function (context) {
                 }, token);
 
                 if (result && result.uri) {
-                    let defUri;
-                    if (!result.uri.startsWith("file://")) {
-                        const workspacePath = vsc.workspace.workspaceFolders[0].uri.fsPath;
-                        defUri = vsc.Uri.file(path.join(workspacePath, result.uri));
-                    } else {
-                        defUri = vsc.Uri.parse(result.uri);
-                    }
-                    return new vsc.Location(defUri, toRange(result.range));
+                    return new vsc.Location(resolveUri(result.uri), toRange(result.range));
                 }
                 // **No guess where the server knows none**: a text search lands on another thing of
                 // the same name, shown with the same confidence as a real answer.
@@ -583,8 +543,8 @@ exports.activate = function (context) {
     });
     context.subscriptions.push(
         // The outline is the server's, read from the syntax tree it already keeps for the document
-        // (`ksplc/lsp/outline.kspls`): no guess from the text, and nothing parsed twice.
-        track(vsc.languages.registerDocumentSymbolProvider(selector, {
+        // (`ksplc/lsp/outline.kspl`): no guess from the text, and nothing parsed twice.
+        track(vsc.languages.registerDocumentSymbolProvider(KSPL_SELECTOR, {
             async provideDocumentSymbols(document, token) {
                 const result = await sendRequest("textDocument/documentSymbol", {
                     textDocument: { uri: getRelativeUri(document.uri) }
@@ -595,7 +555,7 @@ exports.activate = function (context) {
         // The list of what can be written here.
         // **Register no trigger character.** The server declares none on purpose: a declared `.`
         // puts the list up unasked, this feature's most frequent complaint.
-        track(vsc.languages.registerCompletionItemProvider(selector, {
+        track(vsc.languages.registerCompletionItemProvider(KSPL_SELECTOR, {
             async provideCompletionItems(document, position, token) {
                 // **Send what was typed before asking.** The server analyses the text it holds, so
                 // unsent, the list answers for the text as it stood a keystroke ago.
@@ -623,7 +583,7 @@ exports.activate = function (context) {
             }
         })),
 
-        track(vsc.languages.registerReferenceProvider(selector, {
+        track(vsc.languages.registerReferenceProvider(KSPL_SELECTOR, {
             async provideReferences(document, position, context, token) {
                 const result = await sendRequest("textDocument/references", {
                     textDocument: { uri: getRelativeUri(document.uri) },
@@ -635,7 +595,7 @@ exports.activate = function (context) {
             }
         })),
 
-        track(vsc.languages.registerCallHierarchyProvider(selector, {
+        track(vsc.languages.registerCallHierarchyProvider(KSPL_SELECTOR, {
             async prepareCallHierarchy(document, position, token) {
                 const result = await sendRequest("textDocument/prepareCallHierarchy", {
                     textDocument: { uri: getRelativeUri(document.uri) },
@@ -659,7 +619,7 @@ exports.activate = function (context) {
         // **The server decides what can be renamed, and to what.** A refusal (a name in the
         // standard library, a keyword, a name already taken) rejects the promise with the server's
         // reason, which the editor shows in place of the rename.
-        track(vsc.languages.registerRenameProvider(selector, {
+        track(vsc.languages.registerRenameProvider(KSPL_SELECTOR, {
             async prepareRename(document, position, token) {
                 const result = await sendRequest("textDocument/prepareRename", {
                     textDocument: { uri: getRelativeUri(document.uri) },

@@ -24,17 +24,17 @@ The notice is here anyway because **it is cheaper than arguing over whether the 
 | File | What it originates from |
 | :-- | :-- |
 | `ksos/port/rp2040/boot2_generic_03h.S` | the order of the SSI settings and the exit handling in `boot_stage2/boot2_generic_03h.S` and `exit_from_boot2.S` |
-| `ksos/port/rp2040/pad_checksum.kspls` | how `boot_stage2/pad_checksum` applies the checksum |
-| `ksos/port/rp2040/elf2uf2.kspls` | the shape of `elf2uf2`'s output |
-| `ksos/drivers/rp2040/adc.kspls` | the register addresses and field positions in `regs/adc.h` and `regs/resets.h` |
-| `ksos/drivers/rp2040/clocks.kspls` | the values in the register headers, and the procedures in `xosc.c`, `pll.c` and `runtime_init_clocks.c` |
-| `ksos/drivers/rp2040/gpio.kspls` | the register addresses and field positions in `hardware_regs` |
-| `ksos/drivers/rp2040/i2c.kspls` | the values in `regs/i2c.h`, the derivation of the SCL divisor, and the initialization procedure |
-| `ksos/drivers/rp2040/pwm.kspls` | the register addresses and field positions in `regs/{pwm,resets,addressmap}.h` |
-| `ksos/drivers/rp2040/resets.kspls` | the procedure for waiting on the release |
-| `ksos/drivers/rp2040/rtc.kspls` | the values in the register headers, and the numbering of the days of the week |
-| `ksos/drivers/rp2040/timer.kspls` | the register addresses and field positions in `regs/{timer,addressmap}.h` |
-| `ksos/drivers/rp2040/usb_cdc.kspls` | the values in the register headers and `structs/usb_dpram.h`, and pico-examples' USB start-up procedure |
+| `ksos/port/rp2040/pad_checksum.kspl` | how `boot_stage2/pad_checksum` applies the checksum |
+| `ksos/port/rp2040/elf2uf2.kspl` | the shape of `elf2uf2`'s output |
+| `ksos/drivers/rp2040/adc.kspl` | the register addresses and field positions in `regs/adc.h` and `regs/resets.h` |
+| `ksos/drivers/rp2040/clocks.kspl` | the values in the register headers, and the procedures in `xosc.c`, `pll.c` and `runtime_init_clocks.c` |
+| `ksos/drivers/rp2040/gpio.kspl` | the register addresses and field positions in `hardware_regs` |
+| `ksos/drivers/rp2040/i2c.kspl` | the values in `regs/i2c.h`, the derivation of the SCL divisor, and the initialization procedure |
+| `ksos/drivers/rp2040/pwm.kspl` | the register addresses and field positions in `regs/{pwm,resets,addressmap}.h` |
+| `ksos/drivers/rp2040/resets.kspl` | the procedure for waiting on the release |
+| `ksos/drivers/rp2040/rtc.kspl` | the values in the register headers, and the numbering of the days of the week |
+| `ksos/drivers/rp2040/timer.kspl` | the register addresses and field positions in `regs/{timer,addressmap}.h` |
+| `ksos/drivers/rp2040/usb_cdc.kspl` | the values in the register headers and `structs/usb_dpram.h`, and pico-examples' USB start-up procedure |
 
 ```text
 Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
@@ -71,7 +71,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 | File | What it originates from | Origin |
 | :-- | :-- | :-- |
-| `std/ds.kspls` | `fmix32`, MurmurHash3's finalizer (Austin Appleby) | `https://github.com/aappleby/smhasher` |
+| `std/ds.kspl` | `fmix32`, MurmurHash3's finalizer (Austin Appleby) | `https://github.com/aappleby/smhasher` |
 
 ## What is not bundled
 
@@ -100,4 +100,4 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Further reading
 
 * [`LICENSE.md`](LICENSE.md) — the license for this repository as a whole.
-* [`ksos/docs/DESIGN.md`](ksos/docs/DESIGN.md) — "The RP2040 port" says how the three files under `ksos/port/rp2040/` above compute their values and how they are confirmed; "🔧 The peripheral drivers" says what each driver originates from.
+* [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `ksos/port/rp2040/` above compute their values and how they are confirmed; "🔧 The peripheral drivers" says what each driver originates from.

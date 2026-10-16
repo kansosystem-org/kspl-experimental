@@ -1,0 +1,93 @@
+//< Whether the formatter's cache skips only what it may skip
+//<
+//< Not a suite; part of `../suite/fmt_test.kspl`.
+//< **A text the formatter leaves as it is gets recorded, and the next run takes the record instead
+//< of formatting** (`Fixed_points` in `../../fmt/file.kspl`). A record that outlives a change of
+//< style or text would leave a file unformatted while the check of the tree passes, so
+//< each case here shows one part of the key at work, read from `--stats`'s `[Fmt Cache]` line.
+//< **It uses a cache folder of its own** (`KSPLC_CACHE_DIR`).
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/ds" { List }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/sys"
+import "std/verdict"
+
+priv const stats_head: U8[] = "[Fmt Cache] "
+
+priv const formatted: U8[] = "fn main(): I32\n    return 0\n" //< a text formatting leaves alone
+priv const unformatted: U8[] = "fn main(): I32\n  return 0\n" //< one it changes
+
+priv fn counts(out: U8[], arena: Arena$@): U8[] //< `--stats`'s `[Fmt Cache]` line, past its head
+    for one in out.lines(arena)
+        shown: = one.trim_start()
+        if shown.starts_with(stats_head)
+            return shown.sub_from(stats_head.len)
+    return ""
+
+priv fn fmt_counts(path: U8[], extra: U8[][], arena: Arena$@): U8[] //<
+    //< It formats `path` under `extra` and returns the cache's counts
+    $args: = List<|U8[]|>.new(arena)
+    args.push("fmt")
+    args.push("--stats")
+    for e in extra
+        args.push(e)
+    args.push(path)
+    r: = harness.ksplc_bare(args.slice())
+    return counts(r.out, arena)
+
+priv fn expect(name: U8[], got: U8[], want: U8[], arena: Arena$@) //< one run's counts
+    verdict.check(name, got.equals(want),
+        arena.text().s("expected '\{want\}', got '\{got\}'").take())
+
+priv fn place(dir: U8[], leaf: U8[], body: U8[], arena: Arena$@): U8[] //< empty where it cannot
+    path: = fs.join(dir, leaf, arena)
+    io.write_file(path, body) catch
+        return ""
+    return path
+
+priv fn put_back(name: U8[], was: U8[]) //< sets name back to was, or unsets it where it was unset
+    //<
+    //< Caution: **An empty `was` is unset, not set**: `set_env` refuses an empty value, and the
+    //< folder made for these cases would stay the cache of every later suite.
+    if was.len == 0
+        sys.unset_env(name) catch panic("an environment variable could not be unset")
+    else
+        sys.set_env(name, was) catch panic("an environment variable could not be put back")
+
+fn run(arena: Arena$@) //< every case, in a cache folder made fresh for them
+    dir: = harness.sandbox("fmt_cache")
+    was: = sys.get_env("KSPLC_CACHE_DIR").unwrap_or("")
+    sys.set_env("KSPLC_CACHE_DIR", fs.join(dir, "cache", arena))
+        catch panic("KSPLC_CACHE_DIR could not be set")
+    defer put_back("KSPLC_CACHE_DIR", was)
+    a: = place(dir, "a.kspl", formatted, arena)
+    b: = place(dir, "b.kspl", unformatted, arena)
+    if a.len == 0 || b.len == 0
+        verdict.check("the formatter's cache has its material", false, dir)
+        return
+    in_place: = U8[][]::{ "--in-place" }
+    expect("a formatted text is recorded", fmt_counts(a, in_place, arena),
+        "0 hit / 1 miss / 1 stored", arena)
+    expect("the record is taken the second time", fmt_counts(a, in_place, arena),
+        "1 hit / 0 miss / 0 stored", arena)
+    expect("a text formatting changes is not recorded", fmt_counts(b, in_place, arena),
+        "0 hit / 1 miss / 0 stored", arena)
+    got: = io.read_file(b) catch ""
+    verdict.check("a text the cache has no record of is formatted", got.equals(formatted), got)
+    // Each field of the style is part of the key: a record made under one style tells nothing
+    // about another. **Not in place**, so `a` stays as it was for the next style.
+    for style in U8[][]::{ "IndentWidth: 8", "ColumnLimit: 120", "AllowShortBlocks: true",
+        "AllowShortFunctions: true" }
+        name: = arena.text().s("a record is not taken under --style=\{style\}").take()
+        flag: = arena.text().s("--style=\{style\}").take()
+        got_style: = fmt_counts(a, U8[][]::{ flag }, arena)
+        verdict.check(name, got_style.starts_with("0 hit / 1 miss / "),
+            arena.text().s("expected a miss, got '\{got_style\}'").take())
+    cleaned: = harness.ksplc_bare(U8[][]::{ "clean" })
+    verdict.check("ksplc clean runs", cleaned.code == 0, cleaned.out)
+    expect("ksplc clean removes the records", fmt_counts(a, in_place, arena),
+        "0 hit / 1 miss / 1 stored", arena)

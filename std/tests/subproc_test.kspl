@@ -1,0 +1,219 @@
+//< Tests of `std/subproc`'s bounds: every wait on a child ends at its timeout
+import "std/chars" // `ends_with`
+import "std/fs"
+import "std/mem" { Arena }
+import "std/str" // `lines` / `equals` / `Str_builder`
+import "std/subproc"
+import "std/sys"
+import "std/tests/sys_test"
+import "std/verdict"
+
+priv const exit_three_src: U8[] = //< a child that exits 3 of its own accord
+    """import "std/sys"
+
+fn main()
+  sys.exit(3)
+"""
+
+// ==========================================
+// std/subproc: a wait on a child is bounded wherever it can stall, a write to its standard input
+// included. A child that reads nothing fills the pipe, and one that closes its outputs and runs on
+// leaves nothing to read; each must end at the timeout, not when the child does.
+// ==========================================
+priv const idle_src: U8[] = //< a child that reads nothing for longer than any check waits
+    """import "std/sys"
+
+fn main()
+  sys.sleep_ms(30000)
+"""
+
+fn test_child_waits_bounded(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
+    verdict
+        .start("[Sys] a write to a child that reads nothing, and a wait on one that closed its \
+            outputs, end at their timeouts...")
+    $idle: =
+        subproc.spawn_piped(sys_test.child_argv(ksplc, "idle", idle_src, arena), "")
+        catch panic("the idle child must start")
+    big: = U8[]::{ .ptr = U8@::arena.alloc(1 << 20), .len = 1 << 20 }
+    t0: = sys.mono_us()
+    $timed_out: = false
+    idle.write(big, 300) catch e
+        timed_out = e == subproc.Write_end.timed_out
+    took_ms: = (sys.mono_us() - t0) / 1000I64
+    // **A negative wait is a time already up** ("A wait's sign means one thing everywhere" in
+    // std/docs/DESIGN-system.md): it looks once and returns, on a read and a write alike. Read raw,
+    // POSIX poll() waited for good on the read.
+    $buf: U8[16] = ::{}
+    t_neg: = sys.mono_us()
+    $read_up: = false
+    idle.read(U8$[]::buf, -1) catch e
+        read_up = e == subproc.Read_end.timed_out
+    $write_up: = false
+    idle.write(big, -1) catch e
+        write_up = e == subproc.Write_end.timed_out
+    neg_ms: = (sys.mono_us() - t_neg) / 1000I64
+    idle.kill()
+    assert(timed_out, "a write to a child that reads nothing fails as timed_out")
+    $m: = Panic_msg.new()
+    assert(took_ms < 15000I64,
+        m.s("the write returns near its timeout, not when the child ends (took ").n(took_ms)
+        .s(" ms)").slice())
+    $n: = Panic_msg.new()
+    assert(read_up && write_up && neg_ms < 5000I64,
+        n.s("a negative wait looks once and returns timed_out, on a read and a write (took ")
+        .n(neg_ms).s(" ms)").slice())
+
+    $gone: =
+        subproc.spawn_piped(sys_test.child_argv(ksplc, "exit_three", exit_three_src, arena), "")
+        catch
+        panic("the child exiting 3 must start")
+    deadline: = sys.mono_us() + 300000000I64
+    for gone.exit_code().is_none() && sys.mono_us() < deadline
+        sys.sleep_ms(10)
+    $closed: = false
+    gone.write("x", 1000) catch e
+        closed = e == subproc.Write_end.closed
+    gone.kill()
+    assert(closed, "a write to a child that has ended fails as closed")
+
+    // POSIX alone: the shell closes its outputs and runs on.
+    if !sys.is_windows()
+        t1: = sys.mono_us()
+        r: = subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "exec >&- 2>&-; sleep 30" }, "", 300,
+            1024, arena)
+        waited_ms: = (sys.mono_us() - t1) / 1000I64
+        assert(r.timed_out, "a child that closed its outputs and runs on times out")
+        $said: = Panic_msg.new()
+        assert(waited_ms < 15000I64,
+            said.s("run_capture returns near its timeout after the pipes close (took ").n(waited_ms)
+            .s(" ms)").slice())
+    verdict.pass("Each wait ended at its timeout, and a write to an ended child failed as closed.")
+
+priv const naming_src: U8[] = //< a child that says its name and the script it runs from
+    """import "std/io"
+import "std/sys"
+
+fn main()
+  io.out().s(sys.program_name()).c('\n')
+  if p: = sys.script_path()
+    io.out().s(p).c('\n')
+  else
+    io.out().s("none\n")
+"""
+
+fn test_script_names_itself(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //<
+    //< **The same name for a script as for a built program**: no folder and no extension, so a
+    //< tool's usage line reads alike however it was started.
+    verdict.start("[Sys] a script run by ksplc knows its path, and names itself without it...")
+    r: = subproc.run_capture(sys_test.child_argv(ksplc, "naming_probe", naming_src, arena), "",
+        300000, 4096, arena)
+    lines: = r.stdout_data.lines(arena)
+    assert(r.exit_code == 0 && lines.len >= 2, "the child must run and say two lines")
+    assert(lines.get(0).equals("naming_probe"), "program_name has no folder and no extension")
+    assert(lines.get(1).ends_with("naming_probe.kspl"), "script_path is the script ksplc ran")
+    verdict.pass("A script knows its own path, and its name for messages is its bare name.")
+
+priv const counter_src: U8[] = //< a child that reads all of its standard input and says how much
+    """import "std/io"
+import "std/mem"
+
+fn main()
+  got: = io.read_stdin(null) catch panic("standard input could not be read")
+  io.out().s("read \{got.len\}\n")
+  mem.dealloc(Void$@::got.ptr)
+"""
+
+fn test_async_child_and_stdin(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
+    //<
+    //< spawn_async's child is reaped with its own code, and read_stdin takes the whole input,
+    //< however it was split.
+    verdict.start("[Sys] a child started without waiting, and one reading all its input...")
+    $child: =
+        subproc.spawn_async(sys_test.child_argv(ksplc, "exit_three", exit_three_src, arena), "")
+        catch panic("the child exiting 3 must start")
+    assert(child.wait() == 3, "an inherited child's wait gives its own exit code")
+    $idle: =
+        subproc.spawn_async(sys_test.child_argv(ksplc, "idle", idle_src, arena), "")
+        catch panic("the inherited idle child must start")
+    assert(idle.alive(), "an inherited child can be polled while running")
+    idle.kill()
+    $c: =
+        subproc.spawn_piped(sys_test.child_argv(ksplc, "counter", counter_src, arena), "") catch
+        panic("the counting child must start")
+    $input: = str.Str_builder.new()
+    defer input.free()
+    for _i in Range.asc(10000)
+        input.s("0123456789")
+    c.write(input.slice(), 300000) catch panic("the child must take its input")
+    c.close_stdin()
+    $buf: U8[64] = ::{}
+    n: = c.read(U8$[]::buf, 300000) catch panic("the child must answer")
+    c.kill()
+    assert(U8[]::{ .ptr = buf[0]@, .len = n }.trim_end().equals("read 100000"),
+        "read_stdin takes the whole input")
+    verdict.pass("Child.wait gave the child's code, and read_stdin took all 100000 bytes.")
+
+fn test_run_many_frees_slots_early(arena: Arena$@) //<
+    //< A job that ends early frees its slot for the next, while an earlier job still runs
+    //<
+    //< The long job looks, at its end, for the mark the third job leaves: waited on in start order,
+    //< the third would start only after the long one ended, and the mark would be missing.
+    verdict.start("[Sys] run_many starts the next job as soon as any slot is free...")
+    if sys.is_windows()
+        verdict.skip("it hands over POSIX-specific executable paths")
+        return
+    dir: = "out/tmp/kspl_test_run_many_slots"
+    fs.remove_path(dir) catch {}
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    mark: = arena.text().s(dir).s("/third").take()
+    jobs: = subproc.Job[]::{
+        subproc.Job::{ .argv = U8[][]::{ "/bin/sh", "-c",
+            arena.text().s("sleep 2; test -e '\{mark\}' && echo seen || echo missing").take() },
+            .cwd = "" },
+        subproc.Job::{ .argv = U8[][]::{ "/bin/sh", "-c", "exit 0" }, .cwd = "" },
+        subproc.Job::{ .argv = U8[][]::{ "/bin/sh", "-c",
+            arena.text().s("touch '\{mark\}'").take() }, .cwd = "" },
+    }
+    rs: = subproc.run_many(jobs, 2, 60000, 256, dir, arena)
+    assert(rs.get(0).stdout_data.trim_end().equals("seen"),
+        "the third job ran in the slot the second freed, before the first ended")
+    assert(rs.get(1).exit_code == 0 && rs.get(2).exit_code == 0, "the results keep the jobs' order")
+    verdict.pass("The slot a quick job freed went to the next job while the long one still ran.")
+
+fn test_time_limit_ends_the_whole_run(arena: Arena$@) //<
+    //< A time limit stops what the child started, and what it started cannot hold up its end
+    //<
+    //< The grandchild leaves a mark a second after the limit: killed with the child, it leaves
+    //< none. The background `sleep` keeps the pipes open past the child's end.
+    verdict
+        .start("[Sys] a time limit stops a child's own children, and a child's end is not held up \
+            by them...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines")
+        return
+    dir: = "out/tmp/kspl_test_whole_run"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    mark: = arena.text().s(dir).s("/mark").take()
+    fs.remove_path(mark) catch {}
+    nested: = arena.text().s("sh -c 'sleep 1; touch \"\{mark\}\"'; true").take()
+    r: = subproc.run_capture(U8[][]::{ "/bin/sh", "-c", nested }, "", 300, 1024, arena)
+    assert(r.timed_out, "the child waiting on its own child times out")
+    sys.sleep_ms(1500)
+    assert(!fs.exists(mark), "the child's own child is killed with it at the time limit")
+    t0: = sys.mono_us()
+    left: = subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "echo before; sleep 3 & exit 3" }, "",
+        2500, 1024, arena)
+    took_ms: = (sys.mono_us() - t0) / 1000I64
+    assert(!left.timed_out && left.exit_code == 3,
+        "a child that ended in time gives its own code, though its outputs stay open")
+    assert(left.stdout_data.trim_end().equals("before"),
+        "what the child wrote before its end is kept")
+    $m: = Panic_msg.new()
+    assert(took_ms < 2000I64,
+        m.s("run_capture returns soon after the child's end, not at the limit (took ").n(took_ms)
+        .s(" ms)").slice())
+    fs.remove_path(dir) catch {}
+    verdict
+        .pass("A time limit killed the child's own child too, and a child whose outputs stayed open \
+            returned its own code at its end.")

@@ -9,7 +9,7 @@
 
 **Only what you write happens.** There is no garbage collector (a background process that frees memory you no longer use), no memory allocation you did not ask for, and no exception that jumps past your code: a function that can fail says so in its type.
 
-**To try it, follow the three steps of the [Quick start](#-quick-start-write-and-run-your-first-program) below**: get the compiler `ksplc`, save a five-line `hello.kspls`, and type `ksplc run hello.kspls`. Then [`docs/TOUR.md`](docs/TOUR.md) teaches the language in short steps.
+**To try it, follow the three steps of the [Quick start](#-quick-start-write-and-run-your-first-program) below**: get the compiler `ksplc`, save a five-line `hello.kspl`, and type `ksplc run hello.kspl`. Then [`docs/TOUR.md`](docs/TOUR.md) teaches the language in short steps.
 
 "Kanso" (簡素, simplicity) names the design philosophy of the whole project. KSPL is its first product. Kanso OS, Kanso Server, the AI engine, Kanso DataBase and Kanso Doc follow the same philosophy (their folders are in "Repository layout" below).
 
@@ -19,7 +19,7 @@ The diagram shows the path from a KSPL file to a program you can run.
 
 ```mermaid
 flowchart LR
-    KSPL[Your .kspls file] --> Compiler[ksplc, the KSPL compiler]
+    KSPL[Your .kspl file] --> Compiler[ksplc, the KSPL compiler]
     Compiler -->|writes| C[C99 source]
     C -->|clang compiles| Bin[Program, OS image or AI engine]
 ```
@@ -55,9 +55,9 @@ The steps need a C compiler (`clang`) on the PATH, since `ksplc` passes its outp
 
 2. **Write your first program**
 
-  Save the following as `hello.kspls` (inside the unpacked folder, if you downloaded `ksplc`). `import "std/io"` brings in the standard library's input and output, and `main` is where the program starts.
+  Save the following as `hello.kspl` (inside the unpacked folder, if you downloaded `ksplc`). `import "std/io"` brings in the standard library's input and output, and `main` is where the program starts.
 
-  ```kspls
+  ```kspl
   import "std/io"
 
   fn main()
@@ -67,7 +67,7 @@ The steps need a C compiler (`clang`) on the PATH, since `ksplc` passes its outp
 3. **Run it**
 
   ```sh
-  ksplc run hello.kspls      # inside the unpacked folder: ./ksplc run hello.kspls
+  ksplc run hello.kspl      # inside the unpacked folder: ./ksplc run hello.kspl
   ```
 
   `run` compiles, links and runs it in one command. You should see `Hello, Kanso!`.
@@ -89,7 +89,7 @@ Each row is one idea that shapes the whole language, and what it means when you 
 | **A compiler a tool can read** | On request (`--diagnostic-format=json`), the compiler writes its error messages as JSON, and `ksplc explain <code>` explains each message code. An editor, a script or an AI model reading the output needs nothing else. |
 | **AI runs in it** | Running and training AI models is KSPL too (`ksai/`), with no second language under the model. The same code runs on a microcontroller and on a server. |
 
-The reasons for each idea are in [`docs/DESIGN.md`](docs/DESIGN.md); for the last two rows, they are in "Models write it, and AI runs in it" in [`docs/DESIGN.md`](docs/DESIGN.md). How an `import` path resolves is in "The three strict rules of path resolution" in [`docs/SPEC-language.md`](docs/SPEC-language.md), and choosing a way of freeing is in "8.4 The memory management model: `defer` / ARC / arenas" there.
+The reasons for each idea are in [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md); for the last two rows, they are in "Models write it, and AI runs in it" in [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md). How an `import` path resolves is in "The three strict rules of path resolution" in [`docs/SPEC-language.md`](docs/SPEC-language.md), and choosing a way of freeing is in "8.4 The memory management model: `defer` / ARC / arenas" there.
 
 ## 📊 What works, and how far
 
@@ -98,7 +98,7 @@ Each row says what a part can do and how far that has been tested. A row counts 
 | Target | What it can do | How far it is confirmed |
 | :-- | :-- | :-- |
 | **The compiler** (`ksplc/`) | Writes C99. Generics (code written once for many types; the compiler makes one copy per type used), `T!E`, `defer`, the formatter, the Language Server (what gives an editor go-to-definition and error marks), the linter (a checker for suspicious code) | It builds itself in two stages from the seed, and **is self-hosting with zero difference**: the compiler the seed built and the compiler that built itself write exactly the same output. CI builds it on Linux, macOS and Windows; only some of these are supported ([below](#where-it-is-supported)). The Language Server is tested only with VS Code |
-| **The LLVM IR backend** (a second output: LLVM's code format instead of C) | The language features pass | **Not shipped.** It is kept as a mirror: with two backends to serve, the earlier stages of the compiler (parse, sema, lower) cannot come to depend on either ("The backends (Genc / Genllvm) and the runtime ABI" in [`ksplc/docs/DESIGN.md`](ksplc/docs/DESIGN.md)) |
+| **The LLVM IR backend** (a second output: LLVM's code format instead of C) | The language features pass | **Not shipped.** It is kept as a mirror: with two backends to serve, the earlier stages of the compiler (parse, sema, lower) cannot come to depend on either ("The backends (Genc / Genllvm) and the runtime ABI" in [`ksplc/docs/DESIGN-compiler.md`](ksplc/docs/DESIGN-compiler.md)) |
 | **The standard library** (`std/`) | Files, time, environment variables, signals, hashing and randomness, thread synchronization, TCP, HTTP/1.1, asynchronous I/O, JSON, URLs, regular expressions, collection operations | No dependencies: it builds wherever the toolchain does, with nothing to install |
 | **The bindings** (`ksbind/`) | A TLS client (encrypted connections) over OpenSSL, and SQLite | Only where OpenSSL and SQLite are installed. **Run only on Linux** in CI |
 | **The AI engine** (`ksai/`) | Tensor (multi-dimensional array) operations, inference (running a model), training (backpropagation), fine-tuning with LoRA, a tokenizer, safetensors weight files | KSPL alone, with no external library, including continued training on the device |
@@ -107,7 +107,7 @@ Each row says what a part can do and how far that has been tested. A row counts 
 | **Edge AI** (AI on the device itself) | A policy trained on a PC and run on a microcontroller alone | **A closed loop on a palm-sized four-wheeled car** (a Freenove car kit plus a Raspberry Pi Pico W). It decides with the PC disconnected (measured timings are in "What has been checked on real hardware" in [ksos](ksos/README.md)) |
 | **The document editing system** (`kspage/`) | Prose, tables and presentation material as one document: typing, formatting, table formulas, figures, a table of contents, chapter numbers, printing, Markdown export | Runs in a browser (wasm32 + canvas). CI runs the wasm under `node`, and the input handling in a real browser: headless Chromium on Linux. Other browsers and input-method (IME) conversion are untested. **Not complete as an editing system** (what is there and what is not: [kspage](kspage/README.md)) |
 
-**The car shows only that the mechanism runs on a microcontroller.** Its predictions are no better than "the same as last time", and the accuracy target is unmet (why: "🤖 The AI on bare metal" in [`ksos/docs/DESIGN.md`](ksos/docs/DESIGN.md); how to read it: [`ksos/docs/HOWTO-bring-up.md`](ksos/docs/HOWTO-bring-up.md)). It is also a small microcontroller on a commercial car kit, not a car a person rides in.
+**The car shows only that the mechanism runs on a microcontroller.** Its predictions are no better than "the same as last time", and the accuracy target is unmet (why: "🤖 The AI on bare metal" in [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md); how to read it: [`ksos/docs/HOWTO-bring-up.md`](ksos/docs/HOWTO-bring-up.md)). It is also a small microcontroller on a commercial car kit, not a car a person rides in.
 
 ### Phases
 
@@ -124,7 +124,7 @@ Each row says what a part can do and how far that has been tested. A row counts 
 
 ### Where it is supported
 
-**Only the first level is supported.** Each row names the operating system, the processor architecture and the C compiler together. ksplc hands its output to a C compiler, so that compiler partly decides whether a program runs. Why the levels are set this way is in "'Supported' means someone uses it" in [`docs/DESIGN.md`](docs/DESIGN.md).
+**Only the first level is supported.** Each row names the operating system, the processor architecture and the C compiler together. ksplc hands its output to a C compiler, so that compiler partly decides whether a program runs. Why the levels are set this way is in "'Supported' means someone uses it" in [`docs/DESIGN-repository.md`](docs/DESIGN-repository.md).
 
 | Level | What stands behind it | Environments |
 | :-- | :-- | :-- |
@@ -140,19 +140,19 @@ Each row is a top-level folder or file. Each package (a top-level folder built a
 
 | Directory / file | Description |
 | :--- | :--- |
-| **`ksplc/`** | The self-hosting compiler, the bootstrap seed (`seed.c`) and the canonical grammar `kspl.kspeg` ([entry point](ksplc/README.md) / [internal design](ksplc/docs/DESIGN.md)). |
-| **`std/`** | The standard library, which the compiler itself depends on; flat, with no folders ([file list](std/README.md) / [design policy](std/docs/DESIGN.md)). |
-| **`ksai/`** | The KSPL-native AI engine, with its own matrix computation, training, tokenizer and weight files. Its examples are `examples/llama_engine/` (training a tiny model further from its embedded weights) and `examples/qwen_infer/` (a Qwen2.5-family inference CLI); `benches/` measures speed and energy against Python and C ([introduction](ksai/README.md) / [design](ksai/docs/DESIGN.md)). |
+| **`ksplc/`** | The self-hosting compiler, the bootstrap seed (`seed.c`) and the canonical grammar `kspl.kspeg` ([entry point](ksplc/README.md) / [internal design](ksplc/docs/DESIGN-compiler.md)). |
+| **`std/`** | The standard library, which the compiler itself depends on; flat, with no folders ([file list](std/README.md) / [design policy](std/docs/DESIGN-core.md)). |
+| **`ksai/`** | The KSPL-native AI engine, with its own matrix computation, training, tokenizer and weight files. Its examples are `examples/llama_engine/` (training a tiny model further from its embedded weights) and `examples/qwen_infer/` (a Qwen2.5-family inference CLI); `benches/` measures speed and energy against Python and C ([introduction](ksai/README.md) / [design](ksai/docs/DESIGN-learning.md)). |
 | **`kspeg/`** | A parser that runs a PEG grammar (a set of rules that says how text is read) directly, KSPL's own (`ksplc/kspl.kspeg`) among them ([introduction](kspeg/README.md) / [notation specification](kspeg/docs/SPEC-notation.md)). |
-| **`ksos/`** | The lightweight real-time OS (Kanso OS): one kernel from a bare-metal microcontroller (no OS beneath it) to a Linux host ([introduction](ksos/README.md) / [design](ksos/docs/DESIGN.md) / [what is left](docs/PLAN.md)). |
-| **`kssrv/`** | The server (Kanso Server), on top of `std/net` and `std/http` ([introduction](kssrv/README.md) / [design](kssrv/docs/DESIGN.md) / [what is left](docs/PLAN.md)). |
-| **`ksdb/`** | A zero-dependency database for inside a device (Kanso DataBase): an append-only record on flash that survives power loss ([introduction](ksdb/README.md) / [design](ksdb/docs/DESIGN.md)). |
-| **`ksbind/`** | Bindings to C libraries from outside the toolchain, kept out of `std` so that `std` needs nothing installed: a TLS client over OpenSSL, and SQLite ([introduction](ksbind/README.md) / [design](ksbind/docs/DESIGN.md)). |
-| **`kspage/`** | The editing system for prose, tables and presentation material as one document (Kanso Doc), with a browser port (wasm32 + canvas) ([introduction](kspage/README.md) / [design](kspage/docs/DESIGN.md)). |
-| **`docs/`** | The documents belonging to no single package, such as [the design rationale](docs/DESIGN.md), [the rules every document obeys](docs/SPEC-documents.md) and [what is left](docs/PLAN.md). The table in [`docs/README.md`](docs/README.md) says who each is for. |
+| **`ksos/`** | The lightweight real-time OS (Kanso OS): one kernel from a bare-metal microcontroller (no OS beneath it) to a Linux host ([introduction](ksos/README.md) / [design](ksos/docs/DESIGN-rtos.md) / [what is left](docs/PLAN.md)). |
+| **`kssrv/`** | The server (Kanso Server), on top of `std/net` and `std/http` ([introduction](kssrv/README.md) / [design](kssrv/docs/DESIGN-server.md) / [what is left](docs/PLAN.md)). |
+| **`ksdb/`** | A zero-dependency database for inside a device (Kanso DataBase): an append-only record on flash that survives power loss ([introduction](ksdb/README.md) / [design](ksdb/docs/DESIGN-storage.md)). |
+| **`ksbind/`** | Bindings to C libraries from outside the toolchain, kept out of `std` so that `std` needs nothing installed: a TLS client over OpenSSL, and SQLite ([introduction](ksbind/README.md) / [design](ksbind/docs/DESIGN-bindings.md)). |
+| **`kspage/`** | The editing system for prose, tables and presentation material as one document (Kanso Doc), with a browser port (wasm32 + canvas) ([introduction](kspage/README.md) / [design](kspage/docs/DESIGN-architecture.md)). |
+| **`docs/`** | The documents belonging to no single package, such as [the design rationale](docs/DESIGN-principles.md), [the rules every document obeys](docs/SPEC-documents.md) and [what is left](docs/PLAN.md). The table in [`docs/README.md`](docs/README.md) says who each is for. |
 | **`tests/`** | The test suites for the language, the toolchain and the OS ([entry point](tests/README.md)). |
 | **`tools/`** | Tools for developing Kanso itself, in KSPL where possible, including `ai_assist/` (training the code-completion AI) ([entry point](tools/README.md) / [what is left](docs/PLAN.md)). |
-| **`.vscode/`** | Editor settings, syntax highlighting for `.kspls` and `.kspeg`, and the native LSP extension. |
+| **`.vscode/`** | Editor settings, syntax highlighting for `.kspl` and `.kspeg`, and the native LSP extension. |
 | **`.github/`** | GitHub Actions: `ci.yml` (continuous integration) and `release.yml` (per-OS binaries on a tag push). |
 | **`.devcontainer/`** | An identical Dev Containers / Codespaces environment, ready to build and verify right after cloning. |
 | **`out/`** | The output: artifacts directly under it, logs in `log/`, temporaries in `tmp/`, per-target artifacts in `ksos_*/`. `make clean` removes it all. |

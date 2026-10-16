@@ -1,0 +1,582 @@
+//< Reads one outside input through one of std's readers, and **uses what it read**
+//<
+//< `make test-fuzz` runs its mutated inputs through this program.
+//< Caution: **Do not stop at reading.** Bugs appear where the data read is used (a header matched
+//< ignoring case, a query encoded back into text, a tree walked in depth).
+//< **The exit code is the only answer**: 0 "read and used", 1 "refused". **A round trip that
+//< breaks stops with `assert`**, counted as an announced stop: what a writer here wrote, or what
+//< the reader read, must read back the same.
+//< Usage: `read_prog <kind> <file>` (the kinds are the names that `read_one` below lists).
+import "std/argp"
+import "std/base64"
+import "std/chars"
+import "std/ds" { List }
+import "std/http" + { Headers }
+import "std/io"
+import "std/json"
+import "std/json_struct"
+import "std/jsonrpc"
+import "std/mem" { Arena, dealloc }
+import "std/reflect"
+import "std/regex" { Regex }
+import "std/str" { Str_builder }
+import "std/sys"
+import "std/url"
+
+// The value that the bytes read are mixed into.
+// Caution: **Do not just count the bytes**, or a mix-up in the characters does not show.
+priv $used: U64 = 0
+
+priv const mix: U64 = 0x100000001B3U64 //< the multiplier
+    //<
+    //< **It may wrap on overflow**; it is used only for mixing.
+
+priv fn use_bytes(s: U8[])
+    for b in s
+        used = (used ^ U64::b) * mix
+
+priv fn use_len(n: Sz)
+    used = (used ^ U64::n) * mix
+
+priv const split_at: U8 = 0U8 //<
+    //< The byte that separates the regular expression's pattern from the text it is matched against
+
+// ---------------------------------------------------------
+// JSON
+// ---------------------------------------------------------
+
+priv fn read_json(src: U8[], arena: Arena$@): I32 //<
+    //< It turns the parsed tree back into text and then walks the arrays
+    //<
+    //< **Turning the tree back into text and walking it are different code paths.**
+    doc: = json.parse(src, arena) catch
+        return 1
+    $out: = Str_builder.new()
+    defer out.free()
+    doc.val.dump(out@, 2)
+    use_bytes(out.slice())
+    walk_json(doc.val, arena)
+    json_round_trip(doc.val, 0, arena)
+    json_round_trip(doc.val, 2, arena)
+    return 0
+
+priv fn json_round_trip(v: json.Val, indent: Sz, arena: Arena$@) //<
+    //< Checks that the value, written out and read back, is equal, and is then written the same
+    //<
+    //< `equals` holds a decimal to the same F64, bit for bit: the writer's shortest form must read
+    //< back as the number it was.
+    $once: = Str_builder.new()
+    defer once.free()
+    v.dump(once@, indent)
+    back: = json.parse(once.slice(), arena) catch
+        panic("json: what dump wrote does not parse back")
+    assert(back.val.equals(v), "json: the value read back is not the one written")
+    $twice: = Str_builder.new()
+    defer twice.free()
+    back.val.dump(twice@, indent)
+    assert(twice.slice().equals(once.slice()), "json: the value read back is written otherwise")
+
+priv fn walk_json(v: json.Val, arena: Arena$@) //< it walks the elements of the arrays
+    //<
+    //< `dump` already walks inside objects, so only the array path is taken here.
+    $items: = v.arr_list(arena)
+    for it in items.slice()
+        use_bytes(it.as_str())
+        walk_json(it, arena)
+
+// ---------------------------------------------------------
+// URL
+// ---------------------------------------------------------
+
+priv fn read_url(src: U8[], arena: Arena$@): I32 //<
+    //< **There are two decoding functions** (one for a path, one for a form), so it calls both
+    //<
+    //< They differ only in whether a `+` becomes a space.
+    raw: = url.decode_component(src, arena) catch
+        return 1
+    use_bytes(raw)
+    head: = url.parse_query(src, arena) catch
+        return 1
+    use_query(head, arena)
+    round: = url.decode_component(url.encode(raw, arena), arena) catch
+        panic("url: an encoded component does not decode")
+    assert(round.equals(raw), "url: an encoded component decodes to another")
+    query_round_trip(head, arena)
+    return 0
+
+priv fn query_round_trip(head: url.Query_param$@, arena: Arena$@) //<
+    //< Encodes every pair back into a query and checks that it parses to the same pairs, in order
+    again: = arena.text()
+    $node: = head
+    for node != null
+        if node != head
+            again.c('&')
+        again.s(url.encode(node.name, arena)).c('=').s(url.encode(node.value, arena))
+        node = node.next
+    $back: = url.parse_query(again.take(), arena) catch
+        panic("url: an encoded query does not parse")
+    node = head
+    for node != null && back != null
+        assert(back.name.equals(node.name) && back.value.equals(node.value),
+            "url: an encoded pair parses back as another")
+        node = node.next
+        back = back.next
+    assert(node == null && back == null, "url: an encoded query parses back to another count")
+
+priv fn use_query(head: url.Query_param$@, arena: Arena$@) //<
+    //< It walks the pairs and encodes the values back into text
+    //<
+    //< Caution: **Go as far as the round trip**: reading alone never runs the digits the encoder
+    //< writes.
+    $node: = head
+    for node != null
+        use_bytes(node.name)
+        use_bytes(node.value)
+        use_bytes(url.encode(node.value, arena))
+        node = node.next
+
+// ---------------------------------------------------------
+// Base64
+// ---------------------------------------------------------
+priv fn read_base64(src: U8[], arena: Arena$@): I32
+    data: = base64.decode(src, arena) catch
+        return 1
+    use_bytes(data)
+    again: = base64.encode(data, arena)
+    use_bytes(again)
+    back: = base64.decode(again, arena) catch
+        panic("base64: what encode wrote does not decode")
+    assert(back.equals(data), "base64: the bytes encoded decode to others")
+    return 0
+
+// ---------------------------------------------------------
+// Regular expressions
+// ---------------------------------------------------------
+
+priv fn read_regex(src: U8[], arena: Arena$@): I32 //<
+    //< **The input has two parts** (the pattern and the text), and both are mutated
+    //<
+    //< Caution: **Do not split on a newline.** A file written in text mode on Windows gets `\r\n`,
+    //< which leaves an invisible `\r` at the end of the first part.
+    $pattern: = src
+    $text: U8[] = ""
+    if at: = src.find_char(split_at)
+        pattern = src.sub(0, at)
+        text = src.sub_from(at + 1)
+    rx: = Regex.compile(pattern) catch
+        return 1
+    defer rx.free()
+    hit: = rx.is_match(text)
+    use_len(1 if hit else 0)
+    // **The search's work is held to its bound**: a way meeting another at the same state and byte
+    // is merged with it. A search that stepped back instead passes the bound on the patterns that
+    // hang one.
+    assert(rx.visits(text) <= rx.states * (text.len + 1), "regex: a search visits past its bound")
+    use_match(rx, hit, pattern.len, text, arena)
+    return 0
+
+priv fn use_match(rx: Regex$@, hit: Bool, pattern_len: Sz, text: U8[], arena: Arena$@) //<
+    //< It extracts the match and reads the groups, of which the pattern holds fewer than its length
+    //<
+    //< **No match is a valid answer** (it refuses with `no_match`), and the three searches agree.
+    one: = rx.find(text) catch
+        assert(!hit, "regex: is_match found what find does not")
+        return
+    assert(hit, "regex: find found what is_match does not")
+    use_len(one.start)
+    use_len(one.end)
+    for n in Range.asc(pattern_len + 1)
+        if one.has_group(n)
+            use_bytes(one.group(n, text))
+    $all: = rx.find_all(text, arena)
+    first: = all.get(0)
+    assert(first.start == one.start && first.end == one.end,
+        "regex: find_all's first match is not find's")
+    for m in all.slice()
+        use_bytes(m.group(0, text))
+
+// ---------------------------------------------------------
+// HTTP
+// ---------------------------------------------------------
+priv fn read_http_request(src: U8[], arena: Arena$@): I32
+    req: = http.parse_request(src, http.default_max_body_bytes, arena) catch
+        return 1
+    use_bytes(req.method)
+    use_bytes(req.target)
+    use_bytes(req.version)
+    use_headers(req.headers)
+    use_bytes(req.body)
+    use_len(req.consumed)
+    // Caution: **Also parse the received target as a query**, since a real server parses what
+    // follows the `!` again.
+    if qm: = req.target.find_char('?')
+        head: = url.parse_query(req.target.sub_from(qm), arena) catch
+            return 0
+        use_query(head, arena)
+    return 0
+
+priv fn read_http_response(src: U8[], arena: Arena$@): I32
+    res: = http.parse_response(src, arena) catch
+        return 1
+    use_bytes(res.version)
+    use_len(res.status)
+    use_bytes(res.reason)
+    use_headers(res.headers)
+    use_bytes(res.body)
+    use_len(res.consumed)
+    $out: = Str_builder.new()
+    defer out.free()
+    // A head the reader takes may still be one the writer refuses (a 204 naming a length).
+    http.format_response(out@, res.status, res.headers, res.body) catch
+        return 0
+    response_reads_back(out.slice(), res.status, res.headers, res.body, arena)
+    return 0
+
+priv fn use_headers(head: Headers) //< it walks the headers and looks one up by name
+    //<
+    //< Caution: **Go as far as the lookup**: names are matched ignoring case, so walking alone
+    //< leaves a path untested.
+    for h in head.each()
+        use_bytes(h.name)
+        use_bytes(h.value)
+    if v: = head.find("content-length")
+        use_bytes(v)
+    if v: = head.find("Connection")
+        use_bytes(v)
+
+// ---------------------------------------------------------
+// HTTP, written: what a writer here wrote, read back
+// ---------------------------------------------------------
+
+priv fn read_http_written(src: U8[], arena: Arena$@): I32 //<
+    //< Hands the fields to a writer, and checks that what it wrote reads back the same
+    //<
+    //< **The fields are split at each 0 byte**: a status (three digits) or a method and a target,
+    //< then header names and values in turn, and a body if one field is left over.
+    fields: = split_fields(src, arena)
+    if fields.len == 0
+        return 1
+    first: = fields.get(0)
+    is_response: =
+        first.len == 3 && first[0].is_digit() && first[1].is_digit() && first[2].is_digit()
+    $from: Sz = 1 if is_response else 2
+    if fields.len < from
+        return 1
+    $hb: = http.headers(arena)
+    for from + 1 < fields.len
+        hb = hb.add(fields.get(from), fields.get(from + 1))
+        from += 2
+    head: = hb.build()
+    body: = fields.get(from) if from < fields.len else ""
+    $out: = Str_builder.new()
+    defer out.free()
+    if is_response
+        status: =
+            (I32::first[0] - 48) * 100 + (I32::first[1] - 48) * 10 + (I32::first[2] - 48)
+        http.format_response(out@, status, head, body) catch
+            return 1
+        response_reads_back(out.slice(), status, head, body, arena)
+        return 0
+    http.format_request(out@, first, fields.get(1), head, body) catch
+        return 1
+    use_bytes(out.slice())
+    req: = http.parse_request(out.slice(), out.len, arena) catch
+        panic("http: a request the writer wrote is refused by the reader")
+    assert(req.method.equals(first) && req.target.equals(fields.get(1)) &&
+        req.body.equals(body) && req.consumed == out.len,
+        "http: a request the writer wrote reads back as another")
+    same_headers(req.headers, head, body.len, arena)
+    $again: = Str_builder.new()
+    defer again.free()
+    http.format_request(again@, req.method, req.target, req.headers, req.body) catch
+        panic("http: a request read back is refused by the writer")
+    assert(again.slice().equals(out.slice()), "http: a request read back is written otherwise")
+    return 0
+
+priv fn response_reads_back(written: U8[], status: I32, head: Headers, body: U8[], arena: Arena$@) //<
+    //< Checks that a response the writer wrote reads back as the status, headers and body given
+    use_bytes(written)
+    res: = http.parse_response(written, arena) catch
+        panic("http: a response the writer wrote is refused by the reader")
+    assert(res.status == status && res.body.equals(body) && res.consumed == written.len,
+        "http: a response the writer wrote reads back as another")
+    // Only a status that may carry a body names its length.
+    names_length: = status >= 200 && status != 204 && status != 304
+    same_headers(res.headers, head, body.len if names_length else -1, arena)
+    $again: = Str_builder.new()
+    defer again.free()
+    http.format_response(again@, res.status, res.headers, res.body) catch
+        panic("http: a response read back is refused by the writer")
+    assert(again.slice().equals(written), "http: a response read back is written otherwise")
+
+priv fn same_headers(got: Headers, given: Headers, length: Sz, arena: Arena$@) //<
+    //< Checks that the headers read back are those given, then the length the writer added
+    //<
+    //< `length` is -1 where the writer names none (the status allows no body).
+    $gs: = got.each()
+    for h in given.each()
+        $same: = false
+        if g: = gs.next()
+            same = g.name.equals(h.name) && g.value.equals(h.value)
+        assert(same, "http: a header the writer wrote reads back as another")
+    if length >= 0 && given.find("Content-Length").is_none()
+        $added: = false
+        if g: = gs.next()
+            added =
+                g.name.equals("Content-Length") &&
+                g.value.equals(arena.text().s("\{length\}").take())
+        assert(added, "http: the length the writer added reads back as another")
+    assert(gs.next().is_none(), "http: a header the writer never wrote reads back")
+
+// ---------------------------------------------------------
+// JSON-RPC framing
+// ---------------------------------------------------------
+
+priv struct Frames //< the frames cut out of a stream
+    bodies: List<|U8[]|> //< every body taken; reading goes on past a broken frame, as `read_msg`'s
+    clean: Sz //< how many came before the first broken frame
+    broken: Bool //< a frame was broken
+
+priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
+    //< Cuts the frames out of the bytes as they arrive whole, a byte at a time and in runs of seven
+    //<
+    //< **Up to the first broken frame, where a read ends must not matter**: a pipe splits a message
+    //< anywhere. Each body taken is framed again and taken back the same, then read as JSON.
+    $whole: = frames_of(src, src.len + 1, arena)
+    for run in Sz[]::{ 1, 7 }
+        other: = frames_of(src, run, arena)
+        $same: = other.broken == whole.broken && other.clean == whole.clean
+        for i in Range.asc(whole.clean)
+            same = same && other.bodies.get(i).equals(whole.bodies.get(i))
+        assert(same, "jsonrpc: the frames taken depend on where a read ends")
+    for body in whole.bodies.slice()
+        $again: = Str_builder.new()
+        defer again.free()
+        jsonrpc.frame_into(again@, body)
+        back: = jsonrpc.take_frame(again@, jsonrpc.max_body_bytes, arena) catch
+            panic("jsonrpc: a body framed again is broken")
+        assert(back.unwrap_or("").equals(body) && again.len == 0,
+            "jsonrpc: a body framed again is taken back as another")
+        doc: = json.parse(body, arena) catch
+            continue
+        use_bytes(doc.val.get("method").as_str())
+    return 0 if whole.bodies.len > 0 else 1
+
+priv fn frames_of(src: U8[], run: Sz, arena: Arena$@): Frames //<
+    //< The frames taken while the bytes arrive `run` at a time
+    $acc: = Str_builder.new()
+    defer acc.free()
+    $got: = Frames::{ .bodies = List<|U8[]|>.new(arena), .clean = 0, .broken = false }
+    $at: Sz = 0
+    for
+        taken: = jsonrpc.take_frame(acc@, jsonrpc.max_body_bytes, arena) catch
+            got.broken = true
+            continue
+        if body: = taken
+            got.bodies.push(body)
+            if !got.broken
+                got.clean += 1
+            continue
+        if at >= src.len
+            return got
+        n: = run if run < src.len - at else src.len - at
+        acc.s(src.sub(at, n))
+        at += n
+// ---------------------------------------------------------
+// A struct filled from JSON (`json_struct`)
+// ---------------------------------------------------------
+
+priv struct Part //< a struct nested in `Shape`, in a field, a list and an option
+    label: U8[]
+    weight: F64
+
+priv struct Shape //< what `into_struct` fills: a field of each kind its walk takes
+    name: U8[]
+    count: I64
+    small: I8
+    port: U16
+    big: U64
+    ratio: F32
+    on: Bool
+    size: Sz
+    part: Part
+    tags: List<|U8[]|>
+    nums: List<|I32|>
+    parts: List<|Part|>
+    note: U8[]?
+    limit: I64?
+    spare: Part?
+
+impl Shape: reflect.Reflectable {}
+
+priv fn read_struct(src: U8[], arena: Arena$@): I32 //<
+    //< Fills a `Shape` from the JSON, writes it out, and checks that a second trip changes nothing
+    //<
+    //< **Only the second trip is held to equality**: the first drops unknown keys and rounds an
+    //< `F32`, both by design.
+    doc: = json.parse(src, arena) catch
+        return 1
+    $first: Shape = ::{}
+    json_struct.into_struct(doc.val, first@, arena) catch
+        return 1
+    $b: = json.Json_builder.new(arena)
+    once: = json_struct.from_struct(first@, b@) catch
+        panic("json_struct: a struct it filled cannot be written")
+    $again: Shape = ::{}
+    json_struct.into_struct(once, again@, arena) catch
+        panic("json_struct: a struct it wrote cannot be read back")
+    twice: = json_struct.from_struct(again@, b@) catch
+        panic("json_struct: a struct read back cannot be written")
+    assert(twice.equals(once), "json_struct: a struct read back is written otherwise")
+    $out: = Str_builder.new()
+    defer out.free()
+    twice.dump(out@)
+    use_bytes(out.slice())
+    return 0
+
+// ---------------------------------------------------------
+// A command line (`argp`)
+// ---------------------------------------------------------
+
+priv struct Cli //< where the parser under test stores what it read
+    verbose: Bool
+    dry: Bool
+    count: I64
+    name: U8[]
+    defines: List<|U8[]|>$@
+    trailing: List<|U8[]|>$@
+
+priv fn cli_new(arena: Arena$@): Cli
+    return Cli::{ .verbose = false, .dry = false, .count = 0, .name = "",
+        .defines = List<|U8[]|>.create(arena), .trailing = List<|U8[]|>.create(arena) }
+
+priv fn cli_parser(c: Cli$@, arena: Arena$@): argp.Parser$@ //<
+    //< A parser with each kind of item: flags, values, a repeated one, commands and positionals
+    p: = argp.Parser.create("prog", "a parser under test", arena)
+    p.positional("[file ...]")
+    p.flag("--verbose", c.verbose@, "say more")
+    p.flag("--dry-run", c.dry@, "change nothing")
+    p.int_opt("--count", c.count@, "how many")
+    p.str_opt("--name", c.name@, "what to call it")
+    p.str_list_opt("--define", c.defines, "a name to define; repeats")
+    p.command_flag("--version", "print the version")
+    p.subcommand("fmt", "format the files")
+    p.subcommand_trailing("run", "run a script with its own arguments", c.trailing)
+    return p
+
+priv const cli_names: U8[][5] = ::{ "--verbose", "--dry-run", "--count", "--name", "--define" }
+
+priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
+    //< Parses the fields as a command line, then writes what it read back as one and parses that
+    //<
+    //< **The fields are split at each 0 byte.** What the second parse reads must be what the
+    //< first read: the values, the items given, the command and the positionals.
+    $first: = cli_new(arena)
+    p: = cli_parser(first@, arena)
+    $args: = split_fields(src, arena)
+    p.parse_list(args@) catch e
+        use_bytes(arena.text().s("\{e\}").take())
+        return 1
+    $usage: = Str_builder.new()
+    defer usage.free()
+    p.print_usage(usage@)
+    use_bytes(usage.slice())
+    $second: = cli_new(arena)
+    q: = cli_parser(second@, arena)
+    q.parse_list(argv_again(p, first@, arena)) catch e
+        panic(U8$[]::arena.text().s("argp: what it read, written back, is refused: \{e\}").take())
+    $same: =
+        first.verbose == second.verbose && first.dry == second.dry &&
+        first.count == second.count && first.name.equals(second.name) &&
+        p.command.equals(q.command) && same_list(p.rest, q.rest) &&
+        same_list(first.defines, second.defines) &&
+        same_list(first.trailing, second.trailing)
+    for n in cli_names
+        same = same && p.saw(n) == q.saw(n)
+    same = same && p.saw_empty("--define") == q.saw_empty("--define")
+    assert(same, "argp: what it read, written back, reads as another")
+    return 0
+
+priv fn argv_again(p: argp.Parser$@, c: Cli$@, arena: Arena$@): List<|U8[]|>$@ //<
+    //< What the parser read, written as a command line: the items, the command, `--`, the rest
+    out: = List<|U8[]|>.create(arena)
+    if p.saw("--verbose")
+        out.push("--verbose")
+    if p.saw("--dry-run")
+        out.push("--dry-run")
+    if p.saw("--count")
+        out.push(arena.text().s("--count=\{c.count\}").take())
+    if p.saw("--name")
+        out.push(arena.text().s("--name=").s(c.name).take())
+    for d in c.defines.slice()
+        out.push(arena.text().s("--define=").s(d).take())
+    if p.command.len > 0
+        out.push(p.command)
+    out.push("--")
+    for r in p.rest.slice()
+        out.push(r)
+    for t in c.trailing.slice()
+        out.push(t)
+    return out
+
+priv fn same_list(a: List<|U8[]|>$@, b: List<|U8[]|>$@): Bool
+    if a.len != b.len
+        return false
+    for i in Range.asc(a.len)
+        if !a.get(i).equals(b.get(i))
+            return false
+    return true
+
+priv fn split_fields(src: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The input cut at each 0 byte; n zeros give n + 1 fields, and empty input none
+    $out: = List<|U8[]|>.new(arena)
+    if src.len == 0
+        return out
+    $start: Sz = 0
+    for i in Range.asc(src.len + 1)
+        if i == src.len || src[i] == 0U8
+            out.push(src.sub(start, i - start))
+            start = i + 1
+    return out
+
+// ---------------------------------------------------------
+priv fn read_one(kind: U8[], src: U8[], arena: Arena$@): I32
+    if kind.equals("json")
+        return read_json(src, arena)
+    if kind.equals("url")
+        return read_url(src, arena)
+    if kind.equals("base64")
+        return read_base64(src, arena)
+    if kind.equals("regex")
+        return read_regex(src, arena)
+    if kind.equals("http-req")
+        return read_http_request(src, arena)
+    if kind.equals("http-res")
+        return read_http_response(src, arena)
+    if kind.equals("http-write")
+        return read_http_written(src, arena)
+    if kind.equals("jsonrpc")
+        return read_rpc(src, arena)
+    if kind.equals("json-struct")
+        return read_struct(src, arena)
+    if kind.equals("argv")
+        return read_argv(src, arena)
+    io.err().s("a kind I do not know: \{kind\}\n")
+    return 2
+
+fn main(): I32
+    args: = sys.args()
+    if args.len < 3
+        io.err().s("usage: read_prog <kind> <file> (the kinds are those `read_one` lists)\n")
+        return 2
+    src: = io.read_file(args[2]) catch
+        io.err().s("cannot read: \{args[2]\}\n")
+        return 2
+    // The address sanitizer's leak check counts a buffer still held at the exit as a finding.
+    defer dealloc(Void$@::src.ptr)
+    arena: = Arena.new(8 * 1024 * 1024)
+    defer arena.free()
+    code: = read_one(args[1], src, arena)
+    // Caution: **Print the mixed value**, or the reading above could be optimized away entirely.
+    io.out().s("used=\{used\}\n")
+    return code

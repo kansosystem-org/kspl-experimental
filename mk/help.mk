@@ -4,7 +4,7 @@
 # **The make files are the list's canonical source**: a target's description is the one line
 # above its rule, `## <group>|<target>|<description>`, `<group>` being a name in $(HELP_GROUPS).
 # A `<target>` ending in `*` is a **family** (`debug-*`); **the `*` goes at the end and nowhere
-# else**: `tests/suite/recipe_bytes_test.kspls` reads what precedes it as a prefix, and matches the
+# else**: `tests/suite/recipe_bytes_test.kspl` reads what precedes it as a prefix, and matches the
 # descriptions against `.PHONY`: **leave no typable target without one**. **The plain name
 # carries the whole job, and a variant takes a suffix**; **leave no alias behind on a rename**, so
 # an old spelling answers "No rule to make target" rather than quietly doing something else.

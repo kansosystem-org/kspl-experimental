@@ -22,16 +22,16 @@ The port and the root are **positional**; no environment variable fills either i
 | `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** The server does not start when it names a folder, a FIFO or a device, or nothing. It may sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md) says what naming it weighs) |
 | `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** Absent, it stays up. A page holds it through `/api/here` ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 
-The rules of local use are [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)'s, and the grounds [`kssrv/docs/DESIGN.md`](docs/DESIGN.md)'s.
+The rules of local use are [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)'s, and the grounds [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md)'s.
 
 ## What is here
 
 | File | What it holds |
 | :-- | :-- |
-| [`kssrv/main.kspls`](main.kspls) | The command line, the accept loop (the loop that takes new connections and serves the open ones), static serving, and the one logger a run speaks through |
-| [`kssrv/conn.kspls`](conn.kspls) | One connection's state, and how a response is queued |
-| [`kssrv/api.kspls`](api.kspls) | The endpoints under `/api/` and their routing table |
-| [`kssrv/pilot.kspls`](pilot.kspls) | How the steering returned to the car (`POST /api/car`) is decided |
+| [`kssrv/main.kspl`](main.kspl) | The command line, the accept loop (the loop that takes new connections and serves the open ones), static serving, and the one logger a run speaks through |
+| [`kssrv/conn.kspl`](conn.kspl) | One connection's state, and how a response is queued |
+| [`kssrv/api.kspl`](api.kspl) | The endpoints under `/api/` and their routing table |
+| [`kssrv/pilot.kspl`](pilot.kspl) | How the steering returned to the car (`POST /api/car`) is decided |
 | [`kssrv/tests/`](tests/) | The tests `make test` runs ("The tests" below) |
 | [`kssrv/docs/`](docs/) | The client agreement and the design ("Further reading" below) |
 
@@ -50,22 +50,22 @@ Every line gives the product's name, the severity (`E` error, `W` warning, `I` i
 
 ## How it holds up under load
 
-Idle, it uses no CPU. **What it holds on its heap comes back to the same figure** after waves of badly behaved clients, beside one that behaves. The waves are clients that never finish a request, send headers past the cap, or disconnect mid-response. The run `memory` ([`kssrv/tests/memory.kspls`](tests/memory.kspls)) reads `heap_bytes` from `/api/status` after each wave.
+Idle, it uses no CPU. **What it holds on its heap comes back to the same figure** after waves of badly behaved clients, beside one that behaves. The waves are clients that never finish a request, send headers past the cap, or disconnect mid-response. The run `memory` ([`kssrv/tests/memory.kspl`](tests/memory.kspl)) reads `heap_bytes` from `/api/status` after each wave.
 
 ## The tests
 
-**`make test` runs them from this folder** ([`kssrv/Makefile`](Makefile)). It needs a `ksplc`, the `ksai` it uses (found through `KSPLC_PKG_SRC_DIR`) and a C compiler. It builds the server, starts it again and again, and checks from outside what it answers ([`kssrv/tests/main.kspls`](tests/main.kspls)). kssrv names itself in [`kssrv/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs them the same way. `make` alone builds the server into this folder's `out/`.
+**`make test` runs them from this folder** ([`kssrv/Makefile`](Makefile)). It needs a `ksplc`, the `ksai` it uses (found through `KSPLC_PKG_SRC_DIR`) and a C compiler. It builds the server, starts it again and again, and checks from outside what it answers ([`kssrv/tests/main.kspl`](tests/main.kspl)). kssrv names itself in [`kssrv/ksplc.cfg`](ksplc.cfg), so a copy of this folder runs them the same way. `make` alone builds the server into this folder's `out/`.
 
-**A failing check does not stop the run.** The closing `RESULT:` line is printed after every server the run started has stopped. So none is left on its port for the next run to trip over ([`std/verdict.kspls`](../std/verdict.kspls)).
+**A failing check does not stop the run.** The closing `RESULT:` line is printed after every server the run started has stopped. So none is left on its port for the next run to trip over ([`std/verdict.kspl`](../std/verdict.kspl)).
 
-**`make check-pilot-copy COPY=<file>`** compares a copy of the pilot policy (the car's steering network) kept elsewhere with the one this server sends, at every point of the car's sweep ([`kssrv/tests/copy.kspls`](tests/copy.kspls)). The server does not know where copies are kept. Whoever keeps one names it.
+**`make check-pilot-copy COPY=<file>`** compares a copy of the pilot policy (the car's steering network) kept elsewhere with the one this server sends, at every point of the car's sweep ([`kssrv/tests/copy.kspl`](tests/copy.kspl)). The server does not know where copies are kept. Whoever keeps one names it.
 
 ## Further reading
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
 | [`kssrv/docs/SPEC-api.md`](docs/SPEC-api.md) | What each request returns, the JSON API under `/api/`, and the limits a caller writes against. | Whoever calls the server from their own code, with a running `kssrv` to try the calls against |
-| [`kssrv/docs/DESIGN.md`](docs/DESIGN.md) | Why it is shaped this way — one thread serving every connection, the fixed-size connection table, one block of memory (an arena) reused for each request — and what pins each decision. | Whoever changes kssrv |
+| [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md) | Why it is shaped this way — one thread serving every connection, the fixed-size connection table, one block of memory (an arena) reused for each request — and what pins each decision. | Whoever changes kssrv |
 | The "kssrv" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left, and what marks each stage as done. | Whoever changes kssrv |
 | [std](../std/README.md) | The `net` / `reactor` / `http` / `json` it is built on; `ksplc doc std` lists every file std publishes. | Whoever changes kssrv |
 | [ksai](../ksai/README.md) | What the car's steering policy is built on: `tensor`, `nn`, `safetensors` and the rest. | Whoever changes kssrv |

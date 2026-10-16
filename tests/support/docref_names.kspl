@@ -1,0 +1,400 @@
+#!/usr/bin/env -S ksplc run
+//< Checks that a dotted name a published document writes in backticks names a declaration
+//<
+//< A document has no scope, so a name tied to no file (`` `Map.items` ``) is read against the
+//< declarations of the whole tree, as `ksplc doc --surface-scope=all` lists them. **The spellings
+//< the compiler leaves alone in a comment are left alone here** (`[W0211]` in
+//< `ksplc/docs/SPEC-tools.md`): a name tied to its file (`make test-docref` reads that one), a name
+//< introduced as another product's, a file's name, and a code fragment.
+import "ksplc/tests/support/harness" as ksplc_harness
+import "std/chars"
+import "std/ds" { List, Map }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/subproc"
+import "std/sys"
+import "std/verdict"
+import "tests/support/conventions_scan" as scan
+import "tests/support/docsnippet_shape" as shape
+import "tests/support/harness"
+
+priv const entry_head: U8[] = "* [`" //< how `ksplc doc` opens one entry of its contents
+priv const entry_tail: U8[] = "`](" //< and closes the entry's name
+
+// The words that open a declaration of a type or of what a type gains, after `pub` / `priv`.
+priv const decl_words: U8[][_] = ::{ "struct ", "enum ", "trait ", "typedef ", "impl" }
+
+// What ties a name to its file (`name` in `file`), as "Linking documents to source" in
+// `docs/SPEC-documents.md` spells it.
+priv const file_words: U8[][_] = ::{ "in `", "of `", "inside `" }
+
+// The endings that make a name a file's name (`edit.kspl`, `ci.yml`).
+priv const file_exts: U8[][_] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cfg", "json", "html",
+    "js", "css", "mk", "py", "ll", "sh", "exe", "yml", "ld", "kspeg", "toml", "kspage", "uf2", "elf",
+    "o", "a", "so", "dll", "wasm", "svg" }
+
+priv struct Use //< one dotted name a document writes
+    rel: U8[]
+    line: Sz
+    body: U8[] //< the span as written
+    parts: List<|U8[]|>$@
+
+priv struct Index //< what the tree declares, as the check looks it up
+    members: Map<|U8[], List<|U8[]|>$@|>$@ //< each type's members, from every file that adds one
+    modules: Map<|U8[], List<|U8[]|>$@|>$@ //< each standard library file's names, by its alias
+
+priv fn add_to(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[], arena: Arena$@)
+    $got: = m.get(key) catch null
+    if got == null
+        got = List<|U8[]|>.create(arena)
+        m.set(key, got)
+    got.push(name)
+
+priv fn holds(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[]): Bool
+    got: = m.get(key) catch null
+    if got == null
+        return false
+    for n in got
+        if n.equals(name)
+            return true
+    return false
+
+priv fn knows(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[]): Bool
+    got: = m.get(key) catch null
+    return got != null
+
+// ==========================================
+// Reading a document
+// ==========================================
+
+priv fn is_word_byte(c: U8): Bool
+    return c.is_alnum() || c == '_'
+
+fn dotted(span: U8[], arena: Arena$@): List<|U8[]|> //<
+    //< The parts of a span holding a dotted name and nothing else (call brackets may close it)
+    //<
+    //< Empty where the span holds anything more: `io.out().s("x")` is a fragment of code.
+    $parts: = List<|U8[]|>.new(arena)
+    $i: Sz = 0
+    for
+        start: = i
+        if i >= span.len || !span[i].is_alpha()
+            return List<|U8[]|>.new(arena)
+        for i < span.len && is_word_byte(span[i])
+            i += 1
+        parts.push(span.sub(start, i - start))
+        if i < span.len && span[i] == '.'
+            i += 1
+            continue
+        break
+    if i < span.len && span[i] == '('
+        $depth: Sz = 0
+        for i < span.len
+            if span[i] == '('
+                depth += 1
+            else if span[i] == ')'
+                depth -= 1
+            i += 1
+            if depth == 0
+                break
+    if i != span.len || parts.len < 2
+        return List<|U8[]|>.new(arena)
+    return parts
+
+fn is_foreign(before: U8[]): Bool //<
+    //< Whether the text before a span introduces it as another product's (`Python's `)
+    if !before.ends_with("'s ")
+        return false
+    $w: = before.len - 3
+    for w > 0 &&
+        (is_word_byte(before[w - 1]) || before[w - 1] == '+' || before[w - 1] == '#')
+        w -= 1
+    return w < before.len - 3 && before[w].is_upper()
+
+fn is_tied(after: U8[]): Bool //< whether the text after a span ties it to its file
+    $t: = after
+    // A run of names shares one file (`a` / `b` in `file`).
+    for t.trim_start().starts_with("/")
+        rest: = t.trim_start().sub_from(1).trim_start()
+        if !rest.starts_with("`")
+            break
+        if shut: = rest.sub_from(1).find_char('`')
+            t = rest.sub_from(shut + 2)
+        else
+            return false
+    if t.starts_with("(`")
+        return true
+    for w in file_words
+        if t.trim_start().starts_with(w)
+            return true
+    return false
+
+fn names_a_file(parts: List<|U8[]|>@): Bool //< whether its last part is a file's ending
+    last: = parts.get(parts.len - 1)
+    for e in file_exts
+        if last.equals(e)
+            return true
+    return false
+
+priv fn read_uses(rel: U8[], text: U8[], out: List<|Use|>$@, arena: Arena$@) //<
+    //< Collects the dotted names in one document's code spans, fences left out
+    $inside: = false
+    $lineno: Sz = 0
+    for ln in text.lines(arena)
+        lineno += 1
+        if ln.trim_spaces().starts_with("```")
+            inside = !inside
+            continue
+        if inside
+            continue
+        $i: Sz = 0
+        for i < ln.len
+            if ln[i] != '`'
+                i += 1
+                continue
+            $n: Sz = 0
+            for i + n < ln.len && ln[i + n] == '`'
+                n += 1
+            // A span closes on a run of as many backticks; an unmatched run is plain text.
+            switch ln.sub_from(i + n).find_str(ln.sub(i, n))
+            case .none
+                i += n
+            case .some(shut)
+                body: = ln.sub(i + n, shut)
+                end: = i + n + shut + n
+                parts: = dotted(body, arena)
+                // One letter stands for any name (`P.new`).
+                if n == 1 && parts.len >= 2 && !is_foreign(ln.sub(0, i)) &&
+                    !is_tied(ln.sub_from(end)) && !names_a_file(parts@) &&
+                    parts.get(0).len > 1 && parts.get(1).len > 1
+                    kept: = List<|U8[]|>.create(arena)
+                    for p in parts
+                        kept.push(p)
+                    out
+                        .push(Use::{ .rel = rel, .line = lineno, .body = body, .parts = kept })
+                i = end
+
+// ==========================================
+// What the tree declares
+// ==========================================
+
+priv fn bare_key(key: U8[], arena: Arena$@): U8[] //<
+    //< An entry's key without its type arguments and attributes (`List<|T|>.push #inline`)
+    b: = arena.text()
+    $depth: Sz = 0
+    $i: Sz = 0
+    for i < key.len
+        if key.starts_with("<|", i)
+            depth += 1
+            i += 2
+            continue
+        if depth > 0 && key.starts_with("|>", i)
+            depth -= 1
+            i += 2
+            continue
+        if key[i] == ' '
+            break
+        if depth == 0
+            b.c(key[i])
+        i += 1
+    return b.take()
+
+priv fn add_entries(alias: U8[], std: Bool, said: U8[], ix: Index@, arena: Arena$@) //<
+    //< Files one file's listing: a member under its type, every name under a std file's alias
+    for ln in said.lines(arena)
+        if !ln.starts_with(entry_head)
+            continue
+        if shut: = ln.find_str(entry_tail)
+            key: = bare_key(ln.sub(entry_head.len, shut - entry_head.len), arena)
+            // A conformance (`List<|T|>:Owned`) adds no name.
+            if key.len == 0 || key.find_char(':').is_some()
+                continue
+            $parts: = key.split('.', arena)
+            // An impl on another file's type is keyed with that file's alias first
+            // (`sync.Sem.init_dyn`).
+            for parts.len > 2 && parts.get(0)[0].is_lower() &&
+                parts.get(1)[0].is_upper()
+                parts.remove_at(0)
+            if parts.len >= 2
+                add_to(ix.members, parts.get(parts.len - 2), parts.get(parts.len - 1), arena)
+            if std
+                for p in parts
+                    add_to(ix.modules, alias, p, arena)
+
+priv fn add_externs(alias: U8[], src: U8[], ix: Index@, arena: Arena$@) //<
+    //< Files the functions a std file declares in an `extern` block, which `ksplc doc` leaves out
+    $in_block: = false
+    for ln in src.lines(arena)
+        if ln.len > 0 && ln[0] != ' '
+            in_block = ln.strip_prefix("pub ").starts_with("extern ")
+            continue
+        t: = ln.trim_spaces().strip_prefix("pub ")
+        if !in_block || !t.starts_with("fn ")
+            continue
+        open: = t.find_char('(').unwrap_or(0)
+        if open > 3
+            add_to(ix.modules, alias, t.sub(3, open - 3), arena)
+
+priv fn declares_one(src: U8[], heads: Map<|U8[], Bool|>$@, arena: Arena$@): Bool //<
+    //< Whether a source declares a type a document names, or adds to one (`impl`)
+    for ln in src.lines(arena)
+        t: = ln.trim_spaces().strip_prefix("pub ").strip_prefix("priv ")
+        $opens: = false
+        for w in decl_words
+            opens = opens || t.starts_with(w)
+        if !opens
+            continue
+        $i: Sz = 0
+        for i < t.len
+            if !is_word_byte(t[i])
+                i += 1
+                continue
+            start: = i
+            for i < t.len && is_word_byte(t[i])
+                i += 1
+            named: = heads.get(t.sub(start, i - start)) catch false
+            if named
+                return true
+    return false
+
+priv fn std_alias(rel: U8[]): U8[] //< a file directly under `std/`'s alias, or empty
+    if !rel.starts_with("std/") || rel.sub_from(4).find_char('/').is_some()
+        return ""
+    dot: = rel.rfind_char('.').unwrap_or(0)
+    return rel.sub(4, dot - 4) if dot > 4 else ""
+
+priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
+    //< Asks `ksplc doc` for each source that declares a head the documents name
+    //<
+    //< **Only those sources are asked**, so the cost follows the names written, not the tree's
+    //< size.
+    ix: = Index::{ .members = arena.create(Map<|U8[], List<|U8[]|>$@|>.new(arena)),
+        .modules = arena.create(Map<|U8[], List<|U8[]|>$@|>.new(arena)) }
+    // The types named, and the lower-case heads, which only a std file's alias answers.
+    $heads: = Map<|U8[], Bool|>.new(arena)
+    $lower: = Map<|U8[], Bool|>.new(arena)
+    for u in uses
+        head: = u.parts.get(0)
+        if head[0].is_upper()
+            heads.set(head, true)
+        else
+            lower.set(head, true)
+    tracked: = harness.tracked()
+    $stems: = List<|U8[]|>.new(arena)
+    for rel in tracked
+        if !rel.ends_with(".kspl") && !rel.ends_with(".ksplb")
+            continue
+        // Programs written to be refused declare nothing to point at.
+        if rel.starts_with("ksplc/tests/negative/") || rel.starts_with("ksplc/tests/lint/")
+            continue
+        src: = harness.read_under_root(rel)
+        if src.len == 0
+            continue
+        alias: = std_alias(rel)
+        named: = alias.len > 0 && (lower.get(alias) catch false)
+        if named
+            add_externs(alias, src, ix@, arena)
+        if named || declares_one(src, heads@, arena)
+            stems.push(rel.sub(0, rel.rfind_char('.').unwrap_or(rel.len)))
+    $jobs: = List<|subproc.Job|>.new(arena)
+    for stem in stems
+        argv: = ksplc_harness.ksplc_argv(U8[][]::{ "doc", "--surface-scope=all", stem })
+        jobs.push(subproc.Job::{ .argv = argv, .cwd = harness.root() })
+    outs: = ksplc_harness.run_all(jobs.slice(), "docref_names")
+    for i in Range.asc(stems.len)
+        r: = outs.get(i)
+        stem: = stems.get(i)
+        std: =
+            stem.starts_with("std/") && stem.sub_from(4).find_char('/').is_none()
+        if r.code == 0
+            add_entries(sys.get_file_name(stem), std, r.out, ix@, arena)
+    return ix
+
+priv fn fence_words(text: U8[], arena: Arena$@): Map<|U8[], Bool|>$@ //<
+    //< The words inside a document's KSPL fences: what its own examples declare (`Event.click`)
+    $snippets: = List<|shape.Snippet|>.new(arena)
+    shape.collect("", text, snippets@, arena)
+    out: = arena.create(Map<|U8[], Bool|>.new(arena))
+    for s in snippets
+        $i: Sz = 0
+        for i < s.body.len
+            if !is_word_byte(s.body[i])
+                i += 1
+                continue
+            start: = i
+            for i < s.body.len && is_word_byte(s.body[i])
+                i += 1
+            out.set(s.body.sub(start, i - start), true)
+    return out
+
+priv fn wrong_name(ix: Index@, u: Use@, own: Map<|U8[], Bool|>$@): Bool //<
+    //< Whether a name's head is known and its member is not
+    //<
+    //< **Two heads are known**: a type (a capital first), and a standard library file's alias. A
+    //< lower-case head is as often a variable the prose speaks of (`root.children`).
+    head: = u.parts.get(0)
+    member: = u.parts.get(1)
+    if head[0].is_upper()
+        return knows(ix.members, head) && !holds(ix.members, head, member) &&
+            !(own.get(member) catch false)
+    return knows(ix.modules, head) && !holds(ix.modules, head, member)
+
+priv const span_samples: scan.Sample[_] = ::{
+    scan.Sample::{ .text = "Map.items", .hits = true },
+    scan.Sample::{ .text = "io.out()", .hits = true },
+    scan.Sample::{ .text = "mem.dealloc(text.ptr)", .hits = true },
+    // A fragment of code is no pointer, nor is a name with no dot.
+    scan.Sample::{ .text = "io.out().s(\"x\")", .hits = false },
+    scan.Sample::{ .text = "buf.sub_mut(0, 4).fill(0)", .hits = false },
+    scan.Sample::{ .text = "List", .hits = false },
+    scan.Sample::{ .text = "x: = a.b", .hits = false },
+    scan.Sample::{ .text = "Map<|K, V|>.items", .hits = false } //<
+        //< What reads as a pointer and what does not, in a span's text
+}
+
+priv const left_samples: scan.Sample[_] = ::{ scan.Sample::{ .text = "Python's |`json.dumps`|",
+    .hits = true }, scan.Sample::{ .text = "C++'s |`std.move`|", .hits = true },
+    scan.Sample::{ .text = "|`List.order_by`| in `std/seq`", .hits = true },
+    scan.Sample::{ .text = "|`List.where`| / `List.select` in `std/seq`", .hits = true },
+    scan.Sample::{ .text = "the doc's |`Map.items`|", .hits = false },
+    scan.Sample::{ .text = "|`Map.items`| is in the table", .hits = false } } //<
+        //< The wordings that leave a name alone (hit) and that do not; `|` fences the span off
+
+priv fn reads_a_name(text: U8[], arena: Arena$@): Bool
+    return dotted(text, arena).len >= 2
+
+priv fn left_alone(text: U8[], arena: Arena$@): Bool
+    parts: = text.split('|', arena)
+    return is_foreign(parts.get(0)) || is_tied(parts.get(2))
+
+fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref_test.kspl`
+    tracked: = harness.tracked()
+    private: = harness.private_docs()
+    $uses: = List<|Use|>.new(arena)
+    $owns: = Map<|U8[], Map<|U8[], Bool|>$@|>.new(arena)
+    for rel in tracked
+        $skip: = !rel.ends_with(".md") || rel.starts_with("private/")
+        for p in private
+            skip = skip || sys.get_file_name(rel).equals(p)
+        if skip
+            continue
+        text: = harness.read_under_root(rel)
+        if text.len == 0
+            continue
+        read_uses(rel, text, uses@, arena)
+        owns.set(rel, fence_words(text, arena))
+    ix: = build_index(uses@, arena)
+    $bad: = List<|U8[]|>.new(arena)
+    for u in uses
+        own: = owns.get(u.rel) catch null
+        if own != null && wrong_name(ix@, u@, own)
+            bad
+                .push(arena.text().s(u.rel).s(":\{u.line\}: `").s(u.body).s("` names nothing")
+                .take())
+    verdict.check_list("a dotted name a document writes names a declaration", uses.len, "names",
+        bad@, "point at what exists, or tie the name to its file (`name` in `file`)")
+    scan.check_samples("the reading of a span as a dotted name can fire",
+        scan.Sample[]::span_samples, "span_samples", reads_a_name, arena)
+    scan.check_samples("the wordings that leave a name alone can fire",
+        scan.Sample[]::left_samples, "left_samples", left_alone, arena)

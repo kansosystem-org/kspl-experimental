@@ -1,7 +1,7 @@
 // A paragraph's fill and frame, the underline, and joining cells.
 //
 // The style name `heading` is the document's and the theme name `Indigo` is the core's
-// (`kspage/write/theme.kspls`), so those needles follow those sides.
+// (`kspage/write/theme.kspl`), so those needles follow those sides.
 
 function kspageProbePaint(ks) {
   const { check, app, canvas, ime, spot, undoKey, openMenu, findBlock, dpr } = ks;

@@ -1,0 +1,577 @@
+#!/usr/bin/env -S ksplc run
+//< The test of where packages are found (`import`'s resolution)
+//<
+//< The feature's purpose is that std/ need not sit in the current directory, so the test runs from
+//< **a directory where std/ is not visible** (at the repository root the default "std" hits).
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/harness_build"
+import "ksplc/tests/support/std_dir_named" + { case_dir, ksplc_env, run_exe, src }
+import "std/chars" // classifying and extracting single characters
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/str" // `arena.text()`
+import "std/sys"
+import "std/verdict"
+
+priv const other_lib_src: U8[] = """import "mylib/thing"
+
+fn main(): I32
+    return 0
+
+"""
+
+priv const env_mark: U8[] = "env_std_marker" //<
+    //< The value used in the precedence check is **a relative path**
+    //<
+    //< MSYS2 converts a POSIX-looking absolute path (`/env/std`) into a Windows path for a native
+    //< binary; a relative mark escapes that.
+priv const cli_mark: U8[] = "cli_std_marker"
+
+priv fn ksplc_in(args: U8[][], cwd: U8[], env_std: U8[], arena: Arena$@): verdict.Run_out //<
+    //< It runs ksplc once in cwd
+    //<
+    //< **No `--std-dir=` in front** (so not `harness.ksplc`): this tests the resolution itself.
+    //< Caution: **Set KSPLC_STD_DIR again every time.** Left in the caller's environment, the
+    //< default case "happens to resolve and passes".
+    return ksplc_env(args, cwd, env_std, "", arena)
+
+priv fn case_default(arena: Arena$@) //<
+    //< It checks that where std/ is not visible, the build fails and shows the path it tried
+    //<
+    //< It fails unless the location is given. **The diagnostic shows the path it really tried to
+    //< open**: a logical name does not say where it looked.
+    name: = "the default: in a place with no std/ it fails and shows the path it hunted"
+    dir: = case_dir(name, "default", U8[][]::{ "a.kspl" }, U8[][]::{ src })
+    if dir.len == 0
+        return
+    r: = ksplc_in(U8[][]::{ "a.kspl", "a.c" }, dir, "", arena)
+    if r.code == 0
+        verdict.check(name, false, "the compilation succeeded with no std/")
+        return
+    // std/lang is read first (`ksplc/pipeline.kspl` puts it into every program), so with no std/
+    // it stops here.
+    verdict.check(name, r.out.find_str("std/lang.kspl").is_some(),
+        arena.text().s("the path hunted does not come out in the diagnostic\n\{r.out\}").take())
+
+priv fn case_flag_and_env(arena: Arena$@)
+    std: = harness.std_dir()
+    dir: =
+        case_dir("it can be resolved by --std-dir=", "resolve", U8[][]::{ "a.kspl" },
+        U8[][]::{ src })
+    if dir.len == 0
+        return
+    flag: = arena.text().s("--std-dir=\{std\}").take()
+    r: = ksplc_in(U8[][]::{ flag, "a.kspl", "a.c" }, dir, "", arena)
+    verdict.check("it can be resolved by --std-dir=", r.code == 0, r.out)
+    e: = ksplc_in(U8[][]::{ "a.kspl", "b.c" }, dir, std, arena)
+    verdict.check("it can be resolved by KSPLC_STD_DIR", e.code == 0, e.out)
+
+priv fn case_runs(arena: Arena$@) //< whether only the path is right and the content is broken
+    //<
+    //< It links the generated C and runs it.
+    name: = "the artefact made with --std-dir= really works"
+    std: = harness.std_dir()
+    dir: = case_dir(name, "runs", U8[][]::{ "a.kspl" }, U8[][]::{ src })
+    if dir.len == 0
+        return
+    flag: = arena.text().s("--std-dir=\{std\}").take()
+    gen: = fs.join(dir, "a.c", arena)
+    exe: = fs.join(dir, "a.exe", arena)
+    r: = ksplc_in(U8[][]::{ flag, "a.kspl", gen }, dir, "", arena)
+    if r.code != 0
+        verdict.check(name, false, r.out)
+        return
+    b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
+    if b.code != 0
+        verdict.check(name, false, b.out)
+        return
+    out: = harness.run(U8[][]::{ exe })
+    verdict.check(name, out.out.equals("ok\n"),
+        arena.text().s("the output differs from what was supposed: \{out.out\}").take())
+
+priv fn case_only_std_prefix(arena: Arena$@)
+    name: = "the reserved prefix: anything but std/ is untouched by --std-dir="
+    std: = harness.std_dir()
+    dir: = case_dir(name, "prefix", U8[][]::{ "b.kspl" }, U8[][]::{ other_lib_src })
+    if dir.len == 0
+        return
+    flag: = arena.text().s("--std-dir=\{std\}").take()
+    r: = ksplc_in(U8[][]::{ flag, "b.kspl", "b.c" }, dir, "", arena)
+    if r.code == 0
+        verdict.check(name, false, "it succeeded on a file that does not exist")
+        return
+    verdict.check(name, r.out.find_str("mylib/thing.kspl").is_some(),
+        arena.text().s("the user's file is being hunted on the std_dir side\n\{r.out\}").take())
+
+// ==========================================
+// The location of a package other than `std`
+// ==========================================
+priv const unit_thing_shared: U8[] = """pub fn hello(): U8[]
+  return "shared"
+
+"""
+
+priv const unit_thing_here: U8[] = """pub fn hello(): U8[]
+  return "here"
+
+"""
+
+priv const unit_use_src: U8[] =
+    """import "mylib/thing"
+import "std/io"
+
+fn main(): I32
+    io.out().s(thing.hello()).s("\n")
+    return 0
+
+"""
+
+priv fn lib_case_dir(name: U8[], slot: U8[]): U8[] //<
+    //< It makes the user and the given package directory side by side in one working directory
+    //<
+    //< Empty on failure, as with `case_dir`.
+    //< Caution: **Put the user in a folder below.** At the working directory's root it resolves
+    //< without the given directory (the same gap as the default `std`).
+    return case_dir(name, slot, U8[][]::{ "proj/a.kspl", "libs/mylib/thing.kspl" },
+        U8[][]::{ unit_use_src, unit_thing_shared })
+
+priv fn case_pkg_src_dir(arena: Arena$@)
+    name: = "a package other than std can be found through --pkg-src-dir="
+    std: = harness.std_dir()
+    dir: = lib_case_dir(name, "unit")
+    if dir.len == 0
+        return
+    proj: = fs.join(dir, "proj", arena)
+    libs: = fs.join(dir, "libs", arena)
+    std_flag: = arena.text().s("--std-dir=\{std\}").take()
+    // Without the setting, it searches relative to its own folder and fails.
+    none: = ksplc_env(U8[][]::{ std_flag, "a.kspl", "a.c" }, proj, "", "", arena)
+    verdict.check("without being taught it looks only at the folder it is in",
+        none.code != 0 && none.out.find_str("mylib/thing.kspl").is_some(),
+        arena.text().s("the path hunted does not come out in the diagnostic\n\{none.out\}").take())
+    unit_flag: = arena.text().s("--pkg-src-dir=\{libs\}").take()
+    r: =
+        ksplc_env(U8[][]::{ std_flag, unit_flag, "a.kspl", "a.c" }, proj, "", "", arena)
+    verdict.check(name, r.code == 0, r.out)
+    e: = ksplc_env(U8[][]::{ std_flag, "a.kspl", "b.c" }, proj, "", libs, arena)
+    verdict.check("it can be found through KSPLC_PKG_SRC_DIR too", e.code == 0, e.out)
+
+priv fn case_lib_here_wins(arena: Arena$@) //< a local copy wins
+    //<
+    //< Caution: It checks that **it switches over even with the old record left**. **Matching the
+    //< content alone would let it pass**: the configured file the record names stays, with the same
+    //< content (`shadowed_now` in `ksplc/tools/run.kspl`).
+    name: = "the local copy wins and takes over even with the old record left behind"
+    std: = harness.std_dir()
+    dir: = lib_case_dir(name, "unit_here")
+    if dir.len == 0
+        return
+    proj: = fs.join(dir, "proj", arena)
+    libs: = fs.join(dir, "libs", arena)
+    std_flag: = arena.text().s("--std-dir=\{std\}").take()
+    unit_flag: = arena.text().s("--pkg-src-dir=\{libs\}").take()
+    args: = U8[][]::{ "run", std_flag, unit_flag, "a.kspl" }
+    first: = ksplc_env(args, proj, "", "", arena)
+    if !first.out.equals("shared\n")
+        verdict.check(name, false,
+            arena.text().s("it did not come from the taught place: \{first.out\}").take())
+        return
+    fs.write_tree(proj, U8[][]::{ "mylib/thing.kspl" }, U8[][]::{ unit_thing_here }, arena) catch
+        verdict.check(name, false, "the copy cannot be placed")
+        return
+    again: = ksplc_env(args, proj, "", "", arena)
+    verdict.check(name, again.out.equals("here\n"),
+        arena.text().s("the copy was placed yet the previous answer came back: \{again.out\}")
+        .take())
+
+priv fn case_space_in_path(arena: Arena$@) //<
+    //< It checks the resolution works with a path containing a space
+    //<
+    //< This shape breaks under a real Windows configuration ("...\OneDrive - かんそシステム\...").
+    //< The compiler handles it while argv arrives as one element (the argument check below covers
+    //< missing quotes).
+    name: = "it can be resolved even with a path containing a space"
+    dir: = case_dir(name, "space", U8[][]::{ "proj/a.kspl" }, U8[][]::{ src })
+    if dir.len == 0
+        return
+    std: = fs.join(dir, "dir with space/std", arena)
+    fs.copy_tree(harness.std_dir(), std, fs.skip_none, arena) catch
+        verdict.check(name, false, "std/ cannot be copied")
+        return
+    proj: = fs.join(dir, "proj", arena)
+    flag: = arena.text().s("--std-dir=\{std\}").take()
+    r: = ksplc_in(U8[][]::{ flag, "a.kspl", "a.c" }, proj, "", arena)
+    if r.code != 0
+        verdict.check(name, false,
+            arena.text().s("a path containing a space cannot be handed to --std-dir\n\{r.out\}")
+            .take())
+        return
+    e: = ksplc_in(U8[][]::{ "a.kspl", "b.c" }, proj, std, arena)
+    verdict.check(name, e.code == 0,
+        arena.text().s("a path containing a space cannot be handed to KSPLC_STD_DIR\n\{e.out\}")
+        .take())
+
+// A type declared in one file and used in another, so the C name is built on both sides.
+priv const dot_shape: U8[] = """pub struct Box
+    pub w: I32
+
+"""
+
+priv const dot_main: U8[] =
+    """import "shape"
+
+fn main(): I32
+    b: = shape.Box::{ .w = 3 }
+    return b.w - 3
+
+"""
+
+priv fn case_dot_folder_in_path(arena: Arena$@) //<
+    //< It checks a program under a folder whose name starts with a dot compiles and links
+    //<
+    //< A type's C name is built where it is declared and again where it is used, and a folder with
+    //< a leading dot (`~/.local/...`, a worktree under a dot folder) must come out the same on both
+    //< sides, or the C declares one name and uses another (the reason is at
+    //< `ksplc/lower/abi.kspl`).
+    name: = "a program under a folder starting with a dot compiles and runs"
+    dir: =
+        case_dir(name, "dot", U8[][]::{ ".hidden/proj/main.kspl", ".hidden/proj/shape.kspl" },
+        U8[][]::{ dot_main, dot_shape })
+    if dir.len == 0
+        return
+    // Caution: **Run it from above the dot folder**, so the folder is part of the module's path;
+    // run from inside it, the path is `shape` alone and nothing is tested.
+    flag: = arena.text().s("--std-dir=\{harness.std_dir()\}").take()
+    r: = ksplc_in(U8[][]::{ flag, "run", ".hidden/proj/main.kspl" }, dir, "", arena)
+    verdict.check(name, r.code == 0, r.out)
+
+priv fn case_drive_named_folder(arena: Arena$@) //<
+    //< It checks that on POSIX a folder named like a drive is a folder, not a root
+    //<
+    //< Taken for a root, `C:/../a.kspl` keeps its `C:/` and is read as `C:/a.kspl`, a file that
+    //< does not exist (`fold_dots` in `ksplc/base/locate.kspl` takes the root from std/sys).
+    name: = "on POSIX a folder named C: is a folder: C:/../a.kspl is a.kspl"
+    if sys.is_windows()
+        verdict.skip_check(name, "a drive is a root on Windows")
+        return
+    dir: = case_dir(name, "drive", U8[][]::{ "a.kspl" }, U8[][]::{ src })
+    if dir.len == 0
+        return
+    // fs.write_tree refuses a `:` in a name (a drive or a stream on Windows), so it is made here.
+    fs.mkdir(fs.join(dir, "C:", arena)) catch
+        verdict.check(name, false, "cannot make the folder C:")
+        return
+    flag: = arena.text().s("--std-dir=\{harness.std_dir()\}").take()
+    plain: = ksplc_in(U8[][]::{ flag, "a.kspl", "plain.c" }, dir, "", arena)
+    drive: = ksplc_in(U8[][]::{ flag, "C:/../a.kspl", "drive.c" }, dir, "", arena)
+    a: = io.read_file(fs.join(dir, "plain.c", arena)) catch
+        fallback ""
+    b: = io.read_file(fs.join(dir, "drive.c", arena)) catch
+        fallback ""
+    verdict.check(name, plain.code == 0 && drive.code == 0 && a.len > 0 && a.equals(b),
+        arena.text().s(plain.out).s(drive.out).take())
+
+// ==========================================
+// The standard library is closed: a file of it reaches only its own files, and a name under
+// `std/` holds no `..` ("import syntax and path resolution" in docs/SPEC-language.md).
+// Every import below **would** resolve, so the rule rejects it, not a missing file.
+// ==========================================
+
+priv const closed_pkg: U8[] = """import "otherlib/x"
+
+pub fn f(): I32
+    return 1
+
+"""
+
+priv const closed_up: U8[] = """import "../outside/y"
+
+pub fn f(): I32
+    return 1
+
+"""
+
+priv const closed_embed: U8[] =
+    """embed "otherlib/data.txt" as data
+
+pub fn f(): I32
+    return 1
+
+"""
+
+priv const closed_sibling: U8[] =
+    """import "closed_b"
+
+pub fn f(): I32
+    return closed_b.g()
+
+"""
+
+priv const closed_sibling_b: U8[] = """pub fn g(): I32
+    return 0
+
+"""
+
+priv const closed_reached: U8[] = """pub fn f(): I32
+    return 1
+
+"""
+
+priv fn closed_user(imported: U8[], arena: Arena$@): U8[] //< a program importing `imported`
+    //<
+    //< The alias is spelt out, so any path ending reads the same.
+    return arena.text().s("import \"\{imported\}\" as m\n\nfn main(): I32\n")
+        .s("    return m.f() - 1\n\n").take()
+
+priv fn case_std_closed(arena: Arena$@) //<
+    //< It checks each import out of the standard library is rejected at the line that writes it
+    //<
+    //< A file of the standard library still reaches its neighbour by a bare name.
+    name: = "a file of the standard library importing a package is refused at the import"
+    dir: =
+        case_dir(name, "std_closed",
+        U8[][]::{ "deps/otherlib/x.kspl", "deps/otherlib/data.txt", "outside/y.kspl",
+        "proj/pkg.kspl", "proj/up.kspl", "proj/embed.kspl", "proj/dotdot.kspl",
+        "proj/sibling.kspl" },
+        U8[][]::{ closed_reached, "data\n", closed_reached, closed_user("std/closed_pkg", arena),
+        closed_user("std/closed_up", arena), closed_user("std/closed_embed", arena),
+        closed_user("std/../outside/y", arena), closed_user("std/closed_sibling", arena) })
+    if dir.len == 0
+        return
+    std: = fs.join(dir, "std", arena)
+    fs.copy_tree(harness.std_dir(), std, fs.skip_none, arena) catch
+        verdict.check(name, false, "std/ cannot be copied")
+        return
+    fs.write_tree(std,
+        U8[][]::{ "closed_pkg.kspl", "closed_up.kspl", "closed_embed.kspl", "closed_sibling.kspl",
+        "closed_b.kspl" },
+        U8[][]::{ closed_pkg, closed_up, closed_embed, closed_sibling, closed_sibling_b }, arena)
+        catch
+        verdict.check(name, false, "cannot place the files in std")
+        return
+    proj: = fs.join(dir, "proj", arena)
+    deps: = fs.join(dir, "deps", arena)
+    files: = U8[][]::{ "pkg.kspl", "up.kspl", "embed.kspl", "dotdot.kspl" }
+    // Each run stops at its one error, so the position and the reason are searched for separately.
+    ats: = U8[][]::{ "closed_pkg.kspl:1:1: error: ", "closed_up.kspl:1:1: error: ",
+        "closed_embed.kspl:1:1: error: ", "dotdot.kspl:1:1: error: " }
+    whys: = U8[][]::{ "the standard library reaches only its own files",
+        "' climbs out of the standard library", "the standard library reaches only its own files",
+        "' climbs out of the standard library" }
+    names: = U8[][]::{ name,
+        "a file of the standard library climbing out with '..' is refused at the import",
+        "a file of the standard library embedding a package's file is refused at the embed",
+        "a program reaching past std with 'std/..' is refused at its import" }
+    for i in Range.asc(files.len)
+        r: = ksplc_env(U8[][]::{ files[i], "out.c" }, proj, std, deps, arena)
+        verdict.check(names[i],
+            r.code != 0 && r.out.find_str(ats[i]).is_some() &&
+            r.out.find_str(whys[i]).is_some(), r.out)
+    ok: = ksplc_env(U8[][]::{ "sibling.kspl", "out.c" }, proj, std, deps, arena)
+    verdict.check("a file of the standard library still reaches its neighbour by a bare name",
+        ok.code == 0, ok.out)
+
+// ==========================================
+// The std beside the executable: a copy of the compiler with the standard library beside it finds
+// it from any folder with nothing set ("2.9.1 Locating the standard library" in
+// ksplc/docs/SPEC-tools.md). Each case runs from a folder of its own, where no `std/` stands.
+// ==========================================
+
+priv fn placed_compiler(dir: U8[], rel: U8[], arena: Arena$@): U8[] //<
+    //< A copy of the compiler under inspection in the folder `rel` under `dir`; empty on failure
+    //<
+    //< Caution: **Copy it rather than link it**, or the case tests only how a link is followed.
+    exe: = fs.join(fs.join(dir, rel, arena), sys.get_file_name(harness.ksplc_exe()), arena)
+    fs.mkdir_all(sys.get_dir_name(exe)) catch
+        return ""
+    body: = io.read_file(harness.ksplc_exe()) catch
+        return ""
+    defer dealloc(Void$@::body.ptr)
+    io.write_file(exe, body) catch
+        return ""
+    // std/fs carries no mode bits, and Windows starts a file by its extension.
+    if !sys.is_windows() && harness.run(U8[][]::{ "chmod", "+x", exe }).code != 0
+        return ""
+    return exe
+
+priv fn names_folder(r: verdict.Run_out, dir: U8[], rel: U8[], arena: Arena$@): Bool //<
+    //< Whether `info std-dir` answered the folder `rel` under the case's folder `dir`
+    //<
+    //< Caution: **Match the end, from the case's own folder down.** The executable's path comes
+    //< with its links resolved, so a scratch place reached through one (macOS's `/tmp`) reads
+    //< otherwise.
+    want: = arena.text().s("/").s(sys.get_file_name(dir)).s("/").s(rel).take()
+    return r.code == 0 && r.out.trim_spaces().ends_with(want)
+
+priv fn case_std_beside(arena: Arena$@) //<
+    //< A compiler with `std/` beside it, as the release zip unpacks, takes that one
+    //<
+    //< Reached through a link it still does, and the variable and the option still beat it.
+    name: = "a compiler with std/ beside it finds it from another folder, with nothing set"
+    dir: = case_dir(name, "beside", U8[][]::{ "elsewhere/a.kspl" }, U8[][]::{ src })
+    if dir.len == 0
+        return
+    exe: = placed_compiler(dir, "zip", arena)
+    if exe.len == 0
+        verdict.check(name, false, "cannot place a copy of the compiler")
+        return
+    fs.copy_tree(harness.std_dir(), fs.join(dir, "zip/std", arena), fs.skip_none, arena) catch
+        verdict.check(name, false, "std/ cannot be copied")
+        return
+    here: = fs.join(dir, "elsewhere", arena)
+    info: = run_exe(exe, U8[][]::{ "info", "std-dir" }, here, "", "", arena)
+    verdict.check(name, names_folder(info, dir, "zip/std", arena), info.out)
+    built: = run_exe(exe, U8[][]::{ "a.kspl", "a.c" }, here, "", "", arena)
+    verdict.check("and a compile there reads it", built.code == 0, built.out)
+    env: = run_exe(exe, U8[][]::{ "info", "std-dir" }, here, env_mark, "", arena)
+    verdict.check("KSPLC_STD_DIR beats the std beside it",
+        env.out.trim_spaces().equals(env_mark), env.out)
+    flag: = arena.text().s("--std-dir=\{cli_mark\}").take()
+    over: =
+        run_exe(exe, U8[][]::{ flag, "info", "std-dir" }, here, env_mark, "", arena)
+    verdict.check("--std-dir= beats both", over.out.trim_spaces().equals(cli_mark), over.out)
+    link_name: = "reached through a link, it takes the std beside the file the link names"
+    if sys.is_windows()
+        verdict.skip_check(link_name, "Windows's executable path resolves no link")
+        return
+    link: = fs.join(dir, "links/ksplc", arena)
+    fs.mkdir_all(sys.get_dir_name(link)) catch
+        verdict.check(link_name, false, "cannot make the folder for the link")
+        return
+    if harness.run(U8[][]::{ "ln", "-s", exe, link }).code != 0
+        verdict.check(link_name, false, "cannot make the link")
+        return
+    via: = run_exe(link, U8[][]::{ "info", "std-dir" }, here, "", "", arena)
+    verdict.check(link_name, names_folder(via, dir, "zip/std", arena), via.out)
+
+priv fn case_std_under_prefix(arena: Arena$@) //<
+    //< A compiler in `<prefix>/bin` takes `<prefix>/lib/kspl/std`, as `make install` lays them out
+    //<
+    //< A `std/` beside it comes first.
+    name: = "a compiler in <prefix>/bin finds <prefix>/lib/kspl/std, with nothing set"
+    dir: = case_dir(name, "prefix", U8[][]::{ "elsewhere/a.kspl" }, U8[][]::{ src })
+    if dir.len == 0
+        return
+    exe: = placed_compiler(dir, "prefix/bin", arena)
+    if exe.len == 0
+        verdict.check(name, false, "cannot place a copy of the compiler")
+        return
+    fs.copy_tree(harness.std_dir(), fs.join(dir, "prefix/lib/kspl/std", arena), fs.skip_none, arena)
+        catch
+        verdict.check(name, false, "std/ cannot be copied")
+        return
+    here: = fs.join(dir, "elsewhere", arena)
+    info: = run_exe(exe, U8[][]::{ "info", "std-dir" }, here, "", "", arena)
+    verdict.check(name, names_folder(info, dir, "prefix/lib/kspl/std", arena), info.out)
+    built: = run_exe(exe, U8[][]::{ "a.kspl", "a.c" }, here, "", "", arena)
+    verdict.check("and a compile there reads it", built.code == 0, built.out)
+    fs.copy_tree(harness.std_dir(), fs.join(dir, "prefix/bin/std", arena), fs.skip_none, arena)
+        catch
+        verdict.check(name, false, "std/ cannot be copied beside the compiler")
+        return
+    both: = run_exe(exe, U8[][]::{ "info", "std-dir" }, here, "", "", arena)
+    verdict.check("a std/ beside the compiler comes before the prefix's",
+        names_folder(both, dir, "prefix/bin/std", arena), both.out)
+
+priv fn case_std_beside_none(arena: Arena$@) //<
+    //< Where no standard library stands beside it, the current folder's `std` is the answer
+    //<
+    //< **A folder named `std` that holds no standard library does not count** (`std_landmark` in
+    //< `ksplc/base/locate.kspl`), in either place.
+    name: = "with no standard library beside the compiler, the current folder's std is taken"
+    dir: =
+        case_dir(name, "beside_none",
+        U8[][]::{ "bare/bin/std/note.txt", "bare/lib/kspl/std/note.txt", "elsewhere/a.kspl" },
+        U8[][]::{ "not std\n", "not std\n", src })
+    if dir.len == 0
+        return
+    exe: = placed_compiler(dir, "bare/bin", arena)
+    if exe.len == 0
+        verdict.check(name, false, "cannot place a copy of the compiler")
+        return
+    r: =
+        run_exe(exe, U8[][]::{ "info", "std-dir" }, fs.join(dir, "elsewhere", arena), "", "", arena)
+    verdict.check(name, r.code == 0 && r.out.trim_spaces().equals("std"), r.out)
+
+priv fn cli_case(name: U8[], args: U8[][], want_ok: Bool, expect: U8[], equals: U8[],
+    env_std: U8[], arena: Arena$@) //<
+        //< It runs one argument-reading case in the suite's scratch directory
+        //<
+        //< An argument mix-up must not pass silently: a path broken by word splitting becomes file
+        //< names, failing without naming the cause. want_ok demands exit code 0, expect is what the
+        //< output must contain, and equals is the whole output, trimmed (each skipped if empty).
+    r: = ksplc_in(args, harness.tmp_dir(), env_std, arena)
+    if want_ok != (r.code == 0)
+        verdict.check(name, false,
+            arena.text().s("the exit code differs from what was supposed\n\{r.out\}").take())
+        return
+    if equals.len > 0 && !r.out.trim_spaces().equals(equals)
+        verdict.check(name, false,
+            arena.text().s("the output is not \{equals\}: \{r.out\}").take())
+        return
+    if expect.len > 0 && r.out.find_str(expect).is_none()
+        verdict.check(name, false,
+            arena.text().s("\{expect\} does not come out\n\{r.out\}").take())
+        return
+    verdict.check(name, true, "")
+
+fn main(): I32
+    arena: = harness.begin(256 * 1024 * 1024)
+    std: = harness.std_dir()
+    io.out().s("# std's place: 16\n")
+    case_default(arena)
+    case_flag_and_env(arena)
+    case_runs(arena)
+    case_only_std_prefix(arena)
+    case_pkg_src_dir(arena)
+    case_lib_here_wins(arena)
+    case_space_in_path(arena)
+    case_dot_folder_in_path(arena)
+    case_drive_named_folder(arena)
+    std_dir_named.case_named_anywhere(std, arena)
+    std_dir_named.case_named_inner_cfg(std, arena)
+    std_dir_named.case_named_dotted(std, arena)
+    std_dir_named.case_unit_dotted(std, arena)
+    std_dir_named.case_named_uses(std, arena)
+    std_dir_named.case_named_embed(std, arena)
+    std_dir_named.case_named_refused(std, arena)
+    std_dir_named.case_named_elsewhere(std, arena)
+    case_std_closed(arena)
+    case_std_beside(arena)
+    case_std_under_prefix(arena)
+    case_std_beside_none(arena)
+
+    // `ksplc info std-dir`, read by the editor and the build, must match a compilation's
+    // resolution.
+    cli_case("info std-dir: the default is 'std'", U8[][]::{ "info", "std-dir" }, true, "", "std",
+        "", arena)
+    cli_case("info std-dir: KSPLC_STD_DIR beats the default", U8[][]::{ "info", "std-dir" }, true,
+        "", env_mark, env_mark, arena)
+    cli_case("info std-dir: --std-dir= beats KSPLC_STD_DIR",
+        U8[][]::{ arena.text().s("--std-dir=\{cli_mark\}").take(), "info", "std-dir" }, true, "",
+        cli_mark, env_mark, arena)
+    // In LSP mode it is rejected rather than silently disabled (tests/suite/cli_test.kspl).
+    cli_case("lsp mode's --std-dir= is refused",
+        U8[][]::{ "lsp", arena.text().s("--std-dir=\{std\}").take() }, false,
+        "does not take effect on this subcommand", "", "", arena)
+    cli_case("lsp-worker mode's --std-dir= is refused",
+        U8[][]::{ "lsp-worker", arena.text().s("--std-dir=\{std\}").take() }, false,
+        "does not take effect on this subcommand", "", "", arena)
+    // An empty setting is rejected rather than silently replaced by the default.
+    cli_case("an empty --std-dir= is refused", U8[][]::{ "--std-dir=", "info", "std-dir" }, false,
+        "", "", "", arena)
+    // An argument mix-up does not pass silently.
+    cli_case("an unknown option is refused", U8[][]::{ "--typo", "a.kspl", "a.c" }, false,
+        "unknown option: --typo", "", "", arena)
+    // Nor does a bare '-' left by word splitting become a file name. Only as the source of a
+    // compile or a run is it standard input.
+    cli_case("a bare '-' is not made an output file name", U8[][]::{ "ksplc/main.kspl", "-" },
+        false, "unknown option: -", "", "", arena)
+    cli_case("a bare '-' is not made a file name to lint", U8[][]::{ "lint", "-" }, false,
+        "unknown option: -", "", "", arena)
+    cli_case("too many input files is refused", U8[][]::{ "a.kspl", "b.c", "c.kspl" }, false,
+        "too many input files", "", "", arena)
+    cli_case("--help puts the usage out and ends at 0", U8[][]::{ "--help" }, true, "usage: ksplc",
+        "", "", arena)
+    return harness.finish()

@@ -63,7 +63,7 @@ typedef double F64;
 typedef bool Bool;
 
 /* What is recorded is the `?` propagation route one error followed, **one route per thread**
- * (the storage is core.c's, as each target spells KSPL_PER_THREAD). std/sys.kspls reads it back.
+ * (the storage is core.c's, as each target spells KSPL_PER_THREAD). std/sys.kspl reads it back.
  * Caution: **Begin the chain at a `throw` and extend it by `?` alone.** Guessed by "did it return
  * a success", it keeps the frames of failures `catch` handled, and a later route rides on them. */
 KSPL_LINK void kspl_trace_start(const char* file, const char* func, int line);

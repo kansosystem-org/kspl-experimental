@@ -1,6 +1,6 @@
 // Runs kspage built as wasm and makes sure of placing and editing at the wasm boundary. **What
 // comes out on the canvas is not looked at**; placing and editing themselves are the golden tests'
-// beside this folder (`tests/*_test.kspls`, which `make test` runs).
+// beside this folder (`tests/*_test.kspl`, which `make test` runs).
 // **Each part is given its own body and its own document.** On a document the previous part left
 // behind, a failure cannot tell whether the decision took effect or the document differed. **So do
 // not let the order carry meaning.**

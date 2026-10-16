@@ -20,15 +20,15 @@ KSPL_LINK char **kspl_os_argv(int argc, char **argv);
 /* So that what a KSPL program writes to standard output is what lands. */
 KSPL_LINK void kspl_io_set_stdio_binary(void);
 
+KSPL_LINK __attribute__((noreturn)) void kspl_bounds_fail(int64_t idx, int64_t len, const char* file, int line);
+KSPL_LINK __attribute__((noreturn)) void kspl_div_fail(const char* file, int line);
+KSPL_LINK __attribute__((noreturn)) void kspl_shift_fail(int64_t amount, int64_t width, int amount_unsigned, const char* file, int line);
+KSPL_LINK __attribute__((noreturn)) void kspl_tag_fail(int64_t value, const char* enum_name, const char* file, int line);
+
 static inline KSPL_UNUSED ptrdiff_t kspl_bounds_check(ptrdiff_t idx, ptrdiff_t len, const char* file, int line)
 {
     if (idx < 0 || idx >= len) {
-        /* Piped (as in CI) stdout is fully buffered: without the flush the program's own output is
-         * lost, and the last line seen is not the crash site. */
-        fflush(stdout);
-        fprintf(stderr, "panic: index out of bounds in array (idx: %td, len: %td) at %s:%d\n", idx, len, file, line);
-        fflush(stderr);
-        abort();
+        kspl_bounds_fail(idx, len, file, line);
     }
     return idx;
 }
@@ -36,10 +36,7 @@ static inline KSPL_UNUSED ptrdiff_t kspl_bounds_check(ptrdiff_t idx, ptrdiff_t l
 static inline KSPL_UNUSED int64_t kspl_div_check(int64_t divisor, const char* file, int line)
 {
     if (divisor == 0) {
-        fflush(stdout); /* The same reason as kspl_bounds_check */
-        fprintf(stderr, "panic: division by zero at %s:%d\n", file, line);
-        fflush(stderr);
-        abort();
+        kspl_div_fail(file, line);
     }
     return divisor;
 }
@@ -50,17 +47,7 @@ static inline KSPL_UNUSED int64_t kspl_shift_check(int64_t amount, int64_t width
     const char* file, int line)
 {
     if (amount < 0 || amount >= width) {
-        fflush(stdout); /* The same reason as kspl_bounds_check */
-        /* The formats are %lld and %llu. The argument being 64 bits, %td does not match. */
-        if (amount_unsigned) {
-            fprintf(stderr, "panic: shift amount out of range (amount: %llu, width: %lld) at %s:%d\n",
-                (unsigned long long)amount, (long long)width, file, line);
-        } else {
-            fprintf(stderr, "panic: shift amount out of range (amount: %lld, width: %lld) at %s:%d\n",
-                (long long)amount, (long long)width, file, line);
-        }
-        fflush(stderr);
-        abort();
+        kspl_shift_fail(amount, width, amount_unsigned, file, line);
     }
     return amount;
 }
@@ -75,15 +62,12 @@ static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* t
             return value;
         }
     }
-    fflush(stdout); /* The same reason as kspl_bounds_check */
-    fprintf(stderr, "panic: enum %s has no tag %lld at %s:%d\n", enum_name, (long long)value, file, line);
-    fflush(stderr);
-    abort();
+    kspl_tag_fail(value, enum_name, file, line);
 }
 
-/* std/libc.kspls's `get_stdin` / `get_stdout` / `get_stderr` (the substance is in hosted.c). genc
+/* std/libc.kspl's `get_stdin` / `get_stdout` / `get_stderr` (the substance is in hosted.c). genc
  * puts no prototype out for std/libc's functions, a standard header having them
- * (`emit_fwd_extern_decls` in ksplc/gen/c/decl.kspls); these three are in none, so they are
+ * (`emit_fwd_extern_decls` in ksplc/gen/c/decl.kspl); these three are in none, so they are
  * declared here.
  * Caution: **Do not make them static inline**: the LLVM artifact borrows them from the runtime. */
 

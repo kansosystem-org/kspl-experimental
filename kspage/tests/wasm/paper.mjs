@@ -79,7 +79,7 @@ export async function run(ks, open) {
   const flat = w.kspage_web_height();
   check(w.kspage_web_paper_count() === 1, "a document that does not part is one sheet");
   // Caution: **Keep watch here over the page a document with no paper settled borrows for
-  // printing.** The numbers are the core's (`../../model/paper.kspls`'s `a4_portrait`); a JS copy
+  // printing.** The numbers are the core's (`../../model/paper.kspl`'s `a4_portrait`); a JS copy
   // would give **two documents from the same screen different margins**. Pinned by value (A4
   // upright in px at 96dpi, margins 15mm all round).
   w.kspage_web_default_paper(scratch);
@@ -182,7 +182,7 @@ export async function run(ks, open) {
   // --- A page's header and footer ---
   // **It is a row apart from the document's boxes** (its coordinates are from the page's top left).
   // The marks in the text (`{page}`, `{pages}`) are the core's — `page_mark` and
-  // `count_mark` in `kspage/lay/chrome.kspls` — so those needles stay as they are until that side
+  // `count_mark` in `kspage/lay/chrome.kspl` — so those needles stay as they are until that side
   // moves.
   const chromeText = (i) => {
     const len = w.kspage_web_chrome_text(i);

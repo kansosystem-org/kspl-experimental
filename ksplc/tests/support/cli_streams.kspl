@@ -1,0 +1,98 @@
+//< Which stream each line goes to: standard output holds only what was asked for
+//<
+//< A refusal, a compile's diagnostics, its summary and closing line, `fmt`'s failures and
+//< `clean`'s report all go to standard error. Each case reads the two streams apart
+//< (`run_capture`): `harness.ksplc` joins them. Not a suite; `../suite/cli_test.kspl` runs it.
+import "ksplc/tests/support/harness"
+import "std/chars"
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena }
+import "std/str"
+import "std/subproc"
+import "std/verdict"
+
+priv fn streams(r: subproc.Run_result@, arena: Arena$@): U8[] //< both streams, for a failure
+    return arena.text().s("stdout: ").s(r.stdout_data).s("\nstderr: ").s(r.stderr_data).take()
+
+priv fn capture(argv: U8[][], arena: Arena$@): subproc.Run_result //< one run, its streams apart
+    return subproc.run_capture(argv, "", verdict.default_timeout_ms, 4 * 1024 * 1024, arena)
+
+fn case_refusal_stream(arena: Arena$@) //<
+    //< A refused command line writes to standard error alone, `--help` to standard output
+    //<
+    //< A caller reading the answer (`$(ksplc info std-dir)`, a pipe) would otherwise take a
+    //< refusal, or the usage after it, for the answer.
+    refusals: U8[][][3] = ::{ U8[][]::{ "--typo", "a.kspl", "a.c" },
+        U8[][]::{ "info", "std-dirs" }, U8[][]::{ "a.kspl", "b.c", "c.kspl" } }
+    for args in refusals
+        r: = capture(harness.ksplc_argv(args), arena)
+        verdict.check(arena.text().s("a refusal of `").s(args[0])
+            .s("` writes to standard error alone").take(),
+            r.exit_code != 0 && r.stdout_data.len == 0 && r.stderr_data.len > 0,
+            streams(r@, arena))
+    h: = capture(U8[][]::{ harness.ksplc_exe(), "--help" }, arena)
+    verdict.check("--help writes the usage to standard output",
+        h.exit_code == 0 && h.stdout_data.starts_with("usage: ksplc") && h.stderr_data.len == 0,
+        h.stderr_data)
+    case_fmt_stream(arena)
+    case_status_stream(arena)
+
+priv const fmt_good: U8[] = "fn main(): I32\n    return 0\n" //< a file `fmt` leaves as it is
+
+priv fn case_fmt_stream(arena: Arena$@) //<
+    //< A failing `fmt` leaves only formatted text on standard output
+    //<
+    //< `ksplc fmt a.kspl > b.kspl` must not find a status line inside `b.kspl`: the diagnostics,
+    //< the list of failed files and the closing line all go to standard error.
+    dir: = harness.sandbox("cli_fmt_stream")
+    good: = fs.join(dir, "good.kspl", arena)
+    bad: = fs.join(dir, "bad.kspl", arena)
+    io.write_file(good, fmt_good) catch
+        verdict.check("fmt's streams: the sample can be written", false, good)
+        return
+    io.write_file(bad, "fn main(): I32\n    return (\n") catch
+        verdict.check("fmt's streams: the sample can be written", false, bad)
+        return
+    r: = capture(U8[][]::{ harness.ksplc_exe(), "fmt", good, bad }, arena)
+    verdict.check("a failing fmt writes only the formatted text to standard output",
+        r.exit_code != 0 && r.stdout_data.equals(fmt_good) &&
+        r.stderr_data.find_str("fmt/failed:").is_some(), streams(r@, arena))
+
+priv fn case_status_stream(arena: Arena$@) //<
+    //< A line about the run goes to standard error, so `ksplc run x > out.txt` holds the program's
+    //<
+    //< The summary and the closing line of a compile, and `clean`'s report, are about the run; a
+    //< script that fails to compile leaves standard output empty, and one with a warning leaves
+    //< only what the program printed.
+    dir: = harness.sandbox("cli_status_stream")
+    bad: = fs.join(dir, "bad.kspl", arena)
+    warned: = fs.join(dir, "warned.kspl", arena)
+    io.write_file(bad, "fn main(): I32\n    x: I32 = \"a\"\n    return x\n") catch
+        verdict.check("status lines: the sample can be written", false, bad)
+        return
+    io.write_file(warned,
+        "import \"std/io\"\n\nfn main(): I32\n    v: = 3\n    io.out().s(\"said\\n\")\n    return \
+            0\n") catch
+        verdict.check("status lines: the sample can be written", false, warned)
+        return
+    c: =
+        capture(harness.ksplc_argv(U8[][]::{ bad, fs.join(dir, "bad.c", arena) }), arena)
+    verdict.check("a failed compile writes its summary and closing line to standard error",
+        c.exit_code != 0 && c.stdout_data.len == 0 &&
+        c.stderr_data.find_str("Finished with 1 error(s)").is_some() &&
+        c.stderr_data.find_str("sema/analysis_failed: compilation terminated").is_some(),
+        streams(c@, arena))
+    r: = capture(harness.ksplc_argv(U8[][]::{ "run", bad }), arena)
+    verdict.check("`ksplc run` on a script that does not compile leaves standard output empty",
+        r.exit_code != 0 && r.stdout_data.len == 0 &&
+        r.stderr_data.find_str("compilation terminated").is_some(), streams(r@, arena))
+    w: = capture(harness.ksplc_argv(U8[][]::{ "run", warned }), arena)
+    verdict.check("`ksplc run` with a warning leaves only the program's output on standard output",
+        w.exit_code == 0 && w.stdout_data.equals("said\n") &&
+        w.stderr_data.find_str("Finished with 0 error(s), 1 warning(s)").is_some(),
+        streams(w@, arena))
+    k: = capture(U8[][]::{ harness.ksplc_exe(), "clean" }, arena)
+    verdict.check("`clean` reports what it emptied on standard error",
+        k.exit_code == 0 && k.stdout_data.len == 0 &&
+        k.stderr_data.starts_with("ksplc: cleared "), streams(k@, arena))

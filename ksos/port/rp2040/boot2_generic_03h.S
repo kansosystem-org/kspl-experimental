@@ -16,8 +16,8 @@
  *
  * Position-independent code is required: the link address and the execution address differ
  * (ldr rX,=literal is a PC-relative load, so it is fine).
- * After the build, pad_checksum.kspls shapes it into 256 bytes (the code plus the padding plus the
- * 4-byte checksum) and it goes into the final link (the details are in ksos/docs/DESIGN.md).
+ * After the build, pad_checksum.kspl shapes it into 256 bytes (the code plus the padding plus the
+ * 4-byte checksum) and it goes into the final link (the details are in ksos/docs/DESIGN-rtos.md).
  * ========================================== */
     .syntax unified
     .cpu cortex-m0plus
