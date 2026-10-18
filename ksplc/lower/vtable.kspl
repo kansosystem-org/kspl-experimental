@@ -26,8 +26,8 @@ priv fn vtable_key(c: Sema_ctx$@, target_id: I32, trait_id: I32): U8[] //<
     //< by emit_upcast_expr in gen/c/expr.kspl and by gen/llvm/expr_agg.kspl.
     //< Caution: **Take the base type with receiver_base_id.** The upcast's side comes from the
     //< expression's type (`b@` is a `Box immut@`; `p: Pt@` with `typedef Pt = Box` has an alias
-    //< under the pointer), the vtable's side from the impl's target (`Box`): a qualifier or alias
-    //< left on makes the keys disagree, and genc prints only the reference, with no vtable.
+    //< under the pointer). The vtable's side comes from the impl's target (`Box`). A qualifier or
+    //< alias left on makes the keys disagree, and genc prints only the reference, with no vtable.
     base_id: = c.env.receiver_base_id(target_id)
     return base_core.arena
         .dup_str(c.clear_scratch().s("\{base_id\}:\{trait_id\}").slice())
@@ -35,8 +35,8 @@ priv fn vtable_key(c: Sema_ctx$@, target_id: I32, trait_id: I32): U8[] //<
 priv fn collect_upcast_keys(r: Ast_node$@, c: Sema_ctx$@, out: Map<|U8[], Bool|>$@) //<
     //< It collects the (conforming type, trait) pairs the upcasts in this tree need
     //<
-    //< It limits the vtable constants to **the pairs needed, and no others**: a conformance that
-    //< grows per instance (`impl<|T|> List<|T|>: Index`) would otherwise keep producing
+    //< It limits the vtable constants to **the pairs needed, and no others**. Otherwise a
+    //< conformance that grows per instance (`impl<|T|> List<|T|>: Index`) would keep producing
     //< constants and thunks nobody upcasts to.
     if r == null
         return
@@ -54,7 +54,7 @@ fn generate_trait_thunks(root: Ast_node$@, c: Sema_ctx$@)
     collect_upcast_keys(root, c, needed@)
     // Caution: **Do not filter by whether it has a live method.** An `impl P: Trait {}` conforms
     // with inherent methods (found by `resolve_impl_target`), and `is_alive_for_backend` needs a
-    // `decl_fn` child, so its vtable would go missing while genc prints the reference and the C
+    // `decl_fn` child. So its vtable would go missing, while genc prints the reference and the C
     // compiler fails on an undefined name. `needed` does the filtering.
     for child in root.children
         if child.kind_id == .k_decl_impl && !child.is_generic_template()
@@ -113,7 +113,7 @@ priv fn resolve_impl_target(c: Sema_ctx$@, req_m: Sema_symbol$@, t_id: I32, clea
     if real_t_id >= 0 && real_t_id < c.env.id_to_type.len
         target_methods: = c.env.id_to_type.get(real_t_id).methods
         if target_methods != null
-            impl_sym: = target_methods.get(m_name) catch null
+            impl_sym: = target_methods.get(m_name).unwrap_or(null)
             if impl_sym != null
                 res.def_node = impl_sym.node
                 res.ret_id = impl_sym.type_id
@@ -208,7 +208,7 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
     clean_t_id: = c.env.receiver_base_id(t_id)
     if t_id == 0 || i_id == 0
         return
-    if !(needed.get(vtable_key(c, clean_t_id, i_id)) catch false)
+    if !needed.get(vtable_key(c, clean_t_id, i_id)).unwrap_or(false)
         return
 
     $trait_def: sema_type_def.Trait_def$@ = null
@@ -257,7 +257,7 @@ priv fn emit_trait_vtable(c: Sema_ctx$@, t_id: I32, i_id: I32, loc: base_ast.Loc
         field_init.add_child(Ast_node.new(.k_identifier, req_m.name, loc))
         field_init.add_child(Ast_node.new(.k_literal, "=", loc))
         // Caution: **Set def_node** ("The limits on building an AST" in
-        // ksplc/docs/DESIGN-compiler.md). A vtable is the only place that names a thunk, **as
+        // ksplc/docs/DESIGN-lower.md). A vtable is the only place that names a thunk, **as
         // data** and never as a call; without it prune_unreachable_fns drops every thunk.
         thunk_ref: = Ast_node.new(.k_identifier, perm_thunk_name, loc)
         thunk_ref.def_node = parts.thunk_fn

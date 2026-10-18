@@ -3,7 +3,8 @@
 # `make test` wants nothing of a repository around it: a `ksplc` and the `std` it carries, and the
 # `ksai` and `ksdb` it uses. The demos and the gates on them want more, named above each.
 #   make test [KSPLC=/path/to/ksplc]                             # ksos's tests, from this folder
-#   make ksos / ksos-<demo> / ksos-cm-<demo> / ksos-rp2040-<demo>  # one demo (README.md lists them)
+#   make ksos / ksos-<demo> / ksos-cm-<demo> / ksos-cm0-<demo> / ksos-nrf51-<demo> /
+#        ksos-rp2040-<demo>                                       # one demo (README.md lists them)
 #   make test-ksos-posix / test-ksos-qemu / test-ksos-link        # the gates, each over every demo
 # `std` comes from the ksplc or `KSPLC_STD_DIR`; the packages it uses, from `KSPLC_PKG_SRC_DIR`.
 # Caution: **Keep this file standing alone**: a copy of the folder, nothing more, is tested by it.
@@ -12,7 +13,8 @@
 # --- How the demos are listed (the same for the three families POSIX / QEMU / UF2) ---
 # **One demo = one word in the run, plus its paired variables**: the goal, the gate's coverage and
 # the `.PHONY` grow from the run, and a pair left out stops make at start-up (the `$(error)`s).
-# **Do not copy the way of building outside the `define`** (`posix_link` / `cm_link` / `cm0_link`).
+# **Do not copy the way of building outside the `define`** (`posix_link` / `cm_link` /
+# `nrf51_link` / `rp2040_link`).
 
 # --- What this file is handed, and what it settles for itself ---
 # The gates' `set -o pipefail` wants bash (dash lacks it), and make takes no shell from its caller.
@@ -86,7 +88,7 @@ endef
 
 # --- The time cap on every demo run, POSIX and QEMU alike ---
 # **Every run of a demo goes through `ksos_capped`**: a kernel bug that leaves a task spinning
-# stalls the run, and with no cap the gate (and `make ci-linux` with it) waits for ever without a
+# stalls the run, and with no cap the gate (and `make ci` with it) waits for ever without a
 # word. A run that hits its cap prints the `[FAIL] ... it hung` line the gates read
 # (`ksos_run_gate`), rather than ending on `timeout`'s silent 124.
 # **One default for every run.** Measured under load (every demo 10 times, 8 at once beside 16 busy
@@ -174,7 +176,8 @@ KSOS_POSIX_TEMPLATED := mq:msgq_demo mutex:mutex_demo mutex-nested:mutex_nested_
     wake-preempt:wake_preempt_demo event:event_demo preempt:posix_preempt_demo \
     delay-until:delay_until_demo lifecycle:lifecycle_demo isr:isr_signal_demo \
     task-manager:task_manager_demo kernel-check:kernel_check timeout:timeout_demo \
-    tick-mid-switch:tick_mid_switch_demo dyn-race:dyn_race_demo
+    tick-mid-switch:tick_mid_switch_demo dyn-race:dyn_race_demo wake-pass-on:wake_pass_on_demo \
+    sleep:sleep_demo
 
 ifneq ($(call rows_missing,$(KSOS_POSIX_TEMPLATED),2),)
 $(error a POSIX demo's row has no input: $(call rows_missing,$(KSOS_POSIX_TEMPLATED),2))
@@ -194,13 +197,16 @@ $(foreach r,$(KSOS_POSIX_TEMPLATED),$(eval $(call ksos_posix_demo_rule,$(call ro
 # `ksos_posix_panic_needle_<suffix>` is the line the run must print. **The needle is the
 # kernel-side panic's spelling itself**; change both in one commit. `ksos_families` in
 # `tests/support/conventions_iface.kspl` reads the run.
-KSOS_POSIX_PANIC := stack-overflow mutex-relock mutex-foreign-unlock delete-holder timeout-zero
+KSOS_POSIX_PANIC := stack-overflow mutex-relock mutex-foreign-unlock delete-holder timeout-zero \
+  event-no-bits stop-outside
 
 ksos_posix_panic_needle_stack-overflow := ksos: stack overflow detected
 ksos_posix_panic_needle_mutex-relock := Mutex.lock by the holder itself
 ksos_posix_panic_needle_mutex-foreign-unlock := Mutex.unlock by a task that is not the holder
 ksos_posix_panic_needle_delete-holder := ksos: a task ended holding a mutex
 ksos_posix_panic_needle_timeout-zero := ticks must be greater than 0
+ksos_posix_panic_needle_event-no-bits := wanted must name at least one bit
+ksos_posix_panic_needle_stop-outside := ksos: stop_scheduler while no scheduler runs
 
 ksos_posix_panic_missing := $(strip \
     $(foreach d,$(KSOS_POSIX_PANIC),$(if $(ksos_posix_panic_needle_$(d)),,$(d))))
@@ -239,8 +245,8 @@ $(CM_OUT)/startup.o: $(CM_DIR)/startup.S | $(CM_OUT)
 	$(CM_CC) -c $< -o $@
 
 # $(call bare_link,<cc>,<out dir>,<link.ld>,<objects>,<libgcc>,<src.kspl>,<elf>,<stem>,<machine>):
-# the one bare-metal build, which `cm_link` and `cm0_link` name their port's parts to. The libgcc
-# goes last (an archive, pulled per symbol).
+# the one bare-metal build, which `cm_link`, `nrf51_link` and `rp2040_link` name their port's parts
+# to. The libgcc goes last (an archive, pulled per symbol).
 # Caution: The .c/.o stem is **the ELF's base name** unless <stem> names one, never a fixed name:
 # demos run in parallel would overwrite one `demo.c` and link another demo's source.
 define bare_link
@@ -283,7 +289,7 @@ ksos-cm-run: ksos-cm
 # objdump is written by hand.
 KSOS_CM_DEMOS := heap-probe panic-probe ai-probe ai-train-probe car-model-probe \
     ai-weights-probe pilot-probe preempt control-ai-probe mq pi event timeout isr-block isr-unlock \
-    isr-give
+    isr-give stack-guard
 
 # UART0's RX path: QEMU's chardev on a Unix socket, and `tests/uart_probe.py polled` checks the echo.
 ksos-cm-uart-echo: $(CM_OBJS)
@@ -308,38 +314,99 @@ ksos-cm-$(1): $$(CM_OBJS)
 endef
 $(foreach r,$(KSOS_CM_DEMOS),$(eval $(call ksos_cm_demo_rule,$(r))))
 
+# --- The Armv6-M CPU layer (Cortex-M0/M0+), shared by every Armv6-M chip -----------
+# startup/switch come from cortex_m0, the port's C and the semihosting from cortex_m. Built once,
+# into `$(CM0_OUT)`, and linked by the RP2040 (the real chip) and the nRF51 (QEMU) alike.
+# The M0 and the M0+ have one instruction set (Armv6-M), so one `-mcpu` serves both.
+CM0_DIR := port/cortex_m0
+CM0_OUT := $(OUT)/ksos_cm0
+
+CM0_MACHINE := thumbv6m-none-eabi
+CM0_CC   := clang --target=$(CM0_MACHINE) -mcpu=cortex-m0plus -ffreestanding -Wall -Os \
+    -ffunction-sections -fdata-sections
+LIBGCC_CM0 := $(shell arm-none-eabi-gcc -mcpu=cortex-m0plus -mthumb -print-libgcc-file-name 2>/dev/null)
+CM0_OBJS := $(CM0_OUT)/startup.o $(CM0_OUT)/switch.o $(CM0_OUT)/port.o $(CM0_OUT)/semihost.o
+
+$(CM0_OUT):
+	@mkdir -p $@
+$(CM0_OUT)/startup.o: $(CM0_DIR)/startup.S | $(CM0_OUT)
+	$(CM0_CC) -c $< -o $@
+$(CM0_OUT)/switch.o: $(CM0_DIR)/switch.S | $(CM0_OUT)
+	$(CM0_CC) -c $< -o $@
+$(CM0_OUT)/port.o: $(CM_DIR)/ksos_port_cm.c | $(CM0_OUT)
+	$(CM0_CC) -c $< -o $@
+$(CM0_OUT)/semihost.o: $(CM_DIR)/semihost.c | $(CM0_OUT)
+	$(CM0_CC) -c $< -o $@
+
+# --- The nRF51 under QEMU (`-M microbit`, a Cortex-M0): the Armv6-M layer run -------
+# QEMU has no RP2040, and the micro:bit is its one Cortex-M0 board, so this is where the
+# cortex_m0 switch, its preemption and its WFI run. 16 KB of RAM: the demos run here keep each
+# stack to 1 KB (`ksos/docs/DESIGN-rtos.md`, "The nRF51 under QEMU").
+NRF51_DIR := port/nrf51
+NRF51_OUT := $(OUT)/ksos_nrf51
+# What an nRF51 ELF links before its demo: the Armv6-M layer, and the nRF51's interrupt vectors.
+NRF51_LINK_OBJS := $(CM0_OBJS) $(NRF51_OUT)/vectors.o
+
+$(NRF51_OUT):
+	@mkdir -p $@
+$(NRF51_OUT)/vectors.o: $(NRF51_DIR)/vectors.S | $(NRF51_OUT)
+	$(CM0_CC) -c $< -o $@
+
+# $(call nrf51_link,<src.kspl>,<elf>[,<stem>]): an nRF51 build (`bare_link`).
+nrf51_link = $(call bare_link,$(CM0_CC),$(NRF51_OUT),$(NRF51_DIR)/link.ld,$(NRF51_LINK_OBJS),$(LIBGCC_CM0),$(1),$(2),$(3),$(CM0_MACHINE))
+
+# $(call nrf51_qemu,<elf>): runs it on the micro:bit, as `cm_qemu` does on the MPS2 (the same
+# cap, semihosting verdict and `-icount`).
+nrf51_qemu = $(call ksos_capped_run,qemu-system-arm -M microbit -cpu cortex-m0 \
+    -display none -monitor none -serial null -semihosting -icount shift=auto -kernel $(1) </dev/null)
+
+# A row is `<suffix>`: `ksos-cm0-<suffix>` builds `ksos/demo/cortex_m/cortex_m_<suffix>.kspl`, a
+# Cortex-M demo shared with `KSOS_CM_DEMOS`, into `$(NRF51_OUT)/ksos_cm0_<suffix>.elf` (`-`
+# becomes `_`) and runs it. **A demo runs here only if it fits 16 KB of RAM and needs no atomics**
+# (Armv6-M has none; the RP2040's come from its SIO): the AI, heap, pilot and car probes stay on
+# the Cortex-M3, as do the UART probes, which need the MPS2's UART.
+KSOS_CM0_DEMOS := min preempt mq pi event timeout isr-block isr-unlock isr-give stack-guard \
+    panic-probe
+
+# $(call ksos_cm0_demo_rule,<suffix>)
+define ksos_cm0_demo_rule
+ksos-cm0-$(1): $$(NRF51_LINK_OBJS)
+	@echo "# BUILDING+RUNNING demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspl on Cortex-M0 (thumbv6m, QEMU microbit) bare metal"
+	$$(call nrf51_link,demo/cortex_m/cortex_m_$(subst -,_,$(1)).kspl,$$(NRF51_OUT)/ksos_cm0_$(subst -,_,$(1)).elf)
+	$$(call nrf51_qemu,$$(NRF51_OUT)/ksos_cm0_$(subst -,_,$(1)).elf)
+endef
+$(foreach r,$(KSOS_CM0_DEMOS),$(eval $(call ksos_cm0_demo_rule,$(r))))
+
+# A row is `<suffix>`: `ksos-nrf51-<suffix>` builds `ksos/demo/nrf51/nrf51_<suffix>.kspl`, a demo
+# that uses the nRF51's own peripherals, into `$(NRF51_OUT)/ksos_nrf51_<suffix>.elf` and runs it.
+KSOS_NRF51_DEMOS := wfi
+
+# $(call ksos_nrf51_demo_rule,<suffix>)
+define ksos_nrf51_demo_rule
+ksos-nrf51-$(1): $$(NRF51_LINK_OBJS)
+	@echo "# BUILDING+RUNNING demo/nrf51/nrf51_$(subst -,_,$(1)).kspl on the nRF51 (Cortex-M0, QEMU microbit) bare metal"
+	$$(call nrf51_link,demo/nrf51/nrf51_$(subst -,_,$(1)).kspl,$$(NRF51_OUT)/ksos_nrf51_$(subst -,_,$(1)).elf)
+	$$(call nrf51_qemu,$$(NRF51_OUT)/ksos_nrf51_$(subst -,_,$(1)).elf)
+endef
+$(foreach r,$(KSOS_NRF51_DEMOS),$(eval $(call ksos_nrf51_demo_rule,$(r))))
+
 # --- Raspberry Pi Pico / Pico W (RP2040, Cortex-M0+) real-chip port ----------------
-# RP2040 is Armv6-M (Thumb-1): startup/switch come from cortex_m0, the rest of the port is reused.
+# RP2040 is Armv6-M (Thumb-1): its CPU layer is the Armv6-M one above.
 # QEMU has no RP2040, so here is build/link/objdump only (`ksos/docs/DESIGN-rtos.md`).
 export UF2_HINT_COPY := (hold BOOTSEL down, connect USB, and copy it to the drive that appears)
 export UF2_HINT_MOTOR := (lift the wheels off before writing it)
 export RP2040_LINK_NOTE := (for making the UF2 see ksos-rp2040-buzzer. An SWD probe is not needed)
 
 RP2040_DIR := port/rp2040
-RP2040_CM0_DIR := port/cortex_m0
 RP2040_OUT := $(OUT)/ksos_rp2040
 
-CM0_MACHINE := thumbv6m-none-eabi
-CM0_CC   := clang --target=$(CM0_MACHINE) -mcpu=cortex-m0plus -ffreestanding -Wall -Os \
-    -ffunction-sections -fdata-sections
-LIBGCC_CM0 := $(shell arm-none-eabi-gcc -mcpu=cortex-m0plus -mthumb -print-libgcc-file-name 2>/dev/null)
-# atomic.o is RP2040's alone: Armv6-M has no LDREX/STREX, so without it mem.alloc / mem.Arc /
-# thread.Atomic_sz stay undefined. Unused, --gc-sections drops it.
-CM0_OBJS := $(RP2040_OUT)/startup.o $(RP2040_OUT)/switch.o $(RP2040_OUT)/port.o \
-    $(RP2040_OUT)/semihost.o $(RP2040_OUT)/atomic.o
-# What an RP2040 ELF links before its demo: the port, and boot2 (`cm0_link`).
-RP2040_LINK_OBJS := $(CM0_OBJS) $(RP2040_OUT)/boot2_incbin.o
+# What an RP2040 ELF links before its demo: the Armv6-M layer, the atomics and boot2
+# (`rp2040_link`). atomic.o is RP2040's alone: Armv6-M has no LDREX/STREX, so without it
+# mem.alloc / mem.Arc / thread.Atomic_sz stay undefined. Unused, --gc-sections drops it.
+RP2040_LINK_OBJS := $(CM0_OBJS) $(RP2040_OUT)/atomic.o $(RP2040_OUT)/boot2_incbin.o
 
 $(RP2040_OUT):
 	@mkdir -p $@
-$(RP2040_OUT)/startup.o: $(RP2040_CM0_DIR)/startup.S | $(RP2040_OUT)
-	$(CM0_CC) -c $< -o $@
-$(RP2040_OUT)/switch.o: $(RP2040_CM0_DIR)/switch.S | $(RP2040_OUT)
-	$(CM0_CC) -c $< -o $@
-$(RP2040_OUT)/port.o: $(CM_DIR)/ksos_port_cm.c | $(RP2040_OUT)
-	$(CM0_CC) -c $< -o $@
-$(RP2040_OUT)/semihost.o: $(CM_DIR)/semihost.c | $(RP2040_OUT)
-	$(CM0_CC) -c $< -o $@
 $(RP2040_OUT)/atomic.o: $(RP2040_DIR)/ksos_atomic_sio.c | $(RP2040_OUT)
 	$(CM0_CC) -c $< -o $@
 
@@ -356,14 +423,14 @@ $(RP2040_OUT)/boot2_incbin.o: $(RP2040_OUT)/boot2_padded.bin
 	@printf '.section .boot2, "a", %%progbits\n.incbin "%s"\n' "$(notdir $<)" > $(RP2040_OUT)/boot2_incbin.S
 	$(CM0_CC) -I$(RP2040_OUT) -c $(RP2040_OUT)/boot2_incbin.S -o $@
 
-# $(call cm0_link,<src.kspl>,<elf>[,<stem>]): an RP2040 build (`bare_link`), with boot2, or the
+# $(call rp2040_link,<src.kspl>,<elf>[,<stem>]): an RP2040 build (`bare_link`), with boot2, or the
 # boot ROM refuses to start.
 # **Every RP2040 build goes through here**; by hand it skips `require_arm_toolchain` and its hint.
-cm0_link = $(call bare_link,$(CM0_CC),$(RP2040_OUT),$(RP2040_DIR)/link.ld,$(RP2040_LINK_OBJS),$(LIBGCC_CM0),$(1),$(2),$(3),$(CM0_MACHINE))
+rp2040_link = $(call bare_link,$(CM0_CC),$(RP2040_OUT),$(RP2040_DIR)/link.ld,$(RP2040_LINK_OBJS),$(LIBGCC_CM0),$(1),$(2),$(3),$(CM0_MACHINE))
 
 ksos-rp2040: $(RP2040_LINK_OBJS) | $(RP2040_OUT)
 	@echo "# BUILDING KANSO OS (Raspberry Pi Pico / Pico W / RP2040, Cortex-M0+) -> flashable ELF"
-	$(call cm0_link,demo/cortex_m/cortex_m_preempt.kspl,$(RP2040_OUT)/ksos_rp2040.elf,demo)
+	$(call rp2040_link,demo/cortex_m/cortex_m_preempt.kspl,$(RP2040_OUT)/ksos_rp2040.elf,demo)
 	@echo "# --- sections (boot2@0x10000000 FLASH, isr_vector@0x10000100, RAM@0x20000000) ---"
 	$(OBJDUMP) -h $(RP2040_OUT)/ksos_rp2040.elf
 	@echo "# --- stage2 bootloader (256 bytes, checksum in last 4 bytes) ---"
@@ -377,7 +444,7 @@ ksos-rp2040: $(RP2040_LINK_OBJS) | $(RP2040_OUT)
 # `ksos/demo/rp2040/rp2040_<suffix>_probe.kspl` into `$(RP2040_OUT)/ksos_rp2040_<suffix>.elf` and
 # `.uf2` (`-` becomes `_`). The hint names the guidance printed after writing (`UF2_HINT_COPY`
 # when left out); **something that moves needs its own**. Before writing:
-# * net: enable internet connection sharing on the PC (stage 6 of ksos/docs/HOWTO-bring-up.md).
+# * net: enable internet connection sharing on the PC ("The setting on the PC side" in ksos/docs/HOWTO-bring-up.md).
 # * car-loop: lift the wheels off, and start kssrv on 8080 (stage 6e there).
 # * car-pilot: lift the wheels off; kssrv is needed only while receiving (stage 7 there).
 # * car-ir: line tracking uses the policy in the records, so run car-pilot once first.
@@ -387,7 +454,7 @@ KSOS_RP2040_DEMOS := buzzer board motor:UF2_HINT_MOTOR net car-loop car-pilot ca
 define ksos_rp2040_demo_rule
 ksos-rp2040-$(1): $$(RP2040_LINK_OBJS) | $$(RP2040_OUT)
 	@echo "# BUILDING KANSO OS (demo/rp2040/rp2040_$(subst -,_,$(1))_probe.kspl) -> flashable UF2"
-	$$(call cm0_link,demo/rp2040/rp2040_$(subst -,_,$(1))_probe.kspl,$$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf,$(subst -,_,$(1)))
+	$$(call rp2040_link,demo/rp2040/rp2040_$(subst -,_,$(1))_probe.kspl,$$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf,$(subst -,_,$(1)))
 	@echo "# --- sections (boot2@0x10000000 FLASH, isr_vector@0x10000100, RAM@0x20000000) ---"
 	$$(OBJDUMP) -h $$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf
 	"$$(KSPLC)" run $$(RP2040_DIR)/elf2uf2.kspl $$(RP2040_OUT)/ksos_rp2040_$(subst -,_,$(1)).elf \
@@ -408,8 +475,10 @@ demo_stems = $(patsubst demo/$(1)/%.kspl,%,$(wildcard demo/$(1)/*.kspl))
 KSOS_LINK_CM_DEMOS     := $(call demo_stems,cortex_m)
 # **RP2040 has to be included**: Armv6-M is narrower, and what links for CM can fail there.
 KSOS_LINK_RP2040_DEMOS := $(call demo_stems,rp2040)
+KSOS_LINK_NRF51_DEMOS  := $(call demo_stems,nrf51)
 
-KSOS_LINK_TARGETS    := $(addprefix ksos-linkcheck-,$(KSOS_LINK_CM_DEMOS) $(KSOS_LINK_RP2040_DEMOS))
+KSOS_LINK_TARGETS    := $(addprefix ksos-linkcheck-,$(KSOS_LINK_CM_DEMOS) $(KSOS_LINK_RP2040_DEMOS) \
+    $(KSOS_LINK_NRF51_DEMOS))
 
 # One demo = one target, so `make -j` runs them in parallel and a failure names its demo.
 # Caution: **.PHONY, not a stamp**: the link depends on every source under ksos/ and std/.
@@ -421,7 +490,8 @@ ksos-linkcheck-$(1): $(2) | $(3)
 	$$(call $(4),demo/$(5)/$(1).kspl,$(3)/link_$(1).elf,link_$(1))
 endef
 $(foreach d,$(KSOS_LINK_CM_DEMOS),$(eval $(call ksos_linkcheck_rule,$(d),$$(CM_OBJS),$$(CM_OUT),cm_link,cortex_m,CM)))
-$(foreach d,$(KSOS_LINK_RP2040_DEMOS),$(eval $(call ksos_linkcheck_rule,$(d),$$(RP2040_LINK_OBJS),$$(RP2040_OUT),cm0_link,rp2040,RP2040 / Cortex-M0+)))
+$(foreach d,$(KSOS_LINK_RP2040_DEMOS),$(eval $(call ksos_linkcheck_rule,$(d),$$(RP2040_LINK_OBJS),$$(RP2040_OUT),rp2040_link,rp2040,RP2040 / Cortex-M0+)))
+$(foreach d,$(KSOS_LINK_NRF51_DEMOS),$(eval $(call ksos_linkcheck_rule,$(d),$$(NRF51_LINK_OBJS),$$(NRF51_OUT),nrf51_link,nrf51,nRF51 / Cortex-M0)))
 
 # Confirms from the link's result that each window with a tight deadline **sits in RAM** and holds
 # no direct `bl` (only `blx rN` to a ROM function): both link fine and freeze only on the real chip.
@@ -478,7 +548,7 @@ test-ksos-link:
 endif
 else
 test-ksos-link: $(KSOS_LINK_TARGETS) test-ksos-ramtext
-	@echo "RESULT: ALL PASS (bare-metal demos link - Cortex-M: $(words $(KSOS_LINK_CM_DEMOS)), RP2040/Cortex-M0+: $(words $(KSOS_LINK_RP2040_DEMOS)))"
+	@echo "RESULT: ALL PASS (bare-metal demos link - Cortex-M: $(words $(KSOS_LINK_CM_DEMOS)), RP2040/Cortex-M0+: $(words $(KSOS_LINK_RP2040_DEMOS)), nRF51/Cortex-M0: $(words $(KSOS_LINK_NRF51_DEMOS)))"
 endif
 
 .PHONY: test-ksos-link test-ksos-ramtext $(KSOS_LINK_TARGETS)
@@ -492,7 +562,10 @@ endif
 # do not loosen that `== 0` to keep it parallel).
 KSOS_QEMU_CM_DEMOS := $(addprefix ksos-cm-,$(call row_keys,$(KSOS_CM_DEMOS))) \
     ksos-cm-run ksos-cm-uart-echo ksos-cm-uart-irq-echo
-KSOS_QEMU_DEMOS := $(KSOS_QEMU_CM_DEMOS)
+# The Cortex-M0 ones run the cortex_m0 switch, which nothing else runs (QEMU has no RP2040).
+KSOS_QEMU_CM0_DEMOS := $(addprefix ksos-cm0-,$(call row_keys,$(KSOS_CM0_DEMOS))) \
+    $(addprefix ksos-nrf51-,$(call row_keys,$(KSOS_NRF51_DEMOS)))
+KSOS_QEMU_DEMOS := $(KSOS_QEMU_CM_DEMOS) $(KSOS_QEMU_CM0_DEMOS)
 
 # **The serial side is the one listed**: forgotten here, a demo runs in parallel and fails visibly.
 KSOS_QEMU_SERIAL_DEMOS := ksos-cm-uart-echo ksos-cm-uart-irq-echo ksos-cm-control-ai-probe
@@ -536,11 +609,11 @@ test-ksos-qemu:
 	@printf '%s\n' "$$ARM_TOOLCHAIN_HINT" >&2
 	@exit 1
 else
-test-ksos-qemu: $(CM_OBJS)
+test-ksos-qemu: $(CM_OBJS) $(NRF51_LINK_OBJS)
 	@echo "# [test-ksos-qemu] $(words $(KSOS_QEMU_DEMOS)) demos on qemu-system-arm (parallel $(words $(KSOS_QEMU_PARALLEL_DEMOS)) / serial $(words $(KSOS_QEMU_SERIAL_DEMOS)))"
 	$(MAKE) -j$(TEST_JOBS) $(KSOS_QEMU_GATE_TARGETS)
 	$(foreach t,$(KSOS_QEMU_SERIAL_DEMOS),$(call ksos_run_gate,$(t),qemu)$(nl))
-	@echo "RESULT: ALL PASS (QEMU demos - Cortex-M: $(words $(KSOS_QEMU_CM_DEMOS)))"
+	@echo "RESULT: ALL PASS (QEMU demos - Cortex-M3: $(words $(KSOS_QEMU_CM_DEMOS)), Cortex-M0: $(words $(KSOS_QEMU_CM0_DEMOS)))"
 endif
 
 .PHONY: test-ksos-qemu $(KSOS_QEMU_GATE_TARGETS)
@@ -554,7 +627,7 @@ KSOS_POSIX_DEMOS := $(addprefix ksos-,$(call row_keys,$(KSOS_POSIX_TEMPLATED) $(
     ksos
 
 # **A demo that verifies time itself has to be serial** (drift, forced yielding, CPU use).
-KSOS_POSIX_SERIAL_DEMOS := ksos-preempt ksos-delay-until ksos-task-manager
+KSOS_POSIX_SERIAL_DEMOS := ksos-preempt ksos-delay-until ksos-task-manager ksos-sleep
 KSOS_POSIX_PARALLEL_DEMOS := $(filter-out $(KSOS_POSIX_SERIAL_DEMOS),$(KSOS_POSIX_DEMOS))
 
 $(foreach t,$(KSOS_POSIX_PARALLEL_DEMOS),$(eval $(call ksos_gate_rule,posix,$(t))))

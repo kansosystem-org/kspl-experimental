@@ -12,7 +12,7 @@ function kspageApiShow(ks) {
     paintPage(target, i) {
       this.paintPages((at) => (at === i ? target : null), i, i + 1);
     },
-    // Caution: **The page printing uses is this, not `paper()`**: a document with no paper set
+    // Caution: **The page printing uses is this, not `paper()`.** A document with no paper set
     // borrows one in `paintPages`, so `paper()` reads 0 and the browser picks its own page for
     // `@page`. **Decide whether to borrow only here** (`paper.js`'s `@page` uses it too).
     printPaper() {
@@ -27,9 +27,9 @@ function kspageApiShow(ks) {
     // Draws every page; `make(i)` returns page `i`'s canvas (null draws nothing).
     // **Lay out once and ask the page count once** (not in the `for` condition).
     paintPages(make, from = 0, upto = -1) {
-      // Caution: **Split into pages even with no page set** (unsplit, the browser breaks one long
-      // canvas mid-line), **borrowing the margins with the size** (a margin of 0 leaves the bands
-      // nowhere to go); a document with paper set borrows nothing.
+      // Caution: **Split into pages even with no page set**: unsplit, the browser breaks one long
+      // canvas mid-line. **Borrow the margins with the size**, since a margin of 0 leaves the
+      // bands nowhere to go. A document with paper set borrows nothing.
       const was = paperOf();
       const bare = was.width <= 0 || was.height <= 0;
       if (bare) {
@@ -124,8 +124,8 @@ function kspageApiShow(ks) {
     maxStep() {
       return ks.showing < 0 ? 0 : w.kspage_web_max_step(ks.showing);
     },
-    // Advances one: a step if one is left, otherwise the next slide — the one path for keys and
-    // clicks (**not two entry points**: with two, nobody can tell which to use).
+    // Advances one: a step if one is left, otherwise the next slide. It is the one path for keys
+    // and clicks (**not two entry points**: with two, nobody can tell which to use).
     stepAhead() {
       if (ks.showing < 0) return false;
       if ((ks.step || 0) < this.maxStep()) {

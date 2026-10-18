@@ -16,7 +16,8 @@ priv fn streams(r: subproc.Run_result@, arena: Arena$@): U8[] //< both streams, 
     return arena.text().s("stdout: ").s(r.stdout_data).s("\nstderr: ").s(r.stderr_data).take()
 
 priv fn capture(argv: U8[][], arena: Arena$@): subproc.Run_result //< one run, its streams apart
-    return subproc.run_capture(argv, "", verdict.default_timeout_ms, 4 * 1024 * 1024, arena)
+    return subproc.run_capture(argv, "", verdict.default_timeout_ms, 4 * 1024 * 1024, arena) catch
+        panic("ksplc must start")
 
 fn case_refusal_stream(arena: Arena$@) //<
     //< A refused command line writes to standard error alone, `--help` to standard output
@@ -29,11 +30,11 @@ fn case_refusal_stream(arena: Arena$@) //<
         r: = capture(harness.ksplc_argv(args), arena)
         verdict.check(arena.text().s("a refusal of `").s(args[0])
             .s("` writes to standard error alone").take(),
-            r.exit_code != 0 && r.stdout_data.len == 0 && r.stderr_data.len > 0,
+            !r.exited_with(0) && r.stdout_data.len == 0 && r.stderr_data.len > 0,
             streams(r@, arena))
     h: = capture(U8[][]::{ harness.ksplc_exe(), "--help" }, arena)
     verdict.check("--help writes the usage to standard output",
-        h.exit_code == 0 && h.stdout_data.starts_with("usage: ksplc") && h.stderr_data.len == 0,
+        h.exited_with(0) && h.stdout_data.starts_with("usage: ksplc") && h.stderr_data.len == 0,
         h.stderr_data)
     case_fmt_stream(arena)
     case_status_stream(arena)
@@ -56,14 +57,14 @@ priv fn case_fmt_stream(arena: Arena$@) //<
         return
     r: = capture(U8[][]::{ harness.ksplc_exe(), "fmt", good, bad }, arena)
     verdict.check("a failing fmt writes only the formatted text to standard output",
-        r.exit_code != 0 && r.stdout_data.equals(fmt_good) &&
+        !r.exited_with(0) && r.stdout_data.equals(fmt_good) &&
         r.stderr_data.find_str("fmt/failed:").is_some(), streams(r@, arena))
 
 priv fn case_status_stream(arena: Arena$@) //<
     //< A line about the run goes to standard error, so `ksplc run x > out.txt` holds the program's
     //<
-    //< The summary and the closing line of a compile, and `clean`'s report, are about the run; a
-    //< script that fails to compile leaves standard output empty, and one with a warning leaves
+    //< The summary and the closing line of a compile, and `clean`'s report, are about the run. A
+    //< script that fails to compile leaves standard output empty. One with a warning leaves
     //< only what the program printed.
     dir: = harness.sandbox("cli_status_stream")
     bad: = fs.join(dir, "bad.kspl", arena)
@@ -79,20 +80,20 @@ priv fn case_status_stream(arena: Arena$@) //<
     c: =
         capture(harness.ksplc_argv(U8[][]::{ bad, fs.join(dir, "bad.c", arena) }), arena)
     verdict.check("a failed compile writes its summary and closing line to standard error",
-        c.exit_code != 0 && c.stdout_data.len == 0 &&
+        !c.exited_with(0) && c.stdout_data.len == 0 &&
         c.stderr_data.find_str("Finished with 1 error(s)").is_some() &&
         c.stderr_data.find_str("sema/analysis_failed: compilation terminated").is_some(),
         streams(c@, arena))
     r: = capture(harness.ksplc_argv(U8[][]::{ "run", bad }), arena)
     verdict.check("`ksplc run` on a script that does not compile leaves standard output empty",
-        r.exit_code != 0 && r.stdout_data.len == 0 &&
+        !r.exited_with(0) && r.stdout_data.len == 0 &&
         r.stderr_data.find_str("compilation terminated").is_some(), streams(r@, arena))
     w: = capture(harness.ksplc_argv(U8[][]::{ "run", warned }), arena)
     verdict.check("`ksplc run` with a warning leaves only the program's output on standard output",
-        w.exit_code == 0 && w.stdout_data.equals("said\n") &&
+        w.exited_with(0) && w.stdout_data.equals("said\n") &&
         w.stderr_data.find_str("Finished with 0 error(s), 1 warning(s)").is_some(),
         streams(w@, arena))
     k: = capture(U8[][]::{ harness.ksplc_exe(), "clean" }, arena)
     verdict.check("`clean` reports what it emptied on standard error",
-        k.exit_code == 0 && k.stdout_data.len == 0 &&
+        k.exited_with(0) && k.stdout_data.len == 0 &&
         k.stderr_data.starts_with("ksplc: cleared "), streams(k@, arena))

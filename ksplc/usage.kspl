@@ -16,7 +16,7 @@ import "std/sys"
 
 enum Info_topic //< the subjects `ksplc info` answers
     //<
-    //< **A subject is named after its variant**, with `_` written `-` (`std_dir` is `std-dir`), so
+    //< **A subject is named after its variant**, with `_` written `-` (`std_dir` is `std-dir`). So
     //< the usage, the parser and the message that rejects a wrong one use one spelling.
     std_dir //<
         //< The resolved folder of the standard library (like `rustc --print sysroot`)
@@ -94,7 +94,7 @@ fn refuse_unread_std_dir(p: argp.Parser$@, topic: Info_topic) //<
         return
     msg: = base_core.arena.text()
         .s("ksplc info \{topic.info_topic_name()\}: '--std-dir' does not change this subject's \
-            answer (only std-dir's)\n").take()
+            answer. It changes only the std-dir answer\n").take()
     error_exit(msg)
 
 fn flag_faces(flag: U8[]): U8[] //< the subcommands an option applies to
@@ -167,13 +167,13 @@ fn machine_refusal_to(face: U8[], named: U8[], host: U8[], m: Str_builder$@) //<
     else if faces_include(flag_faces("--machine"), face)
         m
             .s("ksplc \{face\}: the machine ksplc runs on ('\{host\}') is not in its table of \
-                machines, so it has no widths to lay values out by. Name the machine the output is \
-                for with --machine=<triple>.")
+                machines. ksplc therefore has no widths for laying out values. Name the machine the \
+                output is for with --machine=<triple>.")
     else
         m
             .s("ksplc \{face\}: the machine ksplc runs on ('\{host\}') is not in its table of \
-                machines, and this subcommand lays values out for the machine it runs on. A compile \
-                or a lint names the machine with --machine=<triple> instead.")
+                machines. This subcommand lays values out for the machine it runs on. A compile or \
+                a lint names the machine with --machine=<triple> instead.")
     m.s(" The machines it knows: ")
     base_target.known_names_to(m)
     m.c('\n')
@@ -212,8 +212,8 @@ fn check_flag_faces(p: argp.Parser$@, face: U8[]) //<
         $m: = Str_builder.new()
         defer m.free()
         m
-            .s("ksplc \{face\}: '\{name\}' does not take effect on this subcommand (it takes effect \
-                on: \{faces\})\n")
+            .s("ksplc \{face\}: '\{name\}' does not take effect on this subcommand. It takes effect \
+                on: \{faces\}\n")
         error_exit(m.slice())
 
 priv fn option_names(p: argp.Parser$@): List<|U8[]|> //< every option the parser declares
@@ -224,7 +224,7 @@ priv fn option_names(p: argp.Parser$@): List<|U8[]|> //< every option the parser
 fn refuse_empty_values(p: argp.Parser$@) //<
     //< It rejects an option given with nothing after its `=` (`--emit-deps=`)
     //<
-    //< **No option of ksplc means anything by an empty value**: taken, it would read as the default
+    //< **No option of ksplc means anything by an empty value.** Taken, it would read as the default
     //< or be ignored, and the writer would believe it took effect.
     for name in option_names(p)
         if p.saw_empty(name)
@@ -295,18 +295,21 @@ fn print_usage(out: Writer) //<
     $usage: =
         """
 
-        `run` builds the script and runs it, leaving the result in $KSPLC_CACHE_DIR (the OS's
-        cache region by default). Place ksplc's own options before the script's path; what comes
-        after it is handed to the script uninterpreted. In place of the path, `-` reads the program
-        from standard input and --eval=<source> takes it from the command line; either is read as
-        a file in the current folder, named `-`, and every argument after it goes to the program
-        (put `--` before a first one starting with `-`). A compile reads standard input for an
-        input of `-`.
+        `run` builds and runs the script. It caches the result in $KSPLC_CACHE_DIR, which defaults
+        to the OS's cache directory. Place ksplc's options before the script's path. Arguments
+        after that path go to the script unchanged. In place of the path, use `-` to read the
+        program from standard input. Use --eval=<source> to take it from the command line.
+        Both forms use `-` as the file name in the current folder. All following arguments go to
+        the program. Put `--` before the first argument if it starts with `-`. A compile also
+        reads standard input when its input is `-`.
 
-        The standard library (`import "std/..."`) is the first of these, strongest first:
-        --std-dir=DIR, the environment variable KSPLC_STD_DIR, the std/ beside the ksplc
-        executable, ../lib/kspl/std from the executable's folder, and then "std" in the current
-        folder. `ksplc info std-dir` names the one taken.
+        For `import "std/..."`, look for the standard library in this order:
+          1. --std-dir=DIR
+          2. The environment variable KSPLC_STD_DIR
+          3. std/ beside the ksplc executable
+          4. ../lib/kspl/std from the executable's folder
+          5. "std" in the current folder
+        `ksplc info std-dir` reports the selected directory.
         """
         .dedent()
     defer usage.free()

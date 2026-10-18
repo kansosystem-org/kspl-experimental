@@ -3,7 +3,7 @@
 
 function kspageProbeFilter(ks) {
   const { check, app, openMenu, flyPick, press, canvas, spot } = ks;
-  // Caution: **Let every press go again.** `press` only puts the pointer down, and one left down
+  // Caution: **Let every press go again.** `press` only puts the pointer down. One left down
   // silently turns the next press into a drag that selects, felling the merging checks that run
   // after this file.
   const tap = (x, y) => {
@@ -61,8 +61,8 @@ function kspageProbeFilter(ks) {
 
   // ---- The set of values ticked, and the arrow that opens it ----
   //
-  // **This can be seen nowhere else**: the list is built from what the core says the column shows,
-  // so a wrong order or a value missed shows only here.
+  // **This can be seen nowhere else.** The list is built from what the core says the column
+  // shows, so a wrong order or a value missed shows only here.
   check(app.find("120", false) && app.cellFrame() !== null,
     "a cell of the price's column can be landed on again");
   const said = app.columnValues();
@@ -97,7 +97,7 @@ function kspageProbeFilter(ks) {
   check(document.getElementById("narrow").hidden, "closing it puts it away");
 
   // The arrow drawn in the heading. **It is painted on the canvas, so only a press on the canvas
-  // reaches it** — misplace it by a few pixels and nothing here would say so.
+  // reaches it.** Misplace it by a few pixels, and nothing here would say so.
   check(app.find("120", false) && app.cellFrame() !== null, "back in the price's column");
   const cell = app.cellFrame();
   // Walking up the column lands the cursor in the heading, whose cell frame the arrow hangs off.
@@ -133,11 +133,11 @@ function kspageProbeFind(ks) {
 
   // 18. Hunting and replacing.
   //
-  // **This can be seen nowhere else**: whether Ctrl+F is taken over, the focus moves to the field,
-  // and goes back to the body after the press. Untaken, the browser's own hunt runs over a body
-  // inside the canvas, so **not one hit is found**.
-  // **There is no row.** The hunt field sits on the band's right side, so Ctrl+F jumps to the field
-  // (a row folding and unfolding makes the body leap on every press).
+  // **This can be seen nowhere else.** It checks that Ctrl+F is taken over and the focus moves to
+  // the field. It checks that the focus goes back to the body after the press. Untaken, the
+  // browser's own hunt runs over a body inside the canvas, so **not one hit is found**.
+  // **There is no row.** The hunt field sits on the band's right side, so Ctrl+F jumps to the
+  // field. A row folding and unfolding makes the body leap on every press.
   const findBox = document.getElementById("find-text");
   const findKey = new KeyboardEvent("keydown",
     { key: "f", ctrlKey: true, bubbles: true, cancelable: true });
@@ -147,9 +147,9 @@ function kspageProbeFind(ks) {
   check(findBox.closest("#bar") !== null, "the hunt field is inside the band (it eats no row)");
   // The count comes out while typing.
   //
-  // **This can be seen nowhere else**: counting is the wasm's, but the keystrokes' wiring to the
-  // field needs the DOM (it breaks as "the count does not come out on the press").
-  // Caution: **Put 0 out too** (left empty, whether it counted or the answer is 0 cannot be told).
+  // **This can be seen nowhere else.** Counting is the wasm's, but the keystrokes' wiring to the
+  // field needs the DOM. It breaks as "the count does not come out on the press".
+  // Caution: **Put 0 out too.** Left empty, whether it counted or the answer is 0 cannot be told.
   const tallyBox = document.getElementById("find-tally");
   const typeFind = (t) => {
     findBox.value = t;
@@ -202,8 +202,8 @@ function kspageProbeFind(ks) {
   //
   // **This can be seen nowhere else**: `clipboardData` exists only in a real browser, and the
   // hidden input field's taking over needs the DOM. The keys are not pressed (a scripted keystroke
-  // starts no default copy); the way from a key is kept by the `else { return; }` that does not
-  // take over.
+  // starts no default copy). The `else { return; }` that does not take over keeps the way from a
+  // key.
   const clip = (kind) => {
     const e = new ClipboardEvent(kind, {
       clipboardData: new DataTransfer(), bubbles: true, cancelable: true,

@@ -11,17 +11,19 @@ import "std/io"
 import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
 import "std/strnum"
+import "std/subproc"
+import "std/sys"
 
 enum Shard //< which job runs a gate on Linux and Windows
     //<
     //< **A shard's name is what `make ci-shard-<name>` and the workflow's matrix use.**
     //< Caution: **A shard costs a job's start-up** (checkout, MSYS2, stage1: about a shard's work,
-    //< more on Windows), so measure before adding one ("Where CI's time goes" in
+    //< more on Windows). So measure before adding one ("Where CI's time goes" in
     //< `docs/DESIGN-repository.md`).
     core //< the first of the two shared jobs on Linux and Windows
     rest //< the second
     linux //<
-        //< The Linux job alone (`make ci-linux-only`)
+        //< The Linux job alone (`make ci-shard-linux`)
         //<
         //< Either only its image holds the tool, or the answer cannot differ by platform, so a
         //< second platform would pay for the same answer.
@@ -50,7 +52,7 @@ struct Gate //< one gate: what `make` is asked for, and where it runs
     macos: Bool //< the macOS job runs it too
     stops: Bool //< a fall stops the set, since the gates after it build on what it built
 
-// Caution: **The order is the order they run in**: a gate may use what one before it built (the
+// Caution: **The order is the order they run in.** A gate can use what one before it built (the
 // self-host builds stage2, which perf-log measures again).
 const gates: Gate[_] = ::{
     Gate::{ .log = "selfhost", .args = "self-host", .par = .serial, .verdict = true,
@@ -75,6 +77,10 @@ const gates: Gate[_] = ::{
     // QEMU's list. **One make for both**, so stage1's check is paid once (no verdict: one log).
     Gate::{ .log = "link_abi", .args = "test-ksos-link test-llvm-abi", .par = .synced,
         .verdict = false, .shard = .core, .macos = false, .stops = false },
+    // On a fall, run `make self-host`, then `make commit-seed`, and commit `ksplc/seed.c` with
+    // `ksplc/seed.sum`.
+    Gate::{ .log = "seed_sum", .args = "test-seed-sum", .par = .serial, .verdict = true,
+        .shard = .core, .macos = true, .stops = false },
     Gate::{ .log = "fm", .args = "test-freestanding-math", .par = .serial, .verdict = true,
         .shard = .core, .macos = true, .stops = false },
     Gate::{ .log = "simd", .args = "test-simd", .par = .serial, .verdict = true, .shard = .core,
@@ -94,8 +100,8 @@ const gates: Gate[_] = ::{
     // `test-extract` (ksai's own `make test`), which macOS does not run.
     Gate::{ .log = "run", .args = "run", .par = .serial, .verdict = true, .shard = .none,
         .macos = true, .stops = false },
-    Gate::{ .log = "selfhost_llvm", .args = "LLVM=1 self-host STATS=1", .par = .serial,
-        .verdict = true, .shard = .rest, .macos = true, .stops = false },
+    Gate::{ .log = "selfhost_llvm", .args = "LLVM=1 self-host", .par = .serial, .verdict = true,
+        .shard = .rest, .macos = true, .stops = false },
     // Caution: **Put the run-time tests through the LLVM backend too.** A self-host that passes
     // does not tread a shape ksplc itself never uses, so a broken genllvm goes unseen. Windows runs
     // it as well: only Win64 passes arguments on the stack, where a wrong argument type shows.
@@ -135,6 +141,10 @@ const gates: Gate[_] = ::{
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
     Gate::{ .log = "kspage_desktop", .args = "test-kspage-desktop KSPAGE_REQUIRE_DESKTOP=1",
         .par = .serial, .verdict = true, .shard = .linux, .macos = false, .stops = false },
+    // Two opens at once (`tools/tests/open_together.kspl`). **Linux alone**, so the opener's lock
+    // on Windows goes unchecked ("What each platform runs" in `docs/SPEC-gates.md`).
+    Gate::{ .log = "kspage_open", .args = "test-kspage-open", .par = .serial, .verdict = true,
+        .shard = .linux, .macos = false, .stops = false },
     // Caution: **Build and run the BLAS backend for real.** `lint-cfg` reads its branch, but only
     // a link shows whether the FFI is right.
     Gate::{ .log = "blas", .args = "test-blas", .par = .serial, .verdict = true, .shard = .linux,
@@ -152,15 +162,14 @@ const gates: Gate[_] = ::{
 }
 
 enum Set //< a set of gates one command runs, named as `make` names it
-    ci //< `make ci`: shared gates on Windows; shared and Linux-only gates elsewhere
-    ci_linux //< the complete set, retained as `make ci-linux` for existing callers
-    ci_linux_only //< `make ci-linux-only`: what Linux alone runs
-    ci_macos //< `make ci-macos`
+    ci //< `make ci`: every gate this host runs natively, the Linux-only ones on Linux alone
+    ci_macos //< `make ci-macos`: the macOS job's set
     ci_shard_core //< `make ci-shard-core`
     ci_shard_rest //< `make ci-shard-rest`
+    ci_shard_linux //< `make ci-shard-linux`: what Linux alone runs
 
-const set_order: Set[_] = ::{ Set.ci, Set.ci_linux, Set.ci_linux_only, Set.ci_macos,
-    Set.ci_shard_core, Set.ci_shard_rest } //< every set, so a name can be read back
+const set_order: Set[_] = ::{ Set.ci, Set.ci_macos, Set.ci_shard_core, Set.ci_shard_rest,
+    Set.ci_shard_linux } //< every set, so a name can be read back
 
 fn set_from(name: U8[], arena: Arena$@): Set? //< the set a name spells, if any
     //<
@@ -176,10 +185,8 @@ impl Set
         shared: = g.shard == Shard.core || g.shard == Shard.rest
         switch s
         case .ci
-            return shared || (g.shard == Shard.linux && !platform.equals("win32"))
-        case .ci_linux
-            return shared || g.shard == Shard.linux
-        case .ci_linux_only
+            return shared || (g.shard == Shard.linux && platform.equals("linux"))
+        case .ci_shard_linux
             return g.shard == Shard.linux
         case .ci_macos
             return g.macos
@@ -191,9 +198,9 @@ impl Set
 // ==========================================
 // The SKIP lines a round expects. **A SKIP no row holds fails its gate**: a tool gone missing from
 // a runner would otherwise pass in silence. A row names its platforms as make's `PLATFORM` spells
-// them, and a piece of the reason's line ("Some gates need a tool or a library that not every
-// machine has" in `docs/SPEC-gates.md`). **Linux is named least**: its image holds every tool but
-// the Windows cross-compiler and Wine, and its container has `::1`.
+// them. It also names a piece of the reason's line ("Some gates need a tool or a library that not
+// every machine has" in `docs/SPEC-gates.md`). **Linux is named least**: its image holds every
+// tool but Wine, and its container has `::1`.
 // ==========================================
 struct Expected_skip //< one SKIP a platform's round may print
     on: U8[] //< the platforms it is expected on, space-separated: `linux`, `darwin`, `win32`
@@ -202,8 +209,7 @@ struct Expected_skip //< one SKIP a platform's round may print
 const expected_skips: Expected_skip[_] = ::{
     Expected_skip::{ .on = "linux win32 darwin", .says = "this machine has no IPv6 at all" },
     Expected_skip::{ .on = "win32 darwin", .says = "the loopback holds no `::1`" },
-    Expected_skip::{ .on = "linux win32 darwin",
-        .says = "x86_64-w64-mingw32-gcc is not installed" },
+    Expected_skip::{ .on = "win32 darwin", .says = "x86_64-w64-mingw32-gcc is not installed" },
     Expected_skip::{ .on = "linux win32 darwin", .says = "Wine is not installed" },
     Expected_skip::{ .on = "win32", .says = "so none goes silent" },
     Expected_skip::{ .on = "win32", .says = "which Windows does not have" },
@@ -287,6 +293,8 @@ const switch_skips: Switch_skip[_] = ::{
     Switch_skip::{ .name = "KANSO_REQUIRE_BOTH_CC",
         .says = "only one of the two C compilers is installed" },
     Switch_skip::{ .name = "KANSO_REQUIRE_CHOWN", .says = "can hand a folder to another user" },
+    Switch_skip::{ .name = "KANSO_REQUIRE_MINGW",
+        .says = "x86_64-w64-mingw32-gcc is not installed" },
     Switch_skip::{ .name = "KSBIND_REQUIRE_LIBS",
         .says = "the libraries ksbind binds are not installed" },
     Switch_skip::{ .name = "KSBIND_REQUIRE_LIBS", .says = "do not link here" },
@@ -334,7 +342,7 @@ priv fn lists(words: U8[], word: U8[]): Bool //< whether a space-separated list 
 
 // ==========================================
 // What a run leaves, and the summary read back from it
-// **One gate leaves two files**: its log, and `<log>.end` holding its exit code and seconds, so a
+// **One gate leaves two files**: its log, and `<log>.end` holding its exit code and seconds. So a
 // later `make ci-summary` (another process, another workflow step) reads what this one saw.
 // ==========================================
 
@@ -399,19 +407,63 @@ fn outcome_of(g: Gate, text: U8[], ended: U8[], j: Judge@, arena: Arena$@): Outc
             odd += 1
     $why: = List<|Cause|>.new(arena)
     if !ok
-        why = causes(text, g.verdict, judge@, arena)
+        why = causes(text, g.log, g.verdict, judge@, arena)
     return Outcome::{ .log = g.log, .ok = ok, .sec = sec, .skips = skips.len, .unexpected = odd,
         .causes = why }
 
 // ==========================================
+// One gate run under its cap
+// **A hung gate is stopped here, named**, not by the CI job's own limit. That limit cancels the
+// whole job and leaves no word of which gate hung. Locally, nothing else would stop it at all.
+// ==========================================
+
+priv const notice_us: I64 = 15000000I64 //< how often a gate still running is named on the screen
+priv const over_cap_head: U8[] = "# gate " //< the cap's line, around the gate's log and the cap
+priv const over_cap_mid: U8[] = " ran over "
+priv const over_cap_tail: U8[] = " s and was stopped"
+
+fn run_capped(argv: U8[][], name: U8[], log: U8[], cap_s: I64, started: I64): I32 //<
+    //< Runs one gate's command to its end, naming it while it runs: its exit code, 127 unstarted
+    //<
+    //< **Its output reaches the screen as it comes**; the command itself copies it into `log`.
+    //< **Past `cap_s`, it is stopped with all it started.** The line saying so goes to the
+    //< screen and the end of `log`, where `causes` names it first. The gate then fails with 1.
+    $child: = subproc.spawn_limited(argv, "", I32::(cap_s * 1000I64)) catch
+        return 127
+    $next: = started + notice_us
+    for
+        // Waited on only until it comes back ended or timed out, it is never reaped before.
+        switch child.wait(I32::((next - sys.mono_us() + 999I64) / 1000I64)).unwrap_or(.ended(1))
+        case .ended(code)
+            return code
+        case .running
+            now: = sys.mono_us()
+            if now >= next
+                io.out()
+                    .s("# still running \{name\}: \{(now - started) / 1000000I64\}s (\{log\})\n")
+                    .flush()
+                next = now + notice_us
+        case .timed_out
+            $line: = Str_builder.new()
+            defer line.free()
+            line.s(over_cap_head).s(name).s(over_cap_mid).s("\{cap_s\}").s(over_cap_tail).c('\n')
+            io.out().s(line.slice()).flush()
+            $f: = io.open(log, "ab") catch
+                return 1
+            defer f.free()
+            f.s(line.slice())
+            return 1
+
+// ==========================================
 // Why a fallen gate fell, read from its log
-// **The summary ends with each cause**, so a round's last lines say why without a search through
+// **The summary ends with each cause.** So a round's last lines say why, with no search through
 // thousands above ("How a run is read" in `docs/SPEC-gates.md`). The gate's own marks are read,
 // and make's `*** [`, the one part of make's line no locale translates (`Error 1` is `エラー 1` in
 // Japanese).
 // ==========================================
 
 enum Cause_kind //< what one line of a fallen gate's log says, in the order the summary lists them
+    over_cap //< the runner's line saying the gate ran over its cap and was stopped (`run_capped`)
     panic //< `panic: ` at the line's head: a test stopped there
     fail //< `FAIL ` or `[FAIL]` at the line's head: a check that did not hold
     unexpected_skip //< a SKIP line no row holds for the platform and the switches off
@@ -424,7 +476,7 @@ struct Cause //< one line of a fallen gate's log that says why it fell
     kind: Cause_kind
     line: U8[]
 
-const cause_order: Cause_kind[_] = ::{ Cause_kind.panic, Cause_kind.fail,
+const cause_order: Cause_kind[_] = ::{ Cause_kind.over_cap, Cause_kind.panic, Cause_kind.fail,
     Cause_kind.unexpected_skip, Cause_kind.result, Cause_kind.make } //<
         //< The kinds read from the lines, most telling first
         //<
@@ -435,8 +487,15 @@ const causes_shown: Sz = 6 //<
 const tail_shown: Sz = 8 //< how many of a log's last lines stand in where nothing names a cause
 const cause_width: Sz = 400 //< the bytes of one line the summary keeps; its log holds it whole
 
-priv fn kind_of(line: U8[], j: Judge@): Cause_kind? //< the cause a line names, if any
+priv fn kind_of(line: U8[], log: U8[], j: Judge@): Cause_kind? //< the cause a line names, if any
+    //<
+    //< Caution: **The cap's line counts for the gate it names alone.** A gate's own tests print
+    //< one for a fake gate, which is no cause of theirs.
     t: = line.trim_spaces()
+    if t.starts_with(over_cap_head) && t.sub_from(over_cap_head.len).starts_with(log) &&
+        t.sub_from(over_cap_head.len + log.len).starts_with(over_cap_mid) &&
+        t.ends_with(over_cap_tail)
+        return .some(.over_cap)
     if t.starts_with("panic: ")
         return .some(.panic)
     if t.starts_with("FAIL ") || t.starts_with("[FAIL]")
@@ -453,11 +512,11 @@ impl Cause_kind
     fn own(k: Self): Bool //< whether a line of this kind is the gate's own word, not make's
         return k != Cause_kind.make && k != Cause_kind.no_verdict && k != Cause_kind.tail
 
-fn causes(text: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List<|Cause|> //<
+fn causes(text: U8[], log: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List<|Cause|> //<
     //< The lines of a fallen gate's log that say why, in `Cause_kind`'s order, each once
     //<
     //< **The log's last lines stand in where no line of the gate's own names a cause** (a C
-    //< compiler's error, a crash): make's line names only the target that stopped.
+    //< compiler's error, a crash). Make's line names only the target that stopped.
     lines: = text.lines(arena)
     $out: = List<|Cause|>.new(arena)
     $own: = false
@@ -466,7 +525,7 @@ fn causes(text: U8[], verdict: Bool, j: Judge@, arena: Arena$@): List<|Cause|> /
         passed = passed || line.trim_spaces().starts_with("RESULT: ALL PASS")
     for k in cause_order
         for line in lines
-            if got: = kind_of(line, j)
+            if got: = kind_of(line, log, j)
                 if got == k && !holds(out@, line.trim_spaces())
                     out.push(Cause::{ .kind = k, .line = line.trim_spaces() })
                     own = own || k.own()
@@ -495,8 +554,8 @@ priv fn holds(found: List<|Cause|>@, line: U8[]): Bool //< whether a cause alrea
 
 fn put_cause(c: Cause, b: Str_builder$@) //< one cause as the summary marks it
     //<
-    //< **A line keeps its own mark** (`FAIL`, `panic:`, `RESULT:`, make's `***`); a SKIP line
-    //< carries one no expected line does, and a line of the tail is set off as quoted.
+    //< **A line keeps its own mark** (`FAIL`, `panic:`, `RESULT:`, make's `***`). A SKIP line
+    //< carries one no expected line does. A line of the tail is set off as quoted.
     if c.kind == Cause_kind.unexpected_skip
         b.s("UNEXPECTED ")
     if c.kind == Cause_kind.no_verdict

@@ -4,8 +4,8 @@
 // ==== case generic_body_error_once
 //< A mistake in a generic's body is reported once, however many instances meet it
 //<
-//< Each instance found it again with its own type in the text, so three calls gave three errors
-//< at one place, and the follow-on "cannot infer" of the later instances came on top.
+//< Each instance found it again with its own type in the text. So three calls gave three errors at
+//< one place. The follow-on "cannot infer" of the later instances came on top.
 // EXPECT: generic_body_error_once.kspl:12:11: error: type 'generic_body_error_once.P' has no field
 // EXPECT-NOT: type 'I32' has no field
 // EXPECT-NOT: cannot infer type for 'q'
@@ -53,13 +53,13 @@ fn main(): I32
 //<
 //< **At the call they cannot be checked**: `T`/`U` are bound to nothing, so the expected type is
 //< `unknown`. Right after the instantiation is the one chance (check_args_against_instance in
-//< sema/body/call.kspl); skipped, the generated C fails with a raw C error (Principle 2).
+//< sema/body/call.kspl). If it is skipped, the generated C fails with a raw C error (Principle 2).
 
 // ==========================================
-// A difference in write permission (`T@` into a `T$@`'s position) is not exposed in the
-// generated C, genc attaching no `const` to an immutable local, so only the KSPL side sees it.
-// Caution: Always place the non-firing side alongside — a correct type, a numeric widening, and a
-// function handed over as a value all have to pass.
+// The generated C does not show a difference in write permission (`T@` into a `T$@`'s position).
+// genc attaches no `const` to an immutable local. So only the KSPL side sees it.
+// Caution: Always place the non-firing side alongside. A correct type, a numeric widening, and a
+// function handed over as a value must all pass.
 // ==========================================
 
 // EXPECT: expected 'I32', but got 'U8[]'
@@ -134,8 +134,8 @@ fn main(): I32
 // ==========================================
 // EXPECT: does not explicitly implement interface
 // The body of an instantiation whose constraint violation is known is not type-checked. Without
-// that, derived errors pointing inside the standard library follow the real diagnostic (the one
-// item above) and the reader can no longer tell the cause.
+// that, derived errors inside the standard library follow the real diagnostic (the one item
+// above). The reader then can no longer tell the cause.
 // EXPECT-NOT: has no field or method named 'hash'
 // EXPECT-NOT: does not implement required method
 // ==========================================
@@ -153,9 +153,9 @@ fn main(): I32
 //<
 //< An instance fills its fields and variants through the same functions as a plain declaration
 //< (fill_struct_fields and fill_enum_variants in ksplc/sema/decl/registry.kspl).
-// EXPECT: field 'a' is already defined in struct
+// EXPECT: field 'a' is already defined in this struct
 // EXPECT: struct fields cannot be of type 'Void'
-// EXPECT: variant 'none' is already defined in enum
+// EXPECT: variant 'none' is already defined in this enum
 
 struct Twice<|T|>
   a: T
@@ -192,10 +192,10 @@ fn main()
 // ==== case generic_enum_variant_first_use
 //< An error inside a generic enum's instance is reported when its first use is `E<|T|>.v`
 //<
-//< That shape instantiates the enum on the way to the variant, and the instance is cached. With
-//< the instantiation's errors suppressed there, a later use finds the cached instance and the
-//< error is never reported: the program goes on to the C compiler with a broken payload type.
-// EXPECT: too few type arguments for generic 'Pair': it declares 2, but 1 given
+//< That shape instantiates the enum on the way to the variant, and the instance is cached. If the
+//< instantiation's errors are suppressed there, a later use finds the cached instance. The error is
+//< then never reported, and the program goes on to the C compiler with a broken payload type.
+// EXPECT: too few type arguments for generic 'Pair'. Expected 2, but got 1
 pub struct Pair<|A, B|>
   a: A
   b: B
@@ -210,9 +210,9 @@ fn main()
 // ==== case generic_field_less_visible
 //< A generic's struct fields and enum payloads are checked the same way as a non-generic one's
 //<
-//< Without the check on an instance, merely wrapping it in a `pub struct W<|T|>` would leak a
-//< `priv` type into other files (ksplc/docs/DESIGN-diagnostics.md "A check of the same nature is not copied
-//< into two places").
+//< Without the check on an instance, a wrapper `pub struct W<|T|>` alone would leak a
+//< `priv` type into other files (ksplc/docs/DESIGN-diagnostics.md "A check of one kind lives
+//< in one place").
 // EXPECT: field type 'Hidden' is less visible than the field exposing it
 // EXPECT: payload type 'Hidden' is less visible than the variant exposing it
 
@@ -236,8 +236,8 @@ fn main()
 // ==== case generic_fn_infinite_instantiation
 //< A generic function calling itself with a different type argument is stopped at a depth cap
 //<
-//< Without the cap the compilation does not finish. Call depth cannot measure it (each body goes
-//< to the pending queue, so it returns to 0 per item), and each new mangled name misses the
+//< Without the cap the compilation does not finish. Call depth cannot measure it: each body goes
+//< to the pending queue, so the depth returns to 0 per item. Each new mangled name misses the
 //< instantiation cache (inst_chain_depth in ksplc/sema/session/ctx.kspl).
 // EXPECT: generic function instantiation chain too deep
 fn recur<|T|>(x: T)
@@ -247,17 +247,36 @@ fn recur<|T|>(x: T)
 
 fn main()
   recur(1)
+// ==== case generic_fn_nests_its_type_once
+//< A recursion whose type argument wraps a struct one level deeper is one error, readably named
+//<
+//< The struct's method table rose with the same depth and was reported as well. Each note spelled
+//< the deepest instance by its internal name, over a thousand characters long.
+// EXPECT: generic function instantiation chain too deep
+// EXPECT: Finished with 1 error(s)
+// EXPECT-NOT: method table chain
+// EXPECT-NOT: generic_fn_nests_its_type_once_W_
+struct W<|T|>
+  v: T
+
+fn f<|T|>(x: T, n: I32): I32
+  if n == 0
+    return 0
+  return f<|W<|T|>|>(::{ .v = x }, n - 1)
+
+fn main(): I32
+  return f<|I32|>(1, 3)
 // ==== case generic_fn_value_needs_type_args
 //< A generic function is a value only as a specialization its type arguments name
 //<
-//< A value has no arguments to infer them from, so the bare name is refused at its line with what
-//< to write; let through, it reaches C as a name no function has. Type arguments after a function
-//< that declares none would bind nothing, so they are refused too, called or not.
+//< A value has no arguments to infer them from. So the bare name is refused at its line, with what
+//< to write. Let through, it reaches C as a name that no function has. Type arguments after a
+//< function that declares none would bind nothing. So they are refused too, called or not.
 //< Caution: Keep the passing side: `same<|I32|>` as a value, checked against the expected type.
 // EXPECT: generic function 'same' cannot be used as a value without its type arguments
-// EXPECT: name one specialization, 'same<|…|>', with a type written for each of 'T'
-// EXPECT: function 'same<|I64|>' cannot be used as 'fn(I32):I32': its own type is 'fn(I64):I64'
-// EXPECT: function 'twice' is not generic, so '<|I32|>' names nothing: drop it
+// EXPECT: name one specialization with 'same<|…|>'. Write a type for each of 'T'
+// EXPECT: function 'same<|I64|>' cannot be used as 'fn(I32):I32'. Its type is 'fn(I64):I64'
+// EXPECT: function 'twice' is not generic. Remove the type arguments '<|I32|>'
 // EXPECT-NOT: undeclared identifier
 priv typedef Op = fn(x: I32): I32
 
@@ -291,9 +310,9 @@ fn main(): I32
 // ==== case generic_method_chain_too_deep
 //< A method that builds its own type one level deeper each time is stopped at the chain's limit
 //<
-//< **One error, at the cut.** The instance left unbuilt has no methods, and the call reaching it
-//< used to add "has no field or method", naming a type 32 levels deep and suggesting an import.
-// EXPECT: generic method table chain too deep: 'generic_method_chain_too_deep.Box2' came out nested
+//< **One error, at the cut.** The instance left unbuilt has no methods. The call that reached it
+//< used to add "has no field or method", which named a type 32 levels deep and suggested an import.
+// EXPECT: generic method table chain too deep. 'generic_method_chain_too_deep.Chain' is nested
 // EXPECT-NOT: has no field or method
 struct Box2<|S|>
   inner: S
@@ -317,8 +336,8 @@ fn main(): I32
 // ==== case generic_spelling_in_diagnostic
 //< A type in a diagnostic is shown as the user wrote it
 //<
-//< **Do not put an internal name out**: whoever wrote `List<|U8[]|>` cannot match a mangled name
-//< to it ("A diagnostic points at 'the position the user wrote'" in `ksplc/docs/DESIGN-diagnostics.md`).
+//< **Do not show an internal name.** Whoever wrote `List<|U8[]|>` cannot match a mangled name to
+//< it ("A diagnostic points at 'the position the user wrote'" in `ksplc/docs/DESIGN-diagnostics.md`).
 //< Caution: **Keep the `EXPECT-NOT`**: with two functions printing it, one still mangled passes.
 // EXPECT: but got 'std.ds.List<|U8[]|>
 // EXPECT-NOT: std_ds_List
@@ -331,6 +350,25 @@ fn main(): I32
   xs: = List<|U8[]|>.create(arena)
   n: I32 = xs
   return n
+// ==== case types_spelled_as_written
+//< A diagnostic spells each type as it is written, never by its internal name
+//<
+//< An optional was `std_lang_Option_I32`, an array literal's element `U8 immut`, and a
+//< polymorphic recursion's note over a thousand characters of mangled names.
+// EXPECT: switch on enum 'I32?' does not cover all variants
+// EXPECT: implicit conversion between 'I32' and 'U8' is forbidden
+// EXPECT-NOT: std_lang_Option
+// EXPECT-NOT: immut
+fn pick(o: I32?): I32
+  switch o
+  case .some(v)
+    return v
+
+fn pair(x: I32): U8[2]
+  return ::{ x, 1 }
+
+fn main(): I32
+  return pick(.none) + I32::pair(1)[0]
 // ==== case generic_trait_arg_is_not_a_leak
 //< A type variable that monomorphisation merely substitutes is no visibility leak
 //<
@@ -372,17 +410,17 @@ fn main()
 //<
 //< Bound from the first argument instead, `zero(5)` would take `I32` and `f(2)` leave `U` raw in C.
 //< The expected type does not fix it. A `const` parameter is read where it stands as an array's
-//< length or a generic's value argument: a slice has no length fixed at translation time, an `I32`
-//< is no `Buf<|N|>`, and `fill` has no parameter where it stands.
-// EXPECT: cannot infer the type argument 'T' of 'zero': no parameter's type mentions it
-// EXPECT: cannot infer the type argument 'T' of 'zero': no parameter's type mentions it
-// EXPECT: cannot infer the type argument 'U' of 'f': no parameter's type mentions it
-// EXPECT: with a type written for each of 'T', 'U'
-// EXPECT: cannot infer the type argument 'T' of 'count': the argument for 'xs' has type 'I32'
-// EXPECT: cannot infer the const parameter 'N' of 'sum': the argument for 'v' has type 'I32[]', which has no length or value fixed at translation time where that parameter's type has 'N'
-// EXPECT: 'sum<|…|>(…)', with an argument written for each of 'N'
-// EXPECT: cannot infer the const parameter 'N' of 'cap': the argument for '_b' has type 'I32', which has no length or value fixed at translation time where that parameter's type has 'N'
-// EXPECT: cannot infer the const parameter 'N' of 'fill': no parameter's type has it as an array's length or a generic's value argument, the places a const parameter is read from
+//< length or a generic's value argument. A slice has no length fixed at translation time. An `I32`
+//< is no `Buf<|N|>`. `fill` has no parameter where it stands.
+// EXPECT: cannot infer the type argument 'T' of 'zero'. No parameter's type mentions 'T'
+// EXPECT: cannot infer the type argument 'T' of 'zero'. No parameter's type mentions 'T'
+// EXPECT: cannot infer the type argument 'U' of 'f'. No parameter's type mentions 'U'
+// EXPECT: Write a type for each of 'T', 'U'
+// EXPECT: cannot infer the type argument 'T' of 'count'. The argument for 'xs' has type 'I32'
+// EXPECT: cannot infer the const parameter 'N' of 'sum'. The argument for 'v' has type 'I32[]'. That type has no length or value fixed at translation time where that parameter's type has 'N'
+// EXPECT: 'sum<|…|>(…)'. Write an argument for each of 'N'
+// EXPECT: cannot infer the const parameter 'N' of 'cap'. The argument for '_b' has type 'I32'. That type has no length or value fixed at translation time where that parameter's type has 'N'
+// EXPECT: cannot infer the const parameter 'N' of 'fill'. No parameter's type has 'N' as an array's length or a generic's value argument. Inference reads const parameters from these positions
 // EXPECT: Finished with 7 error(s)
 // EXPECT-NOT: expected 'U8[]'
 import "std/ds" { List }
@@ -423,11 +461,11 @@ fn main(): I32
 //< Either value chosen alone would make the instance refuse the other argument, as if only that
 //< one were wrong. Written at the call, the value still decides, and the other array is refused.
 //< An array's length and a generic's value argument (`Buf<|4|>`) are values alike.
-// EXPECT: cannot infer the const parameter 'N' of 'both': the argument for 'a' (type 'I32[3]') fixes it to 3, and the argument for 'b' (type 'I32[4]') to 4
+// EXPECT: cannot infer the const parameter 'N' of 'both'. The argument for 'a' (type 'I32[3]') fixes it to 3. The argument for 'b' (type 'I32[4]') fixes it to 4
 // EXPECT: Hint: pass arguments that agree on 'N'
 // EXPECT: Hint: pass arguments that agree on 'N'
 // EXPECT: expected 'I32[3]', but got 'I32[4]'
-// EXPECT: Buf<|4|>@') fixes it to 4, and the argument for 'a' (type 'I32[3]') to 3
+// EXPECT: Buf<|4|>@') fixes it to 4. The argument for 'a' (type 'I32[3]') fixes it to 3
 // EXPECT: Finished with 3 error(s)
 priv fn both<|const N: Sz|>(a: I32[N], b: I32[N]): I32
   return a[0] + b[0]
@@ -446,19 +484,19 @@ fn main(): I32
 // ==== case generic_arg_kind
 //< An argument of the other kind than its parameter is refused where it is written, naming both
 //<
-//< In a generic's declaration its own `const` parameter where a type goes (`Hold<|N|>`), or its
-//< type parameter where a value goes (`Buf<|T|>`, an array's length), is refused called or not.
-//< Left to a call, it failed there as a mismatch blaming the call's argument. Outside a generic a
-//< value for a type, or a type for a `const`, is refused where it is resolved, for a function's
-//< type arguments too.
-//< Caution: Keep the passing side: a constant's name, the generic's own `const` and an array of a
-//< constant's length (a type, though a value stands inside it) each stand where they belong.
-// EXPECT: 'Hold' takes a type for its parameter 'T', but 'N' is a const parameter, which stands for a value
+//< In a generic's declaration, the check refuses two shapes, called or not. One is its own `const`
+//< parameter where a type goes (`Hold<|N|>`). The other is its type parameter where a value goes
+//< (`Buf<|T|>`, an array's length). Left to a call, it failed there as a mismatch blaming the
+//< call's argument. Outside a generic, a value for a type or a type for a `const` is refused where
+//< it is resolved, for a function's type arguments too.
+//< Caution: Keep the passing side. A constant's name, the generic's own `const` and an array of a
+//< constant's length each stand where they belong. That array is a type, though a value is inside.
+// EXPECT: 'Hold' takes a type for its parameter 'T', but 'N' is a const parameter. It stands for a value
 // EXPECT: Hint: declare it without 'const' to pass a type through it
 // EXPECT: 'Buf' takes a value for its parameter 'const n: Sz', but 'T' is a type parameter
 // EXPECT: Hint: declare it 'const T: Sz' to pass a value through it
 // EXPECT: 'N' is a const parameter, which stands for a value, not a type
-// EXPECT: 'T' is a type parameter, but an array's length is a value
+// EXPECT: 'T' is a type parameter. An array's length is a value
 // EXPECT: 'Hold' takes a type for its parameter 'T', but this argument is a value
 // EXPECT: 'Hold' takes a type for its parameter 'T', but this argument is a value
 // EXPECT: 'Hold' takes a type for its parameter 'T', but this argument is a value
@@ -517,9 +555,9 @@ fn main(): I32
 //< (`Buf<|(N + 1)|>`) arithmetic is refused besides, at the declaration and once.
 //< Caution: Keep the bare place beside it: there the argument still fixes it.
 // EXPECT: a value passed as a type argument must be a literal, a negated literal or the name of a const
-// EXPECT: cannot infer the const parameter 'N' of 'shifted': the parameter '_b' has it only inside arithmetic, 'N + 1', which is not solved for it
-// EXPECT: cannot infer the const parameter 'N' of 'longer': the parameter 'v' has it only inside arithmetic, 'N * 2', which is not solved for it
-// EXPECT: Hint: call one specialization, 'longer<|…|>(…)', with an argument written for each of 'N'
+// EXPECT: cannot infer the const parameter 'N' of 'shifted'. The parameter '_b' has 'N' only inside arithmetic, 'N + 1'. The compiler does not solve this expression for 'N'
+// EXPECT: cannot infer the const parameter 'N' of 'longer'. The parameter 'v' has 'N' only inside arithmetic, 'N * 2'. The compiler does not solve this expression for 'N'
+// EXPECT: Hint: call one specialization with 'longer<|…|>(…)'. Write an argument for each of 'N'
 // EXPECT: Finished with 3 error(s)
 priv struct Buf<|const n: Sz|>
   data: U8[n]
@@ -541,9 +579,9 @@ fn main(): I32
 // ==== case generic_type_args_too_few
 //< Fewer type arguments than the declaration has are rejected
 //<
-//< A type variable left unsubstituted goes straight into the generated C and the C compiler says
+//< A type variable left unsubstituted goes straight into the generated C. The C compiler then says
 //< `unknown type name 'U'` ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md).
-// EXPECT: too few type arguments for generic 'W': it declares 2, but 1 given
+// EXPECT: too few type arguments for generic 'W'. Expected 2, but got 1
 struct W<|T, U|>
   a: T
   b: U
@@ -552,9 +590,9 @@ fn main()
 // ==== case generic_type_args_too_many
 //< More type arguments than the declaration has are rejected
 //<
-//< What is left over is bound to no type variable, so nothing happens while whoever wrote it
+//< What is left over is bound to no type variable. So nothing happens, but whoever wrote it
 //< believes it is "in effect" (docs/DESIGN-principles.md Principle 5).
-// EXPECT: too many type arguments for generic 'W': it declares 1, but 2 given
+// EXPECT: too many type arguments for generic 'W'. Expected 1, but got 2
 struct W<|T|>
   v: T
 fn main()
@@ -562,17 +600,17 @@ fn main()
 // ==== case generic_type_call_needs_type_args
 //< A call through a generic type writes the type's type arguments on it; nothing else binds them
 //<
-//< Each instance has its own copy of each method, and the call's arguments do not choose one: the
-//< refusal says what to write. Let through, the name reached the lookup without any instance and
-//< was reported as an undefined path, and a method's own type arguments after a type's that
-//< declares none would bind nothing (Principle 5).
-//< Caution: Keep the passing side: the method's own are inferred from the arguments, through a
-//< generic type's instance and through a plain type alike.
+//< Each instance has its own copy of each method. The call's arguments do not choose one, so the
+//< refusal says what to write. Let through, the name reached the lookup without any instance. It
+//< was reported as an undefined path. A method's own type arguments after a type that declares
+//< none would bind nothing (Principle 5).
+//< Caution: Keep the passing side. The method's own type arguments are inferred from the arguments,
+//< through a generic type's instance and through a plain type alike.
 // EXPECT: generic type 'Box' needs its type arguments before 'keep' can be called through it
-// EXPECT: call one instance's, 'Box<|…|>.keep(…)', with a type written for each of 'T'
+// EXPECT: call the method on one instance with 'Box<|…|>.keep(…)'. Write a type for each of 'T'
 // EXPECT: generic type 'Box' needs its type arguments before 'pair' can be called through it
 // EXPECT: generic type 'Option' needs its type arguments before 'some' can be called through it
-// EXPECT: function 'Box.keep' is not generic, so '<|U8|>' names nothing: drop it
+// EXPECT: function 'Box.keep' is not generic. Remove the type arguments '<|U8|>'
 // EXPECT-NOT: undefined path
 // EXPECT-NOT: undeclared
 priv struct Box<|T|>

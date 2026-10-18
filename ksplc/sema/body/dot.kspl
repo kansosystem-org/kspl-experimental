@@ -41,7 +41,7 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
         return false
     // Caution: **Do not decide by the name `put` alone**, or a user's own `put` that takes an enum
     // has its body silently replaced. Check that the name is read as std/lang's `put`
-    // (read_written_name in sema/decl/name.kspl), where a local or the file's own declaration
+    // (read_written_name in sema/decl/name.kspl). There, a local or the file's own declaration
     // wins.
     if left.kind_id == .k_expr_path && left.children.len > 1
         return false
@@ -73,7 +73,7 @@ fn try_rewrite_enum_fmt(node: Ast_node$@, left: Ast_node$@, c: Sema_ctx$@): Bool
         return false
     // Caution: **Finish building the method table before the lookup.** A generic enum first
     // instantiated in a method's signature has its table deferred (ensure_instance_methods in
-    // mono_queue.kspl); until it is built, the synthesized `variant_name` is invisible and correct
+    // mono_queue.kspl). Until it is built, the synthesized `variant_name` is invisible, and correct
     // code fails with "`Formattable` not implemented".
     c.ensure_instance_methods(base_id) catch {}
     if _user_fmt: = t_entry.get_method("fmt")
@@ -100,19 +100,19 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     $owner_id: = 0
 
     // A generic enum's variant (Option<|I32|>.some(v), mod.Option<|I32|>.some): left resolves to
-    // the template, so is_enum stays false and nothing is monomorphized. So a left with type
-    // arguments is instantiated here (instantiate_struct handles enums too); a variant found there
-    // is enum_init.
-    // Caution: **Read the name as written** (`m.Box`, not the last segment `Box`): a bare name is
-    // looked up as this file's, and may find another file's type of that name.
+    // the template. So is_enum stays false, and nothing is monomorphized. A left with type
+    // arguments is therefore instantiated here (instantiate_struct handles enums too). A variant
+    // found there is enum_init.
+    // Caution: **Read the name as written** (`m.Box`, not the last segment `Box`). A bare name is
+    // looked up as this file's, and can find another file's type of that name.
     if left.find_child(.k_type_args) != null
         written: = c.read_written_type(left)
         tmpl: = c.written_template(written)
         // A type that declares no type parameters takes none (`Plain<|I32|>.mk(3)`); the call goes
         // on through the type itself, as the refused arguments would bind nothing.
-        named: = c.written_type_symbol(written)
-        if tmpl == null && named != null && named.kind.is_type()
-            sema_decl_type_check.refuse_type_args_on_plain_type(c, written)
+        if named: = c.written_type_symbol(written)
+            if tmpl == null && named.kind.is_type()
+                sema_decl_type_check.refuse_type_args_on_plain_type(c, written)
         if tmpl != null && written.args != null
             // Caution: **Suppress only the arguments' resolution.** The instance is cached, so an
             // error inside it, suppressed on a first use of this shape, is never reported.
@@ -152,7 +152,7 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
             return sym_ptr.type_id
         // Not a variant: continue to the static-method resolution.
     type_args_node: = node.get_type_args()
-    // **A method named as a value, not called**, is resolved here, where the type is known: the
+    // **A method named as a value, not called**, is resolved here, where the type is known. The
     // flattened path below would lose the instance its written type arguments name.
     $owner_tmpl: Ast_node$@ = null
     if owner_id == 0
@@ -163,7 +163,7 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
         else if sym_ptr != null && sym_ptr.kind.is_type()
             owner_id = c.env.get_real_type(sym_ptr.type_id)
         else if left.get_path_name().equals("Self") && c.fn_ctx.impl_name.len > 0
-            owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name) catch 0
+            owner_id = c.env.type_to_id.get(c.fn_ctx.impl_name).unwrap_or(0)
     is_value: = c.fn_ctx.callee != node
 
     $new_path: = Str_builder.new()
@@ -198,10 +198,10 @@ fn infer_namespace_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@,
     if is_value && has_owner
         return sema_body_resolve_path.infer_method_value(node, c, owner_id, left, member_node,
             type_args_node, expected_id)!
-    // **A generic method called through its type** has no function until the call instantiates
-    // it, from the type left names and the method's own type arguments (sema/body/call.kspl).
-    // The type is recorded on the path's owner for that, since the flattened path no longer
-    // holds what left resolved to.
+    // **A generic method called through its type** has no function until the call instantiates it.
+    // The call does so from the type left names and the method's own type arguments
+    // (sema/body/call.kspl). The type is recorded on the path's owner for that, since the flattened
+    // path no longer holds what left resolved to.
     // So is any method of a generic type's instance: the call takes it from the instance's table
     // (instance_method in sema/decl/name.kspl).
     if has_owner
@@ -224,14 +224,12 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
         //< Resolves a member of a built-in type: a slice's, a Result's or an array's; else none
         //<
         //< recv_id is the receiver type with pointers already stripped by the caller's
-        //< receiver_base_id (this function ignores pointers entirely). The backend emits the
+        //< receiver_base_id. This function ignores pointers entirely. The backend emits the
         //< dereference from the receiver's pointer depth (emit_postfix_dot in gen/c/expr.kspl,
         //< `.`'s lvalue path in gen/llvm/expr.kspl).
     member_name_raw: = member_node.text
     target_info: = c.env.get_info(recv_id)
     $is_slice: = false
-    $is_result: = false
-    $result_err_id: = I32::sema_type_env.Builtin_type_id.i32_type
     $is_array: = false
     $base_slice_id: = recv_id
     $arr_size: I32 = -1
@@ -241,9 +239,6 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
         is_slice = true
         base_slice_id = slice_base
     switch target_info
-    case .result(_base_id, err_id)
-        is_result = true
-        result_err_id = err_id
     case .array(_b, s)
         is_array = true
         arr_size = s
@@ -259,30 +254,19 @@ fn check_builtin_dot_access(c: Sema_ctx$@, node: Ast_node$@, left: Ast_node$@, r
         member_node.ival = 0
         member_node.type_id = c.env.make_ptr(base_slice_id)
         return .some(member_node.type_id)
-    if is_result
-        if sema_type_query.is_result_inner_field(member_name_raw)
-            c.err(node,
-                "direct access to Result internal fields is forbidden. Use '!' or 'catch' for error \
-                    handling.")
-
-            if member_name_raw.equals("is_err")
-                return .some(I32::sema_type_env.Builtin_type_id.bool_type)
-            if member_name_raw.equals("val")
-                return .some(c.env.strip_result(recv_id))
-            return .some(result_err_id)
     if is_array && member_name_raw.equals("len")
         if arr_size >= 0
             if base_core.config.run_lint_checks && left != null && left.has_side_effect()
                 c.warn(left,
-                    "[W0102] Expression has side effects but will be discarded by compile-time \
-                        array length evaluation.")
+                    "[W0102] Expression has side effects. Compile-time array length evaluation \
+                        discards the expression.")
             $sb: = Str_builder.new()
             defer sb.free()
             sb.s("\{arr_size\}")
             node.morph(.k_integer, sb.slice())
             return .some(I32::sema_type_env.Builtin_type_id.size_type)
 
-        c.err(node, "cannot get length of array with unresolved size")
+        c.err(node, "cannot get the length of an array with unresolved size")
         return .some(I32::sema_type_env.Builtin_type_id.size_type)
     return .none
 
@@ -310,15 +294,15 @@ priv fn reject_unimported_spec(c: Sema_ctx$@, member_node: Ast_node$@, spec_item
         //< Caution: **Name the item as written, not only the method.** `\{v:x\}` writes no
         //< `fmt_hex`, so a message naming only the method points at nothing in the source.
     c.clear_scratch()
-        .s("format spec: writing \{spec_item\} calls '\{method_name\}' in '\{file\}', which this \
-            file does not import\n  Note: add 'import \"\{file\}\"' to this file")
+        .s("format spec: writing \{spec_item\} calls '\{method_name\}' in '\{file\}'. This file \
+            does not import '\{file\}'\n  Note: add 'import \"\{file\}\"' to this file")
     c.err(member_node, c.scratch.slice())
 
 priv fn reject_slotless_trait_call(c: Sema_ctx$@, recv_id: I32, member_name_raw: U8[],
     base_type_str: U8[], member_node: Ast_node$@) //<
         //< Rejects a call through an interface value to a method that has no vtable slot
         //<
-        //< base_type_str is the type as the user wrote it (for the diagnostic), recv_id the
+        //< base_type_str is the type as the user wrote it (for the diagnostic). recv_id is the
         //< receiver type stripped of pointers and immutability (for the lookup).
         //< Caution: **Do not let a method with no slot pass.** A method with a default body is not
         //< in the vtable (has_vtable_slot in `../../base/ast_ext.kspl`). **Call this on both the
@@ -329,11 +313,11 @@ priv fn reject_slotless_trait_call(c: Sema_ctx$@, recv_id: I32, member_name_raw:
             if m_sym.name.equals(member_name_raw) && !m_sym.node.has_vtable_slot()
                 c.clear_scratch()
                     .s("method '\{member_name_raw\}' of interface '\{base_type_str\}' has a default \
-                        body, so it has no vtable slot and cannot be called through an interface \
+                        body. It has no vtable slot, so it cannot be called through an interface \
                         value. Call it on the concrete type, or through a type parameter bound by \
-                        the interface, where the body each implementation received is reached \
-                        directly. Note that the methods an interface declares without a body are \
-                        the ones it dispatches")
+                        the interface. These calls reach the body that each implementation received \
+                        directly. The interface dispatches only methods that it declares without a \
+                        body")
                 c.err(member_node, c.scratch.slice())
                 break
     default {}
@@ -434,7 +418,7 @@ priv fn find_field(c: Sema_ctx$@, node: Ast_node$@, member_node: Ast_node$@,
             member_node.def_node = field.node
             node.def_node = field.node
             member_node.ival = I32::f_idx
-            if (c.symtab.resolve(search_type) catch null) != null
+            if c.symtab.resolve(search_type).is_some()
                 c.check_field_visibility(field, node)
             return .some(field.type_id)
     default {}
@@ -449,8 +433,8 @@ priv fn find_method(c: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, se
     name: U8[]): Method_hit //<
         //< The method `name` of the type: from its method table, a generic template, or by its FQN
         //<
-        //< A method whose return type is `Unknown` (a typo in a type argument) still counts;
-        //< treated as absent, it would add a false "no such method" after the real error. Unknown
+        //< A method whose return type is `Unknown` (a typo in a type argument) still counts.
+        //< Treated as absent, it would add a false "no such method" after the real error. Unknown
         //< silences later errors.
     $hit: = Method_hit::{ .def = null, .sym = null,
         .type_id = I32::sema_type_env.Builtin_type_id.unknown }
@@ -476,7 +460,7 @@ priv fn find_method(c: Sema_ctx$@, s_entry: sema_type_def.Entry$@, s_id: I32, se
             hit.sym.flags.is_method = true
             hit.sym.apply_attributes()
             return hit
-    sym: = c.symtab.resolve(full_m_name) catch null
+    sym: = c.symtab.resolve(full_m_name).unwrap_or(null)
     if sym != null && sym.type_id != 0
         return Method_hit::{ .def = sym.node, .sym = sym, .type_id = sym.type_id }
     return hit
@@ -486,28 +470,27 @@ priv fn check_method_import(c: Sema_ctx$@, member_node: Ast_node$@, found_sym: S
         //< Refuses an extension method whose defining file this file does not import
     member_name_raw: = member_node.text
     clean_struct: = c.env.get_str(recv_id)
-    struct_sym: = c.symtab.resolve(clean_struct) catch null
+    struct_sym: = c.symtab.resolve(clean_struct).unwrap_or(null)
     $struct_file: U8[] = ""
     if struct_sym != null
         struct_file = struct_sym.get_defined_in()
     else
-        g_node: = c.generics.templates.get(clean_struct) catch null
+        g_node: = c.generics.templates.get(clean_struct).unwrap_or(null)
         if g_node != null
             struct_file = g_node.loc.file()
 
-    // **A type that no declaration names counts as `std/lang`'s** (a scalar, a slice,
-    // an array, a `Result`), which every file imports: a method another file adds to it
-    // needs that file imported, as for any type ("An extension method requires the
-    // import" in `../../../docs/SPEC-language.md`).
-    // Caution: **Do not accept it because "some file loaded it".** The call would rest
-    // on what else the program imports, and [I0401] would call the import unused.
+    // **A type that no declaration names counts as `std/lang`'s** (a scalar, a slice, an array, a
+    // `Result`), which every file imports. A method another file adds to it needs that file
+    // imported, as for any type. See "An extension method requires the import" in
+    // `../../../docs/SPEC-language.md`.
+    // Caution: **Do not accept it because "some file loaded it".** The call would rest on what else
+    // the program imports, and [I0401] would call the import unused.
     if c.env.is_slice(recv_id) || (struct_file.len == 0 && !is_declared_type(c, recv_id))
         struct_file = base_locate.lang_file_path
-    // **Not inside an instantiation**: the receiver's type may come from the type
-    // argument, and a generic cannot import every file serving its bound ("While a
-    // generic is being instantiated, a diagnostic that depends on a type argument is
-    // not emitted" in `ksplc/docs/DESIGN-diagnostics.md`).
-    // Caution: **Still check whether it is imported**: that marks the import used, or
+    // **Not inside an instantiation**: the receiver's type can come from the type argument. A
+    // generic cannot import every file serving its bound. See "No diagnostic that depends on a
+    // generic's type argument" in `ksplc/docs/DESIGN-diagnostics.md`.
+    // Caution: **Still check whether it is imported**: that marks the import used. Otherwise
     // [I0401] would tell the reader to delete a template's unmarked import.
     method_file: = found_sym.get_defined_in()
     if struct_file.len == 0 || method_file.len == 0 || struct_file.equals(method_file) ||
@@ -518,9 +501,9 @@ priv fn check_method_import(c: Sema_ctx$@, member_node: Ast_node$@, found_sym: S
         reject_unimported_spec(c, member_node, spec_item, member_name_raw, method_file)
         return
     c.clear_scratch()
-        .s("cannot call extension method '\{member_name_raw\}' because its defining file \
-            '\{method_file\}' is not explicitly imported.\n  Note: add 'import \"\{method_file\}\"' \
-            to this file")
+        .s("cannot call extension method '\{member_name_raw\}' because this file does not \
+            explicitly import its defining file '\{method_file\}'.\n  Note: add 'import \
+            \"\{method_file\}\"' to this file")
     c.err(member_node, c.scratch.slice())
 
 priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32,
@@ -551,40 +534,41 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
             return
         c.clear_scratch()
             .s("format spec: type '\{base_type_str\}' does not take \{spec_item\}\n  Note: the \
-                width, '0' and ',' items apply to integers and floating point, '.N' to floating \
-                point only, 'x' / 'X' to integers only, and 'c' to 'U8' only.")
+                width, '0' and ',' items apply to integers and floating point. '.N' applies only to \
+                floating point. 'x' / 'X' apply only to integers. 'c' applies only to 'U8'.")
         c.err(member_node, c.scratch.slice())
         return
 
-    // A fixed-length array has no slice methods by design; the answer is the cast, not the import
-    // note (Rust and C convert implicitly, so readers expect it to work).
+    // A fixed-length array has no slice methods by design. The answer is the cast, not the import
+    // note. Rust and C convert implicitly, so readers expect it to work.
     if c.env.is_array(recv_id)
         at: = base_type_str.rfind_char('[').unwrap_or(base_type_str.len)
         elem: = base_type_str.sub(0, at)
         c.clear_scratch()
             .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'\n  \
-                Note: a fixed-length array is not a slice, so a slice's methods are not found on \
-                it. View it as one with an explicit cast, in parentheses so that the cast covers \
-                the array alone: '(\{elem\}[]::x).\{member_name_raw\}(…)', with x the array.")
+                Note: a fixed-length array is not a slice. Slice methods are not available on it. \
+                View it as a slice with an explicit cast: \
+                '(\{elem\}[]::x).\{member_name_raw\}(…)', where x is the array. Use parentheses \
+                so that the cast covers only the array.")
         c.err(member_node, c.scratch.slice())
         return
 
-    // An instance whose type arguments were refused has no methods, and that was the one mistake
-    // (check_const_arg / check_type_constraint report it at the type's use).
+    // An instance whose type arguments were refused has no methods, and that was the one mistake.
+    // check_const_arg / check_type_constraint report it at the type's use.
     recv_name: = c.env.get_str(c.env.get_clean_real_type(c.env.strip_ptr(recv_id)))
     if c.has_failed_constraint(recv_name)
         return
     // Likewise an instance the method-table chain was cut short of (mono_queue.kspl).
-    if c.method_chain_was_cut() &&
+    if c.mono.chain_cut &&
         c.env.instance_of(c.env.get_clean_real_type(c.env.strip_ptr(recv_id))).is_some()
         return
 
     // Caution: **Put the guidance in the error message itself.** A `hint` appears only under lint,
-    // so a plain compilation would say only "absent" (as for an `impl` on a built-in type in
-    // another file, such as the `fmt` that `\{x\}` calls).
+    // so a plain compilation would say only "absent". The same holds for an `impl` on a built-in
+    // type in another file, such as the `fmt` that `\{x\}` calls.
     c.clear_scratch()
         .s("type '\{base_type_str\}' has no field or method named '\{member_name_raw\}'")
-    // **Without a call only a field can stand there**, and no other file can add one: name the
+    // **Without a call, only a field can stand there**, and no other file can add one. Name the
     // field a typo most likely meant, never the import of an extension method.
     if !is_call
         near: = nearest_field(c, recv_id, member_name_raw)
@@ -593,8 +577,8 @@ priv fn report_missing_member(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I
     else
         c.scratch
             .s("\n  Note: an extension method is visible only where its defining file is imported. \
-                If '\{member_name_raw\}' comes from another file, import it (and check that the \
-                import is not cyclic).")
+                If '\{member_name_raw\}' comes from another file, import that file. Check that the \
+                import is not cyclic.")
     c.err(member_node, c.scratch.slice())
 
 priv const max_near_name: Sz = 64 //< the longest name nearest_field compares, in bytes
@@ -650,9 +634,9 @@ priv fn edit_distance(a: U8[], b: U8[]): Sz //<
 priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, recv_id: I32) //<
     //< Refuses a method named through a value without being called (`p.m`)
     //<
-    //< A function value is an address alone, with no room for the receiver, so `p.m` has nothing
-    //< to stand for. Named through its type, the method is a function taking the receiver first
-    //< ("A method used as a value is named through its type" in docs/DESIGN-language.md).
+    //< A function value is an address alone, with no room for the receiver, so `p.m` has nothing to
+    //< stand for. Named through its type, the method is a function taking the receiver first. See
+    //< "A method as a value is named through its type" in docs/DESIGN-language.md.
     owner: = c.env.display(recv_id)
     m: = member_node.text
     // The hint names the type as a file inside its package writes it: no package path before it.
@@ -662,9 +646,10 @@ priv fn refuse_method_value_on_value(c: Sema_ctx$@, member_node: Ast_node$@, rec
     if last_dot: = head.rfind_char('.')
         own_name = shown.sub_from(last_dot + 1)
     c.clear_scratch()
-        .s("method '\{m\}' cannot be used as a value through a value of type '\{shown\}': a \
-            function value holds no receiver\n  Hint: call it, '.\{m\}(…)', or name it through \
-            its type, '\{own_name\}.\{m\}', and pass the receiver as its first argument")
+        .s("method '\{m\}' cannot be used as a value through a value of type '\{shown\}'. A \
+            function value holds no receiver\n  Hint: call the method with '.\{m\}(…)', or name \
+            it through its type with '\{own_name\}.\{m\}'. When naming it through its type, pass \
+            the receiver as its first argument")
     c.err(member_node, c.scratch.slice())
 
 priv fn is_declared_type(c: Sema_ctx$@, type_id: I32): Bool //<

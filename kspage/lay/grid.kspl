@@ -1,9 +1,9 @@
 //< Laying out a grid
 //<
-//< One of the three layout strategies: **everything but how the boxes are placed is shared with
+//< One of the three layout strategies. **Everything but how the boxes are placed is shared with
 //< the flow layout**, and a cell's contents use the flow layout. A table is a block holding rows
-//< holding cells; **no field in the document says it is a table**: the style does (`Arrange.grid`).
-//< **The entry point is not here but `lay/flow.kspl`.**
+//< holding cells. **No field in the document says it is a table**: the style does
+//< (`Arrange.grid`). **The entry point is not here but `lay/flow.kspl`.**
 import "kspage/lay/flow"
 import "kspage/lay/page" + { Cell, Page }
 import "kspage/model/doc" { Block, Rect, Tile }
@@ -22,9 +22,10 @@ priv fn natural_width(cell: Block$@, sheet: Sheet$@, src: Font_source, avail: F3
     arena: Arena$@): F32 //<
         //< The width actually used when a cell is laid out at width avail as a trial
         //<
-        //< Caution: **Measure it the same way as the real layout**, or the indent, the inheritance
-        //< and the wrapping could each be computed two ways (the boxes laid out here are thrown
-        //< away). **It is never wider than avail** (contents that do not fit wrap there).
+        //< Caution: **Measure it the same way as the real layout.** Otherwise the indent, the
+        //< inheritance and the wrapping could each be computed two ways (the boxes laid out here
+        //< are thrown away). **It is never wider than avail**: contents that do not fit wrap
+        //< there.
     scratch: = page.new_page(src, arena)
     at: = Rect::{ .x = 0.0, .y = 0.0, .w = avail, .h = 0.0 }
     flow.place_blocks(scratch, only(cell, arena), sheet, at, look, 0.0, 0.0, arena)
@@ -36,7 +37,7 @@ priv fn natural_width(cell: Block$@, sheet: Sheet$@, src: Font_source, avail: F3
             w = right
     // Caution: **Add the inner margin.** What is measured is the contents' right edge, and **only
     // the left margin is in it**. Without it, a column sized to its contents **is short by the
-    // right margin**: the text runs into the margin and, where it does not fit, wraps.
+    // right margin**. The text runs into the margin and, where it does not fit, wraps.
     return w + inner_pad(cell, sheet)
 
 priv fn inner_pad(b: Block$@, sheet: Sheet$@): F32 //<
@@ -50,8 +51,8 @@ priv fn inner_pad(b: Block$@, sheet: Sheet$@): F32 //<
 priv const blank_column: F32 = 32.0 //< the width given to a column with no contents (pixels)
     //<
     //< **It must be a size that can be clicked**, so a newly inserted table can be typed into.
-    //< Caution: **Do not apply it to a column with contents**, or a one-character column widens and
-    //< "a column with no set width sizes to its contents" breaks.
+    //< Caution: **Do not apply it to a column with contents.** Otherwise a one-character column
+    //< widens, and "a column with no set width sizes to its contents" breaks.
 
 priv fn is_auto(table: Block$@, c: Sz): Bool //<
     //< Whether column c sizes to its contents
@@ -66,9 +67,9 @@ priv fn resolve_columns(table: Block$@, sheet: Sheet$@, src: Font_source, avail:
         //< The width of each column
         //<
         //< **A set width does not shrink** (or nobody could tell whether it applied). Only the
-        //< columns with no setting adjust, and **where they add up to more than the rest they
-        //< shrink proportionally** (trimming only the overflow would collapse the narrow ones
-        //< first).
+        //< columns with no setting adjust. **Where they add up to more than the rest, they shrink
+        //< proportionally.** Trimming only the overflow would collapse the narrow ones
+        //< first.
     cols: = table.grid_columns(arena)
     widths: = List<|F32|>.create(arena)
     // The set columns are taken first; the rest is shared among the others.
@@ -175,14 +176,14 @@ impl Grid
                 continue
             cell: = Rect::{ .x = g.x0 + left_of(g.widths, t.column), .y = y,
                 .w = width_of(g.widths, t), .h = 0.0 }
-            // Caution: **Add it before the contents**, or an inner table goes in first and the
-            // innermost cell could not be found by searching from the end.
+            // Caution: **Add it before the contents.** Otherwise an inner table goes in first,
+            // and a search from the end could not find the innermost cell.
             spot: = g.arena
                 .create(Cell::{ .rect = cell, .block = t.block, .table = table, .row = r,
                 .column = t.column })
             dst.cells.push(spot)
             // **A cell merged downward does not decide the row's height** (the first row would
-            // carry them all); it is filled in once the rows it covers are laid out.
+            // carry them all). It is filled in once the rows it covers are laid out.
             if t.rows > 1
                 g.tall.push(Tall::{ .spot = spot, .rows = t.rows })
             else

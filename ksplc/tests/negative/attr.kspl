@@ -4,9 +4,9 @@
 // ==== case attr_align_not_power_of_two
 //< The N of `#align(N)` being positive is not enough; it has to be a power of two
 //<
-//< **Let it through and it falls on the C compiler's side.** And where it was put on a variable,
-//< the place it falls is a line of the generated C, so the `.kspl` that was written cannot be
-//< reached (docs/DESIGN-principles.md Principle 5).
+//< **Let it through and it fails on the C compiler's side.** On a variable, the error points at a
+//< line of the generated C. So the reader cannot find the `.kspl` line that was written
+//< (docs/DESIGN-principles.md Principle 5).
 // EXPECT: '#align(N)' needs N to be a positive constant power of two
 // EXPECT-NOT: requested alignment
 #align(3)
@@ -97,8 +97,8 @@ fn main(): I32
 // ==== case attr_interrupt_llvm_backend
 //< `#interrupt` is implemented only on the C backend (LLVM IR has no portable counterpart)
 //<
-//< An attribute taking effect on one backend alone is believed to be in effect by whoever wrote it,
-//< so rather than being ignored in silence it is an error.
+//< Whoever writes an attribute that works on one backend alone believes it is in effect. So it is
+//< an error, not silently ignored.
 // ARGS: --to=llvm
 // EXPECT: attribute '#interrupt' is only implemented by the C backend
 #interrupt
@@ -201,9 +201,9 @@ fn main()
 // ==== case attr_on_extern_struct
 //< No attribute (other than `#cfg`) can be written on an `extern` struct
 //<
-//< The generated C puts out only a forward declaration (`typedef struct X X;`), so neither an
-//< attribute settling the layout nor a mark attached to the name has anywhere to reach. Ignored in
-//< silence, whoever wrote it goes on believing it is in effect.
+//< The generated C puts out only a forward declaration (`typedef struct X X;`). So neither an
+//< attribute that sets the layout nor a mark on the name has anywhere to go. Silently ignored,
+//< its writer goes on believing it is in effect.
 // EXPECT: attribute '#align' cannot be written on an 'extern' struct
 // EXPECT: attribute '#packed' cannot be written on an 'extern' struct
 // EXPECT: attribute '#deprecated' cannot be written on an 'extern' struct
@@ -258,8 +258,8 @@ fn main()
 //< Anything else has nobody to read it there, so it is an error as on a declaration.
 //< Caution: **The spelling check must take effect here too.** Normalisation eats `#cfg` and sema
 //< picks the rest up (elide_attributed_stmt in ksplc/parse/normalize.kspl), or they vanish.
-// EXPECT: attribute '#inline' does nothing here; it applies to functions
-// EXPECT: attribute '#export' does nothing here; it applies to functions, variables, and constants
+// EXPECT: attribute '#inline' does nothing here. It applies to functions
+// EXPECT: attribute '#export' does nothing here. It applies to functions, variables, and constants
 // EXPECT: unknown attribute '#inlne'
 import "std/io"
 
@@ -278,7 +278,7 @@ fn main(): I32
 //< A function's `#section` takes effect only when paired with `#noinline`
 //<
 //< An optimising C compiler expands the body into the caller, so the named section holds nothing
-//< (under `-Os` it vanishes). Let through in silence, whoever placed it believes it is there; on
+//< (under `-Os` it vanishes). Let through silently, whoever placed it believes it is there. On
 //< bare metal, code meant to run while XIP is stopped still executes from Flash (Principle 5).
 // EXPECT: attribute '#section' on a function needs '#noinline' as well
 #section(".ram_text")
@@ -325,13 +325,13 @@ fn main(): I32
 //< spelling and name right, so letting it through in silence leaves no clue that "it is written
 //< yet nothing happens" (Principle 5).
 // ==========================================
-// EXPECT: attribute '#inline' does nothing here; it applies to functions
-// EXPECT: attribute '#packed' does nothing here; it applies to structs
-// EXPECT: attribute '#interrupt' does nothing here; it applies to functions
+// EXPECT: attribute '#inline' does nothing here. It applies to functions
+// EXPECT: attribute '#packed' does nothing here. It applies to structs
+// EXPECT: attribute '#interrupt' does nothing here. It applies to functions
 // EXPECT: attribute '#deprecated' does nothing here
-// EXPECT: attribute '#align' does nothing here; it applies to structs, functions, variables, and
+// EXPECT: attribute '#align' does nothing here. It applies to structs, functions, variables, and
 // constants
-// EXPECT: attribute '#link' does nothing here; it applies to 'extern' blocks
+// EXPECT: attribute '#link' does nothing here. It applies to 'extern' blocks
 // ==========================================
 import "std/io"
 

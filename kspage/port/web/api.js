@@ -1,10 +1,10 @@
 // ==========================================
 // kspage's JS side — the public entry points that all of the page's chrome (`page.js` and below)
 // uses.
-// Caution: **Do not call the wasm's entry points directly from the page** — the boundary's text
+// Caution: **Do not call the wasm's entry points directly from the page.** The boundary's text
 // spreads into two places, and they get out of step when only one changes.
-// **Every entry point returns "whether it acted"** and **handles the layout itself** (the caller
-// does not remember "redraw after this"). Split off for the 1000-line-per-file cap (Principle 3).
+// **Every entry point returns "whether it acted"** and **handles the layout itself**. The caller
+// does not remember "redraw after this". Split off for the 1000-line-per-file cap (Principle 3).
 // ==========================================
 function kspageApi(ks) {
   // The back and forward history, **two stacks** (one list with a position needs truncating where
@@ -89,8 +89,8 @@ function kspageApi(ks) {
       if (done) { armGroupBreak(); draw(); }
       return done;
     },
-    // Where the cursor is and the lines around it, **for the debug log only**; **no document text**
-    // (only which paragraph, how far in, the lines' shape).
+    // Where the cursor is and the lines around it, **for the debug log only**. **It holds no
+    // document text**, only which paragraph, how far in, and the lines' shape.
     caretReport() {
       const len = w.kspage_web_caret_report();
       return outText(len);
@@ -100,8 +100,9 @@ function kspageApi(ks) {
       const len = w.kspage_web_save();
       return outText(len);
     },
-    // The largest document that can be opened, in bytes (**"unreadable" and "too large" are
-    // reported apart**, with opposite fixes); **not copied into the page** (the two would drift).
+    // The largest document that can be opened, in bytes. **"Unreadable" and "too large" are
+    // reported apart**, with opposite fixes. **It is not copied into the page** (the two would
+    // drift).
     docLimit() { return w.kspage_web_doc_limit(); },
     // Whether it is open read-only, **not a property of the document** (neither saved nor exported).
     // Caution: **Not just a flag for hiding the tools** — the core refuses (`write/edit.kspl`'s
@@ -120,8 +121,8 @@ function kspageApi(ks) {
       if (took) draw();
       return took;
     },
-    // Whether style `i` "is included in chapters"; **false keeps it out of the contents and the
-    // chapter numbers** (a title page, a colophon), though the heading map can still jump to it.
+    // Whether style `i` "is included in chapters". **False keeps it out of the contents and the
+    // chapter numbers** (a title page, a colophon). The heading map can still jump to it.
     styleInChapters(i) { return w.kspage_web_style_in_chapters(i) !== 0; },
     // Replaces it, **as one undo step.**
     setStyleInChapters(i, on) {
@@ -168,7 +169,7 @@ function kspageApi(ks) {
       back.length = 0;
       ahead.length = 0;
     },
-    // Caution: **Remember the position before jumping to the document's edge**; **the cursor does
+    // Caution: **Remember the position before jumping to the document's edge.** **The cursor does
     // not move** (as from a contents row), so typing continues where you came back to.
     goStart() {
       this.markJump();
@@ -239,7 +240,7 @@ function kspageApi(ks) {
       return acted(w.kspage_web_find(len, back ? 1 : 0));
     },
     // How often that text appears in the document, **without a redraw** (the selection would
-    // flicker mid-typing); it can differ from the number replaced (a formula is found, not
+    // flicker mid-typing). It can differ from the number replaced (a formula is found, not
     // replaced).
     count(needle) {
       const len = needle ? stage(needle) : 0;
@@ -256,15 +257,15 @@ function kspageApi(ks) {
       return done;
     },
     // Inserts a table or a slide after the cursor's paragraph, in the named style **the caller
-    // chooses** (it travels with the document; a missing table style is made as a grid). The
-    // slide's style must exist first; false in a cell; `rows` × `cols` is the size (0 is refused).
+    // chooses**. The name travels with the document; a missing table style is made as a grid. The
+    // slide's style must exist first. False in a cell; `rows` × `cols` is the size (0 is refused).
     insertTable(name, rows, cols) {
       const len = stage(name);
       if (len <= 0) return false;
       return acted(w.kspage_web_insert_table(len, rows, cols));
     },
-    // **The template is not kept** (the frames belong to the document); empty if the slide went in,
-    // else **the reason**, **never merged into one** (the rule of `setBlockStyle`).
+    // **The template is not kept** (the frames belong to the document). Empty if the slide went
+    // in, else **the reason**, **never merged into one** (the rule of `setBlockStyle`).
     insertSurface(name, plan) {
       const len = stage(name);
       if (len <= 0) return "The style's name is too long";
@@ -345,8 +346,8 @@ function kspageApi(ks) {
     fillAlong(how) {
       return acted(w.kspage_web_fill_along(how === "right" ? 1 : 0));
     },
-    // Inserts one collecting block after the cursor's paragraph (`what` "contents" or "notes");
-    // **its contents are not inserted** (built at every layout), and a missing style is made.
+    // Inserts one collecting block after the cursor's paragraph (`what` "contents" or "notes").
+    // **Its contents are not inserted** (built at every layout). A missing style is made.
     insertGathered(name, what) {
       const len = stage(name);
       if (len <= 0) return false;
@@ -403,7 +404,7 @@ function kspageApi(ks) {
           img.src = src;
           return;
         }
-        // **The address is this measure's alone**, so it is released once the size is read; the
+        // **The address is this measure's alone**, so it is released once the size is read. The
         // drawing reads its own, kept while its picture is cached.
         load(src).then((url) => {
           if (!url) {
@@ -421,9 +422,9 @@ function kspageApi(ks) {
     },
     // Whether the text may be replaced whole as a formula (a cell or a formula's inline).
     takesFormula() { return w.kspage_web_takes_formula() !== 0; },
-    // The selected frame's position and size, from the slide's top left (**null if none**): the
-    // frame the click landed on, since a shape has no text for the cursor. `seen` is the same frame
-    // in canvas coordinates, for the handles and hit testing.
+    // The selected frame's position and size, from the slide's top left (**null if none**). It is
+    // the frame the click landed on, since a shape has no text for the cursor. `seen` is the same
+    // frame in canvas coordinates, for the handles and hit testing.
     frameRect() {
       w.kspage_web_frame_rect(scratch);
       const at = nums(9);
@@ -467,9 +468,10 @@ function kspageApi(ks) {
       if (end === -1) return "Type a number to compare with";
       return "Click inside a table's cell";
     },
-    // What the cursor's column shows, to check a set of values: `{ values, blank, cut, chosen }` —
-    // its distinct texts in its sort order, whether a cell shows nothing, whether values were cut,
-    // and the set a filter keeps (null unless filtered by a set). **Null outside a cell.**
+    // What the cursor's column shows, to check a set of values: `{ values, blank, cut, chosen }`.
+    // They are its distinct texts in its sort order, whether a cell shows nothing, and whether
+    // values were cut. Last is the set a filter keeps (null unless filtered by a set). **Null
+    // outside a cell.**
     // Caution: **Ask again after every change** (what a column shows changes with the document).
     columnValues() {
       const len = w.kspage_web_column_values();
@@ -519,8 +521,8 @@ function kspageApi(ks) {
       const [shown, total, narrowed, found] = nums(4);
       return found === 0 ? null : [shown, total, narrowed !== 0];
     },
-    // The table heading kept in view ([table, x, y, w, h] in document coordinates, y where the band
-    // sits), or null; **decided by the window's position**, so ask after scrolling.
+    // The table heading kept in view ([table, x, y, w, h] in document coordinates, y where the
+    // band sits), or null. **The window's position decides it**, so ask after scrolling.
     pinnedHead() {
       return ks.pinnedHead ? ks.pinnedHead() : null;
     },
@@ -568,11 +570,11 @@ function kspageApi(ks) {
 
 // ==========================================
 // kspage's JS side — turning the document into text and text into a document (the same `app` as
-// [`api.js`](api.js)): the saved form (JSON), exports (Markdown), text form (`.txt` and
+// [`api.js`](api.js)). That is the saved form (JSON), exports (Markdown), text form (`.txt` and
 // source) and reading them back.
-// Caution: **Do not merge the reasons for refusing into one** — each has a different fix, so the
-// core's answer is passed on as it is. **Read memory only after getting the arena** (wasm memory
-// can grow there, leaving an earlier array on the old ArrayBuffer).
+// Caution: **Do not merge the reasons for refusing into one.** Each has a different fix, so the
+// core's answer is passed on as it is. **Read memory only after getting the arena.** Wasm memory
+// can grow there, leaving an earlier array on the old ArrayBuffer.
 // ==========================================
 function kspageApiIo(ks) {
   // **`cramps` is `kspage.js`'s** (one handler for full memory; with two, one skips cleanup).
@@ -590,7 +592,7 @@ function kspageApiIo(ks) {
     },
     // Reads a document back from text: empty if read, otherwise **the reason for refusing** (the
     // current document stays either way).
-    // Caution: **Return a reason, not a boolean, and never guess it from the size** — "cannot be
+    // Caution: **Return a reason, not a boolean, and never guess it from the size.** "Cannot be
     // read" and "too large to lay out" have opposite fixes (change the text, split the document).
     load(text) {
       const bytes = enc.encode(text);
@@ -608,10 +610,10 @@ function kspageApiIo(ks) {
       w.kspage_web_load_blank();
       draw();
     },
-    // A new document from a text form (`.txt`, a program's source), answering as `load` does with a
-    // fourth reason: **it is not text** (it holds a NUL; open it with another tool).
-    // Caution: **The declaration goes before the text in the one arena**, split by length (a text
-    // can hold any character, so no separator can be used). Read memory after getting the arena.
+    // A new document from a text form (`.txt`, a program's source). It answers as `load` does,
+    // with a fourth reason: **it is not text** (it holds a NUL; open it with another tool).
+    // Caution: **The declaration goes before the text in the one arena**, split by length. A text
+    // can hold any character, so no separator can be used. Read memory after getting the arena.
     loadPlainText(text, spoken) {
       const head = enc.encode(spoken || "");
       const body = enc.encode(text);

@@ -1,8 +1,8 @@
 //< A probe showing that the freestanding heap really works on Cortex-M bare metal
 //<
-//< It runs, under QEMU (mps2-an385), the free-list allocator of `std/mem.kspl` through
+//< It runs under QEMU (mps2-an385). It runs the free-list allocator of `std/mem.kspl` through
 //< `ksos/kernel/heap.kspl` (the counterpart of `pvPortMalloc`, safe from a task and an ISR by
-//< irq_save/irq_restore), `Arc<T>` on top of it, and tasks made and deleted on it
+//< irq_save/irq_restore). It runs `Arc<T>` on top of it. It makes and deletes tasks on it
 //< (`ksos/kernel/dynamic.kspl`) far more times than the port has contexts.
 import "ksos/demo/common/semihost_console" as con
 import "ksos/kernel/dynamic" as dyn
@@ -15,8 +15,8 @@ $heap_buf: U8[8192]
 // Caution: Do not make it a local. Cortex-M's stack is small.
 $arena_buf: U8[1024]
 
-// 7's tasks: each round makes one of each way a task ends, so a context or a slot that one of
-// them fails to return runs the port's 33 contexts out within a dozen rounds.
+// 7's tasks: each round makes one of each way a task ends. Suppose one of them fails to return a
+// context or a slot. The port's 33 contexts then run out within a dozen rounds.
 priv const churn_rounds: I32 = 40
 priv const churn_stack: Sz = 1024
 priv const churn_low: I32 = 1 // below the coordinator's 2: it never runs before its delete
@@ -115,7 +115,7 @@ fn ksos_main()
         con.check("Arc<T> new/clone/get", a.get()$ == 42 && b.get()$ == 42)
 
     // 6. The allocated region must be 8-byte aligned.
-    // **It only breaks on a 32-bit target** (F64 / I64 / U64 need 8 under AAPCS); on 64-bit the
+    // **It only breaks on a 32-bit target** (F64 / I64 / U64 need 8 under AAPCS). On 64-bit, the
     // header is already a multiple of 8, so no hosted test catches it.
     $align_ok: = true
     for i in Range.asc(8)
@@ -134,8 +134,8 @@ fn ksos_main()
             arena_align_ok = false
     con.check("Arena.alloc returns 8-byte aligned blocks", arena_align_ok)
 
-    // Caution: **The returned addresses must be aligned even when the buffer's start is not**:
-    // .bss's layout can put `arena_buf` at an odd address, and an alignment fault hangs in the
+    // Caution: **The returned addresses must be aligned even when the buffer's start is not.**
+    // .bss's layout can put `arena_buf` at an odd address. An alignment fault then hangs in the
     // default handler without printing any mark.
     $ar_odd: = Arena.from_buffer(Void$@::((arena_buf@) + 1), 1023)
     $odd_align_ok: = true

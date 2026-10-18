@@ -4,6 +4,7 @@ import "ksai/tensor" { Tensor }
 import "ksai/tokenizer" as ai_tokenizer
 import "std/fs"
 import "std/io"
+import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
 import "std/str"
@@ -42,7 +43,7 @@ fn test_tokenizer_roundtrip(arena: Arena$@)
 fn test_tokenizer_cache_follows_additions(arena: Arena$@) //<
     //< A text encoded again after a rule is added uses the rule, and a repeat gives the same IDs
     //<
-    //< Caution: **Encode before the addition too**: the cache is filled by the first encoding, so a
+    //< Caution: **Encode before the addition too.** The first encoding fills the cache. So a
     //< cache kept past an addition would answer with the IDs from before it.
     verdict.start("[Tokenizer] the cache of merged chunks follows added rules")
     $tok: = ai_tokenizer.Tokenizer.new(arena)
@@ -62,7 +63,7 @@ fn test_tokenizer_keeps_its_size() //<
     //< A tokenizer used for its lifetime grows only while its cache of chunks fills
     //<
     //< **Every result is on the caller's arena**, and a chunk past the cache's cap is merged in the
-    //< result itself: a server keeps one tokenizer for its lifetime, so anything else it put on its
+    //< result itself. A server keeps one tokenizer for its lifetime. So anything else it put on its
     //< own arena would grow without limit.
     verdict.start("[Tokenizer] encoding and decoding leave the tokenizer's arena as it was...")
     own: = Arena.new(1024 * 1024)
@@ -149,8 +150,8 @@ fn test_tokenizer_load(arena: Arena$@) //<
 // ==========================================
 // ksai/sampler: tests where the next token is picked.
 //
-// **The random numbers themselves are not tested here**: that a fixed seed repeats its sequence
-// and that the OS's randomness can be read are `std`'s tests. Here the only question is whether,
+// **The random numbers themselves are not tested here.** `std`'s tests check that a fixed seed
+// repeats its sequence and that the OS's randomness can be read. Here the only question is whether,
 // from the same logits, the settings pick the expected token.
 // ==========================================
 fn test_sampler(arena: Arena$@)
@@ -175,4 +176,93 @@ fn test_sampler(arena: Arena$@)
     for _i in Range.asc(20)
         top1_tok: = ai_sampler.sample(logits, top1, rng@, arena)
         assert(top1_tok == 1, "Sampler: top_k=1 must always return the argmax token")
+    verdict.pass("")
+priv fn insertion_pick(logits: Tensor<|F32|>, cfg: ai_sampler.Sample_config, rng: prng.Prng$@,
+    arena: Arena$@): I32 //<
+        //< The pick by a stable insertion sort, the plain reading of `sample`'s rank order
+        //<
+        //< Each step's arithmetic is the same as `sample`'s, so the same seed has to give the
+        //< same token: a difference is the order, ties included.
+    n: = logits.size
+    probs: = F64$@::arena.alloc(n * sizeof(F64))
+    idx: = Sz$@::arena.alloc(n * sizeof(Sz))
+    $max_logit: = (logits.data$) / cfg.temperature
+    for i in Range.asc(n)
+        v: = ((logits.data + i)$) / cfg.temperature
+        if v > max_logit
+            max_logit = v
+    $sum_exp: = 0.0
+    for i in Range.asc(n)
+        (probs + i)$ = math.exp(((logits.data + i)$) / cfg.temperature - max_logit)
+        (idx + i)$ = i
+        sum_exp += (probs + i)$
+    for i in Range.asc(n)
+        (probs + i)$ = (probs + i)$ / sum_exp
+    // With neither cut, the candidates are walked unranked, in ID order.
+    ranked: Sz = n if cfg.top_k > 0 || cfg.top_p < 1.0 else 0
+    for $i: Sz = 1; i < ranked; i += 1
+        cur: = (idx + i)$
+        $j: = i - 1
+        for j >= 0 && (probs + (idx + j)$)$ < (probs + cur)$
+            (idx + j + 1)$ = (idx + j)$
+            j -= 1
+        (idx + j + 1)$ = cur
+    $keep: = cfg.top_k if cfg.top_k > 0 && cfg.top_k < n else n
+    if cfg.top_p < 1.0
+        $cum: = 0.0
+        for i in Range.asc(keep)
+            cum += (probs + (idx + i)$)$
+            if cum >= cfg.top_p
+                keep = i + 1
+                break
+    $total: = 0.0
+    for i in Range.asc(keep)
+        total += (probs + (idx + i)$)$
+    u: = rng.next_f64() * total
+    $acc: = 0.0
+    for i in Range.asc(keep)
+        acc += (probs + (idx + i)$)$
+        if acc >= u
+            return I32::(idx + i)$
+    return I32::(idx + (keep - 1))$
+
+fn test_sampler_keeps_the_rank_order() //<
+    //< That top-k and top-p cut the candidates in rank order, a tie going to the lower ID
+    //<
+    //< **Logits drawn from five values tie often**, so a cut that keeps the wrong one of two equal
+    //< candidates changes the pick. The large vocabulary is a real model's: ranked by a sort that
+    //< costs O(n²), one token takes seconds.
+    verdict.start("[Sampler] top-k / top-p pick as a stable sort would, on any vocabulary size...")
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    $draw: = prng.Prng.new(11U64)
+    for trial in Range.asc(300)
+        mark: = arena.save()
+        shape: Sz[1] = ::{ 1 + draw.below(40) }
+        logits: = Tensor<|F32|>.new(Sz[]::shape, arena)
+        for i in Range.asc(logits.size)
+            (logits.data + i)$ = F32::draw.below(5) * F32::0.75
+        cfg: = ai_sampler.Sample_config::{ .temperature = 0.5 + F64::(trial % 3),
+            .top_k = draw.below(12), .top_p = 1.0 if trial % 2 == 0 else 0.6 }
+        $want_rng: = prng.Prng.new(U64::trial)
+        $got_rng: = prng.Prng.new(U64::trial)
+        for _round in Range.asc(8)
+            want: = insertion_pick(logits, cfg, want_rng@, arena)
+            got: = ai_sampler.sample(logits, cfg, got_rng@, arena)
+            assert(got == want, "Sampler: top-k / top-p must keep the stable rank order")
+        arena.restore(mark)
+    vocab_shape: Sz[1] = ::{ 151936 }
+    vocab: = Tensor<|F32|>.new(Sz[]::vocab_shape, arena)
+    for i in Range.asc(vocab.size)
+        (vocab.data + i)$ = F32::draw.below(1000) * F32::0.01
+    wide: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 40, .top_p = 0.95 }
+    nucleus: = ai_sampler.Sample_config::{ .temperature = 0.8, .top_k = 0, .top_p = 0.95 }
+    $rng: = prng.Prng.new(5U64)
+    for _round in Range.asc(4)
+        mark: = arena.save()
+        top: = ai_sampler.sample(vocab, wide, rng@, arena)
+        assert(top >= 0 && Sz::top < vocab.size, "Sampler: a large vocabulary still picks an ID")
+        any: = ai_sampler.sample(vocab, nucleus, rng@, arena)
+        assert(any >= 0 && Sz::any < vocab.size, "Sampler: top-p alone ranks it all")
+        arena.restore(mark)
     verdict.pass("")

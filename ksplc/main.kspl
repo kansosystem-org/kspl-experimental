@@ -53,8 +53,8 @@ priv enum Mode //< what the tool was asked to do
         //< It translates one file.
         //<
         //< Where deps_path is not empty, the list of every source read is written there
-        //< (`--emit-deps=`); where libs_path is not empty, the libraries the program names
-        //< (`--emit-libs=`).
+        //< (`--emit-deps=`). Where libs_path is not empty, the libraries the program names are
+        //< written there (`--emit-libs=`).
     fmt(in_files: List<|U8[]|>$@, in_place: Bool, config: fmt_style.Config)
     lsp
     lsp_worker
@@ -78,8 +78,8 @@ priv enum Mode //< what the tool was asked to do
         //< It writes the C runtime's source out as one translation unit
         //<
         //< `--to=llvm`'s IR links against it ("The backends (Genc / Genllvm) and the runtime
-        //< ABI" in ksplc/docs/DESIGN-compiler.md).
-    explain(code: U8[]) //< it prints one diagnostic code's section of the tools specification
+        //< ABI" in ksplc/docs/DESIGN-backends.md).
+    explain(code: U8[]) //< it prints one diagnostic code's section of the diagnostics specification
     doc(target: U8[]) //< it prints what a file, an entry or a folder publishes (`tools/doc.kspl`)
 
 priv struct Cli //< what the command line asked for, before it is checked
@@ -101,12 +101,12 @@ priv struct Cli //< what the command line asked for, before it is checked
     lint_specs: List<|U8[]|>$@
 
 priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcommand and option
-    // A mode is a command rather than a flag so that argp sees it set twice; as a flag,
-    // `ksplc fmt --lsp` would pass and the later one would silently win.
+    // A mode is a command rather than a flag, so that argp sees it set twice. As a flag,
+    // `ksplc fmt --lsp` would pass, and the later one would silently win.
     p.subcommand("fmt", "format the source")
     p.subcommand("lint", "do the static analysis alone")
     p.subcommand("lsp", "run as the language server")
-    p.subcommand("lsp-worker", "run as the language server's analysis worker")
+    p.subcommand_hidden("lsp-worker") // the language server starts it; no person types it
     p.subcommand_trailing("run", "build a script and run it", o.script_args)
     p.subcommand("build", "build an executable from a program")
     p.subcommand("info", usage.help_with_topics("answer a query", usage.info_topics()))
@@ -121,11 +121,10 @@ priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcom
     p.str_opt("--emit-libs", o.libs_path@,
         "where to write the libraries the program names with #link, as -l words")
     p.str_opt("--emit-surface", base_core.config.surface_path@,
-        "where to write the record of the API being published (for putting one version against \
-            another)")
+        "where to write the published API record for comparing versions")
     p.str_opt("--surface-scope", o.surface_scope@,
-        "what --emit-surface writes: pub (the default, what the package publishes) or all \
-            (everything a sibling file may reach, for a package that publishes nothing)")
+        "what --emit-surface writes: pub (default) for the published API, or all for everything a \
+            sibling file can reach. Use all for a package that publishes nothing")
     p.str_opt("--machine", base_core.config.machine@,
         "the machine the output is for, as a triple (the default is the one ksplc runs on)")
     p.str_opt("--std-dir", o.std_dir@, "where to look for the standard library")
@@ -146,15 +145,15 @@ priv fn declare_options(p: argp.Parser$@, o: Cli$@) //< it declares every subcom
     p.str_opt("--diagnostic-format", o.diag_format@,
         "how diagnostics are written: text (the default) or json (one JSON object per line)")
     p.flag("--stats", base_core.config.enable_stats@,
-        "put the time taken per phase out (for fmt, how often its cache answered)")
+        "report the time per phase (for fmt, report cache usage)")
     p.flag("--freestanding", base_core.config.is_freestanding@,
         "generate for an environment with no OS")
     p.flag("--program", base_core.config.is_program@,
-        "the output becomes a program, so refuse an input with no main() (run and build pass it)")
+        "require main() because the output is a program (run and build set this option)")
     p.str_list_opt("--library", base_core.config.interface_paths,
-        "build a library and write its interface there: a .h for C, a .kspl for KSPL (it can be \
-            repeated); only #export functions are visible outside it, its runtime and std are its \
-            own")
+        "build a library and write its interface: .h for C, .kspl for KSPL. Repeat this option for \
+            more interfaces. Only #export functions are externally visible. The library keeps its \
+            own runtime and std")
     p.flag("--in-place", o.fmt_in_place@, "write the formatting result back into the source")
 
 priv fn refuse_command_line(e: argp.Argp_error) //<
@@ -166,9 +165,8 @@ priv fn refuse_command_line(e: argp.Argp_error) //<
         usage.print_usage(io.out())
         sys.exit(0)
     case .unknown_option(n)
-        // Caution: Never treat an unknown option as an input file name: a typo would be
-        // ignored, and a path cut by the shell's word splitting would fail as file names,
-        // cause unseen.
+        // Caution: Never treat an unknown option as an input file name. A typo would be ignored. A
+        // path cut by the shell's word splitting would fail as file names, with the cause unseen.
         io.err().s("Error: unknown option: \{n\}\n")
         usage.usage_exit()
     case .multiple_commands(_n)
@@ -196,7 +194,7 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
     // **The report is text on standard error**, the stream json leaves to its objects.
     if base_core.config.diag_json && base_core.config.enable_stats
         usage
-            .error_exit("--stats cannot be combined with --diagnostic-format=json: its report is \
+            .error_exit("--stats cannot be combined with --diagnostic-format=json. Its report is \
                 text on standard error, where json writes only JSON objects\n")
     // `--to` names what the output is written in; a compile's languages are c and llvm.
     if mode_name.equals("compile") && o.to_name.equals("llvm")
@@ -211,9 +209,9 @@ priv fn apply_options(o: Cli$@, mode_name: U8[]) //<
         if n < 1 || n > I64::max_split_units
             usage.error_exit("--split: expected a number from 1 to 256\n")
         base_core.config.unit_count = Sz::n
-    // Only the C backend can split: genllvm has no forward-declaration phase ("Genllvm (LLVM
-    // IR): why the structure itself differs" in ksplc/docs/DESIGN-compiler.md) and emits the string
-    // pool at the end. Accepted without effect, it would break Principle 5.
+    // Only the C backend can split. genllvm has no forward-declaration phase ("Genllvm (LLVM IR):
+    // why the structure differs" in ksplc/docs/DESIGN-backends.md), and it emits the string pool at
+    // the end. Accepted without effect, it would break Principle 5.
     if base_core.config.unit_count > 1 && base_core.is_llvm_target()
         usage.error_exit("--split: only the C backend can split output into translation units.\n")
     if base_core.is_library()
@@ -251,10 +249,10 @@ priv fn source_input(path: U8[]): U8[] //<
     //< A source named on the command line; a name in braces (`.ksplb`) or the old `.kspls` exits
     //<
     //< **Braces are only what the parser reads** ("The indentation notation (`.kspl`)" in
-    //< docs/DESIGN-language.md). Read as the indentation notation, such a file would fail at its
-    //< first line with an error that does not say why. **A `.kspls` is the old name of a source**:
-    //< named with its extension it would still be read, while every `import` of its siblings, which
-    //< opens `.kspl`, would not find them.
+    //< docs/DESIGN-notation.md). Read as the indentation notation, such a file would fail at its
+    //< first line with an error that does not say why. **A `.kspls` is the old name of a source.**
+    //< Named with its extension, it would still be read. But every `import` of its siblings opens
+    //< `.kspl`, and would not find them.
     if path.ends_with(".ksplb")
         usage
             .error_exit(base_core.arena.text()
@@ -262,7 +260,7 @@ priv fn source_input(path: U8[]): U8[] //<
             .take())
     if path.ends_with(".kspls")
         said: = base_core.arena.text()
-            .s("\{path\}: a KSPL source is a .kspl file; rename this one, and the files beside it, \
+            .s("\{path\}: a KSPL source is a .kspl file. Rename this file and the files beside it \
                 from .kspls to .kspl\n").take()
         usage.error_exit(said)
     return path
@@ -305,9 +303,9 @@ priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o
         // An error has no code, so a message the reader wants explained may well have none.
         if !base_lint_codes.is_known(code)
             msg: = base_core.arena.text().s("ksplc explain: '").s(asked)
-                .s("' is not a diagnostic code. Only a warning, an information or a hint carries \
-                    one (the table is 5.4 in ksplc/docs/SPEC-tools.md); an error's message is its \
-                    own explanation.\n").take()
+                .s("' is not a diagnostic code. Only warnings, information diagnostics and hints \
+                    carry codes. The table is in ksplc/docs/SPEC-diagnostics.md. An error's message \
+                    explains the error.\n").take()
             usage.error_exit(msg)
         return .explain(code)
     if mode_name.equals("doc")
@@ -332,8 +330,8 @@ priv fn read_mode(p: argp.Parser$@, mode_name: U8[], in_files: List<|U8[]|>$@, o
             usage.error_exit(usage.usage_of("build"))
         return .build(source_input(in_files.get(0)), in_files.get(1), o.cflags)
     if in_files.len != 2
-        // It rejects "too many" as well as "too few". If it silently used the first two, a
-        // path cut by the shell's word splitting (one containing a space) would compile an
+        // It rejects "too many" as well as "too few". Suppose it silently used the first two. Then
+        // a path cut by the shell's word splitting (one containing a space) would compile an
         // unrelated file for no clear reason.
         if in_files.len > 2
             io.err().s("Error: too many input files (expected <input.kspl> <output.c>):\n")
@@ -361,9 +359,7 @@ impl Mode
             refuse_command_line(e)
 
         in_files: = p.rest
-        $mode_name: U8[] = p.command
-        if mode_name.len == 0
-            mode_name = "compile"
+        mode_name: = p.command.unwrap_or("compile")
         // Caution: **A bare `-` is standard input only as the source of a compile or a run.** argp
         // passes it on as "standard input"; anywhere else it is an accident of word splitting.
         for i in Range.asc(in_files.len)
@@ -400,8 +396,8 @@ impl Mode
             pipeline.emit_runtime(out_path)!
         case .explain(code)
             if !tools_explain.print_explanation(code, base_core.arena)
-                msg: = base_core.arena.text().s("ksplc explain: '").s(code)
-                    .s("' is registered but has no section in ksplc/docs/SPEC-tools.md\n").take()
+                msg: = base_core.arena.text().s("ksplc explain: '\{code\}' has no section in ")
+                    .s(tools_explain.spec_name).s("\n").take()
                 usage.error_exit(msg)
         case .doc(target)
             parser: = kspl_parser()!
@@ -463,7 +459,7 @@ priv fn check_machine(face: U8[]) //<
     //< **Refused, never guessed**: a guess folds sizes the C compiler disagrees with. A machine
     //< genllvm cannot lay out is refused `--to=llvm` here too, so no IR with wrong offsets is
     //< written.
-    //< Caution: **The language server's refusal goes to standard error**: its standard output is
+    //< Caution: **The language server's refusal goes to standard error.** Its standard output is
     //< the protocol, where a line of text reads as a broken message and names nothing.
     $said: = Str_builder.new()
     defer said.free()
@@ -479,7 +475,7 @@ priv fn check_machine(face: U8[]) //<
     if m: = base_target.find(name)
         if m.llvm_triple.len == 0
             refusal: = base_core.arena.text()
-                .s("--to=llvm: the LLVM backend lays out only machines with 8-byte pointers, and \
+                .s("--to=llvm: the LLVM backend lays out only machines with 8-byte pointers. \
                     '\{name\}' is not one. Write C for it (--to=c, the default)\n").take()
             usage.error_exit(refusal)
 
@@ -487,25 +483,24 @@ priv fn refuse_with_library() //<
     //< It refuses an option `--library` cannot work with
     //<
     //< Each needs a symbol of the library visible outside it, which `--library` makes `static`
-    //< ("How linkage is chosen" in ksplc/docs/DESIGN-compiler.md).
+    //< ("How linkage is chosen" in ksplc/docs/DESIGN-backends.md).
     if base_core.config.is_program
         usage
-            .error_exit("--library: --program cannot be combined: a library has no main(), and is \
-                entered through its '#export' functions\n")
+            .error_exit("--library: --program cannot be combined. A library has no main(). Its \
+                '#export' functions are its entry points\n")
     if base_core.config.unit_count > 1
         usage
-            .error_exit("--library: --split cannot be combined: the units reach each other's \
+            .error_exit("--library: --split cannot be combined. The units reach each other's \
                 functions, which a library makes static. Build a library as one unit\n")
     if base_core.is_llvm_target()
         usage
-            .error_exit("--library: --to=llvm cannot be combined: the IR links its runtime from \
-                another file, which a library's own runtime cannot be. Build a library with \
-                --to=c\n")
+            .error_exit("--library: --to=llvm cannot be combined. The IR links its runtime from \
+                another file, but a library needs its own runtime. Build a library with --to=c\n")
     if base_core.config.is_freestanding
         usage
-            .error_exit("--library: --freestanding cannot be combined: the C compiler calls the \
-                bare-metal runtime's helpers (__aeabi_memcpy and the like) by name from any object, \
-                so they cannot be private. A bare-metal image is built from source\n")
+            .error_exit("--library: --freestanding cannot be combined. The C compiler calls \
+                bare-metal runtime helpers, such as __aeabi_memcpy, by name from any object. These \
+                helpers cannot be private. A bare-metal image is built from source\n")
 
 priv const sanitizer_names: U8[][4] = ::{ "address", "thread", "memory", "undefined" } //<
     //< The sanitizers `--sanitize=` takes, by the names the C compiler's `-fsanitize=` takes
@@ -529,14 +524,14 @@ priv fn check_sanitize(o: Cli$@, mode_name: U8[]) //<
         return
     if base_core.config.is_freestanding
         usage
-            .error_exit("--sanitize: --freestanding cannot be combined: a sanitizer's runtime maps \
-                its shadow memory and writes its reports through the OS, and none is built for bare \
-                metal\n")
+            .error_exit("--sanitize: --freestanding cannot be combined. A sanitizer's runtime uses \
+                the OS to map shadow memory and write reports. No sanitizer runtime is built for \
+                bare metal\n")
     if mode_name.equals("compile") && !base_core.is_llvm_target()
         usage
-            .error_exit("--sanitize: the C a compile writes is instrumented by the C compiler that \
-                reads it, so give that compiler -fsanitize=<names>. On a compile, --sanitize marks \
-                --to=llvm's IR, which no front end marks\n")
+            .error_exit("--sanitize: the C compiler instruments generated C. Give that compiler \
+                -fsanitize=<names>. When compiling to LLVM, --sanitize marks the IR because it does \
+                not pass through a front end\n")
     for name in o.sanitize.split(',', base_core.arena)
         if !name.is_one_of(U8[][]::sanitizer_names)
             said: = base_core.arena.text().s("--sanitize: '").s(name)
@@ -548,8 +543,8 @@ priv fn check_sanitize(o: Cli$@, mode_name: U8[]) //<
             usage
                 .error_exit("--sanitize=undefined: its checks are written into C by clang's front \
                     end, which LLVM IR does not pass through. KSPL's own checks stop an index, a \
-                    shift, a divisor or an enum's tag out of range in either backend; for the rest, \
-                    build through C (ksplc build --sanitize=undefined)\n")
+                    shift, a divisor or an enum's tag out of range in either backend. For the \
+                    remaining checks, build through C (ksplc build --sanitize=undefined)\n")
 
 priv fn check_interface_paths() //<
     //< It refuses a `--library=` interface that cannot be written
@@ -562,7 +557,7 @@ priv fn check_interface_paths() //<
         switch tools_interface.form_of(path)
         case .none
             why: = base_core.arena.text().s("--library: '").s(path)
-                .s("' names neither form of interface: end it in .h for C, or in .kspl for KSPL\n")
+                .s("' names neither form of interface. End it in .h for C, or in .kspl for KSPL\n")
                 .take()
             usage.error_exit(why)
         default {}
@@ -695,10 +690,10 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
 
     compiler.run_semantic_analysis(mod_name, is_lint, false, .everywhere) catch {}
 
-    // Caution: **Print the summary only once, after every stage has finished.** Printed after
-    // sema, it misses what Lower and the code generation added and fails while saying "0 error(s)".
-    // As a defer it is printed through any throw below, but not on the depth limit's `sys.exit`:
-    // a count after a cut-off that skipped the counting would be a lie.
+    // Caution: **Print the summary only once, after every stage has finished.** Printed after sema,
+    // it misses what Lower and the code generation added, and fails while saying "0 error(s)".
+    // As a defer, it is printed through any throw below, but not on the depth limit's `sys.exit`. A
+    // count after a cut-off that skipped the counting would be a lie.
     defer print_diag_summary(compiler, is_lint)
 
     $errs: = 0
@@ -726,7 +721,7 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         // Caution: **Never fall back to an empty tree**: the record would be written empty, and
         // `make test-surface` would read every published name as removed. The file parsed once
         // already, so a source not held or a second parse that fails is the compiler's own fault.
-        main_src: = compiler.source_map.get(compiler.sema.main_file) catch ""
+        main_src: = compiler.source_map.get(compiler.sema.main_file).unwrap_or("")
         base_diag.ice_assert(main_src.len > 0, "--emit-surface: the main file's source is not held")
         raw_root: =
             parse_load.parse_raw_ast(main_src, compiler.sema.main_file, compiler.base_parser, true)
@@ -737,9 +732,9 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
 
     compiler.run_lower_and_codegen(out_path)!
     // Lower and the code generation also report diagnostics with sema.err() (the retain/release
-    // insertion reaching its depth limit, and the like). The errs check above comes before that,
-    // so without checking the error count again here it would exit with code 0 while printing
-    // errors (and the caller could not detect that the build failed).
+    // insertion reaching its depth limit, and the like). The errs check above comes before that. So
+    // without checking the error count again here, it would exit with code 0 while printing errors.
+    // The caller could then not detect that the build failed.
     if compiler.sema.diags.counts.errors > errs
         throw .sema(.analysis_failed)
     // It writes only after success. A failed compilation's dependency list would look like "the
@@ -752,7 +747,8 @@ priv fn run_compiler(in_path: U8[], out_path: U8[], deps_path: U8[], libs_path: 
         tools_libs.write_libs_file(libs_path, compiler.root_file) catch e
             throw .io(e)
     // Caution: **An API record or an interface that fails to write fails the compile**, as a libs
-    // file does: `make test-surface` would compare against a record left from an earlier run.
+    // file does. Otherwise `make test-surface` would compare against a record left from an earlier
+    // run.
     if base_core.config.surface_path.len > 0
         io.write_file(base_core.config.surface_path, surface_text) catch e
             throw .io(e)
@@ -836,7 +832,7 @@ impl pipeline.Compile_error
 priv fn apply_lint_setting(spec: U8[]) //< it applies one `--lint=CODE=level`
     //<
     //< Both the code and the level are checked against the registry, and an unknown one is an
-    //< error (so a typo cannot silently do nothing; the same rule as `##lint`).
+    //< error. So a typo cannot silently do nothing (the same rule as `##lint`).
     $eq: Sz = 0
     switch spec.find_char('=')
     case .some(at)
@@ -869,10 +865,10 @@ priv fn print_internal_trace() //<
     //< It prints the propagation trace when exiting on a `Compile_error`, and only when asked
     //<
     //< Caution: **Never print it by default.** Every `Compile_error` branch is a failure whose
-    //< diagnostic is already printed (a syntax error, a sema failure, an io failure), and the trace
-    //< describes **ksplc's own control flow, not the user's program**: one missing semicolon would
-    //< give 13 internal frames of 18, the parser engine's own among them (for the reason Principle
-    //< 2 hides the raw C errors).
+    //< diagnostic is already printed (a syntax error, a sema failure, an io failure). The trace
+    //< describes **ksplc's own control flow, not the user's program**. One missing semicolon would
+    //< give 13 internal frames of 18, the parser engine's own among them. Principle 2 hides the raw
+    //< C errors for the same reason.
     if v: = sys.get_env(internal_trace_env_name)
         if v.len > 0
             print_trace()
@@ -896,5 +892,7 @@ fn main(): Void!I32
     if heap_used != 0
         $final_msg: = Str_builder.new()
         defer final_msg.free()
-        final_msg.s("Final Global Heap : \{heap_used:,\} bytes (Should be 0 - memory leak)\n")
+        final_msg
+            .s("Final Global Heap : \{heap_used:,\} bytes (Expected 0. A nonzero value indicates a \
+                memory leak)\n")
         usage.error_exit(final_msg.slice())

@@ -2,14 +2,14 @@
 
 The license for this repository as a whole is [`LICENSE.md`](LICENSE.md) (MIT). **Only the files listed below originate from work under another license**, so their notices are here beside it.
 
-Caution: **When you add a file that declares an origin, add it here too.** A source's comments may name the origin as well, but a recipient of the distributed files cannot look in a comment. This document is the notices' canonical source.
+Caution: **When you add a file that declares an origin, add it here too.** A source's comments can name the origin as well, but a recipient of the distributed files cannot look in a comment. This document is the notices' canonical source.
 
 `make test-conventions` guards four rules on it:
 
-* **A file carrying a license's own words is listed here** (an `SPDX-License-Identifier`, a `Copyright (c)` line, a license's grant), since code copied with its header brings its terms with it.
+* **A file carrying a license's own words is listed here.** Such words are an `SPDX-License-Identifier`, a `Copyright (c)` line or a license's grant. Code copied with its header brings its terms with it.
 * **Every file listed here exists**, so a rename cannot leave a notice pointing at nothing.
 * **A file owing a notice is outside what the release ships.** The release's zip holds `LICENSE.md` but not this file, which is correct only while every such file is under `ksos/`.
-* **Every binary file is listed under "Binary files" with where it comes from**, since a model's weights inherit the license of the model they were converted from.
+* **Every binary file is listed under "Binary files" with where it comes from.** A model's weights inherit the license of the model that they were converted from.
 
 ## Raspberry Pi pico-sdk / pico-examples (BSD-3-Clause)
 
@@ -100,4 +100,4 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Further reading
 
 * [`LICENSE.md`](LICENSE.md) — the license for this repository as a whole.
-* [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `ksos/port/rp2040/` above compute their values and how they are confirmed; "🔧 The peripheral drivers" says what each driver originates from.
+* [`ksos/docs/DESIGN-rtos.md`](ksos/docs/DESIGN-rtos.md) — "The RP2040 port" says how the three files under `ksos/port/rp2040/` above compute their values. It also says how the values are confirmed. "🔧 The peripheral drivers" says what each driver originates from.

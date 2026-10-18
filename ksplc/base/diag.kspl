@@ -1,7 +1,7 @@
 //< Printing a diagnostic: as text or one line of JSON on stderr, or kept for the language server
 //<
 //< **`print_diagnostic` is the one writer for both forms** (`print_unplaced` for an error with no
-//< place in a source): it counts the place once, so the text and the JSON never disagree. Under
+//< place in a source). It counts the place once, so the text and the JSON never disagree. Under
 //< the language server the findings are collected in `lsp_diags` instead. An internal compiler
 //< error stops the run through `ice_panic` / `ice_assert`.
 import "ksplc/base/as_written" as base_as_written
@@ -72,6 +72,7 @@ impl Lsp_diag_manager
 fn log(): Writer
     return io.err()
 
+#noreturn
 fn ice_panic(msg: U8$[])
     log()
         .s("\n=========================================\n[Internal Compiler Error] \
@@ -144,7 +145,7 @@ priv $json_written: Json_written = ::{}
 fn print_json_closing(succeeded: Bool) //<
     //< The closing object: the last line of a compile or lint that reached its verdict, under json
     //<
-    //< **It counts the objects written above it**, not the analysis's tally, so a reader that
+    //< **It counts the objects written above it**, not the analysis's tally. So a reader that
     //< counts the lines itself always gets the same numbers (an error the parse stopped on is in no
     //< tally).
     arena: = Arena.new(4096)
@@ -189,10 +190,10 @@ priv fn lsp_wide(source: U8[], offset: Sz, length: Sz, info: base_core.Line_info
 fn shown_file(file_name: U8[]): U8[] //<
     //< A source's name as a diagnostic shows it, on the arena
     //<
-    //< **The file is named so it can be opened**: a declared package's file by the path it was read
-    //< from (`disk_name` in `locate.kspl`), anything else by its logical name.
-    //< Caution: **Do not copy the extension here.** base/core.kspl holds it (`with_source_ext`);
-    //< with a copy, a renamed extension leaves the diagnostics on the old one.
+    //< **The file is named so it can be opened.** A declared package's file is named by the path
+    //< it was read from (`disk_name` in `locate.kspl`). Anything else is named by its logical name.
+    //< Caution: **Do not copy the extension here.** base/core.kspl holds it (`with_source_ext`).
+    //< With a copy, a renamed extension leaves the diagnostics on the old one.
     return base_core.arena.dup_str(base_locate.disk_name(file_name).with_source_ext())
 
 fn print_diagnostic(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg: U8[],
@@ -203,8 +204,8 @@ fn print_syntax_error(file_name: U8[], source: U8[], offset: Sz, msg: U8[],
     starts: List<|Sz|>$@) //<
         //< A syntax error, which a program reading the JSON form tells apart by its `kind`
         //<
-        //< **An error has no code** (a code could be switched off), so the kind is how such a
-        //< reader knows that the text could not be read and nothing after it was analysed.
+        //< **An error has no code** (a code could be switched off). So the kind tells such a reader
+        //< that the text could not be read, and that nothing after it was analysed.
     print_placed(file_name, source, offset, 1, msg, .error, starts, true)
 
 priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg: U8[],
@@ -224,7 +225,7 @@ priv fn print_placed(file_name: U8[], source: U8[], offset: Sz, length: Sz, msg:
             key_b.s(out_file).c(':').s("\{line\}").c(':').s("\{column\}").c(':')
                 .s("\{severity.to_lsp_severity()\}").c(':').s(msg)
             key: = key_b.slice()
-            if lsp_diags.seen@.get(key) catch false
+            if lsp_diags.seen@.get(key).unwrap_or(false)
                 return
             perm_key: = base_core.arena.dup_str(key)
             lsp_diags.seen@.set(perm_key, true)

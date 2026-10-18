@@ -2,8 +2,8 @@
 // kspage's JS side — drawing: it only draws the laid-out boxes onto a canvas. **No layout logic is
 // here** (line breaking, inheritance and cursor movement are the wasm's).
 // Caution: **Take the colors by role** (`page.css`'s `:root`); a color hard-coded into the canvas
-// escapes the theme. **The cursor's element is not drawn onto the canvas** (drawn, every blink
-// would repaint the whole document; the thumbnails and the pages work the same way).
+// escapes the theme. **The cursor's element is not drawn onto the canvas.** Drawn, every blink
+// would repaint the whole document; the thumbnails and the pages work the same way.
 // Split off for the 1000-line-per-file cap (Principle 3); the shared state is
 // [`kspage.js`](kspage.js)'s `ks`.
 // ==========================================
@@ -61,11 +61,11 @@ function kspageDraw(ks) {
   };
   // Draws the boxes in order, **in the document's own coordinates** (offset and zoom are the
   // caller's).
-  // Caution: **Set the color again for every box**, or the next box takes the last one; **a box
-  // with no setting takes the caller's color**, and **`plain` (the viewer's override) never reaches
-  // paper or the list's images** (pages keep the document's colors). `marks` are the diagnostics',
-  // colored at layout time by the background, **not by color alone** (an error wavy, the rest
-  // dotted).
+  // Caution: **Set the color again for every box**, or the next box takes the last one. **A box
+  // with no setting takes the caller's color.** **`plain` (the viewer's override) never reaches
+  // paper or the list's images** (pages keep the document's colors). `marks` are the diagnostics'.
+  // They are colored at layout time by the background, **not by color alone** (an error wavy, the
+  // rest dotted).
   function paintBoxes(count, ctx, read, crop, plain, marks) {
     const ink = ctx.fillStyle;
     const gap = ctx.letterSpacing;
@@ -103,9 +103,9 @@ function kspageDraw(ks) {
       if (midComp !== 0) ctx.fillRect(x, y + bh - 2, bw, 1);
     }
     ctx.fillStyle = ink;
-    // Caution: **Reset the letter spacing too** — measureText includes it, so the next
-    // `kspage_js_measure` would give the core a wider width and line breaking would shift after the
-    // draw.
+    // Caution: **Reset the letter spacing too.** measureText includes it, so the next
+    // `kspage_js_measure` would give the core a wider width. Line breaking would then shift after
+    // the draw.
     ctx.letterSpacing = gap;
   }
 
@@ -123,8 +123,8 @@ function kspageDraw(ks) {
   const CLOSED = ["box", "round_box", "ellipse", "triangle", "diamond"];
   // Whether it is a shape drawn along the band's diagonal.
   const diagonal = (kind) => CLOSED.indexOf(kind) < 0;
-  // Draws one closed shape's path. **The fill and the line share it** (separate, a thick line would
-  // shift off the fill's edge); `inset` moves it in for a line centered on the path.
+  // Draws one closed shape's path. **The fill and the line share it**: separate, a thick line would
+  // shift off the fill's edge. `inset` moves it in for a line centered on the path.
   const closedPath = (g, kind, x, y, pw, ph, inset) => {
     const l = x + inset, t = y + inset;
     const r = x + pw - inset, b = y + ph - inset;
@@ -184,12 +184,12 @@ function kspageDraw(ks) {
     g.fill();
   }
 
-  // A paragraph's or a cell's fill and border — the document's content, so also in printing and
-  // presenting (unlike a region's frame).
-  // Caution: **Paint all the fills first, then all the lines** — one at a time, a neighbour's fill
-  // covers the nearer cell's line and the grid has gaps. **Draw them before the text.**
-  // **With `plain`, no fill is painted** (the viewer declines the document's colors), but the line
-  // is drawn in the screen's border role, or the cells' boundaries would vanish.
+  // A paragraph's or a cell's fill and border. They are the document's content, so they also show
+  // in printing and presenting (unlike a region's frame).
+  // Caution: **Paint all the fills first, then all the lines.** One at a time, a neighbour's fill
+  // covers the nearer cell's line, and the grid has gaps. **Draw them before the text.**
+  // **With `plain`, no fill is painted** (the viewer declines the document's colors). The line is
+  // still drawn in the screen's border role, or the cells' boundaries would vanish.
   function paintPanels(g, plain, crop) {
     const count = w.kspage_web_panel_count();
     // Caution: Copy them all out first — there is one arena, so asking while drawing deletes the
@@ -220,7 +220,7 @@ function kspageDraw(ks) {
     for (const one of seen) {
       const [x, y, pw, ph, edge, color, , , shape] = one;
       const kind = SHAPES[shape] || SHAPES[0];
-      // Caution: **Draw a line and an arrow even where one side is 0** — a horizontal line is a
+      // Caution: **Draw a line and an arrow even where one side is 0.** A horizontal line is a
       // band of height 0 (with both 0, there is nothing to draw).
       const flat = diagonal(kind);
       if (edge <= 0) continue;
@@ -253,13 +253,13 @@ function kspageDraw(ks) {
   }
 
   // The loaded images, redrawn once loaded (until then only the frame).
-  // Caution: **Keep one per source** (otherwise it is fetched on every redraw).
+  // Caution: **Keep one per place the source names** (otherwise it is fetched on every redraw),
+  // not per source. A relative source names another file in another document's folder.
   const pictures = new Map();
-  // Whether that source is an external server: **anything but an embedded image (`data:`) or one
-  // fetched from where this page came from**, judged by **the address the browser will fetch, not
-  // the spelling**. A source with no scheme can still name another server (`//host/p.png`, and
-  // `\\host/p.png`, which the browser reads the same), and from `file://` such a source asks a
-  // network share. The host is compared too: every `file:` address has the origin `null`.
+  // Whether that source is an external server. That is **anything but an embedded image (`data:`)
+  // or one fetched from where this page came from**. **The address the browser will fetch decides
+  // it, not the spelling.** A source with no scheme can still name another server (`//host/p.png`,
+  // and `\\host/p.png`, which the browser reads the same).
   const outside = (src) => {
     let at;
     try {
@@ -274,15 +274,16 @@ function kspageDraw(ks) {
   // Caution: **Count them again on every draw** (switching the document changes it).
   let held = 0;
   function pictureOf(src) {
-    let got = pictures.get(src);
+    const key = (ks.api.localPlace && ks.api.localPlace(src)) || src;
+    let got = pictures.get(key);
     if (got) return got;
     got = new Image();
     got.addEventListener("load", () => ks.draw());
     // Caution: **Store it before starting the load** — setting `src` starts loading, so the
     // "loaded" event could come with no image stored to draw.
-    pictures.set(src, got);
+    pictures.set(key, got);
     // **Where the page is served locally, a picture beside the document is read with the token**
-    // (`local.js`'s `localPicture`); with no page around it (a test), the source as it is.
+    // (`local.js`'s `localPicture`). With no page around it (a test), the source is used as it is.
     const load = ks.api.localPicture;
     if (load) {
       load(src).then((url) => {
@@ -345,8 +346,8 @@ function kspageDraw(ks) {
   // The marker, **in the core's numbers too** (`Marker`'s order). **Drop one and that marker reads
   // as "no marker"**, vanishing when the style field opens.
   const MARKS = ["none", "bullet", "number", "serial", "outline"];
-  // The markers that pass two texts, **separated by a tab in the one arena** (a running number
-  // `before\tafter`, a chapter number `separator\tafter`); one list, so reading and writing agree.
+  // The markers that pass two texts, **separated by a tab in the one arena**: a running number
+  // `before\tafter`, a chapter number `separator\tafter`. One list, so reading and writing agree.
   const PAIRED_MARKS = ["serial", "outline"];
   // The date format, **in the core's numbers too** (`Dating`'s order). A date is days since
   // 1970-01-01.
@@ -357,9 +358,9 @@ function kspageDraw(ks) {
   // A slide's layout sketch, **in the numbers the core reads** (`Sketch`'s order); it acts once at
   // insertion.
   const SKETCHES = ["whole", "titled", "halved"];
-  // A region's frame, outlining in pale gray the band that is prose, a table or a slide, with a
-  // label (the frame alone does not say which tool applies there).
-  // Caution: **Draw it only on the editing screen** — printing and presenting go through
+  // A region's frame, outlining in pale gray the band that is prose, a table or a slide. It has a
+  // label, since the frame alone does not say which tool applies there.
+  // Caution: **Draw it only on the editing screen.** Printing and presenting go through
   // `paintBoxes` too, so there it would reach the page. **Draw it before the text.**
   function paintRegions(g) {
     const count = w.kspage_web_region_count();
@@ -454,8 +455,8 @@ function kspageDraw(ks) {
     };
   }
 
-  // Shows the band being dragged **in the chosen tool's shape** (a bare rectangle would hide that
-  // an ellipse was chosen), dashed to set it apart from placed shapes.
+  // Shows the band being dragged **in the chosen tool's shape**, since a bare rectangle would hide
+  // that an ellipse was chosen. It is dashed to set it apart from placed shapes.
   function paintDrawn(g) {
     if (!ks.drawn || !ks.api.armed) return;
     const spot = bandRect();
@@ -514,7 +515,7 @@ function kspageDraw(ks) {
     }
     const height = Math.max(w.kspage_web_height(), 24);
 
-    // **One document unit is one CSS pixel**; another scale would need the click-mapping division
+    // **One document unit is one CSS pixel.** Another scale would need the click-mapping division
     // in four more places (`kspage/docs/DESIGN-application.md`'s "Whether the browser or the page holds the
     // zoom"). Only the pixel density is multiplied.
     canvas.width = Math.ceil(ks.width * dpr);
@@ -600,9 +601,10 @@ function kspageDraw(ks) {
 
   // Composed input.
   // Caution: **Handle composition's three events as a set** (update alone leaves committed text
-  // looking composed). The keys go only to the hidden input field, **not hidden by `opacity: 0` or
-  // `visibility: hidden`** (composition may not start; only the color is transparent), and **placed
-  // over the cursor**, or the candidate window opens away from the body.
+  // looking composed). The keys go only to the hidden input field. It is **not hidden by `opacity:
+  // 0` or `visibility: hidden`**, since composition can fail to start; only the color is
+  // transparent. It is **placed over the cursor**, or the candidate window opens away from the
+  // body.
   const ime = document.createElement("input");
   ime.setAttribute("aria-hidden", "true");
   ime.setAttribute("autocapitalize", "off");
@@ -666,15 +668,15 @@ function kspageDraw(ks) {
   let boxCount = 0;
 
   // Puts the jump target at the window's top. **It is separate from following**, which moves the
-  // least and would leave a target reached from below at the window's bottom; after a jump, reading
-  // continues from the target.
+  // least. Following would leave a target reached from below at the window's bottom. After a
+  // jump, reading continues from the target.
   function jumpToCaret() {
     w.kspage_web_cursor(scratch);
     const [_x, y, _h, found] = nums(4);
     if (found === 0) return;
     const top = canvas.getBoundingClientRect().top + y;
     window.scrollBy(0, top - headRoom());
-    // **The kept heading covers the window's top too** — landing under it, the target hides (the
+    // **The kept heading covers the window's top too.** Landing under it, the target hides (the
     // common fault of a sticky heading), so the window scrolls back by its height.
     const band = ks.pinnedBand ? ks.pinnedBand() : null;
     if (band !== null && y >= band.ry + band.rh && y < band.ty + band.th) {
@@ -686,9 +688,9 @@ function kspageDraw(ks) {
     let top = rect.top + y;
     const room = window.innerHeight;
     let above = headRoom();
-    // **The kept heading covers the window's top too** (`narrow.js`): in a body row of that table the
-    // cursor stays below the band; in the heading row the whole row goes under the tools and the
-    // band disappears.
+    // **The kept heading covers the window's top too** (`narrow.js`). In a body row of that table,
+    // the cursor stays below the band. In the heading row, the whole row goes under the tools and
+    // the band disappears.
     const band = ks.pinnedBand ? ks.pinnedBand() : null;
     if (band !== null && y >= band.ty && y < band.ty + band.th) {
       if (y < band.ry + band.rh) top = rect.top + band.ry;

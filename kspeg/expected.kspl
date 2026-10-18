@@ -5,8 +5,8 @@
 //< tree; `kspeg/rule` represents a rule.
 
 // ==========================================
-// Caution: Do not import engine or notation here; they use this, and importing back makes a cycle
-// (which is why the state lives in `Fail_track` itself, not in `Target`'s fields). It is split
+// Caution: Do not import engine or notation here. They use this, and importing back makes a cycle.
+// That is why the state lives in `Fail_track` itself, not in `Target`'s fields. It is split
 // from `engine` because it is read for a different reason ("Files near the limit and how they
 // split" in [kspeg](README.md)).
 // ==========================================
@@ -14,7 +14,7 @@ import "kspeg/rule" { Rule }
 import "std/mem" { Arena }
 import "std/str" // `equals`
 
-const max_expected_labels: Sz = 8 //< how many `expected` labels one position may carry.
+const max_expected_labels: Sz = 8 //< how many `expected` labels one position can carry.
     //<
     //< Caution: Keep the number in this one place; with copies, raising one would write past the
     //< buffer another sized. **Raising it does not help**: what overflows is the operators that
@@ -38,8 +38,8 @@ pub struct Expected //< one thing that could have come where the parse stopped
     pub is_optional: Bool //< whether nothing had to be written here, so it did not stop the parse.
         //<
         //< An optional or a repetition that gave up before reading a character. **Ignoring this
-        //< fills the list with ways to continue**: forget a `;` after an expression and every
-        //< operator is listed at that position before `';'`, though only `';'` stopped the parse.
+        //< fills the list with ways to continue.** Forget a `;` after an expression, and every
+        //< operator is listed at that position before `';'`. Yet only `';'` stopped the parse.
         //< Pass the list through `order_expected` before reporting it.
 
 pub struct Fail_track //< one input's failure record: how far it got, and what could go there
@@ -57,7 +57,7 @@ pub struct Fail_track //< one input's failure record: how far it got, and what c
         //<
         //< Caution: **Count only the failures inside the token** (where recording is suppressed).
         //< An ordinary rule failing inside it (an expression inside interpolation) records at its
-        //< own position; counted here too, it would list the token's name at that position as well.
+        //< own position. Counted here too, it would list the token's name at that position as well.
     skippable_start: Sz //< where the innermost open skippable attempt began, or `no_skippable`
         //<
         //< **Save it and restore it.** Attempts nest, so leaving it overwritten makes an outer
@@ -115,7 +115,7 @@ impl Fail_track
             add.is_optional = pos == r.skippable_start
             for i in Range.asc(r.expected_label_count)
                 if (r.expected_labels + i).text.equals(add.text)
-                    // Caution: **A label that stopped the parse wins.** The same text may already
+                    // Caution: **A label that stopped the parse wins.** The same text can already
                     // be listed as skippable, and if that mark stayed, an overflow would drop it
                     // first.
                     if !add.is_optional
@@ -128,10 +128,10 @@ impl Fail_track
                 (r.expected_labels + r.expected_label_count)$ = add
                 r.expected_label_count += 1
                 return
-            // It overflowed. **Drop a label that need not be written**, or the operators that could
-            // continue the expression fill the list and the `';'` ending the statement never gets
-            // in (the order is explained at `order_expected`). The labels that stopped the parse
-            // never exceed the cap (one position requires no more than its grammar has).
+            // It overflowed. **Drop a label that need not be written.** Otherwise the operators
+            // that could continue the expression fill the list. The `';'` ending the statement then
+            // never gets in (the order is explained at `order_expected`). The labels that stopped
+            // the parse never exceed the cap (one position requires no more than its grammar has).
             for i in Range.asc(max_expected_labels)
                 if (r.expected_labels + i).is_optional
                     (r.expected_labels + i)$ = add
@@ -155,9 +155,9 @@ impl Fail_track
     pub fn order_expected(r: Self$@) //<
         //< moves what stopped the parse to the front, before reporting
         //<
-        //< Labels at one position are recorded from the inside outward, so without reordering the
+        //< Labels at one position are recorded from the inside outward. Without reordering, the
         //< fixes (`';'` / `')'` / `'}'`) are buried behind operators that could continue the
-        //< expression. **Put the rest after them instead of dropping them**: what need not be
+        //< expression. **Put the rest after them instead of dropping them.** What need not be
         //< written can still be written there (after `f(`, both a parameter and a `)` can).
         //< Caution: **Keep the order within each group**: inside to outside says which is closest.
         $sorted: Expected[max_expected_labels] = ::{}

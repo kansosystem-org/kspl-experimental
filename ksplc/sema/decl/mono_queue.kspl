@@ -4,7 +4,7 @@
 //< separately; this file queues and drains them. Instantiation itself is in `sema/decl/mono.kspl`.
 //<
 //< It deals only in **the order**: not what is built but when. The boundaries are in "Where the
-//< instantiation queue is drained" in `ksplc/docs/DESIGN-compiler.md`.
+//< instantiation queue is drained" in `ksplc/docs/DESIGN-sema.md`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/mono" as sema_decl_mono
@@ -25,10 +25,6 @@ priv const max_method_chain_depth: Sz = 32 //< the limit on the method-table cha
     //< Caution: **Do not raise it much**: stopping a runaway would take seconds and look like a
     //< hang.
 
-priv fn empty_pending(): sema_session_state.Pending_methods //<
-    //< The "absent" value for deferred_methods lookups (a Map's only lookup returns a default)
-    return sema_session_state.Pending_methods::{ .type_id = 0 }
-
 impl Sema_ctx
     fn mark_constraint_failed(r: Self$@) //<
         //< Records a type-argument constraint violation against the currently bound instantiation
@@ -45,11 +41,7 @@ impl Sema_ctx
         //< Where it does, its body is not type-checked.
         if inst_name.len == 0
             return false
-        return r.mono.constraint_failed.get(inst_name) catch false
-
-    fn method_chain_was_cut(r: Self$@): Bool //<
-        //< Whether the method-table chain was cut at its depth limit (Mono_state.method_chain_cut)
-        return r.mono.method_chain_cut
+        return r.mono.constraint_failed.get(inst_name).unwrap_or(false)
 
     fn snapshot_generic_args(r: Self$@): List<|sema_session_state.Generic_arg|>$@ //<
         //< Copies the currently bound type arguments
@@ -93,15 +85,13 @@ impl Sema_ctx
         // (`b.moved(true).get()`) would come back with no table: "there is no such method".
         if r.is_table_pending(real)
             r.drain_pending_instances()!
-        held: = r.mono.deferred_methods.get(real) catch empty_pending()
-        if held.type_id == 0
-            return
-        r.mono.deferred_methods.remove(real)
-        // Caution: **Clear the flag before queueing.** Left set, the drain defers it again.
-        $promoted: = held
-        promoted.awaits_pull = false
-        r.mono.pending_methods.push(promoted)
-        return r.drain_pending_instances()
+        if held: = r.mono.deferred_methods.get(real)
+            r.mono.deferred_methods.remove(real)
+            // Caution: **Clear the flag before queueing.** Left set, the drain defers it again.
+            $promoted: = held
+            promoted.awaits_pull = false
+            r.mono.pending_methods.push(promoted)
+            r.drain_pending_instances()!
 
     fn build_entrusted_tables(r: Self$@) //<
         //< Builds every method table deferred until a lookup, for a caller with no type to look by
@@ -198,7 +188,7 @@ impl Sema_ctx
             r.mono.pending_constraints.push(kept.get(j))
 
     // Queues building an instantiation's method table and trait conformance.
-    // **It only queues; nothing is drained here**: it runs while an annotation is resolved, with
+    // **It only queues; nothing is drained here.** It runs while an annotation is resolved, with
     // the outer type arguments bound (drain_pending_instances does the building).
     fn queue_instance_methods(r: Self$@, type_id: I32, inst_name: U8[])
         // The depth is one more than the current body's or table's.
@@ -234,22 +224,31 @@ impl Sema_ctx
             // **The queue turns recursion into iteration, so mono_depth cannot catch this.**
             // Without a depth count, a method returning a deeper form of its type never ends, with
             // no diagnostic.
-            tmpl_node: = r.generics.templates.get(inst.template) catch null
-            if p.depth > max_method_chain_depth
+            tmpl_node: = r.generics.templates.get(inst.template).unwrap_or(null)
+            // **A table nobody has looked up builds no method**, so the chain cannot run through
+            // it. A deeper instance comes from a function body, whose own limit names the
+            // recursion. Its limit only stops a conformance that names a deeper instance.
+            defers: =
+                p.awaits_pull && !r.env.is_arc_type(r.env.get_real_type(p.type_id))
+            limit: = sema_decl_mono.max_mono_depth if defers else max_method_chain_depth
+            if p.depth > limit && r.mono.chain_cut
+                throw .analysis_failed
+            if p.depth > limit
                 // The position is the type's declaration: the body advancing the chain is not known
                 // here.
-                // **Name the nesting, not an owner of the methods**: the instance at the limit is
-                // the innermost one (`Box2` in the example), not the type whose method nests it.
+                // The instance named is the one whose table reached the limit, so its methods are
+                // what nests. In the example, that is `Chain`; `Box2`'s table is deferred and
+                // builds none.
                 r.clear_scratch()
-                    .s("generic method table chain too deep: '\{inst.template\}' came out nested \
-                        \{max_method_chain_depth\} levels, each level's methods requiring the next \
-                        (as when a method of 'Chain<|S|>' returns 'Chain<|Box2<|S|>|>' and a method \
-                        of that one is called). It only grows where a method of the deeper type is \
-                        actually called; stop the recursion there, or make the step a free generic \
+                    .s("generic method table chain too deep. '\{inst.template\}' is nested \
+                        \{limit\} levels, with each level's methods requiring the next. This occurs \
+                        when a method of 'Chain<|S|>' returns 'Chain<|Box2<|S|>|>' and a method of \
+                        that one is called. It only grows where a method of the deeper type is \
+                        actually called. Stop the recursion there, or make the step a free generic \
                         function taking the receiver")
                 r.err(tmpl_node if tmpl_node != null else r.generics.inst_site,
                     r.scratch.slice())
-                r.mono.method_chain_cut = true
+                r.mono.chain_cut = true
                 throw .analysis_failed
             r.generics.inst_chain_depth = p.depth
             real_id: = r.env.get_real_type(p.type_id)
@@ -260,13 +259,13 @@ impl Sema_ctx
             // Queued twice, it is not rebuilt (every annotation requests one).
             if t_entry.methods != null && t_entry.methods.len > 0
                 continue
-            // Caution: **Drain the accumulated constraints before building this item**, or
-            // follow-on errors inside the standard library bury the violation
-            // (the case generic_constraint_in_template_body in tests/negative/generic.kspl). **Not
-            // outside the loop**: an earlier iteration fills the conformance table it reads.
+            // Caution: **Drain the accumulated constraints before building this item.** Otherwise
+            // follow-on errors inside the standard library bury the violation (the case
+            // generic_constraint_in_template_body in tests/negative/generic.kspl). **Not outside
+            // the loop**: an earlier iteration fills the conformance table it reads.
             r.drain_pending_constraints_for(p.inst_name)
-            // Bind the type arguments over the same range as prepare_inst_node, a method included;
-            // the copy queued for the body is taken here, or the body is analyzed without `T`
+            // Bind the type arguments over the same range as prepare_inst_node, a method included.
+            // The copy queued for the body is taken here, or the body is analyzed without `T`
             // (Pending_inst in sema/session/state.kspl).
             gen_params: =
                 tmpl_node.find_child(.k_type_gen_params) if tmpl_node != null else null
@@ -278,7 +277,7 @@ impl Sema_ctx
             defer r.restore_mono_state(backup@)
             r.bind_generic_args(gen_params, inst.args, false)
             // The table is built on first lookup ("Where the instantiation queue is drained" in
-            // ksplc/docs/DESIGN-compiler.md).
+            // ksplc/docs/DESIGN-sema.md).
             // Caution: **Complete only the conformance registration first** (indexing, upcasting
             // and constraints read it), **after binding**, or C gets `unknown type name 'T'`.
             if p.awaits_pull

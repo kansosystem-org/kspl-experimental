@@ -5,7 +5,7 @@
 //< What follows a `for` that never ends is unreachable
 //<
 //< A `for` with no condition that no `break` leaves never hands control on ("Loops" in
-//< `../../../docs/SPEC-language.md`), so the statement after it gets [W0201], and the function
+//< `../../../docs/SPEC-language.md`). So the statement after it gets [W0201], and the function
 //< needs no `return` there. An inner loop's `break` leaves only the inner loop.
 // EXPECT: [W0201] Unreachable code detected
 // EXPECT-NOT: control may reach the end
@@ -23,7 +23,7 @@ pub fn spin(): I32
 //< What follows a labelled `switch` or `if` that a `break` leaves is reachable
 //<
 //< **A `break` to the label carries control past the statement**, so the code after it runs
-//< though every branch ends in a `return`; the missing-return check already reads it so. Read as
+//< though every branch ends in a `return`. The missing-return check already reads it so. Read as
 //< unreachable, the `return` after each would be reported, and the variable it reads as unused.
 // EXPECT-NOT: [W0201]
 // EXPECT-NOT: [W0207]
@@ -52,7 +52,7 @@ pub fn branch_of(e: I32): I32
 // ==== case len_of_an_array_field
 //< A struct read only through its array field's `.len` gets the same note as an array does
 //<
-//< **The note named only a variable that is itself an array**, so `b.v.len` on a struct whose `v`
+//< **The note named only a variable that is itself an array.** So `b.v.len` on a struct whose `v`
 //< is a fixed (or const-generic) array said "nothing reads" with no reason (`holds_fixed_array` in
 //< `ksplc/sema/flow/report.kspl`).
 // EXPECT: [W0207] Nothing reads local variable or parameter 'b'. Prefix with '_' to ignore. Note: a fixed array's '.len' folds at compile time
@@ -67,7 +67,7 @@ fn main()
 // ==== case meaningless_compare_float
 //< [W0204] does not cover floating point
 //<
-//< Under IEEE 754 a NaN is equal to no value at all, so `f != f` is the one spelling that asks "is
+//< Under IEEE 754 a NaN is equal to no value at all. So `f != f` is the one spelling that asks "is
 //< f a NaN", and it is not always false. On the integer side it must come out as before (these two
 //< items are pinned down in one file).
 // EXPECT: [W0204] Meaningless comparison: 'n == n'
@@ -104,12 +104,11 @@ pub fn self_assign($n: I32): I32
   n = n
   return n
 // ==== case unused_and_ignored
-//< Checks that the five diagnostics for "written but never read" can fire
+//< Checks that the diagnostics for "written but never read" can fire
 //<
-//< Caution: Keep one fixed-length array around — [W0207] looks at the reading, not at the name
+//< Caution: Keep one fixed-length array around. [W0207] looks at the reading, not at the name
 //< appearing, so it comes out on an array used only through `.len`.
-//< Keep one import around — the private-declaration check draws the file by name.
-// EXPECT: [W0701] Result of type
+//< Keep one import around: the private-declaration check draws the file by name.
 // EXPECT: [W0202] Expression result of type
 // EXPECT: [W0206] Unused private
 // EXPECT: [W0207] Nothing reads local variable or parameter
@@ -117,17 +116,10 @@ pub fn self_assign($n: I32): I32
 // EXPECT: [W0208] Variable
 import "std/io"
 
-enum Probe_error
-  failed
-
-priv fn may_fail(): I32!Probe_error
-  return 1
-
 priv fn never_called(): I32 //< a private declaration that is not called
   return 0
 
 pub fn probe(used: I32, unread_param: I32): I32
-  may_fail()
   used + 1
   never_read: I32 = 5
   $assigned_only: I32 = 0

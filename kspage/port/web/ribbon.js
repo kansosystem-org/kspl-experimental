@@ -2,10 +2,10 @@
 // kspage's page — the ribbon and the tools: the table of commands shown, collapsing the overflow,
 // collapsing the ribbon.
 //
-// **What a button does is the same as the menu's**: `press` clicks the menu's button (a second
-// path would drift), and `run` is for what is in no menu. **Only as much as fits on one row**; a
+// **What a button does is the same as the menu's.** `press` clicks the menu's button (a second
+// path would drift). `run` is for what is in no menu. **Only as much as fits on one row**; a
 // group that does not fit moves into `…`. **The table is the ribbon**: no tool is chosen, hidden
-// or moved by the viewer, so every screen shows the same row and a tool is where the manual says.
+// or moved by the viewer. So every screen shows the same row, and a tool is where the manual says.
 // ==========================================
 function kspageRibbon(ui) {
   const app = ui.app;
@@ -21,12 +21,12 @@ function kspageRibbon(ui) {
     return spec;
   };
   // ---- The ribbon ---- (the rules are in the header; the menu side handles the notice and the
-  // focus.) **This table's order is "the order of use"**: `…`
-  // takes from the end, so it is the order they survive a narrow screen (`../../docs/DESIGN-application.md`'s
-  // "The band's right side is not left empty"). A contextual group (`when`: `"cells"` in a table,
-  // `"frame"` on a selected frame) goes before the others, so it stays when it appears. The shapes:
+  // focus.) **This table's order is "the order of use".** `…`
+  // takes from the end. So it is the order they survive a narrow screen (`../../docs/DESIGN-application.md`'s
+  // "The band's right side is not left empty"). A contextual group goes before the others, so it
+  // stays when it appears (`when`: `"cells"` in a table, `"frame"` on a selected frame). The shapes:
   // **a shortcut, not the list** (the menu's `shape-kind`; the numbers are `draw.js`'s `SHAPES`).
-  // Caution: **The text must be a name the core knows** — an unknown name becomes number 0, so a
+  // Caution: **The text must be a name the core knows.** An unknown name becomes number 0, so a
   // typo silently inserts a rectangle (`make test-conventions` checks it).
   const SHAPES = [
     { id: "draw-box", mark: "▭", label: "Rectangle", shape: "box" },
@@ -117,7 +117,7 @@ function kspageRibbon(ui) {
       // menus, and set once).
     ] },
     // Shapes. **Clicking arms the tool**, then a drag draws it (a click alone opens the menu's).
-    // Caution: **Do not list the shapes on the row one by one** — they eat the row and the eye
+    // Caution: **Do not list the shapes on the row one by one.** They eat the row and the eye
     // skips over them (Office puts them behind one "Shapes" too).
     { name: "Shapes", items: [
       { id: "tool-shapes", mark: "▱", label: "Shapes", gallery: true, at: "put-shape-fly" },
@@ -360,9 +360,9 @@ function kspageRibbon(ui) {
             return;
           }
           // Caution: **An item that fills a field only goes there** (`page.js`'s `reach`), or a
-          // link with no target would attach. **Stop the click here** — it would bubble to the rule
-          // that closes panels on any click (`page.js`), and the panel would open and close in one
-          // click, looking dead.
+          // link with no target would attach. **Stop the click here.** It would bubble to the rule
+          // that closes panels on any click (`page.js`). The panel would then open and close in
+          // one click, looking dead.
           if (one.at) {
             e.stopPropagation();
             ui.reach(one.at, one.to);
@@ -408,8 +408,8 @@ function kspageRibbon(ui) {
         box.hidden = true;
         // Caution: **Copy them in the row's order** (not buttons and openers separately).
         for (const part of box.children) {
-          // **Do not copy an opener (a color group, the list of shapes) as it is** — the copy would
-          // not open (Principle 5); it goes to the menu's twin.
+          // **Do not copy an opener (a color group, the list of shapes) as it is.** The copy
+          // would not open (Principle 5); it goes to the menu's twin.
           const jump = part.dataset.at !== undefined;
           const key = jump ? null : part;
           if (!jump && key.tagName !== "BUTTON") continue;

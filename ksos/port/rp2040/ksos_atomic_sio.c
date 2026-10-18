@@ -4,9 +4,9 @@
 //
 // Armv6-M has no exclusive-access instructions (LDREX/STREX), so ksplc's runtime
 // (ksplc/gen/runtime/core.c) **defines no** atomic helper for this architecture. That is
-// why std/mem's heap (mem.alloc), Arc and std/thread's Atomic_sz could not link, with "undefined
-// symbol: kspl_atomic_cas". This fills that hole. It is particular to the RP2040, so it is put in
-// the port layer rather than on ksplc's side (ksplc does not know the target CPU).
+// why std/mem's heap (mem.alloc), Arc and std/thread's Atomic_sz could not link without it. The
+// link says "undefined symbol: kspl_atomic_cas". This fills that hole. It is particular to the
+// RP2040, so it is in the port layer, not on ksplc's side (ksplc does not know the target CPU).
 //
 // Caution: **The interrupt mask alone must not stand in for it.** PRIMASK stops only its own core,
 // so it breaks quietly once core1 is used; SIO's spinlock holds between the cores.
@@ -15,8 +15,8 @@
 // here while it is held freezes waiting for itself. So interrupts stop before taking it and come
 // back after releasing it.
 //
-// It protects one read-modify-write alone: mem.alloc from an ISR while std/mem's heap spinlock is
-// held still freezes, which is why ksos/kernel/heap.kspl puts irq_save/irq_restore around it.
+// It protects one read-modify-write alone. mem.alloc from an ISR while std/mem's heap spinlock is
+// held still freezes. That is why ksos/kernel/heap.kspl puts irq_save/irq_restore around it.
 // ==========================================
 #include <stdint.h>
 #include <stddef.h>
@@ -40,9 +40,9 @@ typedef ptrdiff_t Sz;
 // two ever be linked together.
 #define KSOS_ATOMIC_SPINLOCK_ID 31u
 
-// Caution: Get the address wrong and the link and the start-up get through and **it freezes on the
-// first lock** (a missing register reads 0, "somebody else holds it"), seen only on the real
-// thing; so the computed result is pinned down at build time.
+// Caution: With a wrong address, the link and the start-up get through. Then **it freezes on the
+// first lock** (a missing register reads 0, "somebody else holds it"). Only the real thing shows
+// it. So a check at build time pins down the computed result.
 _Static_assert(SIO_BASE + SIO_SPINLOCK0_OFFSET + KSOS_ATOMIC_SPINLOCK_ID * 4u == 0xd000017cu,
                "SIO spinlock address changed: check SIO_BASE / SPINLOCK0 offset / lock id");
 

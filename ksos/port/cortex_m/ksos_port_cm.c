@@ -7,6 +7,19 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// The linker bounds RAM. A panic near its end must not read a full stack fragment past it.
+extern unsigned char _sdata[], _estack[];
+intptr_t kspl_panic_stack_words(intptr_t sp, intptr_t capacity) {
+    uintptr_t address = (uintptr_t)sp;
+    uintptr_t end = (uintptr_t)_estack;
+    if (capacity <= 0 || address < (uintptr_t)_sdata || address >= end ||
+        address % sizeof(intptr_t) != 0) {
+        return 0;
+    }
+    intptr_t words = (intptr_t)((end - address) / sizeof(intptr_t));
+    return words < capacity ? words : capacity;
+}
+
 // The context shared with switch.S / PendSV: it holds the saved PSP at its head.
 typedef struct {
     void* sp;
@@ -14,8 +27,14 @@ typedef struct {
 
 extern void ksos_trampoline(void); // the task's starting point, #exported by the KSPL kernel
 
-// The switch's from and to for PendSV (set by ksos_port_switch; external linkage is needed).
-ksos_ctx* g_pendsv_from;
+// The context of the thread running now, and the one PendSV switches to (external linkage is
+// needed: switch.S reads both).
+// **Only PendSV writes g_pendsv_running**, as it switches (and ksos_port_ctx_free, to the discard).
+// The kernel's own idea of the running task cannot stand in for it. The kernel counts the task it
+// picked as current at once, while the switch waits for PendSV. And PENDSVSET cannot tell a caller
+// whether a switch is still to come. An interrupt above PendSV's priority can run after PendSV has
+// become active (PENDSVSET reads 0), before its first instruction masks interrupts.
+ksos_ctx* g_pendsv_running;
 ksos_ctx* g_pendsv_to;
 
 // The static pool: the scheduler's (the main) context plus one per task. A deleted task's context
@@ -37,11 +56,6 @@ static ksos_ctx* alloc_ctx(void) {
     return NULL;
 }
 
-// PENDSVSET reads 1 while PendSV is pending.
-static int pendsv_pending(void) {
-    return (*(volatile uint32_t*)0xE000ED04u & (1u << 28)) != 0u; // SCB->ICSR
-}
-
 // Makes, on the named stack, an initial frame PendSV can restore. PendSV pops {r4-r11}, and the
 // exception return that follows pops {r0-r3,r12,lr,pc,xPSR} and enters pc (= ksos_trampoline).
 void* ksos_port_ctx_create(void* stack, long stack_size) {
@@ -61,33 +75,34 @@ void* ksos_port_ctx_create(void* stack, long stack_size) {
     return c;
 }
 
-// The scheduler's (the main) context; PendSV saves sp on the first switch away.
+// The scheduler's (the main) context, which is running when it is made (start_scheduler makes it
+// before the first switch). PendSV saves sp into it on that switch away.
 void* ksos_port_ctx_create_main(void) {
-    return alloc_ctx();
+    ksos_ctx* c = alloc_ctx();
+    g_pendsv_running = c;
+    return c;
 }
 
-// Returns a deleted task's context to the pool (the kernel calls it in a critical section). A
-// pending switch may still be about to save the thread running into it: that save goes to the
-// discard instead, or a create taking the slot first would have its new frame overwritten.
+// Returns a deleted task's context to the pool (the kernel calls it in a critical section). If it
+// is the running thread's, the next PendSV would still save that thread into it. So that save goes
+// to the discard instead. Otherwise a create that takes the slot first would lose its new frame.
 void ksos_port_ctx_free(void* ctx) {
     ksos_ctx* c = (ksos_ctx*)ctx;
-    if (pendsv_pending() && g_pendsv_from == c) {
-        g_pendsv_from = &g_ctx_discard;
+    if (g_pendsv_running == c) {
+        g_pendsv_running = &g_ctx_discard;
     }
     g_ctx_busy[c - g_ctx_pool] = 0;
 }
 
-// Saves from and switches to to. The body is PendSV. In thread mode pend plus isb switches at
-// once, and from handler mode (SysTick and the like) it is tail-chained after that handler returns.
-// While a switch is still pending, the thread running is the pending switch's from, not the from
-// handed in (the kernel already counts the pending switch's to as current), so only to changes.
-// It happens when a second schedule() comes before PendSV runs: an interrupt handler giving
-// between another handler's schedule() and PendSV. A null from (the running task was deleted)
-// saves into the discard.
+// Switches to to. The body is PendSV. In thread mode, pend plus isb switches at once. From
+// handler mode (SysTick and the like), it is tail-chained after that handler returns.
+// **from is not read**: PendSV saves the thread really running (g_pendsv_running). That differs
+// from the from handed in when a second schedule() comes before PendSV has switched. (A handler
+// can give after another's schedule(), or during PendSV's first instruction.) So
+// a second call changes only the destination. A null from (the running task was deleted) needs
+// nothing here: ksos_port_ctx_free has already sent its save to the discard.
 void ksos_port_switch(void* from, void* to) {
-    if (!pendsv_pending()) {
-        g_pendsv_from = from != NULL ? (ksos_ctx*)from : &g_ctx_discard;
-    }
+    (void)from;
     g_pendsv_to = (ksos_ctx*)to;
     *(volatile uint32_t*)0xE000ED04u = (1u << 28); // SCB->ICSR: PENDSVSET
     __asm__ volatile("dsb; isb");
@@ -95,8 +110,8 @@ void ksos_port_switch(void* from, void* to) {
 
 // Starts SysTick at a period of reload cycles, and sets PendSV's priority too.
 void ksos_port_tick_start(uint32_t reload) {
-    // SHPR3: PendSV (bits23:16) and SysTick (bits31:24) share the lowest priority, so SysTick
-    // tail-chains after a PendSV in progress and g_pendsv_from/to is not broken mid-switch.
+    // SHPR3: PendSV (bits23:16) and SysTick (bits31:24) share the lowest priority. So SysTick
+    // tail-chains after a PendSV in progress rather than preempting it.
     * (volatile uint32_t*)0xE000ED20u |= (0xFFu << 16) | (0xFFu << 24);
     * (volatile uint32_t*)0xE000E014u = reload;          // SysTick->LOAD
     * (volatile uint32_t*)0xE000E018u = 0;               // SysTick->VAL
@@ -133,10 +148,11 @@ void SysTick_Handler(void) {
     ksos_tick();
 }
 
-// WFI rests the CPU until the next interrupt. A demo uses it to show an interrupt-driven driver
-// really is woken by an interrupt (with the NVIC set up wrong, it never returns).
-void ksos_port_wfi(void) {
-    __asm__ volatile("wfi");
+// Sleeps until an interrupt. The kernel calls it with interrupts masked. WFI wakes on a pending
+// interrupt even under PRIMASK, so one arriving after the kernel's last look is not missed. The
+// handler runs in the short unmasked window that follows. The mask is back on return.
+void ksos_port_wait_irq(void) {
+    __asm__ volatile("dsb\n\twfi\n\tcpsie i\n\tisb\n\tcpsid i" ::: "memory");
 }
 
 // The default handler for UART0's RX interrupt (NVIC IRQ0, on the mps2-an385). The vector table

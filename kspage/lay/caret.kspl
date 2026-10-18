@@ -22,8 +22,8 @@ import "std/str" { Str_builder }
 struct Caret //< a position in the document
     //<
     //< **`Caret` and `Cursor` in this file are two things; merge neither into the other.** This one
-    //< is **the position** (which run, which byte, what is being composed, where a selection
-    //< starts); `Cursor` below is **the vertical bar drawn for it** (x, y, height).
+    //< is **the position**: which run, which byte, what is being composed, where a selection
+    //< starts. `Cursor` below is **the vertical bar drawn for it** (x, y, height).
     inline: Inline$@ //<
         //< The run the cursor is in
         //<
@@ -100,8 +100,8 @@ priv fn away(v: F32): F32
 priv fn width_to(src: Font_source, b: Box$@, offset: Sz): F32 //<
     //< The width from the box's start to byte offset
     //<
-    //< Caution: **Do not divide it by the byte count.** ASCII is one byte per half an em and a
-    //< multi-byte script three bytes per em, so on a mixed line a divided position lands
+    //< Caution: **Do not divide it by the byte count.** ASCII is one byte per half an em. A
+    //< multi-byte script is three bytes per em. So on a mixed line a divided position lands
     //< mid-character. **Add the justifying letter spacing too** (`Box.spacing`).
     wide: = src.measure_width(b.font, b.text.sub(0, offset))
     if b.spacing <= 0.0
@@ -132,9 +132,9 @@ fn hit_test(page: Page$@, x: F32, y: F32): Caret //<
     $best_d: F32 = -1.0
     for $i: Sz = 0; i < page.boxes.len; i += 1
         b: = page.boxes.get(i)
-        // Caution: **Skip a box that is not in the document.** A bullet list's mark is not text, so
-        // a click there would compute a position inside the mark's text and report it as a position
-        // in the body.
+        // Caution: **Skip a box that is not in the document.** A bullet list's mark is not text.
+        // A click there would compute a position inside the mark's text and report it as a
+        // position in the body.
         if b.inline == null
             continue
         // Caution: **Weight vertical distance above horizontal.** Weighted the same, the edge of
@@ -186,8 +186,8 @@ fn carry_tail(c: Caret$@, n: Inline$@, at: Sz, tail: Inline$@) //<
     //< Carries along a cursor that has moved into the second half of a split
     //<
     //< Caution: **Leave a cursor exactly at the split on the near side.** The run before stays, so
-    //< it points at the same position either way, but moved past, the selection's end would point
-    //< at a run outside the range (the applied style could no longer be read).
+    //< it points at the same position either way. Moved past, the selection's end would point at
+    //< a run outside the range, and the applied style could no longer be read.
     if c.inline == n && c.offset > at
         c.inline = tail
         c.offset -= at
@@ -273,7 +273,7 @@ priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): F32? //<
     //< The vertical middle of the next line beyond the line at y..y+h
     //<
     //< **It looks through the laid-out lines; it guesses no distance.** Step by the line's own
-    //< height and nothing taller than half a line (a heading's space, a picture) can be crossed:
+    //< height, and nothing taller than half a line (a heading's space, a picture) can be crossed.
     //< `hit_test` pulls the landing back to the line it started from, and ↓ stays put.
     //< **A line entirely clear of the current one is another line** (the split `same_row` makes).
     $near: Box$@ = null
@@ -296,9 +296,9 @@ priv fn row_beyond(page: Page$@, y: F32, h: F32, dir: I32): F32? //<
         near = b
     if near == null
         return .none
-    // **Of that line, the lowest box is returned.** On a line mixing sizes the small box's middle
-    // is inside the big box but not the other way round, so aiming at the big box's middle, the
-    // small text on that line could not be reached.
+    // **Of that line, the lowest box is returned.** On a line that mixes sizes, the small box's
+    // middle is inside the big box, but not the other way round. Aimed at the big box's middle,
+    // the small text on that line could not be reached.
     $best: Box$@ = near
     for $i: Sz = 0; i < page.boxes.len; i += 1
         b: = page.boxes.get(i)
@@ -412,7 +412,7 @@ fn selection(d: Doc$@, c: Caret): Selection //<
 
 fn selection_into(d: Doc$@, c: Caret, sb: Str_builder$@) //< appends the selected text to sb
     //<
-    //< **A paragraph break is one newline** (the paste code turns it back into a paragraph); an
+    //< **A paragraph break is one newline** (the paste code turns it back into a paragraph). An
     //< `Inline` holds none, so a newline appears only where a paragraph was crossed. **No copy is
     //< made** (it writes straight into the builder).
     if !has_selection(c)

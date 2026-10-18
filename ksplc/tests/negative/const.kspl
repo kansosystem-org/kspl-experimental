@@ -4,9 +4,9 @@
 // ==== case const_cycle
 //< A cycle among constant definitions is rejected
 //<
-//< Otherwise the name goes straight into C's initialiser and the C compiler fails there
-//< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md). **A backward reference is not a cycle** and has to pass; stopping it
-//< binds top-level declarations to file order (sema's collect Pass 2a/2b, emit_top_level_vars).
+//< Otherwise the name goes straight into C's initialiser and the C compiler fails there ("Failing
+//< fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md). **A backward reference is not a cycle** and must pass. A refusal of
+//< it binds top-level declarations to file order (sema's collect Pass 2a/2b, emit_top_level_vars).
 // EXPECT: circular constant definition detected
 // EXPECT-NOT: initializer element
 pub const A: I32 = B
@@ -38,9 +38,9 @@ fn main()
 // ==== case const_init_overflow
 //< A top-level initialiser is folded and checked for overflow even when nothing uses it
 //<
-//< Caution: **Leave it to `eval_constexpr` and it passes through**: that one runs only where a
+//< Caution: **Leave it to `eval_constexpr` and it passes through.** That one runs only where a
 //< value is needed (an array length, an enum tag, an index, a generic bound). An unfoldable
-//< initialiser has to pass in silence; an unsigned wrap (`mod 2^N` by the specification) is fine.
+//< initialiser must pass silently. An unsigned wrap (`mod 2^N` by the specification) is fine.
 // EXPECT: integer overflow in compile-time constant expression
 // EXPECT-NOT: [W0
 // EXPECT-NOT: is not a compile-time constant
@@ -87,11 +87,41 @@ fn main(): I32
   _d: = col
   _e: = hook
   return 0
+// ==== case const_init_part_read
+//< A top-level initializer reading a part of another value is refused, by ksplc itself
+//<
+//< Let through, C99 refuses a read of an element or a member in a file-scope initializer. gcc says
+//< "initializer element is not constant"; clang lets some by. LLVM refuses it with
+//< advice to use C. An array's `.len` is no read and passes.
+// EXPECT: const_init_part_read.kspl:20:21: error: a top-level initializer cannot read a part of another value
+// EXPECT: const_init_part_read.kspl:21:21: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:22:20: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:23:20: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:24:20: error: a top-level initializer cannot read a part
+// EXPECT: const_init_part_read.kspl:25:16: error: a top-level initializer cannot read a part
+// EXPECT: Finished with 6 error(s)
+// EXPECT-NOT: initializer element
+pub struct P
+  pub x: I32
+  pub y: I32
+pub const a: I32[_] = ::{ 1, 2, 3 }
+pub const p: P = ::{ .x = 4, .y = 5 }
+pub const s: U8[] = "hello"
+pub const z1: I32 = a[2]
+pub const z2: I32 = p.x
+pub const z3: U8 = "abc"[1]
+pub const z4: Sz = s.len
+pub const z5: Sz = "abc".len
+pub $z6: U8@ = s.ptr
+pub const ok_len: Sz = a.len
+
+fn main(): I32
+  return z1 + z2 + I32::z3 + I32::z4 + I32::z5 + I32::ok_len + I32::z6$
 // ==== case const_ptr_field_write
 //< A write into a field at the target of a read-only pointer (`T@`)
 //<
-//< The type declares the target immutable, so it is refused, as a write to an element of a
-//< read-only slice `T[]` is; force the element side alone and a pointer's target passes through.
+//< The type declares the target immutable. So it is refused, as a write to an element of a
+//< read-only slice `T[]` is. A check of the element side alone lets a pointer's target through.
 //< `p` itself is mutable (bare), so the refusal is shown to be on the type axis, not the binding's.
 // EXPECT: cannot write through a read-only pointer
 struct S
@@ -104,8 +134,8 @@ fn main()
 //< A write into the target of a read-only pointer (`T@`) held as a struct's field
 //<
 //< A step that is "a pointer beyond a field access" has its immutability forced just the same.
-//< It easily passes sema and falls on the generated C's `const`: for a field chain the root alone
-//< is inferred, then the type side is walked (write_target_type in sema/body/stmt.kspl).
+//< It easily passes sema and fails on the generated C's `const`. For a field chain, only the root
+//< is inferred. Then the type side is walked (write_target_type in sema/body/stmt.kspl).
 // EXPECT: cannot write through a read-only pointer
 
 struct S
@@ -122,9 +152,9 @@ fn main(): I32
 // ==== case const_ptr_nested_deref_write
 //< A multi-step dereference (`pp$$`) where the middle step is a read-only pointer (`I32@`)
 //<
-//< `pp$ = g2@` is legitimate (the outer step is `$@`), but `pp$$`'s target is immutable. Should
-//< write_target_type walk only `.` and not `$`, reject_write_through_const_ptr gives up
-//< (fail-open): C still refuses by its const qualifier, but LLVM has none and the write holds.
+//< `pp$ = g2@` is correct (the outer step is `$@`), but `pp$$`'s target is immutable. If
+//< write_target_type walks only `.` and not `$`, reject_write_through_const_ptr gives up
+//< (fail-open). C still refuses by its const qualifier. LLVM has none, and the write holds.
 // EXPECT: cannot write through a read-only pointer
 $g: I32 = 1
 $g2: I32 = 2
@@ -195,10 +225,10 @@ fn main()
 // ==== case const_slice_elem_compound_assign
 //< A **compound assignment** to an element of a read-only slice
 //<
-//< Caution: Check a write on an index only for `=` and `s[0] += v` rewrites the element: the C
-//< compiler does not catch it, since the generated C's const qualifier covers only the slice
+//< Caution: If a write on an index is checked only for `=`, `s[0] += v` rewrites the element. The C
+//< compiler does not catch it: the generated C's const qualifier covers only the slice
 //< descriptor's value (the `s.ptr` of `const Const_I32_Slice s` is not const).
-// EXPECT: cannot write to an element of a read-only slice or array
+// EXPECT: cannot write to an element of the read-only slice 'I32[]'. Use '$[]'
 
 fn bump_first(s: I32[])
   s[0] += 7
@@ -255,9 +285,9 @@ fn main(): I32
 // ==== case const_writable_elements
 //< A `$` on the type side cannot be written for a fixed-length array's elements
 //<
-//< The elements are the array's very substance, so the write permission belongs to **the side
+//< The elements are the array's own substance. So the write permission belongs to **the side
 //< holding it** (the `$` before the name, or the receiver for a field). `T$[]` and `T$@` target a
-//< separate substance and keep it on the type; a `$` on a `const` slice gets another diagnostic.
+//< separate substance and keep it on the type. A `$` on a `const` slice gets another diagnostic.
 // EXPECT: a fixed-size array cannot carry '$' on its element type
 // EXPECT: a fixed-size array cannot carry '$' on its element type
 // EXPECT: const 'sl' declares writable elements

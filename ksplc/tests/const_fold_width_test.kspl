@@ -1,10 +1,10 @@
 //< Verifies that an integer expression is computed at "the declared type's width and sign"
 //<
-//< Caution: Check the value itself — the two backends agreeing (tests/prog/equiv.kspl) passes
+//< Caution: Check the value itself. The two backends agreeing (tests/prog/equiv.kspl) passes
 //< when both are wrong the same way. Checked: the **width**, the **sign**, **the expected type's
-//< propagation**, **an unsigned narrower than `int` wrapping**, and **a signed wrapping**
-//< (undefined in C; property 3 of tests/suite/property_test.kspl covers optimized builds).
-//< Test both a global `const` and a local — sema's fold and the generated code differ.
+//< propagation**, **an unsigned narrower than `int` wrapping**, **a signed wrapping**. C leaves
+//< the last undefined (property 3 of tests/suite/property_test.kspl covers optimized builds).
+//< Test both a global `const` and a local: sema's fold and the generated code differ.
 import "std/str" { Str_builder }
 import "std/verdict"
 
@@ -143,7 +143,7 @@ priv fn check_negated_left() //<
     //< A negated literal left of `-` is computed at the declared type
     // The expected type propagates to a literal on a `-`'s left side, the one exception there
     // (otherwise pointer subtraction stops it from propagating).
-    // Caution: **Test a negative literal too.** A unary minus is a separate node; left out of the
+    // Caution: **Test a negative literal too.** A unary minus is a separate node. Left out of the
     // exception, `-4294967296` truncates at I32 and quietly gives `-1`, past the range check.
     assert(i64_min_folded == -9223372036854775807I64 - 1I64,
         "a folded negated literal on the left of '-' must be computed at the declared I64")
@@ -160,7 +160,7 @@ priv fn check_nested_folds() //<
     // The divisor and the shift amount sit at a position **folded inside the expression**.
     // Caution: Do not replace this with a global `const`. The divisor's zero check and the shift
     // range check (infer_binary_expr in sema/body/binary.kspl) fold before the right side is
-    // typed; a wrapped unsigned read as signed rejects a correct expression.
+    // typed. A wrapped unsigned read as signed rejects a correct expression.
     nested_div: U32 = 100U32 / ((0U32 - 292U32) / 649U32)
     nested_mod: U32 = 100U32 / ((0U32 - 292U32) % 5U32)
     nested_shift: U32 = 1U32 << (16U32 + 15U32)
@@ -204,7 +204,7 @@ priv fn check_narrow_wraps() //<
     assert(f == 27, "U8 bitwise not must wrap to mod 2^8 before it is divided")
     assert(g == 48, "U8 left shift must wrap to mod 2^8 before it is divided")
     assert(h == 2232, "U16 addition must wrap to mod 2^16 before it is divided")
-    // A 16-bit product passes the range of the `int` C promotes to: the C must not compute it there
+    // A 16-bit product passes the range of the `int` C promotes to. The C must not compute it there
     // (`make test-equiv` runs that C with C's overflow trap; at `-O0` it answers right anyway).
     u16max: U16 = 65535U16
     i16neg: I16 = 0I16 - 1I16
@@ -246,9 +246,9 @@ priv fn check_widening() //<
 
 priv fn check_signed_overflow() //<
     //< A signed overflow wraps by mod 2^N, division by -1 included
-    // A signed overflow wraps by `mod 2^N` too. **C leaves signed overflow undefined.** Unless the
-    // generated code goes through an unsigned of the same width, the answer changes with the
-    // optimization level (wrap_twin in gen/c/expr.kspl).
+    // A signed overflow wraps by `mod 2^N` too. **C leaves signed overflow undefined.** So the
+    // generated code goes through an unsigned of the same width. Otherwise the answer changes with
+    // the optimization level (wrap_twin in gen/c/expr.kspl).
     // Caution: **Test it with a local.** For a global `const` the fold makes an overflow a compile
     // error, so only the run-time path can pin the wrapping down.
     i32max: I32 = 2147483647
@@ -266,10 +266,10 @@ priv fn check_signed_overflow() //<
     assert(szone + 1 == 2, "Sz arithmetic must keep its value when it does not overflow")
 
     // Division's and remainder's overflow. **This cannot be written with a plain `/` `%`.**
-    // Dividing a type's minimum by `-1` is undefined in C and in LLVM alike, so the generated code
+    // Dividing a type's minimum by `-1` is undefined in C and in LLVM alike. So the generated code
     // calls a function that takes both operands (open_signed_div in gen/c/expr.kspl).
     // **Do not write the divisor as a constant.** A divisor known to be `-1` at translation time
-    // goes through that function too, but a divisor decided at run time is the real case.
+    // goes through that function too. But a divisor decided at run time is the real case.
     minus_one: I32 = 0 - 1
     assert(i32min / minus_one == i32min, "the minimum divided by -1 must give the minimum back")
     assert(i32min % minus_one == 0, "the minimum modulo -1 must be zero")
@@ -337,3 +337,18 @@ priv fn check_min_literal() //<
     assert(i64_min_len.len == 1, "the minimum folds as a value an array length can use")
     assert(I64::Tag_min.lo == local && I64::Tag_min.hi == -(local + 1),
         "an I64 tag at the minimum must keep its value")
+
+priv fn byte_address(p: Void$@): Sz //< the address a `Void$@` argument carries
+    return Sz::p
+
+fn test_pointer_step_passed_as_void() //<
+    //< It checks that `p + n` passed where a `Void$@` is expected steps by `p`'s element
+    //<
+    //< Caution: **Use an element wider than a byte.** The expected `Void$@` once converted `p`
+    //< before the addition, which steps by bytes; a `U8$@` cannot tell the two apart.
+    verdict.start("[Lang] pointer arithmetic passed as a Void$@ test...")
+    $n: I32 = 1
+    p: I32$@ = n@
+    step: = byte_address(p + 1) - byte_address(p)
+    assert(step == 4, "`p + 1` of an `I32$@` is 4 bytes on, as a `Void$@` too")
+    verdict.pass("pointer arithmetic steps by the element before it becomes a Void$@.")

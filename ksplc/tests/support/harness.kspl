@@ -1,8 +1,8 @@
 //< What ksplc's suites rely on: the compiler they inspect, the std it reads, and their scratch
 //<
 //< **One ksplc runs a suite, which inspects another.** `make test-suites` gives every suite the
-//< compiler under inspection and its scratch directory first, and runs it with another ksplc:
-//< built with the one inspected, a broken compiler and a failed check look the same. The checks
+//< compiler under inspection and its scratch directory first, and runs it with another ksplc.
+//< Built with the one inspected, a broken compiler and a failed check look the same. The checks
 //< and a child's run come from `std/verdict`, and the directories from `std/fs`.
 import "std/chars"
 import "std/ds" { List }
@@ -48,8 +48,8 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite, and returns the arena it a
     more = rest.slice()
     fs.mkdir_all(scratch) catch panic("the scratch place cannot be made")
     refuse_inside_package(scratch)
-    // **This run works in a folder of its own**: what an earlier run left where it could not be
-    // deleted (the Makefile empties the place where it can) is never read as this run's.
+    // **This run works in a folder of its own.** An earlier run can leave files it could not delete
+    // (the Makefile empties the place where it can). They are never read as this run's.
     scratch = fs.mkdir_unique(scratch, "run_", suite_arena) catch
         fallback ""
     if scratch.len == 0
@@ -76,12 +76,12 @@ fn more_args(): U8[][] //< the suite's arguments after the two paths, for it to 
 
 priv fn refuse_inside_package(dir: U8[]) //< stops if the scratch directory is inside a package
     //<
-    //< **A file under a folder whose `ksplc.cfg` names a package belongs to that package**, so a
+    //< **A file under a folder whose `ksplc.cfg` names a package belongs to that package.** So a
     //< case's files there would compile under its `uses` and fail for another reason.
-    //< Caution: **Ask the compiler under inspection** (`info package`, in that folder) rather than
-    //< walking up here: the walk is the compiler's rule, and a copy would drift from it.
+    //< Caution: **Ask the compiler under inspection** (`info package`, in that folder). Do not
+    //< walk up here: the walk is the compiler's rule, and a copy would drift from it.
     r: = run_in(U8[][]::{ under, "info", "package" }, dir)
-    if r.code != 0
+    if !r.exited_with(0)
         panic(U8$[]::suite_arena.text()
             .s("which package the scratch place \{dir\} stands in cannot be asked\n\{r.out\}")
             .take())
@@ -152,7 +152,7 @@ priv fn settle_std_dir(): U8[] //<
         return fs.absolute(named, suite_arena) catch
             fallback suite_arena.dup_str(named)
     r: = run(U8[][]::{ under, "info", "std-dir" })
-    if r.code != 0
+    if !r.exited_with(0)
         return ""
     answered: = r.out.trim_spaces()
     return fs.absolute(answered, suite_arena) catch
@@ -205,7 +205,7 @@ fn cc_target(): U8[] //< the C compiler's target triple (`cc -dumpmachine`), emp
     //< It is for a case whose subject differs by target.
     //< Caution: **Choose no link flag by it** — ask the compiler for those (`harness_build`).
     r: = run(U8[][]::{ cc(), "-dumpmachine" })
-    return "" if r.code != 0 else r.out.trim_spaces()
+    return "" if !r.exited_with(0) else r.out.trim_spaces()
 
 // ==========================================
 // Scratch
@@ -235,6 +235,9 @@ pub fn run(argv: U8[][]): verdict.Run_out //< runs argv where the suite starts c
     //<
     //< That is the working directory the suite began in, or the folder `begin_at` names.
     return run_capped(argv, start_dir, verdict.default_timeout_ms)
+
+pub fn has_tool(name: U8[]): Bool //< whether the tool answers `--version`
+    return run(U8[][]::{ name, "--version" }).exited_with(0)
 
 pub fn run_in(argv: U8[][], cwd: U8[]): verdict.Run_out //< runs it in the given working directory
     return run_capped(argv, cwd, verdict.default_timeout_ms)

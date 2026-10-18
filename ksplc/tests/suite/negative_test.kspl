@@ -6,6 +6,7 @@
 //< `ksplc run`'s directory, so the same script run at once with other arguments contends for it.
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_expect"
+import "std/chars"
 import "std/fs"
 import "std/io"
 import "std/verdict"
@@ -15,11 +16,31 @@ fn main(): I32
     harness_expect.run_suite("negative", "tests/negative", true, false, true, arena)
     parser_exe: = fs.join(harness.tmp_dir(), "raw_parse.exe", arena)
     built: = harness.ksplc(U8[][]::{ "build", "tests/prog/raw_parse.kspl", parser_exe })
-    if verdict.check("the internal parser probe builds", built.code == 0, built.out)
+    if verdict.check("the internal parser probe builds", built.exited_with(0), built.out)
         valid: = fs.join(harness.tmp_dir(), "valid.ksplb", arena)
         io.write_file(valid, "fn main(): I32 { return 0; }\n") catch
             return harness.fatal("cannot write the parser's valid fixture")
         parsed: = harness.run(U8[][]::{ parser_exe, valid })
-        verdict.check("the internal parser accepts a valid program", parsed.code == 0, parsed.out)
+        verdict.check("the internal parser accepts a valid program", parsed.exited_with(0),
+            parsed.out)
         harness_expect.run_suite("parse", "tests/parse", true, false, false, arena, parser_exe)
+    // **`ksplc fmt` never writes text that does not read back**; no formatter bug is left to make
+    // the check fire, so a probe hands it text directly.
+    reads_exe: = fs.join(harness.tmp_dir(), "fmt_reads_back.exe", arena)
+    reads_built: = harness
+        .ksplc(U8[][]::{ "build", "tests/prog/fmt_reads_back.kspl", reads_exe })
+    if verdict.check("the fmt read-back probe builds", reads_built.exited_with(0), reads_built.out)
+        good: = fs.join(harness.tmp_dir(), "reads_good.kspl", arena)
+        bad: = fs.join(harness.tmp_dir(), "reads_bad.kspl", arena)
+        io.write_file(good, "fn main(): I32\n    return 0\n") catch
+            return harness.fatal("cannot write the read-back fixture")
+        io.write_file(bad, "fn main(): I32\n    return (0\n") catch
+            return harness.fatal("cannot write the read-back fixture")
+        g: = harness.run(U8[][]::{ reads_exe, good })
+        verdict.check("fmt's read-back check lets text that parses through", g.exited_with(0),
+            g.out)
+        b: = harness.run(U8[][]::{ reads_exe, bad })
+        verdict.check("fmt's read-back check refuses text that does not parse",
+            b.exited_with(1) &&
+            b.out.find_str("the formatted text would not parse").is_some(), b.out)
     return harness.finish()

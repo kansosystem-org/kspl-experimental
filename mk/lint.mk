@@ -38,7 +38,7 @@ TOOL_MAINS := $(shell grep -lE '^(pub )?fn main\b' tools/*.kspl)
 LINT_SUITES_OWN := $(wildcard ksplc/tests/suite/*.kspl)
 LINT_TARGETS_OWN := ksplc/tests/main.kspl kspage/tests/main.kspl ksos/tests/main.kspl \
 	tools/tests/main.kspl \
-	kspage/tests/fuzz_main.kspl tools/repo_stat.kspl $(LINT_SUITES_OWN)
+	kspage/tests/fuzz_main.kspl tools/repo_stat.kspl tools/seed_sum.kspl $(LINT_SUITES_OWN)
 
 # Caution: **Keep tests/debug/main.kspl**: some code (std/regex, generics) is reached only from it.
 # **Suites, `ksplc/tests/prog/` and the POSIX demos come by wildcard**: nothing else lints their
@@ -50,7 +50,7 @@ LINT_TARGETS := ksplc/main.kspl tests/debug/main.kspl ksai/examples/llama_engine
 	tools/ai_assist/build_corpus.kspl tools/ai_assist/eval_fim.kspl tools/ai_assist/make_fim.kspl \
 	tools/ai_assist/train_bpe.kspl \
 	ksos/port/rp2040/pad_checksum.kspl ksos/port/rp2040/elf2uf2.kspl \
-	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/kspage_aim.kspl \
+	$(filter-out $(LINT_TARGETS_OWN),$(TOOL_MAINS)) tools/kspage_aim.kspl tools/tests/open_together.kspl \
 	ksai/benches/run_bench.kspl \
 	kspage/port/web/bundle.kspl kspage/tests/open_prog.kspl ksai/tests/read_prog.kspl \
 	std/tests/read_prog.kspl $(filter-out $(LINT_TARGETS_OWN),$(wildcard */tests/fuzz_main.kspl)) \
@@ -63,15 +63,19 @@ LINT_TARGETS := ksplc/main.kspl tests/debug/main.kspl ksai/examples/llama_engine
 	$(wildcard tests/suite/*.kspl) \
 	$(wildcard tests/tools/*.kspl) \
 	$(wildcard ksplc/tests/prog/*.kspl) \
-	$(wildcard ksplc/tests/kspls/*.kspl) \
-	$(PRIVATE_LINT_TARGETS)
+	$(wildcard ksplc/tests/notation/*.kspl) \
+	$(EXTRA_LINT_TARGETS)
 
 LINT_TARGETS_FREE := $(wildcard ksos/demo/cortex_m/*.kspl) \
-	$(wildcard ksos/demo/rp2040/*.kspl) kspage/port/web/bridge.kspl
+	$(wildcard ksos/demo/rp2040/*.kspl) $(wildcard ksos/demo/nrf51/*.kspl) \
+	kspage/port/web/bridge.kspl
 
-# $(call lint_clean,<log>,<what was linted>): passes where the log counts nothing down to Hint,
-# and otherwise shows it and fails.
-lint_clean = if grep -q "0 error(s), 0 warning(s), 0 information(s), and 0 hint(s)" $(1); then :; \
+# $(call lint_clean,<log>,<what was linted>,<ksplc's exit status>): passes where ksplc ended with 0
+# and the log's whole tally line counts nothing down to Hint, and otherwise shows it and fails.
+# Caution: **Match the whole line.** A count is written in digits, so a part of the line matches
+# "10 error(s), 0 warning(s), …" too, and 50 is where ksplc stops counting.
+LINT_TALLY_CLEAN := Finished with 0 error(s), 0 warning(s), 0 information(s), and 0 hint(s).
+lint_clean = if [ $(3) -eq 0 ] && grep -qxF "$(LINT_TALLY_CLEAN)" $(1); then :; \
 	else cat $(1); echo "LINT FAILED: $(2)"; exit 1; fi
 
 # Caution: **Zero down to Hint**, one file = one target and log (a shared log is overwritten).
@@ -79,8 +83,8 @@ define lint_one_rule
 lint-one-$(subst /,_,$(1)): $$(STAGE1_EXE)
 	@echo "  -> $(1) $(2)"
 	@log=$$(LINT_LOG_DIR)/$(subst /,_,$(1)).log; \
-	./$$(STAGE1_EXE) lint $(2) $(1) > $$$$log 2>&1; \
-	$$(call lint_clean,$$$$log,$(1))
+	./$$(STAGE1_EXE) lint $(2) $(1) > $$$$log 2>&1; status=$$$$?; \
+	$$(call lint_clean,$$$$log,$(1),$$$$status)
 endef
 $(foreach f,$(LINT_TARGETS),$(eval $(call lint_one_rule,$(f),)))
 $(foreach f,$(LINT_TARGETS_FREE),$(eval $(call lint_one_rule,$(f),--freestanding)))
@@ -101,8 +105,8 @@ lint: $(LINT_ONE_TARGETS)
 lint-cfg: $(STAGE1_EXE)
 	@echo "  -> ksai/tests/main.kspl [blas]"
 	@log=$(LINT_LOG_DIR)/cfg_blas.log; \
-	./$(STAGE1_EXE) lint --define=blas ksai/tests/main.kspl > $$log 2>&1; \
-	$(call lint_clean,$$log,ksai/tests/main.kspl [blas])
+	./$(STAGE1_EXE) lint --define=blas ksai/tests/main.kspl > $$log 2>&1; status=$$?; \
+	$(call lint_clean,$$log,ksai/tests/main.kspl [blas],$$status)
 	@echo "RESULT: ALL PASS (the #cfg(blas) branch is clean)"
 
 .PHONY: lint-cfg

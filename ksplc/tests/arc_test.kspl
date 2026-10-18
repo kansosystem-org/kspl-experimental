@@ -1,13 +1,13 @@
 //< Where the compiler inserts retain and release under ARC (automatic reference counting)
 //<
-//< **This file checks only the insertion positions**; std's own tests check the balance of
+//< **This file checks only the insertion positions.** Std's own tests check the balance of
 //< `std/refcount`'s Rc/Arc/Weak_*.
 // ==========================================
-// Caution: **Do not declare `Ref_counted` in this file.** Every file imports `std/lang` implicitly,
-// so a declaration of the same name here wins, and Arc_counter quietly stops being an ARC type
+// Caution: **Do not declare `Ref_counted` in this file.** Every file imports `std/lang` implicitly.
+// So a declaration of the same name here wins. Then Arc_counter quietly stops being an ARC type
 // (the same-named declaration is kept apart in ksplc/tests/arc_lookalike_test.kspl).
 // ==========================================
-import "std/ds" { List, Map }
+import "std/ds" { Hashable, List, Map }
 import "std/mem" + { alloc, dealloc }
 import "std/refcount" { Rc, Weak_rc }
 import "std/str" { Str_builder }
@@ -76,7 +76,7 @@ impl Arc_counter
     fn refcount(r: Self$@): Sz
         return r.ctrl.count
 
-// The conforming impl's methods are priv too (calls by hand would double the inserted ones), and
+// The conforming impl's methods are priv too (calls by hand would double the inserted ones). They
 // take `Self@` (`Ref_counted` in std/lang.kspl) for a type outside std as well.
 impl Arc_counter: Ref_counted
     priv fn retain(r: Self@)
@@ -192,7 +192,7 @@ fn test_arc_field_cascade()
 // std/mem: covers the positions where a retain goes in for "a copy of a bare ARC binding".
 // Caution: On Linux freed memory keeps the old value, so a missing retain passes; macOS overwrites
 // it and fails. Judge liveness with Weak_rc.upgrade(), not by reading the value ("A retain goes
-// wherever a copy happens" in ksplc/docs/DESIGN-compiler.md).
+// wherever a copy happens" in ksplc/docs/DESIGN-lower.md).
 // ==========================================
 struct Arc_holder
     v: Rc<|I32|>
@@ -247,7 +247,7 @@ fn test_arc_retain_on_every_copy_site()
     assert(dst_alive,
         "an Rc assigned into an existing binding must stay alive after the source's scope ends")
 
-    // An assignment releases the value it overwrites, or the original leaks; creation and
+    // An assignment releases the value it overwrites, or the original leaks. Creation and
     // destruction must balance (for a struct or a bare Rc, where the chained release applies).
     b0: = mem.heap_used_bytes()
     arc_assign_balance_body()
@@ -362,9 +362,9 @@ fn test_arc_aggregate_cascade_release()
         .pass("a live enum variant's payload and every array element were chain-released through a \
             struct, through nesting and on every exit route.")
 // ==========================================
-// std/mem: a Result's (`T!E`) success payload is an owning position too.
-// Received with `catch` or `!`, the value moves to the binding and balances, so if the walk over
-// owning positions skips Result, **only a Result thrown away unreceived** leaks.
+// std/mem: a Result's (`T!E`) success payload is an owning position too (it is an enum's).
+// Received with `catch` or `!`, the value moves to the binding and balances. So if the walk over
+// owning positions skips Result, **only a Result handed on and never taken apart** leaks.
 // ==========================================
 priv enum Arc_err
     failed
@@ -376,9 +376,11 @@ priv fn arc_make_err(): Rc<|I32|>!Arc_err
     throw .failed
 
 priv fn arc_result_dropped_body() //<
-    //< The shape that throws a Result away using neither catch nor ?
-    _ok: = arc_make_ok()
-    _bad: = arc_make_err()
+    //< The shape that hands a Result on and never takes it apart, using neither catch nor !
+    arc_hold(arc_make_ok())
+    arc_hold(arc_make_err())
+
+priv fn arc_hold(_r: Rc<|I32|>!Arc_err) {} //< takes a Result and reads nothing of it
 
 priv fn arc_result_unwrapped_body() //< the receiving shape
     r: = arc_make_ok()
@@ -399,7 +401,7 @@ fn test_arc_result_payload_release()
     b0: = mem.heap_used_bytes()
     arc_result_dropped_body()
     b0_end: = mem.heap_used_bytes()
-    assert(b0_end == b0, "a Result dropped without catch/? must still release its ARC payload")
+    assert(b0_end == b0, "a Result never taken apart must still release its ARC payload")
 
     b1: = mem.heap_used_bytes()
     arc_result_unwrapped_body()
@@ -412,13 +414,13 @@ fn test_arc_result_payload_release()
         "a Result held in a struct field must be reached by the cascade (copy included)")
 
     verdict
-        .pass("a Result thrown away unreceived, a Result received and a Result in a struct field \
-            all balanced (the error side holds no payload).")
+        .pass("a Result never taken apart, a Result received and a Result in a struct field all \
+            balanced (the error side holds no payload).")
 // ==========================================
 // std/mem: a Result built around a place, or unwrapped from one, copies what the place owns.
 // `return entry.value` in a `V!E` function and `v: = r catch …` on a binding both leave the
 // place owning too, so each copy needs its own count. A missing one frees the value under the
-// copy; the heap still balances while the freed memory reads as before, so a weak handle and the
+// copy. The heap still balances while the freed memory reads as before. So a weak handle and the
 // final balance are what tell.
 // ==========================================
 priv fn arc_unwrap_place(r: Rc<|I32|>!Arc_err): Rc<|I32|> //< unwraps a Result it does not give up
@@ -620,7 +622,7 @@ fn test_arc_copy_through_call()
     arc_through_call_body()
     assert(mem.heap_used_bytes() == b0,
         "a binding, an argument, a field, a payload, a return and an assignment each count once")
-    // The old value was released before the right side's retain, so the box was freed and the
+    // The old value was released before the right side's retain. So the box was freed, and the
     // new node, landing at its address, pointed at itself.
     b1: = mem.heap_used_bytes()
     arc_assign_self_body()
@@ -646,7 +648,7 @@ fn test_arc_last_release_takes_value_apart()
     arc_chain_body(100, false)
     assert(mem.heap_used_bytes() == b2, "a short chain left to the last release is released whole")
 
-    // The value's release drops the last weak handle; holding one weak count across it keeps the
+    // The value's release drops the last weak handle. Holding one weak count across it keeps the
     // block from being freed under the release still using it.
     b3: = mem.heap_used_bytes()
     arc_self_watch_body()
@@ -656,10 +658,10 @@ fn test_arc_last_release_takes_value_apart()
             the last owner.")
 
 // ==========================================
-// std/ds: where the elements of a container implementing "a subscript returning a place"
-// (std/lang's Index_place) are ARC, `l[i]`'s reads and writes go through retain/release. ARC
-// runs before the expansion to `l.at(i)$`, so the cloned receiver is still a `[`, an ICE if genc
-// gets it (expand_place_index_ops in `ksplc/lower/arc.kspl`).
+// std/ds: a container can implement "a subscript returning a place" (std/lang's Index_place).
+// Where its elements are ARC, `l[i]`'s reads and writes go through retain/release. ARC
+// runs before the expansion to `l.at(i)$`, so the cloned receiver is still a `[`. That is an ICE
+// if genc gets it (expand_place_index_ops in `ksplc/lower/arc.kspl`).
 // ==========================================
 priv fn arc_list_index_body()
     $l: = List<|Rc<|I32|>|>.new(null)
@@ -690,8 +692,8 @@ fn test_arc_place_index_container()
 
 // ==========================================
 // std/ds: A container owns its elements' ARC counts
-// **An element is read and written through `(r.ptr + i)$`**, always a place expression: a read
-// retains, an overwrite releases the original ("A container owns its elements' ARC counts" in
+// **An element is read and written through `(r.ptr + i)$`**, always a place expression. A read
+// retains, and an overwrite releases the original ("A container owns its elements' ARC counts" in
 // `../../std/docs/DESIGN-core.md`).
 // ==========================================
 priv fn arc_list_owns_elements_body()
@@ -714,12 +716,32 @@ priv fn arc_map_owns_values_body()
     $m: = Map<|I32, Rc<|I32|>|>.new(null)
     for i in Range.asc(40)
         m.set(I32::i, Rc<|I32|>.new(I32::i)) // put a few resizes in between
-    $got: = m.get(7) catch
-        fallback Rc<|I32|>.new(-1)
+    $got: = m.get(7).unwrap_or(Rc<|I32|>.new(-1))
     assert(got.get()$ == 7, "a value must survive the table's resizes")
     removed: = m.remove(7)
     assert(removed, "remove() must report that the key was present")
     m.free() // throw it away holding the remaining 39
+
+priv struct Arc_key //< a Map key holding a counted value, so hash and equals take it by value
+    id: I32
+    tag: Rc<|I32|>
+
+impl Arc_key: Hashable<|Arc_key|>
+    fn hash(r: Self): U32
+        return U32::r.id
+    fn equals(r: Self, other: Arc_key): Bool
+        return r.id == other.id
+
+priv fn arc_map_owns_keys_body()
+    $m: = Map<|Arc_key, I32|>.new(null)
+    for i in Range.asc(40)
+        m.set(Arc_key::{ .id = I32::i, .tag = Rc<|I32|>.new(I32::i) }, I32::i) // a few resizes
+    $tag: = Rc<|I32|>.new(7)
+    m.set(Arc_key::{ .id = 100, .tag = tag }, 100)
+    tag = Rc<|I32|>.empty()
+    removed: = m.remove(Arc_key::{ .id = 3, .tag = Rc<|I32|>.empty() })
+    assert(removed, "remove() must find a key that holds a counted value")
+    m.free() // throw it away holding the remaining 40 keys
 
 fn test_arc_container_owns_elements()
     verdict.start("[ARC] a container (List / Map) owns its elements test...")
@@ -736,9 +758,32 @@ fn test_arc_container_owns_elements()
     assert(map_balanced,
         "a Map must not lose counts across resize, and must release on remove()/free()")
 
+    b2: = mem.heap_used_bytes()
+    arc_map_owns_keys_body()
+    keys_balanced: = mem.heap_used_bytes() == b2
+    assert(keys_balanced, "a Map must release its keys' counts on remove(), a resize and free()")
+
     verdict
         .pass("the count balanced for a read, an overwrite, a push-along, a growth, a remove and a \
-            free alike.")
+            free alike, a Map's keys included.")
+// ==========================================
+// A receiver passed by value takes a count, as an argument does: the callee releases it.
+// ==========================================
+priv fn arc_store_after_reading(k: Arc_key, at: Arc_key$@) //<
+    //< reads k through a method, then keeps it
+    _h: = k.hash()
+    at$ = k
+
+fn test_arc_value_receiver_takes_a_count()
+    verdict.start("[ARC] a receiver passed by value is retained as an argument is test...")
+    $slot: = Arc_key::{ .id = 0, .tag = Rc<|I32|>.empty() }
+    release_on_exit:
+        arc_store_after_reading(Arc_key::{ .id = 1, .tag = Rc<|I32|>.new(5) }, slot@)
+    kept: = arc_is_alive(slot.tag@)
+    assert(kept, "a value read through a by-value receiver and then kept must stay alive")
+    empty: Arc_key[1] = ::{}
+    slot = empty[0]
+    verdict.pass("k.hash() on a parameter left it its count, so what was kept from it lives on.")
 // ==========================================
 // Returning a place expression needs a retain whether or not the function holds a cleanup.
 // **Inserted only where there is a cleanup, it is one short in `return p.field;`**, and the
@@ -772,10 +817,10 @@ fn test_arc_return_retains_without_cleanups()
         .pass("whether or not there is a cleanup, a place expression's return was handed to the \
             calling side at +1.")
 // ==========================================
-// A managed value no binding takes is released all the same: a call made a statement, a field
-// read off a call or a literal, a `switch` on a value built in place, a success thrown away by a
-// statement's `catch`, and the same inside a branch, a short-circuit operand and a loop's
-// condition (`is_arc_fresh` and `arc_hoist_owned` in `ksplc/lower/arc.kspl`).
+// A managed value no binding takes is released all the same. Examples: a call made a
+// statement, a field read off a call or a literal, a `switch` on a value built in place, a
+// success thrown away by a statement's `catch`. The same holds inside a branch, a short-circuit
+// operand and a loop's condition (`is_arc_fresh` and `arc_hoist_owned` in `ksplc/lower/arc.kspl`).
 // ==========================================
 priv struct Arc_duo
     a: Rc<|I32|>

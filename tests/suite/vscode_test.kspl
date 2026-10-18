@@ -1,13 +1,13 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that what the editor integration (`.vscode/tasks.json` / `launch.json`) points at exists
 //<
-//< **`tasks.json` / `launch.json` go through neither the build nor the tests**, so a missing make
+//< **`tasks.json` / `launch.json` go through neither the build nor the tests.** So a missing make
 //< target fails only for whoever presses it (Principle 5 in `docs/DESIGN-principles.md`). Two
-//< drifts show nothing at all: a name out of step with `${fileBasenameNoExtension}.exe` makes F5
-//< silently start the last executable, and the release zip's build task naming another file does
+//< drifts show nothing at all. A name out of step with `${fileBasenameNoExtension}.exe` makes F5
+//< silently start the last executable. A release zip's build task that names another file does
 //< the same. **The extension's client side is run too**, under node, against a recording fake
-//< server (`../support/vscode_host.js`): what it tells the server about open documents is seen
-//< nowhere else, and a document it never closes makes every other file's answers stale.
+//< server (`../support/vscode_host.js`). What it tells the server about open documents is seen
+//< nowhere else. A document it never closes makes every other file's answers stale.
 
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
@@ -123,11 +123,12 @@ priv fn workspace_rel(text: U8[], from: Sz): U8[] //<
 priv fn labels_of(tasks: json.Val, arena: Arena$@): List<|U8[]|>
     $out: = List<|U8[]|>.new(arena)
     for t in tasks.get("tasks").arr_list(arena)
-        out.push(t.get("label").as_str())
+        out.push(t.get("label").as_str().unwrap_or(""))
     return out
 
 priv fn arg_text(a: json.Val): U8[] //< one argument's text, written bare or quoted (`value`)
-    return a.as_str() if !is_obj(a) else a.get("value").as_str()
+    return (a.as_str().unwrap_or("") if !is_obj(a)
+        else a.get("value").as_str().unwrap_or(""))
 
 priv const suite_lists: U8[][_] = ::{ "mk/test.mk", "ksplc/Makefile" } //<
     //< The files whose `SUITES` / `LINUX_SUITES` name what `make test-<name>` runs
@@ -156,8 +157,8 @@ priv fn check_make_targets(tasks: json.Val, arena: Arena$@) //<
     //< Checks that each `make <target>` in `tasks.json` names a target that really exists
     $names: = typable(arena)
     for t in tasks.get("tasks").arr_list(arena)
-        label: = t.get("label").as_str()
-        cmd: = parse_make_cmd(t.get("command").as_str(), arena)
+        label: = t.get("label").as_str().unwrap_or("")
+        cmd: = parse_make_cmd(t.get("command").as_str().unwrap_or(""), arena)
         if !cmd.found
             continue
         name: = arena.text().s("tasks.json[\{label\}]: 'make \{cmd.target\}' really exists").take()
@@ -167,14 +168,14 @@ priv fn check_make_targets(tasks: json.Val, arena: Arena$@) //<
 priv fn check_launch(launch: json.Val, labels: List<|U8[]|>$@, root: U8[], arena: Arena$@) //<
     //< `launch.json`'s preLaunchTask and initCommands
     for c in launch.get("configurations").arr_list(arena)
-        name: = c.get("name").as_str()
-        pre: = c.get("preLaunchTask").as_str()
+        name: = c.get("name").as_str().unwrap_or("")
+        pre: = c.get("preLaunchTask").as_str().unwrap_or("")
         if pre.len > 0
             title: = arena.text()
                 .s("launch.json[\{name\}]: preLaunchTask '\{pre\}' is in tasks.json").take()
             verdict.check(title, htext.has(labels, pre), "")
         for cmd in c.get("initCommands").arr_list(arena)
-            rel: = workspace_rel(cmd.as_str(), 0)
+            rel: = workspace_rel(cmd.as_str().unwrap_or(""), 0)
             if rel.len == 0
                 continue
             title: = arena.text().s("launch.json[\{name\}]: '\{rel\}' really exists").take()
@@ -219,7 +220,7 @@ priv fn check_debug_file(root: U8[], fmt: U8[], arena: Arena$@) //<
     if fmt.len > 0
         args.push(fmt)
     r: = harness.make(args.slice())
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check(name, false, r.out.trim_end())
         return
     if fmt.len > 0 && !r.out.find_str("is left as generated").is_some()
@@ -244,17 +245,17 @@ priv fn check_release_assets(root: U8[], arena: Arena$@) //<
         load_jsonc(fs.join(root, "tools/release-assets/vscode/launch.json", arena), arena)
     $labels: = labels_of(tasks, arena)
     for t in tasks.get("tasks").arr_list(arena)
-        label: = t.get("label").as_str()
+        label: = t.get("label").as_str().unwrap_or("")
         for dep in t.get("dependsOn").arr_list(arena)
-            d: = dep.as_str()
+            d: = dep.as_str().unwrap_or("")
             title: = ksplc_harness.arena().text()
                 .s("release-assets tasks.json[\{label\}]: dependsOn '\{d\}' is there").take()
             verdict.check(title, htext.has(labels@, d), "")
     for c in launch.get("configurations").arr_list(arena)
-        pre: = c.get("preLaunchTask").as_str()
+        pre: = c.get("preLaunchTask").as_str().unwrap_or("")
         if pre.len == 0
             continue
-        cfg_name: = c.get("name").as_str()
+        cfg_name: = c.get("name").as_str().unwrap_or("")
         title: = ksplc_harness.arena().text()
             .s("release-assets launch.json[\{cfg_name\}]: preLaunchTask '\{pre\}' is there").take()
         verdict.check(title, htext.has(labels@, pre), "")
@@ -273,24 +274,24 @@ priv fn side_of(v: json.Val, key: U8[]): json.Val //< a platform's branch (`wind
 priv fn check_build_task(tasks: json.Val, launch: json.Val, arena: Arena$@) //<
     //< The build task is `ksplc build`, writing what launch.json starts, on each platform
     //<
-    //< **The link words are ksplc's**, so none is written in the task to drift; what can drift is
-    //< the executable's name, and a name out of step makes F5 start the last one built.
+    //< **The link words are ksplc's**, so none is written in the task to drift. What can drift is
+    //< the executable's name. A name out of step makes F5 start the last one built.
     $build: = json.Val.null_val
     $found: = false
     for t in tasks.get("tasks").arr_list(arena)
-        if t.get("label").as_str().equals(build_label)
+        if t.get("label").as_str().unwrap_or("").equals(build_label)
             build = t
             found = true
     if !verdict.check("release-assets tasks.json: the build task is there", found, "")
         return
     $program: = json.Val.null_val
     for c in launch.get("configurations").arr_list(arena)
-        if c.get("preLaunchTask").as_str().equals(build_label)
+        if c.get("preLaunchTask").as_str().unwrap_or("").equals(build_label)
             program = c
     for key in U8[][]::{ "", "windows" }
         side: = side_of(build, key)
         args: = side.get("args").arr_list(arena)
-        cmd: = side.get("command").as_str()
+        cmd: = side.get("command").as_str().unwrap_or("")
         where: = "default" if key.len == 0 else key
         runs: =
             (cmd.ends_with("/ksplc") || cmd.ends_with("/ksplc.exe")) && args.len > 0 &&
@@ -300,7 +301,7 @@ priv fn check_build_task(tasks: json.Val, launch: json.Val, arena: Arena$@) //<
         if args.len == 0
             continue
         built: = arg_text(args.get(args.len - 1))
-        started: = side_of(program, key).get("program").as_str()
+        started: = side_of(program, key).get("program").as_str().unwrap_or("")
         verdict.check(arena.text()
             .s("release-assets [\{where\}]: it builds what launch.json starts").take(),
             built.equals(started),
@@ -323,14 +324,14 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
     langs: = pkg.get("contributes").get("languages").arr_list(arena)
     $opens_source: = false
     for one in langs
-        if one.get("id").as_str().equals("kspl")
+        if one.get("id").as_str().unwrap_or("").equals("kspl")
             $exts: = one.get("extensions").arr_list(arena)
             for e in exts.slice()
-                if e.as_str().equals(".kspl")
+                if e.as_str().unwrap_or("").equals(".kspl")
                     opens_source = true
-        note_missing(missing@, dir, one.get("configuration").as_str(), arena)
+        note_missing(missing@, dir, one.get("configuration").as_str().unwrap_or(""), arena)
     for one in pkg.get("contributes").get("grammars").arr_list(arena)
-        note_missing(missing@, dir, one.get("path").as_str(), arena)
+        note_missing(missing@, dir, one.get("path").as_str().unwrap_or(""), arena)
     verdict.check_list("extension: the files package.json points at really exist", langs.len,
         "files", missing@, "package.json names a file that is not there: add it, or mend the path")
     // Caution: **Keep the id `kspl`.** `extension.js` sends only that languageId to the language
@@ -343,8 +344,8 @@ priv fn check_extension(root: U8[], arena: Arena$@) //<
     grammars: = pkg.get("contributes").get("grammars").arr_list(arena)
     verdict.check("extension: the .kspl colouring is the one grammar, source.kspl",
         grammars.len == 1 &&
-        grammars.get(0).get("scopeName").as_str().equals("source.kspl") &&
-        grammars.get(0).get("language").as_str().equals("kspl"),
+        grammars.get(0).get("scopeName").as_str().unwrap_or("").equals("source.kspl") &&
+        grammars.get(0).get("language").as_str().unwrap_or("").equals("kspl"),
         "package.json must name one grammar, source.kspl, for the language kspl")
 
 // ==========================================
@@ -363,7 +364,7 @@ priv fn sent_by_client(root: U8[], arena: Arena$@): json.Val //<
     out: = ksplc_harness
         .run(U8[][]::{ "node", fs.join(root, host_js, arena),
         fs.join(fs.join(root, ext_dir, arena), "extension.js", arena) })
-    if out.code != 0
+    if !out.exited_with(0)
         verdict.check("extension client: the session runs under node", false, out.out)
         return .null_val
     doc: = json.parse(arena.dup_str(out.out), arena) catch
@@ -373,15 +374,16 @@ priv fn sent_by_client(root: U8[], arena: Arena$@): json.Val //<
 
 priv fn check_client(root: U8[], arena: Arena$@) //<
     //< The lifecycle the extension tells the server, as the protocol orders it
-    if ksplc_harness.run(U8[][]::{ "node", "--version" }).code != 0
+    if !ksplc_harness.run(U8[][]::{ "node", "--version" }).exited_with(0)
         verdict.skip_check("extension client: the lifecycle it sends", "node is not installed")
         return
     got: = sent_by_client(root, arena)
     $msgs: = List<|Sent|>.new(arena)
     for m in got.get("sent").arr_list(arena)
         msgs
-            .push(Sent::{ .method = m.get("method").as_str(),
-            .version = m.get("version").as_int(-1), .text = m.get("text").as_str() })
+            .push(Sent::{ .method = m.get("method").as_str().unwrap_or(""),
+            .version = m.get("version").as_int().unwrap_or(-1),
+            .text = m.get("text").as_str().unwrap_or("") })
     said: = arena.text().s("sent:").s(listed(msgs@, arena)).take()
     verdict.check("extension client: `initialized` follows initialize before anything else",
         msgs.len > 1 && msgs.get(0).method.equals("initialize") &&
@@ -407,11 +409,11 @@ priv fn check_client(root: U8[], arena: Arena$@) //<
         !discarded, said)
     verdict.check("extension client: a document opened again is announced again after its close",
         reopened, said)
-    told: = got.get("refusal").as_str()
+    told: = got.get("refusal").as_str().unwrap_or("")
     verdict.check("extension client: a rename the server refuses reaches the editor with its reason",
         told.equals("refused by the fake server"),
         arena.text().s("told '\{told\}'").take())
-    times: = got.get("shown").as_int(-1)
+    times: = got.get("shown").as_int().unwrap_or(-1)
     verdict.check("extension client: a start with the default settings keeps the output panel back",
         times == 0, arena.text().s("brought forward \{times\} times").take())
 

@@ -9,9 +9,9 @@
 //< check it. `--list`, `--stop=<folder>` and `--stop-all` tend the servers it left (`tend`).
 
 // ==========================================
-// Caution: **Do not pass the token on the command line**: `ps` shows it to every user. It is read
-// from the line kssrv prints once at start-up, written to the note for the next run, and handed
-// to the browser inside a page (`aim.page_text`).
+// Caution: **Do not pass the token on the command line**: `ps` shows it to every user. This tool
+// reads it from the line kssrv prints once at start-up. It writes it to the note for the next run,
+// and hands it to the browser inside a page (`aim.page_text`).
 // ==========================================
 // **The note, the log and the page are as sensitive as the token.** Each is written for its owner
 // alone (`aim.write_owned`, `aim.write_page`).
@@ -27,7 +27,6 @@ import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
-import "std/time"
 import "tools/kspage_aim" as aim
 
 priv const server_names: U8[][] = U8[][]::{ "kssrv.exe", "kssrv" } //<
@@ -49,7 +48,7 @@ priv const page_rel: U8[] = "kspage_web/kspage.html" //<
 priv const tree_mark: U8[] = "std" //< the folder that marks a KSPL tree
     //<
     //< Caution: **Serve the tree's root when the document is inside a tree.** The server refuses
-    //< anything outside its root (that is the boundary), so if only the document's folder is
+    //< anything outside its root (that is the boundary). So if only the document's folder is
     //< served, nothing else in the tree can be opened.
 
 priv const max_climb: Sz = 32 //< the cap on how many folders up to look for the tree's root
@@ -62,17 +61,24 @@ priv const default_port: U8[] = "8080" //< the default port to listen on
 
 priv const idle_hold: U8[] = "300" //< how long the server waits with no page holding it [s]
     //<
-    //< **A page holds the server open while it is open**, so this covers only the gaps before the
-    //< first page (a cold browser start) and after the last, when the next document reuses it.
+    //< **A page holds the server open while it is open.** So this covers only two gaps: before the
+    //< first page (a cold browser start), and after the last, when the next document reuses it.
 
 priv const tmp_rel: U8[] = "tmp" //< where the log, the note and the handed pages live
     //<
     //< **It is `tmp/` next to the server** (relative to the working directory, a double click would
     //< scatter them under home).
-priv const log_rel: U8[] = "tmp/kspage_open.log" //< where the server's output goes
+priv const log_prefix: U8[] = "kspage_open." //< a server's log is this, its port and `.log`
+    //<
+    //< **A log per server, named by its port**: one log shared by every run lets a run read the
+    //< URL another run's server printed. A port is chosen free under the lock (`open_or_start`).
+    //< Its server holds it from then on. So no two running servers share a name, and the logs
+    //< number no more than the ports tried.
+priv const log_ext: U8[] = ".log"
 priv const state_rel: U8[] = "tmp/kspage_open.state" //< the note of the running servers
     //<
     //< Its format is at `aim.state_count`.
+priv const lock_rel: U8[] = "tmp/kspage_open.lock" //< the lock on the note (`open_or_start`)
 priv const browser_rel: U8[] = "tmp/kspage_open.browser.log" //<
     //< Where the browser's start-up output is kept
     //<
@@ -97,9 +103,9 @@ struct Where //< every path this run needs, found once
     //<
     //< **Find them once and pass them around** (looked up in two places, only one gets fixed).
     server: U8[] //< the path of the server to start
-    tmp: U8[] //< the folder the pages handed to the browser go in
-    log: U8[] //< where the server's output goes
+    tmp: U8[] //< the folder the pages handed to the browser and the servers' logs go in
     state: U8[] //< where the note of the running servers is kept
+    lock: U8[] //< the lock held while the note is read and written
     browser: U8[] //< the path of the browser's start-up output
     page: U8[] //< the page returned for `/`; without it nothing opens (`make kspage-web` first)
 
@@ -113,11 +119,11 @@ priv fn where_from(argv0: U8[], arena: Arena$@): Where //<
             if fs.can_run(at)
                 home: = aim.parent_of(at)
                 return Where::{ .server = at, .tmp = fs.join(home, tmp_rel, arena),
-                    .log = fs.join(home, log_rel, arena),
                     .state = fs.join(home, state_rel, arena),
+                    .lock = fs.join(home, lock_rel, arena),
                     .browser = fs.join(home, browser_rel, arena),
                     .page = fs.join(home, page_rel, arena) }
-    return Where::{ .server = "", .tmp = "", .log = "", .state = "", .browser = "", .page = "" }
+    return Where::{ .server = "", .tmp = "", .state = "", .lock = "", .browser = "", .page = "" }
 
 priv fn full(p: U8[], arena: Arena$@): U8[] //<
     //< Turns a relative path into an absolute one, from the working directory
@@ -130,8 +136,7 @@ priv fn full(p: U8[], arena: Arena$@): U8[] //<
     if sys.is_absolute(dir)
         return dir
     $buf: U8[4096] = ::{}
-    at: = sys.cwd(U8$[]::buf)
-    if at.len == 0
+    at: = sys.cwd(U8$[]::buf) catch
         return dir
     return arena.dup_str(at) if dir.equals(".") else fs.join(at, dir, arena)
 
@@ -201,13 +206,19 @@ priv fn stop_server(at: I32, token: U8[]): Bool //<
         sys.sleep_ms(100)
     return false
 
-priv fn tend(where: Where, stop_root: U8[], stop_all: Bool, arena: Arena$@): I32 //<
+priv fn tend(where: Where, stop_root: U8[], stop_all: Bool): I32 //<
     //< Lists the servers in the note that still answer, or stops the ones asked for
     //<
     //< **Only a server that answers with its token is running**: a record outliving its server is
     //< dropped from the note, never listed. **A server is picked by the folder it serves**, the key
-    //< the reuse looks it up by, not by its port, which changes from run to run.
+    //< the reuse looks it up by. Its port is no key: it changes from run to run.
     //< Returns the exit code.
+    // **Under the lock** (the reason is at `open_or_start`): a record written meanwhile would be
+    // lost to this rewrite.
+    $lock: = fs.File_lock.take(where.lock) catch
+        io.err().s("\{sys.program_name()\}: cannot take the lock on the note: \{where.lock\}\n")
+        return 1
+    defer lock.free()
     body: = io.read_file(where.state) catch ""
     listing: = stop_root.len == 0 && !stop_all
     $kept: = Str_builder.new()
@@ -235,7 +246,7 @@ priv fn tend(where: Where, stop_root: U8[], stop_all: Bool, arena: Arena$@): I32
         aim.state_put(kept@, one[0], one[1])
         failed = true
     if body.len > 0
-        aim.write_owned(where.state, kept.slice(), arena) catch
+        aim.write_owned(where.state, kept.slice()) catch
             io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
     if failed
         return 1
@@ -268,14 +279,14 @@ priv fn reusable(root: U8[], state_path: U8[]): U8[] //<
             return one[0]
     return ""
 
-priv fn free_port(from: I32, text: Str_builder$@): U8[] //<
+priv fn free_port(from: I32, arena: Arena$@): U8[] //<
     //< looks for a port that can be listened on
     //<
     //< **Empty where there is none.**
-    //< Caution: **Do not give up after one.** Where something already listens on the port named
-    //< (our own server for another folder included), kssrv fails silently and 30 seconds are lost
-    //< **each time a document from another folder opens**; the next port is tried, as Jupyter and
-    //< Vite do.
+    //< Caution: **Do not give up after one.** Something can already listen on the port named (our
+    //< own server for another folder included). kssrv then fails silently, and 30 seconds are lost
+    //< **each time a document from another folder opens**. So the next port is tried, as Jupyter
+    //< and Vite do.
     for $step: I32 = 0; step < port_tries; step += 1
         at: = from + step
         // Caution: **Do not check it by connecting**: the question is "can we listen", and binding
@@ -283,8 +294,7 @@ priv fn free_port(from: I32, text: Str_builder$@): U8[] //<
         probe: = net.Tcp_listener.bind("127.0.0.1", at) catch
             continue
         probe.free()
-        text.s("\{at\}")
-        return text.slice()
+        return arena.text().s("\{at\}").take()
     return ""
 
 priv fn hand_to_browser(open_url: U8[], where: Where, arena: Arena$@): Bool //<
@@ -293,7 +303,7 @@ priv fn hand_to_browser(open_url: U8[], where: Where, arena: Arena$@): Bool //<
     //< Caution: **Hand the browser the page, never the URL** (the reason is at `aim.page_text`).
     //< Caution: **Try the tools in turn, from the list for this environment** (the reasons are at
     //< `openers` and `openers_win`). Keep their output (the reason is at `browser_rel`).
-    aim.sweep_pages(where.tmp, time.now(), arena)
+    aim.sweep_pages(where.tmp, sys.wall_seconds(), arena)
     // **Hand it an absolute path**: a browser already running reads a relative one from its own
     // working folder.
     dir: = fs.absolute(where.tmp, arena) catch where.tmp
@@ -341,12 +351,17 @@ priv fn hand_and_tell(open_url: U8[], doc: U8[], show_only: Bool, where: Where, 
                 .s("\{sys.program_name()\}: could not start a browser. Please open the URL above\n")
     tell_how(doc, handed)
 
-priv fn wait_for_url(log: U8[]): U8[] //<
+priv fn wait_for_url(log: U8[], child: subproc.Child$@): U8[] //<
     //< The URL the server writes to its log once it is up, or "" after `wait_steps` tries
+    //<
+    //< **"" at once where the server has exited**: the lock is held meanwhile, so every other open
+    //< would wait out the rest of the tries too.
     for _step in Range.asc(wait_steps)
         url: = aim.url_in_log(io.read_file(log) catch "")
         if url.len > 0
             return url
+        if !child.alive()
+            return ""
         sys.sleep_ms(100)
     return ""
 
@@ -367,6 +382,73 @@ priv fn relay_log(log: U8[], child: subproc.Child$@) //<
             return
         sys.sleep_ms(200)
 
+struct Opened //< the server a run opens its document on
+    url: U8[] //< the URL it printed, token included; empty where none could be had
+    log: U8[] //< its log; empty for a server reused
+    child: subproc.Child? //< the server this run started; none for one reused
+
+priv fn open_or_start( //< finds the server for `root` in the note, or starts one and notes it
+    //<
+    //< Caution: **Hold the lock from the search to the note's write.** Documents opened together
+    //< would otherwise each start a server, and one record overwrite another: a server nobody can
+    //< list, stop or reuse. **The OS lets the lock go however the process ends** (`fs.File_lock`),
+    //< so none is left stale for a later run to clear.
+    where: Where,
+    root: U8[], //< the folder to serve, absolute
+    at: U8[], //< the port named, where a new server starts looking (`free_port`)
+    show_only: Bool, //< `--show`: the server gets no idle stop
+    arena: Arena$@,
+): Opened
+    $lock: = fs.File_lock.take(where.lock) catch
+        io.err().s("\{sys.program_name()\}: cannot take the lock on the note: \{where.lock\}\n")
+        return Opened::{ .url = "", .log = "", .child = .none }
+    defer lock.free()
+    // A running server is reused; starting one without looking piles up a server per document,
+    // their ports colliding (a common complaint about notebook servers).
+    had: = reusable(root, where.state)
+    if had.len > 0
+        return Opened::{ .url = had, .log = "", .child = .none }
+    serve_at: = free_port(aim.port_num(at), arena)
+    if serve_at.len == 0
+        io.err()
+            .s("\{sys.program_name()\}: nothing free in the \{port_tries\} numbers from \{at\}\n")
+        return Opened::{ .url = "", .log = "", .child = .none }
+    // Caution: **Send the output to a file**: the token appears only on that one line. **Make it
+    // for its owner alone first**; the server's output then goes into that file.
+    log: = fs.join(where.tmp,
+        arena.text().s(log_prefix).s(serve_at).s(log_ext).take(), arena)
+    aim.write_owned(log, "") catch
+        io.err().s("\{sys.program_name()\}: cannot make the log: \{log\}\n")
+        return Opened::{ .url = "", .log = "", .child = .none }
+    // Caution: **Name the page from outside the root** (the reason is at `page_rel`).
+    // **The idle stop is passed only when this tool exits** (with `--show`, Ctrl+C is right there;
+    // `--idle` in `kssrv/main.kspl`).
+    all: U8[][6] = ::{ where.server, serve_at, root, "--local",
+        arena.text().s("--page=\{where.page\}").take(),
+        arena.text().s("--idle=\{idle_hold\}").take() }
+    told: = U8[][]::all
+    argv: = told.sub(0, 5) if show_only else told
+    $child: = subproc.spawn_redirect(argv, "", log, log) catch
+        // **Say what to check.** Either the server or the log can be the cause. Naming one alone
+        // leads to suspecting a file that is fine.
+        io.err()
+            .s("\{sys.program_name()\}: cannot start \{where.server\} (the log it points at: \
+                \{log\})\n")
+        return Opened::{ .url = "", .log = "", .child = .none }
+    url: = wait_for_url(log, child@)
+    if url.len == 0
+        io.err().s("\{sys.program_name()\}: the server did not come up (\{log\})\n")
+        return Opened::{ .url = "", .log = "", .child = .none }
+    // Caution: **Write the note only after the server is up** (not for one that failed).
+    // **Add to the existing records**; overwritten, an earlier server for another folder is lost,
+    // holding its port with nobody able to reuse it.
+    had_body: = io.read_file(where.state) catch ""
+    $note: = Str_builder.new()
+    defer note.free()
+    aim.write_owned(where.state, aim.state_text(url, root, had_body, note@)) catch
+        io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
+    return Opened::{ .url = url, .log = log, .child = .some(child) }
+
 fn main(): I32 //< opens one document in kspage, starting the server and the browser as needed
     io.set_line_buffered()
     arena: = Arena.new(64 * 1024)
@@ -374,8 +456,8 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     $show_only: = false
     $root_said: U8[] = ""
     $at: U8[] = default_port
-    // Caution: **Do not parse the arguments by hand**: `--root --show` would take the next item as
-    // the value, and the mistake would show 30 seconds later as "the server does not come up".
+    // Caution: **Do not parse the arguments by hand.** `--root --show` would take the next item as
+    // the value. The mistake would show 30 seconds later as "the server does not come up".
     p: = argp.Parser
         .create(sys.program_name(), "open a document on a local server, or list and stop servers",
         arena)
@@ -391,10 +473,10 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     p.str_opt("--stop", stop_said@, "stop the server serving that folder")
     p.command_flag("--stop-all", "stop every running server")
     p.parse_or_exit(sys.args(), arena)
-    tending: = p.command.len > 0 || p.saw("--stop")
+    tending: = p.command.is_some() || p.saw("--stop")
     if tending &&
         (p.rest.len != 0 || p.saw("--root") || p.saw("--port") || p.saw("--show") ||
-        p.command.len > 0 && p.saw("--stop") || p.saw_empty("--stop"))
+        p.command.is_some() && p.saw("--stop") || p.saw_empty("--stop"))
         io.err()
             .s("\{sys.program_name()\}: --list, --stop=<folder> and --stop-all each stand alone\n")
         return 1
@@ -408,10 +490,12 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
             .s("\{sys.program_name()\}: kssrv not found (`make kssrv` and `make kspage-web` \
                 first)\n")
         return 1
+    // **The writer creates the folder** (not every run goes through make); the lock stands there.
+    fs.mkdir_all(where.tmp) catch {}
     if tending
         // Caution: **Make the folder absolute** (the reason is at `full`); the note holds it so.
         return tend(where, full(stop_said, arena) if stop_said.len > 0 else "",
-            p.command.equals("--stop-all"), arena)
+            p.command.unwrap_or("").equals("--stop-all"))
     path: = p.rest.get(0)
     if aim.port_num(at) == 0
         io.err().s("\{sys.program_name()\}: that number cannot be waited on: \{at\}\n")
@@ -419,9 +503,6 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     if !fs.exists(path)
         io.err().s("\{sys.program_name()\}: there is no such file: \{path\}\n")
         return 1
-    // **The writer creates the folder** (not every run goes through make).
-    fs.mkdir_all(aim.parent_of(where.log)) catch {}
-
     if !fs.exists(where.page)
         io.err()
             .s("\{sys.program_name()\}: there is no page: \{where.page\} (`make kspage-web` \
@@ -436,73 +517,30 @@ fn main(): I32 //< opens one document in kspage, starting the server and the bro
     // **Make it relative to the served folder** (the reason is at `aim.doc_under`).
     doc: = aim.doc_under(root, path)
 
-    // A running server is reused; starting one without looking piles up a server per document,
-    // their ports colliding (a common complaint about notebook servers).
-    had: = reusable(root, where.state)
-    if had.len > 0
-        $kept: = Str_builder.new()
-        defer kept.free()
-        open_url: = aim.url_for(had, doc, sys.is_windows(), kept@)
-        io.out().s("\{open_url\}\n")
-        io.out()
-            .s("\{sys.program_name()\}: used a running server (serving \{root\} on \
-                \{aim.port_in_url(had)\})\n")
-        hand_and_tell(open_url, doc, show_only, where, arena)
-        return 0
-
-    // Caution: **Send the output to a file**: the token appears only on that one line. **Make it
-    // for its owner alone first**; the server's output then goes into that file.
-    aim.write_owned(where.log, "", arena) catch
-        io.err().s("\{sys.program_name()\}: cannot make the log: \{where.log\}\n")
+    opened: = open_or_start(where, root, at, show_only, arena)
+    if opened.url.len == 0
         return 1
-    $chose: = Str_builder.new()
-    defer chose.free()
-    serve_at: = free_port(aim.port_num(at), chose@)
-    if serve_at.len == 0
-        io.err()
-            .s("\{sys.program_name()\}: nothing free in the \{port_tries\} numbers from \{at\}\n")
-        return 1
-    // Caution: **Name the page from outside the root** (the reason is at `page_rel`).
-    // **The idle stop is passed only when this tool exits** (with `--show`, Ctrl+C is right there;
-    // `--idle` in `kssrv/main.kspl`).
-    all: U8[][6] = ::{ where.server, serve_at, root, "--local",
-        arena.text().s("--page=\{where.page\}").take(),
-        arena.text().s("--idle=\{idle_hold\}").take() }
-    told: = U8[][]::all
-    argv: = told.sub(0, 5) if show_only else told
-    $child: = subproc.spawn_redirect(argv, "", where.log, where.log) catch
-        // **Say what to check**: either the server or the log can be the cause, so naming one alone
-        // leads to suspecting a file that is fine.
-        io.err()
-            .s("\{sys.program_name()\}: cannot start \{where.server\} (the log it points at: \
-                \{where.log\})\n")
-        return 1
-    url: = wait_for_url(where.log)
-    if url.len == 0
-        io.err()
-            .s("\{sys.program_name()\}: the server did not come up in 30 seconds (\{where.log\})\n")
-        return 1
-    // Caution: **Write the note only after the server is up** (not for one that failed).
-    // **Add to the existing records**; overwritten, an earlier server for another folder is lost,
-    // holding its port with nobody able to reuse it.
-    had_body: = io.read_file(where.state) catch ""
-    $note: = Str_builder.new()
-    defer note.free()
-    aim.write_owned(where.state, aim.state_text(url, root, had_body, note@), arena) catch
-        io.err().s("\{sys.program_name()\}: cannot write the note: \{where.state\}\n")
     $text: = Str_builder.new()
     defer text.free()
-    open_url: = aim.url_for(url, doc, sys.is_windows(), text@)
+    open_url: = aim.url_for(opened.url, doc, sys.is_windows(), text@)
     io.out().s("\{open_url\}\n")
+    if c: = opened.child
+        $started: = c
+        hand_and_tell(open_url, doc, show_only, where, arena)
+        // Caution: **Once the browser has the URL, exit here.** Waiting would leave one of these
+        // behind per document for someone not watching a terminal (a double click).
+        // **The server stays** for the next open (`reusable`).
+        if !show_only
+            io.out().s("  * the server stays (the next open uses this one)\n")
+            io.out().s("  * it stops itself once every kspage tab has been closed\n")
+            io.out()
+                .s("  * --list shows the servers left running, --stop=\{root\} stops this one\n\n")
+            return 0
+        io.out().s("  * to stop it: Ctrl+C\n\n")
+        relay_log(opened.log, started@)
+        return started.wait().unwrap_or(1)
+    io.out()
+        .s("\{sys.program_name()\}: used a running server (serving \{root\} on \
+            \{aim.port_in_url(opened.url)\})\n")
     hand_and_tell(open_url, doc, show_only, where, arena)
-    // Caution: **Once the browser has the URL, exit here.** Waiting would leave one of these behind
-    // per document for someone not watching a terminal (a double click).
-    // **The server stays** for the next open (`reusable`).
-    if !show_only
-        io.out().s("  * the server stays (the next open uses this one)\n")
-        io.out().s("  * it stops itself once every kspage tab has been closed\n")
-        io.out().s("  * --list shows the servers left running, --stop=\{root\} stops this one\n\n")
-        return 0
-    io.out().s("  * to stop it: Ctrl+C\n\n")
-    relay_log(where.log, child@)
-    return child.wait()
+    return 0

@@ -1,12 +1,12 @@
 // ==========================================
 // kspage's page — the wiring of the commands that change the document: a table's rows and
 // columns, inserted things, find and replace, notes, comments. **It is not the JS counterpart of
-// [`../../write/edit.kspl`](../../write/edit.kspl)** (that is [`api.js`](api.js)); it only
+// [`../../write/edit.kspl`](../../write/edit.kspl)** (that is [`api.js`](api.js)). It only
 // connects the menu's buttons to the core's entry points, as [`file.js`](file.js) does for files,
 // [`form.js`](form.js) for styles and [`paper.js`](paper.js) for paper.
-// Caution: **Route every click result through one path** (`ui.putButton` / `ui.lineButton`);
-// wired directly, the focus return and the refusal color would be missing here alone. **Removing
-// a frame acts only inside a slide** (the menu says so); a shape goes to the container the click
+// Caution: **Route every click result through one path** (`ui.putButton` / `ui.lineButton`).
+// Wired directly, the focus return and the refusal color would be missing here alone. **Removing
+// a frame acts only inside a slide** (the menu says so). A shape goes to the container the click
 // landed in, so over the body too.
 // ==========================================
 function kspageCommand(ui) {
@@ -18,8 +18,8 @@ function kspageCommand(ui) {
   lineButton("drop-row", () => app.dropLine("row"));
   whyButton("add-col", () => app.addLine("column"));
   lineButton("drop-col", () => app.dropLine("column"));
-  // Merging says which of five things stopped it (nothing selected, only one cell, a merge
-  // extending outside, too many rows or columns, read-only), so it writes its own refusal.
+  // Merging says which of five things stopped it, so it writes its own refusal. They are nothing
+  // selected, only one cell, a merge extending outside, too many rows or columns, read-only.
   whyButton("merge-cells", () => app.mergeCells());
   lineButton("split-cell", () => app.splitCell());
   lineButton("fill-down", () => app.fillAlong("down"));
@@ -51,7 +51,7 @@ function kspageCommand(ui) {
   const holdFly = (host, id, name, picks) => kspageHoldFly(document.getElementById(host),
     { id: id, name: name, picks: picks, run: () => app.focus() }).now;
 
-  // Filtering the rows. **It is a view** — nothing is saved and a total counts every row — so the
+  // Filtering the rows. **It is a view**: nothing is saved, and a total counts every row. So the
   // count shown stays in the status bar (`page.js`), and "Show all rows" is the way back (not
   // undo).
   const keepNow = holdFly("filter-kind", "filter-keep", "Kind", KEEP_PICKS);
@@ -65,10 +65,10 @@ function kspageCommand(ui) {
   whyButton("narrow-clear", () => app.showThisColumn());
 
   // Inserting a table and a slide. **This page decides the style's name** (a name in the document's
-  // style table); a slide is sized by its style, so without a name it is not inserted.
-  // **Do not rely on the name too much** — the core finds the style **by role** (`role_of` in
+  // style table). A slide is sized by its style, so without a name it is not inserted.
+  // **Do not rely on the name too much.** The core finds the style **by role** (`role_of` in
   // `../../write/insert.kspl`); the name only picks between two with the same role.
-  // **The size grid and the button are one path** — the grid sets the size and clicks the button,
+  // **The size grid and the button are one path.** The grid sets the size and clicks the button,
   // so the refusal and the focus are only `putButton`'s (Principle 6).
   const tableSize = kspageGridPick(document.getElementById("table-picks"), {
     id: "table-size", cols: 10, rows: 8, was: [2, 2],
@@ -93,12 +93,12 @@ function kspageCommand(ui) {
   putButton("put-shape", () => app.insertShape(`figure-${shapeKind()}`, shapeKind()),
     "A shape is placed inside a slide. Click a slide and then insert it");
   // The name of one thing, **separate from a style's name.**
-  // **Write what it attaches to into the refusal** — it depends on where the cursor is (`named_at`
+  // **Write what it attaches to into the refusal.** It depends on where the cursor is (`named_at`
   // in `../../write/block.kspl`).
-  // Caution: **Do not say only "the text inside a frame"** — someone who wants to name a table
+  // Caution: **Do not say only "the text inside a frame"**: someone who wants to name a table
   // reads that as impossible.
-  // **A table's name no formula could reach says why** (`kspage_web_set_name`): the rule is what a
-  // formula reads as the end of a name, as a number or as the date type.
+  // **A table's name that no formula could reach says why** (`kspage_web_set_name`). The rule is
+  // what a formula reads as the end of a name, as a number or as the date type.
   const frameNameBox = document.getElementById("frame-name");
   const NAME_FAULTS = {
     "-1": "A table's name cannot hold a space, a line break or any of + - * / ( ) , : < > = ! "
@@ -151,10 +151,10 @@ function kspageCommand(ui) {
     app.focus();
   });
 
-  // Inserting an image from a local file, **for those who can insert one only here** (the URL field
-  // alone would mean building the data: text yourself); cleared so the same file fires `change`
-  // again, and the natural size is read. **It is always embedded**, with the local server or
-  // without: one press does one thing. A picture to be pointed at by place is typed into the URL
+  // Inserting an image from a local file, **for those who can insert one only here**. The URL
+  // field alone would mean building the data: text yourself. It is cleared so the same file fires
+  // `change` again, and the natural size is read. **It is always embedded**, with the local server
+  // or without: one press does one thing. A picture pointed at by place is typed into the URL
   // field, which references what it is given.
   // **Report the embedded size** (base64 is 4/3), or a few photos silently reach the opening cap.
   const imageFile = document.getElementById("image-file");
@@ -202,9 +202,9 @@ function kspageCommand(ui) {
   // body is inside the canvas.
   const findBox = document.getElementById("find-text");
   const withBox = document.getElementById("find-with");
-  // Shows the match count while typing. **Reporting after a click is too late** — "Replace all"
-  // touches the whole document, so how many will change shows **before clicking** (after it, the
-  // only way back is undo).
+  // Shows the match count while typing. **Reporting after a click is too late.** "Replace all"
+  // touches the whole document, so how many will change shows **before clicking**. After it, the
+  // only way back is undo.
   // Caution: **Show 0 too** (left empty, "not counted" and 0 look alike).
   const tallyBox = document.getElementById("find-tally");
   const retally = () => {

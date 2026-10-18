@@ -53,13 +53,13 @@ So a package carved out of the tree leaves these suites behind, and takes its ow
 | Suite | What it reads | Where it lives |
 | :-- | :-- | :-- |
 | `lsp-tree`, `fmt-tree` | The whole tree | Here |
-| ksplc's `lsp`, `kspls` | ksplc's folder only | In ksplc's folder |
+| ksplc's `lsp`, `notation` | ksplc's folder only | In ksplc's folder |
 
 `lsp-tree` starts its own language server on the workspace that only this folder offers.
 
-**The tests `make debug` builds are not suites.** They are what is inspected ("does a program written in KSPL run correctly"), not what gives the verdict: the Makefile gives that, from the exit code and the output. So they live in each package's `tests/`, and only the run that calls them is here.
+**The tests `make debug` builds are not suites.** They are what is inspected ("does a program written in KSPL run correctly"), not what gives the verdict. The Makefile gives the verdict, from the exit code and the output. So they live in each package's `tests/`, and only the run that calls them is here.
 
-## A folder holds a role, and a file name holds a role within it
+## The folder and the file name each hold a role
 
 The folder tells you whether a file is run or read, and the file name tells you whether it is shared.
 
@@ -78,6 +78,6 @@ An *arena* is a block of memory that hands out pieces and frees them all at once
 
 **`harness.*` does not take the arena per call**, because lines that only pass it along would make up a meaningful share of a suite's code.
 
-**This is not a rule that an arena is never passed.** What decides is where the result goes, not where the receiver lives. A list kept only for one function's length is given `null`, the global heap (`List.new(null)`, freed at once with a `defer`), since a temporary list in a long-lived arena only grows.
+**This is not a rule that an arena is never passed.** What decides is where the result goes, not where the receiver lives. A list kept only for one function's length is given `null`, the global heap (`List.new(null)`, freed at once with a `defer`). A temporary list in a long-lived arena only grows.
 
 Caution: **Confirm before dropping the arena argument from another function.** Plant a check in harness that fails where the arena passed differs from the main arena, and run every suite.

@@ -7,12 +7,12 @@
 // ksos/docs/DESIGN-rtos.md.
 // Caution: **Call clocks.init() first.** USB needs exactly 48MHz on clk_usb (full speed's
 // tolerance is ±0.25%). On the built-in ROSC it does not even reach enumeration.
-// **It runs by polling, not by interrupt**, so ksos's scheduler need not share interrupt priorities
-// with it (if lost events start to matter, move to the NVIC — `enable_irq` in
-// ksos/drivers/cortex_m/scs.kspl).
+// **It runs by polling, not by interrupt.** So ksos's scheduler does not share interrupt priorities
+// with it. (If lost events start to matter, move to the NVIC: `enable_irq` in
+// ksos/drivers/cortex_m/scs.kspl.)
 // ==========================================
-// QEMU has no RP2040 model: it is checked on a real Pico W (ksos/docs/HOWTO-bring-up.md), and the
-// descriptors statically by ksos/tests/usb_descriptors.kspl.
+// QEMU has no RP2040 model. So a real Pico W checks it (ksos/docs/HOWTO-bring-up.md), and
+// ksos/tests/usb_descriptors.kspl checks the descriptors statically.
 // ==========================================
 import "ksos/drivers/cdc_ncm" as ncm
 import "ksos/drivers/mmio"
@@ -48,8 +48,8 @@ $configured: Bool = false
 // Whether `init()` completed. **It is `poll_once`'s guard** (the reason is at `poll_once`).
 $started: Bool = false
 
-// EP0's data stage. **It may take more than one packet (64 bytes)**: the response is copied here
-// and the rest is sent on each completion (stop partway and enumeration fails).
+// EP0's data stage. **It can take more than one packet (64 bytes).** The response is copied here.
+// The rest goes out on each completion (stop partway and enumeration fails).
 $ep0_tx: U8[256] // the largest is the configuration descriptor's 160 bytes
 $ep0_tx_len: U32 = 0
 $ep0_tx_sent: U32 = 0
@@ -184,7 +184,7 @@ priv fn reply_ep0(data: U8@, total: U32, want: U32) //<
     $want_len: U32 = total
     if want_len > want
         want_len = want
-    // copy_from truncates what does not fit and returns **the number copied**; the lengths below
+    // copy_from truncates what does not fit and returns **the number copied**. The lengths below
     // use that value (with any other, ep0_tx_sent would run past the capacity).
     dst: = U8$[]::ep0_tx
     len: = U32::dst.copy_from(0, U8[]::{ .ptr = data, .len = Sz::want_len })
@@ -192,8 +192,8 @@ priv fn reply_ep0(data: U8@, total: U32, want: U32) //<
     ep0_tx_sent = 0
     ep0_tx_active = true
     // If the response is shorter than requested and exactly a multiple of 64, no short packet marks
-    // the end of the data stage, so a zero-length packet is added (if len is 0 the first packet is
-    // itself a short packet, so none is needed).
+    // the end of the data stage. So a zero-length packet is added. (If len is 0, the first packet
+    // is itself a short packet, so none is needed.)
     ep0_tx_zlp = len != 0 && len < want && (len % hw.max_packet) == 0
     ep0_tx_next()
 
@@ -233,16 +233,16 @@ priv fn handle_get_descriptor(value: U32, want: U32) //< GET_DESCRIPTOR
 // unanswered, the host does not bring the link up.** The fields, little-endian: wLength 28;
 // bmNtbFormatsSupported 1 (16-bit only); dwNtbInMaxSize 2048; wNdpInDivisor 4;
 // wNdpInPayloadRemainder 0; wNdpInAlignment 4; wPadding1 0; dwNtbOutMaxSize 2048; wNdpOutDivisor 4;
-// wNdpOutPayloadRemainder 0; wNdpOutAlignment 4; wNtbOutMaxDatagrams 1, which makes the host put
-// one frame in each NTB and keeps parsing simple.
+// wNdpOutPayloadRemainder 0; wNdpOutAlignment 4; wNtbOutMaxDatagrams 1. The last makes the host
+// put one frame in each NTB, which keeps parsing simple.
 const desc_ntb_params: U8[28] = ::{ 28, 0, 1, 0, 0x00, 0x08, 0x00, 0x00, 4, 0, 0, 0, 4, 0, 0, 0,
     0x00, 0x08, 0x00, 0x00, 4, 0, 0, 0, 4, 0, 1, 0 }
 
 priv fn handle_ncm_request(req: U32, want: U32): Bool //< NCM's class requests
     //<
     //< true if it was handled.
-    //< Caution: Reject what cannot be handled with a STALL (ACK it silently and the host goes on
-    //< believing it was accepted, and later nothing adds up).
+    //< Caution: Reject what cannot be handled with a STALL. If it is ACKed silently, the host
+    //< believes the device accepted it, and later nothing adds up.
     if req == 0x80 // GET_NTB_PARAMETERS
         reply_ep0(desc_ntb_params[0]@, 28, want)
         return true
@@ -260,7 +260,7 @@ priv fn handle_ncm_request(req: U32, want: U32): Bool //< NCM's class requests
         ep0_out_active = true
         hw.arm_recv(0, 1, hw.max_packet)
         return true
-    // SET_NTB_FORMAT (0x84) / SET_ETHERNET_PACKET_FILTER (0x43): no data stage, and the device is
+    // SET_NTB_FORMAT (0x84) / SET_ETHERNET_PACKET_FILTER (0x43): no data stage. The device is
     // fixed at 16-bit with no filter, so the empty response is enough.
     if req == 0x84 || req == 0x43
         ack_ep0()
@@ -343,8 +343,8 @@ priv fn handle_setup()
         if !handle_ncm_request(req, want)
             stall_ep0((bm & 0x80) != 0)
         return
-    // CDC's class requests. SET_LINE_CODING (0x20) / SET_CONTROL_LINE_STATE (0x22) may be ignored,
-    // but **a response must always be returned** or the host cannot open the port.
+    // CDC's class requests. The device can ignore SET_LINE_CODING (0x20) / SET_CONTROL_LINE_STATE
+    // (0x22). But **it must always return a response**, or the host cannot open the port.
     if (bm & 0x60) == 0x20 && req == 0x21
         // GET_LINE_CODING: it answers 115200 8N1 (the value itself means nothing)
         lc: U8[7] = ::{ 0x00, 0xc2, 0x01, 0x00, 0, 0, 8 }
@@ -537,8 +537,8 @@ priv fn rx_packet_done() //< one packet arrived on EP4 OUT
             return
     if rx_want != 0 && rx_len >= rx_want
         // Caution: **Discard an NTB that holds no frame to read**, as one out of step is. Marked
-        // ready, nothing reads it (every caller asks `rx_available` first, which says no), and
-        // only reading re-arms: one malformed NTB from the host stopped receiving for good.
+        // ready, nothing reads it (every caller asks `rx_available` first, which says no). Only
+        // reading re-arms. So one malformed NTB from the host would stop receiving for good.
         if !ncm.datagram_at(U8[]::rx_ntb, rx_want, 0).ok
             rx_rearm()
             return
@@ -600,8 +600,8 @@ priv fn pump_ncm_tx() //< sends the stored NTB one packet at a time
 fn send_frame(frame: U8[], len: Sz): Bool //< sends one frame
     //<
     //< **true once it is sent**, and false if it cannot be sent now (ksos/net/link.Send_frame).
-    //< There is only one NTB buffer, so it is false until the host has taken the previous frame:
-    //< call poll_once() until ncm_tx_busy() is false and try again. tx_dropped() counts the
+    //< There is only one NTB buffer, so it is false until the host has taken the previous frame.
+    //< Call poll_once() until ncm_tx_busy() is false, then try again. tx_dropped() counts the
     //< refusals.
     if ncm_alt != 1 || tx_ntb_busy
         tx_drops += 1

@@ -1,9 +1,9 @@
 //< Generates C99 declarations
 //<
-//< The output order of the forward declarations (prototypes, structs / composite types / extern /
-//< embed) and the shared helpers for parameter lists and C declarators (function pointers
-//< included). root.kspl calls emit_forward_declarations / emit_function_prototypes; statements
-//< and expressions are in stmt.kspl / expr.kspl.
+//< It holds the output order of the forward declarations (prototypes, structs / composite types /
+//< extern / embed). It also holds the shared helpers for parameter lists and C declarators
+//< (function pointers included). root.kspl calls emit_forward_declarations /
+//< emit_function_prototypes; statements and expressions are in stmt.kspl / expr.kspl.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -51,22 +51,22 @@ priv fn write_c_fn_name($w: Writer, fn_name: U8[], s_impl: U8[], verbatim_name: 
 priv fn extern_word(item: Ast_node$@): U8[] //< the storage word of an `extern` block's item
     //<
     //< **std's blocks declare the runtime** (the reason a `kspl_*` function's body is in
-    //< `gen/runtime/`), whose linkage `KSPL_LINK` sets: in a library it is `static`, and C refuses
-    //< a `static` definition after an `extern` declaration. Any other block declares C's.
+    //< `gen/runtime/`). `KSPL_LINK` sets the runtime's linkage: in a library it is `static`. C
+    //< refuses a `static` definition after an `extern` declaration. Any other block declares C's.
     if base_core.is_library() && base_locate.is_std_file(item.loc.file())
         return "KSPL_LINK "
     return "extern "
 
 impl Ast_node
     priv fn has_file_local_c_symbol(r: Ast_node$@): Bool //<
-        //< Whether this declaration's C symbol may be local to its translation unit
+        //< Whether this declaration's C symbol can be local to its translation unit
         //<
         //< That is whether `genc` adds `static` and emits the prototype only into the owning unit.
         //<
         //< Caution: **Do not decide by `get_visibility() == file_private` alone.** Make a
         //< program-wide name (`Sema_symbol.has_program_unique_c_name`) local and a synthesized call
         //< from another unit fails to link. **In a library everything but an `#export` is local**
-        //< (`--library`): it is one unit, and only its interface may be seen outside it.
+        //< (`--library`): it is one unit, and only its interface can be seen outside it.
         if r == null || r.kind_id == .k_decl_fn_proto
             return false
         if base_core.is_library()
@@ -143,15 +143,16 @@ impl Ast_node
             cg.s(" ").nm(name)
 
     fn emit_param_list(r: Self$@, cg: Genc_ctx$@) //<
-        //< It emits a function's parameter list in C
+        //< It emits a function's parameter list in C, `void` where it takes none
         //<
         //< Note: emit_trait_decl in gen/c/types.kspl has a similar walk (the reason they stay
         //< apart is there).
+        //< Caution: **Write the `void`.** In C `f()` declares no prototype, so a call with
+        //< arguments compiles unchecked (`-Wstrict-prototypes`).
         r.ice_assert(r != null, "emit_param_list: proto is null")
         param_list: = r if r.kind_id == .k_param_list else r.get_fn_params()
-
+        $is_first: = true
         if param_list != null
-            $is_first: = true
             for item in param_list.children
                 if item.kind_id == .k_fn_param
                     if !is_first
@@ -175,6 +176,8 @@ impl Ast_node
                         cg.s(", ")
                     cg.s("...")
                     is_first = false
+        if is_first
+            cg.s("void")
 
     priv fn alias_target_node(r: Self$@): Ast_node$@ //<
         //< the type node of an alias's right-hand side
@@ -256,9 +259,9 @@ impl Ast_node
         case .k_decl_fn_proto
             // Under hosted, the standard headers already declare a std/libc function, so it is not
             // emitted here (two declarations disagree over variadics and the like). Freestanding
-            // includes no standard header (gen/c/ctx.kspl), so even an unused one is an "implicit
-            // declaration" error; it is emitted to get the compile through, and --gc-sections drops
-            // it if uncalled.
+            // includes no standard header (gen/c/ctx.kspl). There, even an unused one is an
+            // "implicit declaration" error. So it is emitted to get the compile through, and
+            // --gc-sections drops it if uncalled.
             if !r.loc.file().equals("std/libc") || base_core.config.is_freestanding
                 cg.s(extern_word(r))
                 r.emit_single_func_proto(cg, 0)
@@ -431,7 +434,7 @@ impl Ast_node
     fn emit_fwd_externs_and_embeds(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< It declares every top-level variable, constant and embed ahead of the definitions
         //<
-        //< A definition's initializer may name one written after it (a cycle through addresses).
+        //< A definition's initializer can name one written after it (a cycle through addresses).
         //< Caution: **Call it after the types are complete.** In a library the declaration is a
         //< `static` tentative definition, which C refuses on an incomplete type.
         for raw in r.children
@@ -562,24 +565,18 @@ fn emit_single_complex_type(cg: Genc_ctx$@, type_id: I32)
 
     switch info
     case .array(base_id, size)
-        // The version with immutable elements has no definition (it is an alias sharing the struct
-        // tag with the plain type, already typedef'd in emit_complex_types_fwd).
+        // The version with immutable elements has no definition. It is an alias sharing the struct
+        // tag with the plain type, already typedef'd in emit_complex_types_fwd.
         if size != -1 && !cg.env.is_const(base_id)
             // C does not allow a zero-length array (`data[0]` is a GNU extension). A zero-element
             // array type comes only from an empty literal (`T[_]::{}`; sema rejects a written
-            // `T[0]`), so one element here cannot be observed (.len is 0 and no subscript passes
+            // `T[0]`). So nothing can observe one element here (.len is 0, and no subscript passes
             // the bounds check).
             c_size: = 1 if size == 0 else size
             cg.s("struct \{m_str\} {\n    ")
             cg.t(base_id).s(" data[\{c_size\}];\n};\n")
-    case .result(base_id, err_id)
-        cg.s("struct kspl_\{m_str\} {\n    bool is_err;\n    ")
-        cg.t(err_id).s(" error_code;\n")
-        if !sema_type_env.is_void(base_id)
-            cg.s("    ").t(base_id).s(" val;\n")
-        cg.s("};\n\n")
     case .fn_type(sig)
-        // A function pointer has a C name only through a typedef; a declarator alone cannot appear
+        // A function pointer has a C name only through a typedef. A declarator alone cannot appear
         // where a type is written by name (a generic's field, a return, an inferred local).
         name: = base_core.arena.dup_str(m_str)
         cg.s("typedef ").t_ret(sig.ret_id).s(" (*").s(name).s(")(")
@@ -602,18 +599,14 @@ priv fn emit_complex_types_fwd(cg: Genc_ctx$@)
         case .array(_base_id, size)
             if size != -1 && seen.admit(type_id)
                 emit_array_typedef_fwd(cg, type_id, cg.mangled_in_scratch(type_id))
-        case .result(_base_id, _err_id)
-            if seen.admit(type_id)
-                m_slice: = cg.mangled_in_scratch(type_id)
-                cg.s("typedef struct kspl_\{m_slice\} kspl_\{m_slice\};\n")
         default {}
 
 priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<
     //< The forward typedef of a fixed-length array's struct, named `m_slice`
     //<
     //< An array with immutable elements is emitted as an alias sharing **the same struct tag** as
-    //< the plain type (the same reason as a slice's). As a separate struct it would be a different
-    //< type in C, and a value copy (a return value, an assignment) would fail with "the types
+    //< the plain type (the same reason as a slice's). As a separate struct, it would be a different
+    //< type in C. A value copy (a return value, an assignment) would then fail with "the types
     //< differ". The declaration's `const ` makes it read-only (map_c_type_to_impl in
     //< gen/c/ctx.kspl). **Every level is stripped** (`strip_const_deep`).
     plain_arr_id: = cg.env.strip_const_deep(type_id)
@@ -625,7 +618,7 @@ priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<
     cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
     cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
 
-priv fn is_text_data(data: U8[]): Bool //< whether this run may be printed as a C string literal
+priv fn is_text_data(data: U8[]): Bool //< whether this run can be printed as a C string literal
     //<
     //< 1. no control characters, 2. valid UTF-8. **Without the second, the generated C gets an
     //< `illegal character encoding` warning** for correct contents (Principle 2).
@@ -678,12 +671,12 @@ priv fn type_mentions_waiting(cg: Genc_ctx$@, type_id: I32, waiting: Map<|I32, B
     Bool //<
         //< Whether type_id leads to an alias in waiting, looking through the wrappers
         //<
-        //< It strips pointers, slices, arrays, Results, immutability qualifiers and aliases (the
+        //< It strips pointers, slices, arrays, immutability qualifiers and aliases (the
         //< `B` of `typedef A = B@;` counts).
 
     if type_id == 0 || depth > max_alias_dep_depth
         return false
-    if waiting.get(type_id) catch false
+    if waiting.get(type_id).unwrap_or(false)
         return true
     switch cg.env.get_info(type_id)
     case .pointer(base_id)
@@ -694,9 +687,5 @@ priv fn type_mentions_waiting(cg: Genc_ctx$@, type_id: I32, waiting: Map<|I32, B
         return type_mentions_waiting(cg, base_id, waiting, depth + 1)
     case .alias_type(base_id)
         return type_mentions_waiting(cg, base_id, waiting, depth + 1)
-    case .result(base_id, err_id)
-        if type_mentions_waiting(cg, base_id, waiting, depth + 1)
-            return true
-        return type_mentions_waiting(cg, err_id, waiting, depth + 1)
     default
         return false

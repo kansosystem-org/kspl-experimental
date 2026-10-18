@@ -1,15 +1,16 @@
 //< The main walk over the bodies: every function and initializer, then the generics' instances
 //<
-//< `run` types the top-level declarations in the files' order, then checks the body of each queued
-//< instance, evaluates the assertion directives, and runs the checks that need the whole analysis
-//< (the imports, the unused names). `Sema_ctx.bodies` chooses which bodies are checked. The
-//< declarations are registered before this, by `run` in `sema/decl/collect.kspl`.
+//< `run` types the top-level declarations in the files' order. Then it checks the body of each
+//< queued instance and evaluates the assertion directives. Last, it runs the checks that need the
+//< whole analysis (the imports, the unused names). `Sema_ctx.bodies` chooses which bodies are
+//< checked. The declarations are registered before this, by `run` in `sema/decl/collect.kspl`.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/literal" as base_literal
 import "ksplc/sema/body/analyze" as sema_body_analyze
+import "ksplc/sema/body/coerce" as _sema_body_coerce
 import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/body/for_in" as sema_body_for_in
 import "ksplc/sema/body/lint_stmt" as sema_body_lint_stmt
@@ -21,6 +22,7 @@ import "ksplc/sema/decl/eval" as sema_decl_eval
 import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
+import "ksplc/sema/decl/type_check" as sema_decl_type_check
 import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
 import "ksplc/sema/session/import_table" as sema_session_import_table
@@ -35,8 +37,8 @@ import "std/str" { Str_builder }
 // ==========================================
 // Which bodies a `Bodies.mentioning` analysis checks
 // A site naming the name lives in a body that mentions it, or in an instance of a generic that
-// does, and an instance is made by a body naming that generic. So the names grow through the
-// generics using them until none is added; a body naming none of them holds no such site.
+// does. An instance is made by a body naming that generic. So the names grow through the generics
+// using them until none is added. A body naming none of them holds no such site.
 // Caution: **An instance made without naming its generic is not followed** (an operator, a
 // subscript, `for in`, a trait value). The workspace walk reads only the files that name the name,
 // so it already stops there.
@@ -51,7 +53,7 @@ priv fn names_any( //< whether an identifier under `n` is one of `names`
 ): Bool
     if n == null || depth > max_mention_depth
         return false
-    if n != own && n.kind_id == .k_identifier && (names.get(n.text) catch false)
+    if n != own && n.kind_id == .k_identifier && names.get(n.text).unwrap_or(false)
         return true
     for k in n.children
         if names_any(k, names, own, depth + 1)
@@ -121,8 +123,8 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
     default {}
 
     for child_node in r.children
-        // Report progress once per declaration (report_progress in base/core.kspl), or the LSP's
-        // supervisor takes a silent but live worker for a hung one and kills it.
+        // Report progress once per declaration (report_progress in base/core.kspl). Otherwise the
+        // LSP's supervisor takes a silent but live worker for a hung one and kills it.
         base_core.report_progress()
         // Instances the previous declaration queued are created here.
         c.drain_pending_instances() catch
@@ -184,7 +186,7 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         sym: = Sema_symbol$@::pending.node.sym_ptr
         c.fn_ctx.name = sym.name
 
-        // Restores the type-argument bindings as queued, then analyzes the body; always restore the
+        // Restores the type-argument bindings as queued, then analyzes the body. Always restore the
         // previous ones afterwards (instantiations nest; see Pending_inst in
         // sema/session/state.kspl).
         saved_args_len: = c.generics.args.len
@@ -324,17 +326,41 @@ impl Ast_node
             sym.flags.is_mut = false
         $t_id: = I32::sema_type_env.Builtin_type_id.void_type
         t_node: = r.find_child(.k_type_expr)
-        if t_node != null
+        // A type reported missing makes the parameter unknown (names_missing_type in
+        // `../decl/type_check.kspl`), so nothing below repeats that report. **Not in an
+        // instance**: its types are written in the internal form, which the check cannot read, and
+        // the template's declaration was checked already.
+        missing: =
+            !c.is_instantiating() && sema_decl_type_check.names_missing_type(c, t_node)
+        if t_node != null && !missing
             t_id = t_node.resolve_type(c)!
             if is_export
                 c.check_ffi_safety(t_id, t_node)
-        c.check_param_type(r, t_id)
+        if missing
+            t_id = I32::sema_type_env.Builtin_type_id.unknown
+        else
+            c.check_param_type(r, t_id)
+        r.check_param_default(c, t_id)
         sym.type_id = t_id
         r.type_id = t_id
         c.declare_symbol(p_name, sym, false)
         id_node: = r.find_child(.k_identifier)
         if id_node != null
             id_node.def_node = r
+
+    priv fn check_param_default(r: Self$@, c: Sema_ctx$@, t_id: I32) //<
+        //< Checks a parameter's default against its type here, at the declaration
+        //<
+        //< **A call that leaves the argument out checks a copy of it the same way**
+        //< (`call_defaults.kspl`); without this, `v: U8 = 300` passes until some call uses it. The
+        //< two reports are one at the same position, and merged.
+        d: = r.get_param_default()
+        if d == null || d.caller_loc_kind().len > 0 || sema_type_env.is_unknown(t_id)
+            return
+        probe: = d.clone()
+        a_id: = probe.infer_expr(c, t_id) catch I32::sema_type_env.Builtin_type_id.unknown
+        if !sema_type_env.is_unknown(a_id)
+            probe.apply_type_coercion(c, a_id, t_id)
 
     priv fn infer_body(r: Self$@, c: Sema_ctx$@, block: Ast_node$@): Bool //<
         //< It analyzes a function's body; false where it found an error
@@ -380,7 +406,7 @@ impl Ast_node
         //<
         //< It reports the first other statement.
         //< With no prologue there is no frame, so any other statement would use stack the function
-        //< never set up; clang refuses it ("non-ASM statement in naked function").
+        //< never set up. clang refuses it ("non-ASM statement in naked function").
         for stmt in r.children
             if stmt.kind_id == .k_empty
                 continue
@@ -392,8 +418,8 @@ impl Ast_node
                 callee.kind_id == .k_identifier && callee.text.equals("__kspl_asm_volatile")
                 continue
             c.err(stmt,
-                "a '#naked' function holds only '__kspl_asm_volatile(...)' statements: it has no \
-                    prologue, so any other statement would use a stack frame that is not there")
+                "a '#naked' function permits only '__kspl_asm_volatile(...)' statements. It has no \
+                    prologue. Other statements would require a stack frame that does not exist")
             return false
         return true
 
@@ -427,7 +453,7 @@ impl Ast_node
             c.clear_scratch()
                 .s("[H0803] This function spans \{line_count\} lines, over the \
                     ~\{max_fn_lines\}-line guideline (Principle 3 in docs/DESIGN-principles.md). \
-                    Consider splitting it into smaller, focused helpers.")
+                    Split it into smaller functions, each with one purpose.")
             c.hint(r, c.scratch.slice())
 
     priv fn deepest_block(r: Self$@, depth: Sz): Sz //<
@@ -452,7 +478,7 @@ impl Ast_node
             c.clear_scratch()
                 .s("[H0805] This function nests blocks \{depth\} levels deep, past the \
                     \{max_depth\}-level guideline (Principle 3 in docs/DESIGN-principles.md). Move \
-                    the inner part into a helper, or leave early to flatten it.")
+                    the inner code into a helper, or return early to reduce nesting.")
             c.hint(r, c.scratch.slice())
 
     priv fn infer_impl_decl(r: Self$@, c: Sema_ctx$@): Void!Sema_error
@@ -496,7 +522,7 @@ impl Ast_node
                 msg_node = ch
 
         if expr_node != null
-            // Caution: **A condition that does not fold is reported, not taken as false**: folding
+            // Caution: **A condition that does not fold is reported, not taken as false.** Folding
             // names why, and the file's own message would then claim a failure that did not happen.
             val: = expr_node.eval_constexpr(c) catch
                 return

@@ -4,11 +4,11 @@
 //< parses, it stays green with the replacement removed.
 //< **Test the three kinds of head separately**: `p.` (a receiver's type), `io.` (an import's alias)
 //< and a bare name take different paths (the reason is at `pick_tails`).
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "std/chars"
 import "std/ds" { List }
 import "std/json" { Json_builder }
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -18,7 +18,7 @@ priv const heavy_ms: I32 = 60000 //<
 
 // The sample files.
 // Caution: **Keep what is missing to only one place.** Without recovery from a syntax error only
-// one missing name can be handled, so two open places **return empty for both** — hence one file
+// one missing name can be handled. Two open places **return empty for both**. Hence one file
 // per kind of head.
 priv const pick_head: U8[] =
     """import "std/io"
@@ -35,7 +35,7 @@ fn twice(v: I32): I32 //< the number doubled
 """
 
 // The three kinds of head. **The language server handles each by a different path** (the postfix
-// clause, the path clause, the enclosing scope); testing one lets the others silently go empty.
+// clause, the path clause, the enclosing scope). Testing one lets the others silently go empty.
 priv const pick_tails: U8[][_] = ::{ """fn drink(cup: Cup): I32
   y: = cup.
   return 0
@@ -65,13 +65,13 @@ priv struct Row //< one candidate as the list returned it
     doc: U8[]
     detail: U8[]
 
-priv fn picks_at(c: jsonrpc.Client$@, which: Sz, arena: Arena$@): List<|Row|> //<
+priv fn picks_at(c: jsonrpc_client.Client$@, which: Sz, arena: Arena$@): List<|Row|> //<
     //< It sends completion at one of the three places and lists the candidates returned
     $text: = arena.text()
     text = text.s(pick_head).s(pick_tails[which])
     return picks_in(c, pick_uris[which], text.take(), pick_lines[which], pick_cols[which], arena)
 
-priv fn picks_in(c: jsonrpc.Client$@, uri: U8[], text: U8[], line: Sz, character: Sz,
+priv fn picks_in(c: jsonrpc_client.Client$@, uri: U8[], text: U8[], line: Sz, character: Sz,
     arena: Arena$@): List<|Row|> //<
         //< It opens that text and sends completion at (line, character)
     c.notify("textDocument/didOpen", lsp_client.did_open(uri, text, arena), lsp_client.send_ms,
@@ -90,9 +90,9 @@ priv fn picks_in(c: jsonrpc.Client$@, uri: U8[], text: U8[], line: Sz, character
     for i in Range.asc(items.len)
         it: = items.get(i)
         out
-            .push(Row::{ .label = it.get("label").as_str(),
-            .doc = it.get("documentation").get("value").as_str(),
-            .detail = it.get("detail").as_str() })
+            .push(Row::{ .label = it.get("label").as_str().unwrap_or(""),
+            .doc = it.get("documentation").get("value").as_str().unwrap_or(""),
+            .detail = it.get("detail").as_str().unwrap_or("") })
     return out
 
 priv fn holds(rows: List<|Row|>@, want: U8[]): Bool
@@ -117,7 +117,7 @@ priv fn det_of(rows: List<|Row|>@, want: U8[]): U8[] //< what is shown beside th
             return rows.get(i).detail
     return ""
 
-priv fn said(c: jsonrpc.Client$@, doc: U8[], arena: Arena$@): U8[] //<
+priv fn said(c: jsonrpc_client.Client$@, doc: U8[], arena: Arena$@): U8[] //<
     //< A description as the list gave it, for a failure's message
     return lsp_client.why(c, arena.text().s("'").s(doc).s("'").take(), arena)
 
@@ -134,7 +134,7 @@ priv fn in_order(rows: List<|Row|>@): Bool //< whether the list is sorted by nam
             return false
     return true
 
-fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_completion(c: jsonrpc_client.Client$@, arena: Arena$@)
     $fields: = picks_at(c, 0, arena)
     $f_names: = labels(fields@, arena)
     d1: = lsp_client.why(c, lsp_client.join(f_names@, arena), arena)
@@ -145,7 +145,7 @@ fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
         !holds(fields@, "twice"), d1)
     verdict.check("the fields line up in name order", in_order(fields@), d1)
     // **The list is where a caller looks first**, before the hover, so each path is tested for the
-    // description — wired on only one, the others go silent without anything saying so.
+    // description. Wired on only one, the others go silent without anything saying so.
     f_doc: = doc_of(fields@, "water")
     verdict.check("a receiver type's field carries what it says of itself",
         f_doc.find_str("how much water it holds").is_some(), said(c, f_doc, arena))
@@ -167,8 +167,8 @@ fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
     verdict.check("a name beyond a step carries what it says of itself",
         m_doc.find_str("standard output").is_some(), said(c, m_doc, arena))
     m_det: = det_of(mods@, "getchar")
-    verdict.check("a name beyond a step shows its signature", m_det.equals("(): I32"),
-        said(c, m_det, arena))
+    verdict.check("a name beyond a step shows its signature",
+        m_det.equals("(): U8?!std.io.Io_error"), said(c, m_det, arena))
     // **A type gets none**: the `kind` beside it already says it.
     t_det: = det_of(mods@, "Reader")
     verdict.check("a type beyond a step shows no signature", t_det.len == 0,
@@ -191,10 +191,10 @@ fn check_completion(c: jsonrpc.Client$@, arena: Arena$@)
 // Completion in a generic's body that nothing instantiates
 // ==========================================
 
-// **Nothing here instantiates a generic**, so the body is never analysed: a lone name before the
-// dot stays one path with the mark (`cc.<mark>`), which read as a type's name would give nothing,
-// and a generic has no struct entry, so after a chain of fields the list would hold only methods;
-// a local set from a call (`t` of `t.`) is typed by the call's declared return type.
+// **Nothing here instantiates a generic**, so the body is never analysed. A lone name before the
+// dot stays one path with the mark (`cc.<mark>`); read as a type's name, it would give nothing. A
+// generic has no struct entry, so after a chain of fields the list would hold only methods. A
+// local set from a call (`t` of `t.`) is typed by the call's declared return type.
 priv const generic_src: U8[] =
     """struct Cell4<|T|>
   v: T
@@ -228,7 +228,7 @@ priv const generic_lines: U8[][_] = ::{ "  _w: = cc.", "  _q: = pp.left.", "  _z
 priv const generic_names: U8[][_] = ::{ "after a lone parameter", "after a chain of fields",
     "after a local set from a call" }
 
-fn check_completion_generic(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_completion_generic(c: jsonrpc_client.Client$@, arena: Arena$@)
     for i in Range.asc(generic_lines.len)
         line: = generic_lines[i]
         $at: Sz = 0

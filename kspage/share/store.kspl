@@ -119,7 +119,7 @@ priv fn checked(v: Val, dflt: I64, fits: fn(got: I64): Bool): Sz!Store_error //<
     //< Caution: **Do not decide the range here** (`kspage/model/limit` holds it; `fits` checks it).
     //< Read with `as_int64`, not `as_int`: `as_int` returns an I32, so an overflowing number comes
     //< back negative and slips under the limit.
-    got: = v.as_int64(dflt)
+    got: = v.as_int64().unwrap_or(dflt)
     if !fits(got)
         throw .out_of_range
     return Sz::got
@@ -130,14 +130,14 @@ priv fn read_number(v: Val): Number_spec!Store_error //<
     places: = v.get("places")
     if present(places)
         spec.places = .some(checked(places, 0I64, limit.places_fits)!)
-    spec.grouped = v.get("grouped").as_bool(false)
-    spec.percent = v.get("percent").as_bool(false)
+    spec.grouped = v.get("grouped").as_bool().unwrap_or(false)
+    spec.percent = v.get("percent").as_bool().unwrap_or(false)
     if present(v.get("prefix"))
-        spec.prefix = v.get("prefix").as_str()
+        spec.prefix = v.get("prefix").as_str().unwrap_or("")
     if present(v.get("suffix"))
-        spec.suffix = v.get("suffix").as_str()
+        spec.suffix = v.get("suffix").as_str().unwrap_or("")
     if present(v.get("dated"))
-        spec.dated = day.dating_from(v.get("dated").as_str())
+        spec.dated = day.dating_from(v.get("dated").as_str().unwrap_or(""))
     return spec
 
 priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_builder //<
@@ -154,7 +154,7 @@ priv fn when_into(b: Json_builder$@, ob: Obj_builder, how: U8[], w: When): Obj_b
 priv fn read_when(v: Val): When //<
     //< Builds the rule that changes the look by the value from the text
     //<
-    //< There is only one way of comparing, read in a fixed order (`style_when.comparisons`), so a
+    //< There is only one way of comparing, read in a fixed order (`style_when.comparisons`). So a
     //< text holding two does not give an answer that depends on the writer's order.
     $out: When = style_when.no_when()
     $sb: = Str_builder.new()
@@ -166,7 +166,7 @@ priv fn read_when(v: Val): When //<
         if present(than)
             out.how = how
             out.than = as_f32(than, 0.0)
-            out.then = v.get("when_then").as_str()
+            out.then = v.get("when_then").as_str().unwrap_or("")
             return out
     return out
 
@@ -449,14 +449,14 @@ priv fn present(v: Val): Bool //< whether a field is present
     return true
 
 priv fn as_f32(v: Val, dflt: F32): F32
-    return F32::v.as_f64(dflt)
+    return F32::v.as_f64().unwrap_or(dflt)
 
 priv fn checked_f32(v: Val, dflt: F32, fits: fn(got: F64): Bool): F32!Store_error //<
     //< Reads a length or a size only if it is inside the allowed range
     //<
     //< As `checked` for an integer: **the range is `kspage/model/limit`'s**, and one outside it
     //< refuses the document rather than being rounded into it.
-    got: = v.as_f64(dflt)
+    got: = v.as_f64().unwrap_or(dflt)
     if !fits(got)
         throw .out_of_range
     return F32::got
@@ -464,26 +464,23 @@ priv fn checked_f32(v: Val, dflt: F32, fits: fn(got: F64): Bool): F32!Store_erro
 priv fn read_font(v: Val, dflt: Font): Font!Store_error
     $out: Font = dflt
     if present(v.get("family"))
-        out.family = v.get("family").as_str()
+        out.family = v.get("family").as_str().unwrap_or("")
     out.size_px = checked_f32(v.get("size_px"), dflt.size_px, limit.font_fits)!
-    out.weight = U16::v.get("weight").as_int(dflt.weight)
-    out.italic = v.get("italic").as_bool(dflt.italic)
+    out.weight = U16::v.get("weight").as_int().unwrap_or(dflt.weight)
+    out.italic = v.get("italic").as_bool().unwrap_or(dflt.italic)
     return out
 
 fn read_spec(v: Val): Font_spec!Store_error //< builds the font settings from the text
+    //<
+    //< A field that is absent, or of another kind, stays "not set", as in `read_ink`.
     $spec: Font_spec = paint.inherit_all()
-    family: = v.get("family")
-    if present(family)
-        spec.family = .some(family.as_str())
+    spec.family = v.get("family").as_str()
     size_px: = v.get("size_px")
     if present(size_px)
         spec.size_px = .some(checked_f32(size_px, 0.0, limit.font_fits)!)
-    weight: = v.get("weight")
-    if present(weight)
-        spec.weight = .some(U16::weight.as_int(400))
-    italic: = v.get("italic")
-    if present(italic)
-        spec.italic = .some(italic.as_bool(false))
+    if weight: = v.get("weight").as_int()
+        spec.weight = .some(U16::weight)
+    spec.italic = v.get("italic").as_bool()
     return spec
 
 fn read_ink(v: Val): Ink //< builds a color's settings from the text
@@ -492,21 +489,19 @@ fn read_ink(v: Val): Ink //< builds a color's settings from the text
     $ink: Ink = paint.inherit_ink()
     color: = v.get("color")
     if present(color)
-        ink.color = paint.color_from(color.as_str())
+        ink.color = paint.color_from(color.as_str().unwrap_or(""))
     background: = v.get("background")
     if present(background)
-        ink.background = paint.color_from(background.as_str())
-    if present(v.get("underline"))
-        ink.underline = .some(v.get("underline").as_bool(false))
-    if present(v.get("strike"))
-        ink.strike = .some(v.get("strike").as_bool(false))
+        ink.background = paint.color_from(background.as_str().unwrap_or(""))
+    ink.underline = v.get("underline").as_bool()
+    ink.strike = v.get("strike").as_bool()
     return ink
 
 fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
     //< Builds one style from the text, adds it to the end of the table and returns it
     //<
     //< `Sheet.add` sets the defaults (setting them here too would put the default in two places).
-    s: = sheet.add(v.get("name").as_str(), read_spec(v)!)
+    s: = sheet.add(v.get("name").as_str().unwrap_or(""), read_spec(v)!)
     s.ink = read_ink(v)
     s.number = read_number(v)!
     s.space_before =
@@ -524,46 +519,46 @@ fn read_style(sheet: Sheet$@, v: Val): Style$@!Store_error //<
     s.outline = checked(v.get("outline"), 0I64, limit.outline_fits)!
     // Read in a fixed order (the reason is at `read_when`).
     s.collect = .none
-    if v.get("contents").as_bool(false)
+    if v.get("contents").as_bool().unwrap_or(false)
         s.collect = .contents
-    else if v.get("notes").as_bool(false)
+    else if v.get("notes").as_bool().unwrap_or(false)
         s.collect = .notes
-    else if v.get("bars").as_bool(false)
+    else if v.get("bars").as_bool().unwrap_or(false)
         s.collect = .bars
-    else if v.get("lines").as_bool(false)
+    else if v.get("lines").as_bool().unwrap_or(false)
         s.collect = .lines
     s.when = read_when(v)
     s.rule_width = checked_f32(v.get("rule_width"), s.rule_width, limit.length_fits)!
     if present(v.get("rule_color"))
-        s.rule_color = paint.color_from(v.get("rule_color").as_str()).unwrap_or(0U32)
+        s.rule_color = paint.color_from(v.get("rule_color").as_str().unwrap_or("")).unwrap_or(0U32)
     if present(v.get("fill"))
-        s.fill = paint.color_from(v.get("fill").as_str())
+        s.fill = paint.color_from(v.get("fill").as_str().unwrap_or(""))
     if present(v.get("shape"))
-        s.shape = style.shape_from(v.get("shape").as_str())
+        s.shape = style.shape_from(v.get("shape").as_str().unwrap_or(""))
     // The marker comes first (the order is fixed, as at `read_when`).
     if present(v.get("bullet"))
-        s.marker = .bullet(v.get("bullet").as_str())
+        s.marker = .bullet(v.get("bullet").as_str().unwrap_or(""))
     else if present(v.get("number_after"))
-        s.marker = .number(v.get("number_after").as_str())
+        s.marker = .number(v.get("number_after").as_str().unwrap_or(""))
     else if present(v.get("serial_after"))
-        before: = v.get("serial_before").as_str()
-        s.marker = .serial(before, v.get("serial_after").as_str())
+        before: = v.get("serial_before").as_str().unwrap_or("")
+        s.marker = .serial(before, v.get("serial_after").as_str().unwrap_or(""))
     else if present(v.get("outline_after"))
-        sep: = v.get("outline_sep").as_str()
-        s.marker = .outline(sep, v.get("outline_after").as_str())
-    s.wrap = v.get("wrap").as_bool(s.wrap)
-    s.break_before = v.get("break_before").as_bool(s.break_before)
-    // A name that is in no table is the same as naming none (the split then keeps the style), so
+        sep: = v.get("outline_sep").as_str().unwrap_or("")
+        s.marker = .outline(sep, v.get("outline_after").as_str().unwrap_or(""))
+    s.wrap = v.get("wrap").as_bool().unwrap_or(s.wrap)
+    s.break_before = v.get("break_before").as_bool().unwrap_or(s.break_before)
+    // A name that is in no table is the same as naming none (the split then keeps the style). So
     // it is read as it is and looked up at the moment of splitting.
     if present(v.get("next"))
-        s.next = v.get("next").as_str()
-    s.in_chapters = v.get("in_chapters").as_bool(s.in_chapters)
+        s.next = v.get("next").as_str().unwrap_or("")
+    s.in_chapters = v.get("in_chapters").as_bool().unwrap_or(s.in_chapters)
     // Caution: **Where the field is absent, leave the value alone.** Reset to the default, it
     // would override the default rule passed in.
     if present(v.get("align"))
-        s.align = style.align_from(v.get("align").as_str())
+        s.align = style.align_from(v.get("align").as_str().unwrap_or(""))
     if present(v.get("arrange"))
-        s.arrange = style.arrange_from(v.get("arrange").as_str())
+        s.arrange = style.arrange_from(v.get("arrange").as_str().unwrap_or(""))
     return s
 
 priv fn read_sheet(v: Val, arena: Arena$@): Sheet$@!Store_error
@@ -609,9 +604,9 @@ priv fn read_block_at(v: Val, arena: Arena$@, depth: Sz): Block$@!Store_error //
     //< `read_block` for a block `depth` levels down (`limit.nesting_fits`)
     if !limit.nesting_fits(depth)
         throw .out_of_range
-    blk: = doc.new_block(v.get("style").as_str(), arena)
+    blk: = doc.new_block(v.get("style").as_str().unwrap_or(""), arena)
     // A number read is not assigned again (absent it is 0 = the block has no number).
-    blk.name = v.get("name").as_str()
+    blk.name = v.get("name").as_str().unwrap_or("")
     frame: = v.get("frame")
     if present(frame)
         blk.frame = .some(read_rect(frame)!)
@@ -622,22 +617,23 @@ priv fn read_block_at(v: Val, arena: Arena$@, depth: Sz): Block$@!Store_error //
     blk.span_rows = span_of(v.get("span_rows"))!
     // The image.
     // Caution: **Read its size along with it** (the core cannot read an image to learn its size).
-    blk.image = v.get("image").as_str()
+    blk.image = v.get("image").as_str().unwrap_or("")
     blk.image_w = checked_f32(v.get("image_w"), 0.0, limit.length_fits)!
     blk.image_h = checked_f32(v.get("image_h"), 0.0, limit.length_fits)!
-    blk.chart = v.get("chart").as_str()
-    blk.aside = v.get("aside").as_str()
+    blk.chart = v.get("chart").as_str().unwrap_or("")
+    blk.aside = v.get("aside").as_str().unwrap_or("")
     // Absent, it is 0 (it appears at every step).
-    blk.step = v.get("step").as_int(0)
+    blk.step = v.get("step").as_int().unwrap_or(0)
     inlines: = v.get("inlines").arr_list(arena)
     for $i: Sz = 0; i < inlines.len; i += 1
         n: = inlines.get(i)
-        made: = blk.add_text(n.get("text").as_str(), n.get("style").as_str())
-        made.href = n.get("href").as_str()
-        made.note = n.get("note").as_str()
-        made.remark = n.get("remark").as_str()
-        made.remark_by = n.get("remark_by").as_str()
-        made.refers = n.get("refers").as_str()
+        made: = blk.add_text(n.get("text").as_str().unwrap_or(""),
+            n.get("style").as_str().unwrap_or(""))
+        made.href = n.get("href").as_str().unwrap_or("")
+        made.note = n.get("note").as_str().unwrap_or("")
+        made.remark = n.get("remark").as_str().unwrap_or("")
+        made.remark_by = n.get("remark_by").as_str().unwrap_or("")
+        made.refers = n.get("refers").as_str().unwrap_or("")
     children: = v.get("children").arr_list(arena)
     for $i: Sz = 0; i < children.len; i += 1
         blk.children.push(read_block_at(children.get(i), arena, depth + 1)!)
@@ -647,14 +643,14 @@ fn load(src: U8[], arena: Arena$@): Loaded!Store_error //<
     //< Reads the document and the styles back from the text
     //<
     //< Caution: **Put the parsed text and the document on the same arena.** A style's name is a
-    //< pointer into the parsed text, not a copy, so if the text is on another arena, the name
+    //< pointer into the parsed text, not a copy. If the text is on another arena, the name
     //< dangles once that arena is freed.
     root: = json.parse(src, arena) catch
         throw .broken
     // Caution: **Only this one name is read.** The version field is the product's name, so renaming
     // the product stops every saved document from opening ("An earlier name is not read" in
     // `../docs/DESIGN-application.md`).
-    said: = root.val.get("kspage").as_int64(0)
+    said: = root.val.get("kspage").as_int64().unwrap_or(0)
     if said != version
         throw .unknown_version
     d: = Doc.new(arena)

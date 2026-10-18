@@ -2,11 +2,11 @@
 //<
 //< It lists what the file declares (functions, types, a type's fields and variants, an `impl`'s
 //< and a trait's members, constants), nested as written. **It reads the tree already kept for the
-//< document** (`Doc_state.root_file`), so it parses nothing and resolves no import; a function's
+//< document** (`Doc_state.root_file`), so it parses nothing and resolves no import. A function's
 //< body is read only for where it ends.
 //< Caution: **Answer what the tree holds and nothing more.** A document that does not parse gets
 //< the declarations parsed around the error ("Only the editor's parse recovers from a syntax
-//< error" in `../docs/DESIGN-tools.md`), as the colouring does; nothing is guessed from the text.
+//< error" in `../docs/DESIGN-tools.md`), as the colouring does. Nothing is guessed from the text.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as _base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
@@ -56,8 +56,8 @@ priv fn kind_of(k: base_ast_kinds.Ast_kind, in_type: Bool): I32 //<
 priv fn holds_members(k: base_ast_kinds.Ast_kind): Bool //<
     //< Whether the walk enters this declaration for its members
     //<
-    //< **A function, a constant and a variable are not entered**: what is inside a body is no part
-    //< of the outline, and a constant's initializer can hold a function literal.
+    //< **A function, a constant and a variable are not entered.** What is inside a body is no part
+    //< of the outline. A constant's initializer can hold a function literal.
     switch k
     case .k_decl_struct, .k_decl_enum, .k_decl_trait, .k_decl_impl
         return true
@@ -72,8 +72,8 @@ priv fn name_node(node: Ast_node$@): Ast_node$@ //< the identifier that names a 
 priv fn impl_name(c: Ctx$@, node: Ast_node$@): U8[] //<
     //< An `impl`'s header as written, up to its line's end (`impl Align: Formattable`)
     //<
-    //< **The header is shown as written**, not resolved: an impl's type may come through an
-    //< import's alias, and resolving it is the analysis's work, not the outline's.
+    //< **The header is shown as written**, not resolved. An impl's type can come through an
+    //< import's alias. Resolving it is the analysis's work, not the outline's.
     from: Sz = node.loc.offset
     if from >= c.src.len
         return "impl"
@@ -89,8 +89,8 @@ priv fn impl_name(c: Ctx$@, node: Ast_node$@): U8[] //<
 priv fn end_of(c: Ctx$@, node: Ast_node$@): Sz //<
     //< The furthest byte any part of the declaration reaches in this file
     //<
-    //< Caution: **Do not take the last child's span alone** (`get_span_length`): normalization
-    //< reorders children, so the last one need not be the furthest, and the range would end inside
+    //< Caution: **Do not take the last child's span alone** (`get_span_length`). Normalization
+    //< reorders children, so the last one need not be the furthest. Then the range would end inside
     //< the body.
     if node == null || !node.loc.file().equals(c.file)
         return 0
@@ -121,8 +121,8 @@ priv fn symbol(c: Ctx$@, node: Ast_node$@, kind: I32, in_type: Bool): json.Val? 
         inner: = in_type || node.kind_id == .k_decl_impl || node.kind_id == .k_decl_trait
         for ch in node.children
             kids = members(c, ch, inner, kids)
-    // **The whole declaration is the range, the name the selection** (the editor puts the cursor
-    // on the selection and highlights the range); the selection must lie inside the range.
+    // **The whole declaration is the range, the name the selection.** The editor puts the cursor
+    // on the selection and highlights the range. The selection must lie inside the range.
     whole: = c.b
         .range_in(c.src, node.loc.offset, end_of(c, node) - node.loc.offset, c.starts)
     sel: = c.b.range_in(c.src, sel_off, sel_len, c.starts)
@@ -149,8 +149,8 @@ priv fn members(c: Ctx$@, node: Ast_node$@, in_type: Bool, $out: json.Array_buil
 fn handle(state: Doc_state$@, id_val: json.Val, arena: Arena$@) //<
     //< It answers `textDocument/documentSymbol` with the document's declarations, nested
     //<
-    //< Caution: **Answer an empty list for a document with no tree**, not null: the editor shows
-    //< an empty outline either way, and an empty list says the request was understood.
+    //< Caution: **Answer an empty list for a document with no tree**, not null. The editor shows
+    //< an empty outline either way. An empty list says the request was understood.
     $b: = Json_builder.new(arena)
     $top: = b.arr()
     if state != null && state.root_file != null

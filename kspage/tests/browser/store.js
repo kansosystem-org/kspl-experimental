@@ -3,15 +3,15 @@
 function kspageProbeStore(ks) {
   const { check, app, typeIn } = ks;
 
-  // 8. Putting in and out. **The window that chooses a file cannot open headless**, so putting text
-  // in and out, and the focus going back to the input field, are looked at.
+  // 8. Putting in and out. **The window that chooses a file cannot open headless.** So the checks
+  // look at putting text in and out, and at the focus going back to the input field.
   const typed = app.text();
   const written = app.save();
   // Caution: **Do not hunt in a packed shape** (the save's shape is one value per line, with one
   // space after the key. `kspage/share/store.kspl`'s `spacing`).
   check(written.indexOf("\"kspage\": 6") >= 0, "the version goes into the text written out");
-  // **The answer is the reason rather than a true or false** (`api.js`'s `load`): an empty
-  // text is "it could be read", and a refusal names its reason, as "it cannot be read" and "too
+  // **The answer is the reason rather than a true or false** (`api.js`'s `load`). An empty
+  // text is "it could be read", and a refusal names its reason. "It cannot be read" and "too
   // large to lay down" are fixed in opposite ways.
   check(app.load("{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\"," +
     "\"inlines\":[{\"text\":\"elsewhere\"}]}]}") === "", "it can be read back from a text");
@@ -30,7 +30,7 @@ function kspageProbeStore(ks) {
   check(written.split("\n").length > 1,
     "the text saved is split into lines (" + written.split("\n").length + " lines)");
 
-  // Read only. **This can be seen nowhere else**: folding the tools and stopping the shortcut keys
+  // Read only. **This can be seen nowhere else.** Folding the tools and stopping the shortcut keys
   // are the DOM's side (it breaks as "it can be written to through the folded tools' gaps").
   //
   // Caution: **Do not look at a press not acting alone.** What is looked at is that **the text
@@ -119,10 +119,10 @@ function kspageProbeStore(ks) {
     done();
   });
 
-  // 9''. The page lets its connection go when another page opens a later version of the store, and
+  // 9''. The page lets its connection go when another page opens a later version of the store. It
   // opens it again at its next use. Held, that opening stops at `blocked`.
-  // Caution: **Abort the upgrade once it is reached**, and **do not delete the store**: the other
-  // sections keep drafts in it meanwhile, and a later version left behind would shut this page's
+  // Caution: **Abort the upgrade once it is reached**, and **do not delete the store**. The other
+  // sections keep drafts in it meanwhile. A later version left behind would shut this page's
   // own version out.
   async function letGo() {
     const now = (await indexedDB.databases()).find((one) => one.name === "kspage");
@@ -197,8 +197,9 @@ function kspageProbeStore(ks) {
     if (child === null) return;
     try {
       // ---- A document opened by a place ----
-      check(await until(() => child.kspage && child.kspage.text() !== ""
-        && !child.document.getElementById("local-row").hidden, "the other window to stand up"),
+      // `kspage` stands only once the server has answered (`port/web/page.js`).
+      check(await until(() => child.kspage && child.kspage.text() !== "",
+        "the other window to stand up"),
       "the other window stands up with the server there");
       // **Arrived at afresh, it comes up on the sample** (it holds no record of its own yet).
       check(child.kspage.text().indexOf(placeMark) < 0

@@ -1,10 +1,10 @@
 //< `Ast_node`, the one node type of every layer's syntax tree, with its position `Loc`
 //<
 //< A node holds its kind (an `Ast_kind` of `ast_kinds.kspl`), its children and what Sema
-//< attaches. Here are its builders (`build_*`), copying, walking, `validate_layout` (the check of
-//< a finished tree), the ICE reports that name a node, and the spelling of type arguments and
-//< import paths. **Build a new node through `build_*`, never by hand**; they leave `def_node`
-//< unset, so link a synthesized name to its declaration yourself.
+//< attaches. This file holds its builders (`build_*`), copying, walking and `validate_layout`
+//< (the check of a finished tree). It also holds the ICE reports that name a node, and the
+//< spelling of type arguments and import paths. **Build a new node through `build_*`, never by
+//< hand.** They leave `def_node` unset, so link a synthesized name to its declaration yourself.
 //< Caution: **Reach a child through the accessors of `ast_ext.kspl`**, not by an index: which
 //< child is which is the layout's knowledge, kept there.
 import "ksplc/base/ast_kinds" as base_ast_kinds
@@ -26,8 +26,9 @@ priv const max_clone_depth: Sz = 2000 //<
     //<
     //< Caution: A postfix chain (`@` / `$` / `[]`) is outside the parser's max_parse_depth, so a
     //< pathologically deep type (`I32@@@@...@`) reaches every later pass as a deep AST. clone_with
-    //< / validate_layout recurse and can get there before the other depth guards (max_mangle_depth
-    //< in sema/type/naming.kspl), so this limit keeps the native stack from overflowing.
+    //< / validate_layout recurse, and they can get there before the other depth guards
+    //< (max_mangle_depth in sema/type/naming.kspl). This limit keeps the native stack from
+    //< overflowing.
 priv const max_validate_depth: Sz = 2000
 priv const max_find_deep_child_depth: Sz = 2000
 
@@ -42,8 +43,8 @@ priv const anon_fn_prefix: U8[] = "_anon_fn_" //<
 const type_arg_sep: U8[] = ", " //<
     //< The separator between two type arguments in a resolved type-args string
     //<
-    //< **Every writer of such a string reads this** (type_args_to in `../sema/type/naming.kspl`),
-    //< so one list of type arguments has one spelling, and one instance one name.
+    //< **Every writer of such a string reads this** (type_args_to in `../sema/type/naming.kspl`).
+    //< So one list of type arguments has one spelling, and one instance has one name.
 
 fn build_anon_fn_name(serial: Sz): U8[] //<
     //< it makes the lifted function's name from a serial number
@@ -70,7 +71,7 @@ fn build_anon_env_name(serial: Sz): U8[] //<
 fn is_anon_env_type(name: U8[]): Bool //<
     //< Whether a type's name names a synthesized environment struct
     //<
-    //< The name may be qualified (`a.b._anon_env_1`), so it matches at the start or just after a
+    //< The name can be qualified (`a.b._anon_env_1`), so it matches at the start or just after a
     //< `.`; a plain substring match would also hit `Foo_anon_env_1`.
     if name.starts_with(anon_env_prefix)
         return true
@@ -99,8 +100,8 @@ impl Loc
         //< and **points at an unrelated line**, so it is rejected here.
         if offset < 0 || offset > max_offset
             io.err()
-                .s("\nfatal: source offset does not fit in 32 bits (one source file must stay under \
-                    2 GiB).\n")
+                .s("\nfatal: source offset does not fit in 32 bits. One source file must stay under \
+                    2 GiB.\n")
             sys.exit(1)
         return Loc::{ .file_id = base_core.pools.intern_file(file), .offset = I32::offset }
 
@@ -130,6 +131,11 @@ enum Case_variant_info
     variant(name_node: Ast_node$@, payload_start_idx: Sz)
     not_variant
 
+enum Result_part //< the part of a Result that Lower's `!` and `catch` read (build_result_access)
+    is_err //< whether it holds the error, a `Bool`
+    err //< the error `err` holds
+    val //< the value `ok` holds
+
 struct Ast_node
     // The I32 fields (kind_id / type_id / ival) come first, together, to cut the padding.
     // **When adding a field, check the size per node**: there can be millions of nodes, so 8 bytes
@@ -140,23 +146,17 @@ struct Ast_node
     ival: I32 //<
         //< A number whose meaning depends on the node's kind
         //<
-        //< On an `Identifier` (a field reference) it is the virtual field's number, on a
-        //< `stmt_throw` 0 = a new error / 1 = a `!`'s propagation, on a declaration whether the
-        //< compiler made it (`made_by_compiler` in `ast_ext.kspl`), and on a `for` / `if` /
-        //< `switch` / labelled block whether a `break` leaves it (`is_left_by_break` there). Make 0
-        //< the plain case, so a forgotten value is the safe one; the `break` mark cannot be, as
-        //< `left_by_break` there says.
+        //< * On an `Identifier` (a field reference): the virtual field's number.
+        //< * On a `stmt_throw`: 0 = a new error, 1 = a `!`'s propagation.
+        //< * On a declaration: whether the compiler made it (`made_by_compiler` in `ast_ext.kspl`).
+        //< * On a `for` / `if` / `switch` / labelled block: whether a `break` leaves it.
+        //< Make 0 the plain case, so a forgotten value is the safe one. The `break` mark cannot be
+        //< the plain case, as `left_by_break` there says (`is_left_by_break` reads it).
     text: U8[]
     loc: Loc
     children: List<|Ast_node$@|>$@
     def_node: Ast_node$@
     sym_ptr: Void$@ //< a Sema_symbol@, type-erased: base cannot import sema (a cycle)
-
-impl Ast_node: Formattable
-    fn fmt(r: Self$@, w: Writer): Writer
-        if r != null
-            return w.s(r.text)
-        return w.s("<null>")
 
 struct Ast_shared
     empty_list: List<|Ast_node$@|>$@
@@ -173,8 +173,8 @@ fn new_ast_node_list(): List<|Ast_node$@|>$@
 fn empty_child_list(): List<|Ast_node$@|>$@ //<
     //< The empty list shared by the nodes that have no children
     //<
-    //< For code that builds an Ast_node itself (the cache restore in ksplc/parse/ast_cache.kspl);
-    //< one list per childless node would waste one allocation each.
+    //< For code that builds an Ast_node itself (the cache restore in ksplc/parse/ast_cache.kspl).
+    //< One list per childless node would waste one allocation each.
     //< Caution: **Do not push onto the returned list.** Every childless node shares it, so a push
     //< shows up as a child of an unrelated node.
     if shared.empty_list == null
@@ -280,8 +280,9 @@ impl U8[]
         $base: = r
         if last_slash: = r.rfind_char('/')
             base = r.sub_from(last_slash + 1)
-        // **The extension is not part of a name that can be written**; kept, `lib.helper()` would
-        // fail with "undefined path or identifier 'lib'", and only an `as` would get past it.
+        // **The extension is not part of a name that can be written.** If it were kept,
+        // `lib.helper()` would fail with "undefined path or identifier 'lib'". Only an `as` would
+        // get past it.
         if !base.has_kspl_ext()
             return base
         return base.sub(0, base.rfind_char('.').unwrap_or(base.len))
@@ -376,6 +377,25 @@ impl Ast_node
     fn build_ident(name: U8[], type_id: I32, loc: Loc): Ast_node$@
         return Ast_node.new(.k_identifier, name, loc).with_type(type_id)
 
+    fn build_result_ok(result_id: I32, value: Ast_node$@, loc: Loc): Ast_node$@ //<
+        //< `.ok(value)` of the Result result_id, as a written `.ok(v)` is after sema
+        return Ast_node.new(.k_empty, "", loc).with_type(result_id).become_result_ok(value)
+
+    fn become_result_ok(r: Self$@, value: Ast_node$@): Ast_node$@ //<
+        //< r, typed as a Result, becomes that Result's `ok` holding value; null holds nothing
+        //<
+        //< **A Void value is no payload** (`Void!E`'s `ok` carries nothing): the caller passes
+        //< null, having run the value already. The backends then build it as any enum variant.
+        loc: = r.loc
+        variant: = Ast_node.new(.k_identifier, "ok", loc)
+        if value == null
+            r.morph(.k_enum_init, "enum_init")
+            return r.add_child(variant)
+        inner: = Ast_node.new(.k_enum_init, "enum_init", loc).with_type(r.type_id)
+            .add_child(variant)
+        r.morph(.k_enum_init_call, "enum_init_call")
+        return r.add_child(inner).add_child(Ast_node.build_args(loc).add_child(value))
+
     fn build_type_expr(type_name: U8[], type_id: I32, loc: Loc): Ast_node$@
         return Ast_node.new(.k_type_expr, type_name, loc).with_type(type_id)
             .add_child(Ast_node.new(.k_type_atom, "Primitive", loc).with_type(type_id))
@@ -390,8 +410,8 @@ impl Ast_node
     fn build_synth_param(name: U8[], type_name: U8[], type_id: I32, loc: Loc): Ast_node$@ //<
         //< A synthesized function's parameter `name: <type>`
         //<
-        //< Its identifier's def_node is the parameter itself, as a reference to it has to be linked
-        //< ("The limits on building an AST" in ksplc/docs/DESIGN-compiler.md).
+        //< Its identifier's def_node is the parameter itself. A reference to it has to be linked
+        //< ("The limits on building an AST" in ksplc/docs/DESIGN-lower.md).
         param: = Ast_node.new(.k_fn_param, "param", loc).with_type(type_id)
         id_node: = Ast_node.build_ident(name, type_id, loc)
         id_node.def_node = param
@@ -420,16 +440,29 @@ impl Ast_node
 
     fn build_field_access(obj_name: U8[], obj_type_id: I32, field_name: U8[], field_type_id: I32,
         loc: Loc): Ast_node$@
-        // The index follows the virtual field numbers in ksplc/sema/body/dot.kspl (slice.len=1,
-        // result.is_err=0 / .error_code=1 / .val=2). It is built without sema's resolution, so it
-        // breaks silently when those numbers change.
-        $field_idx: I32 = 0
-        if field_name.equals("len") || field_name.equals("error_code")
-            field_idx = 1
-        else if field_name.equals("val")
-            field_idx = 2
+        // The index follows the virtual field numbers in ksplc/sema/body/dot.kspl (slice.len=1).
+        // It is built without sema's resolution, so it breaks silently when those numbers change.
+        field_idx: I32 = 1 if field_name.equals("len") else 0
         return Ast_node.build_member_access(Ast_node.build_ident(obj_name, obj_type_id, loc),
             field_name, field_idx, field_type_id, loc)
+
+    fn build_result_access(obj_name: U8[], obj_type_id: I32, part: Result_part, part_type_id: I32,
+        loc: Loc): Ast_node$@ //< Lower's view of a part of a Result, `<obj>.is_err` / `.err` / `.val`
+            //<
+            //< `!` and `catch` test the tag and read the payload in an `if`. A `switch` would
+            //< change what a `break` in the catch's block leaves.
+            //< **No surface code names these.** The Result enum has no fields, so sema refuses
+            //< them. Each backend reads them off the enum's tag and payload (`result_open_to` in
+            //< gen/c, `result_is_err` in gen/llvm).
+        $name: U8[] = "is_err"
+        switch part
+        case .err
+            name = "err"
+        case .val
+            name = "val"
+        default {}
+        return Ast_node.build_member_access(Ast_node.build_ident(obj_name, obj_type_id, loc), name,
+            0, part_type_id, loc)
 
     fn build_assign_stmt(left: Ast_node$@, right: Ast_node$@, loc: Loc): Ast_node$@
         return Ast_node.new(.k_stmt_expr, "assign", loc).add_child(left)
@@ -486,8 +519,8 @@ impl Ast_node
         //<
         //< Unlike build_var_decl, it leaves the type to inference. The decl_var's text is
         //< "var_synth", neither "var" nor "let".
-        //< **`name` is the identifier itself**, so a name the user wrote (a `for … in`'s item)
-        //< keeps the position it was written at, where the editor and a diagnostic find it.
+        //< **`name` is the identifier itself.** So a name the user wrote (a `for … in`'s item)
+        //< keeps the position it was written at. The editor and a diagnostic find it there.
         return Ast_node.new(.k_decl_var, "var_synth", loc).add_child(Ast_node.build_empty(loc))
             .add_child(Ast_node.new(.k_keyword, "var", loc)).add_child(name)
             .add_child(Ast_node.build_empty(loc)).add_child(init_expr)
@@ -501,8 +534,8 @@ impl Ast_node
             return null
         if depth >= max_clone_depth
             io.err()
-                .s("\nfatal: AST node nesting too deep to clone (possible unbounded \
-                    pointer/array/deref chain).\n")
+                .s("\nfatal: AST node nesting too deep to clone. A chain of pointers, arrays or \
+                    dereferences may be unbounded.\n")
             sys.exit(1)
         cloned: = base_core.arena.create(r$)
         cloned.children = empty_child_list()
@@ -512,7 +545,7 @@ impl Ast_node
 
     fn retarget_loc(r: Self$@, loc: Loc) //< it sets `loc` on every node of this subtree
         //<
-        //< For a synthesized declaration, so its diagnostics point where the user wrote what it
+        //< For a synthesized declaration. Its diagnostics then point where the user wrote what it
         //< stands for (a closure's lifted declarations, a trait's default method copied into an
         //< impl).
         //< Caution: **Do not replace only `file`**: the offset would point somewhere wrong in the
@@ -592,8 +625,8 @@ impl Ast_node
             return .none
         if depth >= max_find_deep_child_depth
             io.err()
-                .s("\nfatal: AST node nesting too deep to search (possible unbounded \
-                    pointer/array/deref chain).\n")
+                .s("\nfatal: AST node nesting too deep to search. A chain of pointers, arrays or \
+                    dereferences may be unbounded.\n")
             sys.exit(1)
         if r.kind_id == target_id
             return .some(r)
@@ -640,16 +673,13 @@ impl Ast_node
         for c in r.children
             c.print_tree_to(depth + 1, out)
 
-    priv fn print_tree(r: Self$@, depth: Sz)
-        r.print_tree_to(depth, base_diag.log())
-
     fn ice_panic(r: Self$@, msg: U8$[])
         if r != null
             _l: = base_diag.log()
             _l.s("\n=========================================\n[ICE] \{msg\}\nLocation: ")
             r.loc.fmt(_l)
             _l.s("\nNode text: '\{r.text\}'\n--- AST Dump ---\n")
-            r.print_tree(0)
+            r.print_tree_to(0, base_diag.log())
             _l.s("=========================================\n")
         base_diag.ice_panic(msg)
 
@@ -671,16 +701,16 @@ impl Ast_node
         if depth >= max_validate_depth
             starts: = src.line_starts(base_core.arena)
             // **Name both shapes that get here.** A long run of one operator (`1 + 1 + … + 1`)
-            // nests one level per operator as surely as a `$` chain does, and a message naming
-            // only chains sends its writer looking for a pointer that is not there.
+            // nests one level per operator, as a `$` chain does. A message naming only chains
+            // sends its writer looking for a pointer that is not there.
             base_diag.print_diagnostic(file, src, r.loc.offset, 1,
-                "AST node nesting too deep to validate: a chain of postfixes (`$`, `@`, `[]`) or a \
+                "AST node nesting too deep to validate. A chain of postfixes (`$`, `@`, `[]`) or a \
                     long run of binary operators nests one level per step. Split it into named \
                     parts", .error, starts)
             return false
         // **The trailing attribute list is not counted.** A statement's attribute goes at the end
-        // (apply_modifiers_to_targets in parse/normalize.kspl) and moves no fixed slot; counted,
-        // one statement would have two possible lengths.
+        // (apply_modifiers_to_targets in parse/normalize.kspl), and it moves no fixed slot. If it
+        // were counted, one statement would have two possible lengths.
         $len: = r.children.len
         if len > 0 && r.get_child(len - 1).kind_id == .k_attribute_list
             len -= 1
@@ -712,8 +742,8 @@ impl Ast_node
         case .k_stmt_throw, .k_stmt_fallback, .k_expr_unary
             r.ice_assert(len == 2, "AST Validation Error: node must have exactly 2 children")
         case .k_stmt_defer
-            // Caution: `defer` takes no capture list, so no third child; without this check, nobody
-            // knows what get_defer_block's "first child that is not a keyword" picks up.
+            // Caution: `defer` takes no capture list, so it has no third child. Without this check,
+            // nobody knows what get_defer_block's "first child that is not a keyword" picks up.
             r.ice_assert(len == 2, "AST Validation Error: stmt_defer must have exactly 2 children")
         case .k_expr_catch_chain, .k_expr_catch
             r.ice_assert(len >= 2 && len <= 3,

@@ -34,8 +34,14 @@ jobs:
   # run builds the head of the branch chosen in "Use workflow from", and `release` below keeps an
   # existing tag where it is, so naming an old tag would attach zips built from another commit.
   # It runs first, before a platform spends its minutes; a pushed tag passes by definition.
+  # **The commit must also have passed a complete CI round**: this workflow runs no gate.
   tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # `actions: read` to look up ci.yml's runs; a job's `permissions:` replaces the top's.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,6 +57,34 @@ jobs:
               exit 1
             fi
           fi
+      # **Every job of the run must have passed**: a run by hand may leave a platform unticked,
+      # and such a run is green over the platforms it ran alone.
+      - name: Refuse a commit no complete CI run passed on
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="$GITHUB_API_URL/repos/$REPO/actions"
+          get() {
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" "$1"
+          }
+          runs=$(get "$api/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=100" |
+            jq -r '.workflow_runs[].id')
+          for id in $runs; do
+            # A matrix job is named `<job> (<target>)`, so the word before the space is the job.
+            if get "$api/runs/$id/jobs?per_page=100" | jq -e '
+                (.jobs | length > 0) and (.jobs | all(.conclusion == "success"))
+                and ([.jobs[].name | split(" ")[0]] as $ran
+                  | ["linux", "macos", "windows-ucrt64"] | all(. as $j | $ran | any(. == $j)))' \
+                >/dev/null; then
+              echo "ci.yml's run $id passed every job on $GITHUB_SHA"
+              exit 0
+            fi
+          done
+          echo "::error::no ci.yml run passed every job on $GITHUB_SHA, and this workflow runs no gate of its own. Start CI by hand (Actions, CI, Run workflow) on the branch whose head is this commit, with every job ticked; once it passes, press Re-run all jobs on this run"
+          exit 1
 
   # The distributed files for three platforms, in one matrix: only the runner, the artifact's name,
   # the shell, and Windows's MSYS2 setup and zip making differ.
@@ -64,12 +98,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, slug: linux-x64, exe: ksplc, shell: bash }
-          - { os: macos-latest, slug: macos-arm64, exe: ksplc, shell: bash }
+          - { os: ubuntu-24.04, slug: linux-x64, exe: ksplc, shell: bash }
+          - { os: macos-26, slug: macos-arm64, exe: ksplc, shell: bash }
           # **Windows builds on MSYS2 UCRT64**, the toolchain Windows is developed on (why:
           # "The Windows executable is built on UCRT64" in docs/DESIGN-repository.md).
-          - { os: windows-latest, slug: windows-x64, exe: ksplc.exe, shell: "msys2 {0}" }
+          - { os: windows-2025, slug: windows-x64, exe: ksplc.exe, shell: "msys2 {0}" }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: ${{ matrix.shell }}
@@ -134,6 +169,32 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path dist/* -DestinationPath "ksplc-${env:TAG}-${{ matrix.slug }}.zip"
+      # **Run what the zip holds, as a person unpacks it**: outside the checkout, with only the
+      # zip's std/ beside the executable. Each platform unpacks with its own tool, as it archives.
+      - name: Unpack the zip (Unix)
+        if: runner.os != 'Windows'
+        run: unzip -q "ksplc-${TAG}-${{ matrix.slug }}.zip" -d "$RUNNER_TEMP/unpacked"
+      - name: Unpack the zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Expand-Archive -Path "ksplc-${env:TAG}-${{ matrix.slug }}.zip" -DestinationPath "${env:RUNNER_TEMP}/unpacked"
+      - name: Run a program with the unpacked compiler
+        run: |
+          set -eu
+          root=$RUNNER_TEMP
+          # MSYS2's bash reads a POSIX path; RUNNER_TEMP is Windows's there.
+          if command -v cygpath >/dev/null; then root=$(cygpath -u "$RUNNER_TEMP"); fi
+          mkdir -p "$root/hello"
+          cd "$root/hello"
+          printf '%s\n' 'import "std/io"' '' 'fn main()' '    io.out().s("hello from the zip\n")' \
+            > hello.kspl
+          # A Windows program's text-mode output ends its lines with CR LF.
+          got=$("$root/unpacked/${{ matrix.exe }}" run hello.kspl | tr -d '\r')
+          if [ "$got" != "hello from the zip" ]; then
+            echo "::error::the unpacked ksplc ran hello.kspl and printed '$got', not 'hello from the zip'"
+            exit 1
+          fi
+          echo "the unpacked ksplc built and ran hello.kspl"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ksplc-${{ env.TAG }}-${{ matrix.slug }}.zip
@@ -145,7 +206,8 @@ jobs:
   # same way, with no server to embed.
   package-vscode-ext:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -153,7 +215,8 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       - name: Embed per-platform ksplc into the extension's bundled LSP server dir
-        # download-artifact@v4 unpacks under a directory named after the artifact: <name>/<name>.
+        # Given no name, download-artifact unpacks each artifact under a directory named after it:
+        # <name>/<name>.
         run: |
           set -e
           embed() { # <slug> <the exe's name inside the zip> <VS Code's platform name>
@@ -186,7 +249,8 @@ jobs:
 
   release:
     needs: [build, package-vscode-ext]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write # it creates the Release and its tag
     steps:

@@ -1,9 +1,9 @@
 //< Feeds broken input to ksai's readers (`make test-fuzz`)
 //<
 //< **ksai reads two kinds of outside input**: a weights file and a vocabulary. `get_tensor`
-//< returns a view onto raw bytes, so **no error shows until an element is read**, and the reader
+//< returns a view onto raw bytes, so **no error shows until an element is read**. The reader
 //< ([`read_prog.kspl`](read_prog.kspl)) sums every element. The Makefile builds it with the
-//< address sanitizer where the C compiler has its runtime, and says so (`fuzz.Sanitized`), so an
+//< address sanitizer where the C compiler has its runtime, and says so (`fuzz.Sanitized`). So an
 //< out-of-range read stops where it happens.
 //< Usage: `ksplc run tests/fuzz_main.kspl <reader> <work folder> [--asan] [--require-asan]`,
 //< with `--trials` and `--seed`.
@@ -19,7 +19,7 @@ import "std/verdict"
 priv const default_seed: I64 = 20260906
 priv const default_trials: I64 = 50 //< how many rounds CI scatters
     //<
-    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression;
+    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
     //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
 
 priv const trial_timeout_ms: I32 = 10000 //<
@@ -73,7 +73,7 @@ priv fn built_weights(arena: Arena$@): U8[] //<
 priv fn built_vocab(arena: Arena$@): U8[] //< one assembled vocabulary
     //<
     //< **The vocabulary and the merges share one file**, split at its first empty line (the
-    //< program under test reads it so), so a seed for only one would leave half the paths untested.
+    //< program under test reads it so). A seed for only one would leave half the paths untested.
     return arena.text().s("0\t\n1\t4b\n2\t61\n3\t6e\n4\t73\n5\t6f\n6\t20\n7\t3132\n")
         .s("8\t4b61\n9\t6e73\n10\t6e736f\n").s("\n").s("1 2 8\n3 4 9\n9 5 10\n").take()
 

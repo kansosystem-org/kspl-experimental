@@ -8,7 +8,7 @@ import "std/chars" // classifying one character
 
 pub enum Strnum_error //< why a string could not be read as a number
     //<
-    //< It is separate from `std/str`'s `Str_error`, which has the same two variants: using that one
+    //< It is separate from `std/str`'s `Str_error`, which has the same two variants. Using that one
     //< would make a program that only reads numbers pay for all of `std/str`, and form a cycle.
     invalid_format //< the text does not have the shape of a number
     out_of_bounds //< the shape is right but the value does not fit the type
@@ -38,8 +38,8 @@ priv const f64_exact_digits: Sz = 768 //<
 priv const f64_refine_steps: I32 = 4 //<
     //< The most times the slow path adjusts the value by 1 ulp
     //<
-    //< It starts from the F64 nearest the 19 digits kept, and the text lies between that and the
-    //< one nearest those digits plus 1, at most 1 ulp apart; only a bug in the algorithm goes past.
+    //< It starts from the F64 nearest the 19 digits kept. The text lies between that and the
+    //< one nearest those digits plus 1, at most 1 ulp apart. Only a bug in the algorithm goes past.
 priv const f64_tie_q_min: I64 = -4I64 //<
     //< The smallest power of 10 at which w x 10^q can lie exactly halfway between two F64s
     //<
@@ -128,23 +128,23 @@ impl U8[]
         //< JSON-RPC's `Content-Length`) is refused whole rather than read as what precedes it.
         r: U8[],
         limit: Sz, //< the largest value taken; the digits are checked before they could overflow
-    ): Sz? //< the value, or none
+    ): Sz!Strnum_error //< the value; fails on anything but digits, or past `limit`
         if r.len == 0
-            return .none
+            throw .invalid_format
         $n: Sz = 0
         for d in r
             if !d.is_digit()
-                return .none
+                throw .invalid_format
             v: = Sz::(d - '0')
             if n > limit / 10 || n * 10 > limit - v
-                return .none
+                throw .out_of_bounds
             n = n * 10 + v
-        return .some(n)
+        return n
 
     pub fn to_f64(r: U8[]): F64!Strnum_error //< the whole string as a floating-point number
         //<
-        //< The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`**: freestanding has
-        //< no libc, and the same value on both targets matters more than strtod's `inf`, `nan` and
+        //< The shape is JSON's number (`-12.5e-3`). **It does not use `strtod`.** Freestanding has
+        //< no libc. The same value on both targets matters more than strtod's `inf`, `nan` and
         //< hex floating point, which are **not accepted** here.
         body: = r.trim_spaces()
         if body.len == 0
@@ -224,8 +224,8 @@ impl U8[]
                 else F64::mant / pow10_exact[Sz::(-exp10)])
             return -v if neg else v
         // **The second path**, exact for the 19 digits kept (Eisel-Lemire). Where digits were
-        // dropped, the text lies between those digits and those digits plus 1: if both read as one
-        // F64 so does the text, else `refine_f64` judges it in multiple precision.
+        // dropped, the text lies between those digits and those digits plus 1. If both read as one
+        // F64, so does the text. Otherwise `refine_f64` judges it in multiple precision.
         $bits: = nearest_f64(mant, exp10)
         if dropped && bits != nearest_f64(mant + 1U64, exp10)
             bits = refine_f64(body, bits)
@@ -244,8 +244,8 @@ priv fn leading_zeros(v: U64): U64 //< how many 0 bits stand above the highest 1
 priv fn nearest_f64(w: U64, q: I64): U64 //<
     //< The bits of the F64 nearest w x 10^q, a tie to the even one
     //<
-    //< It is Eisel-Lemire as fast_float does it: w times the top 128 bits of 10^q gives the top 55
-    //< bits of the product, and Mushtak and Lemire prove those always round right. The low half of
+    //< It is Eisel-Lemire as fast_float does it. w times the top 128 bits of 10^q gives the top 55
+    //< bits of the product. Mushtak and Lemire prove those always round right. The low half of
     //< the table is read only when a carry from below could reach those bits.
     if w == 0U64 || q < I64::bignat.pow10_q_min
         return 0U64
@@ -253,8 +253,8 @@ priv fn nearest_f64(w: U64, q: I64): U64 //<
         return f64_inf_bits
     lz: = leading_zeros(w)
     $p: = bignat.pow10_128(I32::q)
-    // From 10^-27 to 10^-1 the entry is rounded up instead, as the proof needs: 5^-q fits a U64
-    // there, and an exact quotient (where a tie can be) then shows nothing or a 1 below its bits.
+    // From 10^-27 to 10^-1 the entry is rounded up instead, as the proof needs. 5^-q fits a U64
+    // there. An exact quotient (where a tie can be) then shows nothing or a 1 below its bits.
     if q < 0I64 && q >= f64_round_up_q_min
         p.lo += 1U64
         if p.lo == 0U64

@@ -1,14 +1,14 @@
 #!/usr/bin/env -S ksplc run
 //< Checks the rules for the recipes in the files make reads
 //<
-//< It checks seven — **a recipe line is ASCII only**, **it does not break on a path containing a
-//< space**, **it does not swallow a failure in a pipe's earlier stage**, **what `$<` points at
+//< It checks seven rules: **a recipe line is ASCII only**, **it does not break on a path containing
+//< a space**, **it does not swallow a failure in a pipe's earlier stage**, **what `$<` points at
 //< does not move**, **a name in `.PHONY` has a rule**, **a `$(call)` asks for nothing that
-//< vanishes** and **the self-host compare misses no byte** (the reasons are where `main` gives the
-//< verdict, and below). Under MSYS2 the command line make passes to the shell is reread in the ANSI
-//< code page (CP932), so UTF-8 breaks two ways: **garbling** (the build passes, the messages are
-//< unreadable) and **a syntax error** (a character's last byte read as a CP932 lead byte eats the
-//< quote after it).
+//< vanishes** and **the self-host compare misses no byte**. The reasons are where `main` gives the
+//< verdict, and below. Under MSYS2, the shell rereads the command line from make in the ANSI
+//< code page (CP932). So UTF-8 breaks two ways. One is **garbling**: the build passes, the messages
+//< are unreadable. The other is **a syntax error**: a character's last byte, read as a CP932 lead
+//< byte, eats the quote after it.
 
 // ==========================================
 // Caution: Neither reproduces under a UTF-8 locale, so without a check nobody notices. Pass the
@@ -48,8 +48,9 @@ priv fn make_files(arena: Arena$@): List<|U8[]|> //<
     //<
     //< Caution: **Take the files to check from the root Makefile's `include`s.** A hand-written
     //< list misses a file split off, and the check's range shrinks without failing. An `include` is
-    //< followed, and a `-include` where its file exists; add a conditional one or another way, and
-    //< update this too.
+    //< followed, and a `-include` where its file exists; one naming `$(VAR)` takes the files the
+    //< environment holds under that name, as the Makefile exports it. Add another way, and update
+    //< this too.
     $out: = List<|U8[]|>.new(arena)
     out.push("Makefile")
     text: = harness.read_under_root("Makefile")
@@ -61,6 +62,12 @@ priv fn make_files(arena: Arena$@): List<|U8[]|> //<
         if !line.starts_with(head)
             continue
         rest: = line.sub_from(head.len).trim_spaces()
+        if rest.starts_with("$(") && rest.ends_with(")")
+            named: = sys.get_env(rest.sub(2, rest.len - 3)).unwrap_or("")
+            for one in arena.dup_str(named).split(' ', arena)
+                if one.len > 0
+                    out.push(one)
+            continue
         if rest.len == 0 || rest.find_char(' ').is_some()
             continue
         if !optional || fs.exists(fs.join(harness.root(), rest, arena))
@@ -201,7 +208,7 @@ priv fn rule_deps(line: U8[]): U8[]? //<
     //< If it is a rule line (`target: dependencies`), returns the dependency string
     //<
     //< **A `:=`, and a target-specific variable (`install: export V := x`), are not rules** (told
-    //< by what follows the `:`, and by an `=` on the dependency side); mixed in, the next recipe's
+    //< by what follows the `:`, and by an `=` on the dependency side). Mixed in, the next recipe's
     //< dependencies go wrong.
     colon: = line.find_char(':').unwrap_or(0)
     if colon == 0 // no `:`, or nothing before it
@@ -419,9 +426,9 @@ priv fn check_help_docs(names: Names@, arena: Arena$@) //<
     //<
     //< **The list's canonical source is the make files themselves** (the format is in
     //< `mk/help.mk`'s header).
-    //< **A family (`debug-*`) is not checked for its format**: its names come from make variables
+    //< **A family (`debug-*`) is not checked for its format.** Its names come from make variables
     //< (Principle 8: a check that can enforce only half is not made a guarantee).
-    //< Caution: **A family line stands in for no name written out in `.PHONY`**: `test-*` matched
+    //< Caution: **A family line stands in for no name written out in `.PHONY`.** `test-*` matched
     //< every `test-…`, and passed `test-suites-a` with no line of its own.
     $bad: = List<|U8[]|>.new(arena)
     for one in names.said
@@ -514,10 +521,10 @@ priv fn check_help_groups(names: Names@, arena: Arena$@) //<
         arena.text().s("add that group's `## ` line, or drop the group from ").s(help_file).take())
 
 // ==========================================
-// 6. That a `$(call)` asks for nothing that vanishes **make warns about neither**: an argument
-// its function never reads is dropped, and a name defined nowhere expands to empty, so the call
-// looks like it asks while the build goes on without it (Principle 5).
-// Caution: **A name built by an expansion (`$$(call $(3),...)`) is skipped**: which function it
+// 6. That a `$(call)` asks for nothing that vanishes **make warns about neither.** An argument
+// its function never reads is dropped. A name defined nowhere expands to empty. So the call
+// looks like it asks, while the build goes on without it (Principle 5).
+// Caution: **A name built by an expansion (`$$(call $(3),...)`) is skipped.** Which function it
 // names is known only when make runs.
 // ==========================================
 
@@ -749,9 +756,10 @@ priv fn stages_agree(one: U8[], other: U8[], dir: U8[], arena: Arena$@): Bool //
     diff: = arena.text().s("DIFF=\{fs.join(dir, "diff.txt", arena)\}").take()
     from: = arena.text().s("FROM=\{one\}").take()
     to: = arena.text().s("TO=\{other\}").take()
-    if harness.make(U8[][]::{ "-s", "-C", "ksplc", "compare", from, to, diff }).code != 0
+    if !harness.make(U8[][]::{ "-s", "-C", "ksplc", "compare", from, to, diff }).exited_with(0)
         return false
-    return harness.make(U8[][]::{ "-s", "-C", "ksplc", "verdict", diff, "LABEL=probe" }).code == 0
+    return harness.make(U8[][]::{ "-s", "-C", "ksplc", "verdict", diff, "LABEL=probe" })
+        .exited_with(0)
 
 priv fn check_stage_compare(arena: Arena$@) //<
     //< That the self-host check compares byte for byte

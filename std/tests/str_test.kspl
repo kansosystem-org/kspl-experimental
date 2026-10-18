@@ -1,10 +1,15 @@
 //< Tests of std's string operations: `std/str`, `std/strnum` and the writers into memory
+//<
+//< The number helpers beside them are here too: `std/bignat`, and `std/math`'s `round` and checked
+//< conversions from floating point.
 import "std/bignat" + { Bignat }
 import "std/buf" { Buf_writer }
 import "std/chars"
+import "std/checked_int" { Ci32, Cu8 }
 import "std/io"
+import "std/math"
 import "std/mem" + { Arena }
-import "std/str" { Str_builder }
+import "std/str" + { Str_builder }
 import "std/strfmt"
 import "std/strnum" // `to_i64` / `to_f64` / `parse_size`
 import "std/subproc"
@@ -299,6 +304,54 @@ fn test_float_bits() //< reading an F32's bits is a copy, not a conversion
     assert(bignat.f32_to_bits(F32::(1.0 / 0.0)) == 0x7F800000U32, "infinity is 0x7F800000")
     verdict.pass("Known values read as their bit patterns, -0 and infinity included.")
 
+fn test_math_round() //< rounding goes to the nearest whole number, halves away from 0
+    //<
+    //< **Include the largest F64 below one half**: adding 0.5 to it rounds up to 1 in the addition.
+    verdict.start("[math] round test...")
+    below_half: = 0.49999999999999994
+    assert(math.round(below_half) == 0.0, "the largest F64 below 0.5 rounds to 0")
+    assert(math.round(-below_half) == 0.0, "the largest F64 above -0.5 rounds to 0")
+    assert(math.round(0.5) == 1.0 && math.round(-0.5) == -1.0, "a half goes away from 0")
+    assert(math.round(2.5) == 3.0 && math.round(-2.5) == -3.0, "an even half goes away from 0")
+    assert(math.round(1.4) == 1.0 && math.round(-1.6) == -2.0, "the nearer whole number wins")
+    // 2^52 - 0.5: the last half an F64 holds, which the cast must not lose.
+    assert(math.round(4503599627370495.5) == 4503599627370496.0, "the last half rounds up")
+    assert(math.round(1.0e300) == 1.0e300, "a value past I64 comes back as it is")
+    verdict.pass("Halves go away from 0, and the largest F64 below one half stays below.")
+
+fn test_float_to_int() //< `to_i32` and its kin say none where the integer type holds no value
+    //<
+    //< **Test both sides of each bound.** The truncation reaches one past the range (`-128.9` is
+    //< `I8`'s -128). A bound off by one lets a value through that a cast would saturate.
+    verdict.start("[math] float to integer test...")
+    zero: = 0.0
+    nan: = zero / zero
+    inf: = 1.0 / zero
+    assert(nan.to_i32().is_none() && inf.to_i64().is_none() && (-inf).to_u8().is_none(),
+        "NaN and the infinities have no integer value")
+    assert((-0.0).to_u8().unwrap_or(9) == 0 && (-0.9).to_u32().unwrap_or(9) == 0,
+        "-0 and what truncates to 0 fit an unsigned type")
+    assert((-1.0).to_u16().is_none(), "-1 does not fit an unsigned type")
+    assert((-128.9).to_i8().unwrap_or(0) == -128 && (-129.0).to_i8().is_none(), "I8's bottom")
+    assert(127.9.to_i8().unwrap_or(0) == 127 && 128.0.to_i8().is_none(), "I8's top")
+    assert(32767.9.to_i16().unwrap_or(0) == 32767 && 32768.0.to_i16().is_none(), "I16's top")
+    assert((-2147483648.9).to_i32().unwrap_or(0) == -2147483647 - 1 &&
+        (-2147483649.0).to_i32().is_none(), "I32's bottom")
+    assert(2147483647.9.to_i32().unwrap_or(0) == 2147483647 &&
+        2147483648.0.to_i32().is_none(), "I32's top")
+    assert((-9223372036854775808.0).to_i64().is_some() &&
+        9223372036854775808.0.to_i64().is_none(), "I64's bounds")
+    assert(255.9.to_u8().unwrap_or(0) == 255 && 256.0.to_u8().is_none(), "U8's top")
+    assert(65535.9.to_u16().unwrap_or(0) == 65535U16 && 65536.0.to_u16().is_none(), "U16's top")
+    assert(4294967295.9.to_u32().unwrap_or(0) == 4294967295U32 &&
+        4294967296.0.to_u32().is_none(), "U32's top")
+    assert(18446744073709549568.0.to_u64().unwrap_or(0) == 18446744073709549568U64 &&
+        18446744073709551616.0.to_u64().is_none(), "U64's top")
+    assert((-2.9).to_sz().unwrap_or(0) == -2 && 1.0e300.to_sz().is_none(), "Sz")
+    small: = F32::-3.5
+    assert(small.to_i32().unwrap_or(0) == -3 && small.to_u8().is_none(), "an F32 goes the same way")
+    verdict.pass("Each type's bounds are where its range ends, NaN and the infinities none.")
+
 priv fn wide_to_bignat(w: bignat.Wide): Bignat
     $v: = Bignat.from_u64(w.hi)
     v.shl(64)
@@ -314,7 +367,7 @@ priv fn pow5_bignat(n: I32): Bignat
 
 priv fn pow10_entry_exact(q: I32): Bool //< whether pow10_128(q) is 10^q's top 128 bits, truncated
     //<
-    //< With T the entry and e = 127 - (floor_log2_pow10(q) - q), T <= 5^q x 2^e < T + 1 must hold:
+    //< With T the entry and e = 127 - (floor_log2_pow10(q) - q), T <= 5^q x 2^e < T + 1 must hold.
     //< 10^q is 5^q x 2^q, so the two share their bits.
     t: = bignat.pow10_128(q)
     if (t.hi >> 63U64) != 1U64
@@ -337,7 +390,7 @@ priv fn pow10_entry_exact(q: I32): Bool //< whether pow10_128(q) is 10^q's top 1
 
 fn test_pow10_table() //< every power of ten the float conversions read is exact
     //<
-    //< **Check every entry, rebuilt or held**: a wrong correction bit shows in one entry only, and
+    //< **Check every entry, rebuilt or held.** A wrong correction bit shows in one entry only. It
     //< moves a float's digits only where that power is used.
     //< `floor_log10_pow2` is checked over every exponent an F64 or an F32 has.
     verdict.start("[bignat] the 128-bit powers of ten test...")
@@ -386,7 +439,7 @@ priv const self_append_src: U8[] = //< a child that writes builders from views o
     //< Each source is past 1 KiB: glibc scribbles over a freed block only above that size.
     """import "std/chars"
 import "std/io"
-import "std/str" { Str_builder }
+import "std/str" + { Str_builder }
 
 fn main()
   $b: = Str_builder.new()
@@ -426,13 +479,14 @@ fn test_builder_writes_its_own_bytes(ksplc: U8[], arena: Arena$@) //< ksplc runs
     verdict.start("[str] a builder written from a view of its own bytes...")
     sys.set_env("MALLOC_PERTURB_", "165") catch panic("set_env should succeed")
     sys.set_env("MallocScribble", "1") catch panic("set_env should succeed")
-    r: = subproc.run_capture(sys_test.child_argv(ksplc, "self_append", self_append_src, arena), "",
-        300000, 1 << 20, arena)
+    r: =
+        subproc.run_capture(sys_test.child_argv(ksplc, "self_append", self_append_src, arena), "",
+        300000, 1 << 20, arena) catch panic("the child must start")
     sys.unset_env("MALLOC_PERTURB_") catch panic("unset_env should succeed")
     sys.unset_env("MallocScribble") catch panic("unset_env should succeed")
-    if r.exit_code != 0 || !r.stdout_data.equals("ok")
+    if !r.exited_with(0) || !r.stdout_data.equals("ok")
         io.err().s(r.stderr_data)
-    assert(r.exit_code == 0 && r.stdout_data.equals("ok"),
+    assert(r.exited_with(0) && r.stdout_data.equals("ok"),
         "each write must read its source before the old buffer is freed")
     verdict.pass("Written onto itself, as it grows or not, a builder keeps every byte.")
 
@@ -468,3 +522,121 @@ fn test_buf_writer() //<
     v.c('a').c('b').c('c').c('d').c('e')
     assert(v.slice().equals("abcd") && v.overflowed(), "c() counts an overflow too")
     verdict.pass("The case that fits, the case that overflows, and reuse are all confirmed.")
+
+// ==========================================
+// The text and number helpers that answer one small question each, at their edges.
+// ==========================================
+priv fn count_refused(text: U8[], limit: Sz, want: strnum.Strnum_error): Bool //<
+    //< Whether `to_count` refuses the text **for that reason**
+    _n: = text.to_count(limit) catch e
+        return e == want
+    return false
+
+priv fn seq_len_of(a: U8, b: U8, c: U8, d: U8, n: Sz): Sz? //< utf8_seq_len of the first n bytes
+    bytes: U8[4] = ::{ a, b, c, d }
+    return U8[]::{ .ptr = bytes[0]@, .len = n }.utf8_seq_len(0)
+
+fn test_text_edges()
+    verdict.start("[str] the small text and number helpers at their edges...")
+    sz_max: = Sz::9223372036854775807I64
+    assert(("1000".to_count(1000) catch -1) == 1000 &&
+        count_refused("1001", 1000, .out_of_bounds),
+        "to_count: the limit is taken, one past it is not")
+    assert(("9223372036854775807".to_count(sz_max) catch -1) == sz_max &&
+        count_refused("9223372036854775808", sz_max, .out_of_bounds) &&
+        count_refused("99999999999999999999", sz_max, .out_of_bounds),
+        "to_count: the largest Sz is read, and one past it refused before it can overflow")
+    for bad in U8[][]::{ "", "+1", " 1", "1 ", "-0", "1a" }
+        assert(count_refused(bad, 1000, .invalid_format), "to_count: digits alone, nothing else")
+    assert("00fF".hex4(0).unwrap_or(-1) == 255 && "x1234".hex4(1).unwrap_or(-1) == 0x1234 &&
+        "FFFF".hex4(0).unwrap_or(-1) == 0xffff, "hex4: four digits of either case, at any offset")
+    assert("zzzz".hex4(0).is_none() && "123".hex4(0).is_none() && "12345".hex4(2).is_none() &&
+        "1234".hex4(-1).is_none() && "12g4".hex4(0).is_none(),
+        "hex4: none for a non-digit, fewer than four, or an offset outside")
+    assert('7'.hex_val().unwrap_or(-1) == 7 && 'f'.hex_val().unwrap_or(-1) == 15 &&
+        'F'.hex_val().unwrap_or(-1) == 15 && 'g'.hex_val().is_none() &&
+        '/'.hex_val().is_none(), "hex_val: a digit's value in either case, none for anything else")
+    assert(seq_len_of('a', 0U8, 0U8, 0U8, 1).unwrap_or(0) == 1 &&
+        seq_len_of(0xc3U8, 0xa9U8, 0U8, 0U8, 2).unwrap_or(0) == 2 &&
+        seq_len_of(0xe2U8, 0x82U8, 0xacU8, 0U8, 3).unwrap_or(0) == 3 &&
+        seq_len_of(0xf0U8, 0x9fU8, 0x98U8, 0x80U8, 4).unwrap_or(0) == 4,
+        "utf8_seq_len: one to four bytes")
+    assert(seq_len_of(0xc0U8, 0xafU8, 0U8, 0U8, 2).is_none() &&
+        seq_len_of(0xedU8, 0xa0U8, 0x80U8, 0U8, 3).is_none() &&
+        seq_len_of(0xf4U8, 0x90U8, 0x80U8, 0x80U8, 4).is_none() &&
+        seq_len_of(0xe2U8, 0x82U8, 0U8, 0U8, 2).is_none() &&
+        seq_len_of(0x80U8, 0U8, 0U8, 0U8, 1).is_none(),
+        "utf8_seq_len: an overlong form, a surrogate, past 10FFFF, a cut and a lone tail are none")
+    assert("a".utf8_seq_len(1).is_none() && "a".utf8_seq_len(-1).is_none(),
+        "utf8_seq_len: an offset outside gives none")
+    assert(chars.codepoint_len(0x7f) == 1 && chars.codepoint_len(0x80) == 2 &&
+        chars.codepoint_len(0x7ff) == 2 && chars.codepoint_len(0x800) == 3 &&
+        chars.codepoint_len(0xffff) == 3 && chars.codepoint_len(0x10000) == 4 &&
+        chars.codepoint_len(0x10ffff) == 4, "codepoint_len: each width's first and last")
+    assert(chars.codepoint_byte(0x20ac, 0) == 0xe2U8 &&
+        chars.codepoint_byte(0x20ac, 1) == 0x82U8 && chars.codepoint_byte(0x20ac, 2) == 0xacU8 &&
+        chars.codepoint_byte(0x41, 0) == 'A',
+        "codepoint_byte: the bytes of U+20AC and of an ASCII letter")
+    assert(chars.codepoint_byte(0x20ac, 5) == 0xacU8 &&
+        chars.codepoint_byte(0x20ac, -1) == 0xe2U8,
+        "codepoint_byte: past the end the last byte, below 0 the first")
+    assert("a/b/c".rfind_char('/').unwrap_or(-1) == 3 &&
+        "/".rfind_char('/').unwrap_or(-1) == 0 && "abc".rfind_char('/').is_none() &&
+        "".rfind_char('/').is_none(), "rfind_char: the last place, or none")
+    assert("Content-Length".equals_ignore_case("content-LENGTH") && "".equals_ignore_case(""),
+        "equals_ignore_case: ASCII letters of either case")
+    assert(!"a".equals_ignore_case("ab") && !"[".equals_ignore_case("{") &&
+        !"ß".equals_ignore_case("SS"),
+        "equals_ignore_case: another length, a non-letter a case apart, and no Unicode folding")
+    verdict
+        .pass("to_count, hex4, utf8_seq_len, codepoint_len/byte, rfind_char and equals_ignore_case \
+            answer at their edges.")
+
+fn test_builder_room_and_c_strings()
+    verdict.start("[str] reserve, and a C string out and back...")
+    $b: = Str_builder.new()
+    defer b.free()
+    b.reserve(100)
+    assert(b.cap >= 100 && b.len == 0, "reserve: room for 100, nothing written")
+    room: = b.cap
+    b.s("kept")
+    b.reserve(10)
+    assert(b.cap == room && b.slice().equals("kept"), "reserve: less than there is does nothing")
+    b.reserve(room * 4)
+    assert(b.cap >= room * 4 && b.slice().equals("kept"), "reserve: growing keeps what is written")
+    c: = "abc".to_cstr().unwrap_or(null)
+    assert(c != null && (c + 3)$ == 0U8, "to_cstr: a copy with its NUL")
+    back: = str.from_cstr(c)
+    assert(back.equals("abc"), "from_cstr: the bytes before the NUL")
+    mem.dealloc(Void$@::c)
+    assert("a\u0000b".to_cstr().is_none(), "to_cstr: none for text holding a NUL")
+    assert(str.from_cstr(null).len == 0, "from_cstr: a null pointer is empty")
+    verdict.pass("reserve makes room and keeps the text; to_cstr and from_cstr round-trip.")
+
+priv const div_overflow_src: U8[] = //< a child dividing the least I32 by -1, checked
+    """import "std/checked_int" { Ci32 }
+
+fn main()
+  least: = Ci32::(-2147483647 - 1)
+  _q: = least / Ci32::(-1)
+"""
+
+priv const div_zero_src: U8[] = //< a child dividing by 0, checked
+    """import "std/checked_int" { Cu8 }
+
+fn main()
+  _q: = Cu8::7U8 / Cu8::0U8
+"""
+
+fn test_checked_div(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
+    verdict.start("[checked_int] `/` on checked integers...")
+    assert((Ci32::7 / Ci32::2).val == 3 && (Ci32::(-7) / Ci32::2).val == -3,
+        "Ci32: the quotient rounds toward 0")
+    assert((Cu8::255U8 / Cu8::16U8).val == 15U8, "Cu8: the quotient of the largest value")
+    overflow_stops: = sys_test.child_stops_with(ksplc, "div_overflow", div_overflow_src,
+        "Ci32 overflow or division by zero (div)", arena)
+    assert(overflow_stops, "the least I32 divided by -1 must stop the program, not wrap")
+    zero_stops: = sys_test.child_stops_with(ksplc, "div_zero", div_zero_src,
+        "Cu8 division by zero (div)", arena)
+    assert(zero_stops, "a checked division by 0 must stop the program")
+    verdict.pass("`/` gives the quotient, and stops on overflow and on 0.")

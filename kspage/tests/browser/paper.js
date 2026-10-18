@@ -8,9 +8,9 @@ function kspageProbePaper(ks) {
 
   // 23. Copy to paper and it becomes black text on white paper.
   //
-  // **This can be seen nowhere else**: the screen's colours come from `getComputedStyle`, so on a
-  // dark screen the text is white, and copied to paper as it stands **nothing is visible on the
-  // page** — told only by the canvas's pixels.
+  // **This can be seen nowhere else.** The screen's colours come from `getComputedStyle`, so on a
+  // dark screen the text is white. Copied to paper as it stands, **nothing is visible on the
+  // page**, told only by the canvas's pixels.
   const sheet = document.createElement("canvas");
   app.setPaper({ width: 300, height: 200, left: 20, top: 20, right: 20, bottom: 20 });
   check(app.paper().band === 160,
@@ -31,8 +31,8 @@ function kspageProbePaper(ks) {
   // 23'. The rows that choose the paper size and the direction are wired to the document's
   // settlement.
   //
-  // **This can be seen nowhere else**: the rows' reading is DOM inside the menu, so a misspelt row
-  // leaves the wasm unhurt and breaks only as "choose it and the page does not change". **The
+  // **This can be seen nowhere else.** The rows' reading is DOM inside the menu, so a misspelt row
+  // leaves the wasm unhurt. It breaks only as "choose it and the page does not change". **The
   // direction only swaps the vertical measure**, so landscape is looked at too.
   ks.openMenu("paper-size");
   check(ks.flyPick("paper-size", "A4"), "\"A4\" can be chosen from the paper sizes");
@@ -55,8 +55,8 @@ function kspageProbePaper(ks) {
 
   // 24. A page's header and footer come out black inside the margin.
   //
-  // **This can be seen nowhere else**: the bands sit inside the margin, outside the frame cut out;
-  // landed wrong, the wasm still returns the right coordinates and it draws outside the page. It
+  // **This can be seen nowhere else.** The bands sit inside the margin, outside the frame cut out.
+  // Landed wrong, the wasm still returns the right coordinates, and it draws outside the page. It
   // counts the black pixels inside the lower margin (0 before the band goes in).
   const inFooter = () => {
     // **The pixels are apart from the page's measures** (the screen's fineness), so the ratio is
@@ -88,15 +88,15 @@ function kspageProbePaper(ks) {
 
   // 24'. The letter spacing of justification acts on the real drawer too.
   //
-  // **This can be seen nowhere else**: drop the place that hands the spacing over and the text is
+  // **This can be seen nowhere else.** Drop the place that hands the spacing over, and the text is
   // drawn packed while every coordinate stays right. The page is white, so the rightmost black
   // pixel per row is that row's last character.
   //
   // Caution: **Do not compare with the row's right edge itself.** A character's ink does not reach
   // the right edge of its advance, so the verdict changes with the fonts on the machine.
   // **Do not set one pixel row's ink against another layout's.** Latin letters do not ink their
-  // whole box, so where the last character has no ink the rightmost ink is an earlier character's,
-  // and a row's leftmost ink can be a cell or an indented block rather than a line's head.
+  // whole box. Where the last character has no ink, the rightmost ink is an earlier character's.
+  // A row's leftmost ink can be a cell or an indented block rather than a line's head.
   // **How much spacing is dealt is looked at from the boxes** (`kspage/tests/wasm/style.mjs`); what
   // is left here is only **that the drawer applied it at all.**
   const inkEdges = () => {
@@ -142,8 +142,8 @@ function kspageProbePaper(ks) {
   //
   // **This can be seen nowhere else**: whether the menu's tick is wired to the style needs pressing
   // it and having it drawn.
-  // Caution: **Do not look at it by the pixel count inside one page.** Stop the wrapping and the
-  // document shortens, so more fits on the first sheet and the pixels grow; the check would fall
+  // Caution: **Do not look at it by the pixel count inside one page.** Stop the wrapping, and the
+  // document shortens, so more fits on the first sheet and the pixels grow. The check would fall
   // once the sample grows, though the settlement acts. It is looked at by how many sheets the whole
   // document comes to.
   const tallWas = Math.round(canvas.getBoundingClientRect().height);
@@ -160,8 +160,9 @@ function kspageProbePaper(ks) {
 
   // 23'''. Stop it at the body's width and the row narrows inside the window.
   //
-  // **This can be seen nowhere else**: that the field is wired to the style table and what was
-  // stopped reaches the redraw (it breaks as "type in the field and nothing happens").
+  // **This can be seen nowhere else.** It checks that the field is wired to the style table, and
+  // that what was stopped reaches the redraw. It breaks as "type in the field and nothing
+  // happens".
   // Caution: **Settle it from the window's width.** A number settled up front passes unstopped on a
   // machine with a narrow window.
   // It presses the row's head, so the cursor stands at the row's left edge.
@@ -199,8 +200,8 @@ function kspageProbePaper(ks) {
   //
   // **This can be seen nowhere else**: that the fields are wired to the overrides, and that copying
   // to paper does not take them.
-  // **The body's width and type size have no field of their own** (the document's width is the
-  // settlement under File, and the browser's zoom enlarges what is read).
+  // **The body's width and type size have no field of their own.** The document's width is the
+  // settlement under File, and the browser's zoom enlarges what is read.
   check(document.getElementById("over-width") === null
     && document.getElementById("over-size") === null,
     "there is no field for a width or a type size of the viewer's own");
@@ -227,7 +228,7 @@ function kspageProbePaper(ks) {
   overPlain.checked = true;
   overPlain.dispatchEvent(new Event("change", { bubbles: true }));
   check(app.over().plain === true, "the tick goes into the override");
-  // **It does not become 0.** Pictures come out as they are — inverting pictures and highlighter on
+  // **It does not become 0.** Pictures come out as they are. Inverting pictures and highlighter on
   // a dark screen is the standard complaint, so this is "do not use the document's colours" and
   // nothing more.
   const left = fillOf([245, 245, 245]);
@@ -283,9 +284,9 @@ function kspageProbePaper(ks) {
 
   // 23'''''. A document with no paper settled becomes a page with margins in printing too.
   //
-  // **This can be seen nowhere else**: guessing the page borrowed is the JS's side (`api_show.js`'s
-  // `paintPages`); the numbers are the core's (`../../model/paper.kspl`'s `a4_portrait`, watched
-  // in `../wasm/paper.mjs`). **Borrow the size alone and a page with 0 margin comes out** — the
+  // **This can be seen nowhere else.** Guessing the page borrowed is the JS's side (`api_show.js`'s
+  // `paintPages`). The numbers are the core's (`../../model/paper.kspl`'s `a4_portrait`, watched
+  // in `../wasm/paper.mjs`). **Borrow the size alone, and a page with 0 margin comes out.** The
   // bands have nowhere to lay, and the body sticks to the page's break, so **the text looks cut off
   // at the break**. Plain text (a program's source), Markdown and a fresh document all have no
   // paper settled.
@@ -297,7 +298,7 @@ function kspageProbePaper(ks) {
   check(bareSheet.width === 794 && bareSheet.height === 1123,
     "the page borrowed is A4 (" + bareSheet.width + "x" + bareSheet.height + ")");
   // Caution: **The measures handed to `@page` and the measures of the canvas drawn must be the
-  // same.** Out of step, the canvas does not fit the page and **each sheet overflows, the overflow
+  // same.** Out of step, the canvas does not fit the page. **Each sheet overflows, the overflow
   // looking like a blank page** (with no measures, the browser picks its own paper). So it asks for
   // the page printing actually uses (`api_show.js`'s `printPaper`).
   const willPrint = app.printPaper();
@@ -367,9 +368,9 @@ function kspageProbeLink(ks) {
   // 25. The link button, and jumping on a press with Ctrl held.
   //
   // **This can be seen nowhere else**: whether it jumps on that combination of keys with the cursor
-  // staying put (it breaks as "it does not jump on the press" and "the text's position jumps").
+  // staying put. It breaks as "it does not jump on the press" and "the text's position jumps".
   // Caution: **Do not let a window open.** A second window left open stops a headed browser drawing
-  // the DOM, and it runs out of time with not one mark put out; only the attempt is held, and put
+  // the DOM, and it runs out of time with not one mark put out. Only the attempt is held, and put
   // straight back.
   openMenu("link-apply");
   pressAt(8);
@@ -386,8 +387,8 @@ function kspageProbeLink(ks) {
   let opened_to = "";
   window.open = (to) => { opened_to = to; return null; };
   let hitLink = false;
-  // A Ctrl+press not over a link moves the cursor, so the cursor just before each press is held, to
-  // look at the jumping round alone.
+  // A Ctrl+press not over a link moves the cursor. So the cursor just before each press is held,
+  // to look at the jumping round alone.
   let caretWas = "";
   for (let y = 8; y < box.height && !hitLink; y += 4) {
     for (let x = 4; x < 200 && !hitLink; x += 8) {
@@ -409,9 +410,9 @@ function kspageProbeLink(ks) {
 
   // 26. The contents button, and the style's heading field.
   //
-  // **This can be seen nowhere else**: whether the button is wired to the contents' entry point and
-  // the style's field to the depth (a misspelt id leaves the core unhurt). The contents pick the
-  // headings up, so it is told by one text growing.
+  // **This can be seen nowhere else.** It checks that the button is wired to the contents' entry
+  // point, and the style's field to the depth. A misspelt id leaves the core unhurt. The contents
+  // pick the headings up, so it is told by one text growing.
   openMenu("put-toc");
   // `text()` is the laid-out boxes joined, so it grows once the entries come out (that they do not
   // go into the document is the wasm checks').
@@ -443,9 +444,9 @@ function kspageProbeLink(ks) {
 
   // The fields that settle a change of look by value (a conditional style).
   //
-  // **This can be seen nowhere else**: the three fields are DOM inside the menu (a misspelt id
-  // breaks as "settle it and nothing changes"). What it lays over is chosen from the styles there;
-  // the list is made from the style table, so a style just made is not in it.
+  // **This can be seen nowhere else.** The three fields are DOM inside the menu (a misspelt id
+  // breaks as "settle it and nothing changes"). What it lays over is chosen from the styles there.
+  // The list is made from the style table, so a style just made is not in it.
   openMenu("style-apply");
   const moneyAt = app.styleNames().indexOf("amount");
   check(moneyAt >= 0, "the sample holds a money style");

@@ -2,12 +2,12 @@
 //< ksplc's and std's own tests, built with the memory and undefined-behaviour sanitizers, are clean
 //<
 //< **This sees what counting bytes cannot.** ksplc's ARC tests judge a balance by the bytes in use
-//< (`heap_used_bytes`), which a use after free, a binding left pointing at freed memory or an
-//< undefined operation in the generated C leave unchanged. So the language's and std's tests are
-//< built through both backends with the sanitizers and run as their own `make test` runs them;
-//< any report from any process fails the gate, leaks included, and nothing is suppressed.
+//< (`heap_used_bytes`). Some faults leave that count unchanged: a use after free, a binding left
+//< pointing at freed memory, an undefined operation in the generated C. So the language's and std's
+//< tests are built through both backends with the sanitizers and run as their own `make test` runs
+//< them. Any report from any process fails the gate, leaks included, and nothing is suppressed.
 //< **Mandatory where `KANSO_REQUIRE_ASAN=1`** (`mk/test.mk` sets it on Linux, whose image holds the
-//< runtimes); elsewhere a C compiler or a platform without them gives a `SKIP` line, never a silent
+//< runtimes). Elsewhere a C compiler or a platform without them gives a `SKIP` line, never a silent
 //< pass.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
@@ -19,7 +19,7 @@ import "std/str" // `arena.text()`
 import "std/subproc"
 import "std/verdict"
 import "tests/support/harness"
-import "tests/support/sanitizer_build"
+import "tests/support/harness_sanitizer"
 
 // `-g` and the frame pointer keep a report's stack readable down to the `.kspl` line. A report
 // stops the program (`-fno-sanitize-recover`), so its exit code says so too. **`-O0`, as the build
@@ -33,8 +33,8 @@ priv const san_cflags: U8[][_] = ::{ "-O0", "-g", "-fno-omit-frame-pointer",
 // IR does not pass through, so through LLVM they watch the runtime's C alone.
 priv const san_marks: U8[] = "address"
 
-// **LeakSanitizer is asked for by name**: where the platform has none (macOS), the runtime refuses
-// to start, so the probe says `SKIP` rather than a leak passing unseen.
+// **LeakSanitizer is asked for by name.** Where the platform has none (macOS), the runtime refuses
+// to start. So the probe says `SKIP` and no leak passes unseen.
 priv const asan_options: U8[] = "ASAN_OPTIONS=detect_leaks=1"
 
 // ==========================================
@@ -170,8 +170,8 @@ struct Planted //< a program with one fault written on purpose, and what the rep
         //<
         //< **This shows the marks are what watch the IR**: the fault is in KSPL code alone.
 
-// A second way to the memory, through a global, which the compiler's own use-after-free check does
-// not follow; written through the local, the compiler refuses it.
+// A second way to the memory, through a global. The compiler's own use-after-free check does not
+// follow it. Written through the local, the compiler refuses it.
 priv const use_after_free_source: U8[] =
     """
 import "std/mem"
@@ -186,8 +186,8 @@ fn main(): I32
     return kept$
 """
 
-// **Many lost, not one**: the last pointer may linger in a register or on the stack, where the
-// leak check finds it and counts the memory as still held (measured at `-O0`).
+// **Many lost, not one.** The last pointer can linger in a register or on the stack. The leak
+// check finds it there and counts the memory as still held (measured at `-O0`).
 priv const leak_source: U8[] =
     """
 import "std/mem"
@@ -263,14 +263,14 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
                 .s(" without --sanitize, is not reported" if bare else ", is reported as `")
                 .s("" if bare else p.says).s("" if bare else "`").take()
             stem: = arena.text().s("planted\{k\}_\{way\}").take()
-            b: = sanitizer_build.build(work, src, fs.join(work, stem, arena),
+            b: = harness_sanitizer.build(work, src, fs.join(work, stem, arena),
                 U8[][]::san_cflags, llvm, "" if bare else san_marks, arena)
             if b.exe.len == 0
                 verdict.check(name, false, b.why)
                 continue
             runs
                 .push(Sanitized::{ .name = name, .dir = work,
-                .argv = sanitizer_build.kept(U8[][]::{ b.exe }, arena),
+                .argv = harness_sanitizer.kept(U8[][]::{ b.exe }, arena),
                 .log_dir = fs.join(work, arena.text().s(stem).s("_log").take(), arena),
                 .env = U8[][]::{} })
             names.push(name)
@@ -281,12 +281,13 @@ priv fn check_fires(work: U8[], arena: Arena$@) //<
         $named: = false
         for r in found
             named = named || r.find_str(wants.get(i)).is_some()
-        why: = arena.text().s("it ended with \{outs.get(i).code\}; the reports:\n")
+        why: = arena.text().s("it ended with \{outs.get(i).code.unwrap_or(-1)\}; the reports:\n")
         for r in found
             why.s(r).c('\n')
         // An unmarked build wants no report at all.
         ok: =
-            (found.len == 0 if wants.get(i).len == 0 else named && outs.get(i).code != 0)
+            (found.len == 0 if wants.get(i).len == 0
+            else named && !outs.get(i).exited_with(0))
         verdict.check(names.get(i), ok, why.take())
 
 // ==========================================
@@ -299,7 +300,7 @@ struct Pkg_tests //< a package's own tests, as its own `make test` runs them
     takes_ksplc: Bool //< whether they are handed the compiler, to start as a child
     own_folder: Bool //< whether each run takes a fresh folder of its own rather than the package's
         //<
-        //< **For tests that write fixed names under the `out/tmp` they run beside**: two builds
+        //< **For tests that write fixed names under the `out/tmp` they run beside.** Two builds
         //< run side by side in one folder would write over each other's files.
 
 // **ksplc's and std's**: the language and the library every program holds. The other packages'
@@ -321,7 +322,7 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
             name: = arena.text().s(t.pkg).s("'s own tests, built through ").s(backend_name(llvm))
                 .s(", run with nothing the sanitizers report").take()
             stem: = arena.text().s(t.pkg).s("_llvm" if llvm else "_c").take()
-            b: = sanitizer_build.build(dir, entry, fs.join(work, stem, arena),
+            b: = harness_sanitizer.build(dir, entry, fs.join(work, stem, arena),
                 U8[][]::san_cflags, llvm, san_marks, arena)
             if b.exe.len == 0
                 verdict.check(name, false, b.why)
@@ -337,25 +338,25 @@ priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
             runs
                 .push(Sanitized::{ .name = name, .dir = run_dir, .argv = argv.slice(),
                 .log_dir = fs.join(work, arena.text().s(stem).s("_log").take(), arena),
-                .env = sanitizer_build.pkg_env(arena) })
+                .env = harness_sanitizer.pkg_env(arena) })
     outs: = run_all(runs@, work, arena)
     for i in Range.asc(runs.len)
         found: = reports_in(runs.get(i).log_dir, arena)
         why: = arena.text()
         for r in found
             why.s(r).c('\n')
-        code: = outs.get(i).code
+        ended: = outs.get(i).exited_with(0)
         if found.len > 0
             why.s("the whole reports are in ").s(runs.get(i).log_dir)
-        else if code != 0
-            why.s("it ended with \{code\} and no report:\n").s(outs.get(i).out)
-        verdict.check(runs.get(i).name, found.len == 0 && code == 0, why.take())
+        else if !ended
+            why.s("it did not end with 0, and left no report:\n").s(outs.get(i).out)
+        verdict.check(runs.get(i).name, found.len == 0 && ended, why.take())
 
 fn main(): I32
     arena: = harness.begin(16 * 1024 * 1024)
     check_reading_fires(arena)
     work: = harness.sandbox("sanitize")
-    said: = sanitizer_build.runs_with(work, U8[][]::{ "-fsanitize=address,undefined" },
+    said: = harness_sanitizer.runs_with(work, U8[][]::{ "-fsanitize=address,undefined" },
         U8[][]::{ asan_options }, arena)
     if said.len > 0
         lacks: = arena.text()

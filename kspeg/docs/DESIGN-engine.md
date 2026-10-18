@@ -46,7 +46,7 @@ So a program using kspeg needs no generator, neither installed nor run in its bu
 
 **Every reference in a grammar is checked once, as soon as the grammar is loaded, so a mistake is reported then.** A grammar is read once and reused, so this one walk costs nothing per parse.
 
-**The check is not put off until parsing.** A name is looked up when its rule is applied, so an undefined name would show only on a run that reached that branch. A reference in an unmatched alternative, an optional or a repetition may never run: the parse succeeds, and the grammar's author believes the rule takes effect.
+**The check is not put off until parsing.** A name is looked up when its rule is applied, so an undefined name would show only on a run that reached that branch. A reference in an unmatched alternative, an optional or a repetition can stay unrun. The parse then succeeds, and the grammar's author believes the rule takes effect.
 
 The load refuses three kinds of grammar.
 
@@ -56,9 +56,9 @@ The load refuses three kinds of grammar.
 | **A rule defined twice** | One of the two definitions would never be used, and which one wins is not something the grammar's author can see |
 | **Left recursion** (a rule that can reach itself again before reading a character, as in `expr = expr "+" term`) | Such a rule never matches (below) |
 
-**Why left recursion is refused.** Under PEG, each entry to such a rule enters it again at the same position, until the depth limit stops the parse, and only on inputs that reach it. Skipping rules by their first byte (below) would make that worse: a skipped entry does not stop, so whether the parse stopped would depend on the next byte. The analysis that works out what a rule can begin with also says what can match nothing, so finding the cycle costs one more walk.
+**Why left recursion is refused.** Under PEG, each entry to such a rule enters it again at the same position, until the depth limit stops the parse. This happens only on inputs that reach the rule. Skipping rules by their first byte (below) would make that worse. A skipped entry does not stop, so whether the parse stopped would depend on the next byte. The analysis that works out what a rule can begin with also says what can match nothing, so finding the cycle costs one more walk.
 
-**The report names the rule that refers to the missing name.** Several rules can refer to one name, and without the referrer there is no one place to look. The report holds no line and column inside the `.kspeg`: a grammar may be built into an executable, where a position could point at a file nobody can open.
+**The report names the rule that refers to the missing name.** Several rules can refer to one name, and without the referrer there is no one place to look. The report holds no line and column inside the `.kspeg`. A grammar can be built into an executable, where a position could point at a file nobody can open.
 
 ## Lexical rules are not memoized
 
@@ -70,7 +70,7 @@ A lexical-mode rule (an upper-case initial) works one character at a time. Stori
 
 When a choice lists many keywords, kspeg turns them into one hash-table lookup instead of trying each keyword in turn. The result is the same, only faster.
 
-A choice written as keywords, such as a language's built-in type names (`'int' | 'long' | ... | 'bool'`), is tried one keyword at a time as written. At a position holding an identifier, every keyword fails in turn, and a grammar may ask that choice at every position a type can stand.
+A choice written as keywords, such as a language's built-in type names (`'int' | 'long' | ... | 'bool'`), is tried one keyword at a time as written. At a position holding an identifier, every keyword fails in turn. A grammar can ask that choice at every position a type can stand.
 
 **As the grammar loads, each run of two or more keywords inside a choice becomes one rule.** The rule does two steps:
 
@@ -81,11 +81,11 @@ This is `fold_keyword_choices` in [`../rule.kspl`](../rule.kspl). The synthesize
 
 **Only where the result cannot differ.** A keyword matches only when no boundary character follows. So where `_Boundary` is one character class and every keyword is written with its characters, a keyword matches exactly when it equals the whole run. At most one keyword of the run can match at a position, so their order among themselves decides nothing. The alternatives around the run keep their places. Elsewhere the run stays a choice.
 
-**Folding changes no syntax error either.** A choice records a label for each keyword it fails on, also before the one that matches, and then marks those as not what stopped the parse. The folded rule records the same labels in the same order. Those marks are read even on success, where unread text remains. Dropping them makes a case in [`../tests/engine_test.kspl`](../tests/engine_test.kspl) fail: those cases parse each input under a grammar that folds and under its twin that cannot, and require the same tree and labels.
+**Folding changes no syntax error either.** A choice records a label for each keyword it fails on, also before the one that matches. It then marks those labels as not what stopped the parse. The folded rule records the same labels in the same order. Those marks are read even on success, where unread text remains. Dropping them makes a case in [`../tests/engine_test.kspl`](../tests/engine_test.kspl) fail. Those cases parse each input under a grammar that folds and under its twin that cannot. They require the same tree and labels from both.
 
 **What it buys depends on the grammar**: how many keywords a choice holds, and how often it is asked. Counting instructions under callgrind (a tool that counts the machine instructions a program runs) shows it where wall time varies too much to. The rest of a parse's cost is attempts that fail at their first byte on rules other than keywords (below).
 
-## A rule that cannot begin with the next byte is not entered
+## Rules that cannot begin with the next byte are skipped
 
 Before trying a rule, the engine checks whether the next byte could start a match at all. If it cannot, the rule is skipped without any work.
 
@@ -103,28 +103,28 @@ For example, if `number` can only begin with `0`–`9`, the engine never enters 
 * a syntax-mode rule entered from a lexical one skips whitespace itself before its first byte, so there it is always entered;
 * a lexical rule that begins with such a rule allows every byte.
 
-**A syntax error is read from a second run that skips nothing.** A skipped rule records no label, so the skipping run's `expected …` would come up short. A run that fails, or leaves text other than whitespace unread, is run again without skipping, and its report is the one returned. That run costs only where a file holds a syntax error, and its message is byte for byte the one an engine that never skips gives. `ran_twice` says when it happened: on input that parses, it would mean a rule was skipped where it could have matched.
+**A syntax error is read from a second run that skips nothing.** A skipped rule records no label, so the skipping run's `expected …` would come up short. A run that fails, or leaves text other than whitespace unread, is run again without skipping, and its report is the one returned. That run costs only where a file holds a syntax error. Its message is byte for byte the one that an engine that never skips gives. `ran_twice` says when it happened: on input that parses, it would mean a rule was skipped where it could have matched.
 
 **Only references are checked**, not every alternative. A reference is where an attempt costs most: the memo lookup, the node and the restore all sit behind it. A literal already fails at its first byte for the price of the check itself.
 
 **What it buys depends on the grammar** too: the more of its attempts fail at their first byte, the more are skipped. A grammar that seldom guesses wrong gains little.
 
-**What it gives up:** the depth limit counts the rules entered, so near the limit an input that an engine without skipping stops on can pass. The limit is a safety valve at a depth ordinary code never reaches. The profile counts only the rules entered, too.
+**What it gives up:** the depth limit counts the rules entered. So near the limit, an input can pass where an engine without skipping stops. The limit is a safety valve at a depth ordinary code never reaches. The profile counts only the rules entered, too.
 
 ## Indentation becomes markers before the parse
 
-**Kspeg sees bytes, not columns, so it cannot read indentation itself**: for a language like Python, the caller first replaces each change of indentation with a one-byte marker at a line's end, and the grammar matches those markers like ordinary text. To read indentation itself, the engine would need four things it lacks.
+**Kspeg sees bytes, not columns, so it cannot read indentation itself.** For a language like Python, the caller first replaces each change of indentation with a one-byte marker at a line's end. The grammar then matches those markers like ordinary text. To read indentation itself, the engine would need four things it lacks.
 
 | What is missing | Why it is needed |
 | :-- | :-- |
 | **A means of counting the column** | Nothing tells how many spaces a line begins with; the engine holds only the byte position |
 | **A means of saying whether it is at a line's head** | Lookahead (`&` / `!`) only looks forward, so "the byte just before is a `\n`" cannot be written locally. A grammar where every line begins after a consumed newline guarantees it by its shape, but that **cannot be made a part** such as a `_LineStart` |
 | **State during the parse** | Indentation needs a stack of columns. The engine holds only the position, the furthest failure position, the mode's options and the memo, so there is nowhere to put one |
-| **A predicate that looks at a value** | The operators are concatenation, choice, repetition and lookahead; **none decides success from a value**, so "the current column > the top of the stack" cannot be written |
+| **A predicate that looks at a value** | The operators are concatenation, choice, repetition and lookahead. **None decides success from a value**, so "the current column > the top of the stack" cannot be written |
 
 **State inside the engine is not taken, because it breaks two things at once.** Fixing only one of them still breaks silently.
 
-* **The state must be restored on a backtrack.** The engine restores only the position. A stack would have to be restored with it wherever a choice, a `?`, a `*`, a `+` or a lookahead fails; otherwise a column a failed alternative pushed stays behind.
+* **The state must be restored on a backtrack.** The engine restores only the position. A stack would have to be restored with it wherever a choice, a `?`, a `*`, a `+` or a lookahead fails. Otherwise a column that a failed alternative pushed stays behind.
 * **The state must go into the memo key**, for correctness, not speed. The key is `(rule, position, mode)`. Trying the same rule at the same position under a different column makes packrat return the first answer for the second.
 
 How other parsers handle it:

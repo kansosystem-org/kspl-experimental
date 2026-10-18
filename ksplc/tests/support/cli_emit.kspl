@@ -19,7 +19,7 @@ fn cli(args: U8[][]): verdict.Run_out //< it runs ksplc once
 priv fn check_case(name: U8[], args: U8[][], expect: U8[], accepted: Bool) //<
     //< It checks the requested exit status and the text the command must produce
     r: = cli(args)
-    if (r.code == 0) != accepted
+    if (r.exited_with(0)) != accepted
         why: = "the exit code is not 0" if accepted else "it passed without being turned away"
         verdict.check(name, false,
             harness.arena().text().s(why).c('\n').s(r.out).take())
@@ -75,11 +75,11 @@ fn case_library(arena: Arena$@) //<
 fn case_surface_doc(arena: Arena$@) //<
     //< The record of the published API carries the documentation as a fourth column
     //<
-    //< Caution: **Check both sides of the parting**, the opening paragraph and the detail; one
-    //< alone lets the other be lost unnoticed. **Check the full stop between them too**: without it
-    //< two fragments run into one broken sentence, and none is wanted where the summary ends in its
+    //< Caution: **Check both sides of the parting**, the opening paragraph and the detail. One
+    //< alone lets the other be lost unnoticed. **Check the full stop between them too.** Without it
+    //< two fragments run into one broken sentence. None is wanted where the summary ends in its
     //< own (`described` in `../../base/ast_doc.kspl`). **A `pub` C function is a row too**, keyed
-    //< with its block's attributes; without it, what reaches every package goes unrecorded.
+    //< with its block's attributes. Without it, what reaches every package goes unrecorded.
     dir: = fs.join(harness.tmp_dir(), "cli_surface", arena)
     fs.mkdir_all(dir) catch {}
     src: = fs.join(dir, "api.kspl", arena)
@@ -125,7 +125,7 @@ fn main(): I32
         return
     r: = harness.run_in(U8[][]::{ harness.ksplc_exe(), std_flag(),
         arena.text().s("--emit-surface=").s(tsv).take(), src, obj }, dir)
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check("the record's documentation: it is put out", false, r.out)
         return
     got: = io.read_file(tsv) catch ""
@@ -157,7 +157,7 @@ priv fn emitted_libs(dir: U8[], entry: U8[], flags: U8[][], arena: Arena$@): U8[
     argv.push(fs.join(dir, entry, arena))
     argv.push(fs.join(dir, "out.c", arena))
     r: = harness.run_in(argv.slice(), dir)
-    if r.code != 0
+    if !r.exited_with(0)
         return arena.text().s("FAILED ").s(r.out).take()
     return harness.read_generated(libs)
 
@@ -165,8 +165,8 @@ fn case_emit_libs(arena: Arena$@) //<
     //< `--emit-libs` writes the libraries the kept `extern` blocks name (`#link`)
     //<
     //< **A file's names come before those of the files it imports** (a one-pass linker wants a
-    //< library before the ones it uses), each once, at its first place; a block that `#cfg` dropped
-    //< names nothing.
+    //< library before the ones it uses). Each comes once, at its first place. A block that `#cfg`
+    //< dropped names nothing.
     //< Caution: **A failed compile leaves no file.** A build that reads a stale one links the
     //< libraries of a program that does not build.
     dir: = fs.join(harness.tmp_dir(), "cli_emit_libs", arena)

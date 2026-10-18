@@ -6,6 +6,7 @@
 //< times; registered again, the fields and the layout double.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/declare" as sema_decl_declare
@@ -16,6 +17,7 @@ import "ksplc/sema/session/c_boundary" as sema_session_c_boundary
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error, join_dotted_name }
 import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/def" as sema_type_def
+import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
@@ -84,7 +86,7 @@ impl Ast_node
             c.fn_ctx.impl_name = target_fqn
 
             for m_node in r.children
-                // Caution: **Register a method with a default body the same way**: it is a
+                // Caution: **Register a method with a default body the same way.** It is a
                 // `decl_fn` (decl_trait in `kspl.kspeg`), and if missed it is not in the vtable.
                 if m_node.kind_id == .k_decl_fn_proto || m_node.kind_id == .k_decl_fn
                     m_name_node: = m_node.find_child(.k_identifier)
@@ -92,7 +94,7 @@ impl Ast_node
                         m_name: = m_name_node.text
                         c.check_snake_case(m_name, m_node, "Method")
 
-                        m_sym: = c.add_trait_method(m_node, trait_def, trait_vis)!
+                        m_sym: = c.add_trait_method(m_node, m_name, trait_def, trait_vis)!
 
                         local_full_name: = join_dotted_name(target_name, m_name)
                         fqn_full_name: = join_dotted_name(target_fqn, m_name)
@@ -144,7 +146,7 @@ impl Ast_node
             //< Resolves a struct declaration's (self's) layout attributes and fields to struct_def
             //<
             //< build_struct_registry and a generic struct's instantiation (instantiate_struct in
-            //< mono.kspl) both fill through here, so an instance is checked as a plain struct is.
+            //< mono.kspl) both fill through here. So an instance is checked as a plain struct is.
         if r.has_attribute("packed")
             struct_def.is_packed = true
         // sema/decl/attrs.kspl checks the value's form; only usable values reach here.
@@ -195,9 +197,9 @@ impl Ast_node
 
             field_def: = sema_type_def.Struct_field.new(f_name, eff_f_type, f_vis, c_node)
 
-            is_dup: = seen_fields.get(f_name) catch false
+            is_dup: = seen_fields.get(f_name).unwrap_or(false)
             if is_dup
-                c.clear_scratch().s("field '\{f_name\}' is already defined in struct")
+                c.clear_scratch().s("field '\{f_name\}' is already defined in this struct")
                 c.err(f_id_node, c.scratch.slice())
             else if !c.check_c_keyword_collision_field(f_name, f_id_node, seen_fields@)
                 seen_fields.set(f_name, true)
@@ -210,8 +212,8 @@ impl Ast_node
             //< Such a struct is non-ARC and has a raw pointer and its own 'free'. std/ is not
             //< checked: its primitives are what ARC is built on.
             //< Caution: Do not add a two-way switch such as per-diagnostic state here. Only
-            //< off-by-default codes can be switched ("lint is configured per diagnostic code, not
-            //< by a group name" in ksplc/docs/DESIGN-tools.md).
+            //< off-by-default codes can be switched ("lint is set per diagnostic code, not
+            //< per group" in ksplc/docs/DESIGN-tools.md).
         if c.env.is_arc_type(c.env.get_or_add(target_fqn)) ||
             r.loc.file().starts_with("std/")
             return
@@ -234,8 +236,9 @@ impl Ast_node
         name_node: = r.find_child(.k_identifier)
         c.clear_scratch()
             .s("[I0602] Struct '\{target_fqn\}' owns a raw pointer field and defines its own 'free' \
-                method (hand-rolled ownership). In managed mode, consider using a reference-counted \
-                handle (Rc<|T|>/Arc<|T|>) for automatic lifetime management instead.")
+                method (manual ownership). In managed mode, the compiler recommends a \
+                reference-counted handle (Rc<|T|>/Arc<|T|>) for automatic lifetime management \
+                instead.")
         c.information(name_node if name_node != null else r, c.scratch.slice())
 
     priv fn scan_payload_fields(r: Ast_node$@, c: Sema_ctx$@,
@@ -262,7 +265,7 @@ impl Ast_node
                 // outside.
                 c.check_type_vis_leak(f_type_node, enum_vis, "payload type", "variant")
                 // An array's elements are made mutable, as a struct field's are
-                // (fill_struct_fields): the binding holding the enum decides writing, and a `const`
+                // (fill_struct_fields). The binding holding the enum decides writing. A `const`
                 // member would make C refuse to assign a whole value of the enum.
                 f_type_id: = c.binding_value_type(resolved_id, true)
                 if f_type_node != null
@@ -271,6 +274,11 @@ impl Ast_node
                 if f_name_node != null
                     f_name_node.def_node = f_node
                     f_name_node.type_id = f_type_id
+                // **A `Void` field holds nothing**, so the variant does not carry it: `Result`'s
+                // `ok(value: T)` under `Void!E` is built and matched with no value (`.ok()`).
+                if c.env.get_clean_real_type(f_type_id) == I32::sema_type_env.Builtin_type_id
+                    .void_type
+                    continue
                 field_def: = sema_type_def.Struct_field.new(f_name, f_type_id, .public, f_node)
                 variant_def.payload_fields.push(field_def)
 
@@ -332,18 +340,25 @@ impl Ast_node
 
             variant_def: = sema_type_def.Enum_variant.new(v_name, current_tag, v_node)
             tag_node: = v_node.get_enum_variant_tag()
-            if tag_node != null
+            $foldable: = tag_node != null
+            if bare: = r.bare_sibling_variant(c, tag_node)
+                c.clear_scratch()
+                    .s("'\{bare.text\}' is a variant of '\{enum_name\}'. Name the variant through \
+                        its enum here too ('\{enum_name\}.\{bare.text\}')")
+                c.err(bare, c.scratch.slice())
+                foldable = false
+            if foldable
                 if tag: = c.fold_enum_tag(tag_node, base_type_id)
                     variant_def.tag_value = tag
             else
                 c.check_enum_tag_range(v_id_node, current_tag, base_type_id)
-            earlier: = seen_tags.get(variant_def.tag_value) catch ""
+            earlier: = seen_tags.get(variant_def.tag_value).unwrap_or("")
             if earlier.len > 0
                 if !earlier.equals(v_name)
                     c.clear_scratch()
-                        .s("variant '\{v_name\}' has the tag \{variant_def.tag_value\}, which \
-                            '\{earlier\}' already has, so a 'switch' could not tell them apart. \
-                            Give each variant a tag of its own")
+                        .s("variant '\{v_name\}' has the tag \{variant_def.tag_value\}. Variant \
+                            '\{earlier\}' already has that tag. A 'switch' could not distinguish \
+                            them. Give each variant a tag of its own")
                     c.err(v_id_node, c.scratch.slice())
             else
                 seen_tags.set(variant_def.tag_value, v_name)
@@ -358,13 +373,36 @@ impl Ast_node
                 c.declare_symbol_with_fqn(arena_full_name, join_dotted_name(enum_fqn, v_name), v_sym)
 
             v_node.scan_payload_fields(c, variant_def, enum_vis)!
-            is_dup: = seen_variants.get(v_name) catch false
+            is_dup: = seen_variants.get(v_name).unwrap_or(false)
             if is_dup
-                c.clear_scratch().s("variant '\{v_name\}' is already defined in enum")
+                c.clear_scratch().s("variant '\{v_name\}' is already defined in this enum")
                 c.err(v_id_node, c.scratch.slice())
             else
                 seen_variants.set(v_name, true)
                 enum_def.variants_list.push(variant_def)
+
+    priv fn bare_sibling_variant(r: Ast_node$@, c: Sema_ctx$@, tag: Ast_node$@): Ast_node$@? //<
+        //< A bare name in a tag expression that names a variant of this enum (self)
+        //<
+        //< **A tag names a sibling as `E.a`, as every other place does.** There is one spelling for
+        //< a variant, and no scope where the enum's names stand bare beside the file's. A bare name
+        //< that resolves (a `const a`) is that name, not the variant.
+        if tag == null
+            return .none
+        if tag.is_path_or_ident() && tag.text.find_char('.').is_none()
+            known: = c.symtab.resolve(tag.text).unwrap_or(null)
+            if known != null
+                return .none
+            for v_node in r.children
+                if v_node.kind_id == .k_enum_variant
+                    id_node: = v_node.find_child(.k_identifier)
+                    if id_node != null && id_node.text.equals(tag.text)
+                        return .some(tag)
+            return .none
+        for child in tag.children
+            if found: = r.bare_sibling_variant(c, child)
+                return .some(found)
+        return .none
 
 impl Sema_ctx
     priv fn fold_enum_tag(r: Self$@, node: Ast_node$@, base_id: I32): I64? //<
@@ -382,20 +420,12 @@ impl Sema_ctx
         //<
         //< The counter after the last written tag is checked as well: `b` after `a = 255` in a
         //< `U8`.
-        bits: = r.env.get_portable_bit_size(base_id)
-        unsigned: = r.env.is_unsigned(base_id)
-        $lo: I64 = 0
-        $hi: I64 = 9223372036854775807I64
-        if !unsigned && bits < 64
-            lo = -(1I64 << I64::(bits - 1))
-            hi = (1I64 << I64::(bits - 1)) - 1
-        else if !unsigned
-            lo = -9223372036854775807I64 - 1
-        else if bits < 64
-            hi = (1I64 << I64::bits) - 1
+        bounds: = r.env.int_bounds(base_id)
+        lo: = bounds.lo
+        hi: = bounds.hi
         if v >= lo && v <= hi
             return true
-        shown: = r.env.get_str(base_id)
+        shown: = r.env.display(base_id)
         r.clear_scratch()
             .s("enum tag \{v\} does not fit the enum's base type '\{shown\}' (\{lo\} to \{hi\}). \
                 Write a tag in range, or give the enum a wider base type ('enum E: I64')")

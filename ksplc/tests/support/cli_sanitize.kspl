@@ -14,7 +14,7 @@ import "std/verdict"
 priv fn refused(name: U8[], args: U8[][], says: U8[]) //<
     //< It checks that the compile is refused, and that the refusal says `says`
     r: = harness.ksplc(args)
-    verdict.check(name, r.code != 0 && r.out.find_str(says).is_some(), r.out)
+    verdict.check(name, !r.exited_with(0) && r.out.find_str(says).is_some(), r.out)
 
 priv fn marked_count(ir: U8[], arena: Arena$@): Sz //< how many of the IR's `define`s carry a mark
     $n: Sz = 0
@@ -46,14 +46,14 @@ fn case_sanitize(arena: Arena$@) //<
     ir: = harness.read_generated(ll)
     all: = define_count(ir, arena)
     verdict.check("--sanitize=address marks every function --to=llvm writes `sanitize_address`",
-        made.code == 0 && all > 2 && marked_count(ir, arena) == all &&
+        made.exited_with(0) && all > 2 && marked_count(ir, arena) == all &&
         ir.find_str(") sanitize_address {").is_some(), made.out)
     plain: = harness.ksplc(U8[][]::{ "--to=llvm", src, ll })
     verdict.check("without --sanitize, no function is marked",
-        plain.code == 0 && marked_count(harness.read_generated(ll), arena) == 0, plain.out)
+        plain.exited_with(0) && marked_count(harness.read_generated(ll), arena) == 0, plain.out)
     c: = fs.join(dir, "prog.c", arena)
     refused("--sanitize is refused on C, which its C compiler marks",
-        U8[][]::{ "--sanitize=address", src, c }, "give that compiler -fsanitize=")
+        U8[][]::{ "--sanitize=address", src, c }, "Give that compiler -fsanitize=")
     refused("--sanitize=undefined is refused on LLVM IR, whose checks are clang's front end's",
         U8[][]::{ "--to=llvm", "--sanitize=undefined", src, ll }, "LLVM IR does not pass through")
     refused("--sanitize refuses a name it does not know",

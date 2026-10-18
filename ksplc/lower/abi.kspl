@@ -6,6 +6,7 @@
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
+import "ksplc/base/c_name" as base_c_name
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/mangle" as base_mangle
@@ -15,15 +16,30 @@ import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
 import "std/chars" // the one-character tests and cuts
+import "std/ds" { Map }
 import "std/str"
 fn run(r: Ast_node$@, c: Sema_ctx$@) //< the ABI conversion pass's entry point
     //<
     //< It overwrites names with their mangled forms in place, recursively over the whole tree.
     base_diag.ice_assert(r != null, "abi.apply: file_node is null")
-    r.apply_abi_recursive(c)
+    $verbatim: = verbatim_c_names(c)
+    defer verbatim.free()
+    r.apply_abi_recursive(c, verbatim@)
+
+priv fn verbatim_c_names(c: Sema_ctx$@): Map<|U8[], Bool|> //<
+    //< The C names the program's globals keep as written (an `extern` block's, an `#export`)
+    //<
+    //< A local of such a name takes a made one, as a local hiding a local does. C would read the
+    //< local itself in its own initializer, where KSPL reads the global (`libc.abs` is `abs`).
+    $names: = Map<|U8[], Bool|>.new(null)
+    for e in c.symtab.by_fqn.items()
+        sym: = e.value
+        if !sym.flags.is_method && sym.uses_verbatim_c_name()
+            names.set(sym.name, true)
+    return names
 
 impl Ast_node
-    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@)
+    priv fn apply_abi_recursive(r: Ast_node$@, c: Sema_ctx$@, verbatim: Map<|U8[], Bool|>$@)
         if r == null
             return
         kind: = r.kind_id
@@ -33,8 +49,10 @@ impl Ast_node
             return
 
         for child in r.children
-            child.apply_abi_recursive(c)
+            child.apply_abi_recursive(c, verbatim)
 
+        if kind == .k_identifier || kind == .k_expr_path
+            r.name_hiding_local(verbatim)
         switch kind
         case .k_decl_fn, .k_decl_var, .k_decl_const, .k_decl_embed, .k_decl_struct, .k_decl_enum,
             .k_decl_typedef, .k_decl_trait
@@ -48,6 +66,20 @@ impl Ast_node
         case .k_expr_path, .k_type_path, .k_generic_path
             r.transform_path_access(c)
         default {}
+
+    priv fn name_hiding_local(r: Ast_node$@, verbatim: Map<|U8[], Bool|>$@) //<
+        //< Gives a local hiding another of its name a C name of its own (`hiding_local_name`)
+        //<
+        //< It renames the declared name and every reference alike. Both reach the declaration's
+        //< symbol: a reference and a declared name through `def_node`, a `switch` arm's or a
+        //< `catch`'s binding through its own `sym_ptr`. The name is made from the symbol alone, so
+        //< a node Lower cloned takes the same one. A global's verbatim C name counts as hidden.
+        $found: = hiding_local_of(r.def_node, verbatim)
+        if found.is_none()
+            found = hiding_local_of(r, verbatim)
+        if sym: = found
+            c_name: = base_c_name.hiding_local_name(sym.name, sym.hidden_count)
+            r.flatten_to_identifier(c_name)
 
     priv fn transform_decl_name(r: Ast_node$@, c: Sema_ctx$@)
         id_node: = r.find_child(.k_identifier)
@@ -69,9 +101,9 @@ impl Ast_node
         if r.kind_id == .k_decl_struct || r.kind_id == .k_decl_enum ||
             r.kind_id == .k_decl_typedef || r.kind_id == .k_decl_trait
             // Caution: **A type's declaration takes its type's own name** (`mangle_type_id_to`),
-            // the one every use of the type is written with. Spelled again here from the file's
-            // path, a folder like `.hidden` lost its dot here and kept it as `_` in the type's
-            // name, and the C declared one name and used another.
+            // the one every use of the type is written with. A name spelled again here from the
+            // file's path lost the dot of a folder like `.hidden`. The type's name kept it as `_`,
+            // so the C declared one name and used another.
             c.env.mangle_type_id_to(sym.type_id, w)
         else
             get_c_identifier_for_sym_to(sym, id_node.text, w)
@@ -121,8 +153,8 @@ impl Ast_node
             if c.env.trait_def_of_receiver(obj_node.type_id).is_none()
                 requires_ptr: = expr_node.receiver_wants_ptr(c)
                 // It adjusts the receiver's pointer depth (obj_depth) to the method's
-                // (target_depth: 1 for Self@, 0 for Self): one '@' where it is short, a '$' per
-                // extra level (Foo@@, say).
+                // (target_depth: 1 for Self@, 0 for Self). It adds one '@' where the depth is
+                // short, and a '$' per extra level (Foo@@, say).
                 target_depth: = 1 if requires_ptr else 0
                 $obj_depth: = c.env.ptr_depth(obj_node.type_id)
                 $passed_obj: = obj_node
@@ -266,11 +298,10 @@ fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): 
     is_method_name: = sym.flags.is_method || sym.name.find_char_out('.') >= 0
 
     // Caution: **A method must not go through here.** A method's name is `type.method`, which is
-    // not a C identifier, and the code that emits the body (`write_c_fn_name` in
-    // `gen/c/decl.kspl`) does not use the plain name inside an impl. Pass only this through and
-    // the C, with no diagnostic, has the mangled name in the definition and the plain one in the
-    // call. A method has this option only where an `#export` was written, and
-    // `sema/decl/attrs.kspl` rejects that.
+    // not a C identifier. The code that emits the body (`write_c_fn_name` in `gen/c/decl.kspl`)
+    // does not use the plain name inside an impl. Pass only this through and the C, with no
+    // diagnostic, has the mangled name in the definition and the plain one in the call. A method
+    // has this option only where an `#export` was written, and `sema/decl/attrs.kspl` rejects that.
     if !is_method_name && sym.uses_verbatim_c_name()
         return w.s(sym.name)
     if sym.name.equals("main") || sym.name.equals("kspl_main")
@@ -300,12 +331,11 @@ fn get_c_identifier_for_sym_to(sym: Sema_symbol$@, base_name: U8[], w: Writer): 
 priv fn is_private_symbol(sym: Sema_symbol$@): Bool //<
     //< Whether sym is a file-private value whose C name needs the file's prefix
     //<
-    //< A file_private symbol is unique only per file, so in C's flat global namespace it can
+    //< A file_private symbol is unique only per file. So in C's flat global namespace it can
     //< collide with a same-named private symbol in another file.
     //< A prefix spelling the file path makes it unique (write_priv_prefix_to).
     //< Caution: **Do not list exceptions here.** Whether a symbol is already unique across the
-    //< program is answered by `Sema_symbol.has_program_unique_c_name`
-    //< (`sema/type/scope.kspl`).
+    //< program is answered by `Sema_symbol.has_program_unique_c_name` (`sema/type/scope.kspl`).
     if sym == null || sym.vis != sema_type_scope.Visibility.file_private
         return false
     return sym.kind.is_value() && !sym.has_program_unique_c_name()
@@ -323,6 +353,17 @@ priv fn get_global_symbol_by_def(def_node: Ast_node$@): Sema_symbol$@? //<
         return .some(sym)
     // A local variable is not mangled.
     return .none
+
+priv fn hiding_local_of(decl: Ast_node$@, verbatim: Map<|U8[], Bool|>$@): Sema_symbol$@? //<
+    //< The symbol decl declares, if it is a local hiding another of its name or a verbatim C name
+    if decl == null || decl.sym_ptr == null
+        return .none
+    sym: = Sema_symbol$@::decl.sym_ptr
+    if sym.flags.is_global || sym.flags.is_method || !sym.kind.is_value()
+        return .none
+    if sym.hidden_count == 0 && !verbatim.get(sym.name).unwrap_or(false)
+        return .none
+    return .some(sym)
 
 priv fn write_priv_prefix_to(fname: U8[], w: Writer): Writer
     $res: = w.s("kspl_priv_")

@@ -6,7 +6,7 @@
 //< as the answer to a request other than HEAD.
 
 // ==========================================
-// Caution: **Refuse any syntax where another implementation might find a different body boundary;
+// Caution: **Refuse any syntax where another implementation can find a different body boundary;
 // never interpret it silently.** A boundary one byte off from the server in front (a reverse
 // proxy) allows request smuggling.
 // ==========================================
@@ -32,10 +32,10 @@ pub enum Http_error //< why a message could not be read, or cannot be trusted
         //<
         //< A `Content-Length` naming another length or given twice, or a length or a body where the
         //< status allows none (1xx, 204, 304). A reader would cut the message somewhere else.
-    unsupported_close_delimited //< a response that may carry a body names no `Content-Length`
+    unsupported_close_delimited //< a response that can carry a body names no `Content-Length`
         //<
-        //< Its body runs to the close, which is not read here: cut off early, it cannot be told
-        //< from a whole one, so it is refused rather than read as empty.
+        //< Its body runs to the close, which is not read here. Cut off early, it cannot be told
+        //< from a whole one. So it is refused rather than read as empty.
     invalid_line_break //< a bare CR or LF was in the headers; only CRLF ends a line
     unsupported_version //< the version is not `HTTP/` plus one digit, a dot and one digit
     incomplete //< the header or body has not all arrived yet
@@ -44,7 +44,7 @@ pub enum Http_error //< why a message could not be read, or cannot be trusted
     connection_closed //< the peer closed before the header or body was fully read
     io(err: net.Net_error) //< the socket itself failed
 
-pub const max_head_bytes: Sz = 64 * 1024 //< the most a message's head may take, against DoS
+pub const max_head_bytes: Sz = 64 * 1024 //< the most a message's head can take, against DoS
     //<
     //< The head is the first line and the headers; every reader here refuses a longer one.
 pub const default_max_body_bytes: Sz = 16 * 1024 * 1024 //< the body limit if the caller sets none
@@ -57,9 +57,9 @@ priv fn is_token(s: U8[]): Bool //<
     //< Whether it is an RFC 9110 token, the character set of a header name and a method
     //<
     //< An empty string is not a token.
-    //< Caution: **Check a header name with this.** If a space were allowed, `Content-Length : 5`,
-    //< which the proxy in front passes on as "an unknown header", would be Content-Length only
-    //< here: the body boundaries disagree, the same hole that Transfer-Encoding is refused for.
+    //< Caution: **Check a header name with this.** If a space were allowed, `Content-Length : 5`
+    //< would be Content-Length only here. The proxy in front passes it on as "an unknown header".
+    //< The body boundaries then disagree, the same hole that Transfer-Encoding is refused for.
     if s.len == 0
         return false
     for i in Range.asc(s.len)
@@ -79,9 +79,9 @@ priv fn is_field_value(s: U8[]): Bool //<
 
 priv fn is_request_target(s: U8[]): Bool //< whether a request line can carry it as its target
     //<
-    //< Non-empty, with no control byte, space or tab. Caution: **Refuse a tab as a space**: a
-    //< lenient reader splits the line on any whitespace, so either makes the rest the version, and
-    //< a second request can be packed into one line. Reading and writing share this one test.
+    //< Non-empty, with no control byte, space or tab. Caution: **Refuse a tab as a space.** A
+    //< lenient reader splits the line on any whitespace, so either makes the rest the version.
+    //< Then a second request can be packed into one line. Reading and writing share this one test.
     return s.len > 0 && is_field_value(s) && s.find_char(' ').is_none() &&
         s.find_char('\t').is_none()
 
@@ -125,7 +125,8 @@ priv fn is_host_value(v: U8[]): Bool //<
     else
         for at < v.len && v[at] != ':'
             if v[at] == '%'
-                if at + 2 >= v.len || v[at + 1].hex_val() < 0 || v[at + 2].hex_val() < 0
+                if at + 2 >= v.len || v[at + 1].hex_val().is_none() ||
+                    v[at + 2].hex_val().is_none()
                     return false
                 at += 3
             else if is_host_byte(v[at])
@@ -137,7 +138,11 @@ priv fn is_host_value(v: U8[]): Bool //<
     if v[at] != ':'
         return false
     port: = v.sub_from(at + 1)
-    return port.len == 0 || (port.len <= 5 && port.to_count(65535).is_some())
+    if port.len == 0
+        return true
+    _n: = port.to_count(65535) catch
+        return false
+    return port.len <= 5
 
 priv const sz_max: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the largest `Sz`
 
@@ -145,20 +150,19 @@ priv fn parse_digits(s: U8[]): Sz!Http_error //< it accepts only `1*DIGIT`, up t
     //<
     //< Caution: **Do not use parse_size**, which reads `5abc` as 5 and accepts `+5`; accepting what
     //< the proxy in front refuses makes the body boundaries disagree.
-    if n: = s.to_count(sz_max)
-        return n
-    throw .invalid_header
+    return s.to_count(sz_max) catch
+        throw .invalid_header
 
 // ---------------------------------------------------------
 // The headers: in the order they arrived, names compared ignoring case, and one name allowed more
 // than once
 // ---------------------------------------------------------
-pub struct Headers //< a message's headers, in the order they arrived; there may be none
+pub struct Headers //< a message's headers, in the order they arrived; there can be none
     //<
-    //< **The list owns its arena, not any one header**, so `free()` means one thing: it lets go the
-    //< arena `headers(null)` made, and nothing for a list read from a message or built in an arena.
-    //< **A header is reached through it, never through a pointer that may be null**, so an empty
-    //< list is a value like any other (`find`, `each`, `is_empty`).
+    //< **The list owns its arena, not any one header**, so `free()` means one thing. It lets go the
+    //< arena `headers(null)` made. It does nothing for a list read from a message or built in an
+    //< arena. **A header is reached through it, never through a pointer that can be null.** So an
+    //< empty list is a value like any other (`find`, `each`, `is_empty`).
     priv first: Header$@ //< the first header; null for none
     priv own: Own_arena //< the arena `headers(null)` made for the list; empty otherwise
 
@@ -263,7 +267,7 @@ pub fn headers( //< an empty header builder
     return Header_builder::{ .arena = arena, .own = ::{}, .head = null, .tail = null }
 
 impl Header_builder
-    pub fn add( //< appends one header; the same name may be added again
+    pub fn add( //< appends one header; the same name can be added again
         $r: Self,
         name: U8[], //< the header name
         value: U8[], //< its value
@@ -500,15 +504,15 @@ priv fn body_in(src: U8[], h: Head_parts, body_len: Sz): U8[]!Http_error //<
     //< The body that follows the head in src; it throws incomplete until all of it has arrived
     //<
     //< Caution: **Check the body's length.** All the headers can be present while the body is only
-    //< partly there, and cutting without the check returns a view that points outside the buffer.
+    //< partly there. A cut without the check returns a view that points outside the buffer.
     if src.len - h.head_end < body_len
         throw .incomplete
     return src.sub(h.head_end, body_len)
 
 pub fn parse_request( //< the one request at the start of the buffer; fails if it is incomplete
     //<
-    //< **A body over `max_body` fails as soon as the head says so**, before it arrives, and a head
-    //< over `max_head_bytes` as soon as that much has arrived without its end.
+    //< **A body over `max_body` fails as soon as the head says so**, before it arrives. A head
+    //< over `max_head_bytes` fails as soon as that much has arrived without its end.
     src: U8[], //< what has arrived so far
     max_body: Sz, //< the largest body accepted (`default_max_body_bytes` when the caller has none)
     arena: Arena$@, //< where the parts go; null means an arena of the request's own and a `free()`
@@ -591,9 +595,9 @@ priv fn read_head(stream: net.Tcp_stream$@, b: Str_builder$@, arena: Arena$@, ma
         //< Reads from stream to the head's empty line (or past `max_head_bytes`); reads the head
         //<
         //< Caution: **Copy the first line's fields before reading the body.** They view b, which a
-        //< further read may move. **Look for the empty line only where it can newly be**, from
-        //< three bytes before what the last read added: searched from the start each time, a head
-        //< arriving a byte at a time costs its length squared.
+        //< further read can move. **Look for the empty line only where it can newly be**, from
+        //< three bytes before what the last read added. Searched from the start each time, a head
+        //< that arrives a byte at a time costs its length squared.
     $from: Sz = 0
     for b.slice().sub_from(from).find_str("\r\n\r\n").is_none() && b.len <= max_head_bytes
         from = b.len - 3 if b.len > 3 else 0
@@ -604,7 +608,7 @@ pub fn read_response( //< reads one whole response from a connection and splits 
     stream: net.Tcp_stream$@, //< the connection to read from, which blocks
     arena: Arena$@, //< where the parts go; null means an arena of the response's own and a `free()`
     max_body: Sz, //< the largest body accepted; a larger one is refused, not read
-    timeout_ms: I32, //< how long the whole response may take to arrive; past it `.io(.timed_out)`
+    timeout_ms: I32, //< how long the whole response can take to arrive; past it `.io(.timed_out)`
 ): Response$@!Http_error //< the response, held in `arena`; fails if the connection closes first
     $work: = mem.scratch(arena)
     got: = response_from(stream, work, max_body, timeout_ms) catch e
@@ -634,8 +638,8 @@ priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch, max_body: Sz,
 priv fn write_header_lines(b: Str_builder$@, head: Headers): Void!Http_error //<
     //< Writes each header as `name: value`, refusing one that would not read back as itself
     //<
-    //< Caution: **Refuse a value with a space or a tab at either end** (RFC 9110 §5.5 has none):
-    //< the reader trims it, so it would read back as another value.
+    //< Caution: **Refuse a value with a space or a tab at either end** (RFC 9110 §5.5 has none).
+    //< The reader trims it, so it would read back as another value.
     for h in head.each()
         if !is_token(h.name) || !is_field_value(h.value) ||
             h.value.trim_spaces().len != h.value.len
@@ -645,8 +649,8 @@ priv fn write_header_lines(b: Str_builder$@, head: Headers): Void!Http_error //<
 priv fn check_framing(head: Headers, length: Sz, names_length: Bool): Void!Http_error //<
     //< Refuses a head whose framing a reader would read otherwise than the bytes written
     //<
-    //< A `Content-Length` given must name `length`, once. Where no length may be named
-    //< (`names_length` false: 1xx, 204, 304), none may be given and `length` must be 0.
+    //< A `Content-Length` given must name `length`, once. Where no length can be named
+    //< (`names_length` false: 1xx, 204, 304), none can be given and `length` must be 0.
     //< Caution: **Refuse `Transfer-Encoding` here too**: with it, a reader ignores
     //< `Content-Length`.
     if !names_length && length > 0
@@ -712,71 +716,71 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
 
 pub fn reason_phrase( //< the standard phrase for a status number, so the two cannot disagree
     //<
-    //< RFC 9110's "reason-phrase"; empty for a number it does not know. The builders below write it
+    //< RFC 9110's "reason-phrase"; none for a number it does not know. The builders below write it
     //< from the number, so no caller passes the number and the phrase as a pair (which could say
     //< `404 Bad Request`).
     //< Caution: **Do not fill in `"unknown"`**: a phrase from nowhere stays in the receiver's log.
     status: I32, //< the status number
-): U8[] //< the phrase, a fixed string that needs no freeing
+): U8[]? //< the phrase, a fixed string that needs no freeing
     switch status
     case 200
-        return "OK"
+        return .some("OK")
     case 201
-        return "Created"
+        return .some("Created")
     case 204
-        return "No Content"
+        return .some("No Content")
     case 206
-        return "Partial Content"
+        return .some("Partial Content")
     case 301
-        return "Moved Permanently"
+        return .some("Moved Permanently")
     case 302
-        return "Found"
+        return .some("Found")
     case 304
-        return "Not Modified"
+        return .some("Not Modified")
     case 400
-        return "Bad Request"
+        return .some("Bad Request")
     case 401
-        return "Unauthorized"
+        return .some("Unauthorized")
     case 403
-        return "Forbidden"
+        return .some("Forbidden")
     case 404
-        return "Not Found"
+        return .some("Not Found")
     case 405
-        return "Method Not Allowed"
+        return .some("Method Not Allowed")
     case 408
-        return "Request Timeout"
+        return .some("Request Timeout")
     case 409
-        return "Conflict"
+        return .some("Conflict")
     case 411
-        return "Length Required"
+        return .some("Length Required")
     case 413
         // RFC 9110's name (RFC 7231's is "Payload Too Large").
-        return "Content Too Large"
+        return .some("Content Too Large")
     case 414
-        return "URI Too Long"
+        return .some("URI Too Long")
     case 415
-        return "Unsupported Media Type"
+        return .some("Unsupported Media Type")
     case 429
-        return "Too Many Requests"
+        return .some("Too Many Requests")
     case 431
-        return "Request Header Fields Too Large"
+        return .some("Request Header Fields Too Large")
     case 500
-        return "Internal Server Error"
+        return .some("Internal Server Error")
     case 501
-        return "Not Implemented"
+        return .some("Not Implemented")
     case 503
-        return "Service Unavailable"
+        return .some("Service Unavailable")
     case 505
-        return "HTTP Version Not Supported"
+        return .some("HTTP Version Not Supported")
     default {}
-    return ""
+    return .none
 
 pub fn format_response( //< builds one whole response as bytes, for the caller to send
     //<
     //< Appends the status line, the headers, an empty line and the body to b, **leaving the bytes
-    //< to the caller**: a non-blocking socket cannot always send it all at once (see write_all in
-    //< std/net.kspl), so the sender must remember how far it got and continue once writable.
-    //< **The length is the body's**: one given that differs is refused, as is any body or length
+    //< to the caller**. A non-blocking socket cannot always send it all at once (see write_all in
+    //< std/net.kspl). So the sender must remember how far it got and continue once writable.
+    //< **The length is the body's**: one given that differs is refused. So is any body or length
     //< for 1xx, 204 and 304, whose head names none. The answer to a HEAD is
     //< `format_response_to_head`. **On failure b is left as it was.**
     b: Str_builder$@, //< where the message is built
@@ -803,8 +807,8 @@ priv fn write_response_head(b: Str_builder$@, status: I32, head: Headers, length
     Void!Http_error //<
         //< The head naming `length`, or nothing at all where it is refused
         //<
-        //< Caution: **Take back what was written on a failure**: a caller queueing answers in b
-        //< would send the half head, and the next answer would read as its continuation.
+        //< Caution: **Take back what was written on a failure.** A caller that queues answers in b
+        //< would send the half head. The next answer would then read as its continuation.
     names_length: = may_carry_body(status)
     check_framing(head, length, names_length)!
     start: = b.len
@@ -817,7 +821,8 @@ priv fn write_status_line(b: Str_builder$@, status: I32): Void!Http_error //<
     //< Writes `HTTP/1.1 <status> <phrase>` and its CRLF, the phrase from `reason_phrase`
     if !valid_status(status)
         throw .invalid_status_line
-    b.s("HTTP/1.1 \{status\} ").s(reason_phrase(status)).s("\r\n")
+    // RFC 9110 lets the phrase be empty, so a number with none is written with none.
+    b.s("HTTP/1.1 \{status\} ").s(reason_phrase(status).unwrap_or("")).s("\r\n")
 
 pub fn format_response_head( //< builds only a response's head, for a body sent piece by piece
     //<

@@ -16,12 +16,13 @@ struct Seq_person
 fn test_seq_combinators(arena: Arena$@)
     verdict.start("[Seq] where/order_by/distinct/sum and the rest test...")
 
-    // std/seq takes them as `Callable1` / `Callable2`.
+    // std/seq takes them as `Callable1` / `Callable2`, a test or a comparison taking the element
+    // as a `T@`.
     // Caution: Write the `;` even when nothing is captured; without it an anonymous function is a
     // function pointer and cannot be passed.
-    is_adult: = fn(p: Seq_person; ): Bool
+    is_adult: = fn(p: Seq_person@; ): Bool
         return p.age >= 18
-    cmp_age: = fn(a: Seq_person, b: Seq_person; ): I32
+    cmp_age: = fn(a: Seq_person@, b: Seq_person@; ): I32
         return a.age - b.age
 
     $people: = List<|Seq_person|>.new(arena)
@@ -48,8 +49,8 @@ fn test_seq_combinators(arena: Arena$@)
         adult_ages += a
     assert(adult_ages == 30 + 25 + 42, "where+select: sum of adult ages")
 
-    // **Iterating the same chain twice starts from the beginning both times**: the receiver is
-    // taken by value (unlike a Python generator, it does not run empty).
+    // **Iterating the same chain twice starts from the beginning both times.** The receiver is
+    // taken by value. Unlike a Python generator, it does not run empty.
     chain: = people.where(is_adult).select(age_of)
     assert(chain.count() == 3, "restartable: first pass")
     assert(chain.count() == 3, "restartable: second pass sees the same 3")
@@ -59,13 +60,15 @@ fn test_seq_combinators(arena: Arena$@)
     assert(sorted.get(4).age == 42, "order_by: max should be 42")
     assert(sorted.get(0).age <= sorted.get(1).age, "order_by: not sorted at 0/1")
 
-    uniq_ages: = ages.distinct(fn(a: I32, b: I32; ): Bool {
-        return a == b;
+    uniq_ages: = ages.distinct(fn(a: I32@, b: I32@; ): Bool {
+        return a$ == b$;
     }, arena)
     assert(uniq_ages.len == 4, "distinct: expected 4 unique ages (30,15,25,42)")
 
-    first: = people.first() catch panic("first() should not throw on non-empty list")
-    assert(first.name.equals("Alice"), "first() should be Alice")
+    if first: = people.first()
+        assert(first.name.equals("Alice"), "first() should be Alice")
+    else
+        panic("first() should find an element in a list that has one")
 
     assert(people.any(is_adult), "any: should have an adult")
     assert(!people.all(is_adult), "all: not everyone is an adult")
@@ -76,10 +79,7 @@ fn test_seq_combinators(arena: Arena$@)
     assert(rest.len == 3, "skip wrong")
 
     empty: = List<|Seq_person|>.new(arena)
-    $empty_threw: = false
-    empty.first() catch e
-        empty_threw = e == seq.Seq_error.empty_sequence
-    assert(empty_threw, "first() on empty list should throw empty_sequence")
+    assert(empty.first().is_none(), "first() on an empty list should be none")
 
     verdict.pass("The collection operations work as expected.")
 
@@ -93,7 +93,7 @@ fn test_seq_two_element_types(arena: Arena$@) //<
     $words: = List<|U8[]|>.new(arena)
     words.push("a")
     words.push("bcd")
-    long_ones: = words.where(fn(w: U8[]; ): Bool {
+    long_ones: = words.where(fn(w: U8[]@; ): Bool {
         return w.len > 1;
     }).count()
     $nums: = List<|I32|>.new(arena)
@@ -102,8 +102,8 @@ fn test_seq_two_element_types(arena: Arena$@) //<
     lens: = words.select(fn(w: U8[]; ): Sz {
         return w.len;
     }).to_list(arena)
-    big: = nums.where(fn(x: I32; ): Bool {
-        return x > 4;
+    big: = nums.where(fn(x: I32@; ): Bool {
+        return x$ > 4;
     }).count()
     assert(long_ones == 1, "the U8[] side")
     assert(big == 1, "the I32 side")
@@ -121,7 +121,7 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
     //< Caution: **Go past the insertion-sort run length** (16). Below it no merge runs, so lengths
     //< up to 16 test no merging. The equal keys show whether a tie is reversed.
     verdict.start("[Seq] order_by sorts long lists and keeps equals in order test...")
-    by_key: = fn(a: Seq_tagged, b: Seq_tagged; ): I32
+    by_key: = fn(a: Seq_tagged@, b: Seq_tagged@; ): I32
         return a.key - b.key
     for n in U8[]::{ 0, 1, 16, 17, 33, 200 }
         $xs: = List<|Seq_tagged|>.new(arena)
@@ -136,7 +136,7 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
             assert(prev.key <= here.key, "order_by: out of order")
             assert(prev.key < here.key || prev.was < here.was, "order_by: equals turned around")
     // Caution: **Sort on the heap too** (`arena` null), past the run length so the merge's spare
-    // list is made: only the list returned may stay behind.
+    // list is made: only the list returned can stay behind.
     $on_heap: = List<|Seq_tagged|>.new(null)
     for i in Range.asc(40)
         on_heap.push(Seq_tagged::{ .key = I32::(40 - i), .was = i })
@@ -147,6 +147,49 @@ fn test_seq_order_by_stable(arena: Arena$@) //<
     on_heap.free()
     assert(heap_after == heap_before, "order_by: nothing but the list returned stays on the heap")
     verdict.pass("order_by sorts past its insertion runs and keeps equal keys in their order.")
+
+struct Seq_handle //< an owning handle, which must not be copied, and a key to sort it by
+    key: I32
+impl Seq_handle: Move_only {} //< a copy would be a second owner
+
+priv fn lies_in(p: Seq_handle@, xs: List<|Seq_handle|>@): Bool //< whether p points into xs
+    return p >= xs.ptr && p < xs.ptr + xs.len
+
+fn test_seq_move_only_in_place(arena: Arena$@) //<
+    //< That a list of `Move_only` elements is tested, thinned and ordered with no element copied
+    //<
+    //< Each test and comparison is handed a `T@`, so the instance for such a type passes the move
+    //< check. Caution: **Check the address too.** A copy compares the same; only where the pointer
+    //< lies shows that the element was not copied to make the call.
+    verdict.start("[Seq] a Move_only element is tested and compared where it lies...")
+    $xs: = List<|Seq_handle|>.new(arena)
+    for k in I32[]::{ 3, 1, 3, 2 }
+        xs.push(Seq_handle::{ .key = k })
+    over_one: = fn(h: Seq_handle@; ): Bool
+        return h.key > 1
+    assert(xs.where(over_one).count() == 3, "where: a Move_only element passes the test")
+    within: List<|Seq_handle|>@ = xs@
+    $in_place: = true
+    seen: = in_place@
+    assert(xs
+        .any(fn(h: Seq_handle@; within: List<|Seq_handle|>@, seen: Bool$@): Bool {
+        seen$ = seen$ && lies_in(h, within); return h.key == 2;
+    }), "any: finds the element")
+    assert(in_place, "any: the test is handed the element in the list, not a copy")
+    once: = xs.distinct(fn(a: Seq_handle@, b: Seq_handle@; within: List<|Seq_handle|>@,
+        seen: Bool$@): Bool {
+        seen$ = seen$ && lies_in(a, within); return a.key == b.key;
+    }, arena)
+    assert(in_place, "distinct: the comparison is handed the element in the list, not a copy")
+    assert(once.len == 3 && (once.ptr + 0).key == 3 && (once.ptr + 2).key == 2,
+        "distinct: the first of each key, in order")
+    sorted: = xs.order_by(fn(a: Seq_handle@, b: Seq_handle@; ): I32 {
+        return a.key - b.key;
+    }, arena)
+    assert(sorted.len == 4 && (sorted.ptr + 0).key == 1 && (sorted.ptr + 3).key == 3,
+        "order_by: a Move_only element is ordered")
+    verdict
+        .pass("A Move_only list was tested, thinned and ordered with each element read in place.")
 
 // ==========================================
 // Tests of the byte ring buffer (`std/ring`)
@@ -280,8 +323,8 @@ fn test_ring_refuses_other_lengths(ksplc: U8[], arena: Arena$@) //< ksplc runs t
 // Tests of going round std's lists with `for x in`, and of removing from a `Map` or a `List`
 // ==========================================
 // Tests that every std API allowed to allocate the whole result returns a list with `.len` and an
-// index, which `for x in` iterates directly ("One mechanism per purpose" in
-// docs/DESIGN-principles.md); the `next()` form (a lazy chain) is `std/seq`'s.
+// index. `for x in` iterates it directly ("One mechanism per purpose" in
+// docs/DESIGN-principles.md). The `next()` form (a lazy chain) is `std/seq`'s.
 // Caution: **Do not change it to a form that returns a listing** (the reason is at `items` in
 // `std/ds.kspl`).
 // ==========================================
@@ -323,8 +366,8 @@ fn test_iteration(arena: Arena$@)
         e.value += 1
     assert(seen == 2, "entries: a slot already removed is not walked")
     assert(sum == 40, "entries: the sum of the values")
-    v1: = m.get(1) catch 0
-    v3: = m.get(3) catch 0
+    v1: = m.get(1).unwrap_or(0)
+    v3: = m.get(3).unwrap_or(0)
     assert(v1 == 11 && v3 == 31,
         "entries: an update through the returned pointer reaches the Map itself")
 
@@ -332,7 +375,7 @@ fn test_iteration(arena: Arena$@)
     v: = json.parse("[1, 2, 3, 4]", arena) catch panic("iterate_test: parsing the JSON failed")
     $j_sum: I64 = 0
     for item in v.val.arr_list(arena)
-        j_sum += item.as_int(0)
+        j_sum += item.as_int().unwrap_or(0)
     assert(j_sum == 10, "arr_list: the sum of the elements")
     // For a value that is not an array, it returns an empty list.
     scalar: = json.parse("42", arena) catch panic("iterate_test: parsing the JSON failed")
@@ -370,12 +413,12 @@ fn test_map_removal() //<
     m.set(kb, 200)
     assert(m.remove(ka), "the earlier key can be removed")
     assert(m.len == 1, "the count goes down by one")
-    assert((m.get(kb) catch -1) == 200,
+    assert(m.get(kb).unwrap_or(-1) == 200,
         "the key behind is still reachable after removing the earlier one")
 
     m.set(kb, 300)
     assert(m.len == 1, "the count does not go up when it is put back in")
-    assert((m.get(kb) catch -1) == 300, "the value put back in is reachable")
+    assert(m.get(kb).unwrap_or(-1) == 300, "the value put back in is reachable")
 
     // Through repeated removal and insertion, only the remaining keys are reachable.
     $m2: = Map<|I32, I32|>.new(null)
@@ -388,7 +431,7 @@ fn test_map_removal() //<
     assert(m2.len == 100, "100 after removing half")
     $all_ok: = true
     for i in Range.asc(200)
-        got: = m2.get(I32::i) catch -1
+        got: = m2.get(I32::i).unwrap_or(-1)
         want: I32 = -1 if i % 2 == 0 else I32::(i * 10)
         if got != want
             all_ok = false
@@ -406,7 +449,7 @@ fn test_map_removal() //<
         m3.set(7, 1)
         m3.remove(7)
     m3.set(7, 42)
-    assert((m3.get(7) catch -1) == 42, "it is reachable through repeated set and remove")
+    assert(m3.get(7).unwrap_or(-1) == 42, "it is reachable through repeated set and remove")
 
     verdict
         .pass("A colliding key is not lost to removal, and putting it back in does not double it.")
@@ -414,7 +457,7 @@ fn test_map_removal() //<
 fn test_map_churn() //< setting and removing ever new keys keeps a small map small
     //<
     //< Caution: **Keep live keys whose buckets sit at the table's end**, so their run wraps past
-    //< slot 0: rehashing in place must not lose a pair whose probe crosses the end.
+    //< slot 0. Rehashing in place must not lose a pair whose probe crosses the end.
     verdict.start("[Map] a small map under endless set and remove of new keys test...")
     $m: = Map<|I32, I32|>.new(null)
     defer m.free()
@@ -432,7 +475,7 @@ fn test_map_churn() //< setting and removing ever new keys keeps a small map sma
     assert(m.cap == 32, "the capacity stays where a few pairs put it")
     $all_found: = true
     for k in live.slice()
-        if (m.get(k) catch -1) != k * 2
+        if m.get(k).unwrap_or(-1) != k * 2
             all_found = false
     assert(all_found, "every kept key is still reachable")
 
@@ -445,7 +488,7 @@ fn test_map_churn() //< setting and removing ever new keys keeps a small map sma
     for $i: I32 = 2; i < 100000; i += 1
         ma.set(i, i)
         _r: = ma.remove(i)
-    assert(arena.get_total_allocated() == held && (ma.get(1) catch -1) == 1,
+    assert(arena.get_total_allocated() == held && ma.get(1).unwrap_or(-1) == 1,
         "the tombstones are dropped in the slots the map has")
 
     // A value moved within the slots keeps its count: nothing leaks and nothing is freed early.
@@ -462,8 +505,7 @@ priv fn churn_counted_values() //< sets and removes ARC values past several in-p
     for $i: I32 = 100; i < 5000; i += 1
         m.set(i, Rc<|I32|>.new(i))
         _r: = m.remove(i)
-    $kept: = m.get(39) catch
-        fallback Rc<|I32|>.new(-1)
+    $kept: = m.get(39).unwrap_or(Rc<|I32|>.new(-1))
     assert(kept.get()$ == 39 && m.cap == 256, "a kept value survives the rehashes in place")
 
 fn test_map_odd_cap() //< a capacity that is not a power of two
@@ -475,7 +517,7 @@ fn test_map_odd_cap() //< a capacity that is not a power of two
     assert(m.cap == 4, "the count is rounded up to the next power of two")
     for $k: I32 = 1; k <= 3; k += 1
         m.set(k, k * 10)
-    assert(m.len == 3 && (m.get(3) catch -1) == 30, "every key put in is reachable")
+    assert(m.len == 3 && m.get(3).unwrap_or(-1) == 30, "every key put in is reachable")
     verdict.pass("A count that is not a power of two is rounded up, and the map works.")
 fn test_list_remove_at() //< the counterpart of `List.insert`
     verdict.start("[ds] List.remove_at test...")

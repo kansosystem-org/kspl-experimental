@@ -1,16 +1,16 @@
 //< How a type is spelt where the editor shows it
 //<
 //< Not a suite; part of `../suite/lsp_test.kspl`.
-//< **What the editor shows has to be writable in the source.** Reversed mutability, a mangled
-//< generic name and the desugared `Slice<|T|>` each show a type nobody wrote, which a check asking
-//< only whether an answer came back does not see.
+//< **What the editor shows must be writable in the source.** Reversed mutability, a mangled
+//< generic name and the desugared `Slice<|T|>` each show a type nobody wrote. A check asking
+//< only whether an answer came back does not see that.
 import "ksplc/tests/support/harness"
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text }
 import "std/chars"
 import "std/fs"
 import "std/io"
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
@@ -20,7 +20,7 @@ priv const heavy_ms: I32 = 60000 //<
     //< Opening the prelude analyses its whole import tree, so it uses the suite's longer timeout
 
 // **The internal representation and the source mark mutability the opposite way** (internally
-// unmarked is mutable, in the source a `$` marks it), so shown as is, `U8$[]` **lies** as `U8[]`.
+// unmarked is mutable, in the source a `$` marks it). Shown as is, `U8$[]` **lies** as `U8[]`.
 // An instantiated generic's internal name (`std_ds_List_U8_Const_Slice`) cannot be written in the
 // source ("A diagnostic points at 'the position the user wrote'" in
 // ksplc/docs/DESIGN-diagnostics.md).
@@ -48,7 +48,7 @@ priv const types_want: U8[][_] = ::{ "std.ds.List<|U8[]|>", "std.ds.List<|U8$[]|
 
 priv const types_uri: U8[] = "file:///types_probe.kspl"
 
-fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_types(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(types_uri, types_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, types_uri, arena)
@@ -89,9 +89,9 @@ fn check_hover_types(c: jsonrpc.Client$@, arena: Arena$@)
 // A declaration in another file is spelt as its source writes it
 // ==========================================
 
-// **A declaration whose body the editor did not analyse carries no type on its parameters**, so the
+// **A declaration whose body the editor did not analyse carries no type on its parameters.** So the
 // display falls back to the node's spelling, **after** the desugaring. Every name here is in `std`
-// so as to take that path; tested in the document itself, a broken fallback goes green.
+// so as to take that path. Tested in the document itself, a broken fallback goes green.
 priv const away_src: U8[] =
     """import "std/io"
 import "std/str" { Str_builder }
@@ -118,7 +118,7 @@ priv const away_marks: U8[][_] = ::{ ".s(", ".read(", ".argv" }
 priv const away_wants: U8[][_] = ::{ "s: U8[]", "buf: U8$[]", "argv: U8[][]" }
 priv const away_names: U8[][_] = ::{ "a parameter", "a mutable parameter", "a field" }
 
-fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_away(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(away_uri, away_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, away_uri, arena)
@@ -142,7 +142,7 @@ fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
     got: = c.request("textDocument/definition", pos, heavy_ms, arena) catch e
         verdict.check(jump, false, end_text(e))
         return
-    landed: = got.val.get("result").get("uri").as_str().replace("\\", "/", arena)
+    landed: = got.val.get("result").get("uri").as_str().unwrap_or("").replace("\\", "/", arena)
     verdict.check(jump,
         landed.equals(lsp_client.uri_of(harness.std_dir(), "io.kspl", arena)),
         lsp_client.why(c, arena.text().s("'").s(landed).s("'").take(), arena))
@@ -151,8 +151,8 @@ fn check_hover_away(c: jsonrpc.Client$@, arena: Arena$@)
 // A parameter written `Self` on a template no instantiation reached
 // ==========================================
 
-// **Nothing instantiates `Box` here**, so the parameter carries no type at all and the hover falls
-// back to the spelling (`classify_def_fallback` in `ksplc/lsp/hover.kspl`); an instantiated one
+// **Nothing instantiates `Box` here**, so the parameter carries no type at all. The hover falls
+// back to the spelling (`classify_def_fallback` in `ksplc/lsp/hover.kspl`). An instantiated one
 // takes another path and would not reach it.
 priv const self_src: U8[] =
     """struct Box<|T|>
@@ -168,7 +168,7 @@ impl<|T|> Box<|T|>
 
 priv const self_uri: U8[] = "file:///self_probe.kspl"
 
-fn check_hover_self_param(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_self_param(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(self_uri, self_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, self_uri, arena)
@@ -191,9 +191,9 @@ fn check_hover_self_param(c: jsonrpc.Client$@, arena: Arena$@)
 // ==========================================
 
 // **A type's name drops the `$`** (`extract_type_name` in `ksplc/base/ast_spell.kspl`, so that
-// `impl U8$[]` is found as `impl U8[]`), so spelt through it a receiver written `Self$@` would read
-// as one that cannot be written through. The generic's parameter carries no type, the other path;
-// its `put` has the name of the prelude's free function, which a look-up by the bare name finds.
+// `impl U8$[]` is found as `impl U8[]`). Spelt through it, a receiver written `Self$@` would read
+// as one that cannot be written through. The generic's parameter carries no type, the other path.
+// Its `put` has the name of the prelude's free function, which a look-up by the bare name finds.
 priv const recv_src: U8[] =
     """struct Counter
   n: I32
@@ -233,7 +233,7 @@ priv const recv_wants: U8[][_] = ::{ "bump(r: Self$@)", "peek(r: Self@)", "r: Se
 priv const recv_names: U8[][_] = ::{ "a receiver written Self$@", "a receiver written Self@",
     "a generic's receiver written Self$@", "a generic method named as the prelude's `put`" }
 
-fn check_hover_receiver(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_receiver(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(recv_uri, recv_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, recv_uri, arena)
@@ -253,8 +253,8 @@ fn check_hover_receiver(c: jsonrpc.Client$@, arena: Arena$@)
 // A label is shown as a label, and a jump to it lands on it
 // ==========================================
 
-// **A label is not a value**; classified as one, the hover would read `outer: outer`, a variable
-// typed by its own name, and a jump from the `break` would find nothing. The jump target is the one
+// **A label is not a value.** Classified as one, the hover would read `outer: outer`, a variable
+// typed by its own name. A jump from the `break` would find nothing. The jump target is the one
 // sema decides (the innermost label of that name), recorded on the `break`'s own name.
 priv const label_src: U8[] =
     """fn walk(limit: I32): I32
@@ -276,7 +276,7 @@ priv const label_uri: U8[] = "file:///label_probe.kspl"
 priv const label_lines: U8[][_] = ::{ "  outer: for", "        break outer" }
 priv const label_names: U8[][_] = ::{ "a label where it is written", "a label a break names" }
 
-fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_label(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(label_uri, label_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, label_uri, arena)
@@ -300,7 +300,7 @@ fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
         c.request("textDocument/definition", from, lsp_client.read_ms, arena) catch e
         verdict.check(jump, false, end_text(e))
         return
-    landed: = got.val.get("result").get("range").get("start").get("line").as_int(-1)
+    landed: = got.val.get("result").get("range").get("start").get("line").as_int().unwrap_or(-1)
     verdict.check(jump, landed == I32::decl_line(label_src, label_lines[0], arena),
         lsp_client.why(c, arena.text().s("line \{landed\}").take(), arena))
 
@@ -308,11 +308,11 @@ fn check_hover_label(c: jsonrpc.Client$@, arena: Arena$@)
 // A member reached in a generic's body that nothing instantiates
 // ==========================================
 
-// **Nothing here instantiates a generic**, so no body is analysed and no receiver carries a type:
-// read by its bare name, each call would find nothing to jump to. The receiver's declaration does
+// **Nothing here instantiates a generic**, so no body is analysed and no receiver carries a type.
+// Read by its bare name, each call would find nothing to jump to. The receiver's declaration does
 // carry one. Three receivers: a generic of std's through an import's alias (as `lora.Lora` in
-// `ksai/attention_train.kspl`), one named by a selective import, and this file's own through `@`;
-// then chains of fields (as `r.wo.weights.sgd_step` there), from `Self` and from a parameter; then
+// `ksai/attention_train.kspl`), one named by a selective import, and this file's own through `@`.
+// Then chains of fields (as `r.wo.weights.sgd_step` there), from `Self` and from a parameter. Then
 // locals set from a call (as `dq` there): a method's `Self`, a function's result through `catch`.
 priv const generic_src: U8[] =
     """import "std/ds" as coll + { List }
@@ -382,7 +382,7 @@ priv const generic_names: U8[][_] = ::{ "a call on a generic named by an alias n
     "a call on a local set from a method's `Self` (`t.peek`) names its method",
     "a call on a local set from a function through `catch` (`w.left.peek`) names its method" }
 
-fn check_hover_generic_body(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_generic_body(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(generic_uri, generic_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, generic_uri, arena)
@@ -403,7 +403,7 @@ fn check_hover_generic_body(c: jsonrpc.Client$@, arena: Arena$@)
     got: = c.request("textDocument/definition", from, heavy_ms, arena) catch e
         verdict.check(jump, false, end_text(e))
         return
-    landed: = got.val.get("result").get("uri").as_str().replace("\\", "/", arena)
+    landed: = got.val.get("result").get("uri").as_str().unwrap_or("").replace("\\", "/", arena)
     verdict.check(jump, landed.ends_with("/ds.kspl"),
         lsp_client.why(c, arena.text().s("'").s(landed).s("'").take(), arena))
 
@@ -412,8 +412,8 @@ fn check_hover_generic_body(c: jsonrpc.Client$@, arena: Arena$@)
 // ==========================================
 
 // **The hover and the completion list write one signature** (`write_sig` in
-// `ksplc/base/ast_spell.kspl`); a hover that dropped the default would show a parameter a call
-// may leave out as one every call must pass.
+// `ksplc/base/ast_spell.kspl`). A hover that dropped the default would show a parameter a call
+// can leave out as one every call must pass.
 priv const default_src: U8[] =
     """fn bump(n: I32, step: I32 = 1): I32
   return n + step
@@ -426,7 +426,7 @@ fn main(): I32
 
 priv const default_uri: U8[] = "file:///default_probe.kspl"
 
-fn check_hover_default_arg(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_default_arg(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(default_uri, default_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, default_uri, arena)
@@ -445,9 +445,9 @@ fn check_hover_default_arg(c: jsonrpc.Client$@, arena: Arena$@)
 // A method is named by its owner, not by the file its `impl` stands in
 // ==========================================
 
-// **Every owner here is in another file than its `impl`**, as an owner may be: a type of std's, a
-// generic nothing instantiates (its header spells it through the import, `List<|T|>`) and a
-// built-in, which the analysis leaves bare (`resolve_fqn_for_type` in
+// **Every owner here is in another file than its `impl`**, as an owner can be. The owners: a type
+// of std's, a generic nothing instantiates (its header spells it through the import, `List<|T|>`),
+// a built-in. The analysis leaves a built-in bare (`resolve_fqn_for_type` in
 // `ksplc/sema/decl/resolve.kspl`). Prefixed with the probe's own module, each would name nothing.
 priv const owner_src: U8[] =
     """import "std/ds" { List }
@@ -480,7 +480,7 @@ priv const owner_wants: U8[][_] = ::{ "fn std.io.Io_error.probe_named(",
 priv const owner_kinds: U8[][_] = ::{ "a type of std's", "a generic nothing instantiates",
     "a built-in type" }
 
-fn check_hover_owner(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_owner(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(owner_uri, owner_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, owner_uri, arena)
@@ -517,7 +517,7 @@ priv const lang_wants: U8[][_] = ::{ "std.lang.Owned.free(r: Self)",
 priv const lang_names: U8[][_] = ::{ "a trait's requirement", "a generic trait's requirement",
     "a generic impl's method" }
 
-fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_prelude(c: jsonrpc_client.Client$@, arena: Arena$@)
     std_dir: = harness.std_dir()
     src: = io.read_file(fs.join(std_dir, lang_file, arena)) catch
         verdict.check("the prelude can be read", false, std_dir)
@@ -527,7 +527,7 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
         catch {}
     defer lsp_client.close(c, uri, arena)
     // **Opened by its path, it is still std's file**, named as its imports name it (`name_entry` in
-    // `ksplc/base/package.kspl`); named by the path, every owner carries `.home.me.std.lang.…` and
+    // `ksplc/base/package.kspl`). Named by the path, every owner carries `.home.me.std.lang.…`, and
     // one file is loaded twice. An owner written as sugar (`T[]`) names no module, so only the
     // owners std/lang names (`std.lang.…` in `lang_wants`) are held to it.
     $named_as_std: = true
@@ -562,12 +562,12 @@ fn check_hover_prelude(c: jsonrpc.Client$@, arena: Arena$@)
 priv const spell_file: U8[] = "lsp/position.kspl" //<
     //< A file asked about by its logical name, whose answers must come back in that spelling
     //<
-    //< **A file's identity inside the compiler is its project-relative logical name**, so an answer
+    //< **A file's identity inside the compiler is its project-relative logical name.** So an answer
     //< naming a file is rendered in the spelling asked (both spellings are in use:
     //< `lsp_client.kspl`).
 priv const spell_decl: U8[] = "fn find_path_at_offset"
 
-priv fn def_uri_under(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): U8[] //<
+priv fn def_uri_under(c: jsonrpc_client.Client$@, uri: U8[], src: U8[], arena: Arena$@): U8[] //<
     //< It asks where that name is defined, under one spelling, and returns the URI that came back
     c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
         catch {}
@@ -575,9 +575,9 @@ priv fn def_uri_under(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@)
     pos: = lsp_client.at_pos(uri, decl_line(src, spell_decl, arena),
         col_in_line(src, spell_decl, "find_path", arena) + 1, arena)
     got: = lsp_client.answer(c, "textDocument/definition", pos, heavy_ms, arena)
-    return got.get("result").get("uri").as_str()
+    return got.get("result").get("uri").as_str().unwrap_or("")
 
-fn check_uri_spelling(c: jsonrpc.Client$@, top: U8[], arena: Arena$@) //<
+fn check_uri_spelling(c: jsonrpc_client.Client$@, top: U8[], arena: Arena$@) //<
     //< `top` is the workspace, the package's top the server was started in
     src: = io.read_file(spell_file) catch
         verdict.check("the file asked about can be read", false, spell_file)

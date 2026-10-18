@@ -42,11 +42,10 @@ priv fn is_arena_type(c: Sema_ctx$@, type_id: I32): Bool //<
     //< Whether the type id is the arena (`std.mem.Arena`) itself
     //<
     //< Caution: **Strip the pointer before comparing** (the receiver arrives as `Arena$@`).
-    sym: = c.symtab.resolve_fqn(arena_type_fqn) catch
-        return false
-    if sym == null || sym.type_id == 0
-        return false
-    return c.env.strip_ptr(type_id) == c.env.strip_ptr(sym.type_id)
+    if sym: = c.symtab.resolve_fqn(arena_type_fqn)
+        return sym.type_id != 0 &&
+            c.env.strip_ptr(type_id) == c.env.strip_ptr(sym.type_id)
+    return false
 
 priv fn is_free_fn_path(callee: Ast_node$@): Bool //<
     //< Whether callee is a free function that releases its actual argument (`dealloc(x)`)
@@ -74,14 +73,18 @@ priv fn expr_names_local(e: Ast_node$@, name: U8[]): Bool //<
         curr.text.equals(name)
 
 fn call_arg_for_param(callee: Ast_node$@, args_node: Ast_node$@, param_idx: Sz, is_method: Bool):
-    Ast_node$@ //<
-        //< The actual-argument node for the formal parameter param_idx, or null
+    Ast_node$@? //<
+        //< The actual-argument node for the formal parameter param_idx, or none
         //<
         //< On a method call 0 is the receiver (as in mark_call_freed_args).
+    $arg: Ast_node$@ = null
     if is_method && param_idx == 0
-        return callee.get_postfix_receiver()
-    at: = param_idx - 1 if is_method else param_idx
-    return args_node.get_child(at) if at < args_node.children.len else null
+        arg = callee.get_postfix_receiver()
+    else
+        at: = param_idx - 1 if is_method else param_idx
+        if at < args_node.children.len
+            arg = args_node.get_child(at)
+    return .some(arg) if arg != null else .none
 
 impl Ast_node
     fn get_free_call_receiver(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<

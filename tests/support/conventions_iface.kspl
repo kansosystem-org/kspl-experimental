@@ -208,7 +208,7 @@ priv fn check_style(arena: Arena$@)
 // ==========================================
 // ksos's make targets can be walked to from the documents
 // Caution: **Do not leave a target out of the documents.** ksos records hardware confirmations
-// in the documents; with no path to the entry point that confirms, it cannot be tried again.
+// in the documents. With no path to the entry point that confirms, it cannot be tried again.
 // ==========================================
 priv const ksos_mk: U8[] = "ksos/Makefile"
 
@@ -236,11 +236,12 @@ priv fn mk_var_words(text: U8[], name: U8[], out: List<|U8[]|>$@, arena: Arena$@
 
 // Builds the targets of each family from its list and prefix.
 //
-// Caution: **When you add a family, add it here too**, or the gate stops seeing that family's
-// targets (a `make <target>` named in the documents still fails as "in the .md and not in
-// ksos/Makefile").
+// Caution: **When you add a family, add it here too.** Otherwise the gate stops seeing that
+// family's targets. (A `make <target>` named in the documents still fails as "in the .md and not in
+// ksos/Makefile".)
 priv const ksos_families: U8[][2][_] = ::{::{ "KSOS_POSIX_TEMPLATED", "ksos-" },
     ::{ "KSOS_POSIX_PANIC", "ksos-" }, ::{ "KSOS_CM_DEMOS", "ksos-cm-" },
+    ::{ "KSOS_CM0_DEMOS", "ksos-cm0-" }, ::{ "KSOS_NRF51_DEMOS", "ksos-nrf51-" },
     ::{ "KSOS_RP2040_DEMOS", "ksos-rp2040-" } }
 
 priv fn check_ksos_targets(arena: Arena$@)
@@ -322,9 +323,9 @@ priv fn check_std_list(arena: Arena$@)
 priv const flash_drv: U8[] = "ksos/drivers/rp2040/flash.kspl" //<
     //< The driver that holds the Flash region reserved for the record
     //<
-    //< **When they disagree, the link passes even where the image reaches the record's region**:
-    //< the ASSERT sees only "the image does not come this far", so changing only the driver puts
-    //< the record at **a place nobody looks at**.
+    //< **When they disagree, the link passes even where the image reaches the record's region.**
+    //< The ASSERT sees only "the image does not come this far". So a change to the driver alone
+    //< puts the record at **a place nobody looks at**.
 priv const flash_ld: U8[] = "ksos/port/rp2040/link.ld"
 
 priv const drv_head: U8[] = "const region_base: Sz = " //<
@@ -338,7 +339,7 @@ priv const ld_head: U8[] = "ASSERT(_flash_image_end <= ORIGIN(FLASH) + "
 priv fn value_at(rest: U8[]): U8[] //< takes the number written at the start of `rest`
     //<
     //< **Both sides carry something behind the number** (a `//<` on the driver's, the ASSERT's rest
-    //< on the linker script's), so stopping where the number stops serves both.
+    //< on the linker script's). So a stop where the number stops serves both.
     $k: Sz = 0
     for k < rest.len && rest[k].is_alnum()
         k += 1

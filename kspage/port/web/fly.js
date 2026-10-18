@@ -1,11 +1,11 @@
 // kspage's page — the flyout submenu (point at an item and the choices open to the right).
-// **This is where "which one is applied now" is shown**: a label and a `<select>` hide it inside a
-// closed field, which cannot be read until opened (Google Docs, Word and Pages all mark the
-// applied choice). **Inheriting is a choice too**, "Unset"; nothing shows right of a closed item.
+// **This is where "which one is applied now" is shown.** A label and a `<select>` hide it inside a
+// closed field, unread until opened (Google Docs, Word and Pages all mark the applied choice).
+// **Inheriting is a choice too**, "Unset"; nothing shows right of a closed item.
 // Without `spec.picks` it makes **a group** (a submenu inside), **keeping the menu's top level
-// short** (an opened menu over 400px covers the canvas). **A group used step by step is a panel**
-// (`details.sub`), not a submenu: a submenu ends with one choice (the click returns focus to the
-// body), so **text to be read does not go into a group**, nor fields filled in turn.
+// short**. An opened menu over 400px covers the canvas. **A group used step by step is a panel**
+// (`details.sub`), not a submenu. A submenu ends with one choice (the click returns focus to the
+// body). So **text to be read does not go into a group**, nor do fields filled in turn.
 // **Do not list commands flat at the top level** (the cap is four), **nor use a panel for a
 // submenu**; `kspage/tests/browser/menu.js` checks both.
 function kspageFlyout(host, spec) {
@@ -18,8 +18,8 @@ function kspageFlyout(host, spec) {
   const fly = document.createElement("div");
   fly.className = "fly";
   fly.id = spec.id;
-  // Caution: **One button fills the item pointed at**, its text not clickable (with a clickable
-  // span, whether to close the menu would depend on the contents' shape; `page.css`).
+  // Caution: **One button fills the item pointed at**, its text not clickable. With a clickable
+  // span, whether to close the menu would depend on the contents' shape (`page.css`).
   const open = put(fly, "button", "fly-open");
   open.type = "button";
   open.setAttribute("aria-haspopup", "true");
@@ -40,8 +40,8 @@ function kspageFlyout(host, spec) {
   };
   fly.addEventListener("mouseenter", () => requestAnimationFrame(place));
   fly.addEventListener("focusin", () => requestAnimationFrame(place));
-  // A group holds no contents and **shows no mark**; **its box does not scroll** (`overflow` would
-  // clip the submenus inside, as in `page.css`), only the innermost level of choices does.
+  // A group holds no contents and **shows no mark**. **Its box does not scroll** (`overflow` would
+  // clip the submenus inside, as in `page.css`); only the innermost level of choices does.
   if (spec.picks === undefined) {
     box.classList.add("fly-nest");
     return { box: box };
@@ -57,7 +57,7 @@ function kspageFlyout(host, spec) {
       one.setAttribute("role", "menuitemradio");
       const tick = put(one, "span", "fly-tick");
       // Caution: **Show the color itself, not only the name** ("Pink" and "Orange" cannot be told
-      // apart by name); the value's form (`#rrggbb`) decides, so the menu and the ribbon agree.
+      // apart by name). The value's form (`#rrggbb`) decides, so the menu and the ribbon agree.
       if (/^#[0-9a-f]{6}$/i.test(value)) put(one, "span", "fly-chip").style.background = value;
       put(one, "span", "fly-label").textContent = label;
       put(one, "span", "fly-key").textContent = (spec.keys || {})[value] || "";
@@ -84,14 +84,14 @@ function kspageFlyout(host, spec) {
 
 // A submenu that holds one choice.
 // Caution: **Do not go back to a `<select>`** (see the header above). The value is kept here, so
-// the text right of an item and the value passed agree; **a value not in the list falls back to
+// the text right of an item and the value passed agree. **A value not in the list falls back to
 // the first** (otherwise the mark could be nowhere). `set` copies the document's value without
 // `spec.run` (otherwise just opening would change the document). `spec.picks` is a list or a
 // function returning one (a growing list, such as the style names), **rebuilt with `paint()`**.
 function kspageHoldFly(host, spec) {
   const list = () => (typeof spec.picks === "function" ? spec.picks() : spec.picks);
   const has = (value) => list().some((one) => one[0] === value);
-  // Caution: **Taking the list's first must not fail on an empty list** — a function's list is
+  // Caution: **Taking the list's first must not fail on an empty list.** A function's list is
   // empty before the document is loaded (`form.js`'s style names fill in with `paint()`).
   const first = () => {
     const rows = list();
@@ -103,8 +103,8 @@ function kspageHoldFly(host, spec) {
     name: spec.name,
     picks: list,
     now: () => at,
-    // Caution: **`spec.run` must be optional** — a group that only holds a value has nothing to do
-    // on the click, and if required, empty functions would pile up per caller.
+    // Caution: **`spec.run` must be optional.** A group that only holds a value has nothing to do
+    // on the click. If it were required, empty functions would pile up per caller.
     run: (value) => {
       at = value;
       if (spec.run !== undefined) {
@@ -131,11 +131,11 @@ function kspageHoldFly(host, spec) {
   };
 }
 
-// Turns a group written in the HTML into a submenu: **the item pointed at is made in one place,
-// above** (copied into the HTML, one goes stale; Principle 4), so the HTML holds
+// Turns a group written in the HTML into a submenu. **The item pointed at is made in one place,
+// above**: copied into the HTML, one goes stale (Principle 4). So the HTML holds
 // `data-fly="the name"` and only the contents.
-// Caution: **Leave the fields and explanations in the HTML** (`placeholder`, `title`), and **move
-// the contents into the box**, or they flow under the item and each closed group widens the menu.
+// Caution: **Leave the fields and explanations in the HTML** (`placeholder`, `title`). **Move the
+// contents into the box**, or they flow under the item and each closed group widens the menu.
 function kspageFlyGroups(root) {
   for (const host of Array.from(root.querySelectorAll("[data-fly]"))) {
     // **Put the id on the group itself** — on the container, `getElementById` returns the
@@ -148,11 +148,11 @@ function kspageFlyGroups(root) {
   }
 }
 
-// The grid for choosing a table's size: pointing highlights every cell up to it, the count shows
-// beside it, and a click sets the size — **Word's form** (Insert ▸ Table), **columns first**
+// The grid for choosing a table's size. Pointing highlights every cell up to it, the count shows
+// beside it, and a click sets the size. It is **Word's form** (Insert ▸ Table), **columns first**
 // ("4 × 3" is four across). `spec.cols` × `spec.rows` is its extent (Word stops at 10 × 8),
 // `spec.was` the `[rows, cols]` applied first, `spec.run(rows, cols)` the click.
-// Caution: **Pointing is not choosing** — leaving the grid, the highlight goes back to the applied.
+// Caution: **Pointing is not choosing.** Leaving the grid, the highlight goes back to the applied.
 function kspageGridPick(host, spec) {
   const box = document.createElement("div");
   box.className = "grid-pick";

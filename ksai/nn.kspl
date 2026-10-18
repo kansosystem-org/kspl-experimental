@@ -326,8 +326,8 @@ impl<|T|> Swiglu_mlp<|T|>
         return r.down.forward(gu)
 // ---------------------------------------------------------
 // Grouped-Query Attention (the Llama/Qwen family): Q has n_heads, K/V n_kv_heads (a divisor of
-// n_heads); NeoX-style RoPE per head_dim with a variable theta; Q/K/V carry a bias and O none
-// (Qwen2's convention); one token at a time over the KV cache.
+// n_heads). RoPE is NeoX-style per head_dim with a variable theta. Q/K/V carry a bias and O none
+// (Qwen2's convention). It runs one token at a time over the KV cache.
 // ---------------------------------------------------------
 pub struct Gqa_attention<|T|> //< grouped-query attention: several query heads share one key head
     pub wq: Linear<|T|> //< `[dim, n_heads * head_dim]`, the queries
@@ -424,7 +424,7 @@ impl<|T|> Gqa_attention<|T|>
             attn: = sc.softmax() catch panic("Gqa_attention: softmax failed")
             // t goes outside and the accumulation runs parallel over d (as in
             // grad_matmul_weight_into). For a fixed d the addition order stays ascending t, so the
-            // result is unchanged bit for bit, and v_cache is read contiguously within t's row,
+            // result is unchanged bit for bit. v_cache is read contiguously within t's row,
             // which favours auto-vectorization.
             for d in Range.asc(r.head_dim)
                 (out.data + qo + d)$ = T::0.0

@@ -1,7 +1,7 @@
 //< Builds a program through ksplc with a sanitizer, for the suites that run one
 //<
-//< **The one place such a build is composed**: `race_test` (ThreadSanitizer) and `sanitize_test`
-//< (the address and undefined-behaviour sanitizers) both build through it, so a link word or a
+//< **The one place such a build is composed.** `race_test` (ThreadSanitizer) and `sanitize_test`
+//< (the address and undefined-behaviour sanitizers) both build through it. So a link word or a
 //< backend added here reaches both.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "ksplc/tests/support/harness_build"
@@ -18,18 +18,6 @@ struct Built //< an executable, or why it was not built
     exe: U8[]
     why: U8[]
     deps: U8[] //< the sources it was compiled from, one whole path a line
-
-priv fn words_of(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
-    //< Appends what `ksplc info <topic>` answers, word by word
-    //<
-    //< Caution: **Do not copy the link words here**; ksplc knows them.
-    r: = ksplc_harness.run(U8[][]::{ ksplc_harness.ksplc_exe(), "info", topic })
-    if r.code != 0
-        return false
-    for w in r.out.trim_spaces().split(' ', arena)
-        if w.len > 0
-            out.push(w)
-    return true
 
 fn build( //< Compiles entry (from the folder dir) through ksplc, and links it with cflags into exe
     //<
@@ -65,7 +53,7 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
     args.push(entry)
     args.push(gen)
     made: = ksplc_harness.run_in(args.slice(), dir)
-    if made.code != 0
+    if !made.exited_with(0)
         return Built::{ .why = arena.text().s("ksplc cannot compile it:\n").s(made.out).take() }
     $argv: = List<|U8[]|>.new(arena)
     argv.push(ksplc_harness.cc())
@@ -80,16 +68,17 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
         // them).
         rt: = arena.text().s(exe).s(".runtime.c").take()
         emitted: = ksplc_harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
-        if emitted.code != 0
+        if !emitted.exited_with(0)
             return Built::{ .why = arena.text().s("emit-runtime failed:\n").s(emitted.out).take() }
         argv.push(rt)
     argv.push(arena.text().c('@').s(libs).take())
-    if !words_of("exe-flags", argv@, arena) || !words_of("link-libs", argv@, arena)
+    if !harness_build.query_words("exe-flags", argv@, arena) ||
+        !harness_build.query_words("link-libs", argv@, arena)
         return Built::{ .why = "the link words cannot be asked of ksplc" }
     argv.push("-o")
     argv.push(exe)
     linked: = ksplc_harness.run(argv.slice())
-    if linked.code != 0
+    if !linked.exited_with(0)
         return Built::{ .why = arena.text().s("it does not link:\n").s(linked.out).take() }
     listed: = io.read_file(deps) catch
         fallback ""
@@ -105,7 +94,7 @@ fn build( //< Compiles entry (from the folder dir) through ksplc, and links it w
 fn runs_with( //<
     //< Empty where the C compiler builds and runs a program with cflags; else what it said
     //<
-    //< **This is how a suite tells a missing sanitizer from a fault**: a C compiler or a platform
+    //< **This is how a suite tells a missing sanitizer from a fault.** A C compiler or a platform
     //< without its runtime fails here, before any program is built.
     work: U8[], //< a folder of the suite's own
     cflags: U8[][], //< the sanitizer's options
@@ -123,7 +112,7 @@ fn runs_with( //<
     for w in U8[][]::{ c, "-o", exe }
         argv.push(w)
     built: = ksplc_harness.run(argv.slice())
-    if built.code != 0
+    if !built.exited_with(0)
         return built.out
     $run: = List<|U8[]|>.new(arena)
     run.push("env")
@@ -131,7 +120,7 @@ fn runs_with( //<
         run.push(e)
     run.push(exe)
     ran: = ksplc_harness.run(run.slice())
-    return ("" if ran.code == 0
+    return ("" if ran.exited_with(0)
         else arena.text().s("it builds but does not run:\n").s(ran.out).take())
 
 fn kept(words: U8[][], arena: Arena$@): U8[][] //< the words, copied onto the arena

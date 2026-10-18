@@ -1,7 +1,7 @@
 //< Starts kssrv, waits until it can answer, and keeps its output
 //<
-//< **This file knows no HTTP**: it handles the child process, its logs and the check that it came
-//< up, and nothing else, so both entry points (`kssrv/tests/main.kspl` and
+//< **This file knows no HTTP.** It handles only the child process, its logs and the check that it
+//< came up. So both entry points (`kssrv/tests/main.kspl` and
 //< `kssrv/tests/copy.kspl`) start the server the same way.
 import "std/chars"
 import "std/ds" { List }
@@ -54,10 +54,11 @@ fn start_server(exe: U8[], root: U8[], out_log: U8[], err_log: U8[], pt: I32, fl
     for sys.mono_us() < deadline
         mark: = scratch.save()
         if !child.alive()
-            code: = child.wait()
+            why: = arena.text().s("it ended before starting")
+            if code: = child.wait()
+                why.s(" (exit code \{code\})")
             return Started::{ .child = .none,
-                .why = arena.text().s("it ended before starting (exit code \{code\})\n")
-                .s(read_log(out_log, err_log, arena)).take() }
+                .why = why.s("\n").s(read_log(out_log, err_log, arena)).take() }
         if read_log(out_log, err_log, scratch).find_str(ready_line).is_some()
             return Started::{ .child = .some(child), .why = "ok" }
         scratch.restore(mark)

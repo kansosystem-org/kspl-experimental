@@ -1,6 +1,6 @@
 # The design decisions of ksai
 
-`ksai` is a small neural-network engine in KSPL. It runs a model (inference) and can train one lightly, using nothing but the local machine. This document says **why it took this shape**. Each file's purpose is in [ksai](../README.md), and "The idea" there explains the AI words (tensor, weights, forward, backward, loss, optimizer, token) for a reader new to them.
+`ksai` is a small neural-network engine in KSPL. It runs a model (inference) and can train one lightly, using nothing but the local machine. This document says **why it took this shape**. Each file's purpose is in [ksai](../README.md). "The idea" there explains the AI words for a reader new to them: tensor, weights, forward, backward, loss, optimizer and token.
 
 The diagram shows the path data takes through ksai. Inference stops at the next token; training goes on from the scores and loops back to the weights.
 
@@ -34,11 +34,11 @@ The optimizer is the rule that moves the weights after each step. ksai offers tw
 A whole model moves through one `Updater` (SGD, or Adam with a state per weight). Each layer's `apply_grads` passes it that layer's weights with their gradients. **The list of a layer's weights stays in the layer's own `apply_grads`**, beside the `backward_grads` that fills them. So a weight added to a layer is added in one file (the reason "Each layer initializes its own weights" below gives for `init_uniform`).
 
 * **Adam's states are paired with the weights by position.** The n-th weight a step passes keeps the n-th state. This needs no key, and holds while every step passes them in one order. A step passing another number of weights stops the run (`begin_step`), rather than let the states slide onto the wrong weights.
-* **Every gradient is worked out before any weight moves.** No weight is read after its own update within one backward pass. So for SGD this is the same arithmetic as updating each layer as it is reached, except for the embedding (the table turning a token into a row of numbers). There, a token met twice in a sequence takes the sum of its rows' gradients in one step, as Adam needs it.
+* **Every gradient is worked out before any weight moves.** No weight is read after its own update within one backward pass. So for SGD this is the same arithmetic as updating each layer as it is reached. The one exception is the embedding (the table turning a token into a row of numbers). There, a token met twice in a sequence takes the sum of its rows' gradients in one step, as Adam needs it.
 
-## A batch is spread over threads, and the weights come out the same for any count
+## Threads split a batch, and give the same weights
 
-**Training on several CPU threads gives exactly the same weights, byte for byte, as training on one: `fim_coder train --batch=B` moves the weights by the sum of B sequences' gradients, and `--threads` only splits the batch**, so the thread count only changes the speed. The diagram shows one training step with a batch of four on two threads.
+**Training on several CPU threads gives exactly the same weights, byte for byte, as training on one.** `fim_coder train --batch=B` moves the weights by the sum of B sequences' gradients. **`--threads` only splits the batch**, so the thread count only changes the speed. The diagram shows one training step with a batch of four on two threads.
 
 ```mermaid
 flowchart LR
@@ -57,12 +57,12 @@ The table lists the other ways to split the work and why each is not taken.
 | :-- | :-- |
 | **Splitting each matrix product over threads** | At this model's size a matrix product is too small to share. BLAS's own threads make a step slower than one thread does, so `make fim-model` holds OpenBLAS to one thread. A whole sequence is work enough to pay for a thread |
 | **A batch per process, as PyTorch's `DistributedDataParallel` does** | It averages a batch per process, so the effective batch, and with it the result, moves with the number of processes. DeepSpeed spells the batch out as micro-batch × accumulation × processes to hold it still. Here **the batch belongs to the training, the thread count to the machine**, and the thread count never enters the arithmetic |
-| **Averaging the gradients instead of summing** (PyTorch's default) | Summed, `--lr` (the learning rate, the step size) stays how far each sequence moves the weights, whatever the batch. Averaged, a batch of four at one sequence's step size moves the weights a quarter as far, and keeps pace only at four times that step. That is the linear scaling rule (Goyal et al.), which the user then applies by hand |
+| **Averaging the gradients instead of summing** (PyTorch's default) | Summed, `--lr` (the learning rate, the step size) stays how far each sequence moves the weights, whatever the batch. Averaged, a batch of four at one sequence's step size moves the weights a quarter as far. It keeps pace only at four times that step. That is the linear scaling rule (Goyal et al.), which the user then applies by hand |
 | **Hogwild!** (threads moving shared weights without a lock) | It is fast, but the result depends on how the threads happened to interleave, so no run could be repeated |
 
 **A step's memory stays taken for the next** (`Arena.reset`). An arena wound back to empty returns its chunks to the OS. Taking them again page by page costs a large share of each step, more so with several threads sharing one address space.
 
-## LoRA keeps the adapter apart from reading and writing the bundle
+## LoRA keeps the adapter apart from bundle reading and writing
 
 LoRA (low-rank adaptation) fine-tunes a model by training small added matrices, called adapters, instead of the whole model. The adapter and the code that saves and loads it live in separate files.
 
@@ -72,11 +72,11 @@ The three tiers, the body / the format / the file, grow heavier in the order `lo
 | :-- | :-- | :-- |
 | [`lora.kspl`](../lora.kspl) | Only the adapter `Lora` | Nothing for formats |
 | [`lora_set.kspl`](../lora_set.kspl) | The per-block bundle (`Qkv_lora` / `Mlp_lora`) and its safetensors layout | A `Safetensors` (the weights format) |
-| [`model_file.kspl`](../model_file.kspl) | Loading and saving by file path | `std/io` |
+| [`model_file.kspl`](../model_file.kspl) | Loading and saving by file path | `std/io`, `std/fs` |
 
 **The split follows what the signatures import.** Reading and writing the bundle takes a `Safetensors`. In one file, [`nn.kspl`](../nn.kspl), which uses only `Lora`, would bring the weight format and JSON parsing along. Split, `json` / `safetensors` / `bytes` / `strnum` drop out of the inference path.
 
-**Do not move the code that takes a `Safetensors` into [`model_file.kspl`](../model_file.kspl)**, which imports `std/io`. Bare metal (a chip with no operating system and no file system) passes an `embed`ed byte sequence straight through `Safetensors.load_from_bytes` to `lora_set`, and requiring `std/io` there would close that path.
+**Do not move the code that takes a `Safetensors` into [`model_file.kspl`](../model_file.kspl)**, which imports `std/io` and `std/fs`. Bare metal is a chip with no operating system and no file system. It passes an `embed`ed byte sequence straight through `Safetensors.load_from_bytes` to `lora_set`. Requiring `std/io` there would close that path.
 
 **`Lora.save_raw` / `load_raw` are the smallest format, for a place with no heap.** The safetensors path resolves names through `Str_builder` and so needs the global heap. A bare-metal probe that has only `Arena.from_buffer` cannot give it one. So one adapter goes out as raw bytes, and `load_raw` rebuilds it independently of the instance that saved it.
 
@@ -84,7 +84,7 @@ The three tiers, the body / the format / the file, grow heavier in the order `lo
 
 Ksai has two kinds of attention layer. One has a single head and can be trained; the other has several heads and only runs inference.
 
-*Attention* is the layer that lets each token look at the tokens before it. A *head* is one independent copy of that look; a layer with several heads splits each row into parts and lets each head work on one part. *RoPE* (rotary position embedding) marks each token's position by rotating pairs of numbers in its row. *GQA* (grouped-query attention) lets several heads share one set of keys and values, to save memory.
+*Attention* is the layer that lets each token look at the tokens before it. A *head* is one independent copy of that look. A layer with several heads splits each row into parts and lets each head work on one part. *RoPE* (rotary position embedding) marks each token's position by rotating pairs of numbers in its row. *GQA* (grouped-query attention) lets several heads share one set of keys and values, to save memory.
 
 [`nn.kspl`](../nn.kspl) holds two attention mechanisms, split by **the head count and whether they can be trained**.
 
@@ -113,9 +113,9 @@ Caution: **Do not enumerate the weight tensors one by one from outside.** A laye
 
 ## The weights' gradients are matched against numerical differentiation too
 
-**A mistake in the backward pass (a wrong gradient) passes the tests and only makes training worse, so a test checks each weight's gradient against a slow but simple estimate.** A roughly right gradient still makes the loss fall, so a test watching the loss fall lets a wrong gradient through. [`tests/param_grad_test.kspl`](../tests/param_grad_test.kspl) matches each trained weight against a central difference.
+**A mistake in the backward pass (a wrong gradient) passes the tests and only makes training worse.** **So a test checks each weight's gradient against a slow but simple estimate.** A roughly right gradient still makes the loss fall, so a test watching the loss fall lets a wrong gradient through. [`tests/param_grad_test.kspl`](../tests/param_grad_test.kspl) matches each trained weight against a central difference.
 
-A *central difference* estimates a gradient without the backward pass: nudge one weight up a little, then down a little, and divide the change in the loss by the size of the nudge. It is slow, but it is hard to get wrong.
+A *central difference* estimates a gradient without the backward pass. It nudges one weight up a little, then down a little. It then divides the change in the loss by the size of the nudge. It is slow, but it is hard to get wrong.
 
 * **The input's gradient (dX) alone is not enough.** dW (the weight's gradient) can be wrong on its own, and a 1% error in RMSNorm's dW passes the dX test and fails this one.
 * **The analytic gradient is worked back from how SGD moved the weight** (`sgd_step` is `w -= lr*g`, so `g = (before - after)/lr`).
@@ -146,11 +146,11 @@ The default `matmul_kernel` in [`tensor.kspl`](../tensor.kspl) holds no hand-wri
 * the hot loops of `add_bias` / `rmsnorm` / `softmax` in [`tensor.kspl`](../tensor.kspl);
 * `Gqa_attention.forward_lora`'s attn@V gathering in [`nn.kspl`](../nn.kspl).
 
-Each loop it checks carries a comment naming it on the line before, and is checked at its own place in the optimization record, so a function whose other loop vectorizes does not pass for it.
+Each loop it checks carries a comment naming it on the line before. Each is checked at its own place in the optimization record. So a function whose other loop vectorizes does not pass for it.
 
 A loop reaches the vectorizer only through one of two techniques.
 
-1. **Swap the loop nesting alone, keeping the order of the additions into each output element.** It then accumulates each element in parallel rather than by a horizontal sum (adding the lanes of one vector together), and the result is unchanged bit for bit (as in `grad_matmul_weight_into`).
+1. **Swap the loop nesting alone, keeping the order of the additions into each output element.** It then accumulates each element in parallel rather than by a horizontal sum (adding the lanes of one vector together). The result is unchanged bit for bit (as in `grad_matmul_weight_into`).
 2. **Replace a division inside the loop with one reciprocal computed outside it and a multiplication** (division has lower per-lane throughput).
 
 Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, auto-vectorization cannot reach a horizontal sum over a single accumulator, or any loop with `exp` / `sin` / `cos` / `sqrt`, unless one technique applies (`-Rpass-analysis=loop-vectorize` says why).
@@ -159,7 +159,7 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 
 ## What a call returns goes on the caller's arena
 
-**A tokenizer and a set of adapters live as long as the program, so whatever a call leaves on their arena is never freed.** A server keeps one tokenizer for its lifetime: an `encode` that put its result, or its working memory, on the tokenizer's own arena would grow it with every request, by about the size of the text.
+**A tokenizer and a set of adapters live as long as the program, so whatever a call leaves on their arena is never freed.** A server keeps one tokenizer for its lifetime. Suppose an `encode` put its result, or its working memory, on the tokenizer's own arena. It would grow that arena with every request, by about the size of the text.
 
 | What | Where it goes | Why |
 | :-- | :-- | :-- |
@@ -184,11 +184,11 @@ Caution: **`-ffast-math` is not used**, since accuracy comes first. Without it, 
 
 **Constructors control allocation details.** A tensor's arena, a quantized matrix's scales and a parsed weights file's representation are not public fields. Public callers use constructors instead of fabricating these descriptors. Tensor elements remain accessible for numerical kernels. Copying a view does not extend the arena or file's lifetime.
 
-**A parsed header lives on the supplied arena.** `metadata()` returns its JSON value; no separate JSON owner is needed. `load_from_bytes` borrows the caller's file bytes, while `model_file.load_safetensors` copies the file into the arena. A model needs no extra file-owner field to keep its weights alive.
+**A parsed header lives on the supplied arena.** `metadata()` returns its JSON value; no separate JSON owner is needed. `load_from_bytes` borrows the caller's file bytes, while `model_file.load_safetensors` reads the file straight into the arena, so the file is held once and never on the heap. A model needs no extra file-owner field to keep its weights alive.
 
-**Replacement checks precede assignment.** `map_into` leaves the destination intact when the shape differs. Adapter errors carry stable labels (`q`, `v`, `fc1`, `fc2`) that survive temporary lookup strings. Lifetime tests exercise empty values, borrowed and copied weights, refused reads, replacement and incomplete adapter sets; freeing the arena releases their storage together.
+**Replacement checks precede assignment.** `map_into` leaves the destination intact when the shape differs. Adapter errors carry stable labels (`q`, `v`, `fc1`, `fc2`) that survive temporary lookup strings. **An adapter read from a file must fit its base layer.** `load_set_from` takes each base layer's widths (`Lora_widths`). It refuses an A or B that does not match with `shape_mismatch(label)`. Otherwise an adapter for another model would stop the first forward pass on a matrix mismatch. That mismatch names neither the adapter nor the file. Lifetime tests exercise empty values, borrowed and copied weights, refused reads, replacement and incomplete adapter sets; freeing the arena releases their storage together.
 
-## A byte sequence from outside is read on the assumption that it is broken
+## A byte sequence from outside is assumed to be broken
 
 Ksai checks every number a weights file or a vocabulary claims about itself, because someone else wrote that file.
 
@@ -209,7 +209,7 @@ Caution: **Keep the layers so that taking one out leaves the others to catch it.
 
 **The fuzzing check is [`../tests/fuzz_main.kspl`](../tests/fuzz_main.kspl)** (`make test-fuzz`). `Safetensors_writer` writes its seeds (the valid files the fuzzer starts from and breaks) on the spot. Sample files would leave the seeds stale the day the format's spelling changes.
 
-**Build what is fuzzed with the sanitizer (ASan) on.** ASan (AddressSanitizer) is a compiler option that stops a program the moment it reads memory it should not. Built plain, a read past the bounds inside the same allocation or page does nothing and returns 0. So the breakage most worth finding is the least visible. With the sanitizer, the read stops one byte over, at a reported `.kspl` line.
+**Build what is fuzzed with the sanitizer (ASan) on.** ASan (AddressSanitizer) is a compiler option that stops a program the moment it reads memory that it has no right to read. Built plain, a read past the bounds inside the same allocation or page does nothing and returns 0. So the breakage most worth finding is the least visible. With the sanitizer, the read stops one byte over, at a reported `.kspl` line.
 
 **Make it mandatory on Linux** (`KANSO_REQUIRE_ASAN=1`, which the repository sets on Linux for every fuzzed reader). The devcontainer holds the tool, so its absence means it dropped out of the image, not an environment gap.
 

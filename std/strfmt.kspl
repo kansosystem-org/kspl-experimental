@@ -1,14 +1,14 @@
 //< How values are written as text, and every format specifier an interpolation can use
 //<
-//< **All number writing is here**: the `Formattable` implementations an interpolation desugars
-//< to, `write_int` / `write_uint` / `write_float` / `write_ptr`, and the wrapper types that a
-//< specifier such as a zero-padded width or hex desugars to. Parsing a number from a string is
-//< the other direction, in `std/strnum`.
+//< **All number writing is here.** It holds the `Formattable` implementations an interpolation
+//< desugars to, and `write_int` / `write_uint` / `write_float` / `write_ptr`. It also holds the
+//< wrapper types that a specifier such as a zero-padded width or hex desugars to. Parsing a
+//< number from a string is the other direction, in `std/strnum`.
 
 // ==========================================
 // Caution: The digits and the rounding are **a contract shared** with the other direction
-// (`std/strnum`), so after changing one, run `test_strnum_roundtrip` in `make debug`.
-// **`std/str` imports this file**, not the other way round; the split is "how a value is written"
+// (`std/strnum`). After you change one, run `test_strnum_roundtrip` in `make debug`.
+// **`std/str` imports this file**, not the other way round. The split is "how a value is written"
 // here and "how a string is cut and joined" there (Principle 3 in `../docs/DESIGN-principles.md`).
 // ==========================================
 import "std/bignat" + { Bignat, Binary_float, Wide }
@@ -25,7 +25,7 @@ impl U8
 
 // ==========================================
 // The format wrappers for string interpolation. `\{expr\}` only expands to put(w, expr) ("The
-// expansion specification for string interpolation" in `../docs/SPEC-language.md`), so these thin
+// expansion specification for string interpolation" in `../docs/SPEC-language.md`). So these thin
 // structs carry a width, a comma or a precision without any change to the grammar. They format
 // with write_int/write_float, on the stack.
 // ==========================================
@@ -70,7 +70,7 @@ impl Hex_fmt: Formattable //< so it can be used inside an interpolation
         //<
         //< **The digits are not truncated.** `digits` is a minimum width, as in C's `%x`. Cutting a
         //< value to its low digits would **change the value silently** when someone mistakes the
-        //< digit count for the type's size; the lost high digits would appear nowhere.
+        //< digit count for the type's size. The lost high digits would appear nowhere.
         $need: Sz = 1
         $rest: U64 = r.val >> 4U64
         for rest != 0U64
@@ -119,7 +119,7 @@ pub struct Char_fmt //< one byte written as a character rather than a number
     //<
     //< What `\{b:c\}` desugars to; a plain `\{b\}` is a decimal number.
     //< **One byte has two readings: "as a number" and "as a character".** The format string chooses
-    //< which one prints; choosing by type would make the output change just because a value passed
+    //< which one prints. A choice by type would make the output change just because a value passed
     //< through another type ("Notations not carried" in `docs/DESIGN-principles.md`).
     //< It writes one byte; pass a multi-byte character as text (`U8[]`).
     priv val: U8
@@ -348,16 +348,16 @@ priv fn write_digits(w: Writer, digits: U8[], is_neg: Bool, width: Sz, fill: U8,
     Writer //<
         //< Writes a finished string of digits with the alignment and the three-digit grouping
         //<
-        //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"), and with
-        //< grouping those zeros are grouped too ("0,001,234"); any other fill pads before the sign
+        //< Only when fill is `'0'` does it pad between the sign and the digits ("-0042"). With
+        //< grouping those zeros are grouped too ("0,001,234"). Any other fill pads before the sign
         //< (" -42"). It takes a string because an F64's integer part can have 309 digits.
     sign_len: Sz = 1 if is_neg else 0
     // width comes straight from the caller (possibly from an application's format specifier),
     // unchecked. A huge width as the loop count would keep the CPU busy for a very long time (a
-    // DoS), so it is capped at a limit that is large enough in practice.
+    // DoS). So it is capped at a limit that is large enough in practice.
     room: Sz = max_pad_len if width > max_pad_len else width
     if fill == '0' && comma
-        // The zeros are digits and are grouped too, so the digit count grows until the grouped
+        // The zeros are digits and are grouped too. So the digit count grows until the grouped
         // number fills the room: n digits take n + (n - 1) / 3 places. A separator never comes
         // first, so the result can be one place wider than asked.
         need: = room - sign_len
@@ -410,10 +410,10 @@ priv fn write_float_special(w: Writer, v: F64, width: Sz): Bool //< writes NaN a
 // The text form of a floating-point number
 // ==========================================
 
-// The forms written from a `bignat.Binary_float`: the shortest round-trip form (`\{x\}`, the
-// fewest digits that read back to the same value) and the form with a set number of digits after
-// the decimal point (`\{x:.N\}`). **libc's `%f` is not used**: its text and rounding differ
-// between implementations ("The digits of a floating-point number are assembled here" in
+// Two forms are written from a `bignat.Binary_float`. One is the shortest round-trip form
+// (`\{x\}`, the fewest digits that read back to the same value). The other has a set number of
+// digits after the decimal point (`\{x:.N\}`). **libc's `%f` is not used.** Its text and rounding
+// differ between implementations ("The digits of a floating-point number are assembled here" in
 // std/docs/DESIGN-core.md).
 priv fn decompose_f32(mag: U32): Binary_float
     exp_field: = mag >> 23U32
@@ -503,9 +503,9 @@ priv fn shortest_digits(out: Float_digits$@, bf: Binary_float) //<
     //< Puts in out the fewest digits that read back as f x 2^e (f > 0), the nearest, ties to even
     //<
     //< It is Raffaello Giulietti's Schubfach. Every decimal inside the rounding interval reads back
-    //< as the value; the interval is narrower than 10^(k+1) and at least 10^k wide. So of the
-    //< multiples of 10^(k+1) at most one is inside, and of the multiples of 10^k at least one: s
-    //< and t, either side of the value. A shorter one wins, else the nearer.
+    //< as the value. The interval is narrower than 10^(k+1) and at least 10^k wide. So at most one
+    //< multiple of 10^(k+1) is inside, and at least one multiple of 10^k: s and t, either side of
+    //< the value. A shorter one wins, else the nearer.
     c: = bf.f
     // An odd significand leaves the interval's ends out: the parser rounds a tie to even.
     out_bit: = c & 1U64
@@ -733,16 +733,16 @@ pub fn write_ptr( //< writes an address like `%p`, in the host libc's format
     len: = libc.snprintf(Void$@::buf@, 32, "%p", val)
     return w.s(U8$[]::{ .ptr = buf@, .len = len })
 
-// cfg(freestanding): a `%p` with no dependencies. It cannot match every host's format anyway
-// (glibc writes lowercase with "0x", MSVC's UCRT uppercase zero-padded without it), so the
-// contract is **fixed at "0x" plus lowercase hex**.
+// cfg(freestanding): a `%p` with no dependencies. It cannot match every host's format anyway.
+// glibc writes lowercase with "0x", and MSVC's UCRT writes uppercase zero-padded without it. So
+// the contract is **fixed at "0x" plus lowercase hex**.
 #cfg(freestanding)
 pub fn write_ptr( //< writes an address as `0x` plus lowercase hex, whatever the host does
     w: Writer, //< where it goes
     val: Void$@, //< the address to write
 ): Writer //< the same writer, for chaining
-    // **An address is unsigned, and `Sz` is signed**: on a 32-bit board an address from 0x80000000
-    // up (RP2040's SIO and PPB) is negative as an `Sz`, and widening it to U64 copies the sign.
+    // **An address is unsigned, and `Sz` is signed.** On a 32-bit board an address from 0x80000000
+    // up (RP2040's SIO and PPB) is negative as an `Sz`. Widening it to U64 copies the sign.
     // The mask keeps the address's own width: all 64 bits on a 64-bit target, the low 32 on one.
     bits: = U64::Sz::val & ((~0U64) >> U64::(64 - sizeof(Sz) * 8))
     return hex(bits, 1).fmt(w)

@@ -52,8 +52,8 @@ pub fn probe(): I32
 //< Using a declaration marked `#deprecated` must be reported
 //<
 //< If nothing happens although it is attached, there is no point in writing the mark.
-//< **An `enum` is in scope too**: its name appears in an expression as `E.a`, so the warning
-//< reaches it (is_allowed_on in ksplc/sema/decl/attrs.kspl); `trait` / `typedef` do not.
+//< **An `enum` is in scope too.** Its name appears in an expression as `E.a`, so the warning
+//< reaches it (is_allowed_on in ksplc/sema/decl/attrs.kspl). `trait` / `typedef` do not.
 // EXPECT: [W0702] Symbol 'old_way'
 // EXPECT: [W0702] Symbol 'Old_kind'
 import "std/io"
@@ -97,7 +97,7 @@ pub fn probe(): Sz
 // ==== case local_hides_module
 //< A local or a parameter with an imported module's name hides it for the rest of its scope
 //<
-//< KSPL reaches a module's member and a value's with the same `.`, so below the local an `io.out()`
+//< KSPL reaches a module's member and a value's with the same `.`. So below the local an `io.out()`
 //< reads the local and fails as a missing member, far from the cause. Quiet: a name no import binds
 //< (`std/mem` as `{ Arena }` binds `Arena` alone), the prelude's `lang`, and a name led by `_`.
 // EXPECT: local_hides_module.kspl:15:15: warning: [W0502] 'json' hides the imported module
@@ -115,7 +115,7 @@ priv fn shown(json: I32): I32 //< a parameter named as a module
 pub fn main(): I32
   arena: = Arena.new(1024)
   defer arena.free()
-  io.out().s(json.Val.null_val.as_str())
+  io.out().s(json.Val.null_val.as_str().unwrap_or(""))
   mem: = 3
   lang: = 4
   _io: = 5
@@ -170,8 +170,8 @@ pub fn probe(): I32
 //< A `$` before the name is spare where the name's own value is never rewritten
 //<
 //< A write through a pointer or into a slice's elements is allowed by the type's `$` (`T$@`,
-//< `T$[]`), and a read or a `Self@` call needs no `$` at all. Kept: a fixed-length array's element
-//< and a struct's field are part of the value, and `x@`, `U8$[]::buf` and a `Self$@` call hand that
+//< `T$[]`). A read or a `Self@` call needs no `$` at all. Kept: a fixed-length array's element
+//< and a struct's field are part of the value. `x@`, `U8$[]::buf` and a `Self$@` call hand that
 //< value out writable.
 // EXPECT: spare_mut_marker.kspl:26:4: information: [I0601] Binding 'target'
 // EXPECT: spare_mut_marker.kspl:30:4: information: [I0601] Binding 'view'
@@ -259,14 +259,14 @@ import "std/math" as mth
 import "std/strfmt"
 
 fn main(): I32
-  // Choose a function called with the alias in front: it pins the alias being written, where a
+  // Choose a function called with the alias in front. It pins the alias being written. A
   // method call would pin the import that makes the call hold.
   strfmt.write_int(io.out(), 0, 1).c('\n')
   return 0
 // ==== case unused_import_alias_named_like
 //< An import alias counts as used only where it heads a qualified name
 //<
-//< A field or a function spelled like the alias is not the alias: counted, a dead import goes
+//< A field or a function spelled like the alias is not the alias. Counted, a dead import goes
 //< unreported for as long as the file keeps a member of that name. `strfmt` is written as a head,
 //< beside a field of the same name, so it must not sound (pinning down the suppressing side).
 // EXPECT: [I0401] Unused import alias 'strnum'
@@ -291,9 +291,9 @@ fn main(): I32
 // ==== case unused_import_in_template
 //< Whether an import is unused is decided only by whether that file **writes** the name
 //<
-//< An uninstantiated generic body is not analysed, so marking use as a by-product of resolution
+//< An uninstantiated generic body is not analysed. So marking use as a by-product of resolution
 //< swings the same import between used and unused by what is compiled alongside. `hex` is used only
-//< in Box.get, never instantiated here; `Hex_fmt` is written nowhere, so it must sound.
+//< in Box.get, never instantiated here. `Hex_fmt` is written nowhere, so it must sound.
 // EXPECT-NOT: [I0401] Unused import symbol 'hex'
 // EXPECT: [I0401] Unused import symbol 'Hex_fmt'
 import "std/strfmt" { hex, Hex_fmt }

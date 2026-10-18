@@ -1,8 +1,8 @@
 // ==========================================
 // kspage's page — the saved draft (so that what was written does not vanish when the page closes).
 // **This is not a save**: the file does not change by one byte, so it is called **a draft**, never
-// saved. It writes when typing pauses, at the latest a while into typing that does not pause, and
-// when the page is hidden or left (`beforeunload` misses a crashing tab).
+// saved. It writes when typing pauses, and at the latest a while into typing that does not pause.
+// It also writes when the page is hidden or left (`beforeunload` misses a crashing tab).
 // [`handle.js`](handle.js) holds the storage; this file decides when to write, discard and tell.
 // **There is one entry point, `keepSync`**: it asks only `draftNow`, and null means discard.
 // **Restoring happens only on a click** (restored at startup, a draft thought discarded would come
@@ -14,7 +14,7 @@ function kspageKeep(ui) {
   // **The page's one connection** (`ui.handles`, shared with `file.js`).
   const store = ui.handles;
 
-  // Caution: **Do not make it too short** (the whole document is serialized each time); it is
+  // Caution: **Do not make it too short** (the whole document is serialized each time). It is
   // longer than the delay before re-asking for the semantic colors, which someone is waiting on.
   const SETTLE_MS = 2000;
   // The longest a change waits: **every redraw restarts the pause**, so typing that never pauses
@@ -24,8 +24,8 @@ function kspageKeep(ui) {
   const KEEP_DAYS = 30;
   const KEEP_MAX = 32;
 
-  // Caution: **Unique per startup and per window** (by number alone, a reload or a second window
-  // would overwrite a draft); forgotten, it leaves the previous startup's drafts to restore.
+  // Caution: **Unique per startup and per window**: by number alone, a reload or a second window
+  // would overwrite a draft. Forgotten, it leaves the previous startup's drafts to restore.
   const bootId = "b" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   // **Keyed by the document's identity** (`file.js`'s `documentState`): numbers are reused.
   const keyOf = (id) => bootId + "/" + id;
@@ -72,8 +72,9 @@ function kspageKeep(ui) {
     if (since === null) since = now;
     settle = setTimeout(keepNow, Math.max(0, Math.min(SETTLE_MS, since + MOST_MS - now)));
   };
-  // Caution: **Write what is waiting when the page is hidden** (a tab switched away from, a phone's
-  // app put aside: the page may be discarded with no further event) **and when it is left**.
+  // Caution: **Write what is waiting when the page is hidden, and when it is left.** Hidden is a
+  // tab switched away from, or a phone's app put aside. The page can then be discarded with no
+  // further event.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden" && settle !== null) keepNow();
   });
@@ -115,9 +116,9 @@ function kspageKeep(ui) {
   });
 
   // Sets aside the draft of a document another has just replaced (`file.js`'s `draftNow`, taken
-  // before the replacing), **listed at once**: kept only in storage, it could be brought back only
-  // after a reload, and where storage is refused, never. "" when nothing was unsaved, else the tail
-  // of the notice that says where it went.
+  // before the replacing), **listed at once**. Kept only in storage, it could be brought back only
+  // after a reload, and where storage is refused, never. "" when nothing was unsaved. Otherwise it
+  // is the tail of the notice that says where it went.
   const ASIDE = ". What was not saved is kept as a draft (\"Bring the draft back\" under "
     + "\"File\")";
   const keepAside = (one) => {
@@ -174,7 +175,7 @@ function kspageKeep(ui) {
     keepRestore: keepRestore, keepCount: () => found.length,
     // The draft storage itself. **The check uses this connection**: IndexedDB orders transactions
     // only within one connection, so a second would leave the write and the read unordered.
-    // Caution: **Do not wait on it by polling on a timer** — it answers off the page's thread, which
-    // the check's virtual clock does not see, so a cap counted on that clock runs out first.
+    // Caution: **Wait on its answer, not on a timer**: it answers off the page's thread, at a pace
+    // no cap can be set for.
     keepStore: store };
 }

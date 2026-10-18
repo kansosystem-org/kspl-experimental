@@ -69,23 +69,23 @@ priv fn check_omitted_fields_visibility(node: Ast_node$@, c: Sema_ctx$@,
         //< build a value with an invisible field from outside**. Written fields are reported at
         //< their own position (check_field_visibility); the rest as one item here.
     for f_idx in Range.asc(struct_def.fields_list.len)
-        if (written.get(f_idx) catch null) != null
+        if written.get(f_idx).is_some()
             continue
         field: = struct_def.fields_list.get(f_idx)
         if c.is_field_visible_here(field)
             continue
         c.clear_scratch()
-            .s("'\{shown\}' cannot be built here: field '\{field.name\}' is not visible at this \
-                point, and a field left out of '::{ ... }' is filled with zeros. Build the value \
+            .s("'\{shown\}' cannot be built here. Field '\{field.name\}' is not visible at this \
+                point. Fields omitted from '::{ ... }' are filled with zeros. Build the value \
                 through something the declaring file publishes")
         c.err(node, c.scratch.slice())
         return
 
 priv fn has_field_init(node: Ast_node$@): Bool //< whether any field is written
     //<
-    //< Caution: **Tell it apart from an empty `::{}`**: an empty literal writes nothing, so it
-    //< means zero filling and passes even for a type with no fields ("Initialization and
-    //< construction" in `docs/SPEC-language.md`).
+    //< Caution: **Tell it apart from an empty `::{}`.** An empty literal writes nothing, so it
+    //< means zero filling and passes even for a type with no fields. See "Initialization and
+    //< construction" in `docs/SPEC-language.md`.
     for child in node.children
         if child != null && child.kind_id == .k_expr_field_init
             return true
@@ -103,29 +103,10 @@ priv fn has_no_fields(c: Sema_ctx$@, id: I32): Bool //< whether this type has fi
     default {}
     return false
 
-priv fn wrote_result_inner_fields(node: Ast_node$@): Bool //<
-    //< Whether the literal tries to build a Result by hand (`::{ .is_err = …, .val = … }`)
-    //<
-    //< Only for this form can the message name the right approach.
-    //< It is recognized by the field names, since the expected type here has the `!` stripped.
-    for child in node.children
-        if child != null && child.kind_id == .k_expr_field_init
-            if name_node: = child.get_field_init_name()
-                if name_node.kind_id == .k_identifier &&
-                    sema_type_query.is_result_inner_field(name_node.text)
-                    return true
-    return false
-
 priv fn report_fieldless_literal(node: Ast_node$@, c: Sema_ctx$@, whole_id: I32)
     shown: = c.env.display(whole_id)
     c.clear_scratch().s("'").s(shown)
-        .s("' has no fields to fill, so it cannot be built with '::{ ... }'")
-    if wrote_result_inner_fields(node)
-        c.scratch
-            .s(". A Result is built by returning a value or throwing an error, and read with '!' or \
-                'catch'")
-    else
-        c.scratch.s(". Write the value itself")
+        .s("' has no fields to fill. It cannot be built with '::{ ... }'. Write the value itself")
     c.err(node, c.scratch.slice())
 
 priv struct Init_walk //< what a walk over a literal's initializers carries from one to the next
@@ -149,8 +130,8 @@ priv fn place_array_element(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@,
             walk.at = at
     if arr_size >= 0 && walk.at >= Sz::arr_size
         c.clear_scratch()
-            .s("too many initializers for array of length \{arr_size\}: this one lands at index \
-                \{walk.at\}")
+            .s("too many initializers for an array of length \{arr_size\}. This initializer has \
+                index \{walk.at\}")
         c.err(child, c.scratch.slice())
     else
         c.clear_scratch().s("index \{walk.at\}")
@@ -166,21 +147,21 @@ priv fn take_struct_field(c: Sema_ctx$@, child: Ast_node$@, walk: Init_walk$@): 
     $expected: = I32::sema_type_env.Builtin_type_id.unknown
     name_node: = child.get_field_init_name().unwrap_or(null)
     if name_node != null && name_node.kind_id == .k_identifier
-        found_idx: = walk.by_name.get(name_node.text) catch -1
+        found_idx: = walk.by_name.get(name_node.text).unwrap_or(-1)
         if found_idx >= 0
             name_node.def_node = walk.struct_def.fields_list.get(found_idx).node
             expected = mark_field_written(c, walk, found_idx, child, name_node)
         else
             // Caution: **Reject an unknown field name here.** Otherwise C gets `.nope = 1` as
-            // written, and the user gets a **raw C error** ("Failing fast through an exception or
-            // an ICE" in ksplc/docs/DESIGN-compiler.md).
+            // written, and the user gets a **raw C error**. See "Failing fast through an exception
+            // or an ICE" in ksplc/docs/DESIGN-compiler.md.
             c.clear_scratch().s("'\{walk.shown\}' has no field named '\{name_node.text\}'")
             c.err(name_node, c.scratch.slice())
     else if walk.at < walk.struct_def.fields_list.len
         expected = mark_field_written(c, walk, walk.at, child, child)
     else
         c.clear_scratch()
-            .s("too many initializers for '\{walk.shown\}', which has \
+            .s("too many initializers for '\{walk.shown\}'. The type has \
                 \{walk.struct_def.fields_list.len\} field(s)")
         c.err(child, c.scratch.slice())
     walk.at += 1
@@ -203,7 +184,7 @@ priv fn mark_written(c: Sema_ctx$@, walk: Init_walk$@, at: Sz, child: Ast_node$@
     //<
     //< The caller leaves the place's name ("field 'x'", "index 0") in scratch. **Refused, not
     //< merged**: the later value would silently replace the earlier one, as C lets it.
-    first: = walk.written.get(at) catch null
+    first: = walk.written.get(at).unwrap_or(null)
     if first == null
         walk.written.set(at, child)
         return
@@ -214,7 +195,8 @@ priv fn mark_written(c: Sema_ctx$@, walk: Init_walk$@, at: Sz, child: Ast_node$@
         how = "by index"
     c.scratch
         .s(" is written twice in this literal: first \{how\} on line \{c.line_of(first.loc)\}, then \
-            here. The later value would silently replace the earlier one; write each once")
+            here. The later value would silently replace the earlier one. Write each field or index \
+            once")
     c.err(child, c.scratch.slice())
 
 fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
@@ -233,14 +215,14 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     else
         if sema_type_env.is_unknown(expected_id) || sema_type_env.is_void(expected_id)
             c.err(node,
-                "Type Error: Cannot infer struct type for implicit literal. Context does not \
-                    provide an expected type.")
+                "cannot infer the struct type for an implicit literal. The context does not provide \
+                    an expected type.")
             return expected_id
 
         if c.env.is_pointer(expected_id)
             c.err(node,
-                "Type Error: Cannot assign a struct literal value directly to a pointer type. Did \
-                    you mean to dereference the pointer (e.g., 'ptr$ = ::{...}')?")
+                "cannot assign a struct literal value directly to a pointer type. If you intend to \
+                    write through the pointer, dereference it ('ptr$ = ::{...}')")
             return expected_id
 
         // An expected slice with no names written is a list of elements (`s: U8[] = ::{ 65, 66
@@ -257,7 +239,7 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     $base_struct_id: = c.env.strip_result(c.env.strip_ptr(actual_id))
     clean_name: = c.env.base_type_name(base_struct_id)
 
-    struct_sym_ptr: = c.symtab.resolve(clean_name) catch null
+    struct_sym_ptr: = c.symtab.resolve(clean_name).unwrap_or(null)
     if struct_sym_ptr != null
         c.check_visibility_and_mark_used(struct_sym_ptr, node)
 
@@ -267,13 +249,13 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     base_struct_id = c.env.strip_result(c.env.strip_ptr(actual_id))
 
     // **A `::{ ... }` for a type with no fields is rejected here**, or the C compiler reports it
-    // (Principle 2); `n: I32 = ::{ 1, 2 };` would pass with a warning, the second value silently
+    // (Principle 2). `n: I32 = ::{ 1, 2 };` would pass with a warning, the second value silently
     // lost.
     if has_field_init(node) && has_no_fields(c, base_struct_id)
         report_fieldless_literal(node, c, actual_id)
         return actual_id
 
-    // A name-to-index map built once; a linear walk per named field is O(F^2), and one literal
+    // A name-to-index map built once. A linear walk per named field is O(F^2), and one literal
     // naming every field of a wide struct would hang the compilation.
     $field_idx_map: = Map<|U8[], Sz|>.new(null)
     defer field_idx_map.free()
@@ -287,10 +269,10 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
         .shown = c.env.display(base_struct_id), .by_name = field_idx_map@, .written = written@,
         .at = 0 }
     // The shape is computed from actual_id, not from base_struct_id, which has one slice level
-    // stripped: from it the `.ptr` of `U8[]$[]` reads `U8@`, not `U8[]@`, and a `U8$[]` strips to
-    // a scalar and **no field's type is checked at all**.
-    // Caution: **Compute the shape with that same expression for the omitted fields' check.** For
-    // a slice or a Result, struct_def is the stripped struct, so counting fields alone reads
+    // stripped. From base_struct_id, the `.ptr` of `U8[]$[]` reads `U8@`, not `U8[]@`. A `U8$[]`
+    // strips to a scalar, and **no field's type is checked at all**.
+    // Caution: **Compute the shape with that same expression for the omitted fields' check.** For a
+    // slice, struct_def is the stripped struct, so counting fields alone reads
     // `::{ .ptr = …, .len = … }` as a struct literal.
     $is_array: = false
     $elem_id: = I32::sema_type_env.Builtin_type_id.unknown
@@ -301,8 +283,6 @@ fn infer_struct_literal_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
         is_array = true
         elem_id = arr_base_id
         arr_size = asz
-        is_struct_shape = false
-    case .result(_rb, _re)
         is_struct_shape = false
     default {}
 

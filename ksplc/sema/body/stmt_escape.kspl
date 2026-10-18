@@ -1,10 +1,11 @@
 //< The check that stops a frame's memory escaping outward
 //<
-//< It rejects a pointer the compiler synthesizes into the frame (a slice cast from a frame's
-//< array, a trait upcast of a frame's value, a closure among them) leaving by `return` or `throw`,
-//< or by a store into a global or behind a pointer, and a written `@` of the frame's storage
-//< leaving by `return` or `throw`. **This asks a different question from type inference**: not
-//< whether the types agree but whether the lifetime holds.
+//< It rejects a pointer the compiler synthesizes into the frame. The forms are a slice cast from a
+//< frame's array and a trait upcast of a frame's value (a closure among them). Such a pointer must
+//< not leave by `return` or `throw`, or by a store into a global or behind a pointer. It also
+//< rejects a written `@` of the frame's storage leaving by `return` or `throw`. **This asks a
+//< different question from type inference**: not whether the types agree but whether the lifetime
+//< holds.
 // ==========================================
 // Caution: **Where it cannot be decided, lean to the safe side (false).** Wrongly deciding "not
 // escaped" lets a use-after-free pass with zero diagnostics.
@@ -35,10 +36,10 @@ priv fn is_frame_binding(c: Sema_ctx$@, node: Ast_node$@): Bool //<
 fn is_frame_storage(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Whether node's storage lies in **the current frame**, so an address taken of it dies there
     //<
-    //< A name uses is_frame_binding, a struct literal is a frame temporary, and a field or an
+    //< A name uses is_frame_binding, and a struct literal is a frame temporary. A field or an
     //< array's element follows its receiver. Behind a pointer or a slice is not the frame: `r.buf`
-    //< (`r: Self$@`) lives where `r` points ("Which pointers into a frame are stopped from
-    //< leaving it" in docs/DESIGN-language.md); counted, `Panic_msg.slice()` is refused.
+    //< (`r: Self$@`) lives where `r` points. See "Which pointers into a frame are stopped from
+    //< leaving it" in docs/DESIGN-language.md. Counted, `Panic_msg.slice()` is refused.
     if node == null
         return false
     if node.kind_id == .k_struct_literal
@@ -80,9 +81,9 @@ priv fn find_in_each(c: Sema_ctx$@, nodes: Ast_node$@, with_address: Bool): Fram
 priv fn find_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, with_address: Bool): Frame_escape //<
     //< What in expr_node points into the frame: a pointer the compiler synthesizes, or a `@`
     //<
-    //< Two forms synthesize one, with no `@` in the source: a slice cast from a frame's array
-    //< (`U8[]::a`, `U8[]::{ … }`) and a trait upcast of a frame's value (the pair {obj,
-    //< vtable}, emit_upcast_expr in gen/c/expr.kspl). A local set from a form carries it on.
+    //< Two forms synthesize one, with no `@` in the source. One is a slice cast from a frame's
+    //< array (`U8[]::a`, `U8[]::{ … }`). The other is a trait upcast of a frame's value (the pair
+    //< {obj, vtable}, emit_upcast_expr in gen/c/expr.kspl). A local set from a form carries it on.
     //< A written `@` counts only with with_address, which `return` / `throw` pass
     //< (docs/DESIGN-principles.md, the section named at is_frame_storage).
     if expr_node == null
@@ -181,10 +182,10 @@ fn note_frame_pointer(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@)
 fn check_frame_escape(c: Sema_ctx$@, expr_node: Ast_node$@, verb: U8[]) //<
     //< Rejects a pointer into the frame leaving by return / throw, a written `@` among them
     //<
-    //< **A store of a written `@` is not refused** (check_frame_store): a local's address kept in a
-    //< longer-lived place and taken back before the function returns is a pattern real code uses.
+    //< **A store of a written `@` is not refused** (check_frame_store). Real code keeps a local's
+    //< address in a longer-lived place and takes it back before the function returns.
     report_frame_escape(c, find_frame_escape(c, expr_node, true), verb,
-        "this function's frame dies here",
+        "This function's frame dies here.",
         "Return storage that outlives the call (an arena or a heap allocation), or take the \
             destination as a parameter.")
 
@@ -197,7 +198,7 @@ priv fn store_place(c: Sema_ctx$@, left: Ast_node$@): Store_place //<
     //< Whether an assignment's target can outlive the frame, following its fields and elements
     //<
     //< A field of a value, or an element of a fixed-length array, lies where its receiver lies. A
-    //< step through a pointer or a slice leaves the frame's own storage: where it points is not
+    //< step through a pointer or a slice leaves the frame's own storage. Where it points is not
     //< known, so it is taken as outliving (a pointer to a local of this frame is refused too).
     if left == null
         return .frame
@@ -228,8 +229,8 @@ priv fn store_place(c: Sema_ctx$@, left: Ast_node$@): Store_place //<
 fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
     //< Rejects a synthesized pointer into the frame stored where it outlives the frame
     //<
-    //< The forms are find_frame_escape's synthesized ones, anywhere inside the stored value (a
-    //< written `@` is the writer's: check_frame_escape says why); the places are a global and what
+    //< The forms are find_frame_escape's synthesized ones, anywhere inside the stored value. A
+    //< written `@` is the writer's (check_frame_escape says why). The places are a global and what
     //< lies behind a pointer or a slice (store_place). A store dangles there as a `return` does.
     found: = find_frame_escape(c, right, false)
     switch found
@@ -242,14 +243,14 @@ fn check_frame_store(c: Sema_ctx$@, left: Ast_node$@, right: Ast_node$@) //<
         return
     case .global(name)
         c.clear_scratch()
-            .s("it would be stored into the global '\{name.get_path_or_ident_name()\}', which \
-                outlives this function's frame")
+            .s("It would be stored into the global '\{name.get_path_or_ident_name()\}', which \
+                outlives this function's frame.")
         fate = base_core.arena.dup_str(c.scratch.slice())
     case .behind_pointer
-        fate = "it would be stored behind a pointer, where it can outlive this function's frame"
+        fate = "It would be stored behind a pointer, where it can outlive this function's frame."
     report_frame_escape(c, found, "store", fate,
-        "Store a pointer to storage that outlives the call (an arena, a heap allocation or a \
-            global) instead, or keep the value in a local and pass it down as an argument.")
+        "Store a pointer to storage that outlives the call instead (an arena, a heap allocation or \
+            a global). Or keep the value in a local and pass it down as an argument.")
 
 priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate: U8[], fix: U8[]) //<
     //< Reports what find_frame_escape found leaving the frame: by verb, and how (fate)
@@ -260,26 +261,24 @@ priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate
         if is_anon_env_type(c.env.get_str(c.env.strip_const_deep(inner.type_id)))
             c.scratch
                 .s("cannot \{verb\} a closure: it keeps pointers to its captured variables, which \
-                    live in this function's frame, and \{fate\}. A closure can only be passed down \
-                    as an argument; to keep the values longer, put them in a struct and keep that.")
+                    live in this function's frame. \{fate\} A closure can only be passed down as an \
+                    argument. To keep the values longer, put them in a struct and keep that.")
         else
             c.scratch
-                .s("cannot \{verb\} an interface value built from local storage: the interface \
-                    value keeps a pointer to it, and \{fate\} (the address is synthesized by the \
-                    compiler, so no '@' appears). Upcast a pointer to storage that outlives the \
-                    call instead.")
+                .s("cannot \{verb\} an interface value built from local storage. The interface \
+                    value keeps a pointer to it. The compiler makes that address, so no '@' \
+                    appears. \{fate\} Upcast a pointer to storage that outlives the call instead.")
         c.err(inner, c.scratch.slice())
     case .slice(src)
         c.clear_scratch()
-            .s("cannot \{verb\} a slice built from local storage: the descriptor's pointer is \
-                synthesized by the compiler (no '@' appears in the source), and \{fate\}. \{fix\}")
+            .s("cannot \{verb\} a slice built from local storage. The compiler makes the \
+                descriptor's pointer, so no '@' appears in the source. \{fate\} \{fix\}")
         c.err(src, c.scratch.slice())
     case .local(name)
         c.clear_scratch()
             .s("cannot \{verb\} '\{name.get_path_or_ident_name()\}': it was set from a slice or an \
-                interface value built from local storage, whose pointer (synthesized by the \
-                compiler, so no '@' appears) points into this function's frame, and \{fate\}. \
-                \{fix\}")
+                interface value built from local storage. Its pointer points into this function's \
+                frame. The compiler makes that pointer, so no '@' appears. \{fate\} \{fix\}")
         c.err(name, c.scratch.slice())
     case .address(at)
         $root: = at.get_postfix_receiver()
@@ -293,20 +292,20 @@ priv fn report_frame_escape(c: Sema_ctx$@, found: Frame_escape, verb: U8[], fate
             c.scratch.s("'\{root.get_path_or_ident_name()\}'")
         else
             c.scratch.s("a temporary")
-        c.scratch.s(" lives in this function's frame, and \{fate\}. \{fix\}")
+        c.scratch.s(" lives in this function's frame. \{fate\} \{fix\}")
         c.err(at, c.scratch.slice())
     case .local_address(name)
         c.clear_scratch()
             .s("cannot \{verb\} '\{name.get_path_or_ident_name()\}': it was set from the address of \
-                local storage, which points into this function's frame, and \{fate\}. \{fix\}")
+                local storage, which points into this function's frame. \{fate\} \{fix\}")
         c.err(name, c.scratch.slice())
 
 fn check_fn_value_binding(c: Sema_ctx$@, id_node: Ast_node$@, expr_node: Ast_node$@): Bool //<
     //< Rejects binding a variadic function's name with no type annotation (`f: = log_all;`)
     //<
     //< **A declaration with no type takes the function type of the function a name names**
-    //< (own_type_of_name in sema/decl/name.kspl); a variadic one has none, since no function type
-    //< holds its `...`, and keeps the mark generic_fn_value_type_id, which no C type spells.
+    //< (own_type_of_name in sema/decl/name.kspl). A variadic one has none, since no function type
+    //< holds its `...`. It keeps the mark generic_fn_value_type_id, which no C type spells.
     // **Only a bare name counts**: `x: = f(1);` resolves to the same function, so without checking
     // the node's kind every call's result would be rejected.
     if expr_node == null || expr_node.type_id != c.env.generic_fn_value_type_id()

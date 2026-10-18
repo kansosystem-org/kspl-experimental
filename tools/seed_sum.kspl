@@ -1,0 +1,73 @@
+#!/usr/bin/env -S ksplc run
+//< A development tool that records, or checks, which compiler source the seed was taken from
+//<
+//< **`make commit-seed` writes the record; `make test-seed-sum` checks it.** A change under
+//< `ksplc/` reaches the seed only through `make commit-seed`, and nothing else notices one that
+//< skipped it: the self-host checks only that the tree reproduces itself.
+//< The record is one SHA-256 over the files the Makefile names. Each counts as its path, its length
+//< and its bytes with `\r\n` read as `\n`. So a checkout that converts line ends agrees.
+
+// ==========================================
+// Usage:
+//     ./out/ksplc_stage1.exe run tools/seed_sum.kspl write <record> <file>...
+//     ./out/ksplc_stage1.exe run tools/seed_sum.kspl check <record> <file>...
+// The Makefile passes the files sorted, so the order is the same everywhere.
+// ==========================================
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena, dealloc }
+import "std/sha256" { Sha256 }
+import "std/str" { Str_builder }
+import "std/strfmt"
+import "std/sys"
+
+priv fn sum_of(paths: U8[][], arena: Arena$@): U8[] //< the record: the digest in hex and a newline
+    $h: = Sha256.new()
+    for p in paths
+        raw: = io.read_file(p) catch e
+            io.err().s("seed_sum: cannot read \{p\}: \{e\}\n")
+            sys.exit(2)
+        defer dealloc(Void$@::raw.ptr)
+        $body: = Str_builder.new()
+        defer body.free()
+        for i in Range.asc(raw.len)
+            if !(raw[i] == '\r' && i + 1 < raw.len && raw[i + 1] == '\n')
+                body.c(raw[i])
+        $head: = Str_builder.new()
+        defer head.free()
+        head.s(p).c('\n').s("\{body.slice().len\}").c('\n')
+        h.update(head.slice())
+        h.update(body.slice())
+    digest: = h.finalize()
+    out: = arena.text()
+    for b in digest
+        out.c((b >> 4U8).to_hex_lower()).c((b & 0xfU8).to_hex_lower())
+    out.c('\n')
+    return out.take()
+
+fn main(): I32
+    a: = sys.args()
+    if a.len < 4 || !(a[1].equals("write") || a[1].equals("check"))
+        io.err().s("usage: seed_sum.kspl write|check <record> <file>...\n")
+        return 2
+    arena: = Arena.new(1024 * 1024)
+    defer arena.free()
+    $paths: = List<|U8[]|>.new(arena)
+    for i in Range.new(3, a.len, 1)
+        paths.push(a[i])
+    sum: = sum_of(paths.slice(), arena)
+    record: = a[2]
+    if a[1].equals("write")
+        io.write_file(record, sum) catch e
+            io.err().s("seed_sum: cannot write \{record\}: \{e\}\n")
+            return 2
+        return 0
+    kept: = io.read_file(record) catch ""
+    if kept.equals(sum)
+        io.out().s("RESULT: ALL PASS (the seed was taken from the current compiler source)\n")
+        return 0
+    io.err()
+        .s("FAIL: \{record\} names other compiler source than the tree holds: something under \
+            ksplc/ changed after the last `make commit-seed`. Run `make self-host`, then `make \
+            commit-seed`, and commit both files.\n")
+    return 1

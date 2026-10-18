@@ -1,12 +1,12 @@
 //< What a name as written names: the one reader of a written type's, value's or function's name
 //<
-//< **Every route to a type the source names reads the name here** (read_written_type), and
-//< **every route to a value or a function** too (read_written_name): a call's callee, a value's
-//< path, a member reached through its type (`m.Box<|I64|>.get`). The head is read through this
-//< file's scopes and imports (a local, a type parameter, `Self`, a selective import under its own
-//< name or another, this file's own declaration), the segments after an import alias within the
-//< file it names, and each `<|…|>` by where it stands. So a way of reaching a name holds on every
-//< route, or on none.
+//< **Every route to a type the source names reads the name here** (read_written_type). **Every
+//< route to a value or a function** does too (read_written_name): a call's callee, a value's path,
+//< a member reached through its type (`m.Box<|I64|>.get`). The head is read through this file's
+//< scopes and imports. It can be a local, a type parameter, `Self`, or a selective import under
+//< its own name or another. It can also be this file's own declaration. The segments after an
+//< import alias are read within the file it names, and each `<|…|>` by where it stands. So a way of
+//< reaching a name holds on every route, or on none.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as _base_ast_ext
 import "ksplc/base/ast_place" as _base_ast_place
@@ -64,7 +64,7 @@ struct Written_type //< what a written path's leading type is called, read from 
 priv struct Path_parts //< a path's segments and `<|…|>`, in order, as the tree holds them
     //<
     //< A lone name is its own one segment. **A view of the tree, not a copy**: a type's name is
-    //< read on every use of it, and a list per read is garbage on the arena.
+    //< read on every use of it. A list per read would be garbage on the arena.
     path: Ast_node$@ //< the path, or a lone name; null is no segment
 
 impl Path_parts
@@ -224,8 +224,8 @@ fn name_path_of(node: Ast_node$@): Ast_node$@? //<
     //<
     //< A `.` chain of names not yet inferred (`m.N` in an array's size, the target of an
     //< assignment) is that path, its segments in order.
-    //< Caution: **Make one node for the whole chain**, not one per `.`: it is made on every read
-    //< of an assignment's target, and a node per level is garbage on the arena.
+    //< Caution: **Make one node for the whole chain**, not one per `.`. It is made on every read of
+    //< an assignment's target, and a node per level is garbage on the arena.
     if node == null
         return .none
     if node.is_path_or_ident()
@@ -266,11 +266,11 @@ priv fn lookup_bare_name(c: Sema_ctx$@, name: U8[]): Sema_symbol$@ //<
     //< A local or argument first, then a top-level declaration, then a selective import's.
     //< Caution: Look up values here too, not only types, or `import "p" { twice };` passes and the
     //< use fails with `undefined path or identifier` (Principle 5 of docs/DESIGN-principles.md).
-    $sym: = c.symtab.resolve(name) catch null
+    $sym: = c.symtab.resolve(name).unwrap_or(null)
     if sym == null
         imported_fqn: = c.imported_symbol_fqn(name)
         if imported_fqn.len > 0
-            sym = c.symtab.resolve(imported_fqn) catch null
+            sym = c.symtab.resolve(imported_fqn).unwrap_or(null)
     return sym
 
 fn gen_param_named(gen_params: List<|Ast_node$@|>$@, name: U8[]): Ast_node$@? //<
@@ -286,16 +286,15 @@ fn gen_param_named(gen_params: List<|Ast_node$@|>$@, name: U8[]): Ast_node$@? //
 priv fn template_named(c: Sema_ctx$@, name: U8[]): U8[] //<
     //< The FQN of the generic function a bare name names in this file, or "" for none
     //<
-    //< This file's own declaration first, then a selective import's (std/lang's implicit ones
-    //< too).
+    //< This file's own declaration first, then a selective import's (std/lang's implicit ones too).
     //< Caution: **Do not look the bare name up in the template table.** A function's short name
     //< names it only inside its file, so it is not registered there (collect_fn_def in
-    //< collect.kspl); another file's `priv fn same<|T|>` would answer for this file's call.
+    //< collect.kspl). Another file's `priv fn same<|T|>` would answer for this file's call.
     own: = c.make_fqn(name)
-    if (c.generics.templates.get(own) catch null) != null
+    if c.generics.templates.get(own).is_some()
         return own
     imported: = c.imported_symbol_fqn(name)
-    if imported.len > 0 && (c.generics.templates.get(imported) catch null) != null
+    if imported.len > 0 && c.generics.templates.get(imported).is_some()
         return imported
     return ""
 
@@ -306,7 +305,7 @@ priv fn value_at(c: Sema_ctx$@, name: U8[]): Named_value? //<
     //< a type of that name, which nothing declares.
     //< Caution: **A constant passes.** It stands where a type argument does (`Buf<|n|>`), and
     //< const_type_arg_value in resolve.kspl reads it there.
-    sym: = c.symtab.resolve(name) catch null
+    sym: = c.symtab.resolve(name).unwrap_or(null)
     if sym == null
         return .none
     if sym.kind.names_function()
@@ -358,9 +357,9 @@ impl Sema_ctx
             else r.bare_type_kind(w.name, gen_params))
         if w.member == null
             return kind
-        // **A name after the type's is a member** (`Plain.dbl`, `Box<|I32|>.keep`): right after
-        // the type's name, it is one of whatever the name before it names; after the type
-        // arguments, one of the type.
+        // **A name after the type's is a member** (`Plain.dbl`, `Box<|I32|>.keep`). Right after the
+        // type's name, it is one of whatever the name before it names. After the type arguments, it
+        // is one of the type.
         if w.args != null
             switch kind
             case .found
@@ -416,13 +415,13 @@ impl Sema_ctx
             return .found
         if what: = value_at(r, name)
             return .names_value(what)
-        if (r.generics.templates.get(r.make_fqn(name)) catch null) != null
+        if r.generics.templates.get(r.make_fqn(name)).is_some()
             return .found
-        sym: = r.symtab.resolve(name) catch null
+        sym: = r.symtab.resolve(name).unwrap_or(null)
         if sym != null &&
             (sym.get_defined_in().len == 0 || sym.get_defined_in().equals(r.file_name))
             return .found
-        if sema_type_env.is_builtin(r.env.type_to_id.get(name) catch 0)
+        if sema_type_env.is_builtin(r.env.type_to_id.get(name).unwrap_or(0))
             return .found
         // Caution: **Ask this file's imports whether another file declares it**, not the type
         // table: a short key there is whichever file spelled the name first.
@@ -437,10 +436,6 @@ impl Sema_ctx
         //< "p" as _m`). An import nobody wrote (std/lang's) is not asked: its names come in bare.
         return r.alias_where(name, "")
 
-    fn alias_naming(r: Self$@, path: U8[]): Alias_reach? //<
-        //< The import alias of this file that names the file at path, if one does
-        return r.alias_where("", path)
-
     priv fn alias_where(r: Self$@, name: U8[], path: U8[]): Alias_reach? //<
         //< The first written import alias of this file naming path, or declaring name where seen
         prefix: = base_core.arena.text().s(r.file_name).s("::").take()
@@ -453,10 +448,10 @@ impl Sema_ctx
                     return .some(Alias_reach::{ .alias = entry.key.sub_from(prefix.len),
                         .path = target })
                 continue
-            file_env: = r.env.files.get(target) catch null
+            file_env: = r.env.files.get(target).unwrap_or(null)
             if file_env == null
                 continue
-            sym: = file_env.symbols.get(name) catch null
+            sym: = file_env.symbols.get(name).unwrap_or(null)
             if sym != null && r.is_symbol_visible_here(sym)
                 return .some(Alias_reach::{ .alias = entry.key.sub_from(prefix.len),
                     .path = target })
@@ -465,18 +460,18 @@ impl Sema_ctx
     fn report_without_alias(r: Self$@, at: Ast_node$@, name: U8[], path: U8[]) //<
         //< Reports a name of the file at path written without the import alias that reaches it
         //<
-        //< **One wording for a function, a value and a type alike**, saying what to write: the
-        //< alias this file imports the file under, or, where it has none, the import to add.
-        //< Caution: Keep it in this one place: a type position, a value and a call each meet the
+        //< **One wording for a function, a value and a type alike**, saying what to write. That is
+        //< the alias this file imports the file under, or, where it has none, the import to add.
+        //< Caution: Keep it in this one place. A type position, a value and a call each meet the
         //< mistake, and a copy for one would tell the writer something else.
-        r.clear_scratch().s("missing import alias prefix: '\{name\}' is declared in '\{path\}', ")
-        if reach: = r.alias_naming(path)
+        r.clear_scratch().s("missing import alias prefix. '\{name\}' is declared in '\{path\}'. ")
+        if reach: = r.alias_where("", path)
             r.scratch
-                .s("which this file imports as '\{reach.alias\}'; write '\{reach.alias\}.\{name\}'")
+                .s("This file imports it as '\{reach.alias\}'. Write '\{reach.alias\}.\{name\}'")
         else
             r.scratch
-                .s("which this file imports under no alias; import it as one ('import \"\{path\}\" \
-                    as m') and write 'm.\{name\}'")
+                .s("This file imports it without an alias. Give the import an alias ('import \
+                    \"\{path\}\" as m'). Write 'm.\{name\}'")
         r.err(at, r.scratch.slice())
         r.note_undefined_at(at)
 
@@ -507,26 +502,26 @@ impl Sema_ctx
         defer spelled.free()
         return r.resolve_fqn_for_type(spelled.slice().get_generic_base_name())
 
-    fn written_type_symbol(r: Self$@, w: Written_type): Sema_symbol$@ //<
-        //< The declaration of the type w names, or null
+    fn written_type_symbol(r: Self$@, w: Written_type): Sema_symbol$@? //<
+        //< The declaration of the type w names, or none
         //<
-        //< **Within the file an import alias names, every declaration answers**, `priv` ones too,
-        //< so that the use is refused as one the file cannot see rather than passed as unknown.
+        //< **Within the file an import alias names, every declaration answers**, `priv` ones too.
+        //< So the use is refused as one the file cannot see, rather than passed as unknown.
         $sym: Sema_symbol$@ = null
         if w.alias_file.len > 0
-            file_env: = r.env.files.get(w.alias_file) catch null
+            file_env: = r.env.files.get(w.alias_file).unwrap_or(null)
             if file_env != null
-                sym = file_env.symbols.get(w.name) catch null
+                sym = file_env.symbols.get(w.name).unwrap_or(null)
         else
-            sym = r.symtab.resolve(w.fqn) catch null
+            sym = r.symtab.resolve(w.fqn).unwrap_or(null)
         tmpl: = r.written_template(w)
         if sym == null && tmpl != null && tmpl.sym_ptr != null
             sym = Sema_symbol$@::tmpl.sym_ptr
-        return sym
+        return .some(sym) if sym != null else .none
 
     fn written_template(r: Self$@, w: Written_type): Ast_node$@ //<
         //< The template of the generic type w names, or null where it names no generic type
-        return r.generics.templates.get(w.fqn) catch null
+        return r.generics.templates.get(w.fqn).unwrap_or(null)
 
     fn template_of_args(r: Self$@, path: Ast_node$@, args: Ast_node$@): Ast_node$@? //<
         //< The generic type or function whose parameters the `<|…|>` args written in path fill
@@ -540,7 +535,7 @@ impl Sema_ctx
         if tmpl == null && w.alias_file.len == 0
             fqn: = template_named(r, w.name)
             if fqn.len > 0
-                tmpl = r.generics.templates.get(fqn) catch null
+                tmpl = r.generics.templates.get(fqn).unwrap_or(null)
         return .some(tmpl) if tmpl != null else .none
 
     fn instance_written(r: Self$@, w: Written_type, args: I32[], site: Ast_node$@):
@@ -557,9 +552,9 @@ impl Sema_ctx
     fn read_written_name(r: Self$@, path: Ast_node$@): Written_name //<
         //< What a written value's or function's name names, and what each `<|…|>` on it belongs to
         //<
-        //< A member the `.` already found a type for is that type's; a bare name is read through
-        //< this file's scopes and imports; a path's head through this file's import aliases and
-        //< selective imports, the rest within the file the head names. It reports nothing.
+        //< A member the `.` already found a type for is that type's. A bare name is read through
+        //< this file's scopes and imports. A path's head is read through this file's import aliases
+        //< and selective imports, and the rest within the file the head names. It reports nothing.
         $w: = Written_name::{ .parts = named_fn(path), .spelled = spelled_name(path), .fqn = "",
             .head_file = "", .sym = null, .template = null,
             .fn_tmpl = sema_decl_mono.Fn_instance::{ .template = "", .owner = 0,
@@ -581,8 +576,8 @@ impl Sema_ctx
     priv fn read_member_of_type(r: Self$@, w: Written_name$@): Bool //<
         //< Reads a member of the type the `.` recorded on the name before it; false if it has none
         //<
-        //< **A generic method reached through its type** is that type's template, its own type
-        //< arguments instantiating it at the call; **any other method of an instance** is the
+        //< **A generic method reached through its type** is that type's template, and its own type
+        //< arguments instantiate it at the call. **Any other method of an instance** is the
         //< instance's own (instance_method).
         owner_id: = w.parts.owner.type_id
         name: = w.parts.name.text
@@ -611,11 +606,11 @@ impl Sema_ctx
         if w.sym == null || w.sym.kind.names_function()
             tmpl_fqn: = template_named(r, name)
             if tmpl_fqn.len > 0
-                w.template = r.generics.templates.get(tmpl_fqn) catch null
+                w.template = r.generics.templates.get(tmpl_fqn).unwrap_or(null)
                 w.fn_tmpl.template = tmpl_fqn
                 w.fqn = tmpl_fqn
-        // `<|…|>` after a name that names no function binds nothing to it: a type's instance
-        // written whole is read as one (read_instance_type), any other name as nothing.
+        // `<|…|>` after a name that names no function binds nothing to it. A type's instance
+        // written whole is read as one (read_instance_type), and any other name as nothing.
         if w.parts.own != null && w.sym != null && !w.sym.kind.names_function()
             w.sym = null
         if w.sym != null || w.template != null
@@ -643,7 +638,7 @@ impl Sema_ctx
             return
         $full: = path.get_full_path_str()
         defer full.free()
-        w.sym = r.symtab.resolve(full.slice()) catch null
+        w.sym = r.symtab.resolve(full.slice()).unwrap_or(null)
         // **Found under its FQN written out** (`other.lib.twice`), a declaration of another file
         // is reached through no import of this one.
         $is_fqn: =
@@ -652,7 +647,7 @@ impl Sema_ctx
             !w.sym.get_defined_in().equals(r.file_name)
         if w.sym == null
             w.sym = r.member_through_type(path).unwrap_or(null)
-        w.template = r.generics.templates.get(w.spelled) catch null
+        w.template = r.generics.templates.get(w.spelled).unwrap_or(null)
         if w.template != null
             w.fn_tmpl.template = w.spelled
             is_fqn = is_fqn || !w.template.loc.file().equals(r.file_name)
@@ -684,17 +679,17 @@ impl Sema_ctx
         within: = base_core.pools.name_text(b.slice())
         w.head_file = file
         w.fqn = r.build_mod_fqn(file, within)
-        file_env: = r.env.files.get(file) catch null
+        file_env: = r.env.files.get(file).unwrap_or(null)
         if file_env != null
-            w.sym = file_env.symbols.get(within) catch null
+            w.sym = file_env.symbols.get(within).unwrap_or(null)
             if w.sym == null
                 w.sym = r.resolve_type_method_fqn(w.fqn).unwrap_or(null)
             if w.sym == null && head_name.len > 0 &&
-                (file_env.symbols.get(head_name) catch null) == null &&
+                file_env.symbols.get(head_name).is_none() &&
                 !r.file_has_type(file, head_name)
                 w.reach = .absent
                 return
-        w.template = r.generics.templates.get(w.fqn) catch null
+        w.template = r.generics.templates.get(w.fqn).unwrap_or(null)
         if w.template != null
             w.fn_tmpl.template = w.fqn
         if w.sym != null || w.template != null
@@ -704,16 +699,16 @@ impl Sema_ctx
         //< The member a path names through the type it begins with
         //<
         //< `Box<|I32|>.keep`, `Self.get`, `Ints.get` after `typedef Ints = Box<|I32|>`. The type is
-        //< read from the tree, its instance made from the written type arguments: a path is read
-        //< again where it is inferred twice (an operand of `==`), after the `.` flattened it.
+        //< read from the tree, and its instance is made from the written type arguments. A path is
+        //< read again where it is inferred twice (an operand of `==`), after the `.` flattened it.
         written: = r.read_written_type(path)
         if written.member == null
             return .none
         $owner: = written.fqn
         tmpl: = r.written_template(written)
-        // Type arguments on a type that declares none bind nothing, and are refused where they
-        // are written (refuse_type_args_on_plain_type in type_check.kspl): the member is the
-        // type's own.
+        // Type arguments on a type that declares none bind nothing. They are refused where they are
+        // written (refuse_type_args_on_plain_type in type_check.kspl), and the member is the type's
+        // own.
         if written.args != null && tmpl != null
             // Caution: **Suppress only the arguments' resolution**, as infer_namespace_access does.
             saved_sup: = r.suppress_errors
@@ -745,12 +740,12 @@ impl Sema_ctx
     fn own_type_of_name(r: Self$@, node: Ast_node$@): I32 //<
         //< The type a value's expression gives where nothing expects one: its own, or a function's
         //<
-        //< **A name that stands for one function gives the function type of that function**
-        //< (`twice`, `gf<|U16|>`, `Holder<|I32|>.keep` with its receiver first, an anonymous
-        //< function), to a declaration with no type as to a generic parameter. Nothing being
-        //< expected of it, it carries the mark generic_fn_value_type_id, and the declaration its
-        //< name resolved to (an instance's, for a specialization) holds the type. A variadic one
-        //< keeps the mark, no function type holding its `...`.
+        //< **A name that stands for one function gives the function type of that function**, to a
+        //< declaration with no type as to a generic parameter. Examples are `twice`, `gf<|U16|>`,
+        //< `Holder<|I32|>.keep` with its receiver first, and an anonymous function. Nothing being
+        //< expected of it, it carries the mark generic_fn_value_type_id. The declaration its name
+        //< resolved to (an instance's, for a specialization) holds the type. A variadic one keeps
+        //< the mark, no function type holding its `...`.
         decl: = node.def_node
         if node.type_id != r.env.generic_fn_value_type_id() || decl == null ||
             decl.has_variadic_param()
@@ -760,12 +755,12 @@ impl Sema_ctx
     fn instance_method(r: Self$@, owner_id: I32, name: U8[]): Sema_symbol$@? //<
         //< The method an instance of a generic type holds under name, from its own table
         //<
-        //< **A method reached through an instance** (`Box<|I64|>.mk`, `Ints.get` after `typedef
-        //< Ints = Box<|I64|>`, `Self.get` in `impl Box<|I64|>`) is the instance's, as one reached
-        //< through a value is the receiver's. Looked up as the template's (`Box.mk` with `<|I64|>`
-        //< as its type arguments), it holds only where the impl's type parameters are the type's
-        //< arguments in order: a method of `impl Box<|I64|>` declares none, and a renaming import
-        //< or a typedef spells a name no template has.
+        //< **A method reached through an instance** is the instance's, as one reached through a
+        //< value is the receiver's. Examples are `Box<|I64|>.mk`, `Ints.get` after
+        //< `typedef Ints = Box<|I64|>`, and `Self.get` in `impl Box<|I64|>`. Looked up as the
+        //< template's (`Box.mk` with `<|I64|>` as its type arguments), it holds only where the
+        //< impl's type parameters are the type's arguments in order. A method of `impl Box<|I64|>`
+        //< declares none, and a renaming import or a typedef spells a name no template has.
         if !r.env.instance_of(r.env.receiver_base_id(owner_id)).is_some()
             return .none
         return r

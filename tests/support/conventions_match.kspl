@@ -26,13 +26,13 @@ import "tests/support/harness_text" as htext
 // The diagnostic codes' list, and the material that holds them
 // ==========================================
 priv const registry: U8[] = "ksplc/base/lint_codes.kspl" //< the codes' canonical source
-priv const spec_tools: U8[] = "ksplc/docs/SPEC-tools.md" //<
+priv const spec_diagnostics: U8[] = "ksplc/docs/SPEC-diagnostics.md" //<
     //< the document holding each code's section
 
 priv fn is_code(s: U8[], _arena: Arena$@): Bool //< whether it is one of `EWIH` plus four digits
     //<
-    //< Caution: **Keep it a function of one text**, or the samples below can no longer be passed to
-    //< it and a broken judgment fails for nobody ("Showing that a check can fire" in
+    //< Caution: **Keep it a function of one text.** Otherwise the samples below cannot be passed to
+    //< it, and a broken judgment fails for nobody ("Showing that a check can fire" in
     //< `../docs/HOWTO-write-a-suite.md`).
     if s.len != 5
         return false
@@ -45,7 +45,7 @@ priv fn is_code(s: U8[], _arena: Arena$@): Bool //< whether it is one of `EWIH` 
 
 // The samples for the judgment above.
 // Caution: **Include a text with each of the three guards removed in turn** (the length, the
-// leading letter, the four digits); a table with only one cannot notice which guard is gone.
+// leading letter, the four digits). A table with only one cannot notice which guard is gone.
 priv const code_samples: Sample[_] = ::{
     Sample::{ .text = "E0001", .hits = true },
     Sample::{ .text = "W0207", .hits = true },
@@ -72,18 +72,18 @@ priv fn codes_only(xs: List<|U8[]|>@, arena: Arena$@): List<|U8[]|>
 
 priv fn check_codes(arena: Arena$@): List<|U8[]|>
     reg: = harness.read_under_root(registry)
-    spec: = harness.read_under_root(spec_tools)
+    spec: = harness.read_under_root(spec_diagnostics)
     $raw_impl: = scan.find_all(reg, "\"", "\"", arena)
-    $raw_detail: = scan.find_line_starts(spec, "#### [", "]", arena)
+    $raw_detail: = scan.find_line_starts(spec, "### [", "]", arena)
     $codes: = codes_only(raw_impl@, arena)
     $detail: = codes_only(raw_detail@, arena)
     $gaps: = List<|U8[]|>.new(arena)
-    detail_name: = arena.text().s("\{spec_tools\}'s sections").take()
+    detail_name: = arena.text().s("\{spec_diagnostics\}'s sections").take()
     scan.diff_into(codes@, detail@, registry, detail_name, gaps@, arena)
     scan.diff_into(detail@, codes@, detail_name, registry, gaps@, arena)
     verdict.check_list("the diagnostic codes agree between the implementation and the spec",
         codes.len, "codes", gaps@,
-        "give each registered code its `#### [CODE]` section in ksplc/docs/SPEC-tools.md, and \
+        "give each registered code its `### [CODE]` section in ksplc/docs/SPEC-diagnostics.md, and \
             register each section's code")
     return codes
 
@@ -107,7 +107,7 @@ priv fn check_emitted_codes(codes: List<|U8[]|>@, arena: Arena$@) //<
 
 // ==========================================
 // The limits table and the suite that runs it hold the same depths The suite builds each shape at
-// exactly the depth it holds, so a table changed alone is a promise nothing checks.
+// exactly the depth it holds. So a table changed alone is a promise that nothing checks.
 // ==========================================
 priv const limits_suite: U8[] = "ksplc/tests/suite/limits_test.kspl"
 priv const limits_head: U8[] = "| What is nested |"
@@ -153,7 +153,7 @@ priv fn check_limits_table(arena: Arena$@)
 
 // ==========================================
 // kssrv's promises name the numbers its constants hold `kssrv/docs/SPEC-api.md` is what a client
-// relies on, and each limit it states is a constant in the source; one changed alone breaks it.
+// relies on. Each limit it states is a constant in the source. One changed alone breaks it.
 // ==========================================
 priv const kssrv_spec: U8[] = "kssrv/docs/SPEC-api.md"
 
@@ -257,8 +257,8 @@ priv fn check_ast_kinds(arena: Arena$@)
         if !word_only(n)
             continue
         members.push(n)
-    // The string `builtin_name` returns is the value compared with a grammar rule's name: a case's
-    // own string, and the variant's name past `k_` for a kind with no case (its `default`).
+    // The string `builtin_name` returns is the value compared with a grammar rule's name. It is a
+    // case's own string, or the variant's name past `k_` for a kind with no case (its `default`).
     $kinds: = List<|U8[]|>.new(arena)
     $names: = List<|U8[]|>.new(arena)
     lines: = src.lines(arena)
@@ -345,7 +345,7 @@ priv fn mentions_kind(text: U8[], kind: U8[]): Bool //<
 
 // ==========================================
 // The attributes' list agrees across the compiler, the specification and the editor **Neither the
-// specification's table nor the colouring's list goes through a build or a test**, so a forgotten
+// specification's table nor the colouring's list goes through a build or a test.** So a forgotten
 // update shows only as "an attribute not in the specification works" or "one has another colour".
 // ==========================================
 priv const attrs_file: U8[] = "ksplc/sema/decl/attrs.kspl"
@@ -374,7 +374,7 @@ priv fn body_end(rest: U8[]): Sz //<
     //< That is the first line after it starting at column 0 (a `}` closing a brace-written body is
     //< such a line too), or the end.
     //<
-    //< Caution: **Do not search for a `\n}`** — the default notation writes none, so a scan for one
+    //< Caution: **Do not search for a `\n}`.** The default notation writes none. So a scan for one
     //< runs to the end of the file and takes every later declaration's names with it.
     $i: Sz = 0
     for i < rest.len && rest[i] != '\n'
@@ -463,10 +463,9 @@ priv fn check_directives(src: U8[], arena: Arena$@)
             list")
 
 // ==========================================
-// The page prints its marks with the name the gate cuts on **The `file://` side dumps its DOM only
-// at the end, so a run cut before that leaves no mark.** The page also prints every mark on
-// `console`, and the gate cuts them out of the browser's stderr by that leading name alone:
-// changed on one side, the gate says "the page said nothing" on the very run the trace was needed.
+// The page prints its marks with the name the gate cuts on. **The page prints every mark on
+// `console`**. The gate cuts them out of the browser's stderr by that leading name alone. If one
+// side changes it, the gate says "the page said nothing" on the very run the trace was needed.
 // ==========================================
 priv const said_page: U8[] = "kspage/tests/browser/probe.js"
 priv const said_gate: U8[] = "kspage/Makefile"
@@ -514,7 +513,7 @@ priv fn check_the_name_it_speaks_with(arena: Arena$@)
 // ==========================================
 // Every package that fuzzes a program it builds builds it with the address sanitizer, one way
 // **Each `Makefile` stands alone, so the recipe is written once per package.** One that drifts (a
-// flag dropped, the requirement not handed on) fuzzes a plain build, and its gate stays green.
+// flag dropped, the requirement not handed on) fuzzes a plain build. Its gate stays green.
 // ==========================================
 priv const fuzz_target: U8[] = "\ntest-fuzz:"
 priv const asan_flags_mark: U8[] = "ASAN_BUILD := "

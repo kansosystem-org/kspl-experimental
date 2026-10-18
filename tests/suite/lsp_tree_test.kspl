@@ -1,11 +1,12 @@
 //< Drives the language server over the whole repository, as an editor open on it does
 //<
 //< It sends the workspace queries such an editor sends, at the same size.
-//< **Only what the whole tree can show is here**: a common word across every package, a driver's
-//< callers in other packages, files built not to compile, a rename reaching closed files.
-//< The rest is in ksplc's own `lsp` suite; this one drives the same client
+//< **Only what the whole tree can show is here.** These are a common word across every package, a
+//< driver's callers in other packages, files built not to compile, a rename reaching closed files.
+//< The rest is in ksplc's own `lsp` suite. This one drives the same client
 //< (`ksplc/tests/support/lsp_client.kspl`) with the repository's root as the workspace.
 import "ksplc/tests/support/harness" as ksplc_harness
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_outline" { Prepared, incoming, prepare_fn }
 import "ksplc/tests/support/lsp_read" { end_text, from_names, has_name, is_missing }
@@ -22,7 +23,7 @@ import "std/verdict"
 import "tests/support/harness"
 import "tests/support/lsp_tree_uses"
 
-priv fn prepare_in_tree(c: jsonrpc.Client$@, rel: U8[], decl: U8[], arena: Arena$@): Prepared //<
+priv fn prepare_in_tree(c: jsonrpc_client.Client$@, rel: U8[], decl: U8[], arena: Arena$@): Prepared //<
     //< prepareCallHierarchy at `decl`'s name in the repository's file `rel`, opened as on disk
     return prepare_fn(c, rel, harness.read_under_root(rel), decl, arena)
 
@@ -35,7 +36,7 @@ priv const broken_ws_file: U8[] = "std/log.kspl" //<
     //< green after walking straight past what it exists to test.
 priv const broken_ws_decl: U8[] = "    pub fn at"
 
-priv fn check_workspace_survives_unbuildable(c: jsonrpc.Client$@, arena: Arena$@) //<
+priv fn check_workspace_survives_unbuildable(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A workspace query over a tree that holds files built not to compile
     //<
     //< Caution: **The point is that it answers at all.** A worker killed by a too-deep tree answers
@@ -55,10 +56,12 @@ priv fn check_workspace_survives_unbuildable(c: jsonrpc.Client$@, arena: Arena$@
         !got.timed_out && got.calls.len > 0, lsp_client.why(c, how, arena))
     // Caution: **Name a caller.** A non-empty answer alone goes green on a half-analysed
     // workspace's wrong callers.
-    verdict.check("and the callers named are the real ones", has_name(names@, "say"),
+    // `table_drop` in kssrv/conn.kspl writes its line through `log.at`, in another package than
+    // the declaration, so naming it also shows the walk left std.
+    verdict.check("and the callers named are the real ones", has_name(names@, "table_drop"),
         lsp_client.why(c, how, arena))
 
-priv fn check_ht16k33_callers(c: jsonrpc.Client$@, item: json.Val, arena: Arena$@) //<
+priv fn check_ht16k33_callers(c: jsonrpc_client.Client$@, item: json.Val, arena: Arena$@) //<
     //< A caller is always inside a file that refers to ht16k33.
     got: = incoming(c, item, arena)
     calls: = got.calls
@@ -66,13 +69,13 @@ priv fn check_ht16k33_callers(c: jsonrpc.Client$@, item: json.Val, arena: Arena$
     $marked: = List<|U8[]|>.new(arena)
     for i in Range.asc(calls.len)
         from: = calls.get(i).get("from")
-        rel: = from.get("uri").as_str()
+        rel: = from.get("uri").as_str().unwrap_or("")
         if harness.read_under_root(rel).find_str("ht16k33").is_none()
             strays.push(rel)
         // An ordinary call must not carry the "passed as a function pointer" mark, or the reader
         // cannot tell how certain the call is.
-        if from.get("detail").as_str().find_str("fn pointer").is_some()
-            marked.push(from.get("name").as_str())
+        if from.get("detail").as_str().unwrap_or("").find_str("fn pointer").is_some()
+            marked.push(from.get("name").as_str().unwrap_or(""))
     // Caution: **Do not merge "did it come back" and "is nothing mixed in" into one check**, or an
     // empty answer fails as "an unrelated file mixed in" with an empty explanation.
     // **Always add the count and the supervisor's message**: empty may mean "not found" or "the
@@ -90,16 +93,16 @@ priv fn check_ht16k33_callers(c: jsonrpc.Client$@, item: json.Val, arena: Arena$
 priv fn check_caller_order(calls: List<|json.Val|>@, arena: Arena$@) //<
     //< The callers are sorted by file and position
     //<
-    //< Caution: **Do not return them in `Map`'s order**, or **the same question is answered in a
-    //< different order every run** and a reader loses track of how far they have read. With over a
+    //< Caution: **Do not return them in `Map`'s order.** Otherwise **the same question is answered
+    //< in a different order every run**, and a reader loses track of how far they read. With over a
     //< hundred callers here, a broken order always shows.
     $out_of_order: = List<|U8[]|>.new(arena)
     $prev_uri: U8[] = ""
     $prev_line: I64 = -1I64
     for i in Range.asc(calls.len)
         from: = calls.get(i).get("from")
-        uri: = from.get("uri").as_str()
-        line: = from.get("range").get("start").get("line").as_int64(-1I64)
+        uri: = from.get("uri").as_str().unwrap_or("")
+        line: = from.get("range").get("start").get("line").as_int64().unwrap_or(-1I64)
         order: = uri.compare(prev_uri)
         if order < 0 || (order == 0 && line < prev_line)
             out_of_order
@@ -110,7 +113,8 @@ priv fn check_caller_order(calls: List<|json.Val|>@, arena: Arena$@) //<
     verdict.check("the callers line up in order of file and position", out_of_order.len == 0,
         lsp_client.join(out_of_order@, arena))
 
-priv fn check_fn_pointer(c: jsonrpc.Client$@, arena: Arena$@) //< callers via a function pointer
+priv fn check_fn_pointer(c: jsonrpc_client.Client$@, arena: Arena$@) //<
+    //< callers via a function pointer
     //<
     //< ksos's task entry points and `Link`'s implementations are **passed as function pointers with
     //< no call**.
@@ -132,12 +136,14 @@ priv fn check_fn_pointer(c: jsonrpc.Client$@, arena: Arena$@) //< callers via a 
     $found: = false
     for i in Range.asc(calls.len)
         from: = calls.get(i).get("from")
-        if from.get("name").as_str().equals("ksos_main")
+        if from.get("name").as_str().unwrap_or("").equals("ksos_main")
             call = calls.get(i)
             found = true
     entry: = call.get("from")
     d10: = lsp_client.dump(entry, arena)
-    ok8: = found && entry.get("detail").as_str().find_str("fn pointer").is_some()
+    ok8: =
+        found &&
+        entry.get("detail").as_str().unwrap_or("").find_str("fn pointer").is_some()
     verdict.check("that place carries the fn pointer mark", ok8, d10)
     // One range per place the pointer is passed (counting both identifier and path gives two).
     ranges: = call.get("fromRanges").arr_list(arena)
@@ -186,7 +192,8 @@ priv fn answers(out: U8[], id: I32, arena: Arena$@): Bool //<
             return false
         msg: = json.parse(body, arena) catch
             continue
-        if msg.val.get("id").as_int(-1) == id && msg.val.has_key("result")
+        if msg.val.get("id").as_int().unwrap_or(-1) == id &&
+            msg.val.find("result").is_some()
             return true
 
 priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
@@ -232,7 +239,7 @@ priv fn check_worker_alive_workspace(exe: U8[], root: U8[], arena: Arena$@)
         seen += buf.sub(0, got).count_str("__KSPL_WORKER_ALIVE__")
         out.s(buf.sub(0, got))
     w.kill()
-    // **A worker that dies at once is never silent for long**, so the measure counts only beside
+    // **A worker that dies at once is never silent for long.** So the measure counts only beside
     // the marks it sent while working and the answer it ended with.
     answered: = answers(out.slice(), query_id, arena)
     verdict.check("the workspace query is worked on and answered", seen > 0 && answered,
@@ -273,7 +280,7 @@ fn main(): I32
     check_workspace_survives_unbuildable(c@, arena)
 
     // A process-lifetime table allocated from the per-request arena is freed under the worker after
-    // a workspace query, and the worker crashes; the supervisor's null reads as "everything stops
+    // a workspace query. The worker then crashes. The supervisor's null reads as "everything stops
     // working". Check that **content** comes back: a response arrives even after a crash.
     a: = prepare_in_tree(c@, "ksos/drivers/ht16k33.kspl", "fn init(", arena)
     d18: = lsp_client.why(c@, a.raw, arena)
@@ -284,9 +291,10 @@ fn main(): I32
     b2: = prepare_in_tree(c@, "ksos/drivers/rp2040/clocks.kspl", "fn init(", arena)
     same_data: =
         a.found && b2.found &&
-        a.item.get("data").as_str().equals(b2.item.get("data").as_str())
-    pair: = arena.text().s("a=").s(a.item.get("data").as_str()).s(" b=")
-        .s(b2.item.get("data").as_str()).take()
+        a.item.get("data").as_str().unwrap_or("")
+        .equals(b2.item.get("data").as_str().unwrap_or(""))
+    pair: = arena.text().s("a=").s(a.item.get("data").as_str().unwrap_or("")).s(" b=")
+        .s(b2.item.get("data").as_str().unwrap_or("")).take()
     detail5: = lsp_client.why(c@, pair, arena)
     verdict.check("an init of the same name in a different file holds different data",
         a.found && b2.found && !same_data, detail5)

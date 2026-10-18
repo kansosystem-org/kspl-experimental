@@ -1,6 +1,7 @@
 //< What a hover answers: which positions answer, what it says on a value, and a declaration's docs
 //<
 //< Not a suite; `../suite/lsp_test.kspl` runs each part.
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, is_missing }
 import "std/chars"
@@ -15,7 +16,7 @@ import "std/verdict"
 // ==========================================
 // Which positions a hover answers: a name answers, a mark between names does not
 // **A bracket, a comma, an operator and a keyword name nothing**, so the hover there is empty.
-// Answered from the node around them, the `)` of a call read `fn )()`, the `,` after `words@`
+// Answered from the node around them, the `)` of a call read `fn )()`. The `,` after `words@`
 // read `fn @()`, and `priv` read `type priv`: each a declaration that does not exist.
 // **The position just past a name still answers that name** (the `(` after `free`), as an editor
 // asks there when the caret stands at the name's end.
@@ -79,13 +80,14 @@ priv const named_spots: Spot[_] = ::{ //< the positions on a name, and a piece o
         .name = "the position just past a method's name", .want = "free(" },
 }
 
-priv fn hover_at(c: jsonrpc.Client$@, spot: Spot, arena: Arena$@): json.Val!jsonrpc.Rpc_end //<
-    //< The hover at that spot
+priv fn hover_at(c: jsonrpc_client.Client$@, spot: Spot, arena: Arena$@):
+    json.Val!jsonrpc.Rpc_end //<
+        //< The hover at that spot
     col: = col_in_line(marks_src, spot.line, spot.needle, arena) + spot.step
     pos: = lsp_client.at_pos(marks_uri, decl_line(marks_src, spot.line, arena), col, arena)
     return c.request("textDocument/hover", pos, lsp_client.read_ms, arena)!.val
 
-fn check_hover_marks(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_marks(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(marks_uri, marks_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, marks_uri, arena)
@@ -112,8 +114,8 @@ fn check_hover_marks(c: jsonrpc.Client$@, arena: Arena$@)
 // What a hover says on a value. **A literal shows the type it took in its place, and no name**:
 // `4` in `size: Sz = 4` is `Sz` (shown as `type 4`, it read as a declaration). **A name where it
 // is bound reads as it does where it is used** (`words: List<|U8[]|>`), for every kind of
-// binding: a declaration with or without a written type, a parameter, a `for`'s item, an
-// `if v: = opt`, a `catch e` and a pattern's payload.
+// binding. The kinds: a declaration with or without a written type, a parameter, a `for`'s item,
+// an `if v: = opt`, a `catch e` and a pattern's payload.
 // ==========================================
 priv const values_src: U8[] =
     """import "std/ds" { List }
@@ -215,7 +217,7 @@ priv const bound_asks: Ask[_] = ::{ //< the names where they are bound, and fiel
         .name = "a second field set by name in a struct literal", .want = "field b: U8[]" },
 }
 
-priv fn request_at(c: jsonrpc.Client$@, method: U8[], ask: Ask, arena: Arena$@):
+priv fn request_at(c: jsonrpc_client.Client$@, method: U8[], ask: Ask, arena: Arena$@):
     json.Val!jsonrpc.Rpc_end //<
         //< That request at that position (references count the declaration)
     col: = col_in_line(values_src, ask.line, ask.needle, arena) + ask.step
@@ -234,7 +236,7 @@ priv fn shown_line(text: U8[]): U8[] //< the answer's first line inside its code
     body: = text.strip_prefix("```kspl\n")
     return body.sub(0, body.find_char('\n').unwrap_or(body.len))
 
-priv fn check_asks(c: jsonrpc.Client$@, asks: Ask[], arena: Arena$@) //<
+priv fn check_asks(c: jsonrpc_client.Client$@, asks: Ask[], arena: Arena$@) //<
     //< Each hover shows exactly what that position's `want` says
     for ask in asks
         label: = arena.text().s("a hover on ").s(ask.name).s(" shows ")
@@ -254,7 +256,7 @@ priv const ref_asks: Ask[_] = ::{ //< the names whose references are listed, eac
     Ask::{ .line = "    for w", .needle = "w ", .name = "w", .count = 2 },
 }
 
-priv fn check_refs(c: jsonrpc.Client$@, arena: Arena$@) //<
+priv fn check_refs(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< References from where a name is bound list that name's places, each on the name itself
     lines: = values_src.lines(arena)
     for ask in ref_asks
@@ -267,13 +269,14 @@ priv fn check_refs(c: jsonrpc.Client$@, arena: Arena$@) //<
         $off: = List<|U8[]|>.new(arena)
         for spot in spots
             r: = spot.get("range")
-            line: = Sz::r.get("start").get("line").as_int(-1I32)
-            from: = Sz::r.get("start").get("character").as_int(-1I32)
-            to: = Sz::r.get("end").get("character").as_int(-1I32)
+            line: = Sz::r.get("start").get("line").as_int().unwrap_or(-1I32)
+            from: =
+                Sz::r.get("start").get("character").as_int().unwrap_or(-1I32)
+            to: = Sz::r.get("end").get("character").as_int().unwrap_or(-1I32)
             on: =
                 (lines.get(line).sub(from, to - from)
                 if line < lines.len && from <= to && to <= lines.get(line).len else "")
-            uri: = spot.get("uri").as_str()
+            uri: = spot.get("uri").as_str().unwrap_or("")
             if !uri.equals(values_uri) || !on.equals(ask.name)
                 off
                     .push(arena.text().s(uri).s(":\{line + 1\}:\{from\} '").s(on).s("'").take())
@@ -281,7 +284,7 @@ priv fn check_refs(c: jsonrpc.Client$@, arena: Arena$@) //<
         verdict.check(label, off.len == 0 && spots.len == ask.count,
             lsp_client.why(c, found, arena))
 
-fn check_hover_values(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_hover_values(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(values_uri, values_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, values_uri, arena)
@@ -294,7 +297,7 @@ fn check_hover_values(c: jsonrpc.Client$@, arena: Arena$@)
 // ==========================================
 // What a declaration says of itself, as the editor shows it: the hover's description and
 // parameter list, and the panel that comes up while the call is being typed. **They are one
-// subject, so they share one fixture**: one reader (`ksplc/base/ast_doc.kspl`) reads all three.
+// subject, so they share one fixture.** One reader (`ksplc/base/ast_doc.kspl`) reads all three.
 // ==========================================
 // A hover shows the documentation the declaration carries
 // ==========================================
@@ -357,7 +360,7 @@ fn main(): I32
 
 priv const doc_uri: U8[] = "file:///doc_probe.kspl"
 
-priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
+priv fn check_hover_doc(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(doc_uri, doc_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, doc_uri, arena)
@@ -381,7 +384,7 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
         text.find_str("What a row stands for").is_none(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
     // A head ending on a later line starts its run on that line, with **a mark carrying no
-    // text**; one with text describes the return type (`return_doc` in `../../base/ast_doc.kspl`).
+    // text**. One with text describes the return type (`return_doc` in `../../base/ast_doc.kspl`).
     w_line: = decl_line(doc_src, "  w2: = wrapped(1,", arena)
     w_col: = col_in_line(doc_src, "  w2: = wrapped(1,", "wrapped", arena)
     w2_got: =
@@ -416,7 +419,7 @@ priv fn check_hover_doc(c: jsonrpc.Client$@, arena: Arena$@)
         f_text.find_str("What a row stands for").is_none(),
         lsp_client.why(c, arena.text().s("'").s(f_text).s("'").take(), arena))
 
-priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
+priv fn check_hover_params(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< It checks a hover shows the parameters one per line, each with its own `//<`
     //<
     //< The lines are as the source has them.
@@ -484,7 +487,7 @@ priv fn check_hover_params(c: jsonrpc.Client$@, arena: Arena$@) //<
         m_text.find_str("\n): Sz").is_some() && m_text.find_str("a17").is_none(),
         lsp_client.why(c, arena.text().s("\'").s(m_text).s("\'").take(), arena))
 
-priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
+priv fn check_hover_links(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< A name the description mentions is shown as a link to where it is declared
     //<
     //< **It is resolved as `[W0211]` resolves it**, through the description's scope: `Row.put`
@@ -521,7 +524,7 @@ priv fn check_hover_links(c: jsonrpc.Client$@, arena: Arena$@) //<
         quiet.find_str("`io.out` here").is_some() && quiet.find_str("[`io.out`]").is_none(),
         lsp_client.why(c, arena.text().s("'").s(quiet).s("'").take(), arena))
 
-fn run_docs(c: jsonrpc.Client$@, arena: Arena$@)
+fn run_docs(c: jsonrpc_client.Client$@, arena: Arena$@)
     check_hover_doc(c, arena)
     check_hover_params(c, arena)
     check_hover_links(c, arena)

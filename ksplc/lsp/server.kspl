@@ -4,7 +4,7 @@
 //<
 //< A worker that crashes or hangs is killed and restarted, and handed the open documents' texts
 //< without analysing them. Each is analysed again before the first request naming it, or while the
-//< editor is idle, so the first answer after a recovery waits for one document, not for all; a
+//< editor is idle. So the first answer after a recovery waits for one document, not for all. A
 //< document that crashes that analysis is quarantined. The analysis never runs here, so no fault in
 //< it takes down the editor's connection.
 // ==========================================
@@ -44,9 +44,9 @@ priv fn relay_stripping_alive(src: U8[], out: Str_builder$@) //<
         i = end + lsp_msg.marker_len(tag)
 priv enum Worker_end //< the reason a worker was given up on
     //<
-    //< Caution: **Do not merge the cases.** The editor sees the same null response for all of them,
-    //< yet the fix differs entirely (a hang means the analysis is too heavy, exited means the
-    //< worker crashes). Merged, they can only look like "it stops working after a while", which
+    //< Caution: **Do not merge the cases.** The editor sees the same null response for all of them.
+    //< But the fix differs entirely: a hang means the analysis is too heavy, and exited means the
+    //< worker crashes. Merged, they can only look like "it stops working after a while", which
     //< cannot be traced from this side either.
     done //< it read as far as the completion marker
     hang //< not one byte came for worker_timeout_ms
@@ -72,14 +72,15 @@ impl Worker_end
         //< It prints why it gave up to stderr, on one line, and how many documents it restores
         //<
         //< **Never to stdout**, the JSON-RPC channel to the editor; mixing breaks the protocol.
-        //< **The count says how much is analysed again** after the restart: each document once,
-        //< one at a time, before the first request naming it or while the editor is idle. A request
-        //< waits for at most one other document's analysis besides its own.
+        //< **The count says how much is analysed again** after the restart. Each document is
+        //< analysed once, one at a time, before the first request naming it or while the editor is
+        //< idle. A request waits for at most one other document's analysis besides its own.
         io.err()
-            .s("ksplc lsp: giving up on the worker while handling '\{method\}': \
-                \{e.worker_end_text()\} (restarting, open documents to restore: \{restores\})\n")
+            .s("ksplc lsp: worker request failed while handling '\{method\}': \
+                \{e.worker_end_text()\}. Restarting the worker. Open documents to restore: \
+                \{restores\}\n")
 
-priv fn pump_worker_output(worker: subproc.Piped_child, arena: Arena$@): Worker_end //<
+priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker_end //<
     //< It reads the worker's output up to the completion marker and relays what precedes it
     //<
     //< Nothing is relayed before the marker comes, so a partial message never breaks the protocol.
@@ -88,8 +89,8 @@ priv fn pump_worker_output(worker: subproc.Piped_child, arena: Arena$@): Worker_
     $acc: = Str_builder.new()
     defer acc.free()
     $ok: = Worker_end.exited
-    // Each search resumes marker-length-1 before where the last found none, so a marker crossing a
-    // chunk boundary is still found; re-walking the whole buffer per chunk is quadratic in an
+    // Each search resumes marker-length-1 before where the last found none. So a marker crossing a
+    // chunk boundary is still found. Re-walking the whole buffer per chunk is quadratic in an
     // output that can reach tens of MB.
     tag: = lsp_msg.worker_done_tag
     overlap: = lsp_msg.marker_len(tag) - 1
@@ -131,14 +132,16 @@ priv fn spawn_worker(): subproc.Piped_child? //< it starts one worker
         return .none
     return .some(child)
 
-priv fn exchange(w: subproc.Piped_child?, frame: U8[], arena: Arena$@): Worker_end //<
+priv fn exchange(w: subproc.Piped_child?@, frame: U8[], arena: Arena$@): Worker_end //<
     //< It writes one framed message to the worker and relays what it answers, up to the marker
+    //<
+    //< **The worker is lent, not handed over**: the caller still kills it.
     // Caution: **Bound the write by the watchdog too.** A worker stuck in an analysis reads
     // nothing, and once the pipe is full an unbounded write would hang the editor's server with it.
-    if c: = w
+    if c: = w$
         c.write(frame, worker_timeout_ms) catch
             return .write_failed
-        return pump_worker_output(c, arena)
+        return pump_worker_output(c@, arena)
     return .write_failed
 priv struct Lsp_docs //< the open documents' texts, and what the worker has made of them
     //<
@@ -174,17 +177,17 @@ impl Lsp_docs
         //< **Each of the three settles the document's analysis**: the worker analyses the new text
         //< itself, or the document is gone. So none is sent again.
         td: = params.get("textDocument")
-        uri: = td.get("uri").as_str()
+        uri: = td.get("uri").as_str().unwrap_or("")
         if uri.len == 0
             return
         if method.equals("textDocument/didClose")
             r.store.close(uri)
         else if method.equals("textDocument/didOpen")
-            r.store.put(uri, td.get("text").as_str())
+            r.store.put(uri, td.get("text").as_str().unwrap_or(""))
         else if method.equals("textDocument/didChange")
             r.store
                 .put(uri,
-                params.get("contentChanges").get_at(0).get("text").as_str())
+                params.get("contentChanges").get_at(0).get("text").as_str().unwrap_or(""))
         else
             return
         _settled: = r.unchecked.remove(uri)
@@ -195,7 +198,7 @@ impl Lsp_docs
         r.quarantine.set(r.store.arena.dup_str(uri), 1)
 
     priv fn is_poison(r: Self$@, uri: U8[]): Bool
-        return (r.quarantine.get(uri) catch 0) != 0
+        return r.quarantine.get(uri).unwrap_or(0) != 0
 
     priv fn restores(r: Self$@, uri: U8[], is_open: Bool): Bool //<
         //< whether a restart hands it to the new worker
@@ -212,7 +215,7 @@ impl Lsp_docs
         return n
 
     priv fn is_unchecked(r: Self$@, uri: U8[]): Bool //< whether its analysis is still to be sent
-        return uri.len > 0 && (r.unchecked.get(uri) catch 0) != 0
+        return uri.len > 0 && r.unchecked.get(uri).unwrap_or(0) != 0
 
     priv fn next_unchecked(r: Self$@): U8[] //< the document to analyse while idle; empty for none
         if r.is_unchecked(r.first)
@@ -255,7 +258,7 @@ priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@): subpro
         w: = spawn_worker()
         if w.is_none()
             return w
-        handed: = hand_over(docs, w, lost_uri, arena)
+        handed: = hand_over(docs, w@, lost_uri, arena)
         switch handed
         case .done
             return w
@@ -270,7 +273,7 @@ priv fn restart_worker(docs: Lsp_docs$@, lost_uri: U8[], arena: Arena$@): subpro
             return .none
         default {}
 
-priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?, lost_uri: U8[], arena: Arena$@):
+priv fn hand_over(docs: Lsp_docs$@, w: subproc.Piped_child?@, lost_uri: U8[], arena: Arena$@):
     Worker_end //<
         //< It hands a new worker each document `restart_worker` restores; done where all went over
         //<
@@ -307,7 +310,7 @@ priv fn check_doc(docs: Lsp_docs$@, worker: subproc.Piped_child?, uri: U8[], are
     text: = docs.store.open_text(uri).unwrap_or("")
     $frame: = build_doc_frame("textDocument/didOpen", uri, text, arena)
     defer frame.free()
-    end: = exchange(worker, frame.slice(), arena)
+    end: = exchange(worker@, frame.slice(), arena)
     switch end
     case .done
         _checked: = docs.unchecked.remove(uri)
@@ -330,17 +333,17 @@ priv fn message_of(body: U8[], arena: Arena$@): json.Val //<
 priv fn named_uri(params: json.Val): U8[] //< the document a message names; empty for none
     //<
     //< A call hierarchy's second step names it in `item`, every other request in `textDocument`.
-    td_uri: = params.get("textDocument").get("uri").as_str()
+    td_uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
     if td_uri.len > 0
         return td_uri
-    return params.get("item").get("uri").as_str()
+    return params.get("item").get("uri").as_str().unwrap_or("")
 
 // ==========================================
 // Reading the editor on a thread of its own
 // **The supervisor must know whether the editor has sent something** before it starts a
-// document's analysis nobody asked for, so a request never waits for more than one such. Standard
-// input offers no "is anything there" that works on every OS and sees past the C library's buffer,
-// so one thread reads it and hands the messages over.
+// document's analysis nobody asked for. So a request never waits for more than one such. Standard
+// input offers no "is anything there" that works on every OS and sees past the C library's
+// buffer. So one thread reads it and hands the messages over.
 // ==========================================
 
 priv struct Inbox //< what the editor has sent and the supervisor has not taken yet
@@ -361,9 +364,9 @@ priv enum Inbound //< what the editor has for the supervisor now
 fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
     //< The reading thread: each message the editor sends, framed into the inbox
     //<
-    //< Caution: **Stop at `exit`, not only at the end of input.** A client may keep the pipe open
-    //< after `exit`, and a thread left blocked in the C library's read holds standard input's lock,
-    //< which the C library's exit waits for: the process would never end.
+    //< Caution: **Stop at `exit`, not only at the end of input.** A client can keep the pipe open
+    //< after `exit`. A thread left blocked in the C library's read holds standard input's lock. The
+    //< C library's exit waits for that lock, so the process would never end.
     arena: = Arena.new(64 * 1024)
     defer arena.free()
     base: = arena.save()
@@ -377,7 +380,8 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
         // A cheap look first: only a body naming `exit` is parsed here.
         $last: = !got
         if got && body.slice().find_str("\"exit\"").is_some()
-            last = message_of(body.slice(), arena).get("method").as_str().equals("exit")
+            last = message_of(body.slice(), arena).get("method").as_str().unwrap_or("")
+                .equals("exit")
         box: = r.inbox.lock()
         if got
             jsonrpc.frame_into(box.frames@, body.slice())
@@ -443,24 +447,16 @@ impl Editor_reader: Owned {}
 
 fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
     // Where no worker or no reading thread can be started, it runs in-process instead.
+    // Caution: **Start the reading thread last, once a worker is.** Once started it takes standard
+    // input, which the in-process analysis would then never see.
     worker: = spawn_worker()
-    switch reader_beside(worker)
-    case .some(reader)
-        supervise(reader, worker)
-    default
-        lsp_worker.run_lsp_worker(base_parser)
-
-priv fn reader_beside(worker: subproc.Piped_child?): Editor_reader$@? //<
-    //< The reading thread, started once a worker is; none, the worker killed, where either fails
-    //<
-    //< Caution: **Start the reading thread last.** Once started it takes standard input, which the
-    //< in-process analysis would then never see.
-    if c: = worker
-        started: = start_editor_reader()
-        if started.is_none()
+    if worker.is_some()
+        if reader: = start_editor_reader()
+            supervise(reader, worker)
+            return
+        if c: = worker
             c.kill()
-        return started
-    return .none
+    lsp_worker.run_lsp_worker(base_parser)
 
 priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) //<
     //< It relays the editor's messages to the worker until `shutdown` or the end of input
@@ -477,7 +473,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
     for
         arena.restore(base)
         // **A document nobody asked for is analysed only while the editor is silent**, one at a
-        // time, so a request waits for at most one of them.
+        // time. So a request waits for at most one of them.
         idle_work: = worker.is_some() && docs.next_unchecked().len > 0
         $msg_body: U8[] = ""
         switch reader.next(taken@, !idle_work, arena)
@@ -490,12 +486,12 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
             break
 
         msg: = message_of(msg_body, arena)
-        method: = msg.get("method").as_str()
+        method: = msg.get("method").as_str().unwrap_or("")
         id_val: = msg.get("id")
         params: = msg.get("params")
         docs.observe(method, params)
-        // **The document a request names is analysed first**, as a didOpen, so its diagnostics
-        // come too and a crash in that analysis is told from one in answering.
+        // **The document a request names is analysed first**, as a didOpen. So its diagnostics
+        // come too, and a crash in that analysis is told from a crash in answering.
         named: = named_uri(params)
         if docs.is_unchecked(named)
             worker = check_doc(docs@, worker, named, arena)
@@ -503,7 +499,7 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
         $frame: = Str_builder.new()
         defer frame.free()
         jsonrpc.frame_into(frame@, msg_body)
-        end: = exchange(worker, frame.slice(), arena)
+        end: = exchange(worker@, frame.slice(), arena)
         $handled: = false
         switch end
         case .done

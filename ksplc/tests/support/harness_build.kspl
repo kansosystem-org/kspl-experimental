@@ -1,6 +1,6 @@
 //< Links the compiler's output into an executable, and runs it
 //<
-//< **This is the only place that calls the C compiler and the linker**, so a suite that does not
+//< **This is the only place that calls the C compiler and the linker.** So a suite that does not
 //< need them does not depend on them. [`harness.kspl`](harness.kspl) holds the rest.
 import "ksplc/tests/support/harness"
 import "std/chars"
@@ -13,7 +13,7 @@ import "std/subproc"
 import "std/sys"
 import "std/verdict"
 
-priv fn query_words(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
+pub fn query_words(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     //< It asks ksplc's info subcommand for topic and appends the answer's words to out
     //<
     //< Caution: **Do not copy the link options here.** ksplc knows the libraries and the stack size
@@ -24,7 +24,7 @@ priv fn query_words(topic: U8[], out: List<|U8[]|>$@, arena: Arena$@): Bool //<
     q.push("info")
     q.push(topic)
     r: = harness.run(q.slice())
-    if r.code != 0
+    if !r.exited_with(0)
         return false
     for w in r.out.trim_spaces().split(' ', arena)
         if w.len > 0
@@ -93,7 +93,7 @@ priv fn build_job(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, 
     if llvm
         rt: = arena.text().s(exe).s(".runtime.c").take()
         made: = harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
-        if made.code != 0
+        if !made.exited_with(0)
             return failed_job(arena.text().s("[harness] emit-runtime failed\n").s(made.out).take())
         argv.push(below(rt, dir))
     if !query_words("link-libs", argv@, arena)
@@ -108,7 +108,7 @@ priv fn build(cc: U8[], gen: U8[][], exe: U8[], cflags: U8[][], llvm: Bool, flag
     arena: Arena$@): verdict.Run_out //< it builds the executable exe from the generated files gen
     j: = build_job(cc, gen, exe, cflags, llvm, flagged, arena)
     if j.why.len > 0
-        return verdict.Run_out::{ .code = -1, .out = j.why }
+        return verdict.Run_out::{ .code = .none, .out = j.why }
     return harness.run_in(j.job.argv, j.job.cwd)
 
 fn exe_job(gen: U8[], exe: U8[], llvm: Bool): Exe_job //<
@@ -154,7 +154,7 @@ struct Built //< whether it built, and the result of running it
     //<
     //< **Where built is false, out is the failure's explanation**, not the program's output.
     built: Bool
-    code: I32
+    code: I32? //< the exit code; none where it did not build, or did not end
     out: U8[]
 
 fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Bool = false,
@@ -180,16 +180,16 @@ fn build_and_run(src: U8[], dir: U8[], stem: U8[], ksplc_args: U8[][], llvm: Boo
     r: =
         (harness.ksplc(args.slice()) if cwd.len == 0
         else harness.run_in(harness.ksplc_argv(args.slice()), cwd))
-    if r.code != 0
-        return Built::{ .built = false, .code = -1, .out = r.out }
+    if !r.exited_with(0)
+        return Built::{ .built = false, .code = .none, .out = r.out }
     b: =
         (build_llvm_exe(U8[][]::{ gen }, exe, U8[][]::llvm_cflags) if llvm
         else build_exe(U8[][]::{ gen }, exe, U8[][]::default_cflags))
-    if b.code != 0
-        return Built::{ .built = false, .code = -1, .out = b.out }
+    if !b.exited_with(0)
+        return Built::{ .built = false, .code = .none, .out = b.out }
     out: = harness.run(U8[][]::{ exe })
-    if out.code == 0
-        return Built::{ .built = true, .code = 0, .out = out.out }
+    if out.exited_with(0)
+        return Built::{ .built = true, .code = .some(0), .out = out.out }
     note: = arena.text().s(out.out)
-        .s("\n[harness] the executable ended with exit code \{out.code\}\n").take()
+        .s("\n[harness] the executable ended with exit code \{out.code.unwrap_or(-1)\}\n").take()
     return Built::{ .built = true, .code = out.code, .out = note }

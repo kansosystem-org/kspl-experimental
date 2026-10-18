@@ -2,19 +2,19 @@
  * with an OS).
  *
  * **The substance half is split per subject.** This side holds the includes and the shared
- * small pieces alone, and hosted_proc / hosted_thread / hosted_fs / hosted_spawn / hosted_net
- * join behind it **in that order** to make one translation unit (the order
- * is held by write_impl in ksplc/gen/runtime.kspl).
+ * small pieces alone. hosted_proc / hosted_thread / hosted_fs / hosted_spawn / hosted_net
+ * join behind it **in that order** to make one translation unit. write_impl in
+ * ksplc/gen/runtime.kspl holds the order.
  * **The standard for splitting is the
- * subject on std's side** — cut by line count and reading one subject means going back and forth
+ * subject on std's side.** Cut by line count, reading one subject means going back and forth
  * between two files.
- * Split or not, the translation unit is one, so a static small piece placed here is visible
+ * Split or not, the translation unit is one. So a static small piece placed here is visible
  * from everything behind it.
  *
  * This side **enters one translation unit only** (holding many functions with external
  * linkage). The macros and static functions the generated body calls directly are on hosted.h.
  *
- * WIN32_LEAN_AND_MEAN keeps windows.h from pulling in winsock.h (the old API), which collides in
+ * WIN32_LEAN_AND_MEAN keeps windows.h from pulling in winsock.h (the old API). That collides in
  * types and macros with the winsock2.h further down (for std/net.kspl). Defined before the first
  * windows.h, it holds for the whole file. */
 #ifdef _WIN32
@@ -86,20 +86,21 @@ KSPL_LINK I64 kspl_mono_us(void) {
 }
 #endif
 
-/* A wait in milliseconds as every wait here reads it: 0 looks once without waiting, a positive
- * value waits at most that long, and a negative one is a time already up, so it does not wait.
- * Caution: **Pass every wait through this first.** Read raw, -1 waited for good in POSIX poll(),
- * 49 days through Windows' unsigned tick compare, and not at all on POSIX send's deadline: one
- * argument, three behaviours. There is no "forever": a silent peer would hang the caller. */
+/* A wait in milliseconds as every wait here reads it. 0 looks once without waiting. A positive
+ * value waits at most that long. A negative one is a time already up, so it does not wait.
+ * Caution: **Pass every wait through this first.** Read raw, -1 waits for good in POSIX poll(),
+ * 49 days through Windows' unsigned tick compare, and not at all on POSIX send's deadline. That is
+ * one argument with three behaviours. There is no "forever": a silent peer would hang the
+ * caller. */
 static I32 kspl_wait_ms(I32 timeout_ms) { return timeout_ms < 0 ? 0 : timeout_ms; }
 
 /* Copies (ptr, len) to a NUL terminator in out. Every narrow path and host name the OS is handed
  * goes through here.
  * Caution: **Returns 0 where it does not fit or holds a NUL.** A truncated copy, or one the OS
- * reads only up to an inner NUL, reports success for **an operation on something else** (a mkdir
- * landing shallow, a database opened at another path, a connection to another host). A negative
- * length is knocked back apart: compared with the capacity it would turn unsigned, and the memcpy
- * would make a huge copy. */
+ * reads only up to an inner NUL, reports success for **an operation on something else**. Examples
+ * are a mkdir landing shallow, a database opened at another path, a connection to another host. A
+ * negative length is knocked back apart. Compared with the capacity, it would turn unsigned, and
+ * the memcpy would make a huge copy. */
 KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap) {
     if (len < 0 || (size_t)len >= (size_t)out_cap) return 0;
     if (len > 0 && memchr(ptr, '\0', (size_t)len) != NULL) return 0;
@@ -111,10 +112,10 @@ KSPL_UNUSED static int kspl_to_cstr(const U8 *ptr, Sz len, char *out, Sz out_cap
 /* ============================================================
  * Nothing the runtime opens passes to a child unasked
  *
- * A child holding a copy keeps what it names alive while it runs: a closed listener's port cannot
+ * A child holding a copy keeps what it names alive while it runs. A closed listener's port cannot
  * be bound again, a peer never sees a connection close, and a pipe's reader never sees its end.
- * So every socket, file and pipe end is opened close-on-exec (POSIX) or not inheritable (Windows),
- * and a child holds only the three streams kspl_proc_start hands it.
+ * So every socket, file and pipe end is opened close-on-exec (POSIX) or not inheritable (Windows).
+ * A child holds only the three streams kspl_proc_start hands it.
  * Caution: **Mark it in the call that opens it** (SOCK_CLOEXEC, accept4, pipe2, O_CLOEXEC,
  * WSA_FLAG_NO_HANDLE_INHERIT). Marked afterwards, a child started from another thread in between
  * takes the copy. Only where the OS has no such call (a socket or a pipe on macOS, an accepted
@@ -150,18 +151,18 @@ KSPL_UNUSED static void kspl_fd_cloexec(int fd) {
  *
  * Caution: **Do not use the narrow (ANSI) API.** A KSPL string is UTF-8, but Windows's `*A` APIs
  * interpret it in **the current code page** (under CP932 `_getcwd` returns CP932 bytes and
- * `_mkdir` takes them). That adds up inside KSPL alone, but **it breaks the moment those bytes are
+ * `_mkdir` takes them). That adds up inside KSPL alone. But **it breaks the moment those bytes are
  * handed to a child process**: invalid as UTF-8, they cannot become UTF-16 for its command line.
  * Python's PEP 529 drops the `*A` APIs for the same reason.
  *
- * Caution: **Do not mix them halfway.** Make only part of it UTF-8 and a path joining `sys.cwd()`'s
- * result with a name written in the source becomes a mixture of two code pages, resolvable by
- * neither API.
+ * Caution: **Do not mix them halfway.** Make only part of it UTF-8, and a path joining
+ * `sys.cwd()`'s result with a name written in the source becomes a mixture of two code pages.
+ * Neither API can resolve it.
  *
  * **Even with everything here wide, a path handed to a third party's tool is not safe.** The CRT
- * of a program with a narrow `main` copies the UTF-16 command line to the current code page, a
+ * of a program with a narrow `main` copies the UTF-16 command line to the current code page. A
  * character it cannot express collapses to `?`, and the tool fails with `Invalid argument`. So the
- * paths handed to cc / ld are made relative and the place is handed over by cwd (`under_slot` in
+ * paths handed to cc / ld are made relative, and the place is handed over by cwd (`under_slot` in
  * `ksplc/tools/run.kspl`).
  * ============================================================ */
 #ifdef _WIN32
@@ -176,8 +177,8 @@ KSPL_UNUSED static void kspl_fd_cloexec(int fd) {
 #define KSPL_WCMD_MAX 32767
 
 /* Copies a UTF-8 run to a UTF-16 NUL terminator.
- * Caution: **Returns 0 where it does not fit or holds a NUL** — an operation on a different path
- * would come back as a success (the same reason as kspl_to_cstr). */
+ * Caution: **Returns 0 where it does not fit or holds a NUL.** Otherwise an operation on a
+ * different path would come back as a success (the same reason as kspl_to_cstr). */
 KSPL_UNUSED static int kspl_win_to_wide(const char *utf8, Sz len, wchar_t *out, Sz out_cap) {
     int n;
     if (len < 0 || out_cap < 1) return 0;
@@ -209,7 +210,7 @@ KSPL_UNUSED static int kspl_win_cstr_to_wide(const char *cstr, wchar_t *out, Sz 
 }
 
 /* Copies a NUL-terminated UTF-8 to a UTF-16 one on the heap, as long as it needs (an environment
- * value, a command line); NULL where it is not UTF-8 or memory is short. The caller frees it. */
+ * value, a command line). NULL where it is not UTF-8 or memory is short. The caller frees it. */
 KSPL_UNUSED static wchar_t *kspl_win_wide_dup(const char *utf8) {
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
     wchar_t *w = n > 0 ? (wchar_t *)malloc((size_t)n * sizeof(wchar_t)) : NULL;
@@ -236,15 +237,15 @@ KSPL_UNUSED static char *kspl_win_utf8_dup(const wchar_t *w) {
  *
  * Caution: **Do not copy it again from `char **argv`.** The CRT assembles that in the current code
  * page, where a character it cannot express is already a `?` (`かんそ` becomes `???` under
- * CP1252). **It is taken again from `GetCommandLineW`**, the OS's own UTF-16, which loses neither a
+ * CP1252). **It is taken again from `GetCommandLineW`**, the OS's own UTF-16. That loses neither a
  * space nor a non-ASCII character.
  * `CommandLineToArgvW` lives in `shell32`. mingw finds it in the default import library even
- * unnamed, but **the explicit `-lshell32` stays** (beside `-lws2_32`): the MSVC side needs it.
- * Caution: **Do not take it apart again by hand** — the rules for the quotes and the backslashes
- * are the reverse of the assembling side's (kspl_win_build_cmdline), and copied, only
+ * unnamed. But **the explicit `-lshell32` stays** (beside `-lws2_32`): the MSVC side needs it.
+ * Caution: **Do not take it apart again by hand.** The rules for the quotes and the backslashes
+ * are the reverse of the assembling side's (kspl_win_build_cmdline). Copied, only
  * one gets fixed.
  * **Put it through once only** (inside the generated main; gen/c/root.kspl). Put it through
- * on every `sys.args()` and the allocations pile up per call.
+ * on every `sys.args()`, and the allocations pile up per call.
  * POSIX is UTF-8 from the start, so it passes straight through. */
 KSPL_LINK char **kspl_os_argv(int argc, char **argv) {
 #ifdef _WIN32
@@ -281,9 +282,9 @@ KSPL_LINK char **kspl_os_argv(int argc, char **argv) {
 
 /* Sleeps for the given milliseconds.
  *
- * Caution: **Do not wait by spinning busily** (for a port to open, for a child to put a mark out):
- * it eats a whole core the entire time, so **the whole run slows**, not the waiting side alone.
- * Where a read with a timeout (kspl_proc_read) can do the waiting, that comes first; this one is
+ * Caution: **Do not wait by spinning busily** (for a port to open, for a child to put a mark out).
+ * It eats a whole core the entire time, so **the whole run slows**, not the waiting side alone.
+ * Where a read with a timeout (kspl_proc_read) can do the waiting, that comes first. This one is
  * for a wait with nobody to read from, such as a mark appearing in a file. */
 #ifdef _WIN32
 KSPL_LINK void kspl_sleep_ms(I32 ms) {
@@ -299,8 +300,8 @@ KSPL_LINK void kspl_sleep_ms(I32 ms) {
 }
 #endif
 
-/* Whether this is Windows, for a KSPL source (a test and the like) that branches at run time on
- * the OS's paths (skipping a test that leans on a POSIX path such as /bin/echo). */
+/* Whether this is Windows. It is for a KSPL source (a test and the like) that branches at run time
+ * on the OS's paths. An example is skipping a test that leans on a POSIX path such as /bin/echo. */
 #ifdef _WIN32
 KSPL_LINK Bool kspl_is_windows(void) { return true; }
 #else
@@ -308,11 +309,11 @@ KSPL_LINK Bool kspl_is_windows(void) { return false; }
 #endif
 
 /* The machine this program was compiled for, as a triple built from the C compiler's own macros
- * (its architecture, then its OS), into buf; returns the length, or 0 where cap is too small.
- * ksplc looks it up in its table of machines (`ksplc/base/target.kspl`) and refuses, naming it, a
- * machine the table has no row for. A part the macros do not tell is `unknown`.
- * Caution: **Spell each part as the table's rows do**, or a machine the table holds is refused
- * (every gate compiles with the default, on each platform CI runs). */
+ * (its architecture, then its OS), into buf. Returns the length, or 0 where cap is too small.
+ * ksplc looks it up in its table of machines (`ksplc/base/target.kspl`). It refuses a machine the
+ * table has no row for, and names it. A part the macros do not tell is `unknown`.
+ * Caution: **Spell each part as the table's rows do.** Otherwise a machine the table holds is
+ * refused (every gate compiles with the default, on each platform CI runs). */
 #if defined(__x86_64__) || defined(_M_X64)
 #define KSPL_HOST_ARCH "x86_64"
 #elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(__APPLE__)
@@ -349,9 +350,9 @@ KSPL_LINK Sz kspl_host_machine(U8 *buf, Sz cap) {
 #undef KSPL_HOST_ARCH
 #undef KSPL_HOST_OS
 
-/* The OS's random source for std/rand.kspl's CSPRNG (fill/bytes/u64). POSIX reads /dev/urandom;
- * Windows has none, so rand_s() (UCRT/MSVCRT, CNG's RNG inside; its premise is ctx.kspl's
- * _CRT_RAND_S definition) is called four bytes at a time. Not bcrypt.h: under <windows.h> alone
+/* The OS's random source for std/rand.kspl's CSPRNG (fill/bytes/u64). POSIX reads /dev/urandom.
+ * Windows has none, so rand_s() is called four bytes at a time (UCRT/MSVCRT, CNG's RNG inside).
+ * Its premise is ctx.kspl's _CRT_RAND_S definition. Not bcrypt.h: under <windows.h> alone
  * some environments lack its types (LONG/ULONG/PUCHAR), and rand_s needs no extra link. */
 #ifndef _WIN32
 KSPL_LINK Bool kspl_rand_fill(U8 *buf, Sz len) {
@@ -382,10 +383,10 @@ KSPL_LINK Bool kspl_rand_fill(U8 *buf, Sz len) {
 #endif
 
 /* Windows's CRT opens the three standard streams in text mode, where a \n written becomes \r\n
- * behind the program's back — so a "\r\n" the program wrote itself lands as "\r\r\n".
- * Content-Length framing holds raw "\r\n" in its headers and is destroyed by it, and any other
- * program handing bytes to a stream is too. Every generated program calls this once before
- * kspl_main (emit_main_function in gen/c/root.kspl), so what a KSPL program writes is what lands,
+ * behind the program's back. So a "\r\n" the program wrote itself lands as "\r\r\n".
+ * Content-Length framing holds raw "\r\n" in its headers and is destroyed by it. So is any other
+ * program handing bytes to a stream. Every generated program calls this once before
+ * kspl_main (emit_main_function in gen/c/root.kspl). So what a KSPL program writes is what lands,
  * on standard error as on standard output. */
 #ifdef _WIN32
 #include <io.h>
@@ -399,10 +400,10 @@ KSPL_LINK void kspl_io_set_stdio_binary(void) {
 KSPL_LINK void kspl_io_set_stdio_binary(void) {}
 #endif
 
-/* Returns an open stream's size in bytes, -1 where it cannot be read; after any seek that
- * succeeded the position is back at the head (a stream that cannot seek, a pipe, stays put).
+/* Returns an open stream's size in bytes, -1 where it cannot be read. After any seek that
+ * succeeded, the position is back at the head (a stream that cannot seek, a pipe, stays put).
  * Caution: **Do not call fseek / ftell directly from KSPL.** Their `long` is 32-bit on Windows
- * (LLP64) and 64-bit on Linux (LP64), and KSPL cannot write `long`: declared as `I64`, a failing
+ * (LLP64) and 64-bit on Linux (LP64), and KSPL cannot write `long`. Declared as `I64`, a failing
  * `-1L` reads on Windows x86-64 as 4294967295 and slips past the `< 0` check.
  * **Nor use them here**: past 2 GiB, Windows's ftell fails. The 64-bit pair is taken instead. */
 #ifdef _WIN32
@@ -427,16 +428,16 @@ KSPL_LINK int64_t kspl_file_size(void* stream) {
  * abort() ends (kspl_end_on_abort). The generated main calls it once before kspl_main
  * (emit_main_function in gen/c/root.kspl).
  *
- * Caution: **A KSPL string literal is a run of UTF-8 bytes**, and Windows's CRT hands it to
+ * Caution: **A KSPL string literal is a run of UTF-8 bytes.** Windows's CRT hands it to
  * WriteConsoleA, which reads it in the console's code page (under CP932 `ソースを整形する`
  * comes out as `繧ｽ繝ｼ繧ｹ繧呈紛蠖｢縺吶ｋ`). Only **a real console handle** garbles (ConPTY, as in
  * VS Code's terminal, or PowerShell/cmd); mintty (MSYS2) is a pipe. No terminal can be relied on
- * to be the safe kind, so it is lined up on the program's side. **Line up both sides**: typed
+ * to be the safe kind, so it is lined up on the program's side. **Line up both sides.** Typed
  * input would otherwise arrive in the old code page, and mix with UTF-8 in one program.
  *
  * Caution: Put them back once done, on exit and after a panic too (abort() skips atexit, and
- * raises SIGABRT first). A code page is the whole console's state and outlives the process, so left
- * behind it breaks the output of the next program run there. */
+ * raises SIGABRT first). A code page is the whole console's state and outlives the process. Left
+ * behind, it breaks the output of the next program run there. */
 #ifdef _WIN32
 #include <windows.h>
 #include <stdlib.h> /* atexit */
@@ -452,11 +453,11 @@ static void kspl_restore_console_cp(void) {
     if (kspl_saved_out_cp != 0) SetConsoleOutputCP(kspl_saved_out_cp);
     if (kspl_saved_in_cp != 0) SetConsoleCP(kspl_saved_in_cp);
 }
-/* abort() raises SIGABRT first, in msvcrt and UCRT alike, and this ends the process there with
- * the code __fastfail gives (STATUS_STACK_BUFFER_OVERRUN), which a parent reads as SIGABRT's 134
+/* abort() raises SIGABRT first, in msvcrt and UCRT alike. This ends the process there with
+ * the code __fastfail gives (STATUS_STACK_BUFFER_OVERRUN). A parent reads that as SIGABRT's 134
  * ("A child's end is one code on every OS" in std/docs/DESIGN-system.md).
  * Caution: **Do not leave the end to the CRT.** msvcrt's abort() exits 3, which an exit(3) gives
- * too, and UCRT's depends on its fault-reporting setting; a panic and the run-time checks would
+ * too. UCRT's depends on its fault-reporting setting. A panic and the run-time checks would then
  * read differently per CRT. TerminateProcess raises no error-report dialog, as __fastfail can. */
 static void kspl_end_on_abort(int sig) {
     (void)sig;
@@ -480,15 +481,15 @@ KSPL_LINK void kspl_io_init_console(void) {}
 
 /* Joins the console the program was started from, where the program has none of its own. The
  * generated main calls it once, before kspl_io_init_console (emit_main_function in
- * gen/c/root.kspl), because the code page can only be set on a console that is there.
+ * gen/c/root.kspl). The code page can only be set on a console that is there.
  *
- * A windowing-subsystem program shows no console on a double-click, which is the point, but **run
- * from a terminal it would say nothing at all**: it starts with no standard output.
+ * A windowing-subsystem program shows no console on a double-click, which is the point. But **run
+ * from a terminal, it would say nothing at all**: it starts with no standard output.
  *
- * Caution: **Only where the stream has nowhere to go** — `prog > out.txt` has a handle already
- * (redirection is set with or without a console), and pointing it at the console would throw the
- * redirection away. **And do the three streams together**, or the program prints its question and
- * can never be answered.
+ * Caution: **Only where the stream has nowhere to go.** `prog > out.txt` has a handle already
+ * (redirection is set with or without a console). Pointing it at the console would throw the
+ * redirection away. **And do the three streams together.** Otherwise the program prints its
+ * question and can never be answered.
  *
  * A console program (attached already) and a double-clicked one (no parent console) both fail the
  * attach and do nothing, which is right for both. */
@@ -511,22 +512,22 @@ KSPL_LINK void kspl_io_attach_console(void) {}
 /* ============================================================
  * Writing when nobody is left to read it (SIGPIPE)
  *
- * POSIX sends a SIGPIPE where a write goes to a pipe or socket whose reader has closed, and the
- * default handling **ends the process**: left bare, a program is dragged down merely because its
- * partner has gone, **putting nothing out**, so not one clue to the cause appears anywhere.
+ * POSIX sends a SIGPIPE where a write goes to a pipe or socket whose reader has closed. The
+ * default handling **ends the process**. Left bare, a program is dragged down merely because its
+ * partner has gone. It **puts nothing out**, so not one clue to the cause appears anywhere.
  *
  * **The decision: ignore it and return it to the writer as EPIPE.** Every writing call
- * returns a failure as a value (`kspl_proc_send` returns -2, `kspl_net_send` send's return value),
- * so the side receiving it can treat it as a refusal.
+ * returns a failure as a value (`kspl_proc_send` returns -2, `kspl_net_send` send's return value).
+ * So the side receiving it can treat it as a refusal.
  *
  * Caution: **But do not let the output vanish unnoticed.** Where standard output is joined to
- * `head`, Unix's promise is **to finish quietly**; merely ignored, the program runs on with its
+ * `head`, Unix's promise is **to finish quietly**. Merely ignored, the program runs on with its
  * output silently thrown away (a common complaint). So **where a write sees EPIPE,
  * the default is put back and the signal sent again** (kspl_io_broken_pipe below; the same shape
  * as Go).
  *
  * Caution: **Do not carry it over to a child.** The ignoring setting **is inherited** across
- * execve, so a child (`git`, `clang`, a shell's pipeline) stops dying too and `yes | head -1`
+ * execve. So a child (`git`, `clang`, a shell's pipeline) stops dying too, and `yes | head -1`
  * never ends. It is put back after the fork and before the exec (kspl_child_restore_signals below,
  * called by kspl_proc_start in hosted_spawn.c).
  * ============================================================ */
@@ -536,8 +537,8 @@ KSPL_LINK void kspl_io_attach_console(void) {}
 #include <errno.h> /* the EPIPE judgement below */
 
 /* Caution: **Make it take effect before `main`.** Called from the generated `main`, it would miss
- * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspl); both join this runtime.
- * **A library leaves the signal to the program that links it** (KSPL_LIBRARY): its handling is
+ * the `main` the LLVM backbone writes by hand (gen/llvm/module.kspl). Both join this runtime.
+ * **A library leaves the signal to the program that links it** (KSPL_LIBRARY). Its handling is
  * process-wide, and that program has chosen it for its own writes. */
 #if !defined(KSPL_LIBRARY)
 __attribute__((constructor)) static void kspl_sigpipe_init(void) {
@@ -555,7 +556,7 @@ static void kspl_child_restore_signals(void) {
 KSPL_LINK void kspl_io_broken_pipe(void) {
 #if !defined(KSPL_LIBRARY)
     /* Caution: **Do nothing for anything but EPIPE.** A write also comes out short on a full disk
-     * or a removed device, and killing the process there takes away the refusal returned as a
+     * or a removed device. Killing the process there takes away the refusal returned as a
      * value. */
     if (errno != EPIPE) return;
     signal(SIGPIPE, SIG_DFL);
@@ -570,23 +571,24 @@ KSPL_LINK void kspl_io_broken_pipe(void) {}
 /* ============================================================
  * A crash says what happened (SIGSEGV / SIGBUS, Windows's access violation and stack overflow)
  *
- * Left to the OS, a program touching memory it may not ends **without a word**: a shell prints
+ * Left to the OS, a program touching memory it must not ends **without a word**. A shell prints
  * "Segmentation fault" at best, and a parent sees the code alone. So the runtime writes one line,
- * `crash: null pointer dereference (SIGSEGV at address 0x0)`, and ends the program as the fault
- * would have: POSIX puts the signal back to its default and raises it again (139, a core dump
- * where one is enabled), Windows ends with the exception's code (read as 139, "A child's end is
- * one code on every OS" in std/docs/DESIGN-system.md). A library takes nothing: its host owns the signals.
+ * `crash: null pointer dereference (SIGSEGV at address 0x0)`. It then ends the program as the
+ * fault would have. POSIX puts the signal back to its default and raises it again (139, a core
+ * dump where one is enabled). Windows ends with the exception's code (read as 139, "A child's end
+ * is one code on every OS" in std/docs/DESIGN-system.md). A library takes nothing: its host owns
+ * the signals.
  *
- * Caution: **Only async-signal-safe calls in the handler** (write, signal, raise): the fault may
+ * Caution: **Only async-signal-safe calls in the handler** (write, signal, raise). The fault can
  * strike inside malloc or stdio, holding their locks. So standard output is not flushed, and a
- * program whose last lines matter is line-buffered ("A program does not lose its own output on an
+ * program whose last lines matter is line-buffered ("A program keeps its own output on an
  * abnormal exit" in std/docs/DESIGN-system.md).
  * Caution: **A stack overflow needs a stack of its own** (sigaltstack) for the handler to run on.
- * The main thread's is set at start-up, a std/thread thread's as it starts; a thread C code starts
- * has none, and its overflow ends with 139 and no line.
+ * The main thread's is set at start-up, a std/thread thread's as it starts. A thread that C code
+ * starts has none, and its overflow ends with 139 and no line.
  * ============================================================ */
 #if !defined(KSPL_LIBRARY)
-/* One crash line, built with no allocation and no stdio (either may be what broke). */
+/* One crash line, built with no allocation and no stdio (either can be what broke). */
 typedef struct {
     char text[160];
     size_t len;
@@ -623,8 +625,8 @@ static void kspl_crash_compose(kspl_crash_line *l, const char *what, const char 
 }
 
 /* What a fault at addr was. An overflow's fault lands near the stack's end (floor; 0 where it is not
- * known), in the guard below it, which on Linux's main thread is 1 MiB; an address in the first
- * page is a null pointer with a field's offset added. */
+ * known), in the guard below it. On Linux's main thread the guard is 1 MiB. An address in the
+ * first page is a null pointer with a field's offset added. */
 static const char *kspl_crash_what(uintptr_t addr, uintptr_t floor, const char *other) {
     if (floor != 0 && (addr > floor ? addr - floor : floor - addr) < ((uintptr_t)1 << 20)) {
         return "stack overflow";
@@ -676,7 +678,7 @@ static int kspl_crash_alt_stack(void *mem, size_t size) {
     return sigaltstack(&ss, NULL) == 0;
 }
 
-/* The main thread's stack end is its limit below this frame: asking the OS for it reads
+/* The main thread's stack end is its limit below this frame. Asking the OS for it reads
  * /proc/self/maps on Linux, too dear for every start (kspl_stack_floor in hosted_thread.c). What
  * stands above this frame (the arguments, the environment) moves the guess by far less than the
  * window kspl_crash_what allows. Before `main`, for the reason at kspl_sigpipe_init. */
@@ -694,8 +696,8 @@ __attribute__((constructor)) static void kspl_crash_init(void) {
     }
 }
 
-/* A std/thread thread's share as it starts: its stack's end, and an alternate stack to hand back
- * to kspl_crash_thread_leave as it ends (NULL where none was set). */
+/* A std/thread thread's share as it starts. It sets its stack's end, and an alternate stack to
+ * hand back to kspl_crash_thread_leave as it ends (NULL where none was set). */
 static void *kspl_crash_thread_enter(void) {
     void *mem;
     if (!kspl_crash_taken) return NULL;
@@ -725,7 +727,7 @@ static void kspl_crash_thread_leave(void *mem) { (void)mem; }
 
 #if defined(_WIN32) && !defined(KSPL_LIBRARY)
 /* Asked only where no handler took the exception, so a C library's own __try still sees its
- * faults first; one this does not name goes on to the filter it replaced. No alternate stack is
+ * faults first. A fault this does not name goes on to the filter it replaced. No alternate stack is
  * needed: Windows leaves the overflowing thread its guard's room to report in. */
 static LPTOP_LEVEL_EXCEPTION_FILTER kspl_crash_prev_filter = NULL;
 

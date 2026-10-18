@@ -1,6 +1,6 @@
 # Setting up a project
 
-**This guide takes you from a first program to a real project**: running a program with arguments, working in any folder, building an executable to hand out, splitting a program into files, and editing in VS Code. It continues from the quick start in the root [`README.md`](../README.md).
+**This guide takes you from a first program to a real project.** It covers running a program with arguments, working in any folder, and building an executable to hand out. It also covers splitting a program into files, and editing in VS Code. It continues from the quick start in the root [`README.md`](../README.md).
 
 **What you need first:**
 
@@ -22,7 +22,7 @@ The commands are written for the unpacked folder (`./ksplc`). With `ksplc` on th
 
 **It compiles the intermediate C with `clang`** (or the compiler named by the environment variable `CC`), so one has to be on the PATH. Building an executable yourself uses the same C compiler ("Building a standalone executable" below).
 
-**On Windows, use MSYS2's UCRT64 clang** (`pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH). Kanso is developed and built with it. LLVM's own Windows clang targets MSVC instead: ksplc names that toolchain's link flags, but nothing builds or runs a program with it ("Where it is supported" in the root [`README.md`](../README.md)).
+**On Windows, use MSYS2's UCRT64 clang** (`pacman -S mingw-w64-ucrt-x86_64-clang` in the "MSYS2 UCRT64" shell, then put `C:\msys64\ucrt64\bin` on the PATH). Kanso is developed and built with it. LLVM's own Windows clang targets MSVC instead. ksplc names that toolchain's link flags, but nothing builds or runs a program with it ("Where it is supported" in the root [`README.md`](../README.md)).
 
 Arguments after the script name go to the program:
 
@@ -66,7 +66,7 @@ The steps it takes, and how to take them apart (to ship objects without the sour
 
 ## Splitting a program into files
 
-**Where an `import` searches from depends on how it is written, above all on whether it contains `/`** ("The three strict rules of path resolution" in the [KSPL language specification](SPEC-language.md)). The table shows what to write for the usual cases.
+**Where an `import` searches from depends on how it is written.** Above all, it depends on whether it contains `/` ("The three strict rules of path resolution" in the [KSPL language specification](SPEC-language.md)). The table shows what to write for the usual cases.
 
 | Where the file is | Write |
 | :-- | :-- |
@@ -78,11 +78,11 @@ The steps it takes, and how to take them apart (to ship objects without the sour
 
 **A project that names itself is found from any folder.** Put a `ksplc.cfg` holding `[package]` and `name = myapp` at its top, and `import "myapp/hw"` finds `hw.kspl` in that top folder. `ksplc info package` names the package of the current folder. The details are in "A package that names itself (`[package]`)" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
 
-Note: **A library can also be handed over without its KSPL source**, built with `--library=` and used through the C interface the compiler writes beside it ("Shipping a library and using it" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+Note: **A library can also be handed over without its KSPL source.** Build it with `--library=`, and use it through the C interface that the compiler writes beside it ("Shipping a library and using it" in [`ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
 
 ## VS Code (syntax highlighting, the Language Server, debugging)
 
-**VS Code builds and debugs in the unpacked folder without setup; the Kanso extension adds colouring and code help.** The unpacked folder holds `.vscode/` (build tasks, LLDB settings) and, at its top, `kspl_lldb.py`: the LLDB pretty printer that makes slices, `Result` types and structs readable in the debugger. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
+**VS Code builds and debugs in the unpacked folder without setup; the Kanso extension adds colouring and code help.** The unpacked folder holds `.vscode/` (build tasks, LLDB settings). At its top it holds `kspl_lldb.py`, the LLDB pretty printer. It makes slices, `Result` types and structs readable in the debugger. The Kanso extension adds `.kspl` syntax highlighting and the Language Server (jump to definition, hover, diagnostics).
 
 1. **Install the extension**
 
@@ -167,8 +167,11 @@ Caution: **A double-click shows that refusal nowhere.** Run the opener once by h
 
 Each association below runs `out/kspage_open.exe` with one file's path. **No gate runs either of them**, so only your environment can say whether it works.
 
-* **Windows** — right-click a `.kspage` file, choose "Open with ▸ Choose another app ▸ Look for another app on this PC", pick `out\kspage_open.exe`, and tick "Always use this app".
-  * **Do not tie `.json` to it.** Every settings and data file on the machine would open in kspage ("The extension is kspage's own, and does not name the format inside" in [`kspage/docs/DESIGN-application.md`](../kspage/docs/DESIGN-application.md)).
+* **Windows**:
+  1. Right-click a `.kspage` file.
+  2. Choose "Open with ▸ Choose another app ▸ Look for another app on this PC".
+  3. Pick `out\kspage_open.exe`, and tick "Always use this app".
+  * **Do not tie `.json` to it.** Every settings and data file on the machine would open in kspage ("The extension is kspage's own and names no format inside" in [`kspage/docs/DESIGN-application.md`](../kspage/docs/DESIGN-application.md)).
 * **macOS** — Finder's "Get Info ▸ Open with" needs an application bundle (`.app`). Make one in Automator's "Application" running `out/kspage_open.exe "$1"`, and tie that.
 
 ### When a double-click shows nothing

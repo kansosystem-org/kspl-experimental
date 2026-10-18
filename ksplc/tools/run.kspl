@@ -7,7 +7,7 @@
 // ==========================================
 //   tier 1: every input file's hash matches the last run -> neither ksplc nor the C compiler runs.
 //   tier 2: otherwise the generated C is split into units, and **a unit whose contents match the
-//           last run keeps its object**; if every object is reused the link is skipped too.
+//           last run keeps its object**. If every object is reused, the link is skipped too.
 // ==========================================
 import "ksplc/base/cache" as base_cache + { Hash_hex }
 import "ksplc/base/config_file" as base_config_file
@@ -36,7 +36,7 @@ priv const max_run_slots: Sz = 64 //< how many slots the cache keeps, besides th
 priv const run_slot_spare_secs: I64 = 3600 //< a slot used within this many seconds is never swept
     //<
     //< Caution: **Do not rely on the count alone.** One gate run creates more new slots than the
-    //< cap while a single build is still writing its own, and a count alone would remove that slot
+    //< cap while a single build is still writing its own. A count alone would remove that slot
     //< from under it (`failed to write file: …/prog.new.h`). The cache stays over the cap for that
     //< long.
 
@@ -67,7 +67,7 @@ priv fn append_section_flags(list: List<|U8[]|>$@) //< run_section_flags, where 
 
 priv fn append_compile_flags(list: List<|U8[]|>$@) //< the flags every unit is compiled with
     //<
-    //< Caution: **The cache keys read them from here as well** (append_flags_key): a flag given to
+    //< Caution: **The cache keys read them from here as well** (append_flags_key). A flag given to
     //< the command alone would reuse objects compiled without it.
     list.push(run_cflags)
     list.push(run_opt_flag)
@@ -215,7 +215,7 @@ priv fn deps_are_fresh(deps_path: U8[], arena: Arena$@): Bool //<
     //< Whether every line of the deps file (one line = `<64 hex digits> <path>`) still matches
     //<
     //< One unreadable or changed line makes it "stale" (when in doubt, rebuild). A line whose
-    //< digits are dashes names a settings file that was looked for and not found; it matches as
+    //< digits are dashes names a settings file that was looked for and not found. It matches as
     //< long as the file stays absent.
     text: = io.read_file(deps_path) catch
         return false
@@ -263,13 +263,13 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
     for embedded in base_locate.embedded_read()
         if !append_dep_line(embedded, out@)
             return
-    // **The settings files read are inputs too** — a `[package]` decides where the sources above
-    // were read from, so editing one has to make the result stale (`files_read` in
+    // **The settings files read are inputs too.** A `[package]` decides where the sources above
+    // were read from, so editing one must make the result stale (`files_read` in
     // `../base/config_file.kspl`).
     for cfg in base_config_file.files_read()
         if !append_dep_line(cfg, out@)
             return
-    // **So is a settings file looked for and not found**: one placed there later is read instead of
+    // **So is a settings file looked for and not found.** One placed there later is read instead of
     // the one further up, so its appearance makes the result stale. Its line has dashes for a
     // digest.
     for cfg in base_config_file.files_missed()
@@ -309,8 +309,8 @@ priv fn append_slot_key(script: U8[], given: U8[]?, out: Str_builder$@): Bool //
     $h: = Str_builder.new()
     defer h.free()
     // Caution: **Key the script by its absolute path, not as it was typed.** `tests/main.kspl`
-    // names a different file in every folder it is run from: keyed by the text, two packages' tests
-    // would share one slot, and two such runs at once would sweep away each other's objects before
+    // names a different file in every folder it is run from. Keyed by the text, two packages' tests
+    // would share one slot. Two such runs at once would sweep away each other's objects before
     // the link ("no such file or directory: obj/…").
     h.s(base_locate.canonical_path(script)).c(0U8)
     if text: = given
@@ -351,8 +351,8 @@ priv fn has_obj(units: List<|Unit|>$@, obj: U8[]): Bool //<
     //< Whether that object is already in the list
     //<
     //< Caution: **Do not list the same object twice.** A small input split many ways gives units
-    //< with the same (empty) contents, and a name hashed from the contents makes them **one file**:
-    //< `compile_units` would start several cc writing the same output. There are at most
+    //< with the same (empty) contents. A name hashed from the contents makes them **one file**.
+    //< Then `compile_units` would start several cc writing the same output. There are at most
     //< `max_run_units`, so a linear search is enough.
     for u in units
         if u.obj.equals(obj)
@@ -408,8 +408,8 @@ priv fn under_slot(path: U8[], slot: U8[]): U8[] //<
     //< It turns an absolute path under the slot into one relative to the slot
     //<
     //< Caution: **Pass every name given to the C compiler through this.** An absolute path holding
-    //< non-ASCII breaks in the compiler (the reason is "Paths are held in UTF-8, and converted to
-    //< the wide API on Windows" in std/docs/DESIGN-system.md); cc starts with the slot as its cwd,
+    //< non-ASCII breaks in the compiler (the reason is "Paths are UTF-8, converted to the wide API
+    //< on Windows" in std/docs/DESIGN-system.md). Each cc starts with the slot as its cwd,
     //< so a relative path works. It strips only **a name the caller built from the slot**.
     if !path.starts_with(slot) || path.len <= slot.len + 1
         return path
@@ -421,7 +421,7 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
     //< It returns true once they all exist.
     //< Caution: Always reap as many as were started (see spawn_async), even on failure partway.
     //< **Start cc with the slot as its cwd** (see under_slot).
-    // Caution: **A cc that did not start fails the build**, as one that failed does: its object
+    // Caution: **A cc that did not start fails the build**, as one that failed does. Its object
     // is missing, so reporting success would send the link after a file that is not there.
     $ok: = true
     for $i: Sz = 0; i < units.len; i += 1
@@ -440,10 +440,14 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
             ok = false
             continue
         units[i].child = .some(child)
-    for u in units
-        if c: = u.child
+    // **Each child leaves its unit as it is reaped**: a copy of the unit would keep a handle the
+    // wait gives back (`subproc.Child` is `Move_only`).
+    for $i: Sz = 0; i < units.len; i += 1
+        taken: = units[i].child
+        units[i].child = .none
+        if c: = taken
             $child: = c
-            if child.wait() != 0
+            if child.wait().unwrap_or(-1) != 0
                 ok = false
     return ok
 
@@ -454,11 +458,15 @@ priv fn compile_units(units: List<|Unit|>$@, slot: U8[], arena: Arena$@): Bool /
 priv fn append_child_ksplc(list: List<|U8[]|>$@, arena: Arena$@) //<
     //< This ksplc as a child, with the options it needs to read the program as this one does
     //<
-    //< `--program` makes a missing `main` its diagnostic, not the linker's. A value is joined with
-    //< `=` (argp reads no other form). **The std directory is always passed**: the child inherits
-    //< no `--std-dir=`, and would look for "std" from the cwd and fail. The package source
-    //< directory likewise, **but not where none was given**: an empty one reads as "a directory
-    //< was set", and the child fails with `--pkg-src-dir: expected a directory path`.
+    //< `--program` makes a missing `main` its diagnostic, not the linker's; values join with `=`.
+    //< **The std directory is always passed**: the child inherits no `--std-dir=`. The package
+    //< source directory likewise, **but not where none was given**: an empty one reads as "a
+    //< directory was set", and the child fails with `--pkg-src-dir: expected a directory path`.
+    // **Report a missing std here, and stop**: the child's note would name its `--std-dir=` as the
+    // place taken, even where nobody wrote one.
+    if !base_locate.std_found()
+        io.err().s(base_locate.std_missing_note())
+        sys.exit(1)
     list.push(sys.args()[0])
     list.push("--program")
     for d in base_core.config.defines
@@ -489,7 +497,7 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     env_val.s(exe).c('\n').s(script)
     sys.set_env(sys.script_env_name, env_val.slice()) catch
         io.err()
-            .s("ksplc run: cannot set \{sys.script_env_name\} (script_path() will report none)\n")
+            .s("ksplc run: cannot set \{sys.script_env_name\}. script_path() will report none\n")
     $argv: = List<|U8[]|>.new(arena)
     argv.push(exe)
     for a in script_args
@@ -499,10 +507,10 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
 priv fn commit_path(from: U8[], to: U8[]): Bool //<
     //< It moves the cache's working file onto the final name
     //<
-    //< **Rename over it, never remove it first**: the name exists at every moment, so a run
+    //< **Rename over it, never remove it first.** The name exists at every moment, so a run
     //< starting the program in between finds no gap. Windows refuses to replace a running program
-    //< (another run of this script), so that one is renamed aside (`aside_name`), which a running
-    //< program allows, and keeps running while the new one takes the name.
+    //< (another run of this script). So that one is renamed aside (`aside_name`), which a running
+    //< program allows. It keeps running while the new one takes the name.
     fs.rename_path(from, to) catch
         if !fs.exists(to)
             return false
@@ -538,7 +546,7 @@ priv fn sweep_aside(exe_path: U8[], arena: Arena$@) //< removes the programs ren
 priv fn hold_slot(path: U8[]): fs.File_lock //<
     //< The slot's lock; it reports when another run of this script holds it
     //<
-    //< **One build at a time per slot**: the working names (`prog.new.*`, the objects swept) are
+    //< **One build at a time per slot.** The working names (`prog.new.*`, the objects swept) are
     //< the slot's, so two builds at once would take each other's files. The OS releases it if ksplc
     //< dies.
     lock: = fs.File_lock.try_take(path) catch e
@@ -582,8 +590,8 @@ fn run_source(source: U8[], script_args: List<|U8[]|>$@) //<
 priv fn run_program(script: U8[], given: U8[]?, script_args: List<|U8[]|>$@) //<
     //< It builds the program (where needed) and runs it, exiting with its exit code
     //<
-    //< `given` is the program's text where it has no file. Runs of one program share its slot: the
-    //< build is one at a time (`hold_slot`), and the program runs outside the lock, so a long run
+    //< `given` is the program's text where it has no file. Runs of one program share its slot. The
+    //< build is one at a time (`hold_slot`). The program runs outside the lock, so a long run
     //< blocks no other.
     arena: = Arena.new(64 * 1024)
     defer arena.free()
@@ -605,7 +613,7 @@ priv struct Run_slot //< a script's place in the run cache, and the paths a buil
         //< The record of what prog.exe was linked from (the objects, then the libraries)
         //<
         //< All objects existing does not mean the executable was built from them (a compile passed
-        //< and a link failed), and skipping the link then **runs the previous binary as a
+        //< and a link failed). Skipping the link then **runs the previous binary as a
         //< success**.
     new_exe: U8[] //<
         //< The executable before the commit, renamed onto `exe` once the build succeeds
@@ -693,7 +701,7 @@ priv fn generate_c(slot: Run_slot@, script: U8[], given: U8[]?, arena: Arena$@):
     ksplc_argv.push(arena.text().s("--emit-libs=").s(slot.libs).take())
     // It splits the generated C into translation units so that it can be compiled in parallel.
     // **The split count is not part of the cache key.** Which unit a declaration goes to depends on
-    // the split count (ksplc/gen/c/ctx.unit_for), so sharing one cache across machines with
+    // the split count (ksplc/gen/c/ctx.unit_for). So sharing one cache across machines with
     // different core counts changes the contents. An object's name comes from the unit's contents,
     // so even then it is rebuilt correctly.
     units_n: = pick_unit_count()
@@ -703,8 +711,12 @@ priv fn generate_c(slot: Run_slot@, script: U8[], given: U8[]?, arena: Arena$@):
     ksplc_argv.push(slot.new_c)
     $code: I32 = 0
     if text: = given
-        code = subproc.spawn_feed(ksplc_argv.slice(), "", text, feed_idle_ms) catch
-            io.err().s("ksplc: failed to start ksplc\n")
+        code = subproc.spawn_feed(ksplc_argv.slice(), "", text, feed_idle_ms) catch e
+            switch e
+            case .spawn_failed
+                io.err().s("ksplc: failed to start ksplc\n")
+            case .input_not_taken
+                io.err().s("ksplc: the compiling ksplc stopped reading the program part way\n")
             sys.exit(1)
             fallback 1
     else
@@ -754,7 +766,7 @@ priv fn build_and_link(slot: Run_slot@, units: List<|Unit|>$@, named_libs: List<
     // The sweep runs **before** the compile (see sweep_objects).
     sweep_objects(fs.join(slot.dir, "obj", arena), units, arena)
     if !compile_units(units, slot.dir, arena)
-        // The C that failed is kept as the user's only clue; the previous set (prog.exe / deps) is
+        // The C that failed is kept as the user's only clue. The previous set (prog.exe / deps) is
         // left untouched, so the next run comes here again.
         io.err()
             .s("ksplc run: the C compiler failed on the generated code \
@@ -815,7 +827,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
     // Caution: **Refuse an output the C would land on**: the link would read the file it writes.
     if c_path.equals(output) || libs_path.equals(output)
         io.err()
-            .s("ksplc build: '\{output\}' would be overwritten by its own C; name the executable\n")
+            .s("ksplc build: '\{output\}' would be overwritten by its own C. Name the executable\n")
         sys.exit(2)
     dir: = sys.get_dir_name(output)
     if dir.len > 0
@@ -835,7 +847,7 @@ fn build_program(input: U8[], output: U8[], cflags: U8[]) //<
         io.err().s("ksplc build: the compile left no list of libraries (\{libs_path\})\n")
         sys.exit(1)
     // The order the link needs: the C first, the program's libraries before the common ones (they
-    // may need `-lm`), as `ksplc run` links; GNU ld resolves from the left only.
+    // can need `-lm`), as `ksplc run` links. GNU ld resolves from the left only.
     $cc: = List<|U8[]|>.new(arena)
     cc.push(cc_name())
     cc.push(run_cflags)

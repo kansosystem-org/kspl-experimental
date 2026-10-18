@@ -1,7 +1,7 @@
 //< Infers an expression's type: the dispatch on its kind, and the kinds no other file takes
 //<
 //< `infer_expr` hands a literal, a path, a postfix, a binary operator and a struct literal to their
-//< own files, and keeps the small kinds here: a character, a string, `sizeof` / `offsetof`, a unary
+//< own files. It keeps the small kinds here: a character, a string, `sizeof` / `offsetof`, a unary
 //< operator, `?:`, a `catch` chain and an enum's `.variant`. Every expression ends in
 //< `settle_expected`, which fits it to the expected type.
 //< **`infer_expr_of` is the one way in from `sema/decl`** (for `sizeof(<an expression>)`).
@@ -60,16 +60,19 @@ impl Ast_node
             return I32::sema_type_env.Builtin_type_id.unknown
 
         // k_expr_catch / k_result_wrap / k_expr_catch_chain build or unpack a Result, so they see
-        // the expected Result unchanged; any other expression gets only the inner value type.
+        // the expected Result unchanged. Any other expression gets only the inner value type,
+        // except a `.variant` (implicit_variant_target).
         $effective_expected: = expected_id
         if c.env.is_result(effective_expected)
             k: = r.kind_id
-            if k != .k_expr_catch && k != .k_result_wrap && k != .k_expr_catch_chain
+            if k == .k_expr_implicit_dot || k == .k_implicit_enum
+                effective_expected = implicit_variant_target(c, r, effective_expected)
+            else if k != .k_expr_catch && k != .k_result_wrap && k != .k_expr_catch_chain
                 effective_expected = c.env.strip_result(effective_expected)
 
         // An explicit cast ("::") in the postfix chain fixes the result type, so the outer expected
-        // type is not passed down; if it were, a needless cast would read as an implicit conversion
-        // and the redundant-cast check would go wrong.
+        // type is not passed down. If it were, a needless cast would read as an implicit
+        // conversion, and the redundant-cast check would go wrong.
         if r.has_explicit_cast_in_chain()
             effective_expected = I32::sema_type_env.Builtin_type_id.unknown
 
@@ -94,9 +97,9 @@ impl Ast_node
             // arriving here has nowhere to go as a value. Allowed, it reaches Genc as a
             // `string_interp`: an ICE.
             c.err(r,
-                "string interpolation can only be written as the argument of a writer chain (e.g. \
-                    'io.out().s(\"...\")' or 'b.s(\"...\")'); it streams into the writer instead of \
-                    producing a value. Build the value with 'Str_builder' first, then pass \
+                "string interpolation can only be written as an argument of a writer chain, such as \
+                    'io.out().s(\"...\")' or 'b.s(\"...\")'. It streams into the writer instead of \
+                    producing a value. Build the value with 'Str_builder' first. Then pass its \
                     '.slice()'")
             type_id = c
                 .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
@@ -143,8 +146,8 @@ priv fn infer_primitive_type(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32)
     // A type is not a value. Allowed, it would reach genc as a bare `Primitive_type` node: an ICE
     // rather than an answer (Principle 8 in `../../../docs/DESIGN-principles.md`).
     c.clear_scratch()
-        .s("'\{node.text\}' names a type, and a type is not a value. Write the value itself, a cast \
-            ('\{node.text\}::x'), or a static held on it ('\{node.text\}.width()')")
+        .s("'\{node.text\}' names a type. A type is not a value. Write the value itself, a cast \
+            ('\{node.text\}::x'), or a static method of the type ('\{node.text\}.width()')")
     c.err(node, c.scratch.slice())
     return c.env.get_or_add(node.text)
 
@@ -164,26 +167,26 @@ priv fn check_literal_escapes(node: Ast_node$@, c: Sema_ctx$@, one_byte: Bool) /
     switch found.fault
     case .unknown
         m
-            .s("unknown escape '\{spell\}'; a literal takes only \\n \\r \\t \\0 \\' \\\" \\\\ \\{ \
-                \\} \\uXXXX, and in a string a \\ at the line's end carrying the text onto the next \
+            .s("unknown escape '\{spell\}'. A literal takes only \\n \\r \\t \\0 \\' \\\" \\\\ \\{ \
+                \\} \\uXXXX. In a string, a \\ at the line's end continues the text on the next \
                 line. Write the character itself without the backslash, or '\\\\' for a backslash")
     case .short_hex
         m
-            .s("'\\u' takes exactly four hexadecimal digits (for example '\\u00E9'), but \
-                '\{spell\}' is not four of them")
+            .s("'\\u' takes exactly four hexadecimal digits, such as '\\u00E9'. '\{spell\}' does \
+                not have four hexadecimal digits")
     case .surrogate
         m
-            .s("'\{spell\}' names a surrogate (U+D800 to U+DFFF), which is not a character, and two \
-                of them do not pair up as in UTF-16 or JSON. '\\u' reaches only U+FFFF, so write a \
-                character above it as itself in the source (an emoji, say)")
+            .s("'\{spell\}' names a surrogate (U+D800 to U+DFFF), which is not a character. Two of \
+                them do not pair up as in UTF-16 or JSON. '\\u' reaches only U+FFFF. For a \
+                character above U+FFFF, write the character itself in the source, such as an emoji")
     case .wide_in_char
         m
-            .s("'\{spell\}' is more than one byte in UTF-8, and a character literal is one byte. \
-                Use a string literal, or keep '\\u' at U+007F or below")
+            .s("'\{spell\}' is more than one byte in UTF-8. A character literal holds one byte. Use \
+                a string literal, or keep '\\u' at U+007F or below")
     case .wide_char_body
         m
-            .s("a character literal holds exactly one byte, but '\{spell\}' is more than one. Use a \
-                string literal (\"…\") for text that does not fit in a byte")
+            .s("a character literal holds exactly one byte. '\{spell\}' is more than one byte. Use \
+                a string literal (\"…\") for text that does not fit in a byte")
     default {}
     c.err(node, c.scratch.slice())
 
@@ -204,7 +207,7 @@ priv fn infer_sizeof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
         case .none {}
         if inner.kind_id == .k_type_expr
             // The declaration pass leaves a target naming a bound name to here
-            // (validate_all_type_exprs in `../decl/type_check.kspl`), so a bound name out of scope
+            // (validate_all_type_exprs in `../decl/type_check.kspl`). So a bound name out of scope
             // is reported here. Not in an instance: its copy holds names already resolved. A failed
             // resolve registers the name.
             if !c.is_instantiating()
@@ -223,7 +226,7 @@ priv fn infer_offsetof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32):
     //< An `offsetof(T, f)` is a `Sz` (like `sizeof`)
     //<
     //< **The field name is not typed.** It goes as written to `field_offset_of` in
-    //< `sema/decl/layout.kspl`; resolved as an identifier, it would match a local of the same name
+    //< `sema/decl/layout.kspl`. Resolved as an identifier, it would match a local of the same name
     //< and give a wrong offset with no diagnostic.
     inner: = node.get_offsetof_type()
     if inner != null
@@ -236,8 +239,8 @@ priv fn infer_offsetof_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32):
 priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
     //< The only place that decides which type a string literal takes to match the expected type
     //<
-    //< `Void immut@` is for C's format arguments: `printf` takes a plain `char*`, which KSPL cannot
-    //< name (one byte is `U8`: "Primitive types" in docs/SPEC-language.md), and a void pointer fits
+    //< `Void immut@` is for C's format arguments. `printf` takes a plain `char*`, which KSPL cannot
+    //< name (one byte is `U8`: "Primitive types" in docs/SPEC-language.md). A void pointer fits
     //< both the hosted stdio.h and the freestanding declaration.
     //< Caution: **Do not add `U8@`.** One of the two then always mismatches in sign
     //< (-Wpointer-sign).
@@ -257,8 +260,8 @@ priv fn infer_string_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I3
 priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error
     inner: = node.get_unary_target()
     op: = node.get_unary_op().text
-    // Passes the sign to the literal's range check (the reason is at Fn_ctx.literal_negated); set
-    // only when a literal is directly below, so it does not leak into a nested expression.
+    // Passes the sign to the literal's range check (the reason is at Fn_ctx.literal_negated). It is
+    // set only when a literal is directly below, so it does not leak into a nested expression.
     outer_negated: = c.fn_ctx.literal_negated
     c.fn_ctx.literal_negated = op.equals("-") && inner.kind_id == .k_integer
     // A number is negated or inverted at its own width, as a binary operation computes at its
@@ -277,11 +280,22 @@ priv fn infer_unary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32
     // binary counterpart is `is_bool_arith_operand` in `binary.kspl`).
     if (op.equals("-") || op.equals("~")) && c.env.is_bool(inner_type_id)
         shown: = c.env.display(inner_type_id)
-        c.clear_scratch().s("Unary operator '\{op\}' cannot be applied to '\{shown\}'; ")
-            .s("use '!' to negate, and convert first ('I32::flag') for arithmetic")
+        c.clear_scratch().s("Unary operator '\{op\}' cannot be applied to '\{shown\}'. ")
+            .s("Use '!' for negation. For arithmetic, convert the value first ('I32::flag')")
         c.err(node, c.scratch.slice())
         return I32::sema_type_env.Builtin_type_id.unknown
     if sema_body_binary.refuses_fn_operator(c, node, op, inner_type_id)
+        return I32::sema_type_env.Builtin_type_id.unknown
+    // An unsigned number holds no negative, so `-u` could only wrap (`-5` as a `U32` is
+    // 4294967291). A literal under the minus is left to its range check, which names it.
+    if op.equals("-") && c.env.is_integer(inner_type_id) && c.env.is_unsigned(inner_type_id) &&
+        !sema_body_literal.is_untyped_int_literal(inner)
+        shown: = c.env.display(inner_type_id)
+        c.clear_scratch()
+            .s("unary '-' cannot be applied to the unsigned '\{shown\}'. An unsigned type holds no \
+                negative value, so the result would wrap. Write '0 - x' for the wrapping negation, \
+                or cast to a signed type first ('I64::x')")
+        c.err(node, c.scratch.slice())
         return I32::sema_type_env.Builtin_type_id.unknown
 
     method_name: = "neg" if op.equals("-") else ("not" if op.equals("!") else "")
@@ -346,9 +360,9 @@ priv fn infer_ternary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I
             final_id = ternary_numeric_type(c, true_node, t_id, false_node, f_id)
             if sema_type_env.is_unknown(final_id)
                 c.clear_scratch().s("ternary operator branches have incompatible types: ")
-                    .s("'\{c.env.get_str(t_id)\}' and '\{c.env.get_str(f_id)\}'; implicit \
+                    .s("'\{c.env.display(t_id)\}' and '\{c.env.display(f_id)\}'. Implicit \
                         conversion ")
-                    .s("between them is forbidden to prevent data loss. Use explicit '::' cast.")
+                    .s("between them is forbidden to prevent data loss. Use an explicit '::' cast.")
                 c.err(node, c.scratch.slice())
                 throw .analysis_failed
             t_id = settle_branch_literal(c, true_node, t_id, final_id)
@@ -365,10 +379,10 @@ priv fn infer_ternary_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I
                 (c.env.is_pointer(t_id) || c.env.is_fn_ptr(t_id))
                 final_id = t_id
             else
-                t_str: = c.env.get_str(t_id)
-                f_str: = c.env.get_str(f_id)
+                t_str: = c.env.display(t_id)
+                f_str: = c.env.display(f_id)
                 // As in apply_type_coercion (`coerce.kspl`), the shapes are compared with
-                // immutability stripped at every level; when they agree, the result is the
+                // immutability stripped at every level. When they agree, the result is the
                 // immutable side (the safe direction).
                 t_is_const: = c.env.has_const_deep(t_id)
                 f_is_const: = c.env.has_const_deep(f_id)
@@ -402,7 +416,7 @@ priv fn infer_unknown_expr_type(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I
     //< later check, so the form would pass to the backend and fail there with no word from ksplc.
     //< Not an internal error that stops: the language server analyses half-written text too.
     c.err(node,
-        "this expression has a form the analysis has no rule for; it cannot be used as a value here")
+        "this expression has a form the analysis has no rule for. It cannot be used as a value here")
     return I32::sema_type_env.Builtin_type_id.unknown
 
 priv fn infer_upcast_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I32!Sema_error
@@ -413,14 +427,22 @@ priv fn infer_upcast_expr(node: Ast_node$@, c: Sema_ctx$@, _expected_id: I32): I
 
 fn require_result_operand(c: Sema_ctx$@, node: Ast_node$@, type_id: I32, op: U8[]): Bool //<
     //< Unknown already has a diagnostic; only a known non-Result needs another one.
+    //<
+    //< On an Option the hint names its own idiom: a `T?`'s none is an answer, not a failure. So the
+    //< reader who wrote `catch` or `!` out of habit learns the spelling that takes it apart.
     if sema_type_env.is_unknown(type_id) || c.env.is_result(type_id)
         return true
     c.clear_scratch().s("'\{op\}' operator can only be applied to a Result type")
+    if c.env.instance_base(c.env.get_clean_real_type(type_id)).equals(base_core.option_fqn)
+        c.scratch
+            .s("\n  Hint: the operand has type '\{c.env.display(type_id)\}'. Its 'none' represents \
+                absence of a value, not failure. Take the value with 'if x: = …', or supply a \
+                substitute with '.unwrap_or(v)'.")
     c.err(node, c.scratch.slice())
     return false
 
 priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): I32!Sema_error
-    // Read and cleared at once: the flag applies to this catch alone; a catch nested in its subject
+    // Read and cleared at once: the flag applies to this catch alone. A catch nested in its subject
     // or arguments passes its value to a reader.
     value_unread: = ctx.fn_ctx.catch_value_unread
     ctx.fn_ctx.catch_value_unread = false
@@ -455,11 +477,18 @@ priv fn infer_catch_chain(node: Ast_node$@, ctx: Sema_ctx$@, expected_id: I32): 
     // rejected.
     prev_in_fallback: = ctx.fn_ctx.in_fallback_value
     ctx.fn_ctx.in_fallback_value = true
-    fb_is_result: = ctx.env.is_result(target_expr.infer_expr(ctx, exp_for_fb)!)
+    fb_id: = target_expr.infer_expr(ctx, exp_for_fb)!
     sema_body_lint_stmt.lint_type_given(ctx, target_expr, exp_for_fb,
         "The type of the value it stands in for already gives it.")
     ctx.fn_ctx.in_fallback_value = prev_in_fallback
-    return ctx.env.make_result(base_id) if fb_is_result else base_id
+    // A substitute that is itself a result makes the whole a result, failing as the substitute
+    // does.
+    // Caution: **Not where the value is that result already** (`(A!B)!E catch b()`, b giving
+    // `A!B`): the substitute then stands in for the value, as any other.
+    if ctx.env.is_result(fb_id) &&
+        ctx.env.get_clean_real_type(fb_id) != ctx.env.get_clean_real_type(base_id)
+        return ctx.result_type_of(base_id, ctx.env.get_result_err_id(fb_id))
+    return base_id
 
 priv fn lint_rethrow_only(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_node$@,
     err_id_node: Ast_node$@) //<
@@ -480,8 +509,7 @@ priv fn lint_rethrow_only(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_no
     if throw_expr != null && throw_expr.is_path_or_ident() &&
         throw_expr.get_path_or_ident_name().equals(err_id_node.text)
         ctx.information(catch_node,
-            "[I0701] Redundant error propagation. Consider using '!' instead of 'catch e { throw e; \
-                }'.")
+            "[I0701] Redundant error propagation. Use '!' instead of 'catch e { throw e; }'.")
 
 priv fn infer_catch_block(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_node$@,
     err_id_node: Ast_node$@, err_type_id: I32, base_id: I32, value_unread: Bool): Void!Sema_error //<
@@ -503,7 +531,7 @@ priv fn infer_catch_block(ctx: Sema_ctx$@, catch_node: Ast_node$@, block: Ast_no
     if !value_unread && !sema_type_env.is_void(base_id) && !sema_type_env.is_unknown(base_id) &&
         !block.is_guaranteed_to_leave(true)
         ctx.clear_scratch()
-            .s("'catch' is expected to produce '\{ctx.env.get_str(base_id)\}', but control may \
+            .s("'catch' is expected to produce '\{ctx.env.display(base_id)\}', but control may \
                 reach the end of its block without 'fallback'")
         ctx.err(catch_node, ctx.scratch.slice())
     ctx.fn_ctx.catch_depth -= 1
@@ -516,36 +544,43 @@ fn mark_variant_used(c: Sema_ctx$@, enum_name: U8[], variant_name: U8[]) //<
     //< The shorthand (in an expression or a `case`) skips symbol resolution, so unless marked used
     //< here the unused-symbol warnings ([W0206] and the like) misfire.
     name: = c.clear_scratch().s(enum_name).s(".").s(variant_name).slice()
-    sym: = c.symtab.resolve(name) catch null
+    sym: = c.symtab.resolve(name).unwrap_or(null)
     if sym != null
         sym.flags.is_used = true
 
+priv fn implicit_variant_target(c: Sema_ctx$@, node: Ast_node$@, result_id: I32): I32 //<
+    //< The type a `.variant` builds where a Result is expected
+    //<
+    //< **The value's enum comes first**: `.red` against `Color!E` is the value, wrapped as any
+    //< value is. Only a variant the value's type lacks and the Result has (`.ok(v)`, `.err(e)`)
+    //< builds the Result itself.
+    ok_id: = c.env.strip_result(result_id)
+    variant: = node.get_implicit_enum_variant()
+    if variant == null
+        return ok_id
+    if d: = c.env.get_enum_def(c.env.get_str(c.env.get_clean_real_type(ok_id)))
+        if _v: = d.get_variant(variant.text)
+            return ok_id
+    if d: = c.env.get_enum_def(c.env.get_str(c.env.get_clean_real_type(result_id)))
+        if _v: = d.get_variant(variant.text)
+            return result_id
+    return ok_id
+
 priv fn refuse_variant_without_enum(c: Sema_ctx$@, node: Ast_node$@, expected_id: I32) //<
     //< Refuses a `.variant` where the expected type is no enum, naming that type
-    //<
-    //< **`.err(e)` and `.ok(v)` around a Result get the KSPL spelling instead**: Rust's habit of
-    //< returning `Err(e)` meets a `T!E` whose expected value is the `T`, and naming `T` alone
-    //< would send the writer looking for an enum.
     variant: = node.get_implicit_enum_variant().text
+    shown: = c.env.display(expected_id)
     c.clear_scratch()
-    if (variant.equals("err") || variant.equals("ok")) &&
-        (c.env.is_result(expected_id) || c.env.is_result(c.fn_ctx.ret_id))
-        c.scratch
-            .s("'.\{variant\}' does not build a Result: a 'T!E' is no enum, and a function \
-                returning one fails with 'throw <error>' and gives its value with 'return <value>'")
-    else
-        shown: = c.env.display(expected_id)
-        c.scratch
-            .s("'.\{variant\}' needs an enum here, but the expected type is '\{shown\}'. Write the \
-                value in full")
+        .s("'.\{variant\}' needs an enum here. The expected type is '\{shown\}'. Write the value in \
+            full")
     c.err(node, c.scratch.slice())
 
 priv fn infer_implicit_enum_expr(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32):
     I32!Sema_error
     if sema_type_env.is_unknown(expected_id) || sema_type_env.is_void(expected_id)
         c.err(node,
-            "cannot infer enum type for implicit variant. Context does not provide an expected \
-                type.")
+            "cannot infer the enum type for an implicit variant. The context does not provide an \
+                expected type.")
         return expected_id
 
     // Caution: **Look the enum up past an alias and the immutable mark.** An array literal's

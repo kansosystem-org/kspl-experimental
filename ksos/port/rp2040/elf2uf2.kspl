@@ -64,8 +64,9 @@ priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
     //< Spreads the ELF's loadable segments over 256-byte-aligned pages, in ascending address order
     //<
     //< Caution: **Do not cut each segment into 256-byte pieces.** targetAddr must be a multiple of
-    //< 256 and payloadSize 256, and segments meet off a page boundary (`.isr_vector` and `.text`),
-    //< so cutting makes short, unaligned blocks that the boot ROM **ignores with no error**.
+    //< 256, and payloadSize must be 256. Segments meet off a page boundary (`.isr_vector` and
+    //< `.text`). So cutting makes short, unaligned blocks, and the boot ROM **ignores them with no
+    //< error**.
     if data.len < 0x34 || data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F'
         throw .not_an_elf
     if data[4] != 1
@@ -109,24 +110,27 @@ priv fn load_pages(data: U8[], arena: Arena$@): List<|Page|>!Uf2_error //<
             start: = a - page_base
             room: = payload_size - start
             n: = room if room < p_filesz - off else p_filesz - off
-            slot: = slot_of.get(page_base) catch
+            $slot: Sz = 0
+            if known: = slot_of.get(page_base)
+                slot = known
+            else
                 pages.push(Page::{ .addr = U32::page_base, .data = ::{} })
-                slot_of.set(page_base, pages.len - 1)
-                fallback pages.len - 1
+                slot = pages.len - 1
+                slot_of.set(page_base, slot)
             dst: = U8$[]::pages[slot].data
             _n: = dst.copy_from(start, data.sub(p_offset + off, n))
             off += n
     if pages.len == 0
         throw .no_loadable_segment
-    return pages.order_by(fn(a: Page, b: Page; ): I32 {
+    return pages.order_by(fn(a: Page@, b: Page@; ): I32 {
         return -1 if a.addr < b.addr else (1 if a.addr > b.addr else 0);
     }, arena)
 
 priv fn verify(path: U8[], blocks: Sz): Void!Uf2_error //<
     //< Reads back the UF2 just written and checks the format's invariants
     //<
-    //< Caution: If the format is wrong, the boot ROM **ignores it silently, with no error**, so it
-    //< is read back and fails here rather than on the device.
+    //< Caution: If the format is wrong, the boot ROM **ignores it silently, with no error**. So
+    //< this reads it back, and it fails here rather than on the device.
     data: = io.read_file(path) catch
         throw .read_back_failed
     if data.len != blocks * block_size

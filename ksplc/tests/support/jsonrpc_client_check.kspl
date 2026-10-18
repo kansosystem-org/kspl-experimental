@@ -1,0 +1,107 @@
+//< Checks of the suites' JSON-RPC client itself (`jsonrpc_client.kspl`), against a peer of its own
+//<
+//< Each peer is a script `ksplc run` starts, so the client is checked apart from the language
+//< server. `lsp_test` runs it; `KSPLC_STD_DIR` must be set, as for the server.
+import "ksplc/tests/support/harness"
+import "ksplc/tests/support/jsonrpc_client"
+import "std/fs"
+import "std/io"
+import "std/json" { Json_builder }
+import "std/mem" { Arena }
+import "std/str"
+import "std/verdict"
+
+priv const flood_lines: Sz = 3000 //< how many lines the flooding peer writes
+    //<
+    //< Multiplied by one line's length, it decides how far past the pipe's buffer the output goes.
+
+priv const flood_line: U8[] = //< the line the flooding peer writes
+    "flooding stderr so the pipe buffer fills while the reader waits on stdout"
+
+priv const notes_before_answer: Sz = 100 //<
+    //< How many notifications the bursting peer sends before the answer
+    //<
+    //< **It stands for "one per open document"**, which a language server sends on reanalysis. The
+    //< point is that no count breaks it.
+
+priv const wait_ms: I32 = 60000 //< how long a peer may take
+
+fn run(exe: U8[], arena: Arena$@) //< every check of the client, with exe as `ksplc`
+    verdict.check("the id after I32's top is 1, not a negative that makes a notification",
+        jsonrpc_client.id_after(7) == 8 && jsonrpc_client.id_after(2147483647) == 1, "")
+    dir: = harness.sandbox("jsonrpc_client")
+    check_stderr_flood(exe, dir, arena)
+    check_notification_burst(exe, dir, arena)
+
+priv fn check_stderr_flood(exe: U8[], dir: U8[], arena: Arena$@) //<
+    //< A round trip with a peer that writes more to standard error than the pipe holds
+    //<
+    //< **This is the only gate for `drain_err`.** No frame comes, so the read must end as "closed";
+    //< without draining, the peer stalls on standard error and the timeout runs out.
+    //< Caution: **Keep the output past the pipe's buffer (64KB on Linux)**, or the peer never
+    //< stalls and draining is never tested.
+    name: = "the client reads to the end of a peer that floods standard error, keeping its tail"
+    src: = fs.join(dir, "flood.kspl", arena)
+    script: = arena.text().s("import \"std/io\"\n\nfn main(): I32\n")
+        .s("  for _k in Range.asc(\{flood_lines\})\n    io.err().s(\"").s(flood_line)
+        .s("\\n\")\n  return 0\n").take()
+    io.write_file(src, script) catch
+        verdict.check(name, false, "the flooding script cannot be written")
+        return
+    $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
+        verdict.check(name, false, "the flooding peer does not start")
+        return
+    defer c.free()
+    _frame: = c.read_msg(wait_ms, null) catch e
+        switch e
+        case .closed
+            kept: = c.err_tail().len
+            // Caution: **Check what is held, not only what is handed out.** The flood is far
+            // longer than the tail, and holding all of it grows with the server's run.
+            verdict.check(name,
+                kept > 0 && c.err.len == kept && kept < flood_lines * (flood_line.len + 1), "")
+        case .timed_out
+            verdict.check(name, false, "the peer stalled: stderr was not drained while waiting")
+        case .broken
+            verdict.check(name, false, "the peer's output could not be read")
+        return
+    verdict.check(name, false, "a peer that writes no frame yielded one")
+
+priv fn check_notification_burst(exe: U8[], dir: U8[], arena: Arena$@) //<
+    //< A request still finds its answer behind a long run of notifications
+    //<
+    //< **This is the gate for `request` being bounded by time, not count.** A limit on how many
+    //< are skipped breaks at "however many documents happen to be open", with no source change.
+    name: = "a request finds its answer however many notifications stand in front of it"
+    src: = fs.join(dir, "burst.kspl", arena)
+    script: = arena.text()
+        .s("import \"std/io\"\nimport \"std/jsonrpc\"\nimport \"std/str\" { Str_builder }\n\n")
+        .s("priv fn put_frame(body: U8[])\n  $f: = Str_builder.new()\n  defer f.free()\n")
+        .s("  jsonrpc.frame_into(f@, body)\n  io.out().s(f.slice())\n\n")
+        .s("fn main(): I32\n  for _k in Range.asc(\{notes_before_answer\})\n")
+        .s("    put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"note\\\"}\")\n")
+        .s("  \
+            put_frame(\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"result\\\":{\\\"ok\\\":1}}\")\n")
+        .s("  _f: = io.out().flush()\n  return 0\n").take()
+    io.write_file(src, script) catch
+        verdict.check(name, false, "the bursting script cannot be written")
+        return
+    $c: = jsonrpc_client.spawn(U8[][]::{ exe, "run", src }, "") catch
+        verdict.check(name, false, "the bursting peer does not start")
+        return
+    defer c.free()
+    $b: = Json_builder.new(arena)
+    // Before the peer answers it may already be gone, so a refused write is no failure here.
+    c.notify("note", b.obj().build(), wait_ms, null) catch {}
+    got: = c.request("probe", b.obj().build(), wait_ms, null) catch e
+        switch e
+        case .broken
+            verdict.check(name, false, "the answer was given up on behind the notifications")
+        case .timed_out
+            verdict.check(name, false, "the answer did not arrive in time")
+        case .closed
+            verdict.check(name, false, "the peer closed before answering")
+        return
+    defer got.free()
+    verdict.check(name,
+        got.val.get("result").get("ok").as_int().unwrap_or(0) == 1I64, "")

@@ -7,11 +7,11 @@
 //< ksos/docs/DESIGN-rtos.md.
 
 // ==========================================
-// Caution: **Copy bytes with `copy_from` in `std/bytes` and fill with `fill`** — with your own
+// Caution: **Copy bytes with `copy_from` in `std/bytes` and fill with `fill`.** With your own
 // index loop, what happens on an overrun (a panic, or truncation) differs from place to place.
 // ==========================================
 // **Pass a received frame as `(buf, len)` with `len <= buf.len`** (the caller's promise, not
-// checked here): the checks use `len` while the reads index `buf`, so a larger `len` reads bytes
+// checked here). The checks use `len`, while the reads index `buf`. So a larger `len` reads bytes
 // that never arrived.
 // ==========================================
 import "std/bytes"
@@ -52,8 +52,8 @@ struct Ends //< who a frame goes from and to: each end's MAC, IPv4 address and p
 fn put_mac(buf: U8$[], off: Sz, mac: Mac) //<
     //< Writes a MAC into buf at off
     //<
-    //< **It uses the _le writers, not _be**: this writes the two U32 back in the original byte
-    //< order, not in network order (get_mac reads it back the same way).
+    //< **It uses the _le writers, not _be.** This writes the two U32 back in the original byte
+    //< order, not in network order. get_mac reads it back the same way.
     buf.put_u32_le(off, mac.lo)
     buf.put_u16_le(off + 4, U16::mac.hi)
 
@@ -66,7 +66,7 @@ fn get_mac(buf: U8[], off: Sz): Mac //< reads back a MAC in the form put_mac wro
 fn checksum16_step(acc: U32, buf: U8[], off: Sz, len: Sz): U32 //<
     //< Continues the unfinished 16-bit one's-complement sum defined by RFC 1071
     //<
-    //< It adds [off, off+len) into acc without folding the carry or inverting, so a sum can span
+    //< It adds [off, off+len) into acc without folding the carry or inverting. So a sum can span
     //< separate buffers (TCP's pseudo header plus the segment) with no copy. A single region
     //< needs only checksum16.
     $sum: U32 = acc
@@ -109,8 +109,8 @@ priv fn fits(out: U8$[], need: Sz): Bool //<
     //< Whether a frame of need bytes (plus the 0 padding to the minimum length) fits out
     //<
     //< Caution: **Check it before starting to write.** `copy_from` and `sub_mut` silently truncate
-    //< what does not fit, so the full length is returned for a partial frame and the caller sends
-    //< bytes from outside the buffer onto the wire.
+    //< what does not fit. The full length then comes back for a partial frame. The caller then
+    //< sends bytes from outside the buffer onto the wire.
     want: = need if need > eth_min_frame else eth_min_frame
     return out.len >= want
 
@@ -120,8 +120,8 @@ const eth_ipv4_len: Sz = eth_hdr_len + ipv4_hdr_len
 priv fn put_eth_ipv4(buf: U8$[], ends: Ends, proto: U8, ip_payload_len: Sz) //<
     //< Writes the Ethernet header and an IPv4 header with no options, checksum and all
     //<
-    //< ip_payload_len is what follows the IPv4 header (the UDP or TCP header plus its payload);
-    //< the caller has checked with fits that it all fits.
+    //< ip_payload_len is what follows the IPv4 header (the UDP or TCP header plus its payload).
+    //< The caller has checked with fits that it all fits.
     const ip_off: Sz = eth_hdr_len
     put_mac(buf, 0, ends.dst_mac)
     put_mac(buf, 6, ends.src_mac)
@@ -148,9 +148,10 @@ priv fn ipv4_view(buf: U8[], len: Sz, proto: U8, min_payload: Sz): Ipv4_view //<
     //< Whether a received frame holds a whole, unfragmented IPv4 packet of proto
     //<
     //< min_payload is the least that must follow the IPv4 header (the next header's fixed part).
-    //< Caution: **Take the header's length from the IHL**, or IP options make the next header be
-    //< read from their middle. **Drop a fragment**: a later one has no next header, so its payload
-    //< would be read as one (an ICMP "echo request" sending the peer's data back under our IP).
+    //< Caution: **Take the header's length from the IHL.** Otherwise the next header is read from
+    //< the middle of the IP options. **Drop a fragment.** A later one has no next header. Its
+    //< payload would be read as one: an ICMP "echo request" sends the peer's data back under our
+    //< IP.
     none: Ipv4_view = ::{ .ok = false, .hdr_len = 0, .total = 0 }
     if len < eth_ipv4_len + min_payload || buf.get_u16_be(12) != ethertype_ipv4
         return none
@@ -383,9 +384,9 @@ fn parse_tcp_segment(buf: U8[], len: Sz, expect_src_ip: U32, expect_src_port: U1
         //< Whether a received frame is a TCP segment matching src_ip/src_port/dst_port
         //<
         //< It returns the flags, seq, ack and payload position; the checksum is not checked.
-        //< Caution: **Take the payload's length from IP's Total Length** — the frame's length
-        //< includes Ethernet's padding of short frames, so a pure ACK would add 6 zero bytes,
-        //< peer_seq would run ahead, and every later segment would be dropped on a seq mismatch.
+        //< Caution: **Take the payload's length from IP's Total Length.** The frame's length
+        //< includes Ethernet's padding of short frames. So a pure ACK would add 6 zero bytes, and
+        //< peer_seq would run ahead. Every later segment would then fail on a seq mismatch.
     none: Tcp_segment = ::{ .ok = false, .flags = 0, .seq = 0, .ack = 0, .payload_off = 0,
         .payload_len = 0 }
     const min_tcp_hdr: Sz = 20

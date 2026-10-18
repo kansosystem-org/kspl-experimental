@@ -10,12 +10,12 @@
 // ==========================================
 function kspageSave(kf) {
   const { app, bodyExt, bodyText, deny, forgetWhere, keepName, kindOf,
-    layIn, nameOf, pathBox, pathOf, planOpen, recalled, remember, say,
-    takeName, ui, whyNotRead } = kf;
+    layIn, nameOf, NOT_UTF8, pathBox, pathOf, planOpen, recalled, remember, say,
+    takeName, textOf, ui, whyNotRead } = kf;
   //
   // Caution: **Before writing, check whether that path has changed**, or it silently overwrites
-  // another window's changes.
-
+  // another window's changes. **Only a save back to the document's own path asks this**
+  // (`saveLocal` guards any other).
   const changedOutside = async (path, mine) => {
     if (mine.path !== path) {
       return false;
@@ -35,22 +35,23 @@ function kspageSave(kf) {
     if (bytes === null) {
       return true;
     }
-    return new TextDecoder().decode(bytes) !== mine.read;
+    // A text no longer UTF-8 is not the text read (`textOf` gives null).
+    return textOf(bytes) !== mine.read;
   };
   // Where the field is.
   // **Say where it is in words**, quoting the label as the screen shows it (the field is in a
-  // collapsed menu). **Do not open the menu and move focus** — the click closes it again, and a
+  // collapsed menu). **Do not open the menu and move focus.** The click closes it again, and a
   // flag to keep it open would have nothing to clear it after Ctrl+S.
   const pathIsAt = "\"Path for saving and opening\" under \"File\"";
 
-  // Caution: **Do not ignore a typed name** — the target is cleared and asked for again at the next
-  // save. **Clear the path too**, or it writes the same file whatever the name.
+  // Caution: **Do not ignore a typed name.** **Clear the path**, so the next save writes under the
+  // new name (`saveLocal`). Kept, it would write the same file whatever the name.
   const renamed = () => {
     keepName();
-    const path = pathOf();
-    if (!path) return;
-    if (path) pathBox.value = "";
-    say("The name has changed, so the save target will be confirmed at the next save");
+    if (!pathOf()) return;
+    pathBox.value = "";
+    say("The name has changed, so the next save writes under it in the served folder, unless a path"
+      + " is entered into " + pathIsAt);
   };
   // The text of the reason for a refusal.
   // Caution: **Do not mistake it for a cancel** (told apart by name below).
@@ -79,34 +80,39 @@ function kspageSave(kf) {
   // Whether the document the save was made for is still the one shown.
   // Caution: **A save waits on the write, and the view can change meanwhile** (a failed drop
   // restores the old place; one that opens stays). So the path and the text are stored after the
-  // write and on that same document only, or another document gets a file it never came from.
+  // write, and on that same document only. Otherwise another document gets a file it never came
+  // from.
   const stillHere = (mine) => kf.doc === mine;
   // The note added when the shown document is not the one written (its next save asks again).
   const MOVED = ". Another document came into view while it was written, and that one does not "
     + "take this file";
-  // Saving with the local server present:
-  // **Where no question is needed, do not ask** — with the path empty, **it writes under `kssrv`'s
-  // folder by the field's name**, and that path goes into the field.
-  // Caution: **Do not silently overwrite an existing file** (the default name `kspage` can clash):
-  // it refuses and says where the field is.
+  // Where a save goes: the path field, or with it empty **`kssrv`'s folder by the field's name**.
+  // Asking for what is already known only adds a press. The path written goes into the field.
+  // Caution: **Do not silently overwrite a file this document did not come from.** The default
+  // name `kspage` can clash, and a refused open can leave its path behind. The first press
+  // refuses, naming the file, and a second press on the same document and path replaces it.
+  let armed = "";
   const saveLocal = async (path, first, body, mine) => {
-    if (path) {
-      await saveToPath(path, body, mine);
-      return;
-    }
     // Caution: **Do not write the extension here** — only `file.js`'s `bodyExt` decides it, or a
     // text document would be offered kspage's extension.
-    const there = await ui.localStat(first);
-    if (there === null) {
-      app.focus();
-      return;   // `localStat` has said why it could not tell
+    const target = path || first;
+    if (target !== mine.path) {
+      const there = await ui.localStat(target);
+      if (there === null) {
+        app.focus();
+        return;   // `localStat` has said why it could not tell
+      }
+      const asked = mine.id + "\n" + target;
+      if (there && armed !== asked) {
+        armed = asked;
+        deny(target + " is already there. Press Save again to replace it, or enter another path"
+          + " into " + pathIsAt);
+        app.focus();
+        return;
+      }
     }
-    if (there) {
-      deny(first + " is already there. To overwrite it, enter it into " + pathIsAt);
-      app.focus();
-      return;
-    }
-    await saveToPath(first, body, mine);
+    armed = "";
+    await saveToPath(target, body, mine);
   };
 
   // Writes back to the local path.
@@ -125,7 +131,7 @@ function kspageSave(kf) {
       return;
     }
     // Caution: **Store the written text, and set the path, on the document the save was for**
-    // (`stillHere` above), or the next save wrongly says "it changed outside".
+    // (`stillHere` above). Otherwise the next save wrongly says "it changed outside".
     const here = stillHere(mine);
     if (here) {
       pathBox.value = path;
@@ -139,22 +145,27 @@ function kspageSave(kf) {
     // **The document the save is for** (`stillHere` above) and its target, taken before any await.
     const mine = kf.doc;
     const body = bodyText();
-    const path = pathOf(), first = nameOf(bodyExt());
-    if (!(await ui.localReady)) {
-      deny("Open the URL shown by kssrv --local to save this document");
-      return;
-    }
-    await saveLocal(path, first, body, mine);
+    await saveLocal(pathOf(), nameOf(bodyExt()), body, mine);
   };
-  // Caution: **One save at a time** — a second press while one is writing (a double click, Ctrl+S
-  // pressed twice) compares against a text the first has not recorded yet, and refuses as "changed
-  // outside". It is answered by the save under way.
+  // Caution: **One save at a time.** A second press while one is writing (a double click, Ctrl+S
+  // pressed twice) compares against a text the first has not recorded yet. It then refuses as
+  // "changed outside". So the save under way answers it.
   let saving = null;
   const saveToFile = () => {
     if (saving === null) saving = saveNow().finally(() => { saving = null; });
     return saving;
   };
   document.getElementById("save").addEventListener("click", saveToFile);
+
+  // Refuses an open, naming the path. Caution: **Put the field back to the document's own path.**
+  // The field is where a save goes. Left holding the refused path, the next save would write
+  // this document over the file just refused.
+  const refused = (path, reason) => {
+    deny(reason + " (" + path + ")");
+    pathBox.value = kf.doc.path;
+    app.focus();
+    return false;
+  };
 
   // Loads the read text as this page's document, setting `out` (`planOpen`'s) aside. If unreadable
   // it shows the reason, leaves the document as it was, and returns false.
@@ -164,11 +175,7 @@ function kspageSave(kf) {
   // earlier destination is kept**.
   const takeDoc = (out, path, text) => {
     const why = layIn(out, kindOf(path), text, path, { path: path });
-    if (why !== "") {
-      deny(whyNotRead(why, text) + "(" + path + ")");
-      app.focus();
-      return false;
-    }
+    if (why !== "") return refused(path, whyNotRead(why, text));
     // The name comes from the path's last part (the next downloaded copy gets the same name).
     takeName({ name: path.split("/").pop() });
     say("Loaded it (" + path + ")" + kf.aside);
@@ -184,7 +191,9 @@ function kspageSave(kf) {
       app.focus();   // `localRead` has already reported what happened
       return false;
     }
-    return takeDoc(planOpen(), path, new TextDecoder().decode(bytes));
+    const text = textOf(bytes);
+    if (text === null) return refused(path, whyNotRead(NOT_UTF8, ""));
+    return takeDoc(planOpen(), path, text);
   };
   const openFromPath = () => {
     const path = pathOf();
@@ -225,23 +234,16 @@ function kspageSave(kf) {
   };
   // Opens a document named by a text. true if it could.
   //
-  // **The caller reads the URL** (`openFromUrl` below); this takes one text and checks it too (a
-  // fresh page with a `?doc=` URL would put every other section on another document).
+  // **The caller reads the URL** (`openFromUrl` below); this takes one text and checks it too. A
+  // fresh page with a `?doc=` URL would put every other section on another document.
   const openDoc = async (path) => {
     if (!isSafePath(path)) {
       deny("What can be opened is a relative path as seen from the same place as this page, and "
         + "nothing else (" + path + ")");
       return false;
     }
-    if (!(await ui.localReady)) {
-      deny("Open the URL shown by kssrv --local to open a document");
-      return false;
-    }
-    const bytes = await ui.localRead(path);
-    if (bytes === null) return false;
-    const text = new TextDecoder().decode(bytes);
     // **Take the draft just before loading** (what a slow read let be typed is in it).
-    return takeDoc(planOpen(), path, text);
+    return openPlace(path);
   };
 
   // ---- Reopening the document the tab had open ----
@@ -260,9 +262,6 @@ function kspageSave(kf) {
       return false;
     };
     if (was.path.length > 0) {
-      if (!ui.localReady || !(await ui.localReady)) {
-        return lost(was.path, "the local server is not there");
-      }
       // **Ask whether it exists first** (`openPlace`'s refusal names no path, and the field is
       // empty here).
       const there = await ui.localStat(was.path);

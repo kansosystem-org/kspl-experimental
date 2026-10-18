@@ -5,7 +5,7 @@
 //< A following line that starts with the mark continues a `//<` and is joined into the record's
 //< one line. **`///` and `//!` are not read** (`is_unread_mark`). The marker and the
 //< summary/detail rule are "The documentation a declaration carries" in
-//< `../../docs/DESIGN-language.md`.
+//< `../../docs/DESIGN-notation.md`.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -26,7 +26,7 @@ fn brace_at(n: Ast_node$@): Sz //< the position of the `{` where the contents be
             return c.loc.offset
     return end_of(n)
 
-priv fn is_sentence_closer(c: U8): Bool //< the marks that may follow a sentence's last word
+priv fn is_sentence_closer(c: U8): Bool //< the marks that can follow a sentence's last word
     //<
     //< A backtick, a bracket, a quote and a bold mark come after the full stop and are skipped.
     return c == '`' || c == ')' || c == ']' || c == '}' || c == '"' || c == '\'' || c == '*'
@@ -120,9 +120,9 @@ priv fn run_at(src: U8[], at: Sz, limit: Sz): Doc_run //<
     //< line
     //<
     //< **A mark with no text splits the run; it does not end it.** The rule is PEP 257's (a
-    //< summary line, a blank line, the rest) rather than a first sentence cut at a `.`, which
-    //< breaks on `e.g.` and on version numbers. **Such marks at the start of the run split
-    //< nothing**: under an anchor, such a mark is part of the anchor's shape.
+    //< summary line, a blank line, the rest). A first sentence cut at a `.` breaks on `e.g.` and
+    //< on version numbers. **Such marks at the start of the run split nothing**: under an anchor,
+    //< such a mark is part of the anchor's shape.
     e: = line_end(src, at)
     line: = src.sub(at, e - at)
     empty: = Doc_run::{ .summary = "", .detail = "", .lines = 0 }
@@ -197,7 +197,7 @@ fn file_doc_at(src: U8[]): Sz //<
     //< Where the run that describes the file begins (**`src.len` where there is none**)
     //<
     //< **It comes before the first line of code**, maybe after an ordinary banner for whoever edits
-    //< the file; this run is for its callers (as with Rust's `//!` and Go's package comment).
+    //< the file. This run is for its callers (as with Rust's `//!` and Go's package comment).
     //< Caution: **Check for a continuation before checking for a comment.** A `//<` starts with
     //< `//` too, so the looser test first would skip the run.
     $at: Sz = 0
@@ -244,9 +244,9 @@ priv fn mark_offset(src: U8[], at: Sz, brace: Sz): Sz //<
     //<
     //< It is the head's first line or its last; a one-line head is both. On a wrapped head the
     //< first line is taken, as a run there would read as the last parameter's.
-    //< **Only a mark with no text is taken from the last line**; one with text describes the return
-    //< type (`return_doc`), as "The documentation a declaration carries" in
-    //< `../../docs/DESIGN-language.md` decides.
+    //< **Only a mark with no text is taken from the last line.** A mark with text there describes
+    //< the return type (`return_doc`). "The documentation a declaration carries" in
+    //< `../../docs/DESIGN-notation.md` decides this.
     e: = line_end(src, at)
     if src.sub(at, e - at).find_str("//<").is_some()
         return at
@@ -270,7 +270,7 @@ fn doc_of(src: U8[], at: Sz, brace: Sz): U8[] //< the documentation one declarat
 fn doc_parted(src: U8[], at: Sz, brace: Sz): U8[] //<
     //< The same description, with the summary and the detail kept apart
     //<
-    //< **The editor has room the record lacks**: a hover is Markdown, so a blank line separates
+    //< **The editor has room the record lacks.** A hover is Markdown. So a blank line separates
     //< what goes into a declaration file (the summary) from what stays with the body. Both read the
     //< same run.
     run: = run_at(src, mark_offset(src, at, brace), src.len)

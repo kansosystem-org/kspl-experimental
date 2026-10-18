@@ -61,7 +61,7 @@ fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
     //< The `errors` of the closing object that ends the stream; `.none` where it does not end so
     //<
     //< **No closing object means the run ended before its verdict** (a crash, a cut-off, a line of
-    //< text saying why), so the diagnostics above it are not all there were and give no count
+    //< text saying why). So the diagnostics above it are not all there were, and give no count
     //< ("--diagnostic-format" in ksplc/docs/SPEC-tools.md). Nor does a verdict that disagrees with
     //< its count: `failed` with no error, or `succeeded` with one.
     lines: = stderr_data.trim_end().lines(arena)
@@ -69,8 +69,8 @@ fn closing_errors(stderr_data: U8[], arena: Arena$@): I32? //<
         return .none
     doc: = json.parse(lines.get(lines.len - 1), arena) catch
         return .none
-    result: = doc.val.get("result").as_str()
-    n: = doc.val.get("errors").as_int(-1)
+    result: = doc.val.get("result").as_str().unwrap_or("")
+    n: = doc.val.get("errors").as_int().unwrap_or(-1)
     failed: = result.equals("failed")
     if !(failed || result.equals("succeeded")) || n < 0 || failed != (n > 0)
         return .none
@@ -99,13 +99,15 @@ pub fn compile_errors( //< runs one source through ksplc and counts the errors i
         out_path.slice() }
     // Caution: **Do not replace this with `subproc.run`.** A nonzero exit is what is counted here;
     // thrown as an error, every input meant to be counted would end up in the catch.
-    r: = subproc.run_capture(argv, "", compile_timeout_ms, output_cap, arena)
+    got: = subproc.run_capture(argv, "", compile_timeout_ms, output_cap, arena)
 
     // Deleting a file that was never made (the compile failed) fails harmlessly.
     fs.remove_path(src_path.slice()) catch {}
     fs.remove_path(out_path.slice()) catch {}
 
-    if r.spawn_failed || r.timed_out
+    r: = got catch
+        return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
+    if r.exit_code.is_none()
         return Compile_result::{ .error_count = uncompilable, .stderr_data = "" }
     n: = closing_errors(r.stderr_data, arena).unwrap_or(uncompilable)
     return Compile_result::{ .error_count = n, .stderr_data = r.stderr_data }
@@ -121,10 +123,11 @@ fn first_error(stderr_data: U8[], arena: Arena$@): U8[] //<
         doc: = json.parse(line, arena) catch
             continue
         d: = doc.val
-        if !d.get("severity").as_str().equals("error")
+        if !d.get("severity").as_str().unwrap_or("").equals("error")
             continue
-        file: = d.get("file").as_str()
-        ln: = d.get("line").as_int(0)
-        col: = d.get("column").as_int(0)
-        return arena.text().s("\{file\}:\{ln\}:\{col\}: ").s(d.get("message").as_str()).take()
+        file: = d.get("file").as_str().unwrap_or("")
+        ln: = d.get("line").as_int().unwrap_or(0)
+        col: = d.get("column").as_int().unwrap_or(0)
+        return arena.text().s("\{file\}:\{ln\}:\{col\}: ")
+            .s(d.get("message").as_str().unwrap_or("")).take()
     return ""

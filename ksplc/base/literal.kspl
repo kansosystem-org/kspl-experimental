@@ -11,8 +11,8 @@ import "std/str" { Str_builder }
 
 struct Number_u64 //< the result of converting a numeric literal to U64
     //<
-    //< Caution: **Do not silently wrap an overflow**, or an out-of-range literal passes on as an
-    //< in-range value until the C compiler says `integer literal is too large`
+    //< Caution: **Do not silently wrap an overflow.** Otherwise an out-of-range literal passes on
+    //< as an in-range value, until the C compiler says `integer literal is too large`
     //< ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md).
     value: U64 //<
         //< where overflow is true, the value just before it overflowed (not used for display)
@@ -26,7 +26,7 @@ fn literal_escape_byte(ec: U8): U8 //< the byte that the character after a backs
         else 92 if ec == '\\' else 0 if ec == '0' else ec)
 
 fn is_known_escape(ec: U8): Bool //<
-    //< Whether a character may follow a backslash inside a literal
+    //< Whether a character can follow a backslash inside a literal
     //<
     //< Caution: **List the accepted escapes here and nowhere else.** literal_escape_byte turns an
     //< unlisted one into the character itself, so `'\b'` (8 in C) would silently become `'b'`
@@ -73,9 +73,9 @@ struct Literal_check //<
     at: Sz
     len: Sz
 
-fn escape_code_point(text: U8[], at: Sz): I32 //< the code point a `\uXXXX` stands for
+fn escape_code_point(text: U8[], at: Sz): I32? //< the code point a `\uXXXX` stands for
     //<
-    //< `at` is the backslash's index; -1 without four hexadecimal digits (as hex4 in std/chars).
+    //< `at` is the backslash's index; none without four hexadecimal digits (as hex4 in std/chars).
     return text.hex4(at + 2)
 
 struct Literal_step //< one step through a string literal's body, and what it stands for
@@ -102,8 +102,7 @@ fn literal_step(text: U8[], at: Sz, end: Sz, is_raw: Bool): Literal_step //<
     if cont > 0
         return Literal_step::{ .advance = cont, .code_point = -1, .is_cont = true }
     if (text.ptr + at + 1)$ == 'u' && at + 6 <= end
-        cp: = escape_code_point(text, at)
-        if cp >= 0
+        if cp: = escape_code_point(text, at)
             return Literal_step::{ .advance = 6, .code_point = cp }
     return Literal_step::{ .advance = 2, .code_point = -1,
         .byte = literal_escape_byte((text.ptr + at + 1)$) }
@@ -112,40 +111,71 @@ fn literal_end(src: U8[], at: Sz): Sz //<
     //< Where the string or character literal that starts at `at` ends
     //<
     //< It skips a raw string's closing `"""`, the byte after each `\`, and a string inside an
-    //< interpolation (`\{ … \}`), so that string's quote does not close the outer one. A character
+    //< interpolation (`\{ … \}`). So that string's quote does not close the outer one. A character
     //< literal also stops at a line's end, where a broken one would otherwise run on.
-    //< **The only reader of a literal in raw text**; the indentation reader keeps its own, which
+    //< **The only reader of a literal in raw text.** The indentation reader keeps its own, which
     //< stops at every line end by design (`skip_string` in `../parse/layout.kspl`).
+    return walk_literal(src, at, src.len).end
+
+fn interpolation_open_at(src: U8[], at: Sz, pos: Sz): Sz //<
+    //< Where the innermost interpolation of the literal at `at` still open at `pos` opens, or -1
+    //<
+    //< It is the position of its `\{`. A string inside the interpolation that `pos` falls in is
+    //< not entered: its own literal answers for it.
+    return walk_literal(src, at, pos).open
+
+priv const max_open_interpolations: Sz = 16 //<
+    //< How deep walk_literal keeps where the interpolations of one literal open
+    //<
+    //< Deeper ones are still counted, so the literal's end stays right; only where one opened is
+    //< forgotten.
+
+priv struct Literal_walk //< where walk_literal stopped, and what was open there
+    end: Sz //< past the closing quote, or where the walk stopped
+    open: Sz //< where the innermost interpolation still open there opens (its `\`), or -1
+
+priv fn walk_literal(src: U8[], at: Sz, stop: Sz): Literal_walk //<
+    //< It walks the literal at `at` up to its end or to `stop`, whichever comes first
+    //<
+    //< **literal_end and interpolation_open_at both read through here**, so the two never disagree
+    //< on what an interpolation spans.
     if at >= src.len
-        return src.len
+        return Literal_walk::{ .end = src.len, .open = -1 }
     if src.starts_with("\"\"\"", at)
         $r: = at + 3
         for r < src.len && !src.starts_with("\"\"\"", r)
             r += 1
-        return src.len if r >= src.len else r + 3
+        return Literal_walk::{ .end = src.len if r >= src.len else r + 3, .open = -1 }
     quote: = src[at]
     $j: = at + 1
     $depth: Sz = 0
-    for j < src.len
+    $opens: Sz[max_open_interpolations] = ::{}
+    for j < src.len && j < stop
         c: = src[j]
         if c == '\\'
             // **A `\{` opens an interpolation only inside a double quote**; in `'\{'` it is a
             // character.
             if quote == '"' && j + 1 < src.len && src[j + 1] == '{'
+                if depth < max_open_interpolations
+                    opens[depth] = j
                 depth += 1
             else if depth > 0 && j + 1 < src.len && src[j + 1] == '}'
                 depth -= 1
             j += 2
             continue
         if depth > 0 && (c == '"' || c == '\'')
-            j = literal_end(src, j)
+            inner: = literal_end(src, j)
+            if inner > stop
+                break
+            j = inner
             continue
         if depth == 0 && c == quote
-            return j + 1
+            return Literal_walk::{ .end = j + 1, .open = -1 }
         if depth == 0 && quote == '\'' && c == '\n'
-            return j
+            return Literal_walk::{ .end = j, .open = -1 }
         j += 1
-    return src.len
+    open: = opens[depth - 1] if depth > 0 && depth <= max_open_interpolations else -1
+    return Literal_walk::{ .end = j if j < src.len else src.len, .open = open }
 
 fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
     //< It finds the first fault in a literal's spelling
@@ -174,14 +204,18 @@ fn literal_fault(text: U8[], one_byte: Bool): Literal_check //<
         if ec != 'u'
             j += 2
             continue
-        cp: = escape_code_point(text, j)
-        if cp < 0 || j + 6 > span.end
+        $cp: I32? = .none
+        if j + 6 <= span.end
+            cp = escape_code_point(text, j)
+        switch cp
+        case .none
             return Literal_check::{ .fault = .short_hex, .at = j,
                 .len = 6 if j + 6 <= span.end else span.end - j }
-        if cp >= 0xD800 && cp <= 0xDFFF
-            return Literal_check::{ .fault = .surrogate, .at = j, .len = 6 }
-        if one_byte && cp > 0x7F
-            return Literal_check::{ .fault = .wide_in_char, .at = j, .len = 6 }
+        case .some(code)
+            if code >= 0xD800 && code <= 0xDFFF
+                return Literal_check::{ .fault = .surrogate, .at = j, .len = 6 }
+            if one_byte && code > 0x7F
+                return Literal_check::{ .fault = .wide_in_char, .at = j, .len = 6 }
         j += 6
     // **A character literal is one byte**, so `'€'` and `'ab'` are rejected, or char_literal_byte
     // **silently returns only the leading byte**. **Count with literal_span's byte_len**; a recount
@@ -203,8 +237,7 @@ fn char_literal_byte(text: U8[]): U8 //<
     if ch != '\\' || text.len < 4
         return ch
     if (text.ptr + 2)$ == 'u'
-        cp: = escape_code_point(text, 1)
-        return 0 if cp < 0 else U8::cp
+        return U8::escape_code_point(text, 1).unwrap_or(0)
     return literal_escape_byte((text.ptr + 2)$)
 
 struct Str_span //<
@@ -258,8 +291,8 @@ impl U8[]
     fn literal_value(r: U8[], arena: Arena$@): U8[] //< the bytes a string literal stands for
         //<
         //< For a string the compiler reads itself (`##error`'s message, `embed`'s path). Caution:
-        //< **Do not cut the quotes off by hand**: `"a\"b"` would keep its backslash, and a path
-        //< read one way at loading and another at emitting names two files.
+        //< **Do not cut the quotes off by hand.** `"a\"b"` would keep its backslash. A path read
+        //< one way at loading and another way at emitting names two files.
         $b: = Str_builder.new()
         defer b.free()
         r.append_literal_bytes(b@)
@@ -282,10 +315,10 @@ impl U8[]
         //< It converts a literal body already cleaned by append_clean_number to U64
         //<
         //< It handles the 0x/0b prefixes.
-        //< It reads only the digits and ignores the type. The code generator's path that **cleans a
-        //< literal and emits it as it is** (emit_llvm_integer_literal in gen/llvm/expr.kspl) has
-        //< no type resolution, so it uses this rather than sema's evaluator (which takes the width
-        //< from the type).
+        //< It reads only the digits and ignores the type. One code generator path **cleans a
+        //< literal and emits it as it is** (emit_llvm_integer_literal in gen/llvm/expr.kspl). That
+        //< path has no type resolution. So it uses this rather than sema's evaluator (which takes
+        //< the width from the type).
         $i: Sz = 0
         $radix: U64 = 10
         if r.len >= 2 && r.ptr$ == '0' && ((r.ptr + 1)$ == 'x' || (r.ptr + 1)$ == 'X')
@@ -297,8 +330,7 @@ impl U8[]
             i = 2
         $val: U64 = 0
         for i < r.len
-            d: = (r.ptr + i).hex_val()
-            if d >= 0
+            if d: = (r.ptr + i).hex_val()
                 // Unsigned arithmetic wraps mod 2^64, so it computes first and then detects the
                 // overflow from the result (as Cu64 in std/checked_int does).
                 scaled: = val * radix
@@ -314,7 +346,7 @@ impl U8[]
     fn parse_int_literal_u64(r: U8[]): Number_u64 //<
         //< An integer literal's absolute value as U64; it ignores the sign
         //<
-        //< The spelling may use `_` separators, `0x`/`0b`, and a type suffix.
+        //< The spelling can use `_` separators, `0x`/`0b`, and a type suffix.
         //< In source, `-1` is unary minus on `1`; the caller handles the sign.
         $clean: = Str_builder.new()
         defer clean.free()

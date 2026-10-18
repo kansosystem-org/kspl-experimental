@@ -93,7 +93,7 @@ impl Meta
         //< Checks the escapes in a quoted literal and returns it unescaped in the arena
         //<
         //< Caution: **Set `ascii_only` for a character class**, which is a byte-at-a-time table
-        //< (`Rule.char_class`'s `ranges`): a multi-byte `\u3042` would make a table matching any
+        //< (`Rule.char_class`'s `ranges`). A multi-byte `\u3042` would make a table matching any
         //< one of its three bytes, with no diagnostic.
         $i: Sz = 0
         for i < raw.len
@@ -319,17 +319,17 @@ impl Meta
         //< `_Space`, `_Boundary` and `_Keyword` look undefined.
         defined: = r.arena.create(Map<|U8[], Bool|>.new_with_cap(256, r.arena))
         for entry in rules
-            if defined.get(entry.name) catch false
+            if defined.get(entry.name).unwrap_or(false)
                 throw .fatal(r.arena.text().s("Rule '").s(entry.name).s("' is defined twice").take())
             defined.set(entry.name, true)
-        // Caution: **Also name the rule that refers to it.** The name alone may be referred to from
-        // many places, and no line and column can be given: a grammar may be embedded in an
+        // Caution: **Also name the rule that refers to it.** The name alone can be referred to from
+        // many places. No line and column can be given, since a grammar can be embedded in an
         // executable.
         for entry in rules
             refs: = List<|U8[]|>.create(r.arena)
             collect_references(entry.rule, refs)
             for want in refs
-                found: = defined.get(want) catch false
+                found: = defined.get(want).unwrap_or(false)
                 if !found
                     throw .fatal(r.arena.text().s("Undefined rule '").s(want)
                         .s("' referenced from '").s(entry.name).s("'").take())

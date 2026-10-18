@@ -3,7 +3,7 @@
 //< An attribute passes when its name is known, it takes effect at that position, and the backend
 //< can emit it. Only what passes is read later (sema/decl/registry.kspl, gen/c and gen/llvm).
 //< **An attribute that can be written but does nothing is an error** (Principle 5 of
-//< docs/DESIGN-principles.md): silently ignored, its intent and the real behaviour diverge.
+//< docs/DESIGN-principles.md). Silently ignored, its intent and the real behaviour diverge.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -106,7 +106,7 @@ fn check_directive(r: Ast_node$@, c: Sema_ctx$@): Directive_shape //<
             .s(")")
         // An attribute's name written with `##` gets a hint with the right spelling.
         if is_known_attribute(name)
-            c.scratch.s(". '").s(name).s("' is an attribute — write '#").s(name).s("'")
+            c.scratch.s(". '").s(name).s("' is an attribute. Write '#").s(name).s("'")
         c.err(r, c.scratch.slice())
         return .unknown
     case .assertion
@@ -253,8 +253,8 @@ priv fn check_cfg_attribute(r: Ast_node$@, c: Sema_ctx$@) //<
     // value.
     c.clear_scratch()
         .s("'#cfg' takes exactly one flag name, optionally negated: '#cfg(flag)' or '#cfg(!flag)'. \
-            There is no 'all'/'any'/'&&' and no comparison — combine flags on the build side, or \
-            use '##error(cond, msg)' to assert on a compile-time value")
+            There is no 'all'/'any'/'&&' and no comparison. Combine flags on the build side. \
+            Alternatively, use '##error(cond, msg)' to assert on a compile-time value")
     c.err(r, c.scratch.slice())
 
 priv fn check_align_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the N of `#align(N)`
@@ -269,8 +269,8 @@ priv fn check_align_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the N of 
     if n > 0 && (n & (n - 1)) == 0
         return
     c.clear_scratch()
-        .s("'#align(N)' needs N to be a positive constant power of two (1, 2, 4, 8, ...); alignment \
-            is not expressible otherwise")
+        .s("'#align(N)' needs N to be a positive constant power of two (1, 2, 4, 8, ...). Alignment \
+            cannot be expressed otherwise")
     c.err(r, c.scratch.slice())
 
 priv fn check_link_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the name of `#link("name")`
@@ -280,10 +280,10 @@ priv fn check_link_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks the name o
     if r.link_name().len > 0
         return
     c.clear_scratch()
-        .s("'#link' takes one library name, as a string: '#link(\"openblas\")' links what \
-            '-lopenblas' does. The name is letters, digits and '_' '+' '.' '-', beginning with a \
-            letter, a digit or '_' — not a flag, a path or a file name (where the linker looks \
-            stays with the environment: LIBRARY_PATH, LIB). Write one '#link' per library")
+        .s("'#link' takes one library name, as a string. For example, '#link(\"openblas\")' links \
+            as '-lopenblas' does. The name is letters, digits and '_' '+' '.' '-', beginning with a \
+            letter, a digit or '_'. It is not a flag, a path or a file name. Where the linker looks \
+            stays with the environment (LIBRARY_PATH, LIB). Write one '#link' per library")
     c.err(r, c.scratch.slice())
 
 priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#section("name")`
@@ -293,9 +293,10 @@ priv fn check_section_attribute(r: Ast_node$@, c: Sema_ctx$@) //< checks `#secti
     if r.section_name().len > 0
         return
     c.clear_scratch()
-        .s("'#section' takes one section name, as a plain string: '#section(\".ram_text\")'. The \
-            name is letters, digits, '_' and '.', with no escape or interpolation: it reaches the C \
-            and the assembler as written, where a quote or a ';' would end it early")
+        .s("'#section' takes one section name, as a plain string. For example: \
+            '#section(\".ram_text\")'. The name is letters, digits, '_' and '.', with no escape or \
+            interpolation. The name reaches C and the assembler as written. A quote or a ';' would \
+            end it early")
     c.err(r, c.scratch.slice())
 
 priv fn report_attribute_on_extern_struct(name: U8[], id_node: Ast_node$@, c: Sema_ctx$@) //<
@@ -305,10 +306,10 @@ priv fn report_attribute_on_extern_struct(name: U8[], id_node: Ast_node$@, c: Se
     //< which reads as a contradiction; the real reason is that the C gets only a forward
     //< declaration.
     c.clear_scratch()
-        .s("attribute '#\{name\}' cannot be written on an 'extern' struct: the generated C only \
-            forward-declares it ('typedef struct X X;'), so this side never has the type's layout \
-            and nothing here reaches it. The layout stays in the C header — hold the type through \
-            a pointer ('@'), or declare it in KSPL instead of 'extern'")
+        .s("attribute '#\{name\}' cannot be written on an 'extern' struct. The generated C only \
+            forward-declares it ('typedef struct X X;'). This side therefore has no layout for the \
+            type, and the attribute cannot affect its layout. The layout stays in the C header. \
+            Hold the type through a pointer ('@'), or declare it in KSPL instead of 'extern'")
     c.err(id_node, c.scratch.slice())
 
 priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
@@ -317,7 +318,7 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
         return
     name: = attr.attribute_name()
     if !is_known_attribute(name)
-        c.clear_scratch().s("unknown attribute '#\{name\}'; the compiler would silently ignore it")
+        c.clear_scratch().s("unknown attribute '#\{name\}'. The compiler would silently ignore it")
         c.err(id_node, c.scratch.slice())
         return
     rule: = attr_rule(name)
@@ -326,7 +327,7 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
             report_attribute_on_extern_struct(name, id_node, c)
             return
         c.clear_scratch()
-            .s("attribute '#\{name\}' does nothing here; it applies to \{rule.targets\}")
+            .s("attribute '#\{name\}' does nothing here. It applies to \{rule.targets\}")
         c.err(id_node, c.scratch.slice())
         return
     // Caution: **Keep the argument check out of the backend check's chain.** Chained, only one
@@ -341,7 +342,7 @@ priv fn check_one_attribute(attr: Ast_node$@, owner: Attr_owner, c: Sema_ctx$@)
         check_section_attribute(attr, c)
     if base_core.is_llvm_target() && (rule.c_only & owner.bit()) != 0
         c.clear_scratch()
-            .s("attribute '#\{name\}' is only implemented by the C backend; the LLVM backend cannot \
+            .s("attribute '#\{name\}' is only implemented by the C backend. The LLVM backend cannot \
                 emit it. Compile this file with --to=c, or remove the attribute")
         c.err(id_node, c.scratch.slice())
 
@@ -364,12 +365,13 @@ priv fn check_attribute_combination(r: Ast_node$@, owner: Attr_owner, in_impl: B
     // `static`.
     if r.has_attribute("export") && privately_declared(r)
         c.clear_scratch()
-            .s("attribute '#export' has no effect on a 'priv' declaration: 'priv' says nothing \
-                outside this file may use it, and a free function or variable is emitted as C \
-                'static' (internal linkage), so nothing outside can link to the name that '#export' \
-                kept unmangled (on wasm32 it does not appear among the exports either). '#export' \
-                controls the symbol name; visibility controls whether anything can link to it. Drop \
-                'priv' (unit-wide is enough for the C and wasm boundary), or drop '#export'")
+            .s("attribute '#export' has no effect on a 'priv' declaration. 'priv' says nothing \
+                outside this file can use it. A free function or variable is emitted as C 'static' \
+                (internal linkage). Nothing outside can link to the name that '#export' kept \
+                unmangled. On wasm32, the name also does not appear among the exports. '#export' \
+                controls the symbol name. Visibility controls whether anything can link to it. \
+                Remove 'priv' (unit-wide visibility is enough for the C and wasm boundary), or \
+                remove '#export'")
         c.err(r, c.scratch.slice())
     // **`#export` cannot be written on a method.** A method's name is not unique without its type
     // (`bump` per type), so it cannot be the symbol as written; wrap it in a free function. C++
@@ -377,17 +379,17 @@ priv fn check_attribute_combination(r: Ast_node$@, owner: Attr_owner, in_impl: B
     is_method_decl: = r.kind_id == .k_decl_fn || r.kind_id == .k_decl_fn_proto
     if r.has_attribute("export") && in_impl && is_method_decl
         c.clear_scratch()
-            .s("attribute '#export' cannot be written on a method: '#export' keeps the name \
-                unmangled so C can call it, but a method's name is not unique on its own (every \
-                type may have its own 'bump'), so there is no name to keep. Wrap the call in a free \
-                function and put '#export' on that")
+            .s("attribute '#export' cannot be written on a method. '#export' keeps the name \
+                unmangled so C can call the function. A method's name is not unique across types. \
+                Every type can have its own 'bump', so there is no unique name to keep. Wrap the \
+                call in a free function. Put '#export' on that function")
         c.err(r, c.scratch.slice())
     if owner != Attr_owner.fn_decl
         return
     if r.has_attribute("inline") && r.has_attribute("noinline")
         c.clear_scratch()
-            .s("attributes '#inline' and '#noinline' contradict each other; keep only the one you \
-                mean")
+            .s("attributes '#inline' and '#noinline' contradict each other. Keep only the one you \
+                intend")
         c.err(r, c.scratch.slice())
         return
     // **A function's `#section` does not take effect unless paired with `#noinline`.** An
@@ -395,8 +397,8 @@ priv fn check_attribute_combination(r: Ast_node$@, owner: Attr_owner, in_impl: B
     // named section. A variable's or a `const`'s `#section` has nothing to inline.
     if r.has_attribute("section") && !r.has_attribute("noinline")
         c.clear_scratch()
-            .s("attribute '#section' on a function needs '#noinline' as well; otherwise the body \
-                can be inlined into its callers and nothing is left in the named section")
+            .s("attribute '#section' on a function needs '#noinline' as well. Otherwise the body \
+                can be inlined into its callers, and nothing is left in the named section")
         c.err(r, c.scratch.slice())
 
 fn check_attributes(r: Ast_node$@, c: Sema_ctx$@) //< walks the tree and checks the attributes

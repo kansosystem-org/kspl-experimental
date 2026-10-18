@@ -29,7 +29,9 @@ extern "C"
     fn kspl_mutex_destroy(handle: I64)
     fn kspl_cond_create(): I64
     fn kspl_cond_wait(cond_handle: I64, mutex_handle: I64)
+    fn kspl_cond_wait_for(cond_handle: I64, mutex_handle: I64, timeout_ms: I32): I32
     fn kspl_cond_signal(handle: I64)
+    fn kspl_cond_broadcast(handle: I64)
     fn kspl_cond_destroy(handle: I64)
     fn kspl_atomic_load(ptr: Sz$@): Sz
     fn kspl_atomic_store(ptr: Sz$@, val: Sz)
@@ -85,7 +87,7 @@ impl Thread
 // ============================ Raw_mutex ============================
 priv struct Raw_mutex //< the OS mutex itself (pthread_mutex_t / SRWLOCK)
     //<
-    //< It is priv because a bare lock can live apart from the data it protects, so the compiler
+    //< It is priv because a bare lock can live apart from the data it protects. Then the compiler
     //< cannot see a caller that forgets lock() and touches the data directly.
     priv handle: I64
 
@@ -106,6 +108,10 @@ impl Raw_mutex
         kspl_mutex_destroy(r.handle)
 
 // ============================ Cond_var ============================
+pub enum Cond_wait //< how a wait with a limit ended
+    woken //< a signal or a broadcast came, or a spurious wakeup did
+    timed_out //< the limit passed first
+
 pub struct Cond_var //< lets a thread wait, together with a lock, until a condition holds
     //<
     //< pthread_cond_t / CONDITION_VARIABLE, paired with a `Mutex<|T|>` (a producer-consumer queue,
@@ -126,8 +132,27 @@ impl Cond_var
     )
         kspl_cond_wait(r.handle, m.mutex.handle)
 
+    pub fn wait_for<|T|>( //< waits as `wait` does, for no longer than the limit
+        //<
+        //< Caution: **Check the condition again whatever comes back**: `woken` can be spurious, and
+        //< the condition can come true just as the limit passes. The limit is on the monotonic
+        //< clock, so setting the date neither stretches nor cuts it.
+        r: Self$@,
+        m: Mutex<|T|>$@, //< the lock, which the caller must already hold
+        timeout_ms: I32, //< the limit, read as every wait in std reads it: 0 or less looks once
+    ): Cond_wait //< whether it was woken or the limit passed; it holds the lock again either way
+        if kspl_cond_wait_for(r.handle, m.mutex.handle, timeout_ms) == 0
+            return .woken
+        return .timed_out
+
     pub fn signal(r: Self$@) //< wakes exactly one waiting thread
         kspl_cond_signal(r.handle)
+
+    pub fn broadcast(r: Self$@) //< wakes every waiting thread
+        //<
+        //< For a change every waiter must see (a queue closing, a stop): `signal` wakes one, and
+        //< the others sleep on past it.
+        kspl_cond_broadcast(r.handle)
 
     pub fn free(r: Self$@) //< destroys the OS condition variable
         //<
@@ -140,8 +165,8 @@ pub struct Mutex<|T|> //< a lock and the data it protects, kept together so neit
     //< The data is reachable only through lock() (like Rust's `Mutex<T>`). This is the only public
     //< mutex in KSPL (the bare Raw_mutex is priv).
     //< Caution: **It is not re-entrant: locking it again on the thread that holds it stops the
-    //< program** with a message, on every OS, as unlocking it from a thread that does not hold it
-    //< does ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md).
+    //< program** with a message, on every OS. Unlocking it from a thread that does not hold it does
+    //< the same ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md).
     priv mutex: Raw_mutex
     priv value: T
 

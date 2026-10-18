@@ -1,10 +1,10 @@
 //< Where a source comes from, and the logical name it is known by
 //<
-//< It covers std's folder and the folder given for packages, the packages that named themselves,
-//< the path helpers, and mapping a logical name back to the file it is read from.
+//< It covers std's folder, the folder given for packages, and the packages that named themselves.
+//< It also holds the path helpers, and maps a logical name back to the file it is read from.
 //< **The dependency goes one way**: this file imports `core.kspl`, never the reverse.
 //< std's folder is found beside the executable unless set. Environment variables are the main way
-//< to set them: they reach the LSP's separate analysis process (lsp-worker), which command-line
+//< to set them. They reach the LSP's separate analysis process (lsp-worker); command-line
 //< arguments do not.
 import "ksplc/base/core" as base_core
 import "std/chars"
@@ -24,9 +24,9 @@ const pkg_src_dir_env_name: U8[] = "KSPLC_PKG_SRC_DIR" //<
 
 priv const std_prefix: U8[] = "std/" //< the logical prefix `import "std/..."` reserves
     //<
-    //< Only this prefix is resolved by std_dir() instead of a search order, in which the project's
-    //< `std/` folder would silently hide the real standard library (or the reverse). Rust, Go and
-    //< Zig treat `std` specially too.
+    //< Only this prefix is resolved by std_dir() instead of a search order. In a search order, the
+    //< project's `std/` folder would silently hide the real standard library (or the reverse).
+    //< Rust, Go and Zig treat `std` specially too.
 
 fn is_std_file(file_path: U8[]): Bool //< whether that definition comes from std
     //<
@@ -45,9 +45,9 @@ fn package_of(file_path: U8[]): U8[] //< the name of the package that file belon
     //< folder: `ksai/tensor` is in `ksai`, `std/str` in `std`. **An absolute name is in none.**
     if sys.is_absolute(file_path)
         // Caution: **Use `sys.is_absolute`, not a check for a leading `/`.** A file no package
-        // claims keeps its path as its name (`to_project_relative` below); on Windows `C:/…` would
-        // become a package `C:`, with the package folder put in front (`deps/C:/Users/…/s.kspl`,
-        // not found).
+        // claims keeps its path as its name (`to_project_relative` below). On Windows, `C:/…`
+        // would become a package `C:`, with the package folder put in front
+        // (`deps/C:/Users/…/s.kspl`, not found).
         return ""
     if slash: = file_path.find_char('/')
         return file_path.sub(0, slash)
@@ -58,16 +58,44 @@ fn std_dir(): U8[] //< the standard library's folder, resolved once (`SPEC-tools
         return base_core.config.std_dir
     if v: = sys.get_env(std_dir_env_name)
         if v.len > 0
+            base_core.config.std_dir_origin = "the environment variable KSPLC_STD_DIR"
             // get_env returns a view into libc's static buffer, so it is copied (see
             // std/sys.get_env).
             // Caution: **Allocate the copy from perm_arena.** It goes into config, which lives as
-            // long as the process; from the arena, config.std_dir dangles after the LSP's first
+            // long as the process. From the arena, config.std_dir dangles after the LSP's first
             // rewind, and every later import resolution reads it (see base_core.perm_arena).
             base_core.config.std_dir = base_core.perm_arena.dup_str(v)
             return base_core.config.std_dir
     beside: = std_beside_exe()
+    base_core.config.std_dir_origin =
+        "the default, std in the current folder" if beside.len == 0 else "beside ksplc"
     base_core.config.std_dir = default_std_dir if beside.len == 0 else beside
     return base_core.config.std_dir
+
+fn std_found(): Bool //< whether the standard library's folder taken holds `lang.kspl`
+    return fs.exists(fs.join(std_dir(), std_landmark, base_core.arena))
+
+fn std_missing_note(): U8[] //< where std was looked for and which folder was taken
+    //<
+    //< For a std holding no `lang.kspl`. **Name every place, with the path each stands for
+    //< here.** With the bare "std/lang.kspl not found", a reader outside the repository has to
+    //< guess which folder was meant.
+    named: = base_core.config.std_dir_origin
+    origin: = "--std-dir=" if named.len == 0 else named
+    exe_dir: = exe_folder()
+    out: = base_core.arena.text()
+    out.s("ksplc: the standard library is not found: \{to_absolute(std_dir())\} holds no ")
+        .s(std_landmark).s(" (it was taken from ").s(origin).s(").\n")
+        .s("  ksplc takes the first of these:\n    --std-dir=DIR\n")
+        .s("    the environment variable KSPLC_STD_DIR\n")
+    for rel in std_beside
+        where: =
+            (fold_dots(fs.join(exe_dir, rel, base_core.arena)) if exe_dir.len > 0 else rel)
+        out.s("    ").s(where).s(", where it holds ").s(std_landmark).c('\n')
+    out.s("    std in the current folder: ").s(to_absolute(default_std_dir))
+        .s("\n  Name the folder with --std-dir= or KSPLC_STD_DIR; `ksplc info std-dir` names the \
+            one taken.\n")
+    return out.take()
 
 extern "C"
     fn kspl_exe_path(buf: U8$@, cap: Sz): Sz //< this executable's path, links resolved; else 0
@@ -85,6 +113,18 @@ priv const std_landmark: U8[] = "lang.kspl" //< the file that says a folder hold
     //< copied executable would then hide the real library.
 
 priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empty where none does
+    dir: = exe_folder()
+    if dir.len == 0
+        return ""
+    for rel in std_beside
+        // The links are resolved, so folding `bin/..` by spelling names the folder it reaches.
+        at: = fold_dots(fs.join(dir, rel, base_core.arena))
+        if fs.exists(fs.join(at, std_landmark, base_core.arena))
+            // Caution: **Keep it on perm_arena**, as the variable's copy above.
+            return base_core.perm_arena.dup_str(at)
+    return ""
+
+priv fn exe_folder(): U8[] //< this executable's folder, links resolved; empty where unknown
     //<
     //< Caution: **Do not take the executable from argv[0]** (the reason is at `kspl_exe_path` in
     //< `gen/runtime/hosted_spawn.c`).
@@ -97,14 +137,7 @@ priv fn std_beside_exe(): U8[] //< the std standing beside this executable; empt
     defer exe.free()
     for c in U8[]::{ .ptr = buf[0]@, .len = n }
         exe.c('/' if sys.is_path_sep(c) else c)
-    dir: = sys.get_dir_name(exe.slice())
-    for rel in std_beside
-        // The links are resolved, so folding `bin/..` by spelling names the folder it reaches.
-        at: = fold_dots(fs.join(dir, rel, base_core.arena))
-        if fs.exists(fs.join(at, std_landmark, base_core.arena))
-            // Caution: **Keep it on perm_arena**, as the variable's copy above.
-            return base_core.perm_arena.dup_str(at)
-    return ""
+    return base_core.arena.dup_str(sys.get_dir_name(exe.slice()))
 
 fn pkg_src_dir(): U8[] //< the folder where a package other than `std` is looked for
     //<
@@ -225,20 +258,21 @@ priv fn one_name(path: U8[]): U8[] //<
     //<
     //< Caution: **One file must not have two logical names.** Named `./hw` and `hw`, or
     //< `sub/../lib/n` and `lib/n`, one file becomes two modules in two units, each with its own
-    //< globals. So separators become `/` (a command line's keep the OS's), `.` levels are dropped,
-    //< and each `x/..` folds by spelling, as the walk up to a package reads it (`fold_dots` below).
+    //< globals. So separators become `/` (a command line's keep the OS's), and `.` levels are
+    //< dropped. Each `x/..` folds by spelling, as the walk up to a package reads it (`fold_dots`
+    //< below).
     keep: = path.find_str("..").is_some() && placed_elsewhere(first_part(path))
     return fold_dots(path, keep)
 
 fn fold_dots(path: U8[], keep_first: Bool = false): U8[] //<
     //< The path with `.` dropped, each `x/..` folded by spelling only, and `/` as separators
     //<
-    //< **It does not consult the filesystem**, so `a/link/..` reads as `a` wherever `link` points,
+    //< **It does not consult the filesystem.** So `a/link/..` reads as `a` wherever `link` points,
     //< the same trade-off Go's `filepath.Clean` makes. A leading `..` of a relative path stays (it
-    //< names the folder above); one at the root is dropped (the root's parent is itself).
+    //< names the folder above). One at the root is dropped (the root's parent is itself).
     //< With `keep_first`, a `..` that would fold away the first part stays too (`one_name` above).
-    // The root it keeps is std/sys's (`C:/` and `//srv/sh/` on Windows only), and at least the `//`
-    // a path opens with: POSIX leaves `//` to the system, so it is not folded into `/`.
+    // The root it keeps is std/sys's (`C:/` and `//srv/sh/` on Windows only). It also keeps at
+    // least the `//` a path opens with: POSIX leaves `//` to the system, so it stays unfolded.
     $head: Sz = sys.root_len(path) if sys.is_absolute(path) else 0
     if head < 2 && path.len >= 2 && sys.is_path_sep(path[0]) && sys.is_path_sep(path[1])
         head = 2
@@ -288,9 +322,9 @@ priv fn placed_elsewhere(unit: U8[]): Bool //<
     //< That is std's folder, a package that named itself, or one under `--pkg-src-dir`, rather than
     //< a local folder with that name.
     //<
-    //< A `..` that climbs out of such a package stays in the name (`one_name` above): its folder
-    //< need not be at its name, so `ksdb/../x` folded to `x` would name another file. Under `std/`
-    //< it is rejected where it is imported (`refused_use` in `package.kspl`).
+    //< A `..` that climbs out of such a package stays in the name (`one_name` above). The
+    //< package's folder need not be at its name, so `ksdb/../x` folded to `x` would name another
+    //< file. Under `std/` it is rejected where it is imported (`refused_use` in `package.kspl`).
     if unit.len == 0 || unit.equals("..")
         return false
     return unit.equals(std_prefix.sub(0, std_prefix.len - 1)) ||
@@ -302,7 +336,8 @@ fn cwd(): U8[] //< the working directory with `/` separators; empty where it can
     //< `C:\a\b/c/d.kspl`; every one becomes `/`. **Do not use `one_name`**: dropping the `.`
     //< levels also drops a rooted path's leading empty level, which makes it relative.
     $buf: U8[os_path_bytes] = ::{}
-    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes })
+    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes }) catch
+        return ""
     out: = base_core.arena.text()
     for c in root
         out.c('/' if sys.is_path_sep(c) else c)
@@ -329,14 +364,15 @@ fn to_project_relative(path: U8[]): U8[] //<
     //< It turns a path into one relative to the project root (= the working directory)
     //<
     //< A path outside the root is returned unchanged.
-    //< Caution: **An absolute path must not enter a file's logical name**, which feeds the
-    //< mangling, the diagnostics and `#line`: with one in it, the mangled names differ from machine
-    //< to machine. **Nor may a relative path pass unnormalized**: `./main.kspl` and `main.kspl`
-    //< are one file, so the logical name must be one too (`one_name` above).
+    //< Caution: **An absolute path must not enter a file's logical name.** That name feeds the
+    //< mangling, the diagnostics and `#line`. With one in it, the mangled names differ from machine
+    //< to machine. **A relative path must not pass unnormalized either**: `./main.kspl` and
+    //< `main.kspl` are one file, so the logical name must be one too (`one_name` above).
     if !sys.is_absolute(path)
         return one_name(path)
     $buf: U8[os_path_bytes] = ::{}
-    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes })
+    root: = sys.cwd(U8$[]::{ .ptr = buf[0]@, .len = os_path_bytes }) catch
+        return path
     rest: = rest_under(path, root)
     // A logical name is written `/`-separated.
     return path if rest.len == 0 else one_name(rest)
@@ -378,8 +414,8 @@ fn is_same_file(a: U8[], b: U8[]): Bool //< whether they point at the same file
 struct Uri_style //< how one client writes a document URI, read from one it sent
     //<
     //< Caution: **Answer in the form the request used.** A logical name is project-relative
-    //< (`to_project_relative` above), and any one fixed form breaks every client that writes it the
-    //< other way: an editor sends `file:///home/me/proj/std/lang.kspl`, the extension and kspage's
+    //< (`to_project_relative` above). Any one fixed form breaks every client that writes it the
+    //< other way. An editor sends `file:///home/me/proj/std/lang.kspl`; the extension and kspage's
     //< page send `std/lang.kspl`.
     has_scheme: Bool //< the `file://` was present
     is_absolute: Bool //< the path started from the root
@@ -408,8 +444,8 @@ fn append_file_path(import_path: U8[], out: Str_builder$@) //<
     //< It writes into out the file path to read for an import path (a file's logical name)
     //<
     //< Caution: Do not mix a logical name (`std/io`) with the file's path. An absolute path in the
-    //< logical name makes mangled names differ per machine and breaks seed.c's byte-for-byte match
-    //< ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
+    //< logical name makes mangled names differ per machine. That breaks seed.c's byte-for-byte
+    //< match ("The bootstrap, and keeping the seed in step" in ksplc/docs/DESIGN-compiler.md).
     append_disk_path(import_path, out)
     if !out.slice().has_kspl_ext()
         out.s(base_core.source_ext)

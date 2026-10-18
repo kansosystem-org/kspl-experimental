@@ -31,10 +31,11 @@ function kspageSide(ui) {
 
   // ---- The tabs (Headings / Slides / Placed) ----
   // Caution: **Do not mix them into one list** (what you look for drifts away, as in LibreOffice's
-  // Navigator), **nor push the items into another panel** (like Word's "selection pane", closed
-  // until opened). **Always show all the tabs**, each with its count, so what is there is visible
-  // without clicking. **Do not switch the tab on a click** (choosing a shape would hide the
-  // headings). **Remember it**, and **work on a page that cannot store** (read it guarded).
+  // Navigator). **Do not push the items into another panel** either (like Word's "selection
+  // pane", closed until opened). **Always show all the tabs**, each with its count, so what is
+  // there is visible without clicking. **Do not switch the tab on a click** (choosing a shape would
+  // hide the headings). **Remember it**, and **work on a page that cannot store** (read it
+  // guarded).
   const TAB_KEY = "kspage.side.tab";
   const panes = { outline: outlineBox, slides: slidesBox, objects: objectsBox };
   const tabs = Array.from(document.querySelectorAll("#side-tabs > button"));
@@ -79,12 +80,12 @@ function kspageSide(ui) {
   } catch (_) { /* it works on a page that cannot remember too */ }
 
   // ---- The panel's width ----
-  // Caution: **It must be adjustable** — the right width differs per document, and fixed, a long
+  // Caution: **It must be adjustable.** The right width differs per document; fixed, a long
   // heading stays cut (as in Google's panel). **Remember it** (Word does not), and **keep it when
   // the tab switches**. **Not only by dragging** (a barrier for unsteady hands): it moves by key,
   // and a double click restores the default. **Do not write the limits here.** One place holds
-  // them, `page.css`'s `--side-room` — a maximum that depends on the window's width cannot be
-  // written as a number, so with both holding them one would go stale (Principle 4). This holds
+  // them, `page.css`'s `--side-room`. A maximum that depends on the window's width cannot be a
+  // number, so with both holding them one would go stale (Principle 4). This holds
   // only the remembered number and the default.
   const WIDTH_KEY = "kspage.side.width";
   const SIDE_WAS = 216;
@@ -128,7 +129,7 @@ function kspageSide(ui) {
   // cannot be captured, as in `keys.js`); a flag of its own tracks the drag. **The width is "from
   // the panel's right edge to the pointer"** (summed deltas lag behind the limit). **Give focus
   // here** so `←` `→` work at once, **not via `preventDefault`** (it stops focus and the double
-  // click) — and not back to the body (the header of `fly.js`: used step by step).
+  // click). Do not give it back to the body (the header of `fly.js`: used step by step).
   let held = false;
   grip.addEventListener("pointerdown", (e) => {
     held = true;
@@ -188,15 +189,15 @@ function kspageSide(ui) {
     if (mark === outlineMark) return heads.length;
     outlineMark = mark;
     outlineBox.textContent = "";
-    // Caution: **Do not make a separate item that returns to the table of contents** — its heading
+    // Caution: **Do not make a separate item that returns to the table of contents.** Its heading
     // is **an ordinary heading** (`in_chapters` is a style setting), and jumps the same way. The
     // items that jump to the document's ends **stand at their place in the list** (the start at the
-    // top, the end at the bottom), and **share the keys' entry point** (Ctrl+Home / Ctrl+End).
+    // top, the end at the bottom). They **share the keys' entry point** (Ctrl+Home / Ctrl+End).
     const edge = (label, why, run) => {
       const row = document.createElement("button");
       row.type = "button";
       // Caution: **Keep the `edge` class.** It is what tells these two items from the heading
-      // items, and `kspage/tests/browser/keep.js` relies on it — going by the label instead, a
+      // items, and `kspage/tests/browser/keep.js` relies on it. Going by the label instead, a
       // renamed label would make the check click an edge item as a heading. No rule styles it
       // (`--edge` in `page.css` is a color role, not this).
       row.className = "item who edge";
@@ -386,7 +387,7 @@ function kspageSide(ui) {
     const spots = [];
     // **Do not add the current mode here** (the status bar's left edge shows it, once).
     modeFly.sync();
-    // **Being a draft goes in the status bar too**; the panel can be collapsed, and then another
+    // **Being a draft goes in the status bar too.** The panel can be collapsed, and then another
     // document is **opened without noticing this one is unsaved**. The mark is text, not just
     // color.
     if (ui.unsaved && ui.unsaved()) spots.push("● Unsaved");
@@ -418,8 +419,8 @@ function kspageSide(ui) {
   // invisible mark such as a section break).
 
   // ---- The viewer's overrides ----
-  // **The look is one, held by role** (`page.css`'s `:root`), following the screen's light or dark;
-  // the rules and the canvas read nothing but the role names.
+  // **The look is one, held by role** (`page.css`'s `:root`), following the screen's light or
+  // dark. The rules and the canvas read nothing but the role names.
   // **Remember it, guarded.** Remembering and applying are one place (`keptPick` through `kept`).
   // A checkbox is stored as "1" / "0", distinct from empty.
   const kept = (key) => ({
@@ -473,7 +474,7 @@ function kspageSide(ui) {
   return {
     drawSide: drawSide,
     showStatus: showStatus,
-    // Caution: **Call it once whenever the location changes** — left to the redraw, the earlier
+    // Caution: **Call it once whenever the location changes.** Left to the redraw, the earlier
     // path stays shown after opening (loading holds the redraw back until it is done).
     showPlace: showPlace,
   };

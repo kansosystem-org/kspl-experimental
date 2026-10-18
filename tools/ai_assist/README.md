@@ -1,10 +1,10 @@
 # ai_assist — the coding assistant
 
-This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code, and measures how often the compiler accepts what it writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN-tools.md`](../docs/DESIGN-tools.md); what is left is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
+This folder holds the pipeline (data, evaluation, training) that builds a small AI to fill in a missing line of KSPL code. The pipeline also measures how often the compiler accepts what the AI writes. Three `make` lines at the repository's root run it all, from collecting the training text to scoring the model. It is kept apart from the language core and the AI engine (`ksai`). Why it is built this way is in "The coding assistant" in [`tools/docs/DESIGN-tools.md`](../docs/DESIGN-tools.md). What is left is in the "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md).
 
 Note: If how an AI works is new to you, read [`../../ksai/README.md`](../../ksai/README.md) (the introduction to the KSPL-native AI engine) first.
 
-Words used here: the *corpus* is the body of source text the model learns from. *FIM* (fill-in-the-middle) is a training example made by cutting a hole out of code, so the model learns to fill it from the code around it. The *oracle* is the compiler used as the judge: a completion is good if `ksplc` accepts the file.
+Words used here: the *corpus* is the body of source text the model learns from. *FIM* (fill-in-the-middle) is a training example made by cutting a hole out of code. The model learns to fill the hole from the code around it. The *oracle* is the compiler used as the judge: a completion is good if `ksplc` accepts the file.
 
 ## Run it
 
@@ -42,7 +42,7 @@ flowchart LR
 | `make_fim.kspl` | Writes FIM training examples to `corpus/fim_{train,val}.jsonl`. The source is self-hosted code that compiles, so the middle is the correct completion by definition and no example needs recompiling. |
 | `eval_fim.kspl` | Hides single lines of the validation files, inserts a model's completion, and measures the rate at which `ksplc` accepts the file (`make fim-eval`). `--model=native` runs `ksai/examples/fim_coder` as its own process. A file that does not compile on its own gives no holes. |
 | `train_bpe.kspl` | Derives the BPE vocabulary and merges from the corpus into `tokenizer/`, which `Tokenizer.load` in `ksai/tokenizer.kspl` reads. (BPE, byte-pair encoding, builds the vocabulary by merging the pairs of pieces that occur most often.) |
-| `lora_finetune_external.py` | Fine-tunes a LoRA (a small set of added weights trained on top of a model) outside KSPL, on a GPU machine (from scratch, or continued with `--continue-from`), and writes it as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
+| `lora_finetune_external.py` | Fine-tunes a LoRA (a small set of added weights trained on top of a model) outside KSPL, on a GPU machine. It starts from scratch, or continues with `--continue-from`. It writes the LoRA as safetensors in the KSPL convention. `--help` lists its options, including those for a CPU. |
 | `export_qwen_to_kspl.py` / `export_qwen_tokenizer.py` | Convert Hugging Face Qwen's weights and tokenizer into the files `ksai` reads. |
 | `qwen_logit_parity.py` | Prints Hugging Face's logits (the scores for each next token) for the same input, to compare with KSPL's. |
 | `safetensors_io.py` | Writes safetensors, for `export_qwen_to_kspl.py` and `lora_finetune_external.py`. |
@@ -83,7 +83,7 @@ echo "3 1 4" | ./out/qwen_infer.exe out/qwen_kspl.safetensors
 python3 tools/ai_assist/qwen_logit_parity.py --base-model Qwen/Qwen2.5-Coder-0.5B --tokens "3 1 4"
 ```
 
-The two print the same argmax (the token with the top score), and logits that differ only by floating-point rounding (24 layers of matrix products added in a different order).
+The two print the same argmax (the token with the top score). Their logits differ only by floating-point rounding: 24 layers of matrix products are added in a different order.
 
 **Generating text** adds the tokenizer:
 
@@ -96,13 +96,13 @@ echo "def add(a, b):
     out/qwen_tokenizer/vocab.txt out/qwen_tokenizer/merges.txt 151643
 ```
 
-It writes Python that stays coherent across several functions. **The prompt is Python on purpose**: the model has never seen KSPL, so a KSPL prompt could not tell a broken pipeline from a model that does not know KSPL.
+It writes Python that stays coherent across several functions. **The prompt is Python on purpose.** The model has never seen KSPL. So a KSPL prompt could not tell a broken pipeline from a model that does not know KSPL.
 
 Decoding is greedy (it always takes the top-scoring token), with no repetition penalty. So a numeric prompt such as `let n = ` can repeat digits without end. That comes from the decoding, not from a fault in the pipeline.
 
 ## Further reading
 
-* [`tools/docs/DESIGN-tools.md`](../docs/DESIGN-tools.md) — why the assistant is built this way: what is KSPL and what is borrowed, how a completion is scored, why it runs outside the language server.
+* [`tools/docs/DESIGN-tools.md`](../docs/DESIGN-tools.md) — why the assistant is built this way. It says what is KSPL and what is borrowed, and how a completion is scored. It also says why the assistant runs outside the language server.
 * The "tools" section of [`docs/PLAN.md`](../../docs/PLAN.md) — what is left of the coding assistant.
 * [ksai](../../ksai/README.md) — the engine the assistant's tools feed, with the examples that load what it makes.
 * [`../README.md`](../README.md) — the other tools, and the one test file per tool they keep in `tools/tests/`.

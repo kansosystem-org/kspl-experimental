@@ -44,7 +44,7 @@ suite_args_property = --n=60 $(PROPERTY_ARGS)
 # Caution: **Keep `make test SUITES=` the whole rest of `make test`.** A check that runs each suite
 # apart, under a time limit of its own, runs that first and then `make test-<name>` per name here.
 SUITES := lsp run run-source generic-matrix thin-use negative runtime std-dir emit-runtime ship \
-  property limits lint cli kspls split equiv ast-cache broken-pipe config ext-import \
+  property limits lint cli notation split equiv ast-cache broken-pipe config ext-import \
   debug-line decl-macros spawn file-path place visibility fmt doc \
   layout-targets
 # The scattering is a suite too, run apart (`make test-fuzz`) and handed, after the two places, the

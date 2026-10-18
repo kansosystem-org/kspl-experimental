@@ -14,9 +14,9 @@ import "tests/support/harness_text"
 
 // ==========================================
 // The kind of a document is its name
-// It checks **that every document carries one of the names in the specification's closed list**;
-// whether a passage belongs to another kind is left to the reader.
-// Note: The convention itself is "Document naming" in `docs/SPEC-documents.md`; this file **only
+// It checks **that every document carries one of the names in the specification's closed list**.
+// The reader decides whether a passage belongs to another kind.
+// Note: The convention itself is "Document naming" in `docs/SPEC-documents.md`. This file **only
 // turns it into a check**.
 // ==========================================
 priv const kind_names: U8[][_] = ::{ "README.md", "TOUR.md", "PLAN.md" } //<
@@ -62,16 +62,15 @@ priv const name_samples: Sample[_] = ::{
 priv fn check_names(arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
-    // `private/` is left out of the published copy and names its own documents (the comparisons
-    // among them), so the published copy's kinds do not apply to it.
+    // A clone's own documents are left out of the published copy and name themselves, so the
+    // published copy's kinds do not apply to them.
     own: = harness.private_docs()
-    for rel in harness.tracked_matching(U8[][]::{ "*.md", ":!private" })
+    for rel in harness.tracked_matching(U8[][]::{ "*.md" })
+        if harness.is_private_doc(rel, own@)
+            continue
         seen += 1
         name: = sys.get_file_name(rel)
-        $is_own: = false
-        for o in own
-            is_own = is_own || name.equals(o)
-        if !is_kind_name(name, arena) && !is_own
+        if !is_kind_name(name, arena)
             bad
                 .push(arena.text().s(rel).s(": `").s(name).s("` is none of the six kinds").take())
     verdict.check_list("every document carries one of the six kinds' names (docs/SPEC-documents.md)",
@@ -193,16 +192,16 @@ fn run_rule(arena: Arena$@)
 
 // ==========================================
 // Checks that a document's tables render as written
-// Caution: **Check what the reader sees, not just the text**: a table reads fine to its writer in
-// the source, so nobody notices when the rendering drops a cell.
+// Caution: **Check what the reader sees, not just the text.** A table reads fine to its writer in
+// the source. So nobody notices when the rendering drops a cell.
 // ==========================================
 // A vertical bar is written one way inside a table and another outside it
 // (docs/SPEC-documents.md)
 // ==========================================
 
 //   * That no `\|` is in the body (inside a backquote the reader sees the `\`).
-//   * That a table's row holds as many columns as its heading: a bare `|` splits the cell, and GFM
-//     **drops** the extra cells, which the source does not show.
+//   * That a table's row holds as many columns as its heading. A bare `|` splits the cell. GFM
+//     **drops** the extra cells, and the source does not show it.
 
 priv fn strip_quote(line: U8[]): U8[] //<
     //< Strips the quote mark from the start (a table inside a quote is a table too)
@@ -292,9 +291,9 @@ fn run_prose(arena: Arena$@)
 
 // ==========================================
 // Checks that the manual matches what the screen shows
-// Caution: **The day a label is added, the manual goes stale silently**: neither the count nor
+// Caution: **The day a label is added, the manual goes stale silently.** Neither the count nor
 // the names are generated from the implementation. **The wording is not checked** (a machine
-// cannot tell whether "press it and it opens" is right); only the count, the names and the order
+// cannot tell whether "press it and it opens" is right). Only the count, the names and the order
 // are. The page's colours are checked in `conventions_theme.kspl`.
 // ==========================================
 priv fn tab_names(text: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -333,8 +332,8 @@ priv fn joined(names: List<|U8[]|>@, arena: Arena$@): U8[] //<
 priv fn count_after_digit(text: U8[], needle: U8[]): Sz //<
     //< How many times the needle appears with a digit in front of it, no two overlapping
     //<
-    //< **Anchor a needle that is ordinary English to something that is not**: `" tabs "` alone
-    //< catches "the tab characters" or "the tabs and a run of empty lines", and counts a
+    //< **Anchor a needle that is ordinary English to something that is not.** `" tabs "` alone
+    //< catches "the tab characters" or "the tabs and a run of empty lines". It then counts a
     //< place not about the navigation as written wrong.
     $n: Sz = 0
     $i: Sz = 0

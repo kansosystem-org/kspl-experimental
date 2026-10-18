@@ -99,7 +99,7 @@ impl Walk
             if def.is_scalar() && r.find(id) < 0
                 r.types
                     .push(Named::{ .type_id = id, .name = r.short_name(id), .is_enum = true,
-                    .body = true, .node = r.decl_of.get(id) catch null })
+                    .body = true, .node = r.decl_of.get(id).unwrap_or(null) })
         default {}
 
     priv fn note_struct(r: Self$@, id: I32, def: sema_type_def.Struct_def$@, by_value: Bool,
@@ -108,15 +108,15 @@ impl Walk
         if name.len == 0
             // Only by value: behind a pointer an unnamed type is an address (`void *`).
             why: = base_core.arena.text().s("it passes '").s(r.c.env.instance_key(id))
-                .s("' by value, a generic type, which has no single name in C. Declare a plain \
-                    struct with the same fields for the interface").take()
+                .s("' by value. This generic type has no single name in C. Declare a plain struct \
+                    with the same fields for the interface").take()
             r.refuse(why)
             return
         body: = by_value || r.handle_opens(def)
         if by_value && (def.is_packed || def.align_attr > 0)
             why: = base_core.arena.text().s("it passes '").s(name)
-                .s("' by value, whose '#packed' / '#align' layout C99 cannot state. Pass a pointer \
-                    to it").take()
+                .s("' by value. C99 cannot state its '#packed' / '#align' layout. Pass a pointer to \
+                    it").take()
             r.refuse(why)
             return
         at: = r.find(id)
@@ -129,7 +129,7 @@ impl Walk
         else
             r.types
                 .push(Named::{ .type_id = id, .name = name, .is_enum = false, .body = body,
-                .node = r.decl_of.get(id) catch null })
+                .node = r.decl_of.get(id).unwrap_or(null) })
         if body
             for f in def.fields_list
                 r.note(f.type_id, true, depth + 1)
@@ -137,7 +137,7 @@ impl Walk
     priv fn handle_opens(r: Self$@, def: sema_type_def.Struct_def$@): Bool //<
         //< Whether a `struct` reached through a pointer shows its fields
         //<
-        //< **Only where every field is `pub` and can cross to C**: a field kept inside the package
+        //< **Only where every field is `pub` and can cross to C.** A field kept inside the package
         //< stays out of the caller's reach in C as well.
         for f in def.fields_list
             if f.vis != sema_type_scope.Visibility.public || !r.crosses(f.type_id, 0)
@@ -396,9 +396,9 @@ priv fn check_names(walk: Walk$@, exports: List<|Export|>$@) //<
             default {}
 
 priv fn claim(walk: Walk$@, seen: Map<|U8[], Bool|>$@, site: Ast_node$@, name: U8[])
-    if seen.get(name) catch false
+    if seen.get(name).unwrap_or(false)
         walk.c.clear_scratch()
-            .s("'\{name\}' is declared twice in the interface ('--library'): C names a function, a \
+            .s("'\{name\}' is declared twice in the interface ('--library'). C names a function, a \
                 type and an enum's constant in one space. Rename one of them")
         walk.c.err(site, walk.c.scratch.slice())
         return
@@ -436,7 +436,7 @@ priv fn render_c(walk: Walk$@, exports: List<|Export|>$@, out_path: U8[]): U8[]
     $out: = Str_builder.new()
     defer out.free()
     out.s("/* The C interface of a library, written by `ksplc --library`.\n")
-    out.s(" * Caution: Do not edit it; it is remade with the library. */\n")
+    out.s(" * Caution: Do not edit it. The compiler regenerates it with the library. */\n")
     out.s("#ifndef \{guard\}\n#define \{guard\}\n\n")
     out.s("#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n")
     out.s("#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
@@ -495,7 +495,7 @@ priv fn bodies_in_order(walk: Walk$@): List<|Named|> //<
     return out
 
 priv fn visit_body(walk: Walk$@, id: I32, done: Map<|I32, Bool|>$@, out: List<|Named|>$@, depth: Sz)
-    if depth >= max_type_walk_depth || (done.get(id) catch false)
+    if depth >= max_type_walk_depth || done.get(id).unwrap_or(false)
         return
     done.set(id, true)
     at: = walk.find(id)
@@ -543,7 +543,7 @@ priv fn render_kspl(walk: Walk$@, exports: List<|Export|>$@, root: Ast_node$@, o
     $out: = Str_builder.new()
     defer out.free()
     out.s("// The C interface of a library, written by `ksplc --library`.\n")
-    out.s("// Caution: Do not edit it; it is remade with the library.\n\n")
+    out.s("// Caution: Do not edit it. The compiler regenerates it with the library.\n\n")
     for t in walk.types
         if !t.body
             continue

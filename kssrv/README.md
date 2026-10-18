@@ -1,6 +1,6 @@
 # kssrv
 
-kssrv is a small web server written in KSPL. It hands out the files under `<root>` (the folder you name) over HTTP, and answers a JSON API under `/api/`: the file endpoints a local page uses, and the car's steering.
+kssrv is a small web server written in KSPL. It hands out the files under `<root>` (the folder you name) over HTTP. It also answers a JSON API under `/api/`: the file endpoints that a local page uses, and the car's steering.
 
 This page is for whoever wants to run it, call it, or change it. The quickest try is the first two lines under "Run it", then opening `http://localhost:8080/` in a browser, which shows `./public/index.html`.
 
@@ -19,7 +19,7 @@ The port and the root are **positional**; no environment variable fills either i
 | :-- | :-- |
 | (none) | Faces outward: any machine on the network can fetch the files, and the car can ask for its steering |
 | `--local` | **Makes it a local server**, reachable from this machine only. The endpoints a local page uses (`/api/file`, `/api/stat`, and `/api/here` and `/api/stop`, which keep it up and stop it) exist only under it. It starts no program, and it trains nothing, so it answers as soon as it starts. It prints a token (a secret string) that every request but the page must carry |
-| `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** The server does not start when it names a folder, a FIFO or a device, or nothing. It may sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md) says what naming it weighs) |
+| `--page=<file>` | **Names the one file returned for `/` and `/index.html`.** The server does not start when it names a folder, a FIFO or a device, or nothing. It can sit outside the root ("Where it listens" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md) says what naming it weighs) |
 | `--idle=<seconds>` | **Stops the server once no page has held it, and nothing has been asked, for that long.** Absent, it stays up. A page holds it through `/api/here` ("Keeping the server alive while a page is open" in [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)) |
 
 The rules of local use are [`docs/SPEC-local-server.md`](../docs/SPEC-local-server.md)'s, and the grounds [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md)'s.
@@ -28,7 +28,7 @@ The rules of local use are [`docs/SPEC-local-server.md`](../docs/SPEC-local-serv
 
 | File | What it holds |
 | :-- | :-- |
-| [`kssrv/main.kspl`](main.kspl) | The command line, the accept loop (the loop that takes new connections and serves the open ones), static serving, and the one logger a run speaks through |
+| [`kssrv/main.kspl`](main.kspl) | The command line and the accept loop (the loop that takes new connections and serves the open ones). Also static serving, and the one logger that a run writes through |
 | [`kssrv/conn.kspl`](conn.kspl) | One connection's state, and how a response is queued |
 | [`kssrv/api.kspl`](api.kspl) | The endpoints under `/api/` and their routing table |
 | [`kssrv/pilot.kspl`](pilot.kspl) | How the steering returned to the car (`POST /api/car`) is decided |
@@ -58,14 +58,14 @@ Idle, it uses no CPU. **What it holds on its heap comes back to the same figure*
 
 **A failing check does not stop the run.** The closing `RESULT:` line is printed after every server the run started has stopped. So none is left on its port for the next run to trip over ([`std/verdict.kspl`](../std/verdict.kspl)).
 
-**`make check-pilot-copy COPY=<file>`** compares a copy of the pilot policy (the car's steering network) kept elsewhere with the one this server sends, at every point of the car's sweep ([`kssrv/tests/copy.kspl`](tests/copy.kspl)). The server does not know where copies are kept. Whoever keeps one names it.
+**`make check-pilot-copy COPY=<file>`** compares two copies of the pilot policy (the car's steering network). One copy is kept elsewhere; the other is the one this server sends. It compares them at every point of the car's sweep ([`kssrv/tests/copy.kspl`](tests/copy.kspl)). The server does not know where copies are kept. Whoever keeps one names it.
 
 ## Further reading
 
 | Document | What it is for | Who reads it |
 | :-- | :-- | :-- |
 | [`kssrv/docs/SPEC-api.md`](docs/SPEC-api.md) | What each request returns, the JSON API under `/api/`, and the limits a caller writes against. | Whoever calls the server from their own code, with a running `kssrv` to try the calls against |
-| [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md) | Why it is shaped this way — one thread serving every connection, the fixed-size connection table, one block of memory (an arena) reused for each request — and what pins each decision. | Whoever changes kssrv |
+| [`kssrv/docs/DESIGN-server.md`](docs/DESIGN-server.md) | Why it is shaped this way, and what pins each decision. The shape is one thread serving every connection and the fixed-size connection table. It also reuses one block of memory (an arena) for each request. | Whoever changes kssrv |
 | The "kssrv" section of [`docs/PLAN.md`](../docs/PLAN.md) | What is left, and what marks each stage as done. | Whoever changes kssrv |
 | [std](../std/README.md) | The `net` / `reactor` / `http` / `json` it is built on; `ksplc doc std` lists every file std publishes. | Whoever changes kssrv |
 | [ksai](../ksai/README.md) | What the car's steering policy is built on: `tensor`, `nn`, `safetensors` and the rest. | Whoever changes kssrv |

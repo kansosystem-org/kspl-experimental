@@ -1,8 +1,8 @@
 //< Checks at lower's exit that the tree's types match
 //<
 //< **lower "carries types by hand".** Many places set a synthesized node's `type_id` themselves
-//< with `env`'s type operations; without this check a mix-up shows only **after code
-//< generation**, in C's warnings or the LLVM IR's signature check.
+//< with `env`'s type operations. Without this check, a mix-up shows only **after code generation**,
+//< in C's warnings or the LLVM IR's signature check.
 //< **A generic's template never reaches here.** An uninstantiated one (`Arena.alloc_as<|T|>` in
 //< `std/mem`) survives sema's rebuilding, but `lower_prune` drops it as unreachable.
 import "ksplc/base/ast" { Ast_node }
@@ -31,9 +31,9 @@ priv fn norm(c: Sema_ctx$@, id: I32): I32 //<
         if next == cur
             break
         cur = next
-    // **What a pointer points at too** (`Ints@` beside `Box<|I64|>@` after `typedef Ints =
-    // Box<|I64|>`): sema converts one to the other as another name for the same type, and C spells
-    // both through the typedef.
+    // **What a pointer points at too** (`Ints@` beside `Box<|I64|>@` after
+    // `typedef Ints = Box<|I64|>`). Sema converts one to the other as another name for the same
+    // type, and C spells both through the typedef.
     switch c.env.get_info(cur)
     case .pointer(b)
         nb: = norm(c, b)
@@ -61,9 +61,9 @@ priv fn check_postfix(r: Ast_node$@, c: Sema_ctx$@)
         return
     if !r.text.equals("@")
         return
-    // Sema refuses each form that takes such an address; one made here would claim an alignment
-    // the place lacks ("A field of a `#packed` struct is reached byte-wise" in
-    // ksplc/docs/DESIGN-compiler.md).
+    // Sema refuses each form that takes such an address. One made here would claim an alignment the
+    // place lacks. See "A field of a `#packed` struct is reached byte-wise" in
+    // ksplc/docs/DESIGN-backends.md.
     if c.packed_place_align(child) > 0
         r
             .ice_panic("Lower ICE: an '@' was taken of a field a '#packed' struct leaves \

@@ -1,9 +1,9 @@
 //< `Sema_ctx`, the context one whole analysis carries, and the diagnostics it reports
 //<
-//< It holds what every part of Sema reads (the current file and its source, the symbol table, the
-//< environment), the analysis's switches, a body walk's flags (`Fn_ctx`) and each concern's state
-//< (`sema/session/state.kspl`). Every diagnostic goes through `report_diagnostic`, which applies
-//< the `##lint` levels; declaring a symbol is checked here (`declare_symbol`).
+//< It holds what every part of Sema reads: the current file and its source, the symbol table, the
+//< environment. It also holds the analysis's switches, a body walk's flags (`Fn_ctx`) and each
+//< concern's state (`sema/session/state.kspl`). Every diagnostic goes through `report_diagnostic`,
+//< which applies the `##lint` levels. Declaring a symbol is checked here (`declare_symbol`).
 import "ksplc/base/ast" { Ast_node, Loc, is_anon_env_type, is_anon_fn_name }
 import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
@@ -102,8 +102,8 @@ enum Bodies //< which function bodies an analysis checks
     mentioning(name: U8[]) //<
         //< `main_file`'s, and every other body that mentions `name` or a generic that does
         //<
-        //< The workspace view (references, renaming, the call hierarchy): a site naming `name`
-        //< lives in a body that mentions it, or in an instance of a generic that does
+        //< The workspace view (references, renaming, the call hierarchy) uses it. A site naming
+        //< `name` lives in a body that mentions it, or in an instance of a generic that does
         //< (`wanted_names` in `../body/infer.kspl`).
 
 struct Sema_ctx
@@ -143,7 +143,7 @@ struct Sema_ctx
     infer_expr_fn: fn(node: Ast_node$@, c: Sema_ctx$@, expected_id: I32): I32!Sema_error //<
         //< Hands an expression's type inference to the layer above (ksplc/sema/body)
         //<
-        //< **This is the only way decl can call body**: if decl imported body, parse would reject
+        //< **This is the only way decl can call body.** If decl imported body, parse would reject
         //< it as a circular import across directories (ksplc/parse/load.kspl). Only
         //< `sizeof(<expr>)` needs it, since decl's constant folding (an array length, an enum tag,
         //< `#align`) runs before inference.
@@ -266,8 +266,7 @@ impl Sema_ctx
         //<
         //< Built on the first call and reused afterwards. This only holds the cache; how the table
         //< is built and read is in base/core.kspl.
-        existing: = r.diags.line_starts.get(file) catch null
-        if existing != null
+        if existing: = r.diags.line_starts.get(file)
             return existing
         starts: = src.line_starts(base_core.arena)
         r.diags.line_starts.set(base_core.arena.dup_str(file), starts)
@@ -291,9 +290,7 @@ impl Sema_ctx
         return r.scratch.clear()
     fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
         //< A type's mangled name, written into scratch: valid until scratch is used again
-        r.clear_scratch()
-        r.env.mangle_type_id_to(type_id, r.scratch)
-        return r.scratch.slice()
+        return r.env.mangled_into(type_id, r.scratch@)
 
     fn has_error(r: Self$@): Bool
         return r.diags.counts.errors > 0
@@ -319,9 +316,9 @@ impl Sema_ctx
         //< omitted type resolves as "Unknown": normalisation writes the empty type in.
         name: = param.find_text(.k_identifier)
         if sema_type_env.is_unknown(t_id)
-            r.clear_scratch().s("parameter '\{name\}' has no type: write '\{name\}: <type>'")
+            r.clear_scratch().s("parameter '\{name\}' has no type. Write '\{name\}: <type>'")
         else if sema_type_env.is_void(t_id)
-            r.clear_scratch().s("parameter '\{name\}' cannot be Void, which holds no value")
+            r.clear_scratch().s("parameter '\{name\}' must not be Void. Void holds no value")
         else
             return
         r.err(param, r.scratch.slice())
@@ -339,9 +336,9 @@ impl Sema_ctx
     fn make_fqn(r: Self$@, name: U8[]): U8[] //<
         //< The fully qualified name, qualified by the current file
         //<
-        //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`:
-        //< there, ctx would have to import resolve and be pulled into the declarations' mutual
-        //< recursion, a large tangle since many files use ctx.
+        //< The built-in `Unknown` / `Void` are not qualified. It lives here, not in `resolve`.
+        //< There, ctx would have to import resolve and be pulled into the declarations' mutual
+        //< recursion. That is a large tangle, since many files use ctx.
         if r.file_name.len > 0 && !name.equals(base_core.unknown_type_name) &&
             !name.equals("Void")
             return r.build_mod_fqn(r.file_name, name)
@@ -362,9 +359,9 @@ impl Sema_ctx
         //< Whether a generic's instantiation (the analysis of a template body) is in progress
         //<
         //< Caution: Emit no diagnostic whose result depends on the type arguments during this. The
-        //< same source position is analysed once per type argument, so one instantiation's result
-        //< becomes advice that breaks the build if followed (check_unnecessary_cast in coerce.kspl
-        //< and lint_empty_block in lint_stmt.kspl hold back for this reason).
+        //< same source position is analysed once per type argument. So one instantiation's result
+        //< becomes advice that breaks the build if followed. check_unnecessary_cast in coerce.kspl
+        //< and lint_empty_block in lint_stmt.kspl hold back for this reason.
         return r.in_generic_instance || r.generics.inst_site != null
 
     fn set_in_generic_instance(r: Self$@, v: Bool)
@@ -383,9 +380,9 @@ impl Sema_ctx
     fn is_code_off(r: Self$@, node: Ast_node$@, code: U8[]): Bool //<
         //< Whether a diagnostic with that code at node would be dropped as switched off
         //<
-        //< **Ask it before work done only for that diagnostic**: a check off by default (W0601)
-        //< would otherwise pay its whole cost on every declaration and print nothing. The level is
-        //< decided by lint_level_for_file alone, as in report_core.
+        //< **Ask it before work done only for that diagnostic.** Otherwise a check off by default
+        //< (W0601) would pay its whole cost on every declaration and print nothing.
+        //< lint_level_for_file alone decides the level, as in report_core.
         switch r.lint_level_for_file(r.file_for_node(node), code)
         case .off
             return true
@@ -395,7 +392,7 @@ impl Sema_ctx
     priv fn source_for_node(r: Self$@, node: Ast_node$@): U8$[] //<
         //< Gets the source text for a diagnostic **from the file that node belongs to**
         //<
-        //< During monomorphization the current file is the template's, so a diagnostic on a node of
+        //< During monomorphization the current file is the template's. So a diagnostic on a node of
         //< the user's code (a generic's bound violation) would take its line and caret from the
         //< template's text.
         if node == null || node.loc.file().len == 0 ||
@@ -436,8 +433,8 @@ impl Sema_ctx
         if r.suppress_errors
             return
         // A diagnostic with a code goes through its level: off drops it, error promotes it. The
-        // promotion comes **before** the lint-mode-only filter on information and hints, since a
-        // user who asked for error wants it rejected in an ordinary build too.
+        // promotion comes **before** the lint-mode-only filter on information and hints. A user who
+        // asked for error wants it rejected in an ordinary build too.
         $eff_sev: = sev
         code: = base_diag.code_of(msg)
         if code.len > 0
@@ -457,22 +454,22 @@ impl Sema_ctx
         defer key_sb.free()
         if has_pos
             key_sb.s(file).c(':').s("\{offset\}").c(':')
-        // **One error per place in a generic's body**, whichever instance found it: each instance
-        // repeats the same mistake with its own type in the text (`type 'I32' has no field…`,
-        // then `'I64'`), and the copies bury the diagnostics after them.
+        // **One error per place in a generic's body**, whichever instance found it. Each instance
+        // repeats the same mistake with its own type in the text (`type 'I32' has no field…`, then
+        // `'I64'`). The copies bury the diagnostics after them.
         if has_pos && r.in_generic_instance && eff_sev == base_diag.Diagnostic_severity.error
             key_sb.s("error in an instance")
         else
             key_sb.s(msg)
         dup_key: = key_sb.slice()
-        already_reported: = r.diags.reported.get(dup_key) catch 0
+        already_reported: = r.diags.reported.get(dup_key).unwrap_or(0)
         if already_reported == 1
             return
         perm_key: = base_core.arena.dup_str(dup_key)
         r.diags.reported.set(perm_key, 1)
 
         // The cap's own line is the 50th error ("Compilation stops at 50 errors" in
-        // ksplc/docs/SPEC-tools.md), printed in place of the error that would have been it.
+        // ksplc/docs/SPEC-tools.md). It is printed in place of the error that would have been it.
         if eff_sev == base_diag.Diagnostic_severity.error &&
             r.diags.counts.errors >= max_errors - 1
             if r.diags.counts.errors == max_errors - 1
@@ -494,8 +491,8 @@ impl Sema_ctx
             r.diags.counts.hints += 1
 
         starts: = r.line_starts_for(file, src)
-        // **An error in a generic's body names the instantiation that met it**: the line alone is
-        // the template's, and the mistake may be the type argument the caller gave.
+        // **An error in a generic's body names the instantiation that met it.** The line alone is
+        // the template's, and the mistake can be the type argument the caller gave.
         $shown: = msg
         if eff_sev == base_diag.Diagnostic_severity.error && r.in_generic_instance
             shown = r.instance_notes(msg)
@@ -508,25 +505,35 @@ impl Sema_ctx
         //<
         //< **Each names what asked for it** (`in 'f<|P|>', instantiated at a.kspl:12:5`), up to
         //< max_instance_notes; the outermost is the caller's own line. An entry with no name is a
-        //< closure's body, which its function's entry stands for.
+        //< closure's body, which its function's entry stands for. A note that would repeat the one
+        //< before it (a polymorphic recursion, its nesting elided) is left to the closing `…`.
         $at: = r.generics.analysing
         if at < 0
             return msg
         out: = base_core.arena.text().s(msg)
         $n: Sz = 0
+        $prev: U8[] = ""
+        $more: = false
         for at >= 0 && at < r.generics.pending.len
             p: = r.generics.pending.get(at)
             at = p.from
             if p.shown.len == 0
                 continue // a closure's body, named by the function that writes it
-            if n == max_instance_notes
-                out.s("\n  Note: … and more instantiations above it.")
-                break
-            out.s("\n  Note: in '").s(p.shown).s("'")
+            note: = base_core.arena.text().s("in '").s(p.shown).s("'")
             if p.site != null
-                out.s(", instantiated at ").s(r.place_of(p.site))
-            out.s(".")
+                note.s(", instantiated at ").s(r.place_of(p.site))
+            text: = note.take()
+            if text.equals(prev)
+                more = true
+                continue
+            if n == max_instance_notes
+                more = true
+                break
+            out.s("\n  Note: ").s(text).s(".")
+            prev = text
             n += 1
+        if more
+            out.s("\n  Note: … and more instantiations above it.")
         return out.take()
 
     priv fn place_of(r: Self$@, node: Ast_node$@): U8[] //<
@@ -541,8 +548,9 @@ impl Sema_ctx
 
     priv fn note_code(r: Self$@, code: U8[]) //< records an emitted code, once, for the summary
         //<
-        //< Only a code the registry knows reaches here: the summary tells the reader to run `ksplc
-        //< explain` on each, and a bracketed word that is not a code has no section to print.
+        //< Only a code the registry knows reaches here. The summary tells the reader to run
+        //< `ksplc explain` on each, and a bracketed word that is not a code has no section to
+        //< print.
         //< Caution: **Copy it.** The code is a view into the message, and a message is often built
         //< in the scratch buffer the next diagnostic overwrites.
         if !code.is_one_of(r.diags.counts.codes.slice())
@@ -560,10 +568,10 @@ impl Sema_ctx
             exp.free()
             act.free()
         r.clear_scratch().s("expected '\{exp.slice()\}', but got '\{act.slice()\}'")
-        // Where the only difference is an inner level made read-only, say **why** it is rejected:
+        // Where the only difference is an inner level made read-only, say **why** it is rejected.
         // "the types differ" does not explain why one level (`U8$[]`→`U8[]`) is accepted and two
         // are not.
-        // Caution: Put it in the error text, not a hint: a hint or an information appears only in
+        // Caution: Put it in the error text, not a hint. A hint or an information appears only in
         // lint mode and misses someone stuck in a build.
         if r.env.needs_deep_const_add(actual_id, expected_id)
             r.scratch
@@ -591,13 +599,13 @@ impl Sema_ctx
         r.scratch
             .s("\n  Hint: a closure's type is its synthesized environment, which conforms only to \
                 the exact 'Callable' in its signature. Check that the receiving parameter's type \
-                arguments match, and note that a closure cannot be captured by another closure \
-                (pass it as a parameter instead).")
+                arguments match. A closure cannot capture another closure. Pass it as a parameter \
+                instead.")
 
     fn note_undefined_at(r: Self$@, node: Ast_node$@) //<
         //< records where an undefined name was reported
         //<
-        //< A call's callee is resolved as a name before the call is, so its undefined head is
+        //< A call's callee is resolved as a name before the call is. So its undefined head is
         //< reported there first, and the call's own report is skipped (`undefined_reported_at`).
         $key: = Str_builder.new()
         defer key.free()
@@ -609,7 +617,7 @@ impl Sema_ctx
         $key: = Str_builder.new()
         defer key.free()
         r.offset_key(node, key@)
-        return r.diags.undefined_at.get(key.slice()) catch false
+        return r.diags.undefined_at.get(key.slice()).unwrap_or(false)
 
     priv fn offset_key(r: Self$@, node: Ast_node$@, out: Str_builder$@) //< "file:offset" of node
         info: = node.get_span_offset()
@@ -627,18 +635,19 @@ impl Sema_ctx
         //<
         //< The name not found is a file's name that a selective import does not bind.
         //< `import "p" { A }` binds only `A`, so `p.` stands for nothing (`add_withheld_alias`).
-        //< Caution: Keep the wording in this one place: name resolution has two failure points, an
-        //< undefined identifier and an undefined callee, and with a copy each only one gets fixed.
+        //< Caution: Keep the wording in this one place. Name resolution has two failure points, an
+        //< undefined identifier and an undefined callee. With a copy, only one of them gets each
+        //< fix.
         $key: = Str_builder.new()
         defer key.free()
         key.s(r.file_name).s("::").s(name)
-        path: = r.aliases.withheld.get(key.slice()) catch ""
+        path: = r.aliases.withheld.get(key.slice()).unwrap_or("")
         if path.len == 0
             return false
         r.scratch
-            .s("\n  Hint: 'import \"\{path\}\" { ... }' brings in only the names listed, so \
-                '\{name\}.' cannot be written. Add a '+' to bring in the file's name as well: \
-                'import \"\{path\}\" + { ... }'.")
+            .s("\n  Hint: 'import \"\{path\}\" { ... }' imports only the listed names. It does not \
+                make '\{name\}.' available. Add a '+' to bring in the file's name as well: 'import \
+                \"\{path\}\" + { ... }'.")
         return true
 
     fn append_anon_fn_capture_note(r: Self$@, name: U8[]): Bool //<
@@ -653,22 +662,22 @@ impl Sema_ctx
         if !is_anon_fn_name(r.fn_ctx.name)
             return false
         r.scratch
-            .s("\n  Hint: an anonymous function cannot capture '\{name\}' from the enclosing scope \
-                (its body is lifted to a top-level function). Pass it as a parameter.")
+            .s("\n  Hint: an anonymous function cannot capture '\{name\}' from the enclosing scope. \
+                Its body becomes a top-level function. Pass it as a parameter.")
         return true
 
     fn append_closure_note(r: Self$@) //< writes to scratch that adding `;` makes it a closure
         //<
-        //< Even with zero captures a `;` makes it a `Callable` ("Why capture is made explicit and
-        //< escape is forbidden" in docs/DESIGN-language.md). That **the presence of `;` decides
-        //< the type** is not visible in the text; unexplained, the user sees only "the types do not
+        //< Even with zero captures, a `;` makes it a `Callable` ("Why capture is made explicit and
+        //< escape is forbidden" in docs/DESIGN-language.md). That **the presence of `;` decides the
+        //< type** is not visible in the text. Unexplained, the user sees only "the types do not
         //< match, though I just passed a function".
-        //< Caution: Keep the wording in this one place; two situations need it (a function pointer
-        //< passed to a `Callable`'s position, and a function value bound with no type annotation).
+        //< Caution: Keep the wording in this one place. Two situations need it: a function pointer
+        //< passed to a `Callable`'s position, and a function value bound with no type annotation.
         r.scratch
-            .s("\n  Hint: a plain function is a function pointer. A 'Callable' is produced by a \
-                closure — add ';' before the closing paren of the signature ('fn(x: I32; n: I32): \
-                Bool { … }'), even when there is nothing to capture ('fn(x: I32; )').")
+            .s("\n  Hint: a plain function is a function pointer. A closure produces a 'Callable'. \
+                Add ';' before the signature's closing parenthesis ('fn(x: I32; n: I32): Bool { … \
+                }'), even when there are no captures ('fn(x: I32; )').")
 
     fn append_missing_capture_list_note(r: Self$@, expected_id: I32) //<
         //< Adds the explanation above only where a function pointer is passed for a `Callable`
@@ -705,7 +714,9 @@ impl Sema_ctx
                     is_snake = false
                     break
             if !is_snake
-                r.clear_scratch().s("[I0502] \{kind_name\} '\{name\}' should use snake_case.")
+                r.clear_scratch()
+                    .s("[I0502] \{kind_name\} '\{name\}' does not use snake_case. Rename it using \
+                        snake_case.")
                 r.information(node, r.scratch.slice())
 
     fn declare_symbol(r: Self$@, name: U8[], sym: Sema_symbol$@, export_global: Bool): Bool
@@ -732,7 +743,7 @@ impl Sema_ctx
 
         if export_global && sym.vis != sema_type_scope.Visibility.file_private
             id: = base_core.pools.intern_name(name)
-            existing_global: = r.symtab.global_scope.get(id) catch null
+            existing_global: = r.symtab.global_scope.get(id).unwrap_or(null)
             if existing_global != null
                 r.clear_scratch().s("global symbol '\{name\}' is already defined")
                 r.err(target_node, r.scratch.slice())
@@ -752,7 +763,7 @@ impl Sema_ctx
 
     priv fn report_hidden_name(r: Self$@, name: U8[], target_node: Ast_node$@) //<
         //< Reports a local that hides an outer local [I0501] or an imported module [W0502]
-        existing_sym: = r.symtab.resolve(name) catch null
+        existing_sym: = r.symtab.resolve(name).unwrap_or(null)
         if existing_sym != null && !existing_sym.flags.is_global &&
             existing_sym.kind.is_var_or_const()
             r.clear_scratch()
@@ -760,14 +771,14 @@ impl Sema_ctx
                     scope.")
             r.information(target_node, r.scratch.slice())
         // **A local with an imported module's name hides the module**, and KSPL reaches both with
-        // `.`: an `io.out()` below it reads the local and fails as a missing member, far from the
+        // `.`. An `io.out()` below it reads the local and fails as a missing member, far from the
         // cause. A warning, not an error: shadowing stays legal ("Scope and shadowing" in
         // docs/SPEC-language.md). The prelude's `lang`, an import nobody wrote, is excluded.
         named: = r.peek_file_alias(r.file_name, name)
         if named != null && named.decl_node != null
             r.clear_scratch()
-                .s("[W0502] '\{name\}' hides the imported module '\{name\}': from here to the end \
-                    of its scope, '\{name\}.x' reads this instead. Rename it.")
+                .s("[W0502] '\{name\}' hides the imported module '\{name\}'. Within the remaining \
+                    scope, '\{name\}.x' refers to this declaration. Rename it.")
             r.warn(target_node, r.scratch.slice())
 
     priv fn lint_declared_name(r: Self$@, name: U8[], sym: Sema_symbol$@, target_node: Ast_node$@) //<
@@ -777,7 +788,9 @@ impl Sema_ctx
         //< global constant may be upper case.
         if sym.kind.is_type()
             if !(name.len == 1 && (name.ptr + 0).is_upper()) && !is_capital_snake(name)
-                r.clear_scratch().s("[I0502] Type name '\{name\}' should use Capital_snake_case.")
+                r.clear_scratch()
+                    .s("[I0502] Type name '\{name\}' does not use Capital_snake_case. Rename it \
+                        using Capital_snake_case.")
                 r.information(target_node, r.scratch.slice())
             return
         if !sym.kind.is_value()

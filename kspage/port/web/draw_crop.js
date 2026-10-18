@@ -12,9 +12,9 @@ function kspageDrawCrop(ks) {
   const { paintBoxes, paintPanels, paintPictures, surfaceOf, DOC_BOXES, CHROME_BOXES } = ks;
 
   // Crops a part of the document (`box`) onto `target`'s canvas, **clipping what is outside**
-  // (otherwise the neighbours show); presenting and printing differ only in the crop and placement.
-  // **`how` decides the placement and the colors**: empty means "fit and center, in the screen's
-  // colors, no background"; `scale` not 0 places it at `(x, y)` at that multiple (1:1 for paper).
+  // (otherwise the neighbours show). Presenting and printing differ only in the crop and placement.
+  // **`how` decides the placement and the colors.** Empty means "fit and center, in the screen's
+  // colors, no background". `scale` not 0 places it at `(x, y)` at that multiple (1:1 for paper).
   // Caution: **Set black and white (`ink` / `paper`) for paper** (dark screen colors hide text).
   function paintCrop(target, count, box, outW, outH, dpr, how) {
     const [bx, by, bw, bh] = box;
@@ -67,10 +67,10 @@ function kspageDrawCrop(ks) {
     }
   }
 
-  // The slide list (the thumbnails); **with no slides nothing is shown** (the space alone would
+  // The slide list (the thumbnails). **With no slides, nothing is shown** (the space alone would
   // push the body down). **The layout's width is not changed** (a new width re-breaks the flow and
-  // shifts the slides). **Each image is redrawn at every layout** (a slide changes per keystroke);
-  // boxes outside the crop are skipped before `paintBoxes`, so more slides cost a keystroke
+  // shifts the slides). **Each image is redrawn at every layout** (a slide changes per keystroke).
+  // Boxes outside the crop are skipped before `paintBoxes`, so more slides cost a keystroke
   // nothing. A click is mapped to document coordinates, as an ordinary click.
   function paintThumbs(count, dpr) {
     const strip = ks.api.slideStrip;

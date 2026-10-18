@@ -1,9 +1,9 @@
 //< ksai's foundation: the multi-dimensional `Tensor<|T|>`, and the operations over it
 //<
 //< matmul, rmsnorm, softmax, RoPE, the activation functions and the arithmetic operators. **The
-//< matrix-product kernel is pure KSPL by default**: no dependencies, written so that Clang's
-//< auto-vectorization works, and it hands off to BLAS only in a `--define=blas` build. Read this
-//< file first.
+//< matrix-product kernel is pure KSPL by default.** It has no dependencies and is written so that
+//< Clang's auto-vectorization works. It hands off to BLAS only in a `--define=blas` build. Read
+//< this file first.
 import "std/math"
 import "std/mem" { Arena }
 import "std/prng"
@@ -13,11 +13,11 @@ import "std/strfmt"
 pub enum Tensor_error //< why an operation could not run on the shapes it was given
     //<
     //< A shape mismatch can come from run-time data (a bad shape in weights read from a
-    //< safetensors file), so it propagates as an error union (?E) for the caller to handle.
+    //< safetensors file). So it propagates as an error union (?E) for the caller to handle.
     rank_mismatch //< the number of dimensions is not what the operation expects
     shape_mismatch //< a dimension's size does not match, such as the inner-product dimension
     out_of_bounds //< a row number outside the tensor; a bad element index stops the program
-pub const max_tensor_elems: Sz = 100000000 //< the most elements one tensor may hold.
+pub const max_tensor_elems: Sz = 100000000 //< the most elements one tensor can hold.
     //<
     //< The cap `new` enforces, which fits cfg(freestanding)'s 32-bit Sz (800MB even at F64). It is
     //< pub so safetensors.get_tensor, which bypasses `new`, applies the same cap.
@@ -56,15 +56,15 @@ impl<|T|> Tensor<|T|>
         for $i: = I32::ndim - 1; i >= 0; i -= 1
             s: = shape[i]
             (shape_ptr + i)$ = s
-            // Caution: **Check before multiplying.** Multiplying first and then comparing with
+            // Caution: **Check before multiplying.** A multiply first and then a compare with
             // `max_tensor_elems` lets through a product that overflowed Sz and wrapped below the
-            // cap (the wrap can land on any multiple of 256). `new` cannot fail and is called from
+            // cap. The wrap can land on any multiple of 256. `new` cannot fail and is called from
             // many places, so it stops at once on what should never happen.
             if s > 0 && size > max_tensor_elems / s
-                // Always print which dimension held which value: without the values, the cause (a
-                // bug in the caller or in code generation) cannot be told apart (the same intent as
-                // "A program does not lose its own output on an abnormal exit" in
-                // std/docs/DESIGN-system.md).
+                // Always print which dimension held which value. Without the values, nobody can
+                // tell the cause apart: a bug in the caller or in code generation. The intent is
+                // that of "A program keeps its own output on an abnormal exit" in
+                // std/docs/DESIGN-system.md.
                 $b: = Str_builder.new()
                 defer b.free()
                 b
@@ -72,9 +72,10 @@ impl<|T|> Tensor<|T|>
                         shape[\{i\}]=\{s\} product_before=\{size\} shape.ptr=")
                 strfmt.write_ptr(b, Void$@::shape.ptr)
                 strfmt.write_ptr(b.s(" dest="), Void$@::shape_ptr)
-                // Print every dimension: one broken dimension alone cannot tell "the caller passed
-                // a broken shape" from "the shape's memory was overwritten afterwards" (such as
-                // only the low 4 bytes of an 8-byte slot, from a calling-convention mismatch).
+                // Print every dimension. One broken dimension alone cannot tell "the caller passed
+                // a broken shape" from "the shape's memory was overwritten afterwards". An example
+                // of the second: only the low 4 bytes of an 8-byte slot, from a calling-convention
+                // mismatch.
                 b.s("\n  dims:")
                 for $k: = 0; k < I32::ndim && k < 16; k += 1
                     b.s(" [\{k\}]=\{shape[k]\}")
@@ -262,7 +263,7 @@ impl<|T|> Tensor<|T|>
         //<
         //< Caution: **Get the reverse rotation from here, with `invert`.** RoPE is orthogonal, so
         //< the backward pass is a rotation by -θ (`apply_rope_grad` in `ksai/grad.kspl`). **Do not
-        //< copy the body with only the sign changed**: a fix to the frequency base or the indexing
+        //< copy the body with only the sign changed.** A fix to the frequency base or the indexing
         //< on one side alone silently puts the gradient out of step with the forward pass. The
         //< caller does the shape check (forward rejects with a diagnostic, reverse with an assert).
         seq_len: = r.shape[r.shape.len - 2]
@@ -294,15 +295,15 @@ impl<|T|> Tensor<|T|>
         Tensor<|T|>!Tensor_error //<
             //< The RoPE of the NeoX/Llama/Qwen family, pairing each head's first half with its last
             //<
-            //< apply_rope is the interleaved style (pair 2j, 2j+1), while HF Llama/Qwen pair the
-            //< first half's j with the second half's j+hd/2 (rotate_half), per head of head_dim,
-            //< with its own base theta (1e6 for Qwen2.5). r's shape is [seq, n_heads*head_dim].
+            //< apply_rope is the interleaved style (pair 2j, 2j+1). HF Llama/Qwen pair the first
+            //< half's j with the second half's j+hd/2 (rotate_half), per head of head_dim. Each has
+            //< its own base theta (1e6 for Qwen2.5). r's shape is [seq, n_heads*head_dim].
         if r.shape.len != 2
             throw .rank_mismatch
         seq: = r.shape[0]
         width: = r.shape[1]
-        // Caution: **Refuse a head width of 0, or one that does not tile a row**: 0 never moves the
-        // loop on, and a last head cut short reads its second half past the row.
+        // Caution: **Refuse a head width of 0, or one that does not tile a row.** 0 never moves the
+        // loop on. A last head cut short reads its second half past the row.
         if head_dim <= 0 || head_dim % 2 != 0 || width % head_dim != 0
             throw .shape_mismatch
         half: = head_dim / 2
@@ -334,7 +335,7 @@ impl<|T|> Tensor<|T|>
         if src.shape[src.shape.len - 1] != dim
             throw .shape_mismatch
         // In the KV cache (Self_attention/Gqa_attention.forward) row_idx is the generation
-        // position, which goes past the allocated rows once the sequence outgrows max_seq_len; this
+        // position. It goes past the allocated rows once the sequence outgrows max_seq_len. This
         // stops that.
         if row_idx >= r.shape[0]
             throw .out_of_bounds
@@ -361,8 +362,8 @@ impl<|T|> Tensor<|T|>
 
     // ---------------------------------------------------------
     // Operator overloading (+, -, *). An operator cannot return an error union under the trait's
-    // contract, so `checked_add` / `checked_sub` / `checked_mul` hold the body and the operator
-    // panics on their error (so a shape mismatch stays available as a recoverable error).
+    // contract. So `checked_add` / `checked_sub` / `checked_mul` hold the body, and the operator
+    // panics on their error. A shape mismatch thus stays available as a recoverable error.
     // ---------------------------------------------------------
     priv fn elementwise_out(r: Self$@, rhs: Tensor<|T|>): Tensor<|T|>!Tensor_error
         if r.size != rhs.size
@@ -372,7 +373,7 @@ impl<|T|> Tensor<|T|>
     pub fn checked_add( //< element-wise sum; rejects shapes that do not match
         //<
         //< **Do not merge the three loops below into one.** Passing the operation as a function
-        //< pointer makes an indirect call per element, and -O3's auto-vectorization stops working
+        //< pointer makes an indirect call per element. Then -O3's auto-vectorization stops working
         //< (the property the SIMD gate in `tests` checks).
         r: Self$@,
         rhs: Tensor<|T|>, //< the other tensor, which must be the same shape
@@ -415,8 +416,8 @@ impl<|T|> Tensor<|T|>
 
 impl<|T|> Tensor<|T|>: Index_place<|Sz, T|> //< so `t[i]` reads and writes one element
     //<
-    //< Note: An index out of range panics (for the same reason as `std/ds.kspl`'s List: the caller
-    //< can compute the range from `size`, so going outside it is a bug). Only a shape mismatch is a
+    //< Note: An index out of range panics, for the same reason as `std/ds.kspl`'s List. The caller
+    //< can compute the range from `size`, so going outside it is a bug. Only a shape mismatch is a
     //< recoverable `Tensor_error` (the reason is at `Tensor_error`).
     #inline
     pub fn at(r: Self@, index: Sz, file: U8[], line: Sz): T$@ //< the element at a flat index
@@ -462,10 +463,10 @@ fn matmul_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
 fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz) //<
     //< Four outputs at once, **each summed separately in ascending order**
     //<
-    //< One running sum waits on its last addition at every step; four independent ones overlap,
-    //< and each still adds its terms in the same order, so the result is identical bit for bit (the
-    //< third technique beside the two in "The kernels are spelt for the auto-vectorizer, not with
-    //< intrinsics" in `ksai/docs/DESIGN-learning.md`).
+    //< One running sum waits on its last addition at every step. Four independent ones overlap.
+    //< Each still adds its terms in the same order, so the result is identical bit for bit. This
+    //< is the third technique beside the two in "The kernels are spelt for the auto-vectorizer, not
+    //< with intrinsics" in `ksai/docs/DESIGN-learning.md`.
     for i in Range.asc(m)
         a_row: = a + i * k
         c_row: = c + i * n
@@ -503,11 +504,11 @@ fn transb_kernel<|T|>(c: T$@, a: T$@, b: T$@, m: Sz, k: Sz, n: Sz)
     blas_gemm<|T|>(cblas_no_trans, cblas_trans, m, n, k, a, k, b, k, c, n) // C = A@B^T
 
 // ---------------------------------------------------------
-// An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI; by default cfg(blas)
+// An optional backend: only a `--define=blas` build calls BLAS's gemm by FFI. By default cfg(blas)
 // discards these and matmul_kernel's BLAS version, so the generated C never mentions cblas. The
 // library is declared with the block, so no build file names it.
-// Caution: **`#cfg` holds only the one declaration after it**: give each its own, or the ones
-// after the first are kept in every build (the block's `#link` then asks every link for BLAS).
+// Caution: **`#cfg` holds only the one declaration after it.** Give each its own. Otherwise the
+// ones after the first are kept in every build, and the block's `#link` asks every link for BLAS.
 // ---------------------------------------------------------
 
 // CBLAS's enum values, as `cblas.h` numbers them.

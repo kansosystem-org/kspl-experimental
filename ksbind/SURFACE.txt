@@ -8,22 +8,23 @@ ksbind/db	Column_kind.integer	integer	a whole number
 ksbind/db	Column_kind.null_value	null_value	SQL's NULL
 ksbind/db	Column_kind.text	text	text
 ksbind/db	Db	pub struct Db	one open database, which prepares statements
-ksbind/db	Db.exec	pub fn exec(r: Self$@, sql: U8[]): Void!Db_error	prepares, steps and frees in one call, for SQL with no parameters and no rows. Use it for one `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`; SQL holding a second statement is refused, as by `prepare`.
-ksbind/db	Db.free	pub fn free(r: Self$@)	frees it; the database closes once its statements are freed too. Caution: **The name must be `free`.** The use-after-free check treats a call as a release when "the receiver's type conforms to `Owned` and the method called is `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name, `c.free(); c.query(…);` compiles with no diagnostics ([W0107] reports it).
+ksbind/db	Db.exec	pub fn exec(r: Self$@, sql: U8[]): Void!Db_error	prepares, steps and frees in one call, for SQL with no parameters and no rows. Use it for one `CREATE TABLE` / `INSERT` / `UPDATE` / `DELETE`; SQL holding a second statement, or returning rows, is refused before it runs.
+ksbind/db	Db.free	pub fn free(r: Self$@)	frees it; the database closes once its statements are freed too. Caution: **The name must be `free`.** The use-after-free check treats a call as a release when "the receiver's type conforms to `Owned` and the method called is `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name, `c.free(); c.query(…);` compiles with no diagnostics. [W0107] reports it.
 ksbind/db	Db.last_insert_rowid	pub fn last_insert_rowid(r: Self$@): I64	the row id the last `INSERT` created
 ksbind/db	Db.open	pub fn open(path: U8[]): Db$@!Db_error	opens a database, creating the file if it does not exist
 ksbind/db	Db.prepare	pub fn prepare(r: Self$@, sql: U8[]): Statement$@!Db_error	prepares one statement from SQL; a second statement after it is refused. Caution: The caller frees it with `stmt.free()`.
 ksbind/db	Db:Owned	impl Db: Owned	it owns its memory and releases it with `free()`
-ksbind/db	Db_error	pub enum Db_error	why a database operation failed. **A variant SQLite decided carries SQLite's primary result code** (`code`), so a caller tells a busy database (5, SQLITE_BUSY) from a broken constraint (19, SQLITE_CONSTRAINT). A refusal made here, before SQLite is asked, carries the code SQLite gives for the same one.
-ksbind/db	Db_error.bind_failed	bind_failed(code: I32)	a parameter could not be bound: an index out of range or similar
+ksbind/db	Db_error	pub enum Db_error	why a database operation failed. **A variant SQLite decided carries its primary result code and its text** (`code`, `said`). The code tells a busy database (5) from a broken constraint (19). The text names the table or column (`no such table: users`). A refusal made here carries SQLite's code for the same. Caution: **`said` is held by the `Db` or `Statement` that failed**, until its next failure or its `free()`. Copy it to keep it longer (the text of `open_failed` lives for ever).
+ksbind/db	Db_error.bind_failed	bind_failed(code: I32, said: U8[])	a parameter could not be bound: an index out of range
 ksbind/db	Db_error.buffer_too_small	buffer_too_small	the buffer for a text column is shorter than `column_bytes`
-ksbind/db	Db_error.column_failed	column_failed(code: I32)	SQLite could not produce a column's value (7: out of memory)
+ksbind/db	Db_error.column_failed	column_failed(code: I32, said: U8[])	SQLite could not produce a column's value (7: memory)
 ksbind/db	Db_error.column_type	column_type(mismatched: U8[])	the column's kind or value does not fit the field. A value fits when the field's width and sign hold it unchanged: 300 does not fit a `U8`.
-ksbind/db	Db_error.missing_column	missing_column(missing: U8[])	no column or parameter matches a field in the table. Only `bind_row` / `read_row` return this and the next error. Caution: **These two errors keep a default from being filled in silently** (the reason is in "a trait returning a table" in `../docs/DESIGN-language.md`).
-ksbind/db	Db_error.open_failed	open_failed(code: I32)	the file could not be opened: a bad path, no permission, or similar
-ksbind/db	Db_error.prepare_failed	prepare_failed(code: I32)	the SQL could not be prepared: a syntax error or similar
+ksbind/db	Db_error.missing_column	missing_column(missing: U8[])	no column or parameter matches a field in the table. Only `bind_row` / `read_row` return this and the next error. Caution: **These two errors keep a default from being filled in silently** (the reason is in "a table-returning trait" in `../docs/DESIGN-language.md`).
+ksbind/db	Db_error.open_failed	open_failed(code: I32, said: U8[])	the file could not be opened: a bad path, or similar
+ksbind/db	Db_error.prepare_failed	prepare_failed(code: I32, said: U8[])	the SQL could not be prepared: a syntax error or so
+ksbind/db	Db_error.returns_rows	returns_rows	`exec` was given SQL that returns rows (a `SELECT`, a `RETURNING`). **It is refused before it runs**: run, its rows would be thrown away unread. Read them through `prepare` and `step`.
 ksbind/db	Db_error.several_statements	several_statements	the SQL holds a second statement after the first. Caution: **`prepare` and `exec` take one statement**; run each on its own. Taken, the rest would be dropped without a word.
-ksbind/db	Db_error.step_failed	step_failed(code: I32)	the step returned something other than a row or the end
+ksbind/db	Db_error.step_failed	step_failed(code: I32, said: U8[])	the step returned something other than a row or the end
 ksbind/db	Statement	pub struct Statement	one prepared statement, which is bound, stepped and read
 ksbind/db	Statement.bind_f64	pub fn bind_f64(r: Self$@, idx: I32, val: F64): Void!Db_error	binds a floating-point number to a parameter
 ksbind/db	Statement.bind_i64	pub fn bind_i64(r: Self$@, idx: I32, val: I64): Void!Db_error	binds an integer to a parameter

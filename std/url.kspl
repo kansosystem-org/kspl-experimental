@@ -52,7 +52,8 @@ priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_erro
     $i: Sz = 0
     for i < s.len
         if s[i] == '%'
-            if i + 2 >= s.len || s[i + 1].hex_val() < 0 || s[i + 2].hex_val() < 0
+            if i + 2 >= s.len || s[i + 1].hex_val().is_none() ||
+                s[i + 2].hex_val().is_none()
                 throw .invalid_percent_encoding
             i += 3
         else
@@ -64,7 +65,9 @@ priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_erro
     for i < s.len
         c: = s[i]
         if c == '%'
-            out[at] = U8::(s[i + 1].hex_val() * 16 + s[i + 2].hex_val())
+            // The first pass checked both digits, so neither falls back to 0.
+            out[at] =
+                U8::(s[i + 1].hex_val().unwrap_or(0) * 16 + s[i + 2].hex_val().unwrap_or(0))
             i += 3
         else
             out[at] = ' ' if c == '+' && plus_is_space else c
@@ -75,49 +78,78 @@ priv fn decode_impl(s: U8[], plus_is_space: Bool, arena: Arena$@): U8[]!Url_erro
 // ---------------------------------------------------------
 // Parsing a query string (the "a=1&b=2" form)
 // ---------------------------------------------------------
-pub struct Query_param //< one `name=value` pair of a query string
+pub struct Query //< a query string's pairs, in the order they appear; there can be none
+    //<
+    //< **A pair is reached through it, never through a pointer that can be null.** So an empty
+    //< query is a value like any other (`find`, `each`, `is_empty`), as `http.Headers` is.
+    priv first: Query_param$@ //< the first pair; null for none
+    priv own: Own_arena //< the arena `parse_query(…, null)` made for the pairs; empty otherwise
+
+pub struct Query_param //< one `name=value` pair of a query string, as `Query.each` hands it out
     pub name: U8$[] //< the name, already decoded and copied into the arena
     pub value: U8$[] //< the value; empty when the pair has no `=`
-    pub next: Query_param$@ //< the next pair, in the order they appear
-    priv own: Own_arena //< in the first pair `parse_query` returned given null, their arena
+    priv next: Query_param$@ //< the pair after this one; null after the last
 
-impl Query_param
+impl Query
     pub fn free(r: Self$@) //< lets go every pair, when `parse_query` was given null
         //<
-        //< **Only the first pair of such a list frees anything.** One parsed into an arena owns
-        //< nothing, and neither does a pair further down.
-        if r != null
-            $own: = r.own
-            own.free()
-impl Query_param: Owned {} //< `free()` lets go the arena a query parsed with null lives in
+        //< Parsed into an arena, it frees nothing: that arena does.
+        $own: = r.own
+        own.free()
 
-pub fn parse_query( //< splits a query string into a linked list of pairs
+    pub fn find( //< the value of the first pair with that name, or nothing
+        //<
+        //< The name is compared byte for byte, after decoding (`a%20b` is found as `a b`).
+        r: Self,
+        name: U8[], //< the decoded name to look for
+    ): U8[]?
+        for p in r.each()
+            if p.name.compare(name) == 0
+                return .some(p.value)
+        return .none
+
+    pub fn each(r: Self): Query_seq //< walks the pairs in order (`for p in q.each()`)
+        return Query_seq::{ .at = r.first }
+
+    pub fn is_empty(r: Self): Bool //< whether it holds no pair
+        return r.first == null
+impl Query: Owned {} //< `free()` lets go the arena a query parsed with null lives in
+
+pub struct Query_seq //< walks a query's pairs one at a time, in order
+    priv at: Query_param$@
+
+impl Query_seq: Iter<|Query_param@|> //< so a `for` drives it
+    pub fn next(r: Self$@): Query_param@? //< the next pair, or nothing after the last
+        p: = r.at
+        if p == null
+            return .none
+        r.at = p.next
+        return .some(p)
+
+pub fn parse_query( //< splits a query string into its pairs
     //<
     //< Each name and value is percent-decoded, a `+` read as a space as a form writes it, and
-    //< copied into the arena, in order.
+    //< copied into the arena, in order. An empty query (`""`, `"?"`, `"&&"`) gives no pairs.
     query: U8[], //< the text after the `?`; a leading `?` is dropped
     arena: Arena$@, //< where the pairs go; null means an arena of the pairs' own and a `free()`
-): Query_param$@!Url_error //< the first pair, or null for an empty query; a broken `%XX` fails
+): Query!Url_error //< the pairs; a broken `%XX` fails, having left nothing behind
     $work: = mem.scratch(arena)
-    head: = pairs_of(query, work.arena) catch e
+    $q: = pairs_of(query, work.arena) catch e
         work.free()
         throw e
-    if head == null
-        work.free()
-    else
-        head.own = work.own
-    return head
+    q.own = work.own
+    return q
 
-priv fn pairs_of(query: U8[], arena: Arena$@): Query_param$@!Url_error //< parse_query's work
-    $head: Query_param$@ = null
+priv fn pairs_of(query: U8[], arena: Arena$@): Query!Url_error //< parse_query's work
+    $q: = Query::{ .first = null, .own = ::{} }
     $tail: Query_param$@ = null
-    q: = query.strip_prefix("?")
+    text: = query.strip_prefix("?")
 
     $start: Sz = 0
-    for start <= q.len
-        amp: = q.sub_from(start).find_char('&')
-        end: = start + amp.unwrap_or(q.len - start)
-        pair: = q.sub(start, end - start)
+    for start <= text.len
+        amp: = text.sub_from(start).find_char('&')
+        end: = start + amp.unwrap_or(text.len - start)
+        pair: = text.sub(start, end - start)
         if pair.len > 0
             $raw_name: U8[] = pair
             $raw_value: U8[] = ""
@@ -127,12 +159,12 @@ priv fn pairs_of(query: U8[], arena: Arena$@): Query_param$@!Url_error //< parse
             param: Query_param = ::{ .name = U8$[]::decode_impl(raw_name, true, arena)!,
                 .value = U8$[]::decode_impl(raw_value, true, arena)!, .next = null }
             node: = arena.create(param)
-            if head == null
-                head = node
+            if q.first == null
+                q.first = node
             else
                 tail.next = node
             tail = node
         if amp.is_none()
             break
         start = end + 1
-    return head
+    return q

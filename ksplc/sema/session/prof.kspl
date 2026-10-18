@@ -2,10 +2,9 @@
 //<
 //< **It is a tool, not a diagnostic**: nothing passes or fails on it (CI's check watches peak
 //< memory; `tests/tools/perf_guard.kspl`).
-//< **The per-phase total alone is not enough**: it does not name the declaration to fix, so each
-//< body is timed too (see "Profiling where Sema's time goes" in
-//< `ksplc/docs/DESIGN-compiler.md`). **Measure only under `--stats`**: bodies are many, and
-//< always-on timing adds every clock read.
+//< **The per-phase total alone is not enough**: it does not name the declaration to fix. So each
+//< body is timed too (see "Profiling where Sema's time goes" in `ksplc/docs/DESIGN-sema.md`).
+//< **Measure only under `--stats`**: bodies are many, and always-on timing adds every clock read.
 import "ksplc/base/ast" as base_ast
 import "ksplc/base/core" as base_core
 import "std/ds" { List, Map }
@@ -47,7 +46,7 @@ impl Sema_prof
     fn init(r: Self$@)
         // Caution: **Recreate both buffers; do not just reset a length to 0.** They live in
         // `base_core.arena`, which the LSP rewinds per request (`wind_back` in
-        // ksplc/lsp/state.kspl), so an old buffer points into freed memory, and the first push
+        // ksplc/lsp/state.kspl). So an old buffer points into freed memory, and the first push
         // under `--stats` writes there.
         r$ = Sema_prof::{ .by_pos = Map<|U8[], Body_prof_entry$@|>.new(base_core.arena),
             .bodies = List<|Body_prof_entry$@|>.new(base_core.arena) }
@@ -70,7 +69,7 @@ impl Sema_prof
         if name.len == 0
             return
         key: = base_core.arena.text().s(loc.file()).c(':').s("\{loc.offset\}").take()
-        hit: = r.by_pos.get(key) catch null
+        hit: = r.by_pos.get(key).unwrap_or(null)
         if hit != null
             hit.self_us += self_us
             hit.calls += 1
@@ -106,7 +105,7 @@ impl Sema_prof
         if !timing_on() || r.bodies.len == 0
             return
         ranked: = r.bodies
-            .order_by(fn(a: Body_prof_entry$@, b: Body_prof_entry$@; ): I32 {
+            .order_by(fn(a: Body_prof_entry$@@, b: Body_prof_entry$@@; ): I32 {
             if a.self_us == b.self_us {
                 return 0;
             } return -1 if a.self_us > b.self_us else 1;
@@ -118,10 +117,10 @@ impl Sema_prof
         io.err().s(head.slice())
         r.print_rows(ranked, "      self us      calls  declaration\n", 20)
 
-        // **Rank them by the number of instantiations too**: what adds up in KSPL is **one template
+        // **Rank them by the number of instantiations too.** What adds up in KSPL is **one template
         // instantiated dozens of times** (the document is named in this file's header).
         by_calls: = r.bodies
-            .order_by(fn(a: Body_prof_entry$@, b: Body_prof_entry$@; ): I32 {
+            .order_by(fn(a: Body_prof_entry$@@, b: Body_prof_entry$@@; ): I32 {
             if a.calls == b.calls {
                 return 0;
             } return -1 if a.calls > b.calls else 1;
@@ -132,8 +131,8 @@ impl Sema_prof
     priv fn print_rows(_r: Self$@, ranked: List<|Body_prof_entry$@|>, header: U8[], want: Sz) //<
         //< Prints header and then at most want of the ranked rows
         //<
-        //< **The name is that of one instantiation** (grouped by position, a line with `calls` of 2
-        //< or more shows one of them); the position is what identifies it.
+        //< **The name is that of one instantiation.** Rows are grouped by position, so a line with
+        //< `calls` of 2 or more shows one of them. The position is what identifies it.
         io.err().s(header)
         limit: = want if ranked.len > want else ranked.len
         for i in Range.asc(limit)

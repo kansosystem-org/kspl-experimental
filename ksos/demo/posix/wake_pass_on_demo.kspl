@@ -1,0 +1,187 @@
+//< A wake goes to a waiter that can use it, even when the woken one stops before it runs
+//<
+//< A single wake makes one waiter ready; the resource is taken only when that waiter runs. If it is
+//< deleted or suspended before then, the wake passes to the next waiter. Without that, the mutex
+//< stays free or the count stays given while the next waiter waits for ever.
+
+// ==========================================
+//   unlock+delete     the waiter unlock woke is deleted; the next waiter takes the mutex.
+//   give+suspend      the waiter give woke is suspended; the next waiter takes the count, and the
+//                     suspended one, resumed, waits again for the next give.
+//   send+delete       the receiver a send woke is deleted; the next receiver gets the value.
+//   recv+suspend      the sender a recv woke (room) is suspended; the next sender fills the room.
+//   lend+suspend      the waiter lending a holder its priority is suspended. The holder drops back
+//                     at once. A middle-priority task runs before the holder's next line.
+// ==========================================
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+import "std/verdict"
+
+priv const coord_prio: I32 = 5 //< above every waiter, so a woken waiter stays ready, unrun
+priv const waiter_prio: I32 = 2
+
+$g_mutex: sync.Mutex
+$g_sem: sync.Sem
+$g_q: sync.Queue<|I32|>
+$g_qbuf: I32[1]
+$g_room: sync.Queue<|I32|>
+$g_roombuf: I32[1]
+$g_lend_mutex: sync.Mutex
+$g_lend_done: sync.Sem
+
+$g_mutex_got: Sz = 0 // how many waiters took g_mutex
+$g_sem_got: Sz = 0 // how many waiters took g_sem
+$g_recv_value: I32 = 0 // what the receiver that ran got
+$g_mid_ran: Bool = false
+$g_mid_ran_by_suspend: Bool = false // whether mid had run when holder's suspend returned
+$g_holder_prio_after: I32 = 0 // holder's priority once the waiter that lent it is suspended
+
+$tcb_coord: Task
+$tcb_m1: Task
+$tcb_m2: Task
+$tcb_s1: Task
+$tcb_s2: Task
+$tcb_r1: Task
+$tcb_r2: Task
+$tcb_w1: Task
+$tcb_w2: Task
+$tcb_holder: Task
+$tcb_high: Task
+$tcb_mid: Task
+$stack_coord: U8[65536]
+$stack_m1: U8[65536]
+$stack_m2: U8[65536]
+$stack_s1: U8[65536]
+$stack_s2: U8[65536]
+$stack_r1: U8[65536]
+$stack_r2: U8[65536]
+$stack_w1: U8[65536]
+$stack_w2: U8[65536]
+$stack_holder: U8[65536]
+$stack_high: U8[65536]
+$stack_mid: U8[65536]
+
+fn mutex_waiter(_arg: Void$@): Void
+    g_mutex.lock()
+    g_mutex_got += 1
+    g_mutex.unlock()
+
+fn sem_waiter(_arg: Void$@): Void
+    g_sem.take()
+    g_sem_got += 1
+
+fn receiver(_arg: Void$@): Void
+    g_recv_value = g_q.recv()
+
+fn sender(arg: Void$@): Void
+    g_room.send((I32$@::arg)$)
+$g_id_w1: I32 = 1
+$g_id_w2: I32 = 2
+
+fn high(_arg: Void$@): Void //< waits on the mutex holder holds, lending it its priority
+    g_lend_mutex.lock()
+    g_lend_mutex.unlock()
+
+fn mid(_arg: Void$@): Void
+    g_mid_ran = true
+
+fn holder(_arg: Void$@): Void
+    g_lend_mutex.lock()
+    // high outranks holder, so it runs inside create, finds the mutex held, lends and waits.
+    tcb_high.create(U8$[]::stack_high, high, null, 4, "high")
+    // mid ranks between holder's own priority and the one high lent it, so it does not run yet.
+    tcb_mid.create(U8$[]::stack_mid, mid, null, 2, "mid")
+    tcb_high.suspend()
+    g_mid_ran_by_suspend = g_mid_ran
+    g_holder_prio_after = tcb_holder.get_prio()
+    g_lend_mutex.unlock()
+    tcb_high.resume()
+    g_lend_done.give()
+
+fn coordinator(_arg: Void$@): Void
+    // --- unlock, then the woken waiter is deleted ---
+    verdict.start("[ksos] a deleted woken waiter passes an unlock on")
+    g_mutex.lock()
+    tcb_m1.create(U8$[]::stack_m1, mutex_waiter, null, waiter_prio, "m1")
+    tcb_m2.create(U8$[]::stack_m2, mutex_waiter, null, waiter_prio, "m2")
+    Task.delay(1) // m1, then m2, wait on the mutex
+    g_mutex.unlock() // wakes m1, which stays ready below coord
+    tcb_m1.delete()
+    Task.delay(1)
+    assert(g_mutex_got == 1, "wake_pass_on: m2 did not take the mutex m1 was woken for")
+    assert(tcb_m2.get_state() == .done, "wake_pass_on: m2 is still waiting on a free mutex")
+    verdict.pass("once the woken m1 is deleted, m2 takes the mutex.")
+
+    // --- give, then the woken waiter is suspended ---
+    verdict.start("[ksos] a suspended woken waiter passes a give on")
+    tcb_s1.create(U8$[]::stack_s1, sem_waiter, null, waiter_prio, "s1")
+    tcb_s2.create(U8$[]::stack_s2, sem_waiter, null, waiter_prio, "s2")
+    Task.delay(1) // s1, then s2, wait on the semaphore
+    g_sem.give() // wakes s1
+    tcb_s1.suspend()
+    Task.delay(1)
+    assert(g_sem_got == 1 && tcb_s2.get_state() == .done,
+        "wake_pass_on: s2 did not take the count s1 was woken for")
+    tcb_s1.resume()
+    Task.delay(1) // s1 checks again, finds nothing, and waits again
+    assert(g_sem_got == 1 && tcb_s1.get_state() == .blocked,
+        "wake_pass_on: the resumed s1 did not wait again for a count already taken")
+    g_sem.give()
+    Task.delay(1)
+    assert(g_sem_got == 2, "wake_pass_on: the resumed s1 did not take the next give")
+    verdict.pass("once the woken s1 is suspended, s2 takes the count; s1, resumed, takes the next.")
+
+    // --- send, then the woken receiver is deleted ---
+    verdict.start("[ksos] a deleted woken receiver passes a send on")
+    tcb_r1.create(U8$[]::stack_r1, receiver, null, waiter_prio, "r1")
+    tcb_r2.create(U8$[]::stack_r2, receiver, null, waiter_prio, "r2")
+    Task.delay(1) // r1, then r2, wait for data
+    assert(g_q.try_send(42), "wake_pass_on: the empty queue refused a send")
+    tcb_r1.delete()
+    Task.delay(1)
+    assert(g_recv_value == 42 && tcb_r2.get_state() == .done,
+        "wake_pass_on: r2 did not get the value r1 was woken for")
+    verdict.pass("once the woken r1 is deleted, r2 gets the value.")
+
+    // --- recv, then the woken sender is suspended ---
+    verdict.start("[ksos] a suspended woken sender passes the room on")
+    assert(g_room.try_send(0), "wake_pass_on: the empty queue refused a send")
+    tcb_w1.create(U8$[]::stack_w1, sender, Void$@::g_id_w1@, waiter_prio, "w1")
+    tcb_w2.create(U8$[]::stack_w2, sender, Void$@::g_id_w2@, waiter_prio, "w2")
+    Task.delay(1) // w1, then w2, wait for room
+    _first: = g_room.try_recv() // makes room and wakes w1
+    tcb_w1.suspend()
+    Task.delay(1)
+    $from_w2: I32 = 0
+    if v: = g_room.try_recv()
+        from_w2 = v
+    assert(from_w2 == 2, "wake_pass_on: w2 did not fill the room w1 was woken for")
+    tcb_w1.resume()
+    Task.delay(1)
+    $from_w1: I32 = 0
+    if v: = g_room.try_recv()
+        from_w1 = v
+    assert(from_w1 == 1, "wake_pass_on: the resumed w1 did not send")
+    verdict.pass("once the woken w1 is suspended, w2 fills the room; w1, resumed, sends next.")
+
+    // --- the waiter that lent a holder its priority is suspended ---
+    verdict.start("[ksos] suspending a lending waiter returns the lent priority at once")
+    tcb_holder.create(U8$[]::stack_holder, holder, null, 1, "holder")
+    g_lend_done.take()
+    assert(g_holder_prio_after == 1,
+        "wake_pass_on: the holder kept the priority of a waiter that was suspended")
+    assert(g_mid_ran_by_suspend,
+        "wake_pass_on: the middle-priority task waited behind a holder that had dropped below it")
+    verdict
+        .pass("with the waiter suspended, the holder runs at its own priority and mid goes first.")
+
+fn main(): I32
+    g_mutex.init()
+    g_sem.init(0)
+    g_q.init(g_qbuf[0]@, 1)
+    g_room.init(g_roombuf[0]@, 1)
+    g_lend_mutex.init()
+    g_lend_done.init(0)
+    tcb_coord.create(U8$[]::stack_coord, coordinator, null, coord_prio, "coord")
+    task.start_scheduler()
+    return verdict.finish()

@@ -107,7 +107,7 @@ struct Conn
     // while it still answers. From then on what the peer sends is read and thrown away until the
     // peer closes, or `linger_us` passes (`conn_read` in `kssrv/main.kspl`).
     // Caution: **Do not close the socket with the peer's bytes unread.** The OS then answers with a
-    // reset, and on Windows a reset throws away the answer the peer has not read yet: a client
+    // reset. On Windows, a reset throws away the answer the peer has not read yet. So a client
     // still sending a body past the cap never sees its 413.
     lingering_since_us: I64
     // A page holds this connection open to say it is still there (`GET /api/here`). **Nothing more
@@ -152,8 +152,8 @@ fn regular_file_size(path: U8[]): Sz? //<
     //< a regular file's size; none where it is absent or not one
     //<
     //< Caution: **Check this before opening.** On some OSes `fopen` opens a folder, which reads as
-    //< "a broken file"; a FIFO's read waits for a writer that may never come, holding the server,
-    //< and a device's never ends.
+    //< "a broken file". A FIFO's read waits for a writer that can never come, and holds the server.
+    //< A device's read never ends.
     info: = fs.stat(path) catch _e
         return .none
     if info.kind != fs.File_kind.file
@@ -182,7 +182,7 @@ fn conn_close(c: Conn$@) //< frees a connection's resources
 
 fn any_holding(t: Conn_table$@): Bool //< whether a page is holding the server open
     //<
-    //< **This is what "someone is using me" means**; stopping when nobody is depends on it alone
+    //< **This is what "someone is using me" means.** Stopping when nobody is depends on it alone
     //< ("Keeping the server alive while a page is open" in `../docs/SPEC-local-server.md`).
     for i in Range.asc(max_conns)
         if !t.slots[i].is_empty() && t.slots[i].get().holding
@@ -318,7 +318,7 @@ fn queue_error(c: Conn$@, status: I32, allow: U8[] = "") //<
     //< Queues an error answer in plain text; `allow` is a 405's `Allow`
     $b: = Str_builder.new()
     defer b.free()
-    b.s("\{status\} ").s(http.reason_phrase(status)).s("\n")
+    b.s("\{status\} ").s(http.reason_phrase(status).unwrap_or("")).s("\n")
     // An error response always closes: after a broken request, there is no telling where the next
     // one starts in the remaining bytes.
     queue_response(c, status, "text/plain; charset=utf-8", b.slice(), false, allow)

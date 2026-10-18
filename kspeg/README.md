@@ -1,13 +1,13 @@
 # kspeg
 
-**kspeg reads a grammar and parses text with it, with no code generation.** A grammar is a short `.kspeg` file of named rules that say what valid input looks like, such as "an expression is a number, then any number of `+ number`". kspeg reads that file while your program runs and turns input text into a tree. You write no parser code, and no tool generates any. KSPL's own grammar is written this way.
+**kspeg reads a grammar and parses text with it, with no code generation.** A grammar is a short `.kspeg` file of named rules. The rules say what valid input looks like, such as "an expression is a number, then any number of `+ number`". kspeg reads that file while your program runs and turns input text into a tree. You write no parser code, and no tool generates any. KSPL's own grammar is written this way.
 
 It is for whoever writes a grammar for a format or a language, and for whoever changes the engine. The words used below:
 
 | Word | What it means here |
 | :-- | :-- |
 | **grammar** | The `.kspeg` file: a list of rules |
-| **rule** | One named definition, such as `term = Number`. A rule may name other rules, and itself |
+| **rule** | One named definition, such as `term = Number`. A rule can name other rules, and itself |
 | **PEG** (parsing expression grammar) | The kind of grammar kspeg reads. Its choice `a \| b` is an **ordered choice**: it tries `a` first and takes `b` only if `a` fails, so any input has at most one reading |
 | **parse** | Reading input by following the rules, to get a tree of what matched where |
 | **backtracking** | Going back to an earlier position after an alternative fails, to try the next one |
@@ -38,7 +38,7 @@ node: = t.parse_rule("program")!
 | `Meta.new` / `parse_grammar` | Reads the grammar text into rules, and checks them. A bad grammar fails here |
 | `Target.new` | Starts one parse of `source` |
 | `share_grammar_from` | Borrows the rules and the memo table read above (`Target.share_grammar_from`) |
-| `parse_rule("program")` | Parses the whole source from the start, beginning at the rule named `program`, and returns the tree's root `Node` |
+| `parse_rule("program")` | Parses the whole source from the start, beginning at the rule named `program`. Returns the tree's root `Node`, or none where the rule matched without building a node |
 
 **`Target`s that borrow one grammar parse one at a time**, since they share its memo table (`Target.share_grammar_from`). Two at once would each empty the table under the other.
 
@@ -46,7 +46,11 @@ node: = t.parse_rule("program")!
 
 The engine adds two default rules, `_Space` (the whitespace it skips) and `_Boundary` (what ends a word). A grammar that defines `_Space` and `_Boundary` itself never runs these defaults, so only [`kspeg/tests/engine_test.kspl`](tests/engine_test.kspl) tests them.
 
-Three complete grammars sit in `kspeg/docs/`: [`json.kspeg`](docs/json.kspeg), JSON, the shortest, so read it first; [`script.kspeg`](docs/script.kspeg), a small scripting language with keywords, comments, operator precedence and string interpolation; and [`kspeg.kspeg`](docs/kspeg.kspeg), the notation written in itself, the normative grammar `SPEC-notation.md` refers to.
+Three complete grammars sit in `kspeg/docs/`:
+
+* [`json.kspeg`](docs/json.kspeg) is JSON. It is the shortest, so read it first.
+* [`script.kspeg`](docs/script.kspeg) is a small scripting language. It has keywords, comments, operator precedence and string interpolation.
+* [`kspeg.kspeg`](docs/kspeg.kspeg) is the notation written in itself. It is the normative grammar that `SPEC-notation.md` refers to.
 
 ## What is here
 
@@ -67,8 +71,8 @@ Caution: The dependencies run one way, downward; do not add an `import` in the r
 | File | Role |
 | :-- | :-- |
 | [`kspeg/notation.kspl`](notation.kspl) | **Reads a `.kspeg` text** into the rule tree and returns a `Target`. |
-| [`kspeg/engine.kspl`](engine.kspl) | **Applies the rule tree to input** — backtracking, memoization (filling and reading the memo table), whitespace skipping, the profile (a count of how often each rule runs). |
-| [`kspeg/memo.kspl`](memo.kspl) | **What each rule answered at each position** — one table for every input of a grammar. It is emptied by starting a new generation, not by writing zeros over it: each slot carries the generation that wrote it, and a slot from an older one reads as empty. |
+| [`kspeg/engine.kspl`](engine.kspl) | **Applies the rule tree to input.** It holds backtracking, memoization (filling and reading the memo table) and whitespace skipping. It also holds the profile (a count of how often each rule runs). |
+| [`kspeg/memo.kspl`](memo.kspl) | **What each rule answered at each position** — one table for every input of a grammar. Starting a new generation empties it; nothing writes zeros over it. Each slot carries the generation that wrote it. A slot from an older generation reads as empty. |
 | [`kspeg/expected.kspl`](expected.kspl) | The position where the parse failed and **what could have been written** there; it never advances the input. |
 | [`kspeg/rule.kspl`](rule.kspl) | **The rule tree's representation**, and the operations on it alone. |
 
@@ -76,7 +80,7 @@ Caution: The dependencies run one way, downward; do not add an `import` in the r
 
 * **Do not mix the two readers.** kspeg reads two different things. [`kspeg/notation.kspl`](notation.kspl) reads a `.kspeg` grammar file; it is a recursive descent parser written by hand (one function per piece of the notation). [`kspeg/engine.kspl`](engine.kspl) reads your input by following a grammar. They are separate code.
 * **kspeg reaches only what `std` publishes.** The compiler rejects a name under `std/` that is not marked `pub` (`cannot access symbol`). Making one `pub` in `std` is a decision to weigh: an engine that only interprets a grammar cannot be swapped out once it depends on `std/`'s internals.
-* **Inside the grammar, only `try_parse` in `kspeg/engine.kspl` swallows a backtracking signal** ("A backtracking signal may be swallowed, a real failure may not" in [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). A backtracking signal means "this alternative did not match, try the next"; a real failure must reach the caller. The one other place is the top: a first run that skips rules by the next byte takes a mismatch as a cue to run again without skipping, which then reports it.
+* **Inside the grammar, only `try_parse` in `kspeg/engine.kspl` swallows a backtracking signal** ("A backtracking signal can be swallowed, a real failure cannot" in [`kspeg/docs/SPEC-notation.md`](docs/SPEC-notation.md)). A backtracking signal means "this alternative did not match, try the next"; a real failure must reach the caller. The one other place is the top. A first run skips rules by the next byte. It takes a mismatch as a cue to run again without skipping, and that second run reports the mismatch.
 
 ## Files near the limit and how they split
 

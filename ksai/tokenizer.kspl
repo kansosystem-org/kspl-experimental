@@ -10,27 +10,27 @@ import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/strnum" // `to_count`
 
-priv fn hex_byte(hi: U8, lo: U8): U8 //< two hex digits -> one byte
+priv fn hex_bytes(text: U8[], out: Str_builder$@): Bool //< appends the bytes spelt in hex
     //<
-    //< Restores vocab.txt's byte sequences, which `load` has checked are hex (`is_hex_bytes`). The
-    //< digit decoding itself is `U8.hex_val` in str.
-    return U8::((hi.hex_val() << 4) | lo.hex_val())
-
-priv fn is_hex_bytes(text: U8[]): Bool //< whether it is whole bytes written as hex digits
+    //< Restores vocab.txt's byte sequences; false, with part of them appended, when the text is
+    //< not whole bytes written as hex digits. The digit decoding itself is `U8.hex_val`.
     if text.len % 2 != 0
         return false
-    for c in text
-        if c.hex_val() < 0
-            return false
+    for $k: Sz = 0; k + 1 < text.len; k += 2
+        if hi: = text[k].hex_val()
+            if lo: = text[k + 1].hex_val()
+                out.c(U8::((hi << 4) | lo))
+                continue
+        return false
     return true
 
 priv const id_max: Sz = 2147483647 //< the largest ID an `I32` holds
 pub const unk_id: I32 = 0 //< `<unk>`, the ID a byte the vocabulary lacks is encoded as
 
 pub fn parse_token_id(text: U8[]): I32? //< a decimal ID that fits an `I32`, or none
-    if n: = text.to_count(id_max)
-        return .some(I32::n)
-    return .none
+    n: = text.to_count(id_max) catch
+        return .none
+    return .some(I32::n)
 
 priv fn bare_line(line: U8[]): U8[] //< a line without the `\r` a CRLF file leaves on it
     return line.strip_suffix("\r")
@@ -52,8 +52,8 @@ impl Bpe_key
 
 impl Bpe_key: ds.Hashable<|Bpe_key|> //< so a pair of token IDs can stand as a map's key
     //<
-    //< The two hashes below skip `ds.fmix32`: token IDs are consecutive numbers whose low bits are
-    //< already spread, so mixing would only add an operation to each BPE merge lookup.
+    //< The two hashes below skip `ds.fmix32`. Token IDs are consecutive numbers whose low bits are
+    //< already spread. So mixing would only add an operation to each BPE merge lookup.
     fn hash(r: Self@): U32
         v: = r.val
         return U32::(v ^ (v >> 32))
@@ -88,7 +88,7 @@ priv fn chunk_end(text: U8[], start: Sz): Sz //<
     //< Where the chunk starting at `start` ends: the core of GPT-2's regular-expression splitting
     //<
     //< A reduced ASCII version. In a run of spaces, the last one is held back to join the next
-    //< chunk as its leading space (" foo" -> [" ", " foo"]); otherwise a run of letters, of digits,
+    //< chunk as its leading space (" foo" -> [" ", " foo"]). Otherwise a run of letters, of digits,
     //< or of other bytes is one chunk. English contractions ("'s") get no special handling (it
     //< matters little for code completion).
     n: = text.len
@@ -166,7 +166,7 @@ impl Tokenizer
         r.edits += 1
 
     // One entry per line: vocab.txt "<id>\t<hex>" (the word's bytes; id 0's <unk> is empty) and
-    // merges.txt "<id1> <id2> <merged_id>", loaded through `add_token`/`add_merge` into
+    // merges.txt "<id1> <id2> <merged_id>". They are loaded through `add_token`/`add_merge` into
     // encode/decode's representation (a 1-byte base + merges). An empty line is skipped.
     pub fn load( //< loads the vocabulary and merge rules that `train_bpe.kspl` wrote
         r: Self$@,
@@ -206,13 +206,14 @@ impl Tokenizer
             case .some(tab)
                 id: = parse_token_id(line.sub(0, tab))
                 hex: = line.sub_from(tab + 1)
-                if id.is_none() || !is_hex_bytes(hex)
-                    throw .broken(name, i + 1)
                 $b: = Str_builder.new()
                 defer b.free()
-                for $k: Sz = 0; k + 1 < hex.len; k += 2
-                    b.c(hex_byte(hex[k], hex[k + 1]))
-                r.add_token(b.slice(), id.unwrap_or(0))
+                if !hex_bytes(hex, b@)
+                    throw .broken(name, i + 1)
+                if got: = id
+                    r.add_token(b.slice(), got)
+                else
+                    throw .broken(name, i + 1)
 
     priv fn add_merges(r: Self$@, text: U8[], name: U8[]): Void!Load_error //< merges.txt's rules
         $lines: = text.lines(null)
@@ -252,14 +253,14 @@ impl Tokenizer
     priv fn bpe_chunk(r: Self$@, chunk: U8[], out: List<|I32|>$@) //<
         //< Merges one pre-split chunk by BPE, smallest rank first, and appends its token IDs to out
         //<
-        //< **The merging is done in place at the end of `out`**, so a chunk not in the cache
+        //< **The merging is done in place at the end of `out`.** So a chunk not in the cache
         //< allocates nothing on the tokenizer's arena unless the cache keeps it.
         // Otherwise a word or rule added since the cache started could merge a cached chunk anew.
         if r.cache_edits != r.edits
             r.chunk_cache = r.arena.create(Map<|U8[], I32$[]|>.new(r.arena))
             r.cache_edits = r.edits
         // A chunk is never empty, so its IDs never are: an empty answer is a miss.
-        seen: = r.chunk_cache.get(chunk) catch I32$[]::{ .ptr = null, .len = 0 }
+        seen: = r.chunk_cache.get(chunk).unwrap_or(I32$[]::{ .ptr = null, .len = 0 })
         if seen.len > 0
             for id in seen
                 out.push(id)
@@ -267,7 +268,7 @@ impl Tokenizer
         first: = out.len
         for i in Range.asc(chunk.len)
             b: = U8[]::{ .ptr = chunk.ptr + i, .len = 1 }
-            out.push(r.vocab.get(b) catch unk_id)
+            out.push(r.vocab.get(b).unwrap_or(unk_id))
         for
             if out.len - first < 2
                 break
@@ -275,14 +276,14 @@ impl Tokenizer
             $best_i: Sz = 0
             for $i: Sz = first; i < out.len - 1; i += 1
                 key: = Bpe_key.of(out[i], out[i + 1])
-                rank: = r.merge_rank.get(key) catch -1
+                rank: = r.merge_rank.get(key).unwrap_or(-1)
                 if rank != -1 && (best_rank == -1 || rank < best_rank)
                     best_rank = rank
                     best_i = i
             if best_rank == -1
                 break
             key: = Bpe_key.of(out[best_i], out[best_i + 1])
-            merged_id: = r.merges.get(key) catch -1
+            merged_id: = r.merges.get(key).unwrap_or(-1)
             out[best_i] = merged_id
             for $j: Sz = best_i + 1; j < out.len - 1; j += 1
                 out[j] = out[j + 1]
@@ -313,4 +314,4 @@ impl Tokenizer
         r: Self$@,
         id: I32, //< the single ID
     ): U8[]
-        return r.vocab_rev.get(Token_key::{ .val = id }) catch ""
+        return r.vocab_rev.get(Token_key::{ .val = id }).unwrap_or("")

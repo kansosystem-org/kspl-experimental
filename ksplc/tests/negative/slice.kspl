@@ -4,14 +4,13 @@
 // ==== case agg_literal_fieldless
 //< A `::{ ... }` for a type that has no fields
 //<
-//< A number, a boolean, an enum, and Result itself are such. **Let it through and the diagnostic
+//< A number, a boolean and an enum are such. **Let it through and the diagnostic
 //< comes from the C compiler** (Principle 2 in `../../../docs/DESIGN-principles.md`), or, for `::{ 1, 2 }`,
 //< only a warning while the second value vanishes. An empty `::{}` means zero-filling and passes.
 // ==========================================
-// EXPECT: 'I32' has no fields to fill, so it cannot be built with '::{ ... }'. Write the value
+// EXPECT: 'I32' has no fields to fill. It cannot be built with '::{ ... }'. Write the value
 // itself EXPECT: 'Bool' has no fields to fill
 // EXPECT: has no fields to fill
-// EXPECT: A Result is built by returning a value or throwing an error, and read with '!' or 'catch'
 // ==========================================
 pub enum Oops: U8
   bad = 3
@@ -20,8 +19,7 @@ fn main(): I32
   n: I32 = ::{ 1, 2 }
   b: Bool = ::{ .x = true }
   e: Oops = ::{ .bad = 1 }
-  r: I32!Oops = ::{ .is_err = true, .error_code = Oops.bad }
-  return n + (I32)::(r catch 0)
+  return n + (I32)::e
 // ==== case array_elem_mut_marker
 //< A fixed-length array's element mutability is set by the **`$` in front of the name**
 //<
@@ -29,7 +27,8 @@ fn main(): I32
 //< has read-only elements. A slice is the reverse: `T$[]` holds it, the descriptor and the elements
 //< being separate substances (`docs/SPEC-language.md` §4.2).
 // EXPECT: a fixed-size array cannot carry '$' on its element type
-// EXPECT: cannot write to an element of a read-only slice or array
+// EXPECT: cannot write to an element of the read-only array 'U8[4]'. An array's elements follow the binding that holds it
+// EXPECT-NOT: use '$[]'
 
 buf_bad: U8$[4] = ::{ 1, 2, 3, 4 }
 
@@ -39,6 +38,18 @@ fn main(): I32
   $ok: U8[4] = ::{ 1, 2, 3, 4 }
   ok[0] = 9 // this one passes
   return I32::imm[0] + I32::ok[0] + I32::buf_bad[0]
+// ==== case array_param_elem_write
+//< A read-only array parameter's element names the binding as the fix, never the type
+//<
+//< `I32$[3]` is itself an error, so advice to write `$[]` could not be followed; `$a` can.
+// EXPECT: cannot write to an element of the read-only array 'I32[3]'. An array's elements follow the binding that holds it. Declare the binding mutable ('$a')
+// EXPECT-NOT: use '$[]'
+fn fill(a: I32[3]): I32
+  a[0] = 1
+  return a[0]
+
+fn main(): I32
+  return fill(::{ 1, 2, 3 })
 // ==== case index_place_by_value_receiver
 //< An `Index_place` implementation with a by-value receiver is rejected through a read-only slot
 //<
@@ -73,8 +84,8 @@ fn main(): I32
 // ==== case index_place_const_output
 //< A container whose elements are immutable cannot implement `Index_place`
 //<
-//< Immutability riding on a type argument (6.1 of `docs/SPEC-language.md`) is invisible in the
-//< declaration, so unchecked per substance it passes and the C **holds a write** with a "discards
+//< Immutability carried by a type argument (6.1 of `docs/SPEC-language.md`) is invisible in the
+//< declaration. Unchecked per substance, it passes, and the C **holds a write** with a "discards
 //< const" warning (Principle 2). Put `$` on the target (`ksplc/tests/slice_test.kspl`).
 // EXPECT: cannot implement 'Index_place'
 // EXPECT-NOT: discards qualifiers
@@ -98,8 +109,8 @@ fn main(): I32
 // ==== case index_raw_pointer
 //< An index on a pointer that carries no length
 //<
-//< The range cannot be checked, so `[]` is allowed only where the target holds its own length (as
-//< Go allows an index on `*[N]T` alone); a pointer to a slice passes. The diagnostic must not give
+//< The range cannot be checked. So `[]` is allowed only where the target holds its own length (as
+//< Go allows an index on `*[N]T` alone). A pointer to a slice passes. The diagnostic must not give
 //< the forbidden and the recommended form the same characters, or the advice cannot be followed.
 // EXPECT: cannot index 'I32$@'
 import "std/mem" { alloc }
@@ -172,7 +183,7 @@ fn main(): I32
 //< Let through, the C writes across the `Output@` `at_ref` returns, discarding const (Principle 2).
 //< Caution: **Do not talk about `Index_mut`.** Its elements immutable (`ptr: T@`), this type cannot
 //< implement it; a type that does (`List<|T|>@`) is the case `index_readonly_receiver`.
-// EXPECT: this type only provides read-only places
+// EXPECT: This type provides only read-only places
 
 priv struct Ro<|T|>
   ptr: T@
@@ -238,8 +249,8 @@ fn main(): I32
 // ==== case slice_descriptor_field_type
 //< Type checking applies to a slice descriptor literal's fields too
 //<
-//< **The check easily slips out here:** the literal's shape is drawn from a type peeled one step,
-//< which for a single-step slice (`U8$[]`) is a scalar (`U8`); missed, `.ptr`/`.len` get no
+//< **The check is easy to miss here.** The literal's shape comes from a type peeled one step. For
+//< a single-step slice (`U8$[]`), that is a scalar (`U8`). If missed, `.ptr`/`.len` get no
 //< expected type (infer_struct_literal_expr in sema/body/expr.kspl).
 // EXPECT: expected 'Sz', but got 'U8@'
 fn main()
@@ -248,8 +259,8 @@ fn main()
 // ==== case slice_over_frame_escapes
 //< A slice descriptor built from a stack frame's memory must not escape it
 //<
-//< A cast from a fixed-length array or a run of elements synthesises a pointer into the frame with
-//< not one `@` in the source, so it dangles after return. A descriptor over a written `@` is
+//< A cast from a fixed-length array or a run of elements synthesises a pointer into the frame. The
+//< source holds no `@`, but it dangles after return. A descriptor over a written `@` is
 //< refused as that address is (`frame_address_leaves` in `tests/negative/pointer.kspl`); a call's
 //< result passes (docs/DESIGN-language.md "Which pointers into a frame are stopped from leaving it").
 // EXPECT: cannot return a slice built from local storage
@@ -294,7 +305,7 @@ pub fn main(): I32
 //< **Talk about the elements:** "implement `Index_mut`" cannot be followed, since the elements'
 //< immutability rides on a type argument. **Use the sugar's words:** the fix is `$[]`.
 //< `List<|T|>@` is the case `index_readonly_receiver`.
-// EXPECT: cannot write to an element of a read-only slice or array
+// EXPECT: cannot write to an element of the read-only slice 'I32[]'. Use '$[]'
 import "std/io"
 
 $buf: I32[2] = ::{ 1, 2 }

@@ -1,13 +1,13 @@
 // A stand-in for VS Code's extension host: it runs the KSPL extension's client side under node
 //
 // Not a suite; `tests/suite/vscode_test.kspl` runs it as `node vscode_host.js <extension.js>`.
-// **The `vscode` module and the language server are both fakes**: the module answers only what the
-// extension asks of it, and the server records every message the extension writes, answering each
+// **The `vscode` module and the language server are both fakes.** The module answers only what the
+// extension asks of it. The server records every message the extension writes. It answers each
 // request with nothing, but `prepareRename` with a refusal. It plays one editing session and
-// prints, as one JSON object, the messages in the order the server read them, how often the output
+// prints one JSON object: the messages in the order the server read them, how often the output
 // panel was brought forward, and what the editor was told when the rename was refused.
-// Caution: **Answer `initialize` late**, on a later turn, as a real server does: answered at once,
-// a message sent during the handshake could not be told from one sent after it.
+// Caution: **Answer `initialize` late**, on a later turn, as a real server does. If it is answered
+// at once, a message sent during the handshake cannot be told from one sent after it.
 'use strict';
 const Module = require('module');
 const path = require('path');
@@ -149,7 +149,7 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const token = { isCancellationRequested: false, onCancellationRequested: () => disposable };
 
 // One session: open during the handshake, edit, ask, ask to rename, edit and close at once, open
-// again. The last wait outlasts the extension's own delay before it sends a change, so a change it
+// again. The last wait outlasts the extension's own delay before it sends a change. So a change it
 // kept for the closed document would arrive before the end.
 async function session() {
     const ext = require(extPath);

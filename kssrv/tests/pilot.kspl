@@ -2,9 +2,9 @@
 //<
 //< It is not a suite; `kssrv/tests/main.kspl` and `kssrv/tests/copy.kspl` use it.
 //< Caution: **Do not copy kssrv/pilot.kspl's formulas; build only from what came back.** By design
-//< the blob holds both how the features are made and what the manoeuvres mean ("The policy shipped
-//< is a set that can be reproduced on its own" in kssrv/docs/DESIGN-server.md), so a constant kept
-//< here would mean "the blob alone reproduces it" is never tested.
+//< the blob holds both how the features are made and what the manoeuvres mean. "The shipped policy
+//< can be reproduced on its own" in kssrv/docs/DESIGN-server.md says so. With a constant kept here,
+//< nothing would test that "the blob alone reproduces it".
 //< **Write the rule (`car_rule`) again from the specification.** Copying the implementation's
 //< formula makes both wrong in the same way when the formula is wrong.
 import "ksai/safetensors" as st
@@ -18,7 +18,7 @@ import "std/strnum"
 struct Blob //< the whole policy the server serves
     // The format's version (`__metadata__.kspl_pilot`).
     // Caution: Neither the feature order, the activation, nor the manoeuvre table's meaning shows
-    // in a tensor's shape, so an old reader whose version was not raised goes silently wrong.
+    // in a tensor's shape. So an old reader whose version was not raised goes silently wrong.
     version: U8[]
     // The cap for scaling a distance into 0–1 (mm). This one value decides how the features are
     // made.
@@ -40,9 +40,10 @@ fn load(data: U8[], arena: Arena$@): Blob!st.Safetensors_error //<
     w2: = file.get_tensor<|F32|>("fc2.weight", arena)!
     b2: = file.get_tensor<|F32|>("fc2.bias", arena)!
     man: = file.get_tensor<|F32|>("maneuvers", arena)!
-    far: = meta.get("far_mm").as_str().to_f64() catch 0.0
-    return Blob::{ .version = meta.get("kspl_pilot").as_str(), .far_mm = far, .w1 = w1, .b1 = b1,
-        .w2 = w2, .b2 = b2, .man = man, .params = w1.size + b1.size + w2.size + b2.size }
+    far: = meta.get("far_mm").as_str().unwrap_or("").to_f64() catch 0.0
+    return Blob::{ .version = meta.get("kspl_pilot").as_str().unwrap_or(""), .far_mm = far,
+        .w1 = w1, .b1 = b1, .w2 = w2, .b2 = b2, .man = man,
+        .params = w1.size + b1.size + w2.size + b2.size }
 
 struct Drive //< the answer to one observation
     lon: I32

@@ -20,7 +20,7 @@ fn test_db_crud_roundtrip()
     $cut: = false
     _z: = db.Db.open(U8[]::nul_path) catch e
         switch e
-        case .open_failed(_code)
+        case .open_failed(_code, _said)
             cut = true
         default {}
         fallback null
@@ -170,18 +170,37 @@ fn test_db_one_statement_at_a_time()
     $none_ran: = false
     _t: = conn.prepare("SELECT n FROM t") catch e
         switch e
-        case .prepare_failed(_code)
+        case .prepare_failed(_code, _said)
             none_ran = true
         default {}
         fallback null
     assert(none_ran, "a refused SQL runs none of its statements")
 
-    // What follows the one statement may be blank: spaces, semicolons and comments.
+    // What follows the one statement can be blank: spaces, semicolons and comments.
     conn.exec("CREATE TABLE v (n INTEGER);  -- the table\n/* done */ ;\n")
         catch panic("a statement followed only by semicolons and comments should run")
     conn.exec("INSERT INTO v (n) VALUES (1)") catch panic("the table it made should exist")
+
+    // SQLite stops reading at a NUL, so the statement after one would be dropped unseen.
+    $nul_refused: = false
+    conn.exec("CREATE TABLE w (n INTEGER)\0; CREATE TABLE x (n INTEGER)") catch e
+        switch e
+        case .prepare_failed(code, _said)
+            nul_refused = code == 1
+        default {}
+    assert(nul_refused, "SQL holding a NUL is refused as SQLITE_ERROR, not cut at it")
+    $w_absent: = false
+    _w: = conn.prepare("SELECT n FROM w") catch e
+        switch e
+        case .prepare_failed(_code, _said)
+            w_absent = true
+        default {}
+        fallback null
+    assert(w_absent, "SQL refused for a NUL runs nothing before it either")
     conn.free()
-    verdict.pass("A second statement is refused before anything runs, and a blank tail is not one.")
+    verdict
+        .pass("A second statement or a NUL is refused before anything runs, and a blank tail is not \
+            one.")
 
 // ==========================================
 // An integer column read into a narrower field, and a field too wide for SQLite's integer.
@@ -261,15 +280,15 @@ fn test_db_row_out_of_range()
 // ==========================================
 priv fn code_of(e: db.Db_error): I32 //< the SQLite code an error carries, or -1 for one with none
     switch e
-    case .open_failed(code)
+    case .open_failed(code, _said)
         return code
-    case .prepare_failed(code)
+    case .prepare_failed(code, _said)
         return code
-    case .bind_failed(code)
+    case .bind_failed(code, _said)
         return code
-    case .step_failed(code)
+    case .step_failed(code, _said)
         return code
-    case .column_failed(code)
+    case .column_failed(code, _said)
         return code
     default
         return -1
@@ -305,6 +324,87 @@ fn test_db_error_codes()
     assert(busy == 5, "a write against another connection's lock carries SQLITE_BUSY (5)")
     verdict.pass("A broken constraint, a syntax error and a busy database carry their own codes.")
 
+// ==========================================
+// SQLite's text, carried by the error, names what the code cannot.
+// ==========================================
+priv fn said_of(e: db.Db_error): U8[] //< the text an error carries, empty for one with none
+    switch e
+    case .open_failed(_code, said)
+        return said
+    case .prepare_failed(_code, said)
+        return said
+    case .bind_failed(_code, said)
+        return said
+    case .step_failed(_code, said)
+        return said
+    case .column_failed(_code, said)
+        return said
+    default
+        return ""
+
+fn test_db_error_says_what_sqlite_said()
+    verdict.start("[Db] an error carrying SQLite's own text test...")
+    conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
+    $mistyped: U8[] = ""
+    _p: = conn.prepare("SELECT name FROM users") catch e
+        mistyped = said_of(e)
+        fallback null
+    assert(mistyped.equals("no such table: users"), "a mistyped table is named by its name")
+    $syntax: U8[] = ""
+    conn.exec("SELEC 1") catch e
+        syntax = said_of(e)
+    assert(syntax.equals("near \"SELEC\": syntax error"), "a syntax error names where it is")
+    // **A step's text outlives `exec`'s statement**, which is freed before the error arrives.
+    conn.exec("CREATE TABLE u (n INTEGER UNIQUE)") catch panic("create table should not fail")
+    conn.exec("INSERT INTO u (n) VALUES (1)") catch panic("the first insert should run")
+    $broken: U8[] = ""
+    conn.exec("INSERT INTO u (n) VALUES (1)") catch e
+        broken = said_of(e)
+    assert(broken.equals("UNIQUE constraint failed: u.n"),
+        "a broken constraint through exec names the column")
+    // A statement holds the text of its own failure.
+    ins: = conn.prepare("INSERT INTO u (n) VALUES (:n)") catch panic("the insert should prepare")
+    $unbound: U8[] = ""
+    ins.bind_i64(2, 1) catch e
+        unbound = said_of(e)
+    assert(unbound.equals("column index out of range"), "a bind out of range says so")
+    ins.bind_i64(1, 1) catch panic("the value should bind")
+    $stepped: U8[] = ""
+    ins.step() catch e
+        stepped = said_of(e)
+        fallback .done
+    assert(stepped.equals("UNIQUE constraint failed: u.n"), "a step's failure names the column")
+    ins.free()
+    conn.free()
+    // **A failed open says SQLite's text for its code**: no connection is left to say more.
+    $unopened: U8[] = ""
+    _o: = db.Db.open("out/tmp/ksbind_no_such_folder/x/t.db") catch e
+        unopened = said_of(e)
+        fallback null
+    assert(unopened.equals("unable to open database file"), "a failed open says why")
+    verdict
+        .pass("A mistyped table, a syntax error, a constraint and a failed open say SQLite's text.")
+
+fn test_db_exec_refuses_rows()
+    verdict.start("[Db] exec refusing SQL that returns rows, before it runs test...")
+    conn: = db.Db.open(":memory:") catch panic("open(:memory:) should not fail")
+    conn.exec("CREATE TABLE u (n INTEGER)") catch panic("create table should not fail")
+    for sql in U8[][]::{ "SELECT 1", "SELECT n FROM u", "INSERT INTO u (n) VALUES (5) RETURNING n" }
+        $refused: = false
+        conn.exec(sql) catch e
+            switch e
+            case .returns_rows
+                refused = true
+            default {}
+        assert(refused, "exec refuses SQL that returns rows, an empty SELECT included")
+    // **Refused before it runs**: the `RETURNING` insert made no row.
+    count: = conn.prepare("SELECT count(*) FROM u") catch panic("the count should prepare")
+    count.step() catch panic("the count should step")
+    assert(count.column_i64(0) == 0I64, "SQL refused for its rows has not run")
+    count.free()
+    conn.free()
+    verdict.pass("exec refuses a SELECT and a RETURNING before either runs.")
+
 priv const db_base: U8[] = "out/tmp/ksbind_db" //< where a test that needs a database file makes it
 
 fn test_db_free_with_a_statement_open()
@@ -313,16 +413,19 @@ fn test_db_free_with_a_statement_open()
     defer arena.free()
     dir: = fs.mkdir_unique(db_base, "db_", arena) catch panic("the scratch folder should be made")
     path: = fs.join(dir, "t.db", arena)
-    // **In WAL mode the `-wal` file stands while a connection is open**, and the last one to close
+    // **In WAL mode the `-wal` file stands while a connection is open.** The last one to close
     // removes it, so the file tells whether the connection closed.
     wal: = arena.text().s(path).s("-wal").take()
     conn: = db.Db.open(path) catch panic("a database file should open")
-    conn.exec("PRAGMA journal_mode=WAL") catch panic("WAL mode should be set")
+    // The pragma answers with the mode it set, a row, so it is stepped rather than `exec`ed.
+    mode: = conn.prepare("PRAGMA journal_mode=WAL") catch panic("the pragma should prepare")
+    mode.step() catch panic("WAL mode should be set")
+    mode.free()
     conn.exec("CREATE TABLE t (n INTEGER)") catch panic("create table should not fail")
     conn.exec("INSERT INTO t (n) VALUES (7)") catch panic("insert should not fail")
     stmt: = conn.prepare("SELECT n FROM t") catch panic("prepare should not fail")
     conn.free()
-    // **The statement works until it is freed**, so the frees may come in either order.
+    // **The statement works until it is freed**, so the frees can come in either order.
     row: = stmt.step() catch panic("a statement whose database was freed should still step")
     assert(row == db.Step_result.row && stmt.column_i64(0) == 7I64,
         "a statement whose database was freed should still read its row")

@@ -3,8 +3,8 @@
 function kspageProbeKeep(ks) {
   const { check, app, notAPath, typeIn } = ks;
 
-  // Caution: **Do not wait out the thinning's wait** — it is the product's, so the checks alone
-  // would fall the day it is shortened; the person's entry point (`keepSync`) is called by name.
+  // Caution: **Do not wait out the thinning's wait.** It is the product's, so the checks alone
+  // would fall the day it is shortened. The person's entry point (`keepSync`) is called by name.
   // **Swap documents in one lump with no wait inside**: sections overlap through `hold()`.
 
   const planted = "{\"kspage\":6,\"sheet\":{},\"blocks\":[{\"style\":\"body\","
@@ -25,8 +25,8 @@ function kspageProbeKeep(ks) {
   // 2. A document brought back **stays a draft until it is saved** (it is in no file), so opening
   // another over it does not lose it.
   app.keepSync();
-  // 3. What was typed is held back, **looked at as far as the body**: the key alone lets "it comes
-  // back empty" walk past, and a sheet from `save` numbers the blocks and differs even untyped.
+  // 3. What was typed is held back, **looked at as far as the body**. The key alone lets "it comes
+  // back empty" walk past. A sheet from `save` numbers the blocks and differs even untyped.
   app.focus();
   ks.pressAt(0);
   typeIn(MARK);
@@ -38,7 +38,7 @@ function kspageProbeKeep(ks) {
   window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
   const leftWith = app.keepStore.takeDrafts();
   // Caution: **Put the document back** (the draft brought back took its place in the window)
-  // **over a blank sheet**: read over the draft itself, the draft's key would be written again
+  // **over a blank sheet**. Read over the draft itself, the draft's key would be written again
   // without the mark before the store is looked at. "New" sets the typed draft aside first.
   document.getElementById("doc-new").click();
   app.load(wasSaved);
@@ -46,8 +46,6 @@ function kspageProbeKeep(ks) {
 
   // ---- From here on it does not touch the document ----
   // **Borrow the page's connection** (IndexedDB orders transactions only inside one connection).
-  // answers off the page's thread, which the drawing-out side's clock does not see (why: `fed` in
-  // `probe.js`).
   const done = ks.hold();
   const store = app.keepStore;
   // By content, not by count: an earlier round's draft is ordinary, so a count falls later.
@@ -55,13 +53,13 @@ function kspageProbeKeep(ks) {
     ? got.filter((one) => one && one.text.indexOf(body) >= 0) : []);
   const shown = (got) => (Array.isArray(got)
     ? got.map((one) => one.at + ":" + one.text.length + "B").join(" ") : "not a row");
-  // A stand-in for an earlier start-up's draft, **keyed outside this start-up**: what it laid down
-  // itself is not "something lost earlier" (`keep.js`), so under the same key it is not found.
+  // A stand-in for an earlier start-up's draft, **keyed outside this start-up**. What it laid
+  // down itself is not "something lost earlier" (`keep.js`), so under the same key it is not found.
   const PLANT = "b-probe-keep/0";
 
-  // **A page that cannot remember passes too** (a private window can refuse IndexedDB), but not
+  // **A page that cannot remember passes too** (a private window can refuse IndexedDB). But not
   // remembering and a broken holding back look the same, so **it looks for the arena first**.
-  Promise.resolve(store.keepDraft({ at: PLANT, when: Date.now(), kind: "json", name: "the round that fell",
+  store.keepDraft({ at: PLANT, when: Date.now(), kind: "json", name: "the round that fell",
     from: notAPath + "/probe.kspage", text: planted })
     .then(() => store.takeDrafts())
     .then((got) => {
@@ -77,8 +75,8 @@ function kspageProbeKeep(ks) {
       check(mine.length === 1 && mine[0].kind === "json",
         "the draft remembers the opening shape too ("
           + (mine.length === 1 ? mine[0].kind : "none") + ")");
-      // Caution: **See that the draft brought back is held under a key of its own** (under the
-      // earlier one it would be thrown away with it).
+      // Caution: **See that the draft brought back is held under a key of its own.** Under the
+      // earlier one, it would be thrown away with it.
       check(mine.length === 1 && mine[0].at !== PLANT,
         "the document brought back is held back under its own key ("
           + (mine.length === 1 ? mine[0].at : "none") + ")");
@@ -97,7 +95,7 @@ function kspageProbeKeep(ks) {
         store.dropDraft(PLANT);
         return null;
       });
-    }))
+    })
     .then(() => done(), (e) => {
       check(false, "the drafts' entry point returns an answer (" + String((e && e.message) || e) + ")");
       done();
@@ -106,7 +104,7 @@ function kspageProbeKeep(ks) {
 
 // Jumping from the right list (the headings and the contents).
 // Caution: **Press a row in the list like a person**, not the entry point (a row not wired walks
-// past). **Press the contents after jumping to a chapter**: a chapter's row moves the cursor and
+// past). **Press the contents after jumping to a chapter.** A chapter's row moves the cursor, and
 // the contents' row only sends by height, so one fault shows only in that order.
 // **Do not load the manual** (its reread does not finish inside this row of checks); inserting the
 // contents is enough. **It is the last section** (the document changes).
@@ -115,8 +113,8 @@ function kspageProbeOutline(ks) {
   const app = ks.app;
   const done = ks.hold();
   const rowsOf = () => Array.from(document.querySelectorAll("#outline .item"));
-  // Caution: **Poll, capped well below `--virtual-time-budget`** (`kspage/Makefile`): a settled
-  // wait cannot fit a layout growing with the document, and past the budget no mark comes out.
+  // Caution: **Poll, with a cap.** A settled wait cannot fit a layout growing with the document,
+  // and a wait with no cap never lets the marks out.
   const until = async (ok) => {
     for (let waited = 0; waited < 1200; waited += 25) {
       if (ok()) return true;
@@ -139,8 +137,8 @@ function kspageProbeOutline(ks) {
         return doc.blocks.some((b) => gathers.has(b.style));
       };
       ks.check(await until(hasContents), "the contents can be inserted");
-      // **The inserted box itself stays out of the list** (it would be a row with no name); to jump
-      // to the contents, a heading goes above it (`in_chapters` keeps it out of the chapters).
+      // **The inserted box itself stays out of the list** (it would be a row with no name). To
+      // jump to the contents, a heading goes above it (`in_chapters` keeps it out of the chapters).
       ks.check(!rowsOf().some((r) => r.textContent === "contents"),
         "the box that gathers does not itself come out in the list");
 

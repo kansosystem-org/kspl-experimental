@@ -164,10 +164,10 @@ fn case_named_inner_cfg(std: U8[], arena: Arena$@) //<
     //< A folder inside a package holding its own `ksplc.cfg` is still read as the package's
     //<
     //< **The nearest file names no package there**, so the search continues past it to the top
-    //< (`package_top` in `ksplc/base/config_file.kspl`); otherwise the entry file is `probe/…` and
+    //< (`package_top` in `ksplc/base/config_file.kspl`). Otherwise the entry file is `probe/…`, and
     //< `import "mylib/thing"` reaches nothing.
-    //< Caution: **Run it from that folder and from above the package, not from its top**, where the
-    //< folder names the package by itself and the walk goes untested.
+    //< Caution: **Run it from that folder and from above the package, not from its top.** There the
+    //< folder names the package by itself, and the walk goes untested.
     name: = "a folder inside a package holding its own ksplc.cfg is still the package's"
     dir: = named_dir(name, "named_inner_cfg")
     if dir.len == 0
@@ -186,8 +186,8 @@ fn case_named_inner_cfg(std: U8[], arena: Arena$@) //<
 
 priv const dotted_cfg: U8[] = "[package]\nname = mylib\n\n[lint]\nW0206 = off\n"
 
-// **One function is called and one is not**: the called one's symbol carries the file's name
-// into the C, and the uncalled one fires [W0206] unless a setting turns it off.
+// **One function is called and one is not.** The called one's symbol carries the file's name
+// into the C. The uncalled one fires [W0206] unless a setting turns it off.
 priv const outside_lone: U8[] =
     """priv fn unused_helper(): I32
     return 3
@@ -208,8 +208,8 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
     //< It never reaches a package it only passes through.
     //< **The walk up to a package's top folds `..` first** (`fold_dots` in
     //< `ksplc/base/locate.kspl`). Removing one name at a time would step `lib_here/probe/..` back
-    //< into `probe`: every `#line` would name the package's folder `lib_here/probe/..`, and from
-    //< its top a file beside the package, named through `..`, would be taken for one of its files,
+    //< into `probe`. Then every `#line` would name the package's folder `lib_here/probe/..`. From
+    //< its top, a file beside the package, named through `..`, would be taken for one of its files,
     //< named `mylib/…` and held to its settings.
     name: = "a package's file compiles the same through a path spelt with .."
     dir: = named_dir(name, "named_dotted")
@@ -223,7 +223,8 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
         fallback ""
     b: = io.read_file(fs.join(dir, "dotted.c", arena)) catch
         fallback ""
-    verdict.check(name, plain.code == 0 && dotted.code == 0 && a.len > 0 && a.equals(b),
+    verdict.check(name,
+        plain.exited_with(0) && dotted.exited_with(0) && a.len > 0 && a.equals(b),
         arena.text().s(plain.out).s(dotted.out).take())
     fs.write_tree(dir, U8[][]::{ "lib_here/ksplc.cfg", "outside/lone.kspl" },
         U8[][]::{ dotted_cfg, outside_lone }, arena) catch
@@ -235,15 +236,15 @@ fn case_named_dotted(std: U8[], arena: Arena$@) //<
     c: = io.read_file(fs.join(top, "lone.c", arena)) catch
         fallback ""
     verdict.check("a file the package's .. only passes through is not named as its file",
-        lone.code == 0 && c.find_str("used_helper").is_some() &&
+        lone.exited_with(0) && c.find_str("used_helper").is_some() &&
         c.find_str("mylib").is_none(), lone.out)
     lint: = ksplc_env(U8[][]::{ "lint", beside }, top, std, "", arena)
     verdict.check("and the package's settings do not reach it",
         lint.out.find_str("[W0206]").is_some(), lint.out)
 
 // ==========================================
-// A file outside every package, named through `..`, is the file its plain name names: one module
-// with one set of globals, in the package its folded name says ("import syntax and path
+// A file outside every package, named through `..`, is the file its plain name names. It is one
+// module with one set of globals, in the package its folded name says ("import syntax and path
 // resolution" in docs/SPEC-language.md).
 // ==========================================
 
@@ -295,7 +296,7 @@ fn case_unit_dotted(std: U8[], arena: Arena$@) //<
     //< A file no package claims, reached as `lib/n` and as `sub/../lib/n`, is one module in `lib`
     //<
     //< Kept as spelt, the second name would make a second module with its own counter (the program
-    //< would say 1), and put the file in `sub`, so a file of `sub` would reach its unmarked `peek`.
+    //< would say 1), and put the file in `sub`. A file of `sub` would reach its unmarked `peek`.
     name: = "a file named through .. outside every package is one module"
     dir: =
         case_dir(name, "unit_dotted",
@@ -304,10 +305,11 @@ fn case_unit_dotted(std: U8[], arena: Arena$@) //<
     if dir.len == 0
         return
     twice: = ksplc_env(U8[][]::{ "run", "main.kspl" }, dir, std, "", arena)
-    verdict.check(name, twice.code == 2, twice.out)
+    verdict.check(name, twice.exited_with(2), twice.out)
     peek: = ksplc_env(U8[][]::{ "peek.kspl", "peek.c" }, dir, std, "", arena)
     verdict.check("and it stands in the package its folded name says, not the one it passes through",
-        peek.code != 0 && peek.out.find_str("cannot access symbol 'peek'").is_some(), peek.out)
+        !peek.exited_with(0) &&
+        peek.out.find_str("cannot access symbol 'peek'").is_some(), peek.out)
 
 fn case_named_uses(std: U8[], arena: Arena$@) //<
     //< It checks an import of an unlisted package is rejected where it is written
@@ -320,7 +322,7 @@ fn case_named_uses(std: U8[], arena: Arena$@) //<
     top: = fs.join(dir, "lib_here", arena)
     stray: = ksplc_env(U8[][]::{ "probe/stray.kspl", "stray.c" }, top, std, "", arena)
     verdict.check(name,
-        stray.code != 0 &&
+        !stray.exited_with(0) &&
         stray.out.find_str("probe/stray.kspl:1:1: error: the package 'mylib' does ").is_some() &&
         stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
     fs.write_tree(dir,
@@ -338,7 +340,7 @@ fn case_named_embed(std: U8[], arena: Arena$@) //<
     //<
     //< `mylib/data/note.txt` is found through the package, and a bare name beside the embedding
     //< file however far above it the compiler runs.
-    //< **The rejection is the other half**: an embed of an unlisted package is rejected where it is
+    //< **The rejection is the other half.** An embed of an unlisted package is rejected where it is
     //< written, not first in a copy of the folder.
     name: = "an embed finds its package's file from the package's own folder"
     dir: = named_dir(name, "named_embed")
@@ -363,7 +365,7 @@ fn case_named_embed(std: U8[], arena: Arena$@) //<
     stray: =
         ksplc_env(U8[][]::{ "probe/embed_stray.kspl", "stray.c" }, top, std, "", arena)
     verdict.check("an embed of a package not listed in uses is refused at the embed",
-        stray.code != 0 &&
+        !stray.exited_with(0) &&
         stray.out.find_str("probe/embed_stray.kspl:1:1: error: the package 'mylib' does ").is_some()
         && stray.out.find_str("not say it uses 'otherlib'").is_some(), stray.out)
 
@@ -388,7 +390,8 @@ fn case_named_refused(std: U8[], arena: Arena$@) //<
             verdict.check(names[i], false, "cannot write the settings")
             continue
         r: = ksplc_env(U8[][]::{ "probe/main.kspl", "main.c" }, top, std, "", arena)
-        verdict.check(names[i], r.code != 0 && r.out.find_str(wants[i]).is_some(), r.out)
+        verdict.check(names[i],
+            !r.exited_with(0) && r.out.find_str(wants[i]).is_some(), r.out)
 
 fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
     //< It checks a folder reached under one name and naming itself another is rejected
@@ -406,7 +409,7 @@ fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
     r: =
         ksplc_env(U8[][]::{ "main.kspl", "main.c" }, fs.join(dir, "proj", arena), std, "", arena)
     verdict.check(name,
-        r.code != 0 &&
+        !r.exited_with(0) &&
         r.out.find_str("reached as the package 'mylib' but names itself 'otherlib'").is_some(),
         r.out)
     outer: = named_dir("the settings above a package do not reach into it", "named_outer")
@@ -419,8 +422,9 @@ fn case_named_elsewhere(std: U8[], arena: Arena$@) //<
         return
     inside: =
         ksplc_env(U8[][]::{ "lib_here/probe/main.kspl", "in.c" }, outer, std, "", arena)
-    verdict.check("the settings above a package do not reach into it", inside.code == 0,
+    verdict.check("the settings above a package do not reach into it", inside.exited_with(0),
         inside.out)
     plain: = ksplc_env(U8[][]::{ "plain/main.kspl", "plain.c" }, outer, std, "", arena)
     verdict.check("and the folder one is in covers a file in a folder below it",
-        plain.code != 0 && plain.out.find_str("unknown diagnostic code").is_some(), plain.out)
+        !plain.exited_with(0) && plain.out.find_str("unknown diagnostic code").is_some(),
+        plain.out)

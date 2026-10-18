@@ -29,8 +29,8 @@ function kspageProbeInput(ks) {
 
   // 3'. The cursor's sheet follows the cursor, blinking.
   //
-  // **This can be seen nowhere else**: it is not drawn on the canvas, so counting pixels misses it,
-  // and the blink is a real browser's animation.
+  // **This can be seen nowhere else.** It is not drawn on the canvas, so counting pixels misses
+  // it, and the blink is a real browser's animation.
   const caret = app.caretElement;
   check(caret !== undefined && caret.isConnected, "the cursor's sheet is on the page");
   const caretStyle = getComputedStyle(caret);
@@ -52,8 +52,9 @@ function kspageProbeInput(ks) {
   // 3''. Where it was typed going outside the window, it sends that far (the window's side, in
   // neither the canvas's pixels nor the wasm).
   // Caution: **Send only where it went outside** (else a window moved to read goes back on every
-  // keystroke). It narrows the row so the document outgrows the window and looks at the promise,
-  // "the cursor is inside the window, not behind the tools" (**the upper edge is not enough**).
+  // keystroke). It narrows the row so the document outgrows the window. Then it looks at the
+  // promise "the cursor is inside the window, not behind the tools" (**the upper edge is not
+  // enough**).
   const caretInside = () => {
     const at = caret.getBoundingClientRect();
     const room = app.headRoom ? app.headRoom() : 0;
@@ -89,7 +90,7 @@ function kspageProbeInput(ks) {
   // **This can be seen nowhere else**: whether they stay is the page's adornment, told neither by
   // running the wasm nor by the canvas.
   const chrome = document.getElementById("chrome");
-  // **Make the document taller than the window before looking**; with the tools packed down the
+  // **Make the document taller than the window before looking.** With the tools packed down, the
   // sample fits the window at the wide row, leaving nowhere to send.
   app.resize(240);
   window.scrollTo(0, 200);
@@ -100,8 +101,8 @@ function kspageProbeInput(ks) {
     "the body goes under the tools");
   app.resize(wideAt);
   window.scrollTo(0, 0);
-  // Caution: **Where a press does not go in, the reason must come out somewhere visible** — a press
-  // that puts nothing out is read as "nothing happens".
+  // Caution: **Where a press does not go in, the reason must come out somewhere visible.** A
+  // press that puts nothing out is read as "nothing happens".
   // What takes a frame off does not act in the body, so the refusal is looked at there.
   const told = document.getElementById("note");
   press(20, 20);
@@ -149,8 +150,8 @@ function kspageProbeInput(ks) {
   // 5'. A composition broken off does not become a break in the undo.
   //
   // **This can be seen nowhere else**: breaking off shows only as `compositionend` with an empty
-  // `data`. Let an empty one through as a settlement and the step breaks there, so what was typed
-  // before and after comes back separately ("it comes back a keystroke at a time").
+  // `data`. Let an empty one through as a settlement, and the step breaks there. What was typed
+  // before and after then comes back separately ("it comes back a keystroke at a time").
   const kept = app.text();
   typeIn("X");
   ime.dispatchEvent(new CompositionEvent("compositionstart", { data: "", bubbles: true }));
@@ -167,7 +168,7 @@ function kspageProbeInput(ks) {
   // 5''. Text longer than the typing buffer (256 bytes) goes in whole, typed or composed.
   //
   // **This can be seen nowhere else**: a dictation or an autocompletion hands it over in one
-  // `input`; dropped, it vanishes without a word, and a composition commits the one before.
+  // `input`. Dropped, it vanishes without a word, and a composition commits the one before.
   const longTyped = "long".repeat(80);
   const beforeLong = app.text();
   typeIn(longTyped);
@@ -210,9 +211,9 @@ function kspageProbeInput(ks) {
 
   // 8. A fault in the page's own code is thrown on, not reported as memory used up.
   //
-  // **This can be seen nowhere else**: the net that catches the core running out of memory sits
-  // around every layout, and a net catching everything would hide this fault behind the wrong
-  // reason and log it nowhere. A measuring that throws stands in for the fault.
+  // **This can be seen nowhere else.** The net that catches the core running out of memory sits
+  // around every layout. A net catching everything would hide this fault behind the wrong reason
+  // and log it nowhere. A measuring that throws stands in for the fault.
   const kept8 = app.save();
   const shown8 = app.text();
   const measure = CanvasRenderingContext2D.prototype.measureText;

@@ -57,7 +57,7 @@ fn main(): I32
 //<
 //< Only a deeper line opens a step, so an empty block, **or one holding a comment alone**, has
 //< nothing to open it. The fix keeps the braces ("The indentation notation (`.kspl`)" in
-//< `../../../docs/DESIGN-language.md`); without that Note the error reads as a ternary `if` not being level.
+//< `../../../docs/DESIGN-notation.md`); without that Note the error reads as a ternary `if` not being level.
 // EXPECT: a block with no body cannot be written by indentation alone
 import "std/io"
 
@@ -72,7 +72,7 @@ fn main(): I32
 //< The lines after an open bracket read as its contents, so the failure lands on the next line,
 //< where the `)` was expected. The Note sends the writer back to the bracket.
 // EXPECT: laid_bracket_never_closed.kspl:14:3: error: expected ')'
-// EXPECT: the '(' at line 13, column 11 is never closed, so what follows it was read
+// EXPECT: the '(' at line 13, column 11 is never closed. What follows it was read
 import "std/io"
 
 priv fn add(a: I32, b: I32): I32
@@ -143,9 +143,9 @@ fn main(): I32
 // ==== case laid_defer_behind_a_declaration
 //< A `defer` written behind a declaration on the same line
 //<
-//< A `defer` is a statement of its own. The Note gives the line to write, the declared name put in
-//< front of the call, so the fix need not be worked out from the grammar's expectations.
-// EXPECT: a 'defer' is a statement of its own and cannot trail another
+//< A `defer` is a statement of its own. The Note gives the line to write, with the declared name in
+//< front of the call. So the writer does not have to work out the fix from the grammar.
+// EXPECT: a 'defer' must start a separate statement
 // EXPECT: Put 'defer xs.free()' on the next line
 import "std/ds" { List }
 
@@ -159,9 +159,9 @@ fn main(): I32
 //< A `defer` takes the statement to run, and a method called on nothing has no receiver. The
 //< leading `.` would otherwise be read as an enum's value, and "no type to infer it from" sends
 //< the writer looking at enums.
-// EXPECT: a 'defer' names what it cleans up, and '.free()' has nothing in front of it
+// EXPECT: a 'defer' must name its resource. '.free()' has no receiver
 // EXPECT: Write the variable: 'defer x.free()'
-// EXPECT-NOT: cannot infer enum type
+// EXPECT-NOT: cannot infer the enum type
 import "std/ds" { List }
 
 fn main(): I32
@@ -172,8 +172,8 @@ fn main(): I32
 // ==== case laid_group_holds_one_value
 //< Two values side by side inside grouping parentheses
 //<
-//< **Grouping parentheses hold one value**, so a `,` there would be as wrong as the gap; the Note
-//< that names a missing `,` stays for a list's brackets.
+//< **Grouping parentheses hold one value**, so a `,` there would be as wrong as the gap. The Note
+//< that names a missing `,` is only for a list's brackets.
 // EXPECT: expected ')'
 // EXPECT-NOT: may be missing
 fn main(): I32
@@ -183,8 +183,8 @@ fn main(): I32
 //< Some characters look like indentation on screen but do not count as indentation
 //<
 //< **Easiest to tread on with Japanese input: the ideographic space (U+3000).** Only the half-width
-//< space counts, so the line sits at column 0, leaves the step, and the syntax error says nothing
-//< of the cause; a Note names the character (as Python's `invalid non-printable character U+00A0`).
+//< space counts. So the line sits at column 0 and leaves the step. The syntax error says nothing
+//< of the cause. A Note names the character (as Python's `invalid non-printable character U+00A0`).
 // EXPECT: an ideographic space (U+3000)
 import "std/io"
 
@@ -192,13 +192,58 @@ fn main(): I32
   io.out().s("A\n")
 　io.out().s("B\n")
   return 0
+// ==== case laid_interpolation_never_closed
+//< An interpolation left open names its `\{`, not the string around it
+//<
+//< The string's own `"` closes nothing while the interpolation is open. So the rest of the file
+//< reads as its code, and the parser fails at the end. "the string is never closed" sent the
+//< writer to a quote that is right.
+// EXPECT: laid_interpolation_never_closed.kspl:12:17: error: this interpolation is never closed
+// EXPECT-NOT: this string is never closed
+import "std/io"
+
+fn main()
+    a: = 1
+    io.out().s("\{a}\n")
+    io.out().s("x\n")
+// ==== case laid_interpolation_syntax_error
+//< A syntax error inside an interpolation gets the note its own text earns
+//<
+//< Stepping over the whole literal, the note looked past the error and blamed the call's `(`
+//< around the string as never closed.
+// EXPECT: laid_interpolation_syntax_error.kspl:11:20: error: expected
+// EXPECT: Note: an exponent is written only on a floating-point literal
+// EXPECT-NOT: is never closed
+import "std/io"
+
+fn main()
+    io.out().s("\{1e3\}")
+// ==== case laid_interpolation_syntax_error_bare
+//< A syntax error inside an interpolation that earns no note gets none
+//<
+//< The call's `(` around the string is closed; naming it would send the writer to the wrong place.
+// EXPECT: laid_interpolation_syntax_error_bare.kspl:9:22: error: expected
+// EXPECT-NOT: Note:
+import "std/io"
+
+fn main()
+    io.out().s("\{1 +\}")
+// ==== case laid_label_lookalike
+//< A declaration that fails partway through its line is not called a block with no body
+//<
+//< `x:` reads like a label, so the expected list holds a `{`; the note about an empty block fits
+//< only a heading whose code has ended.
+// EXPECT: laid_label_lookalike.kspl:8:8: error: expected
+// EXPECT-NOT: a block with no body
+fn main()
+    x: [3]I32 = ::{}
 // ==== case laid_name_outside_ascii
 //< A name in another script names the ASCII rule, and the list names the notation's own marks
 //<
 //< Python, Rust, Swift, Java and C++ all take `かんそ` as a name, so the bare list would not say why
 //< it is refused. The indentation notation writes no `}`, so the list names the block's end.
 // EXPECT: laid_name_outside_ascii.kspl:9:5: error: expected the end of the block, an identifier
-// EXPECT: Note: a name is written with the ASCII letters, digits and '_' alone, so 'か' cannot stand in one.
+// EXPECT: Note: a name is written with ASCII letters, digits and '_' alone. 'か' cannot appear in a name.
 // EXPECT-NOT: '}'
 fn main(): I32
     かんそ: I32 = 3
@@ -209,7 +254,7 @@ fn main(): I32
 //< The written `;` alone ends the line, so the parse goes on to the analysis's message, beside the
 //< refusal of the `;` itself.
 // EXPECT: laid_prototype_without_body.kspl:8:1: error: 'f' has no body
-// EXPECT: laid_prototype_without_body.kspl:8:12: error: a statement in the indentation notation ends at the end of its line
+// EXPECT: laid_prototype_without_body.kspl:8:12: error: a statement in the indentation notation ends at its line boundary
 // EXPECT-NOT: expected
 fn f(): I32;
 
@@ -218,10 +263,10 @@ fn main(): I32
 // ==== case laid_ragged_sibling
 //< In the indentation notation, siblings in one block whose columns do not line up are rejected
 //<
-//< A piled step keeps only the heading's column (`Frame` in `../../parse/layout.kspl`), so the
-//< `4 columns` line reads as outside the `if` yet is inside it: two readings, two programs, which
-//< Principle 8 in `../../../docs/DESIGN-principles.md` refuses. **It carries no code**, so none can switch it.
-// EXPECT: but its siblings sit
+//< A piled step keeps only the heading's column (`Frame` in `../../parse/layout.kspl`). So the
+//< `4 columns` line reads as outside the `if` but is inside it. Two readings make two programs,
+//< which Principle 8 in `../../../docs/DESIGN-principles.md` refuses. **It carries no code**, so none can switch it.
+// EXPECT: sibling lines use
 // EXPECT-NOT: error: [
 import "std/io"
 
@@ -237,7 +282,7 @@ fn main(): I32
 //< **A `switch` opens no block**, so a deeper line opens one the grammar does not have. The Note
 //< says where the arms go: at the `switch`'s column, the first on the line below.
 // EXPECT: laid_switch_case_indented.kspl:9:12: error: expected 'case'
-// EXPECT: Note: a 'switch' opens no block of its own; each 'case' and 'default' opens one. Put them in the column of 'switch', the first 'case' on the line below it.
+// EXPECT: Note: a 'switch' opens no block of its own. Each 'case' and 'default' opens one. Align them with 'switch'. Put the first 'case' on the next line.
 fn main(): I32
   e: = 1
   switch e
@@ -248,8 +293,8 @@ fn main(): I32
 // ==== case laid_switch_case_shallower
 //< A `case` shallower than its `switch`
 //<
-//< **The head takes its first arm only at its own column**: a shallower line belongs to the level
-//< outside, so the head is left ended, the error lands at its line's end, and no Note claims a
+//< **The head takes its first arm only at its own column.** A shallower line belongs to the level
+//< outside, so the head is left ended. The error lands at its line's end, and no Note claims a
 //< block.
 // EXPECT: laid_switch_case_shallower.kspl:11:13: error: expected 'case'
 // EXPECT-NOT: opens no block of its own
@@ -267,7 +312,7 @@ fn main(): I32
 //< `../../../docs/SPEC-language.md`). Alone, the expectation set asks for a `;`, so a Note names
 //< it and two forms instead (`forbidden_spelling_hint` in `../../parse/syntax_msg.kspl`).
 // EXPECT: KSPL has no trailing closure
-// EXPECT: bind it to a name first
+// EXPECT: bind it to a name and pass that name
 priv fn count_over(xs: I32[], pred: Callable1<|I32, Bool|>): Sz
   $n: Sz = 0
   for x in xs
@@ -286,7 +331,7 @@ fn main(): I32
 //<
 //< Converted with a second `;` after it, it read as an empty statement and listed `'}'` and
 //< `';'`, which this notation never writes (`written_terminator` in `parse/layout.kspl`).
-// EXPECT: laid_trailing_semicolon.kspl:9:16: error: a statement in the indentation notation ends at the end of its line, so this ';' is not written: delete it (a ';' stands only between two statements on one line)
+// EXPECT: laid_trailing_semicolon.kspl:9:16: error: a statement in the indentation notation ends at its line boundary. This ';' is unnecessary. Delete it. A ';' stands only
 // EXPECT: Finished with 1 error(s)
 // EXPECT-NOT: expected '}'
 fn main(): I32
@@ -319,8 +364,8 @@ fn main(): I32
 // ==== case toplevel_init_call
 //< A call in a top-level variable's initialiser is rejected, since C needs a constant there
 //<
-//< The initialiser becomes the generated C's file-scope initialiser, and a call is run-time work;
-//< unrefused, only the C compiler's `initializer element is not constant` surfaces, with no
+//< The initialiser becomes the generated C's file-scope initialiser, and a call is run-time work.
+//< Unrefused, only the C compiler's `initializer element is not constant` shows, with no
 //< diagnostic at KSPL's layer.
 // EXPECT: top-level variable initializer is not a compile-time constant
 fn side(): I32

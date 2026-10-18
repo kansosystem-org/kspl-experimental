@@ -1,0 +1,162 @@
+//< Folding a constant floating-point expression, and the casts to an integer it decides
+//<
+//< **Both backends and sema read the same fold.** Sema refuses a constant cast whose value an
+//< integer type does not hold. genc and genllvm write a constant cast as its value, and a float
+//< global's initializer under `--to=llvm`. Integers are folded in `eval.kspl`.
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/literal" as base_literal
+import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/env" as sema_type_env
+import "ksplc/sema/type/query" as sema_type_query
+import "std/str" { Str_builder }
+import "std/strnum"
+
+priv const max_float_fold_depth: Sz = 256 //< how deep the fold follows nested expressions
+
+enum Float_cast //< what a cast from a floating-point value to an integer type gives
+    not_constant //< the operand is no constant: the cast saturates at run time
+    fits(v: I64) //< the value truncated toward zero, which the type holds (a `U64`'s as its bits)
+    out_of_range(f: F64) //< the operand's value, a NaN or one whose whole part the type cannot hold
+
+impl Ast_node
+    fn fold_float(r: Self$@, c: Sema_ctx$@): F64? //<
+        //< The value of a constant floating-point expression, or none where it is not one
+        //<
+        //< A literal, a constant's name, `-`, `+ - * /`, parentheses and a cast from a number. An
+        //< `F32` node rounds to `F32` at each step, as its operation would.
+        return r.fold_float_at(c, 0)
+
+    fn float_cast_of(r: Self$@, c: Sema_ctx$@, portable: Bool): Float_cast //<
+        //< What the cast r, from a floating-point value to an integer type, gives at translation time
+        //<
+        //< `portable` judges `Sz` at 32 bits, the width every target holds, as sema's integer
+        //< checks do; a backend asks at the machine's width.
+        return r.float_cast_to(c, r.type_id, portable)
+
+    fn float_cast_to(r: Self$@, c: Sema_ctx$@, dst_id: I32, portable: Bool): Float_cast //<
+        //< float_cast_of with the destination named, for sema while the cast's type is being set
+        if !r.is_explicit_cast()
+            return .not_constant
+        dst: = c.env.scalar_repr_id(dst_id)
+        src: = r.get_postfix_receiver()
+        if src == null || !c.env.is_integer(dst) || !c.env.is_float(src.type_id)
+            return .not_constant
+        $f: F64 = 0.0
+        switch src.fold_float(c)
+        case .some(v)
+            f = v
+        case .none
+            return .not_constant
+        bits: =
+            (c.env.get_portable_bit_size(dst) if portable
+            else c.env.get_primitive_bit_size(dst))
+        is_uns: = c.env.is_unsigned(dst)
+        if !whole_part_fits(f, bits, is_uns)
+            return .out_of_range(f)
+        // In range, so neither cast below is out of its type's range.
+        if is_uns && f >= two_to(63)
+            return .fits(I64::(U64::f))
+        return .fits(I64::f)
+
+    priv fn fold_float_at(r: Self$@, c: Sema_ctx$@, depth: Sz): F64?
+        if r == null || depth >= max_float_fold_depth
+            return .none
+        $v: F64 = 0.0
+        switch r.kind_id
+        case .k_float
+            $clean: = Str_builder.new()
+            defer clean.free()
+            _stop: = r.text.append_clean_number(clean@, "Ff")
+            v = clean.slice().to_f64() catch
+                return .none
+        case .k_expr_primary
+            return r.get_primary_inner_expr().fold_float_at(c, depth + 1)
+        case .k_identifier, .k_expr_path
+            switch r.const_init_expr(c)
+            case .some(init)
+                return rounded_as(c, init.fold_float_at(c, depth + 1), r.type_id)
+            case .none
+                return .none
+        case .k_expr_unary
+            if !r.get_unary_op().text.equals("-")
+                return .none
+            switch r.get_unary_target().fold_float_at(c, depth + 1)
+            case .some(a)
+                v = -a
+            case .none
+                return .none
+        case .k_expr
+            return r.fold_float_binary(c, depth)
+        case .k_expr_postfix
+            if !r.is_explicit_cast()
+                return .none
+            src: = r.get_postfix_receiver()
+            if c.env.is_float(src.type_id)
+                return rounded_as(c, src.fold_float_at(c, depth + 1), r.type_id)
+            switch c.try_eval_constexpr_wide(src)
+            case .some(n)
+                v = F64::n
+            case .none
+                return .none
+        default
+            return .none
+        return rounded_as(c, .some(v), r.type_id)
+
+    priv fn fold_float_binary(r: Self$@, c: Sema_ctx$@, depth: Sz): F64? //<
+        //< fold_float's `+ - * /`
+        $a: F64 = 0.0
+        $b: F64 = 0.0
+        switch r.get_binary_left().fold_float_at(c, depth + 1)
+        case .some(x)
+            a = x
+        case .none
+            return .none
+        switch r.get_binary_right().fold_float_at(c, depth + 1)
+        case .some(y)
+            b = y
+        case .none
+            return .none
+        op: = r.get_binary_op().text
+        $v: F64 = 0.0
+        if op.equals("+")
+            v = a + b
+        else if op.equals("-")
+            v = a - b
+        else if op.equals("*")
+            v = a * b
+        else if op.equals("/")
+            v = a / b
+        else
+            return .none
+        return rounded_as(c, .some(v), r.type_id)
+
+priv fn rounded_as(c: Sema_ctx$@, folded: F64?, type_id: I32): F64? //<
+    //< A folded value rounded to `F32` where the node's type is one
+    switch folded
+    case .some(v)
+        if c.env.get_clean_real_type(type_id) == (I32::sema_type_env.Builtin_type_id.f32_type)
+            narrowed: = F32::v
+            return .some(narrowed)
+        return .some(v)
+    case .none
+        return .none
+
+priv fn two_to(n: I32): F64 //< 2 to the n, exact in `F64` for every n used here
+    $v: F64 = 1.0
+    for _i in Range.asc(n)
+        v *= 2.0
+    return v
+
+priv fn whole_part_fits(f: F64, bits: I32, is_uns: Bool): Bool //<
+    //< Whether an integer type of the width holds f truncated toward zero; false for a NaN
+    //<
+    //< The bounds are open by one past the type's range, as the truncation reaches it: `-2.5`
+    //< fits `I8` and `-128.9` does too. `I64`'s lower bound, -2^63 - 1, is no `F64`, so it is
+    //< checked closed at -2^63.
+    if is_uns
+        return f > -1.0 && f < two_to(bits)
+    if bits >= 64
+        return f >= -two_to(63) && f < two_to(63)
+    return f > -two_to(bits - 1) - 1.0 && f < two_to(bits - 1)

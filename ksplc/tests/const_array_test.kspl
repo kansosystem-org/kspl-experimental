@@ -1,16 +1,16 @@
 //< Immutable arrays: what reading, copying and emitting one must keep
 //<
 //< An element of a `const` array is the immutable form of its type (`const_of(T)`). Each route
-//< below once stopped at that mark where it should have looked past it, with no diagnostic on the
+//< below once stopped at that mark where it had to look past it. There was no diagnostic on the
 //< KSPL side: only the C or the LLVM build failed.
 import "std/str" { Str_builder }
 import "std/verdict"
 
 // ==========================================
-// A variable holding a value **copied** from an immutable one is writable: in `$x: = c[i]` the new
+// A variable holding a value **copied** from an immutable one is writable. In `$x: = c[i]` the new
 // binding is writable, or genc writes `const T x` and C rejects the assignment (copy_value_type in
 // `sema/type/query.kspl`).
-// Caution: **Do not test only the annotated shape**, which uses the declared type as it is and
+// Caution: **Do not test only the annotated shape.** It uses the declared type as it is, and it
 // passes even with the inference path broken.
 // ==========================================
 priv const words: U8[][3] = ::{ "alpha", "beta", "gamma" }
@@ -35,9 +35,9 @@ fn test_const_copy_binding()
     verdict.pass("")
 
 // ==========================================
-// A row or an element of an immutable array, copied out, has the type a written one gives:
-// `r: I32[_] = m[1]` takes its length from the row (a field of array type too), and `P::ps[1]` is
-// a copy of a `P`. Each is the immutable form of its type, and compared with that mark both were
+// A row or an element of an immutable array, copied out, has the type a written one gives.
+// `r: I32[_] = m[1]` takes its length from the row (a field of array type too). `P::ps[1]` is
+// a copy of a `P`. Each is the immutable form of its type. Compared with that mark, both were
 // refused (`apply_type_coercion` in sema/body/coerce.kspl, `infer_cast_postfix` in
 // sema/body/postfix.kspl).
 // ==========================================
@@ -71,7 +71,7 @@ fn test_cast_of_an_element_to_its_own_type()
 
 // ==========================================
 // An immutable `F32` array holds the values as written. An LLVM `float` constant must round-trip
-// exactly through its decimal form, and `0.85` does not (format_f32_hex_literal in
+// exactly through its decimal form. `0.85` does not (format_f32_hex_literal in
 // gen/llvm/ctx.kspl writes it in hexadecimal). An element is `const_of(F32)`, so **a plain `F32`
 // constant never reaches this case** (emit_llvm_const_float in gen/llvm/decl.kspl).
 // Caution: **Do not list only values that round-trip** (`1.0` and `0.5` pass in decimal too).
@@ -122,10 +122,9 @@ fn test_a_computed_float_constant_folds()
     verdict.pass("each computed float constant holds the value C's fold gives.")
 
 // ==========================================
-// A top-level `const` array follows its element's struct type: genc strips the qualifier to see the
-// dependency, or C fails with `array has incomplete element type` ("The output order of genc's type
-// definitions is decided after the immutability marks are stripped" in
-// ksplc/docs/DESIGN-compiler.md).
+// A top-level `const` array follows its element's struct type. Genc strips the qualifier to see the
+// dependency, or C fails with `array has incomplete element type` ("Genc orders its type
+// definitions after stripping immutability marks" in ksplc/docs/DESIGN-backends.md).
 // ==========================================
 struct Const_row
     name: U8[]
@@ -180,9 +179,9 @@ fn test_multi_dim_array() //< that multi-dimensional fixed-length arrays share o
 struct Cyc_row //<
     //< The struct half of a struct and an enum pointing at each other through a slice
     //<
-    //< **Building the array** is the point (only it needs the wrapper). The payload is built at run
-    //< time, because `--to=llvm` cannot lower a variant with a payload written into a `const`
-    //< (emit_llvm_const_init in gen/llvm/decl.kspl).
+    //< **Building the array** is the point (only it needs the wrapper), so the payload is built at
+    //< run time. A payload written into a `const` is `tests/prog/equiv_shapes.kspl`'s, on both
+    //< backends.
     name: U8[]
     kind: Cyc_kind
 

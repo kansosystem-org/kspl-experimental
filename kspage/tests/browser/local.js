@@ -5,7 +5,6 @@
 // wrapper, a wrapper wrong the same way on both sides passes.
 
 function kspageProbeLocal(ks) {
-  const row = document.getElementById("local-row");
   const box = document.getElementById("local-path");
   const note = document.getElementById("note");
   // The local server's address. **It is not derived here** — `probe.js`'s `local` holds it, and
@@ -17,9 +16,9 @@ function kspageProbeLocal(ks) {
   const at = server.at;
   // It picks up the text put out on the status bar without dropping any.
   //
-  // Caution: **Do not peek at what is in it at the time.** The bar's one slot is overwritten by
-  // other sections as they finish, and events arrive gathered into a microtask, so a text missed so
-  // is **the same mark as a real failure**; stack **the text the event carried**. **Do not make it
+  // Caution: **Do not peek at what is in it at the time.** Other sections overwrite the bar's one
+  // slot as they finish, and events arrive gathered into a microtask. So a text missed that way is
+  // **the same mark as a real failure**. Stack **the text the event carried**. **Do not make it
   // a settled wait either** (saving slows as the document grows).
   const heard = [];
   new MutationObserver((recs) => {
@@ -53,7 +52,7 @@ function kspageProbeLocal(ks) {
   // Ctrl+S as a person presses it: whether the page took it over. Untaken, the browser's own "save
   // the page" runs, and this HTML falls rather than the document.
   // Caution: **Press it in this section alone.** Taken over, it really saves, and the save waits on
-  // the server, so pressed from another section it lands in the middle of this one's saves and
+  // the server. Pressed from another section, it lands in the middle of this one's saves. It then
   // writes its own place into the field (the later save to finish wins).
   const saveKey = () => {
     const key = new KeyboardEvent("keydown",
@@ -72,8 +71,8 @@ function kspageProbeLocal(ks) {
     ks.pickFile(document.getElementById("image-file"), onePixelPng, fileName, "image/png");
   // The text that goes into the document when it is embedded.
   // Caution: **Do not look at it by a count.** This section overlaps the later ones, so **a picture
-  // another section put in between** rides on a before-and-after count; hunted by its own picture's
-  // text, it does not sway.
+  // another section put in between** rides on a before-and-after count. Hunted by its own
+  // picture's text, it does not sway.
   const asEmbedded = "data:image/png;base64," + btoa(
     String.fromCharCode.apply(null, Array.from(onePixelPng)));
 
@@ -84,9 +83,8 @@ function kspageProbeLocal(ks) {
     "the token picked up is deleted from the URL");
 
   (async function () {
-    // **Do not let it fall to the browser's window even while it is empty** — fallen, it can save
-    // outside the folder served, where it cannot be reopened by place. The arena is the folder
-    // `kssrv` was roused on and the name is the menu bar's field, so it writes without asking.
+    // **With the path empty it writes too, without asking**: the folder is the one `kssrv` was
+    // started on and the name is the menu bar's field.
     const name = document.getElementById("doc-name");
     name.value = "firstsave";
     name.dispatchEvent(new Event("change", { bubbles: true }));
@@ -97,7 +95,7 @@ function kspageProbeLocal(ks) {
     ks.check(saveKey(), "Ctrl+S is taken over");
     // **Match as far as the extension, not the closing bracket** (a document with a history
     // declares that arena along with it). The default is `.kspage` (the settlement is
-    // `kspage/docs/DESIGN-application.md`'s "The extension is kspage's own, and does not name the format
+    // `kspage/docs/DESIGN-application.md`'s "The extension is kspage's own and names no format
     // inside").
     ks.check(await untilSays("Saved (firstsave.kspage"),
       "with the path empty it writes directly under the folder by the menu bar's name");
@@ -105,9 +103,12 @@ function kspageProbeLocal(ks) {
     ks.check(box.value === "firstsave.kspage",
       "the place written goes into the field");
     // Caution: **Do not overwrite silently what is already there.** The name's default is the same
-    // for everyone, so it can collide; on a collision it refuses and says where the field is.
-    box.value = "";
-    box.dispatchEvent(new Event("change", { bubbles: true }));
+    // for everyone, so it can collide; on a collision it refuses and says where the field is. The
+    // file clashed with is laid down by this check's own `fetch`: the one just written is this
+    // document's own, which a save goes back to.
+    await fetch(at("clash.kspage"), { method: "PUT", headers: head, body: "{}" });
+    name.value = "clash";
+    name.dispatchEvent(new Event("change", { bubbles: true }));
     clear();
     document.getElementById("save").click();
     ks.check(await untilSays("is already there"),
@@ -136,8 +137,8 @@ function kspageProbeLocal(ks) {
     const got = back.ok ? await back.text() : "";
     ks.check(back.ok, "the place saved can be read from the server");
     ks.check(got === want, "the text written comes back as a byte row");
-    // **Two presses at once save once** (a double click): two saves in flight compare against a
-    // text neither has recorded yet and can refuse as "changed outside", or open a second picker.
+    // **Two presses at once save once** (a double click). Two saves in flight compare against a
+    // text neither has recorded yet, and can refuse as "changed outside".
     // A third press after the first answer comes after anything the second would say.
     const savedHere = () => heard.filter((m) => m.indexOf("Saved (saved.kspage") >= 0).length;
     clear();
@@ -151,8 +152,8 @@ function kspageProbeLocal(ks) {
     ks.check(savedHere() === 2 && !heard.some((m) => m.indexOf("changed outside") >= 0),
       "two presses at once save once (" + heard.join(" / ") + ")");
 
-    // Opening by a place is the field's Enter (a location bar's shape). **"Open" is the browser's
-    // window**, with or without the server, as whoever arrived by a double-click expects.
+    // Opening by a place is the field's Enter (a location bar's shape); "Open" reads the same
+    // field (below).
     const enter = () => box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     clear();
     enter();
@@ -188,8 +189,8 @@ function kspageProbeLocal(ks) {
     // ----
     //
     // This exercises the page's path reader through the authenticated server API.
-    // Caution: **Do not shape it as standing the page up afresh with a `?doc=` URL** — every other
-    // section would run on a different document; `openDoc` calls the same way with one text.
+    // Caution: **Do not shape it as standing the page up afresh with a `?doc=` URL.** Every other
+    // section would run on a different document. `openDoc` calls the same way with one text.
     // **Point at a text no other section holds open.** One already open is shown where it is
     // ("Showed it"), which is not the reading.
     await fetch(at("pointed.kspage"), { method: "PUT", headers: head,
@@ -222,9 +223,8 @@ function kspageProbeLocal(ks) {
 
     // ---- Putting a picture in from a file at hand ----
     //
-    // **This can be seen nowhere else**: with the server there and a path set, the picture is
-    // **still embedded**, as on the side with none. One press does one thing whether a server
-    // runs or not.
+    // **This can be seen nowhere else**: with a path set, the picture is **still embedded**. The
+    // press decides it, not where the document lives.
     // Caution: **See that nothing is laid next to the document** — "it went in" passes either way.
     box.value = "saved.kspage";
     box.dispatchEvent(new Event("change", { bubbles: true }));
@@ -246,8 +246,7 @@ function kspageProbeLocal(ks) {
     // Caution: **Do not wait for a tiding** — this section overlaps the later ones, so the wait
     // lands inside a later section's tiding. **Whether it wrote back is told by reading the file
     // back.**
-    box.value = "saved.kspage";
-    box.dispatchEvent(new Event("change", { bubbles: true }));
+    ks.check(await ks.app.openDoc("saved.kspage"), "the document to write back is opened");
     clear();
     document.getElementById("save").click();
     ks.check(await untilSays("Saved ("), "it saves first itself");
@@ -313,14 +312,45 @@ function kspageProbeLocal(ks) {
     // Put back what the page last saved, so the sections below start from a file it wrote.
     await fetch(at("mine.kspage"), { method: "PUT", headers: head, body: keep });
 
+    // ---- A request the server never answers ----
+    //
+    // Caution: **A save waiting for good swallows every later press** (one save at a time). A
+    // browser holds six connections to one server and each kspage tab keeps one, so a seventh
+    // tab's request waits so. This stand-in holds `/api/stat` until the page gives up, with the
+    // page's limit shortened; every other request keeps a limit of its own, long enough.
+    const realTimeout = AbortSignal.timeout;
+    AbortSignal.timeout = () => realTimeout.call(AbortSignal, 50);
+    window.fetch = (url, opts) => {
+      const sig = opts && opts.signal;
+      if (String(url).indexOf("/api/stat") < 0) {
+        return realFetch(url, Object.assign({}, opts || {},
+          { signal: realTimeout.call(AbortSignal, 15000) }));
+      }
+      return new Promise((_, no) => {
+        if (sig) sig.addEventListener("abort", () => no(sig.reason));
+      });
+    };
+    try {
+      clear();
+      document.getElementById("save").click();
+      ks.check(await untilSays("did not answer"),
+        "a request the server never answers is given up, saying why");
+    } finally {
+      AbortSignal.timeout = realTimeout;
+      window.fetch = realFetch;
+    }
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("Saved (mine.kspage"), "a save after one given up goes through");
+
     // ---- Opening a different document in a different window ----
     //
-    // **This can be seen nowhere else**: an opened window declares itself to the opener, and one
-    // that takes the other's document then lets the `?doc=` document **vanish silently**.
+    // **This can be seen nowhere else.** An opened window declares itself to the opener. One that
+    // takes the other's document then lets the `?doc=` document **vanish silently**.
     // Caution: **Settle it by whether it is pointed at** (by whether it could be read, one that
     // could not becomes the other's twin).
     // The opened side's DOM cannot be drawn out, so it asks for the text (**a key apart from the
-    // twin's**, `probe: "solo?"`). **Do not settle it by the first answer**: the other side answers
+    // twin's**, `probe: "solo?"`). **Do not settle it by the first answer.** The other side answers
     // once `window.kspage` stands, before the `?doc=` document loads, so the first answer is **the
     // sample**. At the cap the last answer goes onto the marks, telling "no answer" from "a
     // different document".
@@ -378,10 +408,10 @@ function kspageProbeLocal(ks) {
 
     // ---- Editing the plain text shape (`.txt` and source) as it stands ----
     //
-    // **This can be seen nowhere else**: the page settles the shape from the name, so the wasm
-    // misses "it was writing back as JSON". **Write it back without changing one byte** — a text is the compiler's input, and a
-    // dropped trailing space makes a different file; the shapes easiest to drop are put in on
-    // purpose.
+    // **This can be seen nowhere else.** The page settles the shape from the name, so the wasm
+    // misses "it was writing back as JSON". **Write it back without changing one byte.** A text is
+    // the compiler's input, and a dropped trailing space makes a different file. The shapes
+    // easiest to drop are put in on purpose.
     const src = "fn main(): I32 {\n\treturn 0;   \n}\n\n\n# this is no heading\n- nor a bullet";
     const srcPut = await fetch(at("main.kspl"),
       { method: "PUT", headers: head, body: src });
@@ -414,8 +444,8 @@ function kspageProbeLocal(ks) {
 
     // ---- The file open comes out on the band ----
     //
-    // **This can be seen nowhere else** (what opens and the adornment's rules in step): **the name
-    // always remains** and **pointing at it reads the whole thing**.
+    // **This can be seen nowhere else** (what opens and the adornment's rules in step). **The name
+    // always remains**, and **pointing at it reads the whole thing**.
     await fetch(at("lib/deep.kspl"), { method: "PUT", headers: head,
       body: "fn deep(): I32 {\n  return 3;\n}\n" });
     clear();
@@ -436,7 +466,7 @@ function kspageProbeLocal(ks) {
     // **This can be seen nowhere else** (what opens, and the drafts' store, in step): **nothing is
     // lost** and **it can be brought back**.
     const scratchText = "fn one(): I32 {\n  return 1;\n}\n";
-    // Whether this page can hold drafts at all: **a page that cannot remember holds none**, so
+    // Whether this page can hold drafts at all. **A page that cannot remember holds none**, so
     // there a missing draft says nothing (as in the keep probe).
     const keeps = ks.app.keepStore;
     const PLANT = "b-probe-local/0";
@@ -517,10 +547,9 @@ function kspageProbeLocal(ks) {
     ks.check(!canKeep || heldChosen.length === 0, "the saved replacement is not kept as a draft");
     const keptYy = await heldWith("yy");
     ks.check(!canKeep || keptYy.some((one) => one.from === "keepme.kspl"),
-      "what was typed before the window opened is held back ("
+      "what was typed before Open is held back ("
         + (canKeep ? keptYy.length : "this page cannot remember") + ")");
-    // **A `.md` chosen in the file field (a browser without the window) sets aside the same way**,
-    // and opens as the plain text it is.
+    // **A dropped `.md` sets aside the same way**, and opens as the plain text it is.
     typeAtEnd("ww");
     const byMd = ks.app.keepCount();
     clear();
@@ -528,12 +557,12 @@ function kspageProbeLocal(ks) {
     dropped.items.add(new File(["# Taken in\n\nA line taken in.\n"], "taken.md",
       { type: "text/markdown" }));
     window.dispatchEvent(new DragEvent("drop", { dataTransfer: dropped, cancelable: true }));
-    ks.check(await untilSays("Loaded it"), "a .md opens through the file field over typing");
+    ks.check(await untilSays("Loaded it"), "a dropped .md opens over typing");
     ks.check(ks.app.plainText() === "# Taken in\n\nA line taken in.\n",
-      "a .md chosen there opens as plain text (" + ks.app.plainText().slice(0, 12) + ")");
+      "a dropped .md opens as plain text (" + ks.app.plainText().slice(0, 12) + ")");
     ks.check(ks.app.keepCount() === byMd + 1,
       "the document typed in is set aside when a .md opens (" + ks.app.keepCount() + ")");
-    ks.check(ks.app.pathNow() === "" && box.value === "", "a .md from the file field lives in no file");
+    ks.check(ks.app.pathNow() === "" && box.value === "", "a dropped .md lives in no file");
     ks.check(document.getElementById("doc-name").value === "taken.md",
       "an imported text keeps its extension for its first save");
     clear();
@@ -555,7 +584,7 @@ function kspageProbeLocal(ks) {
     ks.check(ks.app.pathNow() === "" && box.value === "",
       "the manual lives in no file (" + ks.app.pathNow() + ")");
     // It tidies up the drafts this section set aside in the store.
-    // Caution: **Do not throw them all away** ("Throw the drafts away" takes every one): the keep
+    // Caution: **Do not throw them all away** ("Throw the drafts away" takes every one). The keep
     // section is still looking for its own in the store.
     for (const mark of ["zz", "yy", "ww", "vv"]) {
       for (const one of await heldWith(mark)) await keeps.dropDraft(one.at);
@@ -563,8 +592,8 @@ function kspageProbeLocal(ks) {
 
     // ---- A picture beside the document is read with the token ----
     //
-    // **The server hands out no file but the page without the token**, and an `<img>` sends none,
-    // so a picture beside the document is read through the API (`localPicture` in the page's
+    // **The server hands out no file but the page without the token**, and an `<img>` sends none.
+    // So a picture beside the document is read through the API (`localPicture` in the page's
     // `local.js`). This is the only place a real server shows the two meeting.
     const dot = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4" +
       "2mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -578,6 +607,68 @@ function kspageProbeLocal(ks) {
     const size = await ks.app.measureImage("lib/dot.png");
     ks.check(size !== null && size[0] === 1 && size[1] === 1,
       "a picture beside the document is read with the token (" + JSON.stringify(size) + ")");
+    // **A relative place is read from the document's folder**, whichever folder the server
+    // publishes. Otherwise the same document shows its pictures under one server and not another.
+    ks.check(await ks.app.openDoc("lib/deep.kspl"), "a document in a folder opens for a picture");
+    const besideDeep = await ks.app.measureImage("dot.png");
+    ks.check(besideDeep !== null && besideDeep[0] === 1,
+      "a relative picture is read from the document's folder ("
+        + JSON.stringify(besideDeep) + ")");
+    ks.check(await ks.app.measureImage("lib/dot.png") === null,
+      "a relative picture is not read from the served folder's top");
+
+    // ---- What an open refuses, a save does not overwrite ----
+    //
+    // Caution: **Put the field back when an open is refused.** The field is where a save goes, so
+    // left holding the refused path, the next save writes this document over that file.
+    const bytesAt = async (path) => new Uint8Array(
+      await (await fetch(at(path), { headers: head })).arrayBuffer());
+    const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    const binary = new Uint8Array([0x61, 0x00, 0x62, 0x0a]);
+    await fetch(at("refused.txt"), { method: "PUT", headers: head, body: binary });
+    ks.check(await ks.app.openDoc("chosen.kspage"), "a document is open before a refused open");
+    box.value = "refused.txt";
+    clear();
+    document.getElementById("open").click();
+    ks.check(await untilSays("is in it) (refused.txt)"),
+      "a refused open names its file, apart from the reason (" + heard.join(" / ") + ")");
+    ks.check(box.value === "chosen.kspage",
+      "a refused open puts the path field back (" + box.value + ")");
+    // **A path typed over another file is refused once**, as the empty field's name is; a second
+    // press is the person's own "replace it".
+    box.value = "refused.txt";
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("refused.txt is already there"),
+      "a save over a file this document did not come from is refused");
+    ks.check(sameBytes(await bytesAt("refused.txt"), binary), "the refused file keeps its bytes");
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("Saved (refused.txt"), "a second press replaces it");
+    ks.check(new TextDecoder().decode(await bytesAt("refused.txt")) === ks.app.save(),
+      "the second press writes this document");
+
+    // ---- Only UTF-8 is read, and a BOM is kept ----
+    //
+    // Caution: **Refuse a text that is not UTF-8.** Decoded loosely, each wrong byte becomes a
+    // replacement character, and the save writes those over the file (Shift_JIS here).
+    const sjis = new Uint8Array([0x82, 0xa0, 0x82, 0xa2, 0x82, 0xa4, 0x0a]);
+    await fetch(at("sjis.txt"), { method: "PUT", headers: head, body: sjis });
+    const beforeSjis = ks.app.pathNow();
+    clear();
+    ks.check(!(await ks.app.openDoc("sjis.txt")), "a text that is not UTF-8 is not opened");
+    ks.check(await untilSays("not UTF-8"), "it says the text is not UTF-8");
+    ks.check(ks.app.pathNow() === beforeSjis && box.value === beforeSjis,
+      "the document and its path stay as they were (" + ks.app.pathNow() + ")");
+    // **A BOM goes back as it came**, and the outside-change check reads it the same way.
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("a line\n")]);
+    await fetch(at("bom.txt"), { method: "PUT", headers: head, body: bom });
+    ks.check(await ks.app.openDoc("bom.txt"), "a text with a BOM opens");
+    clear();
+    document.getElementById("save").click();
+    ks.check(await untilSays("Saved (bom.txt"),
+      "a text with a BOM saves (" + heard.join(" / ") + ")");
+    ks.check(sameBytes(await bytesAt("bom.txt"), bom), "the BOM is written back");
 
     // Caution: **Take the path off once the name is typed afresh**, or it keeps writing to the old
     // place.
@@ -587,7 +678,7 @@ function kspageProbeLocal(ks) {
     name.dispatchEvent(new Event("change", { bubbles: true }));
     ks.check(box.value === "", "changing the name takes the path off");
   })().then(done, (e) => {
-    // Caution: **Always let go, even on falling** — held, it runs out of time with not one mark put
+    // Caution: **Always let go, even on falling.** Held, it runs out of time with not one mark put
     // out, and **which check fell is not left behind either** (`probe.js`'s `hold`).
     ks.check(false,
       "the section finishes without falling (" + String((e && e.stack) || e) + ")");

@@ -8,8 +8,8 @@ import "std/ds" + { List }
 import "std/libc"
 import "std/mem" + { Arena, alloc, dealloc }
 // Caution: **Keep this import even if nothing here seems to call it.** It brings each type's `fmt`,
-// which `\{x\}` calls, into every program that uses this file (the call is made inside `put`, which
-// needs no import); `to_hex_lower` is its only direct use.
+// which `\{x\}` calls, into every program that uses this file. The call is made inside `put`, which
+// needs no import. `to_hex_lower` is its only direct use.
 import "std/strfmt"
 
 pub enum Str_error //< why a string could not be parsed
@@ -38,7 +38,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         //< a string with `0x01`. U8[]'s unescape_to_arena decodes it; changing only one breaks the
         //< round trip. A byte that is not well-formed UTF-8 is written as U+FFFD.
         r: Self$@,
-        src: U8[], //< the plain text, not yet escaped; it may be a view of this builder's bytes
+        src: U8[], //< the plain text, not yet escaped; it can be a view of this builder's bytes
     ): Self$@
         // Caution: **Escape from a copy when `src` lies in this builder's memory.** A write can
         // move the buffer out from under it, and what is written can land on bytes not yet read.
@@ -55,13 +55,12 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
             // 8259 §8.1), so std/json's parser refuses it, and the writer's output would not read
             // back.
             if c >= 0x80U8
-                n: = src.utf8_seq_len(i)
-                if n == 0
-                    r.s("\uFFFD")
-                    i += 1
-                else
+                if n: = src.utf8_seq_len(i)
                     r.s(src.sub(i, n))
                     i += n
+                else
+                    r.s("\uFFFD")
+                    i += 1
                 continue
             switch c
             case '"'
@@ -92,7 +91,7 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
 
     pub fn drop_prefix( //< drops the leading bytes and moves the rest to the start
         //<
-        //< For removing a message already read from a receive buffer, which may hold the start of
+        //< For removing a message already read from a receive buffer, which can hold the start of
         //< the next one. It frees no memory: a long-lived buffer stays at the size of the longest
         //< message.
         r: Self$@,
@@ -111,9 +110,9 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
     #inline
     pub fn s(r: Self$@, s: U8[]): Self$@ //< writes a string, growing if needed
         //<
-        //< `s` may be a view of this builder's own bytes (`b.s(b.slice())`).
+        //< `s` can be a view of this builder's own bytes (`b.s(b.slice())`).
         if s.len > 0
-            // Caution: **Read `s` before the old buffer is freed, and with `move`.** It may be a
+            // Caution: **Read `s` before the old buffer is freed, and with `move`.** It can be a
             // view of this buffer: growing frees it, and a view taken before `clear()` can overlap
             // where the bytes land.
             old: = r.grow(r.len + s.len)
@@ -152,8 +151,8 @@ impl Str_builder: Writer //< so it can be used anywhere a `Writer` is expected
         for cap < new_cap
             doubled: = cap * 2
             if doubled <= cap
-                // cap*2 wraps near Sz's upper bound (it can become 0), so use new_cap as it is; an
-                // absurdly large new_cap is caught by the alloc that follows.
+                // cap*2 wraps near Sz's upper bound (it can become 0), so use new_cap as it is. The
+                // alloc that follows catches an absurdly large new_cap.
                 cap = new_cap
                 break
             cap = doubled
@@ -188,8 +187,8 @@ impl Str_builder: Formattable //< so it can be used inside an interpolation
 
 impl U8[]: ds.Hashable<|U8[]|> //< so a string can be a `Map`'s key
     //<
-    //< `Eq` (what `==` desugars to) is deliberately not implemented: `equals` is an O(N) comparison
-    //< of contents, and written as `==` it would look the same as a pointer comparison.
+    //< `Eq` (what `==` desugars to) is deliberately not implemented. `equals` is an O(N) comparison
+    //< of contents. Written as `==`, it would look the same as a pointer comparison.
     pub fn hash(r: U8[]): U32 //< a hash of the contents that spreads keys over the buckets
         $h: = U32::2166136261
         for i in Range.asc(r.len)
@@ -270,8 +269,8 @@ impl U8[]
         b.s(r.sub_from(pos))
         return arena.dup_str(b.slice())
 
-    // Use this for a text file, not `split('\n', ...)`: lines of a CRLF file from Windows would
-    // keep the `\r` and not compare equal, and `"a\n"` would give two elements rather than one
+    // Use this for a text file, not `split('\n', ...)`. Lines of a CRLF file from Windows would
+    // keep the `\r` and not compare equal. And `"a\n"` would give two elements rather than one
     // line.
     pub fn lines( //< the lines, without trailing `\r` and with no empty line after the last newline
         r: U8[],
@@ -340,18 +339,19 @@ impl U8[]
                 i += 1
                 ec: = (r.ptr + i)$
                 if ec == 'u'
-                    cp: = r.hex4(i + 1)
-                    if cp < 0
+                    $code: I32 = 0
+                    if cp: = r.hex4(i + 1)
+                        code = cp
+                    else
                         throw .invalid_format
-                    $code: I32 = cp
                     $adv: I32 = 5
                     // Only a low surrogate right after a high one combines into one code point.
                     if code >= 0xD800 && code <= 0xDBFF && i + 6 < r.len &&
                         (r.ptr + i + 5)$ == '\\' && (r.ptr + i + 6)$ == 'u'
-                        lo: = r.hex4(i + 7)
-                        if lo >= 0xDC00 && lo <= 0xDFFF
-                            code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
-                            adv = 11
+                        if lo: = r.hex4(i + 7)
+                            if lo >= 0xDC00 && lo <= 0xDFFF
+                                code = 0x10000 + ((code - 0xD800) * 0x400) + (lo - 0xDC00)
+                                adv = 11
                     // Caution: **Do not let an unpaired surrogate through.** Copied to UTF-8 it
                     // makes an invalid three-byte sequence that looks readable and fails only
                     // at a later check or in another language's string type. It is treated the
@@ -407,7 +407,7 @@ impl U8[]
         min_indent: = prefix.len
         // Pass 2: emit each line without the minimum indent. **A whitespace-only line becomes
         // empty** (like Python's textwrap.dedent and Java's stripIndent), not invisible trailing
-        // whitespace; its newline is kept, so a whitespace-only CRLF line becomes `\r\n`.
+        // whitespace. Its newline is kept, so a whitespace-only CRLF line becomes `\r\n`.
         i = 0
         is_empty_line = true
         $skip_count: Sz = 0
@@ -438,8 +438,8 @@ impl Str_builder: Owned {} //< it owns its resources and frees them with `free()
 
 // Caution: **Call `take()`.** Without it the builder's memory leaks (`make debug` fails at the end
 // with "Should be 0 - memory leak").
-// It remembers the arena, so the text cannot end up in the wrong place (how to choose among the
-// three write targets is in std/docs/DESIGN-core.md).
+// It remembers the arena, so the text cannot end up in the wrong place. How to choose among the
+// three write targets is in std/docs/DESIGN-core.md.
 //   name: = arena.text().s("layer.\{i\}.weight").take();
 pub struct Arena_text //< a short-lived builder that leaves the finished text in the arena
     priv b: Str_builder

@@ -2,14 +2,14 @@
 //< The generic matrix: each shape a generic takes, reached each way, written in each position
 //<
 //< A cell compiles and prints its value on both backends, or is refused at the user's line with
-//< the language's words; the table and the rules deciding which are
-//< `tests/support/generic_matrix_table.kspl`. **ksplc's output always compiles**: a C compiler or
-//< LLVM refusing it, or the two backends printing different values, fails the cell whatever was
-//< expected, since only ksplc can be wrong there. A cell the language leaves open may do either,
+//< the language's words. The table and the rules deciding which are in
+//< `tests/support/generic_matrix_table.kspl`. **ksplc's output always compiles.** A C compiler
+//< or LLVM refusing it, or the two backends printing different values, fails the cell whatever
+//< was expected. Only ksplc can be wrong there. A cell the language leaves open can do either,
 //< and is listed (`# left open`) for a decision.
 //< Caution: **The cells are batched, one program per shape and way of reaching it for those that
-//< run, and one for those refused**; a batch that does not hold is taken apart and each of its
-//< cells judged alone, so a fault is named by its cell and no cell hides another's.
+//< run, and one for those refused.** A batch that does not hold is taken apart, and each of its
+//< cells is judged alone. So a fault is named by its cell, and no cell hides another's.
 
 // ==========================================
 //   make test-generic-matrix   … this suite
@@ -46,7 +46,7 @@ priv struct Ran //< what one program came to
     stage: U8[] //< the step that failed, empty where it built and ran on both backends
     detail: U8[] //< that step's output
     said: U8[] //< ksplc's output for the C backend
-    code: I32 //< ksplc's exit code for the C backend
+    code: I32? //< ksplc's exit code for the C backend; none where it did not end
     out_c: U8[] //< what the C backend's executable printed
     out_l: U8[] //< what the LLVM backend's executable printed
 
@@ -206,10 +206,10 @@ priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|
         if u.runs
             l: = gen.get(k)
             k += 1
-            if c.code != 0
+            if !c.exited_with(0)
                 r.stage = "ksplc refused it (C backend)"
                 r.detail = c.out
-            else if l.code != 0
+            else if !l.exited_with(0)
                 r.stage = "ksplc refused it (LLVM backend)"
                 r.detail = l.out
             else
@@ -234,10 +234,10 @@ priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|
         bl: = built.get(k + 1)
         k += 2
         $r: = ran.get(i)
-        if bc.code != 0
+        if !bc.exited_with(0)
             r.stage = "the C compiler refused ksplc's C"
             r.detail = bc.out
-        else if bl.code != 0
+        else if !bl.exited_with(0)
             r.stage = "LLVM refused ksplc's IR"
             r.detail = bl.out
         else
@@ -256,10 +256,11 @@ priv fn run_units(units: List<|Unit|>@, round: U8[], arena: Arena$@): List<|Ran|
         $r: = ran.get(i)
         r.out_c = oc.out
         r.out_l = ol.out
-        if oc.code != 0 || ol.code != 0
+        if !oc.exited_with(0) || !ol.exited_with(0)
             r.stage = "a built program did not end with 0"
-            r.detail = arena.text().s("C: exit \{oc.code\}\n\{oc.out\}\nLLVM: exit \{ol.code\}\n")
-                .s(ol.out).take()
+            r.detail = arena.text()
+                .s("C: exit \{oc.code.unwrap_or(-1)\}\n\{oc.out\}\nLLVM: exit \
+                    \{ol.code.unwrap_or(-1)\}\n").s(ol.out).take()
         ran.set(i, r)
     return ran
 
@@ -307,7 +308,7 @@ priv fn says_one(line: U8[], says: U8[], arena: Arena$@): Bool //<
 
 priv fn judge_refusal(c: Cell@, mark: Sz, named: List<|Sz|>@, r: Ran@, arena: Arena$@): U8[] //<
     //< Why a refused cell fails, or empty
-    if r.code == 0
+    if r.code.unwrap_or(-1) == 0
         return arena.text().s("ksplc accepted it; expected '").s(c.o.says).s("'").take()
     if r.said.find_str("[ICE]").is_some()
         return arena.text().s("ksplc stopped on an internal error\n")
@@ -338,7 +339,7 @@ priv fn judge_refusal(c: Cell@, mark: Sz, named: List<|Sz|>@, r: Ran@, arena: Ar
 
 priv fn judge_open(c: Cell@, mark: Sz, r: Ran@, arena: Arena$@): U8[] //<
     //< Why a cell the language leaves open fails: neither a run nor a refusal at its line
-    if r.code == 0
+    if r.code.unwrap_or(-1) == 0
         return judge_run(c, r, arena)
     if r.said.find_str("[ICE]").is_some()
         return arena.text().s("ksplc stopped on an internal error\n")
@@ -365,7 +366,7 @@ priv fn refused_here(ci: Sz, units: List<|Unit|>@, ran: List<|Ran|>@): Bool //<
     for ui in Range.asc(units.len)
         u: = units.get(ui)
         if u.cells.len == 1 && u.cells.get(0) == ci
-            return ran.get(ui).code != 0
+            return ran.get(ui).code.unwrap_or(-1) != 0
     return false
 
 fn main(): I32
@@ -418,7 +419,7 @@ fn main(): I32
         why.push("")
         where.push("")
     // A running batch that built and ran names each cell's value on its own line, so its verdicts
-    // stand; a refused cell is judged alone unless its batch already shows its refusal.
+    // stand. A refused cell is judged alone unless its batch already shows its refusal.
     $alone: = List<|Unit|>.new(arena)
     for ui in Range.asc(units.len)
         u: = units.get(ui)

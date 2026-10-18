@@ -1,8 +1,9 @@
 //< Every std function that takes an arena, called with `null`: it works on the heap instead
 //<
 //< **`make test-conventions` holds each such function to a call with `null` in std's tests**, most
-//< of them here. Where the summary says how to free the result, the heap is checked to come back
-//< to where it stood once that is done, so neither the result nor the work behind it is lost.
+//< of them here. Where the summary says how to free the result, the test checks the heap after
+//< that free. The heap must come back to where it stood, so neither the result nor the work
+//< behind it is lost.
 import "std/argp"
 import "std/base64"
 import "std/ds" { List, Map }
@@ -24,8 +25,8 @@ import "std/sys"
 import "std/url"
 import "std/verdict"
 
-// The arena here is null, so what it hands out is heap memory, which `dealloc` frees ([W0104],
-// a pointer an arena handed out reaching `dealloc`, cannot see that the arena is null).
+// The arena here is null, so what it hands out is heap memory, which `dealloc` frees. [W0104]
+// (a pointer an arena handed out reaching `dealloc`) cannot see that the arena is null.
 ##lint(W0104 = off)
 
 priv struct Null_probe //< a struct `into_struct` fills from JSON
@@ -41,6 +42,17 @@ priv const probe_fields: reflect.Field_info[2] = ::{::{ .name = "name",
 impl Null_probe: reflect.Reflectable
     fn fields(_r: Self): reflect.Field_info[]
         return reflect.Field_info[]::probe_fields
+
+priv struct Name_list //< a struct whose one field is a list of strings
+    names: List<|U8[]|>
+
+priv const name_list_fields: reflect.Field_info[1] = ::{::{ .name = "names",
+    .offset = offsetof(Name_list, names), .kind = .list_field,
+    .extra = ::{ .elem = .str_field, .elem_size = sizeof(U8[]) } } }
+
+impl Name_list: reflect.Reflectable
+    fn fields(_r: Self): reflect.Field_info[]
+        return reflect.Field_info[]::name_list_fields
 
 priv fn freed(s: U8[]) //< gives back one block a null arena handed out
     dealloc(Void$@::s.ptr)
@@ -126,17 +138,17 @@ fn test_null_arena_lists() //< the functions that return a list, which frees wit
     $nums: = List<|I32|>.new_with_cap(4, null)
     for n in Range.asc(5)
         nums.push(I32::n)
-    $odd: = nums.where(fn(n: I32; ): Bool {
-        return n % 2 == 1;
+    $odd: = nums.where(fn(n: I32@; ): Bool {
+        return n$ % 2 == 1;
     }).to_list(null)
     $twice: = nums.select(fn(n: I32; ): I32 {
         return n * 2;
     }).to_list(null)
-    $once: = nums.distinct(fn(a: I32, b: I32; ): Bool {
-        return a == b;
+    $once: = nums.distinct(fn(a: I32@, b: I32@; ): Bool {
+        return a$ == b$;
     }, null)
-    $sorted: = nums.order_by(fn(a: I32, b: I32; ): I32 {
-        return b - a;
+    $sorted: = nums.order_by(fn(a: I32@, b: I32@; ): I32 {
+        return b$ - a$;
     }, null)
     $head: = nums.take(2, null)
     $tail: = nums.skip(2, null)
@@ -167,12 +179,13 @@ fn test_null_arena_json() //< a JSON document, and a builder, free with their ow
     before: = mem.heap_used_bytes()
     doc: = json.parse("{\"a\":[1,\"x\",{\"b\":null}],\"c\":\"d\"}", null) catch
         panic("an object parses")
-    assert(doc.val.get("a").get_at(1).as_str().equals("x") &&
-        doc.val.get("c").as_str().equals("d"), "a document parsed with a null arena reads")
+    assert(doc.val.get("a").get_at(1).as_str().unwrap_or("").equals("x") &&
+        doc.val.get("c").as_str().unwrap_or("").equals("d"),
+        "a document parsed with a null arena reads")
     doc.free()
     back_to(before, "a parsed document frees all of itself")
     top: = json.parse("\"s\"", null) catch panic("a lone string parses")
-    assert(top.val.as_str().equals("s"), "a lone string on the heap")
+    assert(top.val.as_str().unwrap_or("").equals("s"), "a lone string on the heap")
     top.free()
     n: = json.parse("7", null) catch panic("a lone number parses")
     n.free()
@@ -201,25 +214,50 @@ fn test_json_doc_val_switch() //<
         switch doc.val
         case .str_val(s)
             seen += 1 if s.equals("s") else 0
-        case .array_val(head)
-            seen += 1 if head.val.as_int(0) == 1 else 0
+        case .array_val(a)
+            seen += (1
+                if json.Val.array_val(a).get_at(0).as_int().unwrap_or(0) == 1 else 0)
         case .obj_val(o)
-            seen += 1 if json.Val.obj_val(o).get("k").as_int(0) == 2 else 0
+            seen += (1
+                if json.Val.obj_val(o).get("k").as_int().unwrap_or(0) == 2 else 0)
         default {}
     assert(seen == 3, "each variant binds its one field")
     back_to(before, "each document frees at the end of its turn")
     verdict.pass("A switch over a document's value binds each variant's one field.")
 
+fn test_null_arena_refused_list() //<
+    //< a list refused part way frees with the cleanup `into_struct` documents
+    verdict.start("[json] a list into_struct refused part way, freed as documented test...")
+    before: = mem.heap_used_bytes()
+    doc: = json.parse("{\"names\":[\"a\",1,\"c\"]}", null) catch panic("the fixture parses")
+    $out: Name_list = ::{}
+    $refused: = false
+    json_struct.into_struct(doc.val, out@, null) catch
+        refused = true
+    assert(refused, "an element of another kind refuses the list")
+    // **The elements past the refusal are not counted**: their memory holds nothing written.
+    assert(out.names.len == 2 && out.names[0].equals("a") && out.names[1].len == 0,
+        "a refused list counts what was written, the refused element zeroed")
+    freed_all(out.names@)
+    doc.free()
+    back_to(before, "a refused list frees with each string, then the list")
+    verdict.pass("A list refused part way holds only what was written, and frees as documented.")
+
+priv fn query_refused(text: U8[]): Bool //< whether `parse_query` refuses text, freeing what it took
+    $q: = url.parse_query(text, null) catch
+        return true
+    q.free()
+    return false
+
 fn test_null_arena_messages() //< a query, headers, a message and a parser free with `free()`
     verdict.start("[std] null as the arena for a query, headers, a message and a parser test...")
     before: = mem.heap_used_bytes()
-    q: = url.parse_query("a=1&b=2", null) catch panic("a query parses")
-    assert(q.next.value.equals("2"), "parse_query with a null arena")
-    q.next.free() // a pair further down owns nothing
-    assert(q.next.name.equals("b"), "freeing a later pair frees nothing")
+    $q: = url.parse_query("a=1&b=2", null) catch panic("a query parses")
+    assert(q.find("b").unwrap_or("").equals("2"), "parse_query with a null arena")
     q.free()
-    _broken: = url.parse_query("a=1&b=%zz", null) catch null
-    none: = url.parse_query("", null) catch panic("an empty query parses")
+    assert(query_refused("a=1&b=%zz"), "a broken escape is refused")
+    $none: = url.parse_query("", null) catch panic("an empty query parses")
+    assert(none.is_empty(), "an empty query holds no pair")
     none.free()
     back_to(before, "a query frees with free(), and a refused one leaves nothing")
     $head_only: = http.headers(null).add("Host", "h").add("Accept", "*/*").build()
@@ -254,8 +292,8 @@ fn test_null_arena_messages() //< a query, headers, a message and a parser free 
 fn test_null_arena_work_is_freed() //< a function frees the work it does not return
     verdict.start("[std] null as the arena: the work behind a result is freed test...")
     src: = "GET / HTTP/1.1\r\nHost: h\r\n\r\n"
-    // A parse adds the test's own arguments to the parser, so the first parse comes before the
-    // count and the second adds no more than the room the first made.
+    // A parse adds the test's own arguments to the parser. So the first parse comes before the
+    // count, and the second adds no more than the room the first made.
     p: = argp.Parser.create("probe", "a null arena", null)
     defer p.free()
     p.positional("[anything]")
@@ -306,19 +344,20 @@ fn test_null_arena_children(ksplc: U8[]) //< the functions that run a child
     out: = subproc.run(argv, "", 60000, 4096, null) catch panic("the child runs")
     assert(out.len > 0, "run with a null arena")
     freed(out)
-    r: = subproc.run_capture(argv, "", 60000, 4096, null)
+    r: = subproc.run_capture(argv, "", 60000, 4096, null) catch panic("the child must start")
     text: = r.text(null)
     assert(text.len > 0, "run_capture and text with a null arena")
     freed(text)
     freed(r.stdout_data)
     freed(r.stderr_data)
-    gone: = subproc.run_capture(U8[][]::{ "out/tmp/kspl_test_null_arena/no_such_program" }, "",
-        60000, 4096, null)
-    assert(gone.spawn_failed, "a child that cannot start is said so")
-    freed(gone.stdout_data)
-    freed(gone.stderr_data)
+    $refused: = false
+    _gone: =
+        subproc.run_capture(U8[][]::{ "out/tmp/kspl_test_null_arena/no_such_program" }, "", 60000,
+        4096, null) catch
+        refused = true
+    assert(refused, "a child that cannot start fails to start, and holds no output to free")
     one: = verdict.run_child(argv, "", 60000, null)
-    assert(one.code == 0, "run_child with a null arena")
+    assert(one.exited_with(0), "run_child with a null arena")
     freed(one.out)
     back_to(before, "a child's outputs free with dealloc, and the collecting leaves nothing")
 
@@ -329,19 +368,23 @@ fn test_null_arena_children(ksplc: U8[]) //< the functions that run a child
     fs.mkdir_all(work) catch panic("the jobs' folder can be made")
     before_many: = mem.heap_used_bytes()
     $many: = subproc.run_many(jobs, 1, 60000, 4096, work, null)
-    assert(many.len == 2 && many.get(0).exit_code == 0 && many.get(1).spawn_failed,
-        "run_many with a null arena")
-    for ran in many
+    $started: Sz = 0
+    for got in many
+        ran: = got catch
+            continue
+        assert(ran.exited_with(0), "run_many with a null arena")
+        started += 1
         freed(ran.stdout_data)
         freed(ran.stderr_data)
+    assert(many.len == 2 && started == 1, "run_many with a null arena: the second fails to start")
     many.free()
     $outs: = verdict.run_children(jobs, work, null)
-    assert(outs.len == 2 && outs.get(0).code == 0, "run_children with a null arena")
+    assert(outs.len == 2 && outs.get(0).exited_with(0), "run_children with a null arena")
     for ran in outs
         freed(ran.out)
     outs.free()
     $lost: = verdict.run_children(jobs, "out/tmp/kspl_test_null_arena/f/w", null)
-    assert(lost.len == 2 && lost.get(1).code == -1, "a work folder that cannot be made is said")
+    assert(lost.len == 2 && lost.get(1).code.is_none(), "a work folder that cannot be made is said")
     for ran in lost
         freed(ran.out)
     lost.free()
@@ -372,9 +415,8 @@ fn test_null_arena_fuzz() //< the fuzz driver's steps: a record frees with `free
     seeds.free()
     back_to(before, "the seeds free as gather's summary says, and the folders' work is gone")
     found: = fuzz.findings_new(null)
-    t: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = false,
-        .exit_code = 139, .stdout_data = "", .stderr_data = "", .output_lost = false },
-        .slow = false }
+    t: = fuzz.Trial::{ .got = subproc.Run_result::{ .exit_code = .some(139), .stdout_data = "",
+        .stderr_data = "", .output_lost = false }, .slow = false }
     fuzz.note(found, t@, 0, "seed", "data", dir, ".bin")
     assert(found.crashes.len == 1, "note into findings made with a null arena")
     found.free()

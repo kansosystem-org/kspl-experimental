@@ -1,12 +1,13 @@
 // On top of a real browser, it confirms kspage's entry points for input: this side lines the
-// sections up and turns them. **It looks at what can be seen nowhere else, and nothing more** (the
-// focus, whether an element counts as visible, how often one keystroke goes in); a headless
-// browser has no input method, so only "can composition begin here" is asked of it.
+// sections up and turns them. **It looks at what can be seen nowhere else, and nothing more.**
+// That is the focus, whether an element counts as visible, how often one keystroke goes in.
+// A headless browser has no input method, so only "can composition begin here" is asked of it.
 // It opens the built-up page with each section's text pasted behind it (`kspage/Makefile`'s
-// `KSPAGE_PROBE`) and reads the marks that `handBack` below writes back. **Fall over while the text is read and not one mark comes out**
-// (the DOM still does, so suspect a misspelling first).
-// Caution: **Each section is to make its own**: relying on what an earlier one left, a settlement
-// acting and an earlier section differing cannot be told apart; **the tools come in one bag**.
+// `KSPAGE_PROBE`). It reads the marks that `handBack` below writes back. **Fall over while the
+// text is read, and not one mark comes out** (the page itself still stands, so suspect a
+// misspelling first).
+// Caution: **Each section is to make its own.** Relying on what an earlier one left, a settlement
+// acting and an earlier section differing cannot be told apart. **The tools come in one bag.**
 
 (function () {
   const lines = [];
@@ -24,8 +25,9 @@
     speak(line);
   }
 
-  // What it waits on now, naming where the marks stop on a cut round; **not stacked onto the
-  // marks** (a wait swaps many times; the last will do), **silent when let go** (`waiting("")`).
+  // What it waits on now, naming where the marks stop on a cut round. **It is not stacked onto the
+  // marks** (a wait swaps many times; the last will do). **It is silent when let go**
+  // (`waiting("")`).
   let waitingFor = "";
   function waiting(what) {
     waitingFor = what;
@@ -36,7 +38,7 @@
   }
 
   // The head of one line. **Building the line's shape is this one place** (`make test-conventions`
-  // holds the table of where a line is built); a failing line in another shape does not reach
+  // holds the table of where a line is built). A failing line in another shape does not reach
   // `mk/ci.mk`'s summary (it picks up `^FAIL `).
   function head(mark, tag, what) {
     return mark + " " + (tag.length > 0 ? tag + ": " : "") + what;
@@ -62,7 +64,7 @@
 
   // The count of sections carrying asynchronous work.
   // Caution: **Do not put the marks out while a section still waits** (a check yet to arrive looks
-  // like "all passed"); the last to finish puts them out, so always let a held section go.
+  // like "all passed"). The last to finish puts them out, so always let a held section go.
   let holds = 0;
   let wanted = false;
   function hold() {
@@ -76,8 +78,8 @@
   }
 
   // A wait that looks until it comes out, and a safety net that says it could not be waited out.
-  // Caution: **Do not write the length of the wait per section** — a hand-written net comes out
-  // shorter than the real wait, names no bad wait, and fails rounds that were in time; this one
+  // Caution: **Do not write the length of the wait per section.** A hand-written net comes out
+  // shorter than the real wait, names no bad wait, and fails rounds that were in time. This one
   // place holds the length, and the sections write no milliseconds.
   const lookMs = 25;
   const looks = 40;
@@ -87,8 +89,8 @@
   // The count of waits in flight. **The safety net looks at this** (`netFor` below).
   let waits = 0;
 
-  // Caution: **Do not look once and give up** (the load and the redraw are asynchronous), and **go
-  // on to `then` even having given up** — a broken chain drops the checks behind it, unseen.
+  // Caution: **Do not look once and give up** (the load and the redraw are asynchronous). **Go
+  // on to `then` even having given up.** A broken chain drops the checks behind it, unseen.
   function waitFor(ready, what, then) {
     waits += 1;
     let looked = 0;
@@ -100,7 +102,8 @@
       clearInterval(watch);
       check(ready(), what);
       // Caution: **Drop the count only after `then` begins the next wait** (early, the net reads
-      // "no longer waiting" mid-chain); in a `finally`, so the net names what is left if it threw.
+      // "no longer waiting" mid-chain). Do it in a `finally`, so the net names what is left if it
+      // threw.
       try {
         then();
       } finally {
@@ -109,11 +112,11 @@
     }, lookMs);
   }
 
-  // **Do not cut it by a length** (a net from the chain's steps falls short once a step is added):
-  // **while a wait is in flight it waits again**, and it **says what is left by name**.
+  // **Do not cut it by a length**: a net from the chain's steps falls short once a step is added.
+  // **While a wait is in flight, it waits again**, and it **says what is left by name**.
   // Caution: **Where nothing is left, say nothing** (a passing round's mark would land behind the
-  // answer). Only a `waitFor` section uses it: a wait on an event is not on the count, so it reads
-  // 0 once armed (`open.js`'s pictures are that shape and keeps its length by hand).
+  // answer). Only a `waitFor` section uses it. A wait on an event is not on the count, so it reads
+  // 0 once armed. `open.js`'s pictures are that shape, and it keeps its length by hand.
   function netFor(what, left, free) {
     const look = () => {
       if (left().length === 0) {
@@ -129,12 +132,11 @@
     setTimeout(look, waitMs);
   }
 
-  // If the server is there, it returns the marks as a file too: drawing the DOM out waits for the
-  // browser to settle, so a round waiting on real time is cut before the marks are written, and the
-  // served gate waits for `BROWSER-RESULT` here instead (`kspage/Makefile`'s `test-served`).
-  // Caution: **Use the token this page holds** (taken from the same place as `local.js`), **return
+  // It returns the marks as a file through the server, and the served gate waits for
+  // `BROWSER-RESULT` there (`kspage/Makefile`'s `test-served`).
+  // Caution: **Use the token this page holds** (taken from the same place as `local.js`). **Return
   // them one at a time and never overlapping** (PUTs land in no settled order), ending at a line
-  // end. The waiting line carries the page's clock (real when served, virtual when dumped).
+  // end. The waiting line carries the page's clock.
   const began = Date.now();
   function handBackText() {
     if (waitingFor === "") return lines.join("\n") + "\n";
@@ -145,8 +147,8 @@
   let flying = false;
   let grew = false;
   // The local server's address, as one place: **the token, the address and the header restate
-  // `../../../docs/SPEC-local-server.md`** for `handBack` and every section asking for a file
-  // (written per caller, one lags when the header moves, reading as a real refusal). The token is
+  // `../../../docs/SPEC-local-server.md`** for `handBack` and every section asking for a file.
+  // Written per caller, one lags when the header moves, reading as a real refusal. The token is
   // empty if storage is unavailable, so callers check it first.
   function localHere() {
     let token = "";
@@ -190,28 +192,25 @@
       return;
     }
     reported = true;
-    const pre = document.createElement("pre");
-    pre.id = "kspage-probe";
     mark(failed === 0 ? "BROWSER-RESULT: ALL PASS" : "BROWSER-RESULT: " + failed + " FAILED");
     waitingFor = "";
-    pre.textContent = lines.join("\n");
-    document.body.appendChild(pre);
     handBack();
   }
 
-  // Stopped by an exception, the marks do not come out, so it is caught and carried onto the marks
-  // with the stack (the one place that says which entry point a fall inside the wasm came in by).
+  // Stopped by an exception, the marks do not come out. So it is caught and carried onto the marks
+  // with the stack. That is the one place that says which entry point a fall inside the wasm came
+  // in by.
   window.addEventListener("error", function (e) {
     const trail = (e.error && e.error.stack) || "";
     check(false, "the checks stopped on an exception (" + (e.message || e.error) + ")\n" + trail);
     report();
   });
 
-  // The window on the opened side: **the opening side alone turns this check** (the same text runs
-  // in both, and a second run writes the same files on the server); it answers only when asked.
+  // The window on the opened side: **the opening side alone turns this check**. The same text runs
+  // in both, and a second run writes the same files on the server. It answers only when asked.
   if (window.opener) {
     // The documents handed over from the opening side, **counted here, not in the page** (a field
-    // for the checks alone would stay in the product); the text alone cannot say "not handed over".
+    // for the checks alone would stay in the product). The text alone cannot say "not handed over".
     let handedDocs = 0;
     window.addEventListener("message", function (ev) {
       if (!ev.data) return;
@@ -220,8 +219,8 @@
       if (ev.data.probe === "text?") {
         ev.source.postMessage({ probe: "text", body: window.kspage.text() }, "*");
       }
-      // Caution: **Keep it apart from the key asking a twin for its text** (a section waiting on a
-      // twin would read another window's `probe: "text"` answer as its own).
+      // Caution: **Keep it apart from the key asking a twin for its text.** A section waiting on a
+      // twin would read another window's `probe: "text"` answer as its own.
       if (ev.data.probe === "solo?") {
         ev.source.postMessage({
           probe: "solo", body: window.kspage.text(), handed: handedDocs,
@@ -234,8 +233,8 @@
   }
 
   // It builds the tools handed over per section.
-  // Caution: **Build where it presses from the canvas's position now** — a remembered position goes
-  // stale as the window follows the cursor, and later presses land elsewhere.
+  // Caution: **Build where it presses from the canvas's position now.** A remembered position
+  // goes stale as the window follows the cursor, and later presses land elsewhere.
   function tools(app) {
     const canvas = document.getElementById("page");
     const ime = app.inputElement;
@@ -259,16 +258,16 @@
     // Caution: **Undo by the key** (called directly, a key not wired to the body walks past); it
     // returns the event, as `keyIn` does.
     const undoKey = () => keyIn("z", { ctrlKey: true });
-    // Menus. **Press the knob to open one, in the same order as a person** (`click()` reaches the
-    // content even shut, and merely standing `open` up skips the way the other menus shut).
+    // Menus. **Press the knob to open one, in the same order as a person.** `click()` reaches the
+    // content even shut, and merely standing `open` up skips the way the other menus shut.
     const menuOf = (id) => document.getElementById(id).closest("details.menu");
     const openMenu = (id) => {
       const m = menuOf(id);
       m.querySelector("summary").click();
       return m;
     };
-    // Submenus that jut out (`fly.js`), followed **in the same order as a person** (press the row,
-    // then the choice; on the ribbon's first row it opens on a press, `page.css`'s `.fly-on`). This
+    // Submenus that jut out (`fly.js`), followed **in the same order as a person**: press the row,
+    // then the choice. On the ribbon's first row it opens on a press (`page.css`'s `.fly-on`). This
     // does not tell whether the panel is visible (`click()` reaches hidden ones; `ribbon.js` does).
     const flyOf = (id) => document.getElementById(id);
     const flyRows = (id) => Array.from(flyOf(id).querySelectorAll(".fly-pick"));
@@ -285,7 +284,7 @@
       }
       return "";
     };
-    // Caution: **It presses a choice by name only where it is there** — taken as pressed, a missing
+    // Caution: **It presses a choice by name only where it is there.** Taken as pressed, a missing
     // name walks past with the default on, so whether it pressed is returned.
     const flyPick = (id, label) => {
       for (const one of flyRows(id)) {
@@ -323,8 +322,8 @@
       }
       return -1;
     };
-    // The document as saved, block by block (each with its `depth`) and whether its style lays it
-    // out as a grid: **what a section counts is the document, read from the one text that reads
+    // The document as saved, block by block (each with its `depth`), and whether its style lays it
+    // out as a grid. **What a section counts is the document, read from the one text that reads
     // back**, not from the screen.
     const savedBlocks = () => {
       const doc = JSON.parse(app.save());
@@ -366,8 +365,8 @@
       });
       return n;
     };
-    // The head of a place a fixture speaks of, **not opening with a folder this repo carries**
-    // (`make test-docref` would read it as a citation of a missing file).
+    // The head of a place a fixture speaks of, **not opening with a folder this repo carries**.
+    // `make test-docref` would read it as a citation of a missing file.
     const notAPath = "notes";
     return {
       notAPath: notAPath,
@@ -382,12 +381,12 @@
       hold: hold,
       // The wait and the safety net; **no milliseconds in a section** (why: `waitFor`'s comment).
       waitFor: waitFor, netFor: netFor,
-      // The wait on work off the page's thread (why: its own comment).
+      // A file chosen, as the choosing window would hand it (why: its own comment).
       pickFile: pickFile,
     };
   }
 
-  // It rouses the way onward from a file chosen: **the choosing window cannot open headless**, but
+  // It rouses the way onward from a file chosen. **The choosing window cannot open headless**, but
   // its result can be made (`files` from a `DataTransfer`, then `change`), so the page's way runs.
   // Caution: **Make the content real** (a picture, read in by its measures, refuses bad text).
   function pickFile(el, body, name, type) {
@@ -405,8 +404,8 @@
       return;
     }
     const ks = tools(app);
-    // The same bag under another tab, **for a section cut in two by the line limit** (the half that
-    // came away runs inside the other's chain, keeping the order, and still names itself).
+    // The same bag under another tab, **for a section cut in two by the line limit**. The half that
+    // came away runs inside the other's chain, keeping the order, and still names itself.
     // Caution: **Do not use it to run a section alongside another** (the row below sets the order).
     ks.tagged = (name) => forPart(ks, name);
     // The row of sections, the tabs named here (from the sections, they drift from the file names).
@@ -429,7 +428,7 @@
 
   // It starts when the page says it has stood up (`window.kspageReady`, `port/web/page.js`), and
   // marks the reason where the start failed.
-  // Caution: **Turn the sections in a task of their own, not in the promise's `then`**: a section
+  // Caution: **Turn the sections in a task of their own, not in the promise's `then`.** A section
   // that throws inside a `then` never reaches the `error` listener above, and its marks stop.
   if (!window.kspageReady) {
     runProbe(null, "the page publishes no window.kspageReady");

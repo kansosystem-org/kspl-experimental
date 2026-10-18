@@ -11,8 +11,8 @@ import "tools/ai_assist/ksplc_oracle" as oracle
 // ==========================================
 // Tests the functions that count the training material (`tools/ai_assist/corpus_count.kspl`).
 //
-// It is tested because **a mistake here breaks nothing visible**: a wrong word boundary or an
-// extra line gives a plausible number, which looks the same as the material growing.
+// It is tested because **a mistake here breaks nothing visible.** A wrong word boundary or an
+// extra line gives a plausible number. That looks the same as the material growing.
 // Caution: Test each case that matches together with one that does not.
 // ==========================================
 
@@ -62,8 +62,8 @@ fn test_the_token_estimate() //< the estimate is the larger of the length / 4 an
     verdict.pass("the estimate is the larger of the length / 4 and the word count, below neither.")
 
 // ==========================================
-// tools/ai_assist/ksplc_oracle: checks the compiler oracle on 0 errors, a type error, a syntax
-// error, an error after sema, the temporary file's removal, a stream with no closing object, and
+// tools/ai_assist/ksplc_oracle: checks the compiler oracle. The cases: 0 errors, a type error, a
+// syntax error, an error after sema, the temporary file's removal, a stream with no closing object,
 // JSONL. It really starts ksplc_stage1.exe (make debug depends on $(STAGE1_EXE), so it is built).
 // ==========================================
 fn test_compile_errors(arena: Arena$@) //< the count and the first error, from a real ksplc
@@ -72,9 +72,9 @@ fn test_compile_errors(arena: Arena$@) //< the count and the first error, from a
     good: = "fn main() {}\n"
     good_r: = oracle.compile_errors(good, "_oracle_test_good", arena)
     assert(good_r.error_count == 0, "valid source must compile with 0 errors")
-    kspls_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.kspl")
+    kspl_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.kspl")
     c_left: = fs.exists("tools/ai_assist/corpus/_oracle_test_good.c")
-    assert(!kspls_left && !c_left, "compile_errors must clean up its temp .kspl/.c files")
+    assert(!kspl_left && !c_left, "compile_errors must clean up its temp .kspl/.c files")
     assert(oracle.first_error(good_r.stderr_data, arena).len == 0, "a clean compile has no error")
 
     type_err: = "fn main()\n    x: I32 = \"not a number\"\n\n"
@@ -153,7 +153,9 @@ fn test_load_jsonl(arena: Arena$@) //< a JSONL file becomes one value per line
     fs.remove_path(fixture) catch {}
 
     assert(recs.len == 2, "blank lines must be skipped; exactly 2 records expected")
-    assert(recs[0].get("path").as_str().equals("a.kspl"), "record 0's 'path' must round-trip")
-    assert(recs[1].get("code").as_str().equals("y"), "record 1's 'code' must round-trip")
+    assert(recs[0].get("path").as_str().unwrap_or("").equals("a.kspl"),
+        "record 0's 'path' must round-trip")
+    assert(recs[1].get("code").as_str().unwrap_or("").equals("y"),
+        "record 1's 'code' must round-trip")
 
     verdict.pass("blank lines are skipped and each line's JSON is restored correctly.")

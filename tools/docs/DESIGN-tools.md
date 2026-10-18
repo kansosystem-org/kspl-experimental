@@ -32,11 +32,11 @@ The folder makes the training data, scores the completions and trains the model.
 
 The task is *fill-in-the-middle* (FIM): the model sees the code before and after a gap (a *hole*) and writes what goes in the gap.
 
-### The approach: borrow for training, use KSPL for checking and serving
+### The approach: borrow for training, KSPL for checking and serving
 
 | Part | What it uses |
 | :-- | :-- |
-| **Training** | may borrow an existing model: a large LLM, or LoRA fine-tuning of a small coding model (LoRA trains only a few added parameters, not the whole model) |
+| **Training** | It can borrow an existing model: a large LLM, or LoRA fine-tuning of a small coding model. (LoRA trains only a few added parameters, not the whole model.) |
 | **Checking** | KSPL's own tools: `ksplc` (compiling), `lint` and `fmt` |
 | **Serving** (running the model) | KSPL: inference runs on `ksai` with safetensors weights (`ksai/examples/fim_coder` and `ksai/examples/qwen_infer`) |
 
@@ -44,7 +44,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 **It lives in `tools/`, not in `ksai/`, because it imports nothing from the engine.** It starts the compiler and reads this repository as its corpus, so it runs only inside the whole tree. The engine's examples take the corpus and the tokenizer by path, and this folder runs them as processes.
 
-### The implementation language: KSPL for the data, the evaluation and the gate
+### Implementation language: KSPL for data, evaluation and the gate
 
 **Whatever reduces to the compiler oracle is KSPL.** Calling `ksplc` as a child process and judging the result needs no outside machine-learning library; it uses `run_capture` in [`std/subproc.kspl`](../../std/subproc.kspl).
 
@@ -63,7 +63,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 **A line the compiler accepts is not always the line meant.** Far fewer completions match the original line exactly. So the rate measures whether the code is valid KSPL, not whether it is right.
 
-**Settings are compared by the held-out loss, not by the compiler's rate.** The *held-out loss* is the model's error on code it was not trained on. At this model size, retraining one setting with only the random seed changed moves the compiler's rate more than changing the optimizer or the batch does. The held-out loss hardly moves. So `make fim-eval` prints the held-out loss (`fim_coder loss`) before the rates. The loss `train` prints is on its training data, so it cannot stand in for the held-out loss.
+**Settings are compared by the held-out loss, not by the compiler's rate.** The *held-out loss* is the model's error on code it was not trained on. At this model size, a retrain of one setting with only a new random seed moves the compiler's rate. It moves the rate more than a change of optimizer or batch does. The held-out loss hardly moves. So `make fim-eval` prints the held-out loss (`fim_coder loss`) before the rates. The loss `train` prints is on its training data, so it cannot stand in for the held-out loss.
 
 **The held-out loss is printed twice: over every position, and over the middle alone** (the hole's tokens and its end marker). The first is mostly the prefix and the suffix, which the model is given, not asked to write. The second is the task itself.
 
@@ -73,7 +73,7 @@ The task is *fill-in-the-middle* (FIM): the model sees the code before and after
 
 **The AI runs as its own process, not inside the language server** (the program that gives an editor its completions and diagnostics). A model inside the server's process costs memory and delay on every keystroke, and its crash takes the server down. Kept apart, the compiler is untouched and the seed is unaffected.
 
-`fim_coder complete` fills a file of holes; nothing serves an editor as the user types. **An editor bridge is not built until the completions are worth its cost**: passing completions over, with a fallback on a timeout, adds work to every keystroke.
+`fim_coder complete` fills a file of holes; nothing serves an editor as the user types. **An editor bridge is not built until the completions are worth its cost.** Passing completions over, with a fallback on a timeout, adds work to every keystroke.
 
 ## The desktop opener
 
@@ -91,13 +91,14 @@ sequenceDiagram
     participant S as kssrv
     participant B as the browser
     U->>O: double-clicks a .kspage
-    O->>R: is a server for this folder listed?
+    O->>R: take the lock; is a server for this folder listed?
     O->>S: if listed, ask /api/status with its token
     alt no live server for this folder
         O->>S: start one on a free port
         S-->>O: prints its URL and token once, into the log
         O->>R: add this server to the record
     end
+    O->>R: let the lock go
     O->>B: start it on a small page (the token is inside the page, not on the command line)
     B->>S: the page moves on to the URL and loads the document
     O-->>U: prints the URL on one line, then exits
@@ -105,7 +106,7 @@ sequenceDiagram
 
 ### Where the double-click opener lives
 
-**The opener is a leaf** ([`../kspage_open.kspl`](../kspage_open.kspl)), because only a leaf may know both the server and the page. (A *leaf* is a folder such as `tools/` that may point at every package but that no package points at.) Packages refer to each other only in the direction of import. So `kssrv` knowing the `?doc=` shape, or `kspage` knowing how the server is started, would be a sideways reference ("Reference direction between documents" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md)).
+**The opener is a leaf** ([`../kspage_open.kspl`](../kspage_open.kspl)), because only a leaf can know both the server and the page. (A *leaf* is a folder such as `tools/` that can point at every package but that no package points at.) Packages refer to each other only in the direction of import. So `kssrv` knowing the `?doc=` shape, or `kspage` knowing how the server is started, would be a sideways reference ("Reference direction between documents" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md)).
 
 **Which folder is served, and from where the page comes:**
 
@@ -121,11 +122,18 @@ Why that one named page file gives the client no more reach, and why it is never
 
 * **A running server is reused, but only one serving the same folder, never one picked by its port number.** Do not start a server without looking: one per document multiplies, and their ports collide and are refused. A server for another folder cannot read the document. So the saved record holds a list of servers (`state_text` in `tools/kspage_aim.kspl`). Holding only one, it would lose the first as soon as a second started.
 * **When the named port is taken, the next one is tried.** Giving up after one would make every document in another folder fail to open. The question is "can I listen", not "is someone listening", and it is tested with the same binding kssrv uses.
-* **A server counts as alive only when it accepts the token.** Do not trust an open port: any program may be listening there. On a local server, `/api/status` needs the token (a secret string the server makes at start-up), so a 200 means the peer is kssrv.
+* **A server counts as alive only when it accepts the token.** Do not trust an open port: any program can be listening there. On a local server, `/api/status` needs the token (a secret string the server makes at start-up), so a 200 means the peer is kssrv.
+
+**Several documents opened at once** (several chosen and opened together start one opener each, at the same moment):
+
+* **One lock is held from looking at the record to writing it** (`out/tmp/kspage_open.lock`, `open_or_start` in [`../kspage_open.kspl`](../kspage_open.kspl)), and `--list`, `--stop` and `--stop-all` take it too. Without it, two openers each find no server, and each starts one. Each then rewrites the record from what it read, so one record overwrites the other. The lost record's server holds its port with nobody able to list, stop or reuse it. With it, a second document in the same folder reuses the first's server.
+* **The lock is the operating system's** (`fs.File_lock`), let go however the process ends. A lock file the opener made and removed would outlive a crash and stop every later opening until someone deleted it.
+* **Each server writes its own log, named by its port** (`out/tmp/kspage_open.<port>.log`). One log shared by every opening hands one opener the URL another's server printed. The port is chosen free under the lock and is held by its server from then on. So no two running servers share a log, and the logs number no more than the ports tried.
+* **What it gives up**: an opening waits while another starts its server. The wait is a few seconds at most, since a server that exits early ends the wait at once.
 
 **Keeping the token secret:**
 
-* **The token is kept in files that only their owner may read**: the record (`out/tmp/kspage_open.state`), the server's log and the page handed to the browser. Each is created with mode 0600 (`fs.write_unique`). The record and the log are created beside their place and renamed over it (`write_owned` in [`../kspage_aim.kspl`](../kspage_aim.kspl)), so one written before under another mode does not keep it. On Windows no mode is set, and who may read them is whatever the folder grants, as for the source beside them.
+* **The token is kept in files that only their owner can read**: the record (`out/tmp/kspage_open.state`), the server's log and the page handed to the browser. Each is created with mode 0600 (`fs.write_unique`). The record and the log replace what stood there with `fs.replace_file`'s owner-only rule (`write_owned` in [`../kspage_aim.kspl`](../kspage_aim.kspl)). So a file written before under another mode does not keep that mode. A crash leaves the old record or the new one, never half of it. On Windows no mode is set, and who can read them is whatever the folder grants, as for the source beside them.
 * **The token never goes on a command line**, where `ps` shows it to every user on the machine. The opener reads it from the line kssrv prints once at start-up. It hands it to the browser inside a page ("The browser is handed a page, never the URL" below).
 
 **Starting the browser:**
@@ -136,14 +144,14 @@ Why that one named page file gives the client no more reach, and why it is never
 * **On Windows, the page goes to `explorer.exe`**, an executable that opens one file with the program the system holds for its type: the default browser for `.html`. Its path is written with `\`, the separator `explorer.exe` reads.
 * **`cmd /c start` cannot be used.** Each argument is passed in its own quotation marks (`kspl_win_build_cmdline` in [`../../ksplc/gen/runtime/hosted_spawn.c`](../../ksplc/gen/runtime/hosted_spawn.c)), so `start` becomes `"start"`. cmd does not recognise an internal command in quotation marks (it says "`'"start"'` is not recognized as an internal or external command..."). Do not fix it by dropping the quoting: that function stops argument injection.
 * **"Handed over" is not reported as "opened".** A tool can start successfully and still show nothing on the screen, like the `cmd` above, whose message reaches only the log. So even after handing the URL over, the opener prints how to open it by hand and where the messages are. Otherwise a run where nothing appeared would leave nothing to read.
-* **The separator inside a URL is `/`.** A path from a double-click on Windows arrives as `out\sample.kspage`, so its `\` becomes `/`. This happens on Windows only: on POSIX, `\` may be part of a file name, and converting it everywhere would make such a document impossible to open.
+* **The separator inside a URL is `/`.** A path from a double-click on Windows arrives as `out\sample.kspage`, so its `\` becomes `/`. This happens on Windows only. On POSIX, `\` can be part of a file name, and converting it everywhere would make such a document impossible to open.
 
 **How it is installed and checked:**
 
 * **The file association points at the built executable** (`out/kspage_open.exe`, built by `make kspage`), which finds kssrv beside itself. Do not point it at `ksplc run ...`: started by a double-click, its working folder is home or `/`, where neither `std/` nor `out/` can be found.
 * **The opener exits once the URL is passed to a browser, and the server stays** for the next opening. Do not keep a process waiting for someone who is not watching a terminal: one would be left per document opened. Only with `--show` does it wait and pass the server's output through (`make kspage` uses that).
 * **The document to double-click is built by `make` too** ([`../kspage_doc.kspl`](../kspage_doc.kspl) writes `out/sample.kspage`, and `make kspage` depends on it). Do not write a `.kspage` by hand. Nothing else checks that the association works. With a path one character off, "a double-click does nothing" and "the document is broken" look alike: started by a double-click, the refusal appears nowhere.
-* **It is not the sample shown at start-up.** That one is [`kspage/content/sample.kspl`](../../kspage/content/sample.kspl) (`ensure` in `kspage/port/web/state.kspl`), so with it, a run that read the file and one that did not would look the same. It is the `.kspage` of the fuzzing seed ([`kspage/tests/seeds.kspl`](../../kspage/tests/seeds.kspl)), built to hold one of every shape: a merged table, a heading depth, a column set, a number format. So a path that drops any of them shows it. kspage publishes nothing for this ("What kspage publishes for the opener" in [`kspage/docs/DESIGN-application.md`](../../kspage/docs/DESIGN-application.md)).
+* **It is not the sample shown at start-up.** That one is [`kspage/content/sample.kspl`](../../kspage/content/sample.kspl) (`ensure` in `kspage/port/web/state.kspl`), so with it, a run that read the file and one that did not would look the same. It is the `.kspage` of the fuzzing seed ([`kspage/tests/seeds.kspl`](../../kspage/tests/seeds.kspl)). That document is built to hold one of every shape: a merged table, a heading depth, a column set, a number format. So a path that drops any of them shows it. kspage publishes nothing for this ("What kspage publishes for the opener" in [`kspage/docs/DESIGN-application.md`](../../kspage/docs/DESIGN-application.md)).
 
 **What it gives up**:
 
@@ -152,17 +160,17 @@ Why that one named page file gives the client no more reach, and why it is never
 
 ### The browser is handed a page, never the URL
 
-**The URL carries the token, so the opener never puts it on the browser's command line: the browser is started on the path of a small page, which moves on to the URL at once** (`page_text` in [`../kspage_aim.kspl`](../kspage_aim.kspl)). The command line that starts a browser is open to every user while the starter runs, and a browser started that way keeps it among its own arguments for as long as it runs.
+**The URL carries the token, so the opener never puts it on the browser's command line.** **The browser is started on the path of a small page, which moves on to the URL at once** (`page_text` in [`../kspage_aim.kspl`](../kspage_aim.kspl)). The command line that starts a browser is open to every user while the starter runs. A browser started that way keeps it among its own arguments for as long as it runs.
 
 The page moves on with a `refresh` (an HTML instruction to load another address). The fragment (the part after `#`) travels with it, so the page reads the token as from a URL typed by hand. The page offers the link too, for a browser that does not follow a `refresh`.
 
 | Decision | Why |
 | :-- | :-- |
 | **Each run writes a page of its own** (`fs.write_unique`). | Several documents chosen and opened together start several openers at once, and one shared name would hand each browser the page written last. |
-| **A page is removed by a later run, once it is older than `page_keep_s`** (`sweep_pages`). | The opener exits as soon as the browser is started, so nothing tells it when the page has been read, and a cold browser can take a while to start. |
+| **A page is removed by a later run, once it is older than `page_keep_s`** (`sweep_pages`). | The opener exits as soon as the browser is started, so nothing tells it when the page has been read. A cold browser can take a while to start. |
 | **The page lies in `tmp/` next to the server, not in a hidden folder.** | A browser confined by its packaging (a snap) reads no hidden folder under home, and a page it cannot read opens nothing. |
 
-**What it gives up**: where the browser runs on another system than the opener (Windows' browser started from inside WSL), it may not reach the page's path, and nothing opens. The URL printed on its own line is then the way in. Handing the URL over instead would put the token back on the command line.
+**What it gives up**: the browser can run on another system than the opener (Windows' browser started from inside WSL). There it can fail to reach the page's path, and nothing opens. The URL printed on its own line is then the way in. Handing the URL over instead would put the token back on the command line.
 
 ### Listing and stopping the servers it left
 
@@ -178,11 +186,11 @@ The page moves on with a `refresh` (an HTML instruction to load another address)
 
 **Each mode stands alone.** A document or another option beside `--list`, `--stop` or `--stop-all` would do nothing, so the opener refuses it rather than ignoring it. A folder with no server is a failure, so a mistyped folder does not read as stopped. `--stop-all` with nothing running is not a failure.
 
-### The opener opens no console, yet prints to the one it was started from
+### The opener opens no console, yet prints to the parent's
 
 **On Windows the opener is built for the windowing subsystem, and attaches to the console it was started from when there is one.** (Windows marks each executable as a console program or a windowing program; a console program always gets a console window.) Double-clicked or opened from a document, it shows no black console window. Typed in a terminal, it still prints, to that terminal, the line saying which address to open. The generated entry point attaches to the parent's console before anything is written (`kspl_io_attach_console` in [`../../ksplc/gen/runtime/hosted.c`](../../ksplc/gen/runtime/hosted.c)).
 
-**Two executables are ruled out**, because the choice would be made twice: once by whoever types the name, and once by the file association, which is set once and never looked at again. The price is that the prompt returns before the last line, since a command processor does not wait for a windowing program. The opener prints a line or two and finishes.
+**Two executables are ruled out**, because the choice would be made twice. Whoever types the name would make it once. The file association would make it again, and it is set once and never looked at again. The price is that the prompt returns before the last line, since a command processor does not wait for a windowing program. The opener prints a line or two and finishes.
 
 **The server it starts gets no console window either.** A windowing program that starts a console program gets a fresh console window for the child. So hiding only the opener's window would move the black window rather than remove it (`spawn_redirect` in [`../../std/subproc.kspl`](../../std/subproc.kspl)). With no window to close, the server stops itself once no page holds it open: when the last kspage tab closes.
 

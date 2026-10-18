@@ -4,7 +4,7 @@
 //< each as a child and checks that it stops, says why, and never reaches the line after the stop.
 //< One run is one stop: a stop ends the process, so the cases cannot share a run.
 import "ksai/grad" as _grad // `grad_matmul_input_into` on Tensor
-import "ksai/lora_set" { Qkv_lora }
+import "ksai/lora_set" { Lora_widths, Qkv_lora }
 import "ksai/nn"
 import "ksai/optim"
 import "ksai/quant" as _quant
@@ -35,7 +35,7 @@ fn argmax_empty_logits(arena: Arena$@)
 // ==========================================
 // tensor-shape-product-overflow: a Tensor whose shape's product overflows Sz must not be created.
 // **The wrapped product can land inside the cap** (1e8 * 28999941890838049 wraps past 2^64 to
-// 256), so the cap is checked before multiplying (the caution inside `Tensor.new` in
+// 256). So the cap is checked before multiplying (the caution inside `Tensor.new` in
 // ksai/tensor.kspl). An Sz literal holds only 32 bits, so the factor is built at run time.
 // ==========================================
 fn tensor_shape_product_overflow(arena: Arena$@)
@@ -114,7 +114,8 @@ fn main(): I32
     else if which.equals("adapters-null-arena")
         bytes: U8[10] = ::{ 2, 0, 0, 0, 0, 0, 0, 0, '{', '}' }
         sf: = Safetensors.load_from_bytes(U8[]::bytes, arena) catch panic("valid header")
-        Qkv_lora<|F32|>.load_set_from(sf, 0, null) catch {}
+        none: = Lora_widths::{ .in_dim = 0, .out_dim = 0 }
+        Qkv_lora<|F32|>.load_set_from(sf, 0, none, none, null) catch {}
         io.out().s("must not get here\n")
     else if which.equals("view-null-arena") || which.equals("quant-null-arena")
         shape: Sz[2] = ::{ 1, 1 }

@@ -1,12 +1,12 @@
 # The KSPEG grammar definition specification
 
-**This document defines how to write a `.kspeg` grammar, and what the engine that reads one must do.** A grammar is a file of named rules that describe what valid input looks like; the engine (`engine.kspl`) follows those rules to read input and build a tree from it. Part I is for whoever writes a `.kspeg` file (a grammar's author). Part II is for whoever implements or revises the engine. KSPL's own grammar is written in KSPEG, so everything here applies to the KSPL compiler's parser. Why a requirement is what it is lives in [`DESIGN-engine.md`](DESIGN-engine.md).
+**This document defines how to write a `.kspeg` grammar, and what the engine that reads one must do.** A grammar is a file of named rules that describe what valid input looks like. The engine (`engine.kspl`) follows those rules to read input and build a tree from it. Part I is for whoever writes a `.kspeg` file (a grammar's author). Part II is for whoever implements or revises the engine. KSPL's own grammar is written in KSPEG, so everything here applies to the KSPL compiler's parser. Why a requirement is what it is lives in [`DESIGN-engine.md`](DESIGN-engine.md).
 
 These words come up throughout:
 
 | Word | What it means here |
 | :-- | :-- |
-| **rule** | One named definition, such as `term = Number`. Rules name other rules, and may name themselves |
+| **rule** | One named definition, such as `term = Number`. Rules name other rules, and can name themselves |
 | **parse** | Reading input by following the rules |
 | **AST** (abstract syntax tree) | The tree a parse returns: a node for each rule or literal that matched, holding the nodes matched inside it. Section 10 explains why kspeg's tree is, strictly, a CST |
 | **node** | One entry of that tree: the rule's name, the text it matched, where that text starts, and its child nodes (section 7) |
@@ -32,11 +32,11 @@ KSPEG is the notation of a `.kspeg` file. It is based on PEG (Parsing Expression
 | `&A` | **And lookahead**: succeed if `A` matches here, but consume nothing | `&"("` |
 | `!A` | **Not lookahead**: succeed if `A` does not match here, and consume nothing | `!_Keyword Identifier` |
 
-The things these combine (a quoted string, a keyword, a character class, a rule's name) are in section 3; how tightly each operator binds is in section 6.
+The things these combine (a quoted string, a keyword, a character class, a rule's name) are in section 3. How tightly each operator binds is in section 6.
 
 **One `.kspeg` file holds both lexing and parsing.** Lexing (tokenizing) cuts the text into words such as numbers and names; parsing arranges those words into a tree. Many tools need a separate file for each. In KSPEG:
 
-* The engine infers "may whitespace be skipped here" and "should an AST node be built here" from a rule's name alone (section 4).
+* The engine infers "can whitespace be skipped here" and "is an AST node built here" from a rule's name alone (section 4).
 * A keyword literal `'...'` is enough for it to check the word boundary and build the reserved-word list (section 5).
 
 So neither a separate tokenizer definition nor hard-coding in the engine is needed.
@@ -51,12 +51,12 @@ So neither a separate tokenizer definition nor hard-coding in the engine is need
 
 #### 1.1 What a PEG is (for a reader new to it)
 
-A PEG reads like the grammars in a language manual, but its choice always takes the first alternative that matches. This table compares it with three things you may know.
+A PEG reads like the grammars in a language manual, but its choice always takes the first alternative that matches. This table compares it with three things that a reader often knows already.
 
 | Compared with | What differs in a PEG | Example |
 | :-- | :-- | :-- |
 | **BNF / CFG** (the grammar notation of most language manuals; a context-free grammar) | **Ambiguity is ruled out.** BNF's `\|` permits every grammatical reading, so a rule can have several, and a precedence rule outside the grammar has to pick one. PEG's `\|` is a prioritized choice: it takes the first alternative from the left that matches and tries none after it, so no ambiguity arises | `if_stmt = 'if' cond stmt \| 'if' cond stmt 'else' stmt` has several readings in BNF (the "dangling else" problem: which `if` owns the `else`) |
-| **A regular expression** | **Recursion and nested structure.** PEG rules may reference themselves and each other, so nesting that a regular expression cannot express is written directly | `(1 + (2 * 3))` |
+| **A regular expression** | **Recursion and nested structure.** PEG rules can reference themselves and each other, so nesting that a regular expression cannot express is written directly | `(1 + (2 * 3))` |
 | **A hand-written recursive descent parser** (one function per piece of syntax, each calling the others) | **The same method, written as a grammar.** KSPEG runs the same recursive descent, driven by the declarative `.kspeg` instead of written out. There is no code-generation step: the engine, itself written in KSPL, interprets the `.kspeg` file at run time | — |
 
 **A known constraint: left recursion cannot be written.** A rule is left-recursive when it names itself first, before reading anything. Such a rule would call itself at the same position forever, so the grammar is refused when it is read ([11.1](#111-validation-at-the-moment-the-grammar-is-read)). Write a run of left-associative operators as a repetition (`*`) instead:
@@ -122,11 +122,11 @@ An escape is a backslash and what follows it, standing for a character that is h
 | **Symbols** | `\"`, `\'`, `\\`, `\[`, `\]`, `\-` |
 | **Code points** | `\uXXXX` (four hex digits; a high and a low surrogate written as a pair are combined into one code point) |
 
-**Any other `\X` is a syntax error**, never read as that character itself. If `\d` were silently read as `d`, the grammar's author would see it only as input that matches when it should not, or the reverse.
+**Any other `\X` is a syntax error**, never read as that character itself. If `\d` were silently read as `d`, the grammar's author would see it only as input that matches where it must not, or the reverse.
 
 **`\uXXXX` is only for the bytes that cannot be typed**: the control bytes and DEL, all inside `\u0000`–`\u007F`. A character that can be typed is written as its UTF-8 bytes directly (`あ` reads better than `あ`).
 
-**Inside a character class nothing above `\u007F` can be written.** A character class is a table applied one byte at a time (section 7). A code point that encodes to several bytes would make it match any one of those bytes, so `[あ]` would not match あ; the engine refuses it when the grammar is read. A literal has no such limit: it applies as a byte sequence, so several bytes are correct there.
+**Inside a character class nothing above `\u007F` can be written.** A character class is a table applied one byte at a time (section 7). A code point that encodes to several bytes would make it match any one of those bytes, so `[あ]` would not match あ. The engine refuses it when the grammar is read. A literal has no such limit: it applies as a byte sequence, so several bytes are correct there.
 
 **A `\u` without four hex digits is refused**: let through, `"\u00"` would become the 3 bytes `u00`. An unpaired surrogate is refused too: it is not a code point, so copying it to UTF-8 gives an invalid byte sequence.
 
@@ -162,7 +162,7 @@ A name's first character puts the rule in one of three **modes**.
 A syntax-mode rule describes structure, such as a statement or an expression, and lets whitespace sit between its parts.
 
 * **The trigger**: a rule name beginning with a lower-case letter (`program`, `stmt_if`, or the `expr` and `term` of [section 2](#2-starting-from-the-smallest-example)).
-* **The behaviour**: it calls the whitespace skip (`_Space`) immediately before each atomic element below, and on success builds an AST node holding a list of child nodes.
+* **The behaviour**: it calls the whitespace skip (`_Space`) immediately before each atomic element below. On success it builds an AST node holding a list of child nodes.
 
 **The atomic elements (the units that trigger a skip)**:
 
@@ -187,12 +187,12 @@ So a pure token such as `Identifier` is a flat leaf that allocates nothing. Stri
 
 A transparent rule reads input but leaves nothing in the tree, which suits whitespace and comments.
 
-* **The trigger**: any rule name beginning with an underscore `_`, whatever follows it (`_Space`, `_New_line`, `_internal`, or `_` alone). The first character alone decides, so a `_` rule is transparent even when its second character is upper or lower case. Rules such as whitespace and comments are written this way: they may be ignored, but their definitions are kept apart.
+* **The trigger**: any rule name beginning with an underscore `_`, whatever follows it (`_Space`, `_New_line`, `_internal`, or `_` alone). The first character alone decides, so a `_` rule is transparent even when its second character is upper or lower case. Rules such as whitespace and comments are written this way: the tree can ignore them, but their definitions are kept apart.
 * **The behaviour**: no automatic skip; the match is exact, byte for byte, but no AST node is ever built. It keeps content such as whitespace and comments out of the syntax tree.
 
 ### 5. The automatic rules: `_Space` / `_Boundary` / `_Keyword`
 
-**Three rule names have a special meaning: the engine supplies them when the grammar does not, and a grammar may define its own.** All three are transparent-mode rules. Their names are alike, but the engine **calls** the first two by itself, while it only builds `_Keyword`, which runs only where the grammar references it.
+**Three rule names have a special meaning: the engine supplies them when the grammar does not, and a grammar can define its own.** All three are transparent-mode rules. Their names are alike, but the engine **calls** the first two by itself, while it only builds `_Keyword`, which runs only where the grammar references it.
 
 | Rule | When it runs | The default when undefined | How to override |
 | --- | --- | --- | --- |
@@ -202,7 +202,7 @@ A transparent rule reads input but leaves nothing in the tree, which suits white
 
 #### 5.1 `_Space` and `_Boundary`: the hooks fired automatically
 
-**`_Space` says what to skip between the parts of a syntax rule; `_Boundary` says which characters may not follow a keyword.**
+**`_Space` says what to skip between the parts of a syntax rule; `_Boundary` says which characters must not follow a keyword.**
 
 To skip comments too, the grammar overrides `_Space`. [`script.kspeg`](script.kspeg) does so for a line comment and for a block comment that nests: its `_Block_comment` refers to itself, so `/* a /* b */ c */` is one comment.
 
@@ -232,7 +232,7 @@ The typical use excludes reserved words from identifiers, as `Identifier` in [`s
 | **4** | **Sequence** | `A B` | Implicit concatenation. |
 | **5** | **Choice** | <code>A &#124; B</code> | Prioritized choice, tried from the left. |
 
-"Greedy" means a quantifier takes as many repetitions as match and never gives one back to let what follows match: `[0-9]* "5"` never matches `"125"`, because `[0-9]*` has taken the `5` already.
+"Greedy" means a quantifier takes as many repetitions as match. It never gives one back to let what follows match. So `[0-9]* "5"` never matches `"125"`, because `[0-9]*` has taken the `5` already.
 
 #### 6.1 How lookahead relates to the automatic skip
 
@@ -253,13 +253,17 @@ A lookahead takes the mode of the rule it is in.
 
 **It swallows at least one byte.** An empty match under a `*` would loop forever at the same position, so where a stopping byte is already next, it does not match.
 
-It is for a reader, such as an editor, that needs a tree from a file that does not parse. In the lenient run, a `~` branch last in a rule swallows what could not be read and carries on; in any other run it does nothing. **Whoever writes such a branch must keep the lenient run away from anything that has to refuse bad input**, because there the branch takes in what would otherwise be refused.
+It is for a reader, such as an editor, that needs a tree from a file that does not parse. In the lenient run, a `~` branch last in a rule swallows what could not be read and carries on. In any other run it does nothing. **Whoever writes such a branch must keep the lenient run away from anything that has to refuse bad input.** There, the branch takes in what would otherwise be refused.
 
 ---
 
 ## Part II: The specification for implementers
 
-This part takes Part I's "what happens" as given and states only how the engine must be implemented. It aims to keep the syntax tree from growing without order, to hand a clean AST downstream (to semantic analysis, the compiler step that checks names and types, and the like), and to guarantee memory safety.
+This part takes Part I's "what happens" as given and states only how the engine must be implemented. It has three aims:
+
+* to keep the syntax tree from growing without order;
+* to hand a clean AST downstream (to semantic analysis, the compiler step that checks names and types, and the like);
+* to guarantee memory safety.
 
 ### 7. The AST node the engine builds
 
@@ -293,14 +297,14 @@ This part takes Part I's "what happens" as given and states only how the engine 
 
 For every rule name beginning with `_`, the naming convention alone decides that no AST node is built, with no hard-coded string comparison in the engine.
 
-* **The requirement**: while a transparent-mode rule runs, the engine advances the parse position and nothing else. It must never allocate an AST node or add one to the parent's child list: a stray whitespace node shifts the indices for a downstream reader that accesses children by index.
+* **The requirement**: while a transparent-mode rule runs, the engine advances the parse position and nothing else. It must never allocate an AST node or add one to the parent's child list. A stray whitespace node shifts the indices for a downstream reader that accesses children by index.
 
 #### 8.2 Suppressing subnode generation in lexical mode (Flattening)
 
 A lexical-mode rule (`Capital_snake_case`) is a token: the smallest unit carrying an atomic meaning for the compiler.
 
-* **The requirement**: the engine must hold a flag saying whether lexical mode is running, and while it is, build no AST node for any subpattern called inside (a group, a character class, and so on).
-* **The output**: only when the outermost lexical rule succeeds is a single node built and returned, holding the whole matched span as a slice and no children.
+* **The requirement**: the engine must hold a flag saying whether lexical mode is running. While it is, the engine must build no AST node for any subpattern called inside (a group, a character class, and so on).
+* **The output**: a single node is built and returned only when the outermost lexical rule succeeds. It holds the whole matched span as a slice and no children.
 
 #### 8.3 Dynamic mode transitions
 
@@ -320,9 +324,9 @@ flowchart LR
 
 The keyword literal's role and the uses of `_Boundary` and `_Keyword` are in [section 5](#5-the-automatic-rules-_space--_boundary--_keyword); only the engine's requirements stand here.
 
-* **Desugaring the word boundary**: immediately after `'text'` matches, the engine must run `!_Boundary` internally, rewinding the match as a failure where a boundary character follows (so `'defer'` does not match the start of `defer_scope`).
-* **Automatic collection and synthesis**: as the grammar loads, the engine must register `_Keyword`, a rule matching any one of the file's keyword literals (section 5.2). Where the grammar defines `_Keyword` itself, the engine must not add its own, and uses the grammar's as it stands (the same "a user definition wins" policy as the defaults for `_Space` and `_Boundary`).
-  * The internal representation is free. Trying the keywords one at a time in collection order is fine, and so is cutting a word out once and looking it up in a set once.
+* **Desugaring the word boundary**: immediately after `'text'` matches, the engine must run `!_Boundary` internally. Where a boundary character follows, it rewinds the match as a failure (so `'defer'` does not match the start of `defer_scope`).
+* **Automatic collection and synthesis**: as the grammar loads, the engine must register `_Keyword`, a rule matching any one of the file's keyword literals (section 5.2). Where the grammar defines `_Keyword` itself, the engine must not add its own, and uses the grammar's as it stands. This is the same "a user definition wins" policy as the defaults for `_Space` and `_Boundary`.
+  * The internal representation is free. The engine can try the keywords one at a time in collection order. It can also cut a word out once and look it up in a set once.
   * Caution: **The set lookup must not be used unless both of these hold**; otherwise the engine tries the keywords one at a time. The scan that cuts a word out reads only a run of boundary characters. So in a grammar with a keyword holding any other character, such as `'->'`, `_Keyword` always fails. Where the grammar wrote `!_Keyword`, that shows only as an identifier swallowing a reserved word.
     * `_Boundary` is a single character class (a reference or a concatenation cannot be judged one byte at a time)
     * no keyword is empty, and each is written only with characters that class holds
@@ -333,7 +337,7 @@ The keyword literal's role and the uses of `_Boundary` and `_Keyword` are in [se
 
 **The engine returns every node its grammar produces, and the program using it decides which to keep.** Such a full tree is a CST (concrete syntax tree): unlike a pruned AST, it still holds every bracket, keyword and pass-through rule.
 
-The engine follows its grammar and emits a raw CST. In syntax mode every `Literal` and `Keyword` node stays (sections 3 and 9), and so does every wrapper node a chain of rules leaves (in section 2, the `term` node that only wraps `Number`). The engine cannot tell which nodes carry meaning for a particular language, so the consumer decides which ones a language keeps, and under what names.
+The engine follows its grammar and emits a raw CST. In syntax mode every `Literal` and `Keyword` node stays (sections 3 and 9). So does every wrapper node that a chain of rules leaves (in section 2, the `term` node that only wraps `Number`). The engine cannot tell which nodes carry meaning for a particular language, so the consumer decides which ones a language keeps, and under what names.
 
 ### 11. Error handling: validating the grammar and tracking the furthest failure
 
@@ -353,14 +357,14 @@ The engine refuses two things: **a bad grammar, and input that does not fit the 
 * **Where the confirmation goes**: after the engine has added the rules it synthesizes (`_Space` / `_Boundary` / `_Keyword`; [section 5](#5-the-automatic-rules-_space--_boundary--_keyword)). Done earlier, references to them look undefined.
 * **The granularity of the report**: the refusal must hold the undefined name and the name of the rule referring to it. The line and column inside the `.kspeg` are not required.
 
-Why the check runs when the grammar is read, and why the report holds what it holds, is "A grammar is checked when it is read" in [`DESIGN-engine.md`](DESIGN-engine.md).
+"A grammar is checked when it is read" in [`DESIGN-engine.md`](DESIGN-engine.md) says why the check runs then. It also says why the report holds what it holds.
 
 #### 11.2 Tracking the furthest failure
 
-**A syntax error points at the furthest place the parse reached, and lists what could have been written there.** A PEG parser backtracks, so a naive implementation reports a failure at the start of the file: the outermost rule fails there after every alternative has been tried. To stop that, the engine must implement this tracking.
+**A syntax error points at the furthest place the parse reached, and lists what could have been written there.** A PEG parser backtracks, so a naive implementation reports a failure at the start of the file. The outermost rule fails there after every alternative has been tried. To stop that, the engine must implement this tracking.
 
 * **The requirement**: the engine records, as global state, `max_fail_pos` (the furthest parse position reached so far) and the rules expected there (`expected_labels`).
-* **Zero allocation**: it is strongly recommended that this list allocate no strings and be a fixed-length slice array (say, of about 8 elements at most) plus a counter (`expected_label_count`). It then takes no arena memory.
+* **Zero allocation**: it is strongly recommended that this list allocate no strings. The recommended shape is a fixed-length slice array (say, of about 8 elements at most) plus a counter (`expected_label_count`). It then takes no arena memory.
 * The final syntax error must join the gathered labels into one rich message (`Syntax Error: expected 'case', 'default', or '}'`, say).
 
 **The behaviour** on each failure depends on where it happens:
@@ -371,7 +375,7 @@ Why the check runs when the grammar is read, and why the report holds what it ho
 | At `max_fail_pos` itself (a tie) | Adds the rule, unless its name is already in the list |
 | Before `max_fail_pos` | Records nothing |
 
-#### 11.3 A backtracking signal may be swallowed, a real failure may not
+#### 11.3 A backtracking signal can be swallowed, a real failure cannot
 
 A rule fails in one of two ways, and the engine must keep them apart.
 
@@ -385,7 +389,7 @@ One recursive entry point (`Rule.parse`) throws either, so the receiver can mist
 * **One place swallows.** A choice, an optional and a repetition all swallow a `mismatch`, through one function (`try_parse`) that rethrows a `fatal`. A `catch` per container is refused: with three places able to write one, a fourth added later swallows silently.
 * **Do not catch that entry point's failure with `catch false`.** That does not tell the two apart, so a `fatal` turns into "this branch did not match".
 
-### 12. Performance and safety devices: packrat memoization and the recursion depth guard
+### 12. Performance and safety: packrat memoization and the recursion depth guard
 
 **These devices keep a parse fast on any input, and keep deep input from crashing the program.**
 
@@ -397,23 +401,23 @@ A PEG backtracks, so a naive implementation re-parses the same position under th
 
 On pathologically deep input, a recursive rule such as `expr = expr_primary (operator expr_primary)*` can use up the native call stack and crash. (Input such as ten thousand `(` in a row is pathologically deep: each `(` enters the rule once more.) The engine must track the recursion depth with a counter (`ctx.depth`) and stop the parse once it exceeds a fixed limit (`max_parse_depth = 3000` by default). It fails as a compile error before a native stack overflow can crash it.
 
-* **A count alone does not protect the stack.** The stack one level costs varies with the backend and the toolchain that built the engine. So the engine also stops the parse, with the same failure, when the stack left on its thread drops below a margin (`std/stack_limit`). The count is the limit that is the same on every build; the stack check stops a build that spends more per level before the count does.
-* **The cut-off must not be thrown as a backtracking signal.** A choice, an optional or a repetition would swallow it as "this branch did not match" and carry on searching at the same depth. Throw it as a failure that propagates to the caller (a `fatal`; [11.3](#113-a-backtracking-signal-may-be-swallowed-a-real-failure-may-not) keeps it from being swallowed).
+* **A count alone does not protect the stack.** The stack one level costs varies with the backend and the toolchain that built the engine. So the engine also stops the parse, with the same failure, when the stack left on its thread drops below a margin (`std/stack_limit`). The count is the limit that is the same on every build. The stack check stops a build that spends more per level before the count does.
+* **The cut-off must not be thrown as a backtracking signal.** A choice, an optional or a repetition would swallow it as "this branch did not match" and carry on searching at the same depth. Throw it as a failure that propagates to the caller (a `fatal`; [11.3](#113-a-backtracking-signal-can-be-swallowed-a-real-failure-cannot) keeps it from being swallowed).
 * **The input position of the cut-off must be recorded where it happens.** Backtracking rewinds the position at each level. By the time the failure reaches the entry point, the position is back at the input's start, and a report using it points at line 1.
 
 #### 12.3 Skipping a rule by its first byte
 
-**The engine may skip a rule that cannot begin with the next byte, as long as nobody can tell from the result.** For example, a rule whose every match begins with `{` cannot match where the next byte is `x`.
+**The engine can skip a rule that cannot begin with the next byte, as long as nobody can tell from the result.** For example, a rule whose every match begins with `{` cannot match where the next byte is `x`.
 
-* **What is allowed**: the engine may skip a rule, without entering it, where it cannot match at the next byte: the rule cannot match nothing, and no match of it begins with that byte. In syntax mode the next byte is the one after whitespace.
+* **What is allowed**: the engine can skip a rule, without entering it, where it cannot match at the next byte. That holds where the rule cannot match nothing, and no match of it begins with that byte. In syntax mode the next byte is the one after whitespace.
 * **The requirement**: skipping must change neither the tree nor a syntax error. A skipped rule records no expected label, so the labels must come from a parse that skips nothing.
-* **A syntax-mode rule entered from a lexical one** skips whitespace before its first byte, so the byte at the point of entry is not its first; it must not be skipped there by that byte.
+* **A syntax-mode rule entered from a lexical one** skips whitespace before its first byte. So the byte at the point of entry is not its first, and the rule must not be skipped there by that byte.
 
 ### 13. How to handle a language that depends on indentation
 
 **For a language like Python, where indentation shows structure, the caller marks each change of indentation before the parse.** A language where the column at a line's start decides the structure cannot be written in a PEG alone. **This is not the engine cutting corners: it is beyond a PEG's expressive power.**
 
-**Indentation is resolved before the PEG.** The caller passes over the input once, writes each change of column as a marker at the end of the line before it, and has that text parsed. Below, `<IN>` and `<OUT>` are one byte each, from the bytes that cannot be typed.
+**Indentation is resolved before the PEG.** The caller passes over the input once. It writes each change of column as a marker at the end of the line before it, and has that text parsed. Below, `<IN>` and `<OUT>` are one byte each, from the bytes that cannot be typed.
 
 ```
 if x:                     if x:<IN>
@@ -421,7 +425,7 @@ if x:                     if x:<IN>
 z = 2                     z = 2
 ```
 
-The grammar writes the marker as a plain literal (written with `\uXXXX`, as in `Indent = "\u0001"`), so the engine needs no column count, no test for a line's head, no state and no predicate on a value.
+The grammar writes the marker as a plain literal (written with `\uXXXX`, as in `Indent = "\u0001"`). So the engine needs no column count, no test for a line's head, no state and no predicate on a value.
 
 **Line numbers do not change**: a marker goes at a line's end, so only the end of a marked line shifts. A diagnostic built from `ctx.max_fail_pos` needs no table mapping back to the original text.
 
@@ -429,7 +433,7 @@ Caution: Keep the marker at one byte, so the shift is just the number of markers
 
 **Narrow `_Space` first.** The default `_Space` is `[ \t\r\n]*` and consumes newlines, but where the column decides the structure, a newline and a line's leading whitespace are both syntax. Define `_Space = [ \t]*` in the grammar and consume newlines explicitly in a rule (the grammar's definition replaces the default; section 5).
 
-Why the column is erased outside the engine, and the one shape of syntax this does not carry, are "Indentation becomes markers before the parse" in [`DESIGN-engine.md`](DESIGN-engine.md).
+"Indentation becomes markers before the parse" in [`DESIGN-engine.md`](DESIGN-engine.md) says why the column is erased outside the engine. It also names the one shape of syntax this does not carry.
 
 ## Appendix A: KSPEG's own grammar definition (the normative grammar)
 

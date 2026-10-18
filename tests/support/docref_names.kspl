@@ -1,11 +1,11 @@
 #!/usr/bin/env -S ksplc run
 //< Checks that a dotted name a published document writes in backticks names a declaration
 //<
-//< A document has no scope, so a name tied to no file (`` `Map.items` ``) is read against the
+//< A document has no scope. So a name tied to no file (`` `Map.items` ``) is read against the
 //< declarations of the whole tree, as `ksplc doc --surface-scope=all` lists them. **The spellings
 //< the compiler leaves alone in a comment are left alone here** (`[W0211]` in
-//< `ksplc/docs/SPEC-tools.md`): a name tied to its file (`make test-docref` reads that one), a name
-//< introduced as another product's, a file's name, and a code fragment.
+//< `ksplc/docs/SPEC-tools.md`). These are a name tied to its file (`make test-docref` reads it), a
+//< name introduced as another product's, a file's name, and a code fragment.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List, Map }
@@ -45,14 +45,14 @@ priv struct Index //< what the tree declares, as the check looks it up
     modules: Map<|U8[], List<|U8[]|>$@|>$@ //< each standard library file's names, by its alias
 
 priv fn add_to(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[], arena: Arena$@)
-    $got: = m.get(key) catch null
+    $got: = m.get(key).unwrap_or(null)
     if got == null
         got = List<|U8[]|>.create(arena)
         m.set(key, got)
     got.push(name)
 
 priv fn holds(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[]): Bool
-    got: = m.get(key) catch null
+    got: = m.get(key).unwrap_or(null)
     if got == null
         return false
     for n in got
@@ -61,7 +61,7 @@ priv fn holds(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[], name: U8[]): Bool
     return false
 
 priv fn knows(m: Map<|U8[], List<|U8[]|>$@|>$@, key: U8[]): Bool
-    got: = m.get(key) catch null
+    got: = m.get(key).unwrap_or(null)
     return got != null
 
 // ==========================================
@@ -253,7 +253,7 @@ priv fn declares_one(src: U8[], heads: Map<|U8[], Bool|>$@, arena: Arena$@): Boo
             start: = i
             for i < t.len && is_word_byte(t[i])
                 i += 1
-            named: = heads.get(t.sub(start, i - start)) catch false
+            named: = heads.get(t.sub(start, i - start)).unwrap_or(false)
             if named
                 return true
     return false
@@ -292,7 +292,7 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
         if src.len == 0
             continue
         alias: = std_alias(rel)
-        named: = alias.len > 0 && (lower.get(alias) catch false)
+        named: = alias.len > 0 && lower.get(alias).unwrap_or(false)
         if named
             add_externs(alias, src, ix@, arena)
         if named || declares_one(src, heads@, arena)
@@ -307,7 +307,7 @@ priv fn build_index(uses: List<|Use|>@, arena: Arena$@): Index //<
         stem: = stems.get(i)
         std: =
             stem.starts_with("std/") && stem.sub_from(4).find_char('/').is_none()
-        if r.code == 0
+        if r.exited_with(0)
             add_entries(sys.get_file_name(stem), std, r.out, ix@, arena)
     return ix
 
@@ -337,7 +337,7 @@ priv fn wrong_name(ix: Index@, u: Use@, own: Map<|U8[], Bool|>$@): Bool //<
     member: = u.parts.get(1)
     if head[0].is_upper()
         return knows(ix.members, head) && !holds(ix.members, head, member) &&
-            !(own.get(member) catch false)
+            !own.get(member).unwrap_or(false)
     return knows(ix.modules, head) && !holds(ix.modules, head, member)
 
 priv const span_samples: scan.Sample[_] = ::{
@@ -374,10 +374,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     $uses: = List<|Use|>.new(arena)
     $owns: = Map<|U8[], Map<|U8[], Bool|>$@|>.new(arena)
     for rel in tracked
-        $skip: = !rel.ends_with(".md") || rel.starts_with("private/")
-        for p in private
-            skip = skip || sys.get_file_name(rel).equals(p)
-        if skip
+        if !rel.ends_with(".md") || harness.is_private_doc(rel, private@)
             continue
         text: = harness.read_under_root(rel)
         if text.len == 0
@@ -387,7 +384,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     ix: = build_index(uses@, arena)
     $bad: = List<|U8[]|>.new(arena)
     for u in uses
-        own: = owns.get(u.rel) catch null
+        own: = owns.get(u.rel).unwrap_or(null)
         if own != null && wrong_name(ix@, u@, own)
             bad
                 .push(arena.text().s(u.rel).s(":\{u.line\}: `").s(u.body).s("` names nothing")

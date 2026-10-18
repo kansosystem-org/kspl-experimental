@@ -8,9 +8,9 @@ import "std/verdict"
 // ==========================================
 // ksos/net/tcp_conn: tracking one TCP connection's seq/ack.
 //
-// **It only runs for real on an RP2040 over USB CDC-NCM (`ksos-rp2040-net`)**, which QEMU has no
-// model of, so the regression is reproduced on a host: a fake ksos/net/link.Link returns one
-// prepared frame instead of hardware.
+// **It only runs for real on an RP2040 over USB CDC-NCM (`ksos-rp2040-net`).** QEMU has no model
+// of that. So this test reproduces the regression on a host: a fake ksos/net/link.Link returns
+// one prepared frame instead of hardware.
 // ==========================================
 const peer_ip: U32 = 0x0A000001 // 10.0.0.1
 const our_ip: U32 = 0x0A000005 // 10.0.0.5
@@ -94,8 +94,8 @@ $got: U8[1200] = ::{}
 fn test_tcp_conn_segment_larger_than_buffer() //<
     //< A segment larger than the caller's buffer is returned in parts, not truncated
     //<
-    //< Caution: **Do not truncate a segment to the caller's buffer size**, or the connection can
-    //< never be read again (the reason is at `rx_pending_off` in ksos/net/tcp_conn.kspl).
+    //< Caution: **Do not truncate a segment to the caller's buffer size.** Otherwise nothing can
+    //< read the connection again (the reason is at `rx_pending_off` in ksos/net/tcp_conn.kspl).
     verdict
         .start("[ksos/net] splitting a segment larger than the buffer and handing it over (not \
             truncating) test...")
@@ -157,7 +157,7 @@ fn test_tcp_conn_rejects_wrong_seq() //<
 
 fn test_tcp_conn_acks_received_data() //< received data is ACKed, and a resend ACKed again
     //<
-    //< Caution: **Without an ACK the peer resends what it sent**, and stops once its window is
+    //< Caution: **Without an ACK, the peer resends what it sent.** It stops once its window is
     //< full (the reason is at `send_ack` in ksos/net/tcp_conn.kspl).
     verdict.start("[ksos/net] ACKing what was handed over, and a resend again, test...")
 

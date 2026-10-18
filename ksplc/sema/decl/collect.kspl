@@ -41,8 +41,8 @@ priv fn require_toplevel_type(c: Sema_ctx$@, name: U8[], loc: Ast_node$@): I32 /
     //< docs/SPEC-language.md); the top level is a file's interface.
     //< Caution: Do not default a missing annotation to I32: `g: = 2.5;` truncates to 2 silently.
     c.clear_scratch()
-        .s("top-level declaration '\{name\}' requires a type annotation (type inference is only \
-            available for local variables)")
+        .s("top-level declaration '\{name\}' requires a type annotation. Type inference is only \
+            available for local variables")
     c.err(loc, c.scratch.slice())
     return I32::sema_type_env.Builtin_type_id.unknown
 
@@ -54,9 +54,9 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
     collect_imports_and_lint(r, c)
     sema_session_import_table.register_implicit_lang_imports(r, c)
     check_all_attributes(r, c)
-    // **Stop here if the attributes do not pass.** A leftover statement attribute (see
-    // elide_attributed_stmt in parse/normalize.kspl) is taken by a later pass as a statement and
-    // becomes an ICE that hides the real cause.
+    // **Stop here if the attributes do not pass.** A later pass takes a leftover statement
+    // attribute (see elide_attributed_stmt in parse/normalize.kspl) as a statement. It then becomes
+    // an ICE that hides the real cause.
     if c.has_error()
         throw .analysis_failed
     register_type_symbols(r, c)
@@ -79,7 +79,7 @@ priv fn check_all_attributes(r: Ast_node$@, c: Sema_ctx$@) //<
     //< The attributes' check: after `##lint` is collected, before any other diagnostic
     //<
     //< Caution: **Walk from the wrapper (`top_level_item`).** unwrap_top_level skips past the
-    //< attributes, so one not moved onto the declaration (apply_modifiers_to_targets in
+    //< attributes. So one not moved onto the declaration (apply_modifiers_to_targets in
     //< parse/normalize.kspl) would be invisible there.
     for top_node in r.children
         c.set_current_file(top_node.unwrap_top_level().loc.file())
@@ -133,8 +133,8 @@ priv fn register_type_symbols(r: Ast_node$@, c: Sema_ctx$@) //<
         child: = top_node.unwrap_top_level()
         c.set_current_file(child.loc.file())
         top_vis: = child.get_visibility()
-        // A non-generic declaration gets a `pending_decl`: the hint for filling in the layout when
-        // it is requested before Pass 3 (ensure_type_registry in sema/decl/layout.kspl).
+        // A non-generic declaration gets a `pending_decl`. It is the hint for filling in the layout
+        // when it is requested before Pass 3 (ensure_type_registry in sema/decl/layout.kspl).
         is_generic_decl: = child.find_child(.k_type_gen_params) != null
         switch child.kind_id
         case .k_decl_struct
@@ -202,12 +202,12 @@ priv fn register_value_symbols(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //
             name: = child.get_decl_id_text()
             if name.len > 0
                 fqn: = c.make_fqn(name)
-                sym: = c.symtab.resolve(fqn) catch null
+                sym: = c.symtab.resolve(fqn).unwrap_or(null)
                 if sym != null
                     c.resolve_alias_sym(sym)!
             // Caution: **Run a typedef through the leak check too.** Wider than its target, it lets
-            // code that cannot name the target receive its value ("Why a typedef cannot be
-            // published wider than its target" in docs/DESIGN-language.md).
+            // code that cannot name the target receive its value. See "Why a typedef cannot be
+            // published wider than its target" in docs/DESIGN-language.md.
             c.check_type_vis_leak(child.get_decl_type_node(), top_vis, "target type", "typedef")
         case .k_decl_fn
             child.collect_fn_def(c, top_vis)!
@@ -228,8 +228,8 @@ priv fn register_value_symbols(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //
             sym.type_id = c
                 .slice_type_of(c.env.make_const(I32::sema_type_env.Builtin_type_id.u8_type))
             // Caution: **Set it on the declaration's node too.** genc needs it to write the
-            // instance's C name: with `--slice-struct` on, it becomes `std/lang`'s `Slice<|U8|>`
-            // instance, so hard-coding `kspl_Const_U8_Slice` disagrees with what the vtable expects
+            // instance's C name. With `--slice-struct` on, it becomes `std/lang`'s `Slice<|U8|>`
+            // instance. So hard-coding `kspl_Const_U8_Slice` disagrees with what the vtable expects
             // (emit_embed_decl in `../../gen/c/decl.kspl`).
             child.type_id = sym.type_id
             c.declare_global_symbol(name, sym)
@@ -317,9 +317,9 @@ impl Sema_ctx
         //<
         //< It shows the target type; without it, the user cannot see which parameter is spare.
         r.clear_scratch()
-            .s("type parameter '\{name\}' does not appear in the impl target '\{target\}', so \
-                nothing binds it. Remove it, or make the method a free generic function that takes \
-                '\{name\}' at the call site (see 'select' in std/seq)")
+            .s("type parameter '\{name\}' does not appear in the impl target '\{target\}'. Nothing \
+                binds it. Remove the parameter, or make the method a free generic function. The \
+                free function takes '\{name\}' at the call site (see 'select' in std/seq)")
         r.err(node, r.scratch.slice())
 
 impl Ast_node
@@ -331,8 +331,8 @@ impl Ast_node
         if r.find_child(.k_struct_field) != null
             return
         c.clear_scratch()
-            .s("'\{r.get_decl_id_text()\}' has no fields: a struct is declared with them. A type \
-                defined in C is declared inside an 'extern \"C\"' block ('struct \
+            .s("'\{r.get_decl_id_text()\}' has no fields. A struct declaration must include its \
+                fields. A type defined in C is declared inside an 'extern \"C\"' block ('struct \
                 \{r.get_decl_id_text()\}') and held by pointer")
         c.err(r, c.scratch.slice())
 
@@ -344,9 +344,9 @@ impl Ast_node
         if r.find_child(.k_stmt_block) != null
             return
         c.clear_scratch()
-            .s("'\{name\}' has no body: a function is defined where it is declared. A function \
+            .s("'\{name\}' has no body. A function is defined where it is declared. A function \
                 defined in C, or in a library built from KSPL, is declared inside an 'extern \"C\"' \
-                block (a library's own is written by 'ksplc --library=')")
+                block. For a KSPL library, generate the declaration with 'ksplc --library='")
         c.err(r, c.scratch.slice())
 
     priv fn collect_fn_def(r: Ast_node$@, c: Sema_ctx$@, top_vis: sema_type_scope.Visibility):
@@ -361,10 +361,10 @@ impl Ast_node
         r.refuse_missing_body(c, name)
 
         fqn: = c.make_fqn(name)
-        // Caution: **Register the template under its FQN alone.** The template table is one for
-        // the whole build, while a function's short name names it only inside its file: under the
-        // short name, another file's `priv fn same<|T|>` answered a call of this file's own
-        // `same`. A bare name finds it through read_written_name (name.kspl).
+        // Caution: **Register the template under its FQN alone.** The template table is one for the
+        // whole build, while a function's short name names it only inside its file. Under the short
+        // name, another file's `priv fn same<|T|>` answered a call of this file's own `same`. A
+        // bare name finds it through read_written_name (name.kspl).
         if has_gen
             sema_decl_declare.register_template(c, fqn, r)
 
@@ -375,8 +375,8 @@ impl Ast_node
         sym: = Sema_symbol.new(sym_kind, name, r)
         sym.vis = top_vis
         // Caution: A generic function template's own return type must not be resolved here. T is
-        // bound to nothing yet, so resolve_type would take `T?`'s T for a real type and an
-        // unsubstituted "T" would leak into the generated C.
+        // bound to nothing yet, so resolve_type would take `T?`'s T for a real type. An
+        // unsubstituted "T" would then leak into the generated C.
         if !has_gen
             sym.type_id = resolve_ret_type_or_void(type_node, c)!
         sym.apply_attributes()
@@ -410,9 +410,9 @@ impl Ast_node
         // Caution: **Confirm the base is generic first.** A `<|...|>` on a non-generic name, added
         // to the templates, would silently match no instance (Principle 5).
         inst_target: = !has_gen && ts.find_str("<|").is_some()
-        if inst_target && (c.generics.templates.get(target_fqn) catch null) == null
+        if inst_target && c.generics.templates.get(target_fqn).is_none()
             c.clear_scratch()
-                .s("'\{target_fqn\}' is not a generic type, so it takes no type arguments here")
+                .s("'\{target_fqn\}' is not a generic type. It takes no type arguments here")
             c.err(r, c.scratch.slice())
             return
         if inst_target
@@ -454,9 +454,9 @@ impl Ast_node
         if is_own_param(base_name, gen_params_node)
             c.err(r,
                 "cannot implement methods for every type satisfying a constraint at once ('impl<|T: \
-                    Trait|> T'); name a concrete type per impl ('impl Ci8: Add<|Ci8, Ci8|> { ... \
-                    }') or take the constraint on a generic free function ('fn f<|T: Trait|>(x: \
-                    T)') instead")
+                    Trait|> T'). Name a concrete type per impl ('impl Ci8: Add<|Ci8, Ci8|> { ... \
+                    }'). Alternatively, put the constraint on a generic free function ('fn f<|T: \
+                    Trait|>(x: T)')")
             return false
         // Caution: **Each of an impl's type parameters must appear in the target type.** The `U`
         // of `impl<|T, U|> List<|T|>` is bound to nothing, and a raw `U` would reach code
@@ -464,9 +464,9 @@ impl Ast_node
         for gp in gen_params_node.children
             if gp.kind_id == .k_type_gen_param && gp.has_mut_binding_marker()
                 c.err(gp,
-                    "'$' on an impl's own type parameter has no effect: which instance the impl \
-                        attaches to is decided by the target type (write 'impl<|T|> Box<|$T|>' for \
-                        the mutable one, 'impl<|T|> Box<|T|>' for both). Drop the '$' here")
+                    "'$' on an impl's own type parameter has no effect. The target type decides \
+                        which instance the impl attaches to. Write 'impl<|T|> Box<|$T|>' for the \
+                        mutable instance, or 'impl<|T|> Box<|T|>' for both. Remove the '$' here")
             if id_node: = gp.gen_param_id_node()
                 if !base_ast_spell.mentions_ident(target, id_node.text)
                     c.report_unbound_impl_gen_param(id_node, id_node.text, target)
@@ -480,7 +480,7 @@ impl Ast_node
         //< implementing types, so it needs no extra slot.
         if r.get_impl_trait_node().is_some()
             return false
-        t_id: = c.env.type_to_id.get(target_fqn) catch 0
+        t_id: = c.env.type_to_id.get(target_fqn).unwrap_or(0)
         if t_id == 0
             return false
         switch c.env.get_info(c.env.get_real_type(t_id))
@@ -488,9 +488,10 @@ impl Ast_node
         default
             return false
         c.clear_scratch().s("cannot add methods to interface '").s(target_fqn)
-            .s("'; an interface has vtable slots only for the methods it declares, so an extension \
-                method would have nowhere to dispatch through. Use a free function, or a small \
-                wrapper type conforming to the interface (see 'Int_fmt' / 'Hex_fmt' in std/strfmt)")
+            .s("'. An interface has vtable slots only for the methods it declares. An extension \
+                method would have no slot through which to dispatch. Use a free function, or a \
+                small wrapper type conforming to the interface (see 'Int_fmt' / 'Hex_fmt' in \
+                std/strfmt)")
         c.err(r, c.scratch.slice())
         return true
 
@@ -514,7 +515,7 @@ impl Ast_node
             // Caution: **Reject the same name defined twice.** The template table overwrites by
             // name, so if `impl<|T|> Box<|T|>` and `impl Box<|I32|>` define one method name, the
             // earlier one silently has no effect (Principle 5).
-            prev: = c.generics.templates.get(arena_full_name) catch null
+            prev: = c.generics.templates.get(arena_full_name).unwrap_or(null)
             if prev != null && prev != m
                 c.clear_scratch().s("method '\{m_name\}' is already defined for this type")
                 c.err(m, c.scratch.slice())
@@ -582,8 +583,8 @@ impl Ast_node
             d_node: = p_node.get_param_default()
             if d_node != null
                 c.err(d_node,
-                    "an extern function parameter cannot have a default value: the C side has no \
-                        notion of one")
+                    "an extern function parameter cannot have a default value. C does not support \
+                        default parameter values")
 
     priv fn collect_extern_var(item: Ast_node$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Declares a C variable of an `extern` block, which must name its type
@@ -669,14 +670,14 @@ impl Ast_node
             c_child: = r.get_child(k)
             if c_child.kind_id == .k_identifier
                 name: = c_child.text
-                sym: = c.symtab.resolve(c.make_fqn(name)) catch null
+                sym: = c.symtab.resolve(c.make_fqn(name)).unwrap_or(null)
                 if sym == null
                     continue
                 sym.type_id =
                     (shared_type_id if shared_type_id != 0
                     else require_toplevel_type(c, name, c_child))
-                // As in infer_var_decl (sema/body/stmt.kspl): the `$` before the name sets a
-                // fixed-length array's element immutability, which is written back to the type node
+                // As in infer_var_decl (sema/body/stmt.kspl), the `$` before the name sets a
+                // fixed-length array's element immutability. It is written back to the type node
                 // too.
                 sym.type_id = c.binding_value_type(sym.type_id, sym.flags.is_mut)
                 r.type_id = sym.type_id
@@ -689,7 +690,7 @@ impl Ast_node
             if r.def_node == null
                 name: = r.get_path_name()
                 if name.len > 0
-                    sym: = c.symtab.resolve(name) catch null
+                    sym: = c.symtab.resolve(name).unwrap_or(null)
                     if sym != null
                         sym.flags.is_used = true
         for item in r.children

@@ -2,9 +2,10 @@
 //<
 //< **This file is the canonical source of the list and of how a name is escaped.**
 //< Only local variables, parameters and struct fields (and an enum's payload, a trait's method
-//< names and a closure's captures) are emitted under their plain names. Type names and function
-//< names carry the file path as a prefix, so they never collide. The LLVM backend renames a local
-//< to `%v_<name>_<serial>`, so it is unaffected.
+//< names and a closure's captures) are emitted under their plain names. The exception is a local
+//< that hides another of its name: it takes a made one (`hiding_local_name`). Type names and
+//< function names carry the file path as a prefix, so they never collide. The LLVM backend
+//< renames a local to `%v_<name>_<serial>`, so it is unaffected.
 import "ksplc/base/core" as base_core
 import "std/chars" // `is_upper`
 import "std/str" { Str_builder }
@@ -12,16 +13,17 @@ import "std/str" { Str_builder }
 const made_name_mark: U8[] = "_%" //<
     //< How a local the compiler makes opens its name (`made_name`)
     //<
-    //< **No identifier can hold `%`**, so a name in the source never equals a made one, whatever it
-    //< is: `_e` beside a `catch` or `_for_coll1` beside a `for … in` stays the user's. The `_`
-    //< keeps it among the names nobody need read, which every unused-name check leaves alone.
+    //< **No identifier can hold `%`.** So a name in the source never equals a made one, whatever
+    //< it is: `_e` beside a `catch` or `_for_coll1` beside a `for … in` stays the user's. The `_`
+    //< keeps it among the names that nobody needs to read. Every unused-name check leaves those
+    //< alone.
 
 const made_name_c_prefix: U8[] = "__kspl_" //<
     //< What stands for `made_name_mark` in the generated C
     //<
     //< **A source's name reaches `__` only with `c_name_suffix` after it**
-    //< (`is_reserved_for_compiler`), so a made name, whose stem never ends in that suffix, meets no
-    //< name of the source in C either.
+    //< (`is_reserved_for_compiler`). A made name's stem never ends in that suffix. So a made name
+    //< meets no name of the source in C either.
 
 const made_temp_stem: U8[] = "tmp_" //<
     //< How Lower's temporaries open their stem: each is unique, so the LLVM backend adds no serial
@@ -31,6 +33,17 @@ fn made_name(stem: U8[]): U8[] //< a name for a local the compiler makes, copied
     //< Caution: **Make every such name here.** One spelled in the identifiers' own space shares the
     //< source's names: the source's `_e` read the error a `catch` declares.
     return base_core.arena.text().s(made_name_mark).s(stem).take()
+
+fn hiding_local_name(name: U8[], hidden_count: I32): U8[] //<
+    //< The name of a local that hides hidden_count outer locals of its name (`shadow1_x`)
+    //<
+    //< **C sees a declaration from its own declarator on.** So `I32 x = x + 1;` reads the new `x`,
+    //< and a body's local named like a parameter is a redefinition. KSPL's initializer reads the
+    //< outer one. A made name of its own fixes both. The count keeps nested ones apart, and two
+    //< siblings with one count never share a scope. The stem opens with neither `tmp_` nor any
+    //< other made stem.
+    stem: = name.made_stem() if name.is_made_name() else name
+    return made_name(base_core.arena.text().s("shadow\{hidden_count\}_").s(stem).take())
 
 const c_name_suffix: U8[] = "_kw" //<
     //< The suffix added in the generated C to a name that equals a C reserved word
@@ -53,7 +66,7 @@ impl U8[]
         //<
         //< **It is allowed as a KSPL identifier** (only the generated C escapes it).
         //< Caution: **Do not leave out a single word.** The generated C is compiled with
-        //< `-std=c99`, so a missing word is emitted under its plain name and becomes a C compiler
+        //< `-std=c99`. A missing word is emitted under its plain name. It then becomes a C compiler
         //< error instead of a KSPL diagnostic. A word starting with `_`, such as `_Bool`, is a
         //< reserved word too.
         return r.equals("auto") || r.equals("break") || r.equals("case") || r.equals("char") ||
@@ -120,8 +133,8 @@ impl U8[]
     fn c_safe_name(r: U8[]): Str_builder //< the name as emitted into C
         //<
         //< It adds the suffix where the name is a reserved word, and spells a made name in its own
-        //< space. Many places emit a name inside a string interpolation, so a form that takes no
-        //< Writer is needed too (`nm` in gen/c/ctx.kspl is the Writer version).
+        //< space. Many places emit a name inside a string interpolation. So they need a form that
+        //< takes no Writer too (`nm` in gen/c/ctx.kspl is the Writer version).
         $res: = Str_builder.new()
         r.c_safe_name_to(res@)
         return res

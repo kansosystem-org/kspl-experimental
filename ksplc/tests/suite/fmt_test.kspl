@@ -54,20 +54,19 @@ priv fn case_becomes(slot: U8[], name: U8[], src: U8[], want: U8[], arena: Arena
         verdict.check(name, false, "cannot place the material")
         return
     r: = fmt(path, style)
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
         return
     verdict.check(name, r.out.equals(want), differs(want, r.out, arena))
 
-priv fn case_idempotent(arena: Arena$@) //<
-    //< Checks that even a broken input changes nothing on the second pass
-    name: = "the second formatting changes nothing (idempotent)"
-    path: = write_src("messy", "a.kspl", fmt_material.src_messy, arena)
+priv fn case_idempotent(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
+    //< Checks that formatting src twice changes nothing on the second pass
+    path: = write_src(slot, "a.kspl", src, arena)
     if path.len == 0
         verdict.check(name, false, "cannot place the material")
         return
     first: = fmt(path)
-    if first.code != 0
+    if !first.exited_with(0)
         verdict.check(name, false,
             arena.text().s("the first fmt failed\n\{first.out\}").take())
         return
@@ -76,7 +75,7 @@ priv fn case_idempotent(arena: Arena$@) //<
         verdict.check(name, false, "the first result cannot be written")
         return
     second: = fmt(second_path)
-    if second.code != 0
+    if !second.exited_with(0)
         verdict.check(name, false,
             arena.text().s("the second fmt failed\n\{second.out\}").take())
         return
@@ -96,7 +95,7 @@ priv fn case_carried_string(arena: Arena$@) //<
         verdict.check(name, false, "cannot place the material")
         return
     r: = fmt(path)
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check(name, false, arena.text().s("fmt failed\n\{r.out\}").take())
         return
     verdict.check(name, r.out.equals(fmt_material.src_carried_string),
@@ -108,7 +107,7 @@ priv fn case_carried_string(arena: Arena$@) //<
         return
     second: = fmt(again)
     verdict.check("a carried string does not move on the second formatting",
-        second.code == 0 && second.out.equals(r.out),
+        second.exited_with(0) && second.out.equals(r.out),
         arena.text().s("--- first ---\n\{r.out\}--- second ---\n\{second.out\}").take())
 
 priv fn case_unknown_style_key(arena: Arena$@) //<
@@ -123,7 +122,7 @@ priv fn case_unknown_style_key(arena: Arena$@) //<
         return
     exe: = harness.ksplc_exe()
     bad: = harness.run(U8[][]::{ exe, "fmt", "--style=IndentWith: 8", path })
-    if bad.code == 0
+    if bad.exited_with(0)
         verdict.check(name, false,
             arena.text().s("the mistyped 'IndentWith' passed\n\{bad.out\}").take())
         return
@@ -135,7 +134,7 @@ priv fn case_unknown_style_key(arena: Arena$@) //<
         return
     // Caution: A correct key must pass. If everything were rejected, the case above would pass too.
     good: = harness.run(U8[][]::{ exe, "fmt", "--style=IndentWidth: 8", path })
-    verdict.check(name, good.code == 0,
+    verdict.check(name, good.exited_with(0),
         arena.text().s("the correct 'IndentWidth' was rejected\n\{good.out\}").take())
 
 priv fn case_syntax_error_as_written(arena: Arena$@) //<
@@ -152,7 +151,7 @@ priv fn case_syntax_error_as_written(arena: Arena$@) //<
         return
     r: = fmt(path)
     verdict.check(name,
-        r.code != 0 && r.out.find_str("2 |     x: I32 = \"a\" \"b\"\n").is_some(),
+        !r.exited_with(0) && r.out.find_str("2 |     x: I32 = \"a\" \"b\"\n").is_some(),
         arena.text().s("the line is not shown as written\n\{r.out\}").take())
 
 fn main(): I32
@@ -203,11 +202,21 @@ fn main(): I32
         fmt_material.src_defer_out, arena)
     case_stable("choicebr", "a split value in parentheses does not move",
         fmt_material.src_choice_out, arena)
-    // The three unmoved shapes test the other half: a formatter moving every trailing mark down
-    // would pass the first alone, and the run after a return type would quietly become the
+    // The three unmoved shapes test the other half. A formatter moving every trailing mark down
+    // would pass the first alone. Then the run after a return type would quietly become the
     // declaration's own.
     case_becomes("below", "a description too long for its line stands below the mark",
         fmt_material.src_summary_in, fmt_material.src_summary_out, arena)
+    // Caution: **Format it twice.** A moved text still too long below the mark must stay whole on
+    // the second formatting too. Else the summary grows a line only then, and `[W0213]` reports it.
+    case_idempotent("belowtwice", "a description moved below changes nothing the second time",
+        fmt_material.src_summary_in, arena)
+    // A narrow width breaks lines the default never does; the output must read as the input did,
+    // and stay put.
+    case_becomes("narrow", "at a narrow width a line breaks only where the reader joins it back",
+        fmt_material.src_narrow_in, fmt_material.src_narrow_out, arena, "--style=ColumnLimit: 40")
+    case_becomes("narrowkept", "a narrow formatting does not move on the second formatting",
+        fmt_material.src_narrow_out, fmt_material.src_narrow_out, arena, "--style=ColumnLimit: 40")
     // Idempotent either way, so only the expected value catches it.
     case_stable("innercmt", "a comment inside the braces is put out unbroken at the right level",
         fmt_material.src_inner_comment_in, arena)
@@ -225,7 +234,8 @@ fn main(): I32
     case_becomes("short", "AllowShortBlocks folds only a one-statement block with no comment",
         fmt_material.src_short_in, fmt_material.src_short_out, arena,
         "--style=AllowShortBlocks: true")
-    case_idempotent(arena)
+    case_idempotent("messy", "the second formatting changes nothing (idempotent)",
+        fmt_material.src_messy, arena)
     // Caution: Test the bodies that are not folded too. Folding a two-statement body, one with a
     // comment, or one over the column width breaks the comment or the width setting.
     case_becomes("shortfn", "AllowShortFunctions folds the body of a one-statement fn",

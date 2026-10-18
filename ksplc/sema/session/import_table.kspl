@@ -5,8 +5,8 @@
 //< imports implicitly, and records which imported names are written.
 // ==========================================
 // Caution: **Do not put the table and the checks on it in the same place.** Every pass reads the
-// table, while the checks (unused, existence) run once at the end; mixed, the lookup layer looks
-// as if it depended on the checking layer.
+// table, while the checks (unused, existence) run once at the end. Mixed, the lookup layer looks as
+// if it depended on the checking layer.
 // ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -75,7 +75,7 @@ fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
         file: = child.loc.file()
         if file.len == 0
             continue
-        if !(seen_file.get(file) catch false)
+        if !seen_file.get(file).unwrap_or(false)
             seen_file.set(base_core.arena.dup_str(file), true)
             files.push(base_core.arena.dup_str(file))
         decls_of(child, decls@)
@@ -95,10 +95,10 @@ fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
             continue
         // An alias, like a name, yields to that file's own declaration. In a file that declares `fn
         // lang()`, turning `lang.f()` into an alias prefix would silently change what is called.
-        if !(declared.get(c.import_key(file, lang_alias)) catch false)
+        if !declared.get(c.import_key(file, lang_alias)).unwrap_or(false)
             c.add_implicit_file_alias(file, lang_alias, lang_name)
         for name in lang_names
-            taken: = (declared.get(c.import_key(file, name)) catch false)
+            taken: = declared.get(c.import_key(file, name)).unwrap_or(false)
             c.add_implicit_import_symbol(file, name, lang_name, taken)
 
 impl Alias_info
@@ -106,10 +106,6 @@ impl Alias_info
         return base_core.arena
             .create(Alias_info::{ .target_path = target_path, .is_used = false,
             .decl_node = decl_node })
-
-impl Import_hit
-    fn has_line(r: Self): Bool //< whether a line was found; the zero value is "none yet"
-        return r.alias != null || r.symbol != null
 
 impl Import_symbol_info
     fn new(target_path: U8$[], original_name: U8$[], decl_node: Ast_node$@): Import_symbol_info$@
@@ -129,9 +125,9 @@ impl Sema_ctx
         //< Looks up that alias's information **without setting the used flag** (null if absent)
         //<
         //< Caution: **Do not reuse `find_file_alias` below for this.** That one sets is_used as
-        //< soon as it looks up, silencing the unused lint ([I0401]) on a written `as` (an LSP
+        //< soon as it looks up. It silences the unused lint ([I0401]) on a written `as` (an LSP
         //< operation would change it too).
-        return r.aliases.files.get(r.import_key(file, ali)) catch null
+        return r.aliases.files.get(r.import_key(file, ali)).unwrap_or(null)
 
     fn find_file_alias(r: Self$@, file: U8[], ali: U8[]): Alias_info$@? //<
         //< Looks up the alias information keyed by "file::ali", setting the used flag if found
@@ -150,36 +146,36 @@ impl Sema_ctx
     fn is_file_imported(r: Self$@, target_file: U8[]): Bool //<
         //< Whether this file imports target_file
         //<
-        //< Caution: Check both an import alias (`import "m";`) and a selective import (`import "m"
-        //< { X };`). A match gets is_used set: it is what makes this call valid, so calling it
-        //< unused would be advice that breaks the build if followed.
+        //< Caution: Check both an import alias (`import "m";`) and a selective import
+        //< (`import "m" { X };`). A match gets is_used set, because it is what makes this call
+        //< valid. Calling it unused would be advice that breaks the build if followed.
         if target_file.equals(r.file_name)
             return true
         if r.import_reach == null
             r.build_import_reach()
-        hit: = r.import_reach.get(r.import_key(r.file_name, target_file)) catch
-            return false
-        if hit.alias != null
-            hit.alias.is_used = true
-        else
-            hit.symbol.is_used = true
-        return true
+        if hit: = r.import_reach.get(r.import_key(r.file_name, target_file))
+            if hit.alias != null
+                hit.alias.is_used = true
+            else
+                hit.symbol.is_used = true
+            return true
+        return false
 
     priv fn build_import_reach(r: Self$@) //<
         //< Indexes every import line by the file that writes it and the file it names
         //<
-        //< **One lookup per call instead of a walk over every line of every file**: a method call
+        //< **One lookup per call instead of a walk over every line of every file.** A method call
         //< on another file's type asks, and std/lang's names alone are a line in each file.
         //< Each pair keeps the line a walk over the slots meets first, aliases before selective
-        //< imports, so the line marked used is the one the walk per call marked.
+        //< imports. So the line marked used is the one the walk per call marked.
         reach: = base_core.arena.create(Map<|U8[], Import_hit|>.new_with_cap(64, null))
         for entry in r.aliases.files.items()
             key: = r.reach_key(entry.key, entry.value.target_path)
-            if !(reach.get(key) catch Import_hit::{}).has_line()
+            if reach.get(key).is_none()
                 reach.set(base_core.arena.dup_str(key), Import_hit::{ .alias = entry.value })
         for entry in r.import_symbols.files.items()
             key: = r.reach_key(entry.key, entry.value.target_path)
-            if !(reach.get(key) catch Import_hit::{}).has_line()
+            if reach.get(key).is_none()
                 reach.set(base_core.arena.dup_str(key), Import_hit::{ .symbol = entry.value })
         r.import_reach = reach
 
@@ -228,7 +224,7 @@ impl Sema_ctx
         //< Looks up the selective-import information **without setting the used flag** (or null)
         //<
         //< Caution: the reason not to reuse `find_import_symbol` is at peek_file_alias.
-        return r.import_symbols.files.get(r.import_key(file, local_name)) catch null
+        return r.import_symbols.files.get(r.import_key(file, local_name)).unwrap_or(null)
 
     fn find_import_symbol(r: Self$@, file: U8[], local_name: U8[]): Import_symbol_info$@? //<
         //< Looks up the selective-import information keyed by "file::local_name"
@@ -279,7 +275,7 @@ impl Sema_ctx
         // global, so "yield if the name resolves" turns a generic trait (`Callable1`) into the
         // template name, which no longer matches the instantiated conformance.
         if entry.decl_node == null
-            shadow: = r.symtab.resolve(local_name) catch null
+            shadow: = r.symtab.resolve(local_name).unwrap_or(null)
             if shadow != null && shadow.node != null &&
                 !shadow.node.loc.file().equals(entry.target_path)
                 return ""
@@ -340,12 +336,12 @@ impl Ast_node
         clean_path: = path_opt.unwrap_or("")
         file_name: = r.loc.file()
 
-        // **This is an error, not a lint.** lang's names are already in every file, so allowing it
+        // **This is an error, not a lint.** lang's names are already in every file. So allowing it
         // gives two ways to reach the same name ("One notation per purpose" in
         // docs/DESIGN-principles.md).
         lang_path: = base_locate.lang_file_path
         if clean_path.equals(lang_path)
-            c.clear_scratch().s("'\{lang_path\}' is imported into every file; remove this line.")
+            c.clear_scratch().s("'\{lang_path\}' is imported into every file. Remove this line.")
             c.err(r, c.scratch.slice())
             return
 
@@ -358,8 +354,8 @@ impl Ast_node
         plus: = r.has_import_plus()
         if selector_list != null && !plus && r.get_import_alias().len > 0
             c.err(r,
-                "'as' names the file, so the selector list needs '+': 'import \"p\" as m + { A }'. \
-                    Drop the 'as' to bring in only the selected names.")
+                "'as' names the file. A selector list with 'as' needs '+': 'import \"p\" as m + { A \
+                    }'. To import only the selected names, remove 'as'.")
             return
         $resolved_sb: = file_name.resolve_import_path(clean_path)
         target_path: = resolved_sb.slice()
@@ -387,8 +383,8 @@ impl Ast_node
         taken: = c.peek_file_alias(file_name, alias_name)
         if taken != null && !taken.target_path.equals(target_path)
             c.clear_scratch()
-                .s("import alias '\{alias_name\}' already points at '\{taken.target_path\}'; rename \
-                    one with 'as'.")
+                .s("import alias '\{alias_name\}' already points at '\{taken.target_path\}'. Rename \
+                    one alias with 'as'.")
             c.err(r, c.scratch.slice())
             resolved_sb.free()
             return
@@ -399,9 +395,9 @@ impl Ast_node
         //< Records the identifiers written in the tree as uses of that file's imports
         //<
         //< **Call it before a generic's template body is discarded** (see run in
-        //< sema/body/infer.kspl); afterwards, an import used only from a template body looks
+        //< sema/body/infer.kspl). Afterwards, an import used only from a template body looks
         //< unused.
-        //< Caution: Do not descend into an import declaration itself: its selectors and alias are
+        //< Caution: Do not descend into an import declaration itself. Its selectors and alias are
         //< identifiers too, and every import would mark itself used, silencing I0401.
         r.mark_written_under(c, false)
 

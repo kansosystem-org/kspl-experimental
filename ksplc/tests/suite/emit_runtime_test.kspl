@@ -2,8 +2,8 @@
 //< It checks `ksplc emit-runtime` writes the same C runtime the generated C embeds
 //<
 //< When the runtime written alone and the one embedded at the generated C's head disagree, **both
-//< pass on their own**; an LLVM artefact linked with the one would run other code than the C one
-//< ("The runtime written alone, and its version symbol" in `ksplc/docs/DESIGN-compiler.md`).
+//< pass on their own**. An LLVM artefact linked with the one would run other code than the C one
+//< ("The runtime written alone, and its version symbol" in `ksplc/docs/DESIGN-backends.md`).
 //< Caution: **Do not copy the content into this file.** A copy misses the embedded and the
 //< distributed runtime breaking the same way; compare against the generated C itself.
 import "ksplc/tests/support/harness"
@@ -49,7 +49,7 @@ priv fn emit(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
     args.push("emit-runtime")
     args.push(path)
     r: = harness.ksplc_bare(args.slice())
-    if r.code != 0
+    if !r.exited_with(0)
         return missing(arena.text().s("the output failed: \{r.out\}").take())
     text: = harness.read_generated(path)
     if text.len == 0
@@ -72,7 +72,7 @@ priv fn check_startup_calls(tag: U8[], gen: Text, arena: Arena$@) //<
     //< The calls the generated `main` must make before `kspl_main`
     //<
     //< **This is the only gate either one has on this machine.** Both are empty outside Windows, so
-    //< nothing here runs what they do — this pins down that the generated `main` still calls them,
+    //< nothing here runs what they do. This pins down that the generated `main` still calls them,
     //< in that order, before the program's own code (`startup_calls` in `../../gen/entry.kspl`).
     if !gen.ok
         return
@@ -113,7 +113,7 @@ priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
     args.push(src)
     args.push(out_c)
     r: = harness.ksplc(args.slice())
-    if r.code != 0
+    if !r.exited_with(0)
         return missing(arena.text().s("the generation failed: \{r.out\}").take())
     text: = harness.read_generated(out_c)
     if text.len == 0
@@ -123,8 +123,8 @@ priv fn generated(dir: U8[], tag: U8[], extra: U8[][], arena: Arena$@): Text //<
 priv fn target_probe(dir: U8[], arena: Arena$@): verdict.Run_out //<
     //< Whether the C compiler takes `--target` (code 0), building one small file for ELF
     //<
-    //< Caution: On a tool that cannot (a C compiler with no `--target`), print a SKIP rather than
-    //< passing silently: not failing is not the same as having checked.
+    //< Caution: On a tool that cannot (a C compiler with no `--target`), print a SKIP. Do not pass
+    //< silently: not failing is not the same as having checked.
     probe_c: = fs.join(dir, "target_probe.c", arena)
     io.write_file(probe_c, "int kspl_probe(void) { return 0; }\n") catch {}
     return harness
@@ -139,8 +139,8 @@ priv const lock_free_triples: U8[][5] = ::{ "x86_64-pc-windows-msvc", "x86_64-w6
     "x86_64-pc-linux-gnu", "x86_64-apple-darwin", "thumbv7m-none-eabi" } //<
         //< Targets whose pointer atomics are lock-free, so the runtime defines the four itself
         //<
-        //< **MSVC is the one that matters**: clang there defines only `__CLANG_ATOMIC_*`, and a
-        //< guard asking `__GCC_ATOMIC_*` alone left the four out, seen only at the link on Windows.
+        //< **MSVC is the one that matters.** Clang there defines only `__CLANG_ATOMIC_*`. A guard
+        //< asking `__GCC_ATOMIC_*` alone left the four out, seen only at the link on Windows.
 
 priv const no_lock_free_triple: U8[] = "thumbv6m-none-eabi" //<
     //< Armv6-M, with no LDREX/STREX: the four are left to the port layer
@@ -185,7 +185,7 @@ priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
         verdict.check(on_name, false, "the fragment cannot be written")
         return
     probe: = target_probe(dir, arena)
-    if probe.code != 0
+    if !probe.exited_with(0)
         why: = arena.text().s("the C compiler does not take --target\n\{probe.out\}").take()
         verdict.skip_check(on_name, why)
         verdict.skip_check(off_name, why)
@@ -195,7 +195,7 @@ priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
         r: = harness
             .run(U8[][]::{ harness.cc(), arena.text().s("--target=\{t\}").take(), "-E", "-P", src })
         for n in atomic_names
-            if r.code != 0 || r.out.find_str(n).is_none()
+            if !r.exited_with(0) || r.out.find_str(n).is_none()
                 bad.push(arena.text().s("\{t\}: no \{n\}").take())
     why: = arena.text()
     for b in bad
@@ -204,7 +204,8 @@ priv fn check_atomics(dir: U8[], body: U8[], arena: Arena$@) //<
     off: = harness
         .run(U8[][]::{ harness.cc(),
         arena.text().s("--target=\{no_lock_free_triple\}").take(), "-E", "-P", src })
-    verdict.check(off_name, off.code == 0 && off.out.find_str("kspl_atomic_").is_none(),
+    verdict.check(off_name,
+        off.exited_with(0) && off.out.find_str("kspl_atomic_").is_none(),
         arena.text().s("under \{no_lock_free_triple\}:\n\{off.out\}").take())
 
 fn main(): I32
@@ -222,8 +223,8 @@ fn main(): I32
     io.write_file(llvm_src, prog) catch
         return harness.fatal("cannot write the material")
     llvm: = harness.ksplc(U8[][]::{ "--to=llvm", llvm_src, llvm_ll })
-    verdict.check("the LLVM IR can be generated", llvm.code == 0, llvm.out)
-    if llvm.code == 0
+    verdict.check("the LLVM IR can be generated", llvm.exited_with(0), llvm.out)
+    if llvm.exited_with(0)
         ir: = harness.read_generated(llvm_ll)
         declares_only: =
             ir.find_str("declare void @kspl_io_init_console()").is_some() &&
@@ -249,11 +250,11 @@ fn main(): I32
         built: = harness_build.build_llvm_exe(U8[][]::{ llvm_ll }, llvm_exe,
             U8[][]::harness_build.llvm_cflags)
         $ran_ok: = false
-        if built.code == 0
+        if built.exited_with(0)
             ran: = harness.run(U8[][]::{ llvm_exe })
-            ran_ok = ran.code == 0
+            ran_ok = ran.exited_with(0)
         verdict.check("the LLVM artefact links with emit-runtime's runtime and runs",
-            built.code == 0 && ran_ok, built.out)
+            built.exited_with(0) && ran_ok, built.out)
 
     $hosted: = missing("")
     for i in Range.asc(2)
@@ -271,8 +272,8 @@ fn main(): I32
         if !gen.ok
             continue
         check_startup_calls(tag, gen, arena)
-        // Caution: Check **the position** rather than "it contains", or the declaration half moving
-        // after the generated body, or the definition half slipping into the middle, goes
+        // Caution: Check **the position** rather than "it contains". Otherwise the declaration half
+        // moving after the generated body, or the definition half slipping into the middle, goes
         // unnoticed. In the distributed runtime the halves are contiguous, the version symbol's
         // body at the end.
         runtime: = rt.body.sub(0, rt.body.find_str(abi_def).unwrap_or(rt.body.len))
@@ -311,7 +312,7 @@ fn main(): I32
     rt_c: = fs.join(work, "kspl_runtime_hosted.c", arena)
     rt_o: = fs.join(work, "kspl_runtime_hosted.o", arena)
     standalone: = harness.run(U8[][]::{ cc, "-std=c99", "-c", rt_c, "-o", rt_o })
-    verdict.check("the runtime written out becomes a .o on its own", standalone.code == 0,
+    verdict.check("the runtime written out becomes a .o on its own", standalone.exited_with(0),
         standalone.out)
     check_atomics(work, hosted.body, arena)
 
@@ -325,9 +326,9 @@ fn main(): I32
     //
     // Caution: **Test the mismatching versions too.** The matching link above alone lets through a
     // version symbol that is not actually referenced (`--gc-sections` dropping the reference, say).
-    // **A check that waits on a failed one fails with it**, naming it: a SKIP says the machine
+    // **A check that waits on a failed one fails with it**, naming it. A SKIP says the machine
     // lacks something, and a round would read this one as a missing tool.
-    if llvm.code != 0
+    if !llvm.exited_with(0)
         verdict.check("the LLVM artefact does not link with a runtime of a different version",
             false, "it needs the LLVM IR, whose generation failed above")
         return harness.finish()
@@ -340,5 +341,5 @@ fn main(): I32
     bad: = harness_build.build_exe(U8[][]::{ llvm_ll, other_rt },
         fs.join(work, "rt_llvm_bad.exe", arena), U8[][]::harness_build.llvm_cflags)
     verdict.check("the LLVM artefact does not link with a runtime of a different version",
-        bad.code != 0, "the link passed (the version symbol is not referenced)")
+        !bad.exited_with(0), "the link passed (the version symbol is not referenced)")
     return harness.finish()

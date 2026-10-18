@@ -6,11 +6,11 @@
 
 // ==========================================
 // The three:
-//   1. expression evaluation: the 8 integer kinds' expressions, all 8×8 explicit casts, the 2
-//      floating kinds' expressions and casts, and comparisons, in one program: genc == genllvm ==
+//   1. expression evaluation, in one program: the 8 integer kinds' expressions, all 8×8 explicit
+//      casts, the 2 floating kinds' expressions and casts, and comparisons. genc == genllvm ==
 //      the expected value computed here.
-//   2. a string round trip: random bytes including control bytes, embedded in a literal and read
-//      back at run time.
+//   2. a string round trip: random bytes including control bytes are embedded in a literal and
+//      read back at run time.
 //   3. an overflow's answer does not change under optimisation (`-O0` and `-O2`).
 // ==========================================
 import "ksplc/tests/support/harness"
@@ -175,7 +175,7 @@ priv fn gen_divmod(r: Prng$@, depth: Sz, k: Int_kind@, arena: Arena$@): Expr //<
     //< Division and remainder
     //<
     //< A divisor of 0 halts at run time, so a known constant replaces it. **The minimum / -1 is not
-    //< avoided**: the specification defines it (the dividend back, remainder 0), and only this
+    //< avoided.** The specification defines it (the dividend back, remainder 0). Only this
     //< shape checks that the generated code sends it to the run-time helper.
     op: = "/" if r.chance(50) else "%"
     a: = gen_int(r, depth - 1, k, arena)
@@ -440,7 +440,7 @@ priv struct Side //< the result of building and running on one of the backends
     ok: Bool
     why: U8[]
     out: U8[]
-    code: I32
+    code: I32? //< the exit code; none where it did not build, or did not end
 
 priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], arena: Arena$@): Side //<
     //< It builds and runs src on one backend: genllvm where llvm, genc otherwise
@@ -458,24 +458,24 @@ priv fn build_side(src: U8[], llvm: Bool, work: U8[], tag: U8[], opt: U8[], aren
     args.push(src)
     args.push(gen)
     g: = harness.ksplc(args.slice())
-    if g.code != 0
+    if !g.exited_with(0)
         return Side::{ .ok = false,
             .why = arena.text().s("\{label\} failed at generation\n\{g.out\}").take(), .out = "",
-            .code = -1 }
+            .code = .none }
     cflags: =
         U8[][]::harness_build.llvm_cflags if llvm else U8[][]::{ "-std=c99", opt }
     b: =
         (harness_build.build_llvm_exe(U8[][]::{ gen }, exe, cflags) if llvm
         else harness_build.build_exe(U8[][]::{ gen }, exe, cflags))
-    if b.code != 0
+    if !b.exited_with(0)
         return Side::{ .ok = false,
             .why = arena.text().s("\{label\}'s artefact does not pass the C compiler\n\{b.out\}")
-            .take(), .out = "", .code = -1 }
+            .take(), .out = "", .code = .none }
     r: = harness.run_capped(U8[][]::{ exe }, harness.tmp_dir(), wrap_timeout_ms)
-    if r.code < 0
+    if r.code.is_none()
         return Side::{ .ok = false,
             .why = arena.text().s("\{label\} does not end\n\{r.out\}").take(), .out = "",
-            .code = -1 }
+            .code = .none }
     return Side::{ .ok = true, .why = "", .out = r.out, .code = r.code }
 
 priv fn line_at(lines: List<|U8[]|>@, i: Sz): U8[] //< line n (empty if there is none)
@@ -702,7 +702,7 @@ fn main(): I32
             verdict.check(name, false, w.why)
             continue
         // A non-zero exit code points at the functions that disagreed, one bit each.
-        code: = w.code
+        code: = w.code.unwrap_or(-1)
         why: = arena.text().s("what disagreed:")
         for bit in Range.asc(wrap_names.len)
             if ((code >> I32::bit) & 1) != 0

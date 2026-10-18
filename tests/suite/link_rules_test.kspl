@@ -53,8 +53,8 @@ priv fn disagreements(ldlibs: U8[], libs: U8[], flags: U8[], arena: Arena$@): Li
     //< What `LDLIBS` and ksplc's two answers (`info link-libs`, `info exe-flags`) disagree on
     //<
     //< A library must be on both sides, in any order. A linker option in `LDLIBS` must be one ksplc
-    //< passes, and one ksplc passes for the stack must be in `LDLIBS`. ksplc's other options
-    //< (removing unreferenced sections) the Makefile keeps in `CFLAGS`, so they are not compared.
+    //< passes, and one ksplc passes for the stack must be in `LDLIBS`. The Makefile keeps ksplc's
+    //< other options (removing unreferenced sections) in `CFLAGS`, so they are not compared.
     m: = harness_text.words(ldlibs, arena)
     l: = harness_text.words(libs, arena)
     f: = harness_text.words(flags, arena)
@@ -83,8 +83,8 @@ struct Answers //< one sample: `LDLIBS`, ksplc's two answers, and whether they d
     flags: U8[]
     fires: Bool
 
-// The first two are today's answers on Linux and UCRT64 (on Linux, ksplc's section options are not
-// in LDLIBS), the third UCRT64's out of order.
+// The first two are today's answers on Linux and UCRT64. (On Linux, ksplc's section options are not
+// in LDLIBS.) The third is UCRT64's out of order.
 priv const samples: Answers[_] = ::{ Answers::{ .ldlibs = "-lm -lpthread", .libs = "-lm -lpthread",
     .flags = "-ffunction-sections -fdata-sections -Wl,--gc-sections", .fires = false },
     Answers::{ .ldlibs = "-lm -lws2_32 -lshell32 -Wl,--stack,8388608",
@@ -133,7 +133,7 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
     io.write_file(src, stand_in_src(arena)) catch
         return ""
     gen: = ksplc_harness.ksplc(U8[][]::{ src, c })
-    if !verdict.check("the stand-in C compiler compiles", gen.code == 0, gen.out)
+    if !verdict.check("the stand-in C compiler compiles", gen.exited_with(0), gen.out)
         return ""
     libs: = info("link-libs")
     flags: = info("exe-flags")
@@ -148,7 +148,7 @@ priv fn build_stand_in(work: U8[], arena: Arena$@): U8[] //<
     argv.push("-o")
     argv.push(exe)
     linked: = ksplc_harness.run(argv.slice())
-    if !verdict.check("the stand-in C compiler links", linked.code == 0, linked.out)
+    if !verdict.check("the stand-in C compiler links", linked.exited_with(0), linked.out)
         return ""
     return exe
 
@@ -176,7 +176,7 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
         args.push(v)
     made: = harness.make(args.slice())
     saved: = arena.dup_str(sys.get_env("CC").unwrap_or(""))
-    $libs: = verdict.Run_out::{ .code = -1, .out = "CC could not be set" }
+    $libs: = verdict.Run_out::{ .code = .none, .out = "CC could not be set" }
     $flags: = libs
     $cc_set: = true
     sys.set_env("CC", cc) catch
@@ -197,7 +197,7 @@ priv fn compare(name: U8[], cc: U8[], triple: U8[], make_vars: U8[][], arena: Ar
         verdict.check(arena.text().s("\{name\}: make answers LDLIBS").take(), false, made.out)
         return
     if !verdict.check(arena.text().s("\{name\}: ksplc answers the link rules").take(),
-        libs.code == 0 && flags.code == 0,
+        libs.exited_with(0) && flags.exited_with(0),
         arena.text().s(libs.out).s(flags.out).take())
         return
     $bad: = disagreements(ldlibs, libs.out, flags.out, arena)
@@ -211,15 +211,15 @@ priv const blas_entry: U8[] = "ksai/tests/main.kspl" //< the one package with a 
 priv fn check_blas_off(work: U8[], arena: Arena$@) //<
     //< A build without BLAS asks the link for no OpenBLAS
     //<
-    //< **Linux's image holds OpenBLAS**, so a stray `#link("openblas")` links there and fails only
-    //< on a machine without it (`#cfg` holds one declaration, so a block slipped below the first
-    //< loses it). `--emit-libs` is what the link is asked, the same on every machine.
+    //< **Linux's image holds OpenBLAS.** So a stray `#link("openblas")` links there and fails only
+    //< on a machine without it. (`#cfg` holds one declaration, so a block slipped below the first
+    //< loses it.) `--emit-libs` is what the link is asked, the same on every machine.
     libs: = fs.join(work, "blas_off.libs", arena)
     r: = ksplc_harness.run_in(U8[][]::{ ksplc_harness.ksplc_exe(),
         arena.text().s("--std-dir=").s(ksplc_harness.std_dir()).take(),
         arena.text().s("--emit-libs=").s(libs).take(), blas_entry,
         fs.join(work, "blas_off.c", arena) }, harness.root())
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check("a build without BLAS asks the link for no OpenBLAS", false, r.out)
         return
     got: = io.read_file(libs) catch ""

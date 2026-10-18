@@ -1,20 +1,20 @@
 //< The smallest ARM Cortex-M bare-metal demo
 //<
 //< It prints through ARM semihosting (QEMU -semihosting) and does not depend on std/io. It runs the
-//< same kernel core as the POSIX demos (ksos/kernel/task.kspl) unchanged on the Cortex-M port, and
+//< same kernel core as the POSIX demos (ksos/kernel/task.kspl) unchanged on the Cortex-M port. It
 //< checks cooperative scheduling with priority, Task.delay (tickless idle) and Task.yield. Run it
-//< under QEMU (mps2-an385) to verify it.
+//< under QEMU to verify it: mps2-an385 for the Cortex-M3, microbit for the Cortex-M0.
 //<
-//< **The order the tasks run in is the check.** B is registered before A, so a scheduler that took
-//< the table's order instead of the priority runs B first; a delay that returned at once lets A
-//< run its three rounds in a row; a task that never ran leaves its rounds out.
+//< **The order the tasks run in is the check.** B is registered before A. So a scheduler that took
+//< the table's order instead of the priority runs B first. A delay that returned at once lets A
+//< run its three rounds in a row. A task that never ran leaves its rounds out.
 import "ksos/demo/common/semihost_console" as con
 import "ksos/kernel/task" + { Task }
 
 $tcb_a: Task
 $tcb_b: Task
-$stack_a: U8[4096]
-$stack_b: U8[4096]
+$stack_a: U8[1024]
+$stack_b: U8[1024]
 
 // Each round appends its task's digit (A = 1, B = 2), so the order the rounds ran in is one number.
 $g_trace: U32 = 0
@@ -46,10 +46,10 @@ fn task_b(_arg: Void$@): Void
 // The bare-metal entry called from startup.S.
 #export
 fn ksos_main()
-    con.puts("=== Kanso OS (Cortex-M / QEMU mps2-an385) ===\n")
+    con.puts("=== Kanso OS (Cortex-M / QEMU) ===\n")
     // A has priority 2 and B 1, registered in the other order. A runs first and blocks on the
-    // delay; B, the only task ready, runs all its rounds meanwhile (its yields find nobody else),
-    // then the clock moves on to A's wake-ups.
+    // delay. B, the only task ready, runs all its rounds meanwhile (its yields find nobody else).
+    // Then the clock moves on to A's wake-ups.
     tcb_b.create(U8$[]::stack_b, task_b, null, 1, "b")
     tcb_a.create(U8$[]::stack_a, task_a, null, 2, "a")
     task.start_scheduler()

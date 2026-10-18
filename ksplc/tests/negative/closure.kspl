@@ -47,12 +47,12 @@ fn main(): I32
 // ==== case anon_fn_no_capture
 //< An anonymous function does not capture the outer locals
 //<
-//< The body is lifted to a top-level function (desugar_fn_lit in ksplc/parse/desugar.kspl), so the
-//< outer locals are not visible; **the reason is stated**, and two sides that pass stand beside it.
+//< The body is lifted to a top-level function (desugar_fn_lit in ksplc/parse/desugar.kspl). So the
+//< outer locals are not visible. **The message states the reason**. Two passing cases stand beside it.
 //< Caution: Only one capture is placed: an unresolved path is reported only at the first one.
 // EXPECT: error: undefined path or identifier 'n'
 // EXPECT: an anonymous function cannot capture 'n' from the enclosing scope
-// EXPECT-NOT: Please check for typos
+// EXPECT-NOT: check for typos
 import "std/io"
 
 const g_limit: I32 = 4
@@ -78,8 +78,8 @@ fn main(): I32
 //< From an anonymous function written inside a method, the receiver is not visible
 //<
 //< It is lifted to a top-level function that does not receive `Self`, so `r` is a name that is
-//< nowhere. What is named must be **the side that could not be resolved** (`r`): naming the `v` of
-//< `r.v` casts suspicion on a name that exists and gives advice that cannot be acted on.
+//< nowhere. The message must name **the side that could not be resolved** (`r`). Naming the `v` of
+//< `r.v` blames a name that exists, and its advice cannot be followed.
 // EXPECT: error: undefined path or identifier 'r'
 // EXPECT: an anonymous function cannot capture 'r' from the enclosing scope
 // EXPECT-NOT: is neither a known import alias nor a type
@@ -107,7 +107,7 @@ fn main(): I32
 //< The environment is a temporary on the caller's frame, and the top level has nowhere to declare
 //< it. **That the reason is stated is pinned down**, not an error naming `_anon_env_v_1`. A
 //< function with no capture list holds no environment and has to pass in a top-level `const`.
-// EXPECT: a closure can only appear inside a function body
+// EXPECT: a closure must appear inside a function body
 // EXPECT-NOT: undefined path or identifier
 import "std/io"
 
@@ -134,11 +134,11 @@ fn main(): I32
 // ==== case closure_capture_closure
 //< A closure cannot capture another closure
 //<
-//< The capture's field is the type written (`Callable1<|…|>`), while the synthesised environment
-//< struct comes over, so without the note the user reads `_anon_env_1`, a type they did not write
-//< (anon_env_prefix in ksplc/base/ast.kspl). Handing it over as an **argument** has to pass.
+//< The capture's field is the type written (`Callable1<|…|>`). But the synthesised environment
+//< struct comes over. Without the note, the user reads `_anon_env_1`, a type they did not write
+//< (anon_env_prefix in ksplc/base/ast.kspl). Handing it over as an **argument** must pass.
 // EXPECT: a closure's type is its synthesized environment
-// EXPECT: a closure cannot be captured by another closure
+// EXPECT: A closure cannot capture another closure
 import "std/io"
 
 priv fn app(a: I32, f: Callable1<|I32, I32|>): I32
@@ -164,10 +164,10 @@ fn main(): I32
 //< The diagnostics for mistyping a closure's capture list (`fn(x: I32; n: I32): Bool { … }`)
 //<
 //< Caution: Always place the non-firing side alongside. A correctly written closure has to pass.
-//< Nothing behind the `;` (`fn(x: I32; )`) is rejected by the grammar (capture_list), so no check
-//< for it sits on the desugaring side: an unreachable check "can be written yet does not work".
+//< The grammar (capture_list) rejects nothing behind the `;` (`fn(x: I32; )`). So the desugaring
+//< side has no check for it. An unreachable check "can be written yet does not work".
 // EXPECT: capture 'a' needs a type annotation
-// EXPECT: a capture cannot be marked '$': captures are read-only
+// EXPECT: a capture must not be marked '$'. Captures are read-only
 // EXPECT: a closure with captures must take exactly 1 or 2 parameters
 import "std/io"
 
@@ -201,17 +201,17 @@ fn main(): I32
 // ==== case closure_capture_sema
 //< The **existing checks** enforce the two restrictions on a captured closure
 //<
-//< Writing a capture fails because `call` rebinds it to an immutable local (`build_closure_src` in
-//< parse/desugar.kspl); returning it fails because the environment rides on the caller's frame
+//< Writing a capture fails: `call` rebinds it to an immutable local (`build_closure_src` in
+//< parse/desugar.kspl). Returning it fails: the environment lives in the caller's frame
 //< ("Which pointers into a frame are stopped from leaving it" of
-//< docs/DESIGN-language.md). Should this start passing, the synthesis fell out of those checks.
+//< docs/DESIGN-language.md). If this starts to pass, the synthesis fell out of those checks.
 
 // ==========================================
 // Caution: Always place the non-firing side alongside — a capture only read, and a closure spent
 // inside the call, have to pass.
 // ==========================================
 
-// EXPECT: cannot assign to immutable variable 'd'
+// EXPECT: cannot assign to an immutable variable 'd'
 // EXPECT: cannot return a closure: it keeps pointers to its captured variables
 import "std/io"
 
@@ -239,11 +239,11 @@ fn main(): I32
 //<
 //< Its environment points into the frame, so a global or a place behind a pointer keeps a dead
 //< frame and the later call crashes. `kept_inside` stores into the frame and passes: the count is exact.
-// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored behind a pointer
-// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored behind a pointer
-// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored into the global 'g', which
-// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored into the global 'g_opt', which
-// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame, and it would be stored into the global 'g_holder', which
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored behind a pointer
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored behind a pointer
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored into the global 'g', which
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored into the global 'g_opt', which
+// EXPECT: cannot store a closure: it keeps pointers to its captured variables, which live in this function's frame. It would be stored into the global 'g_holder', which
 // EXPECT: cannot store 'c': it was set from a slice or an interface value built from local storage
 // EXPECT: Finished with 6 error(s)
 import "std/io"
@@ -311,9 +311,9 @@ impl Foo: Owned {}
 // ==== case move_only_array_and_payload
 //< Move_only's structural derivation also walks an enum's payload and an array's elements
 //<
-//< Without that walk, a struct holding an array of owning handles by value could be copied in
-//< silence and become a double free (ksplc/docs/DESIGN-diagnostics.md "A check of the same nature is not copied
-//< into two places").
+//< Without that walk, a struct can hold an array of owning handles by value. It is then copied
+//< silently and becomes a double free (ksplc/docs/DESIGN-diagnostics.md "A check of one kind lives
+//< in one place").
 // EXPECT: was moved out of and cannot be used again
 import "std/mem"
 
@@ -364,6 +364,65 @@ fn main()
   $kept: = gone
   gone.free()
   kept.free()
+// ==== case move_only_field_moved_out
+//< A `Move_only` field read as a value moves out of its local, as the whole binding would
+//<
+//< **Every read as a value is a move, a field's included**: `take(b.m)` twice hands one handle out
+//< twice. After it, the field, what lies below it and the whole binding are gone. Another field
+//< stays. A new value in the field gives it back (the last function passes).
+// EXPECT: move_only_field_moved_out.kspl:31:27: error: field 'b.m' was moved out of
+// EXPECT: move_only_field_moved_out.kspl:34:29: error: field 'o.b.m' was moved out of
+// EXPECT: move_only_field_moved_out.kspl:37:31: error: field 'b.m' was moved out of
+// EXPECT: move_only_field_moved_out.kspl:41:10: error: field 'b.m' was moved out of
+// EXPECT: move_only_field_moved_out.kspl:46:15: error: field 'b.m' was moved out of
+// EXPECT: Finished with 5 error(s)
+priv struct M
+  v: I32
+
+impl M: Move_only {}
+
+priv struct Box
+  m: M
+  n: M
+
+priv struct Outer
+  b: Box
+
+priv fn take(m: M): I32
+  return m.v
+
+priv fn take_box(b: Box): I32
+  return b.n.v
+
+priv fn twice(b: Box): I32
+  return take(b.m) + take(b.m)
+
+priv fn twice_below(o: Outer): I32
+  return take(o.b.m) + take(o.b.m)
+
+priv fn then_whole(b: Box): I32
+  return take(b.m) + take_box(b)
+
+priv fn then_read(b: Box): I32
+  _x: = take(b.m)
+  return b.m.v
+
+priv fn on_every_pass(b: Box, n: I32): I32
+  $t: I32 = 0
+  for $i: I32 = 0; i < n; i += 1
+    t += take(b.m)
+  return t
+
+priv fn apart_and_given_back($b: Box): I32
+  $t: = take(b.m) + take(b.n)
+  b.m = ::{ .v = 3 }
+  t += take(b.m)
+  return t
+
+fn main(): I32
+  b: Box = ::{ .m = ::{ .v = 1 }, .n = ::{ .v = 2 } }
+  o: Outer = ::{ .b = ::{ .m = ::{ .v = 1 }, .n = ::{ .v = 2 } } }
+  return twice(b) + twice_below(o)
 // ==== case move_only_result_payload
 //< Move_only's structural derivation also walks a Result's success payload
 //<

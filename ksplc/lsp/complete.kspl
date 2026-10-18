@@ -134,8 +134,8 @@ priv fn add_pick(out: List<|Pick|>$@, name: U8[], kind: I32, prefix: U8[], node:
 
 // The names visible from the cursor.
 // Caution: **Do not list every name of a module.** An imported name is called qualified
-// (`io.out()`), so the unqualified names are only **the enclosing scopes' names, the file's
-// top-level declarations, and the import aliases**; otherwise thousands of uncallable names mix in.
+// (`io.out()`). So the unqualified names are only **the enclosing scopes' names, the file's
+// top-level declarations, and the import aliases**. Otherwise thousands of uncallable names mix in.
 priv fn picks_in_scope(state: Doc_state$@, path: List<|Ast_node$@|>$@, mark: Ast_node$@,
     prefix: U8[], out: List<|Pick|>$@)
     // What the enclosing scopes declared before the synthesized name (parameters come in here too).
@@ -293,7 +293,7 @@ fn handle_completion(state: Doc_state$@, swapped: Swapped, id_val: json.Val, are
     else
         picks_in_scope(state, path, mark, swapped.prefix, out@)
     // By name; picks of one name keep the order they were found in.
-    $sorted: = out.order_by(fn(a: Pick, b: Pick; ): I32 {
+    $sorted: = out.order_by(fn(a: Pick@, b: Pick@; ): I32 {
         return a.name.compare(b.name);
     }, arena)
     send_picks(state, sorted@, id_val, arena)
@@ -311,7 +311,7 @@ priv fn picks_of_type(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$
     //< That type's fields and methods
     //<
     //< Caution: **Both the path from a receiver and the path qualified by a type's name must go
-    //< through here** (Principle 6), or a member shows for `p.` and not for `P.`.
+    //< through here** (Principle 6). Otherwise a member shows for `p.` and not for `P.`.
     base_only: = c.env.original_generic_name(raw).get_generic_base_name()
     // Fields.
     // **Look a generic up by its base name too** (a `List<|U8[]|>` is registered under
@@ -339,7 +339,7 @@ priv fn add_fields(sd: sema_type_def.Struct_def$@, prefix: U8[], out: List<|Pick
 priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|Pick|>$@) //<
     //< The fields declared by a generic nothing instantiated, which has no struct entry to list
     //<
-    //< Caution: **Only for a generic.** Any other struct has its entry, and one not found by that
+    //< Caution: **Only for a generic.** Any other struct has its entry. One not found by that
     //< name is a name that did not resolve (a bare `P.`), not one to work around.
     switch lsp_nav.struct_decl_of(c, raw)
     case .some(decl)
@@ -356,9 +356,9 @@ priv fn add_declared_fields(c: Sema_ctx$@, raw: U8[], prefix: U8[], out: List<|P
 
 priv fn add_methods(c: Sema_ctx$@, type_name: U8[], prefix: U8[], out: List<|Pick|>$@)
     // The table is built only on demand (ensure_instance_methods in
-    // ksplc/sema/decl/mono_queue.kspl); without that call, a type nobody called methods on is
+    // ksplc/sema/decl/mono_queue.kspl). Without that call, a type nobody called methods on is
     // empty.
-    type_id: = c.env.type_to_id.get(type_name) catch 0
+    type_id: = c.env.type_to_id.get(type_name).unwrap_or(0)
     if type_id != 0
         c.ensure_instance_methods(type_id) catch {}
     switch c.env.methods_of(type_name)

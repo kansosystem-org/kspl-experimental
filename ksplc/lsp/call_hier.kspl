@@ -1,7 +1,7 @@
 //< The call hierarchy: `prepareCallHierarchy`, `incomingCalls` and `outgoingCalls`
 //<
-//< **A function is named by its full name including its file** (`compute_def_fqn`), handed to the
-//< editor as the item's opaque `data`, so two functions called `init` in different files are
+//< **A function is named by its full name including its file** (`compute_def_fqn`). The editor
+//< gets it as the item's opaque `data`, so two functions called `init` in different files are
 //< never mixed up. Passing a function as a pointer is an edge too, marked `(as fn pointer)`: much
 //< code is reachable only that way. A workspace not analysed far enough is answered with an error,
 //< never with an empty list.
@@ -51,7 +51,7 @@ priv fn add_call_entry(idx: Fqn_lookup_idx$@, caller: Ast_node$@, callee: Ast_no
     target: = caller if caller != null else callee
     fqn: = compute_def_fqn(idx, target)
 
-    $entry: = map.get(fqn) catch null
+    $entry: = map.get(fqn).unwrap_or(null)
     if entry == null
         // On the arena, rewound with the request: nothing frees the entries one by one.
         ranges: = base_core.arena.create(List<|Ast_node$@|>.new(base_core.arena))
@@ -141,8 +141,8 @@ impl Ast_node
         return res
 priv struct Fqn_lookup_idx //< the indexes compute_def_fqn uses, built once per request
     //<
-    //< The call hierarchy calls compute_def_fqn per call site, and its two reverse lookups (an
-    //< instance's template name, a generic method template's FQN) as linear walks would be O(N*M);
+    //< The call hierarchy calls compute_def_fqn per call site. Its two reverse lookups (an
+    //< instance's template name, a generic method template's FQN) would be O(N*M) as linear walks.
     //< build_fqn_lookup_idx indexes both.
     inst_names: Map<|U8[], U8[]|>$@ //<
         //< an instance's name -> the original template's registration key
@@ -178,7 +178,7 @@ priv fn find_template_fqn_indexed(idx: Fqn_lookup_idx$@, node: Ast_node$@): U8[]
     $key_sb: = Str_builder.new()
     defer key_sb.free()
     node_loc_key(node, key_sb@)
-    return idx.template_locs.get(key_sb.slice()) catch ""
+    return idx.template_locs.get(key_sb.slice()).unwrap_or("")
 
 priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
     //< A global symbol's full name ("ksos.drivers.ht16k33.init")
@@ -202,7 +202,7 @@ priv fn compute_def_fqn(idx: Fqn_lookup_idx$@, def_node: Ast_node$@): U8[] //<
     if def_node.sym_ptr != null
         sym: = Sema_symbol$@::def_node.sym_ptr
         if sym.flags.is_generated_instance
-            return idx.inst_names.get(sym.name) catch sym.name
+            return idx.inst_names.get(sym.name).unwrap_or(sym.name)
         return qualified_sym_name(sym)
     return find_template_fqn_indexed(idx, def_node)
 
@@ -213,7 +213,7 @@ priv fn build_callee_id_set(root: Ast_node$@): Map<|U8[], I32|>$@ //<
     //<
     //< Caution: **It is not a call and must not be treated as one.** It is still an edge because
     //< **much code is reachable only through a function pointer** (task entry points, bio
-    //< callbacks); shown with "no caller" it looks unused and is mistaken for removable.
+    //< callbacks). Shown with "no caller", it looks unused and is mistaken for removable.
     set: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
     collect_callee_ids(root, set, 0)
     return set
@@ -251,7 +251,7 @@ priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>$@): Bool //
     $key: = Str_builder.new()
     defer key.free()
     node_loc_key(node, key@)
-    return (callee_ids.get(key.slice()) catch 0) == 0
+    return callee_ids.get(key.slice()).unwrap_or(0) == 0
 
 priv struct Call_search //< what both directions of a search carry down the tree unchanged
     idx: Fqn_lookup_idx$@
@@ -295,21 +295,18 @@ priv fn find_outgoing_calls(s: Call_search, node: Ast_node$@, depth: Sz) //<
 
     for child in node.children
         find_outgoing_calls(s, child, depth + 1)
-priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[]): Ast_node$@? //<
-    //< It looks for the definition node matching target_fqn in the whole AST
-    //<
-    //< Not Symbol_table.resolve(): it tries current_file (whichever was walked last) and then
-    //< FQN keys, so a function in an unrelated file can fail to resolve.
-    return find_def_by_fqn_depth(node, idx, target_fqn, 0)
-
-priv fn find_def_by_fqn_depth(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[], depth: Sz):
-    Ast_node$@?
+priv fn find_def_by_fqn(node: Ast_node$@, idx: Fqn_lookup_idx$@, target_fqn: U8[], depth: Sz = 0):
+    Ast_node$@? //<
+        //< It looks for the definition node matching target_fqn in the whole AST
+        //<
+        //< Not Symbol_table.resolve(). That tries current_file (whichever was walked last) and then
+        //< FQN keys. So a function in an unrelated file can fail to resolve.
     if node == null || depth > lsp_position.max_walk_depth
         return .none
     if is_fn_or_impl_decl(node) && compute_def_fqn(idx, node).equals(target_fqn)
         return .some(node)
     for child in node.children
-        if found: = find_def_by_fqn_depth(child, idx, target_fqn, depth + 1)
+        if found: = find_def_by_fqn(child, idx, target_fqn, depth + 1)
             return .some(found)
     return .none
 priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$@,
@@ -318,7 +315,7 @@ priv fn resolve_def_by_fqn(root: Ast_node$@, c: Sema_ctx$@, idx: Fqn_lookup_idx$
         //<
         //< It tries Symbol_table.resolve_fqn first, then the tree walk (find_def_by_fqn) for what
         //< symtab lacks, such as a generics template.
-    sym: = c.symtab.resolve_fqn(target_fqn) catch null
+    sym: = c.symtab.resolve_fqn(target_fqn).unwrap_or(null)
     if sym != null
         return sym.node
     found: = find_def_by_fqn(root, idx, target_fqn).unwrap_or(null)
@@ -373,14 +370,15 @@ priv fn respond_with_call_hier_entries(calls_map: Map<|U8[], Call_hier_entry$@|>
     $arr: = b.arr()
     // **Only here is a list built** (sorting needs them all). Code that only iterates uses
     // `entries()` (the reason is at `entries` in `../../std/ds.kspl`).
-    // Caution: **Do not answer in the Map's order.** That order comes from the hash, so the same
-    // question gets a different order on every run, and a client walking the list loses its place.
+    // Caution: **Do not answer in the Map's order.** That order comes from the hash. So the same
+    // question gets a different order on every run. A client walking the list loses its place.
     $calls: = List<|Call_hier_entry$@|>.new(null)
     defer calls.free()
     for entry in calls_map.items()
         calls.push(entry.value)
-    sorted: = calls.order_by(fn(a: Call_hier_entry$@, b: Call_hier_entry$@; is_incoming: Bool): I32 {
-        return call_order(a, b, is_incoming);
+    sorted: = calls.order_by(fn(a: Call_hier_entry$@@, b: Call_hier_entry$@@; is_incoming: Bool):
+        I32 {
+        return call_order(a$, b$, is_incoming);
     }, arena)
     for call in sorted
         res_obj: = build_call_hier_json(sema, idx, call, is_incoming, style, b)
@@ -402,7 +400,7 @@ priv fn answered_no_workspace(ws_state: Doc_state$@, id_val: json.Val, arena: Ar
 
 fn item_fqn(params: json.Val): U8[] //<
     //< The FQN of the function a call hierarchy request asks about (the `data` prepare returned)
-    return params.get("item").get("data").as_str()
+    return params.get("item").get("data").as_str().unwrap_or("")
 
 fn handle_calls(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, is_incoming: Bool,
     arena: Arena$@) //<

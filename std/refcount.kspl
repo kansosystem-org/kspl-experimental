@@ -15,7 +15,7 @@ priv fn release_value<|T|>(place: T$@) //<
     //< Releases every ARC value the value at `place` holds, leaving it the zero value
     //<
     //< Assigning the zero value makes the compiler release the value overwritten, chained through
-    //< fields, payloads and elements as on leaving a scope; for a `T` holding no ARC it is a plain
+    //< fields, payloads and elements as on leaving a scope. For a `T` holding no ARC it is a plain
     //< write. `List.free` gives its elements back the same way.
     $empty: T[1] = ::{}
     place$ = empty[0]
@@ -38,9 +38,9 @@ priv fn new_control<|T|>(value: T@): Control<|T|>$@
 
 pub struct Rc<|T|> //< a shared owner counted by the compiler, for one thread
     //<
-    //< **The last release takes the value apart**: every ARC value `T` holds (an `Rc` field, an
+    //< **The last release takes the value apart.** Every ARC value `T` holds (an `Rc` field, an
     //< array of them) is released too, to any depth, as when `T` leaves a scope on the stack.
-    //< Caution: **That release runs at the line where the last owner goes**, and a long chain
+    //< Caution: **That release runs at the line where the last owner goes.** A long chain
     //< (`next: Rc<|Node|>` a million deep) recurses once per node there. Walk such a chain in a
     //< loop first ("Release takes the value apart" in `std/docs/DESIGN-core.md`). A resource that
     //< is not ARC (a `List`, a file) still needs its `free()`.
@@ -151,7 +151,7 @@ pub struct Weak_arc<|T|> //< the `Arc` version of `Weak_rc`, which threads can s
 priv fn _drop_implicit_weak<|T|>(ctrl: Control<|T|>$@) //<
     //< Decrements weak atomically by one; only the thread that brings it to 0 frees `Control`
     //<
-    //< Arc.release() and Weak_arc.release() both call it, so one atomic variable decides which
+    //< Arc.release() and Weak_arc.release() both call it. So one atomic variable decides which
     //< decrement is the last, and the memory cannot be freed twice.
     prev_weak: = kspl_atomic_add(ctrl.weak@, -1)
     if prev_weak == 1
@@ -202,7 +202,7 @@ impl<|T|> Weak_arc<|T|>
         return ::{ .ctrl = r.ctrl }
     pub fn upgrade(r: Self$@): Arc<|T|>!Weak_error //< an owner again, if the value is still alive
         //<
-        //< A plain fetch-add could raise strong from 0 to 1, so a CAS increments only a non-zero
+        //< A plain fetch-add could raise strong from 0 to 1. So a CAS increments only a non-zero
         //< value it read, and retries when another thread changed it first.
         for
             current: = kspl_atomic_add(r.ctrl.strong@, 0) // an atomic read

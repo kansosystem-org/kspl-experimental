@@ -4,9 +4,9 @@
 // ==== case char_literal_one_byte
 //< A character literal is one byte
 //<
-//< Caution: **Do not let a spelling through whose body is not spent in one byte**: let it through
-//< and char_literal_byte **returns the leading byte alone in silence** (`あ` becomes 227). Text
-//< that does not fit one byte is a string (`U8[]`); one-byte spellings must not be caught up in it.
+//< Caution: **Refuse a spelling whose body does not fit in one byte.** Let through,
+//< char_literal_byte **silently returns the leading byte alone** (`あ` becomes 227). Text that
+//< does not fit one byte is a string (`U8[]`). One-byte spellings must not be caught by the check.
 // EXPECT: a character literal holds exactly one byte
 // EXPECT-NOT: 'a' is more than one
 // EXPECT-NOT: '\n' is more than one
@@ -24,8 +24,8 @@ pub fn take(): I32
 // ==== case format_spec_char_alone
 //< The `\{b:c\}` that prints a byte **as a character** takes no other setting
 //<
-//< **It does not overlap a number's decoration**: one character has nowhere for a width, a
-//< zero-fill, a thousands separator or a decimal count to apply, so one alongside is refused.
+//< **It does not overlap a number's decoration.** One character has nowhere for a width, a
+//< zero-fill, a thousands separator or a decimal count to apply. So one of them alongside is refused.
 //< Read and discarded, it would be "written yet nothing happens" (Principle 5; as for hex).
 // ==========================================
 // EXPECT: combines 'width' with 'c'
@@ -44,7 +44,7 @@ pub fn take()
 // ==== case format_spec_char_type
 //< Only `U8` accepts `\{v:c\}`
 //<
-//< **With the functions split, a type with nowhere to apply it stops at the interpolation with
+//< **The functions are split. So a type with nowhere to apply it stops at the interpolation with
 //< "there is no such method"** (as hex is split off into `fmt_hex`). One shared function could
 //< only ignore the argument, and that passes in silence.
 // ==========================================
@@ -63,9 +63,9 @@ pub fn take()
 // ==== case format_spec_does_nothing
 //< A format specifier that would be written yet do nothing is refused, one error per specifier
 //<
-//< **Each was accepted or misreported**: `.20` and `.25` printed 19 digits (std/strfmt clamps), a
-//< lone `0` padded to no width, an empty `:` was a syntax error about a `(` never closed, and a
-//< spec both unreadable and misordered gave two errors at one position (`check_format_spec` in
+//< **Each was accepted or misreported.** `.20` and `.25` printed 19 digits (std/strfmt clamps). A
+//< lone `0` padded to no width. An empty `:` was a syntax error about a `(` never closed. A spec
+//< both unreadable and misordered gave two errors at one position (`check_format_spec` in
 //< `ksplc/parse/desugar.kspl`).
 // EXPECT: format spec ':.20' asks for more digits after the point than are written (at most 19)
 // EXPECT: format spec ':0' has a zero-pad '0' and no width to pad to
@@ -98,8 +98,8 @@ fn main(): I32
 // ==== case format_spec_on_struct
 //< A format setting applies only to numbers
 //<
-//< Even conforming to `Formattable`, there is nowhere for an alignment or a thousands separator to
-//< apply, so the desugaring target `fmt_spec` does not resolve and it stops here.
+//< Even with `Formattable`, there is nowhere for an alignment or a thousands separator to apply.
+//< So the desugaring target `fmt_spec` does not resolve, and the compilation stops here.
 // EXPECT: does not take the width / '0' / ',' items
 // EXPECT-NOT: [
 import "std/io"
@@ -152,8 +152,8 @@ pub fn take(): I32
 //< An integer literal that does not fit its range is an error
 //<
 //< **An unsettled literal is not judged as I32** (a numeric operator gives its right side no
-//< expected type, pass_right_id in sema/body/expr.kspl), nor by absolute value (`I8 = -128`):
-//< either bars correct code. Suffixed literals take their own road; `U8::300` truncates and passes.
+//< expected type, pass_right_id in sema/body/expr.kspl), nor by absolute value (`I8 = -128`).
+//< Either bars correct code. Suffixed literals take their own road: `U8::300` truncates and passes.
 
 // EXPECT: literal '2147483648' is out of range for type 'I32'
 // EXPECT: literal '4294967296' is out of range for type 'U32'
@@ -212,9 +212,9 @@ pub fn take(): I32
 // ==== case raw_mutex_is_private
 //< The plain lock (`thread.Raw_mutex`) is an internal part of std/thread and is not published
 //<
-//< Held apart from what it protects, the compiler cannot notice a caller forgetting lock() and
-//< touching the data directly, so only `thread.Mutex<|T|>` (the two as one thing) is published, as
-//< in Rust's std (std/docs/DESIGN-system.md "A mutex makes the lock and what it protects one thing").
+//< Held apart from what it protects, the lock cannot show that a caller forgot lock() and touched
+//< the data directly. So only `thread.Mutex<|T|>` (the two as one thing) is published, as
+//< in Rust's std (std/docs/DESIGN-system.md "A mutex makes the lock and its data one thing").
 // EXPECT: Raw_mutex
 import "std/thread"
 
@@ -227,7 +227,7 @@ fn main()
 //< It holds no storage, so off a Writer chain the interpolation itself is reported; undiagnosed,
 //< it reaches Genc as `string_interp` and becomes an **ICE**. Desugar does not expand it where the
 //< receiver is not a `.` chain, or an argument (`take` below) shows an unwritten name, `take.s`.
-// EXPECT: string interpolation can only be written as the argument of a writer chain
+// EXPECT: string interpolation can only be written as an argument of a writer chain
 // EXPECT: Build the value with 'Str_builder' first
 import "std/io"
 

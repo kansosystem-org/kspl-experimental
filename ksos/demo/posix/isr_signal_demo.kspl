@@ -2,11 +2,10 @@
 //<
 //< A real POSIX signal (SIGUSR1) stands in for a microcontroller's external interrupt. The handler
 //< cannot block (the scheduler has nothing to switch to), so it always uses try_send, which does
-//< not block. Like std/sys's shutdown handler, it does nothing that is not async-signal-safe (no
-//< I/O such as io.out(), no allocation): only try_send and a counter update. Raising the
-//< "interrupt" 10 times against a queue of capacity 4 also shows the price of never blocking: once
-//< the queue is full, values are dropped, and drop_count shows it.
-import "ksos/demo/common/task_end"
+//< not block. Like std/sys's shutdown handler, it does only what is async-signal-safe: try_send
+//< and a counter update. It does no I/O (such as io.out()) and no allocation. It raises the
+//< "interrupt" 10 times against a queue of capacity 4. That shows the price of never blocking:
+//< once the queue is full, values are dropped, and drop_count shows it.
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
@@ -30,8 +29,8 @@ $stack_consumer: U8[65536]
 
 fn on_ext_irq(_sig: I32): Void //< the mock ISR
     //<
-    //< It calls libc.signal() again at the end because, on glibc built with -std=c99, signal() has
-    //< SysV semantics: after one delivery the action resets to the default, which exits. Without
+    //< It calls libc.signal() again at the end. On glibc built with -std=c99, signal() has SysV
+    //< semantics: after one delivery, the action resets to the default, which exits. Without
     //< registering again, the second SIGUSR1 ends the process (the classic "reliable signal"
     //< idiom).
     g_irq_count += 1
@@ -58,9 +57,9 @@ fn consumer(_arg: Void$@): Void
         Task.delay(1)
     io.out().s("=== Kanso OS (POSIX) ISR-safe msgq_try_send demo ===\n")
     io.out().s("[consumer] irq_count=\{g_irq_count\} drop_count=\{g_drop_count\} sum=\{sum\}\n")
-    assert(g_irq_count == 10, "isr: every raised signal must reach the handler")
-    assert(g_drop_count == 6, "isr: a full queue must drop without blocking")
-    assert(sum == 6, "isr: the 4 kept values must be the first 4 (0+1+2+3)")
+    verdict.check("isr: every raised signal reaches the handler", g_irq_count == 10, "")
+    verdict.check("isr: a full queue drops without blocking", g_drop_count == 6, "")
+    verdict.check("isr: the 4 kept values are the first 4 (0+1+2+3)", sum == 6, "")
     // A critical section holds the stand-in interrupt back until it ends, as cpsid does on
     // Cortex-M.
     before: = g_irq_count
@@ -68,8 +67,9 @@ fn consumer(_arg: Void$@): Void
     sys.raise_signal(sigusr1)
     held: = g_irq_count == before
     task.irq_restore(s)
-    assert(held, "isr: a signal raised inside a critical section must wait for its end")
-    assert(g_irq_count == before + 1, "isr: the held signal must arrive once the section ends")
+    verdict.check("isr: a signal raised inside a critical section waits for its end", held, "")
+    verdict.check("isr: the held signal arrives once the section ends", g_irq_count == before + 1,
+        "")
     io.out().s("[consumer] ISR->task signaling via msgq_try_send verified\n")
     io.out().s("=== done ===\n")
 
@@ -79,6 +79,5 @@ fn main(): I32
     tcb_driver.create(U8$[]::stack_driver, driver, null, 1, "driver")
     tcb_consumer.create(U8$[]::stack_consumer, consumer, null, 1, "consumer")
     task.start_scheduler()
-    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
     return verdict.finish()

@@ -48,7 +48,7 @@ priv fn send_cfg_inactive_hover(state: Doc_state$@, params: json.Val, id_val: js
         //<
         //< It returns true where it sent the reason; elsewhere it sends nothing and returns false.
         //< Caution: **Do not silently return null.** A dropped declaration leaves nothing in the
-        //< AST, so without the reason the editor's features look dead on that file alone ("How code
+        //< AST. Without the reason, the editor's features look dead on that file alone ("How code
         //< covered by `#cfg()` is handled" in ksplc/docs/SPEC-tools.md).
     offset: = lsp_msg.offset_at(state.src_perm, params)
     // By the logical name the range was recorded under, not the URI: a copy under another folder
@@ -84,7 +84,7 @@ priv struct Hover_ctx
 // The type a method or associated function belongs to, "" for a free function.
 //
 // Caution: **Prefer the declared type over an instantiation.** A generic's method node is reached
-// from the template's entry and every instance's, and an instance's `str_repr` is the internal
+// from the template's entry and every instance's. An instance's `str_repr` is the internal
 // name, so otherwise whichever comes first names the owner.
 priv fn find_owner_of_fn(state: Doc_state$@, def_node: Ast_node$@, keep_args: Bool): U8[]
     // keep_args tells the two questions apart: at a **call** of an instantiated generic the
@@ -166,8 +166,8 @@ priv fn owns_fn(entry: sema_type_def.Entry$@, def_node: Ast_node$@): Bool //<
     //< Whether that entry's table (`Entry.methods` in `../sema/type/def`) holds the declaration
     //<
     //< **A trait's requirements are not here.** They belong to the trait's own definition
-    //< (`add_trait_method` in `../sema/decl/trait_check.kspl`), so this answers false for them and
-    //< find_owner_of_fn falls through to the tree, which covers a generic trait as well.
+    //< (`add_trait_method` in `../sema/decl/trait_check.kspl`), so this answers false for them.
+    //< Then find_owner_of_fn falls through to the tree, which covers a generic trait as well.
     if entry.methods == null
         return false
     for m in entry.methods.items()
@@ -181,8 +181,8 @@ priv fn find_parent_type_name(state: Doc_state$@, def_node: Ast_node$@, keep_arg
         return ""
     if def_node.is_fn_decl()
         // Caution: **Build every entrusted table, not just the one wanted.** A table is built only
-        // on demand, the scan below needs one, and which type holds the function is the question,
-        // so there is no id to look up by; the set is only what this document instantiated.
+        // on demand, and the scan below needs one. Which type holds the function is the question,
+        // so there is no id to look up by. The set is only what this document instantiated.
         state.sema.build_entrusted_tables()
         return find_owner_of_fn(state, def_node, keep_args)
     for entry in state.sema.env.id_to_type
@@ -271,8 +271,8 @@ priv fn is_label_name(path: List<|Ast_node$@|>$@, target_node: Ast_node$@): Bool
 
 priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: Ast_node$@,
     id_val: json.Val, arena: Arena$@)
-    // Hovering the ':' after a declarator (absorbed in normalization) targets the declaration node,
-    // whose .text is the internal marker "let" / "var"; take its declared name instead, or
+    // Hovering the ':' after a declarator (absorbed in normalization) targets the declaration node.
+    // Its .text is the internal marker "let" / "var". Take its declared name instead, or
     // get_fqn_name shows the marker. A declaration's `const` stands for it too.
     if target_node.is_keyword("const") && path.len >= 2 &&
         path.get(path.len - 2).kind_id == .k_decl_const
@@ -283,7 +283,7 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         if id_n != null
             path.push(id_n)
             target_node = id_n
-    // **A label is not a value**, so it has no type to show; left to the classification below it
+    // **A label is not a value**, so it has no type to show. Left to the classification below, it
     // would read as a variable typed by its own name (`with_setup: with_setup`).
     if is_label_name(path, target_node)
         $md_label: = Str_builder.new()
@@ -480,7 +480,7 @@ priv fn classify_def_node(state: Doc_state$@, d: Ast_node$@, parent_enum_in: Ast
 priv fn classify_decl(d: Ast_node$@, ctx: Hover_ctx$@): Bool //<
     //< The type and prefix of a declaration whose kind alone decides them; false for another kind
     //<
-    //< **A method is in the symbol table only as `Foo.bar`**, so its declaration's own name reaches
+    //< **A method is in the symbol table only as `Foo.bar`.** So its declaration's own name reaches
     //< here through the path walk too (`walk_path_for_type`), not through the symbol table.
     switch d.kind_id
     case .k_decl_fn, .k_decl_fn_proto
@@ -578,12 +578,12 @@ priv fn classify_def_fallback(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, d: Ast_
 priv fn classify_identifier(state: Doc_state$@, path: List<|Ast_node$@|>$@,
     target_node: Ast_node$@, ctx: Hover_ctx$@) //<
         //< How an identifier or primitive type name resolves (as a type, a symbol, or unresolved)
-    t_id: = state.sema.env.type_to_id.get(target_node.text) catch 0
+    t_id: = state.sema.env.type_to_id.get(target_node.text).unwrap_or(0)
     if t_id != 0
         ctx.type_id = t_id
         ctx.prefix = "(Type) "
         return
-    sym: = state.sema.symtab.resolve(target_node.text) catch null
+    sym: = state.sema.symtab.resolve(target_node.text).unwrap_or(null)
     if sym != null && sym.node != null
         if sym.node.kind_id == .k_decl_struct
             ctx.prefix = "(Generic Struct) "
@@ -621,7 +621,7 @@ priv fn walk_path_for_type(path: List<|Ast_node$@|>$@, target_node: Ast_node$@, 
             if ctx.def_node != null && ctx.def_node.kind_id == .k_enum_variant
                 break
             // Caution: **A member access is not always a call.** A field's `j.argv` reaches here
-            // too; treated as a function, the display takes it from the source, whose span stops
+            // too. Treated as a function, the display takes it from the source. That span stops
             // short on a desugared type, so a `U8[][]` field reads `U8`: a different type.
             if p.is_member_access() && !is_field_def(ctx.def_node)
                 ctx.prefix = "(Function) "
@@ -671,7 +671,7 @@ priv fn write_owner_prefix(state: Doc_state$@, def_node: Ast_node$@, keep_args: 
     out: Str_builder$@): Bool //<
         //< It writes `Owner.` for a member, the owner as the source spells it; false where none is
         //<
-        //< **The owner's name is already complete**, with its own module: the member's file is not
+        //< **The owner's name is already complete**, with its own module. The member's file is not
         //< the owner's where an `impl` is in a different file from its type.
     parent_name: = find_parent_type_name(state, def_node, keep_args)
     if parent_name.len == 0

@@ -351,7 +351,8 @@ priv const cases: Case[_] = ::{
         .src = "fn main() { }\n" },
     Case::{ .sec = "8.2", .claim = "main returning a slice is refused", .reject = true,
         .src = "fn main(): U8[] { return \"x\"; }\n" },
-    Case::{ .sec = "8.3", .claim = "using a Result as a bare value is refused", .reject = true,
+    Case::{ .sec = "8.3", .claim = "a Result where its value is expected is refused",
+        .reject = true,
         .src =
         "priv enum E { bad; }\npriv fn f(): I32!E { return 1; }\nfn main(): I32 { x: I32 = f(); \
             return x; }\n" },
@@ -364,6 +365,21 @@ priv const cases: Case[_] = ::{
         .src =
         "priv enum E { bad; }\npriv fn f(): I32!E { return 1; }\nfn main(): I32 { x: = f()!; return \
             x; }\n" },
+    Case::{ .sec = "8.3", .claim = "a Result is a value a switch takes apart", .reject = false,
+        .src =
+        "priv enum E { bad; }\npriv fn f(): I32!E { return .ok(2); }\nfn main(): I32 { r: = f(); \
+            switch r case .ok(v) { return v - 2; } case .err(_e) { return 1; } }\n" },
+    Case::{ .sec = "8.3", .claim = "a Result left as a statement is refused", .reject = true,
+        .src = "priv enum E { bad; }\npriv fn f(): I32!E { return 1; }\nfn main() { f(); }\n" },
+    Case::{ .sec = "8.3", .claim = "a Result bound to a '_' name is refused", .reject = true,
+        .src = "priv enum E { bad; }\npriv fn f(): I32!E { return 1; }\nfn main() { _r: = f(); }\n" },
+    Case::{ .sec = "8.3", .claim = "'catch {}' drops a failure on purpose", .reject = false,
+        .src =
+        "priv enum E { bad; }\npriv fn f(): I32!E { return 1; }\nfn main() { f() catch {} }\n" },
+    Case::{ .sec = "8.3", .claim = "'Result<|T, E|>' written as a type is refused", .reject = true,
+        .src =
+        "priv enum E { bad; }\npriv fn f(): Result<|I32, E|> { return 1; }\nfn main(): I32 { return \
+            f() catch 0; }\n" },
     Case::{ .sec = "8.4", .claim = "a double free is refused", .reject = true,
         .src =
         "priv struct B { v: I32; }\nimpl B { fn free(r: Self$@) { r.v = 0; } }\nimpl B: Owned \
@@ -446,7 +462,7 @@ fn main(): I32
     for i in Range.asc(cases.len)
         c: = cases[i]@
         r: = outs.get(i)
-        got_reject: = r.code != 0
+        got_reject: = !r.exited_with(0)
         name: = arena.text().s("[").s(c.sec).s("] ").s(c.claim).take()
         if got_reject == c.reject
             verdict.check(name, true, "")

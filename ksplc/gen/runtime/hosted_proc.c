@@ -6,9 +6,9 @@
  * Going back and forth with a child process joined by pipes (for std/sys.kspl's Piped_child).
  * Whether the partner crashes or hangs, this side survives.
  *
- * Caution: **A read always has a timeout**, returned as a value (-1). Do not add one without —
- * the caller could no longer see why it stopped ("Three ways to start a child process, split by
- * where its output goes" in std/docs/DESIGN-system.md).
+ * Caution: **A read always has a timeout**, returned as a value (-1). Do not add one without it.
+ * The caller could then no longer see why it stopped ("Three ways to start a child process, by its
+ * output" in std/docs/DESIGN-system.md).
  * What starts one is kspl_proc_start in hosted_spawn.c (the tool assembling argv is there).
  * ============================================================ */
 #ifndef _WIN32
@@ -35,11 +35,11 @@ typedef struct {
 
 /* ============================================================
  * The groups a terminal's signals are passed on to.
- * A child leading a group of its own is out of the terminal's foreground group, so the terminal's
- * SIGINT, SIGQUIT and SIGHUP no longer reach it, and a starter they end would leave it running
- * with nobody to stop it at its time limit. So while such a child runs, those and SIGTERM are
- * passed on to every group held here, and the starter then ends by the signal as by default.
- * Caution: **Take a signal only where it is at its default** (kspl_take_default_signal): a program
+ * A child leading a group of its own is out of the terminal's foreground group. So the terminal's
+ * SIGINT, SIGQUIT and SIGHUP no longer reach it. A starter they end would leave it running, with
+ * nobody to stop it at its time limit. So while such a child runs, those and SIGTERM are passed
+ * on to every group held here. The starter then ends by the signal as by default.
+ * Caution: **Take a signal only where it is at its default** (kspl_take_default_signal). A program
  * that ignores or handles one has chosen. The blocks are never freed: the handler walks unlocked.
  * ============================================================ */
 #define KSPL_GROUP_BLOCK 64
@@ -64,8 +64,8 @@ static void kspl_group_pass_on(int sig) {
 }
 
 /* Puts `to` in the first slot holding `from`: a hold is 0 → pid, a release pid → 0. Where a hold
- * finds every block full, a new block goes on the end, filled before it is linked, as the handler
- * may walk it at any moment. Returns 0 where no block could be had. */
+ * finds every block full, a new block goes on the end. It is filled before it is linked, because
+ * the handler can walk it at any moment. Returns 0 where no block could be had. */
 static int kspl_group_swap(pid_t from, pid_t to) {
     static int taken = 0;
     kspl_group_block *b, *last = NULL;
@@ -96,14 +96,14 @@ static int kspl_group_swap(pid_t from, pid_t to) {
     return done || to == 0;
 }
 
-/* Writes all len bytes to the child's standard input: 0 when all of it went, -1 when no byte went
- * for timeout_ms in a row (what went by then stays written), -2 when the child closed its standard
- * input or ended.
- * **The limit is idle time, not the whole write**: each byte that goes moves the deadline on, so a
- * large input to a child that reads steadily but slowly is not cut off part way, while a child
- * that stops reading is still given up on.
+/* Writes all len bytes to the child's standard input. Returns 0 when all of it went, and -1 when
+ * no byte went for timeout_ms in a row (what went by then stays written). Returns -2 when the child
+ * closed its standard input or ended.
+ * **The limit is idle time, not the whole write.** Each byte that goes moves the deadline on. So a
+ * large input to a child that reads steadily but slowly is not cut off part way. A child that
+ * stops reading is still given up on.
  * Caution: **Never block on the write itself.** A child that stops reading fills the pipe, and a
- * blocking write would outlast every timeout, so the end is non-blocking and waited on by poll. */
+ * blocking write would outlast every timeout. So the end is non-blocking and waited on by poll. */
 KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) {
     timeout_ms = kspl_wait_ms(timeout_ms);
     if (handle == 0) return -2;
@@ -191,8 +191,41 @@ KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     }
 }
 
+/* How long a group sent SIGTERM has to end before SIGKILL. It is short beside any time limit. But
+ * it is ample for a KSPL starter in it to pass the signal on to the groups it leads
+ * (kspl_group_pass_on). */
+#define KSPL_TERM_GRACE_MS 500
+
+/* Stops the group `g` leads and reaps its leader into *st. It sends SIGTERM (with SIGCONT, as a
+ * stopped process takes no other signal), then SIGKILL to whatever is left at the grace's end.
+ * Caution: **Do not send SIGKILL alone.** It ends a KSPL starter in the group before it can pass
+ * anything on. The groups that starter leads then run on with nobody left to stop them. The
+ * group's number stays out of reuse while any member lives. So once the leader is reaped, ESRCH
+ * from kill(-g, 0) says the whole group has ended, and the wait is cut short. */
+static void kspl_group_stop(pid_t g, int *st) {
+    int reaped = 0;
+    I32 pause_ms = 1;
+    I64 deadline = kspl_mono_us() + (I64)KSPL_TERM_GRACE_MS * 1000;
+    kill(-g, SIGTERM);
+    kill(-g, SIGCONT);
+    for (;;) {
+        if (!reaped) {
+            pid_t r = waitpid(g, st, WNOHANG);
+            reaped = r == g || (r < 0 && errno == ECHILD);
+        }
+        if (reaped && kill(-g, 0) != 0 && errno == ESRCH) return;
+        if (kspl_mono_us() >= deadline) break;
+        kspl_sleep_ms(pause_ms);
+        if (pause_ms < 10) pause_ms *= 2;
+    }
+    kill(-g, SIGKILL);
+    if (!reaped) {
+        while (waitpid(g, st, 0) < 0 && errno == EINTR) {}
+    }
+}
+
 /* Stops and reaps it, and closes the pipes. A child leading a group of its own is stopped with
- * its whole group: what it started goes with it.
+ * its whole group: what it started goes with it (kspl_group_stop).
    Caution: **Do not send a signal to a child already reaped.** The OS may reuse the pid, and the
  * SIGKILL stops an unrelated process (kspl_proc_alive often reaps first). Until it is reaped, its
  * pid, and so its group's number, is still its own. */
@@ -201,8 +234,12 @@ KSPL_LINK void kspl_proc_kill(I64 handle) {
     kspl_proc_t *h = (kspl_proc_t *)(intptr_t)handle;
     if (!h->reaped) {
         int st = 0;
-        kill(h->group ? -h->pid : h->pid, SIGKILL);
-        while (waitpid(h->pid, &st, 0) < 0 && errno == EINTR) {}
+        if (h->group) {
+            kspl_group_stop((pid_t)h->pid, &st);
+        } else {
+            kill(h->pid, SIGKILL);
+            while (waitpid(h->pid, &st, 0) < 0 && errno == EINTR) {}
+        }
         kspl_proc_reaped(h, st, 1);
     }
     kspl_proc_free(h);
@@ -272,10 +309,10 @@ typedef struct {
 } kspl_proc_t;
 
 /* The same contract as the POSIX side, the idle limit included. The end is put in PIPE_NOWAIT, so a
- * write takes what the pipe has room for and returns at once; it is looked at again after a pause
+ * write takes what the pipe has room for and returns at once. It is looked at again after a pause,
  * until timeout_ms pass with nothing taken.
- * **A step is 4096 bytes at most**, the size CreatePipe gives a pipe: a write wider than the room
- * may take nothing at all, and could then never go. */
+ * **A step is 4096 bytes at most**, the size CreatePipe gives a pipe. A write wider than the room
+ * can take nothing at all, and could then never go. */
 KSPL_LINK I32 kspl_proc_send(I64 handle, const U8 *ptr, Sz len, I32 timeout_ms) {
     timeout_ms = kspl_wait_ms(timeout_ms);
     if (handle == 0) return -2;
@@ -340,7 +377,7 @@ KSPL_LINK void kspl_proc_close_stdin(I64 handle) {
     }
 }
 
-/* The same contract as the POSIX side: a child in a job is stopped with the whole job, and one
+/* The same contract as the POSIX side: a child in a job is stopped with the whole job. A child
  * already seen to end is only tidied, as the POSIX side can no longer name its group. */
 KSPL_LINK void kspl_proc_kill(I64 handle) {
     if (handle == 0) return;
@@ -353,9 +390,9 @@ KSPL_LINK void kspl_proc_kill(I64 handle) {
     kspl_proc_free(h);
 }
 
-/* The ending number of an ended child, in the POSIX side's terms: a crash Windows reports as an
- * NTSTATUS is 128 + the signal POSIX raises for the same fault, and any other code is its own.
- * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal**: make
+/* The ending number of an ended child, in the POSIX side's terms. A crash Windows reports as an
+ * NTSTATUS is 128 + the signal POSIX raises for the same fault. Any other code is its own.
+ * Caution: **Keep one case per line, each NTSTATUS named, and the code a literal.** make
  * test-conventions compares this table with the one in "A child's end is one code on every OS" in
  * std/docs/DESIGN-system.md, where the reasons are. Exit code 3 is not here, as an exit(3) gives it too. */
 static int kspl_proc_status_code(DWORD st) {

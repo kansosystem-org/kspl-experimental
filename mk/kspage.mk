@@ -46,6 +46,16 @@ kspage-open: kspage-web kssrv $(KSPAGE_OPEN_EXE)
 	@test -n "$(FILE)" || { echo "usage: make kspage-open FILE=<path to a document>"; exit 1; }
 	./$(KSPAGE_OPEN_EXE) "$(FILE)"
 
+# **The opener as a double-click runs it**: two documents chosen and opened together start two
+# openers at once (`tools/tests/open_together.kspl`). Its work folder is emptied first.
+KSPAGE_OPEN_WORK := $(TMP_DIR)/kspage_open_test
+
+## Gates|test-kspage-open|Open two documents from two folders at once, and see each get its own server
+test-kspage-open: kssrv $(KSPAGE_OPEN_EXE)
+	rm -rf "$(KSPAGE_OPEN_WORK)"
+	./$(STAGE1_EXE) run tools/tests/open_together.kspl $(KSPAGE_OPEN_EXE) $(OUT_DIR)/kssrv.exe \
+		"$(KSPAGE_OPEN_WORK)"
+
 KSPAGE_SAMPLE := $(OUT_DIR)/sample.kspage
 
 $(KSPAGE_SAMPLE): $(STAGE1_EXE)
@@ -83,7 +93,7 @@ endif
 
 # **It writes the entry alone**, so the gate costs no build; written afresh each time, as it holds
 # where the repository stands. `KSPAGE_REQUIRE_DESKTOP=1` fails where `desktop-file-validate` is
-# missing (`ci-linux` passes it: the image holds the tool); else a SKIP.
+# missing (the gate passes it: the image holds the tool); else a SKIP.
 KSPAGE_REQUIRE_DESKTOP ?=
 ## Gates|test-kspage-desktop|Whether the entry `make kspage` writes for a double-click is a valid `.desktop` file
 test-kspage-desktop: | $(OUT_DIR)
@@ -122,4 +132,4 @@ kspage: kspage-web kssrv $(KSPAGE_OPEN_EXE) $(KSPAGE_SAMPLE) test-kspage-desktop
 	@echo "# (the other platforms, and what to do if nothing opens: the last section of docs/HOWTO-set-up-a-project.md)"
 
 .PHONY: kspage kspage-serve kspage-open kspage-web \
-	test-kspage-wasm test-kspage-served test-kspage-desktop
+	test-kspage-wasm test-kspage-served test-kspage-desktop test-kspage-open

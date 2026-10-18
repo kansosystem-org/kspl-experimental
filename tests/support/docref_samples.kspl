@@ -41,14 +41,14 @@ const sym_samples: Sym_sample[_] = ::{
         .path = "", .sym = "" },
     // **A run is read to the end.** English lists it before the joiner, so looking only at the
     // last one drops the rest.
-    Sym_sample::{ .text = "fix `ci` / `ci-linux` / `ci-summary` in `mk/ci.mk` today.",
-        .path = "mk/ci.mk", .sym = "ci ci-linux ci-summary" },
+    Sym_sample::{ .text = "fix `ci` / `ci-macos` / `ci-summary` in `mk/ci.mk` today.",
+        .path = "mk/ci.mk", .sym = "ci ci-macos ci-summary" },
     // Caution: **Always include the extensionless form.** An import path (`std/lang`) is this
-    // repository's usual way to cite a place, and keyed on the extension alone **none of that form
-    // is picked up, and it still goes green**.
+    // repository's usual way to cite a place. Keyed on the extension alone, **the check picks up
+    // none of that form and still goes green**.
     Sym_sample::{ .text = "`panic_stack_word` in `std/lang` reads one word.", .path = "std/lang",
         .sym = "panic_stack_word" },
-    // Caution: **Include the side that must not pass on form alone too**: a name with a method,
+    // Caution: **Include the side that must not pass on form alone too.** A name with a method,
     // read as a place, **drops a real symbol citation**.
     Sym_sample::{ .text = "`slice` in `Str_builder.s/c` is called.", .path = "", .sym = "" },
     Sym_sample::{ .text = "`len` in `application/octet-stream` is not a place.", .path = "",
@@ -101,6 +101,8 @@ const sec_samples: Sec_sample[_] = ::{
     // section number.
     Sec_sample::{ .text = "the list is [`port/rp2040/README.md`](port/rp2040/README.md).",
         .want = "" },
+    // A numbered list's next item after a citation is no section of it.
+    Sec_sample::{ .text = "see [`README.md`](README.md).\n\n2. **Run it**", .want = "" },
     // A digit inside a word is not a number.
     Sec_sample::{ .text = "the row is [`README.md`](README.md)'s \"the RP2040 demo\".",
         .want = "" },
@@ -152,21 +154,24 @@ struct Quote_sample //<
     //< Samples for matching a heading name carried with a citation
     //<
     //< **Include both word orders.** Japanese puts the name after, English before.
-    //< Caution: **Always include the forms that must not hit**: a source string's path has its
-    //< closing `"` after it, and read as an opening it makes **everything up to the next argument a
+    //< Caution: **Always include the forms that must not hit.** A source string's path has its
+    //< closing `"` after it. Read as an opening, it makes **everything up to the next argument a
     //< name**.
     text: U8[]
     want: U8[] //< "path name", space-joined; empty: it picks up nothing
 
 priv const sample_dirs: U8[][_] = ::{ "docs", "std" } //< the folder names the samples use
     //<
-    //< Caution: **Do not copy the real list here**: the samples test how a citation's surroundings
-    //< are read, and a copy goes stale while green as the real list grows. `std` is for the
-    //< extensionless sample (`std/lang`); **a path with an extension does not use the list**.
+    //< Caution: **Do not copy the real list here.** The samples test how a citation's surroundings
+    //< are read. A copy goes stale while green as the real list grows. `std` is for the
+    //< extensionless sample (`std/lang`). **A path with an extension does not use the list**.
+priv const sample_bares: U8[][_] = ::{ "README.md", "DESIGN-principles.md", "DESIGN-repository.md",
+    "DESIGN-core.md", "DESIGN-system.md", "SPEC-language.md", "SPEC-local-server.md",
+    "SPEC-tools.md" } //< the documents the samples name without a folder
 
 const quote_samples: Quote_sample[_] = ::{
-    // Caution: **Include a name cited against a source file**: keyed on `.md` alone, a check cited
-    // by its verdict line is **read by nobody**, silently dangling after a rename.
+    // Caution: **Include a name cited against a source file.** Keyed on `.md` alone, a check cited
+    // by its verdict line is **read by nobody**. It dangles silently after a rename.
     Quote_sample::{ .text =
         "the check is \"a label comes first and stands alone\" in \
             [`../../tests/suite/conventions_test.kspl`](../../tests/suite/conventions_test.kspl).",
@@ -184,8 +189,8 @@ const quote_samples: Quote_sample[_] = ::{
         "the rule is \"One means to one purpose\" in \
             [`DESIGN-principles.md`](DESIGN-principles.md).",
         .want = "DESIGN-principles.md One means to one purpose" },
-    // A `"` cannot nest, so for a name wrapped in a link the target is skipped before searching for
-    // the close; otherwise **the name comes out halved**.
+    // A `"` cannot nest. So for a name wrapped in a link, the target is skipped before the search
+    // for the close. Otherwise **the name comes out halved**.
     Quote_sample::{ .text =
         "the partner is [`DESIGN-principles.md`](DESIGN-principles.md)'s \"[a \"bigger text\" \
             row](DESIGN-principles.md#x)\".",
@@ -237,9 +242,9 @@ const quote_samples: Quote_sample[_] = ::{
             [`SPEC-local-server.md`](SPEC-local-server.md).",
         .want = "SPEC-local-server.md Where it listens" },
     // A name carried with a relative citation starting with `../`.
-    // Caution: **Include a form whose continuation is not in `sample_dirs`**, or no heading name
-    // pointing relatively into a package is matched (a rename at the target stays silent).
-    // **Choose a name that really is at the target**
+    // Caution: **Include a form whose continuation is not in `sample_dirs`.** Otherwise no heading
+    // name that points relatively into a package is matched, and a rename at the target stays
+    // silent. **Choose a name that really is at the target**
     Quote_sample::{ .text =
         "the rule is \"Files near the limit and how they split\" in \
             [`../../ksplc/README.md`](../../ksplc/README.md).",
@@ -270,7 +275,7 @@ struct Head_sample //<
     //< Samples for where a cited path is taken to start
     //<
     //< Caution: **Include the forms that must not start one.** A folder's name at the end of a word
-    //< or of a longer path names no folder of the root, and read as one it is reported missing.
+    //< or of a longer path names no folder of the root. Read as one, it is reported missing.
     text: U8[]
     want: U8[] //< the paths picked up, space-joined; empty: it picks up nothing
 
@@ -342,15 +347,15 @@ fn quote_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to cite and checks the "path and name" pairs picked up
     $bad: = List<|U8[]|>.new(arena)
     for s in quote_samples
-        hits: = cite.find_doc_quotes(s.text, U8[][]::sample_dirs, arena)
+        hits: = cite.find_doc_quotes(s.text, U8[][]::sample_dirs, U8[][]::sample_bares, arena)
         note_mismatch(bad@, s.text, s.want, pairs_of(hits, arena), arena)
     return bad
 
 struct Own_sample //<
     //< Samples for the verdict on whether a document holds a name
     //<
-    //< Caution: **Include the forms that must not count**: a name the document only quotes back is
-    //< what the verdict is for, and with counting forms alone, searching anywhere passes them all
+    //< Caution: **Include the forms that must not count.** The verdict exists for a name that the
+    //< document only quotes back. With counting forms alone, a search anywhere passes them all
     //< green.
     text: U8[] //< the document
     name: U8[]
@@ -400,7 +405,7 @@ fn section_defects(arena: Arena$@): List<|U8[]|> //<
     //< Passes each sample to scan and checks the "path and number" pairs picked up
     $bad: = List<|U8[]|>.new(arena)
     for s in sec_samples
-        hits: = cite.find_sections(s.text, U8[][]::sample_dirs, arena)
+        hits: = cite.find_sections(s.text, U8[][]::sample_dirs, U8[][]::sample_bares, arena)
         note_mismatch(bad@, s.text, s.want, pairs_of(hits, arena), arena)
     return bad
 
@@ -445,9 +450,9 @@ fn sym_word_defects(arena: Arena$@): List<|U8[]|> //<
 struct Kspage_link_sample //<
     //< Samples for matching a `.kspage`'s `href`
     //<
-    //< Caution: **Always include the forms that must not hit**: a kspage body is text inside JSON,
-    //< so **a path-like string there is not a naming** (`ksplc run hello.kspl` in a monospace run
-    //< would fail as a missing file nobody can fix).
+    //< Caution: **Always include the forms that must not hit.** A kspage body is text inside JSON.
+    //< So **a path-like string there is not a naming**. (`ksplc run hello.kspl` in a monospace run
+    //< would fail as a missing file that nobody can fix.)
     text: U8[]
     want: U8[] //< `path#anchor`, space-joined; empty: it picks up nothing
 
@@ -503,8 +508,8 @@ struct Md_link_sample //<
     //< Samples for matching a document's links
     //<
     //< Caution: **Include a run of backticks left open.** Paired with the next run of its length
-    //< anywhere later, it masks every link between, so a stretch goes unread and the check stays
-    //< green; a span closes inside its paragraph.
+    //< anywhere later, it masks every link between. A stretch then goes unread and the check stays
+    //< green. A span closes inside its paragraph.
     text: U8[]
     want: U8[] //< the targets picked up, space-joined; empty: it picks up nothing
 
@@ -535,6 +540,40 @@ fn md_link_defects(arena: Arena$@): List<|U8[]|> //<
         note_mismatch(bad@, s.text, s.want, line, arena)
     return bad
 
+struct Misnamed_link_sample //<
+    //< Samples for the check that a link's text names the file it points at
+    //<
+    //< Caution: **Include the texts that name no file.** A symbol, a folder and a URL target are
+    //< not a misnamed link. A refusal of them would refuse correct links.
+    text: U8[]
+    want: U8[] //< the texts picked up, space-joined; empty: it picks up nothing
+
+const misnamed_link_samples: Misnamed_link_sample[_] = ::{
+    Misnamed_link_sample::{ .text = "[`DESIGN-repository.md`](DESIGN-principles.md)",
+        .want = "DESIGN-repository.md" },
+    Misnamed_link_sample::{ .text = "[`std/docs/DESIGN-system.md`](std/docs/DESIGN-core.md#a)",
+        .want = "std/docs/DESIGN-system.md" },
+    // The folders may differ: a comment writes them from its own place.
+    Misnamed_link_sample::{ .text = "[`std/docs/DESIGN-core.md`](docs/DESIGN-core.md#a)",
+        .want = "" },
+    Misnamed_link_sample::{ .text = "[`ksai/`](../ksai/README.md)", .want = "" },
+    Misnamed_link_sample::{ .text = "[`Row.put`](../std/ds.kspl)", .want = "" },
+    Misnamed_link_sample::{ .text = "[`x.md`](https://example.org/y.md)", .want = "" },
+}
+
+fn misnamed_link_defects(arena: Arena$@): List<|U8[]|> //<
+    //< Passes each sample above to the matcher and checks the texts picked up
+    $bad: = List<|U8[]|>.new(arena)
+    for s in misnamed_link_samples
+        got: = arena.text()
+        $first: = true
+        for h in refs.find_misnamed_links(s.text, arena)
+            got.s("" if first else " ").s(h.text)
+            first = false
+        line: = got.take()
+        note_mismatch(bad@, s.text, s.want, line, arena)
+    return bad
+
 // ==========================================
 // How a document reference resolves into a path
 // ==========================================
@@ -542,9 +581,9 @@ fn md_link_defects(arena: Arena$@): List<|U8[]|> //<
 struct Target_sample //<
     //< One sample of a document reference and the path it resolves to
     //<
-    //< **A bare name is the form that breaks**: `find_doc_paths` picks up only names with a folder,
-    //< so the checks that read only a number or name resolve a bare `DESIGN-principles.md`, find
-    //< nothing, and **silently skip it**.
+    //< **A bare name is the form that breaks.** `find_doc_paths` picks up only names with a folder.
+    //< So the checks that read only a number or name resolve a bare `DESIGN-principles.md`. They
+    //< find nothing and **silently skip it**.
     //< Caution: **Include the form that resolves nowhere too**, or a resolver loosened back to
     //< "from the root" goes unnoticed.
     here: U8[]
@@ -565,8 +604,8 @@ priv const target_samples: Target_sample[_] = ::{
     // A name that already has a folder is relative to the root as it is.
     Target_sample::{ .here = "kspage/share", .lead = "", .text = "docs/DESIGN-principles.md",
         .want = "docs/DESIGN-principles.md" },
-    // **A link's target is relative to the file that writes it, folder or not**: from the root, a
-    // package's own `docs/` would be taken for the root's, and a name after the link would be
+    // **A link's target is relative to the file that writes it, folder or not.** From the root, a
+    // package's own `docs/` would be taken for the root's. A name after the link would then be
     // looked up in the wrong document.
     Target_sample::{ .here = "kspage", .lead = "](", .text = "docs/DESIGN-principles.md",
         .want = "kspage/docs/DESIGN-principles.md" },

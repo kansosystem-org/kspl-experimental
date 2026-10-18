@@ -1,0 +1,55 @@
+//< nRF51 (QEMU micro:bit, Cortex-M0): the scheduler sleeps on WFI until an interrupt's give
+//<
+//< waiter takes a semaphore only TIMER0's interrupt gives, three times. Preemption stays off, so
+//< with waiter blocked `start_scheduler` has nothing to run and sleeps in `ksos_port_wait_irq`
+//< (WFI with interrupts masked). The timer's interrupt must still wake it and run its handler.
+//< The give must bring waiter back. A sleep that never woke, or a missed wake, hangs the run,
+//< and its time cap fails it. The handler finding no task running shows the interrupt came while
+//< the scheduler was between tasks, the only place it sleeps.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/drivers/cortex_m/scs"
+import "ksos/drivers/nrf51/timer"
+import "ksos/kernel/sync"
+import "ksos/kernel/task" + { Task }
+
+priv const rounds: Sz = 3
+priv const wait_us: U32 = 1000
+
+$g_sem: sync.Sem
+$g_gives: Sz = 0
+$g_gives_idle: Sz = 0 // gives that found no task running: the scheduler was asleep
+$g_woken: Sz = 0
+
+$tcb_waiter: Task
+$stack_waiter: U8[1024]
+
+// TIMER0's handler (#export overrides the weak default in port/nrf51/vectors.S).
+#export
+fn timer0_irq8_handler()
+    timer.ack()
+    if Task.current() == null
+        g_gives_idle += 1
+    g_gives += 1
+    g_sem.give()
+
+fn waiter(_arg: Void$@): Void
+    con.puts("=== Kanso OS (nRF51 / Cortex-M0) the scheduler sleeps on WFI ===\n")
+    scs.enable_irq(timer.irq)
+    for _ in Range.asc(rounds)
+        timer.start_once(wait_us)
+        g_sem.take() // no deadline: only the interrupt can end it
+        g_woken += 1
+    con.check("each of the timer's interrupts ran its handler, which gave", g_gives == rounds)
+    con.check("each came while no task ran: the scheduler slept between tasks",
+        g_gives_idle == rounds)
+    con.check("each give woke the waiter", g_woken == rounds)
+    con.print_summary("nRF51 WFI sleep")
+    con.exit()
+
+#export
+fn ksos_main()
+    panic_hook = con.on_panic
+    g_sem.init(0)
+    tcb_waiter.create(U8$[]::stack_waiter, waiter, null, 1, "waiter")
+    task.start_scheduler()
+    for {}

@@ -4,7 +4,7 @@
 //< `Location`s here, renaming into `changes` (`rename.kspl`). **Matching is by definition, not by
 //< name.**
 //< **The list must be in a fixed order.** The collection is a Map, so its plain order comes from
-//< the hash and the same answer **looks shuffled on screen** from one request to the next.
+//< the hash. Then the same answer **looks shuffled on screen** from one request to the next.
 //< **A selective import's `as` declares a name of its own** (`import "p" { a as b }`), for its
 //< file alone. The places of `a` are its declaration, every `a` written (the import line's
 //< included) and none of `b`'s; those of `b` are the import line's `b` and its uses. So renaming
@@ -109,7 +109,7 @@ fn handle_references(ws_state: Doc_state$@, params: json.Val, id_val: json.Val, 
     case .some(t)
         // Every place is returned in this request's URI style (`Uri_style` in
         // `../base/locate.kspl`), since a client spells every file the same way.
-        uri: = params.get("textDocument").get("uri").as_str()
+        uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         spots: = collect_spots(ws_state, t, base_locate.uri_style_of(uri), arena)
         want_decl: = wants_decl(params)
         $b: = Json_builder.new(arena)
@@ -153,11 +153,11 @@ fn collect_spots(ws_state: Doc_state$@, t: Target, style: base_locate.Uri_style,
         for entry in ws_state.sema.generics.templates.items()
             w.node(entry.value, 0)
     seen.free()
-    return out.order_by(fn(a: Spot, b: Spot; ): I32 {
+    return out.order_by(fn(a: Spot@, b: Spot@; ): I32 {
         return spot_order(a, b);
     }, arena)
 
-priv fn spot_order(a: Spot, b: Spot): I32 //< by name, then line, then column
+priv fn spot_order(a: Spot@, b: Spot@): I32 //< by name, then line, then column
     order: = a.uri.compare(b.uri)
     if order != 0
         return order
@@ -183,7 +183,7 @@ priv fn is_def_match(n_def: Ast_node$@, t_def: Ast_node$@): Bool //<
     //< Whether the two definitions are the same one
     //<
     //< One definition can be several node instances (a template's re-instantiation, an identifier
-    //< standing for its declaration), so besides sym_ptr several fallbacks are tried; one is
+    //< standing for its declaration). So besides sym_ptr several fallbacks are tried. One is
     //< enough.
     if n_def == null || t_def == null
         return false
@@ -243,7 +243,7 @@ impl Walk
         //< whether an identifier is a place of the target
         //<
         //< An `as` name's uses resolve to the declaration it stands for, as that declaration's own
-        //< places do, so the spelling and the file tell the two apart (the head of this file).
+        //< places do. So the spelling and the file tell the two apart (the head of this file).
         if w.stands_for != null
             return n.loc.file().equals(w.target_def.loc.file()) &&
                 n.text.equals(w.target_def.text) &&
@@ -270,7 +270,7 @@ impl Walk
         $key: = Str_builder.new()
         defer key.free()
         key.s(hit.loc.file()).c(':').s("\{offset\}")
-        if (w.seen.get(key.slice()) catch 0) != 0
+        if w.seen.get(key.slice()).unwrap_or(0) != 0
             return
         w.seen.set(w.arena.dup_str(key.slice()), 1)
 
@@ -288,7 +288,7 @@ impl Walk
         //< The nodes above the one visited, from the top of its own file down
         //<
         //< **An imported file hangs under the file importing it**, so the walk's own path starts in
-        //< another file; the part above the nearest file's top is cut off.
+        //< another file. The part above the nearest file's top is cut off.
         $from: Sz = 0
         for i in Range.asc(w.above.len)
             if w.above.get(i).kind_id == .k_file

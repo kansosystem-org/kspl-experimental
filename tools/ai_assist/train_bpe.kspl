@@ -58,7 +58,7 @@ priv fn load_text(path: U8[], arena: Arena$@): U8[] //<
     for i in Range.asc(recs.len)
         if i > 0
             b.c('\n')
-        b.s(recs[i].get("code").as_str())
+        b.s(recs[i].get("code").as_str().unwrap_or(""))
     // Caution: Copy it into the arena; once returned, the Str_builder's heap memory cannot be
     // freed.
     out: = arena.dup_str(b.slice())
@@ -73,13 +73,15 @@ priv fn count_words(text: U8[], arena: Arena$@): Map<|U8[], Sz|>$@ //<
     $pos: Sz = 0
     for pos < text.len
         rest: = text.sub_from(pos)
-        m: = rx.find(rest) catch
+        $end: Sz = 0
+        if m: = rx.find(rest)
+            if m.end > m.start
+                w: = rest.sub(m.start, m.end - m.start)
+                out.set(w, out.get(w).unwrap_or(0) + 1)
+                end = m.end
+        if end == 0
             break
-        if m.end <= m.start
-            break
-        w: = rest.sub(m.start, m.end - m.start)
-        out.set(w, (out.get(w) catch 0) + 1)
-        pos += m.end
+        pos += end
     return out
 
 priv fn build_corpus(words: Map<|U8[], Sz|>$@, arena: Arena$@): List<|Word|> //<
@@ -109,7 +111,7 @@ priv fn best_pair(corpus: List<|Word|>$@, arena: Arena$@): Merge //<
         w: = corpus.at(i)
         for $j: Sz = 0; j + 1 < w.ids.len; j += 1
             key: Sz = w.ids.get(j) * pair_shift + w.ids.get(j + 1)
-            pairs.set(key, (pairs.get(key) catch 0) + w.count)
+            pairs.set(key, pairs.get(key).unwrap_or(0) + w.count)
     $best: Sz = 1
     $best_key: Sz = -1
     for e in pairs.items()
@@ -209,14 +211,14 @@ priv fn count_tokens(text: U8[], merges: List<|Merge|>$@, arena: Arena$@): Sz //
             $best_i: Sz = -1
             for $j: Sz = 0; j + 1 < ids.len; j += 1
                 key: Sz = ids.get(j) * pair_shift + ids.get(j + 1)
-                r: = rank.get(key) catch -1
+                r: = rank.get(key).unwrap_or(-1)
                 if r >= 0 && (best_rank < 0 || r < best_rank)
                     best_rank = r
                     best_i = j
             if best_i < 0
                 break
             key: Sz = ids.get(best_i) * pair_shift + ids.get(best_i + 1)
-            ids.set(best_i, I32::(merged_id.get(key) catch 0))
+            ids.set(best_i, I32::merged_id.get(key).unwrap_or(0))
             for $j: = best_i + 1; j + 1 < ids.len; j += 1
                 ids.set(j, ids.get(j + 1))
             ids.len -= 1

@@ -20,6 +20,9 @@ import "std/str" { Str_builder }
 impl Ast_node
     fn emit_expr(r: Self$@, c: Genc_ctx$@)
         r.ice_assert(r != null, "emit_expr: node is null")
+        // Only the expression itself stands in the initializer's place; its operands do not.
+        as_init: = c.brace_init
+        c.brace_init = false
 
         switch r.kind_id
         case .k_integer
@@ -29,33 +32,31 @@ impl Ast_node
         case .k_char
             r.emit_char_literal(c)
         case .k_string
-            r.emit_string_literal(c)
+            r.emit_string_literal(c, as_init)
         case .k_enum_init
-            r.emit_enum_init(c)
+            r.emit_enum_init(c, as_init)
         case .k_enum_init_call
-            r.emit_enum_init_call(c)
+            r.emit_enum_init_call(c, as_init)
         case .k_struct_literal, .k_expr_compound
-            r.emit_struct_literal(c)
+            r.emit_struct_literal(c, as_init)
         case .k_expr
             r.emit_binary_expr(c)
-        case .k_result_wrap
-            r.emit_result_wrap(c)
         case .k_generic_path
             r.emit_generic_path(c)
         case .k_literal, .k_bool, .k_null, .k_identifier, .k_expr_path, .k_type_path
-            r.emit_path_or_literal(c)
+            r.emit_path_or_literal(c, as_init)
         case .k_expr_sizeof
             r.emit_sizeof(c)
         case .k_expr_offsetof
             r.emit_offsetof(c)
         case .k_expr_postfix, .k_method_access, .k_generic_method
-            r.emit_postfix_expr(c)
+            r.emit_postfix_expr(c, as_init)
         case .k_expr_unary
             r.emit_unary_expr(c)
         case .k_expr_primary
-            r.emit_expr_primary(c)
+            r.emit_expr_primary(c, as_init)
         case .k_expr_upcast
-            r.emit_upcast_expr(c)
+            r.emit_upcast_expr(c, as_init)
         case .k_empty, .k_underscore
             r.emit_noop(c)
         default
@@ -67,13 +68,13 @@ impl Ast_node
         r.emit_expr_prec(c, 14)
 
     fn emit_expr_prec(r: Self$@, c: Genc_ctx$@, min_prec: I32)
-        if get_c_expr_precedence(r) < min_prec
+        if get_c_expr_precedence(c, r) < min_prec
             c.s("(")
             r.emit_expr(c)
             c.s(")")
         else
             r.emit_expr(c)
-    priv fn emit_enum_init(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_enum_init(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         variant_name: = r.last_child().text
         r.ice_assert(variant_name.len > 0, "emit_enum_init: enum_init missing variant name")
 
@@ -83,9 +84,10 @@ impl Ast_node
         if c.env.is_scalar_enum(real_type_id)
             c.s("(").m(real_type_id).s(")kspl_").m(real_type_id).s("_\{variant_name\}")
         else
-            c.s("(").m(real_type_id).s("){ .tag = kspl_").m(real_type_id).s("_\{variant_name\} }")
+            c.open_compound(real_type_id, as_init).s("{ .tag = kspl_").m(real_type_id)
+                .s("_\{variant_name\} }")
 
-    priv fn emit_enum_init_call(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_enum_init_call(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         r.ice_assert(r.children.len > 0,
             "emit_enum_init_call: enum_init_call missing inner enum_init")
         inner_enum: = r.get_child(0)
@@ -93,12 +95,14 @@ impl Ast_node
 
         real_type_id: = c.env.get_clean_real_type(r.type_id) // the reason is at emit_enum_init
 
-        c.s("(").m(real_type_id).s("){ .tag = kspl_").m(real_type_id).s("_\{variant_name\}")
+        c.open_compound(real_type_id, as_init).s("{ .tag = kspl_").m(real_type_id)
+            .s("_\{variant_name\}")
 
+        // A variant whose fields are all `Void` (`Void!E`'s `.ok()`) has no member in the union.
         args_node: = r.find_child(.k_expr_args)
-        if args_node != null
+        if args_node != null && args_node.children.len > 0
             c.s(", .payload.\{variant_name\} = { ")
-            args_node.emit_comma_separated_args(c)
+            args_node.emit_comma_separated_args(c, as_init)
             c.s(" }")
         c.s(" }")
 
@@ -122,20 +126,21 @@ impl Ast_node
         return name_node.text.equals("ptr") && c.env.is_slice(slice_real_id) &&
             c.env.is_const(c.env.slice_elem(slice_real_id))
 
-    priv fn emit_struct_literal(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_struct_literal(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         is_array: = c.env.is_array(r.type_id)
         has_fields: = r.find_child(.k_expr_field_init) != null
         if !has_fields
             // An array is a struct `{ T data[N]; }` too, filled with braces nested as the type says
             // (emit_zero_init counts the levels) rather than `.data =`.
-            c.s("(").t(r.type_id).s(")")
+            c.open_compound_t(r.type_id, as_init)
             c.emit_zero_init(r.type_id, r)
             return
 
+        c.open_compound_t(r.type_id, as_init)
         if is_array
-            c.s("(").t(r.type_id).s("){ .data = { ")
+            c.s("{ .data = { ")
         else
-            c.s("(").t(r.type_id).s("){")
+            c.s("{")
 
         $is_first: = true
         for child_node in r.children
@@ -149,11 +154,12 @@ impl Ast_node
             val_node: = child_node.get_field_init_expr()
             child_node.ice_assert(val_node != null, "emit_struct_literal: field missing value node")
             if !slice_ptr_field
+                c.brace_init = as_init
                 val_node.emit_expr(c)
                 continue
             // An immutable slice's C type is the alias `Const_T_Slice = T_Slice`, and its `ptr` is
             // non-const (the reason is in the matching comment in gen/c/decl.kspl). Storing a
-            // `const T *` from a KSPL `T@` there warns about a discarded qualifier, so it is cast
+            // `const T *` from a KSPL `T@` there warns about a discarded qualifier. So it is cast
             // to the element type's non-const version (as emit_slice_cast_prefix does for
             // arrays).
             elem_id: = c.env.slice_elem(c.env.get_real_type(r.type_id))
@@ -172,7 +178,7 @@ impl Ast_node
 
         mangled_name.slice().kspl_symbol_to(c$)
 
-    priv fn emit_const_ref_inline(r: Ast_node$@, c: Genc_ctx$@): Bool //<
+    priv fn emit_const_ref_inline(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool): Bool //<
         //< It emits another constant's initializer instead of a reference to it; true if it did
         //<
         //< It does so only inside a top-level `const`'s initializer.
@@ -181,11 +187,11 @@ impl Ast_node
         //< object is not one, `const` or not. A reference by name compiles only where the C
         //< compiler folds it as an extension, and elsewhere fails with `initializer element is not
         //< constant`.
-        if c.const_init_depth == 0
+        if c.const_init_depth == 0 || r == c.addr_root
             return false
         if init: = r.const_init_expr(c.sema)
             key: = Sz::init
-            if c.sema.resolving.consts.get(key) catch false
+            if c.sema.resolving.consts.get(key).unwrap_or(false)
                 return false
             c.sema.resolving.consts.set(key, true)
             defer c.sema.resolving.consts.remove(key)
@@ -199,14 +205,19 @@ impl Ast_node
                 c.s(")")
                 return true
             case .none {}
+            // In an initializer's place the value is braces, which no parentheses can enclose.
+            if as_init
+                c.brace_init = true
+                init.emit_expr(c)
+                return true
             c.s("(")
             init.emit_expr(c)
             c.s(")")
             return true
         return false
 
-    priv fn emit_path_or_literal(r: Ast_node$@, c: Genc_ctx$@)
-        if r.emit_const_ref_inline(c)
+    priv fn emit_path_or_literal(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
+        if r.emit_const_ref_inline(c, as_init)
             return
         if r.kind_id == .k_expr_path || r.kind_id == .k_type_path
             $is_first: = true
@@ -269,7 +280,7 @@ impl Ast_node
         //<
         //< Caution: **Leave it to C's `offsetof`** (do not emit the folded value). Where ksplc's
         //< layout and C's disagree, no diagnostic is reported (the head of
-        //< `sema/decl/layout.kspl`), so the C backend asks C itself, which keeps them in agreement
+        //< `sema/decl/layout.kspl`). So the C backend asks C itself, which keeps them in agreement
         //< by construction. `--to=llvm` has nobody to ask, so it folds (emit_llvm_const_int in
         //< `gen/llvm/expr.kspl`). A field keeps its name in the generated C, so it can be passed
         //< as it is (`gen/c/types.kspl`).
@@ -350,9 +361,9 @@ impl Ast_node
         r.emit_expr(c)
         c.s(", \"\{r.loc.file()\}\", \{c.last_line\})")
 
-    fn close_signed_div(r: Ast_node$@, c: Genc_ctx$@) //<
-        //< It closes what open_signed_div began: the receiver is the divisor's expression
-        c.s("), (I64)(")
+    fn close_signed_div(r: Ast_node$@, c: Genc_ctx$@, type_id: I32) //<
+        //< It closes what open_signed_div began on type_id: the receiver is the divisor's expression
+        c.s("), (I32)(" if signed_div_is_narrow(c, type_id) else "), (I64)(")
         r.emit_expr(c)
         c.s("), \"\{r.loc.file()\}\", \{c.last_line\})")
 
@@ -370,9 +381,20 @@ impl Ast_node
             r.emit_binary_body(c)
             return
         if sema_body_binary.takes_signed_div(c.sema, op, r.type_id, r.get_binary_right())
+            // A file-scope initializer cannot call the helper. Sema has folded it already
+            // (check_static_initializer) and refused a minimum divided by `-1` there. The value
+            // goes in as the LLVM backend writes it.
+            if c.top_level_var
+                switch c.sema.try_eval_constexpr_wide(r)
+                case .some(v)
+                    c.s("((").t(r.type_id).s(")")
+                    gen_c_literal.emit_folded_i64(c, v)
+                    c.s(")")
+                    return
+                case .none {}
             open_signed_div(c, op, r.type_id)
             r.get_binary_left().emit_expr(c)
-            r.get_binary_right().close_signed_div(c)
+            r.get_binary_right().close_signed_div(c, r.type_id)
             return
         if !can_exceed_width(op)
             r.emit_binary_body(c)
@@ -437,27 +459,15 @@ impl Ast_node
         else
             right_node.emit_expr(c)
 
-    priv fn emit_result_wrap(r: Self$@, c: Genc_ctx$@)
-        inner: = r.get_result_wrap_inner()
-        if sema_type_env.is_void(inner.type_id)
-            c.s("(")
-            // Skip an empty node: a Void `return f()!;` leaves a k_empty (lower_try_op in
-            // lower/expr.kspl), which would make an `(a, , b)` the C compiler rejects.
-            // Caution: A Void that is not empty must always be emitted. The call in a `return
-            // plainvoid(x);` appears only here, so skipping it removes the call too.
-            if inner.kind_id != .k_empty
-                inner.emit_expr(c)
-                c.s(", ")
-            c.s("(").t(r.type_id).s("){ .is_err = false })")
-        else
-            c.s("((").t(r.type_id).s("){ .is_err = false, .val = ")
-            inner.emit_expr(c)
-            c.s(" })")
-
-    priv fn emit_expr_primary(r: Ast_node$@, c: Genc_ctx$@)
+    priv fn emit_expr_primary(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         r.ice_assert(r.children.len > 0, "emit_expr: primary expression empty")
         inner: = r.get_primary_inner_expr()
-        if r.has_parentheses()
+        // In an initializer's place the parentheses group nothing, and could not enclose braces.
+        if as_init
+            if inner != null
+                c.brace_init = true
+                inner.emit_expr(c)
+        else if r.has_parentheses()
             c.s("(")
             if inner != null
                 inner.emit_expr(c)
@@ -473,13 +483,15 @@ impl Ast_node
         msg.s("emit_expr: unhandled AST kind '").s(r.get_kind_str()).s("' reached Genc")
         r.ice_panic(msg.slice())
 
-    fn emit_comma_separated_args(r: Self$@, c: Genc_ctx$@)
+    fn emit_comma_separated_args(r: Self$@, c: Genc_ctx$@, as_init: Bool) //<
+        //< It writes the arguments, comma-separated; as_init when they fill an initializer's braces
         $is_first: = true
         for arg_node in r.children
             if arg_node.is_literal(",")
                 continue
             if !is_first
                 c.s(", ")
+            c.brace_init = as_init
             arg_node.emit_expr(c)
             is_first = false
 priv fn get_c_precedence(op: U8[]): I32
@@ -495,7 +507,14 @@ fn open_signed_div(c: Genc_ctx$@, op: U8[], type_id: I32) //<
     //<
     //< The caller emits the dividend, then close_signed_div with the divisor.
     helper: = "kspl_sdiv" if op.equals("/") else "kspl_smod"
-    c.s("(").t(c.env.strip_const_deep(type_id)).s(")\{helper\}((I64)(")
+    c.s("(").t(c.env.strip_const_deep(type_id)).s(")\{helper\}")
+        .s("32((I32)(" if signed_div_is_narrow(c, type_id) else "((I64)(")
+
+fn signed_div_is_narrow(c: Genc_ctx$@, type_id: I32): Bool //<
+    //< Whether a signed `/` `%` on the type goes to the 32-bit helper (`kspl_sdiv32`)
+    //<
+    //< Asked at the machine's width: a 32-bit target's `Sz` divides there too.
+    return c.env.get_primitive_bit_size(type_id) <= 32
 
 priv fn can_exceed_width(op: U8[]): Bool //< whether an operation's result can exceed the width
     //<
@@ -559,12 +578,12 @@ priv fn needs_warning_silencing_parens(child_op: U8[], parent_op: U8[]): Bool //
     return (child_op.equals("&&") && parent_op.equals("||")) ||
         (child_op.equals("||") && parent_op.equals("&&"))
 
-fn emit_slice_cast_prefix(c: Genc_ctx$@, target_id: I32, target_base_id: I32)
-    c.s("(").t(target_id).s("){ .ptr = (")
+fn emit_slice_cast_prefix(c: Genc_ctx$@, target_id: I32, target_base_id: I32, as_init: Bool)
+    c.open_compound_t(target_id, as_init).s("{ .ptr = (")
     clean_base_id: = c.env.strip_const(target_base_id)
     c.t(clean_base_id).s("*)")
 
-priv fn get_c_expr_precedence(node: Ast_node$@): I32
+priv fn get_c_expr_precedence(c: Genc_ctx$@, node: Ast_node$@): I32
     if node == null
         return 15
     k: = node.kind_id
@@ -572,12 +591,23 @@ priv fn get_c_expr_precedence(node: Ast_node$@): I32
         op: = node.get_postfix_op()
         if op != null && op.text.equals("::")
             return 13
+        // A Result's tag test is written as a comparison (emit_postfix_dot in expr_postfix.kspl).
+        if op != null && op.text.equals(".") &&
+            node.get_postfix_member().text.equals("is_err") &&
+            c.env
+            .is_result(c.env.receiver_base_id(node.get_postfix_receiver().type_id))
+            return get_c_precedence("==")
         return 14
     if k == .k_expr
         op: = node.get_binary_op()
         if op != null
             return get_c_precedence(op.text)
         return 10
+    // Caution: **A primary written without parentheses binds as its inner expression**
+    // (emit_expr_primary adds none). Taken as an atom, `(void*)` binds to the left operand of
+    // `buf + n` alone, and the sum becomes arithmetic on a `void *`.
+    if k == .k_expr_primary && !node.has_parentheses()
+        return get_c_expr_precedence(c, node.get_primary_inner_expr())
     switch k
     case .k_expr_unary, .k_expr_sizeof, .k_expr_offsetof, .k_expr_upcast
         return 13

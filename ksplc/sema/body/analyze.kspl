@@ -1,11 +1,13 @@
 //< The checks on the program as a whole, and on a function body once its types are known
 //<
-//< On the program: one `main`, with a signature the start-up code can call; what `--library`
-//< refuses; the target file's unused names ([W0206], [I0402]). On a body: that control cannot fall
-//< off the end of a function returning a value, definite initialization (`sema/flow/track.kspl`),
-//< and the lints on its return and on the methods that release.
+//< On the program, it checks for one `main` with a signature the start-up code can call. It also
+//< checks what `--library` refuses, and the target file's unused names ([W0206], [I0402]).
+//< On a body, it checks that control cannot fall off the end of a function returning a value. It
+//< also checks definite initialization (`sema/flow/track.kspl`), and runs the lints on its return
+//< and on the methods that release.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/locate" as base_locate
@@ -37,10 +39,10 @@ impl Sema_ctx
             return
         for m in mains
             r.clear_scratch()
-                .s("this program defines main() \{mains.len\} times. A program has exactly one \
-                    entry point; with more than one, which of them becomes the entry depends on the \
-                    order the files happen to be read, so the others are silently dropped. Remove \
-                    the extra main(), or move it out of the file being imported.")
+                .s("this program defines main() \{mains.len\} times. A program must have exactly \
+                    one entry point. Otherwise, file reading order would select one and silently \
+                    ignore the others. Remove the extra main(), or move it out of the file being \
+                    imported.")
             r.err(m.node, r.scratch.slice())
 
     fn is_entry_main(r: Self$@, decl: Ast_node$@): Bool //< whether decl is the program's `main`
@@ -62,18 +64,18 @@ impl Sema_ctx
             return
         if !main_sym.kind.is_function()
             r.err(main_sym.node,
-                "main() cannot take type parameters: the program's start-up code calls it with \
-                    none, so no copy of it would ever be made. Drop the '<|…|>'.")
+                "main() must not take type parameters. Startup calls it without type arguments, so \
+                    no instance would be created. Remove the '<|…|>'.")
             return
         if base_ast_ext.Param_cursor.count(main_sym.node.get_fn_params()) > 0
             r.err(main_sym.node,
-                "main() takes no parameters: the program's start-up code calls it with none. Read \
-                    the command line with 'sys.args()' (import \"std/sys\").")
+                "main() takes no parameters. Startup calls it without arguments. Read the command \
+                    line with 'sys.args()' (import \"std/sys\").")
             return
         if main_sym.vis == sema_type_scope.Visibility.file_private
             r.err(main_sym.node,
-                "main() cannot be 'priv': the program's start-up code calls it from outside its \
-                    file, and a 'priv' function is visible only inside its own. Drop 'priv'.")
+                "main() must not be 'priv'. Startup calls it from outside its file, where private \
+                    functions are not visible. Remove 'priv'.")
             return
         if base_core.config.is_freestanding
             return
@@ -82,9 +84,9 @@ impl Sema_ctx
         if sema_type_env.is_void(val_id) || r.env.is_integer(val_id)
             return
         r.clear_scratch()
-            .s("main() must return nothing, an integer (used as the process exit code), or a Result \
-                of either ('Void!E' / 'I32!E'), but returns '\{r.env.get_str(ret_id)\}'. A value of \
-                this type cannot become an exit code, so it would be silently discarded.")
+            .s("main() returns '\{r.env.display(ret_id)\}', which is not a supported return type. \
+                Return nothing, an integer exit code, or a Result of either ('Void!E' / 'I32!E'). A \
+                value of this type cannot become an exit code, so it would be silently discarded.")
         r.err(main_sym.node, r.scratch.slice())
 
     priv fn check_main_present(r: Self$@) //<
@@ -95,30 +97,31 @@ impl Sema_ctx
         if !base_core.config.is_program
             return
         for m_entry in r.env.files.items()
-            ms: = m_entry.value.symbols.get("main") catch null
+            ms: = m_entry.value.symbols.get("main").unwrap_or(null)
             if ms != null && ms.node != null
                 r.err(ms.node,
-                    "'main' must be a function: the program's start-up code calls it, and here it \
-                        names something else. Declare 'fn main()' instead.")
+                    "'main' must be a function. Startup calls it, but this declaration names \
+                        something else. Declare 'fn main()' instead.")
                 return
         r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
             .error,
-            "this program has no main(): a program starts at 'fn main()', so there is nothing to \
-                run. Add one, or build a library from '#export' functions with '--library'")
+            "this program has no main(). Execution starts at 'fn main()', so there is no entry \
+                point. Add one, or build a library from '#export' functions with '--library'")
 
     fn check_library_shape(r: Self$@, root: Ast_node$@) //<
         //< Under `--library`, refuses what a library cannot hold
         //<
-        //< A `main` (the program that links the library has its own), an `#export` variable or
-        //< constant (a DLL's data needs a mark on its user's side that no header can choose), and
-        //< an input exporting no function (the library would hold nothing a caller can reach).
+        //<   - A `main`: the program that links the library has its own.
+        //<   - An `#export` variable or constant: a DLL's data needs a mark on its user's side that
+        //<     no header can choose.
+        //<   - An input exporting no function: the library would hold nothing a caller can reach.
         if r.suppress_errors || !base_core.is_library()
             return
         if main_sym: = r.env.find_main_symbol()
             r.err(main_sym.node,
-                "main() cannot be in a library ('--library'): the program that links the library \
-                    has its own main() and enters the library through its '#export' functions. \
-                    Remove main(), or build without '--library'")
+                "main() must not be in a library ('--library'). The linking program provides main() \
+                    and calls the library's '#export' functions. Remove main(), or build without \
+                    '--library'")
         $exported: Sz = 0
         for raw in root.children
             n: = raw.unwrap_top_level()
@@ -128,26 +131,25 @@ impl Sema_ctx
                 exported += 1
                 continue
             r.err(n,
-                "'#export' on a variable or a constant cannot be part of a library ('--library'): a \
-                    Windows DLL's data needs a mark on its user's side that no one header can \
-                    choose for every build. Export a function that returns it")
+                "a library ('--library') must not export variables or constants. Windows DLL data \
+                    requires a caller-side mark that one header cannot choose for every build. \
+                    Export a function that returns it")
         if exported > 0
             return
         r.report_diagnostic_at(r.main_file, base_core.source_of(r.source_map, r.main_file), 0, 0,
             .error,
-            "'--library' builds a library from its '#export' functions, and this program exports \
-                none: the library would hold nothing a caller can reach. Mark the functions its \
-                callers use '#export'")
+            "'--library' builds a library from its '#export' functions. This program exports none, \
+                so callers could access nothing. Mark the functions its callers use '#export'")
 
     fn check_unused_symbols(r: Self$@) //<
         //< [W0206] checks **the target file alone** for unused names
         //<
-        //< Caution: Do not use `symtab.current_file`: at the end of the analysis it names the last
-        //< file read, so a file with even one import never has its own declarations checked
+        //< Caution: Do not use `symtab.current_file`. At the end of the analysis it names the last
+        //< file read. So a file with even one import never has its own declarations checked
         //< ([W0206] never fires on real sources). Checking every file is wrong too.
         if r.suppress_errors || !base_core.config.run_lint_checks
             return
-        target: = r.env.files.get(r.main_file) catch null
+        target: = r.env.files.get(r.main_file).unwrap_or(null)
         if target == null
             return
         old_file: = r.file_name
@@ -158,7 +160,7 @@ impl Sema_ctx
     fn check_unit_internal_pubs(r: Self$@) //<
         //< [I0402] A `pub` used only from inside the same package
         //<
-        //< Off by default. **It checks only the entry's package**: another unit (`std/` and so on)
+        //< Off by default. **It checks only the entry's package.** Another unit (`std/` and so on)
         //< just has no outside user in this compilation, and in a library an unused `pub` is
         //< correct.
         if r.suppress_errors || !base_core.config.run_lint_checks
@@ -173,7 +175,7 @@ impl Sema_ctx
                     sym.flags.is_used_outside_unit
                     continue
                 // Caution: **Check only declarations that state their own visibility**, or the user
-                // cannot act on the report: an enum's variants inherit the enum's, and an import
+                // cannot act on the report. An enum's variants inherit the enum's, and an import
                 // has nowhere to write one. A `pub` sits under the declaration or in the attribute
                 // list, so only `has_explicit_visibility` decides.
                 if !sym.node.has_explicit_visibility()
@@ -192,15 +194,15 @@ impl Sema_ctx
                     continue
                 r.clear_scratch()
                     .s("[I0402] Public symbol '\{sym.name\}' is only used inside its own package \
-                        ('\{unit\}'). Drop 'pub' to keep it there; 'pub' is a contract with the \
-                        outside.")
+                        ('\{unit\}'). Remove 'pub' to keep it within the package. 'pub' declares an \
+                        external contract.")
                 r.information(sym.node, r.scratch.slice())
 
     priv fn check_unused_symbols_in(r: Self$@, file_env: sema_type_scope.File_env$@)
         for entry in file_env.symbols.items()
             sym: = entry.value
             // Caution: **Do not reject a `#export` on a `priv` here** (`sema/decl/attrs.kspl`
-            // does): this runs only under lint and only on the target file, so another file's would
+            // does). This runs only under lint and only on the target file, so another file's would
             // pass silently.
             if sym.vis != sema_type_scope.Visibility.file_private || sym.flags.is_used
                 continue
@@ -298,8 +300,8 @@ impl Ast_node
             way = "!"
         if way.len > 0
             c.clear_scratch()
-                .s("'\{way\}' returns to the caller, but the function is declared '#noreturn', \
-                    which promises that control never comes back")
+                .s("'\{way\}' returns to the caller, but the function is declared '#noreturn'. This \
+                    declaration promises that control never returns")
             c.err(r, c.scratch.slice())
             ok = false
         for ch in r.children
@@ -329,20 +331,20 @@ impl Ast_node
         if c.fn_ctx.impl_name.len > 0
             sb
                 .s("[W0107] '\{name\}' releases the receiver, but its type does not conform to \
-                    'Owned', so use-after-free is not tracked for it. Add 'impl \
+                    'Owned'. Use-after-free is therefore not tracked. Add 'impl \
                     \{c.fn_ctx.impl_name\}: Owned {}'")
                 .s(" and spell the method 'free'." if !is_free else ".")
         else
             sb
                 .s("[W0107] '\{name\}' releases its first parameter, but that type does not conform \
-                    to 'Owned', so use-after-free is not tracked for it. Make it a 'free' method on \
+                    to 'Owned'. Use-after-free is therefore not tracked. Make it a 'free' method on \
                     the type and conform it to 'Owned'.")
         c.warn(r, c.scratch.slice())
 
     fn lint_nullable_pointer_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@, base_ret_id: I32) //<
         //< [H0701] Suggests `T?` where a function returns a raw pointer that can be null
         //<
-        //< It is a Hint, not an Information: existing code often returns null for "not found", and
+        //< It is a Hint, not an Information. Existing code often returns null for "not found", and
         //< an Information would break CI's gate that requires zero items.
         //< **Only memory and C hand out a raw null** (`null_is_their_word` below).
         if null_is_their_word(r.loc.file()) || !c.env.is_pointer(base_ret_id)
@@ -351,25 +353,96 @@ impl Ast_node
         if r.sym_ptr != null
             sym: = Sema_symbol$@::r.sym_ptr
             is_export = sym.flags.is_export
-        if is_export || !block.contains_return_null()
+        if is_export || !block.contains_return_null(block)
             return
         c.clear_scratch()
-            .s("[H0701] Function '\{c.fn_ctx.name\}' can return a null pointer ('return null' on \
-                some path). Consider returning 'T?' instead so the compiler forces callers to \
-                handle the no-value case explicitly.")
+            .s("[H0701] Function '\{c.fn_ctx.name\}' can return a null pointer. This includes null \
+                literals, conditional expressions with a null branch, and locals assigned null. \
+                Return 'T?' to require callers to handle absence explicitly.")
         c.hint(r, c.scratch.slice())
 
-    fn contains_return_null(r: Self$@): Bool //<
-        //< Whether a "return null" appears anywhere in the subtree, nested blocks included
+    fn contains_return_null(r: Self$@, body: Ast_node$@): Bool //<
+        //< Whether a `return` anywhere in the subtree can hand back null, nested blocks included
+        //<
+        //< What follows a call declared `#noreturn` in the same block is never reached, so the
+        //< `return` a function needs after an internal-error stop does not count.
         if r == null
             return false
         if r.kind_id == .k_stmt_return
-            expr: = r.get_return_expr()
-            return expr != null && expr.kind_id == .k_null
+            return r.get_return_expr().may_be_null(body)
         for ch in r.children
-            if ch.contains_return_null()
+            if ch.contains_return_null(body)
+                return true
+            if ch.kind_id == .k_stmt_expr && ch.children.len > 0 &&
+                ch.get_child(0).is_noreturn_call()
+                return false
+        return false
+
+    priv fn may_be_null(r: Self$@, body: Ast_node$@): Bool //<
+        //< Whether a returned value can be null: `null`, an `if … else` with such a side, or a local
+        //<
+        //< **A local counts when the body assigns it null anywhere**, without following the flow. A
+        //< list's head kept null until the first push is the case to catch. Shadowing is refused
+        //< ([I0501]), so one name is one variable. A local whose address is lent (`p@`) does not
+        //< count: what is written through the address goes unseen.
+        if r == null
+            return false
+        switch r.kind_id
+        case .k_null
+            return true
+        case .k_result_wrap
+            return r.get_result_wrap_inner().may_be_null(body)
+        case .k_expr_ternary
+            return r.get_ternary_true().may_be_null(body) ||
+                r.get_ternary_false().may_be_null(body)
+        default
+            name: = r.local_name()
+            return name.len > 0 && body.assigns_null_to(name) && !body.lends_address_of(name)
+
+    priv fn assigns_null_to(r: Self$@, name: U8[]): Bool //<
+        //< Whether the subtree declares `name` with null, or assigns null to it with `=`
+        if r == null
+            return false
+        $right: Ast_node$@ = null
+        $left: Ast_node$@ = null
+        if r.kind_id == .k_decl_var
+            left = r.get_var_decl_id()
+            right = r.get_var_decl_expr()
+        else if r.kind_id == .k_stmt_expr && r.get_assign_op() != null &&
+            r.get_assign_op().text.equals("=")
+            left = r.get_assign_left()
+            right = r.get_assign_right()
+        if left.local_name().equals(name) && right.is_null_side()
+            return true
+        for ch in r.children
+            if ch.assigns_null_to(name)
                 return true
         return false
+
+    priv fn lends_address_of(r: Self$@, name: U8[]): Bool //< whether the subtree takes `name@`
+        if r == null
+            return false
+        if r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("@") &&
+            r.get_postfix_receiver().local_name().equals(name)
+            return true
+        for ch in r.children
+            if ch.lends_address_of(name)
+                return true
+        return false
+
+    priv fn local_name(r: Self$@): U8[] //< the name, when `r` is one name alone; empty otherwise
+        if !r.is_path_or_ident()
+            return ""
+        name: = r.get_path_or_ident_name()
+        return name if r.text.equals(name) else ""
+
+    priv fn is_null_side(r: Self$@): Bool //< `null`, or an `if … else` with a `null` side
+        if r == null
+            return false
+        if r.kind_id == .k_expr_ternary
+            return r.get_ternary_true().is_null_side() ||
+                r.get_ternary_false().is_null_side()
+        return r.kind_id == .k_null
 
     fn is_guaranteed_to_leave(r: Self$@, any_exit: Bool): Bool //<
         //< Whether control cannot fall off the end of `r`
@@ -416,9 +489,9 @@ impl Ast_node
     fn ret_stmt_switch(r: Self$@, any_exit: Bool): Bool //<
         //< Whether every case of the switch, its default included, is sure to leave.
         //<
-        //< Note: has_default needs no check. sema/body/switch.kspl requires 'default' on a
-        //< non-enum switch, and every variant covered without it (process_switch_exhaustiveness),
-        //< so a switch here always enters a case or the default.
+        //< Note: has_default needs no check. sema/body/switch.kspl requires 'default' on a non-enum
+        //< switch, or every variant covered without it (process_switch_exhaustiveness). So a switch
+        //< here always enters a case or the default.
         $all_returns: = true
         $has_case: = false
         for i in Range.asc(r.children.len)

@@ -3,8 +3,8 @@
 function kspageProbeShow(ks) {
   const { check, app, canvas, ime, pressAt } = ks;
 
-  // 14. While one sheet at a time is shown, a key goes to sending rather than editing (only a real
-  // keystroke shows whether what types is shut: the hidden input field takes the keys).
+  // 14. While one sheet at a time is shown, a key goes to sending rather than editing. Only a real
+  // keystroke shows whether what types is shut: the hidden input field takes the keys.
   if (app.surfaceCount() > 0) {
     const key = (k) => ime.dispatchEvent(new KeyboardEvent("keydown",
       { key: k, bubbles: true, cancelable: true }));
@@ -29,7 +29,7 @@ function kspageProbeShow(ks) {
   }
 
   // 15. Enter is wired to what splits a paragraph (**untaken, a line break goes into the hidden
-  // input field**), seen by the count of blocks in the document.
+  // input field**). The count of blocks in the document shows it.
   const blocks = () => ks.savedBlocks().length;
   // Caution: **Lay it over the body before pressing.** Inside a table's cell it does not split, so
   // "it does not grow on a press" would be the correct answer.
@@ -142,7 +142,7 @@ function kspageProbeInsert(ks) {
     "\"A title and two columns\" can be chosen from the sketch submenu");
   // What was chosen must be readable from the shut row.
   //
-  // **This can be seen nowhere else**: the value is held by the JS, not a field, so forgetting the
+  // **This can be seen nowhere else.** The value is held by the JS, not a field. So forgetting the
   // place that puts it out still passes the entry point (the same harm as a `<select>`).
   check(ks.flyNow("slide-sketch") === "A title and two columns",
     "the sketch chosen comes out to the shut row's right (" + ks.flyNow("slide-sketch") + ")");
@@ -154,8 +154,8 @@ function kspageProbeInsert(ks) {
   // The button that takes one frame off.
   //
   // **This can be seen nowhere else**: a misspelt id breaks only as "the frames do not go down on a
-  // press". **Press inside the slide before taking it off** (in the flow it does not come off);
-  // **the cursor just after inserting is inside the slide**, so it goes out into the flow first.
+  // press". **Press inside the slide before taking it off** (in the flow it does not come off).
+  // **The cursor just after inserting is inside the slide**, so it goes out into the flow first.
   pressAt(8);
   openMenu("drop-frame");
   document.getElementById("drop-frame").click();
@@ -273,7 +273,7 @@ function kspageProbePin(ks) {
   check(Math.abs(pin.getBoundingClientRect().top - room) < 1.5, "it stands just under the tools");
   check(pin.width > 0 && pin.height > 0, "and holds a painting");
 
-  // **A press on the band is a press on the heading**: the cursor goes into that cell and the
+  // **A press on the band is a press on the heading.** The cursor goes into that cell, and the
   // window follows it up, so the real heading shows and nothing is kept.
   const at = pin.getBoundingClientRect();
   pin.dispatchEvent(new PointerEvent("pointerdown", { clientX: at.left + 4, clientY: at.top + 4,

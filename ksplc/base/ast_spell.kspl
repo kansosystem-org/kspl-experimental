@@ -1,7 +1,7 @@
 //< Spelling a node back as text: a type's name, a path, a function's signature
 //<
-//< Unlike the accessors (`ast_ext.kspl`), which say which child is what, it walks the tree into a
-//< string, with its own depth limit. **Spellings are built here and nowhere else**: a mangled
+//< The accessors (`ast_ext.kspl`) say which child is what. This file instead walks the tree into
+//< a string, with its own depth limit. **Spellings are built here and nowhere else.** A mangled
 //< name, a diagnostic and the generated C's type names must agree, so do not rebuild one in the
 //< caller.
 import "ksplc/base/ast" as base_ast + { Ast_node }
@@ -19,7 +19,7 @@ import "std/sys"
 priv const max_extract_type_name_depth: Sz = 1000 //<
     //< The depth limit for extract_type_name_to's walk down a postfix chain
     //<
-    //< Caution: A postfix chain (`I32@@@@...@`) escapes the parser's max_parse_depth and could
+    //< Caution: A postfix chain (`I32@@@@...@`) escapes the parser's max_parse_depth. It could
     //< overflow extract_type_name_to's native stack (max_mangle_depth in sema/type/naming.kspl
     //< too).
 
@@ -72,8 +72,8 @@ fn write_sig(fn_node: Ast_node$@, spell: Callable2<|Sig_part, Str_builder$@, Boo
         //< A function's signature on one line, `(a: I32, b: I32 = 2): I32`, types spelt by `spell`
         //<
         //< **Only this function decides what a signature holds** (which children are parameters,
-        //< the `...`, the defaults, the return type), so the editor's hover and its completion list
-        //< show one signature; only a type's spelling is up to the caller. It returns false where
+        //< the `...`, the defaults, the return type). So the editor's hover and its completion list
+        //< show one signature. Only a type's spelling is up to the caller. It returns false where
         //< `spell` could not.
         //< Caution: **Do not drop a default.** Without it, a reader takes the parameter for one
         //< every call must pass.
@@ -191,15 +191,15 @@ impl Ast_node
             return
         if depth >= max_extract_type_name_depth
             io.err()
-                .s("\nfatal: type expression nesting too deep to extract name (possible unbounded \
-                    pointer/array/slice chain).\n")
+                .s("\nfatal: type expression nesting too deep to extract a name. A chain of \
+                    pointers, arrays or slices may be unbounded.\n")
             sys.exit(1)
 
         if r.kind_id == .k_type_expr || r.kind_id == .k_type_postfix || r.kind_id == .k_type_arg
             if r.kind_id == .k_type_postfix && r.text.len > 0
-                // A `$` is not part of a type name (it says what may be written, not which type),
-                // so it is dropped; kept, `impl U8$[]` would not register as `impl U8[]` and never
-                // be found.
+                // A `$` is not part of a type name (it says what can be written, not which type).
+                // So it is dropped. If it were kept, `impl U8$[]` would not register as
+                // `impl U8[]`, and nothing would find it.
                 res.s(r.text.strip_prefix("$"))
             for c in r.children
                 c.extract_type_name_to(res, depth + 1)
@@ -264,7 +264,7 @@ impl Ast_node
         //< How a type that is `Self` itself is written (`Self`, `Self@`, `Self$@`), or ""
         //<
         //< Caution: **Keep the `$`.** extract_type_name drops it (a type's name says nothing about
-        //< writing through it), and shown without it, a receiver written `Self$@` reads as one that
+        //< writing through it). Shown without it, a receiver written `Self$@` reads as one that
         //< cannot be written through.
         if !r.names_self_type()
             return ""

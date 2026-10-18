@@ -4,7 +4,7 @@
 //< Caution: **Do not stop at reading.** Bugs appear where the data read is used (a header matched
 //< ignoring case, a query encoded back into text, a tree walked in depth).
 //< **The exit code is the only answer**: 0 "read and used", 1 "refused". **A round trip that
-//< breaks stops with `assert`**, counted as an announced stop: what a writer here wrote, or what
+//< breaks stops with `assert`**, counted as an announced stop. What a writer here wrote, or what
 //< the reader read, must read back the same.
 //< Usage: `read_prog <kind> <file>` (the kinds are the names that `read_one` below lists).
 import "std/argp"
@@ -18,7 +18,7 @@ import "std/json_struct"
 import "std/jsonrpc"
 import "std/mem" { Arena, dealloc }
 import "std/reflect"
-import "std/regex" { Regex }
+import "std/regex" { Match, Regex }
 import "std/str" { Str_builder }
 import "std/sys"
 import "std/url"
@@ -29,7 +29,7 @@ priv $used: U64 = 0
 
 priv const mix: U64 = 0x100000001B3U64 //< the multiplier
     //<
-    //< **It may wrap on overflow**; it is used only for mixing.
+    //< **It can wrap on overflow**; it is used only for mixing.
 
 priv fn use_bytes(s: U8[])
     for b in s
@@ -81,7 +81,7 @@ priv fn walk_json(v: json.Val, arena: Arena$@) //< it walks the elements of the 
     //< `dump` already walks inside objects, so only the array path is taken here.
     $items: = v.arr_list(arena)
     for it in items.slice()
-        use_bytes(it.as_str())
+        use_bytes(it.as_str().unwrap_or(""))
         walk_json(it, arena)
 
 // ---------------------------------------------------------
@@ -104,36 +104,34 @@ priv fn read_url(src: U8[], arena: Arena$@): I32 //<
     query_round_trip(head, arena)
     return 0
 
-priv fn query_round_trip(head: url.Query_param$@, arena: Arena$@) //<
+priv fn query_round_trip(q: url.Query, arena: Arena$@) //<
     //< Encodes every pair back into a query and checks that it parses to the same pairs, in order
     again: = arena.text()
-    $node: = head
-    for node != null
-        if node != head
-            again.c('&')
-        again.s(url.encode(node.name, arena)).c('=').s(url.encode(node.value, arena))
-        node = node.next
-    $back: = url.parse_query(again.take(), arena) catch
+    $sep: U8[] = ""
+    for p in q.each()
+        again.s(sep).s(url.encode(p.name, arena)).c('=').s(url.encode(p.value, arena))
+        sep = "&"
+    back: = url.parse_query(again.take(), arena) catch
         panic("url: an encoded query does not parse")
-    node = head
-    for node != null && back != null
-        assert(back.name.equals(node.name) && back.value.equals(node.value),
-            "url: an encoded pair parses back as another")
-        node = node.next
-        back = back.next
-    assert(node == null && back == null, "url: an encoded query parses back to another count")
+    $rest: = back.each()
+    for p in q.each()
+        switch rest.next()
+        case .some(b)
+            assert(b.name.equals(p.name) && b.value.equals(p.value),
+                "url: an encoded pair parses back as another")
+        case .none
+            panic("url: an encoded query parses back to fewer pairs")
+    assert(rest.next().is_none(), "url: an encoded query parses back to more pairs")
 
-priv fn use_query(head: url.Query_param$@, arena: Arena$@) //<
+priv fn use_query(q: url.Query, arena: Arena$@) //<
     //< It walks the pairs and encodes the values back into text
     //<
     //< Caution: **Go as far as the round trip**: reading alone never runs the digits the encoder
     //< writes.
-    $node: = head
-    for node != null
-        use_bytes(node.name)
-        use_bytes(node.value)
-        use_bytes(url.encode(node.value, arena))
-        node = node.next
+    for p in q.each()
+        use_bytes(p.name)
+        use_bytes(p.value)
+        use_bytes(url.encode(p.value, arena))
 
 // ---------------------------------------------------------
 // Base64
@@ -172,28 +170,33 @@ priv fn read_regex(src: U8[], arena: Arena$@): I32 //<
     // is merged with it. A search that stepped back instead passes the bound on the patterns that
     // hang one.
     assert(rx.visits(text) <= rx.states * (text.len + 1), "regex: a search visits past its bound")
-    use_match(rx, hit, pattern.len, text, arena)
+    use_match(rx, hit, text, arena)
     return 0
 
-priv fn use_match(rx: Regex$@, hit: Bool, pattern_len: Sz, text: U8[], arena: Arena$@) //<
-    //< It extracts the match and reads the groups, of which the pattern holds fewer than its length
+priv fn use_match(rx: Regex$@, hit: Bool, text: U8[], arena: Arena$@) //<
+    //< It extracts the match and reads each group the pattern holds
     //<
-    //< **No match is a valid answer** (it refuses with `no_match`), and the three searches agree.
-    one: = rx.find(text) catch
+    //< **No match is a valid answer** (`find` gives none), and the three searches agree.
+    switch rx.find(text)
+    case .none
         assert(!hit, "regex: is_match found what find does not")
-        return
-    assert(hit, "regex: find found what is_match does not")
+    case .some(one)
+        assert(hit, "regex: find found what is_match does not")
+        use_groups(one, rx, text, arena)
+
+priv fn use_groups(one: Match, rx: Regex$@, text: U8[], arena: Arena$@) //<
+    //< It reads each group of the match `find` gave, and the matches `find_all` gives
     use_len(one.start)
     use_len(one.end)
-    for n in Range.asc(pattern_len + 1)
-        if one.has_group(n)
-            use_bytes(one.group(n, text))
+    for n in Range.asc(one.group_count())
+        if got: = one.group(n + 1, text)
+            use_bytes(got)
     $all: = rx.find_all(text, arena)
     first: = all.get(0)
     assert(first.start == one.start && first.end == one.end,
         "regex: find_all's first match is not find's")
     for m in all.slice()
-        use_bytes(m.group(0, text))
+        use_bytes(text.sub(m.start, m.end - m.start))
 
 // ---------------------------------------------------------
 // HTTP
@@ -226,7 +229,7 @@ priv fn read_http_response(src: U8[], arena: Arena$@): I32
     use_len(res.consumed)
     $out: = Str_builder.new()
     defer out.free()
-    // A head the reader takes may still be one the writer refuses (a 204 naming a length).
+    // A head the reader takes can still be one the writer refuses (a 204 naming a length).
     http.format_response(out@, res.status, res.headers, res.body) catch
         return 0
     response_reads_back(out.slice(), res.status, res.headers, res.body, arena)
@@ -251,8 +254,8 @@ priv fn use_headers(head: Headers) //< it walks the headers and looks one up by 
 priv fn read_http_written(src: U8[], arena: Arena$@): I32 //<
     //< Hands the fields to a writer, and checks that what it wrote reads back the same
     //<
-    //< **The fields are split at each 0 byte**: a status (three digits) or a method and a target,
-    //< then header names and values in turn, and a body if one field is left over.
+    //< **The fields are split at each 0 byte.** First come a status (three digits) or a method and
+    //< a target. Then header names and values follow in turn, and a body if one field is left over.
     fields: = split_fields(src, arena)
     if fields.len == 0
         return 1
@@ -300,7 +303,7 @@ priv fn response_reads_back(written: U8[], status: I32, head: Headers, body: U8[
         panic("http: a response the writer wrote is refused by the reader")
     assert(res.status == status && res.body.equals(body) && res.consumed == written.len,
         "http: a response the writer wrote reads back as another")
-    // Only a status that may carry a body names its length.
+    // Only a status that can carry a body names its length.
     names_length: = status >= 200 && status != 204 && status != 304
     same_headers(res.headers, head, body.len if names_length else -1, arena)
     $again: = Str_builder.new()
@@ -359,7 +362,7 @@ priv fn read_rpc(src: U8[], arena: Arena$@): I32 //<
             "jsonrpc: a body framed again is taken back as another")
         doc: = json.parse(body, arena) catch
             continue
-        use_bytes(doc.val.get("method").as_str())
+        use_bytes(doc.val.get("method").as_str().unwrap_or(""))
     return 0 if whole.bodies.len > 0 else 1
 
 priv fn frames_of(src: U8[], run: Sz, arena: Arena$@): Frames //<
@@ -488,7 +491,7 @@ priv fn read_argv(src: U8[], arena: Arena$@): I32 //<
     $same: =
         first.verbose == second.verbose && first.dry == second.dry &&
         first.count == second.count && first.name.equals(second.name) &&
-        p.command.equals(q.command) && same_list(p.rest, q.rest) &&
+        p.command.unwrap_or("").equals(q.command.unwrap_or("")) && same_list(p.rest, q.rest) &&
         same_list(first.defines, second.defines) &&
         same_list(first.trailing, second.trailing)
     for n in cli_names
@@ -510,8 +513,8 @@ priv fn argv_again(p: argp.Parser$@, c: Cli$@, arena: Arena$@): List<|U8[]|>$@ /
         out.push(arena.text().s("--name=").s(c.name).take())
     for d in c.defines.slice()
         out.push(arena.text().s("--define=").s(d).take())
-    if p.command.len > 0
-        out.push(p.command)
+    if cmd: = p.command
+        out.push(cmd)
     out.push("--")
     for r in p.rest.slice()
         out.push(r)

@@ -4,11 +4,11 @@
 function kspageProbeMenu(ks) {
   const { check, app, canvas, ime, pressAt, keyIn, undoKey, openMenu, findCell } = ks;
 
-  // 10. Menus and buttons: whether a menu opens, whether a press shuts it, and whether the focus
-  // goes back to the input field (else "it cannot be typed on after the press"). Like a person, it
-  // opens a menu and then presses (`click()` reaches the content even shut).
-  // Caution: **Shut it before pressing** — an earlier section can leave one open (a save with the
-  // local server and an empty path field shows that field), and pressing an open one shuts it.
+  // 10. Menus and buttons: whether a menu opens, and whether a press shuts it. Also whether the
+  // focus goes back to the input field (else "it cannot be typed on after the press"). Like a
+  // person, it opens a menu and then presses (`click()` reaches the content even shut).
+  // Caution: **Shut it before pressing.** An earlier section can leave one open (a save with the
+  // local server and an empty path field shows that field). Pressing an open one shuts it.
   ks.menuOf("save").open = false;
   const fileMenu = openMenu("save");
   check(fileMenu.open, "pressing the knob opens the menu");
@@ -16,15 +16,15 @@ function kspageProbeMenu(ks) {
   const styleMenu = openMenu("style-apply");
   check(styleMenu.open && !fileMenu.open,
     "opening another menu shuts the earlier menu");
-  // **What is pressed is not "Save"**: holding no file, Save opens a window to choose a place,
-  // which opens only inside a person's press (a headless browser has none); a command answering in
-  // the same press is looked at, and real overwriting is confirmed by hand (`kspage/README.md`).
+  // **What is pressed is not "Save".** Holding no file, Save opens a window to choose a place,
+  // which opens only inside a person's press (a headless browser has none). A command answering in
+  // the same press is looked at. Real overwriting is confirmed by hand (`kspage/README.md`).
   openMenu("export-md");
   document.getElementById("export-md").focus();
   document.getElementById("export-md").click();
   check(document.getElementById("note").textContent === "Wrote it out as Markdown",
     "the command's tiding comes out");
-  // The debug log: **the document's content must not go in**; the falling text is read by taking
+  // The debug log: **the document's content must not go in**. The falling text is read by taking
   // `URL.createObjectURL` over (a real fall cannot be seen in a headless browser).
   const realBlob = URL.createObjectURL;
   let carried = null;
@@ -58,8 +58,8 @@ function kspageProbeMenu(ks) {
   canvas.dispatchEvent(new PointerEvent("pointerdown",
     { clientX: 10, clientY: 10, bubbles: true }));
   check(!fileMenu.open, "a press outside shuts the menu");
-  // Caution: **It must shut on Esc too** (as in other products); the keystroke's way and the menu's
-  // contend for the same key (else deleting a composition shuts the menu).
+  // Caution: **It must shut on Esc too** (as in other products). The keystroke's way and the
+  // menu's contend for the same key (else deleting a composition shuts the menu).
   openMenu("save");
   keyIn("Escape");
   check(!fileMenu.open, "Esc shuts the menu");
@@ -77,7 +77,7 @@ function kspageProbeMenu(ks) {
   check(helpAt >= 0 && helpAt > barMenus.length / 2,
     "\"?\" sits on the band's right side (" + (helpAt + 1) + "/" + barMenus.length + ")");
   check(barMenus[0].id !== "help", "the left edge is not \"?\"");
-  // Caution: **A menu must not grow too far down** (it covers the canvas); a set with many fields
+  // Caution: **A menu must not grow too far down** (it covers the canvas). A set with many fields
   // folds into a nested `<details>`, and the 400px cap is a settled value.
   let tallest = 0;
   let tallestAt = "";
@@ -97,7 +97,7 @@ function kspageProbeMenu(ks) {
   // No box that carries a submenu winds anything up (`overflow` cuts off absolutely placed
   // descendants, hiding a submenu inside).
   // Caution: **Counting the DOM does not notice it** (only the look shows: a band winding sideways,
-  // the deep rows out of reach), so **every submenu inside the band is looked at**, not one set.
+  // the deep rows out of reach). So **every submenu inside the band is looked at**, not one set.
   const clipped = [];
   for (const fly of document.querySelectorAll("#bar .fly")) {
     for (let up = fly.parentElement; up !== null && up.id !== "bar"; up = up.parentElement) {
@@ -112,12 +112,12 @@ function kspageProbeMenu(ks) {
     "there is no box that winds a submenu up ("
       + (clipped.join(" / ") || "none") + ")");
 
-  // The first row's length: **height alone is not enough** — a short menu with the commands flat on
-  // the first row gives no clue to "which acts on what" (`fly.js`'s opening header, "keep the first
-  // row short"), so **the count** is looked at too (the cap of 4 is settled).
-  // Caution: **Do not count by depth** (a command sits inside a `.row` and inside a set inside one,
-  // so "directly under `.items`" misses a row forgotten into a set): a button in neither a submenu
-  // nor a panel counts, a row pointing at a set (`.fly-open`) does not, nor `…` (`#spill`).
+  // The first row's length: **height alone is not enough.** A short menu with the commands flat on
+  // the first row gives no clue to "which acts on what". See `fly.js`'s opening header, "keep the
+  // first row short". So **the count** is looked at too (the cap of 4 is settled).
+  // Caution: **Do not count by depth.** A command sits inside a `.row` and inside a set inside one.
+  // So "directly under `.items`" misses a row forgotten into a set. A button in neither a submenu
+  // nor a panel counts. A row pointing at a set (`.fly-open`) does not, nor does `…` (`#spill`).
   const flat = [];
   for (const m of document.querySelectorAll("#bar > .menu:not(#spill)")) {
     const how = Array.from(m.querySelectorAll(".items button")).filter((b) =>
@@ -131,9 +131,9 @@ function kspageProbeMenu(ks) {
     "the commands lined up directly on a menu's first row go to 4 ("
       + (flat.join(" / ") || "none") + ")");
 
-  // Caution: **Do not lay a `<select>` inside a menu** — choosing one would line up in two guises,
-  // and **which acts on the beat of a press cannot be read**. **Inside a panel too a set, not a
-  // field** (a panel is a `details`, so a press does not shut it: `../../port/web/fly.js`'s
+  // Caution: **Do not lay a `<select>` inside a menu.** Choosing one would line up in two guises,
+  // and **which acts on the beat of a press cannot be read**. **Inside a panel too, a set, not a
+  // field.** A panel is a `details`, so a press does not shut it (`../../port/web/fly.js`'s
   // opening header).
   const loose = [];
   for (const box of document.querySelectorAll("#bar select")) {
@@ -142,9 +142,9 @@ function kspageProbeMenu(ks) {
   check(loose.length === 0,
     "no `<select>` is left in a menu (" + (loose.join(" / ") || "none") + ")");
 
-  // **Two rows at most, and no row that folds one thing only**: **two keep the first row to "what
-  // it acts on"** (Google Docs's `Format ▸ Text ▸ Bold`). A set (`fly-nest`) holds no choices and
-  // a leaf lines up ✓ rows; a leaf on the second row is fine, **a set inside a set makes a third
+  // **Two rows at most, and no row that folds one thing only.** **Two keep the first row to "what
+  // it acts on"** (Google Docs's `Format ▸ Text ▸ Bold`). A set (`fly-nest`) holds no choices, and
+  // a leaf lines up ✓ rows. A leaf on the second row is fine; **a set inside a set makes a third
   // row**.
   const nested = [];
   for (const box of document.querySelectorAll("#bar .fly-items.fly-nest")) {
@@ -157,8 +157,8 @@ function kspageProbeMenu(ks) {
   check(nested.length === 0,
     "no set is made inside a set (" + (nested.join(" / ") || "none") + ")");
 
-  // Caution: **Do not use a folded panel (`details.sub`) in place of a submenu** — a panel is for a
-  // set touched on and on (text to read, fields filled in turn); as a submenu, one touch sends the
+  // Caution: **Do not use a folded panel (`details.sub`) in place of a submenu.** A panel is for a
+  // set touched on and on (text to read, fields filled in turn). As a submenu, one touch sends the
   // focus to the body and it shuts (`fly.js`'s opening header). Looked at after the JS fills lists.
   const panels = [];
   for (const sub of document.querySelectorAll("#bar details.sub")) {
@@ -197,7 +197,7 @@ function kspageProbeMenu(ks) {
       "a set's box does not wind up (" + wrap.overflowX + "/" + wrap.overflowY + ")");
     // It opens the third row (Style → Characters → Bold), which must be inside the window.
     // Caution: **Put the focus in from the outside inward** (it opens on `:focus-within`; a shut
-    // row's child takes no focus), and **`click()` does not open it** (it moves no focus).
+    // row's child takes no focus). **`click()` does not open it** (it moves no focus).
     group.querySelector(".fly-open").focus();
     const boldFly = document.getElementById("paint-bold");
     check(boldFly !== null, "the third row's bold is there");
@@ -213,9 +213,9 @@ function kspageProbeMenu(ks) {
     }
   }
 
-  // A row inside a set does not fold: **its length is settled by `min-width`** (a submenu's box
-  // floats beside its row, so narrow, a set's row folds to two or three; `page.css` says the same).
-  // Caution: **Measure after opening** (while shut the measures are 0); the row's length is
+  // A row inside a set does not fold: **its length is settled by `min-width`**. A submenu's box
+  // floats beside its row, so narrow, a set's row folds to two or three (`page.css` says the same).
+  // Caution: **Measure after opening** (while shut the measures are 0). The row's length is
   // compared with the tallest field inside.
   openMenu("put-shape");
   const shapeGroup = document.getElementById("put-shape-fly");
@@ -237,8 +237,8 @@ function kspageProbeMenu(ks) {
       "a row inside a set does not fold (" + (folded.join(" / ") || "none") + ")");
   }
 
-  // The fields of "change the style itself" land on one press, all together: **a misspelt field id
-  // leaves the wasm unhurt** and breaks only as "the style does not change".
+  // The fields of "change the style itself" land on one press, all together. **A misspelt field
+  // id leaves the wasm unhurt**, and breaks only as "the style does not change".
   openMenu("style-apply");
   const itemAt = app.styleNames().indexOf("bullet");
   check(itemAt >= 0, "the sample holds an item style");
@@ -297,8 +297,8 @@ function kspageProbeMenu(ks) {
   check(enter.defaultPrevented, "Enter is taken over");
   check(document.activeElement === ime, "after the swap the focus goes back to the body");
 
-  // The cell being typed on shows the formula, elsewhere the value (**the value reckoned is not put
-  // into the document**; the text is inside the canvas).
+  // The cell being typed on shows the formula, elsewhere the value. **The value reckoned is not
+  // put into the document**; the text is inside the canvas.
   check(app.text().indexOf("=1+1") >= 0, "the cell being typed on shows the formula");
   pressAt(8);
   check(app.text().indexOf("=1+1") < 0, "move elsewhere and the formula stops showing");
@@ -308,8 +308,8 @@ function kspageProbeMenu(ks) {
   check(app.text().indexOf("=1+1") < 0, "one undo takes the formula off");
 
   // 10'. The icons' shortcuts go the same way as the menus (a misspelt id leaves the wasm unhurt).
-  // Caution: **Do not make a way apart from the menus'** — one alone changed puts them out of step,
-  // so the shortcut must give the same result as the menu.
+  // Caution: **Do not make a way apart from the menus'.** One alone changed puts them out of
+  // step, so the shortcut must give the same result as the menu.
   const tools = document.getElementById("ribbon");
   check(tools !== null && tools.querySelectorAll("button").length > 0,
     "the row of shortcuts is there ("
@@ -331,8 +331,8 @@ function kspageProbeMenu(ks) {
   pressAt(8);
 
   // 11''. The menu of the spot, put out by a right-click: whether the browser's menu was stopped,
-  // where, and whether the rows swap for where it is now (else "right-click and nothing comes out"
-  // or "the spellcheck vanished in a field").
+  // and where. Also whether the rows swap for where it is now. Else "right-click and nothing
+  // comes out", or "the spellcheck vanished in a field".
   const rightAt = (into, x, y) => {
     const now = into.getBoundingClientRect();
     const ev = new MouseEvent("contextmenu",
@@ -381,14 +381,15 @@ function kspageProbeMenu(ks) {
     "inside a cell the rows grow (body " + bodyRows.length
       + " -> cell " + cellRows.length + ")");
   // Caution: **Do not carry cut, copy and paste** (a paste cannot be called from a press; Principle
-  // 5), hunted by **the wording the rows carry** (keyed on wording that is nowhere, this passes).
+  // 5). They are hunted by **the wording the rows carry**: keyed on wording that is nowhere,
+  // this passes.
   const dead = cellRows.filter((name) =>
     name === "Cut" || name === "Copy" || name === "Paste");
   check(dead.length === 0,
     "no row that does not act on a press is carried (" + dead.join(" / ") + ")");
 
-  // 11'. Tab moves between cells (taking the key is the DOM side's call), **not taken outside a
-  // table**, or the page cannot be walked by key alone; the move is seen by the cell's frame.
+  // 11'. Tab moves between cells (taking the key is the DOM side's call). **It is not taken outside
+  // a table**, or the page cannot be walked by key alone. The cell's frame shows the move.
   const tabKey = (back) => ime.dispatchEvent(new KeyboardEvent("keydown",
     { key: "Tab", shiftKey: back, bubbles: true, cancelable: true }));
   pressAt(cellY);
@@ -416,7 +417,7 @@ function kspageProbeCell(ks) {
   const { check, app, canvas, ime, spot, pressAt, undoKey, openMenu, findCell, dpr } = ks;
 
   // 12. The frame of the cell it is in really is painted. **What is inside the canvas does not come
-  // out in the DOM**; the frame's shape is the wasm side's, so only "was it painted" is looked at.
+  // out in the DOM.** The frame's shape is the wasm side's, so only "was it painted" is looked at.
   const box = canvas.getBoundingClientRect();
   const cellY = findCell();
   const cell = app.cellFrame();
@@ -432,16 +433,16 @@ function kspageProbeCell(ks) {
     check(marked !== "0,0,0,0", "the frame's line is painted");
     // Caution: It must go once it is back in the body. Left there, which cell it is in cannot be
     // told.
-    // **It cannot be told apart by whether it is painted** (the cell holds the style's line in the
-    // same place), so the colour changing is looked at.
+    // **It cannot be told apart by whether it is painted**, since the cell holds the style's line
+    // in the same place. So the colour changing is looked at.
     pressAt(8);
     check(inkAt(at[0], at[1]) !== marked, "back in the body the frame goes");
   }
 
   // What lands decoration on the selection without giving a name.
   //
-  // **This can be seen nowhere else**: the colour samples and the mark are DOM inside the menu, so
-  // a misspelt id breaks only as "press it and no colour appears".
+  // **This can be seen nowhere else.** The colour samples and the mark are DOM inside the menu,
+  // so a misspelt id breaks only as "press it and no colour appears".
   openMenu("paint-color");
   pressAt(8);
   ime.dispatchEvent(new KeyboardEvent("keydown",

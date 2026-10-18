@@ -1,7 +1,7 @@
 //< **Runs a closed loop** between the car and kssrv on the PC
 //<
 //< The car is the Freenove 4WD mecanum one (Pico W). The steps are in
-//< "Stage 6e — running a closed loop with the PC's kssrv" in `ksos/docs/HOWTO-bring-up.md`.
+//< "Stage 6e — a closed loop with the PC's kssrv" in `ksos/docs/HOWTO-bring-up.md`.
 
 // ==========================================
 // Caution: **Test it with the wheels off the ground.** A hand is too slow to catch a wrong start.
@@ -11,8 +11,8 @@
 //   with the manoeuvre that comes back
 // ==========================================
 // What stops it whatever the answer says:
-//   (1) once the battery falls below its minimum it stops and sends no more requests (it does not
-//       resume until the switch is turned off and on)
+//   (1) once the battery falls below its minimum, it stops and sends no more requests. It resumes
+//       only after the switch is turned off and on
 //   (2) at point-blank range (under emergency_mm) it backs off whatever the answer is
 //   (3) if no valid answer comes within reply_deadline_ms, it stops
 // ==========================================
@@ -140,13 +140,14 @@ priv fn drive_from_reply(resp: U8[], seq: U32): Bool //<
     doc: = json.parse(resp.sub_from(at), arena@) catch
         return false
     // Caution: Check that it answers this observation; the last round's answer can arrive late.
-    if U32::doc.val.get("seq").as_int(-1) != seq
+    if U32::doc.val.get("seq").as_int().unwrap_or(-1) != seq
         return false
-    cmd: = doc.val.get("cmd").as_str()
+    cmd: = doc.val.get("cmd").as_str().unwrap_or("")
     if cmd.len == 0
         return false
-    apply(cmd, doc.val.get("lon").as_int(0), doc.val.get("lat").as_int(0),
-        doc.val.get("rot").as_int(0))
+    apply(cmd, doc.val.get("lon").as_int().unwrap_or(0),
+        doc.val.get("lat").as_int().unwrap_or(0),
+        doc.val.get("rot").as_int().unwrap_or(0))
     return true
 
 priv fn watch_battery(ln: con.Line$@): Bool //<

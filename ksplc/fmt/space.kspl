@@ -155,8 +155,8 @@ fn check_line_wrap(last_txt: U8[], text: U8[], require_space: Bool, current_col:
         last_txt.is_unary_prefix()
         is_safe_break = false
     // Caution: **Never end a line with `catch` or `catch <name>`.** In the indentation notation the
-    // next line's column decides whether a block opens or the line continues, and a break gives
-    // both the same column — the handler reads as the block's first statement, and its value is
+    // next line's column decides whether a block opens or the line continues. A break gives
+    // both the same column. Then the handler reads as the block's first statement, and its value is
     // lost.
     if after_catch
         is_safe_break = false
@@ -168,16 +168,17 @@ fn check_line_wrap(last_txt: U8[], text: U8[], require_space: Bool, current_col:
 // ---------------------------------------------------------
 // Carrying a string literal onto the next line
 //
-// The bytes between the quotes are part of the program, so the only mark the formatter may put
-// inside a literal is the line-continuation `\`, which stands for no byte ("Escape sequences" in
+// The bytes between the quotes are part of the program. So the only mark the formatter can put
+// inside a literal is the line-continuation `\`. It stands for no byte ("Escape sequences" in
 // `../../docs/SPEC-language.md`). `printer.kspl` does the writing.
 // ---------------------------------------------------------
 
 fn join_string_lines(text: U8[], out: Str_builder$@): Bool //<
     //< It writes a literal's spelling into `out` with every line continuation taken out
     //<
-    //< It returns false, and `out` is then to be ignored, for a literal that is not laid out at
-    //< all: a raw text (`"""`), a character literal, and one holding a line terminator of its own.
+    //< It returns false for a literal that is not laid out at all, and `out` is then to be
+    //< ignored. Such a literal is a raw text (`"""`), a character literal, or one holding a line
+    //< terminator of its own.
     //< Caution: **Join before breaking, every time.** Where the text starts decides the break
     //< points, so otherwise formatting twice gives two different results.
     if text.len < 2 || (text.ptr + 0)$ != '"' || text.starts_with("\"\"\"")
@@ -202,10 +203,10 @@ fn join_string_lines(text: U8[], out: Str_builder$@): Bool //<
 fn string_piece_end(text: U8[], from: Sz, budget: Sz): Sz //<
     //< How much of a joined literal goes on this line, counted from `from`
     //<
-    //< `text.len` where the rest fits, otherwise just past the last space leaving room for the `\`;
+    //< `text.len` where the rest fits, otherwise just past the last space leaving room for the `\`.
     //< `from` where none fits, so a word longer than the line is written whole.
     //< Caution: **Do not break at a space inside `\{ … \}` or in a run of spaces.** The first is
-    //< part of an expression; the second loses a space to the indent the `\` swallows (a JSON
+    //< part of an expression. The second loses a space to the indent the `\` swallows (a JSON
     //< fixture).
     if text.len - from <= budget
         return text.len

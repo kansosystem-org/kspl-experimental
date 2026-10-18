@@ -37,12 +37,14 @@ priv const mark_skip: U8[] = "SKIP"
 // the caller passed, not a copy.
 priv $cur_tag: U8[] = ""
 priv $cur_body: U8[] = ""
+priv $reported: Sz = 0 //< how many `pass`, `FAIL` and `SKIP` lines the run has printed (`finish`)
 
 priv fn line(mark: U8[], text: U8[], tail: U8[]) //<
     //< Builds one line in the order mark, label, text, and ends it
     //<
     //< **This is the only place that builds a line.** A heading that does not start with `[` gets
     //< no separator either. A non-empty `tail` adds one "why" at the end.
+    reported += 1
     io.out().s(mark).c(' ')
     // A heading's own label wins; without one, the run's label (from `begin`) is printed.
     tag: = cur_tag if cur_tag.len > 0 else run_tag.slice()
@@ -117,7 +119,7 @@ pub fn skip( //< reports that the test does not apply on this target, and why
 priv struct Names //< the names a `RESULT:` line lists, copied into a buffer of its own
     //<
     //< **When the names do not all fit, it prints `…` after the ones it kept**, rather than
-    //< failing; the count on the line is still the full count.
+    //< failing. The count on the line is still the full count.
     buf: U8[4000]
     len: Sz
     count: Sz //< how many names were added
@@ -198,9 +200,9 @@ pub fn list_verdict( //< whether a walk passes: it found nothing wrong, and it l
 
 pub fn check_list( //< reports a walk's findings as one check, with how many things it looked at
     //<
-    //< Caution: **Looking at nothing fails**: the code that reads broke, or what it reads has moved
-    //< (a subject that is really empty still walks the files it looked in). Hence the count
-    //< argument.
+    //< Caution: **Looking at nothing fails.** Either the code that reads broke, or what it reads
+    //< has moved. A subject that is really empty still walks the files it looked in. Hence the
+    //< count argument.
     name: U8[], //< what was checked
     seen: Sz, //< how many things the walk looked at
     unit: U8[], //< what was counted (`lines`, `files`, `items`)
@@ -246,6 +248,12 @@ pub fn finish(): I32 //<
     //< ends the run with its `RESULT:` line, and returns the verdict as the exit code
     //<
     //< Caution: **Start no line but the verdict with `RESULT:`**: the gates read that word.
+    //< **A run that reported no check fails**: its checks were never reached, or the program holds
+    //< none, and `ALL PASS` would say that something held.
+    if reported == 0
+        cur_tag = ""
+        line(mark_fail, nothing_ran, "")
+        failed.add(nothing_ran)
     if failed.count > 0
         io.out().s("RESULT: SOME FAILED (\{failed.count\}) -> ")
         failed.put()
@@ -258,6 +266,8 @@ pub fn finish(): I32 //<
         return 0
     io.out().s("RESULT: ALL PASS\n")
     return 0
+
+priv const nothing_ran: U8[] = "no check ran" //< what `finish` names for a run that reported none
 
 pub fn fatal( //< ends a run that cannot continue (for example, its input files are missing)
     msg: U8[], //< why it cannot continue
@@ -285,43 +295,52 @@ pub struct Run_out //< one child's run as a check reads it: how it ended, and wh
     //<
     //< **A diagnostic appears on either stdout or stderr** (by version and route), so the two are
     //< joined, and the matcher misses neither.
-    pub code: I32 //< the exit code; -1 where it could not start or was killed on a timeout
+    pub code: I32? //< the exit code; none where it could not start or was killed on a timeout
     pub out: U8[] //< what it wrote, one text (`Run_result.text`); where it did not end, why
 
-priv fn folded(r: subproc.Run_result@, arena: Arena$@): Run_out //< one run, as a code and a text
+impl Run_out
+    pub fn exited_with(r: Self@, code: I32): Bool //< whether it ended by itself with this code
+        //<
+        //< False where it did not end by itself: a check expecting any code fails on such a run.
+        if got: = r.code
+            return got == code
+        return false
+
+priv fn folded(got: subproc.Run_result!subproc.Spawn_error, arena: Arena$@): Run_out //<
+    //< One run, as a code and a text
     //<
-    //< **Where it could not start, the text says so too**: the code alone can look like "it ended
-    //< non-zero".
-    if r.spawn_failed
-        return Run_out::{ .code = -1, .out = arena.dup_str("[harness] it could not start") }
+    //< **Where it did not end by itself, the text says why**: the code alone is none either way.
+    r: = got catch
+        return Run_out::{ .code = .none,
+            .out = arena.dup_str("[harness] it could not start") }
     $text: = r.text(arena)
     if r.output_lost
         text = arena.text().s(text).s("\n[harness] its output could not be read back\n").take()
-    if r.timed_out
-        return Run_out::{ .code = -1,
-            .out = arena.text().s(text).s("\n[harness] killed on a timeout\n").take() }
+    if r.exit_code.is_none()
+        text = arena.text().s(text).s("\n[harness] killed on a timeout\n").take()
     return Run_out::{ .code = r.exit_code, .out = text }
 
 pub fn run_child( //< runs one child to its end, and returns how it ended and what it wrote
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
-    timeout_ms: I32, //< how long it may run before it is killed (-1 in `code`)
+    timeout_ms: I32, //< how long it can run before it is killed (none in `code`)
     arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): Run_out
-    // The outputs and the folding are work; only the folded text is copied to the caller.
-    $work: = mem.scratch(arena)
+    // The outputs and the folding are work, kept apart from `arena` (`mem.scratch`); only the
+    // folded text is copied to the caller.
+    $work: = mem.scratch(null)
     defer work.free()
     t0: = sys.mono_us()
     r: = subproc.run_capture(argv, cwd, timeout_ms, run_output_cap, work.arena)
-    note_near_cap(argv, (sys.mono_us() - t0) / 1000I64, timeout_ms, r.timed_out)
-    o: = folded(r@, work.arena)
+    o: = folded(r, work.arena)
+    note_near_cap(argv, (sys.mono_us() - t0) / 1000I64, timeout_ms, o.code.is_none())
     return Run_out::{ .code = o.code, .out = arena.dup_str(o.out) }
 
 priv fn note_near_cap(argv: U8[][], took_ms: I64, cap_ms: I32, timed_out: Bool) //<
     //< Says so where a child that ended took three quarters of its cap or more
     //<
-    //< **Before the kill, not at it**: a run that grows towards its cap passes until the round it
-    //< is killed, and the slow machine it is killed on is seldom the one where someone looks.
+    //< **Before the kill, not at it.** A run that grows towards its cap passes until the round it
+    //< is killed. The slow machine it is killed on is seldom the one where someone looks.
     if timed_out || cap_ms <= 0 || took_ms * 4I64 < I64::cap_ms * 3I64 || argv.len == 0
         return
     io.out().s("NOTE: [harness] ").s(sys.get_file_name(argv[0]))
@@ -361,14 +380,13 @@ pub fn run_children( //< runs children side by side (`jobs`), and returns their 
     fs.mkdir_all(work_dir) catch
         for _item in items
             lost: = arena.text().s("[harness] the work folder \{work_dir\} cannot be made").take()
-            outs.push(Run_out::{ .code = -1, .out = lost })
+            outs.push(Run_out::{ .code = .none, .out = lost })
         return outs
     // The outputs and the folding are work, as in `run_child`.
-    $work: = mem.scratch(arena)
+    $work: = mem.scratch(null)
     defer work.free()
     rs: = subproc.run_many(items, jobs(), default_timeout_ms, run_output_cap, work_dir, work.arena)
     for i in Range.asc(rs.len)
-        r: = rs.get(i)
-        o: = folded(r@, work.arena)
+        o: = folded(rs.get(i), work.arena)
         outs.push(Run_out::{ .code = o.code, .out = arena.dup_str(o.out) })
     return outs

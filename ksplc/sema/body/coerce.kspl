@@ -1,8 +1,8 @@
 //< Fits an expression's type to the expected one, and reports a cast the language would do itself
 //<
-//< `apply_type_coercion` inserts the conversions the language makes on its own (a numeric
-//< widening, an upcast to a trait value, a `Result` wrap, dropping a `$`) and reports anything else
-//< as a type mismatch. [I0301] reports a written `::` that does no more than that.
+//< `apply_type_coercion` inserts the conversions the language makes on its own: a numeric widening,
+//< an upcast to a trait value, a `Result` wrap, dropping a `$`. It reports anything else as a type
+//< mismatch. [I0301] reports a written `::` that does no more than that.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -12,6 +12,7 @@ import "ksplc/sema/decl/mono_queue" as sema_decl_mono_queue
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -22,8 +23,8 @@ impl Ast_node
         if !base_core.config.run_lint_checks || r.kind_id != .k_expr_postfix || r.ival == 1
             return // a generated implicit cast (ival == 1) is not linted
         // Skipped while instantiating a generic: a cast redundant at one type argument is needed at
-        // another (`F32$@::(a)` in `blas_gemm<|T|>` is identity at T=F32, a real conversion at
-        // T=F64), so the advice would break the build if followed.
+        // another. `F32$@::(a)` in `blas_gemm<|T|>` is identity at T=F32, a real conversion at
+        // T=F64. So the advice would break the build if followed.
         if c.is_instantiating()
             return
         // **The cast's `::` is a Literal child.** Matching text alone would pick up a
@@ -136,20 +137,20 @@ impl Ast_node
         case .trait_type(_d)
             if c.env.get_clean_real_type(type_id) == clean_expected_id
                 return expected_id
-            // **Finish building the instance's methods before making a trait value**, or the vtable
-            // names a thunk with no instance (register_generic_trait_impls in mono.kspl; the test
-            // is ksplc/tests/trait_test.kspl).
+            // **Finish building the instance's methods before making a trait value.** Otherwise the
+            // vtable names a thunk with no instance (register_generic_trait_impls in mono.kspl; the
+            // test is ksplc/tests/trait_test.kspl).
             c.ensure_instance_methods(type_id) catch {}
             if c.check_trait_implementation(type_id, clean_expected_id, r)
                 if !c.env.is_pointer(type_id) && !c.env.is_slice(type_id) && !r.is_place_expr()
-                    // Advising a binding is right only where it outlives the call; at a return it
-                    // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspl
-                    // rejects that).
+                    // Advising a binding is right only where it outlives the call. At a return it
+                    // dies with the frame (check_frame_escape in sema/body/stmt_escape.kspl rejects
+                    // that).
                     c.err(r,
-                        "cannot cast an rvalue (temporary object) to an interface: the interface \
-                            value keeps a pointer to it. Bind it to something that outlives the \
-                            interface value first (`x: = ...;`, or a heap allocation when it must \
-                            outlive the call).")
+                        "cannot cast an rvalue (temporary object) to an interface. The interface \
+                            value keeps a pointer to the object. Bind the object to storage that \
+                            outlives the interface value (`x: = ...;`). If the object must outlive \
+                            the call, a heap allocation is an alternative.")
                     return expected_id
 
                 clone: = r.snapshot_for_morph(type_id)
@@ -206,8 +207,8 @@ impl Ast_node
                 return expected_id
 
             c.clear_scratch()
-                .s("implicit conversion between '\{c.env.get_str(type_id)\}' and \
-                    '\{c.env.get_str(expected_id)\}' is forbidden to prevent data loss. Use \
+                .s("implicit conversion between '\{c.env.display(type_id)\}' and \
+                    '\{c.env.display(expected_id)\}' is forbidden to prevent data loss. Use an \
                     explicit '::' cast")
             if c.env.is_float(expected_id) && sema_body_literal.is_untyped_int_literal(r)
                 c.scratch.s(", or write the integer literal as a float ('2.0', not '2')")
@@ -227,8 +228,13 @@ impl Ast_node
         // Caution: Do not wrap only on an exact `strip_result(expected_id) == type_id`. Then no
         // value **requiring a conversion** would pass, and `fn f(): Trait!Err` or `fn f():
         // Void$@!Err` could only throw.
+        // A value that is itself a result is wrapped only where the ok type is that result
+        // (`(A!B)!E`); any other result passes as it is.
         ok_id: = c.env.strip_result(expected_id)
-        if c.env.is_result(expected_id) && ok_id != expected_id && !c.env.is_result(type_id)
+        is_ok_value: =
+            !c.env.is_result(type_id) ||
+            c.env.get_clean_real_type(type_id) == c.env.get_clean_real_type(ok_id)
+        if c.env.is_result(expected_id) && ok_id != expected_id && is_ok_value
             if ok_id != type_id
                 inner_id: = r.apply_type_coercion(c, type_id, ok_id)
                 if inner_id != ok_id
@@ -239,9 +245,9 @@ impl Ast_node
             r.add_child(clone)
             return expected_id
 
-        // **`[_]` takes the initializer's length alone**: its elements are then checked as
-        // against a written length, so an immutable array's row or a field (`m[1]`, `s.a`) copies
-        // in as it does into `I32[3]`, and the declaration gets the type a written length gives.
+        // **`[_]` takes the initializer's length alone.** Its elements are then checked as against
+        // a written length. So an immutable array's row or a field (`m[1]`, `s.a`) copies in as it
+        // does into `I32[3]`. The declaration gets the type a written length gives.
         switch c.env.get_info(real_expected_id)
         case .array(exp_b, exp_s)
             if exp_s == -1
@@ -278,7 +284,7 @@ fn implicit_cast_kind(c: Sema_ctx$@, real_src: I32, real_dst: I32, original_id: 
         //< Whether a type-changing cast, where `expected_id` is expected, only converts implicitly
         //<
         //< **The one decision that [I0301] reports on and [H0302] backs off on**
-        //< (`lint_repeated_type` in `lint_stmt.kspl`): following both would drop both the cast and
+        //< (`lint_repeated_type` in `lint_stmt.kspl`). Following both would drop both the cast and
         //< the type that drives it.
     if c.env.is_numeric(real_src) && c.env.is_numeric(real_dst)
         if c.env

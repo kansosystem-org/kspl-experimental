@@ -1,0 +1,72 @@
+//< Checks what a function's paths leave set, moved or released, by running code that passes
+//<
+//< The shapes the compiler refuses are the cases `loop_*` in `negative/control.kspl` and
+//< `move_only_field_moved_out` in `negative/closure.kspl`; the syntax and basic types are in
+//< `lang_test.kspl`.
+import "std/verdict"
+
+// ==========================================
+// What follows a loop starts from the states its exits carry: the condition's and each `break`'s
+// ("Worked example: forbidding copies with `Move_only`" in `../../docs/SPEC-language.md`).
+// ==========================================
+priv struct Loop_handle
+    v: I32
+
+impl Loop_handle: Move_only {}
+
+priv struct Loop_pair
+    a: Loop_handle
+    b: Loop_handle
+
+priv fn loop_take(h: Loop_handle): I32
+    return h.v
+
+priv fn set_before_the_break(n: I32): I32 //< `x` is set on the only way out
+    $x: I32
+    for
+        x = n
+        break
+    return x
+
+priv fn set_before_every_break(n: I32): I32 //< labelled or not, every `break` follows `x = …`
+    $x: I32
+    outer: for
+        for $i: I32 = 0; i < 1000; i += 1
+            if i == n
+                x = i
+                break outer
+            if i > 100
+                x = -1
+                break outer
+    return x
+
+priv fn moved_and_given_back(n: I32): I32 //< a move on each pass is fine when a new value follows
+    $h: Loop_handle = ::{ .v = 1 }
+    $t: I32 = 0
+    for $i: I32 = 0; i < n; i += 1
+        t += loop_take(h)
+        h = ::{ .v = i + 2 }
+    return t + loop_take(h)
+
+priv fn declared_in_the_body(n: I32): I32 //< each pass binds its own
+    $t: I32 = 0
+    for $i: I32 = 0; i < n; i += 1
+        h: Loop_handle = ::{ .v = i }
+        t += loop_take(h)
+    return t
+
+priv fn fields_apart(): I32 //< moving one field leaves the others, and a new value restores it
+    $p: Loop_pair = ::{ .a = ::{ .v = 1 }, .b = ::{ .v = 2 } }
+    $t: = loop_take(p.a) + loop_take(p.b)
+    p.a = ::{ .v = 4 }
+    t += loop_take(p.a)
+    return t
+
+fn test_loop_exits_carry_their_state()
+    verdict.start("[Lang] the state after a loop comes from its exits test...")
+    assert(set_before_the_break(4) == 4, "a variable set before the only break")
+    assert(set_before_every_break(3) == 3, "a variable set before every labelled break")
+    assert(moved_and_given_back(3) == 1 + 2 + 3 + 4, "a value moved and given back on every pass")
+    assert(declared_in_the_body(3) == 0 + 1 + 2, "a value declared in the body, moved on every pass")
+    assert(fields_apart() == 1 + 2 + 4, "two fields moved apart, one given back")
+    verdict.pass("a loop's exits, `break` included, carry what each path set, moved or released.")

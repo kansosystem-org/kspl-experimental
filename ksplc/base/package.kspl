@@ -1,9 +1,9 @@
 //< Where a package is, when its folder's `ksplc.cfg` names it, and what it says it uses
 //<
 //< **A package that names itself is found by its name, not by the current folder.** Its files
-//< import each other as `<name>/…`, so a run from its own folder, whatever it is called, gives the
+//< import each other as `<name>/…`. So a run from its own folder, whatever it is called, gives the
 //< same logical names as a run from the repository's root.
-//< **The same section lists what it imports besides itself and `std`**; an import of any other
+//< **The same section lists what it imports besides itself and `std`.** An import of any other
 //< package is rejected where it is written. `std` lists nothing: the language closes it to itself.
 
 // ==========================================
@@ -74,8 +74,6 @@ priv fn decl_in(dir: U8[]): Package_decl //<
         if s.key.len == 0
             header = s
         else if s.key.equals("name")
-            if decl.name.len > 0
-                base_config_file.reject(s, "'name' is given twice")
             if !is_segment(s.value) || s.value.equals("std")
                 base_config_file.reject(s, "a package's name is one folder name, and not 'std'")
             decl.name = s.value
@@ -95,10 +93,11 @@ priv fn decl_at(dir: U8[]): Package_decl //<
     if read_decls == null
         read_decls = base_core.perm_arena
             .create(Map<|U8[], Package_decl|>.new(base_core.perm_arena))
-    return read_decls.get(dir) catch
-        decl: = decl_in(dir)
-        read_decls.set(base_core.perm_arena.dup_str(dir), decl)
-        fallback decl
+    if known: = read_decls.get(dir)
+        return known
+    decl: = decl_in(dir)
+    read_decls.set(base_core.perm_arena.dup_str(dir), decl)
+    return decl
 
 priv fn decl_of(unit: U8[]): Package_decl //<
     //< The declaration of the package reached by the name `unit`
@@ -130,14 +129,14 @@ fn name_entry(path: U8[]): U8[] //<
     //< name (`to_project_relative` in `locate.kspl`).
     plain: = base_locate.to_project_relative(path)
     // Caution: **Cut the rest from the path the walk read.** The package's top is found with `..`
-    // folded (`fold_dots` in `locate.kspl`), so a path that still holds one would name its file
+    // folded (`fold_dots` in `locate.kspl`). So a path that still holds one would name its file
     // from a top it is not under.
     abs_file: = base_locate.canonical_path(plain)
-    // **A file under std's folder belongs to std**, whatever the current folder: named the way its
-    // imports name it, it is read once, checked as std, and mapped back to where it is on disk
-    // (`Uri_style.spell` in `locate.kspl`).
+    // **A file under std's folder belongs to std**, whatever the current folder. It is named the
+    // way its imports name it. So it is read once, checked as std, and mapped back to where it is
+    // on disk (`Uri_style.spell` in `locate.kspl`).
     // Caution: **Compare the folded absolute paths.** An editor passes a document outside its
-    // workspace spelled with `..`, and std's folder may be given either way.
+    // workspace spelled with `..`, and std's folder can be given either way.
     in_std: = base_locate.rest_under(abs_file,
         base_locate.canonical_path(base_locate.std_dir()))
     if in_std.len > 0
@@ -162,12 +161,12 @@ priv fn climbs(logical: U8[]): Bool //< whether a logical name holds a `..` segm
     return logical.find_str("/../").is_some() || logical.ends_with("/..")
 
 fn refused_written(written: U8[]): U8[] //<
-    //< Why a path written in an `import` or `embed` names no file; empty where it may
+    //< Why a path written in an `import` or `embed` names no file; empty where it can
     //<
     //< **An absolute path is none of the three rules** ("import syntax and path resolution" in
-    //< docs/SPEC-language.md): its first segment is empty or a drive, not a package.
+    //< docs/SPEC-language.md). Its first segment is empty or a drive, not a package.
     //< Caution: **Refuse it before anything is opened.** Opening `//host/share/x` on Windows
-    //< connects to that host and offers it the user's credentials, and the language server opens
+    //< connects to that host and offers it the user's credentials. The language server opens
     //< what a cloned workspace's files name as soon as the folder is opened.
     absolute: = written.len > 0 && (written[0] == '/' || written[0] == '\\')
     drive: = written.len > 1 && written[1] == ':'
@@ -178,7 +177,7 @@ fn refused_written(written: U8[]): U8[] //<
         .s("'std/', or relative to this file ('file', './file', '../file')").take()
 
 fn refused_use(importer: U8[], target: U8[]): U8[] //<
-    //< Why a file may not import that target; empty where it may
+    //< Why a file cannot import that target; empty where it can
     //<
     //< A package that names itself imports itself, `std` and its `uses`; one that names nothing has
     //< no list to keep to. **`std` is closed** ("import syntax and path resolution" in
@@ -211,7 +210,7 @@ fn refused_use(importer: U8[], target: U8[]): U8[] //<
     defer why.free()
     why
         .s("the package '\{from\}' does not say it uses '\{to\}' (add it to 'uses' in the [package] \
-            ").s("section of \{decl.file\})")
+            ").s("section of \{base_locate.to_project_relative(decl.file)\})")
     return base_core.arena.dup_str(why.slice())
 
 fn here(): Package_decl //< the package the current folder is in (`ksplc info package`)

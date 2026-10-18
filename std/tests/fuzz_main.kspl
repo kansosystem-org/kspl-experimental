@@ -24,15 +24,15 @@ import "std/verdict"
 priv const default_seed: I64 = 20260903
 priv const default_trials: I64 = 400 //< how many rounds CI scatters, some 40 a kind
     //<
-    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression;
+    //< **CI's depth**: the seed is fixed, so CI replays the same inputs and shows a regression.
     //< `make fuzz-long` runs deeper, with a fresh seed, to find what this seed never reaches.
 
 priv const reach_floor_div: Sz = 10 //<
     //< At least one round in this many must get deep into the reader
     //<
     //< It is the minimum share of mutated inputs that the reader reads rather than refuses.
-    //< Caution: **Do not change it to tighten the check**: it is a lower bound for "is it working";
-    //< the share that gets through means nothing by itself.
+    //< Caution: **Do not change it to tighten the check.** It is a lower bound for "is it working".
+    //< The share that gets through means nothing by itself.
 
 priv const trial_timeout_ms: I32 = 10000 //<
     //< How long a round runs before it counts as never ending
@@ -64,8 +64,8 @@ priv const kinds: fuzz.Input_kind[10] = ::{ //<
 priv fn built_json(arena: Arena$@): U8[] //<
     //< The JSON that std's writer produces
     //<
-    //< Caution: **Include one of each form**: mutation cannot reach a form missing from the seeds
-    //< (an escape, a decimal, an integer over 53 bits and a nesting each take a separate path).
+    //< Caution: **Include one of each form.** Mutation cannot reach a form missing from the seeds.
+    //< An escape, a decimal, an integer over 53 bits and a nesting each take a separate path.
     $b: = Json_builder.new(arena)
     // The non-ASCII string holds each UTF-8 width, so a mutation reaches every branch of its check.
     inner: = b.obj().set("s", b.str_val("a quote \" and a newline \n and \\ and \t"))
@@ -176,8 +176,8 @@ priv fn built_shape(arena: Arena$@): U8[] //<
 // **From here down the seeds are written by hand.**
 // **When adding one, choose "a form that reaches one more branch of the reader"**; similar forms
 // add no path.
-// A regex seed has the form "the pattern before the 0 byte, the text to match after it" (why the
-// separator is not a newline is in `read_regex` in [`read_prog.kspl`](read_prog.kspl)).
+// A regex seed has the form "the pattern before the 0 byte, the text to match after it". Why the
+// separator is not a newline is in `read_regex` in [`read_prog.kspl`](read_prog.kspl).
 priv const regex_samples: U8[][8] = ::{ "([a-z]+)-([0-9]+)\0foo-12 bar-345 baz",
     "^(cat|dog)s?$\0dogs", "a.*?b|a.*b\0axxbxxb", "[^\\d\\s]+\\b\0words and 123 and abc",
     "(ab)+(cd)?\0ababcd", "\\((\\w+)\\)[*+?]\0(x)* (y)+",
@@ -190,14 +190,15 @@ priv const request_samples: U8[][4] = ::{ "GET /a/b?x=1&y=%E3%81%82 HTTP/1.1\r\n
         world", "PUT / HTTP/1.0\r\nX-A: 1\r\nX-A: 2\r\nx-a: 3\r\n\r\n",
     "HEAD /%2e%2e/ HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n" }
 
-// Numbers in spellings std's writer does not write: integers past I64, which read as decimals,
-// spellings longer than the shortest, and exponents the writer turns into a fixed form that starts
-// with zeros (`0.0000300…`), which must read back as the same F64.
+// Numbers in spellings std's writer does not write: integers past I64, which read as decimals, and
+// spellings longer than the shortest. Also exponents the writer turns into a fixed form that starts
+// with zeros (`0.0000300…`). Those must read back as the same F64.
 priv const number_sample: U8[] =
     "[123456789012345678901234567890,-9223372036854775809,9007199254740993,1E+2,0.10000000000000000555,2.4703282292062328e-324,3.008264692815159e-5,1.555807952092567e-6,-6.388790567867736e-6]"
 
-// A JSON-RPC seed is a stream of frames: a length named twice alike and then apart, a head with
-// other fields and a body cut short, a length past the cap, a head naming none, and a length of 0.
+// A JSON-RPC seed is a stream of frames. They hold a length named twice alike and then apart, and
+// a head with other fields and a body cut short. Others hold a length past the cap, a head naming
+// none, and a length of 0.
 priv const frame_samples: U8[][5] = ::{ "Content-Length: 2\r\nContent-Length: \
     2\r\n\r\n{}Content-Length: 2\r\ncontent-length: 4\r\n\r\n[]",
     "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\ncontent-length: \

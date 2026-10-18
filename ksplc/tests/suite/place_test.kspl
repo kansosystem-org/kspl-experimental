@@ -156,7 +156,7 @@ priv fn compile_only(dir: U8[], index: Sz, body: U8[], arena: Arena$@): Verdict
     io.write_file(src, sb.slice()) catch
         return Verdict::{ .compiled = false, .first_error = "cannot write the material" }
     r: = harness.ksplc(U8[][]::{ src, gen })
-    if r.code == 0
+    if r.exited_with(0)
         return Verdict::{ .compiled = true, .first_error = "" }
     for ln in r.out.lines(arena)
         if ln.find_str("error:").is_some()
@@ -182,11 +182,11 @@ fn main(): I32
     return harness.finish()
 
 // ==========================================
-// That ksplc itself rejects a write to something read-only: each read-only source is written
+// That ksplc itself rejects a write to something read-only. Each read-only source is written
 // through each path, and what ksplc accepts is compiled as C with its warnings on. **C sees only
-// part of it:** a slice's `const` stays on its descriptor ("The output order of genc's type
-// definitions is decided after the immutability marks are stripped" in
-// `ksplc/docs/DESIGN-compiler.md`), so only ksplc can catch a write through a slice.
+// part of it:** a slice's `const` stays on its descriptor ("Genc orders its type definitions
+// after stripping immutability marks" in `ksplc/docs/DESIGN-backends.md`). So only ksplc can catch
+// a write through a slice.
 // ==========================================
 // The verdict per case, assuming that a write C warns about is one ksplc should reject:
 //   * ksplc rejected it             -> OK (this part asserts nothing about "should it be
@@ -268,9 +268,9 @@ priv fn roots(arena: Arena$@): List<|Root|>
     out
         .push(Root::{ .slot = "const_struct", .globals = holder2_decl, .locals = "",
         .expr = "ro_st" })
-    // **Nested view types are among the sources too**, or the implicit conversion of "a slice of
-    // mutable slices" to "a slice of immutable slices" (letting the callee write a read-only value
-    // into a mutable frame) is never tested.
+    // **Nested view types are among the sources too.** Otherwise the implicit conversion of "a
+    // slice of mutable slices" to "a slice of immutable slices" is never tested. That conversion
+    // lets the callee write a read-only value into a mutable frame.
     out
         .push(Root::{ .slot = "nested_mut_slices", .globals = "", .locals = nested_mut_locals,
         .expr = "nested" })
@@ -307,8 +307,8 @@ priv fn writes(arena: Arena$@): List<|Write|>
     out.push(Write::{ .slot = "mut_method_on_elem", .body = "<e>[0].bump();" })
     out.push(Write::{ .slot = "mut_method_on_place", .body = "<e>.bump_holder();" })
     out.push(Write::{ .slot = "mut_method_via_deref", .body = "<e>$.bump();" })
-    // Weakening only the inner level to read-only: the callee puts a read-only value into the frame
-    // and the caller reads it back as mutable (the variance hole).
+    // Weakening only the inner level to read-only. The callee puts a read-only value into the
+    // frame, and the caller reads it back as mutable (the variance hole).
     out.push(Write::{ .slot = "pass_weakening_inner", .body = "sink_nested(<e>);" })
     out.push(Write::{ .slot = "write_nested_elem", .body = "<e>[0][0] = 9;" })
     return out
@@ -350,7 +350,7 @@ priv fn must_accept(slot: U8[], src: U8[], dir: U8[], arena: Arena$@) //<
     //< checks that a valid write passes
     //<
     //< **ksplc is right to reject every combination above**, so rejecting everything would go
-    //< green; a valid write and the explicit cast's way out catch rejecting too much.
+    //< green. A valid write and the explicit cast's way out catch rejecting too much.
     name: = arena.text().s("a lawful write passes: \{slot\}").take()
     kspl: = fs.join(dir, arena.text().s("ok_\{slot\}.kspl").take(), arena)
     gen: = fs.join(dir, arena.text().s("ok_\{slot\}.c").take(), arena)
@@ -360,13 +360,13 @@ priv fn must_accept(slot: U8[], src: U8[], dir: U8[], arena: Arena$@) //<
         return
     // Run from the working directory, as below, so the file's name is its own, not a path.
     r: = harness.run_in(harness.ksplc_argv(U8[][]::{ kspl, gen }), dir)
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check(name, false,
             arena.text()
             .s("ksplc refused it (excessive check)\n\{src\}--- diagnostics ---\n\{r.out\}").take())
         return
     cc: = harness.run_in(U8[][]::{ harness.cc(), "-std=c99", "-Wall", "-c", gen, "-o", obj }, dir)
-    verdict.check(name, cc.code == 0 && !c_complains(cc.out),
+    verdict.check(name, cc.exited_with(0) && !c_complains(cc.out),
         arena.text().s("C refused it\n\{src\}--- C's finding ---\n\{cc.out\}").take())
 
 priv const ok_mut_local_array: U8[] =
@@ -473,7 +473,7 @@ priv fn run_write_perm(arena: Arena$@) //< what passes ksplc passes C without a 
     $cc_index: = List<|Sz|>.new(arena)
     $rejected: Sz = 0
     for i in Range.asc(jobs.len)
-        if gen_outs.get(i).code != 0
+        if !gen_outs.get(i).exited_with(0)
             rejected += 1
             continue
         gen: = gens.get(i)
@@ -488,7 +488,7 @@ priv fn run_write_perm(arena: Arena$@) //< what passes ksplc passes C without a 
     for j in Range.asc(cc_jobs.len)
         out: = cc_outs.get(j)
         i: = cc_index.get(j)
-        if out.code == 0 && !c_complains(out.out)
+        if out.exited_with(0) && !c_complains(out.out)
             both_ok += 1
             continue
         gaps += 1

@@ -63,16 +63,19 @@ debug-tools: $(STAGE1_EXE)
 # on code only they reach would go unseen. The server is built through LLVM and kssrv's tests drive
 # it; ksbind's tests are built through LLVM and run. **Linux alone**: its image holds ksbind's
 # libraries, where elsewhere ksbind's own tests skip.
+# **The compiler built in C translates them** (`STAGE1_EXE` passed down): the nested `LLVM=1`
+# would otherwise build a second compiler through LLVM first, which `selfhost_llvm` already checks.
 ## Gates|test-llvm-pkgs|Build kssrv and ksbind's tests through the LLVM backend, and run kssrv's and ksbind's tests on them
 test-llvm-pkgs: $(STAGE1_EXE) $(SEED_EXE)
-	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm
+	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
+		SRC_KSPL=kssrv/main.kspl OUT_STEM=kssrv_llvm
 	rm -rf "$(TMP_DIR)/kssrv_llvm_test"
 	cd kssrv && KSPLC_STD_DIR="$(abspath std)" KSPLC_PKG_SRC_DIR="$(abspath .)" \
 		"$(abspath $(STAGE1_EXE))" run "$(abspath kssrv/tests/main.kspl)" \
 		"$(abspath $(OUT_DIR))/kssrv_llvm.exe" \
 		"$(abspath $(TMP_DIR))/kssrv_llvm_test"
-	@$(MAKE) --no-print-directory LLVM=1 debug-file SRC_KSPL=ksbind/tests/main.kspl \
-		OUT_STEM=ksbind_llvm
+	@$(MAKE) --no-print-directory LLVM=1 STAGE1_EXE=$(STAGE1_EXE) debug-file \
+		SRC_KSPL=ksbind/tests/main.kspl OUT_STEM=ksbind_llvm
 	./$(OUT_DIR)/ksbind_llvm.exe
 
 .PHONY: test-llvm-pkgs
@@ -102,16 +105,18 @@ suite_found := $(sort $(subst _,-,$(patsubst tests/suite/%_test.kspl,%, \
 # Caution: **Longest first, by CPU time** (not wall clock, a cold-cache round or Windows's 0.0x):
 # `make -j` starts them in this order, and a heavy one at the back runs alone; `make test-suites`
 # prints the numbers. `lsp-tree` leads, as its minute is spent waiting on the language server.
-# `PRIVATE_SUITES` stands only where `private/` does (the root `Makefile`). **The compiler's copy
+# `EXTRA_SUITES` comes from a clone's own make files (the root `Makefile`). **The compiler's copy
 # (`extract-ksplc-core` / `extract-ksplc-rest`) runs apart from the other packages'**: each copy
-# rebuilds itself and takes a share of the suites; the other packages overlap the core share.
-SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest fmt-tree docref c-warnings docsnippet pilot-copy \
+# rebuilds itself and takes a share of the suites. **std's copy (`extract-std`) runs apart from the
+# rest of the packages' (`extract-rest`)**: each runs its packages one after another, so together
+# they would be the longest wait of a half.
+SUITES := lsp-tree extract-ksplc-core extract-ksplc-rest extract-rest extract-std fmt-tree docref c-warnings docsnippet pilot-copy \
   conventions deps spec-claims textrip vscode link-rules pytools recipe-bytes lint-gate own-machine \
-  $(PRIVATE_SUITES)
+  $(EXTRA_SUITES)
 
 # Linux's image alone holds their tool (`js-syntax`: node; `race`: clang's ThreadSanitizer;
 # `sanitize`: its address, leak and undefined-behaviour sanitizers): out of `test-suites`, run by
-# `ci-linux`.
+# `ci-shard-linux`.
 LINUX_SUITES := js-syntax race sanitize
 
 ALL_SUITES := $(SUITES) $(LINUX_SUITES)
@@ -181,7 +186,7 @@ fuzz-long: $(STAGE1_EXE) $(SEED_EXE)
 # such a round is not CI's verdict. Each reads 0 or 1 alone. What each requires, and what turning
 # it off gives up, is "The switches that require a tool" in `docs/SPEC-gates.md`.
 REQUIRE_SWITCHES := KANSO_REQUIRE_ASAN KANSO_REQUIRE_TSAN KANSO_REQUIRE_BOTH_CC \
-  KANSO_REQUIRE_CHOWN KSBIND_REQUIRE_LIBS KSOS_REQUIRE_ARM
+  KANSO_REQUIRE_CHOWN KANSO_REQUIRE_MINGW KSBIND_REQUIRE_LIBS KSOS_REQUIRE_ARM
 require_default := $(if $(filter linux,$(PLATFORM)),1,0)
 $(foreach v,$(REQUIRE_SWITCHES),$(eval $(v) ?= $(require_default)))
 $(foreach v,$(REQUIRE_SWITCHES),$(if $(filter 0 1,$($(v))),,\
@@ -231,10 +236,13 @@ test-suites-text: $(addprefix test-,$(SUITES_TEXT))
 	$(call suites_passed,TEST SUITES (text, Linux only),$(SUITES_TEXT))
 
 # --- The two halves CI runs on separate jobs, of what is left ---
-# **Cut for the two jobs to end together on Windows**, the slowest (by the job log's timestamps;
-# MSYS2 counts no child's CPU); half A is what B leaves. Each gets one compiler suite share;
-# the other packages overlap A's compiler share, and B also pays for LLVM and tool checks.
-SUITES_B := extract-ksplc-rest lsp-tree c-warnings $(PRIVATE_SUITES)
+# **Each half holds one share of the compiler's copy and one of the other packages' two**, so no
+# half waits on two long serial suites. Half A is what B leaves. Caution: **The two CI jobs that
+# run the halves differ by platform**: Linux's rest job is the shorter, Windows's (with its LLVM
+# gates) the longer. Before moving a suite, compare both platforms' job times in a run's job list.
+# How the rest of the work is dealt between the jobs is "How the gates are arranged" in
+# `docs/SPEC-gates.md`.
+SUITES_B := extract-ksplc-rest extract-std lsp-tree c-warnings $(EXTRA_SUITES)
 SUITES_A := $(filter-out $(SUITES_B) $(SUITES_TEXT),$(SUITES))
 
 suites_b_unknown := $(filter-out $(SUITES),$(SUITES_B))
@@ -255,7 +263,7 @@ test-suites-b: $(addprefix test-,$(SUITES_B))
 	$(call suites_passed,TEST SUITES (half B),$(SUITES_B))
 
 ## Local-cycle|test-extract|Every package with its own `Makefile` from a copy (both halves)
-test-extract: test-extract-ksplc test-extract-rest
+test-extract: test-extract-ksplc test-extract-rest test-extract-std
 
 ## Per-item|test-extract-ksplc|The compiler from isolated copies, both suite shares
 test-extract-ksplc: test-extract-ksplc-core test-extract-ksplc-rest
@@ -347,7 +355,7 @@ tour: $(STAGE1_EXE)
 	@echo "# WRITING THE TOUR OF THE LANGUAGE"
 	./$(STAGE1_EXE) run tools/tour.kspl write --ksplc=$(STAGE1_EXE)
 
-## Gates|test-docs|Whether the tour of the language matches its program and what it prints
+## Gates|test-docs|Whether the tour of the language matches its program, and its code blocks run as it
 test-docs: $(STAGE1_EXE)
 	@echo "# CHECKING THE TOUR OF THE LANGUAGE (run 'make tour' to update)"
 	./$(STAGE1_EXE) run tools/tour.kspl check --ksplc=$(STAGE1_EXE)

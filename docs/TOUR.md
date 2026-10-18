@@ -1,10 +1,8 @@
 # A tour of KSPL
 
-**This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Every piece is code that the gates compile and run.
+**This page teaches KSPL by walking through one small program, one declaration at a time.** It is for programmers who know another language, such as Python, JavaScript or C. Each section shows one piece of the program and says what that piece teaches. At the end, `main` puts the pieces together, and the page shows what the program prints. Joined in order, the code blocks are the whole program, which the gates compile and run; it is also one file, [`../ksplc/tests/notation/tour.kspl`](../ksplc/tests/notation/tour.kspl).
 
-The whole program is [`../ksplc/tests/kspls/tour.kspl`](../ksplc/tests/kspls/tour.kspl).
-
-**To run it, or anything of your own, the quick start is in the root [`../README.md`](../README.md)** — it fetches `ksplc`, writes a first file and runs it in three steps. Nothing on this page needs more than that.
+**To run it, or anything of your own, the quick start is in the root [`../README.md`](../README.md).** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on this page needs more than that.
 
 **Do not edit this page.** It is written by `make tour` from the program and the program's own output, and `make test-docs` refuses a page older than its program.
 
@@ -18,14 +16,15 @@ The whole program is [`../ksplc/tests/kspls/tour.kspl`](../ksplc/tests/kspls/tou
 | `Sz` | A size or an index: a signed integer as wide as a pointer |
 | `Bool` | `true` or `false` |
 | `U8[]` | A string: a read-only slice (a view onto memory) of bytes |
-| `T@` / `T$@` | A pointer to a `T` that only reads / that may write |
+| `T@` / `T$@` | A pointer to a `T` that only reads / that can write |
 | `T!E` | A `T`, or the error `E` when the function fails |
 
 ## The steps
 
-1. **A name for a value, and why the type is written** — `limit`
+1. **Bringing in what the program uses** — `import`
+1. **Naming a value, and why the type is written** — `limit`
 1. **Saying something, and what a function looks like** — `greet`
-1. **A binding that changes, and the three shapes of a loop** — `count_up`
+1. **A changing binding, and the three shapes of a loop** — `count_up`
 1. **Values laid side by side** — `Point`
 1. **Methods of one's own** — `Point`
 1. **What a type promises** — `Sized_thing`
@@ -44,9 +43,21 @@ The whole program is [`../ksplc/tests/kspls/tour.kspl`](../ksplc/tests/kspls/tou
 1. **Where memory comes from, and leaving two loops** — `gather`
 1. **Putting it together** — `main`
 
-## A name for a value, and why the type is written
+## Bringing in what the program uses
 
-**A `const` cannot be assigned to.** `Sz` is the type for sizes and counts. At the top of a file the type is written out rather than inferred, because a top-level name is the file's interface: a reader of another file has only this line to go on. Inside a function the type may be left off.
+**An `import` names another file by its path, and the program reaches that file's names through the path's last part**: after `import "std/io"`, it writes `io.out()`. A name listed in braces (`{ List }`) is written bare instead. The `std/strfmt` line brings in no name the program writes. It lets `\{x\}` print each type. The `_` opening its `as` name tells the compiler the import is meant to go unused.
+
+```kspl
+import "std/ds" { List }
+import "std/io"
+import "std/mem" { Arena }
+import "std/str" { Str_builder }
+import "std/strfmt" as _strfmt // the route reaching `\{x\}`'s `fmt`; `_` asks for no `strfmt.`
+```
+
+## Naming a value, and why the type is written
+
+**A `const` cannot be assigned to.** `Sz` is the type for sizes and counts. At the top of a file the type is written out rather than inferred. A top-level name is the file's interface, and a reader of another file has only this line to go on. Inside a function the type can be left off.
 
 ```kspl
 priv const limit: Sz = 4
@@ -61,7 +72,7 @@ priv fn greet(who: U8[])
     io.out().s("hello, ").s(who).s(".\n")
 ```
 
-## A binding that changes, and the three shapes of a loop
+## A changing binding, and the three shapes of a loop
 
 **A binding (a name given to a value) is immutable unless it opens with `$`.** A loop takes one of three shapes: `for a; b; c` counts, `for x in …` walks what it is given, and a bare `for` goes round until something stops it. `continue` takes the next turn; `else if` and `else` chain as they read.
 
@@ -90,7 +101,7 @@ priv struct Point
 
 ## Methods of one's own
 
-**The receiver (the value a method is called on) is written out as the first parameter**, so whether a method may change the value is read off its signature: `Self@` is a pointer that only reads, `Self$@` one that may write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a module's (`Arena.new(…)`, `io.out()`): **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
+**The receiver (the value a method is called on) is written out as the first parameter.** So whether a method can change the value is read off its signature. `Self@` is a pointer that only reads, `Self$@` one that can write. `p.moved(2)` passes `p` as `r`. A type's own function is reached with the same `.` as a module's (`Arena.new(…)`, `io.out()`). **`::` is never a path** to a name, as it is in C++ and Rust. It builds a value (`Point::{ … }`) or casts one (`I32::n`).
 
 ```kspl
 impl Point
@@ -100,7 +111,7 @@ impl Point
 
 ## What a type promises
 
-**A trait is a list of function signatures that a type promises to have**, as an interface is in Java. Whoever asks for a `Sized_thing` may call `area` and knows nothing else about the value. `Self` stands for whichever type keeps the promise.
+**A trait is a list of function signatures that a type promises to have**, as an interface is in Java. Whoever asks for a `Sized_thing` can call `area` and knows nothing else about the value. `Self` stands for whichever type keeps the promise.
 
 ```kspl
 trait Sized_thing
@@ -119,7 +130,7 @@ impl Point: Sized_thing
 
 ## Saying what a thing is, behind it
 
-**A description stands behind what it describes, on that thing's own line, marked `//<`**: a field's on the field, a parameter's on the parameter, the whole's on the opening line. The first line is the summary an editor's hover and `ksplc doc` open with; a `//<` with nothing after it parts the summary from the detail. **`///` and `//!` are not read**: in other languages they describe the next thing and the enclosing one, so the compiler warns rather than guess which is meant.
+**A description stands behind what it describes, on that thing's own line, marked `//<`.** A field's stands on the field, a parameter's on the parameter, the whole's on the opening line. The first line is the summary an editor's hover and `ksplc doc` open with; a `//<` with nothing after it parts the summary from the detail. **`///` and `//!` are not read.** In other languages they describe the next thing and the enclosing one. So the compiler warns rather than guess which is meant.
 
 ```kspl
 priv struct Span
@@ -129,7 +140,7 @@ priv struct Span
 
 ## One of a few, and a variant that carries something
 
-**An enum is one of a fixed list of values, and a variant may carry values**, so `mid(level: I32)` is "mid, and how mid". An enum is not a number: there is no arithmetic on it, and a value not listed cannot be made.
+**An enum is one of a fixed list of values, and a variant can carry values**, so `mid(level: I32)` is "mid, and how mid". An enum is not a number: there is no arithmetic on it, and a value not listed cannot be made.
 
 ```kspl
 priv enum Shade
@@ -155,16 +166,18 @@ priv fn shade_name(s: Shade): U8[]
 
 ## A generic, and a function handed over
 
-**`<|T|>` is a type the caller chooses**, so one definition serves every type (a generic). The type is chosen at the call (`twice_of<|I32|>`). The second parameter is a function value: its type is its signature, so any function of that shape may be passed.
+**`<|T|>` is a type the caller chooses**, so one definition serves every type (a generic). The type is chosen at the call (`twice_of<|I32|>`). The second parameter is a function value: its type is its signature, so any function of that shape can be passed.
 
 ```kspl
 priv fn twice_of<|T|>(v: T, add: fn(a: T, b: T): T): T
     return add(v, v)
+priv fn add_i32(a: I32, b: I32): I32
+    return a + b
 ```
 
 ## An error is a value, and it is listed
 
-**What a function may fail with is an enum like any other.** A caller can `switch` on it, so there is no message text or error number to match on.
+**What a function can fail with is an enum like any other.** A caller can `switch` on it, so there is no message text or error number to match on.
 
 ```kspl
 priv enum Step_error
@@ -194,7 +207,7 @@ priv fn step_twice(n: I32): I32!Step_error
 
 ## `defer`, right below what it cleans up
 
-**`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or a `!` that leaves early. It takes one statement that names what it cleans up (`defer b.free()` in `main` below), so it sits on the line after the binding; a cleanup of more than one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
+**`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or a `!` that leaves early. It takes one statement that names what it cleans up (`defer b.free()` in `main` below). So it sits on the line after the binding. A cleanup of more than one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
 
 ```kspl
 priv fn pick_builder(ok: Bool): Str_builder!Step_error
@@ -205,7 +218,7 @@ priv fn pick_builder(ok: Bool): Str_builder!Step_error
 
 ## Leaving early
 
-**A line holding `return` alone ends the function.** A returned value always starts on the `return`'s own line, so a line below is never read as one; a long value is split inside parentheses.
+**A line holding `return` alone ends the function.** A returned value always starts on the `return`'s own line, so a line below is never read as one. A long value is split inside parentheses.
 
 ```kspl
 priv fn note(on: Bool)
@@ -216,7 +229,7 @@ priv fn note(on: Bool)
 
 ## Where the braces have to stay
 
-**A block holding only a comment cannot be written by indentation**: a comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it.
+**A block holding only a comment cannot be written by indentation.** A comment is not a statement, so laid out by indentation the block would be empty. The braces are kept for that arm alone. Every `case` and `default` sits at the `switch`'s column, the first on the line below it.
 
 ```kspl
 priv fn tally(s: Shade)
@@ -231,7 +244,7 @@ priv fn tally(s: Shade)
 
 ## A global, and why there is one here
 
-**A top-level `$` is a global variable: mutable, and shared by the whole program.** It is here so the steps above have somewhere to leave a mark; a program of your own is better off handing the count along than reaching for one of these.
+**A top-level `$` is a global variable: mutable, and shared by the whole program.** It is here so the steps above have somewhere to leave a mark. A program of your own is better off handing the count along than reaching for one of these.
 
 ```kspl
 priv $seen: Sz = 0
@@ -239,7 +252,7 @@ priv $seen: Sz = 0
 
 ## Where memory comes from, and leaving two loops
 
-**An arena hands out memory and takes it all back at once**, so a `List` (a list that grows) built on one is let go with it, and nothing is freed one by one. A label on a `for` (`outer:`) lets `break` name which loop it leaves.
+**An arena hands out memory and takes it all back at once.** So a `List` (a list that grows) built on one is let go with it, and nothing is freed one by one. A label on a `for` (`outer:`) lets `break` name which loop it leaves.
 
 ```kspl
 priv fn gather(arena: Arena$@): List<|U8[]|>
@@ -256,7 +269,7 @@ priv fn gather(arena: Arena$@): List<|U8[]|>
 
 ## Putting it together
 
-**`main` is where a program starts, and what it returns is the exit code.** `catch` handles the failure a call may return. With a value after it, that value is used instead; with a block, the block runs and `fallback` gives the value. `\{…\}` puts a value into a string.
+**`main` is where a program starts, and what it returns is the exit code.** `catch` handles the failure a call can return. With a value after it, that value is used instead; with a block, the block runs and `fallback` gives the value. `\{…\}` puts a value into a string.
 
 ```kspl
 fn main(): I32
@@ -271,7 +284,7 @@ fn main(): I32
         io.out().s("step refused.\n")
         fallback -1
     // **A handler names the error.** The line is written past the width on purpose and still is not
-    // closed on `catch <name>`: broken there, the handler lands at the block's own column and is
+    // closed on `catch <name>`. Broken there, the handler lands at the block's own column and is
     // read as its first statement ("The formatting settings (`--style`)" in `ksplc/docs/SPEC-
     // tools.md`).
     far: =
@@ -291,7 +304,7 @@ fn main(): I32
     tally(.mid(1))
     words: = gather(arena)
     // **It carries a label.** A block with no heading cannot be told from a continuation of the
-    // statement before it, so a bare `{ … }` is writable in neither notation.
+    // statement before it. So a block of its own is written only with a label in front.
     while_locked:
         io.out().s("a labelled block passes too.\n")
     defer io.out().s("defer comes out last.\n")
@@ -325,4 +338,4 @@ defer comes out last.
 | You want to | Read |
 | :-- | :-- |
 | Look a rule up: the language rule by rule, not for reading through | [`SPEC-language.md`](SPEC-language.md) |
-| Set a project of your own up: an executable to hand out, a program split over files, VS Code with the language server and the debugger | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) |
+| Set a project of your own up. That covers an executable to hand out and a program split over files. It also covers VS Code with the language server and the debugger | [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) |

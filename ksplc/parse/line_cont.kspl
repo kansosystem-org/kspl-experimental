@@ -1,15 +1,50 @@
-//< Which marks at a line's end or start join two physical lines into one logical line
+//< Which marks and words at a line's end or start join two physical lines into one logical line
 //<
-//< **The reader of `.kspl` and the formatter that writes it both ask here**, or a mark on only
-//< one list makes the formatter put a continuation at column 0 (Principle 6 in
+//< **The reader of `.kspl` and the formatter that writes it both ask here.** Otherwise a mark on
+//< only one list makes the formatter break a line where the reader ends it (Principle 6 in
 //< `../../docs/DESIGN-principles.md`).
-//< Caution: **This file does not decide whether a word continues a line.** `catch` / `as` / `in`
-//< continue a line too, but whether a `catch` does depends on indentation only the reader knows
-//< (`ends_open_word` and `merge` in `layout.kspl`); moved here, a mistake would read a handler's
-//< first statement as the value. This file holds what the characters alone decide, a line ending
-//< in `catch` included (`ends_in_catch`).
+//< Caution: **The one join indentation decides stays with the reader.** A line ending in `catch`
+//< joins the next only at the same column (`joins_above` in `layout.kspl`). `joins_next` says
+//< what the text alone decides, and the formatter never ends a line with `catch`.
+import "ksplc/base/core" as _base_core // `is_one_of`
 import "std/chars" // `is_alnum`
 import "std/str" // `equals`
+
+priv const cont_words: U8[][3] = ::{ "as", "in", "catch" } //<
+    //< The words that continue a line onto the next when they end it
+    //<
+    //< **A word that also stands alone does not continue a value.** A conditional value's `if` /
+    //< `else` and a `return` / `throw` / `fallback` are not here. A line starting or ending with
+    //< one also reads as a statement. So a value split there goes in parentheses (the rule is "The
+    //< indentation notation (`.kspl`)" in `../../docs/DESIGN-notation.md`).
+
+priv const lead_cont_words: U8[][1] = ::{ "catch" } //<
+    //< The words that continue the previous line when they start a line
+    //<
+    //< No statement begins with one.
+    //< Caution: **Do not add `defer`.** At a line's start it is a heading that opens a block; read
+    //< as a continuation, its whole block moves one statement earlier.
+
+fn joins_next(code: U8[], next: U8[]): Bool //<
+    //< Whether a line ending in `code` and the line below, whose code starts `next`, read as one
+    //<
+    //< `code` is the line's code without a trailing comment or blanks; `next` can run past the
+    //< next line's first word. **Inside a bracket every newline joins**, whatever this says: the
+    //< caller knows the depth.
+    if line_continues(code) || (next.len > 0 && starts_cont(next[0]))
+        return true
+    if word_at(next, 0).is_one_of(U8[][]::lead_cont_words)
+        return true
+    $s: = code.len
+    for s > 0 && code[s - 1].is_alnum()
+        s -= 1
+    return code.sub_from(s).is_one_of(U8[][]::cont_words)
+
+priv fn word_at(text: U8[], at: Sz): U8[] //< the run of name characters starting at `at`
+    $e: = at
+    for e < text.len && text[e].is_alnum()
+        e += 1
+    return text.sub(at, e - at)
 
 fn line_continues(code: U8[]): Bool //<
     //< Whether a line whose code is `code` continues onto the line below
@@ -63,7 +98,7 @@ fn ends_in_catch(code: U8[]): Bool //<
 fn takes_value_on_its_line(word: U8[]): Bool //<
     //< Whether a statement's word takes its value on its own line (`return` / `throw` / `fallback`)
     //<
-    //< **A line holding one of them alone is a statement of its own** (a bare `return`), so a value
+    //< **A line holding one of them alone is a statement of its own** (a bare `return`). So a value
     //< on a deeper line below reads as the next statement, not as its value.
     return word.equals("return") || word.equals("throw") || word.equals("fallback")
 

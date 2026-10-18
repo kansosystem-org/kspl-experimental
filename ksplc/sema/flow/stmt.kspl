@@ -10,6 +10,7 @@ import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/sema/decl/eval" as sema_decl_eval
+import "ksplc/sema/flow/field" as sema_flow_field
 import "ksplc/sema/flow/track" as sema_flow_track
 import "std/ds" { List }
 import "std/str"
@@ -56,7 +57,7 @@ impl Ast_node
                 continue
             bound_names.push(pchild.text)
             c.add_local(pchild)
-            case_state.add(pchild)
+            case_state.bind(pchild, true)
 
     fn process_df_switch_case(r: Self$@, c: sema_flow_track.Df_ctx$@,
         state: sema_flow_track.Df_state$@, start_idx: Sz): sema_flow_track.Df_state$@
@@ -107,39 +108,76 @@ impl Ast_node
                 merged_state = sema_flow_track.intersect_states(merged_state, state)
             state.apply_merged_state(merged_state)
 
-    fn df_stmt_labeled_block(r: Self$@, c: sema_flow_track.Df_ctx$@,
-        state: sema_flow_track.Df_state$@) //<
-            //< Walks a labeled block, restoring the reachability from before it afterwards
-            //<
-            //< A `break <label>` can leave the block, so the reachability after it is that from
-            //< before entering, not the inside's "returns on every path".
-        prev_reachable: = state.reachable
-        if r.children.len > 1
-            r.get_labeled_block_inner().analyze_df_node(c, state)
-        state.reachable = prev_reachable
-
-    fn df_stmt_for(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@)
+    fn df_stmt_for(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< Walks a loop until the state at its head stops changing, then leaves by its exits
+        //<
+        //< **A pass starts from what the last one left at the back edge.** So the next pass sees a
+        //< move or a release in the body. Moves and releases only grow and initializations only
+        //< shrink, so this ends. A diagnostic a later pass repeats is the same text at the same
+        //< place, which `report_core` in sema/session/ctx.kspl drops.
         init_node: = r.get_for_init()
+        if init_node != null
+            init_node.analyze_df_node(c, state)
+        target: = c.exit_targets.len - 1
+        known: = c.locals.len
+        $head: = state
+        for
+            back: = r.df_loop_pass(c, head, target)
+            if !back.reachable || !back.adds_to(head, c, known)
+                break
+            next_head: = sema_flow_track.intersect_states(head, back)
+            // What only the back edge moved or released is noted as such in a report.
+            for v in back.moved_vars.items
+                if !head.moved_vars.contains(v)
+                    next_head.carried_vars.add(v)
+            for v in back.freed_vars.items
+                if !head.freed_vars.contains(v)
+                    next_head.carried_vars.add(v)
+            head = next_head
+        // **What follows starts from the exits alone**: the condition's, and each `break`'s
+        // (record_jump). A loop with no condition and no `break` leaves by none.
+        jumps: = c.exit_targets.get(target).jump_state
+        if jumps != null
+            state.apply_merged_state(jumps)
+        // What follows a loop that never ends is unreachable ([W0201]), by the judgement the
+        // missing-return check reads too.
+        state.reachable = !r.is_endless_loop()
+
+    priv fn df_loop_pass(r: Self$@, c: sema_flow_track.Df_ctx$@,
+        head: sema_flow_track.Df_state$@, target: Sz): sema_flow_track.Df_state$@ //<
+            //< Walks the loop's condition, body and step once from `head`
+            //<
+            //< Returns the state at the back edge, unreachable where no path loops back. The
+            //< exits of this pass are left in the target's `jump_state`, those of a pass before
+            //< it dropped.
+        $t: = c.exit_targets.get(target)
+        t.jump_state = null
+        t.continue_state = null
+        c.exit_targets.set(target, t)
         cond_node: = r.get_loop_cond()
         step_node: = r.get_for_step()
         block_node: = r.get_loop_block()
-        if init_node != null
-            init_node.analyze_df_node(c, state)
-        loop_state: = state.clone()
-        if cond_node != null
+        $loop_state: = head.clone()
+        if cond_node != null && cond_node.kind_id != .k_empty
             cond_node.analyze_df_node(c, loop_state)
-        // step is reachable even if the body "returns or throws on every path" (a break or continue
-        // may reach it), so the reachability after cond is restored first.
+            // The condition is false: the exit by the condition, merged as a `break`'s is.
+            t = c.exit_targets.get(target)
+            t.jump_state = loop_state.clone()
+            c.exit_targets.set(target, t)
+        // step is reachable even if the body "returns or throws on every path": a break or continue
+        // can reach it. So the reachability after cond is restored first.
         step_reachable: = loop_state.reachable
         if block_node != null
             block_node.analyze_df_node(c, loop_state)
+        continues: = c.exit_targets.get(target).continue_state
+        if continues != null
+            loop_state = sema_flow_track.intersect_states(loop_state, continues)
+        back_reachable: = loop_state.reachable
         loop_state.reachable = step_reachable
         if step_node != null
             step_node.analyze_df_node(c, loop_state)
-        // What follows a loop that never ends is unreachable ([W0201]), by the judgement the
-        // missing-return check reads too.
-        if r.is_endless_loop()
-            state.reachable = false
+        loop_state.reachable = back_reachable
+        return loop_state
 
     fn df_stmt_defer(r: Self$@, c: sema_flow_track.Df_ctx$@, _state: sema_flow_track.Df_state$@) //<
         //< A defer body is not analyzed here, only registered
@@ -178,7 +216,7 @@ impl Ast_node
 
         if expr != null
             expr.analyze_df_node(c, state)
-        c.df_check_defers_on_exit(r, state, r.defers_left_behind(c))
+        c.record_jump(r, c.df_check_defers_on_exit(r, state, r.defers_left_behind(c)))
         state.reachable = false
 
     priv fn defers_left_behind(r: Self$@, c: sema_flow_track.Df_ctx$@): Sz //<
@@ -189,24 +227,22 @@ impl Ast_node
         //< and a `fallback` the innermost `catch`.
         if r.kind_id == .k_stmt_return || r.kind_id == .k_stmt_throw
             return 0
-        for $i: = c.exit_targets.len; i > 0; i -= 1
-            t: = c.exit_targets.get(i - 1)
-            if (r.kind_id == .k_stmt_fallback && t.stmt.kind_id == .k_expr_catch) ||
-                (r.def_node != null && t.stmt == r.def_node)
-                return t.defers_before
+        if idx: = c.find_exit_target(r)
+            return c.exit_targets.get(idx).defers_before
         // Not found (an erroneous jump sema already reported): only the block ends check them.
         return c.pending_defers.len
 
 impl sema_flow_track.Df_ctx
     fn df_check_defers_on_exit(r: Self$@, exit: Ast_node$@, state: sema_flow_track.Df_state$@,
-        keep: Sz) //<
+        keep: Sz): sema_flow_track.Df_state$@ //<
             //< Analyzes the defer bodies an exit runs, LIFO, against the state at that exit
             //<
             //< **Each exit has its own state**: checked only at the block's end, `defer use(x)`
             //< before `if early { return; }` and `x = 4` would pass, and read `x` uninitialized on
-            //< the early path. A copy of the state is used, since the path ends here.
+            //< the early path. A copy of the state is used, since the path ends here; it is
+            //< returned, as what a `break` carries to where it lands.
         if r.pending_defers.len <= keep
-            return
+            return state
         exit_state: = state.clone()
         exit_state.reachable = true
         saved: = r.exit_from
@@ -214,3 +250,78 @@ impl sema_flow_track.Df_ctx
         for $i: = r.pending_defers.len; i > keep; i -= 1
             r.pending_defers.get(i - 1).analyze_df_node(r, exit_state)
         r.exit_from = saved
+        return exit_state
+
+    fn leave_exit_target(r: Self$@, state: sema_flow_track.Df_state$@) //<
+        //< Leaves the innermost exit target, merging the jumps that left it into `state`
+        t: = r.exit_targets.get(r.exit_targets.len - 1)
+        r.exit_targets.len -= 1
+        if t.jump_state != null
+            state.apply_merged_state(sema_flow_track.intersect_states(state, t.jump_state))
+
+    fn find_exit_target(r: Self$@, jump: Ast_node$@): Sz? //<
+        //< The index of the exit target a jump leaves, as sema resolved it
+        //<
+        //< A `break` or `continue` leaves the statement in its `def_node` (set by
+        //< infer_stmt_break_continue in sema/body/stmt.kspl), a `fallback` the innermost `catch`.
+        for $i: = r.exit_targets.len; i > 0; i -= 1
+            t: = r.exit_targets.get(i - 1)
+            if (jump.kind_id == .k_stmt_fallback && t.stmt.kind_id == .k_expr_catch) ||
+                (jump.def_node != null && t.stmt == jump.def_node)
+                return .some(i - 1)
+        return .none
+
+    fn record_jump(r: Self$@, jump: Ast_node$@, at: sema_flow_track.Df_state$@) //<
+        //< Merges the state a `break`, `continue` or `fallback` carries into the target it leaves
+        //<
+        //< `at` is the state after the defer bodies the jump runs. A jump with no target is an
+        //< erroneous one sema already reported.
+        k: = jump.kind_id
+        if k != .k_stmt_break && k != .k_stmt_continue && k != .k_stmt_fallback
+            return
+        if idx: = r.find_exit_target(jump)
+            $t: = r.exit_targets.get(idx)
+            carried: = at.clone()
+            carried.reachable = true
+            if k == .k_stmt_continue
+                t.continue_state =
+                    (carried if t.continue_state == null
+                    else sema_flow_track.intersect_states(t.continue_state, carried))
+            else
+                t.jump_state =
+                    (carried if t.jump_state == null
+                    else sema_flow_track.intersect_states(t.jump_state, carried))
+            r.exit_targets.set(idx, t)
+
+impl sema_flow_track.Df_state
+    fn adds_to(back: Self$@, head: sema_flow_track.Df_state$@, c: sema_flow_track.Df_ctx$@,
+        known: Sz): Bool //<
+            //< Whether a loop's back edge brings what its head's state lacks
+            //<
+            //< Only the locals declared before the loop count (`known`, their number in
+            //< `c.locals`): one declared in the body starts afresh at its declaration on every
+            //< pass (`bind`).
+        for v in head.init_vars.items
+            if !back.init_vars.contains(v)
+                return true
+        return back.freed_vars.adds_known_to(head.freed_vars@, c, known) ||
+            back.gone_vars.adds_known_to(head.gone_vars@, c, known) ||
+            back.moved_vars.adds_known_to(head.moved_vars@, c, known) ||
+            back.moved_fields.adds_known_to(head.moved_fields@, c, known)
+
+impl sema_flow_track.Df_set
+    fn adds_known_to(r: Self$@, other: sema_flow_track.Df_set$@, c: sema_flow_track.Df_ctx$@,
+        known: Sz): Bool //<
+            //< Whether r holds an item `other` lacks whose local is one of the first `known` locals
+            //<
+            //< An item of `moved_fields` counts by the local it is a field of.
+        for v in r.items
+            if other.contains(v)
+                continue
+            $local: = v
+            if v.kind_id == .k_expr_postfix
+                local = v.field_path_root().unwrap_or(null)
+            idx: = c.find_local(local)
+            if idx >= 0 && Sz::idx < known
+                return true
+        return false

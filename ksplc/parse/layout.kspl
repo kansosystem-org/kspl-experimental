@@ -3,12 +3,12 @@
 //< **The two notations differ in three marks only**: indenting, outdenting and a newline stand
 //< for `{`, `}` and `;`. No lines are added: the `{` goes at the end of the heading line and the
 //< `}` at the end of the block's last line.
-//< **Only blocks and terminators disappear** (what remains is `T::{ … }`, `import … { … }`, a
-//< string's interpolation, a block's braces where it fits on one line, and the `;` of a C-style
-//< loop heading, of a closure's captures, and between two statements on one line).
+//< **Only blocks and terminators disappear.** What remains is `T::{ … }`, `import … { … }`, a
+//< string's interpolation, and a block's braces where it fits on one line. The `;` of a C-style
+//< loop heading, of a closure's captures, and between two statements on one line remains too.
 import "ksplc/base/core" as _base_core // `is_one_of`
 import "ksplc/base/lines" as base_lines
-import "ksplc/parse/line_cont" { ends_in_catch, is_label_only, line_continues, starts_cont }
+import "ksplc/parse/line_cont" { ends_in_catch, is_label_only, joins_next }
 import "ksplc/parse/source_fix" as parse_source_fix
 import "std/chars"
 import "std/ds" { List }
@@ -18,8 +18,8 @@ import "std/str" { Str_builder }
 struct Note //< a problem found in the indentation
     //<
     //< **No diagnostic is printed here**, so that no second reporter states a syntax error before
-    //< the analyser does (Principle 6): what it finds is returned as a value and reported once sema
-    //< starts (`report_layout_notes` in `../source_checks.kspl`).
+    //< the analyser does (Principle 6). What it finds is returned as a value. It is reported once
+    //< sema starts (`report_layout_notes` in `../source_checks.kspl`).
     kind: Note_kind
     line: Sz //<
         //< Which line it is (1-based)
@@ -38,13 +38,13 @@ enum Note_kind
     tab //<
         //< A tab is used for indentation.
         //<
-        //< **A tab is not counted in the column** (the walk below counts only spaces), so that line
-        //< is treated as column 0 and ends up outside the level around it.
+        //< **A tab is not counted in the column** (the walk below counts only spaces). So that line
+        //< is treated as column 0, and ends up outside the level around it.
     terminator(col: Sz) //<
         //< A statement's line ends in a written `;`, where the line's end already ends it
         //<
         //< `col` is the `;`'s byte within its line: nothing is inserted before it on that line.
-        //< **No `;` is added after it**, so the parse goes on and `fn f(): I32;` meets the
+        //< **No `;` is added after it.** So the parse goes on, and `fn f(): I32;` meets the
         //< analysis's own "has no body" rather than a syntax error about an empty statement.
     block_end(col: Sz) //<
         //< A `;` written right after a one-line block whose `}` already ended the statement
@@ -60,9 +60,9 @@ priv const tab_byte: U8 = '\t' //< one level of indentation
 
 priv const cr_byte: U8 = '\r' //< the `\r` at the end of a line (CRLF)
     //<
-    //< **Do not treat it as a character** — a CRLF blank line would read as not blank, and a
+    //< **Do not treat it as a character.** A CRLF blank line would read as not blank, and a
     //< terminator or brace put after the `\r` breaks the text. **Do not drop a `\r` inside a
-    //< string** — `open_str` keeps that one, which is part of the newline a raw string holds.
+    //< string.** `open_str` keeps that one, which is part of the newline a raw string holds.
 
 // The block-opening headings that need no `;` after the block closes; **any other gets one** (the
 // `r: = f() catch` kind, a block inside an expression). `"label:"` is a marker: no name contains a
@@ -86,12 +86,17 @@ priv struct Phys //< one physical line
     code_end: Sz //< just after the last non-whitespace, the line comment excluded
     line_end: Sz //< the newline's position (src.len where there is none)
     blank: Bool //< no code (a blank line, or a line comment alone)
-    inner: Bool //< the line's start is inside a bracket, or inside a raw string
-    seg_from: Sz //<
-        //< Where the line's last statement starts: past its last `;` outside every bracket
+    joins: Bool //<
+        //< The line continues the logical line above it
         //<
-        //< `code_start` where it has none. **The heading is read from here**, so in
-        //< `import "std/io"; fn main() { … }` the line is a `fn`'s.
+        //< Its start is inside a bracket or a string, or a mark joins it (`joins_next` in
+        //< `line_cont.kspl`). Blank lines in between are passed over, as a comment can stand there.
+    seg_from: Sz //<
+        //< Where the logical line's last statement starts: past its last `;` outside every bracket
+        //<
+        //< **The heading is read from here**, so in `import "std/io"; fn main() { … }` the line is
+        //< a `fn`'s. **It can lie on a line above**: a `for` heading wrapped after its first `;`
+        //< is still the `for`'s, and its later `;` split nothing.
 
 priv struct Logical //< one logical line (= one statement or declaration)
     line: Sz //< which line it is (1-based), kept only for reporting a note
@@ -113,7 +118,7 @@ priv struct Insert //< one insertion
         //< **A one-line block's `;` replaces the space before its `}`**, so no column moves
         //< (diagnostics and the editor read positions from the converted text).
 
-priv const max_line_opens: Sz = 32 //< how many brackets one physical line may hold open at once
+priv const max_line_opens: Sz = 32 //< how many brackets one physical line can hold open at once
 
 priv struct Line_open //< a bracket opened on the physical line being walked
     at: Sz
@@ -141,9 +146,20 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
     $depth: Sz = 0
     $opens: Line_opens = ::{}
     // A string left open: 0 = none, 1 = a raw string (`"""`), 2 = a plain string. **A plain string
-    // can cross lines too**: `String_content` accepts a newline, so a `= "` may close lines later
+    // can cross lines too**: `String_content` accepts a newline, so a `= "` can close lines later
     // with `";` (`make test-place`).
     $open_str: Sz = 0
+    // The logical line being gathered: its first line's column and code start (-1 before any
+    // code), and where its code ends so far.
+    $lead_indent: Sz = 0
+    $lead_start: Sz = -1
+    $lead_end: Sz = 0
+    // Where the logical line's last statement starts, and the one before it. Caution: **Carry them
+    // onto a line that joins.** Started afresh there, the `;` of a `for` heading wrapped after its
+    // first `;` reads as a statement's end, and an `import`'s `{ … }` below its path as a block.
+    $seg_from: Sz = 0
+    $seg_before: Sz = 0
+    $seg_closed_block: = false // a block closed outside every bracket in this statement
     $i: Sz = 0
     for i < src.len
         line_start: = i
@@ -155,52 +171,42 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
         // **An open bracket ends at a line that starts something new** (`begins_anew`), or one
         // unclosed `(` would read the rest of the file as its arguments.
         // Caution: **A string left open is not cut off** — a raw string holds its own lines, and
-        // one of them may start at column 0.
+        // one of them can start at column 0.
         if indent == 0 && open_str == 0 && look < src.len && begins_anew(src[look])
             depth = 0
         inner: = depth > 0 || open_str > 0
         i = look
         code_start: = i
+        has_code: = open_str == 0 && !holds_no_code(src, i)
+        joins: =
+            inner ||
+            (has_code && lead_start >= 0 &&
+            joins_above(src, lead_start, lead_end, lead_indent, indent, i))
+        if has_code && (!joins || seg_from >= lead_end)
+            // A new statement starts here: a new logical line, or one joined below a `;`.
+            seg_from = i
+            seg_before = i
+            seg_closed_block = false
+        if has_code && !joins
+            lead_indent = indent
+            lead_start = i
         opens.n = 0
-        opens.import_seg = starts_import(src, i)
-        opens.seg_from = i
+        opens.import_seg = starts_import(src, seg_from)
+        opens.seg_from = seg_from
         opens.has_closed = false
-        $seg_from: = i
-        $seg_closed_block: = false // a block closed outside every bracket in this statement
-        // Caution: **Note a tab only on a line with contents** — a line of only tabs is blank, and
+        // Caution: **Note a tab only on a line with contents.** A line of only tabs is blank, and
         // a note on it leaves nothing to fix.
         tab_at: = i if i < src.len && src[i] == tab_byte && open_str == 0 else -1
         $code_end: = i
         $done: = false
         for !done && i < src.len
             c: = src[i]
-            if open_str > 0
-                if open_str == 1 && c == '"' && src.starts_with("\"\"\"", i)
-                    open_str = 0
-                    i += 3
-                    code_end = i
-                    continue
-                // Caution: **A `\` at a line's end does not skip the newline.** It continues the
-                // text with the string still open; skipping it would join two physical lines and
-                // shift every line number below.
-                if open_str == 2 && c == '\\' && i + 1 < src.len && src[i + 1] != '\n' &&
-                    src[i + 1] != '\r'
-                    i += 2
-                    code_end = i
-                    continue
-                if open_str == 2 && c == '"'
-                    open_str = 0
-                    i += 1
-                    code_end = i
-                    continue
-                if c == '\n'
-                    done = true
-                    continue
-                i += 1
-                code_end = i
-                continue
             if c == '\n'
                 done = true
+                continue
+            if open_str > 0
+                i = string_goes_on(src, i, open_str@)
+                code_end = i
                 continue
             if src.starts_with("//", i)
                 // A line comment; code_end does not move.
@@ -221,6 +227,7 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
                 semis.push(Insert::{ .at = i, .text = " ", .drop = 1 })
             else if c == ';' && depth == 0 &&
                 splits_statements(src, seg_from, i, seg_closed_block)
+                seg_before = seg_from
                 seg_from = skip_spaces(src, i + 1, src.len)
                 seg_closed_block = false
                 opens.import_seg = starts_import(src, seg_from)
@@ -254,10 +261,13 @@ priv fn scan_phys(src: U8[], notes: List<|Note|>$@, semis: List<|Insert|>$@, are
         no: = out.len + 1
         if tab_at >= 0 && !blank
             notes.push(Note::{ .kind = .tab, .line = no })
+        if !blank
+            lead_end = code_end
+        // A `;` ending the line starts no statement on it, so the heading is the one it ended.
         out
             .push(Phys::{ .line = no, .indent = indent, .code_start = code_start,
-            .code_end = code_end, .line_end = line_end, .blank = blank, .inner = inner,
-            .seg_from = seg_from if seg_from < code_end else code_start })
+            .code_end = code_end, .line_end = line_end, .blank = blank, .joins = joins,
+            .seg_from = seg_from if seg_from < code_end else seg_before })
         _unused: = line_start
     return out
 
@@ -344,35 +354,14 @@ priv fn skip_string(src: U8[], at: Sz, open_str: Sz$@): Sz //<
     //<
     //< Left open at the line's end, it sets `open_str` (1 raw, 2 plain) and returns at the newline.
     raw: = src.starts_with("\"\"\"", at)
-    $j: = at + 3 if raw else at + 1
-    for j < src.len
-        if raw
-            if src[j] == '"' && src.starts_with("\"\"\"", j)
-                return j + 3
-        else
-            if src[j] == '\\' && j + 1 < src.len && src[j + 1] == '{'
-                j = skip_interp(src, j + 2)
-                continue
-            // A `\` at a line's end is left to the newline below (the caution in `scan_phys`).
-            if src[j] == '\\' && j + 1 < src.len && src[j + 1] != '\n' && src[j + 1] != '\r'
-                j += 2
-                continue
-            if src[j] == '"'
-                return j + 1
-        if j >= src.len
-            break
-        if src[j] == '\n'
-            open_str$ = 1 if raw else 2
-            return j
-        j += 1
     open_str$ = 1 if raw else 2
-    return src.len
+    return string_goes_on(src, at + 3 if raw else at + 1, open_str)
 
 priv fn skip_interp(src: U8[], at: Sz): Sz //<
     //< It skips an interpolation's expression, from past its `\{` to past its `\}`
     //<
-    //< Caution: **A quote inside it opens a string of its own** (`\{"""ab""".len\}`): read as the
-    //< end of the string around it, a raw string seemed left open, and the line got no `;`.
+    //< Caution: **A quote inside it opens a string of its own** (`\{"""ab""".len\}`). Read as the
+    //< end of the string around it, a raw string would seem left open, and the line get no `;`.
     //< It stops at a newline, which the string around it then reports open.
     $j: = at
     for j < src.len && src[j] != '\n'
@@ -402,9 +391,11 @@ priv fn skip_char(src: U8[], at: Sz): Sz
     return src.len
 
 priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
-    //< It continues a string left open on an earlier line, from `at` to its close or the line's end
+    //< It walks a string's contents from `at` to past its close, or to the line's end
     //<
-    //< It uses the walk's own rules (`scan_phys` above).
+    //< `open_str` says which kind is open (1 raw, 2 plain), and is 0 once it closes. **The one walk
+    //< for a string's contents**, its first line and the lines a `\` continues alike. Walked apart,
+    //< a continued line would read the quotes of a string inside `\{ … \}` as the outer string's.
     $j: = at
     for j < src.len
         if open_str$ == 1
@@ -412,6 +403,12 @@ priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
                 open_str$ = 0
                 return j + 3
         else
+            if src[j] == '\\' && j + 1 < src.len && src[j + 1] == '{'
+                j = skip_interp(src, j + 2)
+                continue
+            // Caution: **A `\` at a line's end does not skip the newline.** It continues the text
+            // with the string still open; skipping it would join two physical lines and shift every
+            // line number below.
             if src[j] == '\\' && j + 1 < src.len && src[j + 1] != '\n' && src[j + 1] != '\r'
                 j += 2
                 continue
@@ -427,7 +424,7 @@ priv fn string_goes_on(src: U8[], at: Sz, open_str: Sz$@): Sz //<
 fn next_line_comment(src: U8[], from: Sz): Sz //<
     //< Where the next line comment at or past `from` starts (`src.len` where none does)
     //<
-    //< **It skips string and character literals**, raw ones across lines too, so a `//` inside a
+    //< **It skips string and character literals**, raw ones across lines too. So a `//` inside a
     //< URL or inside program text held in a string is not taken for a comment.
     //< Caution: **Start it on code, never inside a string.** It reads from wherever it starts.
     $i: = from
@@ -448,29 +445,29 @@ fn next_line_comment(src: U8[], from: Sz): Sz //<
     return src.len
 
 // ---------------------------------------------------------
-// Whether a line continues: **indentation alone is not enough**, since KSPL's formatting wraps a
-// long expression, so a deeper indentation can mean "a level" or "a continuation". The marks are in
-// `line_cont.kspl`, which the formatter asks too; this is the half that depends on the line's own
+// Whether a line continues: **indentation alone is not enough.** KSPL's formatting wraps a long
+// expression, so a deeper indentation can mean "a level" or "a continuation". The marks are in
+// `line_cont.kspl`, which the formatter asks too. This is the half that depends on the line's own
 // indentation.
 // ---------------------------------------------------------
 
-priv const cont_words: U8[][3] = ::{ "as", "in", "catch" } //<
-    //< The words that continue a line onto the next when they end it
-    //<
-    //< **A word that also stands alone does not continue a value.** A conditional value's `if` /
-    //< `else` and a `return` / `throw` / `fallback` are not here: a line starting or ending with
-    //< one also reads as a statement, so a value split there goes in parentheses (the rule is "The
-    //< indentation notation (`.kspl`)" in `../../docs/DESIGN-language.md`).
+priv fn joins_above(src: U8[], lead_start: Sz, lead_end: Sz, lead_indent: Sz, indent: Sz, at: Sz):
+    Bool //<
+        //< Whether the line whose code starts at `at` joins the logical line above it
+        //<
+        //< That line's code runs `lead_start`..`lead_end`, its first line at column `lead_indent`.
+        //< The marks decide (`joins_next`), but **the level after a `catch` is a block, not a
+        //< continuation**: a line deeper than `lead_indent` there opens it.
+    if ends_in_catch(src.sub(0, lead_end)) && indent > lead_indent
+        return false
+    return joins_next(src.sub(lead_start, lead_end - lead_start), src.sub_from(at))
 
-priv fn ends_open_word(word: U8[]): Bool //< whether the word at the end of a line continues it
-    return word.is_one_of(U8[][]::cont_words)
-
-priv const lead_cont_words: U8[][1] = ::{ "catch" } //<
-    //< The words that continue the previous line when they start a line
-    //<
-    //< No statement begins with one.
-    //< Caution: **Do not add `defer`.** At a line's start it is a heading that opens a block; read
-    //< as a continuation, its whole block moves one statement earlier.
+priv fn holds_no_code(src: U8[], at: Sz): Bool //<
+    //< Whether the line from `at`, outside every string, holds blanks and at most a line comment
+    $j: = at
+    for j < src.len && (src[j] == ' ' || src[j] == tab_byte || src[j] == cr_byte)
+        j += 1
+    return j >= src.len || src[j] == '\n' || src.starts_with("//", j)
 
 // ---------------------------------------------------------
 // Gathering into logical lines
@@ -480,62 +477,31 @@ priv fn merge(src: U8[], phys: List<|Phys|>@, arena: Arena$@): List<|Logical|>
     $i: Sz = 0
     for i < phys.len
         p: = phys.get(i)
-        if p.blank && !p.inner
+        if p.blank && !p.joins
             i += 1
             continue
-        indent: = p.indent
-        $seg_from: = p.seg_from
-        $seg_end: = p.code_end
-        $code_end: = p.code_end
+        $last: = p
         $j: = i + 1
         for j < phys.len
             $k: = j
-            // Caution: **Do not cut at a comment line.** A comment may stand partway through a
+            // Caution: **Do not cut at a comment line.** A comment can stand partway through a
             // wrapped expression (the run of `.set(…)` in `ksplc/lsp/worker.kspl`) or between an
-            // `=` and its value; the next line with code decides, by the same test as a line right
-            // below.
-            for k < phys.len && phys.get(k).blank && !phys.get(k).inner
+            // `=` and its value. The next line with code decides (`joins` in `scan_phys`).
+            for k < phys.len && phys.get(k).blank && !phys.get(k).joins
                 k += 1
-            if k >= phys.len
+            if k >= phys.len || !phys.get(k).joins
                 break
             q: = phys.get(k)
-            if q.inner
-                if !q.blank
-                    code_end = q.code_end
-                    if q.seg_from != q.code_start
-                        seg_from = q.seg_from
-                        seg_end = q.code_end
-                j = k + 1
-                continue
-            if ends_in_catch(src.sub(0, code_end)) && q.indent > indent
-                break // the level after a `catch` is a block, not a continuation
-            if !continues(src, code_end, p.code_start, q.code_start)
-                break
-            code_end = q.code_end
-            if q.seg_from != q.code_start
-                seg_from = q.seg_from
-                seg_end = q.code_end
+            if !q.blank
+                last = q
             j = k + 1
         // The heading is the last statement's: the one the line's end and a deeper line belong to.
-        head: = heading_of(src, seg_from, seg_end)
+        head: = heading_of(src, last.seg_from, last.code_end)
         out
-            .push(Logical::{ .line = p.line, .indent = indent, .head = head,
-            .code_start = p.code_start, .code_end = code_end, .attr = is_attribute(head) })
+            .push(Logical::{ .line = p.line, .indent = p.indent, .head = head,
+            .code_start = p.code_start, .code_end = last.code_end, .attr = is_attribute(head) })
         i = j
     return out
-
-priv fn continues(src: U8[], code_end: Sz, code_start: Sz, next_start: Sz): Bool //<
-    //< Whether the line at `code_start`..`code_end` continues onto the next line (`next_start`)
-    if line_continues(src.sub(code_start, code_end - code_start)) ||
-        starts_cont(src[next_start])
-        return true
-    lead: = next_word(src, next_start, src.len)
-    if lead.is_one_of(U8[][]::lead_cont_words)
-        return true
-    $s: = code_end
-    for s > code_start && src[s - 1].is_alnum()
-        s -= 1
-    return ends_open_word(src.sub(s, code_end - s))
 
 priv fn head_word(src: U8[], from: Sz, to: Sz): U8[] //< a logical line's leading word
     //<
@@ -614,7 +580,7 @@ priv struct Frame //< one level on the stack of open levels
     //< **Remember each level's column, not the indent width** (indenting by two and by four work
     //< the same).
     //< Caution: **Do not keep the closing position per level.** Every level closes at "the end of
-    //< the logical line last seen"; kept per level, only the inner one moves forward and the outer
+    //< the logical line last seen". Kept per level, only the inner one moves forward, and the outer
     //< one closes at its heading.
     indent: Sz
     head: U8[]
@@ -631,8 +597,9 @@ struct Mended //< a source as an entry point read it, made ready for the parser
 fn mend(raw: U8[], notes: List<|Note|>$@, arena: Arena$@): Mended //<
     //< The bytes an entry point read, normalized and converted into braces
     //<
-    //< **Every entry point for a source goes through here**: the loader for what it opens, the
-    //< formatter, and the language server for what the editor sends and what it reads from disk.
+    //< **Every entry point for a source goes through here.** These are the loader for what it
+    //< opens, the formatter, and the language server for what the editor sends and what it reads
+    //< from disk.
     //< Caution: **Mend only the bytes you read yourself.** Converted a second time, the `{` the
     //< first conversion inserted count as brackets and the text breaks.
     written: = parse_source_fix.settle(raw, arena)
@@ -699,8 +666,8 @@ priv fn heading_of(src: U8[], from: Sz, to: Sz): U8[] //<
     //< The line's head word, telling apart a `defer` that holds one statement
     //<
     //< Caution: **Only a `defer` alone or before a `{` opens its own level.** Treated as one,
-    //< `defer f() catch {}` would end in the block's `}` and get no terminator, and a `catch` level
-    //< below `defer f() catch e` would close without one; the next statement would be read into it.
+    //< `defer f() catch {}` would end in the block's `}` and get no terminator. A `catch` level
+    //< below `defer f() catch e` would close without one. The next statement would be read into it.
     head: = head_word(src, from, to)
     if !head.equals("defer")
         return head
@@ -733,9 +700,7 @@ priv fn written_terminator(src: U8[], cur: Logical): Note //<
     for k in Range.new(cur.code_start, cur.code_end, 1)
         if src[k] == '\n'
             line += 1
-    $start: = cur.code_end - 1
-    for start > 0 && src[start - 1] != '\n'
-        start -= 1
+    start: = base_lines.line_start(src, cur.code_end - 1)
     return Note::{ .kind = .terminator(cur.code_end - 1 - start), .line = line }
 
 priv fn arms_follow(cur: Logical, lines: List<|Logical|>@, n: Sz): Bool //<

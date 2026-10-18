@@ -37,8 +37,28 @@ fn make_link(root: U8[], name: U8[], target: U8[], arena: Arena$@): Bool //<
     //< misses it. False where it cannot be made, and the case becomes a `skip` (Windows has no
     //< `ln -s`, and `mklink` needs privileges).
     at: = fs.join(root, name, arena)
-    r: = subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena)
-    return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
+    r: =
+        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
+        return false
+    return r.exited_with(0) && fs.is_link(at)
+
+fn mode_column(path: U8[], mode: U8[], arena: Arena$@): U8[] //<
+    //< Sets a file's mode with `chmod`, then reads it back as `ls -l` prints it (`-rwx------`)
+    //<
+    //< Empty where either cannot run (Windows has no mode), and the case becomes a `skip`. **Read
+    //< through `ls -l`**, the one way POSIX prints it (`stat`'s options differ between systems).
+    if mode.len > 0
+        set: =
+            subproc.run_capture(U8[][]::{ "chmod", mode, path }, "", 10000, 4096, arena) catch
+            return ""
+        if !set.exited_with(0)
+            return ""
+    r: =
+        subproc.run_capture(U8[][]::{ "ls", "-l", path }, "", 10000, 4096, arena) catch
+        return ""
+    if !r.exited_with(0) || r.stdout_data.len < 10
+        return ""
+    return arena.dup_str(r.stdout_data.sub(0, 10))
 
 fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     auth: = client.bearer_head(token, arena)
@@ -49,8 +69,8 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     ok1: = page.status == 200 && page.body.equals("root index\n")
     verdict.check("even on --local the page is handed out without a token", ok1,
         client.shown(page, arena))
-    // **Every other file needs the token**: from the token's origin, an HTML file in the root could
-    // read it, and any program on this machine could read the root. The page reads its pictures
+    // **Every other file needs the token.** From the token's origin, an HTML file in the root could
+    // read it. And any program on this machine could read the root. The page reads its pictures
     // through `/api/file`.
     for target in U8[][]::{ "/sub/one.txt", "/sub/", "/style.css" }
         other: = client.get(local_port, target, "", arena)!
@@ -58,7 +78,7 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
             .take()
         verdict.check(nm_o, other.status == 401, client.shown(other, arena))
     // **Without the token, a link answers as every other name does.** Resolved before the token is
-    // checked, a link answers 403 and any other name 401, so a client without the token learns
+    // checked, a link answers 403 and any other name 401. A client without the token then learns
     // which names under the root are links.
     if make_link(root, "peek.txt", "../secret.txt", arena)
         for target in U8[][]::{ "/peek.txt", "/no-such.txt", "/.hidden" }
@@ -73,8 +93,8 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     verdict.check("--local hands out a file under the root to the token",
         with_token.status == 200 && with_token.body.equals("one\n"),
         client.shown(with_token, arena))
-    // **A page whose name is re-pointed at 127.0.0.1 (DNS rebinding) sends its own name**, so a
-    // request naming another host is refused, the page and a request with the token included.
+    // **A page whose name is re-pointed at 127.0.0.1 (DNS rebinding) sends its own name.** So the
+    // server refuses a request naming another host, even for the page or with the token.
     rebound: = "Host: attacker.example\r\n"
     r_page: = client.get(local_port, "/", rebound, arena)!
     verdict.check("--local refuses a Host other than the loopback: the page", r_page.status == 403,
@@ -122,9 +142,10 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     // (rather than having to probe the server to find out).
     st0: = client.get(local_port, "/api/status", auth, arena)!
     verdict.check("--local's status declares it is for local use",
-        client.doc_of(st0, arena).get("local").as_bool(false), client.shown(st0, arena))
+        client.doc_of(st0, arena).get("local").as_bool().unwrap_or(false),
+        client.shown(st0, arena))
     verdict.check("--local's status carries no policy (none is trained)",
-        client.doc_of(st0, arena).get("pilot").get("params").as_int(-1) < 0,
+        client.doc_of(st0, arena).get("pilot").get("params").as_int().unwrap_or(-1) < 0,
         client.shown(st0, arena))
 
     // --- Reading ---
@@ -142,6 +163,16 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
         r: = client.get(local_port, arena.text().s("/api/file?\{q\}").take(), auth, arena)!
         nm: = arena.text().s("/api/file refuses outside the root too: \{q\}").take()
         verdict.check(nm, r.status == 403, client.shown(r, arena))
+    // **`path=` is relative to the root.** So an absolute path in any OS's spelling is refused. It
+    // is never looked up under the root with its leading separator dropped.
+    for q in U8[][]::{ "path=/etc/passwd", "path=%2Fetc%2Fpasswd", "path=//sub/one.txt",
+        "path=C:%5CWindows%5Cwin.ini", "path=C:sub/one.txt", "path=%5C%5Cserver%5Cshare%5Cx" }
+        r: = client.get(local_port, arena.text().s("/api/file?\{q\}").take(), auth, arena)!
+        nm: = arena.text().s("/api/file refuses an absolute path: \{q\}").take()
+        verdict.check(nm, r.status == 403, client.shown(r, arena))
+    abs_stat: = client.get(local_port, "/api/stat?path=/sub/one.txt", auth, arena)!
+    verdict.check("/api/stat refuses an absolute path too", abs_stat.status == 403,
+        client.shown(abs_stat, arena))
     missing: = client.get(local_port, "/api/file?path=nope.txt", auth, arena)!
     verdict.check("a name that is not there is 404", missing.status == 404,
         client.shown(missing, arena))
@@ -163,8 +194,8 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     st: = client.get(local_port, "/api/stat?path=sub/one.txt", auth, arena)!
     doc: = client.doc_of(st, arena)
     ok3: =
-        st.status == 200 && doc.get("size").as_int(-1) == 4 &&
-        doc.get("changed_at").as_int64(0I64) > 0I64
+        st.status == 200 && doc.get("size").as_int().unwrap_or(-1) == 4 &&
+        doc.get("changed_at").as_int64().unwrap_or(0I64) > 0I64
     verdict.check("/api/stat returns the size and the time", ok3, client.shown(st, arena))
     // Caution: **Do not return the content.** Returned here, the same content comes by two paths.
     verdict.check("/api/stat does not return the content",
@@ -177,7 +208,7 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     put: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, put_body, arena)!
     ok4: =
         put.status == 200 &&
-        client.doc_of(put, arena).get("wrote").as_int(-1) == put_body.len
+        client.doc_of(put, arena).get("wrote").as_int().unwrap_or(-1) == put_body.len
     verdict.check("PUT /api/file returns the length written", ok4, client.shown(put, arena))
     // Caution: **Compare the written string byte by byte.** A length check alone passes even with
     // the encoding broken.
@@ -185,30 +216,35 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     ok5: = back.status == 200 && back.body.equals(put_body)
     verdict.check("the string written comes back byte for byte", ok5,
         client.shown(back, arena))
-    // Caution: **Leave no half-written file.** Otherwise the next write starts under the same name
-    // as the half-written one.
-    part: = fs.join(root, "sub/two.txt.kssrv-part", arena)
-    verdict.check("no half-written file is left", !fs.exists(part), part)
+    // Caution: **Leave no half-written file.** The body is written beside the file first, under a
+    // name of its own, and that name must be gone once the write is done.
+    $parts: Sz = 0
+    names: = fs.read_dir(fs.join(root, "sub", arena), arena) catch panic("sub/ must be readable")
+    for name in names
+        if name.ends_with(".part")
+            parts += 1
+    verdict.check("no half-written file is left", parts == 0, "a .part file stands in sub/")
     // Writing twice adds no file (it replaces the one of the same name).
     again: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, "second\n", arena)!
     twice: = client.get(local_port, "/api/file?path=sub/two.txt", auth, arena)!
     ok6: = again.status == 200 && twice.body.equals("second\n")
     verdict.check("writing twice replaces", ok6, client.shown(twice, arena))
+    // Caution: **A write keeps the file's mode.** Suppose it is written to another name and renamed
+    // over the file. A file only its owner can read would then be readable by others. A script
+    // would lose its execute bit.
+    two: = fs.join(root, "sub/two.txt", arena)
+    if mode_column(two, "700", arena).equals("-rwx------")
+        _kept: = client.put_file(local_port, "/api/file?path=sub/two.txt", auth, "third\n", arena)!
+        after: = mode_column(two, "", arena)
+        verdict.check("a write keeps the file's mode", after.equals("-rwx------"), after)
+    else
+        verdict.skip_check("a write keeps the file's mode",
+            "this system has no POSIX mode for `chmod` to set and `ls -l` to read")
     // Caution: Apply the root check to writing too (fix reading alone and a path outside the root
     // can still be written).
     out: = client.put_file(local_port, "/api/file?path=%2e%2e/secret.txt", auth, "x", arena)!
     verdict.check("PUT refuses outside the root too", out.status == 403,
         client.shown(out, arena))
-    // **The name written first is checked too**: the body goes to `<name>.kssrv-part` and is
-    // renamed after, so a link standing there would take the write outside the root.
-    if make_link(root, "doc.md.kssrv-part", "../put_target.txt", arena)
-        via: = client.put_file(local_port, "/api/file?path=doc.md", auth, "x", arena)!
-        verdict.check("PUT refuses a link at the name it writes first",
-            via.status == 403 && !fs.exists(fs.join(root, "../put_target.txt", arena)),
-            client.shown(via, arena))
-    else
-        verdict.skip_check("PUT refuses a link at the name it writes first",
-            "a link cannot be made with `ln -s` in this environment")
 
     // --- The cap ---
     // **Check that the local cap is higher.** Without that, a single document cannot be written
@@ -217,12 +253,12 @@ fn cases(token: U8[], root: U8[], arena: Arena$@): Void!client.Http_end
     wide: = client.put_file(local_port, "/api/file?path=sub/big.txt", auth, big, arena)!
     ok7: =
         wide.status == 200 &&
-        client.doc_of(wide, arena).get("wrote").as_int(-1) == local_body
+        client.doc_of(wide, arena).get("wrote").as_int().unwrap_or(-1) == local_body
     verdict.check("--local takes a body larger than the outward-facing one", ok7,
         client.shown(wide, arena))
 
     // --- Files, and nothing else --- No endpoint starts a program or lists a folder, even for the
-    // token, and the car's endpoints are not there: local use trains no policy (the car cannot
+    // token. The car's endpoints are not there: local use trains no policy (the car cannot
     // reach the loopback).
     for gone in U8[][]::{ "/api/run", "/api/plugins", "/api/list", "/api/pilot" }
         r: = client.get(local_port, gone, auth, arena)!

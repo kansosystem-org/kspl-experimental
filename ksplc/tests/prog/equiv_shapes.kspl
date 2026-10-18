@@ -1,8 +1,10 @@
 //< The shapes the backend-equivalence program checks that C leaves open or lays out its own way
 //<
 //< The evaluation order, tagged unions in arrays and globals, nested `#align(N)` and `#packed`
-//< layout, and 16-bit products, each a function `equiv.kspl`'s `main` calls with the builder,
-//< with the declarations it alone reads.
+//< layout, 16-bit products, globals naming globals, locals named as a C symbol, and casts from
+//< floating point to an integer. Each is a function that `equiv.kspl`'s `main` calls with the
+//< builder, with the declarations it alone reads.
+import "std/libc"
 import "std/mem"
 import "std/str" { Str_builder }
 
@@ -104,7 +106,7 @@ impl Ev
 
 fn tagged_union_lines(b: Str_builder$@) //< tagged unions in array literals and in globals
     //<
-    //< An element of a `const` array carries the immutability mark, which both backends once took
+    //< An element of a `const` array carries the immutability mark. Both backends once took it
     //< for another type: C named `Const_Ev`, LLVM read every element as the first variant.
     locals: Ev[3] = ::{ .none, .one(200), .two(-7, 9) }
     $muts: Ev[2] = ::{ .two(1, 2), .none }
@@ -137,7 +139,7 @@ fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group
     //<
     //< The order is "Evaluation order" in docs/SPEC-language.md.
     // Caution: **Put an expression with a side effect on both sides of an assignment.** C does not
-    // define the order of an assignment's left and right sides, so without them a shape that gives
+    // define the order of an assignment's left and right sides. Without them, a shape that gives
     // different answers under clang and gcc passes.
     eval_log = 0
     eval_arr[eval_idx()] = eval_val()
@@ -148,7 +150,7 @@ fn eval_order_lines(b: Str_builder$@) //< the evaluation order, a line per group
     eval_log = 0
     b.s("/\{eval_take(eval_a(), eval_b())\}/\{eval_log\}\n")
     // Caution: **Read a variable before a call that writes it, and give each shape its own line.**
-    // gcc takes a call's arguments from the right and clang from the left, and an operator's sides
+    // gcc takes a call's arguments from the right and clang from the left. An operator's sides
     // and a compound literal's fields are just as open in C, so each shape needs both compilers.
     eval_log = 3
     read_first: = eval_take(eval_log, eval_set(4))
@@ -228,7 +230,7 @@ fn layout_lines(b: Str_builder$@) //<
 priv struct Wire //< a wire record: `#packed` leaves every field but the first under-aligned
     //<
     //< Caution: **Reach the fields through a subscript.** The C backend fixes such a target's
-    //< address first, and an aligned pointer to the field makes the store a word store, which
+    //< address first. An aligned pointer to the field makes the store a word store, which
     //< faults on a Cortex-M0 (`make test-equiv` builds this C with C's alignment trap).
     priv tag: U8
     priv n: I32
@@ -274,3 +276,98 @@ fn wrap16_lines(b: Str_builder$@) //< 16-bit products past `int`'s range, which 
     wrap16(65535, -1, b)
     wrap16(40000, 300, b)
     b.s("\n")
+
+// ==========================================
+// Globals naming other globals: an address taken of a `const` and of a variable, of a field and of
+// an element, and a `const` copying a tagged union. **The address names the global itself.**
+// Written out as its value instead, C takes the address of a cast and LLVM of nothing. A part's
+// address is C's `&g.v` and LLVM's constant `getelementptr`.
+// ==========================================
+priv struct Link
+    v: I32
+    next: Link@
+
+priv enum Pick
+    a
+    b(x: I32)
+
+priv const g_four: I32 = 4
+priv const g_four_at: I32@ = g_four@
+priv $g_var: I32 = 4
+priv const g_var_at: I32@ = g_var@
+priv const g_link1: Link = ::{ .v = 1, .next = null }
+priv const g_link2: Link = ::{ .v = 2, .next = g_link1@ }
+priv const g_pick_a: Pick = .a
+priv const g_pick_a2: Pick = g_pick_a //< a payload-less variant of a tagged union, by name
+priv const g_pick_b: Pick = .b(3)
+priv const g_picks: Pick[2] = ::{ g_pick_b, g_pick_a2 }
+priv const g_v_at: I32@ = g_link2.v@ //< a field's address
+priv const g_nums: I32[4] = ::{ 10, 20, 30, 40 }
+priv const g_num_at: I32@ = g_nums[2]@ //< an element's address
+priv const g_links: Link[2] = ::{::{ .v = 7, .next = null }, ::{ .v = 8, .next = g_link1@ } }
+priv const g_deep_at: I32@ = g_links[1].v@ //< a field of an element
+
+impl Pick
+    priv fn val(r: Self): I32
+        switch r
+        case .a
+            return -1
+        case .b(x)
+            return x
+
+fn global_ref_lines(b: Str_builder$@) //< globals that name other globals, one line
+    g_var = 5
+    b.s("gref=\{g_four_at$\}/\{g_four_at == g_four@\}/\{g_var_at$\}/\{g_link2.next.v\}/")
+        .s("\{g_link2.next == g_link1@\}/\{g_pick_a2.val()\}/\{g_picks[0].val()\}/")
+        .s("\{g_picks[1].val()\}\n")
+    b.s("gpart=\{g_v_at$\}/\{g_v_at == g_link2.v@\}/\{g_num_at$\}/\{g_num_at == g_nums[2]@\}/")
+        .s("\{g_deep_at$\}/\{g_deep_at == g_links[1].v@\}\n")
+
+// ==========================================
+// A local named as a global whose C name is written as it is (`#export`, an `extern` block's). C
+// sees the local from its own declarator on, so it would read itself in its initializer.
+// ==========================================
+#export
+$equiv_hidden: I32 = 5
+
+#export
+fn equiv_hidden_fn(): I32
+    return 9
+
+fn verbatim_hiding_lines(b: Str_builder$@) //< each initializer reads the global, not the local
+    equiv_hidden: = equiv_hidden + 1
+    equiv_hidden_fn: = equiv_hidden_fn() + 1
+    sqrt: = libc.sqrt(16.0) + 1.0
+    b.s("verbatim=\{equiv_hidden\}/\{equiv_hidden_fn\}/\{I32::sqrt\}\n")
+
+// ==========================================
+// Casts from floating point to an integer. Each width saturates at its own bounds, and NaN gives 0
+// at run time. A constant is folded to the value both backends write. **Keep each bound's
+// two sides**: just in (`127.9` for `I8`) and just out (`128.0`).
+// ==========================================
+priv $g_cast_src: F64[_] = ::{ 0.0, -0.0, -0.9, -1.0, 2.9, -2.9, 127.9, 128.0, -128.9, -129.0,
+    255.9, 256.0, 32767.9, 32768.0, -32768.9, -32769.0, 65535.9, 65536.0, 2147483647.9,
+    2147483648.0, -2147483648.9, -2147483649.0, 4294967295.9, 4294967296.0, 9223372036854774784.0,
+    9223372036854775808.0, -9223372036854775808.0, -9223372036854777856.0, 18446744073709549568.0,
+    18446744073709551616.0, 1.0e300, -1.0e300 } //<
+        //< read at run time; the first is the zero the infinities and NaN are made from
+priv $g_cast_src32: F32[_] = ::{ F32::2147483520.0, F32::2147483648.0, F32::3.0e9, F32::-1.0e30,
+    F32::16777217.0 }
+priv const g_cast_folded: I32 = I32::(1.5 * -3.0) //< folded by ksplc for both backends
+
+priv fn cast_row(b: Str_builder$@, v: F64)
+    b.s("\{I8::v\},\{I16::v\},\{I32::v\},\{I64::v\},\{U8::v\},\{U16::v\},\{U32::v\},\{U64::v\},")
+        .s("\{Sz::v\};")
+
+fn float_cast_lines(b: Str_builder$@) //< one line of every source value at every width
+    zero: = g_cast_src[0]
+    b.s("fcast=")
+    cast_row(b, 1.0 / zero)
+    cast_row(b, -1.0 / zero)
+    cast_row(b, zero / zero)
+    for v in g_cast_src
+        cast_row(b, v)
+    for f in g_cast_src32
+        b.s("\{I32::f\},\{U32::f\},\{I8::f\},\{U64::f\};")
+    b.s("\{I32::2.9\},\{I32::-2.9\},\{U8::255.9\},\{I64::-9223372036854775808.0\},")
+        .s("\{U64::18446744073709549568.0\},\{I32::(F32::16777217.0)\},\{g_cast_folded\}\n")

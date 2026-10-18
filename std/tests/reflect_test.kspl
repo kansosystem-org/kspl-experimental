@@ -36,7 +36,7 @@ priv const sample_fields: reflect.Field_info[5] = ::{
 }
 
 // **A body written by hand is kept, not synthesized**: if it were synthesized, the keys would go
-// back to `label` ("a trait returning a table" in `../../docs/DESIGN-language.md`).
+// back to `label` ("a table-returning trait" in `../../docs/DESIGN-language.md`).
 impl Sample: reflect.Reflectable
     fn fields(_r: Self): reflect.Field_info[]
         return reflect.Field_info[]::sample_fields
@@ -86,8 +86,8 @@ impl Spec: reflect.Reflectable {}
 priv struct Widths //< the widths of a number
     //<
     //< Caution: **Always include the unsigned types, `F32` and `Sz`.** If they are not covered
-    //< here, the round trip breaks as soon as one `U16` appears in a declaration (a file format
-    //< whose every field is that width, for example).
+    //< here, the round trip breaks as soon as one `U16` appears in a declaration. An example is a
+    //< file format whose every field is that width.
     tiny: I8
     short_num: I16
     mid: I32
@@ -174,7 +174,7 @@ priv fn roundtrip_flat(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
 
 priv fn refuse_missing_and_null(arena: Arena$@) //<
     //< A missing key and a null key are refused with different values
-    // Refuse a missing key and a null one with different values; with a default, a misspelled name
+    // Refuse a missing key and a null one with different values. With a default, a misspelled name
     // on the sender's side would show only as "the value was 0".
     $absent: U8[] = ""
     short: = json.parse("{\"label\":\"x\"}", arena) catch panic("json: the fixture must parse")
@@ -252,7 +252,7 @@ priv fn roundtrip_nest(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //
 
 priv fn roundtrip_container(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
     //< A container round-trips, and a non-array is refused by its key
-    // **A container's positions do not depend on the element type**: `std/json` uses those of `U8`
+    // **A container's positions do not depend on the element type.** `std/json` uses those of `U8`
     // for all of them.
     same_ptr: = offsetof(List<|I64|>, ptr) == offsetof(List<|Half|>, ptr)
     assert(same_ptr, "reflect: a container's ptr position does not depend on the element's type")
@@ -302,7 +302,7 @@ priv fn roundtrip_container(b: Json_builder$@, out: Str_builder$@, arena: Arena$
     assert(named_list, "json: a value handed over that is not an array is refused by the key's name")
 
 priv fn roundtrip_option(b: Json_builder$@, out: Str_builder$@, arena: Arena$@) //<
-    //< A field that may be absent round-trips, and an explicit null is refused
+    //< A field that can be absent round-trips, and an explicit null is refused
     // **`.none` writes no key.** Writing `null` would give two ways to say "it is absent".
     out.clear()
     spec: Spec = ::{ .family = .some("serif"), .size_px = .none, .weight = .some(700I64),
@@ -434,7 +434,7 @@ fn test_reflect_fits_int()
         reflect.fits_int(.uint_field, 8, 9223372036854775807)
     assert(unsigned_edges, "reflect: an unsigned field holds exactly its own range")
     // Caution: **A negative value into an unsigned field is refused at every width**, the widest
-    // too, where it would come back as a huge positive number.
+    // too. There it would come back as a huge positive number.
     no_negative: =
         !reflect.fits_int(.uint_field, 1, -1) && !reflect.fits_int(.uint_field, 8, -1)
     assert(no_negative, "reflect: a negative value does not fit an unsigned field")

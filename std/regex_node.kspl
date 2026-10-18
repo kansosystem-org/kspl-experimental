@@ -10,12 +10,12 @@
 import "std/ds" { List }
 import "std/mem" + { dealloc }
 
-pub const max_groups: Sz = 9 //< how many capturing groups a pattern may have.
+pub const max_groups: Sz = 9 //< how many capturing groups a pattern can have.
     //<
     //< Caution: **Refuse a pattern that exceeds it** (`too_many_groups`); otherwise the tenth group
     //< onward silently comes back empty. 9 matches `\1`…`\9` and sets the size a Match holds.
 
-pub const max_program_size: Sz = 20000 //< the most states a compiled pattern may hold
+pub const max_program_size: Sz = 20000 //< the most states a compiled pattern can hold
     //<
     //< A search's memory and its time per byte grow with them, so a pattern past it is refused
     //< (`too_large`). A counted repetition is written out round by round, so `(a{1000}){1000}`
@@ -26,14 +26,14 @@ pub const max_repeat_count: Sz = 1000 //< the largest `{m,n}` count accepted, as
     //< Caution: **Refuse a count that exceeds it** (`invalid_repeat`), as a count no engine
     //< accepts would make a pattern that works here alone.
 
-pub struct Slots //< what each capturing group caught; `-1` means it did not take part
+struct Slots //< what each capturing group caught; `-1` means it did not take part
     //<
     //< **`-1` is not 0**: an empty match has `start == end`.
     count: Sz
     start: Sz[max_groups]
     end: Sz[max_groups]
 
-pub fn reset_slots( //< marks every group as not having taken part
+fn reset_slots( //< marks every group as not having taken part
     c: Slots$@, //< the slots to clear
     count: Sz, //< how many groups the pattern has
 )
@@ -42,7 +42,7 @@ pub fn reset_slots( //< marks every group as not having taken part
         c.start[i] = -1
         c.end[i] = -1
 
-pub enum Rx_kind //< what one node of a compiled pattern stands for
+enum Rx_kind //< what one node of a compiled pattern stands for
     lit //< one literal byte
     any //< `.`
     class //< a `[...]` set
@@ -54,7 +54,7 @@ pub enum Rx_kind //< what one node of a compiled pattern stands for
     not_word_boundary //< `\B`
     group_repeat //< a whole group repeated
 
-pub struct Rx_node //< one node of a compiled pattern; `kind` decides which fields mean something
+struct Rx_node //< one node of a compiled pattern; `kind` decides which fields mean something
     kind: Rx_kind
     ch: U8 //< for .lit
     lazy: Bool //<
@@ -72,7 +72,7 @@ pub struct Rx_node //< one node of a compiled pattern; `kind` decides which fiel
         //<
         //< `-1` means no bound (`*` `+` `{m,}`).
 
-pub fn new_node( //< one new node; a `.group` is made with `new_group_node` instead
+fn new_node( //< one new node; a `.group` is made with `new_group_node` instead
     //<
     //< Caution: Make a .group only with new_group_node. Made here, its .alts stays uninitialized
     //< and free_rx_alts walks a garbage list.
@@ -89,7 +89,7 @@ pub fn new_node( //< one new node; a `.group` is made with `new_group_node` inst
     n.max_count = -1
     return n
 
-pub fn new_group_node( //< one new group node, with its alternatives
+fn new_group_node( //< one new group node, with its alternatives
     alts: List<|List<|Rx_node$@|>|>, //< one atom list per alternative
     gidx: I32, //< which capturing group; `-1` for a non-capturing `(?:…)`
 ): Rx_node$@ //< the node; free it with `free_rx_node`
@@ -98,15 +98,15 @@ pub fn new_group_node( //< one new group node, with its alternatives
     n.gidx = gidx
     return n
 
-pub const byte_count: Sz = 256 //< how many values one byte takes: a class's table has a slot each
+const byte_count: Sz = 256 //< how many values one byte takes: a class's table has a slot each
 
-pub fn new_class_node(): Rx_node$@ //< one new `[...]` node with an empty membership table
+fn new_class_node(): Rx_node$@ //< one new `[...]` node with an empty membership table
     n: = new_node(.class)
     for i in Range.asc(byte_count)
         n.set[i] = false
     return n
 
-pub fn set_range( //< adds every byte in a range to a `[...]` set
+fn set_range( //< adds every byte in a range to a `[...]` set
     n: Rx_node$@, //< the set node to write into
     lo: U8, //< the range's first byte
     hi: U8, //< the range's last byte
@@ -114,7 +114,7 @@ pub fn set_range( //< adds every byte in a range to a `[...]` set
     for $c: Sz = lo; c <= Sz::hi; c += 1
         n.set[c] = true
 
-pub fn free_rx_alts( //< frees a group's alternatives and every node under them
+fn free_rx_alts( //< frees a group's alternatives and every node under them
     //<
     //< It frees the Lists too. Walk .alts only for the .group kind (for others it is
     //< uninitialized).
@@ -127,7 +127,7 @@ pub fn free_rx_alts( //< frees a group's alternatives and every node under them
         seq.free()
     alts.free()
 
-pub fn free_rx_node( //< frees one node and everything under it
+fn free_rx_node( //< frees one node and everything under it
     n: Rx_node$@, //< the node to free
 )
     if n == null
@@ -244,10 +244,10 @@ impl Emitter
             r.prog.at(e).x = r.prog.len
 
     // Written out round by round: `x{2,4}` is `x x`, then two rounds each skippable past the whole
-    // repetition (the longest match tries the round first); `x{2,}` is `x x`, then a loop.
-    // Caution: **A round that read nothing stops the repetition; it is not undone.** Undoing it
-    // would leave `(a?)*b`'s group out where Python's `re` and PCRE answer empty, and going on
-    // loops for good. So a body that can match empty sits between `round_in` and `round_out`.
+    // repetition (the longest match tries the round first). `x{2,}` is `x x`, then a loop.
+    // Caution: **A round that read nothing stops the repetition. It is not undone.** Undoing it
+    // would leave `(a?)*b`'s group out where Python's `re` and PCRE answer empty. Going on
+    // would loop for good. So a body that can match empty sits between `round_in` and `round_out`.
     fn repeat(r: Self$@, n: Rx_node$@)
         empty_ok: = n.kind == .group_repeat && can_be_empty(n.sub)
         $forks: = List<|Sz|>.new(null)

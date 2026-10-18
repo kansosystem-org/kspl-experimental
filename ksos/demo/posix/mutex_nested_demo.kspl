@@ -1,8 +1,8 @@
 //< A priority lent through one mutex outlives the release of another
 //<
 //< low holds two mutexes at once, and a higher-priority task waits on each. Releasing either one
-//< must leave low at the highest priority still waiting on the one it keeps, whatever the order
-//< of the releases, and only the last release returns it to its own priority.
+//< must leave low at the highest priority still waiting on the one it keeps, in either order.
+//< Only the last release returns it to its own priority.
 
 // ==========================================
 //   Round 1, the inner one first: low holds m1 and m2, high (5) waits on m1 and mid (3) on m2.
@@ -10,7 +10,6 @@
 //   Round 2, the outer one first: the same waits, released the other way round.
 //     Releasing m1 drops to 3 (mid still waits on m2), not to 1; releasing m2 returns 1.
 // ==========================================
-import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/verdict"
@@ -83,5 +82,4 @@ fn main(): I32
     tcb_high2.create(U8$[]::stack_high2, wait_m1, Void$@::g_round2@, high_prio, "high2")
     tcb_mid2.create(U8$[]::stack_mid2, wait_m2, Void$@::g_round2@, mid_prio, "mid2")
     task.start_scheduler()
-    task_end.require_all_ended()
     return verdict.finish()

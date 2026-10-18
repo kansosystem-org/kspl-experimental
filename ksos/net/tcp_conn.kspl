@@ -1,8 +1,8 @@
 //< Sends and receives bytes while keeping one TCP connection's seq/ack state
 //<
 //< Built on `build_tcp_segment` / `parse_tcp_segment` in `ksos/net/mini_ipv4.kspl`, which hold
-//< no state; this file holds it. send's and recv's signatures match mbedtls_ssl_send_t's and
-//< mbedtls_ssl_recv_t's, so they can be passed to mbedtls_ssl_set_bio as they are (no trampoline).
+//< no state. This file holds it. send's and recv's signatures match mbedtls_ssl_send_t's and
+//< mbedtls_ssl_recv_t's. So a caller can pass them to mbedtls_ssl_set_bio as they are.
 import "ksos/net/link" as netlink
 import "ksos/net/mini_ipv4" as net
 import "std/bytes"
@@ -42,8 +42,8 @@ struct Tcp_conn
     rx_scratch: U8[1500]
     // The payload left in rx_scratch because it did not fit the caller's buffer.
     // Caution: **Do not truncate a segment to the buffer's size.** Losing the rest makes every
-    // later segment fail the seq check, and the connection can never be read again; so the rest is
-    // kept here for the next call.
+    // later segment fail the seq check. Nothing can read the connection again. So the rest
+    // stays here for the next call.
     rx_pending_off: Sz
     rx_pending_len: Sz
     peer_state: Peer_state
@@ -77,8 +77,8 @@ fn tcp_stream_send(ctx: Void$@, buf: U8@, len: Sz): I32
     payload: = U8[]::{ .ptr = buf, .len = n }
     seg_len: = net.build_tcp_segment(U8$[]::conn.tx_scratch, conn.ends, conn.our_seq,
         conn.peer_seq, net.tcp_flag_ack | net.tcp_flag_psh, payload)
-    // Caution: **If it could not send, do not advance our_seq**, or it claims bytes the peer can
-    // never ACK, and with no retransmit the connection breaks silently. A build that returns 0 (it
+    // Caution: **If it could not send, do not advance our_seq.** Otherwise it claims bytes the peer
+    // can never ACK. With no retransmit, the connection breaks silently. A build that returns 0 (it
     // does not fit the scratch buffer) is treated the same way.
     if seg_len == 0 || !conn.link.send_frame(U8[]::conn.tx_scratch, seg_len)
         return 0
@@ -98,9 +98,9 @@ priv fn take_pending(conn: Tcp_conn$@, buf: U8$@, len: Sz): Sz //<
     //< Returns as much of the payload left in rx_scratch as fits the buffer
     //<
     //< It keeps the rest for later.
-    //< peer_seq advances **only by what was actually returned**, and the ACK goes once the whole
-    //< segment has: only then is rx_scratch free for the next one.
-    // copy_from truncates what does not fit and returns how many it copied; the caller's raw
+    //< peer_seq advances **only by what was actually returned**. The ACK goes once the whole
+    //< segment has gone. Only then is rx_scratch free for the next one.
+    // copy_from truncates what does not fit and returns how many it copied. The caller's raw
     // pointer is wrapped in a view first.
     dst: = U8$[]::{ .ptr = buf, .len = len }
     src: = U8[]::conn.rx_scratch
@@ -115,11 +115,11 @@ priv fn take_pending(conn: Tcp_conn$@, buf: U8$@, len: Sz): Sz //<
         send_ack(conn)
     return n
 
-// Compatible with mbedtls_ssl_recv_t: ctx is taken as a Tcp_conn@. It receives one frame and, if
-// it is this connection's next data segment, copies it into buf[0..min(len,payload_len)) and
-// returns that count; otherwise it returns mbedtls_err_ssl_want_read at once. Once the peer's FIN
-// has been taken it returns 0 (the end of the stream), and after its RST
-// mbedtls_err_net_conn_reset, on every call.
+// Compatible with mbedtls_ssl_recv_t: ctx is taken as a Tcp_conn@. It receives one frame. If that
+// is this connection's next data segment, it copies it into buf[0..min(len,payload_len)) and
+// returns that count. Otherwise it returns mbedtls_err_ssl_want_read at once. Once the peer's FIN
+// has been taken, it returns 0 (the end of the stream) on every call. After the peer's RST, it
+// returns mbedtls_err_net_conn_reset on every call.
 #export
 fn tcp_stream_recv(ctx: Void$@, buf: U8$@, len: Sz): I32
     conn: = Tcp_conn$@::ctx
@@ -142,8 +142,8 @@ fn tcp_stream_recv(ctx: Void$@, buf: U8$@, len: Sz): I32
         return mbedtls_err_ssl_want_read
     fin: = (seg.flags & net.tcp_flag_fin) != 0
     if seg.seq != conn.peer_seq
-        // A resend of what was taken (our ACK was lost), or a segment past one lost: the ACK
-        // repeated tells the peer where the stream stands. A bare ACK is not answered, or two ends
+        // A resend of what was taken (our ACK was lost), or a segment past one lost. The repeated
+        // ACK tells the peer where the stream stands. A bare ACK gets no answer. Otherwise two ends
         // would ACK each other's ACKs for ever.
         if seg.payload_len > 0 || fin
             send_ack(conn)

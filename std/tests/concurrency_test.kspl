@@ -2,6 +2,7 @@
 //<
 //< `std/thread` over real OS threads, `std/subproc` started from two at once, a file lock, and a
 //< `Mutex` locked again or unlocked by another thread.
+import "std/ds" { List }
 import "std/fs"
 import "std/json"
 import "std/mem" + { Arena, dealloc }
@@ -148,6 +149,77 @@ fn test_atomic_and_cond_var()
             confirmed.")
 
 // ==========================================
+// std/thread: Cond_var's broadcast wakes every waiter, and wait_for comes back at its limit.
+// ==========================================
+struct Gate //< what the waiters of a broadcast share, under one lock
+    open: Bool //< set once, then broadcast
+    waiting: Sz //< how many waiters have taken the lock to wait
+    woken: Sz //< how many saw it open before their limit
+    late: Sz //< how many reached their limit first
+
+struct Gate_ctx
+    mx: thread.Mutex<|Gate|>
+    cv: thread.Cond_var
+
+#export
+fn gate_waiter(arg: Gate_ctx$@): Void$@
+    g: = arg.mx.lock()
+    g.waiting += 1
+    // A limit long past the test's, so a broadcast that wakes one leaves the others late.
+    for !g.open
+        if arg.cv.wait_for(arg.mx@, 60000) == .timed_out && !g.open
+            g.late += 1
+            break
+    if g.open
+        g.woken += 1
+    arg.mx.unlock()
+    return null
+
+priv const gate_waiters: Sz = 3
+
+fn test_cond_var_broadcast_and_wait_for()
+    verdict.start("[Thread] Cond_var's broadcast and wait_for test...")
+    ctx: = mem.alloc_as<|Gate_ctx|>()
+    ctx.mx = thread.Mutex<|Gate|>.new(Gate::{}) catch panic("mutex create failed")
+    ctx.cv = thread.Cond_var.new() catch panic("cond create failed")
+    // A wait with nobody to wake it comes back at its limit, holding the lock again.
+    _held: = ctx.mx.lock()
+    t0: = sys.mono_us()
+    alone: = ctx.cv.wait_for(ctx.mx@, 50)
+    took_us: = sys.mono_us() - t0
+    at_once: = ctx.cv.wait_for(ctx.mx@, -1)
+    ctx.mx.unlock()
+    assert(alone == .timed_out && took_us >= 40000I64,
+        "wait_for with nobody to wake it times out, after its limit")
+    assert(at_once == .timed_out, "wait_for with a limit already up looks once")
+    // Every waiter wakes on one broadcast.
+    $ts: = List<|thread.Thread$@|>.new(null)
+    defer ts.free()
+    for _i in Range.asc(gate_waiters)
+        ts.push(thread.Thread.spawn<|Gate_ctx|>(gate_waiter, ctx) catch panic("spawn failed"))
+    for
+        w: = ctx.mx.lock()
+        all_in: = w.waiting == gate_waiters
+        if all_in
+            w.open = true
+            ctx.cv.broadcast()
+        ctx.mx.unlock()
+        if all_in
+            break
+        sys.sleep_ms(1)
+    for t in ts.slice()
+        t.join_and_free()
+    done: = ctx.mx.lock()
+    woken: = done.woken
+    late: = done.late
+    ctx.mx.unlock()
+    assert(woken == gate_waiters && late == 0, "one broadcast wakes every waiter")
+    ctx.mx.free()
+    ctx.cv.free()
+    dealloc(Void$@::ctx)
+    verdict.pass("wait_for came back at its limit, and one broadcast woke all three waiters.")
+
+// ==========================================
 // std/subproc with std/thread: children started from two threads at once. A pipe end reaching a
 // child the other thread started holds the end of output back until it ends: never, in this test.
 // Caution: **Judge by the read running out, not by a time limit.** A machine running other builds
@@ -279,9 +351,9 @@ fn test_file_lock()
     verdict.pass("a second holder is refused or waits, and the lock is free once let go")
 
 // ==========================================
-// std/thread: a Mutex locked again on the thread holding it, or unlocked from a thread that does
-// not hold it, stops the program with the reason. Without the check POSIX deadlocked and Windows
-// let the second lock through, so each runs as a child.
+// std/thread: a Mutex locked again on the thread holding it stops the program with the reason. So
+// does one unlocked from a thread that does not hold it. Without the check POSIX deadlocked and
+// Windows let the second lock through, so each runs as a child.
 // ==========================================
 priv const relock_src: U8[] = //< a child that locks one mutex twice on one thread
     """import "std/io"
@@ -333,7 +405,7 @@ fn test_mutex_misuse(ksplc: U8[], arena: Arena$@) //< ksplc runs the children
 // On the main thread, on a thread of its own, and in std's walks that read input.
 // ==========================================
 // std/stack_limit: a walk stops before its stack runs out, on the main thread and on a thread of
-// its own. **Every build that `make debug` makes runs it**, since a level's cost differs per build.
+// its own. **Every build that `make debug` makes runs it.** A level's cost differs per build.
 // ==========================================
 
 priv const test_margin: Sz = 64 * 1024 //< the room kept spare below where the walk stops
@@ -381,8 +453,8 @@ fn test_stack_limit_on_a_thread()
     assert(levels > floor_levels, "on a thread too the walk goes deeper than a thousand levels")
     verdict.pass("")
 
-// **The floor must be the stack's real end**, not where its reservation starts: Windows keeps the
-// bottom back (16KB on 64 bits), so a margin smaller than that walks into it on a floor read from
+// **The floor must be the stack's real end**, not where its reservation starts. Windows keeps the
+// bottom back (16KB on 64 bits). So a margin smaller than that walks into it on a floor read from
 // the bounds alone.
 priv const close_margin: Sz = 4 * 1024 //< a margin smaller than the pages Windows keeps back
 
@@ -405,8 +477,8 @@ fn test_stack_limit_later()
 
 // ==========================================
 // The walks in std that read input stop before a short stack runs out. **The test leaves less
-// stack than they keep free** (64KB), more than they walk before they ask where it ends, and gives
-// them input their counts allow, so only the stack can stop them; without the check they crash.
+// stack than they keep free** (64KB), more than they walk before they ask where it ends. It gives
+// them input their counts allow, so only the stack can stop them. Without the check they crash.
 // ==========================================
 
 priv const short_room: Sz = 60 * 1024 //< the stack left when the walk under test starts
@@ -442,7 +514,7 @@ priv fn json_refuses(arena: Arena$@): Bool //< 400 levels, within `max_nesting_d
 
 priv fn regex_refuses(_arena: Arena$@): Bool //< 400 nested `(?:`, within `max_nesting_depth`
     //<
-    //< **Compiling is the walk that recurses**, once per group level; matching follows its ways
+    //< **Compiling is the walk that recurses**, once per group level. Matching follows its ways
     //< through a list on the heap, so only the pattern's nesting can reach the stack.
     $pattern: = Str_builder.new()
     defer pattern.free()

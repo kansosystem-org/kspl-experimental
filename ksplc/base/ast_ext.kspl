@@ -1,7 +1,7 @@
 //< The safe accessors of `Ast_node`: each returns one named child, so no reader counts indexes
 //<
 //< **Which child of the normalized layout is which is known here and nowhere else** (beside
-//< `ast_place.kspl` and `ast_spell.kspl` for their own questions), so a change to the grammar is
+//< `ast_place.kspl` and `ast_spell.kspl` for their own questions). So a change to the grammar is
 //< met in one file. The marks a synthesized node carries (`if_bind_mark`, `made_by_compiler`,
 //< `is_left_by_break`) and the reading of attributes stand here too.
 import "ksplc/base/ast" { Ast_node, Loc }
@@ -10,8 +10,9 @@ import "std/chars" // the one-character tests and cuts
 import "std/ds" { List }
 import "std/str"
 
-// unwrap_top_level / get_decl_type_node / get_fn_params, like the find_child family in
-// ksplc/base/ast.kspl, are tree-walking primitives used everywhere that promise to return null.
+// unwrap_top_level / get_decl_type_node / get_fn_params are tree-walking primitives, like the
+// find_child family in ksplc/base/ast.kspl. Code everywhere uses them. They promise to return
+// null.
 ##lint(H0701 = off)
 
 const if_bind_mark: U8[] = "stmt_switch_if_bind" //<
@@ -66,9 +67,9 @@ priv fn is_library_name(s: U8[]): Bool //< whether it names a library as `-l` ta
 priv fn is_section_name(s: U8[]): Bool //< whether it names a linker section as written
     //<
     //< Caution: **Only letters, digits, `_` and `.`.** The name reaches the C, the LLVM IR and the
-    //< assembler's `.section` line as written, each with quoting of its own: a `"`, a `\`, a `??/`
-    //< (a trigraph under `-std=c99`) or a `;` would end it early and make what follows code the
-    //< source never declared.
+    //< assembler's `.section` line as written, each with quoting of its own. A `"`, a `\`, a `??/`
+    //< (a trigraph under `-std=c99`) or a `;` would end it early. What follows would then become
+    //< code that the source never declared.
     if s.len == 0
         return false
     for ch in s
@@ -113,8 +114,8 @@ impl Ast_node
         //<
         //< An example is the per-enum `variant_name` (`../parse/load.kspl`).
         //<
-        //< Caution: **An editor's walk by position skips it** (colours, hover, go-to, references):
-        //< it sits at the position of what it was made for, so treated as written it doubles that
+        //< Caution: **An editor's walk by position skips it** (colours, hover, go-to, references).
+        //< It sits at the position of what it was made for. Treated as written, it doubles that
         //< name or lands on unrelated text.
         return r != null && (r.kind_id == .k_decl_impl || r.kind_id == .k_decl_fn) &&
             r.ival == compiler_made
@@ -122,8 +123,8 @@ impl Ast_node
     fn place_as_made(r: Ast_node$@, origin: Loc) //<
         //< It moves a declaration the compiler made to `origin`, marking it and its methods
         //<
-        //< **Every node points at what it was made for**: parsed from a string, its positions are
-        //< the string's, and read in the file they land on unrelated text (a diagnostic or a jump
+        //< **Every node points at what it was made for.** Parsed from a string, its positions are
+        //< the string's. Read in the file, they land on unrelated text (a diagnostic or a jump
         //< into the file's first lines). Only declarations get the mark; `ival` means other things
         //< on other kinds.
         if r == null
@@ -152,8 +153,8 @@ impl Ast_node
         //< Records that a `break` leaves this statement, as sema resolved the `break`'s target
         //<
         //< **Only sema's resolution sets it** (`infer_stmt_break_continue` in
-        //< `../sema/body/stmt.kspl`): which construct an unlabelled `break` leaves, through any
-        //< `switch` or `if` between, is decided there once, and the flow checks read the answer.
+        //< `../sema/body/stmt.kspl`). Sema decides there once which construct an unlabelled `break`
+        //< leaves, through any `switch` or `if` between. The flow checks read the answer.
         if r != null
             r.ival = left_by_break
 
@@ -183,7 +184,7 @@ impl Ast_node
         //< Whether a trait's method holds a vtable slot (one with a default body does not)
         //<
         //< **This is the canonical source.** A default body is copied per implementation and has no
-        //< slot, so a trait value cannot reach it; only a concrete type or a type parameter calls
+        //< slot, so a trait value cannot reach it. Only a concrete type or a type parameter calls
         //< it.
         return r != null && r.kind_id == .k_decl_fn_proto
 
@@ -271,7 +272,7 @@ impl Ast_node
         return false
     fn has_mut_binding_marker(r: Ast_node$@): Bool //< whether a binding is mutable
         //<
-        //< Unmarked is immutable ("The two axes of mutability" in docs/SPEC-language.md), so it
+        //< Unmarked is immutable ("The two axes of mutability" in docs/SPEC-language.md). So it
         //< looks for a `$` before the identifier: one level down on a local variable
         //< (`k_decl_var_item`), directly on a parameter.
         for c in r.children
@@ -287,7 +288,7 @@ impl Ast_node
         //< A parameter's default value (the `2` of `b: I32 = 2`)
         //<
         //< null where there is none.
-        //< Caution: **Read it as the child after the `=`.** A closure's parameter may have no type,
+        //< Caution: **Read it as the child after the `=`.** A closure's parameter can have no type,
         //< so the position alone does not decide it. `is_trivia_node` in `parse/normalize.kspl`
         //< keeps it.
         $after_eq: = false
@@ -404,7 +405,7 @@ impl Ast_node
         //< The section a `#section("...")` node's argument names, without the quotes
         //<
         //< **Empty unless the argument is one plain string holding a section name** (the rule is
-        //< `is_section_name`); `check_section_attribute` in `ksplc/sema/decl/attrs.kspl` rejects
+        //< `is_section_name`). `check_section_attribute` in `ksplc/sema/decl/attrs.kspl` rejects
         //< an empty one, so the backends write only a name that passed.
         arg: = r.sole_argument()
         if arg == null || arg.kind_id != .k_string || arg.text.len < 2
@@ -546,7 +547,7 @@ impl Ast_node
         //< Whether it is an explicit cast's result
         //<
         //< A prefix `Type::(v)` and a postfix `v::Type` are both normalized to a postfix `::`.
-        //< It decides whether the value may escape immutability.
+        //< It decides whether the value can escape immutability.
         if r == null || r.kind_id != .k_expr_postfix || r.children.len < 2
             return false
         op: = r.safe_get_child(1)
@@ -581,7 +582,7 @@ impl Ast_node
     fn get_enum_variant_tag(r: Self$@): Ast_node$@ //<
         //< the tag written after a variant's `=`, or null
         //<
-        //< It may be any constant expression. Normalizing puts it after the name and the payload,
+        //< It can be any constant expression. Normalizing puts it after the name and the payload,
         //< and the attributes after it.
         $past_name: = false
         for ch in r.children
@@ -681,10 +682,10 @@ impl Ast_node
     fn gen_param_id_node(r: Self$@): Ast_node$@? //<
         //< The identifier node of a `type_gen_params` child that stands for one type argument
         //<
-        //< Caution: **Decide what counts as one type argument here and nowhere else.** If the
-        //< counting (check_written_generic_arity in sema/decl/mono.kspl), the binding and a
-        //< closure's synthesis (parse/desugar.kspl) each decided it, the count could disagree with
-        //< the binding.
+        //< Caution: **Decide what counts as one type argument here and nowhere else.** Three places
+        //< use it: the counting (check_written_generic_arity in sema/decl/mono.kspl), the binding,
+        //< and a closure's synthesis (parse/desugar.kspl). If each decided it, the count could
+        //< disagree with the binding.
         if r == null
             return .none
         if r.kind_id == .k_identifier

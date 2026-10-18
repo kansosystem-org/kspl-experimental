@@ -1,7 +1,7 @@
 //< Generates C99 for struct / enum / trait declarations
 //<
-//< Field layouts, tagged unions (enums), vtable types and a trait's wrapper struct (the thunks are
-//< synthesized in ksplc/lower/root.kspl as ordinary decl_fn / decl_const). Forward declarations
+//< Field layouts, tagged unions (enums), vtable types and a trait's wrapper struct. The thunks are
+//< synthesized in ksplc/lower/root.kspl as ordinary decl_fn / decl_const. Forward declarations
 //< are in decl.kspl; expressions and statements in expr.kspl / stmt.kspl.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -46,10 +46,10 @@ impl Ast_node
             e_def = d
         case .none
             r.ice_panic("emit_enum_decl: the enum has no definition")
-        // Caution: **Write each tag as the value sema folded**, never the expression: a name or a
-        // cast written there is not C, and a tag C counts itself drifts from sema's count.
-        // A C99 enumerator is an `int`, so a scalar enum with a tag past it (a `U32`'s top bit, an
-        // `I64`) names its tags as macros of its own type instead; both are constant expressions.
+        // Caution: **Write each tag as the value sema folded**, never the expression. A name or a
+        // cast written there is not C, and a tag that C counts itself drifts from sema's count.
+        // A C99 enumerator is an `int`. So a scalar enum with a tag past it (a `U32`'s top bit, an
+        // `I64`) names its tags as macros of its own type instead. Both are constant expressions.
         if is_scalar && !e_def.tags_fit_i32()
             emit_enum_tag_macros(cg, name, e_def)
             return
@@ -67,7 +67,7 @@ impl Ast_node
         // a C enum type would be an `int`.
         cg.s("} kspl_\{name\}_Tag;\n\nstruct \{name\} {\n    ").t(e_def.base_type_id).s(" tag;\n")
 
-        if _found: = r.find_deep_child(.k_enum_payload)
+        if r.holds_a_payload(cg)
             cg.s("    union {\n")
             for child2 in r.children
                 if child2.kind_id == .k_enum_variant
@@ -75,19 +75,37 @@ impl Ast_node
             cg.s("    } payload;\n")
         cg.s("};\n\n")
 
+    priv fn holds_a_payload(r: Ast_node$@, cg: Genc_ctx$@): Bool //<
+        //< Whether any variant of the enum declaration holds a field that is not `Void`
+        for v in r.children
+            if v.kind_id == .k_enum_variant && v.payload_fields_held(cg) > 0
+                return true
+        return false
+
+    priv fn payload_fields_held(r: Ast_node$@, cg: Genc_ctx$@): Sz //<
+        //< How many of the variant's payload fields hold something (a `Void` one holds nothing)
+        f_list: = r.find_child(.k_enum_payload)
+        if f_list == null
+            return 0
+        $n: Sz = 0
+        for f_node in f_list.children
+            if f_node.kind_id == .k_enum_field && !is_void_field(f_node, cg)
+                n += 1
+        return n
+
     fn emit_variant_payload(r: Ast_node$@, cg: Genc_ctx$@) //<
         //< A variant's payload as a struct member of the enum's union, named after the variant
         //<
-        //< A variant with no payload writes nothing.
-        f_list: = r.find_child(.k_enum_payload)
-        if f_list == null
+        //< A variant with no payload, or only `Void` fields, writes nothing: C has no empty struct.
+        if r.payload_fields_held(cg) == 0
             return
+        f_list: = r.find_child(.k_enum_payload)
         cg.clear_scratch()
         r.get_child(0).text.mangle_c_identifier_to(cg.scratch)
         v_name: = cg.scratch.slice()
         cg.s("        struct {\n")
         for f_node in f_list.children
-            if f_node.kind_id != .k_enum_field
+            if f_node.kind_id != .k_enum_field || is_void_field(f_node, cg)
                 continue
             f_name_node: = f_node.get_enum_field_name_node()
             f_name: = f_name_node.text if f_name_node != null else ""
@@ -119,7 +137,7 @@ impl Ast_node
         //< It emits a trait's C struct and the struct of its vtable
         //<
         //< Note: The walk of a vtable's function pointers is like emit_param_list in
-        //< gen/c/decl.kspl, but the two cannot be merged: this one always makes the first argument
+        //< gen/c/decl.kspl, but the two cannot be merged. This one always makes the first argument
         //< (the receiver) a void* (the pi==0 branch).
         cg.emit_line_directive(r)
         name: = r.find_text(.k_identifier)
@@ -127,9 +145,15 @@ impl Ast_node
             .s("struct \{name\} {\n    void *obj;\n    const struct kspl_vtable_\{name\} \
                 *vtable;\n};\n\nstruct kspl_vtable_\{name\} {\n")
 
+        $slots: Sz = 0
         for c in r.children
             if c.has_vtable_slot()
                 c.emit_vtable_slot(cg)
+                slots += 1
+        // **A trait with no slot (a marker such as `Move_only`) still gets a member.** C99 has no
+        // empty struct (6.7.2.1), and its vtable constant is still written where one is upcast.
+        if slots == 0
+            cg.s("    char kspl_no_slot;\n")
         cg.s("};\n\n")
 
     fn emit_vtable_slot(r: Ast_node$@, cg: Genc_ctx$@) //<
@@ -141,7 +165,7 @@ impl Ast_node
             cg.s(" (*")
         else
             cg.s("void (*")
-        // A method name is emitted plain as the vtable struct's member, so it gets the suffix here
+        // A method name is emitted plain as the vtable struct's member. So it gets the suffix here,
         // just as at the call (`vtable->` in gen/c/expr.kspl).
         cg.nm(r.find_text(.k_identifier)).s(")(")
         param_list: = r.get_fn_params()
@@ -204,3 +228,8 @@ impl Ast_node
                     type_node.emit_c_decl(cg, current_field, false)
                     cg.s(";\n")
         cg.s("};\n\n")
+
+priv fn is_void_field(f_node: Ast_node$@, cg: Genc_ctx$@): Bool //<
+    //< Whether a payload field resolved to `Void`, which the variant does not carry
+    return cg.env.get_clean_real_type(f_node.type_id) == I32::sema_type_env.Builtin_type_id
+        .void_type

@@ -1,11 +1,10 @@
 // The page's start, held back on purpose: every round runs on a start slower than any clock in the
-// page, so a check that waits for it on a timer fails every round, not only on a busy machine.
+// page. So a check that waits for it on a timer fails every round, not only on a busy machine.
 // It is pasted in **ahead of the page's own texts** (`kspage/Makefile`'s `KSPAGE_PROBE_PAGE`), so
 // it wraps `WebAssembly.instantiate` before `port/web/page.js` calls it.
-// How it holds back: it compiles the wasm again **off the page's thread** a number of times before
-// the start goes on. The dumping side's virtual clock does not see that work, just as it does not
-// see a busy machine's slow compile.
-// Caution: **Make each copy differ** (a custom section with a name of its own): the browser keeps
+// How it holds back: it compiles the wasm again **off the page's thread**, a number of times.
+// Then the start goes on, as after a busy machine's slow compile.
+// Caution: **Make each copy differ** (a custom section with a name of its own). The browser keeps
 // a module it compiled once, and the same bytes again come back at once, holding nothing back.
 
 (function () {

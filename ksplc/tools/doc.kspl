@@ -44,8 +44,8 @@ priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is 
 
 priv fn folder_path_of(name: U8[]): U8[] //< the folder a name such as `std` or `ksai` stands for
     //<
-    //< **`std` alone is std's folder**: the logical names under it start `std/`, so the bare name
-    //< is asked here rather than through `embed_disk_path`, which would look for it locally.
+    //< **`std` alone is std's folder.** The logical names under it start `std/`, so the bare name
+    //< is asked here rather than through `embed_disk_path`. That would look for it locally.
     if name.equals("std")
         return base_locate.std_dir()
     return base_locate.embed_disk_path(name)
@@ -182,7 +182,7 @@ priv fn linked(doc: U8[], rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[])
 
 priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from` starts
     //<
-    //< **A label counts only after a space**; inside a word, or at the start of the description, it
+    //< **A label counts only after a space.** Inside a word, or at the start of the description, it
     //< splits nothing (cut there, the paragraph would start empty).
     labels: U8[][2] = ::{ "Caution: ", "Note: " }
     $best: = doc.len
@@ -238,7 +238,7 @@ priv fn write_parts(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], key: 
         if part.len > 0
             out.s("`").s(part).s("` — ")
         else
-            out.s("**what comes back** — ")
+            out.s("**Return value** — ")
         out.s(linked(r.doc, rows, links, tail)).s("\n")
 
 priv fn write_entry(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], at: Sz,
@@ -247,8 +247,8 @@ priv fn write_entry(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], at: S
     r: = rows.get(at)
     heading: = "###" if r.key.find_char('.').is_some() else "##"
     out.s("\n").s(heading).s(" `").s(r.key).s("`\n\n")
-    // **The declaration goes in a fence that names no language**: the fence keeps a generic's `|`
-    // from reading as a table column, and `impl X: Owned` alone is not a program.
+    // **The declaration goes in a fence that names no language.** The fence keeps a generic's `|`
+    // from reading as a table column. `impl X: Owned` alone is not a program.
     out.s("```\n").s(r.text).s("\n```\n")
     if r.doc.len > 0
         out.c('\n')
@@ -276,10 +276,10 @@ priv fn entries_in(rows: List<|Line|>@): Sz //< how many entries the file holds
 
 priv fn scope_says(): U8[] //< the line saying what the reference holds
     if base_core.config.surface_all
-        return "Everything a file here may reach, whether or not it is published \
-            (`--surface-scope=all`). **A declaration that is not `pub` is nobody outside to rely \
-            on.**"
-    return "What is published (`pub`); what is not is reachable only from inside the package."
+        return "Everything a file here can reach, whether or not it is published \
+            (`--surface-scope=all`). **Declarations without `pub` do not form a public API.**"
+    return "Published declarations use `pub`. Other declarations are reachable only from inside the \
+        package."
 
 priv fn write_file(file: U8[], rows: List<|Line|>@, out: Str_builder$@) //<
     //< One file's reference: what it is for, what it holds, and every entry in it
@@ -311,7 +311,7 @@ priv fn write_one(file: U8[], rows: List<|Line|>@, name: U8[], out: Str_builder$
     //< The entries `name` names: the entry itself and, for a type, its members; how many
     //<
     //< **A member is an entry whose key starts with the name and a `.`** (`Arena.alloc` under
-    //< `Arena`), so asking for a type shows what can be called on it.
+    //< `Arena`). So asking for a type shows what can be called on it.
     links: = anchors(rows)
     $n: Sz = 0
     for i in Range.asc(rows.len)
@@ -351,7 +351,10 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
         if !path.has_kspl_ext()
             continue
         rest: = path.sub_from(dir.len + 1)
-        logical: = base_core.arena.text().s(name).c('/').s(rest.strip_kspl_ext()).take()
+        // The current folder's files are named from it, with no `./` in front.
+        logical: =
+            (rest.strip_kspl_ext() if name.equals(".")
+            else base_core.arena.text().s(name).c('/').s(rest.strip_kspl_ext()).take())
         switch read_lines(path, logical, parser)
         case .some(rows)
             if entries_in(rows@) == 0
@@ -364,7 +367,7 @@ priv fn write_folder(name: U8[], dir: U8[], parser: kspeg.Target$@, out: Str_bui
         case .none
             missed.push(logical)
     if missed.len > 0
-        out.s("\nThese could not be read, so what they hold is not listed:\n\n")
+        out.s("\nThese files could not be read. Their contents are not listed:\n\n")
         for one in missed
             out.s("* `").s(one).s("`\n")
     return true
@@ -382,8 +385,11 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     if slash: = target.rfind_char('/')
         after_slash = slash + 1
     $cut: = target.len
-    if dot_rel: = target.sub_from(after_slash).find_char('.')
-        cut = after_slash + dot_rel
+    // **A last part of `.` or `..` is a folder**, and holds no entry.
+    last: = target.sub_from(after_slash)
+    if !last.equals(".") && !last.equals("..")
+        if dot_rel: = last.find_char('.')
+            cut = after_slash + dot_rel
     name: = target.sub(0, cut)
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
     $out: = Str_builder.new()
@@ -392,7 +398,7 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     if !fs.exists(path)
         dir: = folder_path_of(name)
         if key.len > 0 || !fs.is_dir(dir)
-            io.err().s("ksplc doc: no file or folder is called '\{name\}' (looked for \{path\})\n")
+            io.err().s("ksplc doc: no file or folder is called '\{name\}'. Looked for \{path\}\n")
             return false
         if !write_folder(name, dir, parser, out@)
             return false
@@ -404,8 +410,8 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
             write_file(name, rows@, out@)
         else if write_one(name, rows@, key, out@) == 0
             io.err()
-                .s("ksplc doc: \{name\} publishes nothing called '\{key\}' (`ksplc doc \{name\}` \
-                    lists what it does)\n")
+                .s("ksplc doc: \{name\} publishes nothing called '\{key\}'. Run `ksplc doc \
+                    \{name\}` to list its published entries\n")
             return false
     case .none
         return false

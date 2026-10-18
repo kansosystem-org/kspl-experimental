@@ -41,19 +41,14 @@ fn check_args_against_instance(c: Sema_ctx$@, args_node: Ast_node$@, inst_node: 
         p_type_node: = param_node.find_child(.k_type_expr)
         if p_type_node == null
             continue
-        // A formal parameter's type resolves in the template's file (as in infer_call_args).
-        old_file: = c.file_name
-        if p_type_node.loc.file().len > 0
-            c.set_current_file(p_type_node.loc.file())
-        p_id: = p_type_node.resolve_type(c) catch 0
-        c.set_current_file(old_file)
+        p_id: = p_type_node.resolve_type_in_own_file(c) catch 0
         if p_id == 0 || sema_type_env.is_unknown(p_id)
             continue
         a_id: = arg_node.type_id
         if a_id == 0 || sema_type_env.is_unknown(a_id) || a_id == p_id
             continue
         // A function's name got the type `generic_fn_value_type_id`, **a marker with no
-        // signature**, since a generic call passes no expected type (value_of_fn in
+        // signature**. A generic call passes no expected type (value_of_fn in
         // sema/body/resolve_path.kspl). Now the parameter's type is known, so the function is
         // checked against it.
         if a_id == c.env.generic_fn_value_type_id()
@@ -96,7 +91,7 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
     is_method_access: Bool, op_text: U8[], is_generic_call: Bool): Void!Sema_error
     $fn_sig: Ast_node$@ = null
     $param_list: Ast_node$@ = null
-    // What comes here is a named function's or method's declaration; a call through a function
+    // What comes here is a named function's or method's declaration. A call through a function
     // value is matched against the value's type instead (infer_value_call_args).
     if def_node != null
         fn_sig = def_node.find_child(.k_type_fn_sig)
@@ -119,7 +114,7 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
         if is_variadic
             if actual_args < expected_args
                 c.clear_scratch()
-                    .s("not enough arguments for function call. Expected at least \
+                    .s("not enough arguments for a function call. Expected at least \
                         \{expected_args\}, but got \{actual_args\}")
                 if args_node != null
                     c.err(args_node, c.scratch.slice())
@@ -153,11 +148,7 @@ fn infer_call_args(c: Sema_ctx$@, args_node: Ast_node$@, def_node: Ast_node$@,
             // A generic call has no expected type yet (`T` / `U` are unbound); it is checked right
             // after the instantiation (check_args_against_instance).
             if param_type_node != null && !is_generic_call
-                old_file: = c.file_name
-                if param_type_node.loc.file().len > 0
-                    c.set_current_file(param_type_node.loc.file())
-                expected_arg_id = param_type_node.resolve_type(c)!
-                c.set_current_file(old_file)
+                expected_arg_id = param_type_node.resolve_type_in_own_file(c)!
 
         eval_id: = arg_node.infer_expr(c, expected_arg_id)!
         sema_body_lint_stmt.lint_type_given(c, arg_node, expected_arg_id,

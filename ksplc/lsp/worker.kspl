@@ -2,8 +2,8 @@
 //<
 //< The supervisor (`server.kspl`) owns the stdio with the editor; a worker that crashes or hangs
 //< is restarted and handed the open documents' texts, each analysed later. **Every method is
-//< routed in one place** (`dispatch`), each named once, with the state it is answered from built in
-//< its own branch: the document's (`document_state`) or the workspace's (`workspace_state`).
+//< routed in one place** (`dispatch`), each named once. Its own branch builds the state it is
+//< answered from: the document's (`document_state`) or the workspace's (`workspace_state`).
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
@@ -45,7 +45,7 @@ priv fn doc_name(uri: U8[]): U8[] //<
     //< Inside a package that declares its name it is `<name>/<path from the package root>`,
     //< wherever the editor was opened (`name_entry` in `../base/package.kspl`).
     //< Caution: **Every lookup names a file through here.** The source map, the document's own
-    //< nodes, the workspace walk and the layout notes find one file by this name; if one named it
+    //< nodes, the workspace walk and the layout notes find one file by this name. If one named it
     //< differently, the compiler would read the disk instead of the buffer, or load one file twice.
     return base_package.name_entry(uri.strip_file_uri())
 
@@ -53,7 +53,7 @@ priv fn doc_path(uri: U8[]): U8[] //<
     //< A document's path as the pipeline takes an entry file, without the default extension
     //<
     //< Caution: **Give the pipeline this, never `doc_name`.** The pipeline names what it is given
-    //< itself, as with a path from the command line, and a name read as a path again gets the
+    //< itself, as with a path from the command line. A name read as a path again gets the
     //< package's name twice (`mypkg/mypkg/lib`).
     return uri.strip_file_uri().strip_kspl_ext()
 
@@ -78,8 +78,8 @@ priv fn populate_source_map_from_store(server: Server$@,
 
 priv fn init_doc_compiler(server: Server$@, ptr: Doc_state$@, src: U8[]?): pipeline.Compiler$@
     // Caution: **The URI becomes the one logical name here** (`doc_name` above). The AST records a
-    // file by its logical name; with only the scheme stripped an absolute URI would not match it,
-    // so `Pick_walk.visit` (`position.kspl`) rejects every node of the open document and
+    // file by its logical name. With only the scheme stripped, an absolute URI would not match it.
+    // Then `Pick_walk.visit` (`position.kspl`) rejects every node of the open document, and
     // the editor shows nothing.
     ptr.mod_name_perm = base_core.arena.dup_str(doc_name(ptr.uri_perm).strip_kspl_ext())
 
@@ -92,9 +92,9 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
     //< The name used to pre-filter the files to read
     //<
     //< Where `hint` is empty it is taken from the source at `params`' position. **The source holds
-    //< only the bare identifier**, so the fully qualified name the call hierarchy sends is cut to
-    //< its last part; searched whole it matches no file. Off a name the answer is empty, and only
-    //< the entry file's import tree is read.
+    //< only the bare identifier**. So the fully qualified name that the call hierarchy sends is
+    //< cut to its last part: searched whole, it matches no file. Off a name the answer is empty,
+    //< and only the entry file's import tree is read.
     if hint.len > 0
         return hint.fqn_last()
     switch params.get("position")
@@ -105,8 +105,8 @@ priv fn search_word(hint: U8[], src: U8[], params: json.Val): U8[] //<
 
 priv fn word_at(src: U8[], at: Sz): U8[] //< the identifier at that position
     //<
-    //< Caution: **Do not narrow what counts as a name** — narrowed, a cursor on a name yields no
-    //< search word, and it answers without reading the file that should have matched.
+    //< Caution: **Do not narrow what counts as a name.** Narrowed, a cursor on a name yields no
+    //< search word. Then it answers without reading the file that must have matched.
     if at >= src.len
         return ""
     $from: Sz = at
@@ -122,7 +122,7 @@ priv fn mended_from_disk(raw: U8[]): U8[] //<
     //<
     //< **Every path that reads the disk itself goes through here.** `pipeline.Compiler.parse_file`
     //< takes what it is given as is (`../parse/load.kspl` normalizes and converts only what it
-    //< opened), so a path skipping this parses nothing, or reads a Windows checkout's files as
+    //< opened). So a path skipping this parses nothing, or reads a Windows checkout's files as
     //< another program. The conversion's notes are dropped: a file's indentation problems are
     //< reported through its own entry point (`record_layout_notes`).
     $notes: = List<|parse_layout.Note|>.new(base_core.arena)
@@ -151,13 +151,13 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
     compiler: = init_doc_compiler(server, ptr, target_src)
 
     // The "already loaded" check reads a local Map kept in sync with `compiler.loaded_files` (one
-    // load can add several entries through imports): amortized O(1), where walking the list per
-    // file would be O(N*M).
+    // load can add several entries through imports). The check is amortized O(1). Walking the
+    // list per file would be O(N*M).
     loaded_set: = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
     $synced_len: Sz = 0
 
-    // **Every source under the root is read once, matched or not** — the filter looks at the text —
-    // and on slow storage one read can take hundreds of milliseconds, so progress is reported per
+    // **Every source under the root is read once, matched or not**, since the filter looks at the
+    // text. On slow storage one read can take hundreds of milliseconds. So progress is reported per
     // file (`report_progress` does the rate limiting).
     // Caution: **Do not rate-limit by count.** One entry's cost varies by orders of magnitude
     // between environments, so counting lets only the slow environments go past the watchdog's
@@ -170,7 +170,7 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
         for synced_len < compiler.loaded_files.len
             loaded_set.set(compiler.loaded_files.get(synced_len), 1)
             synced_len += 1
-        already_loaded: = (loaded_set.get(logical) catch 0) != 0
+        already_loaded: = loaded_set.get(logical).unwrap_or(0) != 0
 
         if !already_loaded
             src_text: = io.read_file(file_path) catch U8$[]::{ .ptr = null, .len = 0 }
@@ -181,18 +181,18 @@ priv fn build_workspace_state(server: Server$@, target_uri: U8[], search_hint: U
                 // `../base/ast_spell.kspl`).
                 if base_ast_spell.mentions_ident(src_text, old_name)
                     // Caution: **Pass the text read here.** `source_map` already holds the open
-                    // documents' buffers, and for a file the walk only passes through one can be
-                    // stale (the editor may have saved the file without saying so); the disk is
-                    // newer, and a stale text puts the positions on the wrong lines. Read here, so
+                    // documents' buffers. For a file the walk only passes through, one can be
+                    // stale: the editor can save the file without saying so. The disk is newer,
+                    // and a stale text puts the positions on the wrong lines. Read here, so
                     // converted here (`mended_from_disk`).
                     perm_src: = base_core.arena.dup_str(mended_from_disk(src_text))
                     compiler.parse_file(doc_path(file_path), .some(perm_src), true) catch {}
                 dealloc(Void$@::src_text.ptr)
 
     // Caution: **Check every file's bodies here.** The references, the renaming and the call
-    // hierarchy rely on this state, and a call site lives inside a body — limited to the one
+    // hierarchy rely on this state, and a call site lives inside a body. Limited to the one
     // document, they come back empty.
-    // **Only the bodies that can hold a site naming the word** (`Bodies.mentioning`); with no word,
+    // **Only the bodies that can hold a site naming the word** (`Bodies.mentioning`). With no word,
     // every body, as the walk read only the entry file's import tree.
     bodies: = Bodies.everywhere if old_name.len == 0 else Bodies.mentioning(old_name)
     compiler.run_semantic_analysis(doc_path(ptr.uri_perm), false, true, bodies) catch {}
@@ -229,20 +229,20 @@ priv fn build_document_state(server: Server$@, src: U8[], uri: U8[], send_diag: 
         return ptr
 
     // **A recovered tree reports nothing it finds.** The later stages would find only the chain of
-    // errors one missing bracket sets off, so the parse's report is the only one ("Do not put a
+    // errors one missing bracket sets off. So the parse's report is the only one ("Do not put a
     // diagnostic out from a recovered result" in `../docs/DESIGN-tools.md`).
-    // Caution: Not `has_load_error` — that means the file did not load at all, and the branch above
-    // returns on it, which takes away the tree and every answer.
+    // Caution: Not `has_load_error`. That means the file did not load at all. The branch above
+    // returns on it, and that takes away the tree and every answer.
     quiet: = compiler.has_load_error || parse_load.recovered()
 
     // **Only this document's bodies are checked.** The hover, the jump, the colouring and this
-    // document's diagnostics rely on this state, and none looks inside another file's body (the
+    // document's diagnostics rely on this state. None looks inside another file's body (the
     // grounds are "A `didOpen` checks one document's bodies" in `../docs/DESIGN-tools.md`).
     compiler.run_semantic_analysis(doc_path(ptr.uri_perm), true, quiet, .main_file) catch {}
     if send_diag
-        // **A failure with no diagnostic still says what to do**: a bare "error" at the top of
-        // the file names neither the cause nor where to look (an import that cannot be read, say,
-        // is reported only on the compiler's own output).
+        // **A failure with no diagnostic still says what to do.** A bare "error" at the top of
+        // the file names neither the cause nor where to look. For example, an import that cannot
+        // be read is reported only on the compiler's own output.
         if !compiler.is_valid && base_diag.lsp_diags.list.len == 0
             base_diag.lsp_diags.list
                 .push(base_diag.Lsp_diagnostic::{ .file = ptr.uri_perm, .severity = .error,
@@ -318,7 +318,7 @@ impl Server
             //< The analysed state of the document a request names
             //<
             //< Where that document is not open, it answers null itself and returns none.
-        uri: = params.get("textDocument").get("uri").as_str()
+        uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         r.ensure_latest_state(uri)
         if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
             return .some(r.latest_state)
@@ -338,8 +338,8 @@ impl Server
             has_doc = false
         default {}
         uri: =
-            (uri_node.get("uri").as_str() if has_doc
-            else params.get("item").get("uri").as_str())
+            (uri_node.get("uri").as_str().unwrap_or("") if has_doc
+            else params.get("item").get("uri").as_str().unwrap_or(""))
         target_fqn: = "" if has_doc else lsp_call_hier.item_fqn(params)
         return build_workspace_state(r, uri, target_fqn, params)
 
@@ -348,7 +348,7 @@ impl Server
         //<
         //< Caution: **Do not keep `latest_state` past it.** The rewind clears what the compiler
         //< keeps in module-level variables (the ranges a `#cfg()` dropped, the text as written,
-        //< the diagnostics: `wind_back`), which the document state's answers read; kept, its hover
+        //< the diagnostics: `wind_back`). The document state's answers read them. Kept, its hover
         //< would lose a dropped range's reason. The next request that needs it builds it again.
         ws.free()
         r.reset_current_state()
@@ -356,12 +356,12 @@ impl Server
     priv fn handle_completion_req(r: Self$@, params: json.Val, id_val: json.Val, arena: Arena$@) //<
         //< It answers a completion request
         //<
-        //< **Analyse again with the half-typed word replaced by a synthesized name** — half-typed
-        //< text does not parse (the heading of `lsp/complete.kspl`), so `latest_state`, built from
+        //< **Analyse again with the half-typed word replaced by a synthesized name.** Half-typed
+        //< text does not parse (the heading of `lsp/complete.kspl`). So `latest_state`, built from
         //< that text, holds no tree and is not used.
         //< Caution: **Always discard the built state and rewind**, or the arena grows with every
         //< keystroke.
-        uri: = params.get("textDocument").get("uri").as_str()
+        uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         $text: U8[] = ""
         switch r.docs.open_text(uri)
         case .some(t)
@@ -393,7 +393,7 @@ impl Server
 
     fn handle_did_open_change(r: Self$@, method: U8[], params: json.Val)
         text_doc: = params.get("textDocument")
-        uri: = text_doc.get("uri").as_str()
+        uri: = text_doc.get("uri").as_str().unwrap_or("")
         $src_val: = json.Val.null_val
 
         if method.equals("textDocument/didOpen")
@@ -404,7 +404,7 @@ impl Server
             changes: = params.get("contentChanges")
             src_val = changes.get_at(0).get("text")
 
-        sent: = src_val.as_str()
+        sent: = src_val.as_str().unwrap_or("")
         // The indentation problems found while converting are **collected, not reported here** (the
         // reason is at `parse_load.layout_notes`); `pipeline.kspl` reports them once sema starts.
         scratch: = Arena.new(layout_scratch_bytes)
@@ -426,16 +426,16 @@ impl Server
         //< It takes one open document's text from a supervisor that restarted it, without analysing
         //<
         //< **A restart must not make the next answer wait for every open document.** The
-        //< supervisor sends each document's analysis later, as a didOpen: before the first request
-        //< naming it, or while the editor is idle (the grounds are "The language server is split
-        //< into two processes: the watcher and the analyser" in `../docs/DESIGN-tools.md`). The
+        //< supervisor sends each document's analysis later, as a didOpen. It sends it before the
+        //< first request naming it, or while the editor is idle ("The language server runs as
+        //< two processes: watcher and analyser" in `../docs/DESIGN-tools.md`). The
         //< conversion's notes are dropped: that didOpen converts again and records them.
         text_doc: = params.get("textDocument")
         scratch: = Arena.new(layout_scratch_bytes)
         defer scratch.free()
         $notes: = List<|parse_layout.Note|>.new(scratch)
-        _held: = r.store_converted(text_doc.get("uri").as_str(),
-            text_doc.get("text").as_str(), notes@, scratch)
+        _held: = r.store_converted(text_doc.get("uri").as_str().unwrap_or(""),
+            text_doc.get("text").as_str().unwrap_or(""), notes@, scratch)
 
     priv fn store_converted(r: Self$@, uri: U8[], sent: U8[],
         notes: List<|parse_layout.Note|>$@, scratch: Arena$@): U8[]? //<
@@ -456,7 +456,7 @@ impl Server
         return .some(src)
 
     fn handle_did_close(r: Self$@, params: json.Val)
-        uri: = params.get("textDocument").get("uri").as_str()
+        uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
         if uri.len > 0
             r.docs.close(uri)
             if r.latest_state != null && r.latest_state.uri_perm.equals(uri)
@@ -486,8 +486,8 @@ priv fn answer_initialize(params: json.Val, id_val: json.Val, arena: Arena$@)
 priv fn rename_options(params: json.Val, b: Json_builder$@): json.Val //<
     //< The rename capability: with `prepareProvider` where the client can ask it
     //<
-    //< **Only a client that says it sends `prepareRename` is told it is answered**: the protocol
-    //< allows the options only then, and the method is handled whatever is declared.
+    //< **Only a client that says it sends `prepareRename` is told it is answered.** The protocol
+    //< allows the options only then. The method is handled whatever is declared.
     said: = params.get("capabilities").get("textDocument").get("rename").get("prepareSupport")
     switch said
     case .bool_val(yes)
@@ -500,8 +500,8 @@ priv fn completion_options($b: Json_builder): json.Val //<
     //< The completion capability's options
     //<
     //< Caution: **Do not declare `triggerCharacters`.** Only the editor, which watches the typing,
-    //< can decide when to show it; declare a `.` and **the list pops up unasked**, the most common
-    //< complaint about this feature. It answers only when asked.
+    //< can decide when to show it. Declare a `.` and **the list pops up unasked**. That is the most
+    //< common complaint about this feature. It answers only when asked.
     return b.obj().build()
 
 priv fn answer_unknown(id_val: json.Val, arena: Arena$@) //<
@@ -514,12 +514,12 @@ priv fn answer_unknown(id_val: json.Val, arena: Arena$@) //<
 fn run_lsp_worker(base_parser: kspeg.Target$@): Void
     base_core.config.is_lsp = true
     // **The one place that turns the recovery branches on.** Turned on anywhere the compiler runs,
-    // input that should be rejected would be accepted (the grounds are "Only the editor's parse
+    // they would accept input that must be rejected ("Only the editor's parse
     // recovers from a syntax error" in `../docs/DESIGN-tools.md`).
     base_core.config.recover_syntax = true
     // Caution: **Tie the lower layer's progress to the liveness marker.** The supervisor detects a
-    // hang by how long silence lasts, so otherwise a heavy didOpen (hundreds of files plus the
-    // analysis) is silent throughout: a live worker is killed and the document quarantined.
+    // hang by how long silence lasts. Otherwise a heavy didOpen (hundreds of files plus the
+    // analysis) is silent throughout. Then a live worker is killed and the document quarantined.
     base_core.progress_hook = lsp_msg.send_worker_alive
     server: = Server.new(base_parser)
     defer server.free()
@@ -543,7 +543,7 @@ fn run_lsp_worker(base_parser: kspeg.Target$@): Void
             lsp_msg.send_worker_done()
             continue
 
-        method: = doc.val.get("method").as_str()
+        method: = doc.val.get("method").as_str().unwrap_or("")
         // Test hooks for the supervisor's crash / hang recovery. A real client sends nothing in the
         // $/ksplTest* namespace, so they are harmless in production.
         if method.equals("$/ksplTestCrash")

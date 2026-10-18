@@ -1,9 +1,10 @@
 #!/usr/bin/env -S ksplc run
-//< `make lint`'s gate itself fails on an information diagnostic
+//< `make lint`'s gate itself fails on an information diagnostic, and on ten errors
 //<
-//< Caution: checking that each diagnostic fires (the compiler's own `make test-lint`) still lets
-//< CI pass when **the code turning a diagnostic into a verdict**, this repository's lint target, is
-//< broken. This suite checks that verdict itself, on a probe holding one information diagnostic.
+//< Caution: a check that each diagnostic fires (the compiler's own `make test-lint`) still lets
+//< CI pass when **the code turning a diagnostic into a verdict** is broken. That code is this
+//< repository's lint target. This suite checks that verdict itself, on a probe with one information
+//< diagnostic and on one with ten errors. Its tally line ends in the clean line's "0 error(s), …".
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/fs"
@@ -26,15 +27,34 @@ fn main(): I32
 
 """
 
-priv fn check_lint_gate(arena: Arena$@)
-    name: = "the lint gate knocks an information diagnostic back"
-    dir: = harness.sandbox("lint_gate")
+// Ten, so that the tally reads "10 error(s), 0 warning(s), …": a gate matching part of the line
+// takes it for clean.
+priv const ten_errors_probe: U8[] =
+    """import "std/io"
+
+fn main(): I32
+    a1: I32 = "s"
+    a2: I32 = "s"
+    a3: I32 = "s"
+    a4: I32 = "s"
+    a5: I32 = "s"
+    a6: I32 = "s"
+    a7: I32 = "s"
+    a8: I32 = "s"
+    a9: I32 = "s"
+    a10: I32 = "s"
+    io.out().s("hi\n")
+    return 0
+
+"""
+
+priv fn check_lint_gate(name: U8[], dir: U8[], probe_name: U8[], probe: U8[], arena: Arena$@)
     // Caution: Pass the path relative to the root. make reads `LINT_TARGETS`, so a path starts at
     // the root. The workspace's name changes every run, so the path is cut from the one returned
     // rather than built.
     root: = harness.root()
-    rel: = arena.text().s("\{dir.sub_from(root.len + 1)\}/information_probe.kspl").take()
-    io.write_file(fs.join(dir, "information_probe.kspl", arena), information_probe) catch
+    rel: = arena.text().s("\{dir.sub_from(root.len + 1)\}/\{probe_name\}").take()
+    io.write_file(fs.join(dir, probe_name, arena), probe) catch
         verdict.check(name, false, "the material cannot be written")
         return
     r: = harness
@@ -46,16 +66,19 @@ priv fn check_lint_gate(arena: Arena$@)
     log: = fs.join(harness.root(),
         arena.text().s("out/log/lint/").s(rel.replace("/", "_", arena)).s(".log").take(), arena)
     fs.remove_path(log) catch {}
-    if r.code == 0
+    if r.exited_with(0)
         verdict.check(name, false,
             ksplc_harness.arena().text()
-            .s("there is one information diagnostic yet the lint gate ended with 0\n\{r.out\}")
-            .take())
+            .s("\{probe_name\} is not clean yet the lint gate ended with 0\n\{r.out\}").take())
         return
     verdict.check(name, r.out.find_str("LINT FAILED").is_some(),
         arena.text().s("it did fail but LINT FAILED did not come out\n\{r.out\}").take())
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
-    check_lint_gate(arena)
+    dir: = harness.sandbox("lint_gate")
+    check_lint_gate("the lint gate knocks an information diagnostic back", dir,
+        "information_probe.kspl", information_probe, arena)
+    check_lint_gate("the lint gate knocks ten errors back", dir, "ten_errors_probe.kspl",
+        ten_errors_probe, arena)
     return ksplc_harness.finish()

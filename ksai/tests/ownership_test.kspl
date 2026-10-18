@@ -1,5 +1,5 @@
 //< Arena lifetimes of tensors, file headers and borrowed weight views
-import "ksai/lora_set" { Qkv_lora, Mlp_lora }
+import "ksai/lora_set" { Lora_widths, Mlp_lora, Qkv_lora }
 import "ksai/safetensors" { Safetensors, Safetensors_writer }
 import "ksai/tensor" { Tensor }
 import "std/bytes" as _bytes
@@ -106,11 +106,12 @@ priv fn adapters(arena: Arena$@)
                 catch panic("the incomplete adapter has a valid file header")
 
             $refused: = false
+            fits: = Lora_widths::{ .in_dim = 1, .out_dim = 1 }
             if group.equals("attn")
-                Qkv_lora<|F32|>.load_set_from(file, 1, arena) catch
+                Qkv_lora<|F32|>.load_set_from(file, 1, fits, fits, arena) catch
                     refused = true
             else
-                Mlp_lora<|F32|>.load_set_from(file, 1, arena) catch
+                Mlp_lora<|F32|>.load_set_from(file, 1, fits, fits, arena) catch
                     refused = true
             assert(refused, "missing B, an empty scale and a missing second adapter are refused")
 

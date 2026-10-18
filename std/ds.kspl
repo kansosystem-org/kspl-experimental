@@ -6,9 +6,6 @@
 import "std/chars" as _chars // reaches the single-character tests and slicing
 import "std/mem" + { Arena, dealloc }
 
-pub enum Ds_error //< why a container lookup failed
-    key_not_found //< there is no entry for that key
-
 priv fn grow_cap(cap: Sz, initial: Sz): Sz //<
     //< The next capacity: initial for an empty container, otherwise twice cap
     //<
@@ -63,20 +60,20 @@ priv fn grow_slot(slot: Void$@$@, cap: Sz$@, len: Sz, initial: Sz, arena: Arena$
 
 pub trait Hashable<|Key|> //< what a type must provide to be a `Map`'s key
     //<
-    //< A key type declares `impl X: ds.Hashable<|X|>`; `Map`'s type argument carries the
-    //< constraint, so a type that does not meet it is diagnosed in the user's code, not inside std.
+    //< A key type declares `impl X: ds.Hashable<|X|>`. `Map`'s type argument carries the
+    //< constraint. So a type that does not meet it is diagnosed in the user's code, not inside std.
     //< `Self` cannot be written on a non-receiver parameter, so the other key arrives as `Key`.
     fn hash(r: Self): U32 //< a value spread over the buckets; equal keys must give equal values
     fn equals(r: Self, other: Key): Bool //< whether the two are the same key
 
 pub fn fmix32( //< MurmurHash3's finalizer, for a hash whose differences are in the high bits
     //<
-    //< `Map` takes the bucket from the low bits with `hash & (cap-1)`, so **a key whose differences
+    //< `Map` takes the bucket from the low bits with `hash & (cap-1)`. So **a key whose differences
     //< are in the high bits** (a string through FNV, a sequential I32) runs its hash through this
-    //< at the end of `hash()`.
-    //< Caution: **Do not add it everywhere.** It costs extra work per lookup, and in a `hash` that
-    //< runs in the innermost loop that cost outweighs the better spread (for a parser's memo key it
-    //< slows self-hosting's parse by 10-20%).
+    //< last in `hash()`.
+    //< Caution: **Do not add it everywhere.** It costs extra work per lookup. In a `hash` that
+    //< runs in the innermost loop, that cost outweighs the better spread. For a parser's memo key,
+    //< it slows self-hosting's parse by 10-20%.
     h: U32, //< the value to spread
 ): U32 //< the mixed value; two different inputs never give the same one
     $v: = h
@@ -107,7 +104,7 @@ impl Sz: Hashable<|Sz|> //< so an `Sz` can be a `Map`'s key
     //<
     //< `Sz` is here because keying on a pointer's address is common.
     //< Caution: **Do not put an impl that makes a built-in type a key of std's containers in the
-    //< compiler**, which would invert the layers; it goes here, next to the trait that requires it.
+    //< compiler.** That would invert the layers. It goes here, next to the trait that requires it.
     pub fn hash(r: Self@): U32 //< the value spread over the buckets
         return spread_u64(U64::r$)
     pub fn equals(r: Self@, other: Sz): Bool //< whether the two are the same number
@@ -147,8 +144,8 @@ impl<|T|> List<|T|>
 
     priv fn ensure_cap(r: Self$@)
         if r.len >= r.cap
-            // An initial capacity of 2: most lists hold zero to two items (an AST node's children),
-            // and a large list doubles, so the small start costs little.
+            // An initial capacity of 2: most lists hold zero to two items (an AST node's children).
+            // A large list doubles, so the small start costs little.
             grow_slot(Void$@$@::r.ptr@, r.cap@, r.len, 2, r.arena, sizeof(T))
 
     #inline
@@ -235,7 +232,7 @@ impl<|T|> List<|T|>
 impl<|T|> List<|T|>: Index<|Sz, T|> //< so `xs[i]` reads an element
     //<
     //< An index out of range panics: the caller can check it against len, so a failure is a bug.
-    //< Map.get/remove are recoverable (V!Ds_error/Bool), since a key's presence is run-time data.
+    //< Map.get answers none for an absent key (V?), since a key's presence is run-time data.
     #inline
     pub fn get(r: Self@, index: Sz): T //< a copy of the element; out of range stops the program
         if index < 0 || index >= r.len
@@ -281,8 +278,18 @@ pub struct Map_entry<|K, V|> //< one slot of a `Map`, live, empty or a tombstone
     pub is_active: Bool //< whether this slot holds a live pair
     pub is_tombstone: Bool //< whether a removal left a mark here, which a lookup skips.
         //<
-        //< An insertion reuses it. **Without it, a removal hides the keys after it**: a colliding
+        //< An insertion reuses it. **Without it, a removal hides the keys after it.** A colliding
         //< key sits one slot further on, and a plain empty slot before it ends the lookup.
+
+impl<|K, V|> Map_entry<|K, V|>
+    fn drop_pair(r: Self$@) //< gives up the key's and the value's ARC counts, leaving both empty
+        //<
+        //< Caution: **Empty the key too.** A key holding an `Rc` is counted as a value is, and
+        //< `mem.zero` or a freed slot runs no release.
+        $no_key: K[1] = ::{}
+        $no_value: V[1] = ::{}
+        r.key = no_key[0]
+        r.value = no_value[0]
 
 pub struct Map<|K: Hashable<|K|>, V|> //< keys to values, held in an open-addressed table
     pub entries: Map_entry<|K, V|>$@ //< the slots, `cap` of them
@@ -345,9 +352,9 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         key: K, //< the key to look for
     ): Bool
         if entry: = r.find_entry(key)
-            // Caution: Release the ownership of the element being removed (as List.free does).
-            $empty: V[1] = ::{}
-            entry.value = empty[0]
+            // Caution: Release the ownership of the pair being removed, its key too (as List.free
+            // does).
+            entry.drop_pair()
             entry.is_active = false
             entry.is_tombstone = true
             r.len -= 1
@@ -359,7 +366,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         //<
         //< **Where at most a quarter of the slots hold live pairs, the capacity stays.** Doubling
         //< there would grow a map that holds a few pairs at a time without end, as different keys
-        //< are set and removed. The rehash leaves the table at most a quarter full, so a quarter
+        //< are set and removed. The rehash leaves the table at most a quarter full. So a quarter
         //< of its slots go before the next one, and each insertion pays O(1) for it.
         if r.cap > 0 && r.len * 4 <= r.cap
             r.drop_tombstones()
@@ -373,14 +380,13 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         r$ = ::{ .entries = new_entries, .cap = new_cap, .len = 0, .used = 0, .arena = r.arena }
 
         // Caution: Release the ownership of the old slots once moved. set_with_hash copies
-        // (retains) the value, so freeing the old array as it is leaks on every growth with ARC
-        // content.
-        $empty: V[1] = ::{}
+        // (retains) the key and the value, so freeing the old array as it is leaks on every growth
+        // with ARC content.
         for j in Range.asc(old_cap)
             old_e: = old_entries + j
             if old_e.is_active
                 r.set_with_hash(old_e.key, old_e.value, old_e.hash)
-                old_e.value = empty[0]
+                old_e.drop_pair()
 
         if old_cap > 0 && r.arena == null
             dealloc(Void$@::old_entries)
@@ -390,7 +396,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         //<
         //< The walk starts after a slot that was empty, so no pair's probe crosses where it starts.
         //< Each live pair moves to the first free slot from its bucket, which is never past where
-        //< it stands: a pair already placed stays reachable while later ones move.
+        //< it stands. A pair already placed stays reachable while later ones move.
         mask: = r.cap - 1
         $start: Sz = 0
         for
@@ -401,7 +407,6 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         for j in Range.asc(r.cap)
             (r.entries + j).is_tombstone = false
         // Caution: Release the ownership of the slot moved from, as resize does.
-        $empty: V[1] = ::{}
         for k in Range.asc(r.cap)
             at: = (start + 1 + k) & mask
             e: = r.entries + at
@@ -416,7 +421,7 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
                 dest.value = e.value
                 dest.hash = e.hash
                 dest.is_active = true
-                e.value = empty[0]
+                e.drop_pair()
                 e.is_active = false
         r.used = r.len
 
@@ -458,11 +463,10 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
     pub fn free(r: Self$@) //< frees the pairs and the memory
         //<
         //< As in `List.free`, the live slots' ownership is released before the memory is freed.
-        $empty: V[1] = ::{}
         for i in Range.asc(r.cap)
             e: = r.entries + i
             if e.is_active
-                e.value = empty[0]
+                e.drop_pair()
         if r.cap > 0 && r.arena == null
             dealloc(Void$@::r.entries)
         r.len = 0
@@ -472,8 +476,8 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         //< a chain over the live pairs (`for e in m.items()`)
         //<
         //< Caution: **Do not return a list.** It would instantiate **all of `List` for the nested
-        //< element type** for every `Map`, increasing translation time and peak memory ("A function
-        //< that returns every entry does not build a nested generic" in `std/docs/DESIGN-core.md`).
+        //< element type** for every `Map`. That increases translation time and peak memory
+        //< ("Returning every entry builds no nested generic" in `std/docs/DESIGN-core.md`).
         return Map_seq<|K, V|>::{ .m = r, .i = 0 }
 
 pub struct Map_seq<|K: Hashable<|K|>, V|> //< walks a `Map` one live pair at a time
@@ -500,10 +504,10 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index_mut<|K, V|> //< so `m[k] = v` wri
     pub fn set(r: Self$@, key: K, value: V) //< stores a pair, replacing any old value for the key
         r.set_with_hash(key, value, key.hash())
 
-impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V!Ds_error|> //< so `m[k]` reads a pair
-    pub fn get(r: Self$@, key: K): V!Ds_error //< the value for the key, or an error if absent
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?|> //< so `m[k]` reads a pair
+    pub fn get(r: Self$@, key: K): V? //< the value for the key, or none if it is absent
         if entry: = r.find_entry(key)
-            return entry.value
-        throw .key_not_found
+            return .some(entry.value)
+        return .none
 impl<|T|> List<|T|>: Owned {} //< it owns its resources and releases them with `free()`.
 impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Owned {} //< it owns its memory, released with `free()`

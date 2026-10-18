@@ -1,10 +1,8 @@
 # The local server's protocol
 
-**This document sets the protocol a page in a browser uses to ask a small program on the same machine, the *local server*, to read and write files for it, and what that program must refuse.** By design, a browser lets a page open a file only through a window a person chooses, and a page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule (a browser lets a page freely call only the server the page came from) does not block them. **It starts no program**: a server that starts programs on a page's request is one whose every guard must hold, for what a page can ask for there is running code.
+**This document sets the protocol for a page in a browser and a small program on the same machine, the *local server*.** The page asks the program to read and write files for it. The document also sets what that program must refuse. By design, a browser lets a page open a file only through a window a person chooses. A page cannot walk folders or reach a file by its path. So one local program answers these requests. The same program serves the page, so the same-origin rule does not block them. (That rule lets a page freely call only the server the page came from.) **It starts no program.** Take a server that starts programs on a page's request. Every guard of it must hold, for what a page can ask for there is running code.
 
 **It describes no single implementation**: the server is meant to be replaceable, so only the rules live here. Why the protocol has its own document, and why each rule was chosen, is "A page asks the local machine through one protocol" in [`DESIGN-repository.md`](DESIGN-repository.md).
-
-**Both ends are built**: `kssrv --local` answers everything below, and the page asks from `kspage/port/web/local.js`.
 
 ## Who asks whom
 
@@ -21,7 +19,7 @@ flowchart LR
 
 **Only the page asks.** The server never touches the page's contents unasked. It does not know the document either: it delivers only text and byte sequences, and the page decides where in the document they go.
 
-**Nothing flows the other way.** Whether a file changed is asked for ("Watching" below), so no connection carries news from the server, and no WebSocket (a connection the server can push messages down) is used.
+**Nothing flows the other way.** Whether a file changed is asked for ("Watching" below). So no connection carries news from the server. No WebSocket (a connection the server can push messages down) is used.
 
 ## Where it listens
 
@@ -33,7 +31,7 @@ Words used here: the *loopback* is the address `127.0.0.1`, which only this mach
 | :-- | :-- |
 | **It listens on `127.0.0.1` only** | It is out of reach of other machines. Serving them is a separate matter, which this protocol refuses |
 | **It answers only a request whose `Host` names the loopback** (`127.0.0.1` or `localhost`, any port), and refuses any other with 403, the page included | A web page whose name is re-pointed at `127.0.0.1` (DNS rebinding) reaches the port as its own origin and sends its own name. Without this rule it would read whatever the page can |
-| **No file under the root is handed out without the token, the page alone excepted**, static serving included | A file served freely would come from the origin that keeps the token. So an HTML file in the root opened in the page's tab could read the token, and any program on this machine could read the root |
+| **No file under the root is handed out without the token, the page alone excepted**, static serving included | A file served freely would come from the origin that keeps the token. Say an HTML file in the root is opened in the page's tab. It could read the token, and any program on this machine could read the root |
 | **The server prints a token (`token`) once, at start-up, and knowing the address alone is not enough to ask.** A request without the token is refused with 401 | Only `GET /`, the page, needs none: the page is where the token is handed over |
 
 DNS rebinding works like this: a site you visit changes what its own name points at to `127.0.0.1`. The browser then treats your local server as part of that site. The `Host` header (which names the server a request is meant for) still carries the site's name, so the server can tell.
@@ -49,11 +47,14 @@ The page reads what it shows through `GET /api/file`, a picture beside the docum
 
 Caution: **Do not inspect only the last level**: a link on a folder would pass unseen.
 
-**A race remains**: the server inspects the path first and opens it afterwards, and the folders can change in between. Say a request asks for `notes/a.txt`. The server finds that `notes` is a real folder, not a link. Before it opens the file, another program replaces `notes` with a link to the user's home folder, and the open follows that link out of the root. So the two refusals stop a client that can only send a path, such as a web page in the browser, which cannot make a link inside the root. They do not stop a program on the same machine that can write into the root. Closing the race needs two things together: an open that the kernel itself keeps inside the root's folder (on Linux, `openat2` with `RESOLVE_BENEATH`), and file functions that pass on the file already opened rather than the path's text, so that nothing looks the path up a second time.
+**A race remains**: the server inspects the path first and opens it afterwards, and the folders can change in between. Say a request asks for `notes/a.txt`. The server finds that `notes` is a real folder, not a link. Before it opens the file, another program replaces `notes` with a link to the user's home folder. The open follows that link out of the root. So the two refusals stop a client that can only send a path. A web page in the browser is such a client: it cannot make a link inside the root. They do not stop a program on the same machine that can write into the root. Closing the race needs two things together:
 
-**There is exactly one exception: the page named by the person who launches the server.** That person may name, at launch, the one file returned for `/` and `/index.html` (`kssrv --page=<file>`). The page still cannot point outside the root: it cannot choose that file with a string it wrote. Only one regular file can be named, never a folder, because a folder would be a second root that the two refusals above do not cover, and never a FIFO or a device, whose read may never end.
+* an open that the kernel itself keeps inside the root's folder (on Linux, `openat2` with `RESOLVE_BENEATH`);
+* file functions that pass on the file already opened rather than the path's text, so that nothing looks the path up a second time.
 
-* **Naming it is the launching person's judgment.** Named while the server faces outward (without `--local`), that file is served to other machines, so treat it as a choice as weighty as choosing the root.
+**There is exactly one exception: the page named by the person who launches the server.** That person can name, at launch, the one file returned for `/` and `/index.html` (`kssrv --page=<file>`). The page still cannot point outside the root: it cannot choose that file with a string it wrote. Only one regular file can be named. It is never a folder, because a folder would be a second root that the two refusals above do not cover. It is never a FIFO or a device, whose read can never end.
+
+* **Naming it is the launching person's judgment.** Named while the server faces outward (without `--local`), that file is served to other machines. So treat it as a choice as weighty as choosing the root.
 * **Do not start up when the named file does not exist**: a later 404 leaves nobody able to tell why the page is blank.
 
 ### How the token gets across
@@ -73,7 +74,7 @@ The token goes nowhere else either:
 | The rule | What is done instead |
 | :-- | :-- |
 | **It is a fragment (`#`), not a query (`?`).** | The fragment, which a browser never sends to the server |
-| **Do not make an endpoint that returns it on request**, and do not put it in a response's header: both are the same hole as the response above | Printed once, on the console |
+| **Do not make an endpoint that returns it on request.** Do not put it in a response's header. Both are the same hole as the response above | Printed once, on the console |
 | **Do not hand it over in a cookie.** | A header, `Authorization: Bearer` |
 | **Do not take the token from the command line** | The server makes it from the OS's random source |
 | **Do not stop the comparison at the first differing byte**: the response time would then reveal the token one byte at a time | Every byte is compared |
@@ -82,7 +83,7 @@ The token goes nowhere else either:
 
 A page can read and write files, watch whether a file changed, and keep the server running or stop it. Nothing else is offered.
 
-**Do not add an endpoint that starts a program**, for building, debugging, completion or a plugin. Every one turns a request a page can make into running code. **Nor one that lists a folder**: the page asks for each file by its name, and a listing would hand the names under the root to whoever holds the token.
+**Do not add an endpoint that starts a program**, for building, debugging, completion or a plugin. Every one turns a request a page can make into running code. **Nor one that lists a folder.** The page asks for each file by its name. A listing would hand the names under the root to whoever holds the token.
 
 ### Files
 
@@ -101,13 +102,13 @@ Caution: **Do not let a write that dies halfway corrupt the original.** Write to
 
 ### Watching
 
-The page asks, from time to time, whether a file changed. The server answers with the file's size and the time it last changed.
+The page asks whether a file is there, and when it last changed. The server answers with the file's size and the time it last changed.
 
 | Request | Response |
 | :-- | :-- |
 | `GET /api/stat?path=<p>` | `{"size":…,"changed_at":…}`. 404 if absent |
 
-**The OS's file watching (inotify / ReadDirectoryChangesW) is not offered.** The page polls instead (asks again at intervals) and re-reads what changed. However often a file changed in between, the page catches up with its final state.
+**When to ask is the page's choice.** The page can ask before writing over a file, to see whether something else made or changed it. It can ask before opening one again, or at intervals to follow it. **The OS's file watching (inotify / ReadDirectoryChangesW) is not offered**, so a page that follows a file asks again. However often the file changed in between, the next answer gives its final state.
 
 Caution: **Do not return the contents**, only whether the file changed. Where the page needs the contents, it re-reads them through the file endpoint, so the same text never arrives by two paths.
 
@@ -135,7 +136,7 @@ A page, or any program holding the token, can stop the server at once.
 | :-- | :-- |
 | `POST /api/stop` | `{}`, and then the server stops |
 
-**Whoever holds the token may stop the server**, as they may ask for anything else; without it the answer is 401 and the server keeps running. Facing outward there is no token to ask with, so there is no stop either (404).
+**Whoever holds the token can stop the server**, as they can ask for anything else; without it the answer is 401 and the server keeps running. Facing outward there is no token to ask with, so there is no stop either (404).
 
 **The answer goes out before the server stops**, so the asker tells "it stopped" from "the connection broke". It stops once that answer has been sent, whatever pages hold it.
 
@@ -148,7 +149,7 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 | Status | When it is returned |
 | :-- | :-- |
 | 400 | A malformed request (a `Host` given twice included), or a malformed `%XX` |
-| 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike), so a request without the token learns nothing of the names under the root |
+| 401 | No token, or it does not match. **It comes before every answer about a path other than the page's** (403 and 404 alike). So a request without the token learns nothing of the names under the root |
 | 403 | It pointed outside the root, or named a `Host` other than the loopback |
 | 404 | A name that does not exist, or an unknown endpoint |
 | 405 | A `HEAD`, `DELETE`, and so on to the file endpoint |
@@ -159,11 +160,12 @@ Each refusal comes back as one of the HTTP status codes below. **A refusal must 
 
 A client checks `/api/status` once at startup. The response must declare `local: true`; an ordinary outward-facing server is not a local file service. A 401 means the server is present but the token is missing or refused.
 
-A client that requires file access stops startup and tells the user to open the URL printed by `kssrv --local`. It does not substitute a browser file handle or a plain file fetch. The same page is shipped for every supported browser.
+A client that requires file access stops startup and tells the user to open the URL the local server printed ("How the token gets across"). It does not substitute a browser file handle or a plain file fetch. The same page is shipped for every supported browser.
 
 ## Further reading
 
 * [`README.md`](README.md) — which reader each document here is for.
-* [`DESIGN-principles.md`](DESIGN-principles.md) — the Development Principles, which many rules here follow from, and the grounds for this protocol.
+* [`DESIGN-principles.md`](DESIGN-principles.md) — the Development Principles, which many rules here follow from.
+* [`DESIGN-repository.md`](DESIGN-repository.md) — the grounds for this protocol.
 * [kssrv](../kssrv/README.md) — the server that answers.
 * [kspage](../kspage/README.md) — the editing system that is the client.

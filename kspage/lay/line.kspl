@@ -93,8 +93,8 @@ priv fn midpoint(text: U8[], lo: Sz, hi: Sz): Sz //<
     //<
     //< Where the result is lo or less, or hi or more, "there is no boundary between them".
     //< Caution: **Do not split at the exact middle** (it can land mid-character). **Neither going
-    //< back alone nor going forward alone is enough**: back alone can drop to lo and miss a
-    //< boundary between; forward alone skips one just before the middle.
+    //< back alone nor going forward alone is enough.** Back alone can drop to lo and miss a
+    //< boundary between. Forward alone skips one just before the middle.
     $back: Sz = lo + (hi - lo) / 2
     for back > lo && (text[back] & 0xc0U8) == 0x80U8
         back -= 1
@@ -107,7 +107,7 @@ priv fn midpoint(text: U8[], lo: Sz, hi: Sz): Sz //<
 // The last break from start that fits in avail, and the width up to it.
 // **Do not measure character by character.** It first checks whether all that is left fits, and
 // bisects only where it does not (the grounds are "How text flows" in
-// [`../docs/DESIGN-document.md`](../docs/DESIGN-architecture.md)). **Return both the break and
+// [`../docs/DESIGN-document.md`](../docs/DESIGN-document.md)). **Return both the break and
 // the width to lay out.**
 priv fn measure_fit(src: Font_source, font: Font, text: U8[], start: Sz, avail: F32, told: F32?):
     Fit_at
@@ -122,8 +122,8 @@ priv fn measure_fit(src: Font_source, font: Font, text: U8[], start: Sz, avail: 
         whole = src.measure_width(font, text.sub(start, text.len - start))
     if whole <= avail
         return Fit_at::{ .start = start, .end = text.len, .wide = whole, .whole = whole }
-    // It bisects. **lo means "fits up to here"**, with start counted as fitting without measuring
-    // (even where not one character fits, a value that advances must be returned).
+    // It bisects. **lo means "fits up to here"**, with start counted as fitting without measuring.
+    // Even where not one character fits, the function must return a value that advances.
     $lo: Sz = start
     $hi: Sz = text.len
     for
@@ -250,9 +250,9 @@ priv fn whole_width(p: Pen$@, text: U8[], look: Look, from: Inline$@): F32 //<
     //<
     //< **Only this one goes through the cache** (with two readers, one forgets to refresh). The run
     //< holds it (`wide` in `../model/run.kspl`).
-    // **Some lines hold no run**: a line built at layout time (a table of contents, a list of
-    // notes) points at no text of the document (`gather.kspl` passes `null`), so there is nowhere
-    // to cache it; dereferencing it crashes.
+    // **Some lines hold no run.** A line built at layout time (a table of contents, a list of
+    // notes) points at no text of the document (`gather.kspl` passes `null`). So there is nowhere
+    // to cache it, and dereferencing it crashes.
     if from != null
         if w: = from.known_whole(look.font, 0)
             return w

@@ -24,7 +24,7 @@ priv fn rule_group_label(name: U8[], all_names: List<|U8[]|>@): U8[] //<
     //< A rule name's prefix before its first "_" ("stmt_return" -> "stmt") as a rough label
     //<
     //< Where no other rule shares the prefix ("Primitive" against "Primitive_type"), the whole
-    //< name. all_names is only read, so it is `@`: `$@` would force a `$` onto the caller's binding
+    //< name. all_names is only read, so it is `@`. `$@` would force a `$` onto the caller's binding
     //< ("The receiver of a read-only method is `Self@`" in docs/DESIGN-language.md).
     prefix_len: = first_underscore_len(name)
     if prefix_len == name.len
@@ -61,15 +61,15 @@ fn run_keyword_dump(parser: kspeg.Target$@) //<
     for entry in by_rule
         for kw in entry.keywords
             every_name.push(kw)
-    total_names: = every_name.distinct(fn(a: U8[], b: U8[]; ): Bool {
-        return a.equals(b);
+    total_names: = every_name.distinct(fn(a: U8[]@, b: U8[]@; ): Bool {
+        return a.equals(b$);
     }, base_core.arena)
 
     // A leading "_" marks a meta or transparent rule (_Space / _Boundary) by ksplc/kspl.kspeg's own
-    // convention, which the general engine kspeg/ does not know, so the check is made here.
+    // convention. The general engine kspeg/ does not know it, so the check is made here.
     // Caution: **Collect it with `to_list` here.** Used twice, the chain would rerun the predicate
     // per element in the `for` below.
-    content_rules: = by_rule.where(fn(e: kspeg.Rule_keywords$@; ): Bool {
+    content_rules: = by_rule.where(fn(e: kspeg.Rule_keywords$@@; ): Bool {
         return !e.rule_name.starts_with("_");
     }).to_list(base_core.arena)
     all_names: = content_rules.select(fn(e: kspeg.Rule_keywords$@; ): U8[] {
@@ -88,11 +88,11 @@ fn run_keyword_dump(parser: kspeg.Target$@) //<
     for g in groups
         // deduplicated, since several rules in a group share a keyword
         uniq: = g.keywords
-            .distinct(fn(a: U8[], b: U8[]; ): Bool {
-            return a.equals(b);
+            .distinct(fn(a: U8[]@, b: U8[]@; ): Bool {
+            return a.equals(b$);
         }, base_core.arena)
-        sorted: = uniq.order_by(fn(a: U8[], b: U8[]; ): I32 {
-            return a.compare(b);
+        sorted: = uniq.order_by(fn(a: U8[]@, b: U8[]@; ): I32 {
+            return a.compare(b$);
         }, base_core.arena)
         io.out().s(g.label).s(" (\{sorted.len\}):\n")
         for kw in sorted

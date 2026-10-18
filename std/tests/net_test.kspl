@@ -130,14 +130,14 @@ fn test_net_names() //<
 
 // ==========================================
 // The IPv6 loopback. **It is skipped where `::1` cannot be bound**, for one of two reasons that
-// `no_ipv6_loopback` tells apart: only one of them is a setting the machine's start can change.
+// `no_ipv6_loopback` tells apart. Only one of them is a setting the machine's start can change.
 // ==========================================
 priv fn no_ipv6_loopback(): U8[] //< why `::1` cannot be bound here, as a SKIP line's reason
     //<
-    //< **IPv6's every address still binds where only the loopback lacks `::1`**: a socket of the
+    //< **IPv6's every address still binds where only the loopback lacks `::1`.** A socket of the
     //< family opens, and nothing checks an address the interfaces hold. So a failing `"::"` means
-    //< the OS has no IPv6 at all (a Linux kernel started with `ipv6.disable=1`), which neither an
-    //< image nor a container's option can give; a passing one means the loopback's IPv6 is turned
+    //< the OS has no IPv6 at all (a Linux kernel started with `ipv6.disable=1`). Neither an image
+    //< nor a container's option can give that. A passing one means the loopback's IPv6 is turned
     //< off (`disable_ipv6` on a container's `lo`), which a container's start decides.
     any: = net.Tcp_listener.bind("::", 0) catch
         return "this machine has no IPv6 at all"
@@ -225,8 +225,8 @@ fn test_tcp_overlapped()
 
 fn test_tcp_connect_wait() //< a candidate that never answers ends the connect at its wait
     //<
-    //< **A full backlog makes the silence**: past its accept queue, Linux and BSD drop a SYN
-    //< without a word, so the next connect hears nothing, as from an address whose packets are
+    //< **A full backlog makes the silence.** Past its accept queue, Linux and BSD drop a SYN
+    //< without a word. So the next connect hears nothing, as from an address whose packets are
     //< dropped. Without the wait it would hang for the OS's minutes.
     verdict.start("[Net] connect gives up at its wait on a candidate that never answers...")
     if sys.is_windows()
@@ -438,9 +438,9 @@ priv const four_gib: I64 = 1I64 << 32 //< a length whose low 32 bits are all 0
 fn test_tcp_past_int() //<
     //< A read and a write handed more than an `int` holds each move a piece and say how much
     //<
-    //< Windows takes the length as an `int`: cut to one, 4 GiB asks for nothing, so the read ends
-    //< as if the peer had closed and `write_all` fails as `io_failed`. **The memory is never
-    //< touched here**: the read fills five bytes of it, and the write runs non-blocking, so it
+    //< Windows takes the length as an `int`. Cut to one, 4 GiB asks for nothing. So the read ends
+    //< as if the peer had closed, and `write_all` fails as `io_failed`. **The memory is never
+    //< touched here.** The read fills five bytes of it. The write runs non-blocking, so it
     //< moves only what the socket takes at once. Only a 64-bit `Sz` holds a length past an `int`.
     verdict.start("[Net] a read and a write handed more than an int holds move a piece test...")
     len: = Sz::four_gib
@@ -530,7 +530,7 @@ fn test_reactor_multi_connection()
     c2.write("third!") catch panic("client write should succeed")
     c0.write("first") catch panic("client write should succeed")
 
-    // **The set is rebuilt before each wait**, as a server does: a handled connection is left out,
+    // **The set is rebuilt before each wait**, as a server does. A handled connection is left out,
     // since the echo server closes it and its end would read as ready again.
     $handled: U8[3] = ::{[0] = 0, [1] = 0, [2] = 0 }
     $handled_count: Sz = 0

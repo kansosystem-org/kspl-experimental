@@ -151,9 +151,9 @@ priv fn encode_corpus(corpus: U8[], at: Paths, ids: Fim_ids, keep: Arena$@): Enc
     recs: = read_jsonl(corpus, scratch)
     $out: = Encoded::{ .tokens = List<|I32|>.new(keep), .starts = List<|Sz|>.new(keep) }
     for rec in recs
-        pre: = tok.encode(tail(rec.get("prefix").as_str()), scratch)
-        mid: = tok.encode(rec.get("middle").as_str(), scratch)
-        suf: = tok.encode(head(rec.get("suffix").as_str()), scratch)
+        pre: = tok.encode(tail(rec.get("prefix").as_str().unwrap_or("")), scratch)
+        mid: = tok.encode(rec.get("middle").as_str().unwrap_or(""), scratch)
+        suf: = tok.encode(head(rec.get("suffix").as_str().unwrap_or("")), scratch)
         seq: = fim_sequence(pre, mid, suf, ids, scratch)
         out.starts.push(out.tokens.len)
         for t in seq
@@ -188,8 +188,8 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
     out_path: U8[]) //<
         //< Fits a fresh model to the corpus, a batch of sequences per step, and writes its weights
         //<
-        //< **The thread count changes only the time**: the sequences are drawn on this thread, and
-        //< their gradients summed in the order drawn, whichever thread computed each.
+        //< **The thread count changes only the time.** The sequences are drawn on this thread.
+        //< Their gradients are summed in the order drawn, whichever thread computed each.
     began: = sys.mono_us()
     model_arena: = Arena.new(64 * 1024 * 1024)
     defer model_arena.free()
@@ -272,8 +272,8 @@ priv fn train(corpus: U8[], at: Paths, plan: Schedule, u: ai_optim.Updater<|F32|
 priv fn held_out_loss(corpus: U8[], at: Paths, weights: U8[], most: Sz) //<
     //< The mean loss over the first `most` examples of `corpus`; the weights are only read
     //<
-    //< **The loss `train` prints is on its own training data**; this one shows whether it learned
-    //< the language or just the examples. **Only the middle's loss measures the task**: the whole
+    //< **The loss `train` prints is on its own training data.** This one shows whether it learned
+    //< the language or just the examples. **Only the middle's loss measures the task.** The whole
     //< is mostly the prefix and the suffix, which a hole filler is given, not asked to write.
     model_arena: = Arena.new(64 * 1024 * 1024)
     defer model_arena.free()
@@ -323,8 +323,8 @@ priv fn candidates(model: ai_model.Mini_llama<|F32|>$@, tok: ai_tokenizer.Tokeni
     List<|U8[]|> //<
         //< `samples` completions of one hole, each one line: the first greedy, the rest drawn
         //<
-        //< The prompt is read once. **Each draw restarts at the prompt's end**: attention at a
-        //< position reads the cache only up to it, so what a draw left past the prompt is written
+        //< The prompt is read once. **Each draw restarts at the prompt's end.** Attention at a
+        //< position reads the cache only up to it. So what a draw left past the prompt is written
         //< over first.
     $out: = List<|U8[]|>.new(work)
     $last: Tensor<|F32|> = model.forward(prompt[0], 0, work)
@@ -370,8 +370,8 @@ priv fn complete(at: Paths, weights: U8[], in_path: U8[], out_path: U8[], sample
     $text: = Str_builder.new()
     defer text.free()
     for hole in holes
-        pre: = tok.encode(tail(hole.get("prefix").as_str()), work)
-        suf: = tok.encode(head(hole.get("suffix").as_str()), work)
+        pre: = tok.encode(tail(hole.get("prefix").as_str().unwrap_or("")), work)
+        suf: = tok.encode(head(hole.get("suffix").as_str().unwrap_or("")), work)
         $prompt: = fim_prompt(pre, suf, ids, work)
         got: = candidates(model@, tok@, prompt@, ids, samples, rng@, work)
         $b: = Json_builder.new(work)
@@ -429,7 +429,7 @@ fn main()
                 .s("negative number\n")
             sys.exit(2)
     // **Every path is explicit, none assumed**: a default would tie this program to one repository.
-    if p.command.equals("loss")
+    if p.command.unwrap_or("").equals("loss")
         if vocab.len == 0 || merges.len == 0 || corpus.len == 0 || weights.len == 0
             io.err().s("loss needs --corpus=<fim.jsonl> --vocab=<v> --merges=<m> --weights=<w>\n")
             sys.exit(2)
@@ -440,11 +440,11 @@ fn main()
         sys.exit(2)
     at: = Paths::{ .vocab = vocab, .merges = merges }
     seed_n: = U64::seed
-    if p.command.equals("train")
+    if p.command.unwrap_or("").equals("train")
         if corpus.len == 0
             io.err().s("train needs --corpus=<fim.jsonl>\n")
             sys.exit(2)
-        // **Each optimizer uses its own default step size** unless one is given: Adam's steps are
+        // **Each optimizer uses its own default step size** unless one is given. Adam's steps are
         // already scaled by its memory, so SGD's step size would make its weights jump around.
         is_adam: = optimizer.equals("adam")
         if !is_adam && !optimizer.equals("sgd")
@@ -464,7 +464,7 @@ fn main()
             io.err().s("--batch: expected at least 1\n")
             sys.exit(2)
         train(corpus, at, plan, u@, seed_n, out_path)
-    else if p.command.equals("complete")
+    else if p.command.unwrap_or("").equals("complete")
         if weights.len == 0 || in_path.len == 0
             io.err().s("complete needs --weights=<file> and --in=<holes.jsonl>\n")
             sys.exit(2)

@@ -44,16 +44,16 @@ priv fn check_or_binding(c: Sema_ctx$@, mctx: Switch_ctx$@, bind_var: Ast_node$@
         //< holds something else depending on which arm matched.
     if !bind_var.text.equals(expected_sym.name)
         c.clear_scratch()
-            .s("OR pattern variable name mismatch. Expected '\{expected_sym.name\}', but got \
-                '\{bind_var.text\}'")
+            .s("OR patterns bind different variable names. Expected '\{expected_sym.name\}', but \
+                got '\{bind_var.text\}'")
         c.err(bind_var, c.scratch.slice())
         mctx.success = false
     if actual_type_id != expected_sym.type_id
         exp: = c.env.display(expected_sym.type_id)
         act: = c.env.display(actual_type_id)
         c.clear_scratch()
-            .s("OR pattern variable '\{bind_var.text\}' type mismatch. Expected '\{exp\}', but got \
-                '\{act\}'")
+            .s("variable '\{bind_var.text\}' has incompatible types across OR patterns. Expected \
+                '\{exp\}', but got '\{act\}'")
         c.err(bind_var, c.scratch.slice())
         mctx.success = false
     bind_var.sym_ptr = Void$@::expected_sym
@@ -77,7 +77,7 @@ impl Ast_node
         sema_body_lint_stmt.lint_multiline_call_subject(ctx, cond_node, "switch")
 
         target_id: = cond_node.infer_expr(ctx, I32::sema_type_env.Builtin_type_id.unknown)!
-        // Caution: **Look the enum up with the immutability mark stripped**: `r$` of an `r: Self@`
+        // Caution: **Look the enum up with the immutability mark stripped.** `r$` of an `r: Self@`
         // and an immutable binding's copy carry it, and under it no enum is found.
         enum_name: = ctx.env.get_str(ctx.env.get_clean_real_type(target_id))
         enum_def: = ctx.env.get_enum_def(enum_name).unwrap_or(null)
@@ -96,23 +96,23 @@ impl Ast_node
         subject_base: = ctx.env.instance_base(ctx.env.get_clean_real_type(target_id))
         if spelling.len > 0 && !subject_base.equals(base_core.option_fqn)
             ctx.clear_scratch()
-                .s("'\{spelling\}' binds an 'Option'; '\{enum_name\}' is not one. Use 'switch' and \
-                    name every variant, so that adding one later makes this place fail instead of \
-                    passing silently")
+                .s("'\{spelling\}' binds an 'Option'. '\{ctx.env.display(target_id)\}' is not one. \
+                    Use 'switch' and name every variant. Adding a variant later then causes an \
+                    error here instead of passing silently")
             ctx.err(cond_node, ctx.scratch.slice())
             throw .analysis_failed
 
         // Scalars only ("Branching" in docs/SPEC-language.md). **If not rejected, the C compiler
-        // reports it**: a slice in C's `switch` is a **raw C error** ("Failing fast through an
-        // exception or an ICE" in ksplc/docs/DESIGN-compiler.md). The rule exists because comparing
-        // a `U8[]` is O(N), which `.equals()` and an `if` show rather than hide behind a branch.
+        // reports it**: a slice in C's `switch` is a **raw C error**. See "Failing fast through an
+        // exception or an ICE" in ksplc/docs/DESIGN-compiler.md. The rule exists because comparing
+        // a `U8[]` is O(N). `.equals()` and an `if` show that cost, where a branch would hide it.
         if enum_def == null && !ctx.env.is_integer(target_id) && !ctx.env.is_bool(target_id) &&
             !sema_type_env.is_unknown(target_id)
             // Show the type as written (`U8[]`), not its C spelling.
             shown: = ctx.env.display(target_id)
             ctx.clear_scratch().s("cannot 'switch' on '").s(shown)
-                .s("': only scalars (integers, 'Bool', enums) can be matched. Comparing anything \
-                    else hides an O(N) cost behind a branch; use 'if' with '.equals()' instead")
+                .s("'. Only scalars (integers, 'Bool', enums) can be matched. Comparing anything \
+                    else hides an O(N) cost behind a branch. Use 'if' with '.equals()' instead")
             ctx.err(cond_node, ctx.scratch.slice())
             throw .analysis_failed
 
@@ -134,7 +134,7 @@ impl Ast_node
                 has_default = true
                 r.infer_switch_default(ctx, mctx@, j + 1)
 
-        if !r.process_switch_exhaustiveness(ctx, enum_name, enum_def, mctx.covered_variants,
+        if !r.process_switch_exhaustiveness(ctx, target_id, enum_def, mctx.covered_variants,
             has_default)
             mctx.success = false
         else if base_core.config.run_lint_checks && has_default && enum_def != null
@@ -158,7 +158,7 @@ impl Ast_node
             for child in r.children
                 if child.is_keyword("default")
                     ctx.information(child,
-                        "[I0304] Redundant 'default' case: all variants of the enum are already \
+                        "[I0304] Redundant 'default' case. All variants of the enum are already \
                             covered.")
                     break
 
@@ -220,8 +220,8 @@ impl Ast_node
             else
                 if first_child.is_literal(".")
                     c.clear_scratch()
-                        .s("target condition '\{mctx.enum_name\}' is not an enum, variant pattern \
-                            cannot be used")
+                        .s("target condition '\{c.env.display(mctx.target_id)\}' is not an enum. A \
+                            variant pattern requires an enum")
                     c.err(first_child, c.scratch.slice())
                     mctx.success = false
                     processed_as_variant = true
@@ -259,7 +259,9 @@ impl Ast_node
             if v_name_node != null
                 record_covered_variant(c, mctx, variant_name, v_name_node)
         else if r.get_child(0).is_literal(".")
-            c.clear_scratch().s("enum '\{mctx.enum_name\}' has no variant named '\{variant_name\}'")
+            c.clear_scratch()
+                .s("enum '\{c.env.display(mctx.target_id)\}' has no variant named \
+                    '\{variant_name\}'")
             if v_name_node != null
                 c.err(v_name_node, c.scratch.slice())
             else
@@ -348,8 +350,8 @@ impl Ast_node
     priv fn record_case_value(r: Ast_node$@, c: Sema_ctx$@, mctx: Switch_ctx$@): Bool //<
         //< Whether a non-enum case value is a constant no earlier case names; it reports where not
         //<
-        //< Caution: **Compare the folded values, not the spellings**: `'a'` and `97` are one value,
-        //< and C refuses the pair ("duplicate case value") where LLVM silently takes the first.
+        //< Caution: **Compare the folded values, not the spellings.** `'a'` and `97` are one value.
+        //< C refuses the pair ("duplicate case value"), where LLVM silently takes the first.
         if mctx.is_enum
             return true
         $v: I64 = 0
@@ -357,9 +359,9 @@ impl Ast_node
         case .some(folded)
             v = folded
         case .none
-            c.err(r, "a 'case' value must be a compile-time constant; compare with 'if' instead")
+            c.err(r, "a 'case' value must be a compile-time constant. Compare with 'if' instead")
             return false
-        earlier: = mctx.seen_values.get(v) catch null
+        earlier: = mctx.seen_values.get(v).unwrap_or(null)
         if earlier != null
             c.clear_scratch().s("the case value \{v\} is already matched by an earlier case")
             c.err(r, c.scratch.slice())
@@ -394,7 +396,7 @@ impl Ast_node
                 seen_false = seen_false || pat.text.equals("false")
         return seen_true && seen_false
 
-    fn process_switch_exhaustiveness(r: Ast_node$@, c: Sema_ctx$@, enum_name: U8$[],
+    fn process_switch_exhaustiveness(r: Ast_node$@, c: Sema_ctx$@, target_id: I32,
         enum_def: sema_type_def.Enum_def$@, covered_variants: List<|Ast_node$@|>$@,
         has_default: Bool): Bool
         if has_default
@@ -405,7 +407,8 @@ impl Ast_node
             return true
         if enum_def == null
             c.err(r,
-                "switch on non-enum type requires a 'default' case: its values cannot all be listed")
+                "switch on a non-enum type requires a 'default' case. Its values cannot all be \
+                    listed")
             return false
 
         $unhandled: Sz = 0
@@ -423,8 +426,9 @@ impl Ast_node
                     first_unhandled = variant_def.name
 
         if unhandled > 0
+            shown: = c.env.display(target_id)
             c.clear_scratch()
-                .s("switch on enum '\{enum_name\}' does not cover all variants. Missing: \
+                .s("switch on enum '\{shown\}' does not cover all variants. Missing: \
                     '\{first_unhandled\}'")
             if unhandled > 1
                 c.scratch.s(" and others")

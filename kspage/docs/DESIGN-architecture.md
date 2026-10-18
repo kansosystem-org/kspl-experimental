@@ -1,12 +1,19 @@
 # The grounds of kspage's design
 
-This document says why kspage has the shape it has as a whole: each decision, its reasons, and what it gives up. The document itself (its model, layout, editing, tables, slides and pages) is in [`DESIGN-document.md`](DESIGN-document.md); what kspage does around it (saving and opening, windows, other formats, trust, and what the screen says) is in [`DESIGN-application.md`](DESIGN-application.md). What is there, and how to use it, is in [kspage](../README.md).
+This document says why kspage has the shape it has as a whole: each decision, its reasons, and what it gives up. The other design documents cover these parts:
+
+* the document itself (its model, layout and editing): [`DESIGN-document.md`](DESIGN-document.md);
+* its tables: [`DESIGN-tables.md`](DESIGN-tables.md);
+* its slides and pages: [`DESIGN-slides.md`](DESIGN-slides.md);
+* what kspage does around it (saving and opening, windows, other formats, trust, and what the screen says): [`DESIGN-application.md`](DESIGN-application.md).
+
+What is there, and how to use it, is in [kspage](../README.md).
 
 **How a section reads**: it opens with the decision in plain words. Then come the details, the reasons, and the traps. Terms used without stopping are in "Words used in this document" below.
 
 ## Words used in this document
 
-kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `Editor`) are introduced in [kspage's "The terms and the types behind them"](../README.md#the-terms-and-the-types-behind-them). The table below explains the other words of kspage this document uses without stopping. The words every package shares (arena, Principle N and the rest) are in "Words used throughout" in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout); *gate* and the other words with one fixed meaning in every document are in "Terms of art" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art).
+kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `Editor`) are introduced in [kspage's "The terms and the types behind them"](../README.md#the-terms-and-the-types-behind-them). The table below explains the other words of kspage this document uses without stopping. The words every package shares (arena, Principle N and the rest) are in "Words used throughout" in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md#words-used-throughout). Some words have one fixed meaning in every document, such as *gate*. They are in "Terms of art" in [`docs/SPEC-documents.md`](../../docs/SPEC-documents.md#terms-of-art).
 
 | Word | What it means here |
 | :-- | :-- |
@@ -19,7 +26,7 @@ kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `
 | **block** | A paragraph, a heading, a list item, a table, a row, a cell or a slide. All are one type (`Block`); only the style differs. This is kspage's own word, not the block of source text that "Terms of art" names |
 | **run** | A stretch of text inside a block with one style (`Inline`). Making one word of a paragraph bold splits its run into three |
 | **style** | A named set of looks (typeface, size, colour, spacing) and an arrangement. Blocks and runs point at a style by its name |
-| **arrangement** | How a block's children are placed: *flow* (prose that wraps into lines), a *grid* (a table's rows and columns) or *absolute coordinates* (a slide, where each child has its own x and y) |
+| **arrangement** | How a block's children are placed. It is *flow* (prose that wraps into lines) or a *grid* (a table's rows and columns). Or it is *absolute coordinates* (a slide, where each child has its own x and y) |
 | **frame** | A child placed on a slide at a position and size of its own |
 | **layout** | Turning the document into placed boxes: which text goes on which line, at what x and y. It runs again at every keystroke |
 | **box** | One piece of laid-out text, or a list marker, with its position and size. Drawing paints boxes |
@@ -34,7 +41,7 @@ kspage's own types (`Doc`, `Block`, `Inline`, `Style`, `Page`, `Box`, `Caret`, `
 
 **kspage is one editing system for documents, spreadsheets and presentations.** It serves all three uses in one document, with nothing to set up first.
 
-**Word, Excel and PowerPoint are where a feature starts, not a list to match.** A feature begins from how those three do it, since that is what people already know (the screen's words follow them too: "The wording on the screen" in [`DESIGN-application.md`](DESIGN-application.md)). Whether kspage has the feature at all is decided one feature at a time, on review: it is added where the three uses need it and dropped where its cost outweighs what it gives, so that the whole stays simple. Being a complete replacement for the three is not the aim.
+**Word, Excel and PowerPoint are where a feature starts, not a list to match.** A feature begins from how those three do it, since that is what people already know. The screen's words follow them too ("The wording on the screen" in [`DESIGN-application.md`](DESIGN-application.md)). Whether kspage has the feature at all is decided one feature at a time, on review. It is added where the three uses need it. It is dropped where its cost outweighs what it gives, so that the whole stays simple. Being a complete replacement for the three is not the aim.
 
 **So a feature the three have and kspage lacks is not by that alone a fault.** It is either a gap still to fill or a feature left out on purpose, and the two are kept apart. Two lists keep them in view:
 
@@ -57,11 +64,11 @@ In all three, the data is styled text inside boxes. Only the placing differs:
 | A spreadsheet | a grid: rows and columns |
 | A slide deck | absolute coordinates: each box at its own x and y on the slide |
 
-Built as three programs, everything but the placing would be written three times. **The most costly shared part is text layout and the IME**: line breaking, the selection, the cursor and showing the text being composed are needed in every view. Joining the three adds no work; it removes the tripling.
+Built as three programs, everything but the placing would be written three times. **The most costly shared part is text layout and the IME.** Every view needs line breaking, the selection, the cursor and the text being composed. Joining the three adds no work; it removes the tripling.
 
 ## Why the folders are split by 'what they know'
 
-Each folder holds one area of knowledge, and the folders stack in levels. A folder may use the levels below it, never one above.
+Each folder holds one area of knowledge, and the folders stack in levels. A folder can use the levels below it, never one above.
 
 A compiler can be cut by the order of processing: read, check, then generate. **kspage's folders are not split that way.** Layout, editing and export all call one another, so a cut by order would scatter one piece of logic across three places. What can be cut is what each part knows. The levels, from the bottom:
 
@@ -102,9 +109,9 @@ How kspage feels to use is based on the existing office suites, but they are not
 | **No key repeats the last command** | a command is run again from its own button, menu row or key | A repeat key keeps a second record of commands beside the undo record, for a press the command's own way already gives (Principle 6) |
 | **There is no time axis** | no slide transitions, no moving elements | Below |
 
-**Why there is no time axis.** A slide is a block that holds a place, not a separate type (["How a grid and absolute coordinates are laid out" in [`DESIGN-document.md`](DESIGN-document.md)](DESIGN-document.md#how-a-grid-and-absolute-coordinates-are-laid-out)). A time axis would put into the document what cannot be carried into the printed page, the exported Markdown or a diff: paper cannot say "this paragraph appears 0.4 seconds later". Nor can an effect live on the screen alone. An effect that cannot be written into the document is lost on saving, so what was written would silently disappear. kspage's worth is being writable as one document, not winning as a presentation program.
+**Why there is no time axis.** A slide is a block that holds a place, not a separate type (["How a grid and absolute coordinates are laid out" in [`DESIGN-document.md`](DESIGN-document.md)](DESIGN-document.md#how-a-grid-and-absolute-coordinates-are-laid-out)). A time axis would put into the document what cannot be carried into the printed page, the exported Markdown or a diff. Paper cannot say "this paragraph appears 0.4 seconds later". Nor can an effect live on the screen alone. An effect that cannot be written into the document is lost on saving, so what was written would silently disappear. kspage's worth is being writable as one document, not winning as a presentation program.
 
-Note: **An order can be held**, since on the page it flattens to everything shown (["Showing frames in turn is an order, not a timeline" in [`DESIGN-document.md`](DESIGN-document.md)](DESIGN-document.md#showing-frames-in-turn-is-an-order-not-a-timeline) below).
+Note: **An order can be held**, since on the page it flattens to everything shown. See ["Showing frames in turn is an order, not a timeline" in [`DESIGN-slides.md`](DESIGN-slides.md)](DESIGN-slides.md#showing-frames-in-turn-is-an-order-not-a-timeline).
 
 ## The body is not available to a screen reader
 
@@ -121,13 +128,13 @@ Caution: **The day that copy drifts, the screen reader does not go silent; it go
 | Where it is handed over | What happens without it |
 | :-- | :-- |
 | The page's declared language ([`port/web/page.html`](../port/web/page.html)'s `lang`) | Japanese and Chinese **write the same character in different shapes**, so some environments draw Japanese prose in a Chinese typeface. It is also how a screen reader picks a voice |
-| The tab title follows the document's name ([`port/web/side.js`](../port/web/side.js)'s `showPlace`) | Different documents can be open in different windows, yet **every tab shows the same name** (the tab title is the only handle for finding a window folded away) |
+| The tab title follows the document's name ([`port/web/side.js`](../port/web/side.js)'s `showPlace`) | Different documents can be open in different windows, yet **every tab shows the same name**. The tab title is the only handle for finding a window folded away |
 | The body's canvas says what it is and **that its content cannot be read** | An unnamed canvas is announced as "an empty picture", so **the reason it cannot be read appears nowhere** |
 | The tools (the ribbon, the menus, the panels, the status bar) | (They are DOM already, and carry their role and name) |
 
 So the manual's "what it cannot do" chapter states **that the body cannot be read and that this will not change** ([`content/manual.kspage`](../content/manual.kspage)).
 
-**There is no field for a picture's alternative text either** (the description a screen reader says in place of a picture): it would reach nobody, so it would be decoration only the writer sees (Principle 5).
+**There is no field for a picture's alternative text either** (the description a screen reader says in place of a picture). It would reach nobody, so it would be decoration only the writer sees (Principle 5).
 
 ## The core and the port
 
@@ -183,15 +190,15 @@ A *pure function* returns the same output for the same input and changes nothing
 | **It can be tested before a window exists.** | A table of fixed measurements ([`model/fixed_font.kspl`](../model/fixed_font.kspl)) can be plugged in, so no real font or OS is needed, and the answer is the same every time |
 | **Where it draws can be chosen later.** | A thin layer encloses the difference between a canvas and a native window |
 
-**Font measurement has two entry points: a line's width and its height** (`Font_source`'s `measure_width` and `vmetrics_of`, the vertical metrics). Pass them an already resolved `Font` (the final typeface, size and weight), so they depend on nothing of how a style holds things. Tied to the styles, they could not be defined until the document model was fixed, and without them layout could not be tested. Neither rasterizing (turning letters into pixels) nor shaping (choosing each letter's form and position) is held: the canvas uses the browser's own shaping, so the two entry points do not grow when a drawing target is added.
+**Font measurement has two entry points: a line's width and its height** (`Font_source`'s `measure_width` and `vmetrics_of`, the vertical metrics). Pass them an already resolved `Font` (the final typeface, size and weight), so they depend on nothing of how a style holds things. Tied to the styles, they could not be defined until the document model was fixed, and without them layout could not be tested. Neither rasterizing (turning letters into pixels) nor shaping (choosing each letter's form and position) is held. The canvas uses the browser's own shaping. So the two entry points do not grow when a drawing target is added.
 
-JS passes the width and takes the boxes back. It holds neither line breaking, nor inheritance (a style taking unset values from its parent), nor how the cursor advances. The wasm side does the tables' calculation too, and **it runs before the layout**: it changes the cells' text, so run afterwards, the boxes would point at the old text.
+JS passes the width and takes the boxes back. It holds neither line breaking, nor inheritance (a style taking unset values from its parent), nor how the cursor advances. The wasm side does the tables' calculation too, and **it runs before the layout**. It changes the cells' text, so run afterwards, the boxes would point at the old text.
 
 **Everything is bound into one file.** The server and desktop opener distribute one page asset, including its wasm and scripts.
 
 ### Why the browser is the main target
 
-**Connecting to each OS's input method (IME) is most of the work of porting, and a browser gives it for free, so the browser comes first.** Each OS designs its native IME differently (Windows: IMM32 / TSF; Linux: IBus / Fcitx; macOS: `NSTextInputClient`). In a browser, three composition events (start / update / end) are enough.
+**Connecting to each OS's input method (IME) is most of the work of porting.** **A browser gives it for free, so the browser comes first.** Each OS designs its native IME differently (Windows: IMM32 / TSF; Linux: IBus / Fcitx; macOS: `NSTextInputClient`). In a browser, three composition events (start / update / end) are enough.
 
 Caution: **Handle the three composition events as a set.** With only the update handled, committed text stays marked as still being composed.
 
@@ -209,15 +216,15 @@ Caution: **Do not bring layout decisions into it.** The thicker it grows, the mo
 
 ### Where memory runs short it refuses rather than crashing
 
-**kspage refuses to open a document that would not fit in its memory, before the open document is touched**: a failed allocation stops the whole wasm, the screen freezes, and reloading the page loses unsaved work. So the refusal stands where the text first comes in ([`port/web/inout.kspl`](../port/web/inout.kspl)'s `kspage_web_load_buffer`).
+**kspage refuses to open a document that would not fit in its memory, before the open document is touched.** A failed allocation stops the whole wasm, and the screen freezes. Reloading the page then loses unsaved work. So the refusal stands where the text first comes in ([`port/web/inout.kspl`](../port/web/inout.kspl)'s `kspage_web_load_buffer`).
 
 **Derive the cap from the arena** (`port/web/state.kspl`'s `doc_limit`). Written as a number in two places, the refusal and its report get out of step the day the arena is widened. Widening alone changes nothing: four times the arena moves the limit four times further, and past it the page still dies. Whoever widens it first looks at how many instances the wasm gate starts and at the load gate's peak, since both grow with the arena.
 
 **The cap counts blocks, because blocks set the cost of layout.** At the same number of characters, a table costs 40 times as much as prose. The other products all cap by bytes or characters.
 
-**A cap in bytes cannot guard it.** The cost per byte of reading, layout and writing back, measured on paragraphs, does not hold for other shapes; a table's is far higher. Raising the multiple does not help. Fitted to the worst shape, the cap shrinks drastically for everything else and still guarantees nothing: a text can be packed tighter, and a table within the cap still freezes the page during layout. Per block, the cost flattens out. It explodes per byte only because packing puts many more blocks into the same bytes, and eight times the columns (1x20 -> 1x160) costs only 8% more. So a cap per block decides what fits (`port/web/state.kspl`).
+**A cap in bytes cannot guard it.** The cost per byte of reading, layout and writing back, measured on paragraphs, does not hold for other shapes; a table's is far higher. Raising the multiple does not help. Fitted to the worst shape, the cap shrinks drastically for everything else and still guarantees nothing. A text can be packed tighter. A table within the cap still freezes the page during layout. Per block, the cost flattens out. It explodes per byte only because packing puts many more blocks into the same bytes. Eight times the columns (1x20 -> 1x160) costs only 8% more. So a cap per block decides what fits (`port/web/state.kspl`).
 
-**The cap per block has two values, by arrangement: 512 B for flow and 2 KiB for a grid** (the arena one block needs to be laid out and written back). Do not make them one. A grid costs five times what flow does, so one number either cuts prose's cap to a fifth or lets a table cross the limit; kept apart, prose keeps the higher cap. Inside a grid, everything below counts as grid, since the column-width solver's cost applies to rows and cells alike. A style name that does not exist counts as flow, as in layout. So at about the same size the answer differs by shape: prose of 1,162 KB opens, and a table document of 1,225 KB is refused (a gate holds this pair).
+**The cap per block has two values, by arrangement: 512 B for flow and 2 KiB for a grid.** Each is the arena one block needs to be laid out and written back. Do not make them one. A grid costs five times what flow does. So one number either cuts prose's cap to a fifth or lets a table cross the limit. Kept apart, prose keeps the higher cap. Inside a grid, everything below counts as grid, since the column-width solver's cost applies to rows and cells alike. A style name that does not exist counts as flow, as in layout. So at about the same size the answer differs by shape. Prose of 1,162 KB opens, and a table document of 1,225 KB is refused (a gate holds this pair).
 
 **It refuses at three tiers**, because each looks at something different:
 
@@ -229,19 +236,19 @@ Caution: **Do not bring layout decisions into it.** The thicker it grows, the mo
 
 * **The gate means something only before the swap**: afterwards, the open document is already gone.
 * **Send plain text through the same gate.** If only one route is guarded, the page dies the same way through the other.
-* **Why the last net is needed**: a packed text (a row of `{}`, three bytes per block) can use up the arena within the cap while it is being read. A cap fitted to reading's worst case would stop that too, but **cutting every ordinary document to a quarter, to stop a shape the net already handles, is not a fair exchange.**
+* **Why the last net is needed**: a packed text can use up the arena within the cap while it is being read. Such a text is a row of `{}`, three bytes per block. A cap fitted to reading's worst case would stop that too. But **it would cut every ordinary document to a quarter, to stop a shape the net already handles.** That is not a fair exchange.
 
-**The net calls a JS entry point that throws.** The wasm holds no code that raises an exception, so only the JS side can throw. A freestanding panic (the error stop of a build with no standard library) records the reason and stops at `for {}` (`../../std/lang.kspl`), so an unhandled panic freezes the screen. The exception passes through the wasm frames to the catch at the caller (`port/web/kspage.js`'s `ks.cramps`), which every call that lays out or loads goes through. **The net reports only that signal** (its own error class): any other exception is a fault in the page's code, so it is thrown on to the browser's console after the cleanup, never shown as "memory used up", which would send its reader to the wrong cause.
+**The net calls a JS entry point that throws.** The wasm holds no code that raises an exception, so only the JS side can throw. A freestanding panic is the error stop of a build with no standard library. It records the reason and stops at `for {}` (`../../std/lang.kspl`), so an unhandled panic freezes the screen. The exception passes through the wasm frames to the catch at the caller (`port/web/kspage.js`'s `ks.cramps`), which every call that lays out or loads goes through. **The net reports only that signal** (its own error class). Any other exception is a fault in the page's code. So it is thrown on to the browser's console after the cleanup. It is never shown as "memory used up", which would send its reader to the wrong cause.
 
-**After a refusal, the half-built arena is freed** (`kspage_web_recover`). Otherwise refusing loses half its point: after the unwinding nothing points at the half-built chunks, so the arena shrinks by that much for good, until even saving fails. Keep the reading's arena in a global: a local one is lost in the unwinding, leaving nothing to free it through. Do not touch the document. It is swapped only after reading, so a refused read leaves it unharmed.
+**After a refusal, the half-built arena is freed** (`kspage_web_recover`). Otherwise refusing loses half its point. After the unwinding nothing points at the half-built chunks, so the arena shrinks by that much for good. In the end even saving fails. Keep the reading's arena in a global: a local one is lost in the unwinding, leaving nothing to free it through. Do not touch the document. It is swapped only after reading, so a refused read leaves it unharmed.
 
 **Report "too large" apart from "cannot be read".** The fixes are opposite: change the text, or split the document or widen the memory (`port/web/file.js`'s `whyNotRead`). Do not guess the reason from the size. The cap is not a count of bytes, so the core's reason is passed on unchanged (`port/web/api.js`'s `load` returns the reason, not true or false). The debug log shows the memory left, which its reader most needs just before a failure.
 
-### Whether an entry point takes an arena depends on what it returns
+### Whether an entry point takes an arena follows its result
 
 A function that adds to an existing tree uses that tree's arena. A function that returns something new takes an arena as an argument, so the caller chooses how long the result lives.
 
-**"The receiver has an arena, so none need be passed" is not true in general.** An arena argument may choose where the result goes, not where the receiver lives, and the two are not always the same arena.
+**"The receiver has an arena, so none need be passed" is not true in general.** An arena argument can choose where the result goes, not where the receiver lives. The two are not always the same arena.
 
 | The entry point | Takes an arena? | Examples | Why |
 | :-- | :-- | :-- | :-- |
@@ -258,13 +265,13 @@ A function that adds to an existing tree uses that tree's arena. A function that
 
 **Do not list the entry points on the linking side.** The `#export` in the source decides what is exported, and the generated C marks it so the linker's `--gc-sections` (which drops unused code) keeps it. A hand-kept list silently misses each new entry point, and "there is no such function" shows up only when the button is pressed.
 
-**The wasm links with its stack first and 1 MiB of it** (`--stack-first -z stack-size=1048576` in [`../Makefile`](../Makefile)). Placed after the data, the linker's default, a call too deep ran past the stack's end into the page's own memory, the arenas included, and nothing trapped: a document nested a few hundred deep "loaded" and showed the startup sample instead, or damaged what was open. First, running past the end leaves the memory and traps. The C runtime also tells std where the stack ends (from the linker's `__stack_low`), so a walk on deep input stops 64 KiB short of it (`std/stack_limit`) rather than trap.
+**The wasm links with its stack first and 1 MiB of it** (`--stack-first -z stack-size=1048576` in [`../Makefile`](../Makefile)). Placed after the data, the linker's default, a call too deep ran past the stack's end into the page's own memory, the arenas included. Nothing trapped. A document nested a few hundred deep "loaded" and showed the startup sample instead, or damaged what was open. First, running past the end leaves the memory and traps. The C runtime also tells std where the stack ends (from the linker's `__stack_low`). So a walk on deep input stops 64 KiB short of it (`std/stack_limit`) rather than trap.
 
 **`make test-kspage-wasm` checks that nothing else is exported**: only `kspage_web_*`, the `memory` and `__heap_base` the linker adds, and `memcmp`, which a target with no libc needs. `make test-conventions` checks that the two sides agree, matching the source's `#export` against the entry points JS calls by name.
 
 Caution: **Both directions break silently.** JS calling an entry point the source lacks still links, and fails only when pressed. An entry point nobody calls stays, holding the boundary wide (Principle 5).
 
-**Every entry point that asks which cell, holder or line edge the cursor is in is called after layout**, since none of that is known before. Outside a table or holder it returns 0 and leaves the key to the caller.
+**Some entry points ask which cell, holder or line edge the cursor is in. Each of them is called after layout**, since none of that is known before. Outside a table or holder it returns 0 and leaves the key to the caller.
 
 **How text and numbers are passed:**
 
@@ -273,13 +280,13 @@ Caution: **Both directions break silently.** JS calling an entry point the sourc
 | Text passed in (a `len` argument) | It is first written into the typing arena (`kspage_web_input_buffer()`), unless the entry point's comment names the loading arena |
 | Text passed out (an entry point that "writes out") | It goes into the one out arena (`kspage_web_out_ptr()`), which the next write clears; the entry point returns its length |
 | Several numbers (`out`) | Each `out` receives the numbers listed in that entry point's comment under `port/web/` |
-| A refusal | **Where an entry point can refuse for more than one reason, it returns the reason as a number its comment lists** (per `Sort_end`, `Merge_end` and the like), and the page words it |
+| A refusal | **An entry point can refuse for more than one reason. Then it returns the reason as a number its comment lists** (per `Sort_end`, `Merge_end` and the like). The page words it |
 
 ### Values that cross the boundary
 
 Numbers pass through one arena the wasm hands out, and text passes as a place and a length. JS must make a fresh view of the wasm's memory at every read, because the memory moves when it grows.
 
-**Ask the wasm side for the arena the numbers pass through** (`kspage_web_nums()`). Memory borrowed below `__heap_base` is C's stack: a deep call writes to the same place, so the numbers written out vanish inside the entry point that wrote them. The arena's width, `kspage_web_nums_cap()`, fits the entry point that writes the most (a box's 15). Keep one reader (`kspage.js`'s `ks.nums(n)`).
+**Ask the wasm side for the arena the numbers pass through** (`kspage_web_nums()`). Memory borrowed below `__heap_base` is C's stack. A deep call writes to the same place, so the numbers written out vanish inside the entry point that wrote them. The arena's width, `kspage_web_nums_cap()`, fits the entry point that writes the most (a box's 15). Keep one reader (`kspage.js`'s `ks.nums(n)`).
 
 Caution: **Do not hold the width on the JS side.** With a view made in each place, the day the arena is narrowed a view silently reads its neighbour. With one reader, checking that the numbers fit is one place too.
 
@@ -302,13 +309,13 @@ What the page does take from the browser, and why:
 | Key or event | Taken? | Why |
 | :-- | :-- | :-- |
 | The undo key | **Yes** | Otherwise the hidden input field runs its own undo: the field's text goes back and the body does not |
-| Copy, cut, paste | **Yes, on the `copy` / `cut` / `paste` events**, which carry `clipboardData` | The hidden field is empty, so by default a copy takes nothing that can be pasted, and a paste goes into the field and never reaches the body |
+| Copy, cut, paste | **Yes, on the `copy` / `cut` / `paste` events**, which carry `clipboardData` | The hidden field is empty, so by default a copy takes nothing that can be pasted. A paste goes into the field and never reaches the body |
 | Ctrl+F, Ctrl+S, Home, End, Ctrl+A | **Yes** | The body is inside the canvas, so the browser's own versions act on the page instead (below) |
 | Tab outside a table | **No** | Taken, it would hold the keyboard inside the body. Focus moves to the next field, and no tab character goes in |
 
 **JS puts in the undo separator** after a pause in typing (`kspage_web_break_undo_group()`). Without it, one undo takes back everything typed.
 
-**Copy, cut and paste are not taken on the key side**: the key starts the browser's own copy, and taking the key stops that event from arriving. A paste's `input` has `data` null (the text is in `clipboardData`) and does not arrive as a keypress. With nothing selected a copy is not taken, so copying text from outside the page is not blocked.
+**Copy, cut and paste are not taken on the key side.** The key starts the browser's own copy, and taking the key stops that event from arriving. A paste's `input` has `data` null (the text is in `clipboardData`) and does not arrive as a keypress. With nothing selected a copy is not taken, so copying text from outside the page is not blocked.
 
 **What the browser's own versions would do**: its search finds nothing (search looks broken). Its "save page" downloads this HTML, not the document. Home and End scroll the whole window, and Ctrl+A selects the whole page while the cursor stays put.
 
@@ -316,7 +323,7 @@ What the page does take from the browser, and why:
 
 **Do not rewrite the formula field while it is being typed in**: refilled on every redraw, it loses what was typed. It is applied on Enter alone. Applied when the focus leaves, a press elsewhere would change the text.
 
-**Open one menu at a time.** Close the others before opening. `toggle` arrives afterwards, so closing there leaves a moment with two open, and the one meant to be pressed hides behind. Close a menu once a command is pressed (left open, it covers the canvas), but not in a field where a number or a name is typed (the typing could never be finished).
+**Open one menu at a time.** Close the others before opening. `toggle` arrives afterwards, so closing there leaves a moment with two open, and the one meant to be pressed hides behind. Close a menu once a command is pressed (left open, it covers the canvas). Do not close it in a field where a number or a name is typed (the typing could never be finished).
 
 ### What composed input needs
 
@@ -340,13 +347,13 @@ The page's side paints the boxes and bands layout produced, in a fixed order, an
 
 **Pictures are read and drawn by the page's side.** Read each source once (otherwise every redraw fetches it). Redraw once it has loaded: loading is asynchronous, and drawing without waiting leaves a blank. Until then, draw the frame alone (drawing nothing makes the inserted picture look lost).
 
-**The cursor is a layer of its own over the canvas**, so a blink repaints no document and the cursor shows on neither a printed page nor a thumbnail. The window scrolls to it only when it leaves the view: scrolling every time would pull back, at every keystroke, a window moved to read.
+**The cursor is a layer of its own over the canvas**, so a blink repaints no document. The cursor shows on neither a printed page nor a thumbnail. The window scrolls to it only when it leaves the view. Scrolling every time would pull back, at every keystroke, a window moved to read.
 
 **Only a press with Ctrl (⌘) held follows a link**, since on the editing screen a press on text places the cursor. Do not move the cursor when following it (the person could not go on typing on return). A link looks like one because of its decorating style, so drawing needs no special case.
 
 **Draw the page's header and footer after cropping**: they sit in the margins, outside the frame that crops the contents. Their coordinates are from the page's top left, so do not shift them again (with the margin added again, they land off the page). Lay them out again for every page, since the numbers change.
 
-**Draw underline and strikethrough after the text, in the text's colour**; drawn first, the text covers them. Their thickness follows the font size (a fixed 1px looks like a hair at large sizes). The composing underline sits at the box's bottom edge, so it reads as a different line from the style's underline (below the baseline, the line the letters sit on).
+**Draw underline and strikethrough after the text, in the text's colour**; drawn first, the text covers them. Their thickness follows the font size (a fixed 1px looks like a hair at large sizes). The composing underline sits at the box's bottom edge. So it reads as a different line from the style's underline, which is below the baseline (the line the letters sit on).
 
 Caution: **Set the colour again for every box.** Left overwritten, the caller's colour carries on to whatever is drawn next.
 
@@ -366,11 +373,14 @@ Caution: **Set the colour again for every box.** Left overwritten, the caller's 
 
 **All the page's JS files run as one script, concatenated into one `<script>`** ([`port/web/bundle.kspl`](../port/web/bundle.kspl) binds it, in the order [`port/web/page.html`](../port/web/page.html) names). So two files must never declare the same name, and they share only two named objects.
 
-Caution: **Do not declare one name with `let` / `const` / `class` in two files**: the whole block is then never evaluated, so each file passes alone and nothing happens on the screen. `make test-js-syntax` checks each file and the concatenation, but only their syntax, so a mistyped name gets through.
+Caution: **Do not declare one name with `let` / `const` / `class` in two files.** The whole block is then never evaluated. Each file passes alone, and nothing happens on the screen. `make test-js-syntax` checks each file and the concatenation, but only their syntax, so a mistyped name gets through.
 
 **The script files share only two objects, `ks` and `ui`**: `kspage.js` makes `ks` where it starts the wasm, and `page.js` makes `ui` for the page's frame. `make test-conventions` checks that every field read from either is one some file puts there, and that every field put there is read. So a mistyped read and an entry point nobody calls are both caught. Do not expose a field that only its own file uses; keep it out of the `return`.
 
-Two other shared objects are not checked this way: `kf`, through which [`port/web/file.js`](../port/web/file.js) and [`port/web/save.js`](../port/web/save.js) pass entry points both ways; and `ks.api`, which faces callers outside the page, so a field there that no file reads is no defect.
+Two other shared objects are not checked this way:
+
+* `kf`: through it, [`port/web/file.js`](../port/web/file.js) and [`port/web/save.js`](../port/web/save.js) pass entry points both ways.
+* `ks.api`: it faces callers outside the page, so a field there that no file reads is no defect.
 
 ## How the page is checked
 
@@ -380,22 +390,22 @@ kspage's checks on the built page live in `kspage/tests/wasm/` and `kspage/tests
 
 ### Each browser-check section has its own document
 
-Caution: **A check on the page must not count on the document shown at startup, nor share a document with another section.** The startup document is the product's sample ([`content/sample.kspl`](../content/sample.kspl)), and it changes whenever what is to be shown changes. Counted on, fixing one paragraph of it fails a test that cannot say whether the rule broke or the sample changed; moving one heading fails cases in both folders. A shared document breaks the same way: a paragraph added for section A moves section B's measurements.
+Caution: **A check on the page must not count on the document shown at startup.** **It must not share a document with another section either.** The startup document is the product's sample ([`content/sample.kspl`](../content/sample.kspl)), and it changes whenever what is to be shown changes. If a test counts on it, fixing one paragraph of it fails that test. The test cannot say whether the rule broke or the sample changed. Moving one heading fails cases in both folders. A shared document breaks the same way: a paragraph added for section A moves section B's measurements.
 
 **How a folder keeps its sections apart depends on whether each can have a document of its own:**
 
 | Folder | What it holds | How it keeps them apart |
 | :-- | :-- | :-- |
-| `kspage/tests/wasm/` | `make test-wasm`'s per-section code; `kspage/tests/wasm/shell.mjs` hands the entry points over and assembles the documents | **Each section declares its own document** with `opens`, and the driver reads it before passing it on, so **a forgotten declaration fails the run** (a rule merely written down is not kept) |
-| `kspage/tests/browser/` | `make test-served`, run on the assembled page in a real browser; `kspage/tests/browser/probe.js` runs the sections in the order of `KSPAGE_PROBE` in [`Makefile`](../Makefile) | The sections share one page, and **those holding asynchrony overlap**, so the document cannot be swapped: they **search for the place to press and to peek** instead (`findBlock` / `findCell` in `kspage/tests/browser/probe.js`) |
+| `kspage/tests/wasm/` | `make test-wasm`'s per-section code; `kspage/tests/wasm/shell.mjs` hands the entry points over and assembles the documents | **Each section declares its own document** with `opens`. The driver reads it before passing it on, so **a forgotten declaration fails the run**. A rule merely written down is not kept |
+| `kspage/tests/browser/` | `make test-served`, run on the assembled page in a real browser; `kspage/tests/browser/probe.js` runs the sections in the order of `KSPAGE_PROBE` in [`Makefile`](../Makefile) | The sections share one page, and **those holding asynchrony overlap**, so the document cannot be swapped. They **search for the place to press and to peek** instead (`findBlock` / `findCell` in `kspage/tests/browser/probe.js`) |
 
 ### A cut-off test round says how far it got
 
 **A cut-off browser run reports its last completed check.** The page writes progress through the server and to the browser console. The runner has an external deadline and reads console output if no progress file arrives.
 
-### A check starts when the page says it has stood up
+### A check starts when the page says it is ready
 
-**The browser checks begin only once the page itself says its start-up is done, through one promise, `window.kspageReady`** ([`port/web/page.js`](../port/web/page.js)), however long that takes. It resolves once the core runs, the local server has been asked and the document the page comes up on is in. It rejects with the reason where the start failed, and the page then shows that reason in the status bar, so a person is not left before a blank page. Every waiter takes this promise, and none looks for `window.kspage` on a timer.
+**The browser checks begin only once the page itself says its start-up is done.** It says so through one promise, `window.kspageReady` ([`port/web/page.js`](../port/web/page.js)), however long that takes. It resolves once the core runs, the local server has been asked and the document the page comes up on is in. It rejects with the reason where the start failed. The page then shows that reason in the status bar, so a person is not left before a blank page. Every waiter takes this promise, and none looks for `window.kspage` on a timer.
 
 **Asynchronous work is awaited directly.** Wasm compilation and IndexedDB run outside the page's thread; a fixed delay cannot prove either has completed. The runner caps real elapsed time outside the browser.
 
@@ -405,15 +415,20 @@ Caution: **A check on the page must not count on the document shown at startup, 
 
 This chapter keeps the known shortcomings **judged not worth their cost**, each with its grounds. Keep them rather than deleting them; without the grounds, the same point keeps coming back as "something nobody has got round to".
 
-**It is not the list of what is still missing.** That is the manual's last chapter ([`content/manual.kspage`](../content/manual.kspage)), which also carries every item here that a user can see; left out, a user would hunt for it as their own mistake. Do not write the same sentence in both. The manual says what cannot be done, and this chapter says why it is decided not to change.
+**It is not the list of what is still missing.** That is the manual's last chapter ([`content/manual.kspage`](../content/manual.kspage)). It also carries every item here that a user can see. Left out, an item would make a user hunt for it as their own mistake. Do not write the same sentence in both. The manual says what cannot be done, and this chapter says why it is decided not to change.
 
-### Accepted limit 1: typing one character lays the whole document out again
+### Accepted limit 1: one typed character lays the whole document out
 
 Every keystroke, and every cursor move, recomputes the position of everything in the document. This is fast enough for every document kspage can open, and making it incremental would risk showing a stale screen, so it stays.
 
-**How it stands.** The calls that cross the boundary to the browser do not grow with the document ("Text that has not changed is not measured again" in [`DESIGN-document.md`](DESIGN-document.md) and "A style is looked up by name once" in [`DESIGN-document.md`](DESIGN-document.md)), but what is walked is the whole document (`layout` in `lay/flow.kspl`). Retyping one paragraph takes time in proportion to the document's size.
+**How it stands.** The calls that cross the boundary to the browser do not grow with the document. Two sections of [`DESIGN-document.md`](DESIGN-document.md) say why:
 
-**The cost of one relayout.** It is measured on 3,000 paragraphs of an unchanged document under native `ksplc run`, an unoptimised build, so absolute values run about 2.5 times wasm's; what counts is the ratios. The cost is a fixed amount per paragraph plus a fixed amount per box, nearly constant whatever the shape. The paragraph share stays in the low hundreds of nanoseconds, and the box share adds about as much again. The gathering done beforehand (headings, notes, running numbers, charts, references) is no hotspot either; stopping it saves only a small fraction of the fixed cost. So making one place faster does not help: both shares grow with how much is walked.
+* "Text that has not changed is not measured again"
+* "A style is looked up by name once"
+
+But what is walked is the whole document (`layout` in `lay/flow.kspl`). Retyping one paragraph takes time in proportion to the document's size.
+
+**The cost of one relayout.** It is measured on 3,000 paragraphs of an unchanged document under native `ksplc run`, an unoptimised build. So absolute values run about 2.5 times wasm's; what counts is the ratios. The cost is a fixed amount per paragraph plus a fixed amount per box, nearly constant whatever the shape. The paragraph share stays in the low hundreds of nanoseconds, and the box share adds about as much again. The gathering done beforehand (headings, notes, running numbers, charts, references) is no hotspot either. Stopping it saves only a small fraction of the fixed cost. So making one place faster does not help: both shares grow with how much is walked.
 
 **A relayout that changed nothing costs the same**, so merely moving the cursor costs as much as typing. Moving the cursor, finding the place pressed, selecting and rereading the theme each lay the whole document out again. They are as frequent as keystrokes, so this limit cannot be weighed by typing alone.
 
@@ -421,9 +436,9 @@ Every keystroke, and every cursor move, recomputes the position of everything in
 
 | Reason | Detail |
 | :-- | :-- |
-| **No document can make it too slow** | The heaviest document that can be opened takes about a third of the 16.7ms budget of one frame at 60 frames per second. What is hit first is **the size cap**, where the document is refused rather than the page crashing ("Where memory runs short it refuses rather than crashing" above) |
+| **No document can make it too slow** | The heaviest document that can be opened takes about a third of the 16.7ms budget of one frame at 60 frames per second. What is hit first is **the size cap**. There the document is refused rather than the page crashing (see "Where memory runs short it refuses rather than crashing" above) |
 | **No hotspot can be pulled out on its own** | (the breakdown above) so nothing but narrowing what is walked can speed it up |
-| **Narrowing it means changing the model's invariants** | It needs "from where it changed", and guessing that from the text's contents does not work (a length or a fingerprint misses `ab` → `ba`). A version number per block drops nothing, but it cannot be made complete with `Block` as it stands: its fields are all `pub`, and rewriting also happens outside `write/`. Nor is the part before the change safe. Where the table of contents, the footnote list, a chart or a reference from the body stands earlier, it has to be laid out whole again |
+| **Narrowing it means changing the model's invariants** | It needs "from where it changed", and guessing that from the text's contents does not work (a length or a fingerprint misses `ab` → `ba`). A version number per block drops nothing. But it cannot be made complete with `Block` as it stands. Its fields are all `pub`, and rewriting also happens outside `write/`. Nor is the part before the change safe. The table of contents, the footnote list, a chart or a reference from the body can stand earlier. Then the part before the change has to be laid out whole again |
 | **Its way of failing is the worst of all** | A version number not raised "breaks quietly while staying fast", showing an old state. Putting it in first needs a check that relayout gives the same result as a whole layout ([`tests/columns_test.kspl`](../tests/columns_test.kspl)) |
 
 **What a narrower reach would stand on is there already.** The layout is a row of boxes piled fresh onto the arena, not a tree rewritten in place. So nothing is marked, and forgetting to mark a change cannot break it, whereas other editors lay out again from what they mark as changed. A box comes from only four inputs:
@@ -436,7 +451,7 @@ flowchart LR
   inTop["The height it starts at"] --> box
 ```
 
-Where the four are the same, the box is the same to the byte, so once a changed paragraph keeps its height, nothing below needs laying out again.
+Where the four are the same, the box is the same to the byte. So once a changed paragraph keeps its height, nothing below needs laying out again.
 
 **Narrowing is worth something only once the arena itself is wider.** The size cap, not the speed, is what a document meets first.
 
@@ -446,24 +461,24 @@ Where the four are the same, the box is the same to the byte, so once a changed 
 
 One window cannot show two documents side by side. Open a second window instead.
 
-**How it stands.** What it would take lies in the page, not the core. The core can be started twice from the same bytes (`kspageBoot` in [`port/web/kspage.js`](../port/web/kspage.js)). What stands in the way is the tools reaching the DOM by id: hundreds of `getElementById` calls, of ids and of calls to `app`, and the parts wired to `ui`.
+**How it stands.** What it would take lies in the page, not the core. The core can be started twice from the same bytes (`kspageBoot` in [`port/web/kspage.js`](../port/web/kspage.js)). What stands in the way is the tools reaching the DOM by id. There are hundreds of `getElementById` calls, of ids and of calls to `app`, and the parts wired to `ui`.
 
 **Two reasons for giving up:**
 
-* **A second pane that takes typing is large.** Every lookup by id would have to ask which pane is current, or the ids would be kept in two sets, and every part wired to `ui` would be touched.
-* **A second read-only pane is small, but buys almost nothing.** Another document already opens in another window (from a link inside a document, or with `?doc=` when the server serves the page). There the size, the arrangement and a second screen are all real. Another place in the same document opens the same way ("Another place in the same document is seen in another window" in [`DESIGN-application.md`](DESIGN-application.md)). With that means already there, a second goes against Principle 6.
+* **A second pane that takes typing is large.** Every lookup by id would have to ask which pane is current, or the ids would be kept in two sets. Every part wired to `ui` would be touched.
+* **A second read-only pane is small, but buys almost nothing.** Another document already opens in another window (from a link inside a document, or with `?doc=` when the server serves the page). There the size, the arrangement and a second screen are all real. Another place in the same document opens the same way ("Another place in one document is seen in another window" in [`DESIGN-application.md`](DESIGN-application.md)). With that means already there, a second goes against Principle 6.
 
 ### Accepted limit 3: a document cannot be written out as HTML
 
 A document goes out as a printed page (PDF), as Markdown, or a table as CSV; there is no HTML export.
 
-**Why there is none.** An HTML export is a second rendering of the document with rules the screen does not use: styles turned into CSS classes and rules, a line's leading scaled to CSS's measure, escaping for a stylesheet. It would carry its own tests and checks, and the layout could still differ, since the browser breaks the lines. Printing already gives a page that looks as the screen does, and the Markdown export keeps a document beside the code.
+**Why there is none.** An HTML export is a second rendering of the document with rules the screen does not use. Styles become CSS classes and rules, a line's leading is scaled to CSS's measure, and a stylesheet needs escaping. It would carry its own tests and checks. The layout could still differ, since the browser breaks the lines. Printing already gives a page that looks as the screen does, and the Markdown export keeps a document beside the code.
 
 ### Accepted limit 4: a `.md` file is not read as Markdown
 
 A `.md` opens as plain text, one line a paragraph, and saves back byte for byte ("A `.md` opens as plain text" in [`DESIGN-application.md`](DESIGN-application.md)). It is not turned into headings, lists and tables.
 
-**Why it is not.** Reading Markdown into styled blocks needs a reader, a table of looks handed to it, and a check that real files survive the trip there and back, and it would promise only that the text settled, not that it stayed as typed. Every code host and editor already shows Markdown rendered.
+**Why it is not.** Reading Markdown into styled blocks needs a reader and a table of looks handed to it. It also needs a check that real files survive the trip there and back. It would promise only that the text settled, not that it stayed as typed. Every code host and editor already shows Markdown rendered.
 
 ## Further reading
 

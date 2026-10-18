@@ -1,8 +1,8 @@
 //< The actions that move a block itself
 //<
 //< Splitting and joining paragraphs, deleting a selection including whole paragraphs, pasting
-//< text, removing a whole container (a table, a slide, an image), removing a slide's frame, and
-//< the settings that belong to a block itself (a paragraph's style, a frame's name, the memo
+//< text. Removing a whole container (a table, a slide, an image), and removing a slide's frame.
+//< The settings that belong to a block itself (a paragraph's style, a frame's name, the memo
 //< beside it). What is applied to text (a style, a color, a note, an annotation, a link) is in
 //< [`shape.kspl`](shape.kspl).
 //< Note: It is split from [`shape.kspl`](shape.kspl) for the 1000-line-per-file cap.
@@ -125,10 +125,10 @@ priv fn after_kin(d: Doc$@, b: Block$@): Block$@? //< the paragraph after `b`
 priv fn follows(sheet: Sheet$@, name: U8[], at_end: Bool): U8[] //<
     //< The style of the paragraph a split creates
     //<
-    //< The style names the one that follows it — a heading names the body, so Enter at a heading's
+    //< The style names the one that follows it. A heading names the body, so Enter at a heading's
     //< end continues in the body (the field Word, LibreOffice and InDesign have). No name means the
-    //< same style again. It applies only at the paragraph's end; split partway, both halves are one
-    //< paragraph cut in two.
+    //< same style again. It applies only at the paragraph's end. Split partway, both halves are
+    //< one paragraph cut in two.
     if sheet == null || !at_end
         return name
     if s: = sheet.find(name)
@@ -138,7 +138,7 @@ priv fn follows(sheet: Sheet$@, name: U8[], at_end: Bool): U8[] //<
 
 priv fn is_para(page: Page$@, b: Block$@): Bool //< whether that block is a paragraph
     //<
-    //< A container and a cell are not paragraphs: a container (a table, a row, a slide, an image)
+    //< A container and a cell are not paragraphs. A container (a table, a row, a slide, an image)
     //< is one whole thing, and changing a cell breaks the grid. The layout says whether it is a
     //< cell (the document does not say "it is a table").
     return !holds_other(b) && !ask.is_cell(page, b)
@@ -147,10 +147,10 @@ impl Editor
     fn split_block(r: Self$@, page: Page$@, sheet: Sheet$@): Bool //<
         //< Splits the paragraph in two at the cursor (Enter)
         //<
-        //< True if split. It does not split inside a table cell (that row alone would gain a cell;
-        //< "add a row" and "add a column" add cells). **It does not split in the middle of an
-        //< inline holding a formula** (the second half would drop out of the next recalculation,
-        //< keeping the old value).
+        //< True if split. It does not split inside a table cell: that row alone would gain a cell
+        //< ("add a row" and "add a column" add cells). **It does not split in the middle of an
+        //< inline holding a formula.** The second half would drop out of the next recalculation and
+        //< keep the old value.
         if r.shut()
             return false
         if ask.cell_of(page, r.caret).found
@@ -197,8 +197,8 @@ impl Editor
             edit.do_run(r, st, own.block, last, false, null)
             edit.do_run(r, st, made, 0, true, n)
         // Caution: **Leave one text in each paragraph.** The cursor cannot stand in a paragraph
-        // with no text, so nobody could click into it (split at the end or the start, one half is
-        // empty).
+        // with no text, so nobody could click into it. Split at the end or the start, one half
+        // is empty.
         if made.inlines.len <= 0
             edit.do_run(r, st, made, 0, true, run.new_inline(here.style, r.arena))
         if own.block.inlines.len <= 0
@@ -329,7 +329,7 @@ impl Editor
         tail: = caret.selection(r.doc, r.caret).to
         r.delete_selection()
         // Caution: **Find where the joining ends by where the last inline is**, not by counting
-        // paragraphs (it stops where they cannot be joined, or where the inline was merged away).
+        // paragraphs. It stops where they cannot be joined, or where the inline was merged away.
         $more: Bool = !ask.cell_of(page, r.caret).found
         for more
             seat: = r.doc.owner_of(tail)
@@ -372,8 +372,8 @@ impl Editor
         //< Whether `levels` of blocks put under `parent` stand no deeper than a document holds
         //<
         //< Null `parent` is the top level. **Every insertion asks it before changing anything**
-        //< (`limit.nesting_fits`): a slide's frame holds the cursor one level below the slide, so
-        //< slides put in frames nest without end, and saved past the limit the file never loads.
+        //< (`limit.nesting_fits`). A slide's frame holds the cursor one level below the slide, so
+        //< slides put in frames nest without end. Saved past the limit, the file never loads.
         return limit.nesting_fits(r.doc.depth_of(parent) + levels)
 
     fn holder_at(r: Self$@, page: Page$@): Block$@? //<
@@ -480,11 +480,11 @@ impl Editor
     priv fn named_at(r: Self$@, page: Page$@): Block$@? //< where a name goes
         //<
         //< It is chosen from the inside out (a table → a slide's frame → the current paragraph).
-        //< Check the table before the frame — the frame first, in a table cell on a slide, leaves
+        //< Check the table before the frame. With the frame first, a table cell on a slide leaves
         //< no way to name what a formula points at (`cell_of` in `../lay/ask.kspl`).
         //< Caution: **Do not copy the table's position here** ("A table is pointed at by name" in
-        //< `kspage/docs/DESIGN-document.md`), nor put the name on a cell itself — nothing reads
-        //< a cell's name.
+        //< `kspage/docs/DESIGN-tables.md`). Do not put the name on a cell itself either: nothing
+        //< reads a cell's name.
         if t: = r.table_at(page)
             return .some(t)
         if b: = r.frame_at()
@@ -504,7 +504,7 @@ impl Editor
     fn name_fault_at(r: Self$@, page: Page$@, text: U8[]): calc.Name_fault //<
         //< Why `text` cannot name the current place, or `none`
         //<
-        //< **Only a table's name is held to the formula's reading** (`calc.name_fault`): no
+        //< **Only a table's name is held to the formula's reading** (`calc.name_fault`). No
         //< formula reads a frame's or a paragraph's, so `Figure 1` stays a fine name for a figure.
         if _t: = r.table_at(page)
             return calc.name_fault(text)
@@ -519,11 +519,11 @@ impl Editor
 
     fn set_name(r: Self$@, page: Page$@, text: U8[]): Bool //< names the current place
         //<
-        //< It is separate from a style's name. A name applies to a table (referred to from a
-        //< formula), a slide's frame (listed by it among what is placed), and a paragraph with a
-        //< running number (referred to from the body).
+        //< It is separate from a style's name. A name applies to a table, which a formula refers
+        //< to. It applies to a slide's frame, listed by it among what is placed. It also applies to
+        //< a paragraph with a running number, which the body refers to.
         //< Caution: **Do not call it with `page` null** (`named_at` decides where it goes).
-        //< **A table's name no formula could reach is refused** (`name_fault_at` says why).
+        //< **A table's name that no formula could reach is refused** (`name_fault_at` says why).
         if r.shut() || !r.name_fault_at(page, text).reachable()
             return false
         if b: = r.named_at(page)
@@ -535,8 +535,8 @@ impl Editor
 
     priv fn slide_at(r: Self$@, page: Page$@): Block$@? //< the slide the cursor is in
         //<
-        //< The nearest block around the cursor that layout laid out as a slide (`Page.surfaces`):
-        //< whether a block is a slide is its style's to say, so only layout knows.
+        //< The nearest block around the cursor that layout laid out as a slide (`Page.surfaces`).
+        //< Whether a block is a slide is its style's to say, so only layout knows.
         own: = r.doc.owner_of(r.caret.inline)
         if !own.found
             return .none
@@ -624,7 +624,7 @@ impl Editor
 
     fn pick_nth(r: Self$@, at: Sz): Bool //< selects frame number `at` of the current container
         //<
-        //< True if selected. The cursor is not moved — a shape has nowhere to stand, and clicking
+        //< True if selected. The cursor is not moved, since a shape has nowhere to stand. Clicking
         //< the list must not change where typing goes (moving to the click is `pick_at`).
         if face: = r.framer_at()
             if at >= face.children.len

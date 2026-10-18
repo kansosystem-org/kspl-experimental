@@ -1,25 +1,34 @@
-//< The Cortex-M core's own registers, in the System Control Space (shared by Armv7-M/Armv8-M)
+//< The Cortex-M core's own registers, in the System Control Space (shared by every Cortex-M)
 //<
 //< The SCS (0xE000E000-0xE000EFFF) sits in every Cortex-M whatever the chip: here the NVIC's
-//< interrupt enable and SCB->AIRCR's system reset. Only what this project uses is written.
+//< interrupt enable and set-pending, and SCB->AIRCR's system reset. Only what this project uses
+//< is written, and only registers Armv6-M (Cortex-M0/M0+) has too, so one file serves every port.
 import "ksos/drivers/mmio"
 
 // ==========================================
-// The NVIC. This project only enables external interrupts 0 to 31, so it writes ISER0 alone
-// (Interrupt Set-Enable Register 0); priorities, IRQs 32 and above, and disabling (ICER) are not
-// implemented.
+// The NVIC. This project only uses external interrupts 0 to 31. So it writes ISER0 and ISPR0
+// alone (Interrupt Set-Enable / Set-Pending Register 0). Priorities, IRQs 32 and above, and
+// disabling (ICER) are not implemented.
 // ==========================================
 const iser0: U32 = 0xE000E100
+const ispr0: U32 = 0xE000E200
 
 fn enable_irq(irq: U32) //< enables external interrupt number irq (0 to 31, the NVIC IRQn)
     //<
     //< The vector table's exception number is irq+16.
     mmio.write32(iser0, 1U32 << irq)
 
+fn set_pending(irq: U32) //< makes external interrupt number irq pending, as its hardware would
+    //<
+    //< Enabled and above the running priority, it is taken once the write reaches the NVIC (a
+    //< `dsb` then an `isb` make that happen before the next instruction). Armv7-M's STIR does the
+    //< same, but Armv6-M has no STIR.
+    mmio.write32(ispr0, 1U32 << irq)
+
 // ==========================================
-// The system reset: SYSRESETREQ (bit2) of SCB->AIRCR, written with the key VECTKEY
-// (bit[31:16]=0x05FA, which the architecture requires; a write without it is ignored), restarts
-// from Reset_Handler at once, with no power loss. RAM keeps its content, so the next start-up can
+// The system reset: a write of SYSRESETREQ (bit2) of SCB->AIRCR with the key VECTKEY
+// (bit[31:16]=0x05FA) restarts from Reset_Handler at once. Power stays on. The architecture
+// requires the key; it ignores a write without it. RAM keeps its content, so the next start-up can
 // read a panic's crash record (`take_panic_record` in std/lang.kspl).
 // ==========================================
 const aircr: U32 = 0xE000ED0C

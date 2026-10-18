@@ -95,8 +95,8 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
         //< Picks up the paths that are cited
         //<
         //< It cuts at the first position ending in one of `exts` (as Python's lazy quantifier
-        //< does); with `word_end`, not where a word character follows (so `.cpp`'s `.c` is not
-        //< picked up).
+        //< does). With `word_end`, it does not cut where a word character follows (so `.cpp`'s
+        //< `.c` is not picked up).
     $out: = List<|Hit|>.new(arena)
     opens: = first_bytes_of(dirs, bares)
     $i: Sz = 0
@@ -108,16 +108,16 @@ fn find_paths(text: U8[], dirs: U8[][], exts: U8[][], word_end: Bool, bares: U8[
             continue
         start: = i
         // Caution: **A citation starting with `../` is a path even where what follows is not a
-        // folder of this repository**, or `../boards/…/README.md` is not read and **its heading
-        // name and section number go unchecked while green**.
+        // folder of this repository.** Otherwise `../boards/…/README.md` is not read. **Its
+        // heading name and section number then go unchecked while green**.
         after_dots: = skip_dotdot(text, i)
 
-        // **After a `/`, this is not the start of a relative citation**: the URL
-        // `/../ui/app.html` in a test would read as a path in this repo that **does not exist**.
+        // **After a `/`, this is not the start of a relative citation.** Otherwise the URL
+        // `/../ui/app.html` in a test reads as a path in this repo that **does not exist**.
         rel: = after_dots > i && !(i > 0 && text[i - 1] == '/')
-        // Caution: **After a path byte, this is the tail of a longer path or word, not a start**:
-        // `kspage/tests/all.kspl` would read as the root's `tests/`, `*/tests/all.kspl` as a file
-        // that does not exist, `onlinedocs/gcc/…` as `docs/`. **A leading `../` is the exception**
+        // Caution: **After a path byte, this is the tail of a longer path or word, not a start.**
+        // Else `kspage/tests/all.kspl` reads as the root's `tests/`, `*/tests/all.kspl` as a
+        // missing file, and `onlinedocs/gcc/…` as `docs/`. **A leading `../` is the exception**
         // (the test is on `after_dots`).
         if after_dots == i && i > 0 && is_path_at(text, i - 1)
             i += 1
@@ -208,8 +208,8 @@ priv fn span_close(text: U8[], from: Sz, n: Sz): Sz //<
     //<
     //< It is 0 where none does. A span closes inside its own paragraph (a blank line or a fence
     //< ends the search).
-    //< Caution: **Do not search past the paragraph**: one run left open would pair with the next of
-    //< its length however far off, and every link between would go unread.
+    //< Caution: **Do not search past the paragraph.** One run left open would pair with the next of
+    //< its length, however far off. Every link between would then go unread.
     $j: = from
     for j < text.len
         c: = text[j]
@@ -298,10 +298,10 @@ fn find_kspage_links(text: U8[], arena: Arena$@): List<|Hit|> //< the links insi
 fn links_of(rel: U8[], text: U8[], arena: Arena$@): List<|Hit|> //<
     //< The links of a document, by its format
     //<
-    //< **How they are picked up differs by format; how they are checked is in one place** (the
-    //< target, relative to the file that writes it, and the existence check).
-    //< Caution: **Do not branch on the format in the caller** (Principle 6): split in two, the day
-    //< a format is added one copy goes stale.
+    //< **How they are picked up differs by format. How they are checked is in one place**: the
+    //< target, relative to the file that writes it, and the existence check.
+    //< Caution: **Do not branch on the format in the caller** (Principle 6). If it is split in two,
+    //< one copy goes stale the day a format is added.
     if rel.ends_with(".kspage")
         return find_kspage_links(text, arena)
     return find_links(text, arena)
@@ -386,10 +386,10 @@ fn hit_target(here: U8[], text: U8[], hit: Hit, arena: Arena$@): U8[] //<
 priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[] //<
     //< The same, given whether the text came from a Markdown link's `](…)`
     //<
-    //< **A bare name, and a link's target, are relative to the file that writes it**; only a naming
+    //< **A bare name, and a link's target, are relative to the file that writes it.** Only a naming
     //< that already has a folder is relative to the root.
-    //< Caution: **Read a link the other way and a correct one looks broken** where its first folder
-    //< shares a root folder's name (`ksai/README.md`'s link to its own
+    //< Caution: **Read a link the other way, and a correct one looks broken.** That happens where
+    //< its first folder shares a root folder's name (`ksai/README.md`'s link to its own
     //< `docs/DESIGN-principles.md`).
     if linked || text.starts_with("../") || text.find_char('/').is_none()
         return normalize(arena.text().s("\{here\}/\{text\}").take(), arena)
@@ -401,8 +401,8 @@ priv fn linked_target(here: U8[], text: U8[], linked: Bool, arena: Arena$@): U8[
 
 // The file names read.
 // Caution: **Do not drop one because it is not a document.** A name missing here leaves the file
-// **outside the scan**: its namings stay silent about a deleted or moved target while `make
-// test-docref` **stays green**; check here when a new extension is added.
+// **outside the scan**. Its namings stay silent about a deleted or moved target, while `make
+// test-docref` **stays green**. Check here when a new extension is added.
 const scanned_ext: U8[][_] = ::{ ".ksplb", ".kspl", ".c", ".h", ".py", ".S", ".mk", ".kspeg", ".md",
     ".kspage", ".yml", ".cfg", ".js", ".mjs", ".css", ".html", "Makefile" }
 
@@ -421,6 +421,49 @@ fn is_scanned(rel: U8[]): Bool //< whether a tracked file is read for its refere
         if rel.ends_with(e)
             return true
     return false
+
+fn find_misnamed_links(text: U8[], arena: Arena$@): List<|Hit|> //<
+    //< The `` [`X`](Y) `` links whose text names a file other than the one they point at
+    //<
+    //< A hit's `text` is X and its `extra` is Y. **Only the file names are compared**, since a
+    //< comment and a document write the folder each from its own place. A text with no file
+    //< extension (`` `Row.put` ``, `` `ksai/` ``) names no file and is not read.
+    //< Caution: **Do not leave the two apart.** The checks of a citation read the text, the reader
+    //< follows the target, so a heading checked in one file is opened in the other.
+    $out: = List<|Hit|>.new(arena)
+    $i: Sz = 0
+    for i + 2 <= text.len
+        if !text.sub(i, 2).equals("[`")
+            i += 1
+            continue
+        $j: = i + 2
+        for j < text.len && is_path_at(text, j)
+            j += 1
+        if j + 3 > text.len || !text.sub(j, 3).equals("`](")
+            i += 1
+            continue
+        name: = text.sub(i + 2, j - i - 2)
+        $k: = j + 3
+        for k < text.len && is_path_at(text, k)
+            k += 1
+        target: = text.sub(j + 3, k - j - 3)
+        if k < text.len && (text[k] == ')' || text[k] == '#') && target.len > 0 &&
+            names_a_file(name) && !last_step(name).equals(last_step(target))
+            out.push(Hit::{ .at = i, .end = k, .text = name, .extra = target })
+        i = j
+    return out
+
+priv fn names_a_file(name: U8[]): Bool //< whether a link's text ends in a file name read here
+    for e in scanned_ext
+        if name.ends_with(e)
+            return true
+    return false
+
+priv fn last_step(path: U8[]): U8[] //< what follows the last `/`
+    $k: = path.len
+    for k > 0 && path[k - 1] != '/'
+        k -= 1
+    return path.sub_from(k)
 
 const src_suffix: U8[][_] = ::{ ".kspl", ".ksplb" } //<
     //< The extensions added to an import path

@@ -1,6 +1,6 @@
 //< The programs that must stop at run time, each case built and run alone on both backends
 //<
-//< Each case is compiled as the file its head names, outside any package, so a stop's position
+//< Each case is compiled as the file its head names, outside any package. So a stop's position
 //< reads `at <case>:<line>`.
 // ==== case array_index_constant_out_of_bounds
 //< Even with an index known at translation time, **out of range must stop at run time**
@@ -38,7 +38,7 @@ fn main(): I32
 // ==== case crash_stack_overflow
 //< A recursion that runs the main thread's stack out says so, though no stack is left to say it on
 //<
-//< Caution: **The handler runs on a stack of its own**; on the one that ran out it could not run,
+//< Caution: **The handler runs on a stack of its own.** On the one that ran out it could not run,
 //< and the program would end with 139 and no word.
 // EXPECT: crash: stack overflow (
 // EXPECT: exit code 139
@@ -82,8 +82,8 @@ fn main(): I32
 // ==== case dealloc_arena_pointer
 //< Passing a pointer an arena allocated to `mem.dealloc` must stop before touching the heap
 //<
-//< **Neither the type nor translation tells them apart** (both `alloc_as<|T|>()` return `T$@`), so
-//< only the start of `dealloc` can stop it. Libc cannot be relied on: glibc can let it pass, and on
+//< **Neither the type nor translation tells them apart** (both `alloc_as<|T|>()` return `T$@`). So
+//< only the start of `dealloc` can stop it. Libc cannot be relied on: glibc can let it pass. On
 //< freestanding a fake header joins the free list: **the heap breaks with nobody reporting it**.
 // EXPECT: mem.dealloc: this pointer did not come from mem.alloc
 // EXPECT-NOT: must not get here
@@ -197,8 +197,8 @@ fn main(): I32
 // ==== case list_get_out_of_bounds
 //< When List.get's index is out of range, it must stop instead of reading
 //<
-//< Tested apart from a slice's index: both call `std/lang`'s bounds_panic, but the callers differ
-//< (`List.get` returns a value, `Slice.at_ref` a place), so either check can vanish alone.
+//< Tested apart from a slice's index. Both call `std/lang`'s bounds_panic, but the callers differ
+//< (`List.get` returns a value, `Slice.at_ref` a place). So either check can vanish alone.
 //< The case index_place_write_out_of_bounds covers **writing** through a method that returns a
 //< place.
 // EXPECT: index out of bounds in List.get
@@ -248,11 +248,25 @@ priv fn mid(): Void!Er
 
 fn main(): Void!Er
     mid()!
+// ==== case prng_below_zero
+//< `Prng.below(0)` must stop: [0, 0) holds no number, and any answer would be out of it
+// EXPECT: Prng.below: n must be at least 1
+// EXPECT-NOT: must not get here
+import "std/io"
+import "std/prng"
+import "std/sys"
+
+fn main(): I32
+    $r: = prng.Prng.new(7U64)
+    n: = sys.args().len - 1 // = 0, read at run time so no check can fold it away
+    v: = r.below(n)
+    io.out().s("must not get here: \{v\}\n")
+    return 0
 // ==== case shift_amount_out_of_range
 //< A run-time shift amount outside the width must stop the program instead of shifting
 //<
 //< Sema rejects a constant shift amount (the case shift_count_out_of_range in
-//< tests/negative/numbers.kspl); this is the run-time path, whose message the code generator
+//< tests/negative/numbers.kspl). This is the run-time path, whose message the code generator
 //< writes.
 //< Caution: The shift amount must be **decided at run time** (why: the case divide_by_zero).
 // EXPECT: panic: shift amount out of range (amount: 32, width: 32)
@@ -333,9 +347,9 @@ fn main(): I32
 // ==== case slice_struct_out_of_bounds
 //< Out of range on a slice held in a struct
 //<
-//< **Report the place of use.** The code generator embeds the position for the built-in slice; the
+//< **Report the place of use.** The code generator embeds the position for the built-in slice. The
 //< struct version's `Index_ref.at_ref` takes the caller's position as a default argument ("Default
-//< arguments" in `docs/SPEC-language.md`) and `std/lang`'s bounds_panic writes the message.
+//< arguments" in `docs/SPEC-language.md`). `std/lang`'s bounds_panic writes the message.
 // EXPECT: panic: index out of bounds in Slice.at_ref (idx: 9, len: 2)
 import "std/io"
 

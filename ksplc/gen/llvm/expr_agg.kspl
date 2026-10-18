@@ -9,7 +9,6 @@ import "ksplc/gen/llvm/expr" as gen_llvm_expr
 import "ksplc/gen/llvm/types" as gen_llvm_types
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/def" as sema_type_def
-import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/ds" { Map }
 
@@ -25,30 +24,14 @@ priv fn named_field_index(child: Ast_node$@, by_name: Map<|U8[], I32|>$@, at: I3
     name_node: = child.get_field_init_name().unwrap_or(null)
     if name_node == null || name_node.kind_id != .k_identifier
         return at
-    found_idx: = by_name.get(name_node.text) catch -1
+    found_idx: = by_name.get(name_node.text).unwrap_or(-1)
     return at if found_idx == -1 else found_idx
 
 impl Ast_node
-    priv fn emit_enum_tag_init(r: Ast_node$@, cg: Genllvm_ctx$@, real_type_id: I32, tag_value: I64):
-        U8$[] //<
-            //< It zero-fills an enum type's temporary slot, writes the tag and returns the pointer
-            //<
-            //< It stores a zeroinitializer and writes .tag. emit_llvm_enum_init and
-            //< emit_llvm_enum_init_call share it.
-        tmp_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, real_type_id)
-        cg.s("    store ")
-        cg.t(real_type_id).s(" zeroinitializer, ptr ").s(tmp_ptr).s("\n")
-
-        tag_ptr: = cg.next_reg()
-        cg.s("    %\{tag_ptr\} = getelementptr inbounds ")
-        cg.t_gep(real_type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 0\n")
-        cg.s("    store ").t(cg.enum_tag_type(real_type_id)).s(" \{tag_value\}, ptr %\{tag_ptr\}\n")
-        return tmp_ptr
-
     fn emit_llvm_enum_init(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
         variant_name: = r.last_child().text
-        // Caution: **Strip the immutability mark**: an element of a `const` array carries it, and
-        // `const Ev` has no enum definition, so every element would silently become the first tag.
+        // Caution: **Strip the immutability mark.** An element of a `const` array carries it, and
+        // `const Ev` has no enum definition. So every element would silently become the first tag.
         real_type_id: = cg.env.get_clean_real_type(r.type_id)
         if e_def: = cg.env.get_enum_def(cg.env.get_str(real_type_id))
             switch e_def.get_variant(variant_name)
@@ -56,7 +39,7 @@ impl Ast_node
                 if e_def.is_scalar()
                     cg.clear_scratch().s("\{v_def.tag_value\}")
                     return cg.take_scratch()
-                tmp_ptr: = r.emit_enum_tag_init(cg, real_type_id, v_def.tag_value)
+                tmp_ptr: = cg.enum_tag_init(Void$@::r, real_type_id, v_def.tag_value)
 
                 res_reg: = cg.next_reg()
                 cg.op_load(res_reg, real_type_id, tmp_ptr)
@@ -71,7 +54,7 @@ impl Ast_node
             if !e_def.is_scalar()
                 switch e_def.get_variant(variant_name)
                 case .some(v_def)
-                    tmp_ptr: = r.emit_enum_tag_init(cg, real_type_id, v_def.tag_value)
+                    tmp_ptr: = cg.enum_tag_init(Void$@::r, real_type_id, v_def.tag_value)
 
                     args_node: = r.find_child(.k_expr_args)
                     if args_node != null
@@ -102,9 +85,9 @@ impl Ast_node
         inner: = r.get_child(0)
         trait_id: = r.type_id
         base_id: = inner.type_id
-        // Caution: Strip it the same way as vtable_key in lower/vtable.kspl (strip_ptr leaves one
+        // Caution: Strip it the same way as vtable_key in lower/vtable.kspl. strip_ptr leaves one
         // level of the immutability qualifier and prints a `Const_<type>`, a symbol with no
-        // definition).
+        // definition.
         clean_base_id: = cg.env.receiver_base_id(base_id)
 
         is_ptr: = cg.env.is_pointer(base_id)
@@ -130,7 +113,7 @@ impl Ast_node
     fn emit_llvm_struct_literal(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[] //<
         //< It builds a compound literal in a temporary and returns its **value**
         //<
-        //< Where the caller already has the memory the value should end up in, use
+        //< Where the caller already has the memory the value is to end up in, use
         //< emit_llvm_struct_literal_into. This one does "build in a temporary -> load as a value ->
         //< the caller stores": three copies, with waste proportional to the aggregate's size.
         tmp_ptr: = cg.get_or_alloc_tmp_slot(Void$@::r, r.type_id)
@@ -143,10 +126,10 @@ impl Ast_node
         //< Whether this literal fills every byte of the memory (so the leading zero-fill can go)
         //<
         //< It requires not "the value is the same anyway" but "not one uninitialized byte remains".
-        //< Dropping the fill is for robustness, not speed: with a zero-fill right before, the
-        //< backend learns "the high bytes are already 0" and may narrow the following store. No
-        //< code may rely on the zero-fill surviving ("Correctness is not entrusted to zero filling"
-        //< in ksplc/docs/DESIGN-compiler.md).
+        //< Dropping the fill is for robustness, not speed. With a zero-fill right before, the
+        //< backend learns "the high bytes are already 0" and can narrow the following store. No
+        //< code must rely on the zero-fill surviving ("Correctness is not entrusted to zero
+        //< filling" in ksplc/docs/DESIGN-backends.md).
         switch cg.env.get_info(cg.env.get_real_type(r.type_id))
         case .array(elem_id, size)
             if size <= 0
@@ -172,9 +155,9 @@ impl Ast_node
         //< It builds a compound literal directly in the memory dest_ptr points at (with no copy)
         //<
         //< Where the literal does not fill all the memory, dest_ptr is first overwritten with a
-        //< zeroinitializer, so it cannot be used where a field's initializer reads dest_ptr itself.
-        //< A variable declaration (`x: T = ::{...}`) cannot read x before its declaration and so is
-        //< safe, but an assignment to an existing binding (`x = ::{ x.a }`) would need a temporary
+        //< zeroinitializer. So it cannot be used where a field's initializer reads dest_ptr itself.
+        //< A variable declaration (`x: T = ::{...}`) cannot read x before its declaration, so it is
+        //< safe. An assignment to an existing binding (`x = ::{ x.a }`) would need a temporary
         //< copy first.
         if !r.covers_whole_aggregate(cg)
             cg.emit_zero_fill(tmp_ptr, r.type_id)
@@ -222,7 +205,7 @@ impl Ast_node
             type_id = elem_id
         default {}
         if idx_node: = child.get_field_init_index()
-            // idx_node can use registers of its own, so the slot's next_reg() call comes after
+            // idx_node can use registers of its own. So the slot's next_reg() call comes after
             // idx_node is evaluated (SSA register numbers must follow allocation order = output
             // order; see emit_llvm_binary).
             idx_val: = idx_node.emit_llvm_expr(cg)
@@ -252,20 +235,3 @@ impl Ast_node
         cg.t_gep(r.type_id).s(", ptr ").s(tmp_ptr)
             .s(", i32 0, i32 \{cg.field_index(r.type_id, field_idx)\}\n")
         return Field_slot::{ .reg = reg, .type_id = type_id, .align = align }
-
-    fn emit_llvm_result_wrap(r: Ast_node$@, cg: Genllvm_ctx$@): U8$[]
-        inner: = r.get_child(0)
-        val_reg: = inner.emit_llvm_expr(cg)
-
-        tmp1: = cg.next_reg()
-        cg.s("    %\{tmp1\} = insertvalue ")
-        cg.t(r.type_id).s(" zeroinitializer, i8 0, \{cg.field_index(r.type_id, 0)\}\n")
-
-        if !sema_type_env.is_void(inner.type_id)
-            tmp2: = cg.next_reg()
-            cg.s("    %\{tmp2\} = insertvalue ")
-            cg.t(r.type_id).s(" %\{tmp1\}, ").t(inner.type_id).s(" ").s(val_reg)
-                .s(", \{cg.field_index(r.type_id, 2)\}\n")
-            return cg.reg_str(tmp2)
-
-        return cg.reg_str(tmp1)

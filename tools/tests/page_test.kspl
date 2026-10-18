@@ -1,5 +1,6 @@
 //< The URL that opens kspage, the page handing it to a browser, and the running-server note
 import "std/chars"
+import "std/ds" { List }
 import "std/fs"
 import "std/io"
 import "std/mem" { Arena, dealloc }
@@ -14,8 +15,8 @@ import "tools/tour_page" as tour
 // Tests the URL that opens kspage, the page that hands it to a browser, and the paths in the note
 // (`tools/kspage_aim.kspl`).
 //
-// It is tested because **a mistake here breaks nothing visible**: a badly built URL opens the page,
-// which stays blank and says nothing, and a token on a command line shows only to someone else's
+// It is tested because **a mistake here breaks nothing visible.** A badly built URL opens the page,
+// which stays blank and says nothing. A token on a command line shows only to someone else's
 // `ps`. `make kspage` uses the same code, so this also keeps the building from moving back into
 // the Makefile.
 // ==========================================
@@ -67,9 +68,9 @@ fn test_the_url_keeps_the_token_last() //< the query goes before the fragment, t
     assert(kept.equals("http://h:1/?doc=out%5Csample.kspage#t=k"),
         "on POSIX \\ is escaped as part of the name")
     sb.clear()
-    // **Every mark the page's query reader would turn into something else is escaped**, or it
-    // opens, and Save overwrites, another file: `+` reads as a space, `%2F` as a separator, `&` and
-    // `=` start a setting of their own.
+    // **Every mark the page's query reader would turn into something else is escaped.** Otherwise
+    // it opens another file, and Save overwrites it. `+` reads as a space, `%2F` as a separator,
+    // `&` and `=` start a setting of their own.
     marks: = aim.url_for("http://h:1/#t=k", "notes%2Fa+b&read=1.kspage", false, sb@)
     assert(marks.equals("http://h:1/?doc=notes%252Fa%2Bb%26read%3D1.kspage#t=k"),
         "%, +, & and = in a name are escaped")
@@ -123,8 +124,8 @@ fn test_the_note_lists_the_running_servers() //< the note is a run of records, n
     a: = aim.state_record(first, 0)
     assert(a[0].equals("http://127.0.0.1:8080/#t=k9"), "a record holds the URL to open")
     assert(a[1].equals("."), "a record holds the folder being served")
-    // A server for a different folder is **added**, not written over (written over, the first one
-    // is lost, holding its port with nobody able to reuse it).
+    // A server for a different folder is **added**, not written over. Written over, the first one
+    // is lost, and it holds its port with nobody able to reuse it.
     $two: = Str_builder.new()
     defer two.free()
     both: = aim.state_text("http://127.0.0.1:8081/#t=zz", "/home/me/docs", first, two@)
@@ -250,8 +251,8 @@ fn test_where_the_file_lives() //< a path splits into its folder and its name
 
 fn test_the_browser_is_handed_a_page_not_the_url() //< the token stays off the command line
     //<
-    //< **A command line is open to every user on the machine** (`ps`), so the browser is started on
-    //< a page that moves on to the URL, and only its owner may read that page.
+    //< **A command line is open to every user on the machine** (`ps`). So the browser is started on
+    //< a page that moves on to the URL. Only its owner can read that page.
     verdict.start("[tools/kspage_aim] handing the browser a page, not the URL test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
@@ -309,7 +310,7 @@ fn test_the_note_is_written_for_its_owner() //< the note and the log hold the to
     note: = fs.join(dir, "kspage_open.state", arena)
     // **A note written before stands with the mode it was made with**, which must not carry over.
     io.write_file(note, "old") catch panic("the probe file must be writable")
-    aim.write_owned(note, "new", arena) catch panic("the note should be written")
+    aim.write_owned(note, "new") catch panic("the note should be written")
     assert(holding(note, "new") && !holding(note, "old"), "the note holds what was written last")
     assert(owner_only(note, arena), "only its owner may read the note")
     names: = fs.read_dir(dir, arena) catch panic("the folder should be readable")
@@ -321,9 +322,9 @@ fn test_the_note_is_written_for_its_owner() //< the note and the log hold the to
 // ==========================================
 // Tests the functions that read the record of the published API and compare it
 // (`tools/surface_rows.kspl`).
-// Note: It is tested because **a mistake here breaks nothing visible**: `make test-surface` passes
-// on 0 differences, so a reader that keeps no row or a comparer that always returns 0 stays green
-// and silent when the API changes, and it is noticed only after shipping.
+// Note: It is tested because **a mistake here breaks nothing visible.** `make test-surface` passes
+// on 0 differences. So a reader that keeps no row, or a comparer that always returns 0, stays green
+// and silent when the API changes. Nobody notices until after shipping.
 // ==========================================
 
 fn test_reading_the_record(arena: Arena$@) //< the record's text becomes a list of rows
@@ -503,7 +504,7 @@ fn test_what_a_file_says_of_itself(arena: Arena$@) //<
 // ==========================================
 // Tests the tool that writes the language tour (`tools/tour_page.kspl`)
 // **A mistake here gives a page that says less than the program does** (a step dropped, a block
-// cut short), and `make test-docs` stays green, since the page matches the same broken writer.
+// cut short). `make test-docs` stays green, since the page matches the same broken writer.
 // ==========================================
 priv const laid_sample: U8[] =
     "import \"std/io\"\n\npriv const limit: Sz = 4 //< a name for a value\n  //<\n  //< it cannot \
@@ -512,27 +513,52 @@ priv const laid_sample: U8[] =
         global\n\nfn main(): I32\n  return 0\n"
 
 fn test_a_step_per_described_declaration(arena: Arena$@) //<
-    //< One step per top-level `//<`, with its name, its prose and its code
+    //< The imports, then one step per top-level `//<`, with its name, its prose and its code
     verdict.start("[tools/tour] the walk's steps test...")
-    steps: = tour.walk_steps(laid_sample, arena)
-    assert(steps.len == 3, "the three that carry a description, and not the helper")
-    assert(steps.get(0).name.equals("limit"), "a `const` names the word after the keyword")
-    assert(steps.get(0).title.equals("a name for a value"), "the title is the words after the mark")
-    assert(steps.get(0).prose.equals("it cannot be assigned to."),
+    steps: = tour.walk_steps(laid_sample, arena) catch e
+        verdict.check("the sample walks", false, arena.text().s("\{e\}").take())
+        return
+    assert(steps.len == 4, "the imports, then the three that carry a description")
+    assert(steps.get(0).code.equals("import \"std/io\""), "the first step is every import")
+    assert(steps.get(1).name.equals("limit"), "a `const` names the word after the keyword")
+    assert(steps.get(1).title.equals("a name for a value"), "the title is the words after the mark")
+    assert(steps.get(1).prose.equals("it cannot be assigned to."),
         "the prose is the run below the parting, joined into one paragraph")
-    assert(steps.get(0).code.equals("priv const limit: Sz = 4"), "the code carries no `//<`")
-    assert(steps.get(1).code.equals("priv fn twice_of<|T|>(v: T): T\n  return v"),
-        "a body comes with its declaration, and the prose does not")
+    assert(steps.get(1).code.equals("priv const limit: Sz = 4"), "the code carries no `//<`")
+    // **A declaration with no `//<` joins the step before it**: dropped, the joined blocks would
+    // not compile.
+    assert(steps.get(2).code
+        .equals("priv fn twice_of<|T|>(v: T): T\n  return v\npriv fn helper(): I32\n  return 0"),
+        "a body comes with its declaration, an undescribed one after it, and no prose")
     // A top-level mutable starts with its own name (see `page.declared_name`).
-    assert(steps.get(2).name.equals("seen"), "a global's name is its own first word")
+    assert(steps.get(3).name.equals("seen"), "a global's name is its own first word")
     verdict.pass("a described top-level declaration becomes one step, code and prose apart.")
+
+fn test_a_walk_refuses_code_it_cannot_place(arena: Arena$@) //<
+    //< Code with no step to join, and a `//<` with no title, stop the walk instead of vanishing
+    verdict.start("[tools/tour] the walk's refusals test...")
+    $untitled: = false
+    _a: =
+        tour.walk_steps("priv fn helper(): I32\n  return 0\n\nfn main(): I32 //< m\n  return 0\n",
+        arena) catch e
+        untitled = e == .untitled
+        fallback List<|tour.Step|>.new(arena)
+    assert(untitled, "an undescribed declaration before every step is refused")
+    $no_title: = false
+    _b: = tour.walk_steps("fn main(): I32 //<\n  return 0\n", arena) catch e
+        no_title = e == .title_missing
+        fallback List<|tour.Step|>.new(arena)
+    assert(no_title, "a `//<` with nothing after it is refused")
+    verdict.pass("a walk refuses code it cannot place on the page.")
 
 fn test_the_page_holds_the_steps(arena: Arena$@) //<
     //< The page carries a section per step and the printout
     verdict.start("[tools/tour] the page's shape test...")
-    text: = tour.render(laid_sample, "hello", arena)
-    // **The link that climbs out of docs/ is checked by its shape, not written out whole**
-    // (`make test-docref` would resolve it from this file, not from the page).
+    text: = tour.render(laid_sample, "hello", arena) catch e
+        verdict.check("the sample renders", false, arena.text().s("\{e\}").take())
+        return
+    // **The link that climbs out of docs/ is checked by its shape, not written out whole.**
+    // (`make test-docref` would resolve it from this file, not from the page.)
     assert(text.find_str("[`../README").is_some(), "a link climbs out of docs/ first")
     assert(text.find_str("](SPEC-language.md)").is_some(),
         "a link inside docs/ keeps its bare name")

@@ -1,8 +1,8 @@
 //< Turns a type into text to show a person
 //<
-//< Caution: **Keep the knowledge of the surface notation in this file alone.** Mutability's
-//< marking is reversed between the internal form (a postfix immut) and the surface (a `$` before
-//< the sigil), so a stale copy shows a wrong type.
+//< Caution: **Keep the knowledge of the surface notation in this file alone.** Mutability's marking
+//< is reversed between the internal form (a postfix immut) and the surface (a `$` before the
+//< sigil). So a stale copy shows a wrong type.
 //< **A caller of these methods must import this file**, as with `sema/type/arc.kspl`.
 import "ksplc/base/ast" as base_ast
 import "ksplc/base/core" as base_core
@@ -11,9 +11,12 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/chars"
 import "std/str" { Str_builder }
 
-priv const max_generic_key_depth: Sz = 8 //< expand_generic_key_to's recursion limit
+priv const max_generic_key_depth: Sz = 8 //< the type-argument nesting written out in full
     //<
-    //< It also stops a key that reads back as containing itself.
+    //< A deeper argument is written `…`: a polymorphic recursion's instance nests far deeper, and
+    //< its internal name would show past the limit. It also stops a key that reads back as
+    //< containing itself.
+priv const elided_arg: U8[] = "…" //< a type argument past max_generic_key_depth
 
 impl sema_type_env.Env
     fn original_generic_name(r: Self$@, type_str: U8[]): U8[] //<
@@ -46,7 +49,7 @@ impl sema_type_env.Env
                     res = res.s("<|")
                     // The variance list is looked up by the base's name before the `<|`, **not by
                     // the name as written**, where `/` has become `.`.
-                    mask: = r.variance_masks.get(key.sub(0, i)) catch 0
+                    mask: = r.variance_masks.get(key.sub(0, i)).unwrap_or(0)
                     res = r.display_generic_args_to(key.sub(i + 2, close - (i + 2)), mask, depth,
                         res)
                     res = res.s("|>")
@@ -78,12 +81,14 @@ impl sema_type_env.Env
             //< **At a position where the declaration declared mutability (`struct Box<|$T|>`),
             //< restore the mark here** (the surface reverses the internal marking).
         a: = arg.trim_spaces()
-        id: = r.type_to_id.get(a) catch 0
+        id: = r.type_to_id.get(a).unwrap_or(0)
         $res: = w
         if names_mut_pos &&
             !(r.is_const(id) if id != 0 else a.ends_with(base_core.immut_mark))
             res = res.c('$')
-        if id != 0 && depth < max_generic_key_depth
+        if depth >= max_generic_key_depth
+            return res.s(elided_arg)
+        if id != 0
             return r.display_type_to(id, depth + 1, res)
         return r.expand_generic_key_to(a, depth + 1, res)
 
@@ -114,11 +119,6 @@ impl sema_type_env.Env
             if !r.is_const(b)
                 res = res.s("$")
             return res.s("[\{s\}]") if s >= 0 else res.s("[_]")
-        case .result(b, e)
-            // Caution: **Always write the error type.** The language has no `T!` shorthand, so
-            // `I32!` for an `I32!I32` names a type nobody can write.
-            res = r.display_suffix_base_to(b, depth, res).s("!")
-            return r.display_type_to(e, depth, res)
         case .fn_type(sig)
             res = res.s("fn(")
             for i in Range.asc(sig.params.len)
@@ -145,11 +145,19 @@ impl sema_type_env.Env
             real_id: = r.get_clean_real_type(id)
             if r.instance_base(real_id).equals(base_core.option_fqn)
                 inner: = r.instance_arg(real_id, 0)
-                switch r.get_info(inner)
-                case .result(_b, _e)
+                if r.is_result(inner)
                     return r.display_type_to(inner, depth, res.c('(')).s(")?")
-                default
-                    return r.display_suffix_base_to(inner, depth, res).s("?")
+                return r.display_suffix_base_to(inner, depth, res).s("?")
+            // An instance of `Result<|T, E|>` was written `T!E`. **Always write the error type**
+            // (there is no `T!` shorthand); a result on the value's side is bracketed, since
+            // `A!B!E` reads as `A!(B!E)`.
+            if r.is_result(real_id)
+                ok_id: = r.instance_arg(real_id, 0)
+                if r.is_result(ok_id)
+                    res = r.display_type_to(ok_id, depth, res.c('(')).c(')')
+                else
+                    res = r.display_suffix_base_to(ok_id, depth, res)
+                return r.display_type_to(r.instance_arg(real_id, 1), depth, res.c('!'))
             // An instantiated type is written from its record, found by type_id (not the O(cap)
             // walk by name).
             // Caution: **Do not resolve an alias before writing.** An alias is exactly the name the
@@ -165,7 +173,7 @@ impl sema_type_env.Env
             //< Caution: **Write each type argument as a type**, not its internal name, or it shows
             //< `List<|U8 immut[]|>` or `List<|std_ds_List_U8_Const_Slice|>`.
         $res: = w.s(inst.template).s("<|")
-        mask: = r.variance_masks.get(inst.template) catch 0
+        mask: = r.variance_masks.get(inst.template).unwrap_or(0)
         for pos in Range.asc(inst.args.len)
             if pos > 0
                 res = res.s(", ")
@@ -175,7 +183,7 @@ impl sema_type_env.Env
             if depth < max_generic_key_depth
                 res = r.display_type_to(id, depth + 1, res)
             else
-                res = res.s(r.get_str(id))
+                res = res.s(elided_arg)
         return res.s("|>")
 
     fn display_str(r: Self$@, id: I32): Str_builder
@@ -204,7 +212,7 @@ impl sema_type_env.Env
         //< For callers holding no type id (a struct field's parent type name).
         //< Caution: Do not duplicate the notation logic here. Pass a found id to display_type_to.
         b: = Str_builder.new()
-        id: = r.type_to_id.get(name) catch 0
+        id: = r.type_to_id.get(name).unwrap_or(0)
         if id != 0
             r.display_type_to(id, 0, b)
             return b

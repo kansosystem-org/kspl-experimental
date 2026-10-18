@@ -1,11 +1,11 @@
 //< Checks that a copy of the pilot policy kept elsewhere still drives like the one served here
 //<
 //< **This server does not know where copies are kept.** Whoever keeps one names it (`make
-//< check-pilot-copy COPY=<file>` in `kssrv/Makefile`); this starts the server, fetches the policy
-//< it serves, and compares the copy with it at every point the car's sweep visits.
-//< **It compares the manoeuvre, not the bytes.** The weights are trained again at every start, so
-//< their lowest bits change with the optimiser or with FMA contraction, while the answer should
-//< change only when the policy does.
+//< check-pilot-copy COPY=<file>` in `kssrv/Makefile`). This starts the server and fetches the
+//< policy it serves. It compares the copy with it at every point the car's sweep visits.
+//< **It compares the manoeuvre, not the bytes.** The weights are trained again at every start. So
+//< their lowest bits change with the optimiser or with FMA contraction. The answer must change
+//< only when the policy does.
 import "kssrv/tests/car"
 import "kssrv/tests/client"
 import "kssrv/tests/pilot"
@@ -67,7 +67,7 @@ priv fn compare(served: pilot.Blob, copy_path: U8[], arena: Arena$@) //<
     //<
     //< Caution: **Matching manoeuvres are not enough; the versions must match too**
     //< (`__metadata__.kspl_pilot`). The version names the order of the features and the meaning of
-    //< the manoeuvre table, which no tensor shows, and a reader refuses a version it does not know.
+    //< the manoeuvre table, which no tensor shows. A reader refuses a version it does not know.
     //< So a copy whose manoeuvres match exactly still does not run under another version.
     fresh: = arena.text()
         .s("take a fresh copy: curl -s -o \{copy_path\} localhost:<port>/api/pilot").take()
@@ -94,7 +94,7 @@ priv fn read_blob(path: U8[], arena: Arena$@): pilot.Blob? //< the copy, read as
 priv fn sweep(served: pilot.Blob, copy: pilot.Blob, found: List<|U8[]|>$@, arena: Arena$@) //<
     //< Every point where the copy's manoeuvre differs from the served one
     //<
-    //< **A close call is left out of the verdict**: where the served policy barely prefers one
+    //< **A close call is left out of the verdict.** Where the served policy barely prefers one
     //< manoeuvre, the two computations can disagree for that reason alone (`car.tight_margin`).
     scratch: = Arena.new(1024 * 1024)
     defer scratch.free()

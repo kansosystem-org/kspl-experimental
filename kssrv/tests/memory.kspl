@@ -2,8 +2,8 @@
 //<
 //< Not a suite; part of `kssrv/tests/main.kspl`, which starts the server for it (the run
 //< `memory`). **The figure is the server's own heap count** (`heap_bytes` in `/api/status`), not
-//< what the OS reports as resident: that moves with the allocator's caching, which no wave of
-//< clients decides, while the count moves only with what the server holds.
+//< what the OS reports as resident. That moves with the allocator's caching, which no wave of
+//< clients decides. The count moves only with what the server holds.
 import "kssrv/tests/client"
 import "std/ds" { List }
 import "std/fs"
@@ -123,7 +123,7 @@ priv fn settled_heap(auth: U8[], arena: Arena$@): I64?!client.Http_end //<
     for sys.mono_us() < deadline
         st: = client.get(memory_port, "/api/status", auth, arena)!
         doc: = client.doc_of(st, arena)
-        if doc.get("connections_open").as_int64(-1I64) == 1I64
-            return .some(doc.get("heap_bytes").as_int64(-1I64))
+        if doc.get("connections_open").as_int64().unwrap_or(-1I64) == 1I64
+            return .some(doc.get("heap_bytes").as_int64().unwrap_or(-1I64))
         sys.sleep_ms(settle_poll_ms)
     return .none

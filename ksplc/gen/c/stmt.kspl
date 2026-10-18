@@ -38,7 +38,7 @@ priv fn emit_assign_tail(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[], op_tex
         c.s(" = ")
         gen_c_expr.open_signed_div(c, div_op, left_node.type_id)
         emit_assign_target(c, left_node, dst)
-        right_node.close_signed_div(c)
+        right_node.close_signed_div(c, left_node.type_id)
         return
     if emit_wrapped_compound(c, left_node, dst, op_text, right_node)
         return
@@ -86,7 +86,7 @@ priv fn emit_assign_target(c: Genc_ctx$@, left_node: Ast_node$@, dst: U8[])
 priv fn calls_statement_intrinsic(r: Ast_node$@): Bool //<
     //< Whether r calls an intrinsic that returns no value or embeds raw code
     //<
-    //< `__kspl_read_volatile` is not one: the value it reads may be discarded with `(void)()`.
+    //< `__kspl_read_volatile` is not one: the value it reads can be discarded with `(void)()`.
     if r == null || r.kind_id != .k_expr_postfix
         return false
     recv: = r.get_postfix_receiver()
@@ -102,8 +102,8 @@ impl Ast_node
 
         kind: = r.kind_id
         // Caution: **Write it before every statement, not only where the line changes.** The
-        // statements Lower hoists out of one line follow each other there, and without one each C
-        // line between counts as a source line: `!`'s trace named line 14 for a `!` on line 12.
+        // statements Lower hoists out of one line follow each other there. Without one, each C
+        // line between counts as a source line: `!`'s trace names line 14 for a `!` on line 12.
         if kind != .k_stmt_block && kind != .k_stmt_label
             c.emit_line_directive(r, true)
 
@@ -159,7 +159,7 @@ impl Ast_node
     priv fn block_ends_in_jump(r: Ast_node$@): Bool //<
         //< Whether a block ends in an unconditional jump (return / throw / break / continue / goto)
         //<
-        //< Then the following `break;` may be omitted.
+        //< Then the following `break;` can be omitted.
         for $i: = I32::r.children.len - 1; i >= 0; i -= 1
             switch r.get_child(i).kind_id
             case .k_stmt_return, .k_stmt_throw, .k_stmt_break, .k_stmt_continue, .k_stmt_goto
@@ -303,6 +303,8 @@ impl Ast_node
             in_const_init: = c.top_level_var && is_const
             if in_const_init
                 c.const_init_depth += 1
+            // A global's aggregate is plain braces (the reason is at Genc_ctx.brace_init).
+            c.brace_init = c.top_level_var
             expr_node.emit_expr(c)
             if in_const_init
                 c.const_init_depth -= 1
@@ -363,15 +365,16 @@ impl Ast_node
 
     priv fn emit_switch_stmt(r: Ast_node$@, c: Genc_ctx$@)
         cond_node: = r.get_switch_cond()
-        // The switch and its payload bindings write the subject more than once, and anything but a
-        // name would come out as broken C such as `switch (.tag)`; Lower binds it to a temporary.
+        // The switch and its payload bindings write the subject more than once. Anything but a
+        // name would come out as broken C such as `switch (.tag)`. So Lower binds it to a
+        // temporary.
         if !cond_node.is_plain_name()
             r.ice_panic("genc: a switch's subject reached the backend as other than a plain name")
         $cond_slice: = cond_node.get_path_or_ident_name()
         // Caution: **Emit the name as its declaration is emitted**, escaped or made
         // (`../../base/c_name.kspl`). The plain name here makes **the C compiler say
-        // "undeclared"**, which is no KSPL diagnostic and does not say what is wrong: a local named
-        // `near` is declared as `near_kw`, and a `switch (near)` then fails.
+        // "undeclared"**. That is no KSPL diagnostic, and it does not say what is wrong. A local
+        // named `near` is declared as `near_kw`, and a `switch (near)` then fails.
         $safe: = cond_slice.c_safe_name()
         defer safe.free()
         cond_slice = base_core.arena.dup_str(safe.slice())
@@ -417,10 +420,10 @@ impl Ast_node
                     c.s("        break;\n")
                 i += 1
         // sema (process_switch_exhaustiveness) accepts an enum or Bool switch without an explicit
-        // 'default' only if it covers every value, so this branch is never reached at run time. But
-        // a scalar enum is emitted as its base type (`emit_struct_enum_fwd` in
-        // ksplc/gen/c/decl.kspl) and a Bool as an int, so the C compiler does not know that. Even
-        // for an exhaustive switch it wrongly concludes "control can reach the function's end" and
+        // 'default' only if it covers every value. So this branch is never reached at run time.
+        // But a scalar enum is emitted as its base type (`emit_struct_enum_fwd` in
+        // ksplc/gen/c/decl.kspl), and a Bool as an int. So the C compiler does not know that. Even
+        // for an exhaustive switch, it wrongly concludes "control can reach the function's end" and
         // warns with -Wreturn-type.
         if (is_enum || is_bool) && !has_default
             c.s("    default: __builtin_unreachable();\n")
@@ -529,8 +532,8 @@ impl Ast_node
     priv fn emit_case_value(r: Ast_node$@, c: Genc_ctx$@) //<
         //< A non-enum case label, written as the value sema folded
         //<
-        //< Caution: **Do not emit a constant's name**: a C `const` object is no integer constant
-        //< expression, so `case kspl_f_one:` is refused (gcc -O0 says so, -O2 lets it pass).
+        //< Caution: **Do not emit a constant's name.** A C `const` object is no integer constant
+        //< expression. So `case kspl_f_one:` is refused (gcc -O0 says so, -O2 lets it pass).
         switch c.sema.try_eval_constexpr_wide(r)
         case .some(v)
             c.s("(").t(r.type_id).s(")")
@@ -547,7 +550,7 @@ impl Ast_node
         else
             is_res: = c.env.is_result(c.current_ret_id)
             if is_res
-                c.s("    return (").t(c.current_ret_id).s("){ .is_err = false };\n")
+                c.s("    return ").result_open_to(c.current_ret_id, "ok").s(" };\n")
             else
                 c.s("    return;\n")
 
@@ -559,9 +562,10 @@ impl Ast_node
                 c
                     .s("    KSPL_RECORD_TRACE();\n" if r.ival == base_ast_ext.propagated_error
                     else "    KSPL_START_TRACE();\n")
-                c.s("    return (").t(c.current_ret_id).s("){ .is_err = true, .error_code = ")
+                c.s("    return ").result_open_to(c.current_ret_id, "err")
+                    .s(", .payload.err = { .error = ")
                 expr_node.emit_expr(c)
-                c.s(" };\n")
+                c.s(" } };\n")
             else
                 c.s("    exit(")
                 expr_node.emit_expr(c)

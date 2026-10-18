@@ -2,12 +2,12 @@
 //<
 //< The path is `attention_train` / LoRA.
 //< It follows cortex_m_ai_probe.kspl (inference) and likewise avoids malloc with
-//< Arena.from_buffer and uses the cfg(freestanding) panic/std.math. It runs the same check as
-//< test_attention_lora_grad in ksai/tests/param_grad_test.kspl (the host version) — the base
-//< weights frozen, only LoRA learning, the loss falling — on real hardware (in software floating
-//< point). It also checks that saving the learned LoRA adapters to a static byte buffer (a mock
-//< flash) with save_raw and rebuilding them into another instance with load_raw keeps what was
-//< learned (persisting a result learned on the device).
+//< Arena.from_buffer and uses the cfg(freestanding) panic/std.math. On real hardware (in software
+//< floating point), it runs test_attention_lora_grad's check (ksai/tests/param_grad_test.kspl).
+//< The base weights stay frozen, only LoRA learns, and the loss falls. It also saves the learned
+//< LoRA adapters to a static byte buffer (a mock flash) with save_raw. It rebuilds them into
+//< another instance with load_raw, and checks that this keeps what was learned (persisting a
+//< result learned on the device).
 import "ksai/attention_train" as attn_train // adds train_forward_lora/backward_lora to
 // Self_attention
 import "ksai/block_train" // adds train_forward_lora/backward_lora to Transformer_block
@@ -67,11 +67,11 @@ fn ksos_main()
 
     con.check("attention_lora_train", after < before && drift_abs < F32::1.0e-6)
 
-    // Check that saving the LoRA adapters learned on the device to a static byte buffer standing in
-    // for "flash/NVRAM" and rebuilding them (a mock read after a restart) independently of the
-    // original instances (q_lora/v_lora) keeps what was learned. save_set_into/load_set_from
-    // (safetensors plus JSON) need the global heap through Str_builder, but this probe runs on
-    // Arena.from_buffer alone, so it uses the heap-free Lora.save_raw/load_raw.
+    // Save the LoRA adapters learned on the device to a static byte buffer for "flash/NVRAM". Then
+    // rebuild them apart from the original instances (q_lora/v_lora): a mock read after a restart.
+    // Check that they keep what was learned. save_set_into/load_set_from (safetensors plus
+    // JSON) need the global heap through Str_builder. This probe runs on Arena.from_buffer alone,
+    // so it uses the heap-free Lora.save_raw/load_raw.
     q_bytes: Sz = q_lora.raw_size()
     q_lora.save_raw(Void$@::flash_sim@)
     v_lora.save_raw(Void$@::(flash_sim@ + q_bytes))
@@ -87,7 +87,7 @@ fn ksos_main()
 
     con.check("lora_persist", persist_diff_abs < F32::1.0e-6)
 
-    // The variant that freezes the whole block (attention_norm/wq/wk/wv/wo/ffn_norm/fc1/fc2) and
+    // The variant that freezes the whole block (attention_norm/wq/wk/wv/wo/ffn_norm/fc1/fc2). It
     // trains only the LoRA attached to Attention's Q/V and the MLP's fc1/fc2.
     hidden: Sz = 8
     $blk: = nn.Transformer_block<|F32|>.new(d, hidden, seqn, F32::1.0e-5, arena@)

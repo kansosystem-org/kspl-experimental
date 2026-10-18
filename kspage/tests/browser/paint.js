@@ -7,8 +7,8 @@ function kspageProbePaint(ks) {
   const { check, app, canvas, ime, spot, undoKey, openMenu, findBlock, dpr } = ks;
 
   const h1At = app.styleNames().indexOf("heading");
-  // Caution: **Hunt for where the band is** (the start-up rows are the product's sample, so a place
-  // settled up front falls with "0 pixels" once the sample changes), as the cell hunt does.
+  // Caution: **Hunt for where the band is**, as the cell hunt does. The start-up rows are the
+  // product's sample, so a place settled up front falls with "0 pixels" once the sample changes.
   const headY = findBlock("heading");
   check(headY >= 0, "the heading's paragraph is there");
   // **Take it from above where it pressed, wider than the paragraph's length.** The y pressed is
@@ -19,17 +19,17 @@ function kspageProbePaint(ks) {
   const bandAt = () => canvas.getContext("2d")
     .getImageData(0, Math.round(bandTop * dpr), Math.round(60 * dpr), Math.round(72 * dpr)).data;
   // Caution: **Land on the cell by its text, not by pressing down the canvas.** Where the tables
-  // sit moves with the sample's layout, and the first cell a downward scan meets can have nothing
-  // to join or reorder, so the press goes green about being wired while acting on nothing, and its
+  // sit moves with the sample's layout. The first cell a downward scan meets can have nothing to
+  // join or reorder. The press then goes green about being wired while acting on nothing, and its
   // undo takes a neighbouring step back instead. `find` goes the same way as the hunt field, and
   // lands the cursor inside that cell.
   const inCell = (want) => app.find(want, false) && app.cellFrame() !== null;
 
   // 20. A paragraph's fill and frame come out on the canvas.
   //
-  // **This can be seen nowhere else**: with the drawing order wrong, the fill covers the characters
-  // and the line juts into the neighbouring cell, told only by pixels. The fill and the line take
-  // different colours, so the fill cannot pass for a line.
+  // **This can be seen nowhere else.** With the drawing order wrong, the fill covers the
+  // characters and the line juts into the neighbouring cell, told only by pixels. The fill and the
+  // line take different colours, so the fill cannot pass for a line.
   app.setStyleEdge(h1At, { width: 2, color: "#ff00ff", fill: "#0000ff" });
   const walled = app.styleEdge(h1At);
   check(walled.width === 2 && walled.fill === "#0000ff",
@@ -71,7 +71,7 @@ function kspageProbePaint(ks) {
 
   // 22. The buttons that join cells.
   //
-  // **This can be seen nowhere else**: misspell an id of the table menu's buttons and the wasm is
+  // **This can be seen nowhere else.** Misspell an id of the table menu's buttons and the wasm is
   // unhurt (it breaks as "press it and it does not join"). Joining takes the cells it drew in off,
   // so the body's text shortens.
   openMenu("merge-cells");

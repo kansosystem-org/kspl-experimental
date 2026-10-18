@@ -1,15 +1,15 @@
 //< The outline (`textDocument/documentSymbol`): what a file declares, nested as written
 //<
-//< Not a suite; part of `../suite/lsp_test.kspl`. It asks for the outline of a source that parses
-//< and of one that does not.
+//< Not a suite. It is part of `../suite/lsp_test.kspl`. It asks for the outline of a source that
+//< parses and of one that does not.
 //< **It is not a suite of its own**, since one would start the language server a second time
 //< ("Files near the limit and how they split" in `../../README.md`).
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { decl_line, end_text, is_missing }
 import "std/chars" // the single-character checks
 import "std/ds" { List }
 import "std/json" + { Json_builder }
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" // `equals`
 import "std/verdict"
@@ -58,7 +58,8 @@ priv struct Seen //< one symbol as the check reads it
     inside: Bool //< whether the selection lies inside the range
 
 priv fn line_char(v: json.Val): I64 //< a position as one number, the line before the character
-    return v.get("line").as_int64(-1I64) * 100000I64 + v.get("character").as_int64(-1I64)
+    return v.get("line").as_int64().unwrap_or(-1I64) * 100000I64 + v.get("character").as_int64()
+        .unwrap_or(-1I64)
 
 priv fn collect(list: json.Val, depth: Sz, out: List<|Seen|>$@, arena: Arena$@)
     for one in list.arr_list(arena)
@@ -68,8 +69,8 @@ priv fn collect(list: json.Val, depth: Sz, out: List<|Seen|>$@, arena: Arena$@)
             line_char(range.get("start")) <= line_char(sel.get("start")) &&
             line_char(sel.get("end")) <= line_char(range.get("end"))
         out
-            .push(Seen::{ .name = one.get("name").as_str(),
-            .kind = one.get("kind").as_int(-1I32), .depth = depth, .inside = inside })
+            .push(Seen::{ .name = one.get("name").as_str().unwrap_or(""),
+            .kind = one.get("kind").as_int().unwrap_or(-1I32), .depth = depth, .inside = inside })
         collect(one.get("children"), depth + 1, out, arena)
 
 priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
@@ -79,7 +80,7 @@ priv fn found(seen: List<|Seen|>$@, name: U8[], kind: I32, depth: Sz): Bool //<
             return true
     return false
 
-priv fn ask(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val //<
+priv fn ask(c: jsonrpc_client.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val //<
     //< Opens `src` and returns the answer to `documentSymbol` (null where none came)
     c.notify("textDocument/didOpen", lsp_client.did_open(uri, src, arena), lsp_client.send_ms, arena)
         catch {}
@@ -88,10 +89,11 @@ priv fn ask(c: jsonrpc.Client$@, uri: U8[], src: U8[], arena: Arena$@): json.Val
     lsp_client.close(c, uri, arena)
     return got
 
-fn run_outline(c: jsonrpc.Client$@, caps: json.Val, arena: Arena$@) //<
+fn run_outline(c: jsonrpc_client.Client$@, caps: json.Val, arena: Arena$@) //<
     //< Checks the outline of a source that parses and of one that does not
     verdict.check("it names documentSymbol among its capabilities",
-        caps.get("documentSymbolProvider").as_bool(false), lsp_client.dump(caps, arena))
+        caps.get("documentSymbolProvider").as_bool().unwrap_or(false),
+        lsp_client.dump(caps, arena))
 
     got: = ask(c, outline_uri, outline_src, arena)
     d: = lsp_client.dump(got, arena)
@@ -128,7 +130,7 @@ fn run_outline(c: jsonrpc.Client$@, caps: json.Val, arena: Arena$@) //<
 
 // ==========================================
 // Reads the answer of `semanticTokens/full`, kept apart from the suite that asks for it
-// Note: It is kept apart from `../suite/lsp_test.kspl` and uses nothing else there: it decodes
+// Note: It is kept apart from `../suite/lsp_test.kspl` and uses nothing else there. It decodes
 // five-number rows and knows no JSON-RPC. The reference goes one way, from the suite into here
 // ("Files near the limit and how they split" in `../../README.md`).
 // ==========================================
@@ -156,10 +158,10 @@ fn read_tokens(data: json.Val, types: Sz, arena: Arena$@): Toks
     $char: I32 = 0I32
     $first: = true
     for $i: Sz = 0; i + 4 < n; i += 5
-        d_line: = nums.get(i).as_int(-1I32)
-        d_char: = nums.get(i + 1).as_int(-1I32)
-        wide: = nums.get(i + 2).as_int(0I32)
-        kind: = nums.get(i + 3).as_int(-1I32)
+        d_line: = nums.get(i).as_int().unwrap_or(-1I32)
+        d_char: = nums.get(i + 1).as_int().unwrap_or(-1I32)
+        wide: = nums.get(i + 2).as_int().unwrap_or(0I32)
+        kind: = nums.get(i + 3).as_int().unwrap_or(-1I32)
         if d_line < 0I32 || d_char < 0I32
             got.back = true
         if wide <= 0I32
@@ -179,8 +181,8 @@ fn read_tokens(data: json.Val, types: Sz, arena: Arena$@): Toks
 fn off_words(data: json.Val, src: U8[], arena: Arena$@): Sz //<
     //< How many tokens do not cover one whole name as written
     //<
-    //< **A colour on anything but a name is a token nobody wrote there** (one the compiler made,
-    //< read at its own string's positions, lands on a string or inside a keyword). The column is
+    //< **A colour on anything but a name is a token nobody wrote there.** One the compiler made,
+    //< read at its own string's positions, lands on a string or inside a keyword. The column is
     //< taken as the byte, so give it an ASCII source.
     nums: = data.arr_list(arena)
     $line: I32 = 0I32
@@ -189,9 +191,9 @@ fn off_words(data: json.Val, src: U8[], arena: Arena$@): Sz //<
     $at_line: I32 = 0I32 // the line `head` is for
     $bad: Sz = 0
     for $i: Sz = 0; i + 4 < nums.len; i += 5
-        d_line: = nums.get(i).as_int(-1I32)
-        d_char: = nums.get(i + 1).as_int(-1I32)
-        wide: = nums.get(i + 2).as_int(0I32)
+        d_line: = nums.get(i).as_int().unwrap_or(-1I32)
+        d_char: = nums.get(i + 1).as_int().unwrap_or(-1I32)
+        wide: = nums.get(i + 2).as_int().unwrap_or(0I32)
         if d_line > 0I32 || i == 0
             line += d_line
             char = d_char
@@ -221,12 +223,12 @@ priv fn is_name_char(ch: U8): Bool
 
 // ==========================================
 // The call hierarchy from the language server: a starting point, then its callers
-// Not a suite; ksplc's `lsp` suite uses it on a file in its own folder, and the root's `lsp-tree`
-// on the repository's whole tree, so what `lsp-tree` calls is `pub`.
+// Not a suite. ksplc's `lsp` suite uses it on a file in its own folder, and the root's `lsp-tree`
+// on the repository's whole tree. So what `lsp-tree` calls is `pub`.
 // ==========================================
 const heavy_ms: I32 = 60000 //< the default (15 seconds) is not enough
     //<
-    //< A didOpen analyses the document's whole import tree, as many files as a workspace query; at
+    //< A didOpen analyses the document's whole import tree, as many files as a workspace query. At
     //< the default a slow disk misses, and "no answer" cannot be told from "the timeout expired".
 
 pub struct Prepared //<
@@ -235,11 +237,12 @@ pub struct Prepared //<
     pub item: json.Val
     pub raw: U8[]
 
-pub fn prepare_fn(c: jsonrpc.Client$@, rel: U8[], text: U8[], decl: U8[], arena: Arena$@): Prepared //<
-    //< It opens `text` as the document `rel` and sends prepareCallHierarchy at `decl`'s name
-    //<
-    //< Caution: **Return the raw response too**: with no item, only it tells "the worker has no
-    //< answer" from "the timeout expired".
+pub fn prepare_fn(c: jsonrpc_client.Client$@, rel: U8[], text: U8[], decl: U8[], arena: Arena$@):
+    Prepared //<
+        //< It opens `text` as the document `rel` and sends prepareCallHierarchy at `decl`'s name
+        //<
+        //< Caution: **Return the raw response too**: with no item, only it tells "the worker has no
+        //< answer" from "the timeout expired".
     c.notify("textDocument/didOpen", lsp_client.did_open(rel, text, arena), lsp_client.send_ms,
         arena) catch {}
     line: = decl_line(text, decl, arena)
@@ -261,10 +264,13 @@ pub struct Incoming //< the result of incomingCalls: the array of callers
     pub calls: List<|json.Val|> //< the incoming calls, empty where none came
     pub timed_out: Bool //< whether the timeout expired before an answer
 
-pub fn incoming(c: jsonrpc.Client$@, item: json.Val, arena: Arena$@): Incoming //<
+pub fn incoming(c: jsonrpc_client.Client$@, item: json.Val, arena: Arena$@): Incoming //<
     //< who calls `item`
+    //<
+    //< **It walks the workspace**, as references does, so it waits as long (`walk_ms`).
     $b: = Json_builder.new(arena)
     params: = b.obj().set("item", item).build()
-    msg: = c.request("callHierarchy/incomingCalls", params, heavy_ms, arena) catch
+    msg: =
+        c.request("callHierarchy/incomingCalls", params, lsp_client.walk_ms, arena) catch
         return Incoming::{ .calls = List<|json.Val|>.new(arena), .timed_out = true }
     return Incoming::{ .calls = msg.val.get("result").arr_list(arena), .timed_out = false }

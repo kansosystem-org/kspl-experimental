@@ -6,9 +6,11 @@
 //< already-reported flag, and this file stays silent when it is set (`report_*_if_needed`).
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/sema/flow/field" as sema_flow_field
 import "ksplc/sema/flow/track" as sema_flow_track
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/chars" // testing and slicing single characters
 import "std/str"
@@ -63,6 +65,10 @@ fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
 
     if var_name.len == 0 || var_name.starts_with("_")
         return
+    // **A binding whose type was refused is that error's cascade.** Nothing after it was typed, so
+    // "nothing reads it" would only repeat the refusal as a warning.
+    if !is_case_payload && sema_type_env.is_unknown(c.env.get_real_type(decl.type_id))
+        return
 
     // [W0601] ARC inserts hidden retain / release calls, a risk where execution must be
     // deterministic, so it warns at each use. Off by default like I0602 (`##lint(W0601 = on)`), so
@@ -71,7 +77,7 @@ fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
         is_arc_related(c, decl.type_id)
         c.clear_scratch()
             .s("[W0601] Variable '\{var_name\}' has an ARC-managed type, which inserts hidden \
-                retain()/release() calls whose timing is not visible at this declaration. This \
+                retain()/release() calls. Their timing is not visible at this declaration. This \
                 conflicts with deterministic-mode's goal of fully visible execution timing. \
                 Consider explicit ownership (arena/defer) instead, or accept this as an intentional \
                 exception.")
@@ -92,7 +98,7 @@ fn check_local_usage(c: Sema_ctx$@, st: sema_flow_track.Local_state)
             if holds_fixed_array(c, decl.type_id, 0)
                 c.scratch
                     .s(" Note: a fixed array's '.len' folds at compile time, so it does not count \
-                        as a read; declare a 'const' if you only need the length.")
+                        as a read. Declare a 'const' if you only need the length.")
         c.warn(target_node, c.scratch.slice())
     else if is_param && !st.is_reassigned && decl.has_mut_binding_marker()
         // [I0601] The formal-parameter version: not normalized to `let` / `var`, so `$` is checked
@@ -115,9 +121,9 @@ fn err_node_var_name(err_node: Ast_node$@): U8[] //<
 priv fn report_scratch_at(c: sema_flow_track.Df_ctx$@, err_node: Ast_node$@) //<
     //< Reports the message in scratch at err_node, naming the early exit where there is one
     //<
-    //< A defer body is analyzed again at each early exit that leaves it (df_check_defers_on_exit
-    //< in sema/flow/stmt.kspl): the note shows which path reaches the read, and a read already
-    //< reported at one exit is not reported again at the next.
+    //< A defer body is analyzed again at each early exit that leaves it (df_check_defers_on_exit in
+    //< sema/flow/stmt.kspl). The note shows which path reaches the read. A read already reported at
+    //< one exit is not reported again at the next.
     if c.exit_from != null
         if c.reported_in_defers.contains(err_node)
             return
@@ -146,6 +152,8 @@ fn report_freed_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df
         var_name: = err_node_var_name(err_node)
         c.sema.clear_scratch()
             .s("variable '\{var_name\}' may already be freed here (use-after-free or double free)")
+        if state.carried_vars.contains(def)
+            c.sema.scratch.s(", by an earlier pass of the loop around this use")
         report_scratch_at(c, err_node)
         state.remove_freed(def)
 
@@ -158,9 +166,46 @@ fn report_moved_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df
         return
     var_name: = err_node_var_name(err_node)
     c.sema.clear_scratch()
-        .s("variable '\{var_name\}' was moved out of and cannot be used again (its type opts into \
-            'Move_only', so copying it would duplicate an owned handle and free it twice). Borrow \
-            it with '\{var_name\}@' instead of passing it by value, or re-assign it before this \
-            use.")
+        .s("variable '\{var_name\}' was moved out of and cannot be used again. Its type opts into \
+            'Move_only', so copying it would duplicate an owned handle and free it twice. Borrow it \
+            with '\{var_name\}@' instead of passing it by value, or re-assign it before this use.")
+    if state.carried_vars.contains(def)
+        c.sema.scratch.s(" It was moved by an earlier pass of the loop around this use.")
     report_scratch_at(c, err_node)
-    state.moved_vars.remove(def)
+    state.remove_moved(def)
+
+fn report_moved_field_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@,
+    root: Ast_node$@, read: Ast_node$@) //<
+        //< Reports a read of a field moved out of a local, or of what holds that field
+        //<
+        //< `read` is the path read from `root` (a bare name reads the whole binding). A move of
+        //< `b.m` forbids reading `b.m`, `b.m.x` and `b`, not `b.n`. Once reported, the move is
+        //< cleared.
+    if state.moved_fields.items.len == 0
+        return
+    path: = read.field_path_text()
+    for $i: = state.moved_fields.items.len; i > 0; i -= 1
+        m: = state.moved_fields.items.get(i - 1)
+        if m.field_path_root().unwrap_or(null) != root
+            continue
+        moved: = m.field_path_text()
+        if !sema_flow_field.path_is_within(moved, path) &&
+            !sema_flow_field.path_is_within(path, moved)
+            continue
+        root_name: = root_name_of(m)
+        c.sema.clear_scratch()
+            .s("field '\{root_name\}.\{moved\}' was moved out of, so neither it nor what holds it \
+                can be used again. Its type opts into 'Move_only', so copying it would duplicate an \
+                owned handle and free it twice. Borrow it with '\{root_name\}.\{moved\}@' instead \
+                of passing it by value, or assign '\{root_name\}.\{moved\}' a new value before this \
+                use.")
+        report_scratch_at(c, read)
+        state.moved_fields.remove(m)
+        return
+
+priv fn root_name_of(path: Ast_node$@): U8[] //< the name a field path starts from, as written
+    $curr: = path
+    for curr != null && curr.children.len > 0 && curr.kind_id != .k_identifier &&
+        curr.kind_id != .k_expr_path
+        curr = curr.get_child(0)
+    return curr.text if curr != null else ""

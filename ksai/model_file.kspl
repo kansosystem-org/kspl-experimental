@@ -1,14 +1,15 @@
 //< Reads a ksai model from a file, and writes one back
 //<
-//< **This is the only place in `ksai` that imports `std/io`.** Both safetensors and lora take an
-//< already parsed `Safetensors` and a writer to write into, so bare-metal code skips this file:
-//< it passes `embed`ed bytes through `Safetensors.load_from_bytes`, and gets its bytes back from
-//< `Safetensors_writer.finish()`.
+//< **This is the only place in `ksai` that imports `std/io` and `std/fs`.** Both safetensors and
+//< lora take an already parsed `Safetensors` and a writer to write into. So bare-metal code skips
+//< this file. It passes `embed`ed bytes through `Safetensors.load_from_bytes`, and gets its bytes
+//< back from `Safetensors_writer.finish()`.
 import "ksai/lora_set"
 import "ksai/safetensors" as st
 import "ksai/tensor"
+import "std/fs"
 import "std/io"
-import "std/mem" { Arena, dealloc }
+import "std/mem" { Arena }
 
 pub fn load_safetensors( //< reads and parses a model file into the caller's arena
     //<
@@ -18,35 +19,43 @@ pub fn load_safetensors( //< reads and parses a model file into the caller's are
     arena: Arena$@, //< the arena the name-to-tensor index is allocated from
 ): st.Safetensors!st.Safetensors_error //< the parsed file; fails if it cannot be read or parsed
     tensor.require_arena(arena)
-    file_data: = io.read_file(path) catch
+    // **Read straight into the arena**: read onto the heap and copied over, the file is held twice
+    // at the peak. `read_file_capped` sizes its one buffer from the file.
+    file_data: = io.read_file_capped(path, whole_file, arena) catch
         throw .read_failed
-    defer dealloc(Void$@::file_data.ptr)
-    return st.Safetensors.load_from_bytes(arena.dup_str(file_data), arena)!
+    return st.Safetensors.load_from_bytes(file_data, arena)!
+
+priv const whole_file: Sz = Sz::((~0U64) >> U64::(65 - sizeof(Sz) * 8)) //< the largest `Sz`
 
 pub fn save_safetensors( //< writes what a writer has collected as a model file
+    //<
+    //< **A crash or a power cut midway leaves the old file or the new**, never a model cut short.
+    //< `finish` builds the whole file in memory, then hands it to `fs.replace_file`.
     w: st.Safetensors_writer$@, //< the writer, closed by this call
-    path: U8[], //< the file to write; it is created
+    path: U8[], //< the file to write or replace; its folder must exist
 ): Void!st.Safetensors_error
     $out: = w.finish()
     defer out.free()
-    io.write_file(path, out.slice()) catch
+    fs.replace_file(path, out.slice(), .kept) catch
         throw .write_failed
 
 pub fn load_qkv_lora_set<|T|>( //< reads every block's attention adapters directly from a file
     //<
-    //< The names read are "blocks.{i}.attn.{q,v}.lora_*". The file's bytes are copied into the
+    //< The names read are "blocks.{i}.attn.{q,v}.lora_*". The file's bytes are read into the
     //< required arena: freeing it releases the whole set, including a partially loaded set.
     path: U8[], //< the adapter file to read
     n_layers: Sz, //< how many blocks to look for; a missing one is an error
+    q: lora_set.Lora_widths, //< the query projection's widths; an adapter that does not fit fails
+    v: lora_set.Lora_widths, //< the value projection's widths, as `q`
     arena: Arena$@, //< the arena the file's bytes, the array and every matrix are allocated from
 ): lora_set.Qkv_lora<|T|>$@!st.Safetensors_error //< one adapter per block, `n_layers` of them
     s: = load_safetensors(path, arena)!
-    return lora_set.Qkv_lora<|T|>.load_set_from(s, n_layers, arena)!
+    return lora_set.Qkv_lora<|T|>.load_set_from(s, n_layers, q, v, arena)!
 
 pub fn save_qkv_lora_set<|T|>( //< the inverse of `load_qkv_lora_set`: writes adapters to a file
     adapters: lora_set.Qkv_lora<|T|>$@, //< the array to write, one per block
     n_layers: Sz, //< how many of them are written
-    path: U8[], //< the file to write; it is created
+    path: U8[], //< the file to write or replace, as `save_safetensors` writes it
     arena: Arena$@, //< the arena the one-element tensor holding `scale` is allocated from
 ): Void!st.Safetensors_error
     $w: = st.Safetensors_writer.new()

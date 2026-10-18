@@ -1,15 +1,16 @@
 //< What a name in a comment refers to, resolved in the scope of the file holding the comment
 //<
-//< **It resolves as the code beside the comment would**: a parameter or a local where the comment
-//< is (`hidden_by_local`), the file's own declarations, its imports and the prelude, then the
-//< members of what those name. `[W0211]` and the hover's links both ask here, so the two cannot
-//< disagree (Principle 6 in `../../../docs/DESIGN-principles.md`); so does the analysis of a
-//< `T::name` (`read_in_scope`).
+//< **It resolves as the code beside the comment would.** It looks at a parameter or a local where
+//< the comment is (`hidden_by_local`), the file's own declarations, its imports and the prelude.
+//< Then it looks at the members of what those name. `[W0211]` and the hover's links both ask here,
+//< so the two cannot disagree (Principle 6 in `../../../docs/DESIGN-principles.md`). So does the
+//< analysis of a `T::name` (`read_in_scope`).
 //< **Nothing here marks a name used** (`[I0401]`, `[W0206]`): a mention in a comment is not a use.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/cfg_inactive" as base_cfg_inactive
 import "ksplc/base/core" as base_core
+import "ksplc/base/lines" as base_lines
 import "ksplc/base/locate" as base_locate
 import "ksplc/sema/session/ctx" { Sema_ctx, join_dotted_name }
 import "ksplc/sema/session/import_table" as sema_session_import_table
@@ -43,12 +44,6 @@ priv const file_exts: U8[][12] = ::{ "kspl", "ksplb", "md", "c", "h", "txt", "cf
         //<
         //< So `edit.kspl` behind an import named `edit` reads as a file.
         //< **Only a name that resolves to nothing is read this way** (`File_stream.c` is a method).
-
-priv fn skip_spaces(text: U8[], from: Sz): Sz
-    $i: = from
-    for i < text.len && text[i] == ' '
-        i += 1
-    return i
 
 priv fn read_name(text: U8[], from: Sz, close: Sz): Sz //<
     //< How long the dotted name filling `[from, close)` is, or 0 where the span holds anything else
@@ -103,10 +98,10 @@ priv fn tied_to_file(text: U8[], after: Sz): Bool //<
     //< **The document check reads that spelling**; reading it here too would make a second reader.
     $i: = after
     for
-        j: = skip_spaces(text, i)
+        j: = base_lines.skip_blanks(text, i)
         if j >= text.len || text[j] != '/'
             break
-        k: = skip_spaces(text, j + 1)
+        k: = base_lines.skip_blanks(text, j + 1)
         if k >= text.len || text[k] != '`'
             break
         shut: = k + 1 + text.sub_from(k + 1).find_char('`').unwrap_or(text.len)
@@ -115,7 +110,7 @@ priv fn tied_to_file(text: U8[], after: Sz): Bool //<
         i = shut + 1
     if i + 1 < text.len && text[i] == '(' && text[i + 1] == '`'
         return true
-    j2: = skip_spaces(text, i)
+    j2: = base_lines.skip_blanks(text, i)
     for word in file_words
         if text.starts_with(word, j2) && j2 + word.len < text.len && text[j2 + word.len] == '`'
             return true
@@ -171,10 +166,10 @@ priv fn fqn_of(c: Sema_ctx$@, module: U8[], name: U8[]): U8[] //<
 
 priv fn declared_in(c: Sema_ctx$@, file: U8[], name: U8[]): Sema_symbol$@? //<
     //< The top-level declaration `name` in `file`, whatever its visibility
-    env: = c.env.files.get(file) catch null
+    env: = c.env.files.get(file).unwrap_or(null)
     if env == null
         return .none
-    sym: = env.symbols.get(name) catch null
+    sym: = env.symbols.get(name).unwrap_or(null)
     if sym == null
         return .none
     return .some(sym)
@@ -231,9 +226,7 @@ priv fn declares_in_text(text: U8[], name: U8[]): Bool //<
     //< silence, as a warning should.
     $at: Sz = 0
     for at < text.len
-        $end: = at
-        for end < text.len && text[end] != '\n'
-            end += 1
+        end: = base_lines.line_end(text, at)
         $i: = at
         for i < end
             if text[i] == ' ' || text[i] == '\t' || text[i] == '$'
@@ -277,17 +270,17 @@ priv fn type_member(c: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
     //<
     //< **A method another file adds is on the same table**, found while that file is compiled.
     key: = join_dotted_name(owner.fqn, part)
-    sym: = c.symtab.by_fqn.get(key) catch null
+    sym: = c.symtab.by_fqn.get(key).unwrap_or(null)
     if sym != null
         next$ = on_symbol(sym, key)
         return .on
-    template: = c.generics.templates.get(key) catch null
+    template: = c.generics.templates.get(key).unwrap_or(null)
     if template != null
         next$ = At::{ .module = "", .sym = null, .node = template, .fqn = key }
         return .on
     $decl: = owner.node
     if decl == null
-        decl = c.generics.templates.get(owner.fqn) catch null
+        decl = c.generics.templates.get(owner.fqn).unwrap_or(null)
     if decl == null
         return .unsure
     for ch in decl.children
@@ -305,7 +298,7 @@ priv fn type_member(c: Sema_ctx$@, owner: At, part: U8[], next: At$@): Step //<
 priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
     //< What `part` names on what the walk stands on
     if cur.module.len > 0
-        if (c.env.files.get(cur.module) catch null) == null
+        if c.env.files.get(cur.module).is_none()
             return .unsure
         if sym: = declared_in(c, cur.module, part)
             next$ = on_symbol(sym, fqn_of(c, cur.module, part))
@@ -319,7 +312,7 @@ priv fn member_of(c: Sema_ctx$@, cur: At, part: U8[], next: At$@): Step //<
         if sym.type_id == 0
             return .unsure
         base: = bare_type(c.env.get_str(c.env.get_real_type(sym.type_id)))
-        typed: = c.symtab.by_fqn.get(base) catch null
+        typed: = c.symtab.by_fqn.get(base).unwrap_or(null)
         if typed == null || !typed.kind.is_type() || typed.kind.is_alias()
             return .unsure
         return type_member(c, on_symbol(typed, base), part, next)
@@ -346,9 +339,9 @@ fn pointed_at(c: Sema_ctx$@, root: Ast_node$@, file: U8[], at: Sz, name: U8[]): 
 fn read_in_scope(c: Sema_ctx$@, file: U8[], name: U8[]): Pointed //<
     //< What the dotted `name` stands for in `file`'s own scope, with no local in the way
     //<
-    //< **The caller knows the locals**: for a comment, the function it is in (`pointed_at`); for
-    //< the analysis, the scopes it has open (a `::` written as a path, in
-    //< `../body/postfix.kspl`).
+    //< **The caller knows the locals.** For a comment, they are those of the function it is in
+    //< (`pointed_at`). For the analysis, they are the scopes it has open (a `::` written as a path,
+    //< in `../body/postfix.kspl`).
     $cur: = At::{ .module = "", .sym = null, .node = null, .fqn = "" }
     $index: Sz = 0
     $start: Sz = 0

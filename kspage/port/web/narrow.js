@@ -1,12 +1,13 @@
 // ==========================================
-// kspage's JS side — **the table heading kept in view while its table scrolls under the tools**:
-// the first row (the heading by position, `kspage_web_head`) stays at the window's top from when
-// the table's top edge passes under the tools until its last body row leaves, as Numbers does.
+// kspage's JS side — **the table heading kept in view while its table scrolls under the tools**.
+// The first row (the heading by position, `kspage_web_head`) stays at the window's top. It stays
+// from when the table's top edge passes under the tools until its last body row leaves (as in
+// Numbers).
 // **It is a copy on a canvas of its own**: the document's canvas is one long sheet the window
-// scrolls (a band painted there would repaint the whole document for every pixel moved). **It
-// paints the same way as [`draw.js`](draw.js)** (`paintPanels` / `paintBoxes`, cropped to the row),
-// and **sits under the tools** (`#pinned-head` in `page.css`), so a menu covers it; paper never has
-// it. It is split from `draw.js` for the 1000-line-per-file cap (Principle 3).
+// scrolls. A band painted there would repaint the whole document for every pixel moved. **It
+// paints the same way as [`draw.js`](draw.js)** (`paintPanels` / `paintBoxes`, cropped to the
+// row). **It sits under the tools** (`#pinned-head` in `page.css`), so a menu covers it; paper
+// never has it. It is split from `draw.js` for the 1000-line-per-file cap (Principle 3).
 // ==========================================
 function kspagePin(ks) {
   const { w, canvas, scratch, nums } = ks;
@@ -19,8 +20,8 @@ function kspagePin(ks) {
   // The band shown now, in document coordinates (null for none): `y` where it sits, `r*` the row.
   let pinned = null;
 
-  // The band the window's position calls for (the first table whose heading has passed the tools'
-  // bottom while part of it is below); **nothing is painted here**, as following the cursor asks.
+  // The band the window's position calls for: the first table whose heading has passed the tools'
+  // bottom while part of it is below. **Nothing is painted here**, as following the cursor asks.
   function pinnedBand() {
     if (ks.showing >= 0) return null;
     const rect = canvas.getBoundingClientRect();
@@ -65,7 +66,7 @@ function kspagePin(ks) {
     const g = pin.getContext("2d");
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     // The paper's color first, so the row underneath does not show through, **read as computed**
-    // (`readTheme`'s rule in `draw.js`); where it is transparent, the role's own color is used.
+    // (`readTheme`'s rule in `draw.js`). Where it is transparent, the role's own color is used.
     const ground = getComputedStyle(canvas).backgroundColor;
     g.fillStyle = ground && ground !== "rgba(0, 0, 0, 0)" ? ground : ks.paperInkOf();
     g.fillRect(0, 0, band.rw, band.rh);
@@ -77,8 +78,8 @@ function kspagePin(ks) {
     paintBoxes(ks.boxCount(), g, DOC_BOXES, crop, ks.plain, false);
   }
 
-  // **The band is the heading**: a click puts the cursor in that cell (as in a spreadsheet's frozen
-  // row), then following brings the whole row into view under the tools (`followCaret`, `draw.js`).
+  // **The band is the heading.** A click puts the cursor in that cell (as in a spreadsheet's frozen
+  // row). Following then brings the whole row into view under the tools (`followCaret`, `draw.js`).
   pin.addEventListener("pointerdown", (e) => {
     if (pinned === null || e.button !== 0) return;
     e.preventDefault();
@@ -95,7 +96,8 @@ function kspagePin(ks) {
   ks.paintPinned = paintPinned;
   ks.hidePinned = hidePinned;
   // The heading shown now ([table, x, y, w, h] in document coordinates, y where the band sits) or
-  // null, **computed anew from the window's position** so a check can ask right after scrolling.
+  // null. **It is computed anew from the window's position**, so a check can ask right after
+  // scrolling.
   ks.pinnedHead = () => {
     paintPinned();
     return pinned === null ? null : [pinned.table, pinned.rx, pinned.y, pinned.rw, pinned.rh];
@@ -106,15 +108,15 @@ function kspagePin(ks) {
 // kspage's JS side — **the arrow in a table's heading, and the panel it opens**.
 //
 // A table's heading row always has one arrow per column: click it and the panel that filters and
-// sorts that column opens under it. **There is no mode that turns the arrows on first** — Excel has
+// sorts that column opens under it. **There is no mode that turns the arrows on first.** Excel has
 // one, and until it is found, the feature looks missing.
 //
 // **The arrow says whether that column is filtered.** Excel's funnel says that one is somewhere,
 // never which, so every column's menu has to be opened to find out.
 //
 // **The click moves the cursor into that heading cell first.** Filtering, sorting and the values
-// all read the cursor's column, so choosing a column by the arrow and by the cursor is the same
-// act (otherwise there would be a second way of naming a column, and two ways to filter one).
+// all read the cursor's column. So choosing a column by the arrow and by the cursor is the same
+// act. Otherwise there would be a second way of naming a column, and two ways to filter one.
 // It is split from [`draw.js`](draw.js) for the 1000-line-per-file cap (Principle 3).
 // ==========================================
 function kspageNarrow(ks) {
@@ -230,8 +232,8 @@ function kspageNarrow(ks) {
       wrap.appendChild(document.createTextNode(label));
       list.appendChild(wrap);
     };
-    // **"Every value" checks and unchecks what is shown**, not what the search box hides —
-    // otherwise a search followed by "every value" would quietly include what was never read.
+    // **"Every value" checks and unchecks what is shown**, not what the search box hides.
+    // Otherwise a search followed by "every value" would quietly include what was never read.
     const all = document.createElement("label");
     const allBox = document.createElement("input");
     allBox.type = "checkbox";

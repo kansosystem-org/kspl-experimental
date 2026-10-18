@@ -5,7 +5,7 @@
 //< integer, so one wider than 53 bits does not round on the way through.
 import "std/bignat" // `f64_to_bits`
 import "std/chars"
-import "std/ds" { List }
+import "std/ds" { List, Map }
 import "std/mem" + { Arena, Own_arena }
 import "std/stack_limit" { Stack_limit }
 import "std/str" { Str_builder }
@@ -18,25 +18,31 @@ pub enum Val //< one JSON value, of any of the seven kinds
     int_val(i: I64) //< a number written without a point or an exponent
     float_val(f: F64) //< a number with a point or an exponent, kept separate so nothing rounds
     str_val(s: U8[]) //< a string, already unescaped
-    array_val(head: Node$@) //< an array, as a chain of elements
-    obj_val(o: Obj) //< an object; read its members through `get`
+    array_val(a: Arr) //< an array; read its elements through `arr_list` and `get_at`
+    obj_val(o: Obj) //< an object; read its members through `get` and `find`
 
-pub struct Node //< one element of an array, chained to the next
-    pub val: Val //< the element's value
-    pub next: Node$@ //< the element after this one, or null
+priv struct Node
+    val: Val
+    next: Node$@
+
+pub struct Arr //< an array's elements, reachable only through `arr_list` and `get_at`
+    //<
+    //< `Val.array_val`'s payload. It hides the chain as `Obj` hides its members: a payload
+    //< holding a `Node$@` would hand every `switch` a pointer that is null for `[]`.
+    priv head: Node$@
 
 priv struct Member
     key: U8[]
     val: Val
     next: Member$@
 
-pub struct Obj //< an object's members, reachable only through `get` and `has_key`
+pub struct Obj //< an object's members, reachable only through `get` and `find`
     //<
     //< `Val.obj_val`'s payload.
     //< Caution: The payload must not hold a `Member$@` directly. Code outside can bind a `pub
-    //< enum`'s payload (`switch v case .obj_val(head)`), so the priv list would leak out ("Why a
-    //< narrow type may not sit in a position with wide visibility" in docs/DESIGN-language.md).
-    //< Reading an object goes through `get(key)`.
+    //< enum`'s payload (`switch v case .obj_val(head)`). The priv list would then leak out ("Why a
+    //< narrow type cannot stand where visibility is wide" in docs/DESIGN-language.md).
+    //< Reading an object goes through `get(key)` and `find(key)`.
     priv head: Member$@
 
 priv fn append_node(head: Node$@$@, tail: Node$@$@, node: Node$@) //<
@@ -62,8 +68,8 @@ pub struct Json_builder //< makes values, and the two builders that assemble the
 
 pub struct Array_builder //< builds an array in the order elements are pushed
     pub builder: Json_builder //< the builder that allocates the elements
-    pub head: Node$@ //< the first element pushed, or null
-    pub tail: Node$@ //< the last element pushed, so the next one is appended without a walk
+    priv head: Node$@ //< the first element pushed; null for none yet
+    priv tail: Node$@ //< the last element pushed, so the next one is appended without a walk
 
 pub struct Obj_builder //< builds an object; setting a key again replaces it
     pub builder: Json_builder //< the builder that allocates the members
@@ -112,7 +118,7 @@ impl Array_builder
         return r
 
     pub fn build(r: Self): Val //< the array built so far
-        return .array_val(r.head)
+        return .array_val(Arr::{ .head = r.head })
 
 impl Obj_builder
     pub fn set( //< adds a member; an existing key is replaced, not added again
@@ -151,6 +157,13 @@ pub enum Json_error //< why a document could not be read, or cannot be trusted
     too_deep //< deeper than `max_nesting_depth`, or than the stack left can hold
     too_large //< an array's elements need more bytes than this target's `Sz` can count
     trailing_input //< something other than whitespace follows the value
+    duplicate_key(at: Sz) //<
+        //< an object names the same member twice; `at` is where the second name starts in the text
+        //<
+        //< Caution: **A position, not the name.** The name was read into the parse's scratch, which
+        //< a failed parse rewinds. The text is the caller's and outlives the error.
+        //< **Refused, not read first or last wins.** Readers that pick differently would see two
+        //< different documents in one (std/docs/DESIGN-core.md's "Known problems KSPL handles").
     missing_field(missing: U8[]) //< a field in the table is missing from the object.
         //<
         //< Only `into_struct` returns this one.
@@ -176,9 +189,9 @@ pub const max_nesting_depth: Sz = 500 //< the deepest nesting read; deeper fails
 priv const stack_margin: Sz = 64 * 1024 //<
     //< The stack kept free below where a parse stops
     //<
-    //< **The count alone is sized for the main thread.** A thread's stack may be far smaller (512KB
-    //< by default on macOS), so a parse on one also asks where its stack ends ("A walk that must
-    //< not exhaust its stack asks where the stack ends" in `std/docs/DESIGN-system.md`). Below the
+    //< **The count alone is sized for the main thread.** A thread's stack can be far smaller (512KB
+    //< by default on macOS). So a parse on one also asks where its stack ends ("A deep walk asks
+    //< where its stack ends" in `std/docs/DESIGN-system.md`). Below the
     //< check run one level's calls and the throw, which need far less than this.
 
 priv fn enter_nesting(ctx: Parse_ctx$@): Void!Json_error
@@ -199,10 +212,10 @@ priv fn match_str(ctx: Parse_ctx$@, s: U8$[]): Bool
 priv fn is_json_escape(ec: U8): Bool //< the escapes JSON accepts (RFC 8259 §7)
     //<
     //< **This list is the canonical source.**
-    //< `unescape_to_arena` (std/str), which does the decoding, is a shared decoder: it passes a
+    //< `unescape_to_arena` (std/str), which does the decoding, is a shared decoder. It passes a
     //< symbol escape (`\[` and `\-`, used in a grammar's character class) through **as the
     //< character itself**. So the caller decides which escapes are accepted. Without the refusal
-    //< here, `"\-"` would silently pass as `-`, and a notation JSON does not have would be
+    //< here, `"\-"` would silently pass as `-`. A notation JSON does not have would then be
     //< accepted.
     return ec == '"' || ec == '\\' || ec == '/' || ec == 'b' || ec == 'f' || ec == 'n' || ec == 'r'
         || ec == 't' || ec == 'u'
@@ -233,10 +246,10 @@ priv fn parse_string(ctx: Parse_ctx$@): U8[]!Json_error
                 throw .invalid_string
         // **Bytes that are not UTF-8 are refused (RFC 8259 §8.1).** Passed through, they reach a
         // peer whose decoder refuses or replaces them, so the two read different strings.
-        step: = ctx.src.utf8_seq_len(ctx.pos)
-        if step == 0
+        if step: = ctx.src.utf8_seq_len(ctx.pos)
+            ctx.pos += step
+        else
             throw .invalid_string
-        ctx.pos += step
     throw .unexpected_eof
 
 priv fn parse_number(ctx: Parse_ctx$@): Val!Json_error //< reads one number
@@ -344,6 +357,8 @@ priv fn parse_value(ctx: Parse_ctx$@): Val!Json_error
             return parse_number(ctx)!
     throw .invalid_character(c)
 
+priv const key_scan_max: Sz = 16 //< how many keys an object compares one by one before using a set
+
 priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
     enter_nesting(ctx)!
     defer ctx.depth -= 1
@@ -354,12 +369,35 @@ priv fn parse_object(ctx: Parse_ctx$@): Val!Json_error
         return .obj_val(Obj::{ .head = null })
     $head: Member$@ = null
     $tail: Member$@ = null
+    // **A few keys are compared one by one; past that, a set of them.** One by one alone, an
+    // object of a hundred thousand members costs billions of comparisons.
+    $count: Sz = 0
+    $seen: = Map<|U8[], Bool|>.new(ctx.arena)
     for
         skip_ws(ctx)
         // A close after a comma is refused as trailing_comma, not as an `invalid_string` key.
         if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == '}'
             throw .trailing_comma
+        key_at: = ctx.pos
         key: = parse_string(ctx)!
+        if count < key_scan_max
+            $m: = head
+            for m != null
+                if m.key.equals(key)
+                    throw .duplicate_key(key_at)
+                m = m.next
+            if count + 1 == key_scan_max
+                $f: = head
+                for f != null
+                    seen.set(f.key, true)
+                    f = f.next
+                seen.set(key, true)
+        else
+            before: = seen.len
+            seen.set(key, true)
+            if seen.len == before // set replaced rather than added: the key was there
+                throw .duplicate_key(key_at)
+        count += 1
 
         skip_ws(ctx)
         if ctx.pos >= ctx.src.len || (ctx.src.ptr + ctx.pos)$ != ':'
@@ -381,7 +419,7 @@ priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
     skip_ws(ctx)
     if ctx.pos < ctx.src.len && (ctx.src.ptr + ctx.pos)$ == ']'
         ctx.pos += 1
-        return .array_val(null)
+        return .array_val(Arr::{ .head = null })
     $head: Node$@ = null
     $tail: Node$@ = null
     for
@@ -395,7 +433,7 @@ priv fn parse_array(ctx: Parse_ctx$@): Val!Json_error
 
         if check_comma_or_end(ctx, ']')!
             break
-    return .array_val(head)
+    return .array_val(Arr::{ .head = head })
 
 pub struct Doc //< a parsed document: its value, and the arena `parse` built it in given null
     //<
@@ -452,8 +490,8 @@ impl Val
     ): List<|Val|>
         $out: = List<|Val|>.new(arena)
         switch r
-        case .array_val(head)
-            $curr: = head
+        case .array_val(a)
+            $curr: = a.head
             for curr != null
                 out.push(curr.val)
                 curr = curr.next
@@ -489,18 +527,18 @@ impl Val
                 f.fmt(out)
         case .str_val(s)
             out.c('"').escape_and_append(s).c('"')
-        case .array_val(head)
+        case .array_val(a)
             out.c('[')
-            $curr: = head
+            $curr: = a.head
             for curr != null
-                if curr != head
+                if curr != a.head
                     out.c(',')
                 write_break(out, indent, depth + 1)
                 curr.val.dump_at(out, indent, depth + 1)
                 curr = curr.next
             // Caution: **Keep an empty sequence on one line**, as the `[]` other implementations
             // write.
-            if head != null
+            if a.head != null
                 write_break(out, indent, depth)
             out.c(']')
         case .obj_val(o)
@@ -518,45 +556,44 @@ impl Val
             if o.head != null
                 write_break(out, indent, depth)
             out.c('}')
-    pub fn get( //< an object's member, or `null_val`; with a duplicate key, the first one
+    pub fn get( //< an object's member, for reading a path; `null_val` where there is none
         //<
-        //< Neither the parser nor `dump` refuses a duplicate key, so a last-wins parser given the
-        //< same document reads another value.
+        //< **Absent reads as `null`**, so a path stays one line (`v.get("a").get("b").as_str()`);
+        //< where absent and `null` differ, ask `find`. A key names one member.
         //< **It is a linear scan.** Calling it for a list of names the peer chose makes one request
         //< O(members x names).
         r: Self,
         key: U8[], //< the member's name
     ): Val
-        if m: = r.member(key)
-            return m.val
-        return .null_val
-    pub fn has_key( //< whether the member exists, even if it holds `null`
+        return r.find(key).unwrap_or(.null_val)
+
+    pub fn find( //< an object's member, or nothing where the object has none
         //<
-        //< Caution: **`get`'s result is no substitute**: it gives `Val.null_val` both for an absent
-        //< key and for a `null` value.
+        //< **A member holding `null` is found** (`.some(.null_val)`), so this tells an absent key
+        //< from a `null` one. On a value that is not an object, nothing.
         r: Self,
         key: U8[], //< the member's name
-    ): Bool
-        return r.member(key).is_some()
-
-    priv fn member(r: Self, key: U8[]): Member$@? //< the first member of that name
+    ): Val?
         switch r
         case .obj_val(o)
             $m: = o.head
             for m != null
                 if m.key.equals(key)
-                    return .some(m)
+                    return .some(m.val)
                 m = m.next
         default {}
         return .none
 
-    pub fn get_at( //< an array's element, or `null_val` when the position is past the end
+    pub fn get_at( //< an array's element, for reading a path; `null_val` past the end
+        //<
+        //< Past the end reads as `null`, as an absent member does for `get`; `arr_list` gives the
+        //< count.
         r: Self,
         index: Sz, //< which element, counting from 0
     ): Val
         switch r
-        case .array_val(head)
-            $curr: = head
+        case .array_val(a)
+            $curr: = a.head
             $i: Sz = 0
             for curr != null
                 if i == index
@@ -566,65 +603,58 @@ impl Val
         default {}
         return .null_val
 
-    pub fn as_str(r: Self): U8[] //< the string it holds, or empty if it is another kind
+    pub fn as_str(r: Self): U8[]? //< the string it holds, or nothing for another kind
+        //<
+        //< An empty string is `.some("")`, apart from a number, `null` or an absent member.
         switch r
         case .str_val(s)
-            return s
+            return .some(s)
         default {}
-        return ""
+        return .none
 
-    pub fn as_bool( //< the boolean it holds
-        r: Self,
-        default_val: Bool, //< the result when it is another kind
-    ): Bool
+    pub fn as_bool(r: Self): Bool? //< the boolean it holds, or nothing for another kind
         switch r
         case .bool_val(b)
-            return b
+            return .some(b)
         default {}
-        return default_val
+        return .none
 
-    pub fn as_int( //< the integer it holds, when an `I32` holds it
+    pub fn as_int(r: Self): I32? //< the integer it holds, when an `I32` holds it; nothing otherwise
         //<
-        //< Caution: **An integer past `I32` gives the default, never its low bytes**: narrowed,
+        //< Caution: **An integer past `I32` gives nothing, never its low bytes**: narrowed,
         //< 4294967297 would read as 1, and an id that large would match id 1.
-        r: Self,
-        default_val: I32, //< the result when it is another kind, or does not fit
-    ): I32
         switch r
         case .int_val(i)
             if i >= -2147483648I64 && i <= 2147483647I64
-                return I32::i
+                return .some(I32::i)
         default {}
-        return default_val
-    pub fn as_f64( //< the number it holds
+        return .none
+
+    pub fn as_int64(r: Self): I64? //< the integer it holds, at its full width; nothing otherwise
+        //<
+        //< For a value that can exceed 2GB, such as safetensors' `data_offsets`. A number written
+        //< with a point is no integer, however whole.
+        switch r
+        case .int_val(i)
+            return .some(i)
+        default {}
+        return .none
+
+    pub fn as_f64(r: Self): F64? //< the number it holds, or nothing when it is not a number
         //<
         //< It accepts the integer kind too, so `3` and `3.0` need no branch.
-        r: Self,
-        default_val: F64, //< the result when it is not a number
-    ): F64
         switch r
         case .float_val(f)
-            return f
+            return .some(f)
         case .int_val(i)
-            return F64::i
+            return .some(F64::i)
         default {}
-        return default_val
-    pub fn as_int64( //< the integer it holds, at its full width
-        //<
-        //< For a value that can exceed 2GB, such as safetensors' `data_offsets`.
-        r: Self,
-        default_val: I64, //< the result when it is another kind
-    ): I64
-        switch r
-        case .int_val(i)
-            return i
-        default {}
-        return default_val
+        return .none
 
     pub fn equals( //< whether the two hold the same JSON value
         //<
         //< **A number equals only one of its own kind** (`1` is not `1.0`: the reader keeps them
-        //< apart), and a decimal only the same F64, bit for bit, so `-0.0` is not `0.0`. Objects
+        //< apart). A decimal equals only the same F64, bit for bit, so `-0.0` is not `0.0`. Objects
         //< are equal when they hold the same members in any order, a repeated key counted each
         //< time.
         //< Caution: **It is quadratic in an object's members**, as `get` called for each key is.
@@ -633,21 +663,22 @@ impl Val
     ): Bool
         if r.kind_rank() != o.kind_rank()
             return false
+        // The kinds match, so each read below finds o's own value and its fallback is never taken.
         switch r
         case .null_val
             return true
         case .bool_val(b)
-            return b == o.as_bool(!b)
+            return b == o.as_bool().unwrap_or(!b)
         case .int_val(i)
-            return i == o.as_int64(0I64)
+            return i == o.as_int64().unwrap_or(0I64)
         case .float_val(f)
-            return bignat.f64_to_bits(f) == bignat.f64_to_bits(o.as_f64(0.0))
+            return bignat.f64_to_bits(f) == bignat.f64_to_bits(o.as_f64().unwrap_or(0.0))
         case .str_val(s)
-            return s.equals(o.as_str())
-        case .array_val(head)
+            return s.equals(o.as_str().unwrap_or(""))
+        case .array_val(own)
             switch o
             case .array_val(other)
-                return same_elements(head, other)
+                return same_elements(own.head, other.head)
             default {}
             return false
         case .obj_val(own)

@@ -1,6 +1,6 @@
 # The Freenove 4WD car — what is wired to what
 
-**The hardware's own facts** for a Raspberry Pi Pico W (RP2040 / Cortex-M0+, CYW43439 WiFi) on a Freenove FNK0089 4WD mecanum car: pin numbers, PWM frequencies, and the conversion formulae a driver must match. A driver is the code that talks to one part of the car, such as a motor or a sensor.
+**This document gives the hardware's own facts** for a Raspberry Pi Pico W (RP2040 / Cortex-M0+, CYW43439 WiFi) on a Freenove FNK0089 4WD mecanum car. The facts are pin numbers, PWM frequencies, and the conversion formulae a driver must match. A driver is the code that talks to one part of the car, such as a motor or a sensor.
 
 **"The car" is a palm-sized commercial kit carrying one Pico W**, not one a person rides in. The Pico W is a small board holding the RP2040 microcontroller (a computer on one chip) and a CYW43439 WiFi chip.
 
@@ -53,7 +53,7 @@ This table says which RP2040 pin goes to which part of the car. The source is th
 | 0 / 1 | The serial port | TX / RX |
 | 17 / 22 | **Unused** | Unused GPIO |
 
-### The ultrasonic and the LED matrix cannot be used at once
+### The ultrasonic and the LED matrix exclude each other
 
 GPIO 4 / 5 are **one connector shared by two modules** (the official table's "I2C port/Ultrasonic module interface"). In the mecanum arrangement, only one can be plugged in mechanically. The pins change meaning with the module:
 
@@ -83,7 +83,7 @@ Each wheel has its own motor, driven by an H bridge from two PWM pins. **PWM run
 | Negative | 0 | The duty | Turns the other way |
 | 0 | 0 | 0 | Stops |
 
-### On the right side the pin names and forward/back are reversed
+### The right side reverses pin names and forward/back
 
 In the mecanum's formulae, only the right side has its pin groups and wheels swapped. Here `LY` is forward-back, `LX` sideways and `RX` turning, and `FL`, `BL`, `BR`, `FR` are the front-left, back-left, back-right and front-right wheels:
 
@@ -93,7 +93,14 @@ BL = LY - LX - RX      BR = LY + LX + RX
 Motor_M_Move(FL, BL, BR, FR)   // the third argument is BR and the fourth is FR
 ```
 
-`Motor_M_Move(M1,M2,M3,M4)` sends M1 to the front-left pin group, M2 to the rear-left, M3 to the right's first group and M4 to its third, so the real correspondence is:
+`Motor_M_Move(M1,M2,M3,M4)` sends each argument to one pin group:
+
+* M1 to the front-left pin group;
+* M2 to the rear-left;
+* M3 to the right's first group;
+* M4 to the right's third.
+
+So the real correspondence is:
 
 | The pin group | The real wheel |
 |---|---|
@@ -117,7 +124,7 @@ A servo turns to the angle its PWM signal asks for.
 
 ## The battery voltage
 
-The battery reaches the ADC through a voltage divider (two resistors that scale the voltage down to what the pin can read), so the reading is multiplied back up:
+The battery reaches the ADC through a voltage divider. The divider is two resistors that scale the voltage down to what the pin can read. So the reading is multiplied back up:
 
 ```
 voltage = (the ADC value / 1023 * 3.3) * 4       (4 is the voltage divider's coefficient)
@@ -152,7 +159,7 @@ Three sensors under the front of the car tell a dark line from a light floor.
 Each WS2812 is an RGB LED with a small control chip inside it; eight are chained on GPIO 16.
 
 * **A dark element still uses current.** The control IC inside each element takes a static current whether a colour is lit or not, about 0.6mA in Worldsemi's WS2812B datasheet (V5). A lit colour adds its LED's current on top, so darkening an element saves only that part.
-* **The part fitted on this unit is not checked against its marking**, and the static current differs by revision (the WS2812B-V6 rates it under 1µA).
+* **The part fitted on this unit is not checked against its marking.** The static current differs by revision (the WS2812B-V6 rates it under 1µA).
 
 ## Flashing the firmware, and the debug output
 
@@ -164,5 +171,5 @@ Flashing means writing the program (the firmware) into the Pico's storage. The d
 * Reaching the Arduino IDE's Serial Monitor takes a USB CDC driver for the RP2040's USB controller: `ksos/drivers/rp2040/usb_cdc.kspl`.
   * Note: **Before USB is initialized, and where enumeration fails, the buzzer is the only clue.** (Enumeration is the exchange in which the PC learns what a newly plugged-in USB device is.) What each beep count means is stage 2b in [`HOWTO-bring-up.md`](HOWTO-bring-up.md).
 * **USB takes no GPIO.** The RP2040's dedicated pins (`USB_DP` / `USB_DM`) go straight to the micro-USB connector, not the 40-pin header (whose `VBUS` is USB's 5V supply, not a data line). So USB Ethernet can provide the link layer with zero extra parts and zero extra GPIO.
-* **The Serial Monitor's COM port is USB CDC (a virtual serial port), not the UART on GPIO 0/1.** The car has two serial paths, USB's virtual serial and the physical UART (a serial port on two wires) on connector P7, and only the first is in use. The `[0]`, `[1]`, `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins.
+* **The Serial Monitor's COM port is USB CDC (a virtual serial port), not the UART on GPIO 0/1.** The car has two serial paths: USB's virtual serial, and the physical UART (a serial port on two wires) on connector P7. Only the first is in use. The `[0]`, `[1]`, `[17]` and `[22]` on the board's terminals are GPIO numbers, not the pinout diagram's physical pins.
 * **The Pico W's on-board LED is wired to the WiFi chip (CYW43439), not a GPIO** (the plain Pico's is GPIO25). So blinking it needs the WiFi chip initialized and does not suit a first check. This is not checked against the data sheet.

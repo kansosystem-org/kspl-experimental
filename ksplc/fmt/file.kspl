@@ -1,7 +1,7 @@
 //< One file's round trip through the formatter: read, strip, format, restore, write
 //<
 //< **`text.kspl` formats the text; this file handles the file around it.** The BOM, the line
-//< terminator and the shebang come off before formatting and go back on after it, so a file that
+//< terminator and the shebang come off before formatting and go back on after it. So a file that
 //< needs no other change is written back byte for byte. `ksplc fmt` calls it once per file.
 import "kspeg/engine" as kspeg
 import "ksplc/base/cache" as base_cache
@@ -28,7 +28,7 @@ struct Fixed_points //< the record of the texts this ksplc already formats to th
     //<
     //< **A text formatted with no change is recorded, and next time it is not formatted again.**
     //< The record is an empty file named by the key: this ksplc's identity, the style and the
-    //< file's bytes (`key_path`), so a rebuilt formatter or another style finds
+    //< file's bytes (`key_path`). So a rebuilt formatter or another style finds
     //< none. A text that changes is never recorded: only a fixed point is known to stay one.
     dir: U8[] //< the folder holding the records (`<cache folder>/fmt/<generation>`), or empty
     hits: Sz
@@ -66,6 +66,26 @@ impl Fixed_points
 enum Fmt_error //< why one file was left as it was; its diagnostic is already printed
     parse(err: parse_load.Parse_error) //< it could not be read, parsed or written back
     too_deep //< the printer's walk hit its depth limit, so the output is cut short
+    unreadable_output //< the formatted text would not parse again, so it was not written
+
+fn check_reads_back(fmt_out: U8[], in_path: U8[], base_parser: kspeg.Target$@, notes_before: Sz):
+    Void!Fmt_error //<
+        //< It refuses output that reads with more layout problems than the input, or not at all
+        //<
+        //< The output is read under the name `<in_path> (as formatted)`, so a syntax error it
+        //< prints shows the formatted lines, which are on no disk.
+    label: = base_core.arena.text().s(in_path).s(" (as formatted)").take()
+    $notes: = List<|parse_layout.Note|>.new(base_core.arena)
+    code: = parse_load.mend_as_read(fmt_out, label, notes@).code
+    $reads: = notes.len <= notes_before
+    if reads
+        _ast: = parse_load.parse_raw_ast(code, label, base_parser, true) catch
+            reads = false
+    if !reads
+        io.err()
+            .s("\nerror: \{in_path\}: the formatted text would not parse. The file is unchanged. \
+                This is a formatter bug. Report it with the file.\n")
+        throw .unreadable_output
 
 fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_place: Bool,
     fixed: Fixed_points$@): Void!Fmt_error //<
@@ -110,10 +130,16 @@ fn format_file(in_path: U8[], base_parser: kspeg.Target$@, config: Config, in_pl
     defer formatter.free()
     if formatter.too_deep
         io.err()
-            .s("\nerror: source nesting too deep for the formatter (possible pathological input).\n")
+            .s("\nerror: source nesting too deep for the formatter. The input may be excessively \
+                nested.\n")
         throw .too_deep
 
     fmt_out: = formatter.out.slice()
+    // Caution: **Read the output back before it replaces anything.** A formatter bug that breaks a
+    // line where the notation cannot continue it would otherwise write a file that no longer
+    // compiles, and report success.
+    if !fmt_out.equals(work)
+        check_reads_back(fmt_out, in_path, base_parser, laid_notes.len)!
     if had_shebang
         parse_source_fix.unmask_shebang(fmt_out) // forget this and the script's start-up line breaks
     // Caution: **Restore the BOM before writing** (the reason is at `had_bom`).

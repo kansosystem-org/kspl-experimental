@@ -1,18 +1,18 @@
 //< The C runtime that completes both backends' output, as text that ksplc supplies
 //<
-//< **Both backends take the runtime from here** (the C backend writes it around the generated
-//< body, the LLVM backend references its version symbol, `ksplc emit-runtime` writes it alone), so
-//< neither backend imports the other for it.
+//< **Both backends take the runtime from here**, so neither backend imports the other for it.
+//< The C backend writes it around the generated body. The LLVM backend references its version
+//< symbol. `ksplc emit-runtime` writes it alone.
 //< **The declaration half (`write_decls`) goes into every translation unit, and the body half
-//< (`write_impl`) into only one**: in every unit, the body's non-static functions and initialized
-//< globals would be duplicate definitions at link time under a split compile.
+//< (`write_impl`) into only one.** Under a split compile, the body in every unit would make its
+//< non-static functions and initialized globals duplicate definitions at link time.
 import "ksplc/base/cache" as base_cache
 import "ksplc/base/core" as base_core
 import "std/chars"
 import "std/str" { Str_builder }
 // The runtime's sources (the type definitions, the tracing machinery, the panic and bounds checks,
-// the process isolation), kept in `.h` and `.c` files and built into the compiler with embed. Each
-// file's head says which half it is.
+// the process isolation). They are kept in `.h` and `.c` files and built into the compiler with
+// embed. Each file's head says which half it is.
 embed "ksplc/gen/runtime/core.h" as rt_core_decls
 embed "ksplc/gen/runtime/core.c" as rt_core_impl
 embed "ksplc/gen/runtime/freestanding.h" as rt_freestanding_decls
@@ -34,31 +34,31 @@ fn write_decls($w: Writer): Writer //<
     //< The runtime's declaration half (the system headers plus the `.h` side)
     //<
     //< Caution: **Every object-like macro the includes `#define` must be removed by the `#undef`
-    //< below** (`si_pid`, `L_tmpnam`, `math_errhandling`, ...): where KSPL emits the same name
-    //< unprefixed (a local, a parameter, a field), the macro expands.
+    //< below** (`si_pid`, `L_tmpnam`, `math_errhandling`, ...). Otherwise, where KSPL emits the
+    //< same name unprefixed (a local, a parameter, a field), the macro expands.
     w = w
         .s("""
 #define _POSIX_C_SOURCE 200809L
-// The XSI level of the same edition, beside it: sigaltstack, the stack a crash report runs on once
-// the program's own has run out (hosted.c's "A crash says what happened"), is XSI, which the bare
-// POSIX level hides on glibc and musl. Windows has neither level.
+// The XSI level of the same edition, beside it. sigaltstack is XSI. It gives a crash report a
+// stack to run on once the program's own has run out (hosted.c's "A crash says what happened").
+// The bare POSIX level hides XSI on glibc and musl. Windows has neither level.
 #if !defined(_WIN32)
 #define _XOPEN_SOURCE 700
 #endif
 // Caution: **On macOS, always raise _DARWIN_C_SOURCE too.** Apple's headers hide "what is not in
 // POSIX.1" where `_POSIX_C_SOURCE` is defined. What hides includes sysconf's _SC_NPROCESSORS_ONLN
 // (an extension) and even the BSD type aliases <sys/*.h> uses internally (u_int / u_char /
-// u_short). Define nothing and macOS's default is the equivalent of _DARWIN_C_SOURCE, so this is
+// u_short). Define nothing, and macOS's default is the equivalent of _DARWIN_C_SOURCE. So this is
 // the setting that "goes back to the default" (only the declarations multiply; the ABI does
 // not change).
-// Caution: **Place it ahead of the includes.** Defined afterwards it does not take effect, because
-// the include guards of the headers already read are raised.
+// Caution: **Place it ahead of the includes.** Defined afterwards, it does not take effect. The
+// include guards of the headers already read are raised.
 // glibc publishes these unconditionally, so **dropping it passes on Linux and surfaces on
 // macOS alone**.
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif
-// The oldest Windows the runtime is written for is Windows 10, whose C runtime is UCRT: state it
+// The oldest Windows the runtime is written for is Windows 10, whose C runtime is UCRT. State it
 // rather than take the headers' default, which differs per SDK. An older MinGW's is Windows 7,
 // and it hides GetCurrentThreadStackLimits (Windows 8) from kspl_stack_floor.
 // Caution: **Raise WINVER with it**: some headers gate on WINVER alone. A higher one given with
@@ -81,8 +81,8 @@ fn write_decls($w: Writer): Writer //<
             .s("""
 #include <stdio.h>
 // The premise for std/rand.kspl's CSPRNG (kspl_rand_fill, hosted.c) using rand_s() on Windows.
-// #defined after stdlib.h it is ignored by the header guard (where that has already been
-// included), so it has to be defined ahead of here (stdlib.h's first include) without fail. On
+// #defined after stdlib.h, it is ignored by the header guard (where that has already been
+// included). So it must be defined ahead of here (stdlib.h's first include), without fail. On
 // POSIX/macOS it is an unrelated macro name and harmless.
 #define _CRT_RAND_S
 #include <stdlib.h>
@@ -188,7 +188,7 @@ const impl_half_mark: U8[] = "/* ---- kspl runtime implementation half ---- */\n
     //< The mark at the start of the body half
     //<
     //< Caution: **Do not change it.** It appears both in `emit-runtime`'s output and in the
-    //< generated C, where the program's body sits between the two halves, and
+    //< generated C, where the program's body sits between the two halves.
     //< `tests/suite/emit_runtime_test.kspl` cuts both there to compare them.
 
 fn write_impl($w: Writer): Writer //< the runtime's body half (the `.c` side)

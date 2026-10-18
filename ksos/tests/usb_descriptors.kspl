@@ -110,7 +110,7 @@ priv fn parse_body(src: U8[], from: Sz, arena: Arena$@): Arr //<
     //< Reads the rest of `N] = ::{ … }`
     //<
     //< Caution: **Check that the closing `}` is the last thing on its line** (a `;` or a trailing
-    //< `//` comment may follow), or a `}` inside the body ends the list early.
+    //< `//` comment can follow). Otherwise a `}` inside the body ends the list early.
     $j: = from
     for j < src.len && src[j].is_digit()
         j += 1
@@ -168,10 +168,10 @@ priv fn parse_int(t: U8[]): Sz //< decimal, and `0x` hex
     if t.len > 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')
         $n: Sz = 0
         for c in t.sub_from(2)
-            d: = c.hex_val()
-            if d < 0
+            if d: = c.hex_val()
+                n = n * 16 + Sz::d
+            else
                 return bad_value
-            n = n * 16 + Sz::d
         return n
     for c in t
         if !c.is_digit()
@@ -252,8 +252,8 @@ priv fn check_reply_len(src: U8[], arena: Arena$@) //<
     //< Checks each reply_ep0 call in src against its array's length
     //<
     //< Caution: **The array's length and the length passed to reply_ep0 must agree.** **Also check
-    //< calls qualified with `usb_desc.`**: every descriptor from the other file is named that way,
-    //< so without it **the large descriptors drop out of the check entirely**.
+    //< the calls qualified with the prefix `usb_desc.`.** Every descriptor from the other file is
+    //< named that way. Without them, **the large descriptors drop out of the check entirely**.
     $bad: = List<|U8[]|>.new(arena)
     $i: Sz = 0
     for i < src.len
@@ -351,8 +351,8 @@ priv fn push_new(out: List<|Sz|>$@, n: Sz) //< adds n unless out holds it alread
         out.push(n)
 
 priv fn ascending(xs: List<|Sz|>@, arena: Arena$@): List<|Sz|> //< xs sorted, equal ones kept
-    return xs.order_by(fn(a: Sz, b: Sz; ): I32 {
-        return -1 if a < b else (1 if a > b else 0);
+    return xs.order_by(fn(a: Sz@, b: Sz@; ): I32 {
+        return -1 if a$ < b$ else (1 if a$ > b$ else 0);
     }, arena)
 
 priv fn check_config_shape(cfg: List<|Sz|>@, items: List<|Item|>@, nums: List<|Sz|>@,
@@ -567,14 +567,15 @@ priv fn check_mac(mac: List<|Sz|>@, arena: Arena$@) //< the MAC's string descrip
     text: = utf16_text(mac, arena)
     $hex: = text.len == 12
     for c in text
-        if c.hex_val() < 0
+        if c.hex_val().is_none()
             hex = false
     check("the MAC string is 12 hex characters", hex,
         arena.text().s("'").s(text).s("'").take())
     if !hex
         return
     // Caution: The leading octet must be locally administered (bit1) and unicast (bit0=0).
-    first: = Sz::(text[0].hex_val() * 16 + text[1].hex_val())
+    first: =
+        Sz::(text[0].hex_val().unwrap_or(0) * 16 + text[1].hex_val().unwrap_or(0))
     check("the MAC is locally administered and unicast", (first & 0x03) == 0x02,
         arena.text().s("first octet=\{first\}").take())
 

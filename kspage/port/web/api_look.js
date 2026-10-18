@@ -1,13 +1,13 @@
 // ==========================================
-// kspage's JS side — the entry points for styling: colors on text, paragraph and inline styles,
-// the marker, the border and the fill, shapes, and the list of a slide's contents. **They are
-// added to the same `app` as [`api.js`](api.js)** (`api.js` / `api_look.js` /
+// kspage's JS side — the entry points for styling. They cover colors on text, paragraph and
+// inline styles, the marker, the border and the fill, shapes, and the list of a slide's contents.
+// **They are added to the same `app` as [`api.js`](api.js)** (`api.js` / `api_look.js` /
 // `api_show.js` are one `app`). Split off for the 1000-line-per-file cap, and follows the same
 // boundary rules.
 //
 // Caution: **Every entry point replaces the whole.** One that changes a field at a time breaks
-// when a field passed without being read reverts to the default (the caller reads first, then
-// passes it with one thing changed). **A color is passed as a `0xRRGGBB` number** (24-bit, exact
+// when a field passed without being read reverts to the default. The caller reads first, then
+// passes it with one thing changed. **A color is passed as a `0xRRGGBB` number** (24-bit, exact
 // in an F32).
 // ==========================================
 function kspageApiLook(ks) {
@@ -67,8 +67,8 @@ function kspageApiLook(ks) {
         has(spec.italic), spec.italic ? 1 : 0));
     },
     // Toggles bold or italic, leaving the other styling; true if applied. **The styling is replaced
-    // whole**, so the settings are read and only that field changed, between "set" and "the
-    // parent's" ("off" is a setting, passed directly to `paintSpan`).
+    // whole**, so the settings are read, and only that field changes between "set" and "the
+    // parent's". "Off" is a setting, passed directly to `paintSpan`.
     accentSpan(which) {
       const now = this.spanInk();
       const spec = {
@@ -305,9 +305,9 @@ function kspageApiLook(ks) {
     // Whether style `i` can be applied to a paragraph. **The core decides** (a separate check in
     // the page could list a style that is then refused).
     styleFitsBlock(i) { return w.kspage_web_style_fits_block(i) !== 0; },
-    // The name of the current place; **empty means none** (it cannot be pointed at). It is separate
-    // from a style's name. **It attaches to the frame inside a slide, and to the paragraph outside
-    // one** (a table or list inside a frame answers with the outer frame's name).
+    // The name of the current place. **Empty means none** (it cannot be pointed at). It is
+    // separate from a style's name. **It attaches to the frame inside a slide, and to the paragraph
+    // outside one.** A table or list inside a frame answers with the outer frame's name.
     name() {
       const len = w.kspage_web_name();
       return outText(len);
@@ -408,8 +408,8 @@ function kspageApiLook(ks) {
     },
     // Style `i`'s marker; the kind is `MARKS`'s text. **The text's meaning depends on the kind**
     // (the bullet itself, or the text after the number). **Running and chapter numbers have two
-    // texts** (before and after the number; the separator and the after), which the core separates
-    // by a tab and this splits. Other kinds have `before` empty.
+    // texts**: before and after the number (the separator and the after). The core separates them
+    // by a tab, and this splits them. Other kinds have `before` empty.
     styleMark(i) {
       const len = w.kspage_web_style_mark(i, scratch);
       const kind = nums(1)[0];
@@ -434,8 +434,8 @@ function kspageApiLook(ks) {
       return acted(w.kspage_web_set_style_mark(i, at < 0 ? 0 : at, len));
     },
     // Adds one style with a name and returns its index (the existing one's where the name exists).
-    // **A refusal comes back as its reason**: -1 "no name", -2 "the name holds a space" (with one
-    // number, the screen would ask for a name that was already typed).
+    // **A refusal comes back as its reason**: -1 "no name", -2 "the name holds a space". With one
+    // number, the screen would ask for a name that was already typed.
     addStyle(name) {
       const len = stage(name);
       if (len <= 0) return -1;

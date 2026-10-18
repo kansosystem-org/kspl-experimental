@@ -3,11 +3,14 @@
 //< In QEMU's board definition (hw/arm/mps2.c), UART0's (0x40004000's) RX interrupt is wired to
 //< external IRQ 0 (the vector table's exception number 16).
 //< The vector table in ksos/port/cortex_m/startup.S always refers to a symbol named
-//< `uart0_irq0_handler`, but the symbol is weak (the default is in
-//< ksos/port/cortex_m/ksos_port_cm.c), so demos that do not link this driver are unaffected.
+//< `uart0_irq0_handler`. But the symbol is weak (the default is in
+//< ksos/port/cortex_m/ksos_port_cm.c). So demos that do not link this driver are unaffected.
 import "ksos/drivers/cortex_m/scs"
 import "ksos/drivers/mmio"
 import "ksos/drivers/mps2/uart"
+import "ksos/kernel/sync"
+import "ksos/kernel/task"
+import "std/ring"
 
 const uart0_intstatus: U32 = 0x4000400c
 const ctrl_rx_inten: U32 = 0x8
@@ -15,11 +18,19 @@ const intstatus_rx: U32 = 0x2
 
 const uart0_rx_irq: U32 = 0 // external IRQ0 (the mps2-an385's UART0 RX)
 
-$rx_ready: Bool = false
-$rx_byte: U8 = 0
-$rx_isr_count: U32 = 0
+const rx_size: Sz = 16 //< how many received bytes wait for the task before more are dropped
+// The bytes the handler has taken from the data register, oldest first. **One count of `rx_held`
+// stands for each byte here**, so `getc` reads only what a count promised.
+priv $rx_buf: U8[rx_size]
+priv $rx: ring.Ring<|rx_size|>
+priv $rx_held: sync.Sem
+priv $rx_isr_count: U32 = 0
+priv $rx_received: U32 = 0
+priv $rx_dropped: U32 = 0
 
 fn init() //< sets the baud rate, enables TX and RX, the RX interrupt, and NVIC IRQ0
+    rx = ring.Ring<|rx_size|>.new(U8$[]::rx_buf) // before the interrupt can fire
+    rx_held.init(0)
     uart.init() // the baud divisor: QEMU ignores it, a real board does not
     mmio.write32(uart.uart0_ctrl, uart.ctrl_tx_enable | uart.ctrl_rx_enable | ctrl_rx_inten)
     scs.enable_irq(uart0_rx_irq)
@@ -33,27 +44,43 @@ fn puts(s: U8[]): Void!mmio.Driver_error
     uart.puts(s)!
 
 // The NVIC IRQ0 (UART0 RX) interrupt handler. The vector table in ksos/port/cortex_m/startup.S
-// calls it directly (#export keeps the symbol name C sees unchanged).
+// calls it directly (#export keeps the symbol name C sees unchanged). **It keeps every byte until
+// the ring is full**, so a byte arriving before the task has read the last one waits behind it.
+// Caution: **Clear the cause before reading, then read while RX_FULL.** Cleared after the read, the
+// cause of a byte that arrived in between is lost with it, and that byte is never taken.
 #export
 fn uart0_irq0_handler()
-    rx_byte = U8::mmio.read32(uart.uart0_data)
-    mmio.write32(uart0_intstatus, intstatus_rx) // clear the interrupt's cause (write-1-to-clear)
+    mmio.write32(uart0_intstatus, intstatus_rx) // write-1-to-clear
     rx_isr_count += 1
-    rx_ready = true
+    for (mmio.read32(uart.uart0_state) & uart.state_rx_full) != 0
+        one: = U8[1]::{ U8::mmio.read32(uart.uart0_data) }
+        if rx.write(U8[]::one) == 1
+            rx_received += 1
+            rx_held.give() // wakes a task waiting in getc
+        else
+            rx_dropped += 1
 
-fn has_byte(): Bool //< whether the ISR has marked a byte as received
+fn getc(): U8 //< waits for the next received byte; a task only
     //<
-    //< The caller polls this together with WFI (WFI halts the CPU until an interrupt arrives; this
-    //< is not busy polling).
-    return rx_ready
-
-fn take_byte(): U8 //< takes the received byte (check that has_byte() is true before calling it)
-    rx_ready = false
-    return rx_byte
+    //< **While it waits, nothing polls**: the task blocks, and with nothing else to run the
+    //< scheduler sleeps on WFI until the RX interrupt. So wrong NVIC or ISR wiring hangs it.
+    rx_held.take()
+    $one: U8[1] = ::{}
+    // The handler writes the ring too, so the read and the move of its read position are one step.
+    s: = task.irq_save()
+    _n: = rx.read(U8$[]::one)
+    task.irq_restore(s)
+    return one[0]
 
 fn irq_count(): U32 //<
-    //< How many times the ISR has run so far (it should equal the number of bytes received)
+    //< How many times the ISR has run so far
     //<
-    //< It verifies that the ISR really ran: has_byte() alone cannot tell where the flag was set, so
-    //< this independent counter backs it up.
+    //< It verifies that the ISR really ran: getc alone cannot tell where its byte came from. One
+    //< run may take more than one byte, and a run may find none (its byte taken by the run before).
     return rx_isr_count
+
+fn received(): U32 //< how many bytes the ISR has put in the ring
+    return rx_received
+
+fn dropped(): U32 //< how many received bytes found the ring full and were lost
+    return rx_dropped

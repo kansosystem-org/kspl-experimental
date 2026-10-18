@@ -139,12 +139,12 @@ impl Ast_node
         //< `'\b'` is 8 in C and 'b' in KSPL. Emitted as a value, it cannot be misread.
         c.s("\{base_literal.char_literal_byte(r.text)\}")
 
-    fn emit_string_literal(r: Ast_node$@, c: Genc_ctx$@)
+    fn emit_string_literal(r: Ast_node$@, c: Genc_ctx$@, as_init: Bool)
         // Caution: **Do not pass the spelling to C's lexer.** The escapes differ: `\x41` is 'A' in
-        // C but 'x' plus "41" in KSPL, `\101` is 'A' in C but three characters in KSPL, so the
-        // contents and the `.len` (KSPL_STR counts with sizeof) would change through C. Every byte
+        // C but 'x' plus "41" in KSPL; `\101` is 'A' in C but three characters in KSPL. The
+        // contents and the `.len` (KSPL_STR counts with sizeof) would change through C. Each byte
         // the literal stands for (append_literal_bytes in base/literal.kspl, which genllvm uses
-        // too) is emitted with its own C escape; a `\uXXXX` is emitted as its UTF-8 bytes, as C
+        // too) gets its own C escape. A `\uXXXX` is emitted as its UTF-8 bytes, because C
         // rejects a `\u` naming a basic character (Principle 2).
         $bytes: = Str_builder.new()
         defer bytes.free()
@@ -163,4 +163,7 @@ impl Ast_node
         // Caution: **Write it with the node's own type name.** A string's type is a `Slice<|U8|>`
         // instance, whose C type differs from instance to instance though the fields (`ptr`, `len`)
         // match (KSPL accepts it and C fails; Principle 2).
+        if as_init
+            c.s("KSPL_STR_INIT(\{c_str.slice()\})")
+            return
         c.s("KSPL_STR(").t(r.type_id).s(", \{c_str.slice()\})")

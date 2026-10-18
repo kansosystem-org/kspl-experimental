@@ -1,14 +1,15 @@
 //< Log lines that carry a level, so a run can keep only the lines serious enough to matter
 //<
-//< **It imports nothing.** The destination is a `Writer` and nothing else is used, so the same
-//< call works on a host and on a microcontroller with no libc — `std/io`'s `out()` is a
+//< **It imports nothing.** The destination is a `Writer` and nothing else is used. So the same
+//< call works on a host and on a microcontroller with no libc. `std/io`'s `out()` is a
 //< `Writer`, and so is a device console's line buffer. **A line below the threshold is never
 //< built**, so a line that is not emitted costs nothing to assemble.
 
 // ==========================================
-// Caution: **Do not use `std/time` to timestamp a line.** It needs libc, which would exclude a
-// device with no debugger, where a log matters most. A destination that wants a time writes one.
-// The reasons are in "A line that is not emitted is not built" in `std/docs/DESIGN-core.md`.
+// Caution: **Do not use `sys.wall_seconds` to timestamp a line.** It needs libc, which would
+// exclude a device with no debugger, where a log matters most. A destination that wants a time
+// writes one. The reasons are in "A line that is not emitted is not built" in
+// `std/docs/DESIGN-core.md`.
 // ==========================================
 pub enum Level //< how serious a line is, and so whether it is emitted at all
     //<
@@ -16,7 +17,7 @@ pub enum Level //< how serious a line is, and so whether it is emitted at all
     //< `../docs/SPEC-language.md`), so the product uses one vocabulary for severity. **The meaning
     //< still differs**: here a level decides whether the line is emitted at all.
     error //< something did not work, and the run cannot continue as asked
-    warning //< the run continued, and the result may not be what was meant
+    warning //< the run continued, and the result can differ from what was meant
     information //< a step worth seeing on an ordinary run
     hint //< detail wanted only while tracking down a problem
 
@@ -35,7 +36,7 @@ impl Level
     priv fn pressing(r: Self): Bool //<
         //< Whether a line at this level is flushed once it ends, instead of waiting in a buffer
         //<
-        //< **Only the two most serious levels**: a killed run loses its buffered tail, which is
+        //< **Only the two most serious levels.** A killed run loses its buffered tail, which is
         //< where the failure was reported ("Error and warning lines are flushed at once" in
         //< `std/docs/DESIGN-core.md`).
         return r.rank() <= Level.warning.rank()
@@ -62,6 +63,25 @@ priv fn put_num(w: Writer, v: Sz) //< writes a number as decimal
         put_num(w, v / 10)
     w.c('0' + U8::(v % 10))
 
+priv struct Pushing //< the writer a serious line's body goes through, passing each piece on at once
+    //<
+    //< **Nothing tells the logger when a body written through `at` ends.** So the line cannot be
+    //< pushed at its close as `say`'s is. Each piece goes out as it is written instead.
+    dest: Writer
+
+impl Pushing: Writer //< so `at` can hand it out as a serious line's destination
+    fn s(r: Self$@, val: U8[]): Self$@
+        r.dest.s(val).flush()
+        return r
+
+    fn c(r: Self$@, val: U8): Self$@
+        r.dest.c(val).flush()
+        return r
+
+    fn flush(r: Self$@): Self$@
+        r.dest.flush()
+        return r
+
 pub struct Log //< a destination, the lowest level it keeps, and the fields written before a body
     //<
     //< Caution: **This logger owns its destination.** Anything else written there lands in the
@@ -76,13 +96,14 @@ pub struct Log //< a destination, the lowest level it keeps, and the fields writ
     priv open: Bool //< whether a line is open, waiting for its end
     priv hurry: Bool //<
         //< Whether the open line is flushed instead of left in a buffer
+    priv push: Pushing //< what `at` hands out for a serious line; it writes to `dest`
 
 impl Log
     pub fn new( //< creates a logger
         //<
         //< **A body is written unquoted.** **Whether the place is written is chosen here, not per
-        //< line**, so the columns do not shift ("The caller's position reaches `say` as a default
-        //< argument" in `std/docs/DESIGN-core.md`).
+        //< line**, so the columns do not shift ("The caller's position is a default argument" in
+        //< `std/docs/DESIGN-core.md`).
         dest: Writer, //< where the lines go; owned by this logger, not to be shared mid-line
         least: Level, //< the least serious level still kept; anything below it is not built
         tag: U8[], //< the name written before every line, or empty for none
@@ -90,10 +111,10 @@ impl Log
         place: Bool = false, //< whether every line carries the caller's file and line
     ): Log
         return Log::{ .dest = dest, .least = least, .tag = tag, .sep = sep, .place = place,
-            .open = false, .hurry = false }
+            .open = false, .hurry = false, .push = Pushing::{ .dest = dest } }
 
-    // **Write any line that carries a value through this function**: interpolation streams into a
-    // writer, so `"conn #\{n\}"` goes here, and the body does not run when the level is off ("A
+    // **Write any line that carries a value through this function.** Interpolation streams into a
+    // writer, so `"conn #\{n\}"` goes here. The body does not run when the level is off ("A
     // line that is not emitted is not built" in `std/docs/DESIGN-core.md`).
     //   if w: = log.at(.hint) { w.s("x=\{heavy()\}"); }
     pub fn at( //< where to write a line's body, or nothing when the level is filtered out
@@ -102,9 +123,12 @@ impl Log
         file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
         line: Sz = caller_line, //< keep the default unless this is called from a wrapper
     ): Writer?
-        if lv.rank() > r.least.rank()
+        if !r.begin(lv, file, line)
             return .none
-        r.open_line(lv, file, line)
+        // Caution: **Hand out `push` for a serious line, never `dest`.** The line closes only when
+        // the next one opens. So a run killed before then would lose it from the buffer.
+        if r.hurry
+            return .some(r.push@)
         return .some(r.dest)
 
     pub fn say( //< writes one whole line
@@ -112,7 +136,7 @@ impl Log
         //< **It takes text that is already built**; anything that carries a value goes through
         //< `at`.
         //< Caution: **In a wrapper of your own, do not leave the place to its default.**
-        //< `caller_file` looks back one step only, so such a wrapper names itself; take the place
+        //< `caller_file` looks back one step only, so such a wrapper names itself. Take the place
         //< as parameters and pass it on, as this one does ("The caller's position" in
         //< `../docs/SPEC-language.md`).
         r: Self$@,
@@ -121,8 +145,9 @@ impl Log
         file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
         line: Sz = caller_line, //< keep the default unless this is called from a wrapper
     )
-        if w: = r.at(lv, file, line)
-            w.s(text)
+        // The text goes to `dest` in one piece, and `end_line` pushes it with the line end.
+        if r.begin(lv, file, line)
+            r.dest.s(text)
         r.end_line()
 
     pub fn done(r: Self$@) //< ends the open line, if there is one, and flushes
@@ -130,6 +155,13 @@ impl Log
         //< **Call it before the program exits**, or the last line is written without its line end.
         r.end_line()
         r.dest.flush()
+
+    priv fn begin(r: Self$@, lv: Level, file: U8[], line: Sz): Bool //<
+        //< Opens a line at `lv`, or returns false when the level is filtered out
+        if lv.rank() > r.least.rank()
+            return false
+        r.open_line(lv, file, line)
+        return true
 
     priv fn open_line(r: Self$@, lv: Level, file: U8[], line: Sz) //<
         //< Ends any open line and writes the fields that go before a body
@@ -147,8 +179,8 @@ impl Log
     priv fn end_line(r: Self$@) //< ends the open line
         //<
         //< It does nothing when no line is open, so calling it twice is safe.
-        //< Caution: **A serious line is flushed here, not by the caller**, or an `error` on a new
-        //< path waits unseen in a buffer and is lost with the tail (Principle 8 in
+        //< Caution: **A serious line is flushed here, not by the caller.** Otherwise an `error` on
+        //< a new path waits unseen in a buffer and is lost with the tail (Principle 8 in
         //< `../docs/DESIGN-principles.md`).
         if !r.open
             return

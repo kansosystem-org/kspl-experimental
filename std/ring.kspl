@@ -28,9 +28,9 @@ pub struct Ring<|const cap: Sz|> //< a fixed-size byte queue held in memory the 
 impl<|const cap: Sz|> Ring<|cap|>
     pub fn new( //< makes a queue over memory the caller owns
         //<
-        //< **A buffer of any length but `cap` stops the program**, naming both: shorter, the queue
-        //< would write past its end; longer, the bytes past `cap` would never be used, though the
-        //< caller sized them. Take both from one constant (`U8[cap]`).
+        //< **A buffer of any length but `cap` stops the program**, naming both. If shorter, the
+        //< queue would write past its end. If longer, the bytes past `cap` would never be used,
+        //< though the caller sized them. Take both from one constant (`U8[cap]`).
         buf: U8$[], //< the queue's storage, exactly `cap` bytes
     ): Ring<|cap|>
         // cap == 0 would divide by 0 in `step`; this catches the configuration mistake here, not
@@ -62,7 +62,7 @@ impl<|const cap: Sz|> Ring<|cap|>
         //<
         //< A partial write is normal; when everything must fit, check `free_space()` first.
         r: Self$@,
-        src: U8[], //< the bytes to write; the end of them may not fit
+        src: U8[], //< the bytes to write; the end of them can fail to fit
     ): Sz
         room: = r.free_space()
         n: = src.len if src.len < room else room
@@ -85,9 +85,9 @@ impl<|const cap: Sz|> Ring<|cap|>
 
     pub fn peek(r: Self@): U8[] //< the bytes from the read position to the wrap, without copying
         //<
-        //< **It may not be everything in the queue**: data that crosses the wrap needs a second
-        //< `peek` -> `consume` (joining would need a memmove). It is valid until `consume`; a
-        //< `write` that wraps around overwrites it.
+        //< **It can be less than everything in the queue**: data that crosses the wrap needs a
+        //< second `peek` -> `consume` (joining would need a memmove). It is valid until `consume`;
+        //< a `write` that wraps around overwrites it.
         if r.count == 0
             return U8[]::{ .ptr = null, .len = 0 }
         to_end: = cap - r.tail

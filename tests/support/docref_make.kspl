@@ -9,7 +9,6 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 import "std/str"
 import "std/strfmt" as _strfmt
-import "std/sys"
 import "std/verdict"
 import "tests/support/conventions_ci" as ci_layout
 import "tests/support/conventions_scan" as scan
@@ -24,8 +23,8 @@ priv struct Forward //< a pattern the root forwards to a package's `Makefile`
     dir: U8[] //< the folder it forwards to
     suites: Bool //< the names are that `Makefile`'s `suite_found`, not its targets
 
-// Caution: **Add a pattern here when the root gains one**, or its names read as missing; the check
-// below fails on a pattern this table does not hold.
+// Caution: **Add a pattern here when the root gains one**, or its names read as missing. The check
+// below fails on a pattern that this table does not hold.
 priv const forwards: Forward[_] = ::{ Forward::{ .pattern = "test-%", .dir = "ksplc",
     .suites = true }, Forward::{ .pattern = "ksos-%", .dir = "ksos", .suites = false },
     Forward::{ .pattern = "ci-shard-%", .dir = "", .suites = false } }
@@ -127,8 +126,8 @@ priv fn read_mentions(rel: U8[], text: U8[], out: List<|Mention|>$@, arena: Aren
         if ln.trim_spaces().starts_with("```")
             inside = !inside
             continue
-        // The odd pieces are inside a span (a span of double backticks reads the same way), and the
-        // piece before each is the prose that may name its package.
+        // The odd pieces are inside a span (a span of double backticks reads the same way). The
+        // piece before each is the prose that can name its package.
         parts: = ln.split('`', arena)
         for i in Range.asc(parts.len)
             if !inside && i % 2 == 0
@@ -201,7 +200,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     shard_samples: scan.Sample[_] = ::{
         scan.Sample::{ .text = "ci-shard-core", .hits = true },
         scan.Sample::{ .text = "ci-shard-rest", .hits = true },
-        scan.Sample::{ .text = "ci-shard-linux", .hits = false },
+        scan.Sample::{ .text = "ci-shard-linux", .hits = true },
         scan.Sample::{ .text = "ci-shard-unknown", .hits = false },
         scan.Sample::{ .text = "ci-linux-only", .hits = false },
     }
@@ -225,10 +224,7 @@ fn check(arena: Arena$@) //< this check's entry point, called from `suite/docref
     private: = harness.private_docs()
     $mentions: = List<|Mention|>.new(arena)
     for rel in tracked
-        $skip: = !rel.ends_with(".md") || rel.starts_with("private/")
-        for p in private
-            skip = skip || sys.get_file_name(rel).equals(p)
-        if !skip
+        if rel.ends_with(".md") && !harness.is_private_doc(rel, private@)
             read_mentions(rel, harness.read_under_root(rel), mentions@, arena)
     $seen_dirs: = List<|U8[]|>.new(arena)
     $seen_rules: = List<|Rules|>.new(arena)

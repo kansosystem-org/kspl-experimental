@@ -7,8 +7,8 @@
  *
  * **The one function that starts one is kspl_proc_start.** Gathering, lining up, keeping it
  * running and talking back and forth differ only in where the three standard streams go (inherit
- * / a pipe / a file), so C holds one entry taking those as arguments, plus the tools that turn argv
- * into the OS's shape. Waiting, reading and stopping are hosted_proc.c; the rendezvous is
+ * / a pipe / a file). So C holds one entry taking those as arguments, plus the tools that turn
+ * argv into the OS's shape. Waiting, reading and stopping are hosted_proc.c. The rendezvous is
  * assembled on the KSPL side.
  * ============================================================ */
 #ifndef _WIN32
@@ -19,9 +19,9 @@
  * room for argc+1 entries (a NULL is placed at the end). false where it cannot be split.
  *
  * Caution: **Confirm that the number of steps agrees with argc exactly.** A KSPL string can hold a
- * NUL, which here is the separator: one argument splits in two and an argument the caller never
- * wrote is inserted. Only the end position against argv_buf_len tells it, since in the assembled
- * buffer a separating NUL and a content NUL look the same. */
+ * NUL, which here is the separator. One argument splits in two, and an argument the caller never
+ * wrote is inserted. Only the end position against argv_buf_len tells it. In the assembled
+ * buffer, a separating NUL and a content NUL look the same. */
 static Bool kspl_argv_split(const U8 *argv_buf, Sz argv_buf_len, I32 argc, char **out) {
     if (argc <= 0 || argc > 256) return false;
     Sz off = 0;
@@ -60,8 +60,8 @@ static int kspl_pipe_cloexec(int *p) {
 }
 
 /* Where a pipe is marked only after it is opened, a start on another thread forking in between
- * would hand that child the ends: our reader would see EOF only when the unrelated child ends. So
- * there the starts take turns, from the first pipe to the fork. */
+ * would hand that child the ends. Our reader would then see EOF only when the unrelated child
+ * ends. So there the starts take turns, from the first pipe to the fork. */
 #if KSPL_CLOEXEC_IN_CALL
 #define kspl_spawn_take() ((void)0)
 #define kspl_spawn_give() ((void)0)
@@ -71,7 +71,7 @@ static pthread_mutex_t kspl_spawn_lock = PTHREAD_MUTEX_INITIALIZER;
 #define kspl_spawn_give() pthread_mutex_unlock(&kspl_spawn_lock)
 #endif
 
-/* Ends a forked child that could not reach its exec, telling the parent by a byte on `done` (the
+/* Ends a forked child that could not reach its exec. It tells the parent by a byte on `done` (the
  * write end of kspl_proc_start's exec_p). Only async-signal-safe calls, as after any fork. */
 static void kspl_child_fail(int done) {
     char why = 1;
@@ -82,18 +82,19 @@ static void kspl_child_fail(int done) {
 /* Starts one child (the one function; the section heading says why). The KSPL side
  * (std/subproc.kspl) holds the combinations.
  *   stdio … bits: 1/2/4 = pipe stdin/stdout/stderr, 8 = no console window (Windows alone),
- *     16 = the child leads a process group of its own (a job object on Windows), so a kill stops
- *     what it started too (hosted_proc.c's "The groups a terminal's signals are passed on to").
+ *     16 = the child leads a process group of its own (a job object on Windows). With 16, a kill
+ *     stops what it started too (hosted_proc.c's "The groups a terminal's signals are passed on
+ *     to").
  *   out_len / err_len > 0 … that stream to that file (created truncated); else it inherits.
  * Returns hosted_proc.c's handle (0 = failure); a stream with no pipe has end -1 (I/O returns -2).
  * Caution: **Do not specify both a file and a pipe for the same stream** (the file wins).
- * **The same path handed twice is opened once**: two opens keep separate positions and overwrite
+ * **The same path handed twice is opened once.** Two opens keep separate positions and overwrite
  * each other quietly (and on Windows the second is a sharing violation). Opening happens after
  * the fork, so the parent spends no fd on it.
- * **It returns once the child has exec'd**: until then the forked copy still holds every fd of
+ * **It returns once the child has exec'd.** Until then the forked copy still holds every fd of
  * the parent, so a listener closed right after the start could not be bound again. A child that
- * fails before its exec (no such program, a working directory or file it cannot open) is reaped
- * and the start returns 0, as Windows's CreateProcessW fails for the same causes. */
+ * fails before its exec (no such program, a working directory or file it cannot open) is reaped.
+ * The start then returns 0, as Windows's CreateProcessW fails for the same causes. */
 KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, const U8 *cwd_ptr, Sz cwd_len,
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
     char *argv_arr[257];
@@ -180,13 +181,13 @@ fail:
 
 #else
 /* A Windows command line is one string joined by spaces, each argument wrapped in "". Microsoft's
- * parser treats a backslash specially only right before a ", so that run of backslashes is doubled;
- * otherwise a path ending in \ swallows the closing quote and the following arguments merge (an
+ * parser treats a backslash specially only right before a ", so that run of backslashes is doubled.
+ * Otherwise a path ending in \ swallows the closing quote, and the following arguments merge (an
  * argument injection).
- * Caution: Every place calling CreateProcess must come through this function; a copied rule
+ * Caution: Every place calling CreateProcess must come through this function. A copied rule
  * brings the injection back the day only one copy is fixed. */
 /* **Confirm that the number of steps agrees with argc exactly** (the check on off at the
- * end; the reason is at the POSIX side's kspl_argv_split). */
+ * end). The reason is at the POSIX side's kspl_argv_split. */
 
 static Bool kspl_win_build_cmdline(const U8 *argv_buf, Sz argv_buf_len, I32 argc, char *cmd,
     int cmd_cap) {
@@ -268,8 +269,8 @@ static Bool kspl_win_try_dir(const wchar_t *dir, size_t dlen, const wchar_t *nam
 /* Looks a bare program name up in PATH alone and keeps the full path in out; false where it is
  * nowhere. `.exe` is added to a name with no extension, as CreateProcess adds it.
  * Caution: **Search PATH alone, as POSIX's execvp does.** CreateProcess searches this executable's
- * directory, the current directory, the system directory and the Windows directory before PATH, so
- * `bash` names WSL's launcher in System32 in place of the bash on PATH, and a `cc.exe` lying in a
+ * directory, the current directory, the system directory and the Windows directory before PATH.
+ * So `bash` names WSL's launcher in System32 in place of the bash on PATH. A `cc.exe` lying in a
  * directory a build is started from (a cloned repository) runs in place of the compiler. */
 static Bool kspl_win_find_program(const wchar_t *name, wchar_t *out, size_t cap) {
     Bool add_exe = wcschr(name, L'.') == NULL;
@@ -285,7 +286,7 @@ static Bool kspl_win_find_program(const wchar_t *name, wchar_t *out, size_t cap)
             wchar_t *end = wcschr(p, L';');
             size_t len = end != NULL ? (size_t)(end - p) : wcslen(p);
             wchar_t *d = p;
-            /* an entry may be quoted to hold a `;` of its own; the quotes are not part of it */
+            /* an entry can be quoted to hold a `;` of its own; the quotes are not part of it */
             if (len >= 2 && d[0] == L'"' && d[len - 1] == L'"') {
                 d++;
                 len -= 2;
@@ -310,7 +311,7 @@ static Bool kspl_win_is_batch(const char *prog) {
 
 /* Whether an argument run can be handed to cmd.exe as it is.
  * Caution: **Refuse, do not escape.** cmd.exe parses the line again by its own rules, which know
- * nothing of kspl_win_build_cmdline's `\"`: a `"` in an argument closes the quoting, and what
+ * nothing of kspl_win_build_cmdline's `\"`. A `"` in an argument closes the quoting, and what
  * follows (`& del ...`) runs as a command of its own. `%` and `!` expand even inside quotes, and a
  * line break ends the command. With those refused, every argument stays inside its own quotes,
  * where cmd.exe takes `&|<>^()` as they are. */
@@ -338,8 +339,9 @@ static HANDLE kspl_win_std_copy(DWORD which, HANDLE *dup) {
 /* Starts the child handing it the three standard handles in std3 and nothing else
  * (PROC_THREAD_ATTRIBUTE_HANDLE_LIST).
  * Caution: **Do not pass bInheritHandles alone.** It hands the child every inheritable handle of
- * the process, and a start on another thread holds its child's pipe ends inheritable until its own
- * CreateProcessW returns: our child would take them, and that reader see EOF only when ours ends. */
+ * the process. A start on another thread holds its child's pipe ends inheritable until its own
+ * CreateProcessW returns. Our child would take them. That reader would then see EOF only when ours
+ * ends. */
 static BOOL kspl_win_create_listed(wchar_t *wcmd, DWORD flags, const wchar_t *cwd, HANDLE *std3,
     PROCESS_INFORMATION *pi) {
     HANDLE list[3];
@@ -383,12 +385,12 @@ static Bool kspl_win_is_cwd_relative(const char *name) {
 }
 
 /* The command line for argv, on the heap (the caller frees it); NULL where it cannot be built.
- * A bare argv[0] is looked up here, and the line names the full path, so neither CreateProcess
+ * A bare argv[0] is looked up here, and the line names the full path. So neither CreateProcess
  * nor cmd.exe (for a batch file) searches again. A relative one with a directory part is joined
- * onto cwd (where cwd_len > 0): POSIX's exec reads it after the chdir, and CreateProcessW would
+ * onto cwd (where cwd_len > 0). POSIX's exec reads it after the chdir, and CreateProcessW would
  * read it from this process's own directory.
- * Caution: **Measure it in UTF-16 units, after the conversion.** The OS's limit counts those, and
- * counted as UTF-8 bytes a line of kana (three bytes a unit) would be refused at a third of it. */
+ * Caution: **Measure it in UTF-16 units, after the conversion.** The OS's limit counts those.
+ * Counted as UTF-8 bytes, a line of kana (three bytes a unit) would be refused at a third of it. */
 static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 argc,
     const U8 *cwd_ptr, Sz cwd_len) {
     char prog[KSPL_WPATH_CAP * 3];
@@ -445,7 +447,7 @@ static wchar_t *kspl_win_command_line(const U8 *argv_buf, Sz argv_buf_len, I32 a
 KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, const U8 *cwd_ptr, Sz cwd_len,
         I32 stdio, const U8 *out_ptr, Sz out_len, const U8 *err_ptr, Sz err_len) {
     wchar_t cwd_path[KSPL_WPATH_CAP], out_path[KSPL_WPATH_CAP], err_path[KSPL_WPATH_CAP];
-    /* The working directory alone does not go through kspl_path_to_wide: the OS keeps a process's
+    /* The working directory alone does not go through kspl_path_to_wide. The OS keeps a process's
      * current directory under MAX_PATH unless the program opts in (SetCurrentDirectoryW's limit). */
     if (cwd_len > 0 && !kspl_win_to_wide((const char *)cwd_ptr, cwd_len, cwd_path, KSPL_WPATH_CAP)) return 0;
     if (out_len > 0 && !kspl_path_to_wide(out_ptr, out_len, out_path, KSPL_WPATH_CAP)) return 0;
@@ -456,10 +458,10 @@ KSPL_LINK I64 kspl_proc_start(const U8 *argv_buf, Sz argv_buf_len, I32 argc, con
     int pipe_in = (stdio & 1) != 0;
     int pipe_out = (stdio & 2) != 0 && out_len == 0;
     int pipe_err = (stdio & 4) != 0 && err_len == 0;
-    /* 8 asks for no console window: without it, a console child of a console-less parent gets a
+    /* 8 asks for no console window. Without it, a console child of a console-less parent gets a
      * fresh black window of its own (CREATE_NO_WINDOW; ignored for a non-console program).
      * Caution: **Do not ask for it where the child's output is meant to reach the parent's
-     * console** — its writes land nowhere, so the KSPL side asks only where both streams go to
+     * console.** Its writes land nowhere. So the KSPL side asks only where both streams go to
      * files (spawn_redirect in std/subproc.kspl). Ctrl+C in the parent's console no longer
      * reaches the child either, which is why it is not the default. */
     DWORD flags = ((stdio & 8) != 0) ? CREATE_NO_WINDOW : 0;
@@ -569,7 +571,7 @@ static I32 kspl_bits_set(unsigned long long x) {
 int sched_getaffinity(pid_t pid, size_t size, void *mask);
 #endif
 
-/* The number of CPUs this process may run on (for std/sys.kspl's cpu_count). Returns 1 where it
+/* The number of CPUs this process can run on (for std/sys.kspl's cpu_count). Returns 1 where it
  * is unknown.
  * Caution: Do not return 0 or a negative; the caller divides by it.
  * **Ask the affinity first** (`taskset`, a job object, `start /affinity`): the online count says
@@ -647,7 +649,7 @@ KSPL_LINK Sz kspl_exe_path(U8 *buf, Sz cap) {
 #elif defined(__linux__)
     {
         ssize_t got = readlink("/proc/self/exe", (char *)buf, (size_t)(cap - 1));
-        if (got <= 0 || (Sz)got >= cap - 1) return 0; /* a full buffer may be a cut one */
+        if (got <= 0 || (Sz)got >= cap - 1) return 0; /* a full buffer can be a cut one */
         buf[got] = '\0';
     }
 #elif defined(__APPLE__)
@@ -704,11 +706,11 @@ static kspl_env_held *kspl_env_list = NULL;
 /* Reads an environment variable (for std/sys.kspl's env). NULL where there is none. name
  * arrives NUL-terminated.
  * Caution: **Do not call `libc.getenv` directly from the KSPL side.** Windows's narrow side returns
- * the current code page, mixing two encodings; Windows takes the wide API here and converts.
+ * the current code page, mixing two encodings. Windows takes the wide API here and converts.
  * **What it returns stays readable after the next read**, the guarantee std/sys.kspl's get_env
- * states: POSIX lends the environment's own string, which a read does not move, and Windows
- * converts into a copy it never frees. A copy freed at the next read would leave a caller holding
- * two values (`CC` in a link's argv, then `CC` again) with one pointing into freed memory. */
+ * states. POSIX lends the environment's own string, which a read does not move. Windows converts
+ * into a copy it never frees. A copy freed at the next read would leave a caller holding two
+ * values (`CC` in a link's argv, then `CC` again), with one pointing into freed memory. */
 KSPL_LINK const U8 *kspl_get_env(const U8 *name) {
 #ifdef _WIN32
     {

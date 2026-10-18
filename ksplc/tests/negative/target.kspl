@@ -68,9 +68,9 @@ fn main()
 ##error(sizeof(Sz) == 2, "Sz must be 2 bytes")
 // `##error(cond, msg)` stops the compilation where cond is false. It takes the same road as the
 // other diagnostics, so a position is attached and it enters the trailing count too.
-// The directive is placed on line 1. What the shebang rereading touches (has_shebang in
-// ksplc/parse/source_fix.kspl) is only a line 1 opening with `#!`, so this line, opening with
-// `##`, passes through.
+// The directive is placed on line 1. The shebang rereading (has_shebang in
+// ksplc/parse/source_fix.kspl) touches only a line 1 that opens with `#!`. This line opens with
+// `##`, so it passes through.
 // EXPECT: error: Sz must be 2 bytes
 import "std/io"
 
@@ -96,7 +96,7 @@ fn main()
 // EXPECT: error: unknown directive '##foo'
 // EXPECT: known: ##error ##warning ##lint
 // EXPECT: error: unknown directive '##cfg'
-// EXPECT: 'cfg' is an attribute — write '#cfg'
+// EXPECT: 'cfg' is an attribute. Write '#cfg'
 ##foo(1 == 1)
 ##cfg(never)
 
@@ -105,9 +105,9 @@ fn main(): I32
 // ==== case ffi_struct_by_value_llvm
 //< On the LLVM backend, even a plain POD struct cannot cross the C boundary by value
 //<
-//< genllvm does not implement the per-target ABI classification C uses for structs by value, so it
-//< passes aggregates by sret/byval for internal calls alone (ksplc/docs/DESIGN-compiler.md "Passing an
-//< aggregate is an explicit internal ABI"). The C backend accepts this program, hence `--to=llvm`.
+//< genllvm does not implement the per-target ABI classification that C uses for structs by value.
+//< So it passes aggregates by sret/byval for internal calls only (ksplc/docs/DESIGN-backends.md
+//< "Passing an aggregate is an explicit internal ABI"). The C backend accepts this program, hence `--to=llvm`.
 // ARGS: --to=llvm
 // EXPECT: structs cannot be passed or returned by value across C-FFI boundaries on the LLVM backend
 // EXPECT-NOT: 'Wrapper'
@@ -137,9 +137,9 @@ fn main() {}
 // ==== case ffi_unsafe_types
 //< A type whose layout is Kanso's own cannot appear in an `#export`'s signature
 //<
-//< Wrapping it in a struct is the same, and the check walks inside (with the outermost layer alone
-//< it could be dodged by merely wrapping; docs/DESIGN-language.md "The FFI boundary check looks inside the
-//< type").
+//< Wrapping it in a struct is the same: the check walks inside. A check of the outermost layer
+//< alone could be escaped by wrapping (docs/DESIGN-language.md "The FFI boundary check looks inside
+//< the type").
 // EXPECT: interface values cannot cross C-FFI boundaries
 // EXPECT: enums with payloads cannot cross C-FFI boundaries
 // EXPECT: slices (T[]) cannot cross C-FFI boundaries
@@ -194,8 +194,8 @@ fn main() {}
 // ==== case frame_pointer_through_local
 //< A slice or an interface value pointing into the frame is refused through a local too
 //<
-//< **Let it through and it reads a dead frame**: `t: Shape = s; return t` printed 0 on C and
-//< garbage on LLVM, and `s: = I32[]::a; return s` returned a view of a frame that is gone. The
+//< **Let it through and it reads a dead frame**. `t: Shape = s; return t` printed 0 on C and
+//< garbage on LLVM. `s: = I32[]::a; return s` returned a view of a frame that is gone. The
 //< mark follows a local set by its declaration or by `x = …`, from another marked local too
 //< (`note_frame_pointer` in `ksplc/sema/body/stmt_escape.kspl`).
 // EXPECT: cannot return 'cast': it was set from a slice or an interface value built from local storage
@@ -289,10 +289,10 @@ fn main(): I32
 // ==== case lint_promote_to_error
 //< `##lint(CODE = error)` promotes advice to an error
 //<
-//< The promotion includes "running that check", so it is refused even in an ordinary build that is
-//< not in lint mode (without running it, promoting changes nothing = it can be written yet does not
-//< take effect; ksplc/docs/DESIGN-tools.md "lint is configured per diagnostic code, not by a group
-//< name").
+//< The promotion includes "running that check". So it is refused even in an ordinary build that is
+//< not in lint mode. Without the run, the promotion changes nothing: it can be written but has no
+//< effect (ksplc/docs/DESIGN-tools.md "lint is set per diagnostic code, not per
+//< group").
 // EXPECT: error: [I0305]
 ##lint(I0305 = error)
 
@@ -306,9 +306,9 @@ fn main()
 //<
 //< Unmatched, a misspelling such as `##lint(I004 = off)` is silently void, so a suppression
 //< believed in place is not. An unknown code must not pass with zero diagnostics
-//< (ksplc/docs/DESIGN-tools.md "lint is configured per diagnostic code, not by a group name").
+//< (ksplc/docs/DESIGN-tools.md "lint is set per diagnostic code, not per group").
 //< The refusal points at what its reader can open, never at the compiler's own source.
-// EXPECT: unknown diagnostic code 'I004': the codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-tools.md, and 'ksplc explain <code>' prints what one means
+// EXPECT: unknown diagnostic code 'I004'. The codes are listed under "Diagnostic codes, and the errors that have none" in ksplc/docs/SPEC-diagnostics.md. 'ksplc explain <code>' prints what one means
 // EXPECT-NOT: lint_codes.kspl
 // EXPECT: unknown lint level 'maybe'
 ##lint(I004 = off)
@@ -358,7 +358,7 @@ fn helper(): I32
 //< A generic `main` is refused: the start-up code names no type arguments, so no copy is made
 //<
 //< Let it through and the linker reports no `main` at all.
-// EXPECT: main() cannot take type parameters
+// EXPECT: main() must not take type parameters
 fn main<|T|>(): I32
   return 0
 // ==== case main_not_a_function
@@ -381,7 +381,7 @@ fn main(_x: I32): I32
 //< The start-up code in `std/lang` calls main from another file, and a `priv` function is `static`
 //< in the generated C. Let it through and the C compiler's "call to undeclared function" reaches
 //< the user (Principle 2).
-// EXPECT: main() cannot be 'priv'
+// EXPECT: main() must not be 'priv'
 priv fn main()
   return
 // ==== case main_return_type_unusable
@@ -390,8 +390,8 @@ priv fn main()
 //< Returning nothing / an integer / a Result holding one of those as its value.
 //< Caution: Make a Bool or a U8[] writable and
 //< the return value is discarded in silence.
-// EXPECT: main() must return nothing, an integer
-// EXPECT: but returns 'Bool'
+// EXPECT: Return nothing, an integer exit code
+// EXPECT: main() returns 'Bool'
 import "std/io"
 
 fn main(): Bool
@@ -400,9 +400,9 @@ fn main(): Bool
 // ==== case naked_fn_non_asm_statement
 //< A `#naked` function holds assembly statements only
 //<
-//< **Let it through and clang refuses the C** ("non-ASM statement in naked function"), while gcc
-//< builds code that writes to a stack frame the function never set up.
-// EXPECT: a '#naked' function holds only '__kspl_asm_volatile(...)' statements
+//< **Let it through and clang refuses the C** ("non-ASM statement in naked function"). gcc builds
+//< code that writes to a stack frame that the function never set up.
+// EXPECT: a '#naked' function permits only '__kspl_asm_volatile(...)' statements
 #naked
 fn bare(): I32
   x: = 1
@@ -410,3 +410,12 @@ fn bare(): I32
 
 fn main(): I32
   return bare()
+// ==== case asm_operands_llvm_backend
+//< LLVM rejects assembly operands and names alternatives that the compiler accepts
+// ARGS: --to=llvm
+// EXPECT: __kspl_asm_volatile operands are only supported on the C target
+// EXPECT: Compile with --to=c, or write assembly without operands for LLVM
+// EXPECT-NOT: __kspl_inline_c
+fn main(): I32
+  __kspl_asm_volatile("nop", 1)
+  return 0

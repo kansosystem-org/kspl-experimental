@@ -67,9 +67,10 @@ static int kspl_net_wouldblock(void) {
     return errno == EWOULDBLOCK || errno == EAGAIN || errno == EINPROGRESS;
 }
 
-/* A write to a peer that has gone is a failed write, never a SIGPIPE, in a library too, where the
- * program linking it may keep the signal's default (hosted.c's SIGPIPE section): MSG_NOSIGNAL on
- * each send where the OS has it, SO_NOSIGPIPE on the socket where it does not (macOS). */
+/* A write to a peer that has gone is a failed write, never a SIGPIPE. This holds in a library too,
+ * where the program linking it can keep the signal's default (hosted.c's SIGPIPE section).
+ * MSG_NOSIGNAL goes on each send where the OS has it, SO_NOSIGPIPE on the socket where it does not
+ * (macOS). */
 #if defined(MSG_NOSIGNAL)
 #define KSPL_SEND_FLAGS MSG_NOSIGNAL
 static void kspl_net_no_sigpipe(int fd) { (void)fd; }
@@ -82,8 +83,9 @@ static void kspl_net_no_sigpipe(int fd) {
 #endif
 
 /* The four that carry data take types differing per environment (POSIX a void pointer and a
- * size_t, Windows a char pointer and an int); absorbed here so the caller writes no cast. A length
- * reaching them is at most KSPL_NET_PIECE (kspl_tcp_send below), which the int holds. */
+ * size_t, Windows a char pointer and an int). They are absorbed here, so the caller writes no
+ * cast. A length reaching them is at most KSPL_NET_PIECE (kspl_tcp_send below), which the int
+ * holds. */
 static I32 kspl_net_send(kspl_fd_t fd, const U8 *buf, Sz len) {
     return (I32)send(fd, buf, (size_t)len, KSPL_SEND_FLAGS);
 }
@@ -173,7 +175,7 @@ static int kspl_net_wouldblock(void) {
 }
 
 /* The POSIX functions' roles. `socket()` makes an inheritable handle, so the flag is asked of
- * WSASocketW; accept has no flag, and its socket is marked right after, and put back to blocking
+ * WSASocketW. accept has no flag, so its socket is marked right after and put back to blocking
  * (the POSIX side's heading says why). */
 static kspl_fd_t kspl_net_socket(int family, int type) {
     return WSASocketW(family, type, 0, NULL, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
@@ -263,7 +265,7 @@ static int kspl_resolve(const U8 *host_ptr, Sz host_len, I32 port, int socktype,
     /* An empty string on the waiting side is IPv4's every interface (a string, since with the name
      * and service both NULL `getaddrinfo` returns EAI_NONAME).
      * Caution: **An empty string on the connecting side is refused here.** Linux answers "no such
-     * name" but Windows returns **every address it holds**, so a program that forgot its
+     * name", but Windows returns **every address it holds**. So a program that forgot its
      * destination would connect to itself on Windows alone, in silence. */
     if (host_len == 0 && (flags & AI_PASSIVE) == 0) return 0;
     if (host_len == 0) {
@@ -434,11 +436,11 @@ KSPL_LINK I32 kspl_net_local_port(I64 handle) {
 /* The longest address text kspl_net_resolve_all writes: an IPv6 address, `%` and its scope. */
 #define KSPL_HOST_TEXT_MAX (INET6_ADDRSTRLEN + 1 + 64)
 
-/* Solves a name into every candidate kspl_resolve keeps, in its order, each as address text with
+/* Solves a name into every candidate kspl_resolve keeps, in its order. Each is address text with
  * its scope (`fe80::1%eth0`), so connecting to the text reaches the same socket address. Writes
- * texts[i * stride ..] and lens[i]; returns the count, -1 where the name does not solve, -2 where
- * the holder is short (fewer than KSPL_ADDR_MAX slots, or a text longer than stride), refused
- * rather than truncated. */
+ * texts[i * stride ..] and lens[i]. Returns the count, or -1 where the name does not solve. It
+ * returns -2 where the holder is short (fewer than KSPL_ADDR_MAX slots, or a text longer than
+ * stride): that is refused rather than truncated. */
 KSPL_LINK I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, Sz stride, Sz *lens,
     Sz cap) {
     kspl_cand_t cands[KSPL_ADDR_MAX];
@@ -463,10 +465,10 @@ KSPL_LINK I32 kspl_net_resolve_all(const U8 *host_ptr, Sz host_len, U8 *texts, S
 }
 
 /* The most bytes one send or recv is handed. A call moves a piece and returns its count, as a short
- * one may anyway, and the caller's loop (`write_all` in std/net.kspl) asks for the rest.
+ * one can anyway. The caller's loop (`write_all` in std/net.kspl) asks for the rest.
  * Caution: **Hand no more in one call.** Windows takes the length as an int, but an int's worth is
- * not enough to stay under: Winsock takes a non-blocking send whole or refuses it with WSAENOBUFS,
- * so a send of 1 GiB failed on Windows 11 where Wine had sent a piece. 64 KiB is the piece
+ * not enough to stay under. Winsock takes a non-blocking send whole or refuses it with
+ * WSAENOBUFS. So a send of 1 GiB fails on Windows 11, where Wine sends a piece. 64 KiB is the piece
  * Microsoft's guidance names for a send. A larger piece would save only calls: a blocking send of
  * more waits in the kernel for the same room. */
 #define KSPL_NET_PIECE ((Sz)0x10000)
@@ -595,7 +597,7 @@ KSPL_LINK I32 kspl_net_raw_fd(I64 handle) {
  * a KSPL `extern "C"` declaration conflicts with winsock2.h and **the compilation fails there
  * alone**; hence the wrapper.
  *
- * **Write the number by name too** (`SHUT_WR` and `SD_SEND`); equal today, they may drift.
+ * **Write the number by name too** (`SHUT_WR` and `SD_SEND`); equal today, they can drift.
  */
 
 

@@ -37,7 +37,7 @@ priv fn setup_result_unwrap(lhs: Ast_node$@, val_type_id: I32, lctx: Lowering_ct
     res_name: = lhs.hoist_to_tmp(lctx, loc).text
 
     bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
-    is_err_expr: = Ast_node.build_field_access(res_name, res_type_id, "is_err", bool_id, loc)
+    is_err_expr: = Ast_node.build_result_access(res_name, res_type_id, .is_err, bool_id, loc)
     then_block: = Ast_node.build_block(loc)
 
     return Unwrap_ctx::{ .res_name = res_name, .res_type_id = res_type_id,
@@ -86,7 +86,7 @@ priv fn lower_into_block(lctx: Lowering_ctx$@, node: Ast_node$@, loc: base_ast.L
     //< It lowers a branch's value and returns a new block holding the statements lowering hoisted
     //<
     //< A managed value leaves the branch with a count of its own: a place it reads is retained
-    //< there, so a ternary is a fresh value whichever way it went.
+    //< there. So a ternary is a fresh value whichever way it went.
     start: = lctx.pre_stmts.len
     lctx.relocating += 1
     take: = lower_arc.Arc_take.decide(node, lctx)
@@ -120,6 +120,11 @@ impl Ast_node
             r.type_id = type_id
 
     fn lower_logical_op(r: Self$@, lctx: Lowering_ctx$@, is_and: Bool)
+        // A top-level initializer has no statement to hoist into, and a constant has no side effect
+        // to skip. So the operator stays as written, and both backends fold it there.
+        if !lctx.in_fn_body
+            r.lower_default(lctx)
+            return
         lhs: = r.get_binary_left()
         rhs: = r.get_binary_right()
         loc: = r.loc
@@ -150,8 +155,8 @@ impl Ast_node
             lctx.inject_cleanups(0)
             lctx.flush_pre_stmts_to_node(start_defer, u.then_block)
 
-        err_field: = Ast_node.build_field_access(u.res_name, u.res_type_id, "error_code",
-            u.err_type_id, loc)
+        err_field: = Ast_node.build_result_access(u.res_name, u.res_type_id, .err, u.err_type_id,
+            loc)
         throw_node: = Ast_node.new(.k_stmt_throw, "throw", loc)
         throw_node.ival = base_ast_ext.propagated_error
         throw_node.add_child(Ast_node.new(.k_keyword, "throw", loc))
@@ -164,14 +169,10 @@ impl Ast_node
             r.morph(.k_empty, "")
             r.type_id = I32::sema_type_env.Builtin_type_id.void_type
         else
-            if lctx.sema.env.is_result(u.val_type_id)
-                r.morph(.k_identifier, u.res_name)
-            else
-                val: = Ast_node.build_field_access(u.res_name, u.res_type_id, "val", u.val_type_id,
-                    loc)
-                r.morph(.k_expr_postfix, ".")
-                for ch in val.children
-                    r.add_child(ch)
+            val: = Ast_node.build_result_access(u.res_name, u.res_type_id, .val, u.val_type_id, loc)
+            r.morph(.k_expr_postfix, ".")
+            for ch in val.children
+                r.add_child(ch)
             r.type_id = u.val_type_id
 
     fn lower_expr_catch_chain(r: Self$@, lctx: Lowering_ctx$@)
@@ -200,7 +201,7 @@ impl Ast_node
                     target_expr = c_node
 
         if target_block != null
-            get_err_code: = Ast_node.build_field_access(u.res_name, u.res_type_id, "error_code",
+            get_err_code: = Ast_node.build_result_access(u.res_name, u.res_type_id, .err,
                 u.err_type_id, loc)
             err_decl: = lctx.build_let_decl(err_id_text, u.err_type_id, get_err_code, loc)
             if err_id_node != null
@@ -224,8 +225,8 @@ impl Ast_node
         lctx.relocating += 1
         if target_block != null
             target_block.lower(lctx)
-        // The substitute hands over a count of its own, as a ternary's branch does; where the
-        // catch gives no value, a fresh one is released at once, as `fallback` does.
+        // The substitute hands over a count of its own, as a ternary's branch does. Where the catch
+        // gives no value, a fresh one is released at once, as `fallback` does.
         discard: = u.is_void && target_expr != null && target_expr.is_arc_fresh(lctx)
         if target_expr != null
             take: = lower_arc.Arc_take.decide(target_expr if !u.is_void else null, lctx)
@@ -252,11 +253,14 @@ impl Ast_node
         $else_block: Ast_node$@ = null
         if !u.is_void
             else_block = Ast_node.build_block(loc)
-            right_val: =
-                (Ast_node.build_ident(u.res_name, u.res_type_id, loc)
-                if lctx.sema.env.is_result(u.val_type_id)
-                else Ast_node.build_field_access(u.res_name, u.res_type_id, "val", u.val_type_id,
-                loc))
+            // A substitute that is a result makes the whole one (infer_catch_chain in
+            // sema/body/expr.kspl), and the success is then that result's `ok`.
+            ok_id: = lctx.sema.env.strip_result(u.res_type_id)
+            $right_val: = Ast_node.build_result_access(u.res_name, u.res_type_id, .val, ok_id, loc)
+            if lctx.sema.env.is_result(u.val_type_id) &&
+                lctx.sema.env.get_clean_real_type(u.val_type_id) != lctx.sema.env
+                .get_clean_real_type(ok_id)
+                right_val = Ast_node.build_result_ok(u.val_type_id, right_val, loc)
             val_ident: = Ast_node.build_ident(val_name, u.val_type_id, loc)
             else_block.add_child(Ast_node.build_assign_stmt(val_ident, right_val, loc))
             if !recv_owned
@@ -276,14 +280,31 @@ impl Ast_node
             lower_arc.emit_managed_op(lctx, res_ref, u.res_type_id, "release", lctx.pre_stmts, 0)
         r.finalize_or_void(val_name, u.val_type_id, u.is_void)
 
+    fn lower_result_wrap(r: Ast_node$@, lctx: Lowering_ctx$@) //<
+        //< A value sema wrapped into a Result becomes the Result's `.ok(value)`
+        //<
+        //< **The value is lowered first, as it was written**, so what ARC decided for it stands: it
+        //< is not taken again as a payload. A Void value (`return plain_void(x)` in a `Void!E`
+        //< function) runs as a statement before the result, which holds nothing. The operand order
+        //< (`order.kspl`) has already put what came before it into temporaries.
+        r.lower_default(lctx)
+        inner: = r.get_result_wrap_inner()
+        if inner.kind_id == .k_empty || sema_type_env.is_void(inner.type_id)
+            if inner.kind_id != .k_empty
+                lctx.pre_stmts
+                    .push(Ast_node.new(.k_stmt_expr, "expr", r.loc).add_child(inner))
+            r.become_result_ok(null)
+            return
+        r.become_result_ok(inner)
+
     fn lower_fallback_stmt(r: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< A `fallback` in a catch's body: it stores the value and jumps to the catch chain's label
         //<
         //< The value goes into the temporary the catch chain set up (`lctx.fb`). The cleanups down
         //< to the chain's depth run before the jump.
         expr_node: = r.get_fallback_expr()
-        // Where the catch gives no value, a fresh managed substitute is released (lower_stmt_expr);
-        // where it does, the substitute hands over a count of its own.
+        // Where the catch gives no value, a fresh managed substitute is released (lower_stmt_expr).
+        // Where the catch gives one, the substitute hands over a count of its own.
         discard: =
             lctx.fb.target.len == 0 && expr_node != null && expr_node.is_arc_fresh(lctx)
         take: = lower_arc.Arc_take
@@ -296,7 +317,7 @@ impl Ast_node
         r.type_id = I32::sema_type_env.Builtin_type_id.void_type
 
         // Caution: **Never turn a call that does not return into an assignment** (the reason is at
-        // append_result_or_expr); as a statement, the `__attribute__((noreturn))` call stops there.
+        // append_result_or_expr). As a statement, the `__attribute__((noreturn))` call stops there.
         if expr_node != null && lctx.fb.target.len > 0 &&
             !sema_type_env.is_void(expr_node.type_id)
             fb_ident: = Ast_node.build_ident(lctx.fb.target, expr_node.type_id, r.loc)
@@ -515,7 +536,12 @@ impl Ast_node
                 obj != null &&
                 lctx.sema.env.trait_def_of_receiver(obj.type_id).is_none() &&
                 callee.receiver_wants_ptr(lctx.sema)
-            ops.add(callee, 0, by_address)
+            if !by_address && obj != null &&
+                lctx.sema.env.trait_def_of_receiver(obj.type_id).is_none() &&
+                r.arc_receiver_takes(lctx)
+                ops.add_value(callee, 0, true, lctx)
+            else
+                ops.add(callee, 0, by_address)
         else if !callee.is_path_or_ident() || callee.names_variable()
             ops.add(r, 0, false)
         r.add_arc_call_args(lctx, ops)
@@ -549,10 +575,9 @@ impl Ast_node
         else
             recv_node = r.get_child(1)
 
-        // The ABI layer (ksplc/lower/abi.kspl) may take an operator receiver's address for
-        // `Self@`, and a call receiver (`Foo.new(x)`) would give `&f()`, so it is copied into a
-        // temporary. It decides as hoist_complex_expr would, but by hand: it is already lowered
-        // just above.
+        // The ABI layer (ksplc/lower/abi.kspl) can take an operator receiver's address for `Self@`.
+        // A call receiver (`Foo.new(x)`) would then give `&f()`, so it is copied into a temporary.
+        // It decides as hoist_complex_expr would, but by hand: it is already lowered just above.
         if recv_node.has_side_effect()
             recv_node = recv_node.hoist_to_tmp(lctx, loc)
 
@@ -580,7 +605,7 @@ impl Ast_node
         true_node: = r.get_ternary_true()
         false_node: = r.get_ternary_false()
         // A top-level initializer has no statement to hoist into (the temporary would land at file
-        // scope), and its condition is a constant there, so the branch it picks takes its place.
+        // scope). Its condition is a constant there, so the branch it picks takes its place.
         if !lctx.in_fn_body
             switch lctx.sema.try_eval_constexpr_wide(cond_node)
             case .some(v)

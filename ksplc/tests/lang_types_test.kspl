@@ -13,10 +13,10 @@ import "std/verdict"
 
 // ==========================================
 
-// The slice descriptor literal (`T[]::{ .ptr = ..., .len = ... }`), above all nested (`U8[]$[]`):
-// it is the only way to build a slice of a length counted at run time, and a field's expected type
-// off by one level lets a single-level literal pass **without a type check** ("How immutability
-// marks are expressed in a type" in ksplc/docs/DESIGN-compiler.md).
+// The slice descriptor literal (`T[]::{ .ptr = ..., .len = ... }`), above all nested (`U8[]$[]`).
+// It is the only way to build a slice of a length counted at run time. A field's expected type
+// off by one level lets a single-level literal pass **without a type check** ("Immutability
+// marks in a type" in ksplc/docs/DESIGN-sema.md).
 
 // ==========================================
 
@@ -78,8 +78,8 @@ fn test_slice_descriptor_literals(arena: Arena$@)
     assert((nested.ptr + 1).len == 3, "`.len` works on a pointer to a slice too")
 
     // --- `.` and `[]` through a pointer ---
-    // "`.` and `[]` dereference a pointer whatever the number of levels, `[]` only where the target
-    // holds its own length" ("Member access and indexing through a pointer" in
+    // `.` and `[]` dereference a pointer whatever the number of levels. `[]` does so only where the
+    // target holds its own length ("Member access and indexing through a pointer" in
     // docs/SPEC-language.md). A built-in member, a subscript and a method all follow it
     // (receiver_base_id in sema/type/env.kspl).
     pm: U8$[]@ = mut_view@
@@ -193,8 +193,8 @@ fn test_alias_element_acts_as_its_base() //<
     //< It checks an alias read out of an immutable slice acts as its base type
     //<
     //< Caution: **Read the alias out of an immutable slice.** The element is the alias under an
-    //< immutable mark, and stripping each once leaves the alias itself, which conforms to nothing:
-    //< the interpolation then reports "does not implement 'Formattable'".
+    //< immutable mark. Stripping each once leaves the alias itself, which conforms to nothing.
+    //< The interpolation then reports "does not implement 'Formattable'".
     verdict.start("[Alias] an alias read out of an immutable slice acts as its base type test...")
     ms: = Meters[]::{ 3, 4 }
     $b: = Str_builder.new()
@@ -226,12 +226,12 @@ fn test_index_key_type_follows_the_impl(arena: Arena$@)
     // `Index.get` and `Index_mut.set`, so with only one the other stays pinned to `Sz`.
     t["xy"] = 20
     assert(t.base == 18, "an Index_mut implementation taking a non-Sz subscript can be assigned to")
-    // An instantiated implementation must resolve the same way: its parameter can hold no copy of
-    // the type after substitution, and falling back to `Sz` there rejects the key.
+    // An instantiated implementation must resolve the same way. Its parameter can hold no copy of
+    // the type after substitution. Falling back to `Sz` there rejects the key.
     $m: = Map<|U8[], I32|>.new(arena)
     m["k"] = 9
-    assert((m["k"] catch -1) == 9, "an instantiated Map<|U8[], I32|> reads and writes with `[]`")
-    assert((m["nope"] catch -1) == -1, "a missing key goes to the Result's error side")
+    assert(m["k"].unwrap_or(-1) == 9, "an instantiated Map<|U8[], I32|> reads and writes with `[]`")
+    assert(m["nope"].unwrap_or(-1) == -1, "a missing key reads as none")
     verdict
         .pass("a subscript's expected type is not pinned to Sz but taken from the implementation's \
             declaration.")
@@ -274,7 +274,7 @@ fn test_index_place_gives_real_places(arena: Arena$@)
             and taking an address work just as on a built-in slice.")
 
 // ==========================================
-// A template's body is analysed in the template's file, but its `T` is the user's: Cell is
+// A template's body is analysed in the template's file, but its `T` is the user's. Cell is
 // file_private here, so the visibility check sees std/ds.kspl's body writing `T`.
 // ==========================================
 fn test_private_type_arg_reaches_template_body(arena: Arena$@)
@@ -296,7 +296,7 @@ fn test_private_type_arg_reaches_template_body(arena: Arena$@)
             view points at the original data.")
 
 // ==========================================
-// The NUL check on a string passed across the C boundary: a KSPL slice can contain a NUL, and C
+// The NUL check on a string passed across the C boundary. A KSPL slice can contain a NUL, and C
 // stops reading at the first one.
 // ==========================================
 fn test_embedded_nul_is_rejected_at_c_boundary()
@@ -379,7 +379,7 @@ fn test_defer_reads_values_at_scope_exit()
             kept by copying it oneself.")
 // ==========================================
 // The three safe shapes of returning a trait value (a global, the heap, a pointer's target) pass
-// the check that stops a value's upcast (which synthesizes `&value` into {obj, vtable}).
+// the check that stops a value's upcast. That upcast synthesizes `&value` into {obj, vtable}.
 // ==========================================
 priv struct Up_sq
     n: I32
@@ -418,7 +418,7 @@ priv fn up_from_pointee(p: Up_sq$@): Up_shape
 priv struct Up_holder //< holds a conforming value by value, reached through a pointer below
     sq: Up_sq
 
-// A field behind a pointer lives where the pointer points, not in this frame, so it may be
+// A field behind a pointer lives where the pointer points, not in this frame. So it can be
 // returned upcast (is_frame_storage in sema/body/stmt_escape.kspl).
 priv fn up_from_pointee_field(h: Up_holder$@): Up_shape
     return h.sq
@@ -483,7 +483,7 @@ fn test_trait_upcast_through_an_alias_pointer() //<
     //< It checks a pointer to an alias upcasts to a trait as its base type
     //<
     //< Caution: **Give the trait a pointer to the alias.** Removing the pointer level leaves the
-    //< alias as the conforming type: the conformance check then rejects it ("does not explicitly
+    //< alias as the conforming type. The conformance check then rejects it ("does not explicitly
     //< implement"), and the vtable is named after the alias, which nothing defines.
     verdict.start("[trait] a pointer to an alias upcasts as its base type test...")
 
@@ -497,7 +497,7 @@ fn test_trait_upcast_through_an_alias_pointer() //<
     verdict.pass("a pointer to an alias conforms and dispatches as its base type.")
 // ==========================================
 // A return value needing a conversion inside a Result, such as `Trait!Err` / `Void$@!Err`.
-// Against a Result expected type, convert to the ok type first, then wrap; wrapping only on an
+// Against a Result expected type, convert to the ok type first, then wrap. Wrapping only on an
 // exact match leaves these functions able only to throw.
 // ==========================================
 priv enum Wrap_err
@@ -593,6 +593,55 @@ fn test_void_result_return_forms()
     verdict.pass("a collapsed `!` is skipped and an uncollapsed Void is put out.")
 
 // ==========================================
+// A Result is an ordinary value (`T!E` is std/lang's enum `Result<|T, E|>`). It is stored, passed
+// and switched on. `.ok(v)` / `.err(e)` build it. A result whose value is a result keeps both
+// levels.
+// ==========================================
+
+priv enum Held_err
+    lost(code: I32)
+
+priv struct Held //< a Result kept in a field, read later
+    outcome: I32!Held_err
+
+priv fn held_half(n: I32): I32!Held_err
+    if n % 2 != 0
+        return .err(.lost(n))
+    return .ok(n / 2)
+
+priv fn held_code(r: I32!Held_err): I32 //< the error's code, or -1 on success
+    switch r
+    case .ok(_v)
+        return -1
+    case .err(e)
+        switch e
+        case .lost(c)
+            return c
+
+priv fn held_nested(n: I32): (I32!Held_err)!Held_err
+    if n < 0
+        throw .lost(0)
+    return held_half(n)
+
+fn test_result_is_a_value()
+    verdict.start("[T!E] a Result as an ordinary value test...")
+
+    kept: Held[2] = ::{ Held::{ .outcome = held_half(8) }, Held::{ .outcome = held_half(5) } }
+    assert((kept[0].outcome catch 0) == 4, "a Result kept in a field gives its value")
+    assert(held_code(kept[1].outcome) == 5, "a switch reads the error a field keeps")
+    assert(held_code(kept[0].outcome) == -1, "a switch reads the success a field keeps")
+
+    inner: = held_nested(6) catch held_half(1)
+    assert((inner catch 0) == 3, "a result whose value is a result keeps the inner one")
+    failed: = held_nested(-1) catch held_half(1)
+    assert(held_code(failed) == 1, "the substitute stands in for the inner result")
+
+    built: I32!Held_err = .ok(41)
+    assert((built catch 0) == 41, "`.ok(v)` builds a Result where one is expected")
+
+    verdict.pass("a Result is stored, passed, switched on and nested.")
+
+// ==========================================
 // The implicit conversion that relaxes immutability works through an alias too (a raw
 // `strip_const_deep` comparison gives "expected 'P', but got 'I32$@'"). The one check is
 // `same_shape_ignoring_const`, shared with the ternary operator.
@@ -601,7 +650,7 @@ fn test_void_result_return_forms()
 priv typedef Al_ptr = I32@ //<
     //< An alias of a read-only pointer, the target of the relaxing conversion
     //<
-    //< **It must be the relaxing direction only**; immutable back to mutable stays rejected
+    //< **It must be the relaxing direction only.** Immutable back to mutable stays rejected.
     //< **Only the outermost alias is resolved** (the reason is at same_shape_ignoring_const).
 priv typedef Al_arr = I32@[2]
 
@@ -688,7 +737,7 @@ fn test_generic_args_infer_from_composites()
 
 // ==========================================
 // A `const` parameter written as an array's length or as a generic's value argument is read off
-// the argument (`bind_value` in `ksplc/sema/body/generic_infer.kspl`); two values that disagree,
+// the argument (`bind_value` in `ksplc/sema/body/generic_infer.kspl`). Two values that disagree,
 // a slice and a call where nothing fixes it are refused (the cases `generic_const_length_conflict`
 // and `generic_type_args_not_inferred` in `tests/negative/generic.kspl`).
 // ==========================================
@@ -764,7 +813,7 @@ fn test_const_args_infer_from_value_args()
 
 // ==========================================
 // Two numeric operands of different types compute in the one that holds every value of the other
-// (`get_promoted_numeric_type` in `ksplc/sema/type/query.kspl`); a pair with none is refused
+// (`get_promoted_numeric_type` in `ksplc/sema/type/query.kspl`). A pair with none is refused
 // (the case `numeric_operands_no_common_type` in `tests/negative/numbers.kspl`). The type is
 // always one of the two.
 // ==========================================

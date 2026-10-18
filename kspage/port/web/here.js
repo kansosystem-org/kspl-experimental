@@ -1,21 +1,21 @@
 // ==========================================
 // kspage's page — the context menu (right-click): "the menu for the place just clicked", not back
 // and forward navigation (`api.js`'s `markJump`).
-// **It replaces the browser's menu only over the body** (elsewhere, spell check, opening a link,
-// translating and looking up would vanish; on the canvas the browser offers only "save as image").
-// Caution: **Do not make a command that exists only here** (Apple HIG): an item **names a button in
-// a menu** and takes its wording from it, and disappears with it (`kspage/tests/browser/menu.js`
-// checks). **Cut, copy and paste are not included**: a browser cannot paste from a click (reading
+// **It replaces the browser's menu only over the body.** Elsewhere, spell check, opening a link,
+// translating and looking up would vanish. On the canvas the browser offers only "save as image".
+// Caution: **Do not make a command that exists only here** (Apple HIG). An item **names a button in
+// a menu**, takes its wording from it, and disappears with it (`kspage/tests/browser/menu.js`
+// checks). **Cut, copy and paste are not included.** A browser cannot paste from a click (reading
 // asks permission), so they would do nothing (Principle 5); the keys work.
 // ==========================================
 function kspageHere(ui) {
   const app = ui.app;
   const canvas = document.getElementById("page");
 
-  // The items shown, **only what acts in one click**: `run` clicks that button; `at` goes to the
+  // The items shown, **only what acts in one click**. `run` clicks that button. `at` goes to the
   // group inside the menu (named from there), and with `to` on to that field, left selected. `when`
   // is the context: "cell" (in a table cell), "frame" (a shape selected), or omitted (always).
-  // Caution: **Order them by context** — a context menu reads outward from the click (Apple HIG),
+  // Caution: **Order them by context.** A context menu reads outward from the click (Apple HIG),
   // so the items the click decides go on top.
   const PICKS = [
     { run: "add-row", when: "cell" },
@@ -39,8 +39,9 @@ function kspageHere(ui) {
     if (pick.run) return document.getElementById(pick.run).textContent.trim();
     return document.querySelector("#" + pick.at + " .fly-name").textContent.trim();
   };
-  // Where it goes, **possibly the group itself** (a group of choices opens when the item pointing
-  // at it gets focus: `page.css`'s `:focus-within`); `ui.reach` goes there, as for the ribbon.
+  // Where it goes, **which can be the group itself**: a group of choices opens when the item
+  // pointing at it gets focus (`page.css`'s `:focus-within`). `ui.reach` goes there, as for the
+  // ribbon.
   const aimOf = (pick) => (pick.to !== undefined ? document.getElementById(pick.to)
     : document.querySelector("#" + pick.at + " > .fly-open"));
   // Whether the button it names exists; **absent, no item** (a read-only page hides whole menus).

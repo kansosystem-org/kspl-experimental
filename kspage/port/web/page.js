@@ -1,7 +1,7 @@
 // ==========================================
 // kspage's page — startup and the frame: **only what every part needs** (notices, opening and
 // closing menus, the shared wiring, the redraw notification, startup).
-// Caution: **The parts reach each other only through `ui`**, and only for what the others need; a
+// Caution: **The parts reach each other only through `ui`**, and only for what the others need. A
 // field grabbed directly silently breaks the day the setup order changes. Not an ES module
 // (embedded whole into one served page). **The inclusion order is the template's**
 // (`page.html`'s `__KSPAGE_FILE:…__`); this file sets up the parts, so it goes last.
@@ -15,11 +15,11 @@
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
   const canvas = document.getElementById("page");
-  // The start-up's outcome, **the one signal every waiter takes** (the checks too): it resolves
-  // with `window.kspage` once the start-up is done (the core runs, the local server has been
-  // asked, and the document the page comes up on is in), and rejects with the reason where the
-  // start failed.
-  // Caution: **Do not make a waiter look for `window.kspage` on a timer instead**: the wasm is
+  // The start-up's outcome, **the one signal every waiter takes** (the checks too). It resolves
+  // with `window.kspage` once the start-up is done. Done means the core runs, the local server
+  // has been asked, and the document the page comes up on is in. It rejects with the reason
+  // where the start failed.
+  // Caution: **Do not make a waiter look for `window.kspage` on a timer instead.** The wasm is
   // compiled, and the server asked, off this thread, so no length of wait is ever the right one.
   window.kspageReady = kspageBoot(canvas, bytes).then(async (app) => {
     const side = document.getElementById("side");
@@ -30,8 +30,8 @@
     };
     // Where the slide list is shown. **Without it, the list does not appear.**
     app.slideStrip = document.getElementById("slides");
-    // Caution: **Pass the tools' bottom edge, with nothing added**: without it, following the
-    // cursor stops behind the tools; with slack, it never reaches the body's first line.
+    // Caution: **Pass the tools' bottom edge, with nothing added.** Without it, following the
+    // cursor stops behind the tools. With slack, it never reaches the body's first line.
     const chrome = document.getElementById("chrome");
     app.headRoom = () => chrome.getBoundingClientRect().bottom;
     // Ctrl+K and the ribbon reach a panel's field here (the key handler knows only the document).
@@ -73,7 +73,7 @@
     const tell = (ok, good, bad) => { if (ok) { say(good); } else { deny(bad); } };
 
     // ---- The menus ----
-    // Caution: **Only one opens** (the one behind cannot be clicked); **close it once a command is
+    // Caution: **Only one opens** (the one behind cannot be clicked). **Close it once a command is
     // clicked**, but not in a field being typed in. **One function closes them**, ribbon panels
     // too, looked up on the spot (the ribbon is rebuilt). **Include `…`**: it sits in the ribbon's
     // row, so "the bar's menus" miss it.
@@ -110,7 +110,7 @@
       }
     });
     // **Close it once something is chosen**, but not on the knobs that open submenus (it would
-    // never open); a ribbon button that goes to a field stops its own click (`ribbon.js`).
+    // never open). A ribbon button that goes to a field stops its own click (`ribbon.js`).
     document.getElementById("ribbon").addEventListener("click", (e) => {
       if (e.target.closest(".fly-open, summary") === null) shutTools(null);
     });
@@ -173,7 +173,7 @@
         const box = to === undefined ? document.querySelector("#" + at + " > .fly-open")
           : document.getElementById(to);
         if (box === null) return;
-        // Caution: **Open every level before setting the focus**: a closed menu or panel is laid
+        // Caution: **Open every level before setting the focus.** A closed menu or panel is laid
         // out as nothing, and a box not laid out takes no focus (the click reads as dead). A panel
         // opened on purpose has `fly-on` (`page.css`); `shutTools` closes it again.
         for (let up = box.parentElement; up !== null; up = up.parentElement) {
@@ -193,8 +193,8 @@
       // The log of the status bar's texts (the debug log reads it). **It only reads.**
       sayTrail: () => trail.slice(),
     };
-    // **Turn the HTML's groups into submenus before wiring**, or the contents move away from it
-    // (the ids do not change, so later `getElementById`s still find them).
+    // **Turn the HTML's groups into submenus before wiring**, or the contents move away from it.
+    // The ids do not change, so later `getElementById`s still find them.
     kspageFlyGroups(document.getElementById("bar"));
     // **The page's one connection to its storage**, shared by the files and the drafts (two
     // connections leave each other's writes unordered: `keep.js`'s `keepStore`).
@@ -223,11 +223,13 @@
     // **Pictures beside the document are read with the token** (`local.js`), drawn and measured
     // alike.
     app.localPicture = ui.localPicture;
+    app.localPlace = ui.localPlace;
     // Caution: **After the parts are set up**, it opens the URL's document (`?doc=…`) or the one
-    // the tab had open before a reload (it touches the path field and the windows).
+    // the tab had open before a reload. It touches the path field and the windows.
     const opened = ui.openFromUrl().catch(() => false);
     // It reports an earlier draft **once the document is open** (shown first, "Loaded it" replaces
-    // it), **not in a window this page opened** (the opener is alive and still writing that draft).
+    // it). **It does not report in a window this page opened**: the opener is alive and still
+    // writing that draft.
     if (window.opener === null) opened.then(() => ui.keepBoot());
 
     const formula = document.getElementById("formula");
@@ -243,8 +245,8 @@
     app.onRedraw = () => {
       ui.dressing();
       sayNarrowing();
-      // Caution: **Re-ask for the semantic colors and save the draft here**: a redraw is the only
-      // sign that the text changed; throttling is their job (`keep.js`'s `keepLater`).
+      // Caution: **Re-ask for the semantic colors and save the draft here.** A redraw is the only
+      // sign that the text changed. Throttling is their job (`keep.js`'s `keepLater`).
       ui.keepLater();
       if (document.activeElement !== ui.hrefBox) {
         ui.hrefBox.value = app.href();
@@ -330,8 +332,8 @@
     app.onNote = () => {
       tell(ui.flipNote(), "", "This slide has no note");
     };
-    // Redraws the status bar alone, for a change no redraw of the document follows (an armed
-    // tool, a save that makes the text the file's again).
+    // Redraws the status bar alone, for a change that no redraw of the document follows. Such a
+    // change is an armed tool, or a save that makes the text the file's again.
     ui.restatus = () =>
       ui.showStatus(app.surfaceCount(), app.cellFrame() !== null, app.frameRect());
     // Marks the armed tool, **and unmarks it once it is used**.
@@ -353,8 +355,8 @@
     app.openDoc = ui.openDoc;
     // Which file the text open now lives in (empty: none), **read by the check**.
     app.pathNow = ui.pathNow;
-    // Saving and restoring a draft: **the check calls the ones a person uses**, and `keepSync` by
-    // name so as not to wait out the throttle (it would break the day the delay changes).
+    // Saving and restoring a draft: **the check calls the ones a person uses**. It calls `keepSync`
+    // by name so as not to wait out the throttle (that would break the day the delay changes).
     app.keepSync = ui.keepSync;
     app.keepBoot = ui.keepBoot;
     app.keepRestore = ui.keepRestore;
@@ -364,11 +366,11 @@
     // The draft storage, **so the check does not open its own** (why: `keep.js`'s `keepStore`).
     app.keepStore = ui.keepStore;
     window.kspage = app;
-    // **Done once the server has been asked and the document is in**: before, the tools the
+    // **Done once the server has been asked and the document is in.** Before, the tools the
     // server brings are not out yet, and the document shown is not the one it comes up on.
     return Promise.all([ui.localReady, opened]).then(() => app);
   });
-  // **A start that fails says why in the status bar**: silent, the page stays blank and the
+  // **A start that fails says why in the status bar.** Silent, the page stays blank, and the
   // reason is only in the console, where a person does not look.
   window.kspageReady.catch((why) => {
     const note = document.getElementById("note");

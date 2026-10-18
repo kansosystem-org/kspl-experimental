@@ -27,8 +27,8 @@ fn main()
 // ==== case circular_struct_mutual
 //< A cycle where two structs hold each other by value
 //<
-//< Measured from either declaration it goes round the same ring, so the report stays at one item
-//< (the same cause is not lined up once per type).
+//< Measured from either declaration, it goes round the same ring. So the report stays at one item
+//< (the same cause is not listed once per type).
 // EXPECT: recursive data structure with infinite size detected
 struct A
   b: B
@@ -39,8 +39,8 @@ fn main()
 // ==== case circular_struct_unused
 //< A struct of infinite size is rejected even where nothing needs its size
 //<
-//< With a local's declaration alone (no global and no sizeof) the layout computation used not to
-//< run, and the generated C it passed through into had the C compiler saying incomplete type.
+//< With a local's declaration alone (no global and no sizeof), the layout computation did not run.
+//< The type passed into the generated C, and the C compiler reported an incomplete type.
 // EXPECT: recursive data structure with infinite size detected
 struct S
   f: S
@@ -70,8 +70,8 @@ fn main()
 //< `#export` cannot be written on a method
 //<
 //< **Unrefused, C that does not build comes out with zero diagnostics** (the caller alone gets
-//< `type.method`, not a C identifier). A method's name is unique only with its type, so it cannot
-//< be the symbol as written; to call it from C, wrap it in a free function (as in `tests/prog/`).
+//< `type.method`, not a C identifier). A method's name is unique only with its type. So it cannot
+//< be the symbol as written. To call it from C, wrap it in a free function (as in `tests/prog/`).
 // EXPECT: attribute '#export' cannot be written on a method
 import "std/io"
 
@@ -102,10 +102,10 @@ fn main(): I32
 // ==== case import_lang_is_rejected
 //< `std/lang` is in every file without an import line, so writing one for it is an error
 //<
-//< **An error, not a lint:** writable, it gives two ways to the same name, "implicitly" and "by an
-//< import line" (docs/DESIGN-principles.md "One notation per purpose"); mend one alone and the other passes in
-//< silence. The analysis goes on as though the line were absent, so the `Option` below has to
-//< resolve.
+//< **An error, not a lint.** If writable, it gives two ways to the same name: "implicitly" and "by
+//< an import line" (docs/DESIGN-principles.md "One notation per purpose"). Fix one alone and the
+//< other passes silently. The analysis goes on as though the line were absent, so the `Option`
+//< below must resolve.
 // EXPECT: is imported into every file
 // EXPECT-NOT: undefined path or identifier 'Option'
 import "std/lang"
@@ -140,9 +140,9 @@ fn main(): I32
 // ==== case import_path_raw_string
 //< An import's path cannot be written as a raw string (`"""`)
 //<
-//< Caution: Without refusing it, the
-//< handling that strips the quotes one character at a time makes a different path, `""std/io""`,
-//< and goes hunting for that file in silence.
+//< Caution: Without the refusal, the
+//< handling that strips the quotes one character at a time makes a different path, `""std/io""`.
+//< It then silently looks for that file.
 // EXPECT: an import path must be a plain string literal
 import """std/io"""
 
@@ -154,8 +154,8 @@ fn main(): I32
 //< **The spelling disagrees with itself:** `as` asks for a name while braces with no `+` say "bare
 //< only". Unrefused, "a name is given yet `m.` cannot be written" passes in silence. **Only the
 //< writer knows which to remove**, so the diagnostic offers both adding `+` and dropping `as`.
-// EXPECT: 'as' names the file, so the selector list needs '+'
-// EXPECT: Drop the 'as' to bring in only the selected names
+// EXPECT: 'as' names the file. A selector list with 'as' needs '+'
+// EXPECT: To import only the selected names, remove 'as'
 import "std/mem" as m { Arena }
 
 fn main(): I32
@@ -163,8 +163,8 @@ fn main(): I32
 // ==== case import_symbol_missing
 //< A selective import naming something the target lacks is rejected at the import line
 //<
-//< Unchecked, a misspelling in `import "p" { A };` passes the import line in silence, showing up
-//< at the use as `undefined path or identifier` or, never used, nowhere at all
+//< Unchecked, a misspelling in `import "p" { A };` silently passes the import line. It shows up
+//< at the use as `undefined path or identifier`, or nowhere at all if it is never used
 //< ("Name resolution with no namespace goes through one function" in `ksplc/docs/DESIGN-diagnostics.md`).
 // EXPECT: has no symbol named 'Ci33'
 import "std/checked_int" { Ci33 }
@@ -174,11 +174,11 @@ fn main(): I32
 // ==== case lang_prefix_unknown_member
 //< `std/lang`'s import alias is present in every file implicitly
 //<
-//< So a wrong name gets "lang is there, but does not export that name". **Say "the prefix is not
-//< known" and the alias is out:** `impl My_type: lang.Ref_counted` is unwritable, and a file that
+//< So a wrong name gets "lang is there, but does not export that name". **"The prefix is not known"
+//< would remove the alias.** Then `impl My_type: lang.Ref_counted` is unwritable. A file that
 //< declares the same name cannot conform to a trait the compiler knows ("Why compiler-known traits are confined to `std/lang`" in docs/DESIGN-language.md).
 // EXPECT: error: undefined path or identifier 'lang.Nope'
-// EXPECT: 'lang' names a file, but it does not export 'Nope'
+// EXPECT: 'lang' names a file. The file does not export 'Nope'
 // EXPECT-NOT: neither a known import alias nor a type
 import "std/io"
 
@@ -188,9 +188,9 @@ pub fn main(): I32
 // ==== case qualified_generic_variant_not_in_file
 //< A generic enum's enumerators have their alias prefix checked too, just as types do
 //<
-//< Silence a path with type arguments across the board and the qualification is ignored, making a
-//< spelling that passes whatever alias is prefixed (the generated C becomes identical to the
-//< unqualified case, so no clue that a mistake was made comes out anywhere).
+//< If every path with type arguments passes silently, the qualification is ignored. A spelling then
+//< passes whatever alias is prefixed. The generated C is identical to the unqualified case, so
+//< nothing anywhere shows the mistake.
 // EXPECT: undefined path or identifier 'str.Option<|I32|>'
 import "std/str"
 
@@ -199,9 +199,9 @@ fn main()
 // ==== case qualified_type_not_in_file
 //< Once a name has an alias prefix, it is looked up only behind that alias
 //<
-//< A generic template is registered under its short name too, so drawing by the short name as well
-//< makes even a name absent from that file count as found. Nothing comes out at the declaration's
-//< position, and it falls far away at the place of use as "another type has no such method".
+//< A generic template is registered under its short name too. A lookup by the short name as well
+//< finds even a name absent from that file. Nothing comes out at the declaration's position. The
+//< error falls far away, at the place of use, as "another type has no such method".
 // EXPECT: undefined type 'io.List'
 import "std/io"
 
@@ -213,10 +213,10 @@ fn main()
 //< The file name a selective import leaves out is suggested, with the `+` that brings it in
 //<
 //< `import "p" { A }` binds `A` alone, so `p.x` is undefined. The interpolation after it calls the
-//< generic `put`, and instantiating it on a stand-in type would report errors inside `std/lang`
-//< the user never wrote: the mistake is one error.
+//< generic `put`. An instance on a stand-in type would report errors inside `std/lang` that the
+//< user never wrote. The mistake is one error.
 // EXPECT: error: undefined path or identifier 'io'
-// EXPECT: brings in only the names listed
+// EXPECT: imports only the listed names
 // EXPECT: import "std/io" + { ... }
 // EXPECT: Finished with 1 error(s)
 // EXPECT-NOT: 'io.err'
@@ -264,9 +264,9 @@ fn main()
 // ==== case use_after_free_block_dealloc_ok
 //< A pointer's `free()` leaves its block, which `dealloc` may still give back
 //<
-//< A list `create(null)` placed on the heap is freed so, on the straight path, where only one
-//< branch freed the contents, and from two `defer`s. The case fails deliberately on another
-//< variable, by the same check: a type error elsewhere in the body would skip the check, and the
+//< A list `create(null)` placed on the heap is freed so on the straight path. It is freed so where
+//< one branch freed the contents, and from two `defer`s. The case fails on purpose on another
+//< variable, by the same check. A type error elsewhere in the body would skip the check, and the
 //< EXPECT-NOT would then pass on nothing.
 // EXPECT: variable 'w' may already be freed here
 // EXPECT: Finished with 1 error(s)
@@ -392,8 +392,8 @@ fn main()
 // ==== case use_after_free_via_dealloc_fn
 //< A release is not only the method form (`x.free()`)
 //<
-//< A `dealloc(x)` is a release too, and its actual argument ordinarily carries a cast to `Void$@`,
-//< so the wrappings (`@` / `::`) are peeled off and it is walked back to the original local
+//< A `dealloc(x)` is a release too. Its argument usually carries a cast to `Void$@`. So the
+//< check removes the wrappings (`@` / `::`) and walks back to the original local
 //< (ksplc/docs/DESIGN-diagnostics.md "Measuring what suppression costs").
 // EXPECT: variable 'p' may already be freed here
 import "std/mem"
@@ -409,8 +409,8 @@ fn main()
 // ==== case use_after_free_via_dealloc_wrapper
 //< A release wrapper whose body uses the `dealloc(x)` form is followed one level
 //<
-//< `free()`'s last line is mostly this rather than the method form, so without looking here not one
-//< release wrapped under another name can be followed (ksos's heap_free is exactly this shape).
+//< `free()`'s last line is mostly this, not the method form. Without this look, no release wrapped
+//< under another name can be followed (ksos's heap_free is exactly this shape).
 // EXPECT: variable 'q' may already be freed here
 import "std/mem"
 import "std/mem" { dealloc }
@@ -430,8 +430,8 @@ fn main()
 // ==== case use_after_free_via_method_wrapper
 //< Use after free (across a function boundary, method form)
 //<
-//< A method call's receiver heads the parameters but is absent from the argument list; without
-//< mending that offset, a release wrapped in a method under a name other than `free` passes whole.
+//< A method call's receiver heads the parameters but is absent from the argument list. Without a
+//< fix for that offset, a release wrapped in a method not named `free` passes unchecked.
 // EXPECT: may already be freed here
 import "std/mem"
 import "std/mem" { dealloc }
@@ -458,8 +458,8 @@ impl S: Owned {}
 // ==== case use_after_free_via_receiver
 //< A use in the receiver position after a release is a use after free too
 //<
-//< The access may be a field read, a field write or a method call. Suppress the check itself at the
-//< receiver position and all that can be detected is the most harmless whole copy
+//< The access can be a field read, a field write or a method call. If the check is off at the
+//< receiver position, it detects only the most harmless whole copy
 //< (ksplc/docs/DESIGN-diagnostics.md "Measuring what suppression costs").
 // EXPECT: variable 'p' may already be freed here
 import "std/mem"

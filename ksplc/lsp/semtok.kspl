@@ -146,11 +146,11 @@ priv fn add_one(node: Ast_node$@, file: U8[], kind: I32, mods: I32, out: List<|T
         .push(Tok::{ .offset = node.loc.offset, .bytes = node.text.len, .kind = kind,
         .mods = mods })
 
-priv fn position_order(a: Tok, b: Tok): I32 //<
+priv fn position_order(a: Tok@, b: Tok@): I32 //<
     //< By position in the file
     //<
-    //< **The walk order is not necessarily the order of the names** (normalization moves nodes), so
-    //< the collected tokens are sorted this way before they are packed.
+    //< **The walk order is not necessarily the order of the names** (normalization moves nodes).
+    //< So the collected tokens are sorted this way before they are packed.
     if a.offset == b.offset
         return 0
     return -1 if a.offset < b.offset else 1
@@ -159,8 +159,8 @@ priv fn packed(src: U8[], toks: List<|Tok|>$@, b: Json_builder$@, arena: Arena$@
     //< It packs the collected tokens into the LSP's number array
     //<
     //< **Each token is five numbers** (the line's difference, the column's difference, the length,
-    //< the kind, the modifiers). **Each difference is from the previous token** — on the same line
-    //< the column is a difference too, and after a line change the column counts from its start.
+    //< the kind, the modifiers). **Each difference is from the previous token.** On the same line
+    //< the column is a difference too. After a line change the column counts from its start.
     starts: = src.line_starts(arena)
     $data: = b.arr()
     $last_line: Sz = 0
@@ -205,7 +205,7 @@ fn handle(state: Doc_state$@, id_val: json.Val, arena: Arena$@) //<
     // workspace disappear. **Only a document with no tree gets an empty answer.**
     if state != null && state.root_file != null
         gather(state.root_file, state.mod_name_perm, toks@)
-        toks = toks.order_by(fn(a: Tok, b: Tok; ): I32 {
+        toks = toks.order_by(fn(a: Tok@, b: Tok@; ): I32 {
             return position_order(a, b);
         }, arena)
     src: U8[] = state.src_perm if state != null else ""

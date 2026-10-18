@@ -49,8 +49,8 @@ fn test_option_null_safety()
             (handling none forced).")
 // ==========================================
 // std/lang: `T?`'s combinator methods
-// (is_some/is_none/unwrap_or/unwrap_or_else/map/and_then), each a thin wrapper over a switch,
-// including a chain directly on a temporary.
+// (is_some/is_none/unwrap_or/unwrap_or_else/map/and_then). Each is a thin wrapper over a switch.
+// The cases include a chain directly on a temporary.
 // ==========================================
 fn double_i32(x: I32): I32
     return x * 2
@@ -264,7 +264,7 @@ fn test_selective_import()
     $tbl: = Map<|U8[], I32|>.new(null)
     defer tbl.free()
     tbl.set("answer", 42)
-    looked_up: = tbl.get("answer") catch 0
+    looked_up: = tbl.get("answer").unwrap_or(0)
     assert(looked_up == 42,
         "handing a slice type argument to a selectively imported generic must give the same \
             instance as the prefixed one")
@@ -281,7 +281,7 @@ fn first_or<|T|>(v: T, has: Bool): T? //<
     //< A free generic function whose return type builds another generic from its own T
     //<
     //< It is a free function, not an impl method, and its return type is `T?`.
-    //< The return type is resolved in collect.kspl's registration while T is still unbound; T must
+    //< The return type is resolved in collect.kspl's registration while T is still unbound. T must
     //< not be taken for a real type (an unsubstituted "T" in the C), called or not.
     if has
         return .some(v)
@@ -304,7 +304,7 @@ fn pick_second<|T|>(_flag: Bool, v: T): T //<
     //< The type inference of a call whose T-declaring parameter is the second or later
     //<
     //< The inference looks through the parameters for the one declaring T
-    //< (inferred_type_args in sema/body/generic_infer.kspl); if it took the first one,
+    //< (inferred_type_args in sema/body/generic_infer.kspl). If it took the first one,
     //< `pick(true, 42)` would bind T = Bool.
     return v
 
@@ -318,7 +318,7 @@ impl Pick_box
 priv fn take_two<|A, B|>(a: A, _b: B): A //<
     //< A call with two generic type variables, both standing as "a parameter's declared type"
     //<
-    //< One must not be inferred with the rest left unbound; if the first argument filled them all,
+    //< One must not be inferred with the rest left unbound. If the first argument filled them all,
     //< the second would fail with "expected 'T', but got …".
     return a
 
@@ -413,9 +413,9 @@ fn test_instantiation_before_generic_impl()
         .pass("the method table and the trait conformance attach even where the instantiation \
             precedes the impl's registration.")
 // ==========================================
-// The two axes of immutability (the binding `$p` and the target `T$@`) are independent: an
-// unmarked `p: T$@` is only "not rebound", and the target stays writable (else an `impl`'s
-// receiver could not be left unmarked).
+// The two axes of immutability (the binding `$p` and the target `T$@`) are independent. An
+// unmarked `p: T$@` is only "not rebound", and the target stays writable. Otherwise an `impl`'s
+// receiver could not be left unmarked.
 // ==========================================
 priv struct Imm_axes
     f: I32
@@ -666,7 +666,7 @@ fn test_offsetof()
 
     verdict.pass("the alignment's padding, #packed and nesting all answer the same position as C.")
 
-// A generic struct's instance is filled as the same non-generic struct is: its layout attributes
+// A generic struct's instance is filled as the same non-generic struct is. Its layout attributes
 // hold, and an array field's elements follow the binding (fill_struct_fields in
 // sema/decl/registry.kspl).
 #packed
@@ -706,8 +706,8 @@ priv const minus_three: I32 = -3
 
 fn test_negative_const_type_arg()
     verdict.start("[Generics] a negative literal as a const type argument test...")
-    // A negated literal is a unary node, not a literal: read by its text alone, the argument is
-    // `-` and the instance returns `-;` (const_type_arg_value in sema/decl/resolve.kspl).
+    // A negated literal is a unary node, not a literal. Read by its text alone, the argument is
+    // `-`, and the instance returns `-;` (const_type_arg_value in sema/decl/resolve.kspl).
     assert(const_arg_of<|-3|>() == -3, "a negative literal reaches the body as its value")
     assert(const_arg_of<|minus_three|>() == -3, "a const of the same value gives the same instance")
     assert(const_arg_of<|3|>() == 3, "a positive literal stays apart from the negative one")
@@ -872,9 +872,9 @@ fn test_endless_for_ends_a_function()
     verdict.pass("a function may end on a `for` with no condition and no `break` leaving it.")
 
 // ==========================================
-// `sizeof` of a value's name: the grammar reads `sizeof(x)` as a type first, and sema reads it as
+// `sizeof` of a value's name: the grammar reads `sizeof(x)` as a type first. Sema reads it as
 // the value where `x` is a variable or a constant in scope (`sizeof_named_value` in
-// `ksplc/sema/decl/eval.kspl`), a field (`x.a`), an element (`a[0]`) and an address (`x@`) too.
+// `ksplc/sema/decl/eval.kspl`), a field (`x.a`), an element (`a[0]`) or an address (`x@`).
 // ==========================================
 priv struct Sz_of_value
     a: I64

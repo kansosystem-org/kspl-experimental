@@ -1,52 +1,157 @@
 //< A demo of ARM Cortex-M pre-emptive scheduling
 //<
-//< The SysTick interrupt calls ksos_tick() at a fixed rate and forces tasks of the same priority
-//< to switch on a time slice. Tasks A and B are endless loops that never yield, so under
-//< cooperative scheduling A would hog the CPU and the others could never run. If both run
-//< (g_ran_a/b set) and monitor wakes from its Task.delay and ends, pre-emption and the
-//< timer-driven clock work. startup.S calls ksos_main on the PSP, and PendSV (switch.S) switches.
+//< SysTick calls ksos_tick() at a fixed rate and forces tasks of the same priority to switch on a
+//< time slice. Tasks A and B are endless loops that never yield. If both run and monitor wakes
+//< from its Task.delay and ends, pre-emption and the timer-driven clock work.
+//< **A and B also check that a switch gives each its own registers back.** Each holds its own
+//< values in r4-r11, the registers PendSV (switch.S) saves and restores by hand. Each reads them
+//< back while SysTick switches between the two. The check is in assembly Armv6-M and Armv7-M
+//< share, so it runs on both ports' `switch.S`.
 import "ksos/demo/common/semihost_console" as con
 import "ksos/kernel/task" + { Task }
 
 priv const monitor_wait: U64 = 20
+priv const check_rounds: U32 = 2000 //< one call of hold_callee_saved: well under a tick of work
+priv const seed_a: U32 = 0x1000 //< A's r4-r11 hold seed_a+4 .. seed_a+11
+priv const seed_b: U32 = 0x2000 //< and B's seed_b+4 .. seed_b+11
 
 $g_ran_a: I32 = 0
 $g_ran_b: I32 = 0
+$g_calls_a: U32 = 0 //< calls of hold_callee_saved A finished
+$g_calls_b: U32 = 0
+$g_cut_a: U32 = 0 //< A's calls during which B ran: a switch away and back came inside the check
+$g_cut_b: U32 = 0
+$g_bad_a: U32 = 0 //< rounds in which A found one of its r4-r11 changed
+$g_bad_b: U32 = 0
 
 $tcb_a: Task
 $tcb_b: Task
 $tcb_m: Task
-$stack_a: U8[4096]
-$stack_b: U8[4096]
-$stack_m: U8[4096]
+$stack_a: U8[1024]
+$stack_b: U8[1024]
+$stack_m: U8[1024]
+
+#naked
+fn hold_callee_saved(_seed: U32, _rounds: U32, _bad: U32$@) //<
+    //< Holds seed+4 .. seed+11 in r4-r11 and reads them back `rounds` times
+    //<
+    //< It writes to `bad` how many rounds found one changed, putting the values back after each
+    //< such round. The caller's r4-r11 are kept on the stack and restored on return (AAPCS).
+    //< The arguments arrive in r0 (seed), r1 (rounds) and r2 (bad).
+    __kspl_asm_volatile("push {r4-r7, lr}")
+    __kspl_asm_volatile("mov r4, r8")
+    __kspl_asm_volatile("mov r5, r9")
+    __kspl_asm_volatile("mov r6, r10")
+    __kspl_asm_volatile("mov r7, r11")
+    __kspl_asm_volatile("push {r4-r7}")
+    __kspl_asm_volatile("push {r2}") // where the count goes, read back at the end
+    __kspl_asm_volatile("movs r2, #0") // r2: the rounds that found a register changed
+    __kspl_asm_volatile("0:") // put the values in place
+    __kspl_asm_volatile("adds r4, r0, #4")
+    __kspl_asm_volatile("adds r5, r0, #5")
+    __kspl_asm_volatile("adds r6, r0, #6")
+    __kspl_asm_volatile("adds r7, r0, #7")
+    __kspl_asm_volatile("adds r3, r4, #4")
+    __kspl_asm_volatile("mov r8, r3")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("mov r9, r3")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("mov r10, r3")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("mov r11, r3")
+    __kspl_asm_volatile("1:") // one round: read every one back
+    __kspl_asm_volatile("adds r3, r0, #4")
+    __kspl_asm_volatile("cmp r4, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r5, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r6, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r7, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r8, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r9, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r10, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("adds r3, #1")
+    __kspl_asm_volatile("cmp r11, r3")
+    __kspl_asm_volatile("bne 2f")
+    __kspl_asm_volatile("subs r1, #1")
+    __kspl_asm_volatile("bne 1b")
+    __kspl_asm_volatile("b 3f")
+    __kspl_asm_volatile("2:") // a register changed: count the round, and put the values back
+    __kspl_asm_volatile("adds r2, #1")
+    __kspl_asm_volatile("subs r1, #1")
+    __kspl_asm_volatile("bne 0b")
+    __kspl_asm_volatile("3:") // write the count, and give the caller its own r8-r11 and r4-r7 back
+    __kspl_asm_volatile("pop {r3}")
+    __kspl_asm_volatile("str r2, [r3]")
+    __kspl_asm_volatile("pop {r4-r7}")
+    __kspl_asm_volatile("mov r8, r4")
+    __kspl_asm_volatile("mov r9, r5")
+    __kspl_asm_volatile("mov r10, r6")
+    __kspl_asm_volatile("mov r11, r7")
+    __kspl_asm_volatile("pop {r4-r7, pc}")
+
 fn task_a(_arg: Void$@): Void //< a computing task that never yields
     for
         g_ran_a = 1
+        other: = g_calls_b
+        $bad: U32 = 0
+        hold_callee_saved(seed_a, check_rounds, bad@)
+        g_bad_a += bad
+        g_calls_a += 1
+        if g_calls_b != other
+            g_cut_a += 1
 
 fn task_b(_arg: Void$@): Void
     for
         g_ran_b = 1
+        other: = g_calls_a
+        $bad: U32 = 0
+        hold_callee_saved(seed_b, check_rounds, bad@)
+        g_bad_b += bad
+        g_calls_b += 1
+        if g_calls_a != other
+            g_cut_b += 1
 fn monitor(_arg: Void$@): Void //< the monitoring task
     //<
     //< It sleeps 20 ticks on Task.delay. Meanwhile SysTick forces A and B, which never yield, to
     //< switch, the clock advances and monitor wakes. That it wakes at all shows the pre-emptive
-    //< tick works; it then checks that A and B both had the CPU, and ends QEMU.
+    //< tick works. It then checks that A and B both had the CPU and kept their registers. Then it
+    //< ends QEMU.
     from: = task.current_tick()
     Task.delay(monitor_wait)
     con.puts("=== Kanso OS (Cortex-M) preemptive scheduling ===\n")
     con.check("monitor woke from its delay while A and B never yield",
         task.current_tick() - from >= monitor_wait)
-    // Caution: **Check that both A and B ran too**: waking alone does not show the case where one
-    // task hogs the CPU while only the clock advances (a gap in the round robin).
+    // Caution: **Check that both A and B ran too.** Waking alone does not show one task hogging
+    // the CPU while only the clock advances (a gap in the round robin).
     con.check("task A got the CPU", g_ran_a == 1)
     con.check("task B got the CPU", g_ran_b == 1)
+    // A cut call is one a switch came into: the other task ran before it ended. Without one, the
+    // register check would hold on a switch that never happened.
+    con.out().s("[info] A: \{g_calls_a\} checks, \{g_cut_a\} cut by a switch; ")
+        .s("B: \{g_calls_b\} checks, \{g_cut_b\} cut by a switch\n")
+    con.check("switches came in the middle of both tasks' register checks",
+        g_cut_a > 0 && g_cut_b > 0)
+    con.check("task A's r4-r11 came back unchanged from every switch", g_bad_a == 0)
+    con.check("task B's r4-r11 came back unchanged from every switch", g_bad_b == 0)
     con.print_summary("Cortex-M preemptive scheduling")
     con.exit()
 // The bare-metal entry, called on the PSP from startup.S.
 #export
 fn ksos_main()
-    // The monitor is registered first, so a scheduler that takes the table's order instead of
-    // turning round still wakes it at the top of the table: it then reports the task left out,
+    // The monitor is registered first. So a scheduler that takes the table's order instead of
+    // turning round still wakes it at the top of the table. It then reports the task left out,
     // rather than the run hanging behind A.
     tcb_m.create(U8$[]::stack_m, monitor, null, 1, "m")
     tcb_a.create(U8$[]::stack_a, task_a, null, 1, "a")

@@ -2,8 +2,8 @@
 //<
 //< `run`, the counterpart of genc's gen/c/root.kspl, builds the whole LLVM module in output order.
 //< **The IR holds only the language's core.** Only the C runtime has the bodies of the `kspl_*`
-//< functions that touch the OS; the IR `declare`s them and links against `ksplc emit-runtime`'s
-//< output ("The backends (Genc / Genllvm) and the runtime ABI" in ksplc/docs/DESIGN-compiler.md).
+//< functions that touch the OS. The IR `declare`s them and links against `ksplc emit-runtime`'s
+//< output ("The backends (Genc / Genllvm) and the runtime ABI" in ksplc/docs/DESIGN-backends.md).
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -33,10 +33,10 @@ fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM b
     cg.s("; ==========================================\n")
     cg.s("source_filename = \"").s(file_name).s("\"\n")
     // The machine's triple, so an LLVM tool reading the IR builds for the machine sizes were laid
-    // out for. No `target datalayout`: LLVM derives it from the triple, and clang replaces a
-    // module's own without a word, so a copy here would be a second statement nothing reads.
+    // out for. No `target datalayout`: LLVM derives it from the triple. Clang replaces a module's
+    // own without a word, so a copy here would be a second statement that nothing reads.
     cg.s("target triple = \"").s(base_target.current().llvm_triple).s("\"\n\n")
-    gen_llvm_types.emit_complex_types(cg)
+    gen_llvm_types.emit_slice_base_types(cg)
     emit_type_decls(root, cg)
     emit_globals(root, cg)
     emit_fn_defs(root, cg)
@@ -44,9 +44,20 @@ fn run(root: Ast_node$@, cg: Genllvm_ctx$@, file_name: U8[]) //< runs the LLVM b
     // The failure route lives in the C runtime's common half (`runtime/core.c`), on bare metal too.
     cg.s("declare void @kspl_trace_start(ptr, ptr, i32)\n")
     cg.s("declare void @kspl_trace_record(ptr, ptr, i32)\n")
+    emit_saturating_casts(cg)
     emit_runtime_and_main(cg)
     emit_string_pool(cg)
     cg.s("; End of LLVM IR\n")
+
+priv fn emit_saturating_casts(cg: Genllvm_ctx$@) //<
+    //< The intrinsics a cast from floating point to an integer calls (emit_llvm_float_to_int)
+    for f in Range.asc(2)
+        src_word: = "f32" if f == 0 else "f64"
+        for sign in Range.asc(2)
+            letter: = "s" if sign == 0 else "u"
+            for $bits: = 8; bits <= 64; bits *= 2
+                cg.s("declare i\{bits\} @llvm.fpto\{letter\}i.sat.i\{bits\}.\{src_word\}(")
+                cg.s("float" if f == 0 else "double").s(")\n")
 
 priv fn emit_type_decls(root: Ast_node$@, cg: Genllvm_ctx$@)
     for raw in root.children
@@ -72,7 +83,7 @@ priv fn emit_globals(root: Ast_node$@, cg: Genllvm_ctx$@)
 priv fn mark_defined_c_names(root: Ast_node$@, cg: Genllvm_ctx$@) //<
     //< Enters every function this module defines under its own C name (an `#export`) as declared
     //<
-    //< An `extern "C"` block may name a function the program itself defines, as a host stand-in
+    //< An `extern "C"` block can name a function the program itself defines, as a host stand-in
     //< for a port's C does. Its `define` serves as the declaration; a `declare` beside it is a
     //< redefinition to LLVM, though C allows a prototype next to the body.
     for raw in root.children
@@ -120,14 +131,14 @@ priv fn emit_instantiated_fns(cg: Genllvm_ctx$@) //<
     owner_idx: = build_inst_owner_index(cg)
     for inst_node in cg.env.instantiated_nodes_list
         if inst_node.kind_id == .k_decl_fn && inst_node.is_alive_for_backend()
-            owner_type_id: = owner_idx.get(Sz::inst_node) catch 0
+            owner_type_id: = owner_idx.get(Sz::inst_node).unwrap_or(0)
             inst_node.emit_llvm_fn_def(cg, owner_type_id)
 
 priv fn emit_runtime_decls(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     //< The declarations the IR itself holds in hosted's preamble
     //<
     //< **No `kspl_*` bodies go here.** Everything that touches the OS is in the C runtime
-    //< (`ksplc emit-runtime`'s output), and the `declare`s come from `std/`'s `extern "C"`
+    //< (`ksplc emit-runtime`'s output). The `declare`s come from `std/`'s `extern "C"`
     //< (gen/llvm/decl.kspl), which skips what is emitted here (`is_preamble_fn` in `ctx.kspl`).
     for f in gen_llvm_ctx.preamble_fns
         if f.ret.len > 0
@@ -190,6 +201,35 @@ zero:
 remainder:
     %m = srem i64 %a, %safe
     ret i64 %m
+}
+
+; The pair at 32 bits, for i32 and narrower: an i64 division is a software call on a 32-bit core.
+; Paired with genc's kspl_sdiv32 / kspl_smod32.
+define i32 @kspl_sdiv32(i32 %a, i32 %b, ptr %file, i32 %line) {
+entry:
+    %wide = sext i32 %b to i64
+    %safe = call i64 @kspl_div_check(i64 %wide, ptr %file, i32 %line)
+    %is_neg1 = icmp eq i32 %b, -1
+    br i1 %is_neg1, label %negate, label %divide
+negate:
+    %neg = sub i32 0, %a
+    ret i32 %neg
+divide:
+    %q = sdiv i32 %a, %b
+    ret i32 %q
+}
+
+define i32 @kspl_smod32(i32 %a, i32 %b, ptr %file, i32 %line) {
+entry:
+    %wide = sext i32 %b to i64
+    %safe = call i64 @kspl_div_check(i64 %wide, ptr %file, i32 %line)
+    %is_neg1 = icmp eq i32 %b, -1
+    br i1 %is_neg1, label %zero, label %remainder
+zero:
+    ret i32 0
+remainder:
+    %m = srem i32 %a, %b
+    ret i32 %m
 }
 
 define i64 @kspl_div_check(i64 %divisor, ptr %file, i32 %line) {
@@ -298,7 +338,7 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
     cg.s("    store ptr %argv_os, ptr @argv\n")
     for call in gen_entry.startup_calls
         cg.s("    call void @").s(call).s("()\n")
-    // check_main_signature in sema/body/analyze.kspl limits the types a main may return.
+    // check_main_signature in sema/body/analyze.kspl limits the types a main can return.
     val_id: = cg.env.strip_result(main_sym.type_id)
     if !plan.returns_result()
         if plan.exit_is_value
@@ -312,36 +352,31 @@ priv fn emit_main_wrapper(cg: Genllvm_ctx$@, abi_sym: U8[]) //<
             cg.s("    ret i32 0\n")
         cg.s("}\n\n")
         return
-    // kspl_main's Result is an aggregate, so under the internal ABI it comes back through a hidden
+    // kspl_main's Result is an aggregate. So under the internal ABI it comes back through a hidden
     // return-value pointer (ret_needs_sret in gen/llvm/types.kspl).
     // This is hand-written IR, so the alloca for the destination is written here too.
     cg.s("    %retslot = alloca ")
     cg.t(main_sym.type_id).s("\n")
     cg.s("    call void @kspl_main(")
     cg.emit_agg_param_type().s(" %retslot)\n")
-    tmp_res: = cg.next_reg()
-    cg.s("    %\{tmp_res\} = load ")
-    cg.t(main_sym.type_id).s(", ptr %retslot\n")
-    err_flag: = cg.next_reg()
-    cg.s("    %\{err_flag\} = extractvalue ")
-    cg.t(main_sym.type_id).s(" %\{tmp_res\}, \{cg.field_index(main_sym.type_id, 0)\}\n")
+    err_flag: = cg.result_is_err(main_sym.type_id, "%retslot")
     cond_i1: = cg.next_reg()
-    cg.s("    %\{cond_i1\} = icmp ne i8 %\{err_flag\}, 0\n")
+    cg.s("    %\{cond_i1\} = icmp ne i8 ").s(err_flag).s(", 0\n")
     then_lbl: = cg.next_label()
     merge_lbl: = cg.next_label()
     cg.s("    br i1 %\{cond_i1\}, label %b\{then_lbl\}, label %b\{merge_lbl\}\n")
     cg.emit_b_label(then_lbl)
-    emit_main_failure(cg, plan, main_sym.type_id, cg.reg_str(tmp_res))
+    emit_main_failure(cg, plan, main_sym.type_id, "%retslot")
     // **Where a `ret` was emitted directly, call `terminate()`**, or the next emit_b_label adds a
     // `br` that LLVM numbers as a new block, and every later `%N` disagrees.
     cg.terminate()
     cg.emit_b_label(merge_lbl)
     if plan.exit_is_value
-        // A Result is the struct { is_err, error_code, val } (gen/llvm/types.kspl). It returns the
-        // success case's val.
+        // It returns the success case's value.
+        ok_ptr: = cg.payload_field_ptr("%retslot", main_sym.type_id,
+            cg.result_variant(main_sym.type_id, "ok"), 0)
         ok_val: = cg.next_reg()
-        cg.s("    %\{ok_val\} = extractvalue ")
-        cg.t(main_sym.type_id).s(" %\{tmp_res\}, \{cg.field_index(main_sym.type_id, 2)\}\n")
+        cg.op_load(ok_val, val_id, ok_ptr)
         ok_i32: = cg.emit_numeric_to_i32(cg.reg_str(ok_val), val_id)
         cg.s("    ret i32 ").s(ok_i32).s("\n")
     else
@@ -353,17 +388,18 @@ priv fn emit_private_name(cg: Genllvm_ctx$@, name: U8[], body: U8[]) //< a NUL-e
         .s("\\00\"\n")
 
 priv fn emit_main_failure(cg: Genllvm_ctx$@, plan: gen_entry.Main_plan, main_type_id: I32,
-    res: U8[]) //<
-        //< The failure path where `main` returns a Result, from its loaded value `res`
+    res_ptr: U8[]) //<
+        //< The failure path where `main` returns a Result, from the Result at `res_ptr`
         //<
         //< It prints the line and the propagation trace, and returns the exit code
         //< (`gen_entry.Main_err` says which).
     err_id: = cg.env.get_result_err_id(main_type_id)
     err_out: = cg.next_reg()
     cg.s("    %\{err_out\} = call ptr @get_stderr()\n")
+    err_ptr: = cg.payload_field_ptr(res_ptr, main_type_id,
+        cg.result_variant(main_type_id, "err"), 0)
     err_val: = cg.next_reg()
-    cg.s("    %\{err_val\} = extractvalue ")
-    cg.t(main_type_id).s(" ").s(res).s(", \{cg.field_index(main_type_id, 1)\}\n")
+    cg.op_load(err_val, err_id, err_ptr)
     $arg: U8[] = ""
     $code: U8[] = ""
     switch plan.err

@@ -1,6 +1,6 @@
 // ==========================================
 // kspage's page — the paper settings and printing, and presenting one slide at a time.
-// **The pages are a document setting** (not a viewer override): with a different page per viewer
+// **The pages are a document setting** (not a viewer override). With a different page per viewer
 // the prints stop matching, so this file touches only the document's settings.
 // It is split from [`file.js`](file.js) for the 1000-line-per-file cap (Principle 3).
 // ==========================================
@@ -99,7 +99,7 @@ function kspagePaper(ui) {
   };
 
   // The page's header and footer, **not replaced on every keystroke** (half-typed text would go
-  // in); with no top and bottom margins they have nowhere to go and are not shown.
+  // in). With no top and bottom margins, they have nowhere to go and are not shown.
   for (const which of ["header", "footer"]) {
     const box = document.getElementById(`${which}-text`);
     box.value = app.chrome(which);
@@ -112,14 +112,14 @@ function kspagePaper(ui) {
 
   // Caution: **Make one canvas per page** (one long canvas cannot span pages), **discarded after
   // printing** (the page gets heavy). **Pass the paper size with `@page`** (otherwise the browser's
-  // default page is used), **with margins of 0**: the document's settings (`Paper`) hold the
+  // default page is used), **with margins of 0**. The document's settings (`Paper`) hold the
   // margins, so adding them here would double them.
   const printBox = document.getElementById("sheets");
   const pageRule = document.createElement("style");
   document.head.appendChild(pageRule);
   document.getElementById("print").addEventListener("click", () => {
-    // Caution: **Ask for the page printing actually uses** (`printPaper`), not the setting: a
-    // document with no paper borrows one when drawn, so `@page` would get no size and each canvas
+    // Caution: **Ask for the page printing actually uses** (`printPaper`), not the setting. A
+    // document with no paper borrows one when drawn, so `@page` would get no size. Each canvas
     // would spill over the browser's own page into a blank one (`break-inside: avoid` cannot help).
     const p = app.printPaper();
     pageRule.textContent = `@page { size: ${p.width}px ${p.height}px; margin: 0 }`;
@@ -136,9 +136,9 @@ function kspagePaper(ui) {
   });
 
   // Presenting one at a time: **advancing and what is shown are the core's entry points** (keys,
-  // the clicked place); this file only hides the chrome and redraws to the window's size.
-  // Caution: **Give the keys back to the editor on success too**: the keys that send on and Esc
-  // are read by its hidden input, so left on the button the show could be neither sent on nor left.
+  // the clicked place). This file only hides the chrome and redraws to the window's size.
+  // Caution: **Give the keys back to the editor on success too.** Its hidden input reads the keys
+  // that send on and Esc. Left on the button, the show could be neither sent on nor left.
   document.getElementById("present").addEventListener("click", () => {
     if (app.present(0) < 0) deny("This document has no slides");
     app.focus();

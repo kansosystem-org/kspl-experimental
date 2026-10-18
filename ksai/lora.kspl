@@ -1,7 +1,7 @@
 //< Fine-tuning through LoRA: a low-rank pair trained in place of a frozen linear layer
 //<
 //< It adds the delta of the low-rank matrices A·B to a frozen base layer's output. **Only A and B
-//< are trained**, so the device itself can fine-tune with few parameters; every intermediate value
+//< are trained**, so the device itself can fine-tune with few parameters. Every intermediate value
 //< lives on an arena, so the allocation is predictable.
 
 // ==========================================
@@ -86,11 +86,11 @@ impl<|T|> Lora<|T|>
         return dx
     pub fn raw_size(r: Self$@): Sz //< how many bytes `save_raw` writes
         //<
-        //< The bundle (`save_set_into` / `load_set_from` in `ksai/lora_set`) goes through
-        //< safetensors and JSON, which need the global heap (`mem.alloc`): **on bare metal, call
+        //< The bundle (`save_set_into` / `load_set_from` in `ksai/lora_set`) builds its tensor
+        //< names, and a saved file, in `Str_builder`s on the global heap. **On bare metal, call
         //< `mem.init_freestanding_heap()` first**, or an arena-only build panics. This is the
         //< smallest heap-free format: A's and B's raw bytes and `scale` back to back, for an
-        //< embedded target's flash or NVRAM (restoring assumes the caller knows the shapes).
+        //< embedded target's flash or NVRAM. Restoring assumes the caller knows the shapes.
         return (r.a.size + r.b.size + 1) * sizeof(T)
     pub fn save_raw( //< copies A, B and `scale` out contiguously, without using the heap
         r: Self$@,

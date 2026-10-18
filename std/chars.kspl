@@ -4,9 +4,9 @@
 //< with no heap. The functions that allocate and build new strings are in `std/str`.
 
 // ==========================================
-// Caution: **Put only code that does not allocate here** (the axis of the split, and what cannot
+// Caution: **Put only code that does not allocate here.** The axis of the split, and what cannot
 // be moved, are in "String functions are split by whether they allocate" in
-// `std/docs/DESIGN-core.md`).
+// `std/docs/DESIGN-core.md`.
 // Anything that needs an `Arena`, a `List` or a `Str_builder` belongs in `std/str`.
 // ==========================================
 import "std/libc"
@@ -37,19 +37,19 @@ impl U8[]
         remain: = r.len - offset
         return width if width <= remain else remain
 
-    pub fn utf8_seq_len( //< the length of the well-formed UTF-8 sequence at offset; 0 if none is
+    pub fn utf8_seq_len( //< the length of the well-formed UTF-8 sequence at offset, or none
         //<
-        //< **It is strict where `next_codepoint` is lenient**: an overlong form (`C0 AF`), a
-        //< surrogate (`ED A0 80`), anything past 10FFFF and a cut-off sequence all give 0, as
-        //< Unicode's table of well-formed sequences has it.
+        //< **It is strict where `next_codepoint` is lenient.** An overlong form (`C0 AF`), a
+        //< surrogate (`ED A0 80`), anything past 10FFFF and a cut-off sequence all give none. That
+        //< follows Unicode's table of well-formed sequences.
         r: U8[],
-        offset: Sz, //< where the sequence begins; out of range gives 0
-    ): Sz
+        offset: Sz, //< where the sequence begins; out of range gives none
+    ): Sz?
         if offset < 0 || offset >= r.len
-            return 0
+            return .none
         c: = (r.ptr + offset)$
         if c < 0x80U8
-            return 1
+            return .some(1)
         // The lead gives the width and the range of the second byte; the rest are 80..BF. **The
         // narrowed second ranges** are what refuse an overlong form, a surrogate and past 10FFFF.
         $n: Sz = 4
@@ -65,32 +65,32 @@ impl U8[]
             lo = 0x90U8 if c == 0xF0U8 else 0x80U8
             hi = 0x8FU8 if c == 0xF4U8 else 0xBFU8
         else
-            return 0
+            return .none
         if n > r.len - offset
-            return 0
+            return .none
         second: = (r.ptr + offset + 1)$
         if second < lo || second > hi
-            return 0
+            return .none
         for $k: Sz = 2; k < n; k += 1
             if ((r.ptr + offset + k)$ & 0xC0U8) != 0x80U8
-                return 0
-        return n
+                return .none
+        return .some(n)
 
-    pub fn hex4( //< four hex digits as a number, or -1 when there are not four
+    pub fn hex4( //< four hex digits as a number, or none when there are not four
         //<
         //< Four, because every `\uXXXX` that uses it (JSON, KSPL, KSPEG) has four.
         r: U8[],
         at: Sz, //< where the four digits begin
-    ): I32
+    ): I32?
         if at < 0 || at + 4 > r.len
-            return -1
+            return .none
         $v: I32 = 0
         for k in Range.asc(4)
-            d: = (r.ptr + at + k).hex_val()
-            if d < 0
-                return -1
-            v = v * 16 + d
-        return v
+            if d: = (r.ptr + at + k).hex_val()
+                v = v * 16 + d
+            else
+                return .none
+        return .some(v)
 
     pub fn count_codepoints(r: U8[]): Sz //< how many code points it holds
         //<
@@ -132,9 +132,9 @@ impl U8[]
 
     pub fn starts_with( //< whether the text appears at that position
         //<
-        //< **Omitting `offset` and writing `0` call the same function** (a default argument; the
+        //< **Omitting `offset` and writing `0` call the same function** (a default argument). The
         //< rule is "A default argument is allowed only for a foldable constant" in
-        //< docs/DESIGN-principles.md).
+        //< docs/DESIGN-principles.md.
         r: U8[],
         prefix: U8[], //< the text to look for
         offset: Sz = 0, //< where to look; omitted, the start
@@ -161,8 +161,8 @@ impl U8[]
 
     pub fn find_char(r: U8[], ch: U8): Sz? //< where the byte first appears, or none
         //<
-        //< Caution: **"Not found" is no position**: a `-1` passed on as one read the wrong byte far
-        //< from the search, and an `I32` could not name a place past 2 GiB. "Is it there" is
+        //< Caution: **"Not found" is no position.** A `-1` passed on as one reads the wrong byte
+        //< far from the search. An `I32` cannot name a place past 2 GiB. "Is it there" is
         //< `.is_some()` on this same call.
         for i in Range.asc(r.len)
             if (r.ptr + i)$ == ch
@@ -252,16 +252,14 @@ impl U8
         //< ASCII only.
         return U8::(r + 32) if r.is_upper() else r
 
-    pub fn hex_val(r: Self): I32 //< the value of one hex digit, or -1 if it is not one
-        //<
-        //< An `I32`, so -1 can be told apart.
+    pub fn hex_val(r: Self): I32? //< the value of one hex digit, or none if it is not one
         if r.is_digit()
-            return r - '0'
+            return .some(r - '0')
         if r >= 'a' && r <= 'f'
-            return (r - 'a') + 10
+            return .some((r - 'a') + 10)
         if r >= 'A' && r <= 'F'
-            return (r - 'A') + 10
-        return -1
+            return .some((r - 'A') + 10)
+        return .none
 
     priv fn cstr_len(r: Self$@): Sz //< the length of a NUL-terminated run starting here
         $len: Sz = 0

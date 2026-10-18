@@ -7,9 +7,9 @@
 // ==========================================
 //   - Every time an ARC-managed type's value is copied (a read of existing memory), a retain() is
 //     inserted.
-//   - Wherever an ARC-managed local binding leaves its scope, a release() is inserted
-//     (registered on the same cleanup_stack as defer's, covering every way out: the normal
-//     exit, return, throw, break and continue).
+//   - Wherever an ARC-managed local binding leaves its scope, a release() is inserted. It is
+//     registered on the same cleanup_stack as defer's, so it covers every way out: the normal exit,
+//     return, throw, break and continue.
 // ==========================================
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -32,8 +32,9 @@ priv const max_arc_emit_depth: Sz = 1000 //<
     //< The depth limit for emit_managed_op's walk over the owning positions
     //<
     //< The owning positions are a struct's fields, an enum's payload and an array's elements.
-    //< Cycles are already rejected during resolution; this stops a non-cyclic but very deep chain
-    //< from overflowing the native stack (as max_type_layout_depth in sema/session/ctx.kspl does).
+    //< Cycles are already rejected during resolution. This limit stops a non-cyclic but very deep
+    //< chain from overflowing the native stack (as max_type_layout_depth in sema/session/ctx.kspl
+    //< does).
 
 priv const max_arc_place_depth: Sz = 1000 //<
     //< The depth limit for the place-expression check's walk down pointers and fields
@@ -59,8 +60,8 @@ impl Arc_helper_parts
     priv fn arc_param_ref(r: Self, loc: base_ast.Loc): Ast_node$@ //<
         //< It creates a new identifier node that refers to the helper's parameter
         //<
-        //< def_node must point at the parameter declaration: genllvm looks up a local variable's ID
-        //< by that identity, and without it the IR refers to an undefined SSA value.
+        //< def_node must point at the parameter declaration. genllvm looks up a local variable's ID
+        //< by that identity; without it, the IR refers to an undefined SSA value.
         ref_node: = Ast_node.build_ident(arc_helper_param_name, r.ptr_id, loc)
         ref_node.def_node = r.param
         return ref_node
@@ -104,10 +105,10 @@ priv fn expand_place_index_ops(lctx: Lowering_ctx$@, n: Ast_node$@, depth: Sz) /
 
 // It adds to out the statements for the retain/release on recv (a value of type type_id).
 // Keep the owning positions it walks in step with what type_has_arc_content (sema/type/env.kspl)
-// counts as owning: a struct's fields, an enum's live variant's payload, an array's elements,
-// and a Result's success payload. Widen only one and a managed value gets no operation (a
-// leak), or an operation is never inserted ("The rules for implementing ARC" in
-// ksplc/docs/DESIGN-compiler.md).
+// counts as owning. They are a struct's fields, an enum's live variant's payload, an array's
+// elements, and a Result's success payload. Widen only one, and a managed value gets no operation
+// (a leak) or an operation is never inserted. See "The rules for implementing ARC" in
+// ksplc/docs/DESIGN-lower.md.
 fn emit_managed_op(lctx: Lowering_ctx$@, recv: Ast_node$@, type_id: I32, method_name: U8[],
     out: List<|Ast_node$@|>$@, depth: Sz)
     expand_place_index_ops(lctx, recv, 0)
@@ -131,7 +132,7 @@ priv fn arc_helper_type(lctx: Lowering_ctx$@, type_id: I32): I32 //<
 priv fn arc_helper_ptr_type(lctx: Lowering_ctx$@, real_id: I32): I32 //<
     //< The type of the pointer the chain helper receives: a read-only one
     //<
-    //< Only an array becomes "a pointer to the element": `@` on an array gives a pointer to the
+    //< Only an array becomes "a pointer to the element". `@` on an array gives a pointer to the
     //< first element, so a `T[N]$@` parameter would disagree with the call's type.
     //< Read-only, since `retain` / `release` take `Self@`: a read-only array copied by `for x in`
     //< passes as it is, where a writable parameter discarded C's `const` (Principle 2).
@@ -146,14 +147,15 @@ priv fn get_or_create_arc_helper(lctx: Lowering_ctx$@, type_id: I32, method_name
         //< The per-type chain helper `fn kspl_arc_<method>_<type>(p: T@)`, created once
         //<
         //< Caution: The argument must be **a pointer**. By value, lowering a cleanup again for each
-        //< way out makes add_arc_call_args take the argument and retain it, so it is counted twice.
+        //< way out makes add_arc_call_args take the argument and retain it. Then it is counted
+        //< twice.
     real_id: = arc_helper_type(lctx, type_id)
     $key_b: = Str_builder.new()
     defer key_b.free()
     key_b.s(method_name).s(":")
     lctx.sema.env.mangle_type_id_to(real_id, key_b)
     key: = key_b.slice()
-    existing: = lctx.arc_helpers.get(key) catch null
+    existing: = lctx.arc_helpers.get(key).unwrap_or(null)
     if existing != null
         return .some(existing)
 
@@ -211,21 +213,6 @@ priv fn emit_arc_owned_positions(lctx: Lowering_ctx$@, parts: Arc_helper_parts, 
             elem: =
                 build_arc_elem_deref(lctx, parts.arc_param_ref(loc), I32::k, elem_id, loc)
             emit_managed_op(lctx, elem, elem_id, method_name, out, depth + 1)
-    case .result(base_id, _err_id)
-        // A Result owns a value only on success. The tag is the virtual field `is_err` (ival=0, as
-        // sema/body/dot.kspl defines) and the value is `val` (ival=2).
-        bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
-        is_err: = Ast_node.build_member_access(parts.arc_param_ref(loc), "is_err", 0, bool_id, loc)
-        ok_ops: = List<|Ast_node$@|>.create(base_core.arena)
-        val: = Ast_node.build_member_access(parts.arc_param_ref(loc), "val", 2, base_id, loc)
-        emit_managed_op(lctx, val, base_id, method_name, ok_ops, depth + 1)
-        if ok_ops.len == 0
-            return
-        ok_block: = Ast_node.build_block(loc)
-        for op in ok_ops
-            ok_block.add_child(op)
-        not_err: = Ast_node.build_unary_expr("!", is_err, bool_id, loc)
-        out.push(Ast_node.build_if_stmt(not_err, ok_block, null, loc))
     default {}
 
 priv fn build_arc_elem_deref(lctx: Lowering_ctx$@, ptr_expr: Ast_node$@, k: I32, elem_id: I32,
@@ -261,7 +248,7 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
         //<
         //< Each variant has its own payload, and only one is live at run time. So a switch on the
         //< tag is synthesized, and each case binds the payload before recursing into each element.
-        //< Caution: **Bind `p$` to a temporary here**, as lower_stmt_switch would: this body is
+        //< Caution: **Bind `p$` to a temporary here**, as lower_stmt_switch would. This body is
         //< built after Lower's walk and never lowered, and a switch's subject has to be a plain
         //< name.
     loc: = parts.helper_fn.loc
@@ -282,8 +269,8 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
             if !lctx.sema.env.type_is_managed(f.type_id)
                 continue
             // def_node ties the reference to the binding node (genllvm's IDs follow that identity).
-            // It works because the helper body is never copied; expanded at the call site instead,
-            // a cleanup's copy would leave def_node on the original node.
+            // It works because the helper body is never copied. If it were expanded at the call
+            // site instead, a cleanup's copy would leave def_node on the original node.
             ref_node: = Ast_node.build_ident(bind_name, f.type_id, loc)
             ref_node.def_node = bind_node
             emit_managed_op(lctx, ref_node, f.type_id, method_name, ops, depth + 1)
@@ -309,16 +296,16 @@ priv fn emit_managed_enum_op(lctx: Lowering_ctx$@, parts: Arc_helper_parts,
 priv fn arc_binding_ref(bind: Ast_node$@): Ast_node$@ //< a reference to a pattern's binding
     //<
     //< def_node ties it to the binding (genllvm's slot follows that identity, as in
-    //< emit_managed_enum_op); a clone of the binding itself would get a slot of its own.
+    //< emit_managed_enum_op). A clone of the binding itself would get a slot of its own.
     ref_node: = Ast_node.build_ident(bind.text, bind.type_id, bind.loc)
     ref_node.def_node = bind
     return ref_node
 
 impl Lowering_ctx
     // It registers a release on top of the current block's cleanup_stack (run in reverse when the
-    // scope exits, as defers are). id_node must be the declaration's own identifier node: its
-    // clone keeps def_node / sym_ptr and so genllvm's local ID, while a new identifier gets another
-    // ID and the IR refers to an undefined SSA value.
+    // scope exits, as defers are). id_node must be the declaration's own identifier node. Its clone
+    // keeps def_node / sym_ptr and so genllvm's local ID. A new identifier gets another ID, and the
+    // IR then refers to an undefined SSA value.
     fn register_arc_release(r: Self$@, id_node: Ast_node$@, type_id: I32)
         if r.cleanup_stack.len == 0
             return
@@ -330,8 +317,8 @@ impl Lowering_ctx
     fn register_arc_arm_bindings(r: Self$@, pattern: Ast_node$@): List<|Ast_node$@|>$@ //<
         //< The retains a `switch` arm's managed bindings owe; their releases wait for its block
         //<
-        //< A binding copies a payload its subject still owns, and the arm may let the subject go
-        //< (`s = .none`), so each binding holds a count of its own for the arm, as `for x in` does.
+        //< A binding copies a payload its subject still owns, and the arm can let the subject go
+        //< (`s = .none`). So each binding holds a count of its own for the arm, as `for x in` does.
         //< The arm's block releases it on every way out (arc_scope_pending).
         out: = base_ast.new_ast_node_list()
         if pattern == null
@@ -372,11 +359,11 @@ impl Lowering_ctx
 
 struct Arc_take //< the count a new owner of a managed value is owed, decided before lowering
     //<
-    //< A new value brings its own count. A place read is retained at its own type, and a read that
-    //< only its lowered form can name (arc_read_once_lowered) is retained once lowered.
-    //< Caution: A missed retain passes on Linux (freed memory keeps the value) and crashes on macOS
-    //< ("A retain goes wherever a copy happens" in ksplc/docs/DESIGN-compiler.md). Decide it here
-    //< alone.
+    //< A new value brings its own count. A place read is retained at its own type. A read that only
+    //< its lowered form can name (arc_read_once_lowered) is retained once lowered.
+    //< Caution: A missed retain passes on Linux (freed memory keeps the value) and crashes on
+    //< macOS. See "A retain goes wherever a copy happens" in ksplc/docs/DESIGN-lower.md. Decide it
+    //< here alone.
     src: Ast_node$@ //< the place read, cloned; null when the value is not one
     once_lowered: Bool //< whether the retain clones the lowered read instead
 
@@ -395,7 +382,7 @@ impl Arc_take
     fn retain(r: Self, lowered: Ast_node$@, lctx: Lowering_ctx$@) //<
         //< It puts the retain owed into pre_stmts; lowered is the value after its lowering
         //<
-        //< Emit it where the copy is made, after whatever runs before the copy: a retain emitted
+        //< Emit it where the copy is made, after whatever runs before the copy. A retain emitted
         //< ahead of a later `!` is never given back when that `!` leaves.
         if r.src != null
             emit_managed_op(lctx, r.src, r.src.type_id, "retain", lctx.pre_stmts, 0)
@@ -410,12 +397,13 @@ struct Arc_assign //< what an assignment to a managed place owes once its right 
 priv fn arc_retain_lowered(value: Ast_node$@, lctx: Lowering_ctx$@) //<
     //< The retain for a read only its lowered form can name, once lowering made it a plain place
     //<
-    //< arc_read_once_lowered decided it before lowering; the lowered read now names a temporary
+    //< arc_read_once_lowered decided it before lowering. The lowered read now names a temporary
     //< (lower_expr_postfix, lower_arc_part_of_fresh), so cloning it runs nothing twice.
     if value == null
         return
     value.ice_assert(!value.arc_has_call(0),
-        "arc_retain_lowered: the lowered read still holds a call, so its clone would run it twice")
+        "arc_retain_lowered: the lowered read still holds a call. Cloning the read would run the \
+            call twice")
     emit_managed_op(lctx, value.clone(), value.type_id, "retain", lctx.pre_stmts, 0)
 
 struct Arc_held //< a managed value held in a flagged temporary until its taker takes it
@@ -492,7 +480,7 @@ impl Ast_node
     fn arc_hoist_owned(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< Lowers a fresh managed value into a temporary the enclosing scope releases; refers to it
         //<
-        //< The temporary lives as a binding `x: = f();` written there would, so a field or a view
+        //< The temporary lives as a binding `x: = f();` written there would. So a field or a view
         //< read from it stays valid to the end of the scope. Only where can_own_temporaries holds.
         type_id: = r.type_id
         if lctx.relocating == 0
@@ -505,7 +493,7 @@ impl Ast_node
         //< arc_hoist_owned where the hoisted statements move into a block of their own
         //<
         //< The temporary and a flag saying it holds a value are declared at the statement's own
-        //< level (`stmt_decls`), so the scope's exit can see them; a branch not taken leaves the
+        //< level (`stmt_decls`), so the scope's exit can see them. A branch not taken leaves the
         //< flag down.
         //< Caution: **Release what it holds before storing again**: a loop's condition runs each
         //< turn.
@@ -571,9 +559,9 @@ impl Ast_node
         //<
         //< That expression can be cloned as the retain's receiver, at its own type.
         //< A newly built value (a call, a compound literal) is already +1 and returns none.
-        //< Caution: **Look through a Result built or unwrapped around a place**: `return e.value`
-        //< in a `V!E` function and `r!` copy what `e.value` or `r` still owns, and the place's
-        //< retain is that copy's count. Missed, both are released and the value is freed early.
+        //< Caution: **Look through a Result built or unwrapped around a place.** `return e.value`
+        //< in a `V!E` function and `r!` copy what `e.value` or `r` still owns. The place's retain
+        //< is that copy's count. Missed, both are released and the value is freed early.
         //< A catch is not looked through: its success and its substitute each count themselves.
         $curr: = r.arc_unwrapped()
         if curr != null && curr.kind_id == .k_result_wrap
@@ -588,10 +576,10 @@ impl Ast_node
     priv fn arc_read_once_lowered(r: Self$@, lctx: Lowering_ctx$@): Bool //<
         //< Whether it copies existing memory that only its lowered form names: `b.get().v`, `f().v`
         //<
-        //< **Such a copy reads existing memory, so it needs a retain** like any place's: the memory
-        //< a call's pointer leads to, or the temporary that holds a fresh value read in part.
-        //< The retain's receiver cannot be a clone (the call would run twice), so lowering first
-        //< moves the pointer or the fresh value into a temporary (`lower_expr_postfix`), and the
+        //< **Such a copy reads existing memory, so it needs a retain** like any place's. It reads
+        //< where a call's pointer leads, or a temporary holding a fresh value read in part.
+        //< The retain's receiver cannot be a clone, since the call would run twice. So lowering
+        //< first moves the pointer or the fresh value into a temporary (`lower_expr_postfix`). The
         //< retain clones the lowered read. Decide it before lowering, as arc_bare_copy_source is.
         // Both callers have already excluded unmanaged values and ordinary place copies.
         return r.arc_pointer_read(lctx, 0) || r.arc_part_of_fresh(lctx, 0)
@@ -714,9 +702,9 @@ impl Ast_node
         //< What an assignment to an existing binding (`dst = src;`) owes, decided before lowering
         //<
         //< It retains src and releases dst's overwritten value (else it leaks). **The release waits
-        //< until src is lowered and held** (finish_arc_assign): src's own retains are inserted as
-        //< it lowers, so released first, `head = Rc.new(Node::{ .next = head })` freed `head`
-        //< before retaining it, and `head = head.get().next` read a node already freed.
+        //< until src is lowered and held** (finish_arc_assign). src's own retains are inserted as
+        //< it lowers. Released first, `head = Rc.new(Node::{ .next = head })` freed `head` before
+        //< retaining it, and `head = head.get().next` read a node already freed.
         $owed: = Arc_assign::{ .dst = null, .type_id = 0,
             .take = Arc_take::{ .src = null, .once_lowered = false } }
         op: = r.get_assign_op()
@@ -738,7 +726,7 @@ impl Ast_node
             if !lctx.sema.has_error()
                 lctx.sema
                     .err(left,
-                    "cannot assign to an ARC-managed location whose left side contains a call: the \
+                    "cannot assign to an ARC-managed location whose left side contains a call. The \
                         overwritten value could not be released. Take the location into a binding \
                         first (for example 'p: = rc.get(); p.field = ...')")
         return owed
@@ -746,7 +734,7 @@ impl Ast_node
     fn finish_arc_assign(r: Ast_node$@, lctx: Lowering_ctx$@, owed: Arc_assign) //<
         //< What lower_arc_assign decided, once the right side is lowered
         //<
-        //< The right side is held in a temporary before the old value goes, so neither its retains
+        //< The right side is held in a temporary before the old value goes. So neither its retains
         //< nor its reads come after the release: `tmp = src; retain; release(dst); dst = tmp`, the
         //< order Swift uses.
         if owed.type_id == 0
@@ -759,12 +747,26 @@ impl Ast_node
         if owed.dst != null
             emit_managed_op(lctx, owed.dst, owed.type_id, "release", lctx.pre_stmts, 0)
 
+    fn arc_receiver_takes(r: Self$@, lctx: Lowering_ctx$@): Bool //<
+        //< Whether the method call `r` passes its receiver by value to a parameter taking a count
+        //<
+        //< Caution: **Retain such a receiver as an argument is retained.** The callee releases
+        //< every managed parameter it takes by value, the receiver included (register_arc_params).
+        //< Without the count, `key.hash()` on a struct holding an `Rc` frees what the caller holds.
+        recv: = r.safe_get_child(0)
+        if recv == null || recv.kind_id != .k_method_access || recv.def_node == null
+            return false
+        $params: = base_ast_ext.Param_cursor.new(recv.def_node.get_fn_params(), false)
+        if p: = params.next()
+            return lctx.sema.env.type_is_managed(p.param_type_id())
+        return false
+
     fn add_arc_call_args(r: Self$@, lctx: Lowering_ctx$@, ops: Operand_order$@) //<
         //< It adds each argument of the call `r` to ops, as taken where it passes a managed value
         //<
         //< A parameter that is a borrowed pointer takes nothing. The count taken pairs with the
         //< callee's release (register_arc_params), balancing it across the call (Swift's +1
-        //< transfer). On a method call parameter[0] is the receiver, skipped.
+        //< transfer). On a method call parameter[0] is the receiver, which the caller adds.
         args: = r.safe_get_child(2)
         if args == null || args.kind_id != .k_expr_args
             return
@@ -790,9 +792,9 @@ impl Ast_node
         expr_node: = r.get_var_decl_expr()
         id_node: = r.get_var_decl_id()
 
-        // The type and what the copy owes are decided before lower_default, which turns a catch
-        // and the like into an if / fallback and loses both (the release would go unregistered: a
-        // leak).
+        // The type and what the copy owes are decided before lower_default. lower_default turns a
+        // catch and the like into an if / fallback and loses both (the release would go
+        // unregistered: a leak).
         has_expr: = expr_node != null && expr_node.kind_id != .k_empty
         type_id: = expr_node.type_id if has_expr else 0
         take: = Arc_take.decide(expr_node if has_expr else null, lctx)

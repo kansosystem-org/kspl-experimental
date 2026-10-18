@@ -1,0 +1,108 @@
+//< The dataflow analysis of a field path (`b.m.x`): which local it reads, and what moves out of it
+//<
+//< A `Move_only` field read as a value moves that field out of its local, alone. The state keeps
+//< the read's node in `moved_fields` (`sema/flow/track.kspl`), and its path is worked out from the
+//< node here. Why a field moves on its own is in docs/DESIGN-language.md "Why there is no borrow
+//< checker, only a move-only marker".
+import "ksplc/base/ast" { Ast_node }
+import "ksplc/base/ast_ext" as base_ast_ext
+import "ksplc/base/core" as base_core
+import "ksplc/sema/flow/report" as sema_flow_report
+import "ksplc/sema/flow/track" as sema_flow_track
+import "ksplc/sema/type/arc" as sema_type_arc
+import "ksplc/sema/type/query" as sema_type_query
+import "std/chars" // testing and slicing single characters
+import "std/str"
+import "std/str" { Str_builder }
+
+impl Ast_node
+    fn df_field_read(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
+        //< Walks a field read (`b.m`); read as a value, a `Move_only` field moves out of its local
+        //<
+        //< A field read's receiver is not a use as a value (see df_method_access). **The path is
+        //< checked and moved as one**, at its outermost `.`: `b.m.x` reads `m.x` of `b`, which a
+        //< move of `b.m` or of `b.m.x` forbids and one of `b.n` does not.
+        $root: Ast_node$@ = null
+        // Caution: **Only a path of fields of the local's own value is tracked**
+        // (owned_field_root). One reached through a pointer is in memory the local does not own.
+        if !c.in_field_path
+            if rt: = r.owned_field_root(c)
+                root = rt
+        if root != null
+            sema_flow_report.report_moved_field_if_needed(c, state, root, r)
+        saved: = c.in_field_path
+        c.in_field_path = root != null || saved
+        r.get_postfix_receiver().analyze_as_borrow(c, state)
+        c.in_field_path = saved
+        for $i: = 1; i < r.children.len; i += 1
+            r.get_child(i).analyze_df_node(c, state)
+        if root != null && !c.suppress_move && c.sema.env.is_move_only(r.type_id)
+            state.moved_fields.add(r)
+
+    fn field_path_root(r: Self$@): Ast_node$@? //<
+        //< The declaration of the local a field path (`b.m.x`) starts from
+        //<
+        //< Only the shape is read: `.` field reads, and parentheses, down to a name.
+        $curr: = r
+        for curr != null
+            k: = curr.kind_id
+            if k == .k_identifier || k == .k_expr_path
+                return .some(curr.def_node)
+            if k == .k_expr_primary && curr.children.len > 0
+                curr = curr.get_primary_inner_expr()
+            else if k == .k_expr_postfix && curr.children.len > 2 &&
+                curr.postfix_op_text().equals(".")
+                curr = curr.get_postfix_receiver()
+            else
+                break
+        return .none
+
+    fn owned_field_root(r: Self$@, c: sema_flow_track.Df_ctx$@): Ast_node$@? //<
+        //< The tracked local whose own value holds this field path, where it is one
+        //<
+        //< None for a bare name, and for a path that reaches through a pointer on the way.
+        if r == null || r.kind_id != .k_expr_postfix || !r.postfix_op_text().equals(".")
+            return .none
+        env: = c.sema.env
+        $curr: = r
+        for curr != null && curr.kind_id != .k_identifier && curr.kind_id != .k_expr_path
+            if curr.kind_id == .k_expr_postfix
+                if curr.children.len < 3 || !curr.postfix_op_text().equals(".")
+                    return .none
+                curr = curr.get_postfix_receiver()
+                if curr != null && env.is_pointer(curr.type_id)
+                    return .none
+            else if curr.kind_id == .k_expr_primary && curr.children.len > 0
+                curr = curr.get_primary_inner_expr()
+            else
+                return .none
+        if curr == null || !curr.def_node.is_tracked_local(c)
+            return .none
+        return .some(curr.def_node)
+
+    fn field_path_text(r: Self$@): U8[] //<
+        //< The field names of a path below its local, joined by `.` (`m.x` for `b.m.x`)
+        //<
+        //< Empty for a bare name: the whole binding.
+        $sb: = Str_builder.new()
+        defer sb.free()
+        r.append_field_path(sb@)
+        return base_core.arena.dup_str(sb.slice())
+
+    priv fn append_field_path(r: Self$@, sb: Str_builder$@) //<
+        //< field_path_text's walk, outermost last
+        if r == null
+            return
+        if r.kind_id == .k_expr_primary && r.children.len > 0
+            r.get_primary_inner_expr().append_field_path(sb)
+        else if r.kind_id == .k_expr_postfix && r.children.len > 2
+            r.get_postfix_receiver().append_field_path(sb)
+            if sb.len > 0
+                sb.c('.')
+            sb.s(r.get_postfix_member().text)
+
+fn path_is_within(path: U8[], prefix: U8[]): Bool //<
+    //< Whether a field path is `prefix` or lies below it (an empty prefix holds every path)
+    if prefix.len == 0 || path.equals(prefix)
+        return true
+    return path.len > prefix.len && path.starts_with(prefix) && path[prefix.len] == '.'

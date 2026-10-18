@@ -11,7 +11,7 @@ import "ksos/kernel/task" + { Task }
 import "std/strfmt" as _strfmt // `:08x`
 
 $tcb_probe: Task
-$stack_probe: U8[4096]
+$stack_probe: U8[1024]
 
 const test_msg: U8[] = "panic probe: intentional test panic"
 
@@ -37,14 +37,15 @@ fn probe_task(_arg: Void$@): Void
                 msg_matches = false
         con.check("recovered message matches what was panicked with", msg_matches)
 
-        // The SP depends on each run's stack layout and cannot be predicted exactly, but it should
-        // be non-zero and in a valid RAM range (0x20000000-0x20020000; see link.ld).
+        // The SP depends on each run's stack layout and nobody can predict it exactly. But it must
+        // be non-zero and in RAM. On both QEMU boards, RAM starts at 0x20000000. It ends by
+        // 0x20020000 (the MPS2's 128KB in port/cortex_m/link.ld; the nRF51 has 16KB).
         con.check("recovered sp looks like a plausible RAM address",
             info.sp >= 0x20000000 && info.sp < 0x20020000)
 
-        // The exact words in the stack fragment depend on the compiler's frame layout, but if they
-        // really came from the stack at least one is non-zero (record_panic() copies raw bytes from
-        // the SP on). All zeros means the copy did not happen, which points at a bug.
+        // The exact words in the stack fragment depend on the compiler's frame layout. But if they
+        // really came from the stack, at least one is non-zero (record_panic() copies raw bytes
+        // from the SP on). All zeros means the copy did not happen, which points at a bug.
         $any_nonzero: = false
         for i in Range.asc(info.stack_len)
             if panic_stack_word(i) != 0

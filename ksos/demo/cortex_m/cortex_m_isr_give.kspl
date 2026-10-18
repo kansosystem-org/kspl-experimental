@@ -1,21 +1,19 @@
 //< ARM Cortex-M: tasks woken from an interrupt handler run as the handler returns
 //<
-//< low (1) raises IRQ0 from software with the NVIC's STIR. The handler gives two semaphores: first
-//< the one mid (3) waits on, then the one high (4) waits on. The switch the gives pend is taken as
-//< the handler returns, so by low's very next line high and then mid have run. Nothing else gives
-//< the CPU up in between: no yield, no delay, and SysTick runs too slowly to fire inside the
-//< window.
+//< low (1) raises IRQ0 from software, setting it pending in the NVIC. The handler gives two
+//< semaphores: first the one mid (3) waits on, then the one high (4) waits on. The switch the gives
+//< pend is taken as the handler returns, so by low's very next line high and then mid have run.
+//< Nothing else gives the CPU up in between: no yield, no delay, and SysTick runs too slowly to
+//< fire inside the window.
 //<
-//< The second give schedules while the first one's switch is still pending, the case where the
+//< The second give schedules while the first one's switch is still pending. In that case the
 //< port must keep switching away from low, the task really running, and not from mid.
 import "ksos/demo/common/semihost_console" as con
 import "ksos/drivers/cortex_m/scs"
-import "ksos/drivers/mmio"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 
-const nvic_stir: U32 = 0xE000EF00 // Software Trigger Interrupt Register: writing an IRQ number
-const irq0: U32 = 0 //< makes that IRQ pending
+const irq0: U32 = 0 //< the interrupt raised: no hardware of either QEMU board raises it here
 
 $g_sem_mid: sync.Sem
 $g_sem_high: sync.Sem
@@ -26,9 +24,9 @@ $g_ran: Sz = 0
 $tcb_low: Task
 $tcb_mid: Task
 $tcb_high: Task
-$stack_low: U8[4096]
-$stack_mid: U8[4096]
-$stack_high: U8[4096]
+$stack_low: U8[1024]
+$stack_mid: U8[1024]
+$stack_high: U8[1024]
 
 // IRQ0's handler (#export overrides the vector table's weak default, the same wiring as the mps2
 // UART driver).
@@ -45,7 +43,7 @@ fn waiter(arg: Void$@): Void //< waits on the semaphore given, then records its 
     g_ran += 1
 
 fn raise_irq0() //< pends IRQ0 and waits until the core has taken it
-    mmio.write32(nvic_stir, irq0)
+    scs.set_pending(irq0)
     // The barriers make the write reach the NVIC, and the core take the interrupt, before the next
     // instruction.
     __kspl_asm_volatile("dsb")

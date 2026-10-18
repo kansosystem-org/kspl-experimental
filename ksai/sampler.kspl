@@ -1,7 +1,7 @@
 //< Picks one token ID from a model's logits during generation
 //<
-//< There are two ways: `argmax`, which is deterministic and gives the same token every time, and
-//< the probabilistic `sample`, which is nucleus sampling by temperature, top-k and top-p. They are
+//< There are two ways. `argmax` is deterministic and gives the same token every time. The
+//< probabilistic `sample` is nucleus sampling by temperature, top-k and top-p. They are
 //< free functions rather than methods on `Tensor<|T|>`, to keep type inference from getting
 //< confused.
 import "ksai/tensor" { Tensor }
@@ -31,7 +31,7 @@ pub fn argmax<|T|>( //< the highest-scoring token, the same one every time
             max_val = val
             max_idx = I32::i
     return max_idx
-pub struct Sample_config //< how adventurous the sampling is, and which candidates it may pick
+pub struct Sample_config //< how adventurous the sampling is, and which candidates it can pick
     pub temperature: F64 //< how far it strays; 1.0 follows the model, 0 or below means `argmax`
     pub top_k: Sz //< at most this many top-scoring candidates; 0 means no limit
     pub top_p: F64 //< only candidates within this cumulative probability; 1.0 means no limit
@@ -39,18 +39,49 @@ pub struct Sample_config //< how adventurous the sampling is, and which candidat
 impl Sample_config
     pub fn greedy(): Sample_config //< the settings under which `sample` behaves like `argmax`
         return Sample_config::{ .temperature = 0.0, .top_k = 0, .top_p = 1.0 }
-priv fn sort_desc(idx: Sz$@, probs: F64$@, n: Sz) //<
-    //< An insertion sort by descending probability (the vocabulary is taken to be small to medium)
+priv fn ahead(probs: F64$@, a: Sz, b: Sz): Bool //< whether candidate `a` ranks before `b`
     //<
-    //< It reorders `idx`.
-    for $i: Sz = 1; i < n; i += 1
-        cur: = (idx + i)$
-        key: = (probs + cur)$
-        $j: = i - 1
-        for j >= 0 && (probs + (idx + j)$)$ < key
-            (idx + j + 1)$ = (idx + j)$
-            j -= 1
-        (idx + j + 1)$ = cur
+    //< Caution: **Break a tie by the lower ID.** The order has to be total. Otherwise which of two
+    //< equal candidates survives a top-k cut depends on the algorithm. A seed then stops giving
+    //< the same run.
+    return (probs + a)$ > (probs + b)$ || ((probs + a)$ == (probs + b)$ && a < b)
+
+priv fn sift_down(idx: Sz$@, probs: F64$@, from: Sz, len: Sz) //< restores the heap below `from`
+    //<
+    //< The heap keeps its last-ranked candidate at the root, so a better one can replace it.
+    $at: = from
+    for
+        $worst: = at
+        left: = 2 * at + 1
+        if left < len && ahead(probs, (idx + worst)$, (idx + left)$)
+            worst = left
+        if left + 1 < len && ahead(probs, (idx + worst)$, (idx + left + 1)$)
+            worst = left + 1
+        if worst == at
+            return
+        held: = (idx + at)$
+        (idx + at)$ = (idx + worst)$
+        (idx + worst)$ = held
+        at = worst
+
+priv fn rank_top(idx: Sz$@, probs: F64$@, n: Sz, k: Sz) //<
+    //< Puts the `k` best of `n` candidates first in `idx`, in rank order; the rest is left unsorted
+    //<
+    //< A heap of `k` keeps the best seen so far, so it takes O(n log k). A vocabulary of over
+    //< 100,000 with a top-k of 40 is one pass. With `k == n` it is a heapsort, O(n log n).
+    for $i: = k / 2 - 1; i >= 0; i -= 1
+        sift_down(idx, probs, i, k)
+    for i in Range.asc(n - k)
+        cand: = (idx + k + i)$
+        if ahead(probs, cand, idx$)
+            (idx + k + i)$ = idx$
+            idx$ = cand
+            sift_down(idx, probs, 0, k)
+    for $end: = k - 1; end > 0; end -= 1
+        held: = idx$
+        idx$ = (idx + end)$
+        (idx + end)$ = held
+        sift_down(idx, probs, 0, end)
 
 pub fn sample<|T|>( //< one token chosen at random, weighted by the model's scores
     logits: Tensor<|T|>, //< the model's scores; the last row is read, and it must not be empty
@@ -88,9 +119,9 @@ pub fn sample<|T|>( //< one token chosen at random, weighted by the model's scor
     // 3. The top-k / top-p filter (sorted by descending probability only where that is needed)
     $keep: = n
     if cfg.top_k > 0 || cfg.top_p < 1.0
-        sort_desc(idx, probs, n)
         if cfg.top_k > 0 && cfg.top_k < keep
             keep = cfg.top_k
+        rank_top(idx, probs, n, keep)
         if cfg.top_p < 1.0
             $cum: = 0.0
             $p_keep: Sz = 1

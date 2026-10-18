@@ -4,8 +4,7 @@
 //< runs in collect's Pass 2a', after 2a and before 2b.**
 //< Caution: **Do not move it later**: the const it creates would become "an undeclared name".
 //< **Build an `offsetof` node for the offset** (do not fold the number). **Node shapes follow "The
-//< list of the normalized AST's nodes (the shape the Parse layer hands downstream)" in
-//< `../../docs/DESIGN-compiler.md`.**
+//< normalized AST's nodes: the shape Parse hands downstream" in `../../docs/DESIGN-parse.md`.**
 import "ksplc/base/ast" { Ast_node, Loc }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_spell" as base_ast_spell
@@ -87,13 +86,13 @@ impl Sema_ctx
             return .none
         if depth > max_nest_depth
             r.err(impl_node,
-                "'Reflectable' gave up nesting: this struct embeds other structs deeper than the \
-                    limit, so write the 'fields()' body by hand for the inner types")
+                "'Reflectable' nesting exceeds the limit. This struct embeds other structs too \
+                    deeply. Write the 'fields()' body by hand for the inner types")
             return .none
         if impl_node.find_child(.k_type_gen_params) != null
             r.err(impl_node,
-                "a generic type cannot derive 'Reflectable': the field table is one constant per \
-                    concrete type, so write the 'fields()' body by hand for each instantiation")
+                "a generic type cannot derive 'Reflectable'. The field table is one constant per \
+                    concrete type. Write the 'fields()' body by hand for each instantiation")
             return .none
         type_id: = target.resolve_type(r) catch 0
         if type_id == 0
@@ -107,8 +106,8 @@ impl Sema_ctx
             def_fields = sd.fields_list
         if def_fields == null
             r.err(impl_node,
-                "only a struct can derive 'Reflectable': the field table names fields at fixed \
-                    offsets, which no other kind of type has")
+                "only a struct can derive 'Reflectable'. Its field table requires fields at fixed \
+                    offsets, which other type kinds do not provide")
             return .none
         $rows: = List<|Row_spec|>.new(null)
         defer rows.free()
@@ -159,8 +158,8 @@ impl Sema_ctx
                 shown: = r.env.display(f.type_id)
                 r.clear_scratch()
                     .s("field '\{f.name\}' has type '\{shown\}', which 'Reflectable' cannot derive \
-                        a table entry for (covered: the integer types, F32, F64, Bool, U8[], a \
-                        nested struct of those, and List<|T|> / T? of those); write the 'fields()' \
+                        a table entry for. It covers the integer types, F32, F64, Bool, U8[], a \
+                        nested struct of those, and List<|T|> / T? of those. Write the 'fields()' \
                         body by hand")
                 r.err(site, r.scratch.slice())
                 ok = false
@@ -191,17 +190,17 @@ impl Sema_ctx
             r.clear_scratch().s("field '\{f.name\}' has type '\{spelled\}'")
             if nested && is_list
                 r.scratch
-                    .s(": 'Reflectable' does not cover a list whose element is itself a list; write \
+                    .s(". 'Reflectable' does not cover a list whose element is itself a list. Write \
                         the 'fields()' body by hand")
             else if nested
                 r.scratch
-                    .s(": 'Reflectable' does not cover an option whose content is itself a list or \
-                        an option; write the 'fields()' body by hand")
+                    .s(". 'Reflectable' does not cover an option whose content is itself a list or \
+                        an option. Write the 'fields()' body by hand")
             else
                 part: = "element" if is_list else "content"
                 r.scratch
-                    .s(", whose \{part\} 'Reflectable' cannot derive a table entry for (covered: \
-                        the integer types, F32, F64, Bool, U8[] and a struct of those); write the \
+                    .s(". 'Reflectable' cannot derive a table entry for its \{part\}. It covers the \
+                        integer types, F32, F64, Bool, U8[] and a struct of those. Write the \
                         'fields()' body by hand")
             r.err(site, r.scratch.slice())
             rows.push(spec)
@@ -234,7 +233,7 @@ impl Sema_ctx
             return ""
         real_id: = r.env.get_clean_real_type(type_id)
         key: = r.env.base_type_name(real_id)
-        have: = emitted.get(key) catch ""
+        have: = emitted.get(key).unwrap_or("")
         if have.len > 0
             return have
         holder: = make_nested_holder(site, f_type_node, outer)
@@ -249,8 +248,8 @@ impl Sema_ctx
         //< Whether that type's clause is an instance of the generic `generic_fqn` (`List<|T|>`)
         //<
         //< Caution: **Resolve the written name's generic base to an FQN and check that.** The
-        //< internal name's shape silently changes when the mangling rule changes; and the clause,
-        //< not the type, is read, since the element's clause is taken from it (list_elem_node).
+        //< internal name's shape silently changes when the mangling rule changes. The clause, not
+        //< the type, is read, since the element's clause is taken from it (list_elem_node).
         if f_type == null
             return false
         if clause: = sema_decl_name.written_clause_of(f_type)
@@ -511,7 +510,7 @@ priv fn make_nested_holder(site: Ast_node$@, f_type_node: Ast_node$@, outer: Ast
 priv fn make_sizeof(type_node: Ast_node$@, loc: Loc): Ast_node$@ //< `sizeof(<type>)`
     //<
     //< The children's order follows "The expressions and the types" in
-    //< `../../docs/DESIGN-compiler.md`.
+    //< `../../docs/DESIGN-parse.md`.
     node: = Ast_node.new(.k_expr_sizeof, "sizeof", loc)
     node.add_child(Ast_node.new(.k_keyword, "sizeof", loc))
     node.add_child(type_node.clone())

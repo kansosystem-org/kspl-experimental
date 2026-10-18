@@ -1,13 +1,13 @@
 //< Removes from the tree the functions the root cannot reach
 //<
-//< It also says which remaining declarations a backend emits (`is_emittable`); the whole picture
-//< is "A function or type nothing calls is not emitted" in ksplc/docs/DESIGN-compiler.md.
-//< A generic instantiates **every method** of every instance, and std's extensions (all that
-//< `std/seq` adds to `List<|T|>`) come along once used anywhere, so without pruning over half the
-//< output of even a small program is functions nobody calls.
+//< It also says which remaining declarations a backend emits (`is_emittable`). The whole picture is
+//< "A function or type nothing calls is not emitted" in ksplc/docs/DESIGN-lower.md.
+//< A generic instantiates **every method** of every instance. std's extensions (all that `std/seq`
+//< adds to `List<|T|>`) come along once used anywhere. So without pruning, over half the output of
+//< even a small program is functions nobody calls.
 //< Caution: **Follow the edges by `def_node`, never by name.** The backend decides a callee's name
-//< (emit_generic_path in gen/c/expr.kspl builds it from the `type_id`), so walking by name would
-//< copy that rule, and once the copies drift, C calls a symbol with no definition.
+//< (emit_generic_path in gen/c/expr.kspl builds it from the `type_id`). Walking by name would copy
+//< that rule, and once the copies drift, C calls a symbol with no definition.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
@@ -30,9 +30,9 @@ impl Walk
         //< It records d as reached and, if d was not looked into yet, pushes it onto the work queue
         //<
         //< Caution: **Mark it when pushing.** Marked when popped, a function enters the queue once
-        //< per reference, millions of times in ksplc, and the arena never gets the old List memory
+        //< per reference, millions of times in ksplc. The arena never gets the old List memory
         //< back.
-        already: = r.reached.get(Sz::d) catch false
+        already: = r.reached.get(Sz::d).unwrap_or(false)
         if already
             return
         r.reached.set(Sz::d, true)
@@ -52,7 +52,7 @@ priv fn mark_referenced_fns(n: Ast_node$@, w: Walk$@, depth: Sz) //<
     if n == null || depth >= lower_root.max_lower_depth
         return
     if n.def_node != null
-        d: = w.defs.get(Sz::n.def_node) catch null
+        d: = w.defs.get(Sz::n.def_node).unwrap_or(null)
         if d != null
             w.mark(d)
     for child in n.children
@@ -101,7 +101,7 @@ struct Prune_stats //< the count of unmarked `decl_fn`s taken out of their paren
     //< The number of functions dropped is **also Sema's wasted work**: Sema type-checked each one
     //< per instance (`../sema/session/prof.kspl` counts them). **Unreported, a growth in
     //< instantiation shows only as "Sema is slow"** (the breakdown is "Profiling where Sema's time
-    //< goes" in `ksplc/docs/DESIGN-compiler.md`).
+    //< goes" in `ksplc/docs/DESIGN-sema.md`).
     fn_defs: Sz
     fn_dropped: Sz
 
@@ -115,7 +115,7 @@ priv fn drop_unreached(parent: Ast_node$@, reached: Map<|Sz, Bool|>$@)
             drop_unreached(child, reached)
             kept.push(child_node)
             continue
-        is_reached: = reached.get(Sz::child) catch false
+        is_reached: = reached.get(Sz::child).unwrap_or(false)
         if child.kind_id != .k_decl_fn || is_reached
             kept.push(child_node)
         else
@@ -143,7 +143,7 @@ priv fn inst_node_of(c: Sema_ctx$@, tid: I32): Ast_node$@? //<
     key: = c.env.instance_key(tid)
     if key.len == 0
         return .none
-    n: = c.env.instantiated_nodes.get(key) catch null
+    n: = c.env.instantiated_nodes.get(key).unwrap_or(null)
     if n == null
         return .none
     return .some(n)
@@ -156,7 +156,7 @@ priv fn mark_type(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I32|>$@, 
     if id == 0
         return
     tid: = c.env.c_repr_type_id(c.env.get_real_type(id))
-    already: = seen.get(tid) catch false
+    already: = seen.get(tid).unwrap_or(false)
     if already
         return
     seen.set(tid, true)
@@ -176,13 +176,11 @@ priv fn mark_type_members(c: Sema_ctx$@, seen: Map<|I32, Bool|>$@, work: List<|I
     //<
     //< Caution: **Read `Env`, not the tree.** The C field types come from `Struct_def` /
     //< `Enum_def`, and a field's node in the tree may have no type.
-    // A derived type (a pointer, an immutability qualifier, a slice, an array, a Result) needs what
-    // it strips to.
+    // A derived type (a pointer, an immutability qualifier, a slice, an array) needs what it strips
+    // to.
     mark_type(c, seen, work, c.env.receiver_base_id(tid))
     mark_type(c, seen, work, c.env.slice_elem(tid))
     mark_type(c, seen, work, c.env.strip_array(tid))
-    mark_type(c, seen, work, c.env.strip_result(tid))
-    mark_type(c, seen, work, c.env.get_result_err_id(tid))
 
     name: = c.env.get_str(tid)
     if sd: = c.env.get_struct_def(name)
@@ -214,7 +212,7 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
     // below).
     for child_node in root.children
         child: = child_node.unwrap_top_level()
-        if insts.get(Sz::child) catch false
+        if insts.get(Sz::child).unwrap_or(false)
             continue
         mark_referenced_types(child, c, seen, work, 0)
     // A type whose layout was folded stays, so the C compiler's check of the number can name it.
@@ -225,18 +223,18 @@ fn prune_unreachable_types(root: Ast_node$@, c: Sema_ctx$@) //<
         work.len -= 1
         mark_type_members(c, seen, work, tid)
         if d: = inst_node_of(c, tid)
-            if reached.get(Sz::d) catch false
+            if reached.get(Sz::d).unwrap_or(false)
                 continue
             reached.set(Sz::d, true)
             mark_referenced_types(d, c, seen, work, 0)
 
-    drop_orphan_complex_types(c, insts, reached, seen)
+    drop_orphan_complex_types(c, insts, reached)
 
     kept: = base_ast.new_ast_node_list()
     for child_node in root.children
         child: = child_node.unwrap_top_level()
-        is_inst: = insts.get(Sz::child) catch false
-        if is_inst && !(reached.get(Sz::child) catch false)
+        is_inst: = insts.get(Sz::child).unwrap_or(false)
+        if is_inst && !reached.get(Sz::child).unwrap_or(false)
             continue
         kept.push(child_node)
     root.children = kept
@@ -257,9 +255,6 @@ priv fn names_dropped_inst(c: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
         return names_dropped_inst(c, base_id, insts, reached, depth + 1)
     case .array(base_id, _size)
         return names_dropped_inst(c, base_id, insts, reached, depth + 1)
-    case .result(base_id, err_id)
-        return names_dropped_inst(c, base_id, insts, reached, depth + 1) ||
-            names_dropped_inst(c, err_id, insts, reached, depth + 1)
     case .fn_type(sig)
         if names_dropped_inst(c, sig.ret_id, insts, reached, depth + 1)
             return true
@@ -271,26 +266,22 @@ priv fn names_dropped_inst(c: Sema_ctx$@, tid: I32, insts: Map<|Sz, Bool|>$@,
         // Caution: **Fold it as mark_type does** (`c_repr_type_id`): `U8[]` and its immutable form
         // are one C struct, which is kept when either is reached.
         if d: = inst_node_of(c, c.env.c_repr_type_id(c.env.get_real_type(tid)))
-            return (insts.get(Sz::d) catch false) && !(reached.get(Sz::d) catch false)
+            return insts.get(Sz::d).unwrap_or(false) &&
+                !reached.get(Sz::d).unwrap_or(false)
         return false
 
 priv fn drop_orphan_complex_types(c: Sema_ctx$@, insts: Map<|Sz, Bool|>$@,
-    reached: Map<|Sz, Bool|>$@, seen: Map<|I32, Bool|>$@) //<
+    reached: Map<|Sz, Bool|>$@) //<
         //< It removes from the registry the composite types that only dropped code used
         //<
-        //< **`complex_types` stays as sema registered it**: a dropped function's `T!E`, array or
-        //< function type is still there. **One naming a dropped instance goes**, at any depth, as
-        //< it names a struct C never sees; **a `T!E` nothing live names goes too**, for size.
-        //< Caution: **Drop by `seen` only a `T!E`.** A top-level `const`'s initializer can also
-        //< need an array type, and that path does not add to `seen`.
+        //< **`complex_types` stays as sema registered it**: a dropped function's array or function
+        //< type is still there. **One naming a dropped instance goes**, at any depth, as it names a
+        //< struct C never sees.
+        //< Caution: **Do not drop by `seen`.** A top-level `const`'s initializer can also need an
+        //< array type, and that path does not add to `seen`.
     live: = List<|I32|>.create(base_core.arena)
     for tid in c.env.complex_types.slice()
-        $keep: = !names_dropped_inst(c, tid, insts, reached, 0)
-        switch c.env.get_info(tid)
-        case .result(_base_id, _err_id)
-            keep = keep && (seen.get(tid) catch false)
-        default {}
-        if keep
+        if !names_dropped_inst(c, tid, insts, reached, 0)
             live.push(tid)
     c.env.complex_types.len = 0
     for tid in live.slice()
@@ -332,8 +323,8 @@ impl Ast_node
             return false
 
         // Caution: **Leave a struct's or an enum's instance to prune_unreachable_types.** The used
-        // flag is set where a name is resolved, which an instance named only in a type
-        // (`sizeof(G<|T|>)`, a parameter) never is; dropped here, its C name is undeclared.
+        // flag is set where a name is resolved. An instance named only in a type (`sizeof(G<|T|>)`,
+        // a parameter) never is, so if dropped here, its C name is undeclared.
         if r.sym_ptr != null
             sym: = Sema_symbol$@::r.sym_ptr
             if sym.vis == sema_type_scope.Visibility.file_private && !sym.flags.is_used &&

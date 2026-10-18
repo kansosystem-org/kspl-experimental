@@ -6,8 +6,8 @@
 //< cannot, every later write and erase returns false.
 
 // ==========================================
-// What the boot ROM's functions require, and the rules for the window in which XIP is stopped,
-// are in "Writing Flash (`flash.kspl`)" in ksos/docs/DESIGN-rtos.md.
+// "Writing Flash (`flash.kspl`)" in ksos/docs/DESIGN-rtos.md gives what the boot ROM's functions
+// require. It also gives the rules for the window in which XIP is stopped.
 // ==========================================
 
 import "ksos/drivers/mmio"
@@ -64,6 +64,8 @@ priv $ready: Bool = false
 
 // The RAM page that holds the source data of a write. **Data in flash cannot be passed to a ROM
 // function directly**, so each page is copied here and then programmed.
+// Caution: **Fill it only inside the critical section that programs it** (`run_in_window`). Two
+// tasks writing at once would otherwise program one task's bytes at the other's address.
 priv $stage: U8[256] = ::{}
 
 priv fn rom_hword(at: U32): U32
@@ -99,7 +101,7 @@ fn init(): Void!mmio.Driver_error //< looks up the ROM functions' addresses
 // flash from here (only a ROM function through a function pointer can be called).
 //
 // It branches on `do_erase` because **the steps around it are the same** for erasing and
-// writing; split into two, a change to only one would go unnoticed.
+// writing. Split into two, a change to only one would go unnoticed.
 #noinline
 #section(".ram_text")
 priv fn in_window(do_erase: Bool, at: U32, data: U8@)
@@ -118,13 +120,18 @@ priv fn in_window(do_erase: Bool, at: U32, data: U8@)
     flush()
     enter_xip()
 
-priv fn run_in_window(do_erase: Bool, at: U32, data: U8@) //<
-    //< Disables interrupts around the window
+priv fn run_in_window(do_erase: Bool, at: U32, in_page: Sz, part: U8[]) //<
+    //< Disables interrupts around staging a write's part of a page and the window
     //<
     //< **An ISR lives in flash**: an interrupt inside the window fetches an instruction from an
-    //< unreadable address, with no way back.
+    //< unreadable address, with no way back. Staging under the same mask keeps `stage` one
+    //< writer's, at the cost of a 256-byte copy beside a page program's far longer window.
     s: = task.irq_save()
-    in_window(do_erase, at, data)
+    if !do_erase
+        sv: = U8$[]::stage
+        sv.fill(0xff)
+        _w: = sv.copy_from(in_page, part)
+    in_window(do_erase, at, stage[0]@)
     task.irq_restore(s)
 
 fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
@@ -140,9 +147,9 @@ fn read_at(at: Sz, dst: U8$[]) //< reads dst.len bytes from at
 fn program_at(at: Sz, src: U8[]): Bool //< writes src to at
     //<
     //< **true once it is written.** **It does not check that the area is erased** (the caller
-    //< does): unerased bits can only be cleared to 0, with no error. **Untouched bytes are written
-    //< as 0xFF**, which leaves a flash cell unchanged, so the same page can be added to later (the
-    //< append that writes the header last relies on this).
+    //< does). A write can only clear unerased bits to 0, with no error. **Untouched bytes are
+    //< written as 0xFF**, which leaves a flash cell unchanged. So a later write can add to the same
+    //< page (the append that writes the header last relies on this).
     if !ready
         return false
     if at < 0 || src.len < 0 || at + src.len > region_size
@@ -155,10 +162,7 @@ fn program_at(at: Sz, src: U8[]): Bool //< writes src to at
         $n: Sz = page_size - in_page
         if n > src.len - done
             n = src.len - done
-        sv: = U8$[]::stage
-        sv.fill(0xff)
-        _w: = sv.copy_from(in_page, src.sub(done, n))
-        run_in_window(false, U32::page_at, stage[0]@)
+        run_in_window(false, U32::page_at, in_page, src.sub(done, n))
         done += n
     return true
 
@@ -170,5 +174,5 @@ fn erase_sector(at: Sz): Bool //< erases the sector that contains at
     if at < 0 || at >= region_size
         return false
     base: = region_base + at - ((region_base + at) % sector_size)
-    run_in_window(true, U32::base, stage[0]@)
+    run_in_window(true, U32::base, 0, "")
     return true

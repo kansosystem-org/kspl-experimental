@@ -1,7 +1,7 @@
 //< Where the on-disk cache lives, and the "identity of ksplc itself" that caches share
 //<
 //< Note: It lives in base, below its users (`ksplc/parse/ast_cache.kspl`, `ksplc/tools/run.kspl`
-//< and `ksplc/fmt/file.kspl`), since the parse layer may not import a tool.
+//< and `ksplc/fmt/file.kspl`), since the parse layer must not import a tool.
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
@@ -11,7 +11,6 @@ import "std/sha256"
 import "std/str" { Str_builder }
 import "std/strnum"
 import "std/sys"
-import "std/time"
 
 const cache_env_name: U8[] = "KSPLC_CACHE_DIR" //< the variable that sets the cache folder
     //<
@@ -29,28 +28,27 @@ fn exit_unlocated(tool: U8[]) //< it ends a command that finds no folder for its
     //< `tool` names the command in the message (`ksplc`, `ksplc run`).
     //< Caution: **Always name the fix** (the environment variable). In an environment with neither
     //< HOME nor LOCALAPPDATA it is the only way to set the folder.
-    io.err().s(tool).s(": cannot locate a cache directory (set \{cache_env_name\} to choose one)\n")
+    io.err().s(tool).s(": cannot locate a cache directory. Set \{cache_env_name\} to choose one\n")
     sys.exit(1)
 
 fn refused_root(root: U8[], arena: Arena$@): U8[] //<
-    //< Why the cache folder may not be used; empty where it may
+    //< Why the cache folder cannot be used; empty where it can
     //<
-    //< **What it holds is built into the user's programs** (a normalized AST may carry inline C,
-    //< and `ksplc run` runs what it finds there), so a folder another user could write is refused,
-    //< as git refuses a repository another user owns ("A cache folder that others can write is
-    //< refused" in `std/docs/DESIGN-system.md`). A missing folder is made here first, by this user;
-    //< one that cannot be made is left to the caller's own creation to report.
+    //< **What it holds is built into the user's programs.** A normalized AST can carry inline C,
+    //< and `ksplc run` runs what it finds there. So a folder that another user could write is
+    //< refused, as git refuses a repository another user owns ("A cache folder that others can
+    //< write is refused" in `std/docs/DESIGN-system.md`). This user makes a missing folder here
+    //< first. If that fails, the caller's own creation reports it.
     fs.mkdir_all(root) catch {}
     switch fs.dir_trust(root)
     case .foreign
         return arena.text()
-            .s("the cache directory \{root\} belongs to another user, so a file planted in it would \
-                be built into your programs; set \{cache_env_name\} to a directory of your own")
-            .take()
+            .s("the cache directory \{root\} belongs to another user. A file planted there would be \
+                built into your programs. Set \{cache_env_name\} to a directory of your own").take()
     case .shared
         return arena.text()
-            .s("the cache directory \{root\} can be written by its group or by everyone, so a file \
-                planted in it would be built into your programs; run 'chmod go-w \{root\}', or set \
+            .s("the cache directory \{root\} can be written by its group or by everyone. A file \
+                planted there would be built into your programs. Run 'chmod go-w \{root\}', or set \
                 \{cache_env_name\} to a directory of your own").take()
     default
         return ""
@@ -86,8 +84,8 @@ fn append_cache_root(out: Str_builder$@): Bool //< it writes the cache folder in
 fn append_self_identity(out: Str_builder$@): Bool //<
     //< It writes into out the name that tells this build of ksplc apart
     //<
-    //< **It must be part of the cache's key**: the grammar (`ksplc/kspl.kspeg`) and the
-    //< normalization live inside ksplc, so a rebuilt ksplc can answer the same source differently.
+    //< **It must be part of the cache's key.** The grammar (`ksplc/kspl.kspeg`) and the
+    //< normalization live inside ksplc. So a rebuilt ksplc can answer the same source differently.
     //< Caution: On false, do not use the cache at all, rather than use it without the key.
     cmd_args: = sys.args()
     self_path: = cmd_args[0]
@@ -110,8 +108,8 @@ fn hash_hex(data: U8[]): Hash_hex //< the digest as fixed-size text, without all
 
 // ==========================================
 // Cleaning the cache. A rebuilt ksplc cannot use any entry the old one made (the key holds ksplc's
-// identity), so **without cleaning, the cache grows by megabytes per build**. It is split into
-// folders with hexadecimal names, and old ones are removed only when a new one is created.
+// identity). So **without cleaning, the cache grows by megabytes per build**. It is split into
+// folders with hexadecimal names. Old ones are removed only when a new one is created.
 // ==========================================
 priv const gen_name_len: Sz = 16
 
@@ -125,7 +123,7 @@ priv fn is_hex_digit(c: U8): Bool
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 
 priv fn is_hex_name(name: U8[], name_len: Sz): Bool //<
-    //< Whether a name is one the cleaning may remove (name_len hexadecimal digits)
+    //< Whether a name is one the cleaning can remove (name_len hexadecimal digits)
     //<
     //< Caution: **Check this before removing**, so anything unrelated in the folder stays.
     if name.len != name_len
@@ -137,10 +135,10 @@ priv fn is_hex_name(name: U8[], name_len: Sz): Bool //<
 
 priv fn is_own_dir(path: U8[]): Bool //< whether it is a folder itself, not a link to one
     //<
-    //< Caution: **Do not descend through a link.** The cleaning removes what it lists, so a link
-    //< planted in a shared cache (`run/<hex>` pointing at a home folder) would have it empty the
-    //< target. Inside a folder a link is removed as the link (`fs.remove_path` does not follow it);
-    //< at the top it is left alone, like anything else the cleaning does not recognise.
+    //< Caution: **Do not descend through a link.** The cleaning removes what it lists. So a link
+    //< planted in a shared cache (`run/<hex>` pointing at a home folder) would make it empty the
+    //< target. Inside a folder, the link itself is removed (`fs.remove_path` does not follow it).
+    //< At the top it is left alone, like anything else the cleaning does not recognise.
     return !fs.is_link(path) && fs.is_dir(path)
 
 priv fn remove_flat_dir(dir: U8[], arena: Arena$@): Bool //<
@@ -179,7 +177,7 @@ priv const used_marker: U8[] = "used" //< the "last used" mark, holding that tim
     //<
     //< **The folder's own time is not enough.** A hit writes nothing, so the time stays old and
     //< **the most used slot would be the first removed**.
-    //< The time is written in the file rather than read from its metadata, so prune_dirs compares
+    //< The time is written in the file rather than read from its metadata. So prune_dirs compares
     //< against the clock that wrote it, and a test can create a slot last used an hour ago.
 
 fn touch_dir(dir: U8[], arena: Arena$@) //< it marks dir as "used just now"
@@ -187,7 +185,7 @@ fn touch_dir(dir: U8[], arena: Arena$@) //< it marks dir as "used just now"
     //< Caution: **Call it every time**, or a slot removed mid-run makes that process fail for no
     //< visible reason.
     path: = fs.join(dir, used_marker, arena)
-    io.write_file(path, arena.text().s("\{time.now()\}").take()) catch {}
+    io.write_file(path, arena.text().s("\{sys.wall_seconds()\}").take()) catch {}
 
 priv fn used_time(dir: U8[], dir_time: I64, arena: Arena$@): I64 //< the time dir was last used
     //<
@@ -230,13 +228,13 @@ fn prune_dirs(base_dir: U8[], name_len: Sz, keep: Sz, spare_secs: I64, live: U8[
     if kept.len <= room
         return
     // Keep the newest. The count is about keep, so it removes the oldest in a loop, not sorting.
-    cutoff: = time.now() - spare_secs
+    cutoff: = sys.wall_seconds() - spare_secs
     for kept.len > room
         $oldest: Sz = 0
         for $i: Sz = 1; i < kept.len; i += 1
             if times.get(i) < times.get(oldest)
                 oldest = i
-        // Caution: **Stop at the first one used within spare_secs.** It may be another process's,
+        // Caution: **Stop at the first one used within spare_secs.** It can be another process's,
         // still being written, and every one left is newer still.
         if spare_secs > 0 && times.get(oldest) >= cutoff
             return
@@ -273,7 +271,7 @@ fn append_generation_dir(kind: U8[], out: Str_builder$@, arena: Arena$@): Bool /
     fs.mkdir_all(dir) catch
         return false
     // Nothing is spared: a generation removed mid-run only costs that run some misses, since every
-    // write into it is a rename that may fail.
+    // write into it is a rename that can fail.
     if is_new
         prune_dirs(base_dir, gen_name_len, max_generations, 0, dir, arena)
     out.s(dir)

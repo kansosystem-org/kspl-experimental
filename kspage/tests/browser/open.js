@@ -1,6 +1,6 @@
 // "New", starting from a blank sheet. **What the page carries over after the press** (the name,
-// where it saves, the handle, what was typed) lives on the DOM's side, so the wasm alone lets "it
-// overwrites the earlier file with a blank sheet" and "what was typed is gone" walk past.
+// where it saves, what was typed) lives on the DOM's side. So the wasm alone lets "it overwrites
+// the earlier file with a blank sheet" and "what was typed is gone" walk past.
 // Caution: **Put the document back at the end**: the blank sheet takes its place in the window.
 
 function kspageProbeFresh(ks) {
@@ -12,8 +12,8 @@ function kspageProbeFresh(ks) {
   // section's mark**: that section finds its draft in the store by its mark.
   const MARK = "§";
 
-  // **Stand up what must not be carried over before pressing** (pressed while empty, "it vanished"
-  // and "it was empty to begin with" cannot be told apart).
+  // **Stand up what must not be carried over before pressing.** Pressed while empty, "it vanished"
+  // and "it was empty to begin with" cannot be told apart.
   const wasName = nameBox.value;
   const wasPath = pathBox.value;
   const wasSaved = app.save();
@@ -57,7 +57,7 @@ function kspageProbeFresh(ks) {
     `the blank sheet typed on is set aside in its turn (${app.keepCount()})`);
 
   // Tidying up: the document as it was before the section.
-  // Caution: **Do not throw the drafts away** ("Throw the drafts away" takes every one): the keep
+  // Caution: **Do not throw the drafts away** ("Throw the drafts away" takes every one). The keep
   // section is still looking for its own in the store.
   app.load(wasSaved);
   check(app.save() === wasSaved, "the earlier document is back as it was");
@@ -66,12 +66,12 @@ function kspageProbeFresh(ks) {
 }
 
 // Dropping a file onto the screen and opening it. **What matters most is that the default is
-// stopped** — unstopped, the browser moves to that file and the document being edited vanishes
+// stopped.** Unstopped, the browser moves to that file, and the document being edited vanishes
 // along with the page.
-// Caution: **Do not swap the document being looked at**, nor look at the status bar or counts: this
-// section waits (a drop reads asynchronously), and shared state has it read another section's
+// Caution: **Do not swap the document being looked at**, nor look at the status bar or counts.
+// This section waits (a drop reads asynchronously), and shared state has it read another section's
 // answer as its own. What is looked at is **a text only its own drop brings** (its own picture).
-// A good document opening is not looked at here (it would swap the document); a drop goes straight
+// A good document opening is not looked at here (it would swap the document). A drop goes straight
 // to `file.js`'s `takeChosen`, so this holds "it does not move" and "which entry point gets it".
 
 function kspageProbeDrag(ks) {
@@ -88,7 +88,7 @@ function kspageProbeDrag(ks) {
   };
   const paper = (text) => new File([text], "dropped.kspage", { type: "application/json" });
   // Caution: **A real picture** (a 1x1 red GIF; the core asks for the measures, so a fake is
-  // refused), **differing from every other section's** — the same picture's text would read
+  // refused), **differing from every other section's**. The same picture's text would read
   // another section's insertion as its own answer, **a check that cannot fall**.
   const DOT = "R0lGODlhAQABAPAAAAAA/wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
   const dot = () => {
@@ -132,8 +132,8 @@ function kspageProbeDrag(ks) {
         "the mark goes on a drop");
       check(location.href === here, "a drop does not change where it is");
 
-      // Caution: **Insert a picture rather than opening it** (sent to the opening side, one picture
-      // makes the earlier document vanish); this section's own picture's text is hunted for.
+      // Caution: **Insert a picture rather than opening it.** Sent to the opening side, one
+      // picture makes the earlier document vanish. This section's own picture's text is hunted for.
       ks.pressAt(8);
       fire("drop", carry(dot()), canvas);
       check(await until(() => app.save().indexOf(DOT) >= 0),
@@ -142,7 +142,7 @@ function kspageProbeDrag(ks) {
       // section's undo puts another's rewrite back. The picture only adds, so it may stay.
 
       // **A file that cannot be read once dropped is refused out loud** (removed or locked after
-      // it was chosen); a rejection no one catches reaches only the console. Every text the status
+      // it was chosen). A rejection no one catches reaches only the console. Every text the status
       // note takes is watched, so another section's later notice cannot hide this one's.
       const told = [];
       const note = document.getElementById("note");
@@ -154,7 +154,7 @@ function kspageProbeDrag(ks) {
       };
       window.addEventListener("unhandledrejection", onLoose);
       const gone = new File(["{}"], "gone.kspage", { type: "application/json" });
-      gone.text = () => Promise.reject(new Error("drag-unreadable"));
+      gone.arrayBuffer = () => Promise.reject(new Error("drag-unreadable"));
       fire("drop", carry(gone));
       const refused = await until(() => told.some((t) => t.indexOf("drag-unreadable") >= 0));
       watch.disconnect();
@@ -173,9 +173,9 @@ function kspageProbeOutside(ks) {
 
   // 29. It puts a picture in — is it drawn on the canvas?
   //
-  // **This can be seen nowhere else**: reading a picture and drawing it are the page's side (it
-  // breaks as "it went in and nothing comes out"). A `data:` picture is used, as a headless browser
-  // has no network.
+  // **This can be seen nowhere else.** Reading a picture and drawing it are the page's side (it
+  // breaks as "it went in and nothing comes out"). A `data:` picture is used, as a headless
+  // browser has no network.
   const RED_DOT = "data:image/gif;base64," +
     "R0lGODlhAQABAIAAAP8AAAAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
   document.getElementById("image-src").value = RED_DOT;
@@ -198,7 +198,7 @@ function kspageProbeOutside(ks) {
   };
 
   // It waits for the picture to be drawn, then puts the marks out.
-  // Caution: **Do not look once and give up** (the load is asynchronous); the looks are capped, so
+  // Caution: **Do not look once and give up** (the load is asynchronous). The looks are capped, so
   // a picture that never draws still ends the section.
   let looked = 0;
   const watch = setInterval(function () {
@@ -214,7 +214,7 @@ function kspageProbeOutside(ks) {
   // 30b. A picture on an outside server is not fetched on the beat of opening.
   //
   // **This can be seen nowhere else**: fetching is the page's side.
-  // Caution: **It breaks in the shape of leaking silently** — fetched, that the document was
+  // Caution: **It breaks in the shape of leaking silently.** Fetched, that the document was
   // opened, and where, both go to the other side with nothing on the screen (a tracking pixel).
   // With no network, "could it be read" tells them apart, by **the count stopped**.
   document.getElementById("image-src").value = "https://example.invalid/pixel.png";

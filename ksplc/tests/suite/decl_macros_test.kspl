@@ -33,9 +33,7 @@ priv fn is_kspl_identifier(name: U8[], keywords: Map<|U8[], Bool|>$@): Bool //<
     for i in Range.asc(name.len)
         if !(name[i].is_alnum() || name[i] == '_')
             return false
-    return !(keywords.get(name) catch {
-        fallback false;
-    })
+    return !keywords.get(name).unwrap_or(false)
 
 priv fn is_snake_case(name: U8[]): Bool //<
     //< Whether [I0502] stays silent on name at every position where a bare name is written
@@ -54,7 +52,7 @@ priv fn keywords_of(arena: Arena$@): Map<|U8[], Bool|>$@ //<
     //< It collects the reserved words from `ksplc info keywords`'s output (an indented line is one)
     out: = arena.create(Map<|U8[], Bool|>.new(arena))
     r: = harness.ksplc_bare(U8[][]::{ "info", "keywords" })
-    if r.code != 0
+    if !r.exited_with(0)
         return out
     for line in r.out.lines(arena)
         if line.len == 0 || !line[0].is_space()
@@ -114,7 +112,7 @@ fn main(): I32
     // The declaration half; `emit-runtime` does not take `--std-dir`, so ksplc_bare is used.
     rt: = fs.join(work, "runtime.c", arena)
     e: = harness.ksplc_bare(U8[][]::{ "emit-runtime", rt })
-    if e.code != 0
+    if !e.exited_with(0)
         return harness.fatal(arena.text().s("emit-runtime failed\n\{e.out\}").take())
     text: = harness.read_generated(rt)
     $cut: Sz = 0
@@ -130,7 +128,7 @@ fn main(): I32
         return harness.fatal("the declaration half cannot be written")
 
     probe: = harness.run(U8[][]::{ harness.cc(), "-std=c99", "-dM", "-E", decl })
-    if probe.code != 0
+    if !probe.exited_with(0)
         return harness
             .fatal(arena.text().s("cc cannot list the declaration half's macros (`-dM -E`)\n")
             .s(probe.out).take())
@@ -163,5 +161,5 @@ fn main(): I32
         .s("`ksplc/base/c_name.kspl`.\n").s(b.out)
     note: = why.take()
     verdict.check("every name the declaration half's macros replace passes as a bare name",
-        b.built && b.code == 0, note)
+        b.built && b.code.unwrap_or(-1) == 0, note)
     return harness.finish()

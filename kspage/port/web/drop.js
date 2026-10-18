@@ -12,7 +12,7 @@ function kspageDrop(ui) {
   const canvas = ui.canvas;
 
   // The drop-target look, **only while something is dragged** (otherwise "where can I drop it" is
-  // unclear); the class is on the root, the color is in `page.css`.
+  // unclear). The class is on the root; the color is in `page.css`.
   let over = 0;
   const dress = (on) => {
     if (on) {
@@ -71,8 +71,8 @@ function kspageDrop(ui) {
     // An image goes where it is dropped; **only a drop on the body moves the cursor** (no jumps).
     const pictures = files.filter(isPicture);
     if (pictures.length > 0) {
-      // Caution: **Place it the same way as a click** — mapping a click to the document is only
-      // `keys.js`'s; copied here, the zoom and offset correction goes stale on one side.
+      // Caution: **Place it the same way as a click.** Mapping a click to the document is only
+      // `keys.js`'s. Copied here, the zoom and offset correction goes stale on one side.
       if (canvas.contains(e.target) || e.target === canvas) {
         canvas.dispatchEvent(new PointerEvent("pointerdown",
           { clientX: e.clientX, clientY: e.clientY, bubbles: true }));

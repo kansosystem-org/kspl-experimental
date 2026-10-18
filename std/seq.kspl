@@ -1,9 +1,10 @@
 //< Filtering and transforming a `List<|T|>` without building intermediate lists
 //<
-//< **`where` and `select` are lazy**: they touch no element until `for x in` (it declares `Iter`),
+//< **`where` and `select` are lazy.** They touch no element until `for x in` (it declares `Iter`),
 //< `to_list` or `count` drives the chain. **A chain can be driven any number of times**, and must
-//< be built and consumed in the same frame. `std/docs/DESIGN-core.md` explains why the adapters
-//< cannot be merged, why only those two go on the chain, and why a predicate is a `Callable1`.
+//< be built and consumed in the same frame. `std/docs/DESIGN-core.md` explains four choices: why
+//< the adapters cannot be merged, why only those two go on the chain, and why a predicate is a
+//< `Callable1`. It also explains why a test or a comparison is handed a `T@` but `select` a `T`.
 
 // ==========================================
 // Where a chain allocates:
@@ -15,9 +16,6 @@ import "std/ds" { List }
 import "std/mem" { Arena }
 
 priv const sort_run: Sz = 16 //< the run length `order_by` sorts by insertion before merging
-
-pub enum Seq_error //< why a chain could return nothing
-    empty_sequence //< there was no element to pick from
 
 pub struct List_seq<|T|> //< the start of a chain; reads a `List` and advances a position
     //<
@@ -36,13 +34,13 @@ impl<|T|> List_seq<|T|>: Iter<|T|> //< so a `for` can drive it
 
 pub struct Keep<|S, T|> //< the adapter that lets through only elements meeting a condition
     priv src: S
-    priv pred: Callable1<|T, Bool|>
+    priv pred: Callable1<|T@, Bool|>
 
 impl<|S: Iter<|T|>, T|> Keep<|S, T|>: Iter<|T|> //< so a `for` can drive it
     pub fn next(r: Self$@): T? //< the next element that meets the condition, or nothing
         for
             if v: = r.src.next()
-                if r.pred.call(v)
+                if r.pred.call(v@)
                     return .some(v)
             else
                 return .none
@@ -64,7 +62,7 @@ impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>: Iter<|U|> //< so a `for` can drive i
 impl<|S: Iter<|T|>, T|> Keep<|S, T|>
     pub fn where( //< adds one more condition to the chain; reads nothing yet
         r: Self,
-        pred: Callable1<|T, Bool|>, //< the condition an element must meet to pass
+        pred: Callable1<|T@, Bool|>, //< the condition an element must meet to pass
     ): Keep<|Keep<|S, T|>, T|>
         return Keep<|Keep<|S, T|>, T|>::{ .src = r, .pred = pred }
 
@@ -86,7 +84,7 @@ impl<|S: Iter<|T|>, T|> Keep<|S, T|>
 impl<|S: Iter<|T|>, T, U|> Conv<|S, T, U|>
     pub fn where( //< adds a condition to the chain; reads nothing yet
         r: Self,
-        pred: Callable1<|U, Bool|>, //< the condition an element must meet to pass
+        pred: Callable1<|U@, Bool|>, //< the condition an element must meet to pass
     ): Keep<|Conv<|S, T, U|>, U|>
         return Keep<|Conv<|S, T, U|>, U|>::{ .src = r, .pred = pred }
 
@@ -112,15 +110,15 @@ impl<|T|> List<|T|>
         //<
         //< **It touches no element here.**
         r: Self@,
-        pred: Callable1<|T, Bool|>, //< the condition an element must meet to pass
+        pred: Callable1<|T@, Bool|>, //< the condition an element must meet to pass
     ): Keep<|List_seq<|T|>, T|>
         return Keep<|List_seq<|T|>, T|>::{ .src = List_seq<|T|>::{ .xs = r, .i = 0 },
             .pred = pred }
 
     pub fn select<|U|>( //< a chain of each element passed through a function (`map` elsewhere)
         //<
-        //< Caution: **Do not turn it into a free function**: `U` is decided at the call site, not
-        //< by the receiver ("A name on the impl that the receiver does not fix" in
+        //< Caution: **Do not turn it into a free function.** `U` is decided at the call site, not
+        //< by the receiver ("A name on the impl that the receiver leaves open" in
         //< `../docs/DESIGN-language.md`).
         r: Self@,
         f: Callable1<|T, U|>, //< what each element becomes
@@ -152,43 +150,42 @@ impl<|T|> List<|T|>
         assert(n >= 0, "List.skip: n must not be negative")
         return r.copy_range(n if n < r.len else r.len, r.len, arena)
 
-    pub fn any(r: Self@, pred: Callable1<|T, Bool|>): Bool //<
+    pub fn any(r: Self@, pred: Callable1<|T@, Bool|>): Bool //<
         //< whether at least one element meets it
         for i in Range.asc(r.len)
-            if pred.call((r.ptr + i)$)
+            if pred.call(r.ptr + i)
                 return true
         return false
 
-    pub fn all(r: Self@, pred: Callable1<|T, Bool|>): Bool //< whether every element meets it
+    pub fn all(r: Self@, pred: Callable1<|T@, Bool|>): Bool //< whether every element meets it
         //<
         //< An empty list gives true.
         for i in Range.asc(r.len)
-            if !pred.call((r.ptr + i)$)
+            if !pred.call(r.ptr + i)
                 return false
         return true
 
-    pub fn first(r: Self@): T!Seq_error //< the first element; fails when there is none
+    pub fn first(r: Self@): T? //< the first element, or none when the list is empty
         if r.len == 0
-            throw .empty_sequence
-        return (r.ptr + 0)$
+            return .none
+        return .some((r.ptr + 0)$)
 
     pub fn distinct( //< a new list keeping the first of each group of equal elements, in order
         //<
         //< O(n^2); for large data with a hashable type, use a `Map`.
         r: Self@,
-        eq: Callable2<|T, T, Bool|>, //< what counts as the same element
+        eq: Callable2<|T@, T@, Bool|>, //< what counts as the same element
         arena: Arena$@, //< where the new list goes; null means the heap and a `free()`
     ): List<|T|>
         $out: = List<|T|>.new(arena)
         for i in Range.asc(r.len)
-            item: = (r.ptr + i)$
             $seen: = false
             for j in Range.asc(out.len)
-                if eq.call(item, (out.ptr + j)$)
+                if eq.call(r.ptr + i, out.ptr + j)
                     seen = true
                     break
             if !seen
-                out.push(item)
+                out.push((r.ptr + i)$)
         return out
 
     pub fn order_by( //< a new list in ascending order; equal elements keep their order
@@ -196,7 +193,7 @@ impl<|T|> List<|T|>
         //< A merge sort: stable, with O(n log n) comparisons. Short runs (16) are first sorted by
         //< insertion, as Timsort does with its short runs.
         r: Self@,
-        cmp: Callable2<|T, T, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
+        cmp: Callable2<|T@, T@, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
         arena: Arena$@, //< where the new list goes; null means the heap and a `free()`
     ): List<|T|>
         $out: = List<|T|>.new_with_cap(r.len if r.len > 0 else 1, arena)
@@ -205,16 +202,21 @@ impl<|T|> List<|T|>
         n: = out.len
         for $lo: Sz = 0; lo < n; lo += sort_run
             hi: = (lo + sort_run) if lo + sort_run < n else n
+            // Where the element goes is found before anything shifts, so each comparison points
+            // at it in the list.
             for $i: Sz = lo + 1; i < hi; i += 1
-                item: = out.get(i)
                 $j: = i
-                for j > lo && cmp.call(out.get(j - 1), item) > 0
-                    out.set(j, out.get(j - 1))
+                for j > lo && cmp.call(out.ptr + j - 1, out.ptr + i) > 0
                     j -= 1
+                if j == i
+                    continue
+                item: = out.get(i)
+                for $k: = i; k > j; k -= 1
+                    out.set(k, out.get(k - 1))
                 out.set(j, item)
         if n <= sort_run
             return out
-        // Caution: **Take from the right run only when it is strictly smaller**; taking it on a tie
+        // Caution: **Take from the right run only when it is strictly smaller.** Taking it on a tie
         // reverses equal elements, and the sort is no longer stable.
         $spare: = List<|T|>.new_with_cap(n, arena)
         for i in Range.asc(n)
@@ -228,8 +230,7 @@ impl<|T|> List<|T|>
                 $a: = lo
                 $b: = mid
                 for $k: = lo; k < hi; k += 1
-                    if b < hi &&
-                        (a >= mid || cmp.call(from.get(b), from.get(a)) < 0)
+                    if b < hi && (a >= mid || cmp.call(from.ptr + b, from.ptr + a) < 0)
                         to.set(k, from.get(b))
                         b += 1
                     else

@@ -4,13 +4,14 @@
 //< **The gates and which job runs each are `tools/ci_gates.kspl`'s table**; this file only runs
 //< them. `make ci` and its siblings call it with their own name (`mk/ci.mk`), and `make ci-summary`
 //< asks it for the summary the workflow shows.
-//< **A fallen gate does not stop the set**, so one round names every gate that falls; only a gate
-//< the later ones build on (`Gate.stops`, the self-host) stops it, as what fails after it is noise.
+//< **A fallen gate does not stop the set**, so one round names every gate that falls. Only a gate
+//< the later ones build on (`Gate.stops`, the self-host) stops it: what fails after it is noise.
 
 // ==========================================
 // Usage:
-//     ksplc run tools/ci.kspl ci|ci-linux|ci-linux-only|ci-macos|ci-shard-<shard>
+//     ksplc run tools/ci.kspl ci|ci-macos|ci-shard-<shard>
 //         [--make=<make>] [--jobs=<n>] [--platform=<linux|darwin|win32>] [--relaxed=<switches>]
+//         --cap=<seconds>
 //     ksplc run tools/ci.kspl summary [--jobs=<n>] [--title=<text>]
 // ==========================================
 import "std/argp"
@@ -21,7 +22,6 @@ import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
 import "std/subproc"
 import "std/sys"
-import "tools/ci_container"
 import "tools/ci_gates" + { Gate, Set }
 
 priv const verdict_line: U8[] = "RESULT: ALL PASS" //<
@@ -35,6 +35,7 @@ fn main(): I32
     $title: U8[] = "ci"
     $platform: U8[] = ""
     $relaxed: U8[] = ""
+    $cap: I64 = 0I64
     p: = argp.Parser
         .create(sys.program_name(), "run a set of CI gates, or print the summary", arena)
     p.positional("<set> | summary")
@@ -43,13 +44,17 @@ fn main(): I32
     p.str_opt("--title", title@, "the summary's heading (the workflow names its job)")
     p.str_opt("--platform", platform@, "make's PLATFORM: a SKIP its rows do not expect fails")
     p.str_opt("--relaxed", relaxed@, "the switches turned off, space-separated: their SKIPs pass")
+    p.int_opt("--cap", cap@, "the seconds a gate may run before it is stopped (`CI_GATE_CAP`)")
     p.parse_or_exit(sys.args(), arena)
     if platform.len == 0
         if sys.is_windows()
             platform = "win32"
         else
-            host: = subproc.run_capture(U8[][]::{ "uname", "-s" }, "", 10000, 4096, arena)
-            if host.spawn_failed || host.timed_out || host.exit_code != 0
+            host: =
+                subproc.run_capture(U8[][]::{ "uname", "-s" }, "", 10000, 4096, arena) catch
+                io.err().s("ci: cannot determine the host OS; pass --platform\n")
+                return 2
+            if !host.exited_with(0)
                 io.err().s("ci: cannot determine the host OS; pass --platform\n")
                 return 2
             platform =
@@ -64,10 +69,15 @@ fn main(): I32
     if odd: = ci_gates.unknown_switch(relaxed, arena)
         io.err().s("ci: no row of `switch_skips` names the switch '\{odd\}'\n")
         return 2
+    // **No default cap here**: `CI_GATE_CAP` in `mk/ci.mk` is its one place.
+    if cap < 1I64 || cap > cap_max_s
+        io.err().s("ci: a set needs --cap=<seconds>, from 1 to \{cap_max_s\}\n")
+        return 2
     switch ci_gates.set_from(name, arena)
     case .some(s)
         return run_set(name, s,
-            Round::{ .make = make, .jobs = jobs, .platform = platform, .relaxed = relaxed }, arena)
+            Round::{ .make = make, .jobs = jobs, .platform = platform, .relaxed = relaxed,
+            .cap_s = cap }, arena)
     case .none
         io.err().s("ci: no set is named '\{name\}'\n")
         p.print_usage(io.err())
@@ -78,6 +88,9 @@ priv struct Round //< how this round runs each gate: the command line's settings
     jobs: I64
     platform: U8[]
     relaxed: U8[] //< the switches turned off, space-separated (`--relaxed`)
+    cap_s: I64 //< the seconds one gate may run before it is stopped (`--cap`)
+
+priv const cap_max_s: I64 = 2000000I64 //< the longest cap a child's limit in milliseconds holds
 
 priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     //< Runs every gate of the set in the table's order; 0 when all passed
@@ -86,10 +99,19 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
     fs.mkdir_all(ci_gates.log_dir) catch {}
     if !ci_gates.reset_logs(arena)
         return 1
-    if r.platform.equals("darwin") && s != Set.ci_macos && s != Set.ci_linux_only
-        version: = subproc.run_capture(U8[][]::{ r.make, "--output-sync=target", "--version" }, "",
-            10000, 4096, arena)
-        if version.spawn_failed || version.timed_out || version.exit_code != 0
+    // **What only Linux has its tools for runs on Linux alone**: elsewhere, open the repository in
+    // its dev container, a Linux host.
+    if s == Set.ci_shard_linux && !r.platform.equals("linux")
+        io.err().s("ci: '\{name\}' runs on Linux alone; elsewhere run it in the dev container\n")
+        return 1
+    if r.platform.equals("darwin") && s != Set.ci_macos
+        version: =
+            subproc.run_capture(U8[][]::{ r.make, "--output-sync=target", "--version" }, "", 10000,
+            4096, arena) catch
+            io.err()
+                .s("ci: the shared sections need GNU make 4; install it with brew install make\n")
+            return 1
+        if !version.exited_with(0)
             io.err()
                 .s("ci: the shared sections need GNU make 4; install it with brew install make\n")
             return 1
@@ -103,31 +125,19 @@ priv fn run_set(name: U8[], s: Set, r: Round, arena: Arena$@): I32 //<
             return 1
     $count: Sz = 0
     $fallen: Sz = 0
-    $container: = false
     for g in ci_gates.gates
         if !s.runs(g, r.platform)
             continue
         count += 1
-        if g.shard == ci_gates.Shard.linux && !r.platform.equals("linux")
-            container = true
-            continue
         if !run_gate(g, r, arena)
             fallen += 1
             if g.stops
-                container = false
                 break
-    $container_ok: = true
-    if container
-        container_ok = ci_container.run(r.jobs, arena)
-        if !container_ok
-            fallen += 1
     // **A set that runs nothing has gone wrong**: a gate moved to a shard no job runs.
     if count == 0
         io.err().s("ci: the set '\{name\}' holds no gate\n")
         return 1
     print_digest(r, arena)
-    if !container_ok
-        io.err().s("ci: the Linux devcontainer run failed; Linux-only gates are not all verified\n")
     // **A round with a switch off says so last**: green there is not CI's verdict.
     if r.relaxed.len > 0
         io.out().s("# turned off here: ").s(r.relaxed)
@@ -161,8 +171,8 @@ priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
     io.out().flush()
     t0: = sys.mono_us()
     // 127, the shell's "not found", where bash itself cannot start.
-    $rc: =
-        wait_gate(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, g.log, log, t0)
+    $rc: = ci_gates.run_capped(U8[][]::{ "bash", "-o", "pipefail", "-c", cmd.slice() }, g.log, log,
+        r.cap_s, t0)
     sec: = (sys.mono_us() - t0) / 1000000I64
     said: = read_held(log, arena)
     j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed }
@@ -180,20 +190,6 @@ priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
     if rc != 0
         annotate(g, said, rc, j@, arena)
     return rc == 0
-
-priv fn wait_gate(argv: U8[][], name: U8[], log: U8[], started: I64): I32 //<
-    //< Keeps streaming the gate's output and names it periodically while it is still running
-    $child: = subproc.spawn_redirect(argv, "", "", "") catch
-        return 127
-    $next: = started + 15000000I64
-    for child.alive()
-        now: = sys.mono_us()
-        if now >= next
-            io.out().s("# still running \{name\}: \{(now - started) / 1000000I64\}s (\{log\})\n")
-                .flush()
-            next = now + 15000000I64
-        sys.sleep_ms(50)
-    return child.wait()
 
 priv fn read_held(path: U8[], arena: Arena$@): U8[] //< a log's text on the arena, empty if unread
     text: = io.read_file(path) catch
@@ -222,7 +218,7 @@ priv fn annotate(g: Gate, text: U8[], rc: I32, j: ci_gates.Judge@, arena: Arena$
     //< The cause is the summary's first for that gate (`ci_gates.causes`), else its exit code.
     if !sys.get_env("GITHUB_ACTIONS").is_some()
         return
-    why: = ci_gates.causes(text, g.verdict, j, arena)
+    why: = ci_gates.causes(text, g.log, g.verdict, j, arena)
     $b: = Str_builder.new()
     defer b.free()
     if why.len > 0

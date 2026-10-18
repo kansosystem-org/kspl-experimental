@@ -1,7 +1,7 @@
 //< Round-trips a whole struct to and from JSON by walking `std/reflect`'s field table
 //<
 //< **The key names are written nowhere**: a key is the field's own name (the grounds are in
-//< "a trait returning a table" in `../docs/DESIGN-language.md`).
+//< "a table-returning trait" in `../docs/DESIGN-language.md`).
 
 // ==========================================
 // **Kept apart from `std/json`**, which is JSON itself, so a client that never round-trips does
@@ -9,7 +9,7 @@
 // ==========================================
 import "std/ds" { List }
 import "std/json" { Json_builder, Val, Obj_builder, Array_builder, Json_error, max_nesting_depth }
-import "std/mem" { Arena }
+import "std/mem" + { Arena }
 import "std/reflect"
 
 priv const list_ptr_off: Sz = offsetof(List<|U8|>, ptr) //< the positions inside a `List<|T|>`
@@ -100,11 +100,12 @@ priv fn value_of(at: U8@, f: reflect.Field_info, b: Json_builder$@, depth: Sz): 
 
 pub fn into_struct<|T: reflect.Reflectable|>( //< copies a JSON object into a reflectable value
     //<
-    //< **A field whose key is missing or of another kind is refused** (why is at `Json_error`), and
-    //< so is an integer the field cannot hold: 70000 into a `U16`. With `null`, free each string it
-    //< wrote with `dealloc` and each list with `free()`; a refusal leaves those written before it.
-    //< Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena;
-    //< freeing that first leaves the written value pointing at freed memory.
+    //< **A field whose key is missing or of another kind is refused** (why is at `Json_error`). So
+    //< is an integer the field cannot hold: 70000 into a `U16`. With `null`, free each string it
+    //< wrote with `dealloc` and each list with `free()`. A refusal leaves those written before it.
+    //< A list it stopped in holds the elements up to the refused one, zero where unwritten.
+    //< Caution: **Copy the names into `arena`.** The names inside `v` point into the parse's arena.
+    //< Freeing that first leaves the written value pointing at freed memory.
     v: Val, //< the object to read from
     out: T$@, //< the value to write into, field by field
     arena: Arena$@, //< where strings and lists go; null means the heap, freed as above
@@ -121,15 +122,15 @@ priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@,
     default
         throw .field_type("<root>")
     for f in tbl
-        got: = v.get(f.name)
         $at: = base + f.offset
         $field: = f
-        // `get` returns null for both an absent key and an explicit null; only an absent
-        // optional becomes `.none`. A refused explicit null leaves its tag untouched.
-        switch got
-        case .null_val
-            if v.has_key(f.name)
-                throw .field_type(f.name)
+        // Only an absent optional becomes `.none`; an explicit null is refused, leaving the tag
+        // untouched.
+        $got: = Val.null_val
+        switch v.find(f.name)
+        case .some(member)
+            got = member
+        case .none
             switch f.kind
             case .opt_field
                 tag: = I32$@::at
@@ -137,6 +138,9 @@ priv fn fill_from(base: U8$@, tbl: reflect.Field_info[], v: Val, arena: Arena$@,
                 continue
             default
                 throw .missing_field(f.name)
+        switch got
+        case .null_val
+            throw .field_type(f.name)
         default {}
         switch f.kind
         case .opt_field
@@ -202,19 +206,22 @@ priv fn fill_value(at: U8$@, f: reflect.Field_info, got: Val, arena: Arena$@, de
         if I64::(Sz::bytes) != bytes
             throw .too_large
         room: = arena.alloc(Sz::bytes) if count > 0 else null
+        // Caution: **Zero the room, and count an element only once its filling starts.** A refusal
+        // leaves the list to the caller's cleanup, which frees each counted element. Counted
+        // garbage is freed as a pointer, and an element left out leaks what it had written.
+        mem.zero(room, Sz::bytes)
         ptr_slot: Void$@$@ = (Void$@$@)::(at + list_ptr_off)
         len_slot: = Sz$@::(at + list_len_off)
         cap_slot: = Sz$@::(at + list_cap_off)
         arena_slot: Arena$@$@ = (Arena$@$@)::(at + list_arena_off)
         ptr_slot$ = room
-        len_slot$ = count
+        len_slot$ = 0
         cap_slot$ = count
         arena_slot$ = arena
         elem: = element_field(f)
-        $i: Sz = 0
         for e in items
-            cell: = (U8$@::room) + i * f.extra.elem_size
-            i += 1
+            cell: = (U8$@::room) + len_slot$ * f.extra.elem_size
+            len_slot$ += 1
             fill_value(cell, elem, e, arena, depth + 1)!
     case .struct_field
         switch got

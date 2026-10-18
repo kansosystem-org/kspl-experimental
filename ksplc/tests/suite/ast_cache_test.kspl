@@ -3,8 +3,8 @@
 //<
 //< ksplc caches the normalised AST per file and skips KSPEG's parse next time
 //< (`ksplc/parse/ast_cache.kspl`). **An artefact that differs with and without the cache would be
-//< a lie**, so it always compares "cold vs warm, byte for byte", and the hit and miss counts
-//< (`--stats`'s `[AST Cache]` line): without them a cache that quietly stopped working goes
+//< a lie.** So it always compares "cold vs warm, byte for byte", and the hit and miss counts
+//< (`--stats`'s `[AST Cache]` line). Without them a cache that quietly stopped working goes
 //< unnoticed (the result is right, only slower).
 //< **This test uses a cache directory of its own** (`KSPLC_CACHE_DIR`).
 import "ksplc/tests/support/harness"
@@ -71,7 +71,7 @@ priv fn build(dir: U8[], cache: U8[], stem: U8[], src: U8[], extra: U8[][], aren
     args.push(gen)
     sys.set_env("KSPLC_CACHE_DIR", cache) catch panic("KSPLC_CACHE_DIR could not be set")
     r: = harness.ksplc(args.slice())
-    if r.code != 0
+    if !r.exited_with(0)
         return Built::{ .ok = false, .gen = "",
             .counts = Counts::{ .ok = false, .hits = 0, .misses = 0, .stores = 0 },
             .out = r.out }
@@ -154,7 +154,7 @@ priv fn cfg_reason(cache: U8[], arena: Arena$@): U8[] //<
 
 priv fn other_spelling(exe: U8[]): U8[] //< it points at the same executable by a different path
     //<
-    //< `argv[0]`'s path, size and time decide the generation's key, so another path makes **a new
+    //< `argv[0]`'s path, size and time decide the generation's key. So another path makes **a new
     //< generation in the same directory** with no copy of the executable.
     return harness.arena().text().s("\{sys.get_dir_name(exe)\}/./\{sys.get_file_name(exe)\}").take()
 
@@ -163,7 +163,7 @@ fn main(): I32
     dir: = harness.sandbox("ast_cache")
     work: = dir
     // Caution: **Start from an empty cache.** With the last run's left behind, "it builds cold"
-    // measures the warm case; the working directory is new every run, so a cache under it is empty.
+    // measures the warm case. The working directory is new every run, so a cache under it is empty.
     cache: = fs.join(work, "cache", arena)
     io.out().s("# the AST cache\n")
 
@@ -227,7 +227,7 @@ fn main(): I32
 
     // --- each `--define` flag gives a different result ---
     // `#cfg()` works inside normalisation, so **the same source gives a different AST per flag
-    // set**; without the flags in the key, a freestanding build picks up the hosted entry and fails
+    // set**. Without the flags in the key, a freestanding build picks up the hosted entry and fails
     // to link.
     plain: = build(work, cache, "ac_nodef", fixture, U8[][]::{}, arena)
     with_def: =
@@ -265,8 +265,8 @@ fn main(): I32
         fs.mkdir_all(fake) catch
             continue
         io.write_file(fs.join(fake, "x.ksast", arena), "junk") catch {}
-    // It makes the real generation the newest (the sweep erases oldest first): with no way to set a
-    // time directly, writing a file inside advances the directory's.
+    // It makes the real generation the newest (the sweep erases oldest first). There is no way to
+    // set a time directly, so writing a file inside advances the directory's.
     for i in Range.asc(real.len)
         io.write_file(fs.join(fs.join(ast_dir, real.get(i), arena), "used", arena), "") catch {}
     gens_before: = fs.read_dir(ast_dir, arena) catch
@@ -280,7 +280,7 @@ fn main(): I32
     gens_after: = fs.read_dir(ast_dir, arena) catch
         return harness.fatal("the generations' place cannot be read")
     verdict.check("making a new generation sweeps the old generations",
-        other.code == 0 && gens_after.len < gens_before.len,
+        other.exited_with(0) && gens_after.len < gens_before.len,
         arena.text().s("before the sweep \{gens_before.len\} -> after \{gens_after.len\} ")
-        .s("(code=\{other.code\})\n").s(other.out).take())
+        .s("(code=\{other.code.unwrap_or(-1)\})\n").s(other.out).take())
     return harness.finish()

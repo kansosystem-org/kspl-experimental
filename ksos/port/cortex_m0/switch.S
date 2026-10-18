@@ -9,11 +9,10 @@
  *   [sp+0..+28]  the callee-saved r4,r5,r6,r7,r8,r9,r10,r11 (which this handler reads and writes)
  *   [sp+32..+60] r0-r3,r12,lr,pc,xPSR, which the hardware saves and restores by itself
  * The hardware has already saved the latter; here r4-r11 are saved and restored, and PSP swapped.
- * Where they are saved to and restored from is the C side's g_pendsv_from / g_pendsv_to (a
- * ksos_ctx*, whose head is the saved SP).
- * It runs with interrupts masked (cpsid i): an interrupt handler that gives schedules too, and a
- * g_pendsv_from / g_pendsv_to rewritten halfway through would save one thread into another's
- * context.
+ * Where they are saved to and restored from is the C side's g_pendsv_running / g_pendsv_to (a
+ * ksos_ctx*, whose head is the saved SP). **Only this handler moves g_pendsv_running on**, as in
+ * cortex_m/switch.S, whose head says why; the rest runs with interrupts masked for the reason
+ * given there.
  * ========================================== */
     .syntax unified
     .thumb          /* the CPU is fixed at -mcpu=cortex-m0plus (Armv6-M) */
@@ -33,11 +32,12 @@ PendSV_Handler:
     mov     r7, r11
     stmia   r0!, {r4-r7}        /* save r8-r11 by way of r4-r7 (r0 is head+32 = the old PSP) */
     subs    r0, r0, #32         /* return r0 to the saved area's head (the new saved PSP) */
-    ldr     r1, =g_pendsv_from
-    ldr     r1, [r1]            /* r1 = from_ctx (ksos_ctx*)                    */
-    str     r0, [r1]            /* from_ctx->sp = PSP after saving             */
+    ldr     r2, =g_pendsv_running
+    ldr     r1, [r2]            /* r1 = the running thread's ksos_ctx*         */
+    str     r0, [r1]            /* running->sp = PSP after saving              */
     ldr     r1, =g_pendsv_to
     ldr     r1, [r1]            /* r1 = to_ctx                                 */
+    str     r1, [r2]            /* g_pendsv_running = to_ctx                   */
     ldr     r0, [r1]            /* r0 = to_ctx->sp (the saved area's head)     */
     mov     r1, r0
     adds    r1, r1, #16         /* r1 = where r8-r11 are saved                 */

@@ -47,36 +47,7 @@ priv fn low_align(align: Sz, offset: Sz): Sz //< the alignment left `offset` byt
     low: = offset & (0 - offset)
     return align if low == 0 || low > align else low
 
-priv fn result_err_at(err: sema_session_state.Type_layout): Sz //<
-    //< Where a Result's `error_code` starts: after the one-byte `is_err`, at the error's alignment
-    //<
-    //< The C struct's field order (`emit_single_complex_type` in gen/c/decl.kspl).
-    return align_to(1, err.align)
-
-priv fn result_val_at(err: sema_session_state.Type_layout, val: sema_session_state.Type_layout): Sz //<
-    //< where a Result's `val` starts: after the error, at the value's alignment
-    return align_to(result_err_at(err) + err.size, val.align)
-
 impl Sema_ctx
-    fn result_err_offset(r: Self$@, result_id: I32): Sz //<
-        //< Where the Result result_id's `error_code` starts
-        //<
-        //< genllvm lays a Result holding an over-aligned value at these offsets (`is_laid` in
-        //< gen/llvm/types.kspl).
-        switch r.env.get_info(r.env.get_clean_real_type(result_id))
-        case .result(_b, e_id)
-            return result_err_at(r.type_layout(e_id))
-        default
-            return 0
-
-    fn result_val_offset(r: Self$@, result_id: I32): Sz //<
-        //< where the Result result_id's `val` starts
-        switch r.env.get_info(r.env.get_clean_real_type(result_id))
-        case .result(b, e_id)
-            return result_val_at(r.type_layout(e_id), r.type_layout(b))
-        default
-            return 0
-
     priv fn report_infinite_size(r: Self$@, type_id: I32) //<
         //< The one place an infinite size is reported
         //<
@@ -85,15 +56,15 @@ impl Sema_ctx
             return
         name: = r.env.display(type_id)
         r.clear_scratch()
-            .s("recursive data structure with infinite size detected: this field embeds '\{name\}' \
-                by value, which contains it again. Hold it through a pointer ('@') or a slice to \
-                break the cycle")
+            .s("recursive data structure with infinite size detected. This field embeds '\{name\}' \
+                by value, which contains the field again. Hold it through a pointer ('@') or a \
+                slice to break the cycle")
         r.err(r.layout.field, r.scratch.slice())
 
     priv fn reset_layout_memo(r: Self$@) //< recreates the cache of measured layouts
         //<
-        //< Caution: the memo is arena-allocated but its entries array is on the heap (a Map made
-        //< with a null arena): free it first, or every reset leaks.
+        //< Caution: the memo is arena-allocated, but its entries array is on the heap (a Map made
+        //< with a null arena). Free it first, or every reset leaks.
         r.layout.memo.free()
         r.layout.memo = base_core.arena
             .create(Map<|I32, sema_session_state.Type_layout|>.new_with_cap(64, null))
@@ -126,11 +97,11 @@ impl Sema_ctx
     fn check_infinite_size_types(r: Self$@) //<
         //< Checks, for **every** declared struct / enum, whether it holds itself as a value
         //<
-        //< Caution: **Measure every type, needed or not**, or a type used only in a local or a
-        //< field gets C's incomplete-type error instead of KSPL's diagnostic ("Failing fast through
-        //< an exception or an ICE" in ksplc/docs/DESIGN-compiler.md). **Call it before Lower**, or
-        //< a cyclic type drives ARC insertion and mangling into their own depth limits, which
-        //< report no position.
+        //< Caution: **Measure every type, needed or not.** Otherwise a type used only in a local or
+        //< a field gets C's incomplete-type error instead of KSPL's diagnostic. See "Failing fast
+        //< through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md. **Call it before
+        //< Lower**, or a cyclic type drives ARC insertion and mangling into their own depth limits,
+        //< which report no position.
         if r.suppress_errors
             return
         // This sweep does not emit the depth-limit diagnostic (see calc_type_layout).
@@ -162,8 +133,9 @@ impl Sema_ctx
     priv fn check_packed_managed_fields(r: Self$@) //<
         //< Refuses an ARC-managed field that `#packed` leaves under-aligned
         //<
-        //< Its count is kept through the field's address (lower/arc.kspl passes `field@` to the
-        //< retain and release helpers), which such a field cannot give ("refuse_packed_address").
+        //< Its count is kept through the field's address: lower/arc.kspl passes `field@` to the
+        //< retain and release helpers. Such a field cannot give that address
+        //< ("refuse_packed_address").
         count: = r.env.id_to_type.len
         for $id: Sz = 1; id < count; id += 1
             switch r.env.get_info(I32::id)
@@ -175,8 +147,8 @@ impl Sema_ctx
                             r.field_kept_align(def, start, f.name) < r.type_layout(f.type_id).align
                             shown: = r.env.display(f.type_id)
                             r.clear_scratch()
-                                .s("field '\{f.name\}' holds the ARC-managed '\{shown\}', whose \
-                                    count is kept through the field's address, but '#packed' leaves \
+                                .s("field '\{f.name\}' holds the ARC-managed '\{shown\}'. Its count \
+                                    is kept through the field's address. However, '#packed' leaves \
                                     that address under-aligned. Keep it in a struct without \
                                     '#packed'")
                             r.err(f.node, r.scratch.slice())
@@ -214,9 +186,6 @@ impl Sema_ctx
                     r.ensure_type_registry_walk(field.type_id, seen, err_node)!
         case .array(base_id, _size)
             r.ensure_type_registry_walk(base_id, seen, err_node)!
-        case .result(base_id, err_id)
-            r.ensure_type_registry_walk(base_id, seen, err_node)!
-            r.ensure_type_registry_walk(err_id, seen, err_node)!
         default {}
 
     priv fn fill_registry(r: Self$@, type_id: I32, decl: base_ast.Ast_node$@,
@@ -259,8 +228,8 @@ impl Sema_ctx
         if r.resolving.registry_cycle_at == null
             return
         r.err(r.resolving.registry_cycle_at,
-            "'sizeof' here needs the size of a type whose own declaration is still being resolved, \
-                so the sizes depend on each other. Break the cycle by holding one side through a \
+            "'sizeof' here needs the size of a type whose own declaration is still being resolved. \
+                The sizes depend on each other. Break the cycle by holding one side through a \
                 pointer ('@') or by writing the size directly")
         r.resolving.registry_cycle_at = null
 
@@ -271,8 +240,9 @@ impl Sema_ctx
             //< It serves a struct (track_align=!is_packed) and an enum variant's payload
             //< (track_align=true).
             //< Caution: **Set `Layout_state.field` to the field before measuring.** A cycle's
-            //< diagnostic points there; without it, at the start of the file ("A diagnostic points
-            //< at 'the position the user wrote'" in ksplc/docs/DESIGN-diagnostics.md).
+            //< diagnostic points there. Without it, the diagnostic points at the start of the file.
+            //< See "A diagnostic points at 'the position the user wrote'" in
+            //< ksplc/docs/DESIGN-diagnostics.md.
         walk: = r.walk_fields(fields, resolving, track_align, "")
         return sema_session_state.Type_layout::{ .size = walk.size, .align = walk.align }
 
@@ -320,7 +290,7 @@ impl Sema_ctx
         Enum_parts //<
             //< A tagged enumeration's tag, and where and how large the payloads' union is
             //<
-            //< Caution: **Place the payload only here**; calc_type_layout and enum_payload_offset
+            //< Caution: **Place the payload only here.** calc_type_layout and enum_payload_offset
             //< read it, and a second placement would let the size and the offset disagree.
         tag: = r.calc_type_layout(enum_def.base_type_id, resolving)
         $payload: = sema_session_state.Type_layout::{ .size = 0, .align = 1 }
@@ -340,8 +310,8 @@ impl Sema_ctx
         return r.walk_fields(v_def.payload_fields, resolving@, true, field_name).size
 
     // `offsetof(T, f)`'s answer. **Offsets come from this one place** (`walk_fields`); padding
-    // counts ("Why the round trip between a container and an external form is a trait returning a
-    // table" in docs/DESIGN-language.md).
+    // counts ("Why a container's round trip is a table-returning
+    // trait" in docs/DESIGN-language.md).
     fn field_offset_of(r: Self$@, type_id: I32, field_name: U8[], err_node: base_ast.Ast_node$@):
         Sz!Sema_error
         r.ensure_type_registry(type_id, err_node)!
@@ -362,8 +332,8 @@ impl Sema_ctx
                 throw .invalid_argument
             return walk.size
         r.clear_scratch()
-            .s("'offsetof' needs a struct type, but '\{shown\}' is not one (only a struct has named \
-                fields at fixed offsets)")
+            .s("'offsetof' needs a struct type, but '\{shown\}' is not one. Only a struct has named \
+                fields at fixed offsets")
         r.err(err_node, r.scratch.slice())
         throw .invalid_argument
 
@@ -391,8 +361,9 @@ impl Sema_ctx
         shown: = r.env.display(place.type_id)
         r.clear_scratch()
             .s("cannot take the address of a field that '#packed' leaves aligned to \{kept\} \
-                byte(s), as \{how\} would: a pointer to '\{shown\}' promises \{own\}. Copy the \
-                field into a local ('$v: = <field>;'), use the local, and assign it back")
+                byte(s), as \{how\} would. A pointer to '\{shown\}' promises \{own\}. Copy the \
+                field into a local ('$v: = <field>;'). Use the local. Then assign its value back to \
+                the field")
         r.err(place, r.scratch.slice())
         return true
 
@@ -481,7 +452,7 @@ impl Sema_ctx
             key.s(" field ").s(f)
         case .payload_offset
             key.s(" payload")
-        if r.layout.folded_keys.get(key.slice()) catch false
+        if r.layout.folded_keys.get(key.slice()).unwrap_or(false)
             return
         r.layout.folded_keys.set(base_core.arena.dup_str(key.slice()), true)
         r.layout.folded
@@ -502,9 +473,6 @@ impl Sema_ctx
             return r.c_can_measure(b, depth + 1)
         case .array(b, n)
             return n > 0 && r.c_can_measure(b, depth + 1)
-        case .result(b, e)
-            return (sema_type_env.is_void(b) || r.c_can_measure(b, depth + 1)) &&
-                r.c_can_measure(e, depth + 1)
         case .named
             return sema_type_env.is_builtin(type_id)
         default
@@ -545,7 +513,7 @@ impl Sema_ctx
                 else parts.tag.align)
             return ::{ .size = align_to(parts.payload_offset + parts.payload.size, align),
                 .align = align }
-        // A function pointer is a kind of its own (is_fn_ptr in sema/type/query.kspl); if missed,
+        // A function pointer is a kind of its own (is_fn_ptr in sema/type/query.kspl). If missed,
         // it measures the default 4 rather than the machine's width.
         width: = machine.fn_pointer_bytes if r.env.is_fn_ptr(real_id) else 4
         return ::{ .size = width, .align = width }
@@ -568,9 +536,7 @@ impl Sema_ctx
         if sema_type_env.is_unknown(real_id) || sema_type_env.is_void(real_id)
             return res
 
-        memo_hit: = r.layout.memo.get(real_id)
-            catch sema_session_state.Type_layout::{ .size = -1, .align = 0 }
-        if memo_hit.size != -1
+        if memo_hit: = r.layout.memo.get(real_id)
             return memo_hit
 
         for seen_id in resolving
@@ -608,20 +574,6 @@ impl Sema_ctx
                 inner_lay: = r.calc_type_layout(b, resolving)
                 res.align = inner_lay.align
                 res.size = inner_lay.size * size
-        case .result(b, e_id)
-            // A Result (T!E) is instantiated not as a tagged union but as a flat struct (see
-            // emit_single_complex_type in gen/c/decl.kspl: bool is_err; E error_code; T val;). The
-            // order here, offset=1 (the tag) → err → ok, and the alignment must match that C
-            // struct's fields exactly, or sizeof / offsetof disagree with the generated C.
-            // Caution: **No alignment of its own beyond its fields'**: C gives `U8!U8` 3 bytes, and
-            // a floor of 8 here made `sizeof` answer 8 on LLVM, which folds it from here.
-            s1: = r.calc_type_layout(b, resolving)
-            s2: = r.calc_type_layout(e_id, resolving)
-            res.align = s2.align if s2.align > s1.align else s1.align
-            // Caution: **Take the offset from the layouts at hand, not result_val_offset.** That
-            // one measures afresh, which resets the memo and the cycle list in the middle of this
-            // walk.
-            res.size = align_to(result_val_at(s2, s1) + s1.size, res.align)
         default
             res = r.named_type_layout(real_id, resolving)
         resolving.len -= 1

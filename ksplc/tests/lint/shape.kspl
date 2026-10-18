@@ -15,11 +15,11 @@ pub fn probe(n: I32): I32
 //< An `if` that a `break` to its own label leaves gets no guard-clause hint
 //<
 //< **`break ui` continues after the `if`**, so without the `else` its body would run after the
-//< `break` as well, and a `break ui` inside the `else` would be left with no label. The functions
+//< `break` as well. A `break ui` inside the `else` would be left with no label. The functions
 //< whose names begin with `kept_` hold such an `if` and are not reported. The others leave the
-//< `if` in a way the code after it does not follow, so their `else` can go: a `return`, a `break`
-//< or `continue` of the loop, a `break` of an enclosing label or `switch`, a call that does not
-//< return, and an inner `if` that leaves on both sides (reported for both).
+//< `if` in a way the code after it does not follow, so their `else` can go. The ways: a `return`,
+//< a `break` or `continue` of the loop, a `break` of an enclosing label or `switch`, a call that
+//< does not return, an inner `if` that leaves on both sides (reported for both).
 // EXPECT: guard_clause_labelled_if.kspl:47:3: hint: [H0801]
 // EXPECT: guard_clause_labelled_if.kspl:56:5: hint: [H0801]
 // EXPECT: guard_clause_labelled_if.kspl:65:5: hint: [H0801]
@@ -487,11 +487,69 @@ pub fn find(arena: Arena$@, want: Bool): Cell$@
   if !want
     return null
   return arena.create(Cell::{ .v = 1 })
+// ==== case nullable_pointer_return_shapes
+//< A null handed back through a conditional or a local gives the same hint as a written one
+//<
+//< The functions whose names begin with `kept_` cannot hand back null as the walk sees it. They
+//< hold a local filled through its lent address, a `return` after a call that does not return,
+//< and a local never set to null.
+// EXPECT: [H0701] Function 'conditional_side'
+// EXPECT: [H0701] Function 'list_head'
+// EXPECT: [H0701] Function 'through_result'
+// EXPECT-NOT: Function 'kept_lent'
+// EXPECT-NOT: Function 'kept_after_stop'
+// EXPECT-NOT: Function 'kept_never_null'
+import "std/mem" { Arena }
+
+pub struct Cell
+  pub v: I32
+  pub next: Cell$@
+
+pub enum Lost
+  gone
+
+pub fn conditional_side(arena: Arena$@, want: Bool): Cell$@
+  return arena.create(Cell::{ .v = 1, .next = null }) if want else null
+
+pub fn list_head(arena: Arena$@, n: I32): Cell$@
+  $head: Cell$@ = null
+  for i in Range.asc(n)
+    head = arena.create(Cell::{ .v = I32::i, .next = head })
+  return head
+
+pub fn through_result(want: Bool): Cell$@!Lost
+  if !want
+    throw .gone
+  return null
+
+priv fn fill(out: Cell$@$@, arena: Arena$@)
+  out$ = arena.create(Cell::{ .v = 2, .next = null })
+
+pub fn kept_lent(arena: Arena$@): Cell$@
+  $got: Cell$@ = null
+  fill(got@, arena)
+  return got
+
+#noreturn
+priv fn stop()
+  panic("stopped")
+
+pub fn kept_after_stop(arena: Arena$@, want: Bool): Cell$@
+  if want
+    return arena.create(Cell::{ .v = 3, .next = null })
+  stop()
+  return null
+
+pub fn kept_never_null(arena: Arena$@): Cell$@
+  first: = arena.create(Cell::{ .v = 4, .next = null })
+  $at: = first
+  at = at.next if at.next != null else at
+  return at
 // ==== case wrapped_arg_list
 //< A call whose own argument list wraps, passed directly as another call's argument
 //<
 //< Put there, or into an `if`'s subject, and where one expression begins and ends cannot be read.
-//< Caution: The arguments must be long enough that the wrap survives formatting: `make fmt` folds a
+//< Caution: The arguments must be long enough that the wrap survives formatting. `make fmt` folds a
 //< call that fits the column width onto one line, and then the finding stops coming out.
 // EXPECT: [H0802] This call passes another call as an argument
 // EXPECT: [H0804] This 'if' directly wraps a call
@@ -519,7 +577,7 @@ pub fn subject(some_incoming_value: I32): I32
 //<
 //< Pulling it out would leave the readability unchanged and merely add one line.
 //< Caution: The outer must be long enough that the wrap survives formatting (`make fmt` folds a
-//< call that fits the column width onto one line), or the silence only says "it did not wrap".
+//< call that fits the column width onto one line). Else the silence only says "it did not wrap".
 // EXPECT-NOT: [H0802]
 priv fn detail_of(n: I32): I32
   return n + 1

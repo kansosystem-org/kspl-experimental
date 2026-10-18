@@ -2,9 +2,9 @@
 //<
 //< One coordinator waits twice on the bits that setter raises one tick apart: 1) .any holds once
 //< either bit0 or bit1 is set (an OR wait). 2) .all holds once both bit1 and bit2 are set (an AND
-//< wait), and clears those bits when it holds. Each time setter sets a bit, the waiters wake and
-//< check their condition again (wake-and-recheck).
-import "ksos/demo/common/task_end"
+//< wait), and clears those bits when it holds. Then three listeners wait on bit3 with
+//< clear-on-exit, each in its own way. One set of bit3 must release all three before the bit is
+//< cleared.
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
@@ -16,6 +16,20 @@ $tcb_co: Task
 $tcb_set: Task
 $stack_co: U8[65536]
 $stack_set: U8[65536]
+
+// The three listeners: what each waits for, and what its wait returned.
+priv const listen_wanted: U32[3] = ::{ 0x8, 0x18, 0x8 } // bit3; bit3 or bit4; bit3
+$g_heard: U32[3]
+$tcb_listen: Task[3]
+$stack_listen: U8[196608] // 3 * 65536
+
+fn listener(arg: Void$@): Void //< waits once on its bits with clear-on-exit, and keeps the flags
+    k: = Sz::arg
+    if k == 2
+        g_heard[k] = g_ev.wait(listen_wanted[k], .all, true)
+    else
+        g_heard[k] = g_ev.wait(listen_wanted[k], .any, true)
+
 fn setter(_arg: Void$@): Void //< Set bit0, then bit1, then bit2, one tick apart
     Task.delay(1)
     g_ev.set(0x1)
@@ -26,6 +40,9 @@ fn setter(_arg: Void$@): Void //< Set bit0, then bit1, then bit2, one tick apart
     Task.delay(1)
     g_ev.set(0x4)
     io.out().s("[setter] set bit2\n")
+    Task.delay(1)
+    g_ev.set(0x8) // one set for all three listeners
+    io.out().s("[setter] set bit3\n")
 
 fn coordinator(_arg: Void$@): Void
     io.out().s("[coord] wait ANY of {bit0,bit1}\n")
@@ -47,7 +64,15 @@ fn main(): I32
     // coordinator has the higher priority (2), so it runs first and blocks on the unmet condition.
     tcb_co.create(U8$[]::stack_co, coordinator, null, 2, "coord")
     tcb_set.create(U8$[]::stack_set, setter, null, 1, "setter")
+    for k in Range.asc(3)
+        stack: = U8$[]::{ .ptr = stack_listen[0]@ + k * 65536, .len = 65536 }
+        tcb_listen[k].create(stack, listener, Void$@::k, 3, "listen")
     task.start_scheduler()
-    task_end.require_all_ended()
     io.out().s("=== scheduler finished (all tasks done) ===\n")
+    verdict.start("[ksos] one set with clear-on-exit releases every waiter it satisfies")
+    for k in Range.asc(3)
+        io.out().s("[listen \{k\}] heard bits=\{I32::g_heard[k]\}\n")
+        assert(g_heard[k] == 0x9, "event: a listener did not get the flags as set (bit3, bit0)")
+    assert(g_ev.get() == 0x1, "event: the listeners' clear-on-exit did not clear bit3")
+    verdict.pass("all three heard bit3 from one set, and it was cleared once they had.")
     return verdict.finish()

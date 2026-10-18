@@ -68,10 +68,10 @@ function kspageForm(ui) {
     if (names) namedFlies.push(made);
     return made;
   };
-  // Drops the groups that left the page (**the ribbon is rebuilt**); kept, they pile up and every
+  // Drops the groups that left the page (**the ribbon is rebuilt**). Kept, they pile up, and every
   // keystroke **moves the mark of a group that is gone**. Whether it is attached tells them apart.
-  // Caution: **Do not drop them while registering** — a group just built may not be attached yet,
-  // and would **vanish as the next group is built**.
+  // Caution: **Do not drop them while registering.** A group just built can be not yet attached,
+  // and it would **vanish as the next group is built**.
   const dropGone = () => {
     flies = flies.filter((one) => one.box.isConnected);
     namedFlies = namedFlies.filter((one) => one.box.isConnected);
@@ -99,7 +99,7 @@ function kspageForm(ui) {
   inkFly(spanBox, "paint-strike", "Strikethrough", () => triple("Draw", "Do not draw"),
     "strike", {});
   // What names a style and applies it.
-  // Caution: **Put it in the same group as the styling items** — an inline carries one name, and
+  // Caution: **Put it in the same group as the styling items.** An inline carries one name, and
   // the styling is applied as that name too (removing one removes both).
   keepFly(kspageFlyout(spanBox,
     { id: "style-set", name: "Character style", picks: () => named(false),
@@ -156,7 +156,7 @@ function kspageForm(ui) {
           app.focus();
         } })),
   };
-  // **The same group may be placed twice** — the value is the document's, so either acts on it and
+  // **The same group can be placed twice.** The value is the document's, so either acts on it, and
   // both carry the mark (`showSpan` updates every registered group).
   const putFly = (host, kind, id, name) => MADE[kind](host, id, name);
 
@@ -168,9 +168,9 @@ function kspageForm(ui) {
   // Caution: **Build the list from the core** (copied here, an added theme would split the count
   // offered from the count there).
   //
-  // **No mark for what is applied** — once a color can change after a theme is applied, "the
-  // current theme" could be false (through Word's link to the template, a changed style silently
-  // reverts). So `now` is always empty and the items are **actions**. **Rebuild the style fields
+  // **No mark for what is applied.** Once a color can change after a theme is applied, "the
+  // current theme" could be false. Through Word's link to the template, a changed style silently
+  // reverts. So `now` is always empty and the items are **actions**. **Rebuild the style fields
   // once one is applied.**
   keepFly(kspageFlyout(top,
     { id: "theme-picks", name: "The whole document's theme",
@@ -194,10 +194,10 @@ function kspageForm(ui) {
     showFont();
   };
   // Rebuilds them when the list of style names changes.
-  // Caution: **Rebuild them when the document is switched**, or **the earlier document's names
-  // stay** and choosing one is refused with "there is no style of that name". **Only the list of
-  // names triggers it** (the contents would rebuild on every color change and close an open
-  // submenu).
+  // Caution: **Rebuild them when the document is switched.** Otherwise **the earlier document's
+  // names stay**, and choosing one is refused with "there is no style of that name". **Only the
+  // list of names triggers it**: the contents would rebuild on every color change and close an
+  // open submenu.
   let styleMark = "";
   const syncStyles = () => {
     const mark = app.styleNames().join("|");
@@ -208,13 +208,13 @@ function kspageForm(ui) {
     paintStyles(0);
   };
 
-  // Shows the chosen style's look in the fields. **Empty means "unset"**; **only the colors cannot
+  // Shows the chosen style's look in the fields. **Empty means "unset"**. **Only the colors cannot
   // be empty** (`<input type="color">`), so the checkbox beside says whether one is used. The
   // choices inside a panel.
-  // Caution: **Do not go back to a `<select>`** — groups down to the second level and a field on
+  // Caution: **Do not go back to a `<select>`.** Groups down to the second level and a field on
   // the third would show one "choose one" in two forms. A group in a panel does not close on a
   // click (a `details` stays open; the header of `fly.js`). **The list lives here** (copied into
-  // `page.html`, it would be two), **its values match the core's** (`menu_pairs` in
+  // `page.html`, it would be two). **Its values match the core's** (`menu_pairs` in
   // `tests/support/conventions_bound.kspl` checks them).
   const ITALIC_PICKS = [["", "Italic as the parent's"], ["1", "Italic"], ["0", "Not italic"]];
   const DATED_PICKS = [["none", "As a number"], ["plain", "2026-08-18"],

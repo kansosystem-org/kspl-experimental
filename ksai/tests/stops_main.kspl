@@ -1,9 +1,9 @@
 //< ksai's checks that stop a program on purpose (`make test`)
 //<
 //< **A check that stops the program cannot run in the tests' own process**, since it would end
-//< it: each stop in [`stops.kspl`](stops.kspl) runs as a child (`ksplc run`, the stop's name its
-//< argument), and must exit non-zero, say why, and never reach the line after the stop. The stops
-//< the compiler inserts (a bounds check, a division by zero) are tested with the compiler; these
+//< it. So each stop in [`stops.kspl`](stops.kspl) runs as a child (`ksplc run`, the stop's name its
+//< argument). It must exit non-zero, say why, and never reach the line after the stop. The stops
+//< the compiler inserts (a bounds check, a division by zero) are tested with the compiler. These
 //< are ksai's own. Usage: `ksplc run tests/stops_main.kspl <ksplc>`, from this folder.
 import "std/chars"
 import "std/mem" { Arena }
@@ -41,10 +41,13 @@ fn main(): I32
     arena: = Arena.new(1024 * 1024)
     defer arena.free()
     for s in stops
-        r: = subproc.run_capture(U8[][]::{ args.get(1), "run", "tests/stops.kspl", s.name }, "",
-            300000, 1 << 20, arena)
+        r: =
+            subproc.run_capture(U8[][]::{ args.get(1), "run", "tests/stops.kspl", s.name }, "",
+            300000, 1 << 20, arena) catch
+            verdict.check(s.name, false, "ksplc could not be started")
+            continue
         out: = r.text(arena)
-        stopped: = !r.spawn_failed && !r.timed_out && r.exit_code != 0
+        stopped: = r.exit_code.is_some() && !r.exited_with(0)
         verdict.check(s.name,
             stopped && out.find_str(s.says).is_some() &&
             out.find_str(past_the_stop).is_none(), out)

@@ -3,7 +3,7 @@
 //< A heading's id and number, a name a document holds, and a symbol cited "in" a file. Picking up
 //< a naming and resolving where it lands belong to `docref_refs.kspl`.
 //< **This part copies the Python version's regular expressions.** Loosen the matching and an error
-//< in a reference passes silently; when changing it, confirm that broken input reports the same
+//< in a reference passes silently. When changing it, confirm that broken input reports the same
 //< lines as the Python version ("Moving a tool out of Python" in
 //< ../docs/HOWTO-write-a-suite.md).
 //< The verdict belongs to `tests/suite/docref_test.kspl`; this file only picks up the names.
@@ -63,8 +63,8 @@ fn heading_anchors_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
     //< The set of ids the headings of that document hold
     //<
     //< **A repeated id is numbered, not refused.** The renderer gives the second heading with the
-    //< same id a `-1` and the third a `-2` (`#cfg` and `#cfg(!…)` reduce to one), so without
-    //< counting here a correct link is reported broken.
+    //< same id a `-1` and the third a `-2` (`#cfg` and `#cfg(!…)` reduce to one). Without the count
+    //< here, a correct link is reported broken.
     $out: = List<|U8[]|>.new(arena)
     for line in text.lines(arena)
         h: = heading_text(line, 6)
@@ -126,9 +126,9 @@ fn heading_numbers_of(text: U8[], arena: Arena$@): List<|U8[]|> //<
 fn holds_name(text: U8[], name: U8[], arena: Arena$@): Bool //<
     //< Whether a document holds `name` as a name of its own
     //<
-    //< **Where it names things**: inside a heading (any part, so a short form counts), inside a
-    //< bold span, and at the start of a table cell or a list item.
-    //< Caution: **Not anywhere in the text**: a document quotes its partner's names back, and that
+    //< **Where it names things.** These are inside a heading (any part, so a short form counts),
+    //< inside a bold span, and at the start of a table cell or a list item.
+    //< Caution: **Not anywhere in the text.** A document quotes its partner's names back. That
     //< quote would keep a renamed name alive.
     for line in text.lines(arena)
         t: = line.trim_spaces()
@@ -186,9 +186,9 @@ priv fn opens_with(t: U8[], name: U8[]): Bool //<
 priv const sym_joiners: U8[][_] = ::{ " in ", " of ", " inside " } //<
     //< The words that join a citation of "what is in which file"
     //<
-    //< Caution: **The symbol comes first and the path after.** These joiners tie them, so a
-    //< citation joined another way is picked up by nothing here, **and the check goes green on a
-    //< smaller count**, which looks like a real green.
+    //< Caution: **The symbol comes first and the path after.** These joiners tie them. Nothing here
+    //< picks up a citation joined another way. **The check then goes green on a smaller count**,
+    //< which looks like a real green.
 
 fn sym_base(sym: U8[]): U8[] //<
     //< The word to look for in the file, taken from the cited name
@@ -216,11 +216,11 @@ fn sym_base(sym: U8[]): U8[] //<
 fn sym_member(sym: U8[]): U8[] //<
     //< The member's word from a cited `Owner.member`, looked for next to the owner's
     //<
-    //< Empty where the name carries no member. The arguments are cut off first (`Foo.bar(x.y)`),
-    //< and only a dot right after a name, a `|>` or a `]` opens a member; an ellipsis's dots do
+    //< Empty where the name carries no member. The arguments are cut off first (`Foo.bar(x.y)`).
+    //< Only a dot right after a name, a `|>` or a `]` opens a member. An ellipsis's dots do
     //< not.
     //< Caution: **Do not stop at the owner.** A method that moved leaves its type named in the old
-    //< file, so checking only the owner keeps finding it and the citation goes stale silently.
+    //< file. A check of the owner alone keeps finding it, and the citation goes stale silently.
     if sym_base(sym).len == 0
         return ""
     s: = sym.trim_spaces()
@@ -244,10 +244,10 @@ priv fn looks_like_place(s: U8[], dirs: U8[][]): Bool //<
     //<
     //< A path carrying an extension and an import's extensionless spelling (`std/lang`) are both
     //< places.
-    //< Caution: **Do not drop the extensionless form**: it is this repository's usual way to cite a
-    //< place, so checking extensions alone leaves the check green on a smaller count. **For it,
-    //< check that the first step is a folder of this repository**, or `Str_builder.s/c` becomes a
-    //< place and a real citation is dropped.
+    //< Caution: **Do not drop the extensionless form.** It is this repository's usual way to cite a
+    //< place. A check of extensions alone goes green on a smaller count. **For it, check that the
+    //< first step is a folder of this repository.** Otherwise `Str_builder.s/c` becomes a place,
+    //< and a real citation is dropped.
     if looks_like_path(s)
         return true
     cut: = s.find_char('/').unwrap_or(0)
@@ -386,9 +386,9 @@ fn is_reset_heading(line: U8[]): Bool //<
     //< **heading_numbers is a set, so it cannot find this.** **Only a number containing a dot is
     //< checked.**
     //<
-    //< Caution: **The boundary is found by the heading's own text, so it goes silent when that text
-    //< changes**: after a rename, this demands "unique across the whole text" with no boundary
-    //< found, which looks green until two numbers collide.
+    //< Caution: **The boundary is found by the heading's own text. So it goes silent when that text
+    //< changes.** After a rename, this demands "unique across the whole text" with no boundary
+    //< found. That looks green until two numbers collide.
     h: = heading_text(line, 3)
     return h.starts_with("Appendix ") || h.starts_with("Part ")
 

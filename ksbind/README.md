@@ -1,14 +1,14 @@
 # ksbind
 
-**Bindings to C libraries that come from outside the toolchain (KSPL's compiler and the C compiler it uses): a TLS client over OpenSSL, and SQLite.** A *binding* lets KSPL code call a library written in C. TLS is the encryption behind `https://`; SQLite is a small database kept in one file. Each binding is KSPL calling the library's own functions, with no C of its own; the library has to be installed where the program is built.
+ksbind provides bindings for OpenSSL and SQLite. A *binding* lets KSPL code call a C library. OpenSSL provides Transport Layer Security (TLS), the encryption used by `https://`. SQLite provides a small database stored in one file. The bindings contain only KSPL code and call the libraries directly. Install each library where you build the program.
 
-They are for whoever needs an encrypted connection or a SQL database from KSPL. They are not in `std`, which builds anywhere with nothing installed. Why they stand apart, and how OpenSSL's macros are reached without a header, is [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md).
+Use ksbind for encrypted connections or SQL databases. These libraries are separate from the toolchain: KSPL's compiler and the C compiler it uses. They remain outside `std`, which requires no additional libraries. [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md) explains this separation and access to OpenSSL macros without headers.
 
 ## Run it
 
-**`make test` runs the tests from this folder** with a `ksplc`, a C compiler and the libraries ([`ksbind/Makefile`](Makefile)). Where the libraries do not link, it says `SKIPPED` and names them. ksbind names itself in [`ksbind/ksplc.cfg`](ksplc.cfg), so a copy of this folder alone runs them the same way.
+Run `make test` from this folder with `ksplc`, a C compiler, and the libraries installed ([`ksbind/Makefile`](Makefile)). If a library cannot link, the tests report `SKIPPED` and name it. [`ksbind/ksplc.cfg`](ksplc.cfg) declares the package name. A copy of this folder runs the same tests independently.
 
-A program uses a binding like this: it opens an in-memory database, makes a table, stores 42 and reads it back, printing `n=42`. `ksplc run` links the library the binding names.
+This example opens a database in memory and creates a table. It stores 42, reads the value, and prints `n=42`. `ksplc run` links the library named by the binding.
 
 ```kspl
 import "ksbind/db"
@@ -32,25 +32,25 @@ fn main()
 
 ## What is here
 
-Each file is one binding, and the table says what you must install to use it.
+Each source file provides one binding. The table lists the required libraries.
 
 | File | Content | What it needs installed |
 | :-- | :-- | :-- |
-| [`ksbind/tls.kspl`](tls.kspl) | A TLS client on top of a `std/net` connection, verifying the certificate and the host name | OpenSSL 1.1.0 or later (`libssl-dev`) |
-| [`ksbind/db.kspl`](db.kspl) | One SQLite connection: prepared statements, bound values, rows read back, and a struct bound or read as a whole row | SQLite 3 (`libsqlite3-dev`) |
-| [`ksbind/tests/`](tests/) | The tests, on the loopback and an in-memory database; the TLS peer makes its own certificate in memory | OpenSSL 1.1.1 or later, for the peer's Ed25519 key |
+| [`ksbind/tls.kspl`](tls.kspl) | A TLS client using a `std/net` connection. It verifies the certificate and host name | OpenSSL 1.1.0 or later (`libssl-dev`) |
+| [`ksbind/db.kspl`](db.kspl) | A SQLite connection with prepared statements, bound values, and row access. It can bind or read a structure as a whole row | SQLite 3 (`libsqlite3-dev`) |
+| [`ksbind/tests/`](tests/) | Tests using loopback connections and a database in memory. The TLS peer creates its certificate in memory | OpenSSL 1.1.1 or later, for the peer's Ed25519 key |
 
-What each file publishes is what `ksplc doc ksbind/<file>` prints.
+Run `ksplc doc ksbind/<file>` to list a file's published API.
 
 ## Pitfalls
 
-Both traps concern linking: the step after compiling, where the C compiler joins the program with its libraries.
+Linking combines the compiled program with its libraries. These limitations apply:
 
-* **A library the linker does not find fails the link, not the compile**, and the linker's message names `-l<name>`. Where it is installed outside the linker's search path (Homebrew's OpenSSL on macOS, say), tell the C compiler with `LIBRARY_PATH`.
-* **OpenSSL is linked as `ssl` and `crypto`**, the names on Linux, macOS and MSYS2. The MSVC toolchain names them `libssl` and `libcrypto`, and does not link this binding.
+* A missing library causes a link failure after compilation. The linker message names `-l<name>`. If the library is outside the search path, set `LIBRARY_PATH`. Homebrew's OpenSSL on macOS is one example.
+* The binding links OpenSSL as `ssl` and `crypto` on Linux, macOS, and MSYS2. The MSVC toolchain uses `libssl` and `libcrypto`, so it cannot link this binding.
 
 ## Further reading
 
-* [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md) — why the bindings stand apart from `std`, how KSPL reaches a C macro and C's `long` type, and what each binding guards against.
-* [`ksbind/SURFACE.txt`](SURFACE.txt) — the record of the published API, written by `make surface` and checked by `make test-surface` ("The record of a published API" in [`docs/SPEC-gates.md`](../docs/SPEC-gates.md)).
-* [std](../std/README.md) — the way in to `ksbind`'s only KSPL dependency; every file it publishes is listed by `ksplc doc std`.
+* [`ksbind/docs/DESIGN-bindings.md`](docs/DESIGN-bindings.md) explains the separation from `std`, access to C macros and `long`, and each binding's checks.
+* [`ksbind/SURFACE.txt`](SURFACE.txt) records the published API. `make surface` writes it. `make test-surface` checks it. See [`docs/SPEC-gates.md`](../docs/SPEC-gates.md).
+* [std](../std/README.md) introduces ksbind's only KSPL dependency. `ksplc doc std` lists its published files.

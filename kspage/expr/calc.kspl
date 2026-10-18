@@ -31,14 +31,14 @@ priv const settled: U8 = 2U8
 
 priv const max_nest: Sz = 64 //< how deep one formula may nest (parentheses, `-`, `if … else`)
     //<
-    //< As Excel's cap of 64. **Each level is a call**, so without a cap a formula of a few
-    //< kilobytes (`((((…1…))))`) runs the stack out, and on wasm writes over the page's memory.
+    //< As Excel's cap of 64. **Each level is a call.** Without a cap, a formula of a few kilobytes
+    //< (`((((…1…))))`) runs the stack out, and on wasm it writes over the page's memory.
 
 priv const max_depth: Sz = 256 //< how deep one computation goes before a chain is set aside
     //<
     //< It counts the cells a chain passes through (`=A2`, `=A3`, …) and the nesting inside them.
-    //< **A deeper chain is not refused**: its deepest cell is set aside and settled first, and the
-    //< chain retried (`settle`), so an ordinary running total of thousands of rows still computes.
+    //< **A deeper chain is not refused**: its deepest cell is set aside and settled first, and then
+    //< the chain is retried (`settle`). So an ordinary running total of thousands of rows computes.
 
 priv struct Cell_at //< one cell, by its table and position
     g: Grid$@
@@ -74,8 +74,8 @@ priv struct Book //< the document's tables together
     editing: Inline$@ //<
         //< The run being typed in now
         //<
-        //< **The screen lays it out as typed** (the user could not edit it without seeing the typed
-        //< text); its value is still computed and kept, for export and for the other cells.
+        //< **The screen lays it out as typed**, since the user cannot edit it without seeing the
+        //< typed text. Its value is still computed and kept, for export and for the other cells.
     depth: Sz //< how deep the computation under way is (`max_depth`)
     // A chain went past `max_depth` at `deferred`: what was computed on the way is not kept, and
     // `settle` computes `deferred` first.
@@ -560,7 +560,7 @@ priv fn parse_compare(p: P$@): Value //<
 
 priv fn parse_pick(p: P$@): Value //< `<value where true> if <condition> else <value where false>`
     //<
-    //< **Both sides are computed**, so the same formula touches the same cells every time; the
+    //< **Both sides are computed**, so the same formula touches the same cells every time. The
     //< error on the side not chosen is discarded (`0 if A1 = 0 else 1/A1` is 0 where A1 is 0). It
     //< chains to the right (`a if c else b if d else e`).
     if !p.enter()
@@ -584,8 +584,8 @@ priv fn parse_pick_body(p: P$@): Value //< `parse_pick` within one level of nest
 priv fn literal_of(text: U8[], spec: Number_spec): Value //< reads a text as a number
     //<
     //< **A text that does not parse is not a number** (it is not the same as 0).
-    //< **It is read as a date only where the text's style sets a date format** (read every text as
-    //< a date and a text meant as a number would become one too); otherwise as a number.
+    //< **It is read as a date only where the text's style sets a date format.** Read every text as
+    //< a date, and a text meant as a number would become one too. Otherwise it is read as a number.
     if text.len <= 0
         return Cell_error.not_number.failed()
     if !spec.dated.same_dating(.none)
@@ -651,8 +651,8 @@ priv fn value_at(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value
 priv fn settle(g: Grid$@, r: Sz, c: Sz): Value //< cell (r, c)'s value, however long its chain
     //<
     //< A chain set aside (`max_depth`) has its deepest cell computed first, then is retried. **A
-    //< cell set aside while it is already waiting depends on itself**: a cycle longer than one pass
-    //< sees, marked as one so the rest of it reads `#CYCLE!` as a short cycle does.
+    //< cell set aside while it is already waiting depends on itself.** That is a cycle longer than
+    //< one pass sees. It is marked as one, so the rest of it reads `#CYCLE!` as a short cycle does.
     book: = g.book
     $todo: = List<|Cell_at|>.new(book.arena)
     todo.push(Cell_at::{ .g = g, .r = r, .c = c })

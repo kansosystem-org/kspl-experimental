@@ -2,9 +2,9 @@
 //<
 //< The entry point for loading and parsing is in `parse/load.kspl`.
 //< **Sema assumes a tree that has been through here.** Removing wrappers, moving modifiers and
-//< folding a type's postfixes (`@` / `$@` / `[]`) all happen here; a sema branch for the raw shape
+//< folding a type's postfixes (`@` / `$@` / `[]`) all happen here. A sema branch for the raw shape
 //< would hide a gap in the normalization.
-//< **The decision what `#cfg` drops is here too** (`should_drop_by_cfg`); a dropped declaration
+//< **The decision what `#cfg` drops is here too** (`should_drop_by_cfg`). A dropped declaration
 //< is invisible to every later stage.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -22,7 +22,7 @@ const max_parse_tree_depth: Sz = 2000 //<
     //< The depth guard of normalize_ast and the raw tree's reader (`to_ast_node` in `load.kspl`)
     //<
     //< Both recurse as deep as KSPEG's guard (max_parse_depth in kspeg/rule.kspl) lets the tree
-    //< nest, and walk it before any later guard such as validate_layout (the reason is at
+    //< nest. They walk it before any later guard such as validate_layout (the reason is at
     //< clone_with / validate_layout_impl in base/ast.kspl).
 
 fn is_expr_wrapper_kind(kind_id: base_ast_kinds.Ast_kind): Bool //<
@@ -47,8 +47,8 @@ impl Ast_node
         case .some(attr)
             $is_neg: = false
             target_str: = attr.cfg_flag_name(is_neg@)
-            // Caution: **Do not drop a shape other than `cfg(flag)` / `cfg(!flag)`**; kept, sema's
-            // check_attributes reports it with a position (see cfg_flag_name in
+            // Caution: **Do not drop a shape other than `cfg(flag)` / `cfg(!flag)`.** Kept, it is
+            // reported with a position by sema's check_attributes (see cfg_flag_name in
             // base/ast_ext.kspl).
             if target_str.len == 0
                 return false
@@ -60,8 +60,8 @@ impl Ast_node
                         break
             drop: = found if is_neg else !found
             if drop
-                // Caution: **Take the range before the morph**: a dropped node becomes `empty` and
-                // loses its extent, and the LSP uses this range to explain why nothing shows there.
+                // Caution: **Take the range before the morph.** A dropped node becomes `empty` and
+                // loses its extent. The LSP uses this range to explain why nothing shows there.
                 span: = r.get_span_length()
                 base_cfg_inactive.record_cfg_inactive(r.loc.file(), r.loc.offset, span, target_str,
                     is_neg)
@@ -74,12 +74,12 @@ impl Ast_node
             return .none
         if depth >= max_parse_tree_depth
             io.err()
-                .s("\nfatal: AST nesting too deep to normalize (possible unbounded recursive \
-                    construct).\n")
+                .s("\nfatal: AST nesting too deep to normalize. A recursive construct may be \
+                    unbounded.\n")
             sys.exit(1)
         // **Move the attributes onto the declaration first, then decide `#cfg`.** Written before
-        // the declaration, they parse as children of the enclosing node (an `impl` block, say); in
-        // the other order, the `impl` reads "a `#cfg` is on me" and the whole block disappears.
+        // the declaration, they parse as children of the enclosing node (an `impl` block, say). In
+        // the other order, the `impl` reads "a `#cfg` is on me", and the whole block disappears.
         r.apply_modifiers_to_targets()
         if r.should_drop_by_cfg()
             r.morph(.k_empty, "")
@@ -107,8 +107,8 @@ impl Ast_node
     fn is_modifier(r: Ast_node$@): Bool
         if r == null
             return false
-        // Caution: Include the attribute list, which parses onto the wrapper (see normalize_ast);
-        // without it apply_modifiers_to_targets leaves it there and the `#cfg` silently does
+        // Caution: Include the attribute list, which parses onto the wrapper (see normalize_ast).
+        // Without it, apply_modifiers_to_targets leaves it there, and the `#cfg` silently does
         // nothing.
         if r.kind_id == .k_attribute_list
             return true
@@ -145,8 +145,8 @@ impl Ast_node
     priv fn is_modifier_target(r: Ast_node$@): Bool //<
         //< Whether the attributes and visibility are moved onto this node
         //<
-        //< **Not a statement** (`stmt_if` and the like): parse/normalize_stmt.kspl picks its
-        //< children by kind into fixed positions, and an attribute list placed first would be taken
+        //< **Not a statement** (`stmt_if` and the like). parse/normalize_stmt.kspl picks its
+        //< children by kind into fixed positions. An attribute list placed first would be taken
         //< for another child. Its attributes stay on the `stmt` wrapper until elide_attributed_stmt
         //< moves them to the end.
         if r == null
@@ -239,8 +239,8 @@ impl Ast_node
     priv fn wants_inline(r: Ast_node$@, c: Ast_node$@): Bool //<
         //< Whether `c` is a child whose contents are lifted into `r`
         //<
-        //< Caution: **Do not copy this check**: the scanning round and the building round share it,
-        //< and a copy silently drifts when one of them is changed.
+        //< Caution: **Do not copy this check.** The scanning round and the building round share it.
+        //< A copy silently drifts when one of them is changed.
         return (c.kind_id == .k_decl_fn_proto && r.kind_id == .k_decl_fn) ||
             c.kind_id == .k_empty
 
@@ -302,7 +302,7 @@ impl Ast_node
             // Caution: **Leave the mutability mark on the name.** Dropped, `Box<|$T|>` becomes
             // `Box<|T|>` and an impl only for the mutable version applies to the immutable one too
             // (impl_target_rejects in `../sema/decl/mono_target.kspl`).
-            // The last non-Literal child holds the contents; a one-child `type_expr` may already be
+            // The last non-Literal child holds the contents; a one-child `type_expr` can already be
             // removed.
             if c.kind_id == .k_type_arg
                 $inner_text: U8[] = c.text
@@ -401,7 +401,7 @@ impl Ast_node
         if r.kind_id == .k_type_args || r.kind_id == .k_type_gen_params
             r.normalize_type_args_text()
 
-        // Caution: Modifiers are moved down once, at the start of normalize_ast; a second round
+        // Caution: Modifiers are moved down once, at the start of normalize_ast. A second round
         // here would pick the moved attributes up again as the enclosing node's children.
 
         if r.is_decl_or_stmt()
@@ -434,8 +434,8 @@ impl Ast_node
         r.normalize_type_atom()
         r.flatten_inline_nodes()
         // A decl_var / decl_const wraps decl_var_items, which hold the cfg attributes. With every
-        // item dropped the wrapper remains empty; left that way, apply_modifiers_to_targets moves
-        // just the visibility into it and sema's W0206 reports a symbol named "unknown".
+        // item dropped, the wrapper remains empty. Left that way, apply_modifiers_to_targets moves
+        // just the visibility into it, and sema's W0206 reports a symbol named "unknown".
         if (r.kind_id == .k_decl_var || r.kind_id == .k_decl_const) && r.children.len == 0
             r.morph(.k_empty, "")
         return .some(r)
@@ -479,7 +479,7 @@ impl Ast_node
             else
                 r.text = wrap_child_text("[", inner_node.text, "]")
                 clean.push(inner_node)
-        // The mutability marker `$` starts the postfix's text and is moved up to the k_type_expr:
+        // The mutability marker `$` starts the postfix's text and is moved up to the k_type_expr.
         // apply_type_postfixes in sema/decl/resolve.kspl applies the qualifier per level (unmarked
         // is immutable), and fmt restores the `$` from it.
         if is_mut_mark
@@ -617,8 +617,8 @@ priv fn map_keyword_to_decl_kind(t: U8[]): Decl_kind_info //<
     //<
     //< The wrapper is a `stmt` / `decl_top` and the like.
     //<
-    //< **Only syntax beginning with a keyword goes here**: one beginning with a mark (`##error`)
-    //< takes the grammar rule's name as its kind (kspl.kspeg); adding it here would decide it
+    //< **Only syntax beginning with a keyword goes here.** Syntax beginning with a mark (`##error`)
+    //< takes the grammar rule's name as its kind (kspl.kspeg). Adding it here would decide it
     //< twice.
     return (.valid(.k_decl_var, t) if t.equals("var") || t.equals("let")
         else .valid(.k_decl_const, t) if t.equals("const")

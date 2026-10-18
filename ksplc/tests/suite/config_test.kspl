@@ -12,6 +12,7 @@
 // ==========================================
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_markers"
+import "std/chars" // `starts_with`
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
@@ -62,7 +63,7 @@ priv const bad_cfgs: Bad[_] = ::{
     ::{ .slot = "sec", .label = "an unknown section", .body = "[typo]\nI0307 = off\n",
         .msg = "unknown configuration section" },
     ::{ .slot = "code", .label = "an unknown code", .body = "[lint]\nI9999 = off\n",
-        .msg = "unknown diagnostic code 'I9999': the codes are listed under" },
+        .msg = "unknown diagnostic code 'I9999'. The codes are listed under" },
     ::{ .slot = "level", .label = "an unknown level", .body = "[lint]\nI0307 = maybe\n",
         .msg = "unknown lint level" },
     ::{ .slot = "nosec", .label = "a setting before the section", .body = "I0307 = off\n",
@@ -71,6 +72,12 @@ priv const bad_cfgs: Bad[_] = ::{
         .msg = "expected 'key = value'" },
     ::{ .slot = "unterm", .label = "an unclosed section heading", .body = "[lint\nI0307 = off\n",
         .msg = "unterminated section header" },
+    // **A key set twice is refused in every section**: in `[lint]` the second line silently won.
+    ::{ .slot = "twice", .label = "a code set twice", .body = "[lint]\nI0307 = off\nI0307 = on\n",
+        .msg = "'I0307' is set twice in [lint] (first on line 2)" },
+    ::{ .slot = "pkgtwice", .label = "a package key set twice",
+        .body = "[package]\nname = one\nname = two\n",
+        .msg = "'name' is set twice in [package] (first on line 2)" },
 }
 
 priv fn lint_case(slot: U8[], name: U8[], rels: U8[][], bodies: U8[][], entry: U8[],
@@ -80,7 +87,7 @@ priv fn lint_case(slot: U8[], name: U8[], rels: U8[][], bodies: U8[][], entry: U
         //<
         //< Caution: Make the directory's name from the ASCII label. The case name as it is makes a
         //< directory holding a `:`, which cannot be made on Windows. A case that is not want_fail
-        //< demands exit code 0: lint ends with 0 even with diagnostics, so a failure means reading
+        //< demands exit code 0. Lint ends with 0 even with diagnostics, so a failure means reading
         //< the settings file is broken.
     dir: = harness.sandbox(arena.text().s("cfg_\{slot\}").take())
     fs.write_tree(dir, rels, bodies, arena) catch
@@ -93,11 +100,11 @@ priv fn lint_case(slot: U8[], name: U8[], rels: U8[][], bodies: U8[][], entry: U
     argv.push(fs.join(dir, entry, arena))
     r: = harness.ksplc(argv.slice())
     if want_fail
-        if r.code == 0
+        if r.exited_with(0)
             verdict.check(name, false,
                 arena.text().s("it ended at 0 without refusing the setting\n\{r.out\}").take())
             return
-    else if !allow_nonzero && r.code != 0
+    else if !allow_nonzero && !r.exited_with(0)
         verdict.check(name, false, arena.text().s("it failed\n\{r.out\}").take())
         return
     harness_markers.check(name, expect, deny, r.out)
@@ -116,8 +123,8 @@ priv fn build_case(slot: U8[], name: U8[], cfg: U8[], arena: Arena$@) //<
     r: = harness
         .ksplc(U8[][]::{ fs.join(dir, "a.kspl", arena), fs.join(dir, "a.c", arena) })
     fail: = harness_markers.match_markers(U8[][]::{ "error: [I0307]" }, U8[][]::{}, r.out)
-    verdict.check(name, r.code != 0 && fail.len == 0,
-        arena.text().s("exit \{r.code\}\n\{fail\}\n\{r.out\}").take())
+    verdict.check(name, !r.exited_with(0) && fail.len == 0,
+        arena.text().s("exit \{r.code.unwrap_or(-1)\}\n\{fail\}\n\{r.out\}").take())
 
 priv fn main_cases(arena: Arena$@)
     none: = U8[][]::{}
@@ -172,10 +179,26 @@ priv fn main_cases(arena: Arena$@)
         "# before the heading\n\n[lint]   # on the section\n   I0307   =   off   # on the value\n" },
         "a.kspl", none, none, U8[][]::{ "[I0307]" }, false, false, arena)
 
+priv fn case_relative_name(arena: Arena$@) //<
+    //< Every refusal names the file from the current folder, as the specification shows it
+    //<
+    //< An unknown section was named by its absolute path and an unknown code by the relative one,
+    //< as each reached the folder by another spelling.
+    for b in U8[][]::{ "[typo]\n", "[lint]\nI9999 = off\n" }
+        name: = arena.text().s("a refusal names the file from the current folder: ")
+            .s(b.lines(arena).get(0)).take()
+        dir: = harness.sandbox("cfg_relative")
+        fs.write_tree(dir, U8[][]::{ "p/a.kspl", "p/ksplc.cfg" }, U8[][]::{ src, b }, arena) catch
+            verdict.check(name, false, "cannot place the material")
+            continue
+        r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "lint", "p/a.kspl" }), dir)
+        verdict.check(name, !r.exited_with(0) && r.out.starts_with("p/ksplc.cfg:"), r.out)
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
-    io.out().s("# ksplc.cfg: \{13 + bad_cfgs.len * 2\}\n")
+    io.out().s("# ksplc.cfg: \{15 + bad_cfgs.len * 2\}\n")
     main_cases(arena)
+    case_relative_name(arena)
     none: = U8[][]::{}
     for b in bad_cfgs
         // The error carries the position "ksplc.cfg: ", so the user finds the place to fix.

@@ -63,6 +63,34 @@ fn main(): I32
   _from_bool: = E::true
   _tagged: = T::1
   return 0
+// ==== case cast_float_constant_out_of_range
+//< A constant cast from floating point that the integer type cannot hold is refused
+//<
+//< At run time the cast saturates; a constant is a mistake written down, as an integer constant's
+//< overflow is. **Let it through and each backend folds it its own way**: C's compiler and LLVM
+//< gave different answers for the same `I32::1.0e20`. A value just inside a bound passes.
+// EXPECT: cannot cast 100000000000000000000.0 to 'I32'
+// EXPECT: cannot cast -1.0 to 'U8'
+// EXPECT: cannot cast nan to 'I32': NaN has no integer value
+// EXPECT: cannot cast 3000000000.0 to 'Sz': 'Sz' does not hold its whole part at 32 bits
+// EXPECT: cannot cast 128.0 to 'I8'
+// EXPECT: cannot cast 50000000000.0 to 'I32'
+// EXPECT-NOT: cannot cast -128.9
+// EXPECT-NOT: cannot cast 255.9
+// EXPECT-NOT: cannot cast -9223372036854775808.0
+priv const big: F64 = 5.0e10
+priv const g: I32 = I32::big
+
+fn main(): I32
+  _a: = I32::1.0e20
+  _b: = U8::-1.0
+  _c: = I32::(0.0 / 0.0)
+  _d: = Sz::3.0e9
+  _e: = I8::128.0
+  _in_low: = I8::-128.9
+  _in_high: = U8::255.9
+  _i64_low: = I64::-9223372036854775808.0
+  return g
 // ==== case compound_assign_operands
 //< That ksplc gives a compound assignment the operand checks `a = a op b` gets
 //<
@@ -87,6 +115,22 @@ pub fn main(): I32
   $v: = V::{ .x = 1 }
   v += V::{ .x = 2 }
   return v.x
+// ==== case compound_assign_promotes
+//< A compound assignment promotes its two numbers as the binary operator does
+//<
+//< A result wider than the place is refused, as `a = a + b` is; a shift amount keeps its own type,
+//< so `<<=` takes an `I32` on a `U8` (line 11 passes). The accepted side is in lang_limits_test.
+// EXPECT: compound_assign_promotes.kspl:9:8: error: implicit conversion between 'I32' and 'U8' is forbidden to prevent data loss. '+=' computes in 'I32'
+// EXPECT: Finished with 1 error(s)
+fn f(y: I32): U8
+  $b: U8 = 1
+  b += y
+  $c: U8 = 1
+  c <<= y
+  return b + c
+
+fn main(): I32
+  return I32::f(1)
 // ==== case divide_by_zero
 //< A divisor known to be 0 at translation time is rejected
 //<
@@ -140,7 +184,7 @@ fn main(): I32
 //< `buf.sub(...)`. The note on importing an extension method points the wrong way there.
 // EXPECT: error: type 'U8$[8]' has no field or method named 'sub'
 // EXPECT: a fixed-length array is not a slice
-// EXPECT: '(U8$[]::x).sub(…)', with x the array
+// EXPECT: '(U8$[]::x).sub(…)', where x is the array. Use parentheses so that the cast covers only the array.
 // EXPECT-NOT: an extension method is visible only where
 fn main(): I32
   $buf: U8[8] = ::{}
@@ -189,10 +233,10 @@ fn main(): I32
 // ==== case int_literal_too_wide
 //< ksplc rejects an integer literal with more digits than any integer type holds
 //<
-//< The backend puts the characters straight into C / LLVM IR, so letting it through has the C
-//< compiler say `integer literal is too large to be represented in any integer type` (and to the
-//< user both the position and the cause become far from the KSPL source).
-// EXPECT: is too large to be represented in any integer type
+//< The backend puts the characters straight into C / LLVM IR. Let through, the literal makes the C
+//< compiler say `integer literal is too large to be represented in any integer type`. To the
+//< user, both the position and the cause are then far from the KSPL source.
+// EXPECT: is too large for any integer type. The widest integer type is 64 bits
 fn main()
   _x: U64 = 18446744073709551616
 // ==== case integer_leading_zero
@@ -209,10 +253,10 @@ fn main(): I32
 // ==== case integer_leading_zero_in_type
 //< A leading `0` is refused in a type's array length too, where no expression is inferred
 //<
-//< The grammar refuses the spelling, so every place a literal can stand refuses it alike; a check
+//< The grammar refuses the spelling. So every place a literal can stand refuses it alike. A check
 //< in the analysis would have to be repeated wherever a constant is folded.
 // EXPECT: error: expected a float
-// EXPECT: a decimal integer does not start with 0, and KSPL has no octal literal, so '09'
+// EXPECT: a decimal integer does not start with 0. KSPL has no octal literal. '09'
 // EXPECT-NOT: or '0x
 priv const table: U8[09] = ::{}
 
@@ -225,11 +269,11 @@ fn main(): I32
 //< since an integer beyond 24 bits does not fit an `F32`. An integer literal given a float type
 //< (`f: F64 = 2`) passed on C and gave LLVM `store double 2`, which does not build; `2.0` is the
 //< one spelling of that value.
-// EXPECT: between 'F32' and 'I64' is forbidden to prevent data loss: neither holds every value of the other, so '+' has
-// EXPECT: between 'F64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '*' has
-// EXPECT: between 'F64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '-' has no type to compute in. Use explicit '::' cast, or write the integer literal as a float
-// EXPECT: between 'I32' and 'F32' is forbidden to prevent data loss: neither holds every value of the other, so '<' has no type to compute in. Use explicit '::' cast, or write the integer literal as a float
-// EXPECT: implicit conversion between 'I32' and 'F64' is forbidden to prevent data loss. Use explicit '::' cast, or write the integer literal as a float
+// EXPECT: between 'F32' and 'I64' is forbidden to prevent data loss. Neither holds every value of the other, so '+' has
+// EXPECT: between 'F64' and 'I32' is forbidden to prevent data loss. Neither holds every value of the other, so '*' has
+// EXPECT: between 'F64' and 'I32' is forbidden to prevent data loss. Neither holds every value of the other, so '-' has no type to compute in. Use an explicit '::' cast, or write the integer literal as a float
+// EXPECT: between 'I32' and 'F32' is forbidden to prevent data loss. Neither holds every value of the other, so '<' has no type to compute in. Use an explicit '::' cast, or write the integer literal as a float
+// EXPECT: implicit conversion between 'I32' and 'F64' is forbidden to prevent data loss. Use an explicit '::' cast, or write the integer literal as a float
 // EXPECT: ternary operator branches have incompatible types: 'F64' and 'I32'
 // EXPECT-NOT: error: expected
 priv fn half(x: F64): F64
@@ -254,14 +298,14 @@ fn main(): I32
 //< compare) while `I64 -1 < U64 1` was true, `I8 -1 == U8 255` was true, `-6 / U32 2` gave
 //< 2147483645, and `U16 1 + I8 -2` gave 65535. A constant folded too: C and LLVM disagreed on it.
 //< The rule is one relation, `is_lossless_numeric` in `ksplc/sema/type/query.kspl`.
-// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '<' has
-// EXPECT: between 'I64' and 'U64' is forbidden to prevent data loss: neither holds every value of the other, so '<' has
-// EXPECT: between 'I8' and 'U8' is forbidden to prevent data loss: neither holds every value of the other, so '==' has
-// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '/' has
-// EXPECT: between 'U16' and 'I8' is forbidden to prevent data loss: neither holds every value of the other, so '+' has
-// EXPECT: between 'U64' and 'I32' is forbidden to prevent data loss: neither holds every value of the other, so '-' has
-// EXPECT: between 'Sz' and 'U32' is forbidden to prevent data loss: neither holds every value of the other, so '*' has
-// EXPECT: between 'Sz' and 'U64' is forbidden to prevent data loss: neither holds every value of the other, so '>' has
+// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss. Neither holds every value of the other, so '<' has
+// EXPECT: between 'I64' and 'U64' is forbidden to prevent data loss. Neither holds every value of the other, so '<' has
+// EXPECT: between 'I8' and 'U8' is forbidden to prevent data loss. Neither holds every value of the other, so '==' has
+// EXPECT: between 'I32' and 'U32' is forbidden to prevent data loss. Neither holds every value of the other, so '/' has
+// EXPECT: between 'U16' and 'I8' is forbidden to prevent data loss. Neither holds every value of the other, so '+' has
+// EXPECT: between 'U64' and 'I32' is forbidden to prevent data loss. Neither holds every value of the other, so '-' has
+// EXPECT: between 'Sz' and 'U32' is forbidden to prevent data loss. Neither holds every value of the other, so '*' has
+// EXPECT: between 'Sz' and 'U64' is forbidden to prevent data loss. Neither holds every value of the other, so '>' has
 // EXPECT: ternary operator branches have incompatible types: 'I16' and 'U16'
 // EXPECT: numeric_operands_no_common_type.kspl:20:27:
 // EXPECT-NOT: error: expected
@@ -291,6 +335,51 @@ fn main(): I32
   r8: = n > d
   r9: = s if r1 else t
   return I32::r4 + I32::r5 + I32::r6 + I32::r7 + I32::r9 + I32::(r2 || r3 || r8) + I32::folded
+// ==== case unsigned_unary_minus
+//< A unary minus on an unsigned number is refused, with the two spellings that say what is meant
+//<
+//< It holds no negative, so `-u` with `u: U32 = 5` gave 4294967291 in silence. A literal under
+//< the minus stays the range check's (`u: U32 = -1`).
+// EXPECT: unary '-' cannot be applied to the unsigned 'U32'. An unsigned type holds no negative value, so the result would wrap. Write '0 - x'
+// EXPECT: unary '-' cannot be applied to the unsigned 'U8'
+// EXPECT: literal '-1' is out of range for type 'U16'
+// EXPECT: Finished with 3 error(s)
+fn main(): I32
+  u: U32 = 5
+  w: U8 = 1
+  _a: = -u
+  _b: = -w
+  _c: U16 = -1
+  _d: I32 = -I32::u
+  return 0
+// ==== case unsigned_compared_outside_its_range
+//< An integer compared with a constant outside its own type has a fixed answer, and is refused
+//<
+//< `x == -1` with `x: U8` computes at `I32` and is never true; the same against a `U32` is the
+//< literal's range error. The answer the message gives follows the operator and the side.
+// EXPECT: :14:6: error: this comparison is always false: a 'U8' holds 0 to 255, and -1 is outside that
+// EXPECT: :16:6: error: this comparison is always true: a 'U8' holds 0 to 255, and -1 is outside that
+// EXPECT: :18:6: error: this comparison is always true: a 'U8' holds 0 to 255, and 300 is outside that
+// EXPECT: :20:6: error: this comparison is always false: a 'I8' holds -128 to 127, and 200 is outside that
+// EXPECT: Finished with 4 error(s)
+fn f(x: U8, s: I8): I32
+  $n: I32 = 0
+  if x == 255
+    n += 1
+  if x == -1
+    n += 1
+  if x != -1
+    n += 1
+  if x < 300
+    n += 1
+  if 200 < s
+    n += 1
+  if s >= -128
+    n += 1
+  return n
+
+fn main(): I32
+  return f(1, 1)
 // ==== case shift_count_out_of_range
 //< A shift amount that is negative, or at least the left-hand side's type width, is rejected
 //<

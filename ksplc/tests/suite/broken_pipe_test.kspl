@@ -7,9 +7,9 @@
 //< when one goes, and nothing points at the cause.
 
 // ==========================================
-// It checks three things, and **missing any one is a different way of breaking**: writing to an
-// ended peer must not crash (else the server vanishes when its peer leaves), it must end quietly
-// when the destination goes (else `prog \| head` runs on with no destination), and a started child
+// It checks three things, and **missing any one is a different way of breaking**. Writing to an
+// ended peer must not crash (else the server vanishes when its peer leaves). It must end quietly
+// when the destination goes (else `prog \| head` runs on with no destination). A started child
 // must keep the default (else `yes \| head` never ends, the ignore setting outliving exec).
 // ==========================================
 
@@ -65,8 +65,8 @@ fn main(): I32
 
 """
 
-// The probe that writes a lot and creates the mark file **only once it has written it all**: a
-// POSIX shell cannot give each pipe stage's status (`PIPESTATUS` is bash's), so **no mark = it
+// The probe that writes a lot and creates the mark file **only once it has written it all**. A
+// POSIX shell cannot give each pipe stage's status (`PIPESTATUS` is bash's). So **no mark = it
 // ended part way**.
 // Caution: **Write more than the buffer.** An amount that fits is never flushed, so the probe
 // never gets the chance to notice the destination is gone.
@@ -109,7 +109,8 @@ fn main()
   arena: = Arena.new(1024 * 1024)
   defer arena.free()
   r: = subproc.run_capture(U8[][]::{ "/bin/sh", "-c", "grep ^SigIgn: /proc/self/status" }, "",
-    5000, 4096, arena)
+    5000, 4096, arena) catch
+    return
   io.out().s("\{r.stdout_data\}")
 
 """
@@ -128,11 +129,11 @@ priv fn build(name: U8[], src: U8[], work: U8[], arena: Arena$@): U8[] //< it bu
         verdict.check(arena.text().s("\{name\}: the source can be written").take(), false, s_path)
         return ""
     c: = harness.ksplc(U8[][]::{ s_path, gen })
-    if c.code != 0
+    if !c.exited_with(0)
         verdict.check(arena.text().s("\{name\}: it translates to C").take(), false, c.out)
         return ""
     b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::{ "-std=c99", "-O0", "-w" })
-    if b.code != 0
+    if !b.exited_with(0)
         verdict.check(arena.text().s("\{name\}: it builds").take(), false, b.out)
         return ""
     return exe
@@ -145,8 +146,10 @@ priv fn check_dead_child(work: U8[], arena: Arena$@) //<
     r: = harness.run(U8[][]::{ exe })
     // Caution: **Check the exit status too.** With only the error checked, a crash **after the
     // write** passes.
-    verdict.check("writing to a peer that has ended does not crash", r.code == 0,
-        arena.text().s("exit status \{r.code\} (141 = died by SIGPIPE) / output: \{r.out\}").take())
+    verdict.check("writing to a peer that has ended does not crash", r.exited_with(0),
+        arena.text()
+        .s("exit status \{r.code.unwrap_or(-1)\} (141 = died by SIGPIPE) / output: \{r.out\}")
+        .take())
     verdict.check("a write to a peer that has ended gets an error back",
         r.out.find_str("REFUSED").is_some(), r.out)
 
@@ -160,17 +163,18 @@ priv fn check_head(name: U8[], src: U8[], how: U8[], work: U8[], arena: Arena$@)
     full_mark: = fs.join(work, arena.text().s("\{name\}_full.txt").take(), arena)
     full: = harness.run(U8[][]::{ exe, full_mark })
     verdict.check(arena.text().s("with a counterpart connected it can write to the end \{how\}")
-        .take(), full.code == 0 && fs.exists(full_mark),
-        arena.text().s("exit status \{full.code\}").take())
+        .take(), full.exited_with(0) && fs.exists(full_mark),
+        arena.text().s("exit status \{full.code.unwrap_or(-1)\}").take())
     cut_mark: = fs.join(work, arena.text().s("\{name\}_cut.txt").take(), arena)
     // **Have the shell build the pipe**; the caller cannot connect stages itself.
     piped: = harness
         .run(U8[][]::{ "/bin/sh", "-c",
         arena.text().s("'\{exe\}' '\{cut_mark\}' | head -1 > /dev/null").take() })
+    left: = arena.text()
+        .s("the mark is left (it ran to the end). The shell's exit status \
+            \{piped.code.unwrap_or(-1)\}").take()
     verdict.check(arena.text().s("once the destination goes it ends without writing it all \{how\}")
-        .take(), !fs.exists(cut_mark),
-        arena.text()
-        .s("the mark is left (it ran to the end). The shell's exit status \{piped.code\}").take())
+        .take(), !fs.exists(cut_mark), left)
 
 priv fn check_child_default(work: U8[], arena: Arena$@) //<
     //< Checks that a started child keeps SIGPIPE's default

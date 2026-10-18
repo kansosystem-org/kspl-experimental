@@ -10,7 +10,7 @@ function kspageLocal(ui) {
   const say = ui.say, deny = ui.deny;
 
   // ---- The token ----
-  // **The token comes in the URL's fragment (`#t=`)**, which is not sent to the server, so another
+  // **The token comes in the URL's fragment (`#t=`)**, which is not sent to the server. So another
   // process on the same machine cannot get it by requesting the same address (a query `?` goes in
   // the request line).
   // Caution: **Delete it from the URL as soon as it is read**, or it stays in the history.
@@ -53,6 +53,18 @@ function kspageLocal(ui) {
   // Caution: **Do not put it in the query** (it stays in the logs).
   const head = () => (token ? { Authorization: "Bearer " + token } : {});
   const at = (path) => "/api/file?path=" + encodeURIComponent(path);
+  // Caution: **Give every request a limit.** Each kspage tab holds one connection to the server
+  // open (`holdOn` below), and a browser opens six to one server. So with six tabs a request waits
+  // for good: a save never settles, and every later press joins the one under way.
+  const WAIT_MS = 15000;
+  const send = (url, how) => fetch(url,
+    Object.assign({ headers: head(), signal: AbortSignal.timeout(WAIT_MS) }, how || {}));
+  // Why a request got no answer, in words a person can act on.
+  const lostWhy = (e) => (e && e.name === "TimeoutError"
+    ? "The local server did not answer within " + WAIT_MS / 1000 + " seconds. Each kspage tab "
+      + "holds one of the six connections a browser opens to one server, so close a kspage tab "
+      + "and try again"
+    : "Could not connect to the local server (" + String((e && e.message) || e) + ")");
 
   // ---- Whether it is there ----
   //
@@ -64,9 +76,10 @@ function kspageLocal(ui) {
   const ask = async () => {
     let got = null;
     try {
-      got = await fetch("/api/status", { headers: head() });
-    } catch (_) {
-      // Startup reports how to connect.
+      got = await send("/api/status");
+    } catch (e) {
+      // Startup reports how to connect; a request that went unanswered says why.
+      if (e && e.name === "TimeoutError") told = lostWhy(e);
       return;
     }
     if (got.status === 401) {
@@ -75,9 +88,9 @@ function kspageLocal(ui) {
     }
     if (!got.ok) return;
     // Caution: **Do not stop at "the server is there".** A kssrv not meant for local use answers
-    // `/api/status` too but has no file entry points (a 404), so the tools appear **only where it
-    // declares them open**. **Once this holds, the save target is the path alone** (`file.js`);
-    // loosen the declaration and a save can land outside the served folder, where it cannot be
+    // `/api/status` too but has no file entry points (a 404). So the tools appear **only where it
+    // declares them open**. **Once this holds, the save target is the path alone** (`file.js`).
+    // Loosen the declaration, and a save can land outside the served folder, where it cannot be
     // reopened by path.
     let said = null;
     try {
@@ -100,43 +113,42 @@ function kspageLocal(ui) {
     return "The local server refused it (" + status + ")";
   };
   const readAt = async (path) => {
-    let got = null;
     try {
-      got = await fetch(at(path), { headers: head() });
+      const got = await send(at(path));
+      if (!got.ok) {
+        deny(reasonOf(got.status));
+        return null;
+      }
+      // Caution: **Return bytes.** The server does not guess the type (a guessed type gets
+      // believed), so the caller decides whether it is text.
+      return new Uint8Array(await got.arrayBuffer());
     } catch (e) {
-      deny("Could not connect to the local server (" + String((e && e.message) || e) + ")");
+      deny(lostWhy(e));
       return null;
     }
-    if (!got.ok) {
-      deny(reasonOf(got.status));
-      return null;
-    }
-    // Caution: **Return bytes.** The server does not guess the type (a guessed type gets believed),
-    // so the caller decides whether it is text; a document and a history go through the same path.
-    return new Uint8Array(await got.arrayBuffer());
   };
   // Writes to that path. Empty text if written, and the reason if not.
   const writeAt = async (path, data) => {
     let got = null;
     try {
-      got = await fetch(at(path), { method: "PUT", headers: head(), body: data });
+      got = await send(at(path), { method: "PUT", body: data });
     } catch (e) {
-      return "Could not connect (" + String((e && e.message) || e) + ")";
+      return lostWhy(e);
     }
     return got.ok ? "" : reasonOf(got.status);
   };
   // Whether something is at that path: true or false, and null where it could not be asked (it
   // gives the reason, as `readAt` does). **The contents are not returned** (read it again where
   // they are needed).
-  // Caution: **Do not answer "absent" for a failed question.** Only a 404 says nothing is there; a
-  // lost token, a refusal or a dropped connection read as absent would let a save overwrite a file
-  // without the check that guards it.
+  // Caution: **Do not answer "absent" for a failed question.** Only a 404 says nothing is there.
+  // A lost token, a refusal or a dropped connection read as absent would let a save overwrite a
+  // file without the check that guards it.
   const statAt = async (path) => {
     let got = null;
     try {
-      got = await fetch("/api/stat?path=" + encodeURIComponent(path), { headers: head() });
+      got = await send("/api/stat?path=" + encodeURIComponent(path));
     } catch (e) {
-      deny("Could not connect to the local server (" + String((e && e.message) || e) + ")");
+      deny(lostWhy(e));
       return null;
     }
     if (got.ok) return true;
@@ -147,9 +159,9 @@ function kspageLocal(ui) {
 
   // ---- Telling the server this page is still open ----
   //
-  // **The server stops when nobody is using it, and this is how it knows somebody is**: one
-  // connection held open and never answered, which closing the tab closes at once (a timer would
-  // only say "somebody was there N seconds ago").
+  // **The server stops when nobody is using it, and this is how it knows somebody is.** It is one
+  // connection held open and never answered, which closing the tab closes at once. A timer would
+  // only say "somebody was there N seconds ago".
   // Caution: **Reconnect if it ends.** A connection can break with the tab still open, and the
   // server would count down while a person is writing.
   const HOLD_AGAIN_MS = 5000;
@@ -179,33 +191,45 @@ function kspageLocal(ui) {
 
   // ---- A picture the document names ----
   //
+  // The served path a picture's source names. It is "" where it names no file here (an embedded
+  // picture, `data:`, or an outside one), and null where it cannot be read. **The one place a
+  // source is resolved**, for drawing and measuring alike.
+  // Caution: **Read a relative source from the document's folder**, not from the page's address.
+  // The server publishes either a tree or the document's own folder. Read from the page, the same
+  // document would show its pictures under one and not the other. A document in no file reads
+  // from the served folder's top.
+  const picturePlace = (src) => {
+    const doc = ui.pathNow ? ui.pathNow() : "";
+    const folder = doc.split("/").slice(0, -1).map((one) => encodeURIComponent(one) + "/").join("");
+    let place = null;
+    try {
+      place = new URL(src, location.origin + "/" + folder);
+    } catch (_) {
+      return null;
+    }
+    if (place.origin !== location.origin) return "";
+    try {
+      return decodeURIComponent(place.pathname.replace(/^\/+/, ""));
+    } catch (_) {
+      return null;
+    }
+  };
   // The address to load a picture from. **A picture beside the document is read through the API,
-  // with the token**: the server answers no file but the page without one, and an `<img>` cannot
-  // send a header, so the bytes come back as a `blob:` address. An embedded picture (`data:`), an
-  // outside one, and any picture where there is no server keep their source (whether an outside
-  // one may load is `draw.js`'s `outside`). null where it cannot be read. **A `blob:` address
-  // belongs to the caller**, who releases it once done (`URL.revokeObjectURL`); each call makes one.
+  // with the token.** The server answers no file but the page without one, and an `<img>` cannot
+  // send a header. So the bytes come back as a `blob:` address. An embedded picture and an outside
+  // one keep their source (whether an outside one can load is `draw.js`'s `outside`). null where
+  // it cannot be read. **A `blob:` address belongs to the caller**, who releases it once done
+  // (`URL.revokeObjectURL`); each call makes one.
   // Caution: **The server does not say the type** (`application/octet-stream`), so it is given
   // here from the name's end; an SVG without it does not draw.
   const PICTURE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
     gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", ico: "image/vnd.microsoft.icon" };
   const pictureAt = async (src) => {
-    if (!(await ready)) return src;
-    let place = null;
+    const path = picturePlace(src);
+    if (path === null) return null;
+    if (path === "") return src;
     try {
-      place = new URL(src, location.href);
-    } catch (_) {
-      return null;
-    }
-    if (place.origin !== location.origin) return src;
-    let path = "";
-    try {
-      path = decodeURIComponent(place.pathname.replace(/^\/+/, ""));
-    } catch (_) {
-      return null;
-    }
-    try {
-      const got = await fetch(at(path), { headers: head() });
+      const got = await send(at(path));
       if (!got.ok) return null;
       const dot = path.lastIndexOf(".");
       const type = PICTURE_TYPES[dot < 0 ? "" : path.slice(dot + 1).toLowerCase()] || "";
@@ -217,10 +241,10 @@ function kspageLocal(ui) {
 
   return {
     localReady: ready,
-    localHere: () => here,
     localRead: readAt,
     localWrite: writeAt,
     localStat: statAt,
     localPicture: pictureAt,
+    localPlace: picturePlace,
   };
 }

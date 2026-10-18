@@ -8,7 +8,7 @@ import "kspeg/engine" as kspeg
 import "kspeg/expected" { Expected }
 import "ksplc/base/core" as base_core
 import "ksplc/base/lines" { line_end, line_start }
-import "ksplc/base/literal" { literal_end }
+import "ksplc/base/literal" { interpolation_open_at, literal_end }
 import "ksplc/parse/layout" { heads_a_block }
 import "ksplc/parse/line_cont" { takes_value_on_its_line }
 import "std/chars"
@@ -84,48 +84,47 @@ priv fn forbidden_spelling_hint(src: U8[], pos: Sz): U8[] //<
     // Caution: **Ask what stands before it.** A valid `{` (`if cond {`, `T::{ … }`) has a name
     // or a mark in front; only one where a statement begins is bare.
     if pos < src.len && src[pos] == '{' && starts_a_statement(src, pos)
-        return "\n  Note: a bare block carries a label. Name what that level is there for \
-            ('while_locked: { ... }'); a block with no heading cannot be told from a continuation \
-            of the statement before it."
+        return "\n  Note: a bare block carries a label. Name its purpose ('while_locked: { ... }'). \
+            Without a heading, it looks like a continuation of the previous statement."
     // A block under a `switch`: C's, Go's, Swift's and Rust's `switch x {`, or a `.kspl` `case`
     // indented under its head, whose `{` the indentation reader put there.
     if pos < src.len && src[pos] == '{' && is_switch_head(src, line_start(src, pos), pos)
-        return "\n  Note: a 'switch' opens no block of its own; each 'case' and 'default' opens \
-            one. Put them in the column of 'switch', the first 'case' on the line below it."
+        return "\n  Note: a 'switch' opens no block of its own. Each 'case' and 'default' opens \
+            one. Align them with 'switch'. Put the first 'case' on the next line."
     // `?` after a value (`f()?`): only a type takes it, so the failure lands on it there.
     if pos < src.len && src[pos] == '?'
-        return "\n  Note: '?' marks an optional type ('I32?' is 'Option<|I32|>') and does nothing \
-            after a value: 'f()!' passes a call's failure on, and 'if v: = x' takes an optional's \
-            value out."
+        return "\n  Note: '?' marks an optional type ('I32?' is 'Option<|I32|>'). It does nothing \
+            after a value. Use 'f()!' to pass on a call's failure. Use 'if v: = x' to get an \
+            optional's value."
     // A result in the old spelling (`I32?Io_error`): `I32?` is whole, so the name after it fails.
     before: = skip_space_back(src, pos)
     if before >= 0 && src[before] == '?' && pos < src.len && src[pos].is_alpha()
-        return "\n  Note: a result is written with '!' ('I32!Io_error'); 'I32?' is an optional, and \
-            no name follows it."
+        return "\n  Note: a result is written with '!' ('I32!Io_error'). 'I32?' is an optional \
+            type. No type name follows it."
     // The range syntax `a..b` / the slice syntax `a[i..j]`: the failure lands on the second `.`.
     if pos >= 1 && pos < src.len && src[pos] == '.' && src[pos - 1] == '.'
         return "\n  Note: KSPL has no range syntax ('a..b'). Write the bounds in the loop header \
-            ('for $i: = a; i < b; i += 1'), and take sub-slices with 'x.sub(start, len)'."
+            ('for $i: = a; i < b; i += 1'). Use 'x.sub(start, len)' for a sub-slice."
     prev: = skip_space_back(src, pos)
     // A trailing closure (`count_over(xs) fn(x: I32; ): Bool`, Swift's and Kotlin's shape). Nothing
     // in KSPL puts a `fn` right after a call's `)`, so the failure lands on the `fn`.
     if prev >= 0 && src[prev] == ')' && src.starts_with("fn", pos) &&
         word_end(src, pos) == pos + 2
         return "\n  Note: KSPL has no trailing closure. Pass the closure inside the call's \
-            parentheses ('f(xs, fn(x: I32; ): Bool { return x > 0 })'), or bind it to a name first \
-            and pass the name."
+            parentheses ('f(xs, fn(x: I32; ): Bool { return x > 0 })'). Alternatively, bind it to a \
+            name and pass that name."
     // A postfixed `if` (`return x if cond;` / `return if cond;`): an unmatched ternary's shape.
     // Caution: A ternary (`a if cond else b`) exists, so do not say "an `if` cannot be written";
     // what is missing is a branch.
     if statement_has_if_without_else(src, pos)
         return "\n  Note: 'if' as an expression needs all three parts ('a if cond else b'). KSPL \
-            has no postfix condition ('x if cond'); to branch without a value, write 'if cond { ... \
+            has no postfix condition ('x if cond'). To branch without a value, write 'if cond { ... \
             }' first."
     // An enum's values separated by `,`. **The expected set alone does not make it clear**: its
     // `';'` does not read as "a `;`, not a `,`".
     if pos < src.len && src[pos] == ',' && enclosing_block_head(src, pos).equals("enum")
-        return "\n  Note: an enum value stands on its own, as a struct field does. ',' parts no two \
-            of them — it only separates the fields inside a payload ('mid(level: I32, tone: \
+        return "\n  Note: an enum value stands on its own, as a struct field does. Separate enum \
+            values with ';'. Use ',' only between fields inside a payload ('mid(level: I32, tone: \
             U8)')."
     return ""
 
@@ -173,6 +172,11 @@ priv fn block_head_without_body(src: U8[], pos: Sz): Bool //<
     if pos < 0 || pos > src.len
         return false
     s: = line_start(src, pos)
+    // **Only where the line's code has ended.** A heading fails where its `{` would stand. A
+    // failure partway through the line is a mistake there (`x: [3]I32` read as a label).
+    head: = code_line(src, s)
+    if pos < s + head.indent + head.code.len
+        return false
     $head_indent: Sz = 0
     for s + head_indent < src.len && src[s + head_indent] == ' '
         head_indent += 1
@@ -255,7 +259,7 @@ priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //
     //<
     //< Two shapes: a conditional value broken at its `if` / `else`, and a value below a lone
     //< `return` / `throw` / `fallback` (the rule is "The indentation notation (`.kspl`)" in
-    //< `../../docs/DESIGN-language.md`).
+    //< `../../docs/DESIGN-notation.md`).
     if pos < 0 || pos > src.len
         return false
     cur: = code_line(src, line_start(src, pos))
@@ -265,9 +269,9 @@ priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //
     if takes_value_on_its_line(cur.code)
         w: = cur.code
         msg.s("\n  Note: a '").s(w)
-            .s("' takes its value on the same line; a deeper line below a lone '").s(w)
+            .s("' takes its value on the same line. A deeper line below a lone '").s(w)
             .s("' is not read as its value. Start the value on the '").s(w)
-            .s("' line, and put a long one in parentheses to split it across lines.")
+            .s("' line. Put a long value in parentheses to split it across lines.")
         return true
     split_choice: =
         ((ends_with_word(cur.code, "if") || ends_with_word(cur.code, "else")) &&
@@ -277,8 +281,8 @@ priv fn append_split_value_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //
         return false
     msg
         .s("\n  Note: a conditional value split across lines goes in parentheses ('(a if c' on one \
-            line and 'else b)' on the next). Outside them a line with 'if' or 'else' at its head or \
-            its end reads as a statement.")
+            line and 'else b)' on the next). Outside parentheses, a line starting or ending with \
+            'if' or 'else' reads as a statement.")
     return true
 
 priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
@@ -293,13 +297,13 @@ priv fn append_trailing_defer_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
         return false
     name: = declared_name(src, statement_start(src, pos))
     call: = code_line(src, pos + 5).code
-    msg.s("\n  Note: a 'defer' is a statement of its own and cannot trail another. ")
+    msg.s("\n  Note: a 'defer' must start a separate statement. ")
     if name.len > 0 && call.starts_with(".")
         msg.s("Put 'defer ").s(name).s(call).s("' on the next line.")
     else if call.len > 0 && !call.starts_with(".")
         msg.s("Put 'defer ").s(call).s("' on the next line.")
     else
-        msg.s("Put it on the next line, naming what it cleans up ('defer x.free()').")
+        msg.s("Put it on the next line. Name what it cleans up ('defer x.free()').")
     return true
 
 priv const other_typedef_words: U8[][4] = ::{ "alias", "type", "typealias", "using" } //<
@@ -332,7 +336,7 @@ priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
         if after.find_char('=').is_some() || k == 0 || k == after.len ||
             !after[k].is_alpha()
             return false
-        msg.s("\n  Note: 'typedef' puts the new name first, the type after '=': '")
+        msg.s("\n  Note: 'typedef' puts the new name first. Put the type after '=': '")
             .s(code.sub(0, s)).s("typedef ").s(after.sub_from(k)).s(" = ")
             .s(after.sub(0, k).trim_spaces()).s("'.")
         return true
@@ -341,7 +345,7 @@ priv fn append_typedef_spelling_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
         return false
     for w in other_typedef_words
         if word.equals(w)
-            msg.s("\n  Note: another name for a type is declared with 'typedef': '")
+            msg.s("\n  Note: use 'typedef' to declare another name for a type: '")
                 .s(code.sub(0, s)).s("typedef ").s(after).s("'.")
             return true
     return false
@@ -364,19 +368,19 @@ priv fn append_statement_word_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool
     head: = rest.sub(0, rest.find_char('{').unwrap_or(rest.len)).trim_spaces()
     if word.equals("while") && head.len > 0
         msg
-            .s("\n  Note: every loop is written with 'for', and a condition alone makes it repeat \
+            .s("\n  Note: every loop is written with 'for'. A condition alone repeats the loop \
                 while the condition holds: 'for ").s(head).s("'.")
         return true
     if word.equals("loop") && head.len == 0
         msg
-            .s("\n  Note: every loop is written with 'for', and a bare 'for' repeats until a \
-                'break' leaves it.")
+            .s("\n  Note: every loop is written with 'for'. A bare 'for' repeats until a 'break' \
+                leaves it.")
         return true
     if !word.equals("match") || head.len == 0
         return false
     msg
-        .s("\n  Note: KSPL branches on a value with 'switch'; each case opens with 'case', with no \
-            braces around them all: 'switch ").s(head)
+        .s("\n  Note: KSPL branches on a value with 'switch'. Start each case with 'case'. Do not \
+            enclose all cases in braces: 'switch ").s(head)
         .s("" if head.find_str(" case ").is_some() else " case ...").s("'.")
     return true
 
@@ -431,16 +435,16 @@ priv fn statement_has_if_without_else(src: U8[], pos: Sz): Bool //<
     span: = src.sub(start + 1, pos - start - 1)
     return span.find_str(" if").is_some() && span.find_str(" else").is_none()
 
-priv const max_open: Sz = 64 //< how many brackets may be open before the count below gives up
+priv const max_open: Sz = 64 //< how many brackets can be open before the count below gives up
 
 priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming where an unclosed `(` or `[` around the failure opened
     //<
-    //< The rule is "What a syntax error names" in `../docs/DESIGN-compiler.md`.
+    //< The rule is "What a syntax error names" in `../docs/DESIGN-parse.md`.
     //<
-    //< **"Never closed" is checked over the rest of the text**: a bracket closed further on means
-    //< the mistake is inside it (a missing `,`), and naming the bracket would mislead the author.
-    //< **A `{` is left out**: in the brace notation it may be a block's rather than a value's.
+    //< **"Never closed" is checked over the rest of the text.** A bracket closed further on means
+    //< the mistake is inside it (a missing `,`). Naming the bracket would mislead the author.
+    //< **A `{` is left out**: in the brace notation it can be a block's rather than a value's.
     at: = innermost_open(src, pos)
     if at < 0 || src[at] == '{'
         return false
@@ -448,7 +452,7 @@ priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
     if pos < src.len && (src[pos] == ')' || src[pos] == ']') && src[pos] != closer
         msg.s("\n  Note: this '").c(src[pos]).s("' cannot close the '").c(src[at]).s("' at ")
         append_place(msg, src, at)
-        msg.s("; only a '").c(closer).s("' can.")
+        msg.s(". Only a '").c(closer).s("' can close it.")
         return true
     $depth: Sz = 0
     $j: = pos
@@ -466,8 +470,8 @@ priv fn append_unclosed_bracket_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
     msg.s("\n  Note: the '").c(src[at]).s("' at ")
     append_place(msg, src, at)
     msg
-        .s(" is never closed, so what follows it was read as its contents. Close it where its \
-            contents end.")
+        .s(" is never closed. What follows it was read as its contents. Close it where its contents \
+            end.")
     return true
 
 priv fn innermost_open(src: U8[], pos: Sz): Sz //<
@@ -479,6 +483,15 @@ priv fn innermost_open(src: U8[], pos: Sz): Sz //<
     $i: Sz = 0
     for i < pos && i < src.len
         c: = src[i]
+        // **Where `pos` lies inside a literal, look inside its interpolation**: stepping over the
+        // whole literal would leave the call's `(` around it open and blame that.
+        if (c == '"' || c == '\'') && literal_end(src, i) > pos
+            inner: = interpolation_open_at(src, i, pos)
+            if inner < 0
+                return -1
+            n = 0
+            i = inner + 2
+            continue
         if c == '(' || c == '[' || c == '{'
             if n == max_open
                 return -1
@@ -494,7 +507,7 @@ priv fn opened_by_layout(src: U8[], at: Sz): Bool //<
     //<
     //< The reader puts ` {` at the end of a heading's code (`to_braces` in `layout.kspl`). A
     //< written `{` that ends a line stands inside a call's brackets (a closure's body) or after
-    //< `::` (a value), and a written block's `{` has its body on its own line.
+    //< `::` (a value). A written block's `{` has its body on its own line.
     if at < 1 || src[at] != '{' || src[at - 1] != ' '
         return false
     $j: = at + 1
@@ -508,25 +521,25 @@ priv fn opened_by_layout(src: U8[], at: Sz): Bool //<
 priv fn append_non_ascii_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming a character outside ASCII where a name or a mark was expected
     //<
-    //< Python, Rust, Swift, Java and C++ all take a name in other scripts (`café`, `かんそ`), so
-    //< the writer expects it to work; KSPL's names are ASCII ("Identifiers and naming rules" in
+    //< Python, Rust, Swift, Java and C++ all take a name in other scripts (`café`, `かんそ`). So
+    //< the writer expects it to work. KSPL's names are ASCII ("Identifiers and naming rules" in
     //< `docs/SPEC-language.md`), and the expected list alone does not say why `か` is refused.
     if pos >= src.len || src[pos] < 0x80U8
         return false
     $end: = pos + 1
     for end < src.len && (src[end] & 0xC0U8) == 0x80U8
         end += 1
-    msg.s("\n  Note: a name is written with the ASCII letters, digits and '_' alone, so '")
+    msg.s("\n  Note: a name is written with ASCII letters, digits and '_' alone. '")
         .s(src.sub(pos, end - pos))
-        .s("' cannot stand in one. Spell the name in ASCII; other text goes in a string or a \
+        .s("' cannot appear in a name. Spell the name in ASCII. Put other text in a string or a \
             comment.")
     return true
 
 priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
-    //< It writes the sentence naming a `,` that may be missing between two items of a list
+    //< It writes the sentence naming a `,` that can be missing between two items of a list
     //<
     //< It does so where two items stand side by side inside a list's brackets ("What a syntax
-    //< error names" in `../docs/DESIGN-compiler.md`).
+    //< error names" in `../docs/DESIGN-parse.md`).
     //<
     //< **Only a list's brackets**: a call's or a signature's `(`, which has a name or a closing
     //< bracket right in front of it, and a value's `::{`. Grouping parentheses hold one value.
@@ -547,7 +560,7 @@ priv fn append_missing_comma_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool 
         msg.s("'").s(src.sub(pos, e - pos)).s("'")
     else
         msg.s("this item")
-    msg.s("; the items of a list are parted by ','.")
+    msg.s(". Separate the items of a list with ','.")
     return true
 
 priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
@@ -576,7 +589,7 @@ priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool /
     $rest: = start
     for rest < end - 1 && (src[rest] == '0' || src[rest] == '_')
         rest += 1
-    msg.s("\n  Note: a decimal integer does not start with 0, and KSPL has no octal literal, so '")
+    msg.s("\n  Note: a decimal integer does not start with 0. KSPL has no octal literal. '")
         .s(spelled).s("' is not read. Write '").s(src.sub(rest, end - rest))
         .s("' for the decimal value")
     if is_octal
@@ -587,8 +600,8 @@ priv fn append_leading_zero_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool /
 priv fn append_integer_exponent_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bool //<
     //< It writes the sentence naming an exponent written on an integer (`1e5`)
     //<
-    //< C, Rust and Python read `1e5` as a floating-point number; KSPL takes an exponent only after
-    //< a `.`, so the failure lands on the `e` with an expected set that does not say why.
+    //< C, Rust and Python read `1e5` as a floating-point number. KSPL takes an exponent only after
+    //< a `.`. So the failure lands on the `e`, with an expected set that does not say why.
     if pos <= 0 || pos + 1 >= src.len || (src[pos] != 'e' && src[pos] != 'E')
         return false
     after: = src[pos + 1]
@@ -605,7 +618,7 @@ priv fn append_integer_exponent_hint(msg: Str_builder$@, src: U8[], pos: Sz): Bo
     for end < src.len && src[end].is_digit()
         end += 1
     digits: = src.sub(start, pos - start)
-    msg.s("\n  Note: an exponent is written only on a floating-point literal, after a '.': write '")
+    msg.s("\n  Note: an exponent is written only on a floating-point literal, after a '.'. Write '")
         .s(digits).s(".0").s(src.sub(pos, end - pos))
         .s("' for an F64, or the integer's digits in full.")
     return true
@@ -653,8 +666,8 @@ priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid
     //<
     //< A name goes in quotes and a kind in a readable phrasing. **Do not quote a kind**:
     //< `'Primitive_type'` reads as text to type, not the name of what can come there.
-    //< **The indentation notation writes no statement's `;` and no block's `}`**: they are named
-    //< the end of the line and, in a block the indentation opened (`in_laid_block`), of the block.
+    //< **The indentation notation writes no statement's `;` and no block's `}`.** They are named
+    //< the end of the line, or in a block the indentation opened (`in_laid_block`), of the block.
     //< Caution: **Do not make a table of phrasings.** The grammar (`ksplc/kspl.kspeg`) owns the
     //< rule's name, and a copy silently drifts when it is renamed.
     if !e.is_rule
@@ -676,16 +689,19 @@ priv fn append_expected(msg: Str_builder$@, e: Expected, laid_out: Bool, in_laid
 fn parse_error_at(src: U8[], pos: Sz): Sz //<
     //< Where the syntax error found at `pos` is reported
     //<
-    //< That is `pos`, or **the opening quote of a string that runs to the end of the text**: the
+    //< That is `pos`, or **the opening quote of a string that runs to the end of the text**. The
     //< parser fails only where the text runs out, far below the quote the writer left open.
     at: = unclosed_string_at(src, pos)
-    return at if at >= 0 else pos
+    if at < 0
+        return pos
+    interp: = interpolation_open_at(src, at, src.len)
+    return interp if interp >= 0 else at
 
 priv fn unclosed_string_at(src: U8[], pos: Sz): Sz //<
     //< Where a string still open at the end of the text opens, or -1
     //<
     //< It is -1 too where that string opens after `pos`, so the failure is not inside it.
-    //< **Only a string reaching the end counts.** An ordinary string may hold a line end, so one
+    //< **Only a string reaching the end counts.** An ordinary string can hold a line end. So one
     //< that a later quote closes is text the parser read, and its mistake shows where it ends.
     $i: Sz = 0
     for i < src.len
@@ -707,17 +723,23 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     Str_builder //<
         //< It builds the message for the syntax error at `pos`
         //<
-        //< Caution: **Take `laid_out`.** In the indentation notation a heading line holds no `{`,
-        //< so the guess that "the ternary's `if` is not matched" would fire wrongly (on an empty
+        //< Caution: **Take `laid_out`.** In the indentation notation a heading line holds no `{`.
+        //< So the guess that "the ternary's `if` is not matched" would fire wrongly (on an empty
         //< level, or one holding only comments). This is the one place where the wording differs by
         //< notation.
     $msg: = Str_builder.new()
-    // **The expected list would name the end of the text**, where the parser ran out; the mistake
+    // **The expected list would name the end of the text**, where the parser ran out. The mistake
     // is the open quote the message is placed on (`parse_error_at`).
-    if unclosed_string_at(src, pos) >= 0
+    open_at: = unclosed_string_at(src, pos)
+    if open_at >= 0 && interpolation_open_at(src, open_at, src.len) >= 0
         msg
-            .s("this string is never closed: no '\"' after it ends it, so the rest of the file was \
-                read as its text. Close it where its text ends")
+            .s("this interpolation is never closed. No '\\}' follows its '\\{'. The rest of the \
+                file was read as its code. Close it with '\\}' where its value ends")
+        return msg
+    if open_at >= 0
+        msg
+            .s("this string is never closed. No '\"' closes it. The rest of the file was read as \
+                its text. Close it where its text ends")
         return msg
     msg.s("expected ")
     in_laid_block: = laid_out && opened_by_layout(src, innermost_open(src, pos))
@@ -737,8 +759,8 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     odd: = odd_indent_name(src, pos)
     if odd.len > 0
         msg.s("\n  Note: this line is indented with ").s(odd)
-            .s(". Only the plain space (U+0020) counts as a column, so the line is read as if it \
-                began at column 0 and left the block that encloses it. Indent with spaces.")
+            .s(". Only the plain space (U+0020) counts as a column. The line is read as starting at \
+                column 0, outside its enclosing block. Indent with spaces.")
         return msg
     if append_non_ascii_hint(msg@, src, pos)
         return msg
@@ -751,16 +773,15 @@ fn build_parse_error_msg(target_parser: kspeg.Target$@, src: U8[], pos: Sz, laid
     if append_integer_exponent_hint(msg@, src, pos)
         return msg
     // **Narrow it to "a `{` was expected".** "The next line is not deeper" alone holds for nearly
-    // every line and would fire on unrelated errors; the expected set says if a level is needed.
+    // every line, and would fire on unrelated errors. The expected set says if a level is needed.
     if laid_out && append_split_value_hint(msg@, src, pos)
         return msg
     wants_block: = msg.slice().find_str("'{'").is_some()
     if laid_out && wants_block && block_head_without_body(src, pos)
         msg
-            .s("\n  Note: a block with no body cannot be written by indentation alone — there is \
-                no deeper line to open it. Keep the braces for an empty block ('if cond {}'), and \
-                note that a body of only comments is the same case: comment lines do not open a \
-                block.")
+            .s("\n  Note: a block with no body cannot be written by indentation alone. There is no \
+                deeper line to open it. Keep the braces for an empty block ('if cond {}'). A body \
+                containing only comments also needs braces. Comment lines do not open a block.")
         return msg
     if append_trailing_defer_hint(msg@, src, pos)
         return msg

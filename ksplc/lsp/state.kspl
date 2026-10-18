@@ -62,7 +62,7 @@ impl Doc_store
         r.arena.free()
 
     fn put(r: Self$@, uri: U8[], text: U8[]) //< it stores `text` as the document's, reopening it
-        existing: = r.map.get(uri) catch null
+        existing: = r.map.get(uri).unwrap_or(null)
         if existing != null
             // The capacity is kept: the next whole text is about the same size (a reopened document
             // starts from cap 0).
@@ -78,7 +78,7 @@ impl Doc_store
         //<
         //< The entry stays (see Doc_cache): only the buffer is freed, and the key and the entry are
         //< reused on a reopen.
-        existing: = r.map.get(uri) catch null
+        existing: = r.map.get(uri).unwrap_or(null)
         if existing != null
             existing.text.free()
             existing.is_open = false
@@ -87,7 +87,7 @@ impl Doc_store
         //<
         //< Caution: **A closed document is none, not an empty text.** Its entry remains, so reading
         //< it as text would put an empty source over the file.
-        existing: = r.map.get(uri) catch null
+        existing: = r.map.get(uri).unwrap_or(null)
         if existing == null || !existing.is_open
             return .none
         return .some(existing.text.slice())
@@ -102,10 +102,10 @@ fn wind_back(mark: mem.Arena_state) //<
     //< It rewinds base_core.arena to `mark` and discards everything on it
     //<
     //< Caution: **Do not call `base_core.arena.restore` from anywhere else.** What the compiler
-    //< keeps in module-level variables — the text as written (base/as_written.kspl), the
-    //< indentation notes (parse/load.kspl), the diagnostics (base/diag.kspl), the ranges a
-    //< `#cfg()` dropped (base/cfg_inactive.kspl) — lives on that arena, so a bare rewind leaves
-    //< those pointers dangling.
+    //< keeps in module-level variables lives on that arena: the text as written
+    //< (base/as_written.kspl), the indentation notes (parse/load.kspl), the diagnostics
+    //< (base/diag.kspl), the ranges a `#cfg()` dropped (base/cfg_inactive.kspl). So a bare
+    //< rewind leaves those pointers dangling.
     base_as_written.forget_as_written()
     parse_load.forget_layout_notes()
     base_diag.lsp_diags.clear()

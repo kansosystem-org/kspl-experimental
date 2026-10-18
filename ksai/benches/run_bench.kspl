@@ -60,8 +60,9 @@ priv fn which(name: U8[], arena: Arena$@): U8[] //< looks a command up from PATH
 priv fn build(argv: U8[][], arena: Arena$@): Bool //< builds one
     //<
     //< Returns false if the build exits with anything but 0.
-    r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena)
-    return !r.spawn_failed && !r.timed_out && r.exit_code == 0
+    r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena) catch
+        return false
+    return r.exited_with(0)
 
 priv fn measure(exe: U8[], pin: U8[], cores: U8[], arena: Arena$@) //< runs the one that was built
     //<
@@ -80,8 +81,9 @@ priv fn has_openblas(arena: Arena$@): Bool //< whether the system OpenBLAS is in
     //< **Without `ldconfig` it counts as not installed**: "skipped" reads better than a link
     //< failure.
     argv: = U8[][]::{ "ldconfig", "-p" }
-    r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena)
-    if r.spawn_failed || r.timed_out || r.exit_code != 0
+    r: = subproc.run_capture(argv, "", build_timeout_ms, capture_cap, arena) catch
+        return false
+    if !r.exited_with(0)
         return false
     return (U8[]::r.stdout_data).find_str("libopenblas.so ").is_some()
 

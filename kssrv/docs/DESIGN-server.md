@@ -4,15 +4,15 @@ kssrv (Kanso Server) is an HTTP server written in KSPL on `std` and `ksai`. It i
 
 ## The command line and the two modes
 
-Kssrv runs either as a *local* server for one person's browser (`--local`) or as an *outward-facing* server anyone on the network may reach. Everything else about it is set on the command line.
+Kssrv runs either as a *local* server for one person's browser (`--local`) or as an *outward-facing* server anyone on the network can reach. Everything else about it is set on the command line.
 
-### The CLI takes positional arguments, and options read by name, and nothing else
+### The CLI takes positional arguments and named options only
 
 **No setting comes from an environment variable.** Two ways into the settings would let a server run under a value nobody can see (Principle 5). The port is read by `to_i64`, which takes only a whole number, so trailing rubbish is not let through silently.
 
 Caution: **Read the options by name.** Told apart by the argument count, the premise "the third must be `--local`" breaks silently once there are two options.
 
-`--page` names the file returned for `/`, which may lie outside the root (the folder the server serves). It is the agreement's one exception: the rule is "Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md), and the reason is "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
+`--page` names the file returned for `/`, which can lie outside the root (the folder the server serves). It is the agreement's one exception. The rule is "Where it listens" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 ### Local use and outward-facing use are split by one decision
 
@@ -40,7 +40,7 @@ How the token is made, passed on and compared is in the agreement ("How the toke
 
 Kssrv serves every client from one thread. It never waits on one client; it asks the operating system which sockets are ready and does a little work on each.
 
-**The limits below are named by their constants, not by their values.** The values are what a client relies on, so they stand in "What a client can rely on" in [`SPEC-api.md`](SPEC-api.md) alone, and `make test-conventions` holds them to the constants.
+**The limits below are named by their constants, not by their values.** The values are what a client relies on, so they stand only in "What a client can rely on" in [`SPEC-api.md`](SPEC-api.md). `make test-conventions` holds them to the constants.
 
 One round of the loop goes like this (the accept loop in `main` in `kssrv/main.kspl`):
 
@@ -74,9 +74,9 @@ stateDiagram-v2
 
 ### Memory robustness comes first
 
-Kssrv prefers reference-counted memory to memory it frees by hand, because a leak or a double free in a long-running server is worse than a little hidden work.
+Kssrv prefers reference-counted memory to memory it frees by hand. In a long-running server, a leak or a double free is worse than a little hidden work.
 
-`kssrv/ksplc.cfg` sets `I0602 = on`, the lint that points out hand-made ownership (a raw pointer plus one's own `free`). A resident process that keeps handling other people's input ranks avoiding that hand-rolled ownership management ([I0602]) above seeing when the hidden `retain`/`release` of ARC runs ([W0601], the lint a real-time system turns on instead).
+`kssrv/ksplc.cfg` sets `I0602 = on`, the lint that points out hand-made ownership (a raw pointer plus one's own `free`). A resident process keeps handling other people's input. For it, avoiding that hand-rolled ownership management ([I0602]) ranks first. Seeing when the hidden `retain`/`release` of ARC runs ([W0601]) ranks below it. W0601 is the lint that a real-time system turns on instead.
 
 ### Every socket is non-blocking and multiplexed on one thread
 
@@ -91,9 +91,9 @@ A *non-blocking* socket returns at once when it has nothing to give, instead of 
 
 Caution: **Watch writable only while part-sent.** A socket whose send buffer is empty is always writable. Watched permanently, it makes `wait()` return at once, over and over, burning the CPU.
 
-### The connection table is fixed-length, and a free slot is an ARC handle's zero value
+### The connection table is fixed-length; free slots are zero handles
 
-The table is one `Rc<|Conn|>[max_conns]` (`max_conns` in `kssrv/conn.kspl`), indexed by `reactor`'s token (the number it gives each socket). `Rc` is a reference-counted handle (ARC: the memory is freed when the last handle goes). A free slot is `Rc.empty()`, told apart by `is_empty()`.
+The table is one `Rc<|Conn|>[max_conns]` (`max_conns` in `kssrv/conn.kspl`), indexed by `reactor`'s token (the number it gives each socket). `Rc` is a reference-counted handle (ARC: the memory is freed when the last handle goes). A free slot is `Rc.empty()`, an ARC handle's zero value, told apart by `is_empty()`.
 
 * **Why fixed-length**: concurrent connections need a cap anyway, or memory grows with the number of peers. A capped table need not grow, and going from token to slot is one subscript.
 * **Why `Rc`**: each occupied slot owns an allocated connection; an empty slot owns nothing. Read, build and send borrow from the slot, which only the outer loop drops, after the driver returns. So those phases carry no ownership transitions of their own.
@@ -147,26 +147,26 @@ With no free slot, an accepted connection is closed without a response. Making i
 * **A page's hold is exempt** (`GET /api/here`, `holding`): it is quiet by design, and closing it would read as the page having gone.
 * **The clock restarts on every byte either way**, so a slow but moving transfer is not cut.
 
-### A request must arrive whole within a deadline from its first byte
+### A request has a deadline from its first byte
 
-**A request still arriving `request_time_us` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspl`). The idle timer alone does not bound it: it restarts on every byte, so a client that sends one byte every few seconds holds its slot for good, and `max_conns` of them shut everyone out (the attack called Slowloris).
+**A request still arriving `request_time_us` after its first byte is closed** by `sweep_done` (`request_since_us` in `kssrv/conn.kspl`). **A request must arrive whole within that deadline.** The idle timer alone does not bound it, because it restarts on every byte. So a client that sends one byte every few seconds holds its slot for good. `max_conns` such clients shut everyone out (the attack called Slowloris).
 
-* **One deadline for the head and body together.** The bodies taken are small (`max_request_body` facing outward), so a client that can send at all sends one well within it; a minimum rate would add a second figure to tune for no case kssrv meets.
+* **One deadline for the head and body together.** The bodies taken are small (`max_request_body` facing outward), so a client that can send at all sends one well within it. A minimum rate would add a second figure to tune for no case kssrv meets.
 * **The clock starts at the request's first byte**, not at accept, so a keep-alive connection waiting between requests is the idle timer's to judge.
 
 ### One address holds only a few connections, facing outward
 
-**A connection from an address that already holds `max_conns_per_peer` is closed at accept**, as one at the table's cap is, and counted with them (`connections_refused`). Without it one machine takes every slot, however short the time it may hold each. A browser opens six per host, so the cap is set to leave room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
+**A connection from an address that already holds `max_conns_per_peer` is closed at accept**, as one at the table's cap is, and counted with them (`connections_refused`). Without it one machine takes every slot, however short the time it can hold each. A browser opens six per host, so the cap is set to leave room for a few behind one address (a NAT). With `--local` every peer is this machine, so only the table's cap applies.
 
-**Accepting comes last in each wakeup**, after its closes and the sweep (`accept_all` in `kssrv/main.kspl`). Accepted first, a connection already gone still counts against its address and the table's cap, so a client that closes one and reconnects at once is refused.
+**Accepting comes last in each wakeup**, after its closes and the sweep (`accept_all` in `kssrv/main.kspl`). Accepted first, a connection already gone still counts against its address and the table's cap. So a client that closes one and reconnects at once is refused.
 
-### A request is parsed only once there is something new to decide
+### Parsing waits until there is something new to decide
 
-**`conn_build` parses only when the head has ended (or met a line break it refuses), and then only once the whole body is in** (`head_decided`, `need`). Parsed from the start on every read, a request arriving a byte at a time costs its length squared: a 64 KiB head of short headers, with its body sent one byte per packet, made each byte cost a full parse. `http.request_length` gives the whole request's length once the head is in, so the body's arrival is a count.
+**`conn_build` parses only when the head has ended (or met a line break it refuses), and then only once the whole body is in** (`head_decided`, `need`). Parsed from the start on every read, a request arriving a byte at a time costs its length squared. Take a 64 KiB head of short headers, with its body sent one byte per packet: each byte cost a full parse. `http.request_length` gives the whole request's length once the head is in, so the body's arrival is a count.
 
 ### A file is sent in chunks as the connection drains
 
-**A file's body is read 16 KiB at a time as `outbuf` empties** (`queue_file`, `refill_from_file`), so a connection holds one chunk, not the file. Read whole, 128 slow readers of a large file held 128 copies of it, enough to run the server out of memory. The head names the size `stat` gave; a file that shrinks meanwhile ends the connection short, which tells the client the body is cut, rather than padding it with bytes that are not the file. The chunks per notification are capped, as reads are, so one fast download does not make the others wait.
+**A file's body is read 16 KiB at a time as `outbuf` empties** (`queue_file`, `refill_from_file`), so a connection holds one chunk, not the file. Read whole, 128 slow readers of a large file held 128 copies of it, enough to run the server out of memory. The head names the size `stat` gave. A file that shrinks meanwhile ends the connection short, which tells the client the body is cut. The server does not pad it with bytes that are not the file. The chunks per notification are capped, as reads are, so one fast download does not make the others wait.
 
 ### A name starting with a dot is not served
 
@@ -174,7 +174,7 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 ### `read` returning 0 does not mean the connection is over
 
-**A TCP connection has two directions, and `read`'s 0 only means the client closed its sending side** (a *half-close*). It may still be waiting for the response, with its receiving half open: a client may close its sending side once it has nothing more to send. Closing the connection there would lose the part of the answer still unsent, and the client would wait forever on a request that never completes.
+**A TCP connection has two directions, and `read`'s 0 only means the client closed its sending side** (a *half-close*). It can still be waiting for the response, with its receiving half open. A client can close its sending side once it has nothing more to send. Closing the connection there would lose the part of the answer still unsent, and the client would wait forever on a request that never completes.
 
 **A half-closed connection is kept until nothing is left to send.**
 
@@ -186,16 +186,16 @@ With no free slot, an accepted connection is closed without a response. Making i
 
 Note: The check is in `keepalive_cases` in `kssrv/tests/main.kspl` (it closes only the sending side after a request, and waits for the answer to come through).
 
-### A connection that closes after its answer reads what the peer still sends
+### A connection reads what the peer sends after the answer
 
-**Before closing a connection after its last answer, kssrv closes its sending side and keeps reading and throwing away what the client still sends**, until the client closes or `linger_us` (5 seconds) passes (`lingering_since_us` in `kssrv/conn.kspl`, `conn_read` and `sweep_done` in `kssrv/main.kspl`). The same reader handles both phases with the same fairness cap and socket-error rules; only a request read is buffered, and only a lingering EOF finishes the connection.
+**Before closing a connection after its last answer, kssrv closes its sending side. It then keeps reading and throwing away what the client still sends.** This goes on until the client closes or `linger_us` (5 seconds) passes (`lingering_since_us` in `kssrv/conn.kspl`, `conn_read` and `sweep_done` in `kssrv/main.kspl`). The same reader handles both phases with the same fairness cap and socket-error rules. Only a request read is buffered, and only a lingering EOF finishes the connection.
 
-**Closing the socket with the peer's bytes unread makes the OS answer with a reset** (a TCP RST, which aborts the connection). The usual case is a client still sending a body past the cap, refused with a 413 as soon as the head names its length. On Windows a reset throws away what the client has received and not yet read, so the client sees a broken connection in place of the 413. On Linux the 413 survives, so the loss shows on Windows alone. nginx and Apache read on after their last answer for the same reason.
+**Closing the socket with the peer's bytes unread makes the OS answer with a reset** (a TCP RST, which aborts the connection). The usual case is a client still sending a body past the cap, refused with a 413 as soon as the head names its length. On Windows a reset throws away what the client has received and not yet read. So the client sees a broken connection in place of the 413. On Linux the 413 survives, so the loss shows on Windows alone. nginx and Apache read on after their last answer for the same reason.
 
 * **A lingering connection counts as closed for `open_serial`**: its answer is all sent, so a stop asked on it does not wait out the linger.
 * **The time is capped**, so a peer that never stops sending cannot hold a slot.
 
-Note: The check is "after a 413 it reads the rest of the body rather than resetting" in `kssrv/tests/main.kspl`: it sends the rest of the body after reading the 413, which a reset refuses.
+Note: The check is "after a 413 it reads the rest of the body rather than resetting" in `kssrv/tests/main.kspl`. It sends the rest of the body after reading the 413, which a reset refuses.
 
 ### The server stops when no page is holding it
 
@@ -207,7 +207,7 @@ Caution: **Stamp the clock for every request, in one place** (`queue_for_request
 
 ### The server stops when asked, once the answer is out
 
-**`POST /api/stop` marks the connection that asked, and the accept loop stops once that connection is gone** (`stop_asked_by` / `open_serial` in `kssrv/conn.kspl`). A connection is dropped only after its last byte is sent, so the answer is out before the listener closes. Stopping inside the handler would close the socket with the answer still queued, and the asker would see a broken connection. The rule is "Stopping it when asked" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md); why it is a request and not a signal is in "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
+**`POST /api/stop` marks the connection that asked, and the accept loop stops once that connection is gone** (`stop_asked_by` / `open_serial` in `kssrv/conn.kspl`). A connection is dropped only after its last byte is sent, so the answer is out before the listener closes. Stopping inside the handler would close the socket with the answer still queued, and the asker would see a broken connection. The rule is "Stopping it when asked" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). Why it is a request and not a signal is in "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md).
 
 `kssrv/tests/main.kspl` tests both halves ("a refused stop leaves it answering" and "it stops once it has answered"), for the same reason as the idle stop.
 
@@ -217,7 +217,7 @@ Kssrv serves files from under its root and answers JSON under `/api/`. Every pat
 
 ### The path is checked after the decode
 
-**The path part of the request target is *percent-decoded* (`%2e` becomes `.`) once, by `url.decode_component`, and only then does `fs.stays_under` check that it stays under the root: the order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`, returning a file outside the root. A test with a raw `..` alone would not notice, so the regression in `kssrv/tests/main.kspl` sends encoded strings too.
+**The path part of the request target is *percent-decoded* (`%2e` becomes `.`) once, by `url.decode_component`.** **Only then does `fs.stays_under` check that it stays under the root. The order is everything.** Checked first, `%2e%2e` passes the check and then becomes `..`, returning a file outside the root. A test with a raw `..` alone would not notice, so the regression in `kssrv/tests/main.kspl` sends encoded strings too.
 
 Caution: **Decode a path with `decode_component`, which keeps a `+`.** `+` means a space only in a query or a form (`parse_query` reads it so). In a URI's path it is just a `+`, and mistaking one for the other makes a file with `+` in its name unreachable.
 
@@ -243,13 +243,16 @@ The counters `/api/status` returns (uptime, requests, connections) sit in one `p
 
 ### No process is started
 
-**kssrv starts no program on a request.** The file endpoints at worst read and write under the root. A started process would be outside the root check: able to read beyond it, reach the network and write anything, with one token as the whole defence. What would need it (a language server, a plugin) serves writing code, which the page is not for ("No program is started" in "A page asks the local machine through one protocol" in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md)).
+**kssrv starts no program on a request.** The rule is "Only three things can be asked for" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). The reason is in [`../../docs/DESIGN-repository.md`](../../docs/DESIGN-repository.md), under two headings:
+
+* "A page asks the local machine through one protocol";
+* "No program is started", inside it.
 
 ## The log
 
-Every log line goes through one buffered logger on the server's one thread, and the buffer is written out at most every 0.2 seconds, except for start-up lines, errors and warnings.
+Every log line goes through one buffered logger on the server's one thread. The buffer is written out at most every 0.2 seconds, except for start-up lines, errors and warnings.
 
-### The log is flushed at a fixed interval rather than per line
+### The log is flushed at fixed intervals, not per line
 
 `stdout` stays buffered and is flushed just before `wait()`, **once `flush_gap_us` has passed since the last flush** (`kssrv/main.kspl`).
 
@@ -271,7 +274,7 @@ Every line goes through one `std/log` logger, made by `prog.log_new()` and passe
 
 Caution: **Do not write from a second thread.** A logger used from two threads cuts a line in two, since a line stays open until the next one starts.
 
-**Do not hold the logger in a file-level variable.** `Log`'s fields belong to `std/log`, so what could be held is a null pointer filled in later. That is a server that is up but may or may not be able to speak, which the command-line decision at the top refuses.
+**Do not hold the logger in a file-level variable.** `Log`'s fields belong to `std/log`, so what could be held is a null pointer filled in later. That is a server that is up but perhaps unable to speak, which the command-line decision at the top refuses.
 
 The usage text is not a log line: it has no severity and is always printed, so it stays a plain write to `io.err()`.
 
@@ -279,7 +282,7 @@ The usage text is not a log line: it has no severity and is always printed, so i
 
 Kssrv also steers a toy car over the network. A small neural net, trained at start-up from written rules, picks the car's next move; the car keeps its own safety stops.
 
-### The car's judgement is the server's, and the safety timeout is the car's
+### The server judges, and the car keeps the safety timeout
 
 The MLP (a small neural net of a few layers) in `kssrv/pilot.kspl` answers `POST /api/car`. It is **trained at start-up with the written rules (`rule_action`) as its teacher**.
 
@@ -291,17 +294,17 @@ The MLP (a small neural net of a few layers) in `kssrv/pilot.kspl` answers `POST
 
 ### The car's answer is computed on the accepting thread
 
-A few hundred weights take microseconds per forward pass (one run of the net). So answering on the accepting thread stalls no other connection, and handing it to a second thread would stretch the control period by that round trip. After `build()` the policy is read-only and no endpoint rewrites it. **An endpoint that continues training it breaks this premise.**
+A few hundred weights take microseconds per forward pass (one run of the net). So answering on the accepting thread stalls no other connection. Handing it to a second thread would stretch the control period by that round trip. After `build()` the policy is read-only and no endpoint rewrites it. **An endpoint that continues training it breaks this premise.**
 
-### The policy shipped is a set that can be reproduced on its own
+### The shipped policy can be reproduced on its own
 
 `GET /api/pilot` sends the car everything it needs to make the same decisions without the server, in one file.
 
-That one safetensors file (a standard format for storing named arrays of numbers) holds not just the weights but **how the features are made (`far_mm`), the manoeuvre table and the format's version**.
+That one safetensors file (a standard format for storing named arrays of numbers) holds more than the weights. **It also holds how the features are made (`far_mm`), the manoeuvre table and the format's version**.
 
-* **Why all of it**: with the weights alone, the receiver would keep its own copy of the preprocessing and of the manoeuvres' meaning, and a copy cannot notice when the server's code is fixed. With everything needed to reproduce `decide` and the manoeuvres' meaning in one file, no disagreement arises.
+* **Why all of it**: with the weights alone, the receiver would keep its own copy of the preprocessing and of the manoeuvres' meaning. A copy cannot notice when the server's code is fixed. With everything needed to reproduce `decide` and the manoeuvres' meaning in one file, no disagreement arises.
 * **Why safetensors**: it is the codebase's one format for storing tensors (`ksai/safetensors`), with reader and writer in place.
 * **Why it is not quantized** (stored as smaller, less exact numbers): the weights are about a kilobyte even as F32. int8 would save about three quarters of that at a higher cost: the receiver's answers would drift from the server's. As F32, "the same observation gives the same manoeuvre" can be matched.
-* **What tests it: a policy rebuilt from the shipped blob alone returns the same manoeuvre as `POST /api/car` at every swept point** (`kssrv/tests/car.kspl`). Shapes can fit while a drifted preprocessing constant or manoeuvre table changes the answer. The server computes in F32 and the checker in double precision. So points where the top two logits (the net's raw scores) nearly tie are not judged, with a cap on how many (more is itself an anomaly).
-* **`command_valid_ms` is not included.** It is how long a car that asks may wait for an answer, which means nothing to a car carrying the policy. That car's timeout is its own.
+* **What tests it: a policy rebuilt from the shipped blob alone returns the same manoeuvre as `POST /api/car` at every swept point** (`kssrv/tests/car.kspl`). Shapes can fit while a drifted preprocessing constant or manoeuvre table changes the answer. The server computes in F32 and the checker in double precision. So points where the top two logits (the net's raw scores) nearly tie are not judged. A cap limits how many such points there can be (more is itself an anomaly).
+* **`command_valid_ms` is not included.** It is how long a car that asks can wait for an answer, which means nothing to a car carrying the policy. That car's timeout is its own.
 * **Do not forget to raise the version (`__metadata__.kspl_pilot`).** The feature order, the activation and the manoeuvre table's meaning cannot be told from a tensor's shape. Left unraised, an old reader applies new weights the old way and goes wrong silently, the shapes fitting.

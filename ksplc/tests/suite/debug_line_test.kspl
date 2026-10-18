@@ -88,7 +88,7 @@ priv fn directives(text: U8[], arena: Arena$@): List<|Directive|> //<
 
 // ==========================================
 // A package that names itself, compiled from its own folder
-// **The folder's name differs from the package's** (`alone/` holding `mypkg`): a `#line` naming
+// **The folder's name differs from the package's** (`alone/` holding `mypkg`). A `#line` naming
 // `mypkg/lib.kspl`, relative to the folder the C compiler ran in, sends a debugger nowhere.
 // ==========================================
 priv const own_rels: U8[][3] = ::{ "alone/ksplc.cfg", "alone/lib.kspl", "alone/probe/main.kspl" }
@@ -104,7 +104,7 @@ priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
     top: = fs.join(dir, "alone", arena)
     gen: = fs.join(dir, "own.c", arena)
     r: = harness.run_in(harness.ksplc_argv(U8[][]::{ "probe/main.kspl", gen }), top)
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check(name, false, r.out)
         return
     text: = io.read_file(gen) catch
@@ -126,8 +126,8 @@ priv fn case_own_folder(dir: U8[], arena: Arena$@) //<
 priv fn check_for_has_its_own_line(text: U8[], arena: Arena$@) //<
     //< Every C `for` of the fixture comes right after a `#line`
     //<
-    //< A loop's init is written between the loop's directive and its `for`, and C counts each of
-    //< those lines as a source line: the debugger stood three lines past the loop.
+    //< A loop's init is written between the loop's directive and its `for`. C counts each of
+    //< those lines as a source line, so the debugger stood three lines past the loop.
     name: = "a C `for` comes right after its own #line"
     $prev: = ""
     $in_fixture: = false
@@ -147,7 +147,7 @@ priv fn check_for_has_its_own_line(text: U8[], arena: Arena$@) //<
 
 priv fn has_nul_string(blob: U8[], want: U8[], arena: Arena$@): Bool //<
     //< It splits the executable on NUL and checks whether the string is present in it
-    return blob.split(0U8, arena).any(fn(part: U8[]; want: U8[]): Bool {
+    return blob.split(0U8, arena).any(fn(part: U8[]@; want: U8[]): Bool {
         return part.equals(want);
     })
 
@@ -163,7 +163,7 @@ fn main(): I32
 
     gen: = fs.join(dir, "gen.c", arena)
     r: = harness.ksplc(U8[][]::{ fixture, gen })
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check("the fixture's C generation", false, r.out)
         return harness.finish()
     text: = io.read_file(gen) catch
@@ -212,7 +212,7 @@ fn main(): I32
     exe_g: = fs.join(dir, "with_g.exe", arena)
     with_g: = harness_build.build_exe(U8[][]::{ gen }, exe_g,
         U8[][]::{ "-std=c99", "-g", "-O0", "-w" })
-    if with_g.code != 0
+    if !with_g.exited_with(0)
         verdict.check("the build with -g", false, with_g.out)
         return harness.finish()
     blob: = io.read_file(exe_g) catch
@@ -227,7 +227,7 @@ fn main(): I32
     exe_nog: = fs.join(dir, "no_g.exe", arena)
     no_g: = harness_build.build_exe(U8[][]::{ gen }, exe_nog,
         U8[][]::{ "-std=c99", "-O0", "-w" })
-    if no_g.code != 0
+    if !no_g.exited_with(0)
         verdict.check("the build without -g", false, no_g.out)
     else
         plain: = io.read_file(exe_nog) catch
@@ -238,5 +238,5 @@ fn main(): I32
     // The fixture itself is not broken (alpha=11, beta=22 -> 33).
     out: = harness.run(U8[][]::{ exe_g })
     verdict.check("the fixture works as expected",
-        out.code == 0 && out.out.find_str("dl=36").is_some(), out.out)
+        out.exited_with(0) && out.out.find_str("dl=36").is_some(), out.out)
     return harness.finish()

@@ -1,9 +1,9 @@
 //< A lightweight regular-expression engine: compile a pattern, then match it against text
 //<
-//< A character matches itself; `\.` and `\*` write the ones that mean something else. **Matching
-//< takes time linear in the text, whatever the pattern**: every way through the pattern runs side
+//< A character matches itself. `\.` and `\*` write the ones that mean something else. **Matching
+//< takes time linear in the text, whatever the pattern.** Every way through the pattern runs side
 //< by side, so no pattern or text can make a search hang. **Going past any limit is refused,
-//< never silently truncated**: the group count, the counted repetition `{m,n}`, the nesting depth
+//< never silently truncated.** The group count, the counted repetition `{m,n}`, the nesting depth
 //< and the compiled program's size each have their own error.
 
 // ==========================================
@@ -18,14 +18,13 @@ import "std/regex_node" { byte_count, max_groups, max_repeat_count, Slots, reset
     Emitter }
 import "std/stack_limit" { Stack_limit }
 
-pub enum Regex_error //< why a pattern could not be compiled, or `find` matched nothing
+pub enum Regex_error //< why a pattern could not be compiled
     unmatched_paren //< an opening parenthesis has no closing one, or the other way round
     unmatched_bracket //< a `[` has no `]`
     dangling_quantifier //< nothing quantifiable comes before `*`, `+`, `?` or `{`
     invalid_escape //< nothing follows `\`, or an escaped letter or digit is not in the list
     invalid_range //< a range's ends are reversed, or a set such as `\d` is at a range's end
     invalid_repeat //< `{` has no valid count, m > n, or the count exceeds `max_repeat_count`
-    no_match //< nothing in the text matched
     too_deep //< the `(` nesting is deeper than its limit, or than the stack left can hold
     too_large //< the compiled program would hold more than `max_program_size` states
     too_many_groups //< there are more capturing groups than `max_groups`
@@ -40,9 +39,9 @@ priv const max_nesting_depth: Sz = 500 //<
 priv const stack_margin: Sz = 64 * 1024 //<
     //< The stack kept free below where compiling stops
     //<
-    //< **The counts are sized for the main thread.** A thread's stack may be far smaller (512KB by
-    //< default on macOS), so a walk also asks where its stack ends ("A walk that must not exhaust
-    //< its stack asks where the stack ends" in `std/docs/DESIGN-system.md`).
+    //< **The counts are sized for the main thread.** A thread's stack can be far smaller (512KB by
+    //< default on macOS). So a walk also asks where its stack ends ("A deep walk asks where its
+    //< stack ends" in `std/docs/DESIGN-system.md`).
 
 priv fn is_word_byte(c: U8): Bool //< whether the byte is a word character (`\w` and `\b`)
     //<
@@ -111,8 +110,8 @@ priv fn quantify_group(g: Rx_node$@, min_count: I32, max_count: I32, lazy: Bool)
     //< shortest.
     if min_count == 0 && max_count == 1
         // Caution: **Do not add the empty alternative to the group itself.** Then `(ab)?c` matching
-        // `c` would fill the group with an empty string, where other implementations answer "it did
-        // not take part"; so it is wrapped **from outside** in a non-capturing group.
+        // `c` would fill the group with an empty string. Other implementations answer "it did
+        // not take part". So it is wrapped **from outside** in a non-capturing group.
         $inner: = List<|Rx_node$@|>.new(null)
         inner.push(g)
         $alts: = List<|List<|Rx_node$@|>|>.new(null)
@@ -387,8 +386,8 @@ impl Compiler
 
 // ==================== Matching (every way through the program at once) ====================
 // Every way through the program runs side by side, a byte at a time (a Pike VM). **Two ways at the
-// same state and byte go on alike**, so only the preferred one is kept: a byte costs at most one
-// visit per state. Caution: **Do not match by trying one way and stepping back.** That is
+// same state and byte go on alike.** So only the preferred one is kept, and a byte costs at most
+// one visit per state. Caution: **Do not match by trying one way and stepping back.** That is
 // exponential in the text for `(a+)+$` or `(a|a)*b`, the shape that hangs a program.
 priv fn atom_matches(atom: Rx_node$@, c: U8): Bool
     switch atom.kind
@@ -547,7 +546,7 @@ impl Vm: Owned {} //< it owns its block and frees it in `free()`.
 priv fn first_bytes(prog: List<|Inst|>$@, first: Bool$[]): Bool //<
     //< Marks in `first` every byte a match can begin with; true when a match can be empty
     //<
-    //< It follows every step that reads no byte, taking each test as passing: a byte left out
+    //< It follows every step that reads no byte, taking each test as passing. A byte left out
     //< would skip a start that matches, while one too many only costs a look.
     for i in Range.asc(byte_count)
         first[i] = false
@@ -590,29 +589,31 @@ pub struct Match //< one matched span, and what its groups captured
     priv caps: Slots
 
 impl Match
-    fn has_group( //< whether that group took part; an empty match still counts
-        //<
-        //< `group` returns empty both for a group that did not take part and for one that matched
-        //< empty; this tells them apart. Group 0 (the whole match) is never one. Package-wide, so
-        //< `std/tests` can check the engine through it.
-        r: Self,
-        n: Sz, //< which group, counting from 1 in the order of the `(`
-    ): Bool
-        return n >= 1 && n <= r.caps.count && r.caps.start[n - 1] >= 0
+    fn group_count(r: Self): Sz //< how many groups the pattern has; package-wide, for `std/tests`
+        return r.caps.count
 
-    pub fn group( //< what that group captured, or empty if it did not take part
+    pub fn group( //< what that group captured, or none if it did not take part
         //<
-        //< **The result is a view into text**, using the original text's indices.
+        //< **A group that matched empty is `.some("")`**, apart from one that did not take part
+        //< (`(a)|b` against `b`). **The result is a view into text**, by the original text's
+        //< indices. Caution: **A group the pattern lacks stops the program**, 0 included: the
+        //< whole match is `start` and `end`.
         r: Self,
         n: Sz, //< which group, counting from 1 in the order of the `(`
         text: U8[], //< the same text passed to `find`; any other text gives garbage
-    ): U8[]
-        if !r.has_group(n)
-            return ""
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
+    ): U8[]?
+        if n < 1 || n > r.caps.count
+            $m: = Panic_msg.new()
+            m.s("Match.group: the pattern has no group ").n(n).s(" (it has ").n(r.caps.count)
+                .s(", counted from 1)")
+            panic(m.slice(), file, line)
         lo: = r.caps.start[n - 1]
         hi: = r.caps.end[n - 1]
-        return ("" if lo < 0 || hi < lo || hi > text.len
-            else U8[]::{ .ptr = text.ptr + lo, .len = hi - lo })
+        if lo < 0 || hi < lo || hi > text.len
+            return .none
+        return .some(U8[]::{ .ptr = text.ptr + lo, .len = hi - lo })
 
 pub struct Regex //< one compiled pattern, matched against any number of texts
     priv alts: List<|List<|Rx_node$@|>|> //< the tree, which the program's steps read
@@ -626,7 +627,7 @@ pub struct Regex //< one compiled pattern, matched against any number of texts
     priv anchored: Bool //<
         //< Whether every alternative starts with `^`, **fixed at compile time**.
     priv first: Bool[byte_count] //< the bytes a match can begin with
-    priv may_be_empty: Bool //< whether a match can be empty, so no start may be skipped
+    priv may_be_empty: Bool //< whether a match can be empty, so no start can be skipped
 
 priv fn alts_all_anchored(alts: List<|List<|Rx_node$@|>|>$@): Bool //<
     //< Whether every alternative starts with `^`
@@ -689,14 +690,14 @@ impl Regex
         //< Searches text from `from`, leaving the match in `vm.best` and `vm.end`
         //<
         //< **Every start runs in the same pass**, a later start with lower priority than the ways
-        //< already alive: the match found is the leftmost, and among those the one the pattern's
+        //< already alive. The match found is the leftmost. Among those it is the one the pattern's
         //< order prefers. With `vm.width` 0 it stops at the first match it meets.
         vm.now.len = 0
         $found: = false
         $p: = from
         for
             // **A pattern starting with `^` cannot match by moving the start**, nor can a start at
-            // a byte no match begins with; with no way alive, those bytes are passed over at once.
+            // a byte no match begins with. With no way alive, those bytes are passed over at once.
             if !found && (p == from || !r.anchored)
                 if vm.now.len == 0 && !r.may_be_empty && !r.anchored
                     for p < text.len && !r.first[(text.ptr + p)$]
@@ -716,8 +717,8 @@ impl Regex
                 step: = r.prog.ptr + pc
                 row: = vm.now.slots + s * vm.width
                 if step.op == .done
-                    // **The ways after this one have lower priority**, so they are dropped; the
-                    // ones already carried to the next byte have higher, and may still match.
+                    // **The ways after this one have lower priority**, so they are dropped. The
+                    // ones already carried to the next byte have higher, and can still match.
                     found = true
                     if vm.width == 0
                         return true
@@ -745,8 +746,8 @@ impl Regex
 
     fn visits( //< how many states one search through the text visits: its work
         //<
-        //< It is at most `states` for each byte, plus one; package-wide, so `std/tests` can hold
-        //< a search to that bound and check that the work grows linearly with the text.
+        //< It is at most `states` for each byte, plus one. It is package-wide, so `std/tests` can
+        //< hold a search to that bound and check that the work grows linearly with the text.
         r: Self$@,
         text: U8[], //< the text to search
     ): Sz
@@ -755,21 +756,21 @@ impl Regex
         _found: = r.search(text, 0, vm@)
         return vm.visits
 
-    pub fn find( //< the first matched span; fails when nothing matches
+    pub fn find( //< the first matched span, or none when nothing matches
         r: Self$@,
         text: U8[], //< the text to search
-    ): Match!Regex_error
+    ): Match?
         $vm: = new_vm(r.states, r.width())
         defer vm.free()
         if !r.search(text, 0, vm@)
-            throw .no_match
-        return r.found(vm@)
+            return .none
+        return .some(r.found(vm@))
 
     pub fn find_all( //< every matched span; the search resumes past each one
         //<
         //< Front to back; **even an empty match advances one byte**, and no match is an empty list.
         //< An element holds a whole `Slots`. Why it is eager, and how it differs from Python's
-        //< `findall`, is in "Every match is returned in a `List`. No lazy iterator is made" in
+        //< `findall`, is in "Every match comes back in a `List`, with no lazy iterator" in
         //< `std/docs/DESIGN-core.md`.
         r: Self$@,
         text: U8[], //< the text to search

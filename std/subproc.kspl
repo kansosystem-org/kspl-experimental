@@ -1,17 +1,19 @@
 //< Starting a child process and waiting for it
 //<
-//< **There are three functions; choose by how you want the output and the failure.** `run`
-//< returns the output and throws any non-zero exit as a `Run_error`; `run_capture` returns the
-//< exit code as a value to inspect; `spawn_wait` lets the output go straight to the user as it
-//< comes. The first two collect it through a pipe, so they allow no interaction or live output,
-//< and all three are synchronous, so none suits long-lived concurrency.
+//< **There are three functions. Choose by how you want the output and the failure.** `run`
+//< returns the output and throws any non-zero exit as a `Run_error`. `run_capture` returns the
+//< exit code as a value to inspect. `spawn_wait` lets the output go straight to the user as it
+//< comes. Each throws a child that cannot start. The first two collect the output through a pipe,
+//< so they allow no interaction or live output. All three are synchronous, so none suits
+//< long-lived concurrency. Where the output must reach the user as it comes and a hang must end,
+//< `spawn_limited` adds a time limit.
 
 // ==========================================
 // **The C code has only one "start" plus "read, wait, kill"** (hosted_spawn.c and hosted_proc.c
-// in `ksplc/gen/runtime/`). Collecting output, running in parallel, keeping a child running and
-// two-way talk differ only in where the three standard streams go (inherited / a pipe / a file),
-// so combining them and the waiting are here. Only starting and reading differ per OS, and only
-// those are in C.
+// in `ksplc/gen/runtime/`). Four uses differ only in where the three standard streams go
+// (inherited / a pipe / a file): collecting output, running in parallel, keeping a child running
+// and two-way talk. So this file combines them and does the waiting. Only starting and reading
+// differ per OS, and only those are in C.
 // ==========================================
 import "std/chars"
 import "std/ds" { List }
@@ -49,9 +51,9 @@ priv const stdio_no_window: I32 = 8 //< no console window is shown for the child
     //< parent's console, so anything it writes to the console is lost.
 priv const stdio_group: I32 = 16 //< the child leads a process group of its own (a job on Windows)
     //<
-    //< **Only for a child stopped at a time limit**: the kill then stops what it started too
-    //< ("A child stopped at its time limit is stopped with all it started" in
-    //< std/docs/DESIGN-system.md).
+    //< **Only for a child stopped at a time limit.** The kill then stops what it started too.
+    //< See "A time limit stops the child and all it started" in
+    //< std/docs/DESIGN-system.md.
 
 priv fn start(argv: U8[][], cwd: U8[], stdio: I32, out_path: U8[], err_path: U8[]): I64 //<
     //< Starts the child; returns 0 on failure
@@ -66,11 +68,18 @@ priv fn start(argv: U8[][], cwd: U8[], stdio: I32, out_path: U8[], err_path: U8[
         out_path.ptr, out_path.len, err_path.ptr, err_path.len)
 
 impl Run_result
+    pub fn exited_with(r: Self@, code: I32): Bool //< whether it ended by itself with this code
+        //<
+        //< False where its time limit stopped it, which leaves it no code of its own.
+        if got: = r.exit_code
+            return got == code
+        return false
+
     pub fn text( //< the child's output as one text: its standard output, then its standard error
         //<
-        //< Each `\r\n` becomes `\n`, since a child on Windows ends its text lines that way; a lone
+        //< Each `\r\n` becomes `\n`, since a child on Windows ends its text lines that way. A lone
         //< `\r` is kept. **The two are joined end to end, not interleaved**, so a run reads the
-        //< same every time; the cost is that you cannot tell which stream a line came from.
+        //< same every time. The cost is that you cannot tell which stream a line came from.
         r: Self@,
         arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
     ): U8[]
@@ -85,15 +94,6 @@ priv fn fold_crlf_into(b: Str_builder$@, text: U8[]) //< appends text, with each
         if text[i] == '\r' && i + 1 < text.len && text[i + 1] == '\n'
             continue
         b.c(text[i])
-
-priv fn spawn_failed_result(): Run_result //<
-    //< The result of a child that did not start
-    //<
-    //< Caution: **Empty with no memory, not `""`**: `dealloc` frees a null pointer as nothing,
-    //< where it stops the program on a literal, so a caller freeing heap outputs frees these too.
-    empty: = U8$[]::{ .ptr = null, .len = 0 }
-    return Run_result::{ .spawn_failed = true, .timed_out = false, .exit_code = -1,
-        .stdout_data = empty, .stderr_data = empty, .output_lost = false }
 
 priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
     //< Appends one read's bytes to the builder (bytes beyond the cap are discarded)
@@ -110,22 +110,21 @@ priv fn take_into(into: Str_builder$@, chunk: U8[], n: I32, cap: Sz): Bool //<
         into.s(chunk.sub(0, take))
     return true
 
-pub struct Run_result //< the outcome of one run: how it ended, and what it wrote
-    pub spawn_failed: Bool //< if true, every other field is invalid
-    pub timed_out: Bool //< if true, it was killed with all it started; the code means nothing
-    pub exit_code: I32 //< the child's exit code; 0 means success.
+pub struct Run_result //< the outcome of one run that started: how it ended, and what it wrote
+    pub exit_code: I32? //< the child's exit code, 0 for success; none once its limit stopped it.
         //<
+        //< Stopped at its limit, it is killed with all it started and has no code of its own.
         //< **A child that crashed or was killed gives 128 + the signal number on every OS** (the
-        //< shell's convention: a segmentation fault is 139, an abort 134); Windows's crash codes
-        //< are read as the signal POSIX raises for the same fault ("A child's end is one code on
-        //< every OS" in std/docs/DESIGN-system.md). Any other code is the child's own, which on
-        //< Windows may be negative.
+        //< shell's convention: a segmentation fault is 139, an abort 134). A Windows crash code is
+        //< read as the signal POSIX raises for the same fault. See "A child's end is one code on
+        //< every OS" in std/docs/DESIGN-system.md. Any other code is the child's own. On
+        //< Windows it can be negative.
     pub stdout_data: U8$[] //< what it wrote to standard output, cut at the cap.
         //<
-        //< Not named stdout/stderr: MSVC UCRT's headers make those object-like macros, so a field
+        //< Not named stdout/stderr: MSVC UCRT's headers make those object-like macros. So a field
         //< of that name in the generated C struct fails to compile on Windows.
     pub stderr_data: U8$[] //< what it wrote to standard error, cut at the cap
-    pub output_lost: Bool //< an output could not be read back, so the two above may lack some.
+    pub output_lost: Bool //< an output could not be read back, so the two above can lack some.
         //<
         //< Only `run_many` collects through files, and only it sets this; read as empty, a lost
         //< output would pass for a child that wrote nothing.
@@ -133,21 +132,21 @@ pub struct Run_result //< the outcome of one run: how it ended, and what it wrot
 #cfg(!freestanding)
 pub fn run_capture( //< runs one child to the end and collects both its outputs
     //<
-    //< argv[0] is as for `spawn_wait`; stdout and stderr are collected separately, watched in one
+    //< argv[0] is as for `spawn_wait`. stdout and stderr are collected separately, watched in one
     //< wait (`kspl_proc_poll`). **Append only what was read**: the cap is a promise ("beyond this
     //< it is cut"), not the size to allocate.
     //< **Past the time limit, the child and all it started are killed.** Once the child itself
-    //< has ended, what it started may hold the outputs open: they are read for `pipe_grace_ms`
+    //< has ended, what it started can hold the outputs open. They are read for `pipe_grace_ms`
     //< more, and what comes after is not kept.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
-    timeout_ms: I32, //< how long it may run before it is killed
+    timeout_ms: I32, //< how long it can run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
     arena: Arena$@, //< where the outputs go; null means the heap, each freed with `dealloc`
-): Run_result //< both outputs and how it ended; a failed start is a flag, not an error
+): Run_result!Spawn_error //< both outputs and how it ended; fails only if it cannot start
     h: = start(argv, cwd, stdio_out | stdio_err | stdio_group, "", "")
     if h == 0
-        return spawn_failed_result()
+        throw .spawn_failed
     $out: = Str_builder.new()
     defer out.free()
     $err: = Str_builder.new()
@@ -159,18 +158,18 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     $err_open: = true
     $timed_out: = false
     $ended: = false
-    $exit_code: I32 = -1
+    $code: I32 = 0
     $pause: I32 = 1
     for out_open || err_open
         now: = sys.mono_us()
-        if !ended && kspl_proc_ended(h, exit_code@)
+        if !ended && kspl_proc_ended(h, code@)
             ended = true
             grace_end: = now + I64::pipe_grace_ms * 1000I64
             until = grace_end if grace_end < deadline else deadline
         if now >= until
             timed_out = !ended
             break
-        // Caution: **Look at the child between the reads.** The outputs may stay open after it
+        // Caution: **Look at the child between the reads.** The outputs can stay open after it
         // ends, and a wait on them alone would run to the deadline.
         $wait_ms: = I32::((until - now + 999I64) / 1000I64)
         if !ended && pause < wait_ms
@@ -188,17 +187,14 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
                 kspl_proc_read_err(h, chunk[0]@, chunk.len, 0), output_cap)
     // Caution: **Bound the wait after the pipes close too.** A child can close both and run on (a
     // daemon, or a grandchild holding nothing), and a bare wait would outlast every timeout.
+    $exit_code: I32? = .none
     if timed_out
         kspl_proc_kill(h)
     else if ended
-        exit_code = kspl_proc_wait(h)
+        exit_code = .some(kspl_proc_wait(h))
     else
-        got: = wait_until(h, deadline)
-        timed_out = got.is_none()
-        exit_code = got.unwrap_or(-1)
+        exit_code = wait_until(h, deadline)
     return Run_result::{
-        .spawn_failed = false,
-        .timed_out = timed_out,
         .exit_code = exit_code,
         .stdout_data = arena.dup_str(out.slice()),
         .stderr_data = arena.dup_str(err.slice()),
@@ -207,9 +203,9 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
 
 priv const pipe_grace_ms: I32 = 100 //< how long outputs are read once the child itself has ended
     //<
-    //< **Everything the child wrote is in the pipes when it ends**, so this waits only for what it
-    //< started and left holding them ("A child's outputs are read a short while past its end" in
-    //< std/docs/DESIGN-system.md).
+    //< **Everything the child wrote is in the pipes when it ends.** So this waits only for what
+    //< it started and left holding them. See "A child's outputs are read briefly past its end" in
+    //< std/docs/DESIGN-system.md.
 
 pub struct Job //< one of many children to start
     pub argv: U8[][] //< the executable and its arguments
@@ -230,7 +226,7 @@ priv fn read_capped(path: U8[], cap: Sz, arena: Arena$@): U8$[]? //<
         return .none
     return .some(U8$[]::got)
 
-// Starts one job; returns 0 on failure (the caller turns that into a spawn_failed result).
+// Starts one job; returns 0 on failure (the caller turns that into `Spawn_error.spawn_failed`).
 #cfg(!freestanding)
 priv fn start_job(job: Job, index: Sz, work_dir: U8[], arena: Arena$@): I64
     return start(job.argv, job.cwd, stdio_group, job_path(work_dir, index, "out", arena),
@@ -239,42 +235,52 @@ priv fn start_job(job: Job, index: Sz, work_dir: U8[], arena: Arena$@): I64
 priv const reap_pause_max_ms: I32 = 10 //< the longest pause between two looks at a running job
     //<
     //< **Short beside a job's own run**, so a slot stands idle at most this long after its job
-    //< ends; the pauses start at 1 ms and double up to it, so a long job costs a look every 10 ms.
+    //< ends. The pauses start at 1 ms and double up to it, so a long job costs a look every 10 ms.
 
 priv fn next_pause(pause: I32): I32 //< the pause doubled, up to reap_pause_max_ms
     return pause * 2 if pause * 2 < reap_pause_max_ms else reap_pause_max_ms
 
 // Waits for a started child until its deadline: its exit code, or none once the deadline passed,
 // the child then killed.
-// **Waiting with a limit is looking again after a pause**: POSIX's `waitpid` takes no time limit,
-// and a signal to wake on would reach the whole program.
 #cfg(!freestanding)
 priv fn wait_until(handle: I64, deadline_us: I64): I32?
+    got: = ended_by(handle, deadline_us)
+    if got.is_none()
+        kspl_proc_kill(handle)
+    return got
+
+// Looks at a started child until it ends or `until_us` comes: its exit code, the child then
+// reaped, or none with the child left running.
+// **Waiting with a limit is looking again after a pause.** POSIX's `waitpid` takes no time limit.
+// A signal to wake on would reach the whole program.
+#cfg(!freestanding)
+priv fn ended_by(handle: I64, until_us: I64): I32?
     $code: I32 = 0
     $pause: I32 = 1
     for !kspl_proc_ended(handle, code@)
-        if sys.mono_us() >= deadline_us
-            kspl_proc_kill(handle)
+        left_us: = until_us - sys.mono_us()
+        if left_us <= 0I64
             return .none
-        sys.sleep_ms(pause)
+        left_ms: = (left_us + 999I64) / 1000I64
+        sys.sleep_ms(pause if I64::pause < left_ms else I32::left_ms)
         pause = next_pause(pause)
     return .some(kspl_proc_wait(handle))
 
 // Waits for one started job until its deadline and reads its output into a result. Past the
-// deadline the job is killed and marked `timed_out`, with what it wrote by then.
+// deadline the job is killed and has no code, with what it wrote by then.
 #cfg(!freestanding)
 priv fn reap_job(handle: I64, deadline_us: I64, index: Sz, output_cap: Sz, work_dir: U8[],
-    work: Arena$@, arena: Arena$@): Run_result
+    work: Arena$@, arena: Arena$@): Run_result!Spawn_error
     if handle == 0
-        return spawn_failed_result()
-    ended: = wait_until(handle, deadline_us)
-    timed_out: = ended.is_none()
-    code: = ended.unwrap_or(-1)
+        throw .spawn_failed
+    code: = wait_until(handle, deadline_us)
     out: = read_capped(job_path(work_dir, index, "out", work), output_cap, arena)
     err: = read_capped(job_path(work_dir, index, "err", work), output_cap, arena)
+    // Caution: **Empty with no memory, not `""`.** `dealloc` frees a null pointer as nothing, but
+    // it stops the program on a literal. So a caller that frees heap outputs frees these too.
     empty: = U8$[]::{ .ptr = null, .len = 0 }
-    return Run_result::{ .spawn_failed = false, .timed_out = timed_out, .exit_code = code,
-        .stdout_data = out.unwrap_or(empty), .stderr_data = err.unwrap_or(empty),
+    return Run_result::{ .exit_code = code, .stdout_data = out.unwrap_or(empty),
+        .stderr_data = err.unwrap_or(empty),
         .output_lost = out.is_none() || err.is_none() }
 
 #cfg(!freestanding)
@@ -284,24 +290,25 @@ priv struct Running_job //< a handle and its deadline; handle 0 means no child r
 
 // Runs jobs at most max_parallel at a time and returns the results **in the input order**.
 // **The caller creates work_dir.** A file with the same name is truncated and rewritten.
-// **Each job has its own time limit**, counted from its own start, as `run_capture`'s; a job past
-// it is killed with all it started and comes back `timed_out`, and the rest run on.
-// **A job that cannot start is `spawn_failed`** (`Run_error.spawn_failed` lists the causes), never
-// an exit code, so a program that itself exits 127 is not read as missing.
+// **Each job has its own time limit**, counted from its own start, as `run_capture`'s. A job past
+// it is killed with all it started and comes back with no code. The rest run on.
+// **A job that cannot start is `spawn_failed`** (`Spawn_error.spawn_failed` lists the causes),
+// never an exit code, so a program that itself exits 127 is not read as missing.
 #cfg(!freestanding)
 pub fn run_many( //< runs many children, a few at a time, and collects each one's output
     jobs: Job[], //< what to run; the results are returned in this order
-    max_parallel: Sz, //< how many may run at once
-    timeout_ms: I32, //< how long each may run before it is killed
+    max_parallel: Sz, //< how many can run at once
+    timeout_ms: I32, //< how long each can run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
     work_dir: U8[], //< where the temporary files that collect the outputs go
     arena: Arena$@, //< where the list and the outputs go; null means the heap, freed as below
-): List<|Run_result|> //< one result per job; a job that fails is marked in its own result.
+): List<|Run_result!Spawn_error|> //< one per job, in order; a job that cannot start fails alone
     //<
     //< With `null`, free each result's two outputs with `dealloc`, then the list with `free()`.
-    $results: = List<|Run_result|>.new(arena)
+    $results: = List<|Run_result!Spawn_error|>.new(arena)
     slots: = max_parallel if max_parallel > 0 else 1
-    $work: = mem.scratch(arena)
+    // Apart from `arena`, which takes each result while the work stands (`mem.scratch`).
+    $work: = mem.scratch(null)
     defer work.free()
     $live: = List<|Running_job|>.new(work.arena)
     $running: Sz = 0
@@ -313,7 +320,7 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
         live
             .push(Running_job::{ .handle = h,
             .deadline_us = sys.deadline_after_ms(timeout_ms) })
-        results.push(spawn_failed_result())
+        results.push(.err(.spawn_failed))
         if h != 0
             running += 1
     for running > 0
@@ -326,8 +333,8 @@ pub fn run_many( //< runs many children, a few at a time, and collects each one'
 // Caution: **Not the oldest first.** Waiting on the job started first holds every slot a later,
 // quicker job freed, so the jobs behind it start late.
 #cfg(!freestanding)
-priv fn collect_one(live: List<|Running_job|>$@, results: List<|Run_result|>$@, output_cap: Sz,
-    work_dir: U8[], work: Arena$@, arena: Arena$@)
+priv fn collect_one(live: List<|Running_job|>$@, results: List<|Run_result!Spawn_error|>$@,
+    output_cap: Sz, work_dir: U8[], work: Arena$@, arena: Arena$@)
     $pause: I32 = 1
     for
         now: = sys.mono_us()
@@ -346,8 +353,8 @@ priv fn collect_one(live: List<|Running_job|>$@, results: List<|Run_result|>$@, 
 
 pub enum Run_error //< why a run did not produce a result
     //<
-    //< **The text in `exited` points into the arena** and cannot be read after the arena is freed;
-    //< with a null arena it is on the heap, freed with `dealloc`.
+    //< **The text in `exited` points into the arena** and cannot be read after the arena is freed.
+    //< With a null arena it is on the heap, freed with `dealloc`.
     spawn_failed //< it could not start; the causes are `Spawn_error.spawn_failed`'s
     timed_out //< the time ran out, so it was killed
     exited(code: I32, err: U8[]) //< it exited non-zero; the text is its standard error
@@ -378,26 +385,28 @@ impl Run_error
 #cfg(!freestanding)
 pub fn run( //< runs one child and returns its standard output; any failure is thrown
     //<
-    //< The arguments are as for run_capture; **the failure is thrown**: "cannot start", "timed out"
+    //< The arguments are as for run_capture. **The failure is thrown**: "cannot start", "timed out"
     //< and "exited non-zero" all become `Run_error`, so the caller can pass them on with `!`.
-    //< **When you need the exit code itself, use run_capture**; this one treats anything but 0 as
-    //< a failure, which does not suit a program where a non-zero exit is normal.
+    //< **When you need the exit code itself, use run_capture.** This one treats anything but 0 as
+    //< a failure. That does not suit a program where a non-zero exit is normal.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
-    timeout_ms: I32, //< how long it may run before it is killed
+    timeout_ms: I32, //< how long it can run before it is killed
     output_cap: Sz, //< how many bytes of each output are kept; the rest is cut
     arena: Arena$@, //< where the output goes; null means the heap, freed with `dealloc`
 ): U8$[]!Run_error //< the standard output, at most `output_cap` bytes
-    // Both outputs are collected apart; only the one handed back is copied to the caller.
-    $work: = mem.scratch(arena)
+    // Both outputs are collected apart, from `arena` too (`mem.scratch`); only the one handed back
+    // is copied to the caller.
+    $work: = mem.scratch(null)
     defer work.free()
-    r: = run_capture(argv, cwd, timeout_ms, output_cap, work.arena)
-    if r.spawn_failed
+    r: = run_capture(argv, cwd, timeout_ms, output_cap, work.arena) catch
         throw .spawn_failed
-    if r.timed_out
+    switch r.exit_code
+    case .none
         throw .timed_out
-    if r.exit_code != 0
-        throw .exited(r.exit_code, arena.dup_str(r.stderr_data))
+    case .some(code)
+        if code != 0
+            throw .exited(code, arena.dup_str(r.stderr_data))
     return arena.dup_str(r.stdout_data)
 
 // ==========================================
@@ -408,24 +417,33 @@ pub fn run( //< runs one child and returns its standard output; any failure is t
 pub enum Spawn_error //< why a child could not be started
     spawn_failed //< it could not start, and it cannot say why.
         //<
-        //< The causes are the same on every OS: no such program, no permission to run it, a working
-        //< directory or output file that cannot be opened, an argument holding a NUL, or the OS
-        //< refusing a new process. Telling them apart would need errno passed up from the C code
-        //< (as with fs.Fs_error).
+        //< The causes are the same on every OS. Three are no such program, no permission to run it,
+        //< and a working directory or output file that cannot be opened. The other two are an
+        //< argument holding a NUL and the OS refusing a new process. Telling them apart would need
+        //< errno passed up from the C code (as with fs.Fs_error).
 
 pub fn spawn_wait( //< runs one child with the standard I/O inherited, and waits for it
     //<
-    //< argv[0] is the executable's path or a name looked up in PATH alone, never in the current
-    //< directory unless PATH names it ("A program named without a directory is looked up in PATH
-    //< alone" in std/docs/DESIGN-system.md); **a relative one is read from `cwd`**, on every OS.
+    //< argv[0] is the executable's path or a name looked up in PATH alone. The current directory
+    //< is never searched unless PATH names it ("A bare program name is looked up in PATH alone"
+    //< in std/docs/DESIGN-system.md). **A relative path is read from `cwd`**, on every OS.
     //< Caution: **Give a third-party tool its location with `cwd` and keep the paths relative**
-    //< ("Paths are held in UTF-8" in std/docs/DESIGN-system.md).
+    //< ("Paths are UTF-8" in std/docs/DESIGN-system.md).
     //< When argv's length is known only at run time, build a `List<|U8[]|>` and pass its `slice()`.
     argv: U8[][], //< the executable and its arguments
     cwd: U8[], //< the working directory; empty inherits the caller's
 ): I32!Spawn_error //< the exit code, as `Run_result.exit_code`'s; fails only if it cannot start
-    $child: = spawn_async(argv, cwd)!
-    return child.wait()
+    handle: = start(argv, cwd, 0, "", "")
+    if handle == 0
+        throw .spawn_failed
+    return kspl_proc_wait(handle)
+
+pub enum Feed_error //< why a child handed its input gave no exit code that answers for all of it
+    spawn_failed //< it could not start; the causes are `Spawn_error.spawn_failed`'s
+    input_not_taken //< it stopped taking its input before all of it went, so it was stopped.
+        //<
+        //< It closed its standard input or ended early, or took none of it for `idle_ms`. Its
+        //< exit code would answer for part of the input, as if it were all.
 
 #cfg(!freestanding)
 pub fn spawn_feed( //< runs one child with the given bytes on its standard input, and waits for it
@@ -433,20 +451,24 @@ pub fn spawn_feed( //< runs one child with the given bytes on its standard input
     //< Its outputs are inherited, as `spawn_wait`'s are. Its standard input is closed once `input`
     //< has gone, so the child reads to an end.
     //< **The limit is idle time, as a `write`'s**: a child that stops reading fills the pipe, and
-    //< the rest of `input` is then dropped rather than waited for.
+    //< it is then stopped rather than waited for.
     argv: U8[][], //< the executable and its arguments, as for `spawn_wait`
     cwd: U8[], //< the working directory; empty inherits the caller's
     input: U8[], //< what the child reads on its standard input
-    idle_ms: I32, //< how long the child may go without taking any of it
-): I32!Spawn_error //< the exit code, as `Run_result.exit_code`'s; fails only if it cannot start
+    idle_ms: I32, //< how long the child can go without taking any of it
+): I32!Feed_error //< the exit code, as `Run_result.exit_code`'s, once it has taken all of `input`
     handle: = start(argv, cwd, stdio_in, "", "")
     if handle == 0
         throw .spawn_failed
-    _sent: = kspl_proc_send(handle, input.ptr, input.len, idle_ms)
+    // Caution: **Stop a child that did not take it all, rather than wait for it.** One that stopped
+    // reading can never end, and its exit code would not answer for the input.
+    if kspl_proc_send(handle, input.ptr, input.len, idle_ms) != 0
+        kspl_proc_kill(handle)
+        throw .input_not_taken
     kspl_proc_close_stdin(handle)
     return kspl_proc_wait(handle)
 
-// Caution: **Call kill or wait exactly once**, as for spawn_redirect.
+// Caution: **Call kill or wait**, as for spawn_redirect.
 #cfg(!freestanding)
 pub fn spawn_async( //< starts a child with the standard I/O inherited, without waiting
     argv: U8[][], //< the executable and its arguments
@@ -461,17 +483,17 @@ pub fn spawn_async( //< starts a child with the standard I/O inherited, without 
 // A child kept running, and a child with two-way pipes
 // ==========================================
 
-// **There is no single function with options for each variant.** The functions are split by use,
-// so that waiting for the child while a pipe is still attached (which fills the buffer and stalls
-// in any language) **cannot be written at all** ("Three ways to start a child process, split by
-// where its output goes" in std/docs/DESIGN-system.md).
+// **There is no single function with options for each variant.** The functions are split by use.
+// Then a wait for the child while a pipe is still attached **cannot be written at all**. In any
+// language that wait fills the buffer and stalls ("Three ways to start a child process, by its
+// output" in std/docs/DESIGN-system.md).
 
 pub enum Write_end //< why a write to a child's standard input stopped
     timed_out //< the child took nothing for that long; what went before stays written
     closed //< the child closed its standard input, or ended
 
 pub enum Read_end //< why a read from a child returned no bytes
-    timed_out //< no byte arrived in time; the child may still be running
+    timed_out //< no byte arrived in time; the child can still be running
     closed //< the child finished, so waiting again returns nothing
     failed //< the read itself failed
 
@@ -479,11 +501,11 @@ pub enum Read_end //< why a read from a child returned no bytes
 // comes up (in Java, using redirectOutput makes getInputStream() silently return empty).
 #cfg(!freestanding)
 pub struct Child //< a child with inherited standard I/O or output going to files
-    handle: I64
+    handle: I64 //< the runtime's handle; 0 once `wait` or `kill` has given it back
 
 // **No console window is shown for it**; it is the only function that asks for that.
-// Caution: **Always call kill or wait, exactly once.** Calling neither leaves a zombie process (on
-// Windows a process handle).
+// Caution: **Always call kill or wait.** Calling neither leaves a zombie process (on Windows a
+// process handle); a second call does nothing.
 #cfg(!freestanding)
 pub fn spawn_redirect( //< starts a child without waiting, with its outputs going to files
     argv: U8[][], //< the executable and its arguments
@@ -503,17 +525,91 @@ impl Child
         //< **The call that returns false also reaps the child.** It stays false after that.
         return kspl_proc_alive(r.handle)
 
-    pub fn wait(r: Self$@): I32 //< waits for it to finish, and returns the exit code
-        return kspl_proc_wait(r.handle)
+    pub fn wait(r: Self$@): I32? //< waits for it to finish, and returns the exit code
+        //<
+        //< **After a `wait` or a `kill`, it is none at once**: the child is already reaped, and
+        //< its code is not kept.
+        if r.handle == 0
+            return .none
+        code: = kspl_proc_wait(r.handle)
+        r.handle = 0
+        return .some(code)
 
     pub fn kill(r: Self$@) //< kills it and reaps it
         //<
-        //< It returns only once the child has stopped.
+        //< It returns only once the child has stopped; after a `wait` or a `kill` it does nothing.
         kspl_proc_kill(r.handle)
+        r.handle = 0
+
+// Caution: **The runtime frees the child's record at `wait` or `kill`**: a copy would keep the
+// freed handle, and its own `wait` would read freed memory.
+#cfg(!freestanding)
+impl Child: Move_only {} //< copying it would reap one child twice
+
+// ==========================================
+// A child with a time limit, writing where the starter writes
+// **Its output reaches the screen as it comes.** `run_capture` holds it until the end. Past its
+// limit the child is stopped with all it started. `Child.kill` does not do that ("A time
+// limit stops the child and all it started" in std/docs/DESIGN-system.md).
+// ==========================================
+
+#cfg(!freestanding)
+pub struct Limited_child //< a child with a time limit, in a process group (a job) of its own
+    handle: I64 //< the runtime's handle; 0 once a wait has seen it end or stopped it
+    deadline_us: I64 //< the `sys.mono_us` reading its limit ends at
+
+pub enum Wait_end //< how a wait on a `Limited_child` came back
+    ended(code: I32) //< it ended within its limit; the code is as `Run_result.exit_code`'s
+    running //< the wait's own time passed first; the child runs on, within its limit
+    timed_out //< its limit passed: it was stopped with all it started, and reaped
+
+// Caution: **Wait on it until it comes back `ended` or `timed_out`.** Before that it is not
+// reaped (a zombie process, on Windows a handle); it has no `kill`, as its limit is its stop.
+#cfg(!freestanding)
+pub fn spawn_limited( //< starts a child that writes where the caller does, with a time limit
+    //<
+    //< **Its standard input is empty**, read to an end at once. In a process group of its own, a
+    //< child that reads the terminal would be stopped by the OS until its limit.
+    argv: U8[][], //< the executable and its arguments, as for `spawn_wait`
+    cwd: U8[], //< the working directory; empty inherits the caller's
+    timeout_ms: I32, //< how long it can run, from now, before it is stopped with all it started
+): Limited_child!Spawn_error //< the running child, to wait on; fails if it cannot start
+    handle: = start(argv, cwd, stdio_in | stdio_group, "", "")
+    if handle == 0
+        throw .spawn_failed
+    kspl_proc_close_stdin(handle)
+    return Limited_child::{ .handle = handle,
+        .deadline_us = sys.deadline_after_ms(timeout_ms) }
+
+#cfg(!freestanding)
+impl Limited_child
+    pub fn wait( //< waits for it to end, for at most `wait_ms` and never past its limit
+        //<
+        //< **Past its limit the wait stops it**, with every process it started. After it has come
+        //< back `ended` or `timed_out`, it is none at once: the child is reaped, and how it ended
+        //< is not kept.
+        r: Self$@,
+        wait_ms: I32, //< how long this call can wait; the limit holds however it is waited on
+    ): Wait_end?
+        if r.handle == 0
+            return .none
+        until: = sys.deadline_after_ms(wait_ms)
+        if code: = ended_by(r.handle, until if until < r.deadline_us else r.deadline_us)
+            r.handle = 0
+            return .some(.ended(code))
+        if sys.mono_us() < r.deadline_us
+            return .some(.running)
+        kspl_proc_kill(r.handle)
+        r.handle = 0
+        return .some(.timed_out)
+
+// The record is freed once a wait sees it end or stops it, as `Child`'s is at `wait`.
+#cfg(!freestanding)
+impl Limited_child: Move_only {} //< copying it would reap one child twice
 
 #cfg(!freestanding)
 pub struct Piped_child //< a child whose standard input, output and error are pipes
-    handle: I64
+    handle: I64 //< the runtime's handle; 0 once `kill` has given it back
 
 // Caution: **Do not use this just to collect the output.** Waiting without reading fills the pipe
 // and stalls the child. To collect everything, use `run_capture`.
@@ -535,7 +631,7 @@ impl Piped_child
         //< and the write would wait for it for good.
         r: Self@,
         data: U8[], //< the bytes to send
-        timeout_ms: I32, //< how long the child may go without taking any of them
+        timeout_ms: I32, //< how long the child can go without taking any of them
     ): Void!Write_end
         got: = kspl_proc_send(r.handle, data.ptr, data.len, timeout_ms)
         if got == -1
@@ -573,8 +669,8 @@ impl Piped_child
 
     pub fn exit_code(r: Self@): I32? //< the exit code, or none while it is still running
         //<
-        //< The code is as `Run_result.exit_code`'s. **Do not call it after `kill`** (kill also does
-        //< the cleanup).
+        //< The code is as `Run_result.exit_code`'s. **After `kill` it is none**: kill reaps the
+        //< child without keeping its code.
         $code: I32 = 0
         if kspl_proc_ended(r.handle, code@)
             return .some(code)
@@ -582,8 +678,13 @@ impl Piped_child
 
     pub fn kill(r: Self$@) //< kills it, reaps it, and closes the pipes
         //<
-        //< Caution: **Call it once only.**
+        //< A second call does nothing, and every other call then answers as for a child gone.
         kspl_proc_kill(r.handle)
+        r.handle = 0
+
+// The record is freed at `kill`, as `Child`'s is.
+#cfg(!freestanding)
+impl Piped_child: Move_only {} //< copying it would reap one child twice
 
 // Turns the C return value (>0 a byte count / -1 a timeout / 0 EOF / anything else a failure)
 // into the result type.

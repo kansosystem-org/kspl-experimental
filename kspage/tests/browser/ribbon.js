@@ -5,7 +5,7 @@ function kspageProbeRibbon(ks) {
 
   // 28''. That the tools at the top eat no height, and can be folded.
   //
-  // **This can be seen nowhere else**: the height and the folding are the DOM's side
+  // **This can be seen nowhere else.** The height and the folding are the DOM's side
   // (it breaks as "two thirds of the window is all that is seen of the body"). **Lay a cap down.**
   // Every row added shaves the body's width, so it is made to fall once they grow.
   const chromeBox = document.getElementById("chrome");
@@ -27,7 +27,7 @@ function kspageProbeRibbon(ks) {
   document.getElementById("fold-ribbon").click();
   check(!ribbonBox.hidden && chromeTall() === wasTall, "pressing again puts it back");
   // **The ribbon is the same on every screen**: no tool is chosen, hidden, moved or stripped of
-  // its name by the viewer, so the ⚙ panel holds no place for it, and a tool's name is out.
+  // its name by the viewer. So the ⚙ panel holds no place for it, and a tool's name is out.
   for (const id of ["tool-picks", "show-labels", "tool-find", "tools-reset"]) {
     check(document.getElementById(id) === null, "there is no ribbon setting " + id);
   }
@@ -84,8 +84,8 @@ function kspageProbeRibbon(ks) {
   check(getComputedStyle(inkItems).left === "0px",
     "a ribbon set opens downward (" + getComputedStyle(inkItems).left + ")");
   // **It must open on a press, onto a panel that can be pointed at.** Measures alone pass a `flex`
-  // panel that **is not out on the screen** (cut off by a box winding the vertical up, the canvas
-  // takes the press), and `click()` reaches a hidden node too; so it looks at who picks up the
+  // panel that **is not out on the screen**. Cut off by a box winding the vertical up, the canvas
+  // takes the press. `click()` reaches a hidden node too. So it looks at who picks up the
   // panel's middle.
   const inkOpen = inkRibbon.querySelector(".fly-open");
   inkOpen.click();
@@ -121,9 +121,10 @@ function kspageProbeRibbon(ks) {
 
   // 28'. The ribbon's sets, and dragging a selected frame.
   //
-  // **This can be seen nowhere else**: that the sets put out change with the state, and that a
-  // pressed frame can be taken hold of (it breaks as "press it and it does not move"). **Do not
-  // line up anything pressable that does not act** — a contextual set is put out only when it acts.
+  // **This can be seen nowhere else.** It checks that the sets put out change with the state. It
+  // checks that a pressed frame can be taken hold of (it breaks as "press it and it does not
+  // move"). **Do not line up anything pressable that does not act.** A contextual set is put out
+  // only when it acts.
   const ribbon = document.getElementById("ribbon");
   check(ribbon.querySelectorAll(".group").length >= 4, "the ribbon is split into sets");
   // **A set's name is laid where it eats no row.** A row of names doubles the height; the sets show
@@ -143,8 +144,8 @@ function kspageProbeRibbon(ks) {
   if (facePart) {
     const held = (x, y, type) => canvas.dispatchEvent(new PointerEvent(type, spot(x, y)));
     held(facePart.x + 4, facePart.y + 4, "pointerup");
-    // **A region's upper edge is not the slide's upper edge** (the slack before a paragraph goes
-    // into the region), so it hunts downward until a frame is found.
+    // **A region's upper edge is not the slide's upper edge**, since the slack before a paragraph
+    // goes into the region. So it hunts downward until a frame is found.
     let first = null;
     for (let dy = 4; dy < facePart.h && first === null; dy += 4) {
       held(facePart.x + 8, facePart.y + dy, "pointerdown");
@@ -226,7 +227,7 @@ function kspageProbeRibbon(ks) {
   document.getElementById("drop-frame").click();
   check(document.getElementById("note").classList.contains("warn"),
     "a refusal gets a colour (" + document.getElementById("note").className + ")");
-  // Caution: **Do not make it red** — red is kept for when something is lost; a refusal that broke
+  // Caution: **Do not make it red.** Red is kept for when something is lost. A refusal that broke
   // nothing, in the strongest colour, races the words and is not read. The rules' side attaches the
   // mark (⚠).
   const denied = getComputedStyle(document.getElementById("note"));
@@ -256,7 +257,7 @@ function kspageProbeRibbon(ks) {
     "the front side is shaved and folded");
 
   // The document's one unit is one CSS pixel. **This can be seen nowhere else.** Another ratio in
-  // between wants the press-to-document division in four places (the zoom is the browser's); only
+  // between wants the press-to-document division in four places (the zoom is the browser's). Only
   // the pixel density is multiplied, so the CSS width is the width handed over.
   const zoomWide = Math.round(canvas.getBoundingClientRect().width);
   app.resize(600);
@@ -444,7 +445,7 @@ function kspageProbeRibbon(ks) {
           "the shape's size comes out on the band ("
             + document.getElementById("tally").textContent + ")");
         // The nudge moves the one chosen, and leaves the other where it was.
-        // Caution: **Do not take the list's order for the contents' order** — the list has the
+        // Caution: **Do not take the list's order for the contents' order.** The list has the
         // top nearest the front, so it is the other way round.
         const at = app.objects().findIndex((one) => one.picked);
         const wasAt = app.objects().map((one) => Math.round(one.x));
@@ -511,8 +512,8 @@ function kspageProbeRibbon(ks) {
 
   // 28'''. The look.
   //
-  // **This can be seen nowhere else**: the roles (CSS variables) hold colours, and **the look is
-  // one**: no other palette and no other packing of the tools is offered, so the root carries no
+  // **This can be seen nowhere else.** The roles (CSS variables) hold colours, and **the look is
+  // one**. No other palette and no other packing of the tools is offered, so the root carries no
   // mark for either.
   const root = document.documentElement;
   const roleOf = (name) => getComputedStyle(root).getPropertyValue(name).trim();
@@ -530,7 +531,7 @@ function kspageProbeRibbon(ks) {
 
   // 28-e. Putting the right list out, and folding it.
   //
-  // **This can be seen nowhere else**: whether the body's width spreads when it is folded is the
+  // **This can be seen nowhere else.** Whether the body's width spreads when it is folded is the
   // adornment's (it breaks as "fold it and the body does not spread").
   const sideKey = document.getElementById("side-toggle");
   check(sideKey !== null, "the list's knob is there");
@@ -553,9 +554,10 @@ function kspageProbeRibbon(ks) {
 
   // 28-f. Changing the right list's width by the boundary.
   //
-  // **This can be seen nowhere else**: whether the boundary sits at the panel's edge, whether the
-  // body is taken afresh by the drag, and whether it moves by key are the adornment's and the DOM's
-  // (they break as "it cannot be taken hold of" and "drag it and the body does not spread").
+  // **This can be seen nowhere else.** Three things are the adornment's and the DOM's. They are
+  // whether the boundary sits at the panel's edge, whether the drag takes the body afresh, and
+  // whether it moves by key. They break as "it cannot be taken hold of" and "drag it and the body
+  // does not spread".
   const grip = document.getElementById("side-grip");
   check(grip !== null, "the boundary that changes the width is there");
   if (grip !== null && !sideBox.hidden) {
@@ -632,8 +634,8 @@ function kspageProbeRibbon(ks) {
 
   // The Insert buttons act the way Word's and PowerPoint's do.
   //
-  // **This can be seen nowhere else**: a button that opens a panel and a rule that folds the panels
-  // both run on the one press, and their order breaks as "press it and nothing happens".
+  // **This can be seen nowhere else.** A button that opens a panel and a rule that folds the
+  // panels both run on the one press. Their order breaks as "press it and nothing happens".
   const note = document.getElementById("note");
   // Esc folds every menu and panel (`page.js`), putting the screen back to a known state between
   // presses.

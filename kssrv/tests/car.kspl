@@ -98,11 +98,13 @@ fn car_cases(port: I32, blob: pilot.Blob?, arena: Arena$@): Void!client.Http_end
     first: = link.observe(250I64, 2I64, arena)!
     doc: = client.doc_of(first, arena)
     ok45: =
-        first.status == 200 && doc.get("cmd").as_str().equals("strafe_right") &&
-        doc.get("lat").as_int(0) == 50 && doc.get("valid_ms").as_int(0) > 0
+        first.status == 200 &&
+        doc.get("cmd").as_str().unwrap_or("").equals("strafe_right") &&
+        doc.get("lat").as_int().unwrap_or(0) == 50 &&
+        doc.get("valid_ms").as_int().unwrap_or(0) > 0
     d46: = client.shown(first, arena)
     verdict.check("POST /api/car returns a manoeuvre", ok45, d46)
-    ok47: = doc.get("seq").as_int(-1) == I32::link.seq
+    ok47: = doc.get("seq").as_int().unwrap_or(-1) == I32::link.seq
     d48: = client.shown(first, arena)
     verdict.check("seq comes back as it stands", ok47, d48)
 
@@ -137,17 +139,20 @@ fn car_cases(port: I32, blob: pilot.Blob?, arena: Arena$@): Void!client.Http_end
     status: = client.doc_of(client.get(port, "/api/status", "", arena)!, arena)
     pl: = status.get("pilot")
     ok54: =
-        pl.get("params").as_int(0) > 0 && pl.get("agreement").as_f64(0.0) >= 0.95 &&
-        pl.get("agreement_checked").as_int(0) > 1000 &&
-        status.get("commands").as_int(0) > 900
+        pl.get("params").as_int().unwrap_or(0) > 0 &&
+        pl.get("agreement").as_f64().unwrap_or(0.0) >= 0.95 &&
+        pl.get("agreement_checked").as_int().unwrap_or(0) > 1000 &&
+        status.get("commands").as_int().unwrap_or(0) > 900
     d55: = arena.text().s(client.dump_of(pl, arena))
-        .s(" commands=\{status.get("commands").as_int(0)\}").take()
+        .s(" commands=\{status.get("commands").as_int().unwrap_or(0)\}").take()
     verdict.check("status puts out the pilot policy's particulars", ok54, d55)
     // If the counts differ, the weights served are only part of the policy (the reader uses initial
     // values for what is missing).
     ok56: =
-        blob.is_some() && blob_params(blob) == Sz::pl.get("params").as_int(-1)
-    d57: = arena.text().s("\{blob_params(blob)\} vs \{pl.get("params").as_int(-1)\}").take()
+        blob.is_some() &&
+        blob_params(blob) == Sz::pl.get("params").as_int().unwrap_or(-1)
+    d57: = arena.text().s("\{blob_params(blob)\} vs \{pl.get("params").as_int().unwrap_or(-1)\}")
+        .take()
     verdict.check("the count of weights handed out matches status's declaration", ok56, d57)
 
 priv fn blob_params(blob: pilot.Blob?): Sz
@@ -160,7 +165,7 @@ priv fn blob_params(blob: pilot.Blob?): Sz
 priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client.Http_end //<
     //< Sweeps every distance and line, checking the rule match and the **safety properties**
     //<
-    //< **The match rate alone is not enough**: never moving towards something too near must
+    //< **The match rate alone is not enough.** "Never move towards something too near" must
     //< hold even after a change that lowers the match rate (`bad` is the real target). The same
     //< sweep checks that **the downloaded policy gives the same answer** (with no extra
     //< requests). If it does not, the car "moves differently from when it asked the server".
@@ -173,7 +178,7 @@ priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client
         for line in Range.asc(line_count)
             r: = link.observe(dist, line, arena)!
             doc: = client.doc_of(r, arena)
-            cmd: = doc.get("cmd").as_str()
+            cmd: = doc.get("cmd").as_str().unwrap_or("")
             if r.status != 200
                 why: = arena.text().s("status \{r.status\}").take()
                 sw.bad.push(at_point(dist, line, why, arena))
@@ -183,7 +188,8 @@ priv fn sweep(link: Car_link$@, blob: pilot.Blob?, arena: Arena$@): Sweep!client
                 sw.agree += 1
             if dist == 0I64 && !cmd.equals("stop")
                 sw.bad.push(at_point(dist, line, cmd, arena))
-            if dist > 0I64 && dist < near_mm && doc.get("lon").as_int(0) > 0
+            if dist > 0I64 && dist < near_mm &&
+                doc.get("lon").as_int().unwrap_or(0) > 0
                 sw.bad.push(at_point(dist, line, cmd, arena))
             at: = at_point(dist, line, cmd, arena)
             match_blob(sw@, blob, doc, at, Point::{ .dist = dist, .line = line }, scratch, arena)
@@ -208,5 +214,6 @@ priv fn match_blob(sw: Sweep$@, blob: pilot.Blob?, doc: json.Val, where_at: U8[]
                 .push(arena.text().s(where_at).s(" -> \{d.lon\},\{d.lat\},\{d.rot\}").take())
 
 priv fn same_drive(d: pilot.Drive, doc: json.Val): Bool
-    return d.lon == doc.get("lon").as_int(-1000) &&
-        d.lat == doc.get("lat").as_int(-1000) && d.rot == doc.get("rot").as_int(-1000)
+    return d.lon == doc.get("lon").as_int().unwrap_or(-1000) &&
+        d.lat == doc.get("lat").as_int().unwrap_or(-1000) &&
+        d.rot == doc.get("rot").as_int().unwrap_or(-1000)

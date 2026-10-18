@@ -51,8 +51,10 @@ pub fn mode_shown(path: U8[], arena: Arena$@): U8[] //< the permissions `ls -l` 
     //< at `test_can_run` in `std/tests/sys_test.kspl`).
     if sys.is_windows()
         return ""
-    r: = subproc.run_capture(U8[][]::{ "/bin/ls", "-l", path }, "", 10000, 4096, arena)
-    if r.spawn_failed || r.timed_out || r.exit_code != 0 || r.stdout_data.len < 10
+    r: =
+        subproc.run_capture(U8[][]::{ "/bin/ls", "-l", path }, "", 10000, 4096, arena) catch
+        return ""
+    if !r.exited_with(0) || r.stdout_data.len < 10
         return ""
     shown: = r.stdout_data.sub(0, 10)
     return "" if shown.find_char('x').is_some() else shown
@@ -86,6 +88,65 @@ fn test_fs_write_unique()
         return
     verdict.pass("Each call makes a file of its own, which only its owner may read.")
 
+priv fn set_mode(path: U8[], mode: U8[], arena: Arena$@): Bool //< `chmod`, true where it ran
+    if sys.is_windows()
+        return false
+    r: =
+        subproc.run_capture(U8[][]::{ "/bin/chmod", mode, path }, "", 10000, 4096, arena) catch
+        return false
+    return r.exited_with(0)
+
+fn test_fs_replace_file()
+    verdict.start("[Fs] replacing a file whole, with its mode kept or narrowed test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(base, "replace_", arena)
+        catch panic("mkdir_unique should make a directory")
+    doc: = fs.join(dir, "doc.txt", arena)
+    fs.replace_file(doc, "one", .kept) catch panic("a new file should be written")
+    fs.replace_file(doc, "two", .kept) catch panic("the file should be replaced")
+    assert(holds(doc, "two"), "the file holds what was written last")
+    $last: U8[] = "two"
+    // **The mode stays**: renamed over it, the part's own 0600 would become the file's.
+    $shown: U8[] = ""
+    if set_mode(doc, "640", arena)
+        fs.replace_file(doc, "three", .kept) catch panic("the file should be replaced again")
+        shown = mode_shown(doc, arena)
+        if shown.len > 0
+            assert(shown.equals("-rw-r-----"), "kept: the replaced file's bits stay")
+        fs.replace_file(doc, "four", .owner_only) catch panic("the file should be narrowed")
+        if shown.len > 0
+            assert(mode_shown(doc, arena).equals("-rw-------"), "owner_only: its owner alone")
+        last = "four"
+    // A read-only file is replaced, as a rename over it is, and stays read-only.
+    if set_mode(doc, "444", arena)
+        fs.replace_file(doc, "five", .kept) catch panic("a read-only file should be replaced")
+        if shown.len > 0
+            assert(mode_shown(doc, arena).equals("-r--r--r--"), "kept: read-only stays")
+        last = "five"
+    assert(holds(doc, last), "each replacement holds its own content")
+    // A folder at the name is refused, and its part goes with the refusal.
+    sub: = fs.join(dir, "sub", arena)
+    fs.mkdir(sub) catch panic("the folder must be makeable")
+    $refused: = false
+    fs.replace_file(sub, "x", .kept) catch
+        refused = true
+    assert(refused, "a folder standing at the name is not replaced")
+    $missing: = false
+    fs.replace_file(fs.join(dir, "no/such.txt", arena), "x", .kept) catch
+        missing = true
+    assert(missing, "a missing folder fails the call")
+    names: = fs.read_dir(dir, arena) catch panic("the folder must be readable")
+    assert(names.len == 2, "no part is left beside the file")
+    _writable: = set_mode(doc, "644", arena)
+    fs_test.clear_tree_best_effort(dir, arena)
+    if shown.len == 0
+        verdict.skip("this system shows no POSIX mode (Windows, or a filesystem without one)")
+        return
+    verdict
+        .pass("Each replacement held its content whole, kept or narrowed the mode, and left no \
+            part.")
+
 fn test_fs_write_tree()
     verdict.start("[Fs] writing a tree of files test...")
     arena: = Arena.new(64 * 1024)
@@ -112,9 +173,11 @@ fn test_fs_write_tree()
     fs_test.clear_tree_best_effort(dir, arena)
     verdict.pass("A tree is written with its levels made, and a name climbing out writes nothing.")
 
-priv fn runnable(path: U8[], arena: Arena$@): Bool //< whether `test -x` says it may be started
-    r: = subproc.run_capture(U8[][]::{ "test", "-x", path }, "", 10000, 1024, arena)
-    return !r.spawn_failed && !r.timed_out && r.exit_code == 0
+priv fn runnable(path: U8[], arena: Arena$@): Bool //< whether `test -x` says it can be started
+    r: =
+        subproc.run_capture(U8[][]::{ "test", "-x", path }, "", 10000, 1024, arena) catch
+        return false
+    return r.exited_with(0)
 
 fn test_fs_copy_tree()
     verdict.start("[Fs] copying a tree to a place where nothing stands test...")
@@ -174,8 +237,8 @@ fn tree_test_watch_mode(w: Mode_watch$@): Void$@ //< looks at the copy until tol
 priv fn check_mode_from_first_byte(dir: U8[], arena: Arena$@) //<
     //< A copy has its source's bits from its first byte, never the default mode while written
     //<
-    //< The source is its owner's alone and executable (0700), so a copy created with the default
-    //< mode stands without the execute bit until narrowed, for as long as its contents take.
+    //< The source is its owner's alone and executable (0700). A copy created with the default
+    //< mode would stand without the execute bit until narrowed, for as long as its contents take.
     from: = fs.join(dir, "private", arena)
     key: = fs.join(from, "key", arena)
     fs.mkdir(from) catch panic("the private folder must be creatable")
@@ -201,11 +264,13 @@ priv fn check_mode_from_first_byte(dir: U8[], arena: Arena$@) //<
 
 priv fn trust_at_mode(dir: U8[], mode: U8[], arena: Arena$@): fs.Dir_trust //<
     //< `dir_trust`'s answer once `chmod` has given the folder that mode
-    r: = subproc.run_capture(U8[][]::{ "chmod", mode, dir }, "", 60000, 1024, arena)
-    assert(r.exit_code == 0, "chmod must change the folder's mode")
+    r: =
+        subproc.run_capture(U8[][]::{ "chmod", mode, dir }, "", 60000, 1024, arena)
+        catch panic("the child must start")
+    assert(r.exited_with(0), "chmod must change the folder's mode")
     return fs.dir_trust(dir)
 
-fn test_fs_dir_trust() //< dir_trust tells a folder others may write from one they may not
+fn test_fs_dir_trust() //< dir_trust tells a folder others can write from one they cannot
     verdict.start("[Fs] dir_trust: a folder's owner alone, everyone, and nothing there test...")
     arena: = Arena.new(64 * 1024)
     defer arena.free()
@@ -231,8 +296,10 @@ fn test_fs_dir_trust() //< dir_trust tells a folder others may write from one th
 // ==========================================
 priv fn made_link(target: U8[], at: U8[], arena: Arena$@): Bool //<
     //< `ln -s`; false where none is made
-    r: = subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena)
-    return !r.spawn_failed && r.exit_code == 0 && fs.is_link(at)
+    r: =
+        subproc.run_capture(U8[][]::{ "ln", "-s", target, at }, "", 10000, 4096, arena) catch
+        return false
+    return r.exited_with(0) && fs.is_link(at)
 
 fn test_fs_walk_links() //<
     //< A walk does not enter a link to a directory, and a copy takes no link at all
@@ -275,3 +342,35 @@ priv fn sys_suffix(path: U8[]): U8[] //< the last name of a path, to keep the co
     for at > 0 && path[at - 1] != '/' && path[at - 1] != '\\'
         at -= 1
     return path.sub_from(at)
+
+fn test_fs_copy_file()
+    verdict.start("[Fs] copying one file to a name where nothing stands test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    dir: = fs.mkdir_unique(base, "copy1_", arena)
+        catch panic("mkdir_unique should make a directory")
+    from: = fs.join(dir, "from.txt", arena)
+    io.write_file(from, "contents") catch panic("the file to copy must be writable")
+    to: = fs.join(dir, "to.txt", arena)
+    fs.copy_file(from, to) catch panic("copy_file should copy a file to a free name")
+    assert(holds(to, "contents"), "the copy holds the source's contents")
+    $stood: = false
+    fs.copy_file(from, to) catch
+        stood = true
+    assert(stood && holds(to, "contents"), "a destination that stands is refused and left as it is")
+    $missing: = false
+    fs.copy_file(fs.join(dir, "absent.txt", arena), fs.join(dir, "x.txt", arena)) catch e
+        switch e
+        case .not_found
+            missing = true
+        default {}
+    assert(missing, "a source that is not there fails as not_found")
+    $dir_refused: = false
+    fs.copy_file(dir, fs.join(dir, "y.txt", arena)) catch
+        dir_refused = true
+    assert(dir_refused && !fs.exists(fs.join(dir, "y.txt", arena)),
+        "a directory is no regular file, and nothing is made for it")
+    fs_test.clear_tree_best_effort(dir, arena)
+    verdict
+        .pass("copy_file copies to a free name, and refuses one that stands, a missing source and a \
+            directory.")

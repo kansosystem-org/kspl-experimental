@@ -1,0 +1,341 @@
+//< A published document's sentence holds at most 25 words, its heading at most 10 (not the suite)
+//<
+//< The rule is "Length" in `docs/SPEC-plain-language.md`; this file only counts.
+//< Caution: **It sees the length alone** (Principle 8 in `docs/DESIGN-principles.md`). It cannot
+//< tell an instruction (20 words) from a description (25), so it holds every sentence to 25. One
+//< topic per sentence, plain words and the rest are left to review.
+import "std/chars" // `starts_with` / `sub` / `is_digit`
+import "std/ds" { List }
+import "std/mem" { Arena }
+import "std/str"
+import "std/strfmt" as _strfmt
+import "std/verdict"
+import "tests/support/conventions_scan" as scan + { Sample }
+import "tests/support/harness"
+import "tests/support/harness_text"
+
+priv const max_words: Sz = 25 //< the cap on a sentence, a table cell's or a list item's included
+priv const max_heading_words: Sz = 10
+
+priv const lead_words: Sz = 8 //< how many of a sentence's first words a finding shows
+
+// ==========================================
+// The documents not yet in plain language
+// **Each is skipped whole**, and the list only shrinks. A listed document that passes fails the
+// check. So it is taken off once its last long sentence is split. A document not listed passes.
+// ==========================================
+priv const not_converted: U8[][_] = ::{}
+
+priv const quoted_whole: U8[][_] = ::{ "LICENSE.md" } //<
+    //< The documents whose text is another's words, quoted whole
+    //<
+    //< **They are never converted**: the MIT license is read in its own words, or not at all.
+
+// ==========================================
+// How a document is cut and counted
+// A fenced code block, a span in backquotes and a link's target count as no words. A link counts
+// as its text. A unit is a heading, a table cell, a list item, or a paragraph up to a blank line.
+// A unit splits into sentences after a `.`, `!` or `?` followed by a space or its end (a `)`,
+// `"` or `'` can stand between). A word is a run of letters, with a `'` or `-` inside it.
+// ==========================================
+
+priv struct Unit //< one heading, table cell, list item or paragraph
+    line: Sz //< its first line, 1-based
+    text: U8[] //< its lines joined by `\n`, markers and quote marks taken off
+    heading: Bool
+
+priv struct Finding //< one sentence or heading over its cap
+    line: Sz //< 1-based
+    words: Sz
+    cap: Sz
+    lead: U8[] //< its first words, for the message
+
+priv fn is_letter(c: U8): Bool //< a letter of a word: ASCII's, or any byte past ASCII
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80U8
+
+priv fn word_end(text: U8[], at: Sz): Sz //< where the word starting at `at` ends
+    $i: = at
+    for i < text.len &&
+        (is_letter(text[i]) ||
+        (text[i] == '\'' || text[i] == '-') && i + 1 < text.len && is_letter(text[i + 1]))
+        i += 1
+    return i
+
+priv fn count_words(text: U8[]): Sz //< how many words the text holds
+    $n: Sz = 0
+    $i: Sz = 0
+    for i < text.len
+        if is_letter(text[i])
+            n += 1
+            i = word_end(text, i)
+        else
+            i += 1
+    return n
+
+priv fn lead_of(text: U8[], arena: Arena$@): U8[] //<
+    //< the text's first `lead_words` words, on one line
+    t: = text.trim_spaces()
+    $n: Sz = 0
+    $i: Sz = 0
+    for i < t.len && n < lead_words
+        if is_letter(t[i])
+            n += 1
+            i = word_end(t, i)
+        else
+            i += 1
+    return t.sub(0, i).replace("\n", " ", arena)
+
+priv fn plain(text: U8[], arena: Arena$@): U8[] //<
+    //< The text as a reader counts it: no link target, no `*`, `[` or `]`
+    //<
+    //< A code span becomes `` `_` ``, which holds no word. It keeps its line ends, so a sentence's
+    //< line is still right.
+    b: = arena.text()
+    $i: Sz = 0
+    for i < text.len
+        c: = text[i]
+        if c == '`'
+            $run: Sz = 0
+            for i + run < text.len && text[i + run] == '`'
+                run += 1
+            $end: = i + run
+            if shut: = text.sub_from(end).find_str(text.sub(i, run))
+                end = end + shut + run
+            b.s("`_`")
+            for k in Range.asc(end - i)
+                if text[i + k] == '\n'
+                    b.c('\n')
+            i = end
+            continue
+        if c == ']' && i + 1 < text.len && text[i + 1] == '('
+            if shut: = text.sub_from(i).find_char(')')
+                i += shut + 1
+                continue
+        if c != '*' && c != '[' && c != ']'
+            b.c(c)
+        i += 1
+    return b.take()
+
+priv fn quote_free(raw: U8[]): U8[] //< the line without its indent and its quote marks
+    $s: = raw.trim_spaces()
+    for s.starts_with(">")
+        s = s.sub_from(1).trim_spaces()
+    return s
+
+priv fn item_marker(s: U8[]): Sz //< the length of a list item's marker (`* `, `12. `), or 0
+    if s.starts_with("* ") || s.starts_with("- ") || s.starts_with("+ ")
+        return 2
+    $n: Sz = 0
+    for n < s.len && s[n].is_digit()
+        n += 1
+    if n > 0 && s.sub_from(n).starts_with(". ")
+        return n + 2
+    return 0
+
+priv fn heading_marker(s: U8[]): Sz //< the length of a heading's `## `, or 0
+    $n: Sz = 0
+    for n < s.len && s[n] == '#'
+        n += 1
+    if n > 0 && n <= 6 && n < s.len && s[n] == ' '
+        return n + 1
+    return 0
+
+priv fn is_table_rule(s: U8[]): Bool //< whether it is a table's separator row (`|---|---|`)
+    for c in s
+        if c != '|' && c != '-' && c != ':' && c != ' ' && c != '\t'
+            return false
+    return true
+
+priv fn paragraph(lines: List<|U8[]|>@, from: Sz, to: Sz, arena: Arena$@): Unit //<
+    //< Lines `from` to `to` (0-based, `to` left out) as one unit, the item's marker taken off
+    b: = arena.text()
+    for i in Range.asc(to - from)
+        s: = quote_free(lines.get(from + i))
+        if i == 0
+            b.s(s.sub_from(item_marker(s)))
+        else
+            b.c('\n').s(s)
+    return Unit::{ .line = from + 1, .text = b.take(), .heading = false }
+
+priv fn units(src: U8[], arena: Arena$@): List<|Unit|> //< cuts a document into its units
+    lines: = src.lines(arena)
+    $out: = List<|Unit|>.new(arena)
+    $from: Sz = -1 // the open paragraph's first line, or -1
+    $fence: = false
+    for i in Range.asc(lines.len + 1)
+        s: = "" if i == lines.len else quote_free(lines.get(i))
+        opens: = s.starts_with("```")
+        new_unit: =
+            i == lines.len || s.len == 0 || opens || fence || heading_marker(s) > 0 ||
+            s.starts_with("|") || item_marker(s) > 0
+        if new_unit && from >= 0
+            out.push(paragraph(lines@, from, i, arena))
+            from = -1
+        if opens
+            fence = !fence
+        if i == lines.len || opens
+            continue
+        if fence || s.len == 0
+            continue
+        h: = heading_marker(s)
+        if h > 0
+            out.push(Unit::{ .line = i + 1, .text = s.sub_from(h), .heading = true })
+        else if s.starts_with("|")
+            if !is_table_rule(s)
+                cells: = s.replace("\\|", "\0", arena).strip_prefix("|").strip_suffix("|")
+                for cell in cells.split('|', arena)
+                    out.push(Unit::{ .line = i + 1, .text = cell, .heading = false })
+        else if from < 0
+            from = i
+    return out
+
+priv fn sentence_ends(text: U8[], at: Sz): Sz //<
+    //< Where the sentence ends if the `.`, `!` or `?` at `at` ends it, or 0
+    $j: = at + 1
+    for j < text.len && (text[j] == ')' || text[j] == '"' || text[j] == '\'')
+        j += 1
+    if j == text.len || text[j] == ' ' || text[j] == '\n'
+        return j
+    return 0
+
+priv fn judge(u: Unit@, from: Sz, to: Sz, text: U8[], out: List<|Finding|>$@, arena: Arena$@) //<
+    //< Adds a finding for `text[from..to]` if it is over its cap
+    part: = text.sub(from, to - from)
+    cap: = max_heading_words if u.heading else max_words
+    n: = count_words(part)
+    if n <= cap
+        return
+    skip: = part.len - part.trim_start().len
+    line: = u.line + scan.count_char(text.sub(0, from + skip), '\n')
+    out
+        .push(Finding::{ .line = line, .words = n, .cap = cap, .lead = lead_of(part, arena) })
+
+priv fn over_long(src: U8[], arena: Arena$@): List<|Finding|> //<
+    //< every sentence and heading over its cap
+    $out: = List<|Finding|>.new(arena)
+    for u in units(src, arena)
+        text: = plain(u.text, arena)
+        $from: Sz = 0
+        if !u.heading
+            for i in Range.asc(text.len)
+                c: = text[i]
+                if c == '.' || c == '!' || c == '?'
+                    end: = sentence_ends(text, i)
+                    if end > 0
+                        judge(u@, from, end, text, out@, arena)
+                        from = end
+        judge(u@, from, text.len, text, out@, arena)
+    return out
+
+// ==========================================
+// The check, and its samples
+// ==========================================
+
+priv fn listed(names: U8[][], rel: U8[]): Bool
+    for n in names
+        if n.equals(rel)
+            return true
+    return false
+
+priv fn check_documents(arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    $stale: = List<|U8[]|>.new(arena)
+    $seen: Sz = 0
+    $published: = List<|U8[]|>.new(arena)
+    own: = harness.private_docs()
+    for rel in harness.tracked_matching(U8[][]::{ "*.md" })
+        if harness.is_private_doc(rel, own@)
+            continue
+        published.push(rel)
+        if listed(U8[][]::quoted_whole, rel)
+            continue
+        seen += 1
+        found: = over_long(harness.read_under_root(rel), arena)
+        if listed(U8[][]::not_converted, rel)
+            if found.len == 0
+                stale
+                    .push(arena.text().s(rel).s(": it passes now; take it off the list").take())
+            continue
+        for f in found
+            bad
+                .push(arena.text().s(rel).s(":\{f.line\}: \{f.words\} words (cap \{f.cap\}): \"")
+                .s(f.lead).s(" …\"").take())
+    gone(U8[][]::not_converted, published@, stale@, arena)
+    gone(U8[][]::quoted_whole, published@, stale@, arena)
+    n: = arena.text().s("a sentence in a document holds at most \{max_words\} words, a heading ")
+        .s("\{max_heading_words\} (the length alone; an instruction's 20 is left to review)").take()
+    verdict.check_list(n, seen, "documents", bad@, "Split it (docs/SPEC-plain-language.md)")
+    verdict.check_list("the documents not yet in plain language are listed, and only those",
+        not_converted.len + quoted_whole.len, "names", stale@,
+        "mend the lists in `tests/support/conventions_plain.kspl`")
+
+priv fn gone(names: U8[][], published: List<|U8[]|>@, stale: List<|U8[]|>$@, arena: Arena$@) //<
+    //< Adds to `stale` each listed name that is no published document
+    for rel in names
+        if !harness_text.has(published, rel)
+            stale
+                .push(arena.text().s(rel).s(": no such published document").take())
+
+priv fn has_over_long(text: U8[], arena: Arena$@): Bool //< the judgment the samples are held to
+    return over_long(text, arena).len > 0
+
+priv const samples: Sample[_] = ::{
+    // 26 words, then 25.
+    Sample::{ .text =
+        "The gate reads every document in the tree and counts the words of each sentence, so a \
+            sentence that runs past the cap fails the gate.", .hits = true },
+    Sample::{ .text =
+        "The gate reads every document in the tree and counts the words of each sentence, so a \
+            sentence that runs past the cap fails it.", .hits = false },
+    // A heading of 11 words, then 10.
+    Sample::{ .text = "## How the gate counts the words of every heading in documents",
+        .hits = true },
+    Sample::{ .text = "## How the gate counts the words of every heading here", .hits = false },
+    // **Each sentence, cell and item counts apart**: 21 and 21 words.
+    Sample::{ .text =
+        "A table cell is a unit of its own, and the gate counts its words apart from the cells \
+            beside it. A list item is a unit of its own too, so two short items next to each other \
+            pass the gate.", .hits = false },
+    Sample::{ .text =
+        "**A table cell is a unit of its own, and the gate counts its words apart from the cells \
+            beside it.** A list item is a unit of its own too, so two short items next to each \
+            other pass the gate.", .hits = false },
+    Sample::{ .text =
+        "| A table cell is a unit of its own, and the gate counts its words apart from the cells \
+            beside it | A list item is a unit of its own too, so two short items next to each other \
+            pass the gate |", .hits = false },
+    Sample::{ .text =
+        "* A table cell is a unit of its own, and the gate counts its words apart from the cells \
+            beside it\n* A list item is a unit of its own too, so two short items next to each \
+            other pass the gate", .hits = false },
+    // **A cell and an item that run on are still hit**, an item across two lines too.
+    Sample::{ .text =
+        "| x | The gate reads every document in the tree and counts the words of each sentence, so \
+            a sentence that runs past the cap fails the gate |", .hits = true },
+    Sample::{ .text =
+        "* The gate reads every document in the tree and counts the words\n  of each sentence, so a \
+            sentence that runs past the cap fails the gate.", .hits = true },
+    // A word holds its `-` and `'`: 23 words, 27 if they split it.
+    Sample::{ .text =
+        "A well-known rule-of-thumb says a sentence that doesn't fit on one line is too long, and \
+            the gate holds every sentence to it.", .hits = false },
+    // **Code counts no words**, a link counts its text and not its target.
+    Sample::{ .text =
+        "A span in backquotes counts as no words, so `this span holds far more words than the cap \
+            on a sentence allows, and more` passes.", .hits = false },
+    Sample::{ .text =
+        "```\nThe gate reads every document in the tree and counts the words of each sentence, so a \
+            sentence that runs past the cap fails the gate.\n```", .hits = false },
+    Sample::{ .text =
+        "A link counts as the words a reader sees, so [the \
+            address](https://example.org/one/two/three/four) adds nothing to the count of this one \
+            sentence here.", .hits = false },
+    Sample::{ .text =
+        "A link counts as the words a reader sees, so this sentence ends in [a link whose text \
+            holds enough words to pass the cap here](#cap).", .hits = true },
+}
+
+fn run(arena: Arena$@)
+    scan.check_samples("the count of a sentence's words can fire", Sample[]::samples, "samples",
+        has_over_long, arena)
+    check_documents(arena)

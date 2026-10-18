@@ -1,8 +1,8 @@
 #!/usr/bin/env -S ksplc run
 //< Checks what the make steps say about the machine they run on, where it lacks something
 //<
-//< **CI's machines hold every tool, so these answers are seen nowhere else**: a step that needs a
-//< tool must say so, one that does not must go on without it, and `make install` must say which
+//< **CI's machines hold every tool, so these answers are seen nowhere else.** A step that needs a
+//< tool must say so. One that does not must go on without it. `make install` must say which
 //< `ksplc` the PATH really starts. Each case stands the missing piece in on purpose: a formatter
 //< name nothing answers to, a PATH with another `ksplc` first, a switch set to what is lacking.
 import "ksplc/tests/support/harness" as ksplc_harness
@@ -35,9 +35,10 @@ priv fn check_seed_needs_fmt(arena: Arena$@) //<
     before: = read_held(seed, arena)
     r: = harness.make(U8[][]::{ "LOGGING=1", "commit-seed", absent_fmt })
     after: = read_held(seed, arena)
-    if r.code == 0 || !r.out.find_str("needs clang-format").is_some()
-        why: = arena.text().s("exit \{r.code\}, and no line says it needs clang-format\n")
-            .s(r.out).take()
+    if r.exited_with(0) || !r.out.find_str("needs clang-format").is_some()
+        why: = arena.text()
+            .s("exit \{r.code.unwrap_or(-1)\}, and no line says it needs clang-format\n").s(r.out)
+            .take()
         verdict.check(name, false, why)
         return
     verdict.check(name, before.len > 0 && before.equals(after), "the seed changed")
@@ -48,7 +49,7 @@ priv fn fake_ksplc(dir: U8[], file: U8[], arena: Arena$@): Bool //< an executabl
     path: = fs.join(dir, file, arena)
     io.write_file(path, "#!/bin/sh\nexit 0\n") catch
         return false
-    return ksplc_harness.run(U8[][]::{ "chmod", "+x", path }).code == 0
+    return ksplc_harness.run(U8[][]::{ "chmod", "+x", path }).exited_with(0)
 
 priv fn install_check(prefix: U8[], first: U8[], second: U8[], arena: Arena$@): verdict.Run_out //<
     //< `make install-check` under a PATH whose first two folders are given, the rest as it was
@@ -81,11 +82,11 @@ priv fn check_install_names_first(arena: Arena$@) //<
         return
     other: = install_check(prefix, old, bin, arena)
     verdict.check(name_other,
-        other.code == 0 && other.out.find_str("another one").is_some() &&
+        other.exited_with(0) && other.out.find_str("another one").is_some() &&
         other.out.find_str("old").is_some() && !other.out.find_str("✅").is_some(), other.out)
     ok: = install_check(prefix, bin, old, arena)
     verdict.check(name_ok,
-        ok.code == 0 && ok.out.find_str("✅").is_some() &&
+        ok.exited_with(0) && ok.out.find_str("✅").is_some() &&
         !ok.out.find_str("another one").is_some(), ok.out)
 
 priv fn check_switch_values(arena: Arena$@) //<
@@ -95,8 +96,9 @@ priv fn check_switch_values(arena: Arena$@) //<
     name: = "a switch requiring a tool refuses a value other than 0 or 1"
     r: = harness.make(U8[][]::{ "LOGGING=1", "KANSO_REQUIRE_CHOWN=yes", "help" })
     verdict.check(name,
-        r.code != 0 && r.out.find_str("KANSO_REQUIRE_CHOWN=yes: only 0 or 1").is_some(),
-        arena.text().s("exit \{r.code\}\n").s(r.out).take())
+        !r.exited_with(0) &&
+        r.out.find_str("KANSO_REQUIRE_CHOWN=yes: only 0 or 1").is_some(),
+        arena.text().s("exit \{r.code.unwrap_or(-1)\}\n").s(r.out).take())
 
 priv const switch_probe: U8[] = //<
     //< A suite of one check that lacks its tool, through the harness every suite uses
@@ -127,10 +129,10 @@ priv fn check_switch_message(arena: Arena$@) //<
     off: = ksplc_harness.ksplc(U8[][]::{ "run", probe, dir })
     sys.unset_env("KANSO_REQUIRE_PROBE") catch panic("the switch cannot be unset")
     verdict.check(name_on,
-        on.code != 0 && on.out.find_str("FAIL").is_some() &&
+        !on.exited_with(0) && on.out.find_str("FAIL").is_some() &&
         on.out.find_str("KANSO_REQUIRE_PROBE=0 makes this a SKIP").is_some(), on.out)
     verdict.check(name_off,
-        off.code == 0 && off.out.find_str("SKIP").is_some() &&
+        off.exited_with(0) && off.out.find_str("SKIP").is_some() &&
         !off.out.find_str("FAIL").is_some(), off.out)
 
 priv const native_ci_probe: U8[] =
@@ -152,7 +154,7 @@ priv fn check_windows_ci_is_native(arena: Arena$@) //< Docker is deliberately ma
     exe: = fs.join(dir, "ci_probe.exe", arena)
     built: = ksplc_harness
         .ksplc(U8[][]::{ "build", fs.join(harness.root(), "tools/ci.kspl", arena), exe })
-    if !verdict.check("the native CI probe builds", built.code == 0, built.out)
+    if !verdict.check("the native CI probe builds", built.exited_with(0), built.out)
         return
     src: = fs.join(dir, "commands.kspl", arena)
     io.write_file(src, native_ci_probe) catch panic("cannot write the native CI stand-ins")
@@ -160,17 +162,17 @@ priv fn check_windows_ci_is_native(arena: Arena$@) //< Docker is deliberately ma
     docker: = fs.join(dir, "docker.exe" if sys.is_windows() else "docker", arena)
     for path in U8[][]::{ make, docker }
         command: = ksplc_harness.ksplc(U8[][]::{ "build", src, path })
-        if !verdict.check("the native CI stand-in builds", command.code == 0, command.out)
+        if !verdict.check("the native CI stand-in builds", command.exited_with(0), command.out)
             return
     was: = arena.dup_str(sys.get_env("PATH").unwrap_or(""))
     sys.set_env("PATH",
         arena.text().s(dir).s(";" if sys.is_windows() else ":").s(was).take())
         catch panic("cannot set the native CI probe's PATH")
     defer sys.set_env("PATH", was) catch panic("cannot restore PATH")
-    run: = ksplc_harness.run_in(U8[][]::{ exe, "ci", "--platform=win32",
+    run: = ksplc_harness.run_in(U8[][]::{ exe, "ci", "--platform=win32", "--cap=600",
         arena.text().s("--make=").s(make).take() }, dir)
     verdict.check("Windows ci succeeds without invoking Docker",
-        run.code == 0 && run.out.find_str("# ci: ALL GREEN").is_some() &&
+        run.exited_with(0) && run.out.find_str("# ci: ALL GREEN").is_some() &&
         run.out.find_str("# --- selfhost:").is_some() &&
         run.out.find_str("Docker was invoked").is_none(), run.out)
 
@@ -186,21 +188,21 @@ priv fn check_logged_goals(arena: Arena$@) //< shared prerequisites have one bui
         if line.find_str("# GENERATING STAGE 2").is_some()
             stages += 1
     verdict.check("parallel make goals plan their shared compiler stage once",
-        planned.code == 0 && stages == 1, planned.out)
+        planned.exited_with(0) && stages == 1, planned.out)
     log: = fs.join(out, "log/make.log", arena)
     verdict.check("make keeps its combined log under OUT_DIR",
         read_held(log, arena).find_str("# GENERATING STAGE 2").is_some(), planned.out)
     failed: = harness.make(U8[][]::{ "LOGGING=", setting, "kanso-absent-build-target" })
     verdict.check("the logging pipe preserves a failed goal's status and its reason",
-        failed.code != 0 &&
+        !failed.exited_with(0) &&
         read_held(log, arena).find_str("kanso-absent-build-target").is_some(), failed.out)
     restarted: = harness.make(U8[][]::{ "LOGGING=", setting, "clean", "help" })
     verdict.check("goals after clean start a new combined log",
-        restarted.code == 0 &&
+        restarted.exited_with(0) &&
         read_held(log, arena).find_str("Build-and-install").is_some(), restarted.out)
     cleaned: = harness.make(U8[][]::{ "LOGGING=", setting, "clean" })
     verdict.check("clean removes OUT_DIR without reopening its log",
-        cleaned.code == 0 && !fs.exists(out), cleaned.out)
+        cleaned.exited_with(0) && !fs.exists(out), cleaned.out)
 
 fn main(): I32
     arena: = harness.begin(16 * 1024 * 1024)

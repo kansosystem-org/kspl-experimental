@@ -21,9 +21,9 @@ fn main(): I32
 // ==== case defer_double_free_at_scope_exit
 //< A defer's body is checked against the state at the point of leaving the scope
 //<
-//< Analyse at registration and nothing after the defer statement is visible, so this double free
-//< passes with zero diagnostics (reversing the order detects it, the asymmetry that marks the bug;
-//< ksplc/docs/DESIGN-diagnostics.md "A check of the same nature is not copied into two places").
+//< At registration, nothing after the defer statement is visible. An analysis there passes this
+//< double free with zero diagnostics. The reverse order is detected: that asymmetry marks the bug
+//< (ksplc/docs/DESIGN-diagnostics.md "A check of one kind lives in one place").
 // EXPECT: variable 'b' may already be freed here
 import "std/str"
 import "std/str" { Str_builder }
@@ -37,7 +37,7 @@ fn main()
 //<
 //< Move it in the body and then use it in the defer's body and the run order becomes "move -> move
 //< again". Analysed at the state at registration it goes undiagnosed (ksplc/docs/DESIGN-diagnostics.md "A check
-//< of the same nature is not copied into two places").
+//< of one kind lives in one place").
 // EXPECT: was moved out of and cannot be used again
 import "std/mem"
 
@@ -60,7 +60,7 @@ fn main()
 //< A `defer` block whose one statement calls a method on nothing
 //<
 //< The block form and the statement form are one `defer`, so the same message stands for both.
-// EXPECT: a 'defer' names what it cleans up, and '.close()' has nothing in front of it
+// EXPECT: a 'defer' must name its resource. '.close()' has no receiver
 import "std/ds" { List }
 
 fn main(): I32
@@ -260,8 +260,8 @@ fn main(): I32
 //< An alias to a user's enum does not widen what `if <name>: = <expr>` unwraps
 //<
 //< Caution: **Resolving the alias must not lose the refusal.** The check reads the resolved name so
-//< `typedef Opt = T?` goes through; stop there and this alias to an enum goes through too,
-//< and the day the enum grows **a branch passes in silence** (7.1 of docs/SPEC-language.md).
+//< that `typedef Opt = T?` goes through. Stop there, and this alias to an enum goes through too.
+//< The day the enum grows, **a branch passes silently** (7.1 of docs/SPEC-language.md).
 // EXPECT: 'if <name>: = <expr>' binds an 'Option'
 // EXPECT-NOT: .some
 enum Light
@@ -306,8 +306,8 @@ fn main(): I32
 // ==== case if_bind_non_option
 //< `if name: = expression` unwraps only `Option`
 //<
-//< **Not on a user's enum:** `Option` is fixed at two variants, a user's enum can grow, and the day
-//< it grows **a branch passes in silence** (7.1 of docs/SPEC-language.md). The wording names the
+//< **Not on a user's enum.** `Option` is fixed at two variants, but a user's enum can grow. The day
+//< it grows, **a branch passes silently** (7.1 of docs/SPEC-language.md). The wording names the
 //< characters the user wrote (`synthesized_option_spelling` in `ksplc/base/ast_ext.kspl`).
 // EXPECT: 'if <name>: = <expr>' binds an 'Option'
 // EXPECT-NOT: .some
@@ -338,13 +338,164 @@ fn pick(c: Bool): I32
 
 fn main(): I32
   return pick(true)
+// ==== case loop_carries_a_move
+//< A `Move_only` value moved inside a loop is moved again by the next pass
+//<
+//< **Each pass starts from what the last one left**, in all four shapes of `for`. Walked once
+//< from the state before the loop, the body never sees its own move, and the handle is handed
+//< out once per pass. The note says where the first move was, which is below the use.
+// EXPECT: loop_carries_a_move.kspl:24:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:31:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:40:15: error: variable 'm' was moved out of
+// EXPECT: loop_carries_a_move.kspl:47:15: error: variable 'm' was moved out of
+// EXPECT: It was moved by an earlier pass of the loop around this use.
+// EXPECT: Finished with 4 error(s)
+priv struct M
+  v: I32
+
+impl M: Move_only {}
+
+priv fn take(m: M): I32
+  return m.v
+
+priv fn three_part(n: I32): I32
+  m: M = ::{ .v = 1 }
+  $t: I32 = 0
+  for $i: I32 = 0; i < n; i += 1
+    t += take(m)
+  return t
+
+priv fn condition_only(n: I32): I32
+  m: M = ::{ .v = 1 }
+  $t: I32 = 0
+  for t < n
+    t += take(m)
+  return t
+
+priv fn bare(n: I32): I32
+  m: M = ::{ .v = 1 }
+  $t: I32 = 0
+  for
+    if t >= n
+      break
+    t += take(m)
+  return t
+
+priv fn each_element(n: Sz): I32
+  m: M = ::{ .v = 1 }
+  $t: I32 = 0
+  for _k in Range.asc(n)
+    t += take(m)
+  return t
+
+fn main(): I32
+  return three_part(2) + condition_only(2) + bare(2) + each_element(2)
+// ==== case loop_carries_a_release
+//< A value released inside a loop is released already on the next pass, and after the loop
+//<
+//< The `free()` can run on a pass before the use, in the body or in a `defer` of it. A second
+//< pass then frees twice. The loop's exit hands the released value to what follows.
+// EXPECT: loop_carries_a_release.kspl:15:5: error: variable 'b' may already be freed here (use-after-free or double free), by an earlier pass of the loop around this use
+// EXPECT: loop_carries_a_release.kspl:16:10: error: variable 'b' may already be freed here
+// EXPECT: loop_carries_a_release.kspl:22:5: error: variable 'b' may already be freed here
+// EXPECT: Finished with 3 error(s)
+import "std/str" { Str_builder }
+
+priv fn freed_in_the_body(n: I32): Sz
+  $b: = Str_builder.new()
+  b.s("x")
+  for $i: I32 = 0; i < n; i += 1
+    b.free()
+  return b.slice().len
+
+priv fn freed_by_a_defer(n: I32)
+  $b: = Str_builder.new()
+  for $i: I32 = 0; i < n; i += 1
+    defer b.free()
+    b.s("x")
+
+fn main(): I32
+  freed_by_a_defer(2)
+  return I32::freed_in_the_body(2)
+// ==== case loop_exit_carries_a_move
+//< What follows a statement a jump leaves starts from the state each jump carries
+//<
+//< **A `break`, a `continue` and a `fallback` each carry the state of their own path.** If it is
+//< dropped, a move just before the jump is lost, and the value goes out twice. The `continue`
+//< carries its move to the next pass as well as past the loop.
+// EXPECT: loop_exit_carries_a_move.kspl:35:19: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:43:15: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:50:17: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:52:19: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:61:15: error: variable 'm' was moved out of
+// EXPECT: loop_exit_carries_a_move.kspl:67:19: error: variable 'm' was moved out of
+// EXPECT: Finished with 6 error(s)
+priv struct M
+  v: I32
+
+impl M: Move_only {}
+
+priv enum Er
+  bad
+
+priv fn take(m: M): I32
+  return m.v
+
+priv fn may(n: I32): I32!Er
+  if n < 0
+    throw .bad
+  return n
+
+priv fn by_break(n: I32): I32
+  m: M = ::{ .v = 1 }
+  $t: I32 = 0
+  for $i: I32 = 0; i < n; i += 1
+    t += take(m)
+    break
+  return t + take(m)
+
+priv fn by_labelled_break(n: I32): I32
+  m: M = ::{ .v = 1 }
+  outer: for $i: I32 = 0; i < n; i += 1
+    for $j: I32 = 0; j < n; j += 1
+      _x: = take(m)
+      break outer
+  return take(m)
+
+priv fn by_continue(n: I32): I32
+  m: M = ::{ .v = 1 }
+  $t: I32 = 0
+  for $i: I32 = 0; i < n; i += 1
+    if i == 0
+      t += take(m)
+      continue
+  return t + take(m)
+
+priv fn by_block_break(c: Bool): I32
+  m: M = ::{ .v = 1 }
+  out:
+    if c
+      _x: = take(m)
+      break out
+    return 0
+  return take(m)
+
+priv fn by_fallback(n: I32): I32
+  m: M = ::{ .v = 1 }
+  y: = may(n) catch
+    fallback take(m)
+  return y + take(m)
+
+fn main(): I32
+  return by_break(1) + by_labelled_break(1) + by_continue(1) + by_block_break(true) +
+    by_fallback(-1)
 // ==== case loop_written_as_while
 //< Another language's `while` suggests `for` with the condition alone, the line to write shown
 //<
 //< `while x > 0` reads as a name followed by a value (`append_statement_word_hint` in
 //< `../../parse/syntax_msg.kspl`); the word stays a name, as the first line of `main` shows.
 // EXPECT: loop_written_as_while.kspl:9:11: error: expected ':'
-// EXPECT: every loop is written with 'for', and a condition alone makes it repeat while the condition holds: 'for x > 0'.
+// EXPECT: every loop is written with 'for'. A condition alone repeats the loop while the condition holds: 'for x > 0'.
 fn main()
     while: = 3
     while x > 0
@@ -353,7 +504,7 @@ fn main()
 //< An error in one function does not hide the diagnostics of the functions after it
 //<
 //< Counted over the whole compilation, the first error silenced every later "control may reach
-//< the end" and "undefined path", so each fix uncovered one more error and needed one more run.
+//< the end" and "undefined path". So each fix showed one more error and needed one more run.
 // EXPECT: missing_return_after_other_error.kspl:9:12: error: undefined path or identifier 'nosuch'
 // EXPECT: missing_return_after_other_error.kspl:11:1: error: function 'second' is expected to
 // EXPECT: missing_return_after_other_error.kspl:17:12: error: undefined path or identifier 'gone'
@@ -416,7 +567,7 @@ fn main(): I32
 //<
 //< **The C spelling (`std_lang_Slice_U8_Const`) is a name the writer never wrote**, and a reader
 //< cannot tell it is the `U8[]` they switched on.
-// EXPECT: cannot 'switch' on 'U8[]': only scalars
+// EXPECT: cannot 'switch' on 'U8[]'. Only scalars
 // EXPECT-NOT: std_lang_Slice
 fn main(): I32
   s: U8[] = "a"
@@ -430,7 +581,7 @@ fn main(): I32
 //< The note writes the head with the subject the line gave; `match` stays a name, as the call on
 //< the first line of `main` shows.
 // EXPECT: switch_written_as_match.kspl:12:11: error: expected ':'
-// EXPECT: KSPL branches on a value with 'switch'; each case opens with 'case', with no braces around them all: 'switch x case ...'.
+// EXPECT: KSPL branches on a value with 'switch'. Start each case with 'case'. Do not enclose all cases in braces: 'switch x case ...'.
 fn match(n: I32): I32
     return n
 

@@ -47,6 +47,7 @@ priv fn check_usage_layout(arena: Arena$@) //<
     p.positional("<file>")
     p.subcommand("build", "compile")
     p.subcommand_trailing("run", "execute", values)
+    p.subcommand_hidden("worker") // listed nowhere below: the usage leaves it out
     p.flag("--quiet", flag@, "silent")
     p.flag("--a-name-longer-than-the-column", flag@, "long")
     p.str_required("--name", text@, "name")
@@ -68,6 +69,20 @@ priv fn check_usage_layout(arena: Arena$@) //<
             repeat\n\u0020\u0020--version                \
             version\n\u0020\u0020--help                   show this usage\n"
     assert(out.slice().equals(expected), "argp: help layout is exact for every declaration kind")
+    // `print_options` is the usage from its first list on, with no heading.
+    $options: = str.Str_builder.new()
+    defer options.free()
+    p.print_options(options@)
+    from_lists: = expected.sub_from(expected.find_str("\nCommands:").unwrap_or(0))
+    assert(options.slice().equals(from_lists), "argp: print_options writes the lists alone")
+    // `append_names` gives every declared name in order, and adds to what the list holds.
+    names: = List<|U8[]|>.create(arena)
+    names.push("kept")
+    p.append_names(names)
+    joined: = " ".join(names$, arena)
+    in_order: = joined
+        .equals("kept --quiet --a-name-longer-than-the-column --name --count --item --version")
+    assert(in_order, "argp: append_names pushes each declared name, in order, after what was there")
 
 priv fn check_defaults_and_joined(arena: Arena$@) //<
     //< A default is the variable's initial value itself, and a value is joined with `=`
@@ -123,7 +138,7 @@ priv fn check_rest(arena: Arena$@) //< an argument that is not an option goes in
     assert(dash_out.equals("DEFAULT"), "argp: a refused argument does not reach where it writes")
     assert(sp.rest.len == 0, "argp: a refused argument does not enter rest either")
 
-    // The space-separated form is refused, and the argument after it is not taken as the value,
+    // The space-separated form is refused. The argument after it is not taken as the value,
     // whether it looks like a value (`--out a.txt`) or like an option (`--out --verbose`).
     $spaced: U8[] = "DEFAULT"
     $spaced_rest: = false
@@ -180,7 +195,7 @@ priv fn check_rest(arena: Arena$@) //< an argument that is not an option goes in
     assert(saw_unexpected_arg,
         "argp: a positional is an error when `positional` has not been declared")
     assert(xp.rest.len == 0, "argp: a refused positional does not enter rest either")
-    assert(xp.command.len == 0, "argp: a refused positional does not become a command either")
+    assert(xp.command.is_none(), "argp: a refused positional does not become a command either")
 
     // `-h` is not a spelling of `--help`: it is refused like any undeclared option.
     hp: = argp.Parser.create("t", "", arena)
@@ -318,6 +333,29 @@ priv fn test_repeatable(arena: Arena$@)
         items.len == 2 && items.get(0).equals("A=off") && items.get(1).equals("B=error")
     assert(accumulated, "argp: repeated values pile up in order rather than overwriting")
 
+    // An item of one value given twice is refused: kept, `--out=safe` would undo `--out=/etc/x`.
+    $out: U8[] = ""
+    $n: I64 = 0
+    $quiet: = false
+    for twice in U8[][]::{ "--out=/etc/x --out=safe", "--n=1 --n=2", "--out= --out=" }
+        one: = argp.Parser.create("t", "", arena)
+        one.str_opt("--out", out@, "")
+        one.int_opt("--n", n@, "")
+        $args: = twice.split(' ', arena)
+        $refused: = false
+        one.parse_list(args@) catch e
+            switch e
+            case .repeated(name)
+                refused = twice.starts_with(name)
+            default {}
+        what: =
+            U8$[]::arena.text().s("argp: '").s(twice).s("' is refused as repeated").take()
+        assert(refused, what)
+    flags: = argp.Parser.create("t", "", arena)
+    flags.flag("--quiet", quiet@, "")
+    flags.parse_list(argv_of(U8[][]::{ "--quiet", "--quiet" }, arena))
+        catch panic("argp: a flag given twice says the same thing twice, and is taken")
+
 // ==========================================
 // Commands. A positional's name (`fmt`) and an option's name (`--version`) both go into command
 // once chosen, and a second one is refused.
@@ -330,24 +368,33 @@ priv fn test_commands(arena: Arena$@)
     p.command_flag("--version", "")
     p.parse_list(argv_of(U8[][]::{ "fmt", "a.kspl" }, arena))
         catch panic("argp: parsing a command failed")
-    assert(p.command.equals("fmt"), "argp: a command is chosen by a positional's name")
+    assert(p.command.unwrap_or("").equals("fmt"), "argp: a command is chosen by a positional's name")
     // Do not put a command's name into rest, or the input file count goes up by one.
     cmd_not_in_rest: = p.rest.len == 1 && p.rest.get(0).equals("a.kspl")
     assert(cmd_not_in_rest, "argp: a command's name does not enter rest")
 
-    // Empty when none is given; the caller chooses the default.
+    // A hidden command is still chosen by its name, not read as an input.
+    hp: = argp.Parser.create("t", "", arena)
+    hp.positional("<file>...")
+    hp.subcommand_hidden("worker")
+    hp.parse_list(argv_of(U8[][]::{ "worker" }, arena))
+        catch panic("argp: parsing a hidden command failed")
+    assert(hp.command.unwrap_or("").equals("worker") && hp.rest.len == 0,
+        "argp: a hidden command is chosen by its name")
+
+    // None when none is given; the caller chooses the default.
     np: = argp.Parser.create("t", "", arena)
     np.positional("<file>")
     np.subcommand("fmt", "")
     np.parse_list(argv_of(U8[][]::{ "a.kspl" }, arena))
         catch panic("argp: it failed with no command")
-    assert(np.command.len == 0, "argp: command is empty when none is handed over")
+    assert(np.command.is_none(), "argp: command is none when none is handed over")
 
     fp: = argp.Parser.create("t", "", arena)
     fp.command_flag("--version", "")
     fp.parse_list(argv_of(U8[][]::{ "--version" }, arena))
         catch panic("argp: a command named as an option failed")
-    chose_by_flag: = fp.command.equals("--version")
+    chose_by_flag: = fp.command.unwrap_or("").equals("--version")
     assert(chose_by_flag, "argp: a command is chosen by an option's name too")
 
     // Giving two is refused, or the later one silently wins; for positionals and options alike.
@@ -377,7 +424,7 @@ priv fn test_trailing(arena: Arena$@)
     args: =
         argv_of(U8[][]::{ "run", "--stats", "s.kspl", "--stats", "--help", "x" }, arena)
     p.parse_list(args) catch panic("argp: parsing the uninterpreted remainder failed")
-    assert(p.command.equals("run"), "argp: a trailing command enters command too")
+    assert(p.command.unwrap_or("").equals("run"), "argp: a trailing command enters command too")
     assert(stats, "argp: an option before the subject is its own")
     assert(p.rest.len == 1 && p.rest.get(0).equals("s.kspl"),
         "argp: only the one subject goes to rest")
@@ -402,7 +449,7 @@ priv fn test_operands_marker(arena: Arena$@)
     taken: =
         p.rest.len == 4 && p.rest.get(0).equals("-x") && p.rest.get(1).equals("--help") &&
         p.rest.get(2).equals("fmt") && p.rest.get(3).equals("--")
-    assert(taken && verbose && p.command.len == 0,
+    assert(taken && verbose && p.command.is_none(),
         "argp: after `--` each argument is positional, even one naming an option or a command")
     // A CLI that takes no positional refuses one after `--` as well.
     np: = argp.Parser.create("t", "", arena)
@@ -437,10 +484,11 @@ fn test_argp_prints_usage(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     //< **What a person reads first**: the program's name, what it takes, and one line per option
     //< with the value it wants.
     verdict.start("[argp] the usage printed from the declarations test...")
-    r: = subproc.run_capture(sys_test.child_argv(ksplc, "usage_probe", usage_src, arena), "",
-        300000, 4096, arena)
+    r: =
+        subproc.run_capture(sys_test.child_argv(ksplc, "usage_probe", usage_src, arena), "", 300000,
+        4096, arena) catch panic("the child must start")
     out: = r.stdout_data
-    assert(r.exit_code == 0, "the child must print its usage and end")
+    assert(r.exited_with(0), "the child must print its usage and end")
     assert(out.starts_with("Usage: usage_probe [options] <file>\n"),
         "the first line names the program, its options and its positional")
     assert(out.find_str("says hello").is_some(), "the line saying what it is follows")
@@ -473,13 +521,38 @@ fn test_argp_refusal_goes_to_stderr(ksplc: U8[], arena: Arena$@) //< ksplc runs 
         argv.push(one)
     argv.push("--bogus")
     r: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena)
-    assert(r.exit_code == 2, "a refused command line ends with 2")
+        catch panic("the child must start")
+    assert(r.exited_with(2), "a refused command line ends with 2")
     assert(r.stdout_data.len == 0, "a refusal writes nothing to standard output")
     assert(r.stderr_data.find_str("unknown option '--bogus'").is_some() &&
         r.stderr_data.find_str("Usage: refuse_probe").is_some(),
         "the reason and the usage go to standard error")
     argv.set(argv.len - 1, "--help")
     h: = subproc.run_capture(argv.slice(), "", 300000, 4096, arena)
-    assert(h.exit_code == 0 && h.stdout_data.starts_with("Usage: refuse_probe"),
+        catch panic("the child must start")
+    assert(h.exited_with(0) && h.stdout_data.starts_with("Usage: refuse_probe"),
         "--help writes the usage to standard output and ends with 0")
     verdict.pass("A refusal and its usage go to standard error with 2; --help to standard output.")
+
+priv const saw_misspelt_src: U8[] = //< a child that asks whether an item declared nowhere was given
+    """import "std/argp"
+import "std/mem" { Arena }
+
+fn main()
+  a: = Arena.new(1 << 16)
+  $out: U8[] = ""
+  p: = argp.Parser.create("saw_probe", "", a)
+  p.str_opt("--out", out@, "where it goes")
+  _given: = p.saw("--outt")
+  a.free()
+"""
+
+fn test_argp_saw_refuses_an_undeclared_name(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //<
+    //< Answered false, a misspelt name reads as an item never given, and the check it guards
+    //< passes for good.
+    verdict.start("[argp] asking whether an item declared nowhere was given test...")
+    why: = "Parser.saw: '--outt' is declared nowhere"
+    assert(sys_test.child_stops_with(ksplc, "saw_probe", saw_misspelt_src, why, arena),
+        "saw with a name declared nowhere must stop the program, naming it")
+    verdict.pass("saw stops on a name declared nowhere, and names it.")

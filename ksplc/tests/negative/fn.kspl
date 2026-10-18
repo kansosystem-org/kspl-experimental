@@ -4,9 +4,9 @@
 // ==== case call_pointer_to_fn_ptr
 //< A call on a **pointer to** a function pointer
 //<
-//< Peeled, it can be called, so that is advised. is_fn_ptr must not look at the canonical string's
-//< leading `fn(` alone: since `ptr(X)` = `str(X) + "@"`, `fn(x: I32): I32@` looks like one too and,
-//< as an indirect call, yields an invalid Void node (and a different diagnostic far away).
+//< Peeled, it can be called, so the message advises that. is_fn_ptr must not look only at the
+//< leading `fn(` of the canonical string. Since `ptr(X)` = `str(X) + "@"`, `fn(x: I32): I32@` looks
+//< like one too. As an indirect call, it yields an invalid Void node and a different diagnostic far away.
 // EXPECT: Dereference it first
 fn twice(x: I32): I32
   return x * 2
@@ -20,15 +20,15 @@ fn main()
 //<
 //< The marks are every function's marks gathered at the head. The same mark written N times
 //< must match N places.
-// EXPECT: cannot call 'x': it is a value of type 'I32', not a function
+// EXPECT: cannot call 'x'. It is a value of type 'I32', not a function
 // EXPECT: argument count mismatch
 
-// A call on a value that cannot be called. It is stopped by KSPL's diagnostic (rather than
-// showing the user the C compiler's `called object type 'I32' is not a function`).
+// A call on a value that cannot be called. KSPL's diagnostic stops it, so the user does not see
+// the C compiler's `called object type 'I32' is not a function`.
 // A named
-// function's symbol holds **the return type** in its type_id, so the branch taking a call
-// expression's result type from "the target's type" is legitimate. That branch was hitting a
-// plain variable too, so it put `I32 y = x(1);` out with no diagnostic.
+// function's symbol holds **the return type** in its type_id. So the branch that takes a call's
+// result type from "the target's type" is correct. That branch also met a plain variable, so it
+// wrote `I32 y = x(1);` with no diagnostic.
 fn case_call_non_callable()
   x: I32 = 5
   _y: = x(1)
@@ -47,8 +47,8 @@ fn main()
 //<
 //< What it holds is called through its `call`. Telling the writer to drop the `()`, as for a field
 //< holding a value, would send them the wrong way.
-// EXPECT: cannot call 'pred': it is a field of
-// EXPECT: Call what it holds through 'call': '.pred.call(...)'
+// EXPECT: cannot call 'pred'. It is a field of
+// EXPECT: Call the field's value through 'call': '.pred.call(...)'
 // EXPECT-NOT: Read it without
 priv struct Holder
   pred: Callable1<|I32, Bool|>
@@ -62,17 +62,17 @@ fn main(): I32
 //< A function's name passed to a generic parameter gives it a type only where it names one function
 //<
 //< A non-generic function, a written specialization and a method named through its type each give
-//< the function type of the function they name. A bare generic name names none, so it is refused at
-//< its line with what to write, and so is a variadic function, which no function type holds; bound
-//< to the mark of "a function", a call through the result had nothing to be checked against, nor C
-//< to spell. A name passed where the parameter's type is fixed is checked against it.
+//< the function type of the function they name. A bare generic name names none. So it is refused at
+//< its line with what to write. So is a variadic function, which no function type holds. Bound to
+//< the mark of "a function", a call through the result had nothing to check against and no C to
+//< spell. A name passed where the parameter's type is fixed is checked against it.
 //< Caution: Keep the passing side: the names that give a type, and a written type argument.
 // EXPECT: generic function 'gf' cannot be used as a value without its type arguments
-// EXPECT: generic type 'Holder' needs its type arguments before a method of it can be used as a value
+// EXPECT: generic type 'Holder' needs its type arguments before one of its methods can be used as a value
 // EXPECT: generic method 'gk' cannot be used as a value without its type arguments
-// EXPECT: cannot infer the type arguments of 'pass_through' from function 'snprintf': it is variadic, and a function type holds no '...'
+// EXPECT: cannot infer the type arguments of 'pass_through' from function 'snprintf'. The function is variadic. A function type cannot contain '...'
 // EXPECT: then 'pass_through<|Op|>(…)'
-// EXPECT: function 'text_len' cannot be used as 'fn(I32):I32': its own type is 'fn(U8[]):I32'
+// EXPECT: function 'text_len' cannot be used as 'fn(I32):I32'. Its type is 'fn(U8[]):I32'
 // EXPECT-NOT: from function 'twice'
 // EXPECT-NOT: from function 'gf'
 // EXPECT-NOT: from function 'keep'
@@ -123,7 +123,7 @@ fn main(): I32
 //<
 //< Both read the same "missing type annotation", which sent the writer looking for a type they had
 //< written.
-// EXPECT: parameter 'x' cannot be Void, which holds no value
+// EXPECT: parameter 'x' must not be Void. Void holds no value
 fn f(x: Void): I32
     return 0
 
@@ -132,9 +132,9 @@ fn main()
 // ==== case fn_param_without_type
 //< A declared function's parameter with no type is named, once
 //<
-//< A function's own signature was also read as a function-pointer type, so one omission gave two
-//< errors, the first naming a function pointer the file does not hold.
-// EXPECT: parameter 'x' has no type: write 'x: <type>'
+//< A function's own signature was also read as a function-pointer type. So one omission gave two
+//< errors. The first one named a function pointer that the file does not hold.
+// EXPECT: parameter 'x' has no type. Write 'x: <type>'
 // EXPECT-NOT: function-pointer
 fn f(x): I32
     return 0
@@ -144,8 +144,8 @@ fn main()
 // ==== case fn_ptr_alias_chain_args
 //< A call's arguments are checked even when a `typedef` names the function pointer type
 //<
-//< The call reads the parameters off the function type an alias chain ends at (fn_sig_of in
-//< sema/type/env.kspl), so **however many links stand between, count and types are checked**.
+//< The call reads the parameters off the function type at the end of an alias chain (fn_sig_of in
+//< sema/type/env.kspl). So **the count and the types are checked, however long the chain is**.
 //< Caution: Always place the non-firing side alongside: a correct call passes at one step and four.
 // EXPECT: argument count mismatch. Expected 1, but got 3
 // EXPECT: expected 'I32', but got 'U8[]'
@@ -227,8 +227,8 @@ fn main(): I32
 //< A function used as a value is matched against the expected type, whatever that type is
 //<
 //< Caution: Exempt only "there is nothing to match against" (fn_value_type_id in
-//< ksplc/sema/body/resolve_path.kspl); exempting "not a function pointer" lets this and `Callable`
-//< through, to be learnt for the first time on the C side. Keep the non-firing side alongside.
+//< ksplc/sema/body/resolve_path.kspl). An exemption for "not a function pointer" lets this and
+//< `Callable` through, and only the C side finds them. Keep the non-firing side alongside.
 // EXPECT: function 'big' cannot be used as 'Sz'
 // EXPECT-NOT: cannot be used as 'fn(v: Sz):Bool'
 // EXPECT-NOT: cannot be used as 'Void$@'
@@ -253,11 +253,11 @@ pub fn main(): I32
 //< A function pointer cannot be passed where a `Callable` is expected
 //<
 //< **ksplc must stop it.** Let through, it reaches generation (in C a function pointer is a plain
-//< address) and clang reports a synthesised name and lines of std ("Failing fast through an exception or an ICE" in ksplc/docs/DESIGN-compiler.md). No
-//< synthesised name goes in a diagnostic (ksplc/docs/DESIGN-diagnostics.md "A diagnostic points at 'the
-//< position the user wrote'"): it names the call.
+//< address). clang then reports a synthesised name and lines of std ("Failing fast through an
+//< exception or an ICE" in ksplc/docs/DESIGN-compiler.md). No synthesised name goes in a diagnostic
+//< (ksplc/docs/DESIGN-diagnostics.md "A diagnostic points at 'the position the user wrote'"): it names the call.
 // EXPECT: this anonymous function cannot be used as
-// EXPECT: add ';' before the closing paren of the signature
+// EXPECT: Add ';' before the signature's closing parenthesis
 // EXPECT-NOT: _anon_fn_
 import "std/ds" { List }
 import "std/io"
@@ -279,8 +279,8 @@ pub fn main(): I32
 // ==== case fn_type_arg_keeps_its_commas
 //< A function type written as a type argument is one argument, commas and all
 //<
-//< Its name holds commas of its own (`fn(I32,I32):I32`); cut at every comma, the row reads it as
-//< two and the messages name a type that is not there.
+//< Its name holds commas of its own (`fn(I32,I32):I32`). If the row cuts at every comma, it reads
+//< two arguments. The messages then name a type that is not there.
 //< Caution: Always place the non-firing side alongside: a function of the right shape goes in.
 // EXPECT: function 'one_arg' cannot be used as 'fn(I32,I32):I32'
 // EXPECT-NOT: type arguments for generic
@@ -304,7 +304,7 @@ fn main(): I32
 // ==== case fn_value_call_checked_by_type
 //< A call through a function value is checked against the value's own type, whatever holds it
 //<
-//< The signature is read off the type (infer_value_call_args in `sema/body/call_args.kspl`), so a
+//< The signature is read off the type (infer_value_call_args in `sema/body/call_args.kspl`). So a
 //< value from a generic's field, a list or a call's result is checked as a local is, never as Void.
 //< Caution: Always place the passing side alongside; a check refusing every call must not pass.
 // EXPECT: argument count mismatch. Expected 1, but got 2
@@ -340,8 +340,8 @@ fn main(): I32
 // ==== case fn_value_operators
 //< A function value takes `==` and `!=` alone, and two names give it no type
 //<
-//< A function's name takes its type from where it is written: compared with a typed value, it
-//< takes that value's type in either order, but two names have none between them. An address has
+//< A function's name takes its type from where it is written. Compared with a typed value, it
+//< takes that value's type in either order. Two names have no type between them. An address has
 //< no order or arithmetic that means anything. Let through, these reached C as arithmetic on an
 //< address, and the LLVM IR compared an `i32` with a function's address.
 //< Caution: Keep the passing side: a name compared with a typed function value, on either side.
@@ -352,8 +352,8 @@ fn main(): I32
 // EXPECT: operator '+' does not apply to a function
 // EXPECT: operator '-' does not apply to a function
 // EXPECT: operator '+=' does not apply to a function
-// EXPECT: function 'twice' cannot be used as 'I32': its own type is 'fn(I32):I32'
-// EXPECT: function 'two' cannot be used as 'fn(I32):I32': its own type is 'fn(I32,I32):I32'
+// EXPECT: function 'twice' cannot be used as 'I32'. Its type is 'fn(I32):I32'
+// EXPECT: function 'two' cannot be used as 'fn(I32):I32'. Its type is 'fn(I32,I32):I32'
 // EXPECT-NOT: global variable reference
 // EXPECT-NOT: undeclared identifier
 priv typedef Op = fn(x: I32): I32
@@ -410,8 +410,8 @@ fn main(): I32
 // ==== case fn_value_variadic_binding
 //< A variadic function's name bound with no type annotation is refused: no function type holds it
 //<
-//< A declaration with no type takes the function type of the function a name names (`f: = big`),
-//< and a variadic one has none to give, since a function type holds no `...`. Let through, the
+//< A declaration with no type takes the function type of the function a name names (`f: = big`).
+//< A variadic function has none to give, since a function type holds no `...`. Let through, the
 //< binding would carry the mark of a name with no type, which no C type spells.
 //< Caution: Keep the passing side: a non-variadic name, an anonymous function and a call's result
 //< are each a binding's type.
@@ -473,6 +473,17 @@ fn main(): I32
   if ok > 0
     return ok
   return panic("this one is refused")
+// ==== case param_default_out_of_range
+//< A default that does not fit its parameter is refused at the declaration, with no call using it
+//<
+//< Checked only where a call fills it in, a library's default could be wrong until some caller
+//< leaves the argument out.
+// EXPECT: param_default_out_of_range.kspl:6:21: error: literal '300' is out of range for type 'U8'
+pub fn dflt(v: U8 = 300): U8
+  return v
+
+fn main(): I32
+  return 0
 // ==== case param_default_generic_type
 //< A parameter whose type holds a type argument cannot have a default
 //<
@@ -489,7 +500,7 @@ fn main(): I32
 //< A closure is never called by name, so a default written on it would never take effect
 //<
 //< Written and silently ignored is the shape Principle 5 refuses.
-// EXPECT: a closure parameter or capture cannot have a default value
+// EXPECT: a closure parameter or capture must not have a default value
 
 fn main(): I32
   _f: = fn(a: I32, b: I32 = 2; ): I32
@@ -524,8 +535,8 @@ fn main(): I32
 // ==== case param_default_in_trait_impl
 //< A default cannot be written on the implementation either
 //<
-//< A call through a trait resolves to the trait's declaration, so it does not look at the
-//< implementation side's default (the same way C++'s inherited defaults break).
+//< A call through a trait resolves to the trait's declaration. So it does not look at the
+//< default on the implementation side (the same way C++'s inherited defaults break).
 // EXPECT: a trait implementation cannot give a parameter a default value
 
 priv trait Greeter
@@ -578,8 +589,8 @@ fn main()
 //<
 //< It binds with `x: = make();`, and method calls and field reads work, so the `priv` its author
 //< wrote is not in effect (docs/DESIGN-principles.md Principle 5). For the reason only the return-value
-//< position is checked, see docs/DESIGN-language.md "Why a narrow type may not sit in a position with wide
-//< visibility".
+//< position is checked, see docs/DESIGN-language.md "Why a narrow type cannot stand where visibility is
+//< wide".
 // EXPECT: return type 'Hidden' is less visible than the function exposing it
 
 priv struct Hidden
@@ -593,8 +604,8 @@ fn main()
 // ==== case return_type_visibility_ok
 //< The counterpart of the case above
 //<
-//< Balanced visibility puts nothing out: a `priv` fn returning a `priv` type, a `priv struct`'s
-//< `pub` method (held down to the impl target), a narrow argument type (nothing leaks outward).
+//< Balanced visibility leaks nothing. The cases are a `priv` fn returning a `priv` type, a `priv
+//< struct`'s `pub` method (held to the impl target) and a narrow argument type.
 //< The case fails on purpose through the same check, at a field rather than a return value.
 // EXPECT: field type 'Leaked' is less visible than the field exposing it
 // EXPECT: Finished with 1 error(s)

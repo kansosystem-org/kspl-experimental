@@ -5,8 +5,8 @@
 //< count, so a leak shows as a count left over and an early release as one missing.
 // ==========================================
 // Caution: **Count with a block the test owns, never with freed memory.** A Tally's last release
-// frees nothing, so a missing retain reads as a count one short instead of passing on Linux's
-// freed memory (the trap "A retain goes wherever a copy happens" in ksplc/docs/DESIGN-compiler.md
+// frees nothing. So a missing retain reads as a count one short. It does not pass on Linux's
+// freed memory (the trap "A retain goes wherever a copy happens" in ksplc/docs/DESIGN-lower.md
 // names).
 // ==========================================
 import "std/verdict"
@@ -60,8 +60,8 @@ priv fn tally_two(a: Tally, b: Tally): Sz
     return a.peek() + b.peek()
 
 // ==========================================
-// Each branch of a ternary, and a catch's substitute, hands over a count of its own: a binding it
-// reads is retained there, so the value it yields carries one count whichever way it went.
+// Each branch of a ternary, and a catch's substitute, hands over a count of its own. A binding it
+// reads is retained there. So the value it yields carries one count whichever way it went.
 // ==========================================
 priv fn pick_returned(ab: Tally_block$@, bb: Tally_block$@, c: Bool): Tally
     a: = Tally.on(ab)
@@ -144,8 +144,8 @@ fn test_arc_branch_hands_over_a_count()
             binding or made a new value.")
 
 // ==========================================
-// A `switch` arm's binding (and `if v: = o`'s) holds a count of its own for the arm, so the arm
-// may reassign its subject and still use the binding.
+// A `switch` arm's binding (and `if v: = o`'s) holds a count of its own for the arm. So the arm
+// can reassign its subject and still use the binding.
 // ==========================================
 priv fn arm_outlives_subject(b: Tally_block$@): Sz //< the count after the subject lets go
     $s: = Tally_slot.one(Tally.on(b))
@@ -184,7 +184,7 @@ fn test_arc_arm_binding_holds_a_count()
     verdict.pass("each binding held one count through its arm, and gave it back at the arm's end.")
 
 // ==========================================
-// An operand that already holds a count (a new value, or a binding's copy) is released when a
+// An operand can already hold a count (a new value, or a binding's copy). It is released when a
 // later operand's `!` leaves the statement before the consumer takes it.
 // ==========================================
 priv fn two_fresh(ab: Tally_block$@, fb: Tally_block$@, fail: Bool): Sz!Tally_err
@@ -242,8 +242,8 @@ fn test_arc_operand_left_by_exit()
     verdict.pass("every count an operand held was given back on the way out, and taken otherwise.")
 
 // ==========================================
-// A field or an element read off a value nothing owns yet: the value is held to the end of the
-// block, and the part is counted only where something takes it.
+// A field or an element read off a value nothing owns yet. The value is held to the end of the
+// block. The part is counted only where something takes it.
 // ==========================================
 priv fn tally_box(b: Tally_block$@): Tally_box
     return Tally_box::{ .n = 7, .t = Tally.on(b) }

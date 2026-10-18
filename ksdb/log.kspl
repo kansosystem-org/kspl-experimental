@@ -1,13 +1,13 @@
 //< An append-only log whose records can still be read after a power cut
 //<
 //< The smallest way for a device to keep a sensor's time series, or a policy it was sent.
-//< **It never rewrites a record**: it only appends, so every finished record survives a power
-//< cut. A binding to SQLite does not fit here: it hands the work to libsqlite3 by FFI, which
+//< **It never rewrites a record.** It only appends, so every finished record survives a power
+//< cut. A binding to SQLite does not fit here. It hands the work to libsqlite3 by FFI, which
 //< needs a C backend and a library a freestanding microcontroller does not have.
 
 // ==========================================
-// A record's layout, the order its parts are written in, what a power cut leaves behind, and why
-// appending stops at `full` instead of wrapping around are in `ksdb/docs/DESIGN-storage.md`.
+// `ksdb/docs/DESIGN-storage.md` holds a record's layout, the order its parts are written in, and
+// what a power cut leaves behind. It also says why appending stops at `full` instead of wrapping.
 // ==========================================
 
 import "ksdb/store" { Store }
@@ -126,8 +126,8 @@ impl Log
         assert(store.capacity % store.sector_size == 0,
             "ksdb: Store.capacity has to be divisible by sector_size")
         // **How to walk the records lives only in `Cursor`.** A copy here would make the scan
-        // (`iter`) and the choice of the append position (here) two separate rules, which disagree
-        // as soon as one reads a sector the other skipped.
+        // (`iter`) and the choice of the append position (here) two separate rules. They would
+        // disagree as soon as one reads a sector the other skipped.
         $it: = cursor(store, store.capacity)
         $after_last: Sz = 0
         for it.next()
@@ -188,8 +188,8 @@ impl Log
 
     pub fn reset(r: Self$@): Void!Ksdb_error //< erases the whole medium; the records are lost
         //<
-        //< Use it before a device's first write (a device is erased when it leaves the factory, not
-        //< after it has been written), and after someone has copied the records off a full log.
+        //< Use it before a device's first write, and after someone has copied the records off a
+        //< full log. A device is erased when it leaves the factory, not after it has been written.
         $at: Sz = 0
         for at < r.store.capacity
             if !r.store.erase_sector(at)
@@ -222,8 +222,8 @@ impl Log
 
     pub fn last( //< copies out the newest record of that kind and returns its length
         //<
-        //< This is how a device keeps a policy it was sent: the same kind is appended again and
-        //< again and **the newest one wins**, so a power cut mid-write leaves the old policy in
+        //< This is how a device keeps a policy it was sent. The same kind is appended again and
+        //< again and **the newest one wins**. So a power cut mid-write leaves the old policy in
         //< force. A caller that is fine with 0 when there is none can write `catch 0`.
         r: Self$@,
         kind: U16,
@@ -234,9 +234,9 @@ impl Log
 
     pub fn last_equals( //< whether the newest record of that kind already holds this data
         //<
-        //< false if there is none. **It lets the caller skip writing what has not changed**, since
-        //< each append uses up space (a policy of a few KB fills the medium in a few dozen writes).
-        //< It needs no output buffer: it reads in chunks, since a second record-sized buffer costs
+        //< false if there is none. **It lets the caller skip writing what has not changed.** Each
+        //< append uses up space: a policy of a few KB fills the medium in a few dozen writes.
+        //< It needs no output buffer. It reads in chunks, since a second record-sized buffer costs
         //< too much of a device's RAM.
         r: Self$@,
         kind: U16,
@@ -258,7 +258,7 @@ impl Log
 
 pub struct Cursor //< a walk over the records, oldest first, kept separate from the `Log`
     //<
-    //< **It looks only up to `end`, the range `open` checked**: a half-written record may lie
+    //< **It looks only up to `end`, the range `open` checked**: a half-written record can lie
     //< beyond it, so the scan must not go further.
     priv store: Store
     pub at: Sz //< the start of the record it points at now.

@@ -88,7 +88,7 @@ fn main(): I32
 //<
 //< Do not name the insides of an instantiated `List`
 //< (`ptr` / `len` / `cap` / `arena`) — they are names the user did not write.
-// EXPECT: whose element 'Reflectable' cannot derive a table entry for
+// EXPECT: 'Reflectable' cannot derive a table entry for its element
 
 import "std/ds" { List }
 import "std/reflect"
@@ -103,8 +103,8 @@ fn main(): I32
 // ==== case reflect_derive_list_of_list
 //< A container of containers cannot be walked
 //<
-//< The shape where an element's kind can point at itself is `Field_kind`'s payload, and
-//< `--to=llvm` cannot lower that (Field_info's in std/reflect).
+//< The shape where an element's kind can point at itself is a payload on `Field_kind`, which
+//< std/reflect does not declare (`Field_info.nested` there).
 // EXPECT: does not cover a list whose element is itself a list
 
 import "std/ds" { List }
@@ -157,7 +157,7 @@ fn main(): I32
 //<
 //< Do not name the insides of an `Option` (the tag and the payload) — they are names
 //< the user did not write.
-// EXPECT: whose content 'Reflectable' cannot derive a table entry for
+// EXPECT: 'Reflectable' cannot derive a table entry for its content
 
 import "std/reflect"
 
@@ -188,8 +188,8 @@ fn main(): I32
 // ==== case sizeof_cycle
 //< A `sizeof` whose size depends on itself is rejected
 //<
-//< Caution: **Put one item out alone:** the fold failure follows from the cycle, so the array-size
-//< error is not piled on it (the array-length branch of sema/decl/resolve.kspl checks
+//< Caution: **Report one item alone.** The fold failure follows from the cycle. So the array-size
+//< error is not added on top (the array-length branch of sema/decl/resolve.kspl checks
 //< `registry_cycle_at`). Keep the passing side: drawing from before the declaration must pass.
 // EXPECT: sizes depend on each other
 // EXPECT-NOT: array size must be a positive
@@ -217,15 +217,15 @@ fn main(): I32
 // ==== case sizeof_function_name
 //< `sizeof` of a function's name is refused: a function's size has no one meaning
 //<
-//< Read as a type, the name took the function's return type (`sizeof(twice)` gave an `I32`'s 4,
-//< where a pointer to it is 8), and a written specialization or a method named through its type
+//< Read as a type, the name took the function's return type. `sizeof(twice)` gave an `I32`'s 4,
+//< where a pointer to it is 8. A written specialization or a method named through its type
 //< reached C as an undeclared name. `offsetof` reads its first argument as a type the same way.
 //< Caution: Keep the passing side: `sizeof` of a function type and of a variable holding one.
-// EXPECT: 'sizeof' cannot take the function 'twice': a function's size has no one meaning
+// EXPECT: 'sizeof' cannot take the function 'twice'. A function's size has no single meaning
 // EXPECT: 'sizeof' cannot take the function 'twice'
 // EXPECT: such as 'sizeof(fn(x: I32): I32)'
 // EXPECT: 'sizeof' cannot take the function 'same<|I32|>'
-// EXPECT: 'sizeof' cannot take 'Holder<|I32|>.keep': a member named through its type is neither a type nor a value
+// EXPECT: 'sizeof' cannot take 'Holder<|I32|>.keep'. A member named through its type is neither a type nor a value
 // EXPECT: 'sizeof' cannot take 'Plain.v'
 // EXPECT: 'twice' is a function, not a type
 // EXPECT: 'offsetof' needs a struct type, but 'twice' is not one

@@ -75,10 +75,10 @@ fn test_fs_wide_path() //<
     //< That the file operations work in a folder whose path contains a space and non-ASCII
     //<
     //< **Only this test covers it.** The folder in the section above is ASCII, so `std/fs`'s
-    //< functions never pass through **the code that copies a path for the OS's wide API** (on
-    //< Windows every function goes through `kspl_win_to_wide`; `ksplc/gen/runtime/hosted_fs.c`).
-    //< This test checks the functions themselves; a program run through `ksplc run` from such a
-    //< folder is for the compiler's own suites to test.
+    //< functions never pass through **the code that copies a path for the OS's wide API**. On
+    //< Windows every function goes through `kspl_win_to_wide` (`ksplc/gen/runtime/hosted_fs.c`).
+    //< This test checks the functions themselves. The compiler's own suites test a program run
+    //< through `ksplc run` from such a folder.
     verdict.start("[Fs] file operations in a place holding a space and non-ASCII...")
     arena: = Arena.new(4096)
     defer arena.free()
@@ -134,10 +134,10 @@ priv const level_filler: U8[] = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijk
 fn test_fs_past_max_path() //<
     //< That every function works on a path longer than Windows's 260 characters
     //<
-    //< **On Linux it works anyway**; the target is a Windows runner, where a path passed unchanged
+    //< **On Linux it works anyway.** The target is a Windows runner, where a path passed unchanged
     //< stops at 260 while a C compiler still accepts it (`kspl_path_to_wide` in
     //< `ksplc/gen/runtime/hosted_fs.c`). The tree is built through a relative path, which is
-    //< resolved before the long-path prefix is added, and read back through the absolute one.
+    //< resolved before the long-path prefix is added. It is read back through the absolute one.
     verdict.start("[Fs] file operations on a path longer than Windows's 260 characters...")
     arena: = Arena.new(8192)
     defer arena.free()
@@ -368,7 +368,7 @@ fn test_fs_path_guard()
     // stays_under keeps paths under the root (is_safe_relative is its text-only half).
     // Caution: **Do not count an absent path as "a link".** If it counted, code writing a file
     // about to be created (a server's PUT, for example) could write nothing.
-    // Refusing a real link is not tested here: `fs` has no way to create one, so that test belongs
+    // Refusing a real link is not tested here. `fs` has no way to create one, so that test belongs
     // to whoever serves files and creates links of its own.
     assert(fs.stays_under(".", "a/b.txt"), "an absent path is treated as staying under")
     assert(!fs.stays_under(".", "../x"), "pointing outside by path does not stay under")
@@ -387,8 +387,8 @@ fn test_fs_path_guard()
     defer arena.free()
     $deep: = build_deep_tree(520)
     defer deep.free()
-    // **Where the OS path-length limit is hit first, the tree cannot be created** (Windows, macOS),
-    // and mkdir_all rightly fails; there the test stops after the text checks. Linux verifies
+    // **Where the OS path-length limit is hit first, the tree cannot be created** (Windows, macOS).
+    // There mkdir_all rightly fails, and the test stops after the text checks. Linux verifies
     // depth.
     fs.mkdir_all(deep.slice()) catch
         remove_deep_tree(520)

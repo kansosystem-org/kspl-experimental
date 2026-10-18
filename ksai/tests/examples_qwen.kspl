@@ -5,6 +5,8 @@
 //< reference values meaningless.
 //< **Keep the vocabulary at 10 or under.** Every value then appears in the output's
 //< `LOGITS[0:10]`, so the gap between the top two can be measured here as well.
+import "ksai/lora" { Lora }
+import "ksai/lora_set" { Qkv_lora }
 import "ksai/model_file" as ai_file
 import "ksai/safetensors" as st
 import "ksai/tensor" { Tensor }
@@ -74,10 +76,10 @@ priv fn made1(d0: Sz, step: Sz, arena: Arena$@): Tensor<|F32|>
 
 priv fn made_norm(step: Sz, arena: Arena$@): Tensor<|F32|> //< the normalisation's weights
     //<
-    //< **Keep them near 1**: near 0 the output collapses and the gap between the top two vanishes.
+    //< **Keep them near 1.** Near 0 the output collapses and the gap between the top two vanishes.
     //< Caution: **Do not drop `step`.** If the rows before attention and before the MLP were the
-    //< same, **swapping the two would not show in the answer** (swapping `attention_norm` for
-    //< `ffn_norm` would leave this gate green).
+    //< same, **a swap of the two would not show in the answer.** Swapping `attention_norm` for
+    //< `ffn_norm` would then leave this gate green.
     shape: Sz[1] = ::{ hidden }
     t: = Tensor<|F32|>.new(Sz[]::shape, arena)
     for i in Range.asc(t.size)
@@ -137,6 +139,21 @@ priv fn write_weights(path: U8[], arena: Arena$@): Bool //< writes one small wei
         return false
     return true
 
+priv fn write_adapters(path: U8[], v_out: Sz, arena: Arena$@): Bool //< writes a set of adapters
+    //<
+    //< `v_out` is the value adapter's output width: `n_kv_heads * head_dim` fits the model above,
+    //< and another width makes an adapter for another model.
+    adapters: = Qkv_lora<|F32|>$@::arena.alloc(n_layers * sizeof(Qkv_lora<|F32|>))
+    for i in Range.asc(n_layers)
+        q: = Lora<|F32|>::{ .a = made2(hidden, 2, 43 + i, arena),
+            .b = made2(2, n_heads * head_dim, 47 + i, arena), .scale = F32::0.5 }
+        v: = Lora<|F32|>::{ .a = made2(hidden, 2, 53 + i, arena),
+            .b = made2(2, v_out, 59 + i, arena), .scale = F32::0.5 }
+        (adapters + i)$ = Qkv_lora<|F32|>::{ .q = q, .v = v }
+    ai_file.save_qkv_lora_set<|F32|>(adapters, n_layers, path, arena) catch
+        return false
+    return true
+
 priv struct Said //< the result of running it
     //<
     //< **Keep the standard error too**: that is where the program says why it did not answer.
@@ -162,12 +179,15 @@ priv fn drain(child: subproc.Piped_child$@, want_err: Bool, arena: Arena$@): U8[
         got.s(U8[]::{ .ptr = buf.ptr, .len = n })
     return got.take()
 
-priv fn ran(exe: U8[], weights: U8[], input: U8[], arena: Arena$@): Said //<
-    //< Passes the weights and the tokens to the built executable and collects the answer
-    $child: = subproc.spawn_piped(U8[][]::{ exe, weights }, "") catch
+priv fn ran(exe: U8[], weights: U8[], input: U8[], arena: Arena$@, adapters: U8[] = ""): Said //<
+    //< Passes the weights, any adapters and the tokens to the built executable; collects its answer
+    args: = U8[][]::{ exe, weights, adapters }
+    $child: =
+        subproc.spawn_piped(U8[][]::{ .ptr = args.ptr, .len = 3 if adapters.len > 0 else 2 }, "")
+        catch
         return Said::{ .out = "",
             .err = arena.text().s("cannot be started: ").s(exe).take() }
-    // **Say a write that stopped in the answer**, as a read's timeout is: the child then answers
+    // **Say a write that stopped in the answer**, as a read's timeout is. The child then answers
     // to part of the input, which would read as a wrong answer.
     $stopped: U8[] = ""
     child.write(input, read_wait) catch
@@ -288,3 +308,19 @@ fn test_qwen_answers(exe: U8[], work: U8[], arena: Arena$@) //<
     assert(empty.err.find_str("there is no token ID on standard input").is_some(),
         U8$[]::arena.text().s("with no token it said: \{empty.err.trim_spaces()\}").take())
     verdict.pass("with no token handed over it says the reason")
+
+    // **An adapter for another model is refused when read, naming the file.** Let through, it
+    // stopped the first forward pass on a matmul mismatch that named nothing.
+    fits: = fs.join(work, "mini_qwen_lora.safetensors", arena)
+    foreign: = fs.join(work, "other_lora.safetensors", arena)
+    assert(write_adapters(fits, n_kv_heads * head_dim, arena) &&
+        write_adapters(foreign, n_heads * head_dim, arena), "cannot write the adapters")
+    tuned: = ran(exe, weights, tokens_in, arena, fits)
+    assert(tuned.err.find_str("LoRA adapter loaded").is_some() &&
+        after(tuned.out, argmax_head, arena).len > 0,
+        U8$[]::arena.text().s("the adapters that fit were not used: \{tuned.err\}").take())
+    refused: = ran(exe, weights, tokens_in, arena, foreign)
+    assert(refused.err.find_str(arena.text().s("LoRA load failed: \{foreign\}").take()).is_some(),
+        U8$[]::arena.text().s("an adapter for another model was not refused: \{refused.err\}")
+        .take())
+    verdict.pass("adapters that fit are used, and ones for another model are refused by name")

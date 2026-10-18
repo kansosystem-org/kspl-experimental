@@ -1,10 +1,9 @@
 //< Keeping a periodic task from drifting with Task.delay_until
 //<
 //< In a loop of "wake, work, sleep a relative time", Task.delay (a relative time) makes the cycle
-//< drift late by the work's duration. With Task.delay_until (an absolute tick) the caller keeps the
-//< next absolute time, so the cycle does not drift even when the work's duration varies each round.
+//< drift late by the work's duration. With Task.delay_until (an absolute tick), the caller keeps
+//< the next absolute time. So the cycle does not drift, even when the work's duration varies.
 //< This matters where the cycle must be exact, such as a physical AI control loop.
-import "ksos/demo/common/task_end"
 import "ksos/kernel/task" + { Task }
 import "std/io"
 import "std/verdict"
@@ -12,6 +11,8 @@ import "std/verdict"
 const period: U64 = 10
 // A different mock work time each cycle (all under period, so every deadline is met).
 $work_ticks: I32[5] = ::{ 1, 4, 0, 7, 2 }
+
+$on_time: I32 = 0 // periods that woke exactly on their deadline
 
 $tcb: Task
 $stack: U8[65536]
@@ -30,12 +31,14 @@ fn periodic(_arg: Void$@): Void
         actual: = task.current_tick()
         io.out().s("[periodic] woke at tick \{I32::actual\} (expected \{I32::next\})\n")
         assert(actual == next, "task_delay_until: drift detected")
+        on_time += 1
     io.out().s("[periodic] all 5 periods landed exactly on schedule -> OK\n")
     io.out().s("=== done ===\n")
 
 fn main(): I32
     tcb.create(U8$[]::stack, periodic, null, 1, "periodic")
     task.start_scheduler()
-    task_end.require_all_ended()
+    verdict.check("task_delay_until: all 5 periods wake on their deadline", on_time == 5,
+        "fewer than 5 periods ran")
     io.out().s("=== scheduler finished (all tasks done) ===\n")
     return verdict.finish()

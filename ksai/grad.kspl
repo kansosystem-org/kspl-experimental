@@ -1,8 +1,8 @@
 //< The backward-pass operations a gradient is built from, added as methods on `Tensor`
 //<
-//< **There is no automatic-differentiation tape**: each forward operation has a backward method
+//< **There is no automatic-differentiation tape.** Each forward operation has a backward method
 //< beside it, called in order. The "allocate and return" versions put an intermediate gradient on
-//< the tensor's own arena, so **the allocation is entirely predictable**; the `_into` versions
+//< the tensor's own arena, so **the allocation is entirely predictable**. The `_into` versions
 //< take the destination from the caller.
 import "ksai/tensor" + { Tensor }
 import "std/math"
@@ -27,24 +27,24 @@ impl<|T|> Tensor<|T|>
             sum_exp += math.exp(F64::(r.data + offset + i)$ - max_v)
         return Reduce_stats::{ .max_v = max_v, .sum_exp = sum_exp }
     // --- The backward pass of the matrix product Y = X @ W -------
-    // Each grad has an "allocate and return" version and an `_into` one; `cfg` switches between
+    // Each grad has an "allocate and return" version and an `_into` one. `cfg` switches between
     // pure KSPL (the default) and BLAS (`--define=blas`) on the `_into` one.
 
     // dX = dY @ W^T   (self=dY:[m,n], w=W:[k,n] → out:[m,k])
-    // Caution: **Validate the shapes before the kernel**: `lda`/`ldb`/`ldc` come from them under
-    // `cfg(blas)`, so a `w` of the wrong shape (a corrupted or tampered LoRA adapter) would let
+    // Caution: **Validate the shapes before the kernel.** `lda`/`ldb`/`ldc` come from them under
+    // `cfg(blas)`. So a `w` of the wrong shape (a corrupted or tampered LoRA adapter) would let
     // `cblas_sgemm` read past `w.data`.
     pub fn grad_matmul_input_into( //< the gradient for a matrix product's input, into `out`
         r: Self$@,
         w: Tensor<|T|>, //< the weights the forward pass used, [k,n]
-        out: Tensor<|T|>, //< where it is written, [m,k]; the caller prepares it and may reuse it
+        out: Tensor<|T|>, //< where it is written, [m,k]; the caller prepares it and can reuse it
     )
         assert(r.shape.len == 2 && w.shape.len == 2, "grad_matmul_input requires 2D tensors")
         n: = r.shape[1]
         k: = w.shape[0]
         assert(w.shape[1] == n, "grad_matmul_input inner dimension mismatch")
         m: = r.shape[0]
-        // `out` may be reused from another step: a smaller one would be written past its end.
+        // `out` can be reused from another step: a smaller one would be written past its end.
         assert(out.holds_matrix(m, k), "grad_matmul_input: out is not [m, k]")
         tensor.transb_kernel<|T|>(out.data, r.data, w.data, m, n, k)
     fn grad_matmul_input(r: Self$@, w: Tensor<|T|>): Tensor<|T|> //<
@@ -58,7 +58,7 @@ impl<|T|> Tensor<|T|>
     pub fn grad_matmul_weight_into( //< the gradient for a matrix product's weights, into `out`
         r: Self$@,
         dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
-        out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and may reuse it
+        out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and can reuse it
     )
         assert(r.shape.len == 2 && dy.shape.len == 2, "grad_matmul_weight requires 2D tensors")
         m: = r.shape[0]
@@ -84,7 +84,7 @@ impl<|T|> Tensor<|T|>
     pub fn grad_matmul_weight_into( //< the gradient for a matrix product's weights, into `out`
         r: Self$@,
         dy: Tensor<|T|>, //< the gradient of the product's output, [m,n]
-        out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and may reuse it
+        out: Tensor<|T|>, //< where it is written, [k,n]; the caller prepares it and can reuse it
     )
         assert(r.shape.len == 2 && dy.shape.len == 2, "grad_matmul_weight requires 2D tensors")
         m: = r.shape[0]
@@ -203,8 +203,8 @@ impl<|T|> Tensor<|T|>
         return dlogits
     pub fn accumulate( //< adds another gradient into this one, in place
         //<
-        //< self += grad. **The caller decides the order of the additions**: floating-point addition
-        //< is not associative, so a sum that must match on every run has to be taken in one fixed
+        //< self += grad. **The caller decides the order of the additions.** Floating-point addition
+        //< is not associative. So a sum that must match on every run has to be taken in one fixed
         //< order.
         r: Self$@,
         grad: Tensor<|T|>, //< another gradient of the same weight; a different size is rejected

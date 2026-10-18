@@ -140,6 +140,20 @@ priv fn doc_dirs(arena: Arena$@): U8[][] //<
             out.push(d)
     return out.slice()
 
+priv fn doc_bares(arena: Arena$@): U8[][] //<
+    //< The names a document is cited by without a folder: every tracked `.md`'s file name, once
+    //<
+    //< Caution: **Build it from what git tracks.** A copied list misses a document added later, and
+    //< its section numbers and quoted names pass without being read.
+    $out: = List<|U8[]|>.new(arena)
+    for f in harness.tracked()
+        if !f.ends_with(".md")
+            continue
+        name: = sys.get_file_name(f)
+        if !htext.has(out@, name)
+            out.push(name)
+    return out.slice()
+
 priv fn scanned_files(arena: Arena$@): List<|U8[]|> //< what is scanned
     //<
     //< Caution: **Check only what git knows**, or the count depends on whether it was built. The
@@ -156,8 +170,8 @@ priv fn exists_at(rel: U8[], arena: Arena$@): Bool
 
 priv fn is_file_at(rel: U8[], arena: Arena$@): Bool //< whether a file is there
     //<
-    //< Caution: **Keep it separate from `exists_at`.** A Markdown link **may point at a folder**,
-    //< but a symbol's home is a file; folded into one, a symbol named by a folder (`ksos/net`)
+    //< Caution: **Keep it separate from `exists_at`.** A Markdown link **can point at a folder**,
+    //< but a symbol's home is a file. Folded into one, a symbol named by a folder (`ksos/net`)
     //< reads a folder and runs the arena out.
     full: = fs.join(harness.root(), rel, arena)
     return fs.exists(full) && !fs.is_dir(full)
@@ -254,7 +268,7 @@ priv fn names_a_doc(block: U8[]): Bool //<
 priv const bare_leaders: U8[][_] = ::{ "section ", "sections ", "chapter ", "chapters " } //<
     //< The word that comes before a bare section number
     //<
-    //< **The word comes first and the number after** (`section 1.2`), so a scan that looks only
+    //< **The word comes first and the number after** (`section 1.2`). So a scan that looks only
     //< after the number picks up **none of them**, and stays green on the smaller count.
 
 priv fn bare_leader_len(line: U8[], at: Sz): Sz //<
@@ -319,7 +333,7 @@ priv fn report(name: U8[], count: Sz, f: Finding@, tail: U8[], arena: Arena$@)
 priv fn quote_needle(name: U8[], arena: Arena$@): U8[] //<
     //< Turns the name carried with a naming into the text to search for in that document
     //<
-    //< Caution: **Fold both forms** (the repository uses both), or **a correct reference fails**; a
+    //< Caution: **Fold both forms** (the repository uses both), or **a correct reference fails**. A
     //< check that fails wrongly gets removed, and the real stale references go unseen with it.
     $t: = name
     // For the form wrapped in a link, only what is between the `[` and the `]` is taken.
@@ -345,8 +359,8 @@ priv fn symbol_ref_defects(rel: U8[], here: U8[], text: U8[], dirs: U8[][],
             continue // a name that does not look like a symbol is out of scope
         target: = resolve_src(here, s.text, arena)
         // Caution: **Do not silently skip an unresolved path.** `find_src_paths` **picks up only
-        // paths starting from a folder**, so a path with a step dropped (`sema/type/env.kspl`)
-        // leaves **both checks silent**; it goes to the existence check here.
+        // paths starting from a folder**. So a path with a step dropped (`sema/type/env.kspl`)
+        // leaves **both checks silent**. It goes to the existence check here.
         if target.len == 0
             $made: = false
             for g in generated
@@ -381,6 +395,11 @@ priv fn has_word(body: U8[], word: U8[]): Bool //<
 
 priv fn check_picks_and_names(arena: Arena$@) //<
     //< the link picks can fire; the names and targets cited stand
+    misnamed_fires: = Finding::{ .seen = samples.misnamed_link_samples.len,
+        .bad = samples.misnamed_link_defects(arena) }
+    report("the check that a link's text names its target can fire",
+        samples.misnamed_link_samples.len, misnamed_fires@,
+        "the table is `misnamed_link_samples` in `support/docref_samples.kspl`", arena)
     md_link_fires: = Finding::{ .seen = samples.md_link_samples.len,
         .bad = samples.md_link_defects(arena) }
     report("the pick of a document's links can fire", samples.md_link_samples.len, md_link_fires@,
@@ -396,6 +415,7 @@ priv fn check_picks_and_names(arena: Arena$@) //<
 
 priv struct Doc_check //< the per-file checks' findings, one Finding per verdict
     dirs: U8[][]
+    bares: U8[][]
     generated: List<|U8[]|>
     arena: Arena$@
     missing: Finding
@@ -403,6 +423,7 @@ priv struct Doc_check //< the per-file checks' findings, one Finding per verdict
     stale: Finding
     bad_anchor: Finding
     bad_link: Finding
+    misnamed_link: Finding
     wrong_dir: Finding
     spec_down: Finding
     spec_plan: Finding
@@ -416,10 +437,11 @@ priv struct Doc_check //< the per-file checks' findings, one Finding per verdict
 
 impl Doc_check
     fn new(arena: Arena$@): Doc_check
-        return Doc_check::{ .dirs = doc_dirs(arena), .generated = generated_dirs(arena),
-            .arena = arena, .missing = new_finding(arena), .missing_src = new_finding(arena),
-            .stale = new_finding(arena), .bad_anchor = new_finding(arena),
-            .bad_link = new_finding(arena), .wrong_dir = new_finding(arena),
+        return Doc_check::{ .dirs = doc_dirs(arena), .bares = doc_bares(arena),
+            .generated = generated_dirs(arena), .arena = arena, .missing = new_finding(arena),
+            .missing_src = new_finding(arena), .stale = new_finding(arena),
+            .bad_anchor = new_finding(arena), .bad_link = new_finding(arena),
+            .misnamed_link = new_finding(arena), .wrong_dir = new_finding(arena),
             .spec_down = new_finding(arena), .spec_plan = new_finding(arena),
             .bare_phase = new_finding(arena), .bad_numbering = new_finding(arena),
             .stray_sym = new_finding(arena), .bare_sec = new_finding(arena),
@@ -443,6 +465,7 @@ impl Doc_check
             d.unit_ref.seen += unit_ref_defects(rel, text, d.unit_ref.bad@, arena)
         if is_md || rel.ends_with(".kspage")
             d.check_links(rel, here, text)
+        d.check_link_names(rel, text)
         // A heading number depends on Markdown syntax (what is read is the `#` line).
         if is_md
             scan.heading_number_defects(rel, text, d.bad_numbering.bad@, arena)
@@ -492,6 +515,20 @@ impl Doc_check
                 d.bad_anchor.bad
                     .push(arena.text().s(rel).s(": there is no heading #").s(l.extra).s(" in ")
                     .s(target).take())
+
+    fn check_link_names(d: Self$@, rel: U8[], text: U8[]) //<
+        //< That a `` [`X`](Y) `` link's text names the file it points at
+        //<
+        //< In every file read, since a comment's link misleads as a document's does.
+        arena: = d.arena
+        for m in refs.find_misnamed_links(text, arena)
+            $line: Sz = 1
+            for k in Range.asc(m.at)
+                if text[k] == '\n'
+                    line += 1
+            d.misnamed_link.bad
+                .push(arena.text().s(rel).s(":\{line\}: [`").s(m.text).s("`](").s(m.extra).s(")")
+                .take())
 
     fn check_heading_quotes(d: Self$@, rel: U8[], text: U8[]) //<
         //< That a heading holds no double quote outside a code span
@@ -567,7 +604,7 @@ impl Doc_check
     fn check_doc_quotes(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That a name quoted beside a document is one that document holds
         arena: = d.arena
-        for q in cite.find_doc_quotes(text, d.dirs, arena)
+        for q in cite.find_doc_quotes(text, d.dirs, d.bares, arena)
             target: = refs.hit_target(here, text, q, arena)
             if !exists_at(target, arena)
                 // Caution: **Do not silently skip a bare name.** `find_doc_paths` picks up only a
@@ -581,7 +618,7 @@ impl Doc_check
                         .s(target).s(")").take())
                 continue
             d.stale_quote.seen += 1
-            // **A document is searched for its own names; a source for the name anywhere** — a
+            // **A document is searched for its own names; a source for the name anywhere.** A
             // check is cited by its verdict line, which a source holds as a string, not as a
             // heading.
             needle: = quote_needle(q.extra, arena)
@@ -601,22 +638,28 @@ impl Doc_check
     fn check_sections(d: Self$@, rel: U8[], here: U8[], text: U8[]) //<
         //< That each section number cited beside a document is a heading there
         arena: = d.arena
-        for s in cite.find_sections(text, d.dirs, arena)
+        for s in cite.find_sections(text, d.dirs, d.bares, arena)
             // Caution: **A name with no folder resolves relative to the file it is written in.**
             // From the root, `docs/`'s `DESIGN-language.md` names a root one that does not exist,
             // so **that section number passes unmatched**.
             target: = refs.hit_target(here, text, s, arena)
             if !exists_at(target, arena)
-                // **A bare name that resolves nowhere is skipped here**: a number near a name is
+                // **A bare name that resolves nowhere is skipped here.** A number near a name is
                 // too weak a sign (a `.md` in a source string, this scanner's own examples). **The
                 // quoted-name check does report it**, since a quoted name next to a document is a
                 // citation.
                 continue
+            // A document whose headings carry no number has no §N at all: its headings are cited
+            // by name.
             nums: = heading_numbers(target, arena)
-            if nums.len == 0
-                continue // a document with no numbered heading is out of scope
+            if nums.len == 0 && !cite.is_marked(text, s, arena)
+                continue // a plain number beside a document numbering nothing may be prose
             d.stale.seen += 1
-            if !htext.has(nums@, s.extra)
+            if nums.len == 0
+                d.stale.bad
+                    .push(arena.text().s(rel).s(": §").s(s.extra).s(" cites ").s(target)
+                    .s(", whose headings carry no number: cite the heading by name").take())
+            else if !htext.has(nums@, s.extra)
                 d.stale.bad
                     .push(arena.text().s(rel).s(": there is no §").s(s.extra).s(" in ").s(target)
                     .take())
@@ -697,6 +740,8 @@ fn main(): I32
         quoted_fires@, "the table is `quoted_head_samples` in `support/docref_samples.kspl`", arena)
     report("every link's destination really exists", d.bad_link.seen, d.bad_link@,
         "a markdown link is relative to the file it is written in", arena)
+    report("a link's text names the file it points at", 0, d.misnamed_link@,
+        "point the link at the file its text names, or name the file it points at", arena)
     report("the reference directions are as the convention says (no sideways or reverse flow)", 0,
         d.wrong_dir@, "", arena)
     report("import's and embed's directions are as the convention says too", d.unit_ref.seen,

@@ -1,14 +1,14 @@
 // ==========================================
-// kspage's page — the storage kept across reloads: **where a tab's document lives** (so a reload
-// comes back to it) and **the saved draft** (so what was written does not vanish). **This file only
-// holds the storage**; which tab, when to reload and what to say belong to [`file.js`](file.js)
-// and [`save.js`](save.js), the drafts' timing to [`keep.js`](keep.js).
+// kspage's page — the storage kept across reloads. It keeps **where a tab's document lives**, so
+// a reload comes back to it. It keeps **the saved draft**, so what was written does not vanish.
+// **This file only holds the storage.** Which tab, when to reload and what to say belong to
+// [`file.js`](file.js) and [`save.js`](save.js), the drafts' timing to [`keep.js`](keep.js).
 // Storage failure answers with no record so opening and saving never wait indefinitely.
 // ==========================================
 function kspageHandles() {
   const DB_NAME = "kspage";
-  // Caution: **Raise it when a store is added or its records change shape**, or on the earlier
-  // version a draft silently fails where it is written (`NotFoundError`).
+  // Caution: **Raise it when a store is added or its records change shape.** Otherwise, on the
+  // earlier version, a draft silently fails where it is written (`NotFoundError`).
   const DB_VERSION = 3;
   // Where each tab's document lives, keyed by the tab's name.
   const STORE = "handles"; // Keep the old store name so existing tab paths survive.
@@ -18,8 +18,8 @@ function kspageHandles() {
   // The drafts, **keyed by the `at` inside each** (`keyPath`), so a listed draft carries its key.
   const DRAFTS = "drafts";
 
-  // Caution: **Open it only once** (otherwise one page holds several connections to one store):
-  // **call this function once per page** and share what it returns (`page.js`'s `ui.handles`). A
+  // Caution: **Open it only once** (otherwise one page holds several connections to one store).
+  // **Call this function once per page** and share what it returns (`page.js`'s `ui.handles`). A
   // failure is remembered too (otherwise a private window waits on every click).
   let opening = null;
   const openDb = () => {
@@ -74,7 +74,7 @@ function kspageHandles() {
   };
 
   // The connection to use now. Caution: **Take it again where it was let go meanwhile**
-  // (`opening` no longer the one waited on): a transaction on a closed connection throws, and the
+  // (`opening` no longer the one waited on). A transaction on a closed connection throws, and the
   // write would be lost in silence.
   const liveDb = () => {
     const was = openDb();
@@ -119,7 +119,7 @@ function kspageHandles() {
       const one = { path: where.path, when: Date.now() };
       return inStore(STORE, "readwrite", (store) => {
         store.put(one, tab);
-        // Caution: **Never drop the record just written** (it is the current tab); records in the
+        // Caution: **Never drop the record just written** (it is the current tab). Records in the
         // same millisecond tie on time, so it is kept by its key.
         const held = [];
         const walk = store.openCursor();
@@ -148,7 +148,7 @@ function kspageHandles() {
       if (!one || typeof one.at !== "string") return Promise.resolve(null);
       return inStore(DRAFTS, "readwrite", (store) => store.put(one));
     },
-    // Returns every stored draft (empty if none), **not only this tab's**: a startup after a crash
+    // Returns every stored draft (empty if none), **not only this tab's**. A startup after a crash
     // is another tab, and an orphaned draft is exactly the one to restore.
     takeDrafts() {
       return inStore(DRAFTS, "readonly", (store) => store.getAll())

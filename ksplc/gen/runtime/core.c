@@ -15,8 +15,8 @@ typedef struct {
 } kspl_trace_frame;
 
 /* The error route core.h describes.
- * Caution: **Keep it per thread** (KSPL_PER_THREAD): shared, two threads failing at once write
- * over each other's route, and print_trace shows a mix of the two. */
+ * Caution: **Keep it per thread** (KSPL_PER_THREAD). If it were shared, two threads failing at
+ * once would write over each other's route. print_trace would then show a mix of the two. */
 static KSPL_PER_THREAD kspl_trace_frame kspl_error_trace_data[KSPL_MAX_TRACE_DEPTH];
 static KSPL_PER_THREAD int kspl_error_trace_count;
 
@@ -48,18 +48,18 @@ KSPL_LINK void kspl_get_trace_frame_info(int index, const U8** out_file, const U
 
 /* Where the calling thread's stack is now, for std/stack_limit to compare with kspl_stack_floor.
  * Caution: **Not a local's address.** The address sanitizer moves a local whose address is taken
- * onto a stack of its own on the heap, to catch a use after return, so that address says nothing
+ * onto a stack of its own on the heap, to catch a use after return. So that address says nothing
  * of how deep the thread's stack is. A frame's own address is always on the thread's stack. */
 KSPL_LINK Sz kspl_stack_here(void) {
     return (Sz)(intptr_t)__builtin_frame_address(0);
 }
 
 /* The atomic operations (std/mem.kspl's Arc<T> and the freestanding heap's spinlock,
- * std/thread.kspl's Atomic_sz) on the clang/gcc builtins, needing no <stdatomic.h> at -std=c99.
+ * std/thread.kspl's Atomic_sz) on the clang/gcc builtins. They need no <stdatomic.h> at -std=c99.
  * Caution: On a core holding no LDREX/STREX (Armv6-M: Cortex-M0+, the RP2040) they are **not
- * defined**: the builtin would become a library call, and only the port layer knows the chip's
- * inter-core exclusion. POINTER_LOCK_FREE judges it (Sz is pointer-wide; 2 = always lock-free),
- * **asked by both names**: clang targeting MSVC leaves the GCC one undefined. */
+ * defined**. The builtin would become a library call, and only the port layer knows the chip's
+ * inter-core exclusion. POINTER_LOCK_FREE judges it (Sz is pointer-wide; 2 = always lock-free).
+ * It is **asked by both names**: clang targeting MSVC leaves the GCC one undefined. */
 #if __GCC_ATOMIC_POINTER_LOCK_FREE == 2 || __CLANG_ATOMIC_POINTER_LOCK_FREE == 2
 KSPL_LINK Sz kspl_atomic_add(Sz *ptr, Sz delta) {
     return __atomic_fetch_add(ptr, delta, __ATOMIC_SEQ_CST);

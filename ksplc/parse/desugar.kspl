@@ -2,8 +2,8 @@
 //<
 //< `run` is the one entry point and `desugar_node` the one walk. A `for x in`, a binding `if`, a
 //< string's interpolation, an anonymous function or closure (`desugar_closure.kspl`) and a written
-//< slice type (`desugar_slice.kspl`) are each expanded on the way; what needs types is Sema's
-//< ("Which sugar belongs to which layer (the list)" in `../docs/DESIGN-compiler.md`).
+//< slice type (`desugar_slice.kspl`) are each expanded on the way. What needs types is Sema's
+//< ("Which sugar belongs to which layer (the list)" in `../docs/DESIGN-parse.md`).
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -18,8 +18,8 @@ import "std/str" { Str_builder }
 import "std/strfmt"
 
 // The number that keeps a for-in expansion's temporaries (the collection's cache and the index)
-// apart from those of other loops and from a user variable of the same name. **It resets to 0 at
-// the start of each function** (the reason is at desugar_node).
+// apart. It keeps them apart from other loops' and from a user variable of the same name.
+// **It resets to 0 at the start of each function** (the reason is at desugar_node).
 priv $for_in_counter: Sz = 0
 
 const closure_empty_field: U8[] = "_empty" //<
@@ -64,9 +64,10 @@ fn run(root: Ast_node$@, parser: kspeg.Target$@, source_map: Map<|U8[], U8$[]|>$
     lifted: = ctx.lifted
     root.desugar_node(ctx)
     // A lifted function is added at the end of the top level. Both C and LLVM emit a function's
-    // forward declaration first (emit_function_prototypes in gen/c/decl.kspl), so the definition
-    // may come after the position that uses it.
+    // forward declaration first (emit_function_prototypes in gen/c/decl.kspl). So the definition
+    // can come after the position that uses it. The walk has passed, so its types fold here.
     for fn_decl in lifted
+        fn_decl.fold_sugar_under()
         root.add_child(fn_decl)
     return ctx.ok
 
@@ -248,8 +249,8 @@ impl Ast_node
         if first_arg.kind_id != .k_string_interp
             return
         // Caution: **Expand only a call on a `.` chain.** The expansion splices `.s(...)` /
-        // `.fmt(...)` onto the receiver as a Writer, so on `f("...\{x\}")` it would report an
-        // unwritten `f.s`; left alone, sema reports at the interpolation itself (k_string_interp in
+        // `.fmt(...)` onto the receiver as a Writer. So on `f("...\{x\}")` it would report an
+        // unwritten `f.s`. Left alone, sema reports at the interpolation itself (k_string_interp in
         // sema/body/expr.kspl).
         recv: = r.get_postfix_receiver()
         recv_op: =
@@ -257,8 +258,8 @@ impl Ast_node
         if recv_op == null || !recv_op.text.equals(".")
             return
         // Caution: **Expand only `.s(<the string>)`.** The chain writes the parts with `.s` and
-        // `put`, so any other method's name, and any argument after the string, would be dropped
-        // without a word (`.flush("…\{x\}")` writing text); left alone, sema refuses it.
+        // `put`. So any other method's name, and any argument after the string, would be dropped
+        // without a word (`.flush("…\{x\}")` writing text). Left alone, sema refuses it.
         member: = recv.get_postfix_member()
         if member == null || !member.text.equals("s") || args_node.children.len != 1
             return
@@ -335,7 +336,7 @@ impl Ast_node
         //< Caution: **Set `ctx.ok` to false.** The desugaring rewrites the tree rather than
         //< returning a value, so otherwise the error reaches sema as a distant diagnostic about a
         //< synthesized name.
-        src: = ctx.source_map.get(r.loc.file()) catch ""
+        src: = ctx.source_map.get(r.loc.file()).unwrap_or("")
         starts: = src.line_starts(base_core.arena)
         base_diag.print_diagnostic(r.loc.file(), src, r.loc.offset, 1, msg, .error, starts)
         ctx.ok = false
@@ -433,10 +434,10 @@ impl Ast_node
 fn next_anon_serial(ctx: Desugar_ctx$@, file: U8[]): Sz //<
     //< The next per-file number for the declaration an anonymous function is lifted into
     //<
-    //< Caution: **Count it per file, never per function** (unlike `for_in_counter`): the lifted
+    //< Caution: **Count it per file, never per function** (unlike `for_in_counter`). The lifted
     //< declaration is a top-level `priv`, and `write_priv_prefix_to` in `lower/abi.kspl` makes its
     //< C name unique by the file path.
-    n: = (ctx.anon_serials.get(file) catch 0) + 1
+    n: = ctx.anon_serials.get(file).unwrap_or(0) + 1
     ctx.anon_serials.set(file, n)
     return n
 

@@ -4,7 +4,7 @@
 //< They share this body rather than one file taking flags.
 //<
 //< **A package's suites run apart**, side by side, each a run of its own under the usual time limit
-//< (`verdict.default_timeout_ms`): one limit over the whole `make test` grows too short as the
+//< (`verdict.default_timeout_ms`). One limit over the whole `make test` grows too short as the
 //< package grows. A package names them as `ksplc/Makefile` does: `SUITES` lists them, `make
 //< test-<name>` runs one, and `make test SUITES=` runs the rest of `make test`.
 import "ksplc/tests/support/harness" as ksplc_harness
@@ -50,7 +50,7 @@ priv fn declared(dir: U8[], arena: Arena$@): List<|U8[]|> //<
         fs.join(harness.root(), dir, arena))
     $out: = List<|U8[]|>.new(arena)
     lines: = r.out.lines(arena)
-    if r.code != 0 || lines.len == 0 || lines.get(0).trim_spaces().len == 0
+    if !r.exited_with(0) || lines.len == 0 || lines.get(0).trim_spaces().len == 0
         return out
     out.push(lines.get(0).trim_spaces())
     if lines.len > 1
@@ -116,7 +116,7 @@ priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
     r: = harness
         .make(U8[][]::{ "-C", copy, "--no-print-directory", "-s", "-f", "Makefile", "-f", mk,
         "kanso-extract-suites" })
-    if r.code != 0
+    if !r.exited_with(0)
         return out
     for w in r.out.trim_spaces().split(' ', arena)
         if w.trim_spaces().len > 0
@@ -126,7 +126,7 @@ priv fn suites_of(copy: U8[], arena: Arena$@): List<|U8[]|> //<
 priv fn offers(copy: U8[], target: U8[]): Bool //< whether the copy's `Makefile` holds that target
     //<
     //< **make answers, with a dry run** ("No rule to make target" where it is absent).
-    return harness.make(U8[][]::{ "-C", copy, "-n", target }).code == 0
+    return harness.make(U8[][]::{ "-C", copy, "-n", target }).exited_with(0)
 
 priv const tail_lines: Sz = 30 //< how much of a failed run's end is shown after its own FAIL lines
 priv const log_dir: U8[] = "out/log/extract" //< where a failed run's whole output is kept
@@ -134,7 +134,7 @@ priv const log_dir: U8[] = "out/log/extract" //< where a failed run's whole outp
 priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
     //< A failed run's output cut to what explains it: its own `FAIL` lines, then its last lines
     //<
-    //< **The whole output goes to a log** named at the end (CI keeps it): printed whole, the `FAIL`
+    //< **The whole output goes to a log** named at the end (CI keeps it). Printed whole, the `FAIL`
     //< that matters sits thousands of lines above the verdict.
     lines: = out.lines(arena)
     b: = arena.text()
@@ -152,17 +152,17 @@ priv fn digest(what: U8[], out: U8[], arena: Arena$@): U8[] //<
         return b.s("(the whole output could not be written to ").s(path).s(")").take()
     return b.s("the whole output: ").s(path).take()
 
-priv fn check_run(name: U8[], what: U8[], code: I32, out: U8[], arena: Arena$@): Bool //<
+priv fn check_run(name: U8[], what: U8[], run: verdict.Run_out, arena: Arena$@): Bool //<
     //< One run's check: on a failure the detail is its `digest`
-    if code == 0
+    if run.exited_with(0)
         return verdict.check(name, true, "")
-    return verdict.check(name, false, digest(what, out, arena))
+    return verdict.check(name, false, digest(what, run.out, arena))
 
 priv fn relay_skips(dir: U8[], out: U8[], arena: Arena$@) //<
     //< The checks a package's own tests skipped, reported again as this gate's own
     //<
-    //< Caution: **Do not leave them inside a passing run's output**, shown only on failure; where
-    //< this gate is the one running them in CI, a skipped check would pass silently.
+    //< Caution: **Do not leave them inside a passing run's output**, shown only on failure. Where
+    //< this gate is the one that runs them in CI, a skipped check would pass silently.
     for line in out.lines(arena)
         if line.starts_with("SKIP ")
             verdict.skip_check(arena.text().s("\{dir\}'s own tests").take(), line.sub_from(5))
@@ -199,13 +199,17 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
     if offers(copy, "self-host")
         h: = make_in(copy, uses, "self-host", U8[][]::{}, arena)
         check_run(arena.text().s("\{dir\} rebuilds itself from the copy").take(),
-            arena.text().s("\{label\}_self-host").take(), h.code, h.out, arena)
-    // **The rest of `make test` goes first, then the suites side by side** (CI runs ksplc's suites
-    // here, the longest wait otherwise), each its own run and check.
+            arena.text().s("\{label\}_self-host").take(), h, arena)
+    // **The rest of `make test` goes first, then the suites side by side**, each its own run and
+    // check. (CI runs ksplc's suites here, the longest wait otherwise.) **One share alone runs what
+    // is not a suite** (the unit tests, the fuzzing, the declaration's removal). The other share's
+    // copy would give the same answer.
+    whole: = part != .rest
     jobs: = arena.text().s("-j\{verdict.jobs()\}").take()
-    r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
-    if check_run(name, arena.text().s("\{label\}_test").take(), r.code, r.out, arena)
-        relay_skips(dir, r.out, arena)
+    if whole
+        r: = make_in(copy, uses, "test", U8[][]::{ jobs, "SUITES=" }, arena)
+        if check_run(name, arena.text().s("\{label\}_test").take(), r, arena)
+            relay_skips(dir, r.out, arena)
     $suites: = List<|U8[]|>.new(arena)
     all: = suites_of(copy, arena)
     for i in Range.asc(all.len)
@@ -226,15 +230,17 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
         o: = outs.get(i)
         passed: = arena.text().s("\{dir\}'s suite \{suites.get(i)\} passes from the copy").take()
         what: = arena.text().s("\{label\}_\{suites.get(i)\}").take()
-        if check_run(passed, what, o.code, o.out, arena)
+        if check_run(passed, what, o, arena)
             relay_skips(dir, o.out, arena)
     // The seeds are the repository's files, as `make test-<name>-fuzz` passes them, so a finding
     // repeats from the same two numbers.
+    if !whole
+        return
     if offers(copy, "test-fuzz")
         seeds: = arena.text().s("FUZZ_SEEDS=\{harness.root()\}").take()
         f: = make_in(copy, uses, "test-fuzz", U8[][]::{ seeds }, arena)
         fuzzed: = arena.text().s("\{dir\} scatters broken input from the copy").take()
-        if check_run(fuzzed, arena.text().s("\{label\}_fuzz").take(), f.code, f.out, arena)
+        if check_run(fuzzed, arena.text().s("\{label\}_fuzz").take(), f, arena)
             relay_skips(dir, f.out, arena)
     taken: = "lang.kspl" if is_std else "ksplc.cfg"
     proof: =
@@ -244,14 +250,17 @@ priv fn case_alone(dir: U8[], part: Part, arena: Arena$@) //<
         verdict.check(proof, false, arena.text().s("cannot take \{taken\} away").take())
         return
     lost: = make_in(copy, uses, "test", U8[][]::{ "SUITES=" }, arena)
-    verdict.check(proof, lost.code != 0, lost.out)
+    verdict.check(proof, !lost.exited_with(0), lost.out)
 
-fn run(only: U8[], except: U8[], part: Part): I32 //<
+fn run(only: U8[], except: U8[][], part: Part): I32 //<
     //< Every package with its own `Makefile`, or only `only`, minus `except`; the suite's exit code
     arena: = harness.begin(64 * 1024 * 1024)
     $pkgs: = List<|U8[]|>.new(arena)
     for dir in packages_with_make(arena)
-        if (only.len == 0 || dir.equals(only)) && !dir.equals(except)
+        $left_out: = false
+        for e in except
+            left_out = left_out || dir.equals(e)
+        if (only.len == 0 || dir.equals(only)) && !left_out
             pkgs.push(dir)
     // **Seeing none is a failure, not a pass**, or it goes green having looked at nothing.
     verdict.check("a package carries its own Makefile", pkgs.len > 0,

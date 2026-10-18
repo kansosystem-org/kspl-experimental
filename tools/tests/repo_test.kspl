@@ -1,8 +1,11 @@
 //< The repository statistics' file classification, and how the CI's sets are dealt out
 import "std/chars"
 import "std/ds" { List }
-import "std/mem" { Arena }
+import "std/fs"
+import "std/io"
+import "std/mem" { Arena, dealloc }
 import "std/str" + { Str_builder }
+import "std/sys"
 import "std/verdict"
 import "tools/ci_gates" + { Outcome }
 import "tools/repo_stat_path" as path_kind + { Opening }
@@ -10,8 +13,8 @@ import "tools/repo_stat_path" as path_kind + { Opening }
 // ==========================================
 // Tests the functions that classify files by their path alone (`tools/repo_stat_path.kspl`).
 //
-// It is tested because **a mistake here breaks nothing visible**: a wrong skip, generated-file
-// test or comment mark each gives a plausible number, and nothing shows the misreading.
+// It is tested because **a mistake here breaks nothing visible.** A wrong skip, generated-file
+// test or comment mark each gives a plausible number. Nothing shows the misreading.
 // Caution: Test each case that matches together with one that does not. With only one side,
 // "always true" and "always false" both pass.
 // ==========================================
@@ -113,8 +116,8 @@ fn test_the_extension_and_the_top_folder() //< the extension, and the top tier's
 // Tests how the CI's sets are named and dealt out, and the summary read back from a round
 // (`tools/ci_gates.kspl`).
 //
-// It is tested because **a mistake here goes green**: a gate a set leaves out is never run, and
-// the summary is the only place a fallen or skipping gate is listed.
+// It is tested because **a mistake here goes green.** A gate a set leaves out is never run. The
+// summary is the only place a fallen or skipping gate is listed.
 // ==========================================
 
 priv fn named(name: U8[], arena: Arena$@): U8[] //< the set a name reads back as, or empty
@@ -130,36 +133,31 @@ fn test_a_set_is_named_as_make_names_it(arena: Arena$@) //< `-` for `_`, and not
     assert(named("ci", arena).equals("ci"), "a name with no dash reads back")
     // The variant's own spelling is not a target's, so it must not run a set.
     assert(named("ci_shard_core", arena).len == 0, "the variant's spelling is refused")
-    assert(named("ci-shard-linux", arena).len == 0, "a shard no job runs as a set is refused")
+    assert(named("ci-shard-none", arena).len == 0, "a shard no job runs as a set is refused")
     for s in ci_gates.set_order
         back: = named(s.variant_name().replace("_", "-", arena), arena)
         assert(back.equals(s.variant_name()), "every set reads back from its own name")
     verdict.pass("a set is named as make names it, and only so.")
 
-fn test_the_shards_part_ci() //<
-    //< `ci` selects the shared sections on Windows and all three on Linux
+fn test_the_shards_part_ci() //< `ci` selects what the host runs natively
     verdict.start("[tools/ci_gates] how the gates are dealt out test...")
     for g in ci_gates.gates
         core: = ci_gates.Set.ci_shard_core.runs(g)
         rest: = ci_gates.Set.ci_shard_rest.runs(g)
-        linux: = ci_gates.Set.ci_linux_only.runs(g)
+        linux: = ci_gates.Set.ci_shard_linux.runs(g)
         assert(ci_gates.Set.ci.runs(g) == (core || rest || linux),
-            "ci runs the union of all three workflow sections")
+            "Linux's ci runs the union of all three workflow sections")
         assert(!(core && rest) && !(core && linux) && !(rest && linux),
             "no gate is in more than one section")
-        assert(ci_gates.Set.ci_linux.runs(g) == ci_gates.Set.ci.runs(g),
-            "ci-linux keeps its full Linux coverage")
         assert(ci_gates.Set.ci.runs(g, "win32") == (core || rest),
-            "Windows ci runs exactly the two native workflow sections")
-        assert(ci_gates.Set.ci.runs(g, "darwin") == ci_gates.Set.ci.runs(g),
-            "macOS ci retains its shared and Linux-only coverage")
-        assert(ci_gates.Set.ci_linux.runs(g, "win32") == ci_gates.Set.ci_linux.runs(g),
-            "the explicit ci-linux target retains complete Linux coverage")
-    verdict.pass("ci selects the native Windows sections and the complete Linux set.")
+            "Windows' ci runs exactly the two shared sections")
+        assert(ci_gates.Set.ci.runs(g, "darwin") == (core || rest),
+            "macOS's ci runs exactly the two shared sections, with no container")
+    verdict.pass("ci selects what each host runs natively: three sections on Linux, two elsewhere.")
 
 // ==========================================
 // Sample gate logs, each cut to a real round's shape, and the summary read back from them
-// **What a reader needs is the line that failed the gate, last**: each sample's cause sits among
+// **What a reader needs is the line that failed the gate, last.** Each sample's cause sits among
 // lines that look alike (expected SKIPs, a `pass` line saying "panic", make's other `***`).
 // ==========================================
 
@@ -349,6 +347,48 @@ fn test_a_log_saying_nothing_shows_its_tail(arena: Arena$@) //<
     assert(p.find_str("#   lint: NO VERDICT").is_some(), "a gate cut short with an empty log fell")
     verdict.pass("where nothing names a cause, the log's last lines stand in.")
 
+fn test_a_gate_past_its_cap_is_stopped_and_named(arena: Arena$@) //<
+    //< A gate past its cap is stopped with what it started, and the cap is its first cause
+    //<
+    //< The fake gate's own child leaves a mark three seconds in: stopped with the gate at one, it
+    //< leaves none. The stop may take the half second of grace a group is given to end.
+    verdict.start("[tools/ci_gates] a gate that runs past its cap test...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines")
+        return
+    dir: = "out/tmp/kspl_ci_cap"
+    fs.mkdir_all(dir) catch panic("the work directory must be creatable")
+    log: = arena.text().s(dir).s("/fake.log").take()
+    mark: = arena.text().s(dir).s("/mark").take()
+    fs.remove_path(mark) catch {}
+    io.write_file(log, "the gate's own line\n") catch panic("the log must be writable")
+    gate: = arena.text().s("sh -c 'sleep 3; touch \"\{mark\}\"'; true").take()
+    t0: = sys.mono_us()
+    rc: = ci_gates.run_capped(U8[][]::{ "/bin/sh", "-c", gate }, "fake", log, 1I64, t0)
+    took_ms: = (sys.mono_us() - t0) / 1000I64
+    sys.sleep_ms(2500)
+    assert(rc != 0, "a gate stopped at its cap fails")
+    $m: = Panic_msg.new()
+    assert(took_ms < 2800I64,
+        m.s("it is stopped at its cap, before its child's end (took ").n(took_ms).s(" ms)").slice())
+    assert(!fs.exists(mark), "the gate's own child is stopped with it")
+    text: = io.read_file(log) catch panic("the log must be readable")
+    held: = arena.dup_str(text)
+    dealloc(Void$@::text.ptr)
+    line: = "# gate fake ran over 1 s and was stopped"
+    assert(held
+        .equals(arena.text().s("the gate's own line\n").s(line).c('\n').take()),
+        "the cap's line ends the gate's log")
+    j: = ci_gates.Judge::{ .platform = "linux", .relaxed = "" }
+    why: = ci_gates.causes(held, "fake", true, j@, arena)
+    assert(why.len > 0 && why.get(0).kind == ci_gates.Cause_kind.over_cap &&
+        why.get(0).line.equals(line), "the cap is the first cause named")
+    // A gate's own tests print the line for their fake gate: it is no cause of that gate's.
+    for c in ci_gates.causes(held, "debug_tools", true, j@, arena)
+        assert(c.kind != ci_gates.Cause_kind.over_cap, "the cap's line counts for its gate alone")
+    fs.remove_path(dir) catch {}
+    verdict.pass("a gate past its cap was stopped with its child, and the cap was its first cause.")
+
 fn test_the_page_lists_what_needs_attention(arena: Arena$@) //<
     //< The job's page marks a fall and lists a skipping gate, with no line of a log
     verdict.start("[tools/ci_gates] the summary page test...")
@@ -401,6 +441,11 @@ fn test_a_switch_turned_off_lets_its_own_skips_through() //<
         "another switch lets it through nowhere")
     arm: = "RESULT: SKIPPED (no ARM toolchain)"
     assert(ci_gates.is_expected_skip(arm, "linux", "KSOS_REQUIRE_ARM"), "each switch its own")
+    cross: =
+        "SKIP ship: the Windows programs run under Wine: x86_64-w64-mingw32-gcc is not installed"
+    assert(!ci_gates.is_expected_skip(cross, "linux", ""), "Linux's image holds the cross compiler")
+    assert(ci_gates.is_expected_skip(cross, "linux", "KANSO_REQUIRE_MINGW"),
+        "turned off, the cross half's skip passes")
     node: = "SKIP vscode: the extension's client side: node is not installed"
     assert(!ci_gates.is_expected_skip(node, "linux", "KANSO_REQUIRE_CHOWN KSOS_REQUIRE_ARM"),
         "a tool no switch covers stays required")

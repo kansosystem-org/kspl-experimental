@@ -1,6 +1,6 @@
 /* The "declaration half" of the C runtime's preamble header (bare metal).
  *
- * Only macros and static / static inline functions may be placed here (the reason is at
+ * Only macros and static / static inline functions can be placed here (the reason is at
  * the head of core.h). A substance carrying external linkage is on the freestanding.c side.
  *
  * **The canon for the meaning of the four run-time checks is the head of core.h.** This side
@@ -8,7 +8,7 @@
  * Caution: **Throw an unused argument away with `(void)`**, or -Wunused-parameter fires
  * (Principle 2); `KSPL_UNUSED` is empty on a target without attributes. */
 
-/* What core.c keeps per thread is one copy here: bare metal's thread-local storage needs a thread
+/* What core.c keeps per thread is one copy here. Bare metal's thread-local storage needs a thread
  * pointer that only a port layer could give (`__thread` is a link error on arm-none-eabi). */
 #define KSPL_PER_THREAD
 

@@ -2,11 +2,11 @@
 //< The backend-equivalence test
 //<
 //< It builds the same program (`tests/prog/equiv.kspl`) on the C and the LLVM backend, runs both
-//< and checks that their standard output agrees; the C is built under clang and gcc both, where
-//< both are installed, since each fills in what C leaves open (an evaluation order) its own way,
-//< and once more with C's traps for a misaligned access and a signed overflow.
-//< Caution: **Link through the harness's function.** List the libraries yourself and the two
-//< builds run under different conditions (Windows's stack size and the like), which shows as "a
+//< and checks that their standard output agrees. The C is built under clang and gcc both, where
+//< both are installed. Each fills in what C leaves open (an evaluation order) its own way. It is
+//< built once more with C's traps for a misaligned access and a signed overflow.
+//< Caution: **Link through the harness's function.** List the libraries yourself, and the two
+//< builds run under different conditions (Windows's stack size and the like). That shows as "a
 //< difference between the backends' output". The source is passed as a **relative path**
 //< (resolved at cwd = the root).
 import "ksplc/tests/support/harness"
@@ -28,8 +28,8 @@ priv const trap_cflags: U8[][_] = ::{ "-std=c99", "-O0",
         //< C's traps for what C leaves undefined and KSPL defines, which stop the program
         //<
         //< A trap needs no sanitizer library, so every C compiler the suite runs on can build it.
-        //< **At `-O0` a misaligned store or an `int` overflow still answers right**, so only a trap
-        //< shows that the C is undefined: a word store to a `#packed` field faults on a Cortex-M0.
+        //< **At `-O0` a misaligned store or an `int` overflow still answers right.** So only a trap
+        //< shows that the C is undefined. A word store to a `#packed` field faults on a Cortex-M0.
 
 priv const trap_probe: U8[] =
     """static int words[2];
@@ -74,12 +74,12 @@ priv fn build_run(llvm: Bool, gen: U8[], exe: U8[], cflags: U8[][], arena: Arena
     args.push(src)
     args.push(gen)
     g: = harness.ksplc(args.slice())
-    if g.code != 0
+    if !g.exited_with(0)
         return built(false, g.out)
     b: =
         (harness_build.build_llvm_exe(U8[][]::{ gen }, exe, cflags) if llvm
         else harness_build.build_exe(U8[][]::{ gen }, exe, cflags))
-    if b.code != 0
+    if !b.exited_with(0)
         return built(false, b.out)
     return run_built(exe, arena)
 
@@ -89,11 +89,12 @@ priv fn run_built(exe: U8[], arena: Arena$@): Built //< it runs a built executab
     // gen/llvm/types.kspl). Compare only the output and a disagreement on that path **leaves
     // nothing on the screen**.
     r: = harness.run(U8[][]::{ exe })
-    return built(true, arena.text().s(r.out).s("exit=\{r.code\}\n").take())
+    return built(true,
+        arena.text().s(r.out).s("exit=\{r.code.unwrap_or(-1)\}\n").take())
 
 priv fn is_clang(cc: U8[]): Bool? //< whether cc is clang, none where it does not run
     r: = harness.run(U8[][]::{ cc, "--version" })
-    if r.code != 0
+    if !r.exited_with(0)
         return .none
     return .some(r.out.find_str("clang").is_some())
 
@@ -231,7 +232,7 @@ fn main(): I32
         alt_exe: = fs.join(work, "c_alt.exe", arena)
         a: = harness_build.build_exe_with(alt_cc, U8[][]::{ c_gen }, alt_exe,
             U8[][]::harness_build.default_cflags)
-        if a.code != 0
+        if !a.exited_with(0)
             verdict.check("the C build under the other compiler", false, a.out)
         else
             alt: = run_built(alt_exe, arena)
@@ -258,10 +259,10 @@ priv fn check_traps(work: U8[], c_gen: U8[], want: U8[], arena: Arena$@) //<
     probe_exe: = fs.join(work, "trap_probe.exe", arena)
     pb: = harness_build.build_exe(U8[][]::{ probe_c }, probe_exe, U8[][]::trap_cflags)
     verdict.check("a misaligned store stops a build with C's traps",
-        pb.code == 0 && harness.run(U8[][]::{ probe_exe }).code != 0, pb.out)
+        pb.exited_with(0) && !harness.run(U8[][]::{ probe_exe }).exited_with(0), pb.out)
     trap_exe: = fs.join(work, "c_trap.exe", arena)
     tb: = harness_build.build_exe(U8[][]::{ c_gen }, trap_exe, U8[][]::trap_cflags)
-    if tb.code != 0
+    if !tb.exited_with(0)
         verdict.check("the C build with C's traps", false, tb.out)
         return
     t: = run_built(trap_exe, arena)

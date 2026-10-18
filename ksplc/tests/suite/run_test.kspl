@@ -1,8 +1,8 @@
 #!/usr/bin/env -S ksplc run
 //< The test that pins down `ksplc run`'s behaviour
 //<
-//< run "runs a script in one command" and caches the build (`ksplc/tools/run.kspl`), so **not
-//< running an old artefact** is what makes it correct: each way a dependency can change is pinned
+//< run "runs a script in one command" and caches the build (`ksplc/tools/run.kspl`). So **not
+//< running an old artefact** is what makes it correct. Each way a dependency can change is pinned
 //< one at a time. The cache directory is always the working directory.
 import "ksplc/tests/support/harness"
 import "ksplc/tests/support/harness_build"
@@ -17,7 +17,6 @@ import "std/str"
 import "std/strfmt" as _strfmt
 import "std/subproc"
 import "std/sys"
-import "std/time"
 import "std/verdict"
 
 priv const strip_must_shrink_percent: Sz = 95 //<
@@ -42,14 +41,14 @@ priv const spare_edge_secs: I64 = 300 //< how far outside or inside that window 
 // Running, and the cache
 // ==========================================
 
-priv fn first_round(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn first_round(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Writes the usual script, `s.kspl`, and its import into work, and runs it once for `v=1`
     if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
         return run_case.failed("cannot place the material")
     return run_case.expect_out(run_case.run_script(fs.join(work, "s.kspl", arena), arena), "v=1",
         "the first round failed", arena)
 
-priv fn case_runs_and_caches(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_runs_and_caches(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It runs, the second run gives the same answer, and the cache is really made
     s: = fs.join(work, "s.kspl", arena)
     first: = first_round(work, arena)
@@ -67,7 +66,7 @@ priv fn case_runs_and_caches(work: U8[], arena: Arena$@): run_case.Result //<
             return run_case.failed(arena.text().s("no \{name\} in the cache").take())
     return run_case.ok_result()
 
-priv fn case_edit_entry_rebuilds(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_edit_entry_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Edit the entry script and it is rebuilt
     if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
         return run_case.failed("cannot place the material")
@@ -78,7 +77,7 @@ priv fn case_edit_entry_rebuilds(work: U8[], arena: Arena$@): run_case.Result //
     return run_case.expect_out(run_case.run_script(s, arena), "w=1",
         "the entry script's change is not reflected", arena)
 
-priv fn case_edit_import_rebuilds(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_edit_import_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It is rebuilt when only the imported file is edited (the entry file's hash misses it)
     s: = fs.join(work, "s.kspl", arena)
     first: = first_round(work, arena)
@@ -89,7 +88,7 @@ priv fn case_edit_import_rebuilds(work: U8[], arena: Arena$@): run_case.Result /
     return run_case.expect_out(run_case.run_script(s, arena), "v=42",
         "the import target's change is not reflected", arena)
 
-priv fn case_new_settings_file_rebuilds(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_new_settings_file_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< A `ksplc.cfg` added where there was none is read on the next run
     //<
     //< **Comparing the files read misses it**, as no file of that name was read. A file searched
@@ -103,7 +102,7 @@ priv fn case_new_settings_file_rebuilds(work: U8[], arena: Arena$@): run_case.Re
     io.write_file(fs.join(work, "ksplc.cfg", arena), "[typo]\n") catch
         return run_case.failed("the settings file cannot be placed")
     r: = run_case.run_script(s, arena)
-    if r.code == 0 || r.out.find_str("unknown configuration section").is_none()
+    if r.exited_with(0) || r.out.find_str("unknown configuration section").is_none()
         return run_case
             .failed(arena.text().s("the new settings file was not read\n\{r.out\}").take())
     return run_case.ok_result()
@@ -117,11 +116,11 @@ fn main()
 
 """
 
-priv fn case_edited_embed_rebuilds(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_edited_embed_rebuilds(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< An embedded file edited in place is read again on the next run
     //<
     //< **Its bytes are in the output**, so an edit the cache missed would silently run the old
-    //< bytes; it is listed among the files read (`note_embedded` in `ksplc/base/locate.kspl`).
+    //< bytes. It is listed among the files read (`note_embedded` in `ksplc/base/locate.kspl`).
     data: = fs.join(work, "data.txt", arena)
     s: = fs.join(work, "s.kspl", arena)
     io.write_file(data, "first") catch
@@ -141,11 +140,11 @@ priv fn case_edited_embed_rebuilds(work: U8[], arena: Arena$@): run_case.Result 
 // Rebuilding the objects
 // ==========================================
 
-priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< When one line of a body is edited, **the objects of unrelated units are not rebuilt**
     //<
     //< Neither the count (the sweep keeps it the same) nor "one or more left in place" (a leftover
-    //< of a broken sweep counts) will do: the check is **that no more than one is new**.
+    //< of a broken sweep counts) will do. The check is **that no more than one is new**.
     s: = fs.join(work, "s.kspl", arena)
     first: = first_round(work, arena)
     if first.state != run_case.state_ok
@@ -172,7 +171,7 @@ priv fn case_unchanged_objects_are_reused(work: U8[], arena: Arena$@): run_case.
             .s(" (before=\{before.count\} after=\{after.count\})").take())
     return run_case.ok_result()
 
-priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< However many times it is edited, the object count does not grow (the old ones are swept)
     //<
     if !run_case.write_script(work, "s.kspl", run_progs.script_src, 1, arena)
@@ -194,7 +193,7 @@ priv fn case_objects_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Result
             .failed(arena.text().s("the objects are growing: \{first\} -> \{last\}").take())
     return run_case.ok_result()
 
-priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@): run_case.Result //<
+priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@): run_case.Outcome //<
     //< It triggers the slot sweep over more fake slots than the cap
     //<
     //< It runs one script, creates the fake slots, each last used at used_at, and runs a second
@@ -212,18 +211,18 @@ priv fn sweep_over_fakes(work: U8[], used_at: I64, before: Sz$@, arena: Arena$@)
     io.write_file(fs.join(work, "other.kspl", arena), run_progs.script_src) catch
         return run_case.failed("the second script cannot be placed")
     second: = run_case.run_script(fs.join(work, "other.kspl", arena), arena)
-    if second.code != 0
+    if !second.exited_with(0)
         return run_case.broke("the second script failed", second.out, arena)
     return run_case.ok_result()
 
-priv fn case_slots_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_slots_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The slots do not grow past the cap
     //<
-    //< ksplc's own identity goes into the key, so each rebuild of ksplc wastes every slot: **if not
+    //< ksplc's own identity goes into the key, so each rebuild of ksplc wastes every slot. **If not
     //< swept, they pile up in the OS's cache area** unnoticed. The fakes are last used before the
-    //< spare window, so only the first run's slot is spared, and the directory shrinks to the cap.
+    //< spare window. So only the first run's slot is spared, and the directory shrinks to the cap.
     $before: Sz = 0
-    long_ago: = time.now() - run_slot_spare_secs - spare_edge_secs
+    long_ago: = sys.wall_seconds() - run_slot_spare_secs - spare_edge_secs
     r: = sweep_over_fakes(work, long_ago, before@, arena)
     if r.state != run_case.state_ok
         return r
@@ -235,13 +234,13 @@ priv fn case_slots_do_not_pile_up(work: U8[], arena: Arena$@): run_case.Result /
             .take())
     return run_case.ok_result()
 
-priv fn case_slot_in_use_is_spared(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_slot_in_use_is_spared(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< A slot used within the spare window is not swept, even past the cap
     //<
     //< A slot another process is still building looks just like these; swept, that build fails with
     //< `failed to write file`.
     $before: Sz = 0
-    lately: = time.now() - run_slot_spare_secs + spare_edge_secs
+    lately: = sys.wall_seconds() - run_slot_spare_secs + spare_edge_secs
     r: = sweep_over_fakes(work, lately, before@, arena)
     if r.state != run_case.state_ok
         return r
@@ -257,7 +256,7 @@ priv fn case_slot_in_use_is_spared(work: U8[], arena: Arena$@): run_case.Result 
 // Managing the cache directory from outside
 // ==========================================
 
-priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< ksplc itself can report the cache directory
     //<
     //< The default is the OS's cache area (`%LOCALAPPDATA%` on Windows); **without asking, nobody
@@ -266,7 +265,7 @@ priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Result /
     fs.mkdir_all(cache) catch
         return run_case.failed("the place cannot be made")
     r: = harness.run(U8[][]::{ harness.ksplc_exe(), "info", "cache-dir" })
-    if r.code != 0
+    if !r.exited_with(0)
         return run_case.broke("the exit code is not 0", r.out, arena)
     // ksplc answers with the directory in one line: the last non-empty line.
     $said: U8[] = ""
@@ -279,7 +278,7 @@ priv fn case_cache_dir_is_visible(work: U8[], arena: Arena$@): run_case.Result /
             .take())
     return run_case.ok_result()
 
-priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< ksplc itself can erase the cache directory
     //<
     //< Only hex names are touched: `KSPLC_CACHE_DIR` may point at a directory holding other things.
@@ -294,14 +293,14 @@ priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Result /
     io.write_file(mine, "keep") catch
         return run_case.failed("the mark cannot be placed")
     r: = harness.ksplc_bare(U8[][]::{ "clean" })
-    // Compared as a location rather than a path string here too (run_case.same_place); a partial
+    // Compared as a location rather than a path string here too (run_case.same_place). A partial
     // match passes a rewritten path that contains the original.
     marker: = "cleared "
     $said: U8[] = ""
     for line in r.out.lines(arena)
         if at: = line.find_str(marker)
             said = line.sub_from(at + marker.len).trim_spaces()
-    if r.code != 0 || !run_case.same_place(said, cache, arena)
+    if !r.exited_with(0) || !run_case.same_place(said, cache, arena)
         return run_case
             .failed(arena.text().s("it does not report the place erased (\{said\})\n\{r.out\}")
             .take())
@@ -311,11 +310,11 @@ priv fn case_cache_can_be_cleared(work: U8[], arena: Arena$@): run_case.Result /
         return run_case.failed("it erased something ksplc did not make")
     return run_case.ok_result()
 
-priv fn case_same_name_elsewhere_is_another_script(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_same_name_elsewhere_is_another_script(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The same relative name run from two directories is kept as two scripts
     //<
     //< **The check is two slots, not one.** Each prints its own value even when they share one (the
-    //< second merely rebuilds over the first), so the output cannot tell; sharing one, two such
+    //< second merely rebuilds over the first), so the output cannot tell. Sharing one, two such
     //< runs at once sweep away each other's objects before the link.
     one: = fs.join(work, "one", arena)
     two: = fs.join(work, "two", arena)
@@ -344,10 +343,10 @@ priv fn case_same_name_elsewhere_is_another_script(work: U8[], arena: Arena$@): 
 priv const side_by_side: Sz = 4 //< how many runs of one script start at once
 priv const side_by_side_cap: Sz = 64 * 1024 //< how much of each one's output is kept
 
-priv fn case_runs_side_by_side(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_runs_side_by_side(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Runs of one script started together on an empty cache each run it, sharing one slot
     //<
-    //< **The slot lock guards the build** (`hold_slot` in `ksplc/tools/run.kspl`): without it, the
+    //< **The slot lock guards the build** (`hold_slot` in `ksplc/tools/run.kspl`). Without it, the
     //< runs remove each other's working files: "cannot update the cache", or a program gone at
     //< start.
     //< Caution: **Not through `harness.run_all`**, whose `KANSO_TEST_JOBS=1` would run them in
@@ -365,57 +364,60 @@ priv fn case_runs_side_by_side(work: U8[], arena: Arena$@): run_case.Result //<
     rs: = subproc.run_many(jobs.slice(), side_by_side, verdict.default_timeout_ms, side_by_side_cap,
         outs, arena)
     for i in Range.asc(rs.len)
-        r: = rs.get(i)
+        r: = rs.get(i) catch
+            return run_case
+                .failed(arena.text().s("run \{i\} of \{side_by_side\} could not start").take())
         said: = r.text(arena)
-        if r.spawn_failed || r.timed_out || r.exit_code != 0 ||
-            said.find_str("v=1").is_none()
+        if !r.exited_with(0) || said.find_str("v=1").is_none()
             return run_case
                 .failed(arena.text().s("run \{i\} of \{side_by_side\} at once failed ")
-                .s("(code=\{r.exit_code\})\n").s(said).take())
+                .s("(code=\{r.exit_code.unwrap_or(-1)\})\n").s(said).take())
     if run_case.only_slot(work, arena).len == 0
         return run_case.failed("runs of one script at once did not share one slot")
     return run_case.ok_result()
 
-priv fn case_args_pass_through(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_args_pass_through(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The arguments after the script's name go to the script as they are, even in option form
     path: = fs.join(work, "args.kspl", arena)
     io.write_file(path, run_progs.args_src) catch
         return run_case.failed("cannot place the material")
     r: = run_case.ksplc_run(U8[][]::{ path, "x", "--stats", "--define=y" }, arena)
-    if r.code != 0
+    if !r.exited_with(0)
         return run_case.broke("the run failed", r.out, arena)
     // `--stats` / `--define` are ksplc's options too, but here they pass through to the script
     return run_case.expect_out(r, "[x][--stats][--define=y]",
         "the arguments are not handed over intact", arena)
 
-priv fn case_exit_code_propagates(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_exit_code_propagates(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< `sys.exit()`'s exit code becomes `ksplc run`'s exit code unchanged
     path: = fs.join(work, "e.kspl", arena)
     io.write_file(path, run_progs.exit_src) catch
         return run_case.failed("cannot place the material")
     r: = run_case.run_script(path, arena)
-    if r.code != 7
+    if !r.exited_with(7)
         return run_case
-            .failed(arena.text().s("the exit code was \{r.code\} rather than 7\n").s(r.out).take())
+            .failed(arena.text().s("the exit code was \{r.code.unwrap_or(-1)\} rather than 7\n")
+            .s(r.out).take())
     return run_case.ok_result()
 
-priv fn main_ret_ok(r: verdict.Run_out, arena: Arena$@): run_case.Result //<
+priv fn main_ret_ok(r: verdict.Run_out, arena: Arena$@): run_case.Outcome //<
     //< Whether `main`'s return became the process's exit code unchanged
     if r.out.find_str("ran").is_none()
         return run_case.broke("the program is not running", r.out, arena)
-    if r.code != 7
+    if !r.exited_with(7)
         return run_case
             .failed(arena.text()
-            .s("main's return 7 has not become the exit code (code=\{r.code\})\n").s(r.out).take())
+            .s("main's return 7 has not become the exit code (code=\{r.code.unwrap_or(-1)\})\n")
+            .s(r.out).take())
     return run_case.ok_result()
 
-priv fn case_main_return_is_exit_code_c(work: U8[], arena: Arena$@): run_case.Result
+priv fn case_main_return_is_exit_code_c(work: U8[], arena: Arena$@): run_case.Outcome
     path: = fs.join(work, "r.kspl", arena)
     io.write_file(path, run_progs.main_ret_src) catch
         return run_case.failed("cannot place the material")
     return main_ret_ok(run_case.run_script(path, arena), arena)
 
-priv fn case_main_return_is_exit_code_llvm(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_main_return_is_exit_code_llvm(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< The exit code is the same on the LLVM backend too
     //<
     //< `ksplc run` is C-only, so the IR is linked and run by hand.
@@ -425,10 +427,10 @@ priv fn case_main_return_is_exit_code_llvm(work: U8[], arena: Arena$@): run_case
     io.write_file(src, run_progs.main_ret_src) catch
         return run_case.failed("cannot place the material")
     g: = harness.ksplc(U8[][]::{ "--to=llvm", src, ll })
-    if g.code != 0
+    if !g.exited_with(0)
         return run_case.broke("generating the LLVM IR failed", g.out, arena)
     b: = harness_build.build_llvm_exe(U8[][]::{ ll }, exe, U8[][]::{ "-Wno-override-module" })
-    if b.code != 0
+    if !b.exited_with(0)
         return run_case.broke("linking the IR failed", b.out, arena)
     return main_ret_ok(harness.run(U8[][]::{ exe }), arena)
 
@@ -436,7 +438,7 @@ priv fn case_main_return_is_exit_code_llvm(work: U8[], arena: Arena$@): run_case
 // The shebang line
 // ==========================================
 
-priv fn case_shebang_runs(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_shebang_runs(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< A script with a shebang runs, and the line numbers do not drift either
     path: = fs.join(work, "sh.kspl", arena)
     io.write_file(path, run_progs.shebang_src) catch
@@ -451,11 +453,11 @@ priv fn case_shebang_runs(work: U8[], arena: Arena$@): run_case.Result //<
         run_progs.shebang_src.replace("io.out().s(\"shebang ok\\n\")", "nope()", arena)) catch
         return run_case.failed("cannot place the material")
     c: = harness.ksplc(U8[][]::{ bad, fs.join(work, "shbad.c", arena) })
-    if c.code == 0 || c.out.find_str("shbad.kspl:5:").is_none()
+    if c.exited_with(0) || c.out.find_str("shbad.kspl:5:").is_none()
         return run_case.broke("the diagnostic's line number drifts with a shebang", c.out, arena)
     return run_case.ok_result()
 
-priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< `ksplc fmt --in-place` does not break the shebang line
     //<
     //< Written back with the first two bytes `//`, the `#!` is gone and **the script quietly cannot
@@ -464,10 +466,10 @@ priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Result /
     io.write_file(path, run_progs.shebang_src) catch
         return run_case.failed("cannot place the material")
     r: = harness.ksplc_bare(U8[][]::{ "fmt", path })
-    if r.code != 0 || !r.out.starts_with(run_progs.shebang_line)
+    if !r.exited_with(0) || !r.out.starts_with(run_progs.shebang_line)
         return run_case.broke("fmt's output does not start with the shebang line", r.out, arena)
     w: = harness.ksplc_bare(U8[][]::{ "fmt", "--in-place", path })
-    if w.code != 0
+    if !w.exited_with(0)
         return run_case.broke("fmt --in-place failed", w.out, arena)
     body: = io.read_file(path) catch
         return run_case.failed("the formatted result cannot be read")
@@ -483,13 +485,13 @@ priv fn case_shebang_survives_fmt(work: U8[], arena: Arena$@): run_case.Result /
 // Handling a failure
 // ==========================================
 
-priv fn case_compile_error_is_reported(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_compile_error_is_reported(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< A failed compilation shows its diagnostic, ends non-zero and leaves no cache
     path: = fs.join(work, "bad.kspl", arena)
     io.write_file(path, run_progs.bad_src) catch
         return run_case.failed("cannot place the material")
     r: = run_case.run_script(path, arena)
-    if r.code == 0
+    if r.exited_with(0)
         return run_case.broke("it should fail but ended at 0", r.out, arena)
     if r.out.find_str("error").is_none()
         return run_case.broke("no diagnostic comes out", r.out, arena)
@@ -505,7 +507,7 @@ priv fn version_src(n: Sz, arena: Arena$@): U8[] //<
         .s("import \"std/io\"\n\nfn main(): I32\n  io.out().s(\"VERSION-\{n\}\\n\")\n")
         .s("  return 0\n\n").take()
 
-priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< On a run where the C compiler failed, only the cache's validity data must not advance
     //<
     //< Caution: Do not substitute a fake cc: Windows's CreateProcess cannot start a shebang script,
@@ -527,10 +529,10 @@ priv fn case_cc_failure_does_not_leave_stale_exe(work: U8[], arena: Arena$@): ru
     io.write_file(src, version_src(2, arena)) catch
         return run_case.failed("the material cannot be rewritten")
     second: = run_case.run_script(src, arena)
-    if second.code == 0
+    if second.exited_with(0)
         return run_case.broke("cc failed yet it exited with 0", second.out, arena)
     third: = run_case.run_script(src, arena)
-    if third.code == 0
+    if third.exited_with(0)
         return run_case.broke("cc still fails yet it exited with 0 (it is running the old version)",
             third.out, arena)
     if third.out.find_str("VERSION-1").is_some()
@@ -581,7 +583,7 @@ priv fn run_with_cc_probe(work: U8[], body: U8[], arena: Arena$@, before: U8[] =
     sys.unset_env("KSPL_CC_LOG") catch panic("KSPL_CC_LOG could not be unset")
     return "" if !restored || !placed else io.read_file(log) catch ""
 
-priv fn case_cc_is_asked_once(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_cc_is_asked_once(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< cc is not started many times for the same question
     //<
     //< **Remove the caching and no gate fails** (it is only slow). Three places ask for the target.
@@ -597,7 +599,7 @@ priv fn case_cc_is_asked_once(work: U8[], arena: Arena$@): run_case.Result //<
             .s("\{seen.dumpmachine\}").s(" times").take(), log, arena)
     return run_case.ok_result()
 
-priv fn case_no_duplicate_objects(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_no_duplicate_objects(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< cc is not started twice for the same object
     //<
     //< **The core count decides the split count** (`pick_unit_count` in `ksplc/tools/run.kspl`).
@@ -615,7 +617,7 @@ priv fn case_no_duplicate_objects(work: U8[], arena: Arena$@): run_case.Result /
             .s(" times over for the same object").take(), log, arena)
     return run_case.ok_result()
 
-priv fn case_cc_gets_relative_paths(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_cc_gets_relative_paths(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It checks cc gets no absolute path, and does get the arguments checked
     //<
     //< **Break it and nothing happens on Linux** (cc opens it absolute or relative).
@@ -637,7 +639,7 @@ priv fn case_cc_gets_relative_paths(work: U8[], arena: Arena$@): run_case.Result
 // The libraries the program names (`#link`)
 // ==========================================
 
-priv fn case_named_library_is_linked(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_named_library_is_linked(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It checks a library an `extern` block names goes onto the link line
     //<
     //< It goes after the objects and before the libraries every program needs.
@@ -661,7 +663,7 @@ priv fn case_named_library_is_linked(work: U8[], arena: Arena$@): run_case.Resul
         return run_case.broke("the named library stands before an object", log, arena)
     return run_case.ok_result()
 
-priv fn case_library_change_relinks(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_library_change_relinks(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Change only the library and it links again, though no object is rebuilt
     //<
     //< A `#link` does not change the generated C, so every object is reused. **Leave the libraries
@@ -682,7 +684,7 @@ priv fn case_library_change_relinks(work: U8[], arena: Arena$@): run_case.Result
             return run_case.ok_result()
     return run_case.broke("the link again does not name the new library", log, arena)
 
-priv fn case_std_dir_reaches_the_child(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_std_dir_reaches_the_child(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< `--std-dir=` must be passed to the child ksplc too
     //<
     //< ksplc compiles by restarting itself; if not passed, the child searches for "std" from cwd
@@ -696,7 +698,7 @@ priv fn case_std_dir_reaches_the_child(work: U8[], arena: Arena$@): run_case.Res
     return run_case.expect_out(harness.run_in(argv, work), "v=5",
         "--std-dir= is not handed over to the child", arena)
 
-priv fn case_define_reaches_the_child(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_define_reaches_the_child(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< `--define=` must be passed to the child ksplc too, in the one form argp reads
     path: = fs.join(work, "d.kspl", arena)
     io.write_file(path, run_progs.define_src) catch
@@ -704,13 +706,13 @@ priv fn case_define_reaches_the_child(work: U8[], arena: Arena$@): run_case.Resu
     r: = run_case.ksplc_run(U8[][]::{ "--define=greet", path }, arena)
     return run_case.expect_out(r, "cfg=on", "--define= is not handed over to the child", arena)
 
-priv fn case_missing_script(work: U8[], arena: Arena$@): run_case.Result
+priv fn case_missing_script(work: U8[], arena: Arena$@): run_case.Outcome
     r: = run_case.run_script(fs.join(work, "no_such_file.kspl", arena), arena)
-    if r.code == 0 || r.out.find_str("no such file").is_none()
+    if r.exited_with(0) || r.out.find_str("no such file").is_none()
         return run_case.broke("a script that does not exist is not turned away", r.out, arena)
     return run_case.ok_result()
 
-priv fn case_llvm_target_refused(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_llvm_target_refused(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< run generates and links C, so it does not work on the LLVM backend
     //<
     //< Not accepted with no effect (Principle 5 in `docs/DESIGN-principles.md`); the per-subcommand
@@ -718,11 +720,12 @@ priv fn case_llvm_target_refused(work: U8[], arena: Arena$@): run_case.Result //
     if !run_case.write_script(work, "s2.kspl", run_progs.script_src, 1, arena)
         return run_case.failed("cannot place the material")
     r: = run_case.ksplc_run(U8[][]::{ "--to=llvm", fs.join(work, "s2.kspl", arena) }, arena)
-    if r.code == 0 || r.out.find_str("does not take effect on this subcommand").is_none()
+    if r.exited_with(0) ||
+        r.out.find_str("does not take effect on this subcommand").is_none()
         return run_case.broke("--to=llvm is not turned away", r.out, arena)
     return run_case.ok_result()
 
-priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< It checks `sys.script_path()` returns the started script's own path
     //<
     //< The path does not leak to a grandchild process.
@@ -734,16 +737,16 @@ priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Result //<
     gen: = fs.join(work, "c.c", arena)
     exe: = fs.join(work, "c.exe", arena)
     g: = harness.ksplc(U8[][]::{ fs.join(work, "c.kspl", arena), gen })
-    if g.code != 0
+    if !g.exited_with(0)
         return run_case.broke("generating the child script's C failed", g.out, arena)
     b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
-    if b.code != 0
+    if !b.exited_with(0)
         return run_case.broke("linking the child script failed", b.out, arena)
     alone: = harness.run(U8[][]::{ exe })
     if alone.out.find_str("child=none").is_none()
         return run_case.broke("an ordinary build's executable should return none", alone.out, arena)
     r: = run_case.ksplc_run(U8[][]::{ fs.join(work, "p.kspl", arena), exe }, arena)
-    if r.code != 0
+    if !r.exited_with(0)
         return run_case.broke("the run failed", r.out, arena)
     // Caution: Do not match on the full path. **The same file's path differs by environment** (on
     // MSYS2 `/tmp/<dir>/p.kspl` reaches ksplc as `D:/a/_temp/msys64/tmp/<dir>/p.kspl`), so the
@@ -761,15 +764,15 @@ priv fn case_script_path(work: U8[], arena: Arena$@): run_case.Result //<
 priv fn strips_sections(flags: List<|U8[]|>$@): Bool //<
     //< Whether the build options include the one that drops unused sections
     //<
-    //< **Whether the options are empty does not tell**: Windows gets the stack size but not the
-    //< dropping option, and a shrink would be demanded of a linker that does not drop.
+    //< **Whether the options are empty does not tell.** Windows gets the stack size but not the
+    //< dropping option. Then a shrink would be demanded of a linker that does not drop.
     //< Caution: Keep the options in step with run_section_flags in `ksplc/tools/run.kspl`.
     for i in Range.asc(flags.len)
         if flags.get(i).starts_with("-ffunction-sections")
             return true
     return false
 
-priv fn case_unused_std_is_stripped(work: U8[], arena: Arena$@): run_case.Result //<
+priv fn case_unused_std_is_stripped(work: U8[], arena: Arena$@): run_case.Outcome //<
     //< Unused std code is not left in the executable
     //<
     //< A generic makes every method on each instantiation. `ksplc/lower/prune.kspl` drops what no
@@ -785,17 +788,17 @@ priv fn case_unused_std_is_stripped(work: U8[], arena: Arena$@): run_case.Result
     io.write_file(src, run_progs.small_src) catch
         return run_case.failed("cannot place the material")
     g: = harness.ksplc(U8[][]::{ src, gen })
-    if g.code != 0
+    if !g.exited_with(0)
         return run_case.broke("ksplc failed", g.out, arena)
     plain_exe: = fs.join(work, "plain.exe", arena)
     strip_exe: = fs.join(work, "stripped.exe", arena)
     p: = harness_build.build_exe_unflagged(U8[][]::{ gen }, plain_exe,
         U8[][]::harness_build.default_cflags)
-    if p.code != 0
+    if !p.exited_with(0)
         return run_case.broke("the link without the option failed", p.out, arena)
     s: = harness_build.build_exe(U8[][]::{ gen }, strip_exe,
         U8[][]::harness_build.default_cflags)
-    if s.code != 0
+    if !s.exited_with(0)
         return run_case.broke("the link with the option failed", s.out, arena)
     plain: = fs.stat(plain_exe) catch
         return run_case.failed("the size without the option cannot be read")

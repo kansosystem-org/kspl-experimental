@@ -1,8 +1,8 @@
 //< How close the calling thread's stack is to its end, for a walk that recurses on its input
 //<
-//< **A depth count guards a recursion only on the build where it was measured**: the cost of one
+//< **A depth count guards a recursion only on the build where it was measured.** The cost of one
 //< level changes with the backend, the toolchain and the optimization level. This module asks the
-//< OS for the thread's own stack bounds, so a walk stops before its stack runs out on every build.
+//< OS for the thread's own stack bounds. So a walk stops before its stack runs out on every build.
 
 // ==========================================
 // The per-OS code (`pthread_getattr_np`, `pthread_get_stackaddr_np`,
@@ -20,8 +20,8 @@ priv fn stack_floor(): Sz //< where the calling thread's stack ends; 0 where not
 
 priv fn stack_here(): Sz //< where the calling thread's stack is now
     //<
-    //< Caution: **Not a local's address** (`Sz::here@`): the address sanitizer moves an
-    //< address-taken local onto a stack of its own on the heap, so it reads as past any floor.
+    //< Caution: **Not a local's address** (`Sz::here@`). The address sanitizer moves an
+    //< address-taken local onto a stack of its own on the heap. So it reads as past any floor.
     return kspl_stack_here()
 
 priv const unasked_room: Sz = 32 * 1024 //<
@@ -36,7 +36,7 @@ pub struct Stack_limit //<
     //<
     //< Caution: **Create it on the thread that walks.** It holds that thread's bounds, and another
     //< thread's stack is somewhere else.
-    floor: Sz //< the lowest address the walk may reach; 0 where the OS does not tell
+    floor: Sz //< the lowest address the walk can reach; 0 where the OS does not tell
     margin: Sz //< the room kept free, for a limit made by `later` that has not asked yet
     start: Sz //< where a `later` limit was made, until it asks the OS; 0 once it has asked
 
@@ -53,8 +53,8 @@ impl Stack_limit
 
     pub fn later( //< a limit that asks the OS only once a walk gets deep
         //<
-        //< **For a walk run many times over mostly shallow input** (a regex per line of a file):
-        //< asking costs far more than a shallow walk, which never needs the answer. It asks once
+        //< **For a walk run many times over mostly shallow input** (a regex per line of a file).
+        //< Asking costs far more than a shallow walk, which never needs the answer. It asks once
         //< the walk has gone a few tens of KB of stack below where it was made.
         margin: Sz, //< how many bytes to keep free below the point where the walk stops
     ): Stack_limit
@@ -67,8 +67,8 @@ impl Stack_limit
         limit: Self$@,
     ): Bool
         here: = stack_here()
-        // **Compare differences**, not two addresses: when the stack crosses the middle of the
-        // address space, the signed `Sz` changes sign between the two; the difference does not.
+        // **Compare differences**, not two addresses. When the stack crosses the middle of the
+        // address space, the signed `Sz` changes sign between the two. The difference does not.
         if limit.start != 0
             if limit.start - here < unasked_room
                 return false

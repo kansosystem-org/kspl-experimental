@@ -18,8 +18,8 @@ impl Ast_node
         // A block (`extern "C" { … }`, holding the ABI name's string) or a single `extern`
         // declaration.
         // Caution: **Do not look children up by index.** Attributes come first among the children
-        // ("The top-level declarations" in ksplc/docs/DESIGN-compiler.md) and shift `get_child(1)`;
-        // a block mistaken for a single declaration loses every declaration inside.
+        // ("The top-level declarations" in ksplc/docs/DESIGN-parse.md) and shift `get_child(1)`.
+        // A block mistaken for a single declaration loses every declaration inside.
         $is_block: = r.kind_id == .k_decl_extern_block
         for $i: Sz = 0; i + 1 < r.children.len; i += 1
             if r.get_child(i).is_keyword("extern")
@@ -99,16 +99,16 @@ impl Ast_node
         for single_item in items
             item_parts: = single_item.normalize_var_item()
             // An item without the mutability marker `$` (`x: = ...`) cannot be reassigned, which is
-            // `let`'s meaning, so its keyword becomes `let` and later stages check only `let`
+            // `let`'s meaning. So its keyword becomes `let`, and later stages check only `let`
             // (is_mut=false; C emits const).
             $item_kw: = kw_node
             if kw_node.text.equals("var") && !single_item.has_mut_binding_marker()
                 item_kw = Ast_node.new(.k_keyword, "let", kw_node.loc)
             new_decl: = Ast_node.new(r.kind_id, item_kw.text, single_item.loc)
 
-            // Caution: **Move the `attribute_list`'s contents, not the list itself**: moved whole
-            // into `mods` it nests (`attribute_list > attribute_list > attribute`), and
-            // `get_attribute` (base/ast_ext.kspl), which looks one level deep, silently misses it.
+            // Caution: **Move the `attribute_list`'s contents, not the list itself.** Moved whole
+            // into `mods`, it nests (`attribute_list > attribute_list > attribute`).
+            // `get_attribute` (base/ast_ext.kspl) looks one level deep, so it silently misses it.
             mods_node: = Ast_node.new(.k_attribute_list, "mods", r.loc)
             for mod in mods
                 if mod.kind_id == .k_attribute_list
@@ -135,8 +135,8 @@ impl Ast_node
         //< Whether r is a decl_var already normalized, to be passed through
         //<
         //< Note: normalize_by_kind (parse/normalize.kspl) runs flatten_var_decl_lists() on a
-        //< k_stmt_for both before normalize_loop() and after, so a single init unwrapped from
-        //< for_init comes back as an already normalized decl_var; this passes it through instead
+        //< k_stmt_for both before normalize_loop() and after. So a single init unwrapped from
+        //< for_init comes back as an already normalized decl_var. This passes it through instead
         //< of handling it twice.
         if !r.has_keyword("var") && !r.has_keyword("let") && !r.has_keyword("const")
             return false

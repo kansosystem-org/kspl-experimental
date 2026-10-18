@@ -51,7 +51,7 @@ fn refuse_type_args_on_plain_type(c: Sema_ctx$@, w: sema_decl_name.Written_type)
     if w.args == null || c.written_template(w) != null
         return false
     c.clear_scratch()
-        .s("type '\{w.spelled\}' is not generic, so '\{w.args.text\}' names nothing: drop it")
+        .s("type '\{w.spelled\}' is not generic. Remove the type arguments '\{w.args.text\}'")
     c.err(w.args, c.scratch.slice())
     return true
 
@@ -63,11 +63,10 @@ priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@,
     kind: = c.type_kind_of(w, gen_params)
     switch kind
     case .found
-        // **A type reached through an import alias is checked for visibility here**, at the use:
-        // nothing at the `import` line names it, as a selective import does.
+        // **A type reached through an import alias is checked for visibility here**, at the use.
+        // Nothing at the `import` line names it, as a selective import does.
         if w.alias_file.len > 0
-            sym: = c.written_type_symbol(w)
-            if sym != null
+            if sym: = c.written_type_symbol(w)
                 c.check_visibility_and_mark_used(sym, err_node)
         if w.member == null
             refuse_type_args_on_plain_type(c, w)
@@ -78,6 +77,36 @@ priv fn check_and_report_type(node: Ast_node$@, c: Sema_ctx$@,
         report_type_existence_error(c, kind, path_str.slice(), err_node)
     default
         report_type_existence_error(c, kind, w.spelled, err_node)
+
+priv fn atom_path(atom: Ast_node$@): Ast_node$@? //< the path a type atom names its type by
+    if atom.children.len == 0
+        return .none
+    first: = atom.get_child(0)
+    if first.kind_id == .k_identifier || first.kind_id == .k_type_path ||
+        first.kind_id == .k_expr_path || first.kind_id == .k_generic_path
+        return .some(first)
+    return .none
+
+fn names_missing_type(c: Sema_ctx$@, type_node: Ast_node$@): Bool //<
+    //< Whether a written type names a type check_and_report_type refuses as missing
+    //<
+    //< The resolver still gives such a name an id of its own. So **a binding of it is typed unknown
+    //< instead** (declare_param in `../body/infer.kspl`). Its uses then add nothing to the one
+    //< report, an unread-parameter warning included.
+    if type_node == null
+        return false
+    if type_node.kind_id == .k_type_atom
+        if path: = atom_path(type_node)
+            w: = c.read_written_type(path)
+            if w.spelled.len > 0
+                switch c.type_kind_of(w, null)
+                case .found {}
+                default
+                    return true
+    for child in type_node.children
+        if names_missing_type(c, child)
+            return true
+    return false
 
 priv fn refuse_sizeof_of_value_name(c: Sema_ctx$@, target: Ast_node$@,
     gen_params: List<|Ast_node$@|>$@): Bool //<
@@ -104,14 +133,14 @@ priv fn refuse_sizeof_of_value_name(c: Sema_ctx$@, target: Ast_node$@,
     case .names_value(what)
         if what == .function
             c.clear_scratch()
-                .s("'sizeof' cannot take the function '\{full\}': a function's size has no one \
-                    meaning. A pointer to one has the size of a function type, such as \
+                .s("'sizeof' cannot take the function '\{full\}'. A function's size has no single \
+                    meaning. A function pointer has the size of a function type, such as \
                     'sizeof(fn(x: I32): I32)'")
         else if what == .type_member
             c.clear_scratch()
-                .s("'sizeof' cannot take '\{full\}': a member named through its type is neither a \
-                    type nor a value. Write the member's type: a field's own, or a function type \
-                    for a method")
+                .s("'sizeof' cannot take '\{full\}'. A member named through its type is neither a \
+                    type nor a value. For a field, write its type. For a method, write a function \
+                    type")
         else
             return false
         c.err(target, c.scratch.slice())
@@ -161,7 +190,7 @@ impl Ast_node
             if t_node != null && t_node.children.len > 0
                 continue
             c.err(p,
-                "a parameter of this function-pointer type has no type: inside 'fn(...)' a bare \
+                "a parameter of this function-pointer type has no type. Inside 'fn(...)', a bare \
                     name is the parameter's name, not its type. Write 'fn(name: Type): Ret'")
 
     priv fn report_bad_param_defaults(r: Ast_node$@, c: Sema_ctx$@,
@@ -179,7 +208,7 @@ impl Ast_node
             if d == null
                 if seen_default
                     c.err(p,
-                        "a parameter without a default cannot follow one that has a default: move \
+                        "a parameter without a default cannot follow one that has a default. Move \
                             the defaults to the end of the list")
                 continue
             seen_default = true
@@ -197,32 +226,57 @@ impl Ast_node
                     "a parameter whose type mentions a type parameter cannot have a default value")
 
     fn check_spelled_out_sugar(r: Ast_node$@, c: Sema_ctx$@) //<
-        //< Refuses each type under r that spells a slice or an optional out (`Slice<|T|>`)
+        //< Refuses each type under r that spells a slice, an optional or a result out
         //<
-        //< **One spelling per type** (Principle 6 in docs/DESIGN-principles.md): `T[]` / `T$[]` and
-        //< `T?` stand everywhere a type does, an `impl`'s target included. An expression keeps the
-        //< long form (`Option<|I32|>.none`), as no postfix can stand there. **Read from the tree as
-        //< written**, once: an instance's copy would repeat it. A declaration the compiler made is
-        //< skipped.
+        //< It refuses an optional error type (`T!E?`) too.
+        //< **One spelling per type** (Principle 6 in docs/DESIGN-principles.md): `T[]` / `T$[]`,
+        //< `T?` and `T!E` stand everywhere a type does, an `impl`'s target included. An expression
+        //< keeps the long form (`Option<|I32|>.none`), as no postfix can stand there. **Read from
+        //< the tree as written**, once: an instance's copy would repeat it. A declaration the
+        //< compiler made is skipped.
         if r == null || r.made_by_compiler()
             return
         if r.kind_id == .k_type_atom && r.children.len > 0
             path: = r.get_child(0)
-            if (path.kind_id == .k_expr_path || path.kind_id == .k_type_path) &&
-                !path.is_sugar_made()
+            if path.is_sugar_made()
+                w: = c.read_written_type(path)
+                // `T!E?` folds `?` into the error type; an absent error would be a failure with
+                // nothing to say.
+                if w.fqn.equals(base_core.result_fqn) && w.args != null &&
+                    w.args.children.len > 1 && w.args.get_child(1).names_optional(c)
+                    c.err(r,
+                        "an error type cannot be optional. Write an optional result as '(T!E)?'. If \
+                            only the result's value can be absent, write 'T?!E'")
+            else if path.kind_id == .k_expr_path || path.kind_id == .k_type_path
                 w: = c.read_written_type(path)
                 if w.args != null && w.member == null
-                    if w.fqn.equals(base_core.option_fqn)
+                    if w.fqn.equals(base_core.result_fqn)
                         c.err(r,
-                            "an optional type is written 'T?', not 'Option<|T|>' (a result or a \
-                                function type is put in parentheses first: '(T!E)?'); the long form \
-                                stands only in an expression, as in 'Option<|I32|>.none'")
+                            "a result type is written 'T!E', not 'Result<|T, E|>'. The long form \
+                                stands only in an expression, as in 'Result<|I32, E|>.ok(1)'")
+                    else if w.fqn.equals(base_core.option_fqn)
+                        c.err(r,
+                            "an optional type is written 'T?', not 'Option<|T|>'. Put a result or \
+                                function type in parentheses first: '(T!E)?'. The long form stands \
+                                only in an expression, as in 'Option<|I32|>.none'")
                     else if w.fqn.equals(base_core.slice_fqn)
                         c.err(r,
                             "a slice type is written 'T[]', or 'T$[]' for writable elements, not \
                                 'Slice<|T|>' / 'Slice<|$T|>'")
         for child in r.children
             child.check_spelled_out_sugar(c)
+
+    priv fn names_optional(r: Ast_node$@, c: Sema_ctx$@): Bool //<
+        //< Whether the type argument r, as written, is an optional (`E?`)
+        $at: = r
+        for at != null && (at.kind_id == .k_type_expr || at.kind_id == .k_type_arg) &&
+            at.children.len > 0
+            at = at.last_child()
+        if at == null || at.kind_id != .k_type_atom || at.children.len == 0
+            return false
+        path: = at.get_child(0)
+        return path.is_sugar_made() &&
+            c.read_written_type(path).fqn.equals(base_core.option_fqn)
 
     priv fn mentions_gen_param(r: Ast_node$@, gen_params: List<|Ast_node$@|>$@): Bool //<
         //< Whether the type's name names one of the type parameters currently in scope
@@ -253,11 +307,11 @@ impl Ast_node
         gen_params: List<|Ast_node$@|>$@, bound: List<|U8[]|>$@) //<
             //< Checks each argument of a `<|…|>` in a generic's declaration against its parameter
             //<
-            //< **Only in a generic's declaration**: a template is resolved only as its instances,
-            //< where its own parameters' names are already their arguments; elsewhere each is
-            //< judged where it is resolved (build_resolved_type_args in resolve.kspl). tmpl is
-            //< null where the declarations do not tell whose. An argument computing a value is
-            //< refused here too, once; an argument standing for a value is not read as a type.
+            //< **Only in a generic's declaration.** A template is resolved only as its instances,
+            //< where its own parameters' names are already their arguments. Elsewhere each is
+            //< judged where it is resolved (build_resolved_type_args in resolve.kspl). tmpl is null
+            //< where the declarations do not tell whose. An argument computing a value is refused
+            //< here too, once. An argument standing for a value is not read as a type.
         params: = tmpl.find_child(.k_type_gen_params) if tmpl != null else null
         $pos: Sz = 0
         for arg in r.children
@@ -288,8 +342,8 @@ impl Ast_node
             if gp.is_const_gen_param()
                 return
             c.clear_scratch()
-                .s("'\{name\}' is a type parameter, but an array's length is a value\n  Hint: \
-                    declare it 'const \{name\}: Sz' to pass a value through it")
+                .s("'\{name\}' is a type parameter. An array's length is a value\n  Hint: declare \
+                    it 'const \{name\}: Sz' to pass a value through it")
             c.err(length, c.scratch.slice())
         case .none {}
 
@@ -300,8 +354,8 @@ impl Ast_node
             //< bound lists the names a function binds (parameters and locals), once inside one.
         if r == null
             return
-        // **A `sizeof` naming a value is the body's to read** (`sizeof(x)`, `sizeof(x.a)`): no
-        // local is in scope yet here, so a name the function binds is left to infer_sizeof_expr in
+        // **A `sizeof` naming a value is the body's to read** (`sizeof(x)`, `sizeof(x.a)`). No
+        // local is in scope yet here. So a name the function binds is left to infer_sizeof_expr in
         // `../body/expr.kspl`, which has the scope. A global's name reads the same way.
         if r.kind_id == .k_expr_sizeof &&
             (sizeof_may_name_value(c, r.get_sizeof_target(), bound) ||
@@ -331,13 +385,7 @@ impl Ast_node
         if r.kind_id == .k_expr_fn_lit_sig
             r.report_bad_param_defaults(c, gen_params, true)
         if r.kind_id == .k_type_atom
-            $path_node: Ast_node$@ = null
-            if r.children.len > 0
-                first: = r.get_child(0)
-                if first.kind_id == .k_identifier || first.kind_id == .k_type_path ||
-                    first.kind_id == .k_expr_path || first.kind_id == .k_generic_path
-                    path_node = first
-            if path_node != null
+            if path_node: = atom_path(r)
                 check_and_report_type(path_node, c, gen_params, r)
 
         // **A cast on a module (`io::out()`) is left to the body's analysis**, which reads the
@@ -352,10 +400,9 @@ impl Ast_node
         if r.kind_id == .k_type_postfix
             r.refuse_type_param_length(c, gen_params)
         for child in r.children
-            // **A declared function's own signature is no function-pointer type**: its untyped
-            // parameter is reported by the function's check, which names the parameter
-            // (`check_param_type` in `../session/ctx.kspl`); read here too, one mistake gave two
-            // errors.
+            // **A declared function's own signature is no function-pointer type.** The function's
+            // check reports its untyped parameter and names the parameter (`check_param_type` in
+            // `../session/ctx.kspl`). Read here too, one mistake gave two errors.
             if child.kind_id == .k_type_fn_sig && r.kind_id != .k_decl_fn
                 child.report_untyped_fn_ptr_params(c)
             if child.kind_id == .k_type_args && gen_params.len > 0

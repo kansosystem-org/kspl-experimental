@@ -4,7 +4,7 @@
 //< It also checks that no instruction follows a block's terminator. LLVM's verifier checks
 //< neither.
 //< Caution: **Do not rewrite it with a regular expression.** It cannot count nested brackets (the
-//< commas inside `{i64, i64}`), a wrapped declaration must be joined first, and a pattern costs
+//< commas inside `{i64, i64}`). A wrapped declaration must be joined first. A pattern costs
 //< far more per line than a look by hand ("For a hot loop over many lines, look by hand" in
 //< `std/docs/DESIGN-core.md`).
 //< Usage: ksplc run tests/tools/llvm_ir_abi_check.kspl <file.ll> [<file.ll> ...]
@@ -33,9 +33,9 @@ priv const type_attrs: U8[][_] = ::{ "noalias", "nocapture", "nonnull", "readonl
 priv const value_heads: U8[][_] = ::{ "zeroinitializer", "null", "true", "false", "undef", "poison",
 }
 
-// A block's terminator (no instruction may follow until the next label). LLVM reads one placed
-// after it as an unnamed block that uses up an implicit number, so every later `%N` disagrees and
-// "the number is too small" is reported far from the cause; caught in the text, the causing line
+// A block's terminator (no instruction can follow until the next label). LLVM reads one placed
+// after it as an unnamed block that uses up an implicit number. So every later `%N` disagrees, and
+// "the number is too small" is reported far from the cause. Caught in the text, the causing line
 // is named.
 priv const terminators: U8[][_] = ::{ "ret", "br", "switch", "unreachable", "resume", "indirectbr",
 }
@@ -182,7 +182,7 @@ priv fn callee_at(s: U8[], from: Sz, out_name: U8[]$@, out_open: Sz$@): Bool //<
     //< Searches for the `@name(` form and returns the name and its `(`'s position
     //<
     //< Caution: **Check only the first `@`.** In a call through a function pointer (`call void
-    //< %12(ptr @g)`) it is an argument, not followed by `(`, so it fails here; search further and
+    //< %12(ptr @g)`) it is an argument, not followed by `(`, so it fails here. Search further, and
     //< **the function passed as an argument is mistaken for the callee**.
     switch s.sub_from(from).find_char('@')
     case .none
@@ -301,7 +301,7 @@ priv fn is_label(ln: U8[]): Bool //< a block's label (`name:`), only at a line's
 priv fn join_define(lines: List<|U8[]|>, at: Sz, used: Sz$@, arena: Arena$@): U8[] //<
     //< Joins a wrapped define into one line and returns the number of lines used in used
     //<
-    //< Caution: **Join until it closes**, not just one line — a declaration wrapped over three
+    //< Caution: **Join until it closes**, not just one line. A declaration wrapped over three
     //< lines would be missed, unseen as long as today's IR closes in one.
     b: = arena.text()
     b.s(lines.get(at).trim_spaces())
@@ -322,10 +322,10 @@ priv fn check_call(c: Call, want: Def_params, bad: List<|Bad|>$@, arena: Arena$@
     //< Matches the callee's parameters against the caller's actual arguments
     //<
     //< With opaque pointers a call's signature comes from the call itself, so `define void @f(i64
-    //< %n)` next to `call void @f(i32 2)` passes the verifier. In a register it comes out right,
-    //< but on the stack (the fifth argument on Win64) the upper 4 bytes keep the slot's old value —
-    //< only windows-ucrt64 breaks ("Why it differs between platforms" in
-    //< `ksplc/docs/DESIGN-compiler.md`).
+    //< %n)` next to `call void @f(i32 2)` passes the verifier. In a register it comes out right.
+    //< On the stack (the fifth argument on Win64), the upper 4 bytes keep the slot's old value.
+    //< Only windows-ucrt64 breaks ("Why it differs between platforms" in
+    //< `ksplc/docs/DESIGN-backends.md`).
     got_n: = top_level_count(c.args)
     if got_n != want.count
         wb: = arena.text()
@@ -360,8 +360,8 @@ priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$
     //< the cause.
     heap_text: = io.read_file(path) catch
         return false
-    // Caution: Copy into the arena before letting go: the strings in bad are views into the body,
-    // so freeing it first reads freed memory at the report.
+    // Caution: Copy into the arena before letting go. The strings in bad are views into the body,
+    // so a free before the copy reads freed memory at the report.
     text: U8[] = arena.dup_str(heap_text)
     dealloc(Void$@::heap_text.ptr)
     lines: = text.lines(arena)
@@ -444,13 +444,12 @@ priv fn check(path: U8[], stats: File_stats$@, bad: List<|Bad|>$@, arena: Arena$
     // a new order shows other items for the same IR.
     for tb in term_bad
         bad.push(tb)
-    absent: = Def_params::{ .count = -1, .text = "" }
+    // Skipped: a call with no define here (extern / a `declare` alone / a runtime stub) and a
+    // variadic one.
     for c in calls
-        want: = defines.get(c.name) catch
-            fallback absent
-        if want.count < 0 || is_varargs(c.raw)
-            continue // extern / a `declare` alone / a runtime stub / variadic
-        check_call(c, want, bad, arena)
+        if want: = defines.get(c.name)
+            if !is_varargs(c.raw)
+                check_call(c, want, bad, arena)
     return true
 
 // ==========================================
@@ -477,8 +476,8 @@ fn main(): I32
     $total_bad: Sz = 0
     for i in Range.asc(args.len - 1)
         path: U8[] = args.get(i + 1)
-        // Caution: Allocate a fresh arena per file: the body and its lines go here, so reusing it
-        // piles them up file after file (one file's IR runs to megabytes).
+        // Caution: Allocate a fresh arena per file. The body and its lines go here, so a reused
+        // arena piles them up file after file (one file's IR runs to megabytes).
         arena: = Arena.new(16 * 1024 * 1024)
         defer arena.free()
         $stats: = File_stats::{ .defines = 0, .calls = 0, .rets = 0 }

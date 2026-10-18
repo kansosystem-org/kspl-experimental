@@ -1,7 +1,7 @@
 //< What the formatter does with what stands between two tokens: comments and blank lines
 //<
 //< **`printer.kspl` writes the tokens; this file handles what lies between them.** A comment keeps
-//< the line and level it was written on, a blank line the author placed stays as one, and a `//<`
+//< the line and level it was written on. A blank line the author placed stays as one. A `//<`
 //< too long for its line moves its text to the line below.
 import "ksplc/base/lines" { line_end, opens_its_line }
 import "ksplc/fmt/comment" as fmt_comment
@@ -14,15 +14,15 @@ impl Formatter
     fn pull_trailing_comment(r: Self$@, open_offset: Sz, close_offset: Sz) //<
         //< The comment after an inserted `}` belongs to the line before it
         //<
-        //< The conversion to braces moves no line or column, so where a block's last line ends in a
+        //< The conversion to braces moves no line or column. So where a block's last line ends in a
         //< comment, the only place left for the `}` is after it.
-        //< Caution: **Only for an inserted `}`.** An inserted `}` lands after a line's code, so a
-        //< `}` that starts its line was typed (a value's, or a block's the notation keeps), and the
+        //< Caution: **Only for an inserted `}`.** An inserted `}` lands after a line's code. So a
+        //< `}` that starts its line was typed (a value's, or a block's the notation keeps). The
         //< comment after it stays as written. In the brace notation the author placed everything.
         if !r.from_layout || opens_its_line(r.src, close_offset)
             return
-        // Caution: **Skip the inserted marks** (`fmt_source.past_mended_marks`). Stop at the first
-        // of a run of `}` and `;` and the comment goes to the outermost close, landing on a `}`
+        // Caution: **Skip the inserted marks** (`fmt_source.past_mended_marks`). Stopped at the
+        // first of a run of `}` and `;`, the comment goes to the outermost close. It lands on a `}`
         // line rather than on the line whose code it describes.
         after: = fmt_source.past_mended_marks(r.src, close_offset)
         if r.last_offset <= close_offset && r.src.starts_with("//", after)
@@ -62,7 +62,7 @@ impl Formatter
         //< It writes a line comment's text, moving a `//<` too long for its line below the mark
         //<
         //< Caution: **Every comment the printer writes goes through here.** The comment after an
-        //< inserted `}` takes another path than the one after a typed `}`, and a width rule on one
+        //< inserted `}` takes another path than the one after a typed `}`. A width rule on one
         //< path alone moves a description in one notation and not in the other.
         if r.carries_summary_down(text, trailing)
             r.write_summary_below(text)
@@ -80,6 +80,7 @@ impl Formatter
         r.flags.wrap_indent = false
         // The run of `//<` is contiguous, so the blank line closes it.
         r.summary_run_open = false
+        r.summary_said = false
 
     fn blank_groups_nothing(r: Self$@, next_char: U8): Bool //<
         //< Whether a blank line touches a block's edge
@@ -94,7 +95,7 @@ impl Formatter
         //< It chooses and writes the separator before a comment
         //<
         //< That is a kept blank line, a kept newline, or plain whitespace. A blank line before the
-        //< comment (new_lines > 1) is kept as one; the next character is not known yet, so only the
+        //< comment (new_lines > 1) is kept as one. The next character is not known yet, so only the
         //< block's start is checked.
         // **A pending newline wins over the suppression**, and its flag is cleared once written. A
         // comment on the token's line (new_lines == 0) trails and stays.
@@ -106,7 +107,7 @@ impl Formatter
             else
                 r.write_nl()
             // Caution: **Ask whether the line continues; do not just clear the flag.** A comment
-            // among a bracket's wrapped elements takes their indent; at column 0 the indentation
+            // among a bracket's wrapped elements takes their indent. At column 0 the indentation
             // notation reads a new top-level item and inserts a `{` where the element was.
             r.flags.wrap_indent = r.carries_on(true)
             r.flags.force_next_nl = false
@@ -125,9 +126,9 @@ impl Formatter
         //< Whether a trailing `//<` should move its text to the line below
         //<
         //< The rule for a description too long for its line ("The documentation a declaration
-        //< carries" in `../../docs/DESIGN-language.md`): the width decides.
+        //< carries" in `../../docs/DESIGN-notation.md`): the width decides.
         //< Caution: **Only on the line where the declaration opens.** A mark after a return type,
-        //< on the line where a wrapped heading closes, describes the return; moved down it would
+        //< on the line where a wrapped heading closes, describes the return. Moved down, it would
         //< read as the declaration's own (`mark_offset` in `../base/ast_doc.kspl`). `line_wrapped`
         //< tells them apart.
         if !trailing || r.flags.is_line_start || !text.starts_with("//<")
@@ -142,20 +143,30 @@ impl Formatter
         //< It leaves the mark on the line and writes its text on the line below, one step in
         //<
         //< The mark is written trailing, so `track_summary_run` opens the run here and `indent_for`
-        //< takes the column from it — the same column a hand-written continuation uses.
+        //< takes the column from it — the same column a hand-written continuation uses. The text
+        //< is the summary, so it goes below whole (`opens_summary`).
         r.write_raw("//<")
         r.write_nl()
         $line: = Str_builder.new()
         defer line.free()
         line.s("//< ").s(text.sub_from(3).trim_spaces())
-        r.write_raw(line.slice())
+        r.write_comment_text(line.slice(), false)
+
+    priv fn opens_summary(r: Self$@, text: U8[]): Bool //<
+        //< Whether `text` is a summary's first line: a `//<` with text, opening its run's words
+        //<
+        //< Caution: **Never cut it.** The summary runs to the first `//<` with no text, so a cut
+        //< makes it two lines, which `[W0213]` reports: formatting a clean file would warn. It runs
+        //< past the width instead.
+        return fmt_comment.mark_of(text).equals("//<") &&
+            text.sub_from(3).trim_spaces().len > 0 && !r.summary_said
 
     priv fn write_own_comment(r: Self$@, text: U8[], carry: Str_builder$@) //<
         //< It writes a comment standing on a line of its own, cut where it crosses the limit
         //<
         //< What does not fit goes into `carry`, for the paragraph's next line to take up or for
         //< `flush_carry` to write on lines of its own (`cut_at` in `comment.kspl`).
-        if !r.flags.is_line_start || fmt_comment.keeps_layout(text)
+        if !r.flags.is_line_start || fmt_comment.keeps_layout(text) || r.opens_summary(text)
             r.write_comment_text(text, false)
             return
         room: = r.config.column_limit - r.indent_for(text)

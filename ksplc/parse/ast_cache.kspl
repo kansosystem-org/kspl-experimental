@@ -1,8 +1,8 @@
 //< Saves the normalized AST to disk so the next run can skip KSPEG's parse
 //<
-//< Parsing takes most of ksplc's time (more so for small inputs, since std is always read); a
-//< build parses each file once, but **every start of ksplc parses again**, and that is what this
-//< saves. The unit is one file, and the key must include ksplc's own identity
+//< Parsing takes most of ksplc's time (more so for small inputs, since std is always read). A
+//< build parses each file once, but **every start of ksplc parses again**. This saves that
+//< parse. The unit is one file, and the key must include ksplc's own identity
 //< (base/cache.append_self_identity).
 //< Caution: **Silently discard a broken or old-format file and parse instead.** The cache only
 //< saves time, so an unreadable one is no reason to fail.
@@ -23,9 +23,9 @@ priv const magic: U8[] = "KSAST"
 
 priv const format_version: U32 = 4 //< the format's version
     //<
-    //< **Raise it whenever a node's fields, their order or the way the key is built change**, or a
-    //< new reader reads an old file and silently breaks. Rebuilding ksplc changes every key anyway;
-    //< this guards what would still be read (a file placed by hand, for example).
+    //< **Raise it whenever a node's fields, their order or the way the key is built change.**
+    //< Otherwise a new reader reads an old file and silently breaks. Rebuilding ksplc changes every
+    //< key anyway. This guards what would still be read (a file placed by hand, for example).
 
 priv const max_nodes: Sz = 8 * 1024 * 1024 //< the most nodes one entry can hold
     //<
@@ -42,7 +42,7 @@ priv fn temp_nonce(): Sz
 
 struct Stats //< the hits and misses --stats prints
     //<
-    //< Caution: Without it, a cache that silently goes unused cannot be noticed: things only get
+    //< Caution: Without it, nobody can notice a cache that silently goes unused. Things only get
     //< slower while the results stay right (tests/suite/ast_cache_test.kspl checks it).
     hits: Sz
     misses: Sz
@@ -110,7 +110,7 @@ impl Str_table
         //< table.
         if s.len == 0
             return 0
-        existing: = r.ids.get(s) catch -1
+        existing: = r.ids.get(s).unwrap_or(-1)
         if existing >= 0
             return existing
         id: = r.items.len + 1
@@ -165,11 +165,11 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
         if !d.loc.file().equals(logical_name) || !write_subtree(d, tbl, body@, n_nodes@)
             return
 
-    // The ranges a `#cfg()` dropped are the normalization's other result; the editor reads them to
+    // The ranges a `#cfg()` dropped are the normalization's other result. The editor reads them to
     // explain why a position is empty (`find_cfg_inactive` in `../base/cfg_inactive.kspl`).
-    // Caution: **Store them in the entry**, or a hit returns only the declarations, and whether a
-    // file shows the reason depends on whether a build cached it. Their flag's spelling goes into
-    // the string table, so collect them before the table is written.
+    // Caution: **Store them in the entry.** Otherwise a hit returns only the declarations.
+    // Whether a file shows the reason would then depend on whether a build cached it. Their
+    // flag's spelling goes into the string table, so collect them before the table is written.
     $regions: = Str_builder.new()
     defer regions.free()
     $n_regions: Sz = 0
@@ -197,7 +197,7 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     out.s(body.slice())
     out.s(regions.slice())
 
-    // Another process may write the same content at once (make -j). **Write to a temporary name,
+    // Another process can write the same content at once (make -j). **Write to a temporary name,
     // then rename**, or a reader reads half-written content. The temporary name differs per
     // process; if two clash, the key and length checks discard the entry and the next writer
     // repairs it.
@@ -337,7 +337,7 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
             stats.misses += 1
             return false
     // The ranges a `#cfg()` dropped, read back so that a hit answers exactly as a parse would.
-    // Caution: **Pass none on before the whole entry is checked**: a miss parses again and records
+    // Caution: **Pass none on before the whole entry is checked.** A miss parses again and records
     // them again, so a partly passed set would appear twice.
     cached: = List<|base_cfg_inactive.Cfg_inactive|>.create(base_core.arena)
     for _i in Range.asc(n_regions)
@@ -379,7 +379,7 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
 fn print_stats() //< it prints the hits and misses, only under --stats
     //<
     //< Caution: **Keep the string `[AST Cache] `**: `tests/suite/ast_cache_test.kspl` looks for it
-    //< in the line (the indentation may change). It is printed apart from the timing, since a count
+    //< in the line (the indentation can change). It is printed apart from the timing, since a count
     //< means something even where the timing does not.
     if base_core.config.enable_stats
         io.err()

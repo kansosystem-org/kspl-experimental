@@ -19,9 +19,9 @@ import "std/ds" { List }
 import "std/json" { Json_builder }
 
 // Adds one row (`axis` 0) or column (1) to the table the cursor is in.
-// **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`):
-// 1 added, 0 the cursor is outside a cell, -1 open read-only, -2 the column would widen a merge
-// past what one may cover.
+// **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`).
+// 1 added, 0 the cursor is outside a cell, -1 open read-only. -2 the column would widen a merge
+// past what one can cover.
 #export
 fn kspage_web_add_line(axis: I32): I32
     if page == null
@@ -37,12 +37,12 @@ fn kspage_web_add_line(axis: I32): I32
     case .too_wide
         return -2
 
-// Merges every cell the selection covers into its top-left cell (drag across, click once); one
+// Merges every cell the selection covers into its top-left cell (drag across, click once). One
 // undo restores them all.
-// **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`):
-// 1 merged, 0 the selection is outside a cell or spans two tables, -1 open read-only, -2 only one
-// cell is selected, -3 a merge inside extends outside the selection, -4 it covers more rows or
-// columns than one merge may.
+// **The result carries its reason as a number** (the rule at `kspage_web_set_block_style`).
+// 1 merged, 0 the selection is outside a cell or spans two tables, -1 open read-only. -2 only one
+// cell is selected, -3 a merge inside extends outside the selection. -4 it covers more rows or
+// columns than one merge can.
 #export
 fn kspage_web_merge_cells(): I32
     if page == null
@@ -90,9 +90,9 @@ fn kspage_web_drop_line(axis: I32): I32
 // Sorts the rows under the heading by the cursor's column (`down` 0 is smallest first). **The
 // first row is the heading and never moves**; the cursor only chooses the column.
 // Caution: **Return the reason as a number** (the rule at `kspage_web_set_block_style` in
-// `face.kspl`): 1 sorted, 0 the cursor is outside a cell, -1 a downward-merged cell among the
-// rows, -2 fewer than two rows under the heading, -3 already in that order, -4 open read-only. One
-// number for all would send the reader looking for the wrong cause.
+// `face.kspl`). 1 sorted, 0 the cursor is outside a cell, -1 a downward-merged cell among the
+// rows. -2 fewer than two rows under the heading, -3 already in that order, -4 open read-only.
+// One number for all would send the reader looking for the wrong cause.
 #export
 fn kspage_web_sort_rows(down: I32): I32
     if page == null
@@ -198,8 +198,8 @@ fn kspage_web_set_cell_size(axis: I32, v: F32): I32
 
 // ---- Filtering the rows ----
 
-// Filters the cursor's table to the rows whose cell in the cursor's column matches: the kind is
-// `kind`'s number in `keep_order` (`state.kspl`) and the value is the `len` bytes written into
+// Filters the cursor's table to the rows whose cell in the cursor's column matches. The kind is
+// `kind`'s number in `keep_order` (`state.kspl`). The value is the `len` bytes written into
 // `kspage_web_input_buffer()`. **It is a view** (`Over.filters`): nothing is saved, and a formula
 // counts every row. A condition already on that column is replaced. 1 if filtered, 0 with the
 // cursor outside a cell, -1 where a number is needed and the text is not one.
@@ -225,10 +225,10 @@ fn kspage_web_filter(kind: I32, len: Sz): I32
     return 1
 
 // Writes what the cursor's column shows, so a set of values can be checked, and returns the
-// length: `{"values":[…],"blank":<bool>,"cut":<bool>,"chosen":[…]|null}`, where `values` are that
-// column's distinct texts in its sort order, `blank` says some cell shows nothing, `cut` says there
-// were more values than the list holds, and `chosen` is the set a filter keeps. **Empty means the
-// cursor is not inside a cell.**
+// length: `{"values":[…],"blank":<bool>,"cut":<bool>,"chosen":[…]|null}`. `values` are that
+// column's distinct texts in its sort order. `blank` says some cell shows nothing. `cut` says
+// there were more values than the list holds. `chosen` is the set a filter keeps. **Empty means
+// the cursor is not inside a cell.**
 // Caution: **Ask again after every change** (what a column shows changes with the document).
 #export
 fn kspage_web_column_values(): Sz
@@ -277,11 +277,11 @@ priv fn set_on(table: Block$@, column: Sz): U8[]? //<
             return .some(f.text)
     return .none
 
-// Filters the cursor's column to the rows whose cell shows one of the chosen values: the set is
-// the `len` bytes written into `kspage_web_input_buffer()`, one value per line with a line break
-// after each (an empty value means the blank cells). **It is a view** (as `kspage_web_filter`).
+// Filters the cursor's column to the rows whose cell shows one of the chosen values. The set is
+// the `len` bytes written into `kspage_web_input_buffer()`, one value per line, with a line break
+// after each. An empty value means the blank cells. **It is a view** (as `kspage_web_filter`).
 // 1 if filtered, 0 with the cursor outside a cell.
-// **Choosing nothing filters to no rows**, which is what unchecking everything asks for; the way
+// **Choosing nothing filters to no rows**, which is what unchecking everything asks for. The way
 // back is `kspage_web_unfilter_column`.
 #export
 fn kspage_web_filter_values(len: Sz): I32
@@ -341,9 +341,10 @@ fn kspage_web_unfilter(): I32
     sheet.over.filters.len = 0
     return 1
 
-// Writes four values into out for the cursor's table: the rows shown under the heading, all rows
-// under the heading, whether a condition is set on the table, and whether the cursor is in a table
-// at all. **It counts what the layout produced** (the row kept for the cursor counts as shown).
+// Writes four values into out for the cursor's table. Two are the rows shown under the heading
+// and all rows under the heading. Two say whether a condition is set on the table, and whether
+// the cursor is in a table at all. **It counts what the layout produced** (the row kept for the
+// cursor counts as shown).
 #export
 fn kspage_web_rows_shown(out: F32$@)
     state.clear_out(out, 4)

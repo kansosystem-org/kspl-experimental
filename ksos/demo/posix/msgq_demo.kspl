@@ -2,7 +2,6 @@
 //<
 //< The small capacity shows the producer blocking on a full queue while the consumer is slow.
 //< Blocking in both directions is something a counting semaphore cannot express.
-import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
@@ -10,6 +9,7 @@ import "std/verdict"
 
 $g_q: sync.Queue<|I32|>
 $g_qbuf: I32[3] // a small capacity, so the queue fills and the producer blocks
+$g_got: I32 = 0 // values the consumer took, each in its order
 
 $tcb_p: Task
 $tcb_c: Task
@@ -30,6 +30,7 @@ fn consumer(_arg: Void$@): Void
         // A bounded queue keeps the order. The order must hold even when a sender that waited on a
         // full queue resumes.
         assert(v == n * 10, "msgq: values must arrive in the order they were sent")
+        g_got += 1
         Task.delay(2) // consume slowly
     io.out().s("[consumer] done\n")
 
@@ -41,6 +42,7 @@ fn main(): I32
     tcb_p.create(U8$[]::stack_p, producer, null, 2, "producer")
     tcb_c.create(U8$[]::stack_c, consumer, null, 1, "consumer")
     task.start_scheduler()
-    task_end.require_all_ended()
+    verdict.check("msgq: all 6 values arrive in order through a queue of 3", g_got == 6,
+        "the consumer took fewer than 6")
     io.out().s("=== scheduler finished (all tasks done) ===\n")
     return verdict.finish()

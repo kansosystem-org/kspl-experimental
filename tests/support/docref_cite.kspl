@@ -16,24 +16,18 @@ import "tests/support/harness_text" as htext
 
 // A reference carrying a section number: `<doc>… §12` and `<doc>… chapter 8`, with up to
 // `section_window` characters between.
-// Caution: **Do not keep the list of folders here** — the caller passes it from `doc_dirs`.
-
-// The names of documents written without a folder (meaning a file in the same folder).
-priv const section_bares: U8[][_] = ::{ "README.md", "CONTRIBUTING.md", "DESIGN-principles.md",
-    "DESIGN-language.md", "DESIGN-repository.md", "DESIGN-compiler.md", "DESIGN-diagnostics.md",
-    "DESIGN-tools.md", "DESIGN-core.md", "DESIGN-system.md", "DESIGN-architecture.md",
-    "DESIGN-document.md", "DESIGN-application.md", "DESIGN-rtos.md", "DESIGN-server.md",
-    "DESIGN-learning.md", "DESIGN-bindings.md", "DESIGN-storage.md", "DESIGN-engine.md",
-    "DESIGN-suites.md", "SPEC-language.md", "SPEC-local-server.md", "SPEC-notation.md",
-    "SPEC-tools.md", "PLAN.md" }
+// Caution: **Do not keep the list of folders here.** The caller passes it from `doc_dirs`. **Do not
+// keep the names of documents written without a folder** (`bares`) either. The caller builds them
+// from the tracked documents. A copied list misses a document added later, and its citations go
+// unread.
 
 priv const section_window: Sz = 40 //<
     //< How far after the citation the number may be, in **characters**
     //<
     //< Not bytes: a character outside ASCII takes several, shrinking a byte window. **The ASCII `.`
     //< is not a stop**; a few references are read across one.
-    //< Caution: **Do not simply add the stop**: `e.g. 8.2` also has a `.` and a space, so deciding
-    //< what ends a sentence first needs samples that show the check can fire.
+    //< Caution: **Do not simply add the stop.** `e.g. 8.2` also has a `.` and a space. So a rule
+    //< for what ends a sentence needs samples first, which show that the check can fire.
 
 fn read_section_number(text: U8[], i: Sz, arena: Arena$@): U8[] //<
     //< Reads `§?\s*(\d+(\.\d+)*)` from i in text
@@ -62,6 +56,10 @@ fn read_section_number(text: U8[], i: Sz, arena: Arena$@): U8[] //<
         j += 1
         for j < text.len && text[j].is_digit()
             j += 1
+    // **A line's leading `2. ` is a list item**, not a section of the citation above it.
+    at_line_start: = start == 0 || text[start - 1] == '\n'
+    if at_line_start && j + 1 < text.len && text[j] == '.' && text[j + 1] == ' '
+        return ""
     return arena.dup_str(text.sub(start, j - start))
 
 priv const sec_joiners: U8[][_] = ::{ " in ", " of " } //<
@@ -72,11 +70,12 @@ priv const sec_joiners: U8[][_] = ::{ " in ", " of " } //<
     //< green on a smaller count** (as with symbols; the caution on `sym_joiners` in
     //< `docref_scan.kspl`).
 
-priv const sec_not_prefix: U8[][_] = ::{ "Principle" } //<
+priv const sec_not_prefix: U8[][_] = ::{ "Principle", "stage", "Stage" } //<
     //< The words that mark a number before a joiner as not a section number
     //<
     //< **`Principle N` is not a section number**: another check watches it, and picked here
     //< `Principle 8 in [`DESIGN-principles.md`]` becomes "there is no §8 in DESIGN-principles.md".
+    //< **Nor is `stage N`**: it names a plan's or a guide's step, whose heading says `Stage N`.
 
 priv fn read_section_before(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     //< Returns the section number an English joiner ties before `at`, or empty
@@ -131,10 +130,19 @@ priv fn skip_link_target(text: U8[], at: Sz): Sz //< the position past a whole `
         c += 1
     return c + 1 if c < text.len else c
 
-fn find_sections(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
+fn is_marked(text: U8[], h: Hit, arena: Arena$@): Bool //<
+    //< Whether the citation's number is written as one: `§N` after it, or `N in` before it
+    //<
+    //< A plain number read after the name may be prose (`its stages count from 1`), so only these
+    //< two forms say a document's sections are numbered.
+    if read_section_before(text, h.at, arena).len > 0
+        return true
+    stop: = h.end + 80 if h.end + 80 < text.len else text.len
+    return text.sub(h.end, stop - h.end).find_str("§").is_some()
+
+fn find_sections(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<|Hit|>
     $out: = List<|Hit|>.new(arena)
-    paths: =
-        find_paths(text, dirs, U8[][]::{ "md" }, false, U8[][]::section_bares, arena)
+    paths: = find_paths(text, dirs, U8[][]::{ "md" }, false, bares, arena)
     // Caution: **Do not cross a range already read.** A citation inside what was read up to the
     // number is dropped from the next candidates, as Python's finditer does (else the counts
     // differ).
@@ -156,9 +164,9 @@ fn find_sections(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
             if num.len > 0
                 out
                     .push(Hit::{ .at = p.at, .end = p.end, .text = p.text, .extra = num })
-                // Caution: **Do not read `j` as the start of the number**: it is where the `§`
-                // starts, so on `§ 6.6` `j + num.len` lands **inside the number** and the next
-                // citation reads a digit beyond.
+                // Caution: **Do not read `j` as the start of the number.** It is where the `§`
+                // starts. So on `§ 6.6`, `j + num.len` lands **inside the number**. The next
+                // citation then reads a digit beyond.
                 $num_at: = j
                 for num_at + num.len <= text.len &&
                     !text.sub(num_at, num.len).equals(num)
@@ -169,8 +177,8 @@ fn find_sections(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
                 // becoming "there is no §256").
                 taken = skip_link_target(text, taken)
                 break
-            // The window stops at a newline (only the space right before the number may be crossed)
-            // and at `](`: beyond it is the link's target, whose **anchor digits would read as a
+            // The window stops at a newline (only the space right before the number can be crossed)
+            // and at `](`. Beyond it is the link's target. Its **anchor digits would read as a
             // section number** (`](SPEC-language.md#84-…)` becoming "there is no §84"). The ASCII
             // `.` is not a stop (the caution on `section_window`).
             if j >= text.len || text[j] == '\n' ||
@@ -189,9 +197,9 @@ fn find_sections(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|>
 
 priv fn quote_body_ok(body: U8[]): Bool //< whether a quotation's body passes as a name
     //<
-    //< Caution: **Do not accept a body starting with punctuation**: a source string's closing `"`
+    //< Caution: **Do not accept a body starting with punctuation.** A source string's closing `"`
     //< read as an opening makes **everything up to the next argument look like a name**. A backtick
-    //< or `[` may start one. **Nor an over-long body**: that is a quoted sentence.
+    //< or `[` can start one. **Do not accept an over-long body either**: that is a quoted sentence.
     if body.len < 2 || body.len > 120
         return false
     for b in body
@@ -243,8 +251,8 @@ priv fn skip_wrap_back(text: U8[], at: Sz): Sz //<
 
 priv fn crossed_lines(seen: U8[]): Sz //< how many lines were crossed
     //<
-    //< Caution: **Use it in the backward reader**: searching back for an opening has **nothing to
-    //< stop it** and would run to the start of the file.
+    //< Caution: **Use it in the backward reader.** A search back for an opening has **nothing to
+    //< stop it**. It would run to the start of the file.
     $n: Sz = 0
     for b in seen
         if b == '\n'
@@ -257,8 +265,8 @@ priv fn fold_one_wrap(body: U8[], arena: Arena$@): U8[] //<
     //< Caution: **If the newline rejection is dropped from `quote_body_ok`, restore it here.**
     //< **Drop the comment marker at the start of the continuation line too**, or it lands inside
     //< the name as **a name in no document**.
-    // **Drop the escape at a name's end**: cited from a source string, the closing quote is `\"`,
-    // and the lone `\` left puts the name **in no document**. No heading ends in `\`.
+    // **Drop the escape at a name's end.** Cited from a source string, the closing quote is `\"`.
+    // The lone `\` left puts the name **in no document**. No heading ends in `\`.
     if body.len > 0 && body[body.len - 1] == '\\'
         return fold_one_wrap(body.sub(0, body.len - 1), arena)
     $nl: Sz = -1
@@ -288,9 +296,9 @@ priv fn fold_one_wrap(body: U8[], arena: Arena$@): U8[] //<
 priv fn opens_at_wrap(body: U8[]): Bool //<
     //< Whether the body starts at the line break — only blanks come before the wrap
     //<
-    //< **Then the quote found closes something else**: a wrapped name starts on the citation's
-    //< line, so a body starting at the wrap means a literal's **closing** quote was taken, reading
-    //< code as the name.
+    //< **Then the quote found closes something else.** A wrapped name starts on the citation's
+    //< line. So a body that starts at the wrap means that a literal's **closing** quote was taken.
+    //< The code was then read as the name.
     for b in body
         if b == '\n'
             return true
@@ -407,8 +415,8 @@ fn step_dir(text: U8[], at: Sz, arena: Arena$@): U8[] //<
     //< The `working-directory:` of the workflow step holding the place; empty where it names none
     //<
     //< **A step's command runs from there**, so its paths are read from there. The step is the `- `
-    //< item found climbing out of the keys the position is nested in; **climb only through keys**,
-    //< since a line under a job's own key belongs to no step.
+    //< item found by climbing out of the keys that hold the position. **Climb only through keys**:
+    //< a line under a job's own key belongs to no step.
     $starts: = List<|Sz|>.new(arena)
     starts.push(0)
     for i in Range.asc(text.len)
@@ -468,7 +476,7 @@ priv fn unquoted(value: U8[]): U8[] //< a YAML scalar with the quotes around it 
         return value.sub(1, value.len - 2)
     return value
 
-fn find_doc_quotes(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
+fn find_doc_quotes(text: U8[], dirs: U8[][], bares: U8[][], arena: Arena$@): List<|Hit|> //<
     //< Finds each quoted name cited together with the path of a document or a source
     //<
     //< Caution: **A source file must be a target too, not only documents.** A check is cited by its
@@ -479,11 +487,11 @@ fn find_doc_quotes(text: U8[], dirs: U8[][], arena: Arena$@): List<|Hit|> //<
     // **The longer extension comes first**: `find_paths` stops at the first entry that fits, so
     // `kspl` first cuts every default-notation citation a byte short.
     paths: =
-        find_paths(text, dirs, U8[][]::{ "md", "kspl", "ksplb", "js", "mjs", "py" }, false,
-        U8[][]::section_bares, arena)
-    // **The section-number side's two workarounds are not needed here**: the read after a path
-    // stops at `(`, and on the target side no joiner comes before, so **only one of the two ever
-    // reaches a name**; and for a link with an anchor, the read before still finds the document.
+        find_paths(text, dirs, U8[][]::{ "md", "kspl", "ksplb", "js", "mjs", "py" }, false, bares,
+        arena)
+    // **The section-number side's two workarounds are not needed here.** The read after a path
+    // stops at `(`. On the target side no joiner comes before. So **only one of the two ever
+    // reaches a name**. For a link with an anchor, the read before still finds the document.
     // Caution: **Add `(` to `quote_joiners` and the workaround is needed here again** (one
     // reference looks like two).
     for p in paths

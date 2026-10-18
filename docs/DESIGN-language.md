@@ -2,7 +2,7 @@
 
 **This document says why the language is the way it is.** It answers two kinds of question: "why does KSPL do this differently from other languages?" and "why does this restriction exist?".
 
-What the language *is* belongs to the specification, [`SPEC-language.md`](SPEC-language.md). For the rules alone, that is all you need. Read this document when two readings of the specification disagree, and before you propose a change to it. The principles its reasons rest on are in [`DESIGN-principles.md`](DESIGN-principles.md).
+What the language *is* belongs to the specification, [`SPEC-language.md`](SPEC-language.md). For the rules alone, that is all you need. Read this document when two readings of the specification disagree, and before you propose a change to it. The principles its reasons rest on are in [`DESIGN-principles.md`](DESIGN-principles.md). Why the source text is written as it is (the indentation notation, names, keywords, line ends, long strings and documentation comments) is in [`DESIGN-notation.md`](DESIGN-notation.md).
 
 ## Symbols and syntax
 
@@ -45,7 +45,7 @@ A postfix operator appears directly after a complete expression. That is also wh
 
 Exactly two ASCII symbols pass. `@`, read as "at" (an address), takes the address, and `$`, the inverse, dereferences. **Error propagation's `!` is postfix although condition 2 rules it out for dereferencing**: what it yields is a value, never an assignment target, so `f()! = v` means nothing. A postfix `!` is therefore read only where no `=` follows it, and `a!=b` still compares ("Failure" in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-The one operator deliberately made **prefix** is the type cast `T::v`. Its left side is a *type*, which no reader mistakes for an expression. What it still costs the parser, and why `::` does not go to paths instead, is "Why `::` stays the cast, and what the cast costs to parse" below.
+The one operator deliberately made **prefix** is the type cast `T::v`. Its left side is a *type*, which no reader mistakes for an expression. What it still costs the parser is a section below. So is why `::` does not go to paths instead: "Why `::` stays the cast, and what it costs to parse".
 
 #### Why directives are `##` and attributes are `#`
 
@@ -83,7 +83,7 @@ Note: `type_args` in `ksplc/kspl.kspeg` fails at once unless it sees `"<|"`, so 
 
 **The price is unfamiliarity.** Anyone arriving from another language writes it wrong once, while the ambiguity would be paid every time it is written.
 
-#### Why `::` stays the cast, and what the cast costs to parse
+#### Why `::` stays the cast, and what it costs to parse
 
 `::` means a cast (`I64::x`), and a path to a module's member uses `.` (`Arena.new`). The cast makes the parser a little slower, and that time is won back elsewhere. A Rust-style `Arena::new` gets one error that names the fix.
 
@@ -97,27 +97,27 @@ Note: `type_args` in `ksplc/kspl.kspeg` fails at once unless it sees `"<|"`, so 
 
 Guards gain little. A lookahead before both tries cuts the calls, and the time, by a few percent at most. First-token guards cut more calls and no time: the calls they save are cheap.
 
-**Giving `::` to paths would not buy this back.** The cost is the attempt at an operand's head, not the separator, and no product has measured a separator costing parse time. Nor would a second mark buy more than Rust's split of the namespaces (paths take `::`, fields and methods `.`), since type arguments that open with `<|` need no turbofish (Rust's `f::<T>()` form). A cast moved elsewhere still needs a mark, and every mark costs somewhere.
+**Giving `::` to paths would not buy this back.** The cost is the attempt at an operand's head, not the separator, and no product has measured a separator costing parse time. Nor would a second mark buy more than Rust's split of the namespaces (paths take `::`, fields and methods `.`). Type arguments that open with `<|` need no turbofish (Rust's `f::<T>()` form). A cast moved elsewhere still needs a mark, and every mark costs somewhere.
 
 **The parse time is saved in the memo table instead.** The memo table is where the parser remembers each rule's result at each position, so no text is parsed twice. One table serves every file of a run: a generation stamp empties it, and it is sized from one slot per byte ([`../kspeg/memo.kspl`](../kspeg/memo.kspl)). It takes clearly fewer instructions and less time than a table zeroed per file. That saves more than taking the cast out would, with no change to the language. Parsing dominates a cold self-compile, and takes milliseconds once the syntax-tree cache is warm.
 
 **What keeping `::` costs the writer, and the answer**: a Rust or C++ writer's `Arena::new(1024)`, read as a cast, gives three errors, none naming the fix. So where `T` is a module, or a type holding `name`, and `name` is nothing in scope, `T::name` is read as the path meant. It is reported as one error naming `Arena.new`. A cast of a value in scope (`I32::count`) is left alone.
 
-**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0502]` in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
+**The one weakness of `.` everywhere** is that a local named like an imported module hides the module: below `io: = 5`, `io.out()` reads the local. Such a local or parameter is a warning at its declaration (`[W0502]` in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)), not an error, since shadowing stays legal ("4.5 Scope and shadowing" in [`SPEC-language.md`](SPEC-language.md)). A second separator for modules (Swift 6.3's `Module::name`) would collide with the cast. `json::Val` and `Sz::n` have one shape, and only name resolution could tell them apart.
 
 ### Why immutability is the default
 
 **A variable cannot be changed unless you mark it with `$`: immutability is the default** (docs/SPEC-language.md §4.2), for three reasons:
 
 1. **A marker goes on the minority side.** In this repository most local declarations and parameters are immutable (to recount, grep a tree that `ksplc lint` passes). Marking them would waste much.
-2. **Writing shows up in the type.** With mutability the default, the source does not say what can be written, and nobody notices a write through a pointer that slips past the checks.
+2. **Writing shows up in the type.** With mutability the default, the source does not say what can be written. Nobody notices a write through a pointer that slips past the checks.
 3. **It matches what readers expect and where other languages are heading.** `$` reads as "variable" from Perl and the shells. Rust's `&mut` / `let mut`, Swift's `let` default and Kotlin's recommended `val` all mark the mutable side.
 
 **The marker is the same `$` as dereferencing**, because only `@` and `$` pass "Why the symbols are `@` and `$`"'s conditions; another symbol would only move the overloading. The two never meet. In an expression `$` appears only in `expr_postfix`, after a value. As a marker it stands in one of three positions: directly before a declaration's identifier (`$x: = 0`), on a parameter, and directly before a type's postfix `@`/`[` (`I32$@`). None can hold a dereference, so the grammar decides each uniquely, and neither the implementation nor the reader hesitates.
 
 #### Why the mutability marker on a type argument is prefix
 
-Where a generic declares that its type parameter may be mutable, the `$` goes in front: `struct Slice<|$T|>`, not `Slice<|T$|>`.
+Where a generic declares that its type parameter can be mutable, the `$` goes in front: `struct Slice<|$T|>`, not `Slice<|T$|>`.
 
 The rule is `docs/SPEC-language.md`, 3.3. Three reasons put the marker in front:
 
@@ -140,14 +140,14 @@ Inside a function, `x: = 5` lets the compiler work out the type. A declaration o
 Top-level declarations (`const`, variables, `extern` variables: everything declared outside a function) must carry a type annotation, and only local variables are inferred (docs/SPEC-language.md §4.1), because:
 
 1. **It follows an existing line.** Parameters, return values, `struct` fields and enum payloads all state their type. A top-level declaration is the file's interface, not a local variable. So requiring the annotation joins existing policy and adds no restriction.
-2. **Inferring it would bring in a new failure mode.** Inference runs in declaration order, so a function body before a global would see a stale type. Avoiding that needs a pass typing every global before any function body. Globals depend on one another (`pub const b = a * 2;`), so it also needs resolution in dependency order and cycle detection. That is the ground of C++'s static initialization order problem, where one global can be read before another file's global it depends on is set.
+2. **Inferring it would bring in a new failure mode.** Inference runs in declaration order, so a function body before a global would see a stale type. Avoiding that needs a pass typing every global before any function body. Globals depend on one another (`pub const b = a * 2;`), so it also needs resolution in dependency order and cycle detection. That is the ground of C++'s static initialization order problem. There, one global can be read before another file's global that it depends on is set.
 3. **It does not balance.** It saves one type name, and gains only brevity.
 
 **What is given up**: omitting a type name at the top level.
 
 #### A type is redundant only where it is written twice
 
-**The compiler calls a local's type annotation redundant only where its initializer already names that type**: the same type written at the initializer's head, or `Bool` over `true` / `false`. A type that could merely be inferred stays, because the annotation may be the only place a reader sees it. The report is [H0302], a hint on by default, so the tree holds none (its section is in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+**The compiler calls a local's type annotation redundant only where its initializer already names that type.** That is the same type written at the initializer's head, or `Bool` over `true` / `false`. A type that could merely be inferred stays, because the annotation can be the only place a reader sees it. The report is [H0302], a hint on by default, so the tree holds none (its section is in [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
 
 | The line | Reported? | Why |
 | :-- | :-- | :-- |
@@ -158,15 +158,23 @@ Top-level declarations (`const`, variables, `extern` variables: everything decla
 | `return Option<\|I32\|>.some(n)` in a function returning `I32?`, `kinds.push(Kind.small)` | Yes, the variant's type | The signature or the parameter already says it |
 | `k: = Kind.small`, `mode == Mode.on` | No | Nothing else says the type |
 
-* **Inferable is not redundant.** In `count: Sz = items.len` the annotation is the one place the type stands in the text. A model reads the text and cannot hover ("The reader may be a model" in [`DESIGN-repository.md`](DESIGN-repository.md)). A person in KSPL's editor sees it only by hovering. So removing every inferable type would take it from the readers least able to recover it.
+* **Inferable is not redundant.** In `count: Sz = items.len` the annotation is the one place the type stands in the text. A model reads the text and cannot hover ("The reader can be a model" in [`DESIGN-repository.md`](DESIGN-repository.md)). A person in KSPL's editor sees it only by hovering. So removing every inferable type would take it from the readers least able to recover it.
 * **Deleting it keeps the type.** An annotation doing work is not reported: a literal takes its type from it, a conversion follows it, and `::{ … }` or `.small` are typed by it. Nor is a cast that [I0301] calls unnecessary, since deleting both would leave the value's own type.
-* **The verdict holds for every type argument.** The check compares what is written, so a generic's line reads the same in each instantiation. A call is the exception: its type is its callee's, which an impl for one instance can change, so a call inside a generic is left alone.
+* **The verdict holds for every type argument.** The check compares what is written, so a generic's line reads the same in each instantiation. A call is the exception: its type is its callee's, which an impl for one instance can change. So a call inside a generic is left alone.
 
-**An enum's type at its variant goes where the place already gives it.** In the places where the language lets the name go (a declaration's written type, the place `=` assigns to, a call's parameter, a variant's payload, a struct literal's field or an array literal's element, the value a `catch` stands in for, the function's return and error types: "6.6.2 Where the type may be omitted" in [`SPEC-language.md`](SPEC-language.md)), `return Option<|I32|>.some(n)` writes the type twice, once in the signature and once at the value. [H0302] reports the second, so the tree reads `return .some(n)`, `kinds.push(.small)`, `held = .none` and `throw .lost`.
+**An enum's type at its variant goes where the place already gives it.** The language lets the name go in these places ("6.6.2 Where the type may be omitted" in [`SPEC-language.md`](SPEC-language.md)):
 
-* **The variant's name stays, and it says which value.** What goes is the enum's name, which the signature or the declaration still writes and the compiler checks the value against. At a `return` or a `throw` that is the function's own signature; at a call it is the parameter, which a reader looks up to learn what the argument means anyway; at `=` it is the variable's declaration, in a payload, a field or an element the variant's, the struct's or the array's, and after `catch` the call it stands in for.
-* **Only where the variant's type is the one the place expects.** Then `.small` is looked up in the same enum, and the program does not change. An `if … else` in such a place passes the type to both sides: the whole expression takes the place's type, and each side takes the whole's, so `return .some(n) if ok else .none` needs no name either. Where nothing fixes the type the name stays: a comparison, an `if … else` in no such place (`v: = .ok if c else .err`), and an argument a generic infers its type from, which the value decides.
-* **One fix per line.** In a declaration whose annotation the initializer repeats, the annotation is reported and the variant keeps its type: `k: = Kind.small` and `k: Kind = .small` say the same, and two hints on one line would pull against each other.
+* a declaration's written type, and the place `=` assigns to;
+* a call's parameter, and a variant's payload;
+* a struct literal's field, or an array literal's element;
+* the value a `catch` stands in for;
+* the function's return and error types.
+
+There, `return Option<|I32|>.some(n)` writes the type twice, once in the signature and once at the value. [H0302] reports the second, so the tree reads `return .some(n)`, `kinds.push(.small)`, `held = .none` and `throw .lost`.
+
+* **The variant's name stays, and it says which value.** What goes is the enum's name, which the signature or the declaration still writes and the compiler checks the value against. At a `return` or a `throw`, that is the function's own signature. At a call, it is the parameter, which a reader looks up to learn what the argument means anyway. At `=`, it is the variable's declaration. In a payload, a field or an element, it is the variant's, the struct's or the array's. After `catch`, it is the call it stands in for.
+* **Only where the variant's type is the one the place expects.** Then `.small` is looked up in the same enum, and the program does not change. An `if … else` in such a place passes the type to both sides. The whole expression takes the place's type, and each side takes the whole's. So `return .some(n) if ok else .none` needs no name either. Where nothing fixes the type, the name stays. That holds for a comparison, and for an `if … else` in no such place (`v: = .ok if c else .err`). It holds for an argument that a generic infers its type from, which the value decides.
+* **One fix per line.** In a declaration whose annotation the initializer repeats, the annotation is reported and the variant keeps its type. `k: = Kind.small` and `k: Kind = .small` say the same. Two hints on one line would pull against each other.
 
 **What is given up**: leaving out every type that could be left out. `count: Sz = items.len` stays, and so does an annotation written from habit. And a call's line no longer names an argument's enum: the reader of `kinds.push(.small)` finds `Kind` in the parameter.
 
@@ -178,11 +186,11 @@ The permitted range is in [`docs/SPEC-language.md`, 6.4](SPEC-language.md).
 
 Rust and Swift allow no implicit numeric conversion, though both keep reference coercions implicit (`&mut T` → `&T`, Deref coercion). Rust has not accepted proposals to make widening implicit. Chiefly, a mixed-width expression (`Foo(x * (y + z))`) **computes at the narrow width and then widens**, which hides the overflow.
 
-**That reason does not apply to KSPL.** The expected type propagates down through the operator, so a wider receiver widens before computing. For `a: I32 = 100000`, `f: I64 = a * a` gives 10000000000, and the generated C is `(I64)((U64)((I64)a) * (U64)((I64)a))`. Received as `I32`, the same expression computes narrow and overflows. So KSPL may leave lossless widening implicit.
+**That reason does not apply to KSPL.** The expected type propagates down through the operator, so a wider receiver widens before computing. For `a: I32 = 100000`, `f: I64 = a * a` gives 10000000000, and the generated C is `(I64)((U64)((I64)a) * (U64)((I64)a))`. Received as `I32`, the same expression computes narrow and overflows. So KSPL can leave lossless widening implicit.
 
 **Between integers and reals it is forbidden both ways.** Java's implicit `int` → `float` rounds an integer beyond 24 bits, and a line at "only what loses nothing" cannot accept that. An integer literal is an integer too: `2` takes no float type, and `2.0` is the one spelling of that value (Principle 6).
 
-**Two operands of different types compute in one of the two: the one holding every value of the other**, by the same relation as an implicit conversion.
+**Two operands of different types compute in one of the two.** That is the one holding every value of the other, by the same relation as an implicit conversion.
 
 | Operands | Computed in |
 | :-- | :-- |
@@ -193,7 +201,7 @@ C's answer, converting to the unsigned side, makes `-1 < 1u` false; that is the 
 
 #### Conversion also applies inside a Result
 
-A function returning `T!E` (a `T`, or an error `E`) may `return` any value that converts to `T`.
+A function returning `T!E` (a `T`, or an error `E`) can `return` any value that converts to `T`.
 
 When the expected type is `T!E`, the value is converted to the success type `T`, then wrapped.
 
@@ -207,20 +215,37 @@ priv fn f(): Shape!Err
 
 ### A cast to an enum gives one of its variants
 
-**An enum value is one of the variants its declaration lists.** An exhaustive `switch` names every variant and no `default`, and `variant_name` names each one; both read a value that is none of them as the last one they test. So a number cast to an enum (`E::x`) must be a tag, or the cast is refused. The rule is in [`docs/SPEC-language.md`, 6.4](SPEC-language.md).
+**An enum value is one of the variants its declaration lists.** An exhaustive `switch` names every variant and no `default`, and `variant_name` names each one. Both read a value that is none of them as the last one they test. So a number cast to an enum (`E::x`) must be a tag. The rules are "6.4 Type conversion (`::`) and implicit casts" in [`SPEC-language.md`](SPEC-language.md).
 
-* **A constant is refused at translation time** (`cannot cast 300 to 'E'`), as a constant divisor of 0 is: what is fixed then is not left to run time.
-* **A value known only at run time is checked there**, and one that is no tag stops the program ([`docs/SPEC-language.md`, 13](SPEC-language.md)). The check costs a comparison per variant where a number becomes an enum, and nothing where an enum is only read.
-* **The value is compared as it is, before it narrows to the enum's base type.** Narrowed first, `E::300` of an `enum E: U8` would wrap to 44 and pass as a tag nobody wrote.
-* **Only an integer or another enum casts to a scalar enum.** A float or a `Bool` goes through an integer cast written out (`E::(I32::f)`), so the truncation shows where it happens. Nothing casts to an enum whose variants carry data, since no number holds a payload; a variant is built instead.
+* **A constant is caught at translation time**, as a constant divisor of 0 is: what is fixed then is not left to run time.
+* **The run-time check costs a comparison per variant where a number becomes an enum**, and nothing where an enum is only read.
+* **The value is compared before it narrows to the enum's base type.** Narrowed first, `E::300` of an `enum E: U8` would wrap to 44, and pass as a tag nobody wrote.
+* **A float or a `Bool` goes through an integer cast written out**, so the truncation shows where it happens. No number holds a payload, so an enum whose variants carry data is built, not cast.
 
-**The cast stays, rather than being taken away.** A program reading an enum from a file or a wire format holds a number first. Without the cast, each such program writes a `switch` from numbers to variants by hand: a second copy of every tag, which a variant added later leaves behind with nothing to show it (Principle 4).
+**The cast stays, rather than being taken away.** A program reading an enum from a file or a wire format holds a number first. Without the cast, each such program writes a `switch` from numbers to variants by hand. That is a second copy of every tag. A variant added later leaves it behind, with nothing to show it (Principle 4).
 
-**No second conversion returns `E?`.** It would be a second spelling of what `E::x` writes (Principle 6), and every caller would handle an absence even where the number came from `I32::e` a line before. A number from outside is checked as other input is, before the cast; the cast's own check then guards against a mistake, as the bounds check guards an index.
+**No second conversion returns `E?`.** It would be a second spelling of what `E::x` writes (Principle 6). And every caller would handle an absence, even where the number came from `I32::e` a line before. A number from outside is checked as other input is, before the cast. The cast's own check then guards against a mistake, as the bounds check guards an index.
 
-**Raw memory can still hold a value that is no tag**: a write through a pointer cast, or a C function filling the enum. That is undefined, as a dangling pointer is ([`docs/SPEC-language.md`, 14.2](SPEC-language.md)); the cast is the one ordinary way a number becomes an enum, so the rule holds there (Principle 8).
+**Raw memory can still hold a value that is no tag**: a write through a pointer cast, or a C function filling the enum. That is undefined, as a dangling pointer is ([`docs/SPEC-language.md`, 14.2](SPEC-language.md)). The cast is the one ordinary way a number becomes an enum, so the rule holds there (Principle 8).
 
-### A slice is a std struct, and the rules for generics apply to it unchanged
+### A cast from floating point to an integer saturates
+
+**`I32::x` always gives an answer, and the same one on every target and backend.** NaN gives `0`, a value below the type's range its minimum, a value above it its maximum, and anything else is truncated toward zero. The rules are "6.4 Type conversion (`::`) and implicit casts" in [`SPEC-language.md`](SPEC-language.md).
+
+* **Not undefined.** C leaves a value the type cannot hold undefined, and each target's instruction answers its own way. x86-64 gives the minimum for every such value, NaN included, while Arm saturates. An optimizer folding a constant can answer anything. A cast left undefined would print a different number per target, per backend and per optimization level. A sensor reading out of range would carry no sign of it.
+* **Saturating, not stopping.** A cast is how a value is brought into a narrower range on purpose (a sample clipped to `I16`, a coordinate to a pixel). There the nearest bound is the answer wanted. Stopping the program would make every such cast need a range check first. That check is written by hand, with bounds that are easy to get wrong by one. Arm's conversion instruction saturates and gives NaN `0` itself, so on a microcontroller the rule costs nothing; x86-64 pays two comparisons.
+* **NaN gives `0`**, the one integer that claims no magnitude, as Arm's instruction answers.
+* **Each width saturates at its own bounds.** `I8::300.0` is `127`, not `300` narrowed through `I32` to `44`: going through a wider type first would bring back the wrap the rule exists to avoid.
+
+**A constant that does not fit is a compile error**, as a constant integer overflow is (6.8 in [`SPEC-language.md`](SPEC-language.md)). What is fixed at translation time is not left to the rule for run time. `I32::1.0e20` written in the source is a mistake, never a deliberate clip. The width checked is the one every target holds, so `Sz::3.0e9` is refused on a 64-bit machine too. One fold decides it (`float_cast_of` in `ksplc/sema/decl/fold_float.kspl`). Both backends write a constant cast as that fold's value. So the C compiler and LLVM never fold it a second time.
+
+**`to_i32` and its kin say none instead** (`x.to_i32(): I32?`, on `F64` and `F32`, in `std/math`, not in `std/lang`, which every program carries whether it calls them or not). Saturation hides that a bound was reached; a caller who must know, such as one reading a number from a file, needs the absence. The two do not spell one thing twice (Principle 6): the cast answers for every input, the method answers whether the input had an answer. Without the method, that caller writes the bounds by hand. The right ones are open one past the range (`-128.9` fits `I8`), which a hand-written check easily gets wrong. The name follows `std/strnum`'s `to_i64` for a string.
+
+### A tag names another variant through its enum
+
+**`b = E.a + 1` is written with the enum's name, and a bare `a` is refused** ("3.4 Enums (`enum`)" in [`SPEC-language.md`](SPEC-language.md)). A variant is named `E.a` or, where an enum is expected, `.a`. Say a tag expression could read `a` alone. That would open one place where the enum's names stand bare beside the file's own. A `const a` in the same file would then mean two things, depending on where it is written. The refusal names `E.a`, the spelling that folds. A bare `a` meant as an alias cannot arise either: two variants sharing a tag are refused.
+
+### A slice is a std struct, under generics' rules
 
 A slice (`U8[]`: a pointer plus a length) is not built into the compiler. It is an ordinary generic struct in the standard library, so what holds for generics holds for slices.
 
@@ -239,7 +264,7 @@ There is no built-in slice. `std/lang` declares `struct Slice<|$T|> { ptr: T$@; 
 
 **Diagnostics show the sugar** (`ksplc/sema/type/display.kspl`), not a type name the user never wrote, such as `std_lang_Slice_U8_Const`.
 
-**The sugar is the only spelling of a slice type.** `Slice<|U8|>` written as a type is a compile error naming `U8[]`, as `Option<|T|>` is for `T?` ("`T?` is sugar for `Option<|T|>`" below): two spellings of one type would leave a reader wondering whether they differ (Principle 6). Only `std/lang`'s declaration of `Slice` names it.
+**The sugar is the only spelling of a slice type.** `Slice<|U8|>` written as a type is a compile error naming `U8[]`, as `Option<|T|>` is for `T?` ("`T?` is sugar for `Option<|T|>`" below). Two spellings of one type would leave a reader wondering whether they differ (Principle 6). Only `std/lang`'s declaration of `Slice` names it.
 
 **Being a struct spares three special cases.** A descriptor literal (`::{ .ptr = …, .len = … }`) is an ordinary struct literal, the C type name is mangled like any other generic's, and the layout follows from the fields. An out-of-bounds index, too, stops through the one `bounds_panic` in `std/lang`.
 
@@ -247,17 +272,17 @@ There is no built-in slice. `std/lang` declares `struct Slice<|$T|> { ptr: T$@; 
 
 `T$[]` is sugar for `Slice<|$T|>`, so adding methods to every slice is no different from adding a method to `List<|T|>` (docs/SPEC-language.md §9.3).
 
-#### Immutable and mutable instances share one C struct, but stay two KSPL types
+#### Immutable and mutable instances: one C struct, two KSPL types
 
 A read-only slice and a writable slice are two KSPL types, so the compiler keeps them apart. The generated C uses one struct for both, so passing a writable slice where a read-only one is expected costs no cast.
 
-`U8$[]` passes where `U8[]` is declared (docs/SPEC-language.md §3.3), yet **as KSPL types they stay two**. Immutability rides on the field's type, so the `p` of `Box<|$I32|>` is `I32$@` and that of `Box<|I32|>` is `I32@`. In C they are one struct, so the one step of weakening emits no cast. With a struct each, the generated C would refuse to pass one where the other is declared. How the C name drops the mark belongs to the compiler ("How immutability marks are expressed in a type" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)).
+`U8$[]` passes where `U8[]` is declared (docs/SPEC-language.md §3.3), yet **as KSPL types they stay two**. Immutability rides on the field's type, so the `p` of `Box<|$I32|>` is `I32$@` and that of `Box<|I32|>` is `I32@`. In C they are one struct, so the one step of weakening emits no cast. With a struct each, the generated C would refuse to pass one where the other is declared. How the C name drops the mark belongs to the compiler ("Immutability marks in a type" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md)).
 
 **The body is instantiated per instance**, so a write to the element inside the immutable version is rejected at translation time, not at run time.
 
 #### Making a single instantiation the target of an impl
 
-`impl U8[] { ... }` adds methods to byte slices alone, and it may not overlap a general impl.
+`impl U8[] { ... }` adds methods to byte slices alone, and it cannot overlap a general impl.
 
 `impl U8[] { ... }` needs **no new notation**. An impl's target is a type expression: a template when it holds the impl's own type argument, and that one instance when it does not. The matching rules are docs/SPEC-language.md §9.3 (the check is `impl_target_rejects` in `ksplc/sema/decl/mono.kspl`).
 
@@ -271,11 +296,11 @@ A read-only slice and a writable slice are two KSPL types, so the compiler keeps
 
 | Position | Example | Section |
 | :-- | :-- | :-- |
-| A name on the impl that the receiver does not fix | `impl<\|T, U\|> List<\|T\|>` | 2.4.1 |
+| A name on the impl that the receiver leaves open | `impl<\|T, U\|> List<\|T\|>` | 2.4.1 |
 | A mutability marker on the impl's own type argument | `impl<\|$T\|> Box<\|T\|>` | 2.4.2 |
 | A type argument at the call of a generic type's method | `q.get<\|U8\|>()` | 2.4.2 |
 
-#### A name on the impl that the receiver does not fix
+#### A name on the impl that the receiver leaves open
 
 `impl<|T, U|> List<|T|>` cannot be written (docs/SPEC-language.md §3.3): **the receiver's type does not determine `U`**, since `List<|I32|>` says nothing about it.
 
@@ -291,9 +316,9 @@ h.to(true)          // U is determined from the actual argument
 h.to<|Bool|>(true)  // may also be written
 ```
 
-**Such a method is instantiated at the call site**, since the receiver's type arguments alone cannot instantiate it. It can be written because the method table is built when it is looked up. A table built along with the type would have nothing to fix `U` with. How the compiler finds and instantiates it is "Where the instantiation queue is drained" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
+**Such a method is instantiated at the call site**, since the receiver's type arguments alone cannot instantiate it. It can be written because the method table is built when it is looked up. A table built along with the type would have nothing to fix `U` with. How the compiler finds and instantiates it is "Where the instantiation queue is drained" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md).
 
-#### A mutability marker on the impl, and a type argument at the call site
+#### An impl's mutability marker, and a call's type argument
 
 **The mutability marker takes effect only on the target side.** A `$` on the impl's own type argument (`impl<|$T|> Box<|T|>`) changes nothing. `apply_arg_mut_mark` reads the marker from the declaration that declared that position (the variance of `struct Box<|$T|>`). An impl's list only names what to bind, and the target type expression alone decides which instance the impl attaches to. Writable but ineffective, it is made unwritable (Principle 5). So, for the same reason, is a type argument written at the call site on a generic type's method.
 
@@ -301,41 +326,49 @@ Caution: **This is not only about the marker.** A method's type arguments belong
 
 A method that declares **its own** type arguments (`fn m<|$T|>(…)`) can be written. It is instantiated from a template, so both the count and the markers can be matched.
 
-**Rust and Swift reject it too.** The complaints there are about the notation, not the rule, so KSPL takes the same rule. It adds only the diagnostic's content: where the type argument came from, and where it should be written.
+**Rust and Swift reject it too.** The complaints there are about the notation, not the rule, so KSPL takes the same rule. It adds only the diagnostic's content: where the type argument came from, and where it belongs.
 
-### Inferring a generic's type arguments from the actual arguments is kept
+### A generic's type arguments are inferred from the actual arguments
 
 **You write `f(x)`, and the compiler works `T` back from `x`'s type; keep it so, and do not swing to "always require `<|T|>` explicitly".** Calls that omit the type argument outnumber those that write it by an order of magnitude, and most of them are `arena.create(x)`. Requiring it would mean writing nested generics such as `arena.create<|List<|U8[]|>|>(…)`. That costs clearly more than reading the type in the text gains.
 
 The design already infers what is determined and asks for the rest. Where `T` is the parameter's type itself (`Arena.create<|T|>(init_val: T)`), working back is unique; where `T` appears only in the return (`alloc_as<|T|>()`), it must be written. No cheap part is left to cut.
 
-**The type a call's result is given does not fix a type argument**: `y: U8 = zero(5)` is refused, as `x: = zero(5)` is, and asks for `zero<|U8|>(5)`. Inference runs one way, from the arguments to the call, as for a function named as a value ("A generic function used as a value names its specialization"). Run the other way too, the same `zero(5)` would build a different copy depending on where it stands, which the call itself does not show, and it would still need the type arguments written wherever nothing fixes a type (a declaration with no type, an argument of another generic). Written once at the call, they read the same everywhere.
+**The type a call's result is given does not fix a type argument**: `y: U8 = zero(5)` is refused, as `x: = zero(5)` is, and asks for `zero<|U8|>(5)`. Inference runs one way, from the arguments to the call. It runs so for a function named as a value too ("A generic function used as a value names its specialization"). Run the other way too, the same `zero(5)` would build a different copy depending on where it stands. The call itself does not show that. And it would still need the type arguments written wherever nothing fixes a type. Examples are a declaration with no type, and an argument of another generic. Written once at the call, they read the same everywhere.
 
-**What is inferred is a function's own type arguments, however the function is reached**: `f(x)`, `h.to(x)` and `Holder<|I32|>.to(h, x)` alike. **A generic type's are not inferred from a call through it**: `Holder.mk(1)` is a compile error that says to write `Holder<|I32|>.mk(1)`. The type written before the `.` is what chooses the instance, as it is for a variable's type or a field's ("A mutability marker on the impl, and a type argument at the call site"). Many of a type's functions take nothing that would fix it (`List<|I32|>.new(null)`), so inferring it would add a second form that works for only some of them (Principle 6).
+**What is inferred is a function's own type arguments, however the function is reached**: `f(x)`, `h.to(x)` and `Holder<|I32|>.to(h, x)` alike. **A generic type's are not inferred from a call through it**: `Holder.mk(1)` is a compile error that says to write `Holder<|I32|>.mk(1)`. The type written before the `.` is what chooses the instance. It is so for a variable's type or a field's too ("An impl's mutability marker, and a call's type argument"). Many of a type's functions take nothing that would fix it (`List<|I32|>.new(null)`). So inferring it would add a second form that works for only some of them (Principle 6).
 
-**The price is that instantiation comes after the arguments' inference.** Right after instantiating, the actual arguments must be checked again against the substituted parameter types (["A generic call's arguments are checked against the parameter types after instantiation" in ksplc/docs/DESIGN-diagnostics.md](../ksplc/docs/DESIGN-diagnostics.md#a-generic-calls-arguments-are-checked-against-the-parameter-types-after-instantiation)). Skip that, and broken C comes out with zero diagnostics.
+**The price is that instantiation comes after the arguments' inference.** Right after instantiating, the compiler must check the actual arguments again against the substituted parameter types. Skip that, and broken C comes out with zero diagnostics. The check is in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md), under this heading:
+
+* ["A generic call's arguments are checked after instantiation"](../ksplc/docs/DESIGN-diagnostics.md#a-generic-calls-arguments-are-checked-after-instantiation)
 
 #### A generic function used as a value names its specialization
 
 **To pass or store a generic function as a function pointer, you write which copy (specialization) you mean: `f: fn(x: I32): I32 = same<|I32|>`.** A generic function's code exists only as specializations, one per set of type arguments, and a function-pointer value is the address of one of them. Written `same<|I32|>`, it is built where it is named, as a call would build it, and its type is checked against the expected one. The bare `same` there is a compile error that says to write it.
 
-**The type arguments are not inferred from the expected type.** The inference of "Inferring a generic's type arguments from the actual arguments is kept" works back from actual arguments, and a function named as a value has none. Working back from the expected type would be a second direction of inference, which no other position has: an anonymous function's types are not taken from where it is passed either ("Why capture is made explicit and escape is forbidden"). It would also reach only some positions. Where the receiving parameter is itself generic (`apply(same, 3)` with `fn apply<|F|>(f: F, x: I32)`), nothing is expected at all, and a bare name already has to be written out there. Writing the specialization works in every position, so it is the one form (Principle 6), and the reader sees which copy is taken without opening the receiving function.
+**The type arguments are not inferred from the expected type.** The inference of "A generic's type arguments are inferred from the actual arguments" works back from actual arguments. A function named as a value has none. Working back from the expected type would be a second direction of inference, which no other position has. An anonymous function's types are not taken from where it is passed either ("Why capture is made explicit and escape is forbidden"). It would also reach only some positions. Where the receiving parameter is itself generic (`apply(same, 3)` with `fn apply<|F|>(f: F, x: I32)`), nothing is expected at all, and a bare name already has to be written out there. Writing the specialization works in every position, so it is the one form (Principle 6). The reader sees which copy is taken without opening the receiving function.
 
-**Passed to a generic parameter, or bound to a declaration with no type, the name gives its function type**: `apply(same<|I32|>, 3)` binds `F` to `fn(x: I32): I32`, and `f: = same<|I32|>` makes `f` one. This is the inference of "Inferring a generic's type arguments from the actual arguments is kept", from an actual argument to the parameter, not a second direction: the written specialization names one function, and its signature is in the text. A non-generic function's name, a method named through its type ("A method used as a value is named through its type") and an anonymous function each name one function too, and give their types the same way. Refusing them while taking the specialization would make a plain function harder to pass than a generic one. A declaration with no type is the same question, the type a local takes from its initializer ("Why type inference is limited to local variables"), and the answer is in the text where the name is written; writing the function type out instead would repeat what the declaration already says. The bare `same` names no one function, so it stays a compile error there as everywhere. **`F` becomes a function-pointer type**, the same for every function of that signature, so two functions of one signature pass through one instance of `apply`, and a variable of that type holds either.
+**Passed to a generic parameter, or bound to a declaration with no type, the name gives its function type**: `apply(same<|I32|>, 3)` binds `F` to `fn(x: I32): I32`, and `f: = same<|I32|>` makes `f` one. This is the inference of "A generic's type arguments are inferred from the actual arguments". It runs from an actual argument to the parameter, and is not a second direction. The written specialization names one function, and its signature is in the text. These each name one function too, and give their types the same way:
 
-**Type arguments after a function that declares none are a compile error**, called or named as a value (`twice<|I32|>`): they would bind nothing and change nothing (Principle 5).
+* a non-generic function's name;
+* a method named through its type ("A method as a value is named through its type");
+* an anonymous function.
+
+Refusing them while taking the specialization would make a plain function harder to pass than a generic one. A declaration with no type is the same question: the type a local takes from its initializer ("Why type inference is limited to local variables"). The answer is in the text where the name is written. Writing the function type out instead would repeat what the declaration already says. The bare `same` names no one function, so it stays a compile error there as everywhere. **`F` becomes a function-pointer type**, the same for every function of that signature. So two functions of one signature pass through one instance of `apply`, and a variable of that type holds either.
+
+**Type arguments after a function that declares none would bind nothing and change nothing** (Principle 5), so "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md) refuses them.
 
 **What is given up**: `f: fn(x: I32): I32 = same`, leaving the specialization to the expected type. Each use costs the few characters of `<|I32|>`.
 
-#### A method used as a value is named through its type
+#### A method as a value is named through its type
 
-A method is passed or stored as a function pointer by naming it through its type: `f: fn(r: Meter@): I32 = Meter.read`. It is then a function whose first parameter is the receiver, in the shape the method declares (a copy or a pointer).
+The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
 
-**Every type argument is written, each where it belongs**: a generic type's on the type, the method's own after the method (`Keeper<|I32|>.pair<|U8|>`). Each instance of `Keeper` has its own copy of each method, and a generic method has one copy per specialization, so a value names one, as in "A generic function used as a value names its specialization". The bare `Keeper.keep` and `Meter.same` are compile errors that say what to write.
+**Every type argument is written, each where it belongs**: a generic type's on the type, the method's own after the method (`Keeper<|I32|>.pair<|U8|>`). Each instance of `Keeper` has its own copy of each method. A generic method has one copy per specialization. So a value names one, as in "A generic function used as a value names its specialization". The bare `Keeper.keep` and `Meter.same` are compile errors that say what to write.
 
-**A method named through a value (`p.read`, not called) is a compile error.** A function pointer is an address alone, with no room for the receiver, so `p.read` would have to keep `p` somewhere: that is a closure, which states what it captures ("Why capture is made explicit and escape is forbidden") and is written as one. Naming the method through its type and passing the receiver at the call keeps the value an address.
+**A method named through a value (`p.read`, not called) is a compile error.** A function pointer is an address alone, with no room for the receiver. So `p.read` would have to keep `p` somewhere. That is a closure, which states what it captures and is written as one ("Why capture is made explicit and escape is forbidden"). Naming the method through its type and passing the receiver at the call keeps the value an address.
 
-**A trait's method named through the trait (`Shape.area`) is a compile error**: it is a slot that each conforming type fills with its own function, and there is no one function to point at. A conforming type's method is named through that type.
+**A trait's method named through the trait (`Shape.area`) is a compile error.** It is a slot that each conforming type fills with its own function. There is no one function to point at. A conforming type's method is named through that type.
 
 **What is given up**: a bound method, `p.read` standing for "read `p` later". Where one is wanted, the receiver is passed at the call.
 
@@ -343,28 +376,28 @@ A method is passed or stored as a function pointer by naming it through its type
 
 A type argument can be a constant, as in `Ring<|512|>`. That is how a buffer of fixed size lives inside a type where no heap (memory allocated at run time) is available.
 
-What may be written is in [`docs/SPEC-language.md`, "3.3 Structs (`struct`)"](SPEC-language.md#33-structs-struct).
+What can be written is in [`docs/SPEC-language.md`, "3.3 Structs (`struct`)"](SPEC-language.md#33-structs-struct).
 
-**It is the only way to embed fixed-capacity memory in a type where no heap is available.** The declaration alone fixes the size of `struct Buf<|const n: Sz|> { data: U8[n]; }`. So it works where `alloc` cannot be called: in an interrupt handler, before the scheduler starts, right after a freestanding boot (a program starting with no operating system under it). With the value on the type, `% n` is also a constant in the generated C, so no software division is called, even on a target without hardware divide.
+**It is the only way to embed fixed-capacity memory in a type where no heap is available.** The declaration alone fixes the size of `struct Buf<|const n: Sz|> { data: U8[n]; }`. So it works where `alloc` cannot be called. That is in an interrupt handler, before the scheduler starts, and right after a freestanding boot. (A freestanding boot is a program starting with no operating system under it.) With the value on the type, `% n` is also a constant in the generated C. So no software division is called, even on a target without hardware divide.
 
 **Arithmetic cannot be written in the argument position**, because the notation as written is the canonical name. Naming by the folded value would turn `true` into `1` and land a `Bool` type argument on a different type. Write the arithmetic in the `const`'s definition: a `Foo<|n|>` given `const n: Sz = 4 * 2;` is the same type as `Foo<|8|>`. The array-length position (`T[rows * cols]`) creates no canonical name, so arithmetic is accepted there: the only place two positions treat the same value differently.
 
-**A parameter's kind is checked where the argument is written, a generic's own declaration included.** `fn f<|const N: Sz|>(h: Hold<|N|>@)` passes a value where `Hold` takes a type, and is refused at the declaration, whether or not anything calls `f`. Left to a call, the mistake would show as the call's argument failing to match, blaming the caller for the declaration's error, and a generic nobody calls yet would keep it hidden.
+**A parameter's kind is checked where the argument is written, a generic's own declaration included.** `fn f<|const N: Sz|>(h: Hold<|N|>@)` passes a value where `Hold` takes a type, and is refused at the declaration, whether or not anything calls `f`. Left to a call, the mistake would show as the call's argument failing to match. That blames the caller for the declaration's error. And a generic nobody calls yet would keep it hidden.
 
-**A capacity on the type fixes the memory's size at translation time only where the memory is embedded in the type.** Where the memory is passed separately, it is passed as a slice, whose length the receiver compares with the type argument when it is handed over: `std/ring.kspl`'s `Ring<|cap|>.new` takes a `U8$[]` and stops the program unless its length is `cap`. So the two guarantee different things: the type argument keeps the arithmetic constant (the wrap `% cap` needs no division at run time), and the slice carries the bounds, which every access then checks. A bare address would carry no length, and a capacity differing from the buffer would write out of bounds unseen.
+**A capacity on the type fixes the memory's size at translation time only where the memory is embedded in the type.** Where the memory is passed separately, it is passed as a slice. The receiver compares the slice's length with the type argument when it is handed over. `std/ring.kspl`'s `Ring<|cap|>.new` takes a `U8$[]` and stops the program unless its length is `cap`. So the two guarantee different things. The type argument keeps the arithmetic constant (the wrap `% cap` needs no division at run time). The slice carries the bounds, which every access then checks. A bare address would carry no length, and a capacity differing from the buffer would write out of bounds unseen.
 
-**A `const` parameter is read off the argument where it stands as an array's length or as a generic's value argument**: `sum(s)` with `s: I32[3]` makes `N` of `fn sum<|const N: Sz|>(v: I32[N])` 3, and `cap(b@)` with `b: Buf<|8|>` makes `N` of `fn cap<|const N: Sz|>(b: Buf<|N|>@)` 8. Each is part of the argument's type, so the argument determines the value as uniquely as it determines a type parameter standing bare ("Inferring a generic's type arguments from the actual arguments is kept"), and writing `sum<|3|>(s)` or `cap<|8|>(b@)` would repeat what the declaration of `s` or `b` already says. The two are one value to the rule: `fn fit<|const N: Sz|>(b: Buf<|N|>@, v: I32[N])` takes `N` from either argument. Where two arguments fix it to different values, the call is refused naming both: taking the first, as a type parameter does, would leave the instance refusing the second argument alone, though either may be the wrong one.
+**A `const` parameter is read off the argument where it stands as an array's length or as a generic's value argument.** `sum(s)` with `s: I32[3]` makes `N` of `fn sum<|const N: Sz|>(v: I32[N])` 3. `cap(b@)` with `b: Buf<|8|>` makes `N` of `fn cap<|const N: Sz|>(b: Buf<|N|>@)` 8. Each is part of the argument's type. So the argument determines the value as uniquely as it determines a type parameter standing bare. See "A generic's type arguments are inferred from the actual arguments". Writing `sum<|3|>(s)` or `cap<|8|>(b@)` would repeat what the declaration of `s` or `b` already says. The two are one value to the rule: `fn fit<|const N: Sz|>(b: Buf<|N|>@, v: I32[N])` takes `N` from either argument. Where two arguments fix it to different values, the call is refused naming both. Say it took the first, as a type parameter does. The instance would then refuse the second argument alone, though either can be the wrong one.
 
 **Nothing else gives a `const` parameter's value.** A slice's length is known only at run time, so it fixes nothing at translation time. A length written as arithmetic on the parameter (`I32[N + 1]`) is not solved for `N`. Where nothing gives the value, the call writes it (`sum<|3|>(I32[]::s)`), and a value written there decides as any written type argument does.
 
 **What is given up:**
 
 * **A separate body per value.** `Ring<|4|>` and `Ring<|8|>` are different types, so a type and its functions are emitted into the generated C once per value used.
-* **The declaration-synthesizing features skip it.** `variant_name` is not synthesized for an `enum` carrying a const generic, because the type arguments' notation is not reconstructed ([`ksplc/docs/DESIGN-compiler.md`, "Synthesizing an `enum`'s `variant_name`"](../ksplc/docs/DESIGN-compiler.md#synthesizing-an-enums-variant_name)). Every new declaration-synthesizing feature needs the same exception.
+* **The declaration-synthesizing features skip it.** `variant_name` is not synthesized for an `enum` carrying a const generic, because the type arguments' notation is not reconstructed ([`ksplc/docs/DESIGN-parse.md`, "Synthesizing an `enum`'s `variant_name`"](../ksplc/docs/DESIGN-parse.md#synthesizing-an-enums-variant_name)). Every new declaration-synthesizing feature needs the same exception.
 
 ### Whatever returns a view returns an immutable view
 
-**A function that returns a view (a slice pointing into existing data) returns a read-only one: only a function that takes a writable slice can hand back a writable view.** Every slicing function in `std/chars` and `std/str` returns an immutable view.
+**A function that returns a view (a slice pointing into existing data) returns a read-only one. Only a function that takes a writable slice can hand back a writable view.** Every slicing function in `std/chars` and `std/str` returns an immutable view.
 
 ```kspl
 pub fn sub(r: U8[], start: Sz, len: Sz): U8[]
@@ -392,7 +425,10 @@ One place decides how many elements a range really holds: `sub_count(count, star
 
 **Out of range returns empty; it does not panic.** Indexing (`xs[i]`) panics because the caller can compute the range from `len`. Slicing asks whether a range exists, and if it does not, empty is the answer.
 
-**A slice being a struct whose immutability rides on its element type has two consequences inside the compiler**: how a descriptor literal's fields are checked, and why an immutable slice's `ptr` is not `const` in the generated C. Both belong to the compiler ("How immutability marks are expressed in a type" and "The output order of genc's type definitions is decided after the immutability marks are stripped" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)).
+**A slice is a struct whose immutability rides on its element type. That has two consequences inside the compiler.** One is how a descriptor literal's fields are checked. The other is why an immutable slice's `ptr` is not `const` in the generated C. Both belong to the compiler:
+
+* "Immutability marks in a type, and the API that asks" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md);
+* "Genc orders its type definitions after stripping immutability marks" in [`../ksplc/docs/DESIGN-backends.md`](../ksplc/docs/DESIGN-backends.md).
 
 ### Where permission lives changes with whether it is owned
 
@@ -408,7 +444,7 @@ One place decides how many elements a range really holds: `sub_count(count, star
 
 **So `List` gets no mutability marker.** Receiving `List<|T|>@` already says "do not touch the contents", and `List<|$T|>` would be a second means to the same purpose (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)). A slice, passed around by value, needs the marker because it has no axis but its type.
 
-**A read-only slot does not mean nothing can be written through it.** The walk up the path to the root stops at a pointer type and answers with the immutability of what it points at. So for `x: H@`, `x.p$ = 22` (a field of a bare pointer) passes. Indexing follows the same rule, with the return type of `at` stopping the walk. Where the compiler walks the path is "Where immutability's two axes are enforced" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
+**A read-only slot does not mean nothing can be written through it.** The walk up the path to the root stops at a pointer type and answers with the immutability of what it points at. So for `x: H@`, `x.p$ = 22` (a field of a bare pointer) passes. Indexing follows the same rule, with the return type of `at` stopping the walk. Where the compiler walks the path is "Where immutability's two axes are enforced" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md).
 
 #### The receiver of a read-only method is `Self@`
 
@@ -418,13 +454,13 @@ None of `std/seq`'s methods rewrite the receiver: they return a new `List` or co
 
 Caution: **Keep `slice` / `at` / `items` as `Self$@`.** Each returns a writable pointer or slice into the receiver, so calling it on a read-only receiver would wash away const. Only `get`, which returns a value, can safely be relaxed.
 
-#### Whether an index may resolve to a 'place' is decided by the receiver's permission
+#### The receiver's permission decides whether an index is a 'place'
 
 On a read-only receiver, `a[i]` reads through `get`, which returns a copy, never through `at`, which returns a writable pointer.
 
 `a[i]` resolves first to `Index_place`'s `at`, a mutable pointer to the element.
 
-Caution: **Do not choose it when the receiver is read-only.** `at` takes `Self$@`, so through a read-only place such as `xs: List<|T|>@` the generated C discards const, with zero diagnostics from ksplc (against Principle 2). `for x in xs` expands to indexing and takes the same path. Reads go to `Index.get` instead (safe, as it returns a value), and writes to `Index_mut.set`. How the compiler keeps this choice in one place is "Where immutability's two axes are enforced" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
+Caution: **Do not choose it when the receiver is read-only.** `at` takes `Self$@`, so through a read-only place such as `xs: List<|T|>@` the generated C discards const, with zero diagnostics from ksplc (against Principle 2). `for x in xs` expands to indexing and takes the same path. Reads go to `Index.get` instead (safe, as it returns a value), and writes to `Index_mut.set`. How the compiler keeps this choice in one place is "Where immutability's two axes are enforced" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md).
 
 ### A typedef is only another name
 
@@ -432,7 +468,7 @@ Caution: **Do not choose it when the receiver is read-only.** `at` takes `Self$@
 
 The rule is "3.5 Typedefs (`typedef`)" in [`SPEC-language.md`](SPEC-language.md).
 
-**The reason**: a typedef told apart from its type would be "the same type, but remembered". Every value would carry one of two spellings, and every feature would have to say which: a variant built through the typedef, a function called through it, a value returned where the typedef is declared.
+**The reason**: a typedef told apart from its type would be "the same type, but remembered". Every value would carry one of two spellings, and every feature would have to say which. Examples are a variant built through the typedef, and a function called through it. Another is a value returned where the typedef is declared.
 
 Rust's `type`, Swift's `typealias`, C's `typedef` and Go's `type A = B` all name the same type. A language needing a separate type declares one (Rust's and Haskell's newtype, Go's defined type). KSPL already has that means, a struct with one field. It costs nothing at run time and makes the mix an error, not a warning (Principle 6).
 
@@ -448,7 +484,23 @@ The operators `Bool` takes, and the answers arithmetic would silently change, ar
 
 **What is given up**: a flag is counted only through a conversion, `I32::flag`.
 
-**No number casts to `Bool`.** C's `_Bool` makes every non-zero value true, while a conversion that keeps the low bit (LLVM's `trunc`) makes `2` false; a cast would have to pick one of two readings a writer could hold. `x != 0` already says the one meant, so a second spelling of it is not carried (Principle 6), and the comparison reads the same to everyone.
+**No number casts to `Bool`.** C's `_Bool` makes every non-zero value true. A conversion that keeps the low bit (LLVM's `trunc`) makes `2` false. A cast would have to pick one of two readings a writer could hold. `x != 0` already says the one meant, so a second spelling of it is not carried (Principle 6). The comparison reads the same to everyone.
+
+### Why an unsigned minus and a fixed-answer comparison are refused
+
+`-u` on an unsigned integer, and an integer compared with a constant outside every value its type holds (`x == -1` with `x: U8`), are compile errors. The rules are in "6.8 Integer arithmetic: folding, overflow, division, shifts" in [`SPEC-language.md`](SPEC-language.md).
+
+**Both are written but do nothing a writer meant** (Principle 5). An unsigned type holds no negative, so `-u` can only wrap: with `u: U32 = 5` it is `4294967291`. A `U8` compared with `-1` computes at `I32`, where the `U8` is widened to `0` … `255`, so the answer is false whatever the value.
+
+**Why errors, not warnings**:
+
+1. **The same comparison against a `U32` is already an error**: there `-1` is a literal out of the type the comparison computes in. Whether a narrower type is refused would otherwise hang on a promotion detail.
+2. **The answer is fixed at translation**, so no program needs the comparison as written; the fix is always a different spelling.
+3. **A warning would be noisy only in generic code**, where a type argument makes a comparison fixed in one instance and not another. KSPL reports neither check inside a generic instance, so that cost does not arise.
+
+**Where the meaning was wrapping, it is still written**: `0 - u` is the wrapping negation, and a cast reads the bits the other way first (`I8::x == -1`). A literal under the minus (`u: U32 = -1`) stays the literal's range error, which names the cast that keeps the bits.
+
+**What is given up**: C's `-u` idiom for "the two's complement of an unsigned" needs `0 - u`, three characters more.
 
 ### Why the size and index type `Sz` is signed
 
@@ -466,34 +518,51 @@ Caution: **A proposal to make it unsigned must answer all three points above.** 
 
 ### `T?` is sugar for `Option<|T|>`
 
-A value that may be absent is written `T?`. It is `std/lang`'s `Option<|T|>`, folded in the parse as `T[]` is folded into `Slice<|T|>` ("`T[]` is sugar for `Slice<|$T|>`").
+A value that can be absent is written `T?`. It is `std/lang`'s `Option<|T|>`, folded in the parse as `T[]` is folded into `Slice<|T|>` ("`T[]` is sugar for `Slice<|$T|>`").
 
 | Written | Desugared to |
 | :-- | :-- |
 | `I32?` | `Option<\|I32\|>` |
 | `U8[]?` | `Option<\|Slice<\|U8\|>\|>`: an optional slice |
 | `U8?[]` | `Slice<\|Option<\|U8\|>\|>`: a slice of optional bytes |
-| `I32?!E` | a result whose value may be absent |
+| `I32?!E` | a result whose value can be absent |
 | `(I32!E)?` | an optional result |
 
 * **The marks fold from the left**, as `[]` does (`fold_sugar_postfixes` in `ksplc/parse/desugar_slice.kspl`), so the order written is the order read.
 * **`?` is the mark Swift, Kotlin and C# give an optional value**, so their readers read it on sight. A result is marked with `!` ("Failure" in [`DESIGN-principles.md`](DESIGN-principles.md)), so `?` names absence alone.
 * **Diagnostics show the sugar**, as they do for a slice; an optional result is written in brackets, `(T!E)?`.
-* **`T!E?` is refused.** The `!` takes the whole type after it, so the `?` would land on the error type, and an absent error is a failure with nothing to say. The note names both readings the writer may have meant.
-* **The long form is refused as a type, and stands only in an expression.** A type written `Option<|I32|>` is a compile error naming `I32?`, an `impl`'s target included (`impl<|T|> T?`), so an optional is spelled one way (Principle 6); a hint would leave the second spelling accepted. An expression that names the type has no other spelling (`Option<|I32|>.none`, where a `?` cannot stand), so it keeps the long form. Source the compiler writes from a folded type spells the sugar back (`spell_as_written` in `ksplc/parse/desugar_slice.kspl`).
-* **A `?` after a value marks nothing.** There is no early return of an absent value (Rust's `?` on an `Option`): `if v: = x` takes the value out ("Unwrapping an `Option`" in [`DESIGN-principles.md`](DESIGN-principles.md)), and keeping it the one way keeps what a `?` means to one thing.
+* **`T!E?` is refused.** The `!` takes the whole type after it, so the `?` would land on the error type. An absent error is a failure with nothing to say. The note names both readings the writer can have meant.
+* **The long form is refused as a type, and stands only in an expression.** A type written `Option<|I32|>` is a compile error naming `I32?`, an `impl`'s target included (`impl<|T|> T?`). So an optional is spelled one way (Principle 6). A hint would leave the second spelling accepted. An expression that names the type has no other spelling (`Option<|I32|>.none`, where a `?` cannot stand), so it keeps the long form. Source the compiler writes from a folded type spells the sugar back (`spell_as_written` in `ksplc/parse/desugar_slice.kspl`).
+* **A `?` after a value marks nothing.** There is no early return of an absent value (Rust's `?` on an `Option`). `if v: = x` takes the value out ("Unwrapping an `Option`" in [`DESIGN-principles.md`](DESIGN-principles.md)). Keeping it the one way keeps what a `?` means to one thing.
 
-**What is given up**: "may be absent" (`I32?`) and "may fail" (`I32!E`) differ by one mark, so a signature is read to its last character.
+### `T!E` is sugar for `Result<|T, E|>`
+
+A result is written `T!E`, folded in the parse into `std/lang`'s enum `Result<|T, E|>` as `T?` is folded into `Option<|T|>`. The rules, the desugaring included, are "8.3 Error handling" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
+
+**Why a library type, not the compiler's own**: one mechanism then serves the optional and the result. And a result is a value like any other.
+
+* **A built-in kind would stand apart from every other value.** It could not be stored, passed through a generic or switched on. So a failure that has to wait would need a second type. Examples are a task's outcome kept in a queue, and a batch of answers checked at the end. And `(A!B)!E` and `A!B!E` would come to one type. Its layout, its reference counting and its unpacking would be written a third time beside the enum's and the optional's.
+* **What the enum gives.** Layout, reference counting and code generation are the enum's, so nothing about a result is special past the sugar and the three operators.
+* **`!` and `catch` stay**: they are what makes failure cheap to pass on, and a `switch` alone would make every call site three lines.
+* **The long form is refused as a type** so that a result is spelled one way (Principle 6). An expression keeps it only because no `!` can stand there.
+* **A result crosses no C boundary because its layout is the enum's tagged union** ("11.1 Types that cannot cross the C boundary" in [`SPEC-language.md`](SPEC-language.md)). A C caller gets a status and an out-parameter, written as such.
+
+**A result nobody takes apart is refused because the type says the call can fail.** A failure dropped in silence breaks that promise where nothing shows it. A warning would leave the second reading accepted, and the same code would compile clean on a machine that turns warnings off.
+
+* **A binding whose name opens with `_` counts as dropping it**, since `_` is the mark that silences the unread-variable warning.
+* **`f() catch {}` drops a failure on purpose**, and the reader sees it where it happens.
+
+**What is given up**: "can be absent" (`I32?`) and "can fail" (`I32!E`) differ by one mark, so a signature is read to its last character.
 
 ## Traits and markers
 
-**A trait is the only thing in KSPL that rides on the type system**: only a trait combines with generics and is checked by the type checker. So a property pasted onto a type is either a trait or an attribute (a `#` mark such as `#inline`), and this chapter says which, and why.
+**A trait is the only thing in KSPL that rides on the type system.** Only a trait combines with generics and is checked by the type checker. So a property pasted onto a type is either a trait or an attribute (a `#` mark such as `#inline`). This chapter says which, and why.
 
 ### Why a trait's receiver is fixed to a bare `Self`
 
-In a trait's declaration, a method's receiver is always written plain `Self`. Each implementation chooses for itself whether it takes the receiver by value or through a pointer it may write through.
+In a trait's declaration, a method's receiver is always written plain `Self`. Each implementation chooses for itself whether it takes the receiver by value or through a pointer it can write through.
 
-A `trait` method's receiver **is written only as a bare `Self`**; `Self@` / `Self$@` are compile errors (docs/SPEC-language.md §5.3). The implementation may receive it in any form.
+A `trait` method's receiver **is written only as a bare `Self`**; `Self@` / `Self$@` are compile errors (docs/SPEC-language.md §5.3). The implementation can receive it in any form.
 
 ```kspl
 pub trait Writer
@@ -513,9 +582,9 @@ flowchart LR
     T --> I["Builder's s<br/>receives Self$@ and may rewrite it"]
 ```
 
-**In a trait's receiver position, `$@` would not mean what it means elsewhere in a type** (value or pointer, and whether what it points at is rewritten):
+**In a trait's receiver position, `$@` would not mean what it means elsewhere in a type.** Elsewhere it says value or pointer, and whether what it points at is rewritten:
 
-* **It would bind nothing on the implementation.** The conformance check ignores the receiver's notation, and the thunk bridges value and pointer. So an implementation may take `Self$@` and rewrite the receiver. A trait value is a fat pointer to `v` (object pointer + vtable), not a copy, so the rewrite reaches the original.
+* **It would bind nothing on the implementation.** The conformance check ignores the receiver's notation, and the thunk bridges value and pointer. So an implementation can take `Self$@` and rewrite the receiver. A trait value is a fat pointer to `v` (object pointer + vtable), not a copy, so the rewrite reaches the original.
 * **It would bind only the caller.** A declared `Self$@` engages the lvalue check in `ksplc/sema/body/call.kspl`: the receiver must be a place that can be written, such as a variable. That check rejects a temporary as the receiver, as in `io.out().s("x")`.
 
 **Enforcing agreement, as Rust does, is not open.** The declaration must be `Self` for `io.out().s(…)` to be writable, and the implementation must be `Self$@` to rewrite. The two must differ, which is why the thunk exists, so the choice is removed instead.
@@ -526,7 +595,7 @@ flowchart LR
 
 **A guarantee that "the receiver is not rewritten"** would need a marker per method (for example `fn draw(r: Self) # readonly;`). The receiver's type cannot carry that contract: the thunk makes the receiver rewritable, and the fat pointer makes no copy.
 
-Omitting a parameter's type, and `Self` on a parameter **other than the receiver**, are separate rules (docs/SPEC-language.md §5.1, §5.3). The second exists because a thunk would pass the fat pointer where a concrete type is expected. That fails at the C stage with no KSPL diagnostic (`ksplc/docs/DESIGN-compiler.md` "The Sema layer: it knows the types").
+Omitting a parameter's type, and `Self` on a parameter **other than the receiver**, are separate rules (docs/SPEC-language.md §5.1, §5.3). The second exists because a thunk would pass the fat pointer where a concrete type is expected. That fails at the C stage with no KSPL diagnostic (`ksplc/docs/DESIGN-sema.md` "The Sema layer: it knows the types").
 
 #### When a temporary can be the receiver
 
@@ -543,7 +612,7 @@ The rule is docs/SPEC-language.md §5.2:
 
 **Rejecting a writing receiver**: the slot is a copy. A write through `Self$@` would vanish where the caller cannot see it, and `make_point().set_n(5)` would be a call doing nothing (Principle 5).
 
-**So a receiver takes `$` only when the method rewrites the receiver's own memory.** A write to what a descriptor points at does not need it, since only the descriptor is copied (the `fill` example is in docs/SPEC-language.md §5.2). The line is "was it declared as writing", so it can be read off the declaration of `m` alone, and the protection needs no borrow checker.
+**So a receiver takes `$` only when the method rewrites the receiver's own memory.** A write to what a descriptor points at does not need it, since only the descriptor is copied. The `fill` example is in docs/SPEC-language.md §5.2. The line is "was it declared as writing", so it can be read off the declaration of `m` alone, and the protection needs no borrow checker.
 
 **Operators and casts use the same slot**: `a + b` desugars to `a.add(b)` and `Dest::x` to `x.cast()`, whose receivers can be temporaries too.
 
@@ -551,9 +620,9 @@ The rule is docs/SPEC-language.md §5.2:
 
 Rust extends the temporary's lifetime to the end of the statement and accepts the call; its borrow checker does not stop the write being discarded. C++ binds a temporary to `const&` but not to a non-`const` lvalue reference, which is in effect KSPL's line. Swift, Java and Python have reference semantics, so the question does not arise.
 
-### Whether a marker is expressed as an attribute or as a trait
+### Whether a marker is an attribute or a trait
 
-A marker that changes how the compiler treats a type or a declaration has two means: an attribute (`#inline`) or a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed ("The order of decision").
+A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed ("The order of decision").
 
 #### The order of decision
 
@@ -577,9 +646,9 @@ flowchart TD
 
 **(1) Is the subject a type, or a declaration or a site?** A trait attaches only to a type. So it is not an option for `#naked` / `#interrupt` / `#noreturn` / `#inline` / `#export` / `#section` (a function), `#align` / `#packed` (a struct's layout) or `#cfg` (any declaration). A choice arises only for "this type is such-and-such".
 
-**(2) If something is required of the type, a trait.** A conformance check enforces the methods' existence, argument count and types; an attribute cannot ("Why ARC is expressed as a trait"). A library is no different: what `Map<|K, V|>` requires of its key is the trait `ds.Hashable<|Key|>` (`std/docs/DESIGN-core.md`, "What a container requires of a type is written as a trait").
+**(2) If something is required of the type, a trait.** A conformance check enforces the methods' existence, argument count and types; an attribute cannot ("Why ARC is expressed as a trait"). A library is no different: what `Map<|K, V|>` requires of its key is the trait `ds.Hashable<|Key|>` (`std/docs/DESIGN-core.md`, "A container's requirement on a type is a trait").
 
-**(3) Even a pure marker with no requirement is a trait if it propagates through types.** Only a trait rides on the type system. So only a trait can be derived structurally from a type's parts (fields, an `enum`'s payload, an array's elements), written as a generic's constraint (`fn f<|T: some.Marker|>`), and checked at instantiation. An attribute is a flag per declaration with no rule for composing, and `fn f<|T: #arc|>` cannot be written.
+**(3) Even a pure marker with no requirement is a trait if it propagates through types.** Only a trait rides on the type system. So only a trait can be derived structurally from a type's parts (fields, an `enum`'s payload, an array's elements). Only a trait can be written as a generic's constraint (`fn f<|T: some.Marker|>`) and checked at instantiation. An attribute is a flag per declaration with no rule for composing, and `fn f<|T: #arc|>` cannot be written.
 
 **(4) If it carries a value, an attribute.** `#align(16)` / `#section(".isr")` / `#cfg(blas)` take parameters; a marker trait cannot carry a value.
 
@@ -606,7 +675,7 @@ The rule is docs/SPEC-language.md §8.4.2. An attribute such as `#arc` fails on 
 
 **3. A trait already drives code generation.** `Add` desugars `a + b` to `a.add(b)`, and `Index_place` desugars `a[i]` to `a.at(i)$`. Inserting "retain on copy, release on leaving scope" is the same shape, not a new mechanism.
 
-**The methods are `priv`**, because a call by hand doubles up with the inserted ones: an automatic `release` after an explicit one writes into freed memory. `priv` on the conforming impl refuses the direct call, and on the trait it closes the path through an upcast (converting the value to the trait type). The synthesized calls are inserted after the visibility check, so they still reach.
+**The methods are `priv`**, because a call by hand doubles up with the inserted ones: an automatic `release` after an explicit one writes into freed memory. `priv` on the conforming impl refuses the direct call. On the trait, it closes the path through an upcast (converting the value to the trait type). The synthesized calls are inserted after the visibility check, so they still reach.
 
 **The trait itself is `pub`.** A `priv trait`'s name could not be written, and every file defining an ARC-managed type would redeclare a trait of the same name. With only the methods `priv`, every file shares one declaration and the calls stay closed.
 
@@ -628,9 +697,9 @@ Three markers are deliberately absent: `#arc`, `#deterministic` and `Thread_shar
 
 The traits the compiler looks up by name all live in one file, `std/lang`. Whoever renames something there can see that the name is special.
 
-The traits the compiler names by FQN (the operator traits, and `Ref_counted` / `Move_only` / `Owned` / `Callable1` / `Callable2`) stand only in `std/lang`, with one exception, under "When it may sit outside `std/lang`" below.
+The traits the compiler names by FQN (the operator traits, and `Ref_counted` / `Move_only` / `Owned` / `Callable1` / `Callable2`) stand only in `std/lang`, with one exception, under "When it can sit outside `std/lang`" below.
 
-**The motive**: "The order of decision"'s cost "the compiler depends on a name in the standard library" cannot be removed, since a name is the only tie. What is left is to show by placement which names bear the load.
+**The motive**: "The order of decision" names a cost: "the compiler depends on a name in the standard library". That cost cannot be removed, since a name is the only tie. What is left is to show by placement which names bear the load.
 
 Caution: Mixed into a general-purpose file, a name whose renaming silently disables a feature cannot be told from one safe to rename.
 
@@ -638,9 +707,9 @@ Caution: Mixed into a general-purpose file, a name whose renaming silently disab
 
 **Do not add for convenience.** Every program pays for this file (`make test-thin-use` guards its size).
 
-**When it may sit outside `std/lang`**: when the whole file exists for that mechanism. `std/reflect` holds only `Reflectable` / `Field_info` / `Field_kind`, and its name declares the mechanism, which meets the motive. Mixed into `std/lang`, it would be harder to tell apart. `std/lang` holds only what the syntax requires, and `impl X: reflect.Reflectable` is written out, so reflection does not belong there.
+**When it can sit outside `std/lang`**: when the whole file exists for that mechanism. `std/reflect` holds only `Reflectable` / `Field_info` / `Field_kind`, and its name declares the mechanism, which meets the motive. Mixed into `std/lang`, it would be harder to tell apart. `std/lang` holds only what the syntax requires, and `impl X: reflect.Reflectable` is written out, so reflection does not belong there.
 
-**The direction of dependency**: `std/lang.kspl` may import only `std/libc`. Routing `panic`'s output through `std/io` would cycle (`lang → io → mem → lang`) and make every program pay for strings and IO. The other way round, `std/refcount` (the `Rc`/`Arc` conformances) and `std/thread` (`Raw_mutex`/`Mutex`) depend on it.
+**The direction of dependency**: `std/lang.kspl` can import only `std/libc`. Routing `panic`'s output through `std/io` would cycle (`lang → io → mem → lang`) and make every program pay for strings and IO. The other way round, `std/refcount` (the `Rc`/`Arc` conformances) and `std/thread` (`Raw_mutex`/`Mutex`) depend on it.
 
 **The way out for a file that declared the same name**: `std/lang` also gives every file the import alias `lang`. So a file declaring its own `Ref_counted` still conforms to the lang one with `impl My_type: lang.Ref_counted`. Unqualified, the name means the file's own declaration: the conformance target changes, type checking passes, and ARC and operator desugaring stop working with no diagnostic.
 
@@ -651,7 +720,7 @@ Conversely, do not write `lang.` where the unqualified form is not blocked. That
 | Name | Purpose | What backs it |
 | :-- | :-- | :-- |
 | `retain` / `release` | ARC's synthesized calls | `Ref_counted`'s conformance check requires them |
-| `fields` | Where `Reflectable`'s synthesized table goes ("Why the round trip between a container and an external form is a trait returning a table") | `Reflectable`'s conformance check requires it |
+| `fields` | Where `Reflectable`'s synthesized table goes ("Why a container's round trip is a table-returning trait") | `Reflectable`'s conformance check requires it |
 | `fmt` | String interpolation (called inside `\{x\}` → `put(w, x)`) | If missing, `Formattable`'s conformance check stops it |
 | `put` | What string interpolation desugars to; a free function in `std/lang`, so **its unqualified name is taken in every file** | If missing, "undefined identifier" |
 | `len` | `for`-`in`, and slices | As above |
@@ -660,7 +729,7 @@ Conversely, do not write `lang.` where the unqualified form is not blocked. That
 
 The last is the weakest coupling: it can misfire on an unrelated method named `free`. Moving it onto a trait such as `Deallocating` would mean a conformance on every type with a freeing method. The cost does not balance, so it stays, stated as a heuristic.
 
-#### Why the round trip between a container and an external form is a trait returning a table
+#### Why a container's round trip is a table-returning trait
 
 To write a struct out as JSON or a database row and read it back, a type conforms to `Reflectable`. Its one method returns a table describing the type's fields, and the libraries walk that table. The compiler writes the table for you when the `impl` is empty.
 
@@ -680,13 +749,17 @@ flowchart LR
     T --> D["ksbind/db<br/>bind_row / read_row"]
 ```
 
-**A trait rather than an attribute**, by (3) of "The order of decision". Whether a type can round-trip is derived structurally from its fields' types (`Outer` only when `Inner` can), and it must be writable as a generic's constraint (`fn save<|T: Reflectable|>`). Nor is it an empty marker: `fields()` is called directly under that constraint, so no second mechanism looks up a name (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)).
+**A trait rather than an attribute**, by (3) of "The order of decision". Whether a type can round-trip is derived structurally from its fields' types (`Outer` only when `Inner` can), and it must be writable as a generic's constraint (`fn save<|T: Reflectable|>`). Nor is it an empty marker: `fields()` is called directly under that constraint. So no second mechanism looks up a name (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-**A table rather than a body per library.** `Json_codable { fn to_json(…) }` names a `std/json` type in its signature. Once ksplc synthesized its body, it would be a compiler-known trait. "Why compiler-known traits are confined to `std/lang`" puts those in `std/lang`, which may import only `std/libc`. A table's signature needs only `U8[]`, `Sz` and an enum, so it can live anywhere: in `std/reflect`, not `std/lang` ("Why compiler-known traits are confined to `std/lang`"). And one mechanism serves both `json` and `db`.
+**A table rather than a body per library.** `Json_codable { fn to_json(…) }` names a `std/json` type in its signature. Once ksplc synthesized its body, it would be a compiler-known trait. "Why compiler-known traits are confined to `std/lang`" puts those in `std/lang`, which can import only `std/libc`. A table's signature needs only `U8[]`, `Sz` and an enum, so it can live anywhere: in `std/reflect`, not `std/lang` ("Why compiler-known traits are confined to `std/lang`"). And one mechanism serves both `json` and `db`.
 
-**The compiler writes the table only for an `impl` with an empty body**, as a person would write it, and leaves an `impl` with a body alone (the rule is "5.5 Worked example: synthesizing a field table with `Reflectable`" in [`SPEC-language.md`](SPEC-language.md)). A body written by hand is the way out for another key mapping, or for a type the table cannot express. The trait is matched by FQN, as every compiler-known trait is ("Why compiler-known traits are confined to `std/lang`"). How the compiler builds the table is ksplc's (`synthesize_reflect_impls` in `ksplc/sema/decl/reflect.kspl`, and pass 2a' under "The internal flow: registering every file up front → the main type-inference walk → draining the work list of generic instantiations" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)). The table's own shape (nesting, widths, containers) is `std`'s ("The field table holds a number's width as data, and nests by pointing" in [`../std/docs/DESIGN-system.md`](../std/docs/DESIGN-core.md)).
+**The compiler writes the table only for an `impl` with an empty body**, as a person would write it. It leaves an `impl` with a body alone (the rule is "5.5 Worked example: synthesizing a field table with `Reflectable`" in [`SPEC-language.md`](SPEC-language.md)). A body written by hand is the way out for another key mapping, or for a type the table cannot express. The trait is matched by FQN, as every compiler-known trait is ("Why compiler-known traits are confined to `std/lang`"). How the compiler builds the table is ksplc's: `synthesize_reflect_impls` in `ksplc/sema/decl/reflect.kspl`. It is also pass 2a' in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md), under this heading:
 
-**`offset` is in the table** because adding up sizes from `kind` cannot give it. Padding intervenes (the `b` of `struct { a: U8; b: I64; }` is at 8, not 1), `#packed` stops the padding, and `#align(N)` overrides a struct's alignment. One place in ksplc interprets those and the alignment rules ("A layout is computed when it is first asked for" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)). A walker that added up sizes would be a second implementation of the layout rules, and a divergence would produce no diagnostic. Given `offset`, the walker needs only "where" and "how to convert", never "how many bytes".
+* "The internal flow: registration, type inference, then generic instantiation"
+
+The table's own shape (nesting, widths, containers) is `std`'s ("The field table holds widths as data, nesting by pointer" in [`../std/docs/DESIGN-system.md`](../std/docs/DESIGN-system.md)).
+
+**`offset` is in the table** because adding up sizes from `kind` cannot give it. Padding intervenes (the `b` of `struct { a: U8; b: I64; }` is at 8, not 1), `#packed` stops the padding, and `#align(N)` overrides a struct's alignment. One place in ksplc interprets those and the alignment rules ("A layout is computed when it is first asked for" in [`../ksplc/docs/DESIGN-sema.md`](../ksplc/docs/DESIGN-sema.md)). A walker that added up sizes would be a second implementation of the layout rules, and a divergence would produce no diagnostic. Given `offset`, the walker needs only "where" and "how to convert", never "how many bytes".
 
 **A `T?` field that is `.none` writes no key**, and an explicit `null` is refused as a difference in kind. serde, Swift's `Codable` and Jackson read a missing key and a `null` as one state, and a user who needs the difference reaches for a double wrapper. Here the two are already different values, and `null` is not made a second spelling of "missing" (the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
@@ -717,14 +790,14 @@ C++'s concepts check a template's constraints **before instantiation**. Without 
 
 | What concepts gave | Where KSPL stands |
 | :-- | :-- |
-| (1) Constraints checked before instantiation, ending diagnostics reported from the depths | **Present.** A violation of `<\|T: Trait\|>` is rejected naming the instantiated type, and **the body of an instantiation known to violate is not type-checked**, so no errors derive from it (pinned by `EXPECT-NOT` in the case `generic_constraint_via_static_call` in `ksplc/tests/negative/generic.kspl`) |
+| (1) Constraints checked before instantiation, ending diagnostics reported from the depths | **Present.** A violation of `<\|T: Trait\|>` is rejected naming the instantiated type. **The body of an instantiation known to violate is not type-checked**, so no errors derive from it. `EXPECT-NOT` in the case `generic_constraint_via_static_call` in `ksplc/tests/negative/generic.kspl` pins this |
 | (2) Choosing an overload by constraint (replacing SFINAE, C++'s rule of skipping a template whose substitution fails; subsumption) | **Not needed.** KSPL has no function overloading, and an impl targeting a type argument itself is rejected, so **there is nothing to choose between** |
 | (3) The requirements shown in the signature | Partly: `<\|T: Trait\|>` can be written but is **not required** |
 
-**Measured**: a method the type lacks, called three levels deep in generics calling generics, gives exactly one message, naming the concrete type and pointing into the body. A body failing for several types gives one per type. The cascade C++ shows without concepts does not occur.
+**Measured**: take a method the type lacks, called three levels deep in generics calling generics. It gives exactly one message, naming the concrete type and pointing into the body. A body failing for several types gives one per type. The cascade C++ shows without concepts does not occur.
 
 * **So the syntax is not added.** (1) is present and (2) has nothing to act on. A mandatory (3) would check generics once against the constraints, limiting a body to what they guarantee.
-* **What is given up is a diagnostic detail**: an unconstrained body that fails does not say which call bound the type argument. The position that caused the instantiation is recorded for the constraint check, not for the body's later analysis ("A diagnostic points at 'the position the user wrote'" in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md)). So the gap is a missing note on the diagnostic, not a gap in the type system.
+* **What is given up is a diagnostic detail**: an unconstrained body that fails does not say which call bound the type argument. The position that caused the instantiation is recorded for the constraint check, not for the body's later analysis. See "A diagnostic points at 'the position the user wrote'" in [`../ksplc/docs/DESIGN-diagnostics.md`](../ksplc/docs/DESIGN-diagnostics.md). So the gap is a missing note on the diagnostic, not a gap in the type system.
 
 ## Function values
 
@@ -741,13 +814,13 @@ A closure lists the outer variables it uses after a `;`, with their types. It ca
 
 An anonymous function (`fn(x: I32): Bool { … }`) is lifted to a top-level `priv fn`. A closure (`fn(x: I32; n: I32): Bool { … }`) gets a synthesized struct pointing at its captures and an impl of `Callable1`/`Callable2` (`desugar_fn_lit` / `desugar_closure` in `ksplc/parse/desugar_closure.kspl`).
 
-**That the `;` changes the type is intended.** A function plus an environment does not fit one C function pointer. With the kind visible in the notation, a reader can tell what may go to C without following the types. Even with zero captures, a `;` makes a `Callable`. So a predicate needing no captures can reach an API that takes no function pointer: KSPL has no overloading, so the callee cannot take both.
+**That the `;` changes the type is intended.** A function plus an environment does not fit one C function pointer. With the kind visible in the notation, a reader can tell what can go to C without following the types. Even with zero captures, a `;` makes a `Callable`. So a predicate needing no captures can reach an API that takes no function pointer: KSPL has no overloading, so the callee cannot take both.
 
 **Captures are held by place (a pointer).** Copied by value, they would break as a `defer` frozen at registration does ("Why `defer` has no capture list"). Through a pointer, a call reads the body as it is then.
 
-**Escape is forbidden in exchange.** A captured place dangles once the environment leaves the function. With no borrow checker ("Why there is no borrow checker, only a move-only marker") that cannot be tracked. But a closure is a trait value, so "Which pointers into a frame are stopped from leaving it"'s escape prohibition applies (at `return` / `throw` and at a store into a global or behind a pointer), and `check_ffi_safety` already stops it at the C boundary. Closures need no check of their own: the trait value's constraints are exactly the two needed.
+**Escape is forbidden in exchange.** A captured place dangles once the environment leaves the function. With no borrow checker ("Why there is no borrow checker, only a move-only marker") that cannot be tracked. But a closure is a trait value. So the escape prohibition of "Which pointers into a frame are stopped from leaving it" applies. It applies at `return` / `throw`, and at a store into a global or behind a pointer. And `check_ffi_safety` already stops it at the C boundary. Closures need no check of their own: the trait value's constraints are exactly the two needed.
 
-**An enclosing type argument reaches a closure, but not an anonymous function.** A closure's synthesized declarations copy across the ones its signature touches (ksplc/docs/DESIGN-compiler.md "Synthesizing a closure makes a KSPL source string and puts it through the same parser"). An anonymous function is a function-pointer value, and nothing fixes the instantiation where a value is passed. This follows from the `;` rule, which the text does not show, so the error asks for a capture list (the case `anon_fn_generic_param` in `ksplc/tests/negative/closure.kspl`).
+**An enclosing type argument reaches a closure, but not an anonymous function.** A closure's synthesized declarations copy across the ones its signature touches. See "A closure is synthesized as source for the same parser" in ksplc/docs/DESIGN-parse.md. An anonymous function is a function-pointer value, and nothing fixes the instantiation where a value is passed. This follows from the `;` rule, which the text does not show, so the error asks for a capture list (the case `anon_fn_generic_param` in `ksplc/tests/negative/closure.kspl`).
 
 **Captures are typed because the environment is a struct, whose fields need types.** Inferring them would invert the phases. Types come from the body's inference (`sema_body_infer.run`), while a struct's fields are resolved before it (Pass 3 of `sema_decl_collect.run`). A written type lets desugaring decide it alone, on the line "Why type inference is limited to local variables" already holds.
 
@@ -762,7 +835,7 @@ An anonymous function (`fn(x: I32): Bool { … }`) is lifted to a top-level `pri
 
 **A route existing is not a reason to take it.** Closures with captures are few in the tree, and omitting all four would save no lines and a negligible share of characters.
 
-Note: This is revisited only under "Whether a callback is received as a function pointer or as a `Callable`"'s condition, "when a caller needing captures appears". The mechanism, and why no route leads back from an expected type, are "Synthesizing a closure makes a KSPL source string and puts it through the same parser" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
+Note: This is revisited only under the condition in "Whether a callback arrives as a function pointer or a `Callable`". The condition is "when a caller needing captures appears". The mechanism is in [`../ksplc/docs/DESIGN-parse.md`](../ksplc/docs/DESIGN-parse.md), with why no route leads back from an expected type. Its heading is "A closure is synthesized as source for the same parser".
 
 **Only one- and two-argument `Callable`s exist** (`std/lang.kspl`). With no variadic generics (generics taking any number of type arguments), `Callable` cannot take the argument count as a type argument. `std/seq` needs no more than two, so `Callable3` and beyond are not added ahead on "it would be handy".
 
@@ -770,17 +843,17 @@ Note: This is revisited only under "Whether a callback is received as a function
 
 * **It cannot be carried out.** Where the writer must decide the environment's lifetime, put the captures in a `struct` and pass that as an argument (docs/SPEC-language.md appendix A).
 * **The call goes through a vtable**, one level more than an anonymous function's direct call.
-* **A closure cannot be captured.** A capture points at the body a name refers to, so it would take in the environment struct, not a `Callable` (composition passes an argument instead; docs/SPEC-language.md §8.1.3). Say so in the diagnostic, or the user reads `_anon_env_N`, a type name they never wrote (`append_closure_capture_note` in `ksplc/sema/session/ctx.kspl`).
-* **It cannot be placed at the top level**, even with zero captures: the environment is a temporary on the caller's frame (`block_depth` in `ksplc/parse/desugar.kspl` decides it, and a diagnostic says so). So a reused predicate cannot be given a name. A function pointer can be named once and passed from several functions, while an API taking a `Callable` needs a closure in each function using it.
+* **A closure cannot be captured.** A capture points at the body a name refers to. So it would take in the environment struct, not a `Callable`. Composition passes an argument instead (docs/SPEC-language.md §8.1.3). Say so in the diagnostic, or the user reads `_anon_env_N`, a type name they never wrote (`append_closure_capture_note` in `ksplc/sema/session/ctx.kspl`).
+* **It cannot be placed at the top level**, even with zero captures. The environment is a temporary on the caller's frame. `block_depth` in `ksplc/parse/desugar.kspl` decides it, and a diagnostic says so. So a reused predicate cannot be given a name. A function pointer can be named once and passed from several functions. An API taking a `Callable` needs a closure in each function using it.
 * **Diagnostics can name synthesized declarations absent from the source** (`_anon_env_N` / `_anon_env_new_N` / `_anon_env_v_N`), placed where the closure was written.
 * **An outer name used in an anonymous function's body gives `undefined path or identifier`.** That suggests a typo, so the diagnostic adds that capture is impossible (`append_anon_fn_capture_note` in `ksplc/sema/session/ctx.kspl`).
   * A failed name has two reporting points (an undefined identifier, an undefined callee), so the wording is held in one place.
 
 **The notation does not collide with the function-pointer type.** The type `fn(args): return` and an anonymous function differ only in whether a body block follows. The missing name after `fn` sets both apart from a definition (`decl_fn`), so one token of lookahead decides it.
 
-**The function-pointer type cannot be withdrawn.** It serves an `extern "C"` signature, a hook stored in a `struct` field or a top-level variable, and a context with no allocator. None of these has anywhere to put an environment, for the reason a trait value cannot cross the C boundary ("The FFI boundary check looks inside the type").
+**The function-pointer type cannot be withdrawn.** It serves an `extern "C"` signature, a hook stored in a `struct` field or a top-level variable, and a context with no allocator. None of these has anywhere to put an environment. The reason is the one for which a trait value cannot cross the C boundary ("The FFI boundary check looks inside the type").
 
-### Whether a callback is received as a function pointer or as a `Callable`
+### Whether a callback arrives as a function pointer or a `Callable`
 
 **A function that takes a callback takes a `Callable` only if callers need to give it captures; otherwise it takes a plain function pointer.** Being a predicate does not make it a `Callable`. Keeping both kinds is selective extensibility, not duplication.
 
@@ -790,13 +863,13 @@ Note: This is revisited only under "Whether a callback is received as a function
 | No | A function pointer | `std/fs`'s `skip_dir` (its natural predicate is a fixed set of names such as `.git` / `out`), `ksos`'s `on_idle` |
 | It crosses the C boundary | A function pointer, **with no choice** | `std/thread.spawn`'s `entry`, which goes to `pthread_create` (`check_ffi_safety` stops a trait value) |
 
-**Moving a callback that needs no captures to `Callable` shrinks what can be written**, since a closure cannot be named and reused ("Why capture is made explicit and escape is forbidden"). `ksos`'s `on_idle` takes `semihost_console`'s `exit` from each demo's `ksos_main`; as a `Callable` it would need the same closure in every one.
+**Moving a callback that needs no captures to `Callable` shrinks what can be written.** A closure cannot be named and reused ("Why capture is made explicit and escape is forbidden"). `ksos`'s `on_idle` takes `semihost_console`'s `exit` from each demo's `ksos_main`; as a `Callable` it would need the same closure in every one.
 
-**The judgment changes only "when a caller needing captures appears".** Only then is a zero-capture closure in a top-level `const` (a closure that can be named) worth weighing. Do not add it first. The LLVM backend lacks the ground for it (a fat pointer cannot be folded into a static initializer, stopping with `this global initializer is not a compile-time constant`), so it would cost about as much as making a function pointer placeable at global scope.
+**The judgment changes only "when a caller needing captures appears".** Only then is a zero-capture closure in a top-level `const` (a closure that can be named) worth weighing. Do not add it first. The LLVM backend lacks the ground for it. A fat pointer cannot be folded into a static initializer, and the build stops with `this global initializer is not a compile-time constant`. So it would cost about as much as making a function pointer placeable at global scope.
 
 ### Where it is fine to move to `std/seq`
 
-A chain such as `xs.where(…).select(…)` from `std/seq` may replace a hand-written loop over a `List` in ordinary code. Keep hand-written loops in the compiler's inner loops and in `std/`, `ksos/` and `ksai/`.
+A chain such as `xs.where(…).select(…)` from `std/seq` can replace a hand-written loop over a `List` in ordinary code. Keep hand-written loops in the compiler's inner loops and in `std/`, `ksos/` and `ksai/`.
 
 **A chain of `where` / `select` adds no allocation** ("Iteration" in [`DESIGN-principles.md`](DESIGN-principles.md)), so it does the work of a hand-written `for`. Only `to_list` allocates. A place using the chain twice needs it, since a second pass runs the predicate again per element. `order_by` / `distinct` stay eager and allocate a `List`.
 
@@ -823,27 +896,27 @@ big: = count_over(xs, over)
 
 A `fn` right behind a call's `)` is an error whose Note names both forms (`forbidden_spelling_hint` in `ksplc/parse/syntax_msg.kspl`). "Features not carried" in [`SPEC-language.md`](SPEC-language.md) lists it.
 
-**What would reopen it**: calls that read as statements of their own, written many times over (SwiftUI's view builders, Kotlin's type-safe builders), where naming each closure first would become the bulk of the text. KSPL writes none.
+**What would reopen it**: calls that read as statements of their own, written many times over (SwiftUI's view builders, Kotlin's type-safe builders). There, naming each closure first would become the bulk of the text. KSPL writes none.
 
-### A function's name in a comparison takes the other side's type
+### A compared function's name takes the other side's type
 
-`twice == f` and `f == twice` are the same comparison: the name of a function, written on either side, takes the function type of the other side and is checked against it. Two names (`twice == thrice`) are a compile error that says to bind one side to a variable of a function type first. A function value takes `==` and `!=` and no other operator.
+The rules are "8.1 Definitions" in [`SPEC-language.md`](SPEC-language.md); this section holds why.
 
-**A function's name takes its type from where it is written**: an expected function type, or, passed to a generic parameter or bound to a declaration with no type, the function type of the function it names ("A generic function used as a value names its specialization"). In a comparison the position is the other side, and `==` asks the same question in either order, so the order the sides are written in cannot decide whether the name has a type. The other side is typed first, whichever it is.
+**A function's name takes its type from where it is written** ("A generic function used as a value names its specialization"). In a comparison, the position is the other side. `==` asks the same question in either order, so the order the sides are written in cannot decide whether the name has a type. The other side is typed first, whichever it is.
 
-**Two names are refused, not compared**, even when their signatures agree. Neither side gives the other a type, and a comparison is neither a generic parameter nor a declaration, the positions that take a type from the function a name names ("A generic function used as a value names its specialization"). The answer is in the text as well: which functions two names stand for is known where they are written. Binding one side (`f: = twice`) costs a line and fixes the type both are compared at.
+**Two names are refused, not compared**, even when their signatures agree. Neither side gives the other a type. Only a generic parameter or a declaration takes a type from the function that a name names, and a comparison is neither. See "A generic function used as a value names its specialization". The answer is in the text as well: which functions two names stand for is known where they are written. Binding one side (`f: = twice`) costs a line and fixes the type both are compared at.
 
-**An address has no order and no arithmetic that means anything.** Where two functions sit is the linker's choice, C leaves ordering them undefined, and an address moved by an offset is no function. So `<`, `+`, a unary `-` or `!`, and a compound assignment (`f += g`) are compile errors on a function value; a null check is `f == null`.
+**An address has no order and no arithmetic that means anything**, which is why a function value takes `==` and `!=` alone. Where two functions sit is the linker's choice, C leaves ordering them undefined, and an address moved by an offset is no function.
 
 **What is given up**: sorting function values by address, as a table's keys. Where an order is wanted, cast to an integer first (`U64::f`).
 
 ### A function's name has no size
 
-`sizeof(twice)` is a compile error, as is a function's name where a type goes (`x: twice`). The message names what answers the question its writer most likely had: `sizeof(fn(x: I32): I32)`, the size of a pointer to a function, which is the same for every function type.
+`sizeof(twice)` is a compile error, as is a function's name where a type goes (`x: twice`). The message names what answers the question its writer most likely had: `sizeof(fn(x: I32): I32)`. That is the size of a pointer to a function, which is the same for every function type.
 
-**`sizeof` gives a function's name no type** ("A function's name in a comparison takes the other side's type"), so it has nothing to measure. A variable holding a function does have a type, the function type it was declared with, and `sizeof(f)` measures it.
+**`sizeof` gives a function's name no type** ("A compared function's name takes the other side's type"), so it has nothing to measure. A variable holding a function does have a type, the function type it was declared with, and `sizeof(f)` measures it.
 
-**"The size of a function" has no one meaning.** It could be the size of a pointer to it, the size of its machine code, or, reading the name the way a call is read, the size of what it returns. Each answer is right for some reader and silently wrong for the others; the refusal costs one rewrite and leaves no reader with a wrong number.
+**"The size of a function" has no one meaning.** It could be the size of a pointer to it, or the size of its machine code. Reading the name the way a call is read, it could be the size of what it returns. Each answer is right for some reader and silently wrong for the others. The refusal costs one rewrite and leaves no reader with a wrong number.
 
 **What is given up**: nothing that cannot be written. The size of a pointer to a function is `sizeof` of a function type; the size of its result is `sizeof` of the result type.
 
@@ -851,41 +924,45 @@ A `fn` right behind a call's `)` is an error whose Note names both forms (`forbi
 
 `(fn(x: I64): I64)::f` for an `f: fn(x: I32): I32` is a compile error, as is any `::` between function types whose parameters or result differ. A cast to the same signature, the parameters' names or an alias aside, is a copy.
 
-**A call through the result is undefined, and nothing would show it.** The caller lays out the arguments and reads the result as the new type says, while the function takes and gives them as it was written: an `I64` read where an `I32` was passed, a result read from a function that returns none. C compiles such a cast without a warning, and the program goes wrong only when the call runs, often far from the cast. A conversion that is right is a function of the wanted signature calling the original, which states what happens to each argument.
+**A call through the result is undefined, and nothing would show it.** The caller lays out the arguments and reads the result as the new type says. The function takes and gives them as it was written. So an `I64` is read where an `I32` was passed, or a result is read from a function that returns none. C compiles such a cast without a warning, and the program goes wrong only when the call runs, often far from the cast. A conversion that is right is a function of the wanted signature calling the original, which states what happens to each argument.
 
-**An address arriving from C stays reachable.** A function pointer handed over as `Void@` (a symbol looked up at run time, a slot in a C table) becomes a function type by a cast from `Void@`, since nothing on the KSPL side knows its signature to compare. That cast states that the writer vouches for the signature; a cast from another function type would state the opposite of what the compiler can see.
+**An address arriving from C stays reachable.** A function pointer can be handed over as `Void@` (a symbol looked up at run time, a slot in a C table). It becomes a function type by a cast from `Void@`, since nothing on the KSPL side knows its signature to compare. That cast states that the writer vouches for the signature. A cast from another function type would state the opposite of what the compiler can see.
 
 **What is given up**: reinterpreting one function type as another directly. Where C code demands it (a callback slot typed for another signature), going through `Void@` spells the step out in two casts.
 
 ## Ownership and lifetime
 
-**KSPL does not prove at compile time that every pointer stays valid, as Rust's borrow checker does, so what the language protects has to be chosen.** It protects what local data flow alone can follow: what happens to a value inside one function, read from that function's code alone. The rest is stated as the writer's responsibility (Principle 8).
+**KSPL does not prove at compile time that every pointer stays valid, as Rust's borrow checker does. So what the language protects has to be chosen.** It protects what local data flow alone can follow: what happens to a value inside one function, read from that function's code alone. The rest is stated as the writer's responsibility (Principle 8).
 
 | Section | What the language does | What stays the writer's |
 | :-- | :-- | :-- |
 | 4.1 | Stops an accidental copy of an owning handle, such as a lock or a file (`Move_only`) | A duplicate made through a pointer |
 | 4.2 | Runs a `defer` on the variables as they are when the scope ends | Copying a value to keep it as it was at registration |
-| 4.3 | Stops a pointer into the frame leaving by `return` / `throw`, and one the compiler would make unseen leaving by a store into a global or behind a pointer as well | Storing `x@` of a local; an escape through a call or a struct field set afterwards |
+| 4.3 | Stops a pointer into the frame leaving by `return` / `throw`. Also stops a pointer the compiler would make unseen from leaving by a store into a global or behind a pointer | Storing `x@` of a local; an escape through a call or a struct field set afterwards |
 | 4.4 | Warns where a block can be left before the `defer` that frees a value | A value with no `defer` at all |
 | 4.5 | Keeps a counted value a `switch` arm binds alive for the whole arm | A pointer to the binding (`a@`) kept past the arm |
 
 **Raw pointers are set apart rather than banned.** `T@` is a first-class type, and unchecked access has its own form, `(p + i)$` (docs/SPEC-language.md §6.2.1), so C-level control need not move into a library.
 
-**What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0601] and [I0602], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
+**What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0601] and [I0602], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
 
 ### Why there is no borrow checker, only a move-only marker
 
 KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` value is handed over, the old name cannot be used again.
 
-Conformance to `Move_only` forbids implicitly copying an owning handle, such as an OS lock or a file descriptor, where a duplicate means a double free (docs/SPEC-language.md §5.4). Rust's borrow checker is not adopted.
+Conformance to `Move_only` forbids implicitly copying an owning handle, such as an OS lock or a file descriptor. There a duplicate means a double free (docs/SPEC-language.md §5.4). Rust's borrow checker is not adopted.
 
-**Why no borrow checker**: Rust's borrow checker proves that no reference outlives the data it points at, and that no two places change the same data at once. That proof tracks an order of magnitude more: it infers the region of code each reference is valid in, and it excludes aliases (two live references to one place where one writes). It would also reject the raw pointers (`T@`) KSPL code uses routinely. Move-only tracks one thing, "this binding can no longer be read", and local data flow suffices for that.
+**Why no borrow checker**: Rust's borrow checker proves that no reference outlives the data it points at. It also proves that no two places change the same data at once. That proof tracks an order of magnitude more. It infers the region of code each reference is valid in. It excludes aliases (two live references to one place where one writes). It would also reject the raw pointers (`T@`) KSPL code uses routinely. Move-only tracks one thing, "this binding can no longer be read", and local data flow suffices for that.
 
 **Why a move rather than a ban on copying**: a ban makes construction impossible. `Mutex<|T|>::{ .mutex = m, … }` copies `m`, and so does binding the result of `Raw_mutex.new()`. Ownership passes there and leaves no duplicate, so what fits is a move invalidating the original.
 
-**Which reads are moves**: the rule lists the reads that do not duplicate: a method's or field's receiver and the target of `@` / `$` / `[` (docs/SPEC-language.md §5.4). Every other read as a value is a move. Listing the moves instead (assignment, arguments, struct literals, `return`) would be longer, and a position added later would be easy to miss.
+**Which reads are moves**: the rule (docs/SPEC-language.md §5.4) lists the reads that do not duplicate. They are a method's or field's receiver, and the target of `@` / `$` / `[`. Every other read as a value is a move. Listing the moves instead (assignment, arguments, struct literals, `return`) would be longer, and a position added later would be easy to miss.
 
-**What is given up**: duplication through a pointer goes undetected, so the check is not sound, meaning it does not catch every case (the limit is stated in docs/SPEC-language.md §5.4).
+**Why a field moves on its own, rather than taking its binding with it**: a struct can hold more than one owning handle. Handing one over while keeping the others is ordinary work (a pair of pipe ends, one given to a child process). Three answers were possible. Refusing to move a field at all forces the whole struct to be taken apart by a function written for it. Moving the whole binding on a field's move refuses the other fields for no reason. Tracking the field's path costs one path per read of a `Move_only` field, which is rare, and frees both. So the path is tracked. The moved field, what lies below it, and the binding read as a whole are refused. A new value in the field revives it, as one in the binding does. Only a path inside the binding's own value is tracked. A field reached through a pointer lies in memory the binding does not own, which is the pointer limit below.
+
+**Why a loop's body is followed until nothing changes**: the body's end leads back to its start. So a move on one pass meets the next pass's read. Following the body once, from the state before the loop, can never see that. The analysis walks the body again from the state its end leaves, until the state at its start stops changing. Moves and releases only accumulate, so this ends, mostly after one walk. The report on a move found that way says it came from an earlier pass. The line that moved the value stands below the use, where a reader would not look.
+
+**What is given up**: duplication through a pointer goes undetected. So the check is not sound, meaning it does not catch every case. The limit is stated in docs/SPEC-language.md §5.4.
 
 ### Why `defer` has no capture list
 
@@ -923,7 +1000,7 @@ Caution: **Should freezing at registration ever be needed, do not spell it `defe
 
 ### Which pointers into a frame are stopped from leaving it
 
-A pointer *dangles* when what it points at is gone: here, a local variable after its function has returned and its frame (the function's local storage) is folded. Two ways out are checked, `return` / `throw` and a store into a place that outlives the frame, and a pointer is refused at each only where one function's code shows the danger and the refusal is always right.
+A pointer *dangles* when what it points at is gone. Here, that is a local variable after its function has returned and its frame (the function's local storage) is folded. Two ways out are checked: `return` / `throw`, and a store into a place that outlives the frame. At each, a pointer is refused only where one function's code shows the danger. There the refusal is always right.
 
 | How the pointer leaves | A pointer the compiler makes unseen: a trait value, a slice over a local array | An address written with `@`: `x@`, `a[0]@`, `s.f@` |
 | :-- | :-- | :-- |
@@ -938,11 +1015,11 @@ priv fn make(): Shape
     return s // <- not one pointer operation is written
 ```
 
-It lowers to `return (Shape){ .obj = (void*)&s, … };`, yet `Shape` looks like a value type and no `@` or `$@` is written. **Responsibility can only be assigned for what the writer can see.** A slice is the same: casting a fixed-length array to a slice, or building one from a run of elements, makes the compiler synthesize the descriptor's pointer. So both are refused wherever they leave.
+It lowers to `return (Shape){ .obj = (void*)&s, … };`, yet `Shape` looks like a value type and no `@` or `$@` is written. **Responsibility can only be assigned for what the writer can see.** A slice is the same. Casting a fixed-length array to a slice makes the compiler synthesize the descriptor's pointer. So does building a slice from a run of elements. So both are refused wherever they leave.
 
-**At `return` / `throw`, a written `@` is refused too.** `return x@` hands the caller the address of storage that is folded as the function returns. No caller can use it, so the program is wrong whatever it does next, and the refusal turns away nothing that works. Left to the C compiler, the mistake would come out as its warning that a stack address is returned, which the build must not print (Principle 2), and then as garbage read from a dead frame.
+**At `return` / `throw`, a written `@` is refused too.** `return x@` hands the caller the address of storage that is folded as the function returns. No caller can use it, so the program is wrong whatever it does next, and the refusal turns away nothing that works. Left to the C compiler, the mistake would come out as its warning that a stack address is returned. The build must not print that (Principle 2). Then it would come out as garbage read from a dead frame.
 
-**A store of a written `@` stays the writer's.** Keeping a local's address in a place that outlives the frame is right when the place is cleared before the function returns. A compiler pass points a shared context at a cache that is its own local and takes the pointer back at the end of the pass; a kernel links a waiting function's own queue entry, a local, into a shared wait queue and unlinks it before the wait returns. Whether the place is cleared is a fact of control flow, which a check following names cannot see, so refusing the store would forbid both. The `@` on the page shows the danger, and the one who wrote it is the one to clear the place. An invisible pointer is refused at a store all the same: nobody wrote it there, so nobody knows to clear it.
+**A store of a written `@` stays the writer's.** Keeping a local's address in a place that outlives the frame is right when the place is cleared before the function returns. A compiler pass points a shared context at a cache that is its own local. It takes the pointer back at the end of the pass. A kernel links a waiting function's own queue entry, a local, into a shared wait queue. It unlinks the entry before the wait returns. Whether the place is cleared is a fact of control flow, which a check following names cannot see. So refusing the store would forbid both. The `@` on the page shows the danger, and the one who wrote it is the one to clear the place. An invisible pointer is refused at a store all the same: nobody wrote it there, so nobody knows to clear it.
 
 | Returned or thrown | Stopped? | Why |
 | :-- | :-- | :-- |
@@ -956,21 +1033,28 @@ It lowers to `return (Shape){ .obj = (void*)&s, … };`, yet `Shape` looks like 
 
 Caution: **Do not reject a call's result, and do not widen the check to "do not return a slice" or "do not return a pointer".** The compiler does not know where `builder.slice()` or `arena.alloc()` points, and returning allocated memory or what a pointer parameter points at is legitimate.
 
-**The forms are found anywhere inside the value**: a struct's field, an enum's payload, a `T!E`'s value, either branch of `a if c else b`, a pointer stepped by an integer, a cast between pointers or slices (`g = .some(c)`, `p.v = View::{ .s = U8[]::a }`, `return .some(x@)`). A store's place outlives the frame when it is a global, or lies behind a pointer (a field reached through a `T$@`, `p$`, a slice's element): a global outlives every frame, and where a pointer leads is not known, so the place is taken as outliving the frame.
+**The forms are found anywhere inside the value** (`g = .some(c)`, `p.v = View::{ .s = U8[]::a }`, `return .some(x@)`):
 
-**What is not checked** needs real escape analysis, and stays the writer's ("Why there is no borrow checker, only a move-only marker"'s line: follow only what is cheap and certainly correct):
+* a struct's field, an enum's payload, or a `T!E`'s value;
+* either branch of `a if c else b`;
+* a pointer stepped by an integer;
+* a cast between pointers or slices.
 
-* **A value handed to a call that stores it or returns it** (`list.push(c)`, `return id(x@)`). The callee sees a parameter, which may point anywhere, and the caller sees an ordinary argument.
+A store's place outlives the frame when it is a global. It does so too when it lies behind a pointer (a field reached through a `T$@`, `p$`, a slice's element). A global outlives every frame. Where a pointer leads is not known, so the place is taken as outliving the frame.
+
+**What is not checked** needs real escape analysis, and stays the writer's. The line is the one in "Why there is no borrow checker, only a move-only marker": follow only what is cheap and certainly correct.
+
+* **A value handed to a call that stores it or returns it** (`list.push(c)`, `return id(x@)`). The callee sees a parameter, which can point anywhere, and the caller sees an ordinary argument.
 * **A local struct whose field is set afterwards**, then returned or stored (`h.s = U8[]::a; return h`, `h.p = x@; return h`). Assigning a field does not mark the struct.
 * **A written `@` stored** (`g = x@`), for the reason above.
 
 **What is given up: a pointer into this very frame counts as outliving it.** `q: = h@; q.c = …` is refused, as is a callback installed in a context reached through a pointer and removed before the function returns. Telling these apart would mean following where each pointer points. A closure that has to reach a callee is passed to it as an argument.
 
-**A local variable carries the mark along names.** `t: Shape = s; return t` hides the upcast one line up, and is as invisible as `return s`; `p: = x@; return p` hides the `@` as well. So a local set from one of the forms, by its declaration or by `x = …` (from another marked local too), is refused where that form is: at `return` / `throw`, and, set from an invisible pointer, at a store that outlives the frame as well. The mark follows names, not control flow, and is never cleared: a marked local later set to heap memory is still refused, the safe side of a check that does not see which assignment ran last. A struct field assigned afterwards (`h.s = U8[]::a`), a call (`return id(s)`) and a pointer are not followed.
+**A local variable carries the mark along names.** `t: Shape = s; return t` hides the upcast one line up, and is as invisible as `return s`; `p: = x@; return p` hides the `@` as well. So take a local set from one of the forms, by its declaration or by `x = …` (from another marked local too). It is refused where that form is: at `return` / `throw`. Set from an invisible pointer, it is refused at a store that outlives the frame as well. The mark follows names, not control flow, and is never cleared. A marked local later set to heap memory is still refused. That is the safe side of a check that does not see which assignment ran last. A struct field assigned afterwards (`h.s = U8[]::a`), a call (`return id(s)`) and a pointer are not followed.
 
 ### Why a field `#packed` leaves under-aligned has no address
 
-**A field that `#packed` puts at an unaligned position can be read and written through any path, but nothing may take its address.** Where the program reads or writes the field through its path, the compiler knows the field's alignment and makes the access byte-wise. A pointer carries no such knowledge: an `I32@` promises four bytes, so every access through it is a word access. At an odd address that faults on a Cortex-M0, and C and LLVM leave it undefined everywhere (x86 merely tolerates it).
+**A field that `#packed` puts at an unaligned position can be read and written through any path, but nothing can take its address.** Where the program reads or writes the field through its path, the compiler knows the field's alignment and makes the access byte-wise. A pointer carries no such knowledge: an `I32@` promises four bytes, so every access through it is a word access. At an odd address that faults on a Cortex-M0, and C and LLVM leave it undefined everywhere (x86 merely tolerates it).
 
 | Way weighed | What it costs | Verdict |
 | :-- | :-- | :-- |
@@ -979,29 +1063,33 @@ Caution: **Do not reject a call's result, and do not widen the check to "do not 
 | A hidden copy for a receiver that only reads | A method returning a pointer into its receiver (`Index_ref.at_ref`) would point into the copy, and nothing on the page says so | Not taken |
 | A compile error naming the fix | The writer copies the field into a local and assigns it back | **Taken** |
 
-**The implicit forms are refused along with `@`**: a method, an operator or a subscript whose receiver is a pointer, and a slice cast of an array field. Each makes the pointer with no `@` on the page, as the upcast in the section above does, so refusing `@` alone would leave the same fault a call away (Principle 8). ARC counts a field through its address on every copy and release, so an ARC-managed field left under-aligned is refused once, where the struct declares it.
+**The implicit forms are refused along with `@`.** They are a method, an operator or a subscript whose receiver is a pointer, and a slice cast of an array field. Each makes the pointer with no `@` on the page, as the upcast in the section above does. So refusing `@` alone would leave the same fault a call away (Principle 8). ARC counts a field through its address on every copy and release. So an ARC-managed field left under-aligned is refused once, where the struct declares it.
 
-**The line is the alignment, not the attribute.** A one-byte field, a field of a nested `#packed` struct's type, and a field at a multiple of its alignment in a struct both `#packed` and `#align(N)` keep their type's alignment, so their address is as good as any other and passes.
+**The line is the alignment, not the attribute.** These fields keep their type's alignment, so their address is as good as any other and passes:
 
-**What is given up**: calling a method on such a field directly. The copy costs a line or two where it happens, and for a method that writes its receiver (`Self$@`), assigning the copy back is the writer's to remember.
+* a one-byte field;
+* a field of a nested `#packed` struct's type;
+* a field at a multiple of its alignment in a struct both `#packed` and `#align(N)`.
 
-### Why an early exit before a `defer` is warned about, and how narrowly
+**What is given up**: calling a method on such a field directly. The copy costs a line or two where it happens. For a method that writes its receiver (`Self$@`), assigning the copy back is the writer's to remember.
 
-**If a block can be left (by `!`, `return`, `throw`, `break` or `continue`) after an `Owned` value is bound but before the `defer` in the same block that frees it, the compiler warns ([W0109]).** That path leaves before the `defer` is registered, so what was acquired leaks. The language does not stop it, since a `defer` is its own statement ("Notations not carried" in [`DESIGN-principles.md`](DESIGN-principles.md)).
+### Why an early exit before a `defer` warns, and how narrowly
 
-* **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape, and calling it a leak would be a false report (the exemptions are under [W0109] in `ksplc/docs/SPEC-tools.md`).
+**A `defer` is its own statement. So the language cannot stop a way out from standing between an acquisition and its cleanup** ("A `defer` is not joined onto a declaration" in [`DESIGN-principles.md`](DESIGN-principles.md)). A warning asks about it instead. What it reports, and what it exempts, are [W0109] in `ksplc/docs/SPEC-diagnostics.md`.
+
+* **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape. Calling it a leak would be a false report.
 * **A shape rather than every path.** Checkers that follow a resource along every path pay in false reports. A rule read off the code as written, like Error Prone's `MustBeClosed`, does not. The gap before a `defer` is such a rule.
 * **`Owned` says which values are asked about.** `Owned` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-language.md §8.4.5), so a type taking part in one takes part in the other.
 
 **What is given up**: a value with no later `defer` in the block, never freed at all, is not this warning's to find.
 
-### Why a binding a `switch` arm takes out of a value holds a count of its own
+### Why a `switch` arm's binding holds its own count
 
-A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload, so ARC counts it as any other copy: one retain where the arm starts, one release wherever it ends (docs/SPEC-language.md §8.4.2).
+A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload. So ARC counts it as any other copy: one retain where the arm starts, one release wherever it ends (docs/SPEC-language.md §8.4.2).
 
-**The alternative is a borrow**: the binding reads the payload in place and owns nothing. That costs no count, but the payload then lives only as long as the subject holds it, and an arm can let the subject go while the binding is still named (`s = .none`, a call that empties the container the subject came from). Proving that an arm never does so is a borrow checker's work, which KSPL does not do ("Why there is no borrow checker, only a move-only marker"). Unproven, one assignment in the arm frees the value under the binding, with nothing on the page to show it.
+**The alternative is a borrow**: the binding reads the payload in place and owns nothing. That costs no count, but the payload then lives only as long as the subject holds it. An arm can let the subject go while the binding is still named. Examples are `s = .none`, and a call that empties the container the subject came from. Proving that an arm never does so is a borrow checker's work. KSPL does not do it ("Why there is no borrow checker, only a move-only marker"). Unproven, one assignment in the arm frees the value under the binding, with nothing on the page to show it.
 
-**The same holds for every copy the writer does not spell out.** Each branch of `x if c else y` and a `catch`'s substitute hands over a count of its own, so the value is counted the same whichever way it was reached.
+**The same holds for every copy the writer does not spell out.** Each branch of `x if c else y` and a `catch`'s substitute hands over a count of its own. So the value is counted the same whichever way it was reached.
 
 **What is given up**: one retain and one release per counted binding per arm, atomic for an `Arc`. `for x in` already pays the same for each element it binds.
 
@@ -1009,7 +1097,7 @@ A `switch` arm's binding, and `if v: = o`'s, is a copy of the payload, so ARC co
 
 ### Why data races are not prevented by the type system
 
-KSPL's types do not stop two threads from touching the same data at once (a *data race*). A marker could check only one of the two ways data reaches another thread. Instead, a type's name says whether it may be shared (`Arc`, `Mutex`), and a gate runs the tests under ThreadSanitizer to catch the races they reach.
+KSPL's types do not stop two threads from touching the same data at once (a *data race*). A marker could check only one of the two ways data reaches another thread. Instead, a type's name says whether it can be shared (`Arc`, `Mutex`), and a gate runs the tests under ThreadSanitizer to catch the races they reach.
 
 KSPL's type system **places no constraint on values crossing a thread boundary**. `thread.Thread.spawn<|T|>` requires nothing of `T`, and there is no marker like Rust's `Send` / `Sync` or Swift's `Sendable` (`Thread_shareable`).
 
@@ -1032,28 +1120,39 @@ Worse, the single-thread `Rc<|T|>` also passes in a global, and running it SIGSE
 
 **Structural derivation decides it.** Derivation counts a type nobody reviewed as conforming. `struct Counter { n: I32 }` conforms, and `c.n += 1` racing from two threads passes with no diagnostic and still ends below the count. Where it does not protect, the marker would manufacture false assurance (Principle 8).
 
-**What is given up, and what stands in its place**: the type system cannot stop the one point `spawn(worker, rc@)`, so the type's name carries the choice instead (Principle 8, "The order of decision").
+**What is given up, and what stands in its place**: the type system cannot stop the one point `spawn(worker, rc@)`. So the type's name carries the choice instead (Principle 8, "The order of decision").
 
-**A gate finds the races the tests reach.** `make test-race` builds the programs that start threads with ThreadSanitizer and fails on any report (what it runs is "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). ThreadSanitizer is a compiler option that records, while the program runs, which thread touched which memory. Without the gate, a race shows only as a wrong result some runs later, a counter ending low or an `Rc` crashing, with nothing naming the two accesses.
+**A gate finds the races the tests reach.** `make test-race` builds the programs that start threads with ThreadSanitizer and fails on any report (what it runs is "What each platform runs" in [`SPEC-gates.md`](SPEC-gates.md)). ThreadSanitizer is a compiler option that records, while the program runs, which thread touched which memory. Without the gate, a race shows only as a wrong result some runs later: a counter ending low, or an `Rc` crashing. Nothing names the two accesses.
 
-* **It watches every channel at once.** A marker would see `spawn`'s argument alone; the sanitizer sees an access through a global, an argument or a raw pointer alike, the bypass above included, and names both accesses by their `.kspl` lines and the threads they came from.
+* **It watches every channel at once.** A marker would see `spawn`'s argument alone. The sanitizer sees an access through a global, an argument or a raw pointer alike, the bypass above included. It names both accesses by their `.kspl` lines and the threads they came from.
 * **It is a check on what ran, not a guarantee** (Principle 8). A race no test reaches stays unseen, so the gate is not read as "the program has no race", only as "no test hit one".
-* **Nothing is suppressed.** std, the runtime and the program are compiled from source into one unit, so nothing the sanitizer watches is uninstrumented. The false reports that a prebuilt library gives in C++, and an uninstrumented standard library in Rust, do not arise, and a report is a finding to fix.
-* **The price is paid by the gate, not the language**: a sanitized run takes several times the time and memory, so the gate runs once, in the Linux job, whose image holds the sanitizer. A program left out of it is named with its reason, so what the gate does not run stays visible.
+* **Nothing is suppressed.** std, the runtime and the program are compiled from source into one unit, so nothing the sanitizer watches is uninstrumented. The false reports that a prebuilt library gives in C++, and an uninstrumented standard library in Rust, do not arise. A report is a finding to fix.
+* **The price is paid by the gate, not the language.** A sanitized run takes several times the time and memory. So the gate runs once, in the Linux job, whose image holds the sanitizer. A program left out of it is named with its reason, so what the gate does not run stays visible.
 
 **`Move_only` escapes this criticism**: a global does not bypass the local data flow it follows ("Why there is no borrow checker, only a move-only marker").
 
 ## Visibility
 
-**`priv` answers one question: which files may write this name.** "Why a narrow type may not sit in a position with wide visibility" and "Why a typedef cannot be published wider than its target" close holes where the mark could be written and not hold. "Visibility and linkage are separate axes" separates it from the question it is most often confused with. "Why a method on a built-in type needs its file imported" is the other gate on reaching a name: a method another file adds is reached only where that file is imported.
+**`priv` answers one question: which files can write this name.** Two sections close holes where the mark could be written and not hold:
 
-### Why a narrow type may not sit in a position with wide visibility
+* "Why a narrow type cannot stand where visibility is wide";
+* "Why a typedef cannot be published wider than its target".
 
-A `pub` function may not return a `priv` type. Otherwise code outside the file would hold a value of a type it is not even allowed to name.
+"Visibility and linkage are separate axes" separates it from the question it is most often confused with. "Why a built-in type's method needs its file imported" is the other gate on reaching a name. A method another file adds is reached only where that file is imported.
+
+### Why a narrow type cannot stand where visibility is wide
+
+A `pub` function cannot return a `priv` type. Otherwise code outside the file would hold a value of a type it is not even allowed to name.
 
 A `priv` type in a `pub` function's return (`pub fn open(): File_stream$@`) passes the value to code that cannot name the type. That code binds it (`f: = io.open(path);`), calls its methods and reads its fields. Meanwhile whoever wrote `priv` believes the type is closed to the file. **A marker that is writable but ineffective** is an error.
 
-**Only positions where a value leaves are covered**: a function's return, a `struct`'s `pub` fields, an `enum`'s payload, a `trait`'s method prototypes, and a top-level declaration's type annotation.
+**Only positions where a value leaves are covered**:
+
+* a function's return;
+* a `struct`'s `pub` fields;
+* an `enum`'s payload;
+* a `trait`'s method prototypes;
+* a top-level declaration's type annotation.
 
 **Left out, and why**:
 
@@ -1069,9 +1168,9 @@ A `priv` type in a `pub` function's return (`pub fn open(): File_stream$@`) pass
 
 ### Why a typedef cannot be published wider than its target
 
-**A typedef may not be more visible than any type it names**, walking inside the type expression on its right: a `pub typedef` of a `priv` type is refused (the rule and its examples are "3.5.1 Visibility" in [`SPEC-language.md`](SPEC-language.md)).
+**A typedef cannot be more visible than any type it names**, walking inside the type expression on its right. A `pub typedef` of a `priv` type is refused. The rule and its examples are "3.5.1 Visibility" in [`SPEC-language.md`](SPEC-language.md).
 
-**The reason**: a typedef puts a type's name outward. A wider one lets code that cannot name the target receive its value through the typedef. That is the state "Why a narrow type may not sit in a position with wide visibility" forbids, in the shape of a `priv` on one declaration overridden by another. With visibility decided away from the declaration, how far a type reaches could no longer be read from its declaration alone.
+**The reason**: a typedef puts a type's name outward. A wider one lets code that cannot name the target receive its value through the typedef. That is the state that "Why a narrow type cannot stand where visibility is wide" forbids. Here it has the shape of a `priv` on one declaration overridden by another. With visibility decided away from the declaration, how far a type reaches could no longer be read from its declaration alone.
 
 **To keep the implementation closed and publish only the name, mark the type itself** (the same section), so no typedef is needed for it.
 
@@ -1079,14 +1178,14 @@ A `priv` type in a `pub` function's return (`pub fn open(): File_stream$@`) pass
 
 ### Visibility and linkage are separate axes
 
-`priv` decides which KSPL files may name a symbol. It does not decide whether the C symbol is hidden from the linker (C's `static`). Tying the two together breaks some correct programs, and only when the build splits the C into a different number of files.
+`priv` decides which KSPL files can name a symbol. It does not decide whether the C symbol is hidden from the linker (C's `static`). Tying the two together breaks some correct programs, and only when the build splits the C into a different number of files.
 
-"**Which translation units may use this symbol**" is a different question from the one `priv` answers. A translation unit is one C file that the C compiler compiles on its own; the linker then joins the units.
+"**Which translation units can use this symbol**" is a different question from the one `priv` answers. A translation unit is one C file that the C compiler compiles on its own; the linker then joins the units.
 
 | Question | Answered by | What decides it |
 | :-- | :-- | :-- |
-| Which KSPL files may write this name? | `priv` / `pub` (visibility) | The mark the writer puts on the declaration |
-| Which C translation units may use this symbol? | C's `static` or not (linkage) | Whether the name is unique within the file and not beyond it |
+| Which KSPL files can write this name? | `priv` / `pub` (visibility) | The mark the writer puts on the declaration |
+| Which C translation units can use this symbol? | C's `static` or not (linkage) | Whether the name is unique within the file and not beyond it |
 
 Caution: **Mixing them makes a correct program fail to build only when the number of splits changes.** ARC's `retain` / `release` are `priv fn` in `std/refcount` ("Why ARC is expressed as a trait"), yet the compiler synthesizes their calls in the user's file. Mapping `priv` straight to C's `static` makes such a call reach outside its translation unit. So it fails under `ksplc run`, which splits by core count, and passes under `ksplc a.kspl a.c`, a single unit.
 
@@ -1096,11 +1195,11 @@ Caution: **Mixing them makes a correct program fail to build only when the numbe
 
 **`priv` loses nothing**: the rule decides only what the linker sees.
 
-**Rust and Swift keep the two apart too**, each for its own constraint. KSPL reads the whole program at once, so no function gets two bodies, and whether a name is globally unique can be read off the declaration.
+**Rust and Swift keep the two apart too**, each for its own constraint. KSPL reads the whole program at once, so no function gets two bodies. Whether a name is globally unique can be read off the declaration.
 
 **In C++, which mixes them, the link fails silently, by configuration.** So the check must change the number of splits and actually link and run (`ksplc/tests/prog/split.kspl` and `ksplc/tests/suite/split_test.kspl`). A check reading the generated C lets this failure through.
 
-### Why a method on a built-in type needs its file imported
+### Why a built-in type's method needs its file imported
 
 A file can add methods to a built-in type such as `U8[]`. You can call such a method only in a file that imports the file adding it, just as for any other type.
 
@@ -1117,11 +1216,11 @@ Swift closes the same hole with `MemberImportVisibility`, and Rust, C# and Kotli
 
 **A generic's instantiation is excluded.** Its receiver can be the type argument's, and `put<|W, T: Formattable|>` in `std/lang` cannot import every file serving its bound, so the requirement would vary with the argument. A conformance (`impl I32: Formattable`) holds wherever its file is in the program, and a call through it is the generic's.
 
-**What is given up**: one import line per file using a method another file adds to a built-in type, stating a dependency the call already has.
+**What is given up**: one import line per file that uses a method another file adds to a built-in type. The line states a dependency the call already has.
 
-### A name the file cannot see is refused where it is selected
+### A name the file cannot see is refused where selected
 
-**Importing a name the file may not see is a compile error at that `import` line**: `import "p" { Hidden }`, with `Hidden` `priv` in `p` or unmarked in another package, gives `cannot access symbol 'Hidden'`. A name that does not exist is refused there too. Selecting a name changes no visibility, and the line that selects it is the one place to say so. Asked at each use instead, every road to a name had to ask again: a call, a value, a type, a constant and a struct literal each find the name their own way. Some did not ask, so a `priv` struct or constant selected from another file was used with no diagnostic, and a function's use was reported as an undefined name.
+**Importing a name the file cannot see is a compile error at that `import` line**: `import "p" { Hidden }`, with `Hidden` `priv` in `p` or unmarked in another package, gives `cannot access symbol 'Hidden'`. A name that does not exist is refused there too. Selecting a name changes no visibility, and the line that selects it is the one place to say so. Asked at each use instead, every road to a name had to ask again. A call, a value, a type, a constant and a struct literal each find the name their own way. Some did not ask. So a `priv` struct or constant selected from another file was used with no diagnostic. And a function's use was reported as an undefined name.
 
 **Rust and Java refuse it at the import as well** (`use p::Hidden` is "struct `Hidden` is private"; `import p.Hidden` is "not public in p"). A use of the name then needs no check of its own.
 
@@ -1129,11 +1228,18 @@ Swift closes the same hole with `MemberImportVisibility`, and Rust, C# and Kotli
 
 ## The boundary with C
 
-**Everything Kanso passes to C or receives from it crosses one boundary.** This chapter says which types may cross it, how C's types are received, where a binding names its C library, what standard output carries, how a library built from KSPL is shipped to C, and how the sizes ksplc folds are tied to the C compiler's.
+**Everything Kanso passes to C or receives from it crosses one boundary.** This chapter says these things:
+
+* which types can cross it;
+* how C's types are received;
+* where a binding names its C library;
+* what standard output carries;
+* how a library built from KSPL is shipped to C;
+* how the sizes ksplc folds are tied to the C compiler's.
 
 ### The FFI boundary check looks inside the type
 
-A function marked `#export` (callable from C) may not use a type whose memory layout is KSPL's own, such as a slice, even one buried inside a struct.
+A function marked `#export` (callable from C) cannot use a type whose memory layout is KSPL's own. An example is a slice, even one buried inside a struct.
 
 The list of such types is docs/SPEC-language.md §11.1.
 
@@ -1141,7 +1247,7 @@ Caution: **Do not look at the outermost layer only.** Merely wrapping (`struct W
 
 **Pointers are not followed.** A pointer is a pointer in C too, and what it points at matters only if the C code touches it. Following would fail nearly every `#export`, self-referential structs included. Cycles are cut twice over, by a visited set and a depth limit.
 
-**The LLVM backend is stricter still**: it cannot pass even a plain struct by value across the C boundary. genllvm does not implement the per-target C ABI classification, the rules for which registers or memory carry a struct (Win64 uses a hidden pointer beyond 8 bytes, SysV x86-64 works in eightbytes around a 16-byte boundary, AAPCS has the HFA case, and so on). The C backend passes it, since the C compiler does the classification ([`ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md), "Passing an aggregate is an explicit internal ABI").
+**The LLVM backend is stricter still**: it cannot pass even a plain struct by value across the C boundary. genllvm does not implement the per-target C ABI classification: the rules for which registers or memory carry a struct. Win64 uses a hidden pointer beyond 8 bytes. SysV x86-64 works in eightbytes around a 16-byte boundary. AAPCS has the HFA case, and so on. The C backend passes it, since the C compiler does the classification ([`ksplc/docs/DESIGN-backends.md`](../ksplc/docs/DESIGN-backends.md), "Passing an aggregate is an explicit internal ABI").
 
 ### What cannot be written in C's types
 
@@ -1157,7 +1263,7 @@ In an `extern` declaration, which one applies decides how it is received. Below,
 
 Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit return value is read as 64 bits. x86-64 zero-fills the upper 32 bits on a write to EAX, so `-1L` (failure) becomes `4294967295`. It slips past a "negative means failure" check, with no crash to notice.
 
-**A `long` whose every value fits in 32 bits crosses with no C between.** A parameter is `Sz`: it has `long`'s width on LP64 and on 32-bit targets, and on LLP64 Windows both take one 8-byte register or stack slot, of which the callee reads the low half. A result is `I32`: it comes back in a register, whose low 32 bits are the value whatever `long`'s width. OpenSSL's `SSL_ctrl` crosses this way (`ksbind/tls.kspl`), and so a binding needs no C file of its own. A `long` that can pass 32 bits (`ftell`'s offset, a `time_t`) cannot, and stays with the third row's C.
+**A `long` whose every value fits in 32 bits crosses with no C between.** A parameter is `Sz`: it has `long`'s width on LP64 and on 32-bit targets. On LLP64 Windows, both take one 8-byte register or stack slot, of which the callee reads the low half. A result is `I32`: it comes back in a register, whose low 32 bits are the value whatever `long`'s width. OpenSSL's `SSL_ctrl` crosses this way (`ksbind/tls.kspl`), and so a binding needs no C file of its own. A `long` that can pass 32 bits (`ftell`'s offset, a `time_t`) cannot, and stays with the third row's C.
 
 `kspl_file_size` / `kspl_mono_us` (`ksplc/gen/runtime/hosted.c`) and `kspl_path_info` / `kspl_remove_path` (`ksplc/gen/runtime/hosted_fs.c`) take the third row's way out: only fixed-width types cross. Adding one needs its LLVM backend counterpart too (`ksplc/gen/llvm/module.kspl`; `make test-conventions` watches the pair).
 
@@ -1172,7 +1278,7 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 | Decision | Why |
 | :-- | :-- |
 | 1. **A name, never a flag or a place** | A flag in the source is one machine's link line forced on every machine that builds it. Go narrows its `#cgo` flags with an allowlist, because a flag can run code at build time. A name carries no search path, plugin or option. Where to look and whether to link statically belong to the building machine, so they stay with the environment |
-| 2. **On the block, under the block's own `#cfg`** | `#cfg` keeps or drops the block whole, so the library follows the flag that keeps its declarations, written once. Apart from the block (on a line of its own at the file's head), it would link the library into a build that dropped every declaration needing it |
+| 2. **On the block, under the block's own `#cfg`** | `#cfg` keeps or drops the block whole, so the library follows the flag that keeps its declarations, written once. Apart from the block (on a line of its own at the file's head), it would link the library into a build. That build could have dropped every declaration needing it |
 | 3. **The source is the one place the name is written** | The compile writes the names of the blocks it kept, and `ksplc run` and a build linking by hand both take them from there. A copy in a Makefile would be tied to it by a comment alone, and changing one would leave the other linking the old library |
 | 4. **The order is the one a linker reading once from the left needs** | A library comes before the ones it uses, which is the order of a file's imports. Rust also passes a crate's libraries before its dependencies', and CMake also drops a repeat at its later place |
 
@@ -1182,17 +1288,17 @@ Caution: **Writing `long` as `I64` breaks silently on Windows.** The 32-bit retu
 
 * **A library named differently per OS cannot be one `#link`.** OpenSSL is `ssl` and `crypto` on a Unix-like system and under MSYS2, but `libssl` and `libcrypto` for the MSVC toolchain. No `#cfg` names the OS (the flags come from the build), so `ksbind/tls`, which names `ssl` and `crypto`, does not link there. A name that agrees works on both: clang's driver turns `-lopenblas` into `openblas.lib` on an MSVC target.
 * **Nothing is searched for, and static or dynamic is not chosen.** A library not where the linker looks fails the link, and the linker's own message names `-l<name>`.
-* **A kept block links its library whether or not a call reaches it.** Tied to use, the link line would move with the pruning of unused functions, and an edit elsewhere could drop a library the program still names.
+* **A kept block links its library whether or not a call reaches it.** Tied to use, the link line would move with the pruning of unused functions. An edit elsewhere could drop a library the program still names.
 
 ### Standard output carries the bytes a program writes
 
-**On Windows, a KSPL program writes `\n` as `\n`: the generated `main` puts the standard streams into binary mode**, standard error with standard output, after `argc`/`argv` and before the program's own code (`emit_main_function` in [`../ksplc/gen/c/root.kspl`](../ksplc/gen/c/root.kspl)). The C runtime's streams are in text mode there. Every `\n` becomes `\r\n` behind the program's back, and a line that already ends `\r\n` becomes `\r\r\n`, shown as a blank line between lines. What a program writes has to be what lands, for every KSPL program and not for the tool alone. The console is unaffected, since it makes a lone `\n` a new line itself.
+**On Windows, a KSPL program writes `\n` as `\n`. The generated `main` puts the standard streams into binary mode.** It does so for standard error with standard output, after `argc`/`argv` and before the program's own code (`emit_main_function` in [`../ksplc/gen/c/root.kspl`](../ksplc/gen/c/root.kspl)). The C runtime's streams are in text mode there. Every `\n` becomes `\r\n` behind the program's back, and a line that already ends `\r\n` becomes `\r\r\n`, shown as a blank line between lines. What a program writes has to be what lands, for every KSPL program and not for the tool alone. The console is unaffected, since it makes a lone `\n` a new line itself.
 
 **Deciding it per program does not work.** An opt-in call in one program's `main` covers that program alone. Another KSPL program speaking the same `Content-Length` framing writes `\r\r\n`, and its reader finds no `\r\n\r\n` to cut the header at. The exchange ends as "the peer closed", with nothing naming the cause. That is correct to read and wrong on one platform, the shape Principle 5 refuses. The entry point every hosted program shares leaves nothing to remember and nothing to forget.
 
-**A library built from KSPL leaves the mode to the program that links it** ("A library built from KSPL crosses as C, holding its own runtime"): the mode is the process's, and that program has chosen it for its own output.
+**A library built from KSPL leaves the mode to the program that links it** ("A KSPL library crosses as C, holding its own runtime"). The mode is the process's, and that program has chosen it for its own output.
 
-### A library built from KSPL crosses as C, holding its own runtime
+### A KSPL library crosses as C, holding its own runtime
 
 **A library shipped without its source is reached through its C interface alone**: its `#export` functions, and the plain types they name, written as C. **It holds its own copy of the runtime and of std**, which nothing outside it can see: built with `--library`, every definition but an `#export` is C's `static`. KSPL code shares KSPL types with other KSPL code as source ("Outside parts are not fetched; only their location is stated" in [`DESIGN-repository.md`](DESIGN-repository.md)). How to build, ship and use one, and what can be relied on, is "Binaries crossing the boundary" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md); this section holds why.
 
@@ -1212,9 +1318,9 @@ flowchart LR
 
 **Why a private copy, not one runtime shared between artifacts**:
 
-* **A shared copy ties every artifact to one compiler and one std.** Each must leave its runtime out, one artifact must supply it, and a library built by another version must be stopped at the link, by a version in every symbol name. Folding the duplicates needs weak symbols, which pick one definition without a word wherever the names agree. Every guard is a mark that a toolchain may honour or not, so each object format needs its own proof.
+* **A shared copy ties every artifact to one compiler and one std.** Each must leave its runtime out, and one artifact must supply it. A library built by another version must be stopped at the link, by a version in every symbol name. Folding the duplicates needs weak symbols, which pick one definition without a word wherever the names agree. Every guard is a mark that a toolchain can honour or not, so each object format needs its own proof.
 * **A private copy needs none of that.** Nothing two libraries hold can meet, so libraries from different vendors and different compiler versions sit in one program. The person linking them names no runtime and learns no rule.
-* **`static` hides a symbol on every toolchain, a static archive included.** That holds because the compiler writes a library as one translation unit. A visibility attribute leaves a static archive's symbols colliding, and an export list belongs to a linker the compiler does not run. A compiler that writes a library as many objects can hide symbols only in a shared library (a version script, a definition file), and two of its static archives collide on their copies of the standard library.
+* **`static` hides a symbol on every toolchain, a static archive included.** That holds because the compiler writes a library as one translation unit. A visibility attribute leaves a static archive's symbols colliding, and an export list belongs to a linker the compiler does not run. A compiler that writes a library as many objects can hide symbols only in a shared library (a version script, a definition file). Two of its static archives collide on their copies of the standard library.
 * **C's interface is the one every caller already links.** A C program includes a header; a KSPL program imports an `extern "C"` block. Both are written by the compilation that writes the library (`--library=`), so neither drifts from it.
 
 **What is given up**:
@@ -1222,15 +1328,14 @@ flowchart LR
 * **A closed library cannot offer KSPL's own types**: a slice, a `Result`, a trait value, a generic, a method. Its interface is C's. A library offering them ships as source, as std does.
 * **Each library carries its own runtime and std.** The parts it does not reach are dropped by the C compiler and the linker; the parts it does are paid once per library.
 * **What a KSPL program's start-up sets for the whole process is the program's** ("Standard output carries the bytes a program writes"). A library sets none of it, and writes as the program that links it writes. Each step is listed in "Building a library" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md).
-* **Every `#export` is the library's interface**, a callback passed to C (a thread's entry) included, so each is named as an API name is.
 
-### A size is the target machine's, and the C compiler checks each one ksplc folds
+### The target sets sizes; the C compiler checks folded ones
 
-**ksplc lays every value out for the machine the program will run on, named to it with `--machine`, and each size it writes into the C as a number carries a compile-time check against the C compiler's own layout.** A pointer, `Sz` and a function pointer are 8 bytes on a 64-bit machine and 4 on a Cortex-M chip or in wasm32. Where ksplc folds a size (an array's length, a constant built from another, a static `if`, `##error`, reflection's offsets), the folded number is what the program runs with, so it must be that machine's.
+**ksplc lays every value out for the machine the program will run on, named to it with `--machine`.** **Each size it writes into the C as a number carries a compile-time check against the C compiler's own layout.** A pointer, `Sz` and a function pointer are 8 bytes on a 64-bit machine and 4 on a Cortex-M chip or in wasm32. Take a place where ksplc folds a size: an array's length, a constant built from another, a static `if`, `##error`, or reflection's offsets. The folded number is what the program runs with, so it must be that machine's.
 
 | Decision | Why |
 | :-- | :-- |
-| 1. **One description of each machine** (`machines` in [`../ksplc/base/target.kspl`](../ksplc/base/target.kspl)) | A width written where it is used answers for one machine only. With every reader taking it from one row, a fold cannot use one width while the layout uses another, and a new machine is one row |
+| 1. **One description of each machine** (`machines` in [`../ksplc/base/target.kspl`](../ksplc/base/target.kspl)) | A width written where it is used answers for one machine only. With every reader taking it from one row, a fold cannot use one width while the layout uses another. A new machine is one row |
 | 2. **The C compiler checks every number ksplc folds**, at the source line that asked for it | ksplc's layout is a copy of the C compiler's, and a copy is tied to its original by a check (Principle 4). The C compiler is the one party that knows the machine it builds for. Where the two disagree, a `typedef` of negative size stops the build, and its name says which machine ksplc laid the number out for |
 | 3. **Only a folded number makes the C target-specific** | A `sizeof` left in a function body stays the C compiler's own and is right on any machine. A program that folds nothing carries no check, and its C builds for any machine as it did |
 | 4. **The machine is named to both, rather than read by ksplc from the C compiler** | ksplc translates without a C compiler at hand: the editor's analysis, `ksplc lint`, a build whose C is compiled elsewhere. The default is the machine ksplc runs on, which every hosted build targets. A build for a chip writes the triple once and hands it to both (`CM_MACHINE` in [`../ksos/Makefile`](../ksos/Makefile)) |
@@ -1239,343 +1344,6 @@ flowchart LR
 **What is given up**:
 
 * **The C of a program that folds a size builds only for machines that lay that type out alike.** One C for a 32-bit and a 64-bit machine needs the size left in a function body, where the C compiler answers it.
-* **The editor analyses for the machine it runs on.** The language server takes no `--machine`, so a static `if` on a size is shown as that machine takes it, and on a machine the table lacks it refuses to start, naming that machine.
+* **The editor analyses for the machine it runs on.** The language server takes no `--machine`, so a static `if` on a size is shown as that machine takes it. On a machine the table lacks, it refuses to start, naming that machine.
 * **The LLVM backend lays out only 8-byte pointers** and refuses `--to=llvm` for any other machine, rather than writing IR with wrong offsets.
 * **A constant expression is still checked at the bound every machine guarantees** (`Sz` at 32 bits, SPEC-language.md §6.8), whatever machine is named. So a source that compiles for one machine is not refused for another for its arithmetic.
-
-## The indentation notation (`.kspl`)
-
-**KSPL source is written by indentation, in `.kspl` files.** Indenting, dedenting and the end of a line say where a block opens and closes and where a statement ends:
-
-```kspl
-priv fn sign(n: I32): I32
-    if n < 0
-        return -1
-    return 1
-```
-
-The rules are "2.5 Blocks and statement ends" in [`SPEC-language.md`](SPEC-language.md). This chapter holds why there is one notation and why its rules are what they are. A reader in the compiler ([`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)) rewrites indentation into braces before parsing ("Only one stage rewrites, and only before the parser"). **The braces are the parser's representation, not a second way to write**: no command takes a `.ksplb` file (the name kept for brace text, which only the parser's own tests write), the formatter writes only `.kspl`, and an `import` names only `.kspl`. The grammar holds, in the names of its rules, which symbols that reader replaces ("What disappears, and what does not").
-
-**One notation, through the decision order of the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md):**
-
-1. **The meanings coincide exactly**, so a second notation adds no program that could not be written.
-2. **Actual use is all indentation.** The repository is written in it, every package included. Braces were left only in test material: parser cases broken on purpose, and pairs written twice to be compared.
-3. **A second public notation costs on every side.** It needs a converter both ways, a gate holding the round trip to the same bytes, a lint for the comments a conversion moves, an `import` that probes the disk for either file, and an editor that tells two languages apart. Each exists only because two notations do.
-
-**A test that must show what the parser alone does** (a shape the indentation reader would refuse first, or a diagnostic naming a `{`) hands brace text to the parser directly, through a program of its own in `ksplc/tests/prog/`. That is a test of the parser, not a second notation.
-
-### What disappears, and what does not
-
-**Only the braces around a block and the `;` that ends a statement (blocks and terminators) disappear**, and every other brace or `;` (in a struct literal, for example) stays as it is written. The table of which is which is in "2.5 Blocks and statement ends" of [`SPEC-language.md`](SPEC-language.md).
-
-Note: **The grammar names them too.** A block's opening and closing braces and the terminating `;` are the rules `Block_open` / `Block_close` / `Stmt_end`, listed in the header of [`../ksplc/kspl.kspeg`](../ksplc/kspl.kspeg). How that list is kept in step with the tree is "Keeping the grammar and the AST node kinds in step" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md).
-
-**No mark (`:`) is placed on a block's heading.** Python opens a block with `:`. KSPL's `:` already serves type annotations and labels, and this would be a third meaning. Instead, a wrapped line and a block are told apart by how they are written; the three cases in which a line continues are in the specification's section above. Python's rule "a line wraps only inside brackets" is not enough, because the formatter also wraps outside brackets (it starts the line after `b.s(…)` with `.s(…)`).
-
-**`catch` is the one word that both continues a line and opens a block, and the one form the symbols alone do not decide: the column decides.** So a line is never broken after `catch`. A break there would put the two readings at the same column. The handler would be read as the block's first statement, and the value it stood for would be lost. `ksplc fmt` refuses that break and runs past the width instead ("The formatting settings (`--style`)" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). `ksplc/tests/kspls/tour.kspl` carries the shape, so the refusal cannot be dropped unnoticed.
-
-### How a column is read
-
-**A line belongs to a block when it is indented deeper than the block's heading: only the heading's column is stacked**, and how deep a block's body is indented is not remembered (`Frame` in `ksplc/parse/layout.kspl`). So any indent width works, and a block indented by 2 and one indented by 4 can mix in the same file; all the lines of one block must still start at the same column.
-
-**The price would be that a depth matching no block enters the inner block.** Take a block whose heading is at column 2 and whose body is at column 6:
-
-```text
-  if ready        ← the heading, at column 2
-      start()     ← the body, at column 6
-    stop()        ← column 4: refused
-```
-
-By the heading's column alone, the line at 4 would join the block. A person sees it stand shallower than its siblings, and reads it as outside. Two readings give two programs.
-
-**So it is refused.** Python stacks the body's column too, and cuts the same shape off with `IndentationError`. KSPL compares the line with the block's own members instead. That leaves wrapping free, since a continuation line is folded into its logical line before any column is looked at.
-
-* **The refusal carries no diagnostic code.** A code can be switched off by a project setting, and what would go quiet is a difference in what runs ("5.4 Diagnostic codes, and the errors that have none" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md) names the others handled so).
-* `ksplc fmt` rebuilds the columns, so no formatted source meets it.
-* The reader returns what it finds as a value, and the compiler prints it once, with every other diagnostic (how: "Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)).
-
-**Indentation is written with spaces.** Several characters look like a space and are not, and none of them counts as a column, so such a line leaves the block enclosing it. Do not make a tab count. Its width is an editor setting, so counting it would allow a line that lines up on screen while the columns differ. The tab gets no diagnostic code: a line pushed out to column 0 gets a syntax error first, so a code would never fire. The rewriting stage does find it, and `ksplc/tests/layout_test.kspl` pins that.
-
-Note: **Japanese input most easily slips in the ideographic space** (U+3000, a full-width space). The syntax error it causes says nothing about the cause, since on screen the line looks correctly indented. So `odd_indent_name` in `ksplc/parse/syntax_msg.kspl` adds a Note naming the character, as Python names it in `invalid non-printable character U+00A0`. It is a Note rather than a lint because the syntax error comes first, and the program never reaches sema.
-
-**A lone `return`, `throw` or `fallback`, and a `!` at a line's end, end the statement.** A bare `return` returns nothing, and `f()!` passes an error on to the caller, so neither waits for more. A `!` at the start of a line continues one (a wrapped `T!E` type). That is the one place where a line's end and its start are read differently.
-
-**A value that splits where no mark continues it goes in parentheses.** Two kinds of value are written with words that also stand alone:
-
-* In a conditional value (`a if c else b`), an `if` / `else` at a line's head or end reads as a statement's heading.
-* In the value of a `return` / `throw` / `fallback`, the keyword alone is a bare statement.
-
-A newline inside brackets never starts a level, so parentheses carry either value across lines, with no rule of their own.
-
-| Question | Answer |
-| :-- | :-- |
-| **Why not a word-keyed rule for each?** | Such rules would be `else` / `if` at a line's end continuing it except behind a `}`, a lone `return` taking a deeper line below as its value, and the reverse of `catch`'s reading of the same shape. A writer would have to know which break points are read back (after `else` yes, before it no), and those not read back say nothing about why. The products that key exceptions on a line's leading word (F#, Scala 3) keep adding to the list |
-| **Why does the value still come first?** | A condition-first form (`if c then a else b`) starts the value with `if`. Every value moved to a line of its own would then put `if` at the line's head, which is the misreading this rule removes. `a if c else b` never starts with its `if`, and every reader from Python already knows it |
-| **Who writes the parentheses?** | `ksplc fmt` puts them in. A conditional value that must split outside every bracket gets parentheses, and breaks between its choices, never between an `if` and its condition. A `return`'s value stays on the `return`'s line, with a string carried on and a call broken inside its own brackets (`paren_spans` in [`../ksplc/fmt/printer.kspl`](../ksplc/fmt/printer.kspl)) |
-| **What if a writer breaks outside the brackets?** | It is refused, and the message names the parentheses (`append_split_value_hint` in [`../ksplc/parse/syntax_msg.kspl`](../ksplc/parse/syntax_msg.kspl)). The cases `laid_choice_split_*` and `laid_value_below_return` in `ksplc/tests/negative/laid.kspl`, and the formatter's case "a value too long for its line" in `make test-fmt` hold it |
-
-### The forms whose notation is fixed
-
-A few shapes have exactly one spelling: a block with no heading always carries a label, and an empty or one-line block keeps its braces.
-
-**A block with no name declares itself with `_`**, though naming it is better where it can be named (below). `break` / `continue` to a `_` label are not possible. `_` can be written any number of times in the same scope, so what it would point at is not fixed (the case `break_to_no_name_label` in `ksplc/tests/negative/control.kspl` pins the refusal).
-
-**A bare block carries a label**, because a block with no heading cannot be told from a continuation of the previous statement. The label states what the block exists for. A bare block always exists so that something runs on exit, and that something becomes the name (`release_on_exit` / `while_locked` / `until_exit`).
-
-* **Do not generate names mechanically.** A meaningless name (`scope1`) leaves the reason unknown until the inside is read.
-* **The compiler holds it**: `stmt` does not use `stmt_block` (`ksplc/kspl.kspeg`), so a bare block does not parse, and the message names the label to put on. The case `bare_block_without_label` in `ksplc/tests/parse/syntax.ksplb`, and the one-line shape beside it, pin the message.
-
-**Two forms keep their braces in `.kspl`.**
-
-| Form | Why it keeps its braces |
-| :-- | :-- |
-| **A closure with a multi-line body inside a call's arguments** | A newline inside brackets does not become a block |
-| **An empty block, and a block fitting on one line** | Indentation cannot say "there are no contents", and a comment line does not make a block. No word such as Python's `pass` is added: Python needs one because it has no braces, and here the braces already say it (Principle 1 and Principle 6) |
-
-For such a block:
-
-* **No terminator follows it** (`fn f() {};` is not in the grammar). The heading word tells it apart from `x: = T::{ … }`, which also ends in `}` but is a value and needs a terminator.
-* **Its last statement takes no `;`**. Otherwise that `;` would be the one terminator the notation still shows, and a writer who types the block the way Go or Swift spells it would get `expected ';'`. The reader puts it back before the `}`, by the rule a line's end follows: a statement ending in `}` takes one unless its heading opens a block (`supply_block_end` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)). Only a `}` on the same line supplies one, so no line break changes what a statement means, as one does in JavaScript when a `return` ends its line. `ksplc fmt` leaves the `;` out. The grammar is not touched, so the parser keeps one spelling.
-
-### Statements sharing a line
-
-**A `;` outside every bracket ends a statement, so one line holds any number of statements and declarations, a whole program included** (`import "std/io"; fn main() { … }`). A program sometimes has to fit where no line break can go: a command-line argument, a string in JSON or YAML, an HTML attribute, a message in a chat. Without this, the smallest program takes two lines, an `import` and a `fn`, and every such place needs an escaped newline.
-
-* **It is not a second notation.** The `;` is the separator the notation already had between two statements on one line. It is read the same at the top level as inside a one-line block, and `ksplc fmt` puts each statement back on a line of its own.
-* **One-line blocks nest.** A loop inside a condition inside a function fits on one line, so the one-line form is not limited to simple statements. A notation whose one-line form takes only simple statements cannot put a loop after its `;`, and its users fall back on executing a string.
-* **The heading is the last statement's**, since the line's end and a deeper line can only belong to one statement, and the last is the one they follow (`seg_from` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)).
-* **A C-style loop header keeps its `;`** until the loop's block has closed: those are the `for`'s, not statement ends.
-
-**A `;` right after a one-line block's `}` is refused, with no code.** The `}` already ended the statement. Accepted, `}` and `};` would be two spellings of one end (Principle 6), and no setting may let either pass. It is the `;` a writer from C, Java or JavaScript types by habit, and a model writing KSPL does the same, so the message names the cause and the fix rather than the token the parser expected. The reader reads that `;` as a space, so the parse goes on and the message is the one report. A block that is part of a value (`catch`'s) ends no statement, so its `;` is the statement's own and stays.
-
-**A program with no file is read as a file named `-` in the current folder** (`ksplc run -` from standard input, `--eval=` from the command line; "2.5 Running as a script (ksplc run)" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). A relative import then resolves from where the command runs, as it would for a script saved there.
-
-### No lines are added, and `switch` gets no block
-
-**The rewriting into braces never adds or removes a line, so line numbers agree with the file as written.** A diagnostic's line, a jump-to-definition target, and a hover position all point at the line of the `.kspl` the writer is looking at.
-
-**Columns shift only at the end of a line** (back by what was inserted), so the columns before an end-of-line comment do not change. **The `;` a one-line block leaves out stands in the space before its `}`**, so it moves no column either. With no space there it is inserted, and the rest of that line reads one column late until `ksplc fmt` puts the space in.
-
-**Do not make a block under `switch`.** `switch` carries no braces (its `case` and `default` do). So every `case` and `default` stands at the `switch`'s column: the first on the line below the `switch`, and each later one on the line after the arm before it, where that arm's block closes, or below an empty arm's `{}`.
-
-**The first arm goes below the `switch`, not on its line.** On the `switch`'s line it would be the one arm with another shape:
-
-* **The arms line up.** Every `case` starts a line at one column, so a reader scans them as a list, and a search for `^ *case` finds each.
-* **A change to one arm touches that arm's lines alone.** Adding an arm in front, removing the first, or reordering them leaves the `switch`'s line as it is, so a diff shows only the arms that changed.
-* **A long subject and a long first pattern do not share a line**, so neither is broken to fit the width.
-
-**So the `switch`'s line goes on into a `case` at its own column.** That is the continuation a later arm already has after its `}`, so the reader adds no new kind of rule: the `switch`'s line simply takes no terminator (`arms_follow` in [`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)). The line it goes on into is the next with code, as for every continuation, so a comment written over the first arm stays there.
-
-* **A `case` indented under the `switch` is refused, not read as the first arm** ("Do not align with Python" below). The error's Note says where the arms go, for whoever writes the indented shape of Python's `match` or the braced block of other languages' `switch` (the case `switch_arms_in_a_block` in `../ksplc/tests/parse/syntax.ksplb` and the case `laid_switch_case_indented` in `../ksplc/tests/negative/laid.kspl`).
-* **A shallower `case` is not taken in.** It belongs to the level outside, by the same columns that close any level ("How a column is read").
-* **Only a `case` continues it.** The grammar's first arm is always a `case`, so a `default` standing first is a compile error on either line.
-
-**The one-line form is still read, and `ksplc fmt` writes the arm below.** Where the first `case` stands is layout, like a break inside brackets: the program is the same either way, and the formatter gives it one spelling.
-
-**An empty arm (`case .a {}`) keeps a line of its own too**, and so does the arm after it. Joined (`case .a {} default`), the next arm would be the one a search for `^ *case` misses, and an edit to either arm would touch the other's line. The joined form is still read, as the one-line first arm is.
-
-**Do not align with Python.** Python's `match` carries a block of its own, so one level of indent is required. KSPL's `switch` does not, so a level there would create a block where no brace exists. That departs from "only blocks and terminators disappear" ("What disappears, and what does not"), and the arms of one `switch` would stand at two columns, the first below it and the rest where each `}` closes.
-
-### Only one stage rewrites, and only before the parser
-
-**The compiler turns `.kspl` into braces in one early step, before the parser, and only that step rewrites anything.** `ksplc` reads `.kspl` directly ([`../ksplc/parse/layout.kspl`](../ksplc/parse/layout.kspl)). The grammar, the syntax tree and every later stage see one notation only. What is passed on is ordinary brace notation, so semantic analysis, code generation and the language server (the part that serves an editor's hovers and squiggles) do not know the difference.
-
-```mermaid
-flowchart LR
-    S[".kspl file<br/>(indentation)"] --> R["layout reader<br/>(the one rewriting stage)"]
-    R -->|"the same program<br/>in braces"| P[parser]
-    P --> A["semantic analysis,<br/>code generation,<br/>language server"]
-```
-
-**The rewriting runs exactly once at each place a source enters**: from the disk and from the editor. The compiler holds that ("Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)).
-
-**An import names a `.kspl` file, and a logical name drops that extension** (the rule is "9.1 import syntax and path resolution" in [`SPEC-language.md`](SPEC-language.md)). Wherever a logical name is written out again (a diagnostic, a `#line`, the language server's document URI), `.kspl` is added back. Dropping and adding back read one constant, `source_ext` in [`../ksplc/base/core.kspl`](../ksplc/base/core.kspl), so no name is written out that points at a missing file.
-
-Note: `make test-kspls` watches that a file saved with CRLF is the same program as with LF, and that squiggles, hovers and jump-to-definition point at the lines as written.
-
-### Formatting
-
-**`ksplc fmt` rewrites indentation from scratch, from the syntax tree, so formatting erases raggedness.** Once `make fmt` runs, unintended raggedness shows as a diff, lined up the way the compiler understood it. A gate (`make test-fmt-tree`) formats every tracked source and fails where one byte would change; what it compares is the source itself, not a second formatting, since a reading that goes wrong settles to a fixed point as firmly as one that goes right.
-
-Note: So the ragged column's test material (the case `laid_ragged_sibling` in `../ksplc/tests/negative/laid.kspl`) sits where the formatting gate does not reach (`mk/lint.mk`). Formatting it would line the columns up and stop it being material.
-
-**A comment behind a block's last line stays inside the block.** The reader puts a block's `}` behind that line's code, never at a line's head, so the comment after it is passed back to the line it follows (`pull_trailing_comment` in [`../ksplc/fmt/trivia.kspl`](../ksplc/fmt/trivia.kspl)). A `}` written at a line's head is the writer's (a value's, or an empty block's), and the comment after it stays where it stands.
-
-## How the source text is written
-
-**Nothing this chapter decides changes what a program does**, and a gate, not habit, holds each rule. The chapter covers names, keywords, line ends, long strings and documentation comments.
-
-### A name's prefix is added only when the name cannot state its own origin
-
-Write `io.out()` when `out` alone would be unclear, and plain `Arena` when the name already says what it is. Each name is written one way across the whole repository.
-
-A prefix (the `io.` of `io.out()`) is **part of the name, showing at the use site**. Where the name alone says what the thing is, the prefix says it twice. Where it does not, fix the name, not the prefix.
-
-**A name may enter the unprefixed space (selective import, `import "…" { Name }`; docs/SPEC-language.md §9) only if all three hold:**
-
-| # | Condition | Passes | Fails |
-| :-- | :-- | :-- | :-- |
-| 1 | **Its spelling says what the thing is** | `Arena`, `Tensor`, `Option`, `Str_builder` | `Node`, `Val`, `Entry`, `Config`, `run`, `init`, `out` |
-| 2 | **Its spelling is unique across the program** | — | A colliding name cannot enter, since a collision is always a compile error |
-| 3 | **Its origin carries no design information** | A name from `ksplc/base/` or `std/`: where it comes from tells the reader nothing | A reference crossing layers (`ksplc/`'s `parse` / `sema` / `lower` / `gen`). Such a name enters with the layer in the name (`Sema_ctx`, `Genc_ctx`) |
-
-**A name's spelling is fixed once per name, not per file.** `mod.Name` in one place and `Name` in another is one thing written two ways, which the chapter "One notation per purpose" in [`DESIGN-principles.md`](DESIGN-principles.md) forbids. Inside one file it looks like two things.
-
-**No line can be drawn by kind.** Types and functions alike can be legible (`Arena`, `percent_decode`) or not (`Node`, and `run` or `init`, which many files declare), so the conditions apply to both.
-
-**What is given up**:
-
-* **An unprefixed name loses its origin at the use site.** The reader finds it on the file's `import` lines, where a selective import lists the names it brings.
-* **A name legible unprefixed is redundant with a prefix** (`base_ast.Ast_node` says it twice), so each name goes one way.
-* **Condition 2 breaks if the same spelling appears elsewhere**, and it breaks as a compile error, never as a silent pointer to something else.
-
-### The spelling of reserved words is taken from C
-
-**Where a keyword does C's job, it uses C's word (`switch`, `for`, `typedef`), even when it behaves a little differently**: it takes C's spelling, not C's behavior. `switch` does not fall through (run on into the next case), and `for` covers C's `for` / `while` / `do-while` and sequence iteration in one word (`docs/SPEC-language.md`, 7.1 and 7.2). There are two reasons.
-
-1. **The names left to a writer do not shrink.** In KSPL, C's reserved words (`int`, `goto` and so on) are usable as identifiers (`docs/SPEC-language.md`, 2.2). A keyword of KSPL's own would take one more word out of the names a writer may use. Taking C's spelling takes only words that are already reserved in C. `match` and `loop` are common nouns, needed exactly where one names a match's result, or a loop.
-2. **The reader does not look it up again.** A reader of C reads `switch` and `for` on sight; a new spelling for the same meaning must be looked up once.
-
-**Being one word and being spelled `for` are separate decisions.** The first follows from "every repetition serves the same purpose" (`docs/SPEC-language.md`, 7.2), with Go's single `for` as the precedent. The second is this section's rule.
-
-**One word costs the checks nothing.** Whether a loop ever ends is read from its shape, not from a keyword: a `for` with no condition that no `break` leaves never ends. So a function may end on it, and what follows it is unreachable (`docs/SPEC-language.md`, 7.2). A separate word for the endless loop would give the checks nothing the shape does not, while the writer would have one more word to choose between. Where each `break` goes is settled once, when the compiler resolves the `break`. The missing-return check and the unreachable-code warning read that one judgement (`is_endless_loop` in `ksplc/base/ast_ext.kspl`), so they cannot disagree (Principle 6).
-
-* **A constant `true` is a condition.** Reading `for true` as endless would make the check fold constants, and give one meaning two spellings. `for true` gets a warning instead, whose fix is the bare `for`.
-* **The shape spares the writer a dead `return`.** If the loop were read as one that can end, a `return` that never runs would be demanded after it. Nothing would warn that it never runs, and loops would be bent into a flag and a `break` to avoid it.
-
-**Another name for a type is `typedef`, name first** (`typedef Id = I32`; `docs/SPEC-language.md`, 3.5). The job is exactly C's: a KSPL typedef is only another name ([2.9](#a-typedef-is-only-another-name)), as C's `typedef` "does not introduce a new type, only a synonym" (C11, 6.7.8), and the C backend writes one for each. The order is not C's:
-
-| | Where the new name stands | Example |
-| :-- | :-- | :-- |
-| C | Where a variable's name would stand in a declaration: last, or in the middle | `typedef int Id;`, `typedef int (*Op)(int);` |
-| KSPL | First, as in Rust, Swift, Go and C++'s `using` | `typedef Id = I32` |
-
-KSPL writes a type whole (`fn(x: I32): I32`), so C's order would only put the name behind it. Reason 1 holds as well: `alias` and `type` stay free for a writer, where Rust's `type` keyword costs every field called `type`.
-
-**What is given up**: `typedef` reads as "define a type" and defines none, which C's standard itself must say. A reader from C takes it as meant. One who expects a new type finds the one-field struct in Appendix A of `docs/SPEC-language.md`. A C writer's `typedef I32 Id;`, and the other languages' spellings of an alias, fail with a note writing the line in KSPL's order (`append_typedef_spelling_hint` in `ksplc/parse/syntax_msg.kspl`).
-
-Caution: **Where the spelling is the same but the behavior differs, the specification must say so by name.** The same spelling invites the reading "presumably the same", and silence lets that misreading through (`docs/SPEC-language.md`, 7.1 names that `switch` does not fall through).
-
-### The line terminator is the file's spelling, not the program's
-
-**A file saved with Windows line ends (`\r\n`, CR LF) compiles to exactly the same program as one saved with `\n`: every `\r\n` becomes `\n` where the source enters** (`to_lf` in [`../ksplc/parse/source_fix.kspl`](../ksplc/parse/source_fix.kspl)). The BOM (an invisible marker some editors put at a file's start) and the shebang (a `#!` first line) are handled at the same place, since they too are the file's spelling. Why this matters: a `"""` text keeps its bytes, line terminators included. Otherwise one source would be two programs, one per way an editor ends a line, and no check would see it: both checkouts build, pass, and disagree. Every language with a multi-line literal fixes it at the same place.
-
-**Writing it back is the other half.** `ksplc fmt` writes `\r\n` back where the file used it, as it does the BOM ("The formatting settings" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)). So a Windows checkout does not show every line as changed: the whole-file diff that Prettier's move to `endOfLine: "lf"` met.
-
-```mermaid
-flowchart LR
-    D[the disk] --> S["settle<br/>(CR LF becomes LF,<br/>the BOM is dropped,<br/>the shebang becomes a comment)"]
-    F[the formatter] --> S
-    L[the language server] --> S
-    S --> C[one program]
-    F -.->|"writes CR LF back<br/>where the file used it"| D
-```
-
-**Every place a source enters takes this step**: the disk, the formatter and the language server. A place that skips it answers about a different program from the one a compile sees. They share one step, `settle` in [`../ksplc/parse/source_fix.kspl`](../ksplc/parse/source_fix.kspl), so none can be skipped (the places are listed in "Every place a source enters reads it the same way" in [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md)).
-
-**What a program writes is the output half of the same question**, and on Windows it is decided for every program at its entry point ("Standard output carries the bytes a program writes").
-
-### Carrying a long string literal across lines
-
-End a line inside a string with `\` to continue the string on the next line. The `\`, the line break and the next line's indent add no bytes.
-
-**A string literal is the one thing on a line a formatter cannot narrow by itself**, because its bytes are the program. Without a way to carry a string on, a formatter breaks everything else on the line and stops at the literal. Narrowing it then means splitting the call by hand into several `.s(…)`, changing code to fix layout. The width check misses it too, since it reads only lines that *begin* with `//`.
-
-**A `\` at a line's end carries the text on, stands for no byte, and takes the next line's indent with it** ("Escape sequences" in [`SPEC-language.md`](SPEC-language.md)). So indenting the block moves no byte, and `ksplc fmt` can lay a literal out like anything else. What is carried on stands one step in from its opening line, as a `//<` run does. At the opener's column it would look like a line beginning something of its own.
-
-```kspl
-priv const help: U8[] = "usage: tool [options] <file>, \
-    where options come before the file"
-```
-
-**A mark, not two literals side by side.** C, C++ and Python join adjacent literals (`"a" "b"` is `"ab"`), and clang-format, the one widely used formatter that narrows a literal, relies on that. But think of `U8[][2]::{ "a"` with the comma forgotten and `"b" }` below it. In KSPL that is a syntax error. With adjacent literals joined, it would be a one-element array that compiles. That is a daily exposure in a tree that writes `::{ "a", "b" }` in every test file, and a common complaint that lint rules are written against. Turning a refusal into a silent merge is the shape Principle 8 refuses. Exempting `::{ … }` would be a rule with a hole in it, needed every day.
-
-**Nor is `+` the spare path.** `"one" + "two"` is refused with its own sentence (*slices have no arithmetic or ordering*). Reopening it for literals would give `+` one meaning on a literal and another on a value: the second means to one purpose that Principle 6 refuses.
-
-**The space at the seam cannot be seen** (`"… for it. \` against `"… for it.\`, at the right margin). The answer: only the formatter writes a seam. One edited by hand is broken again elsewhere, and `make test-fmt-tree` shows the file as changed. A check on the seam would not answer it. Nothing tells a dropped space from a deliberate break inside a long word, so it would need an exemption, and an exemption is how a check stops saying anything.
-
-**KSPL formats around what it cannot narrow rather than going quiet**, which is a common complaint against formatters. What stays over the width is what has no seam: a literal with no space (a URL, a JSON fixture, one long identifier), one whose only spaces are inside a `\{ … \}`, a word longer than the line (half a word is worse than a long line), and an overrun that is not a literal ("The formatting settings" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
-
-**The formatter counts bytes and the width check counts display columns**, so a line holding CJK (Chinese, Japanese, Korean) text breaks early. That is safe, not exact: a character never takes more columns than bytes. One measure is kept, not two: the bytes `write_raw` in [`../ksplc/fmt/printer.kspl`](../ksplc/fmt/printer.kspl) counts.
-
-### The documentation a declaration carries
-
-A documentation comment starts with `//<` and stands on the line of what it describes, or just below it. An empty `//<` line separates a one-line summary from the details.
-
-```kspl
-priv struct Window //< a rectangle on the screen
-    //<
-    //< Its origin is the top-left corner, and every size is in pixels.
-    width: I32 //< how wide it is
-    height: I32 //< how tall it is
-```
-
-**One marker, `//<`, describes the thing on its own line, and a `//<` with no text separates the summary from the detail.** One marker spares the writer a question that does not matter to a reader: whether a sentence is about the line or about its contents. Where each kind of declaration takes it is "2.1 Comments" in [`SPEC-language.md`](SPEC-language.md). `Rule_prof` in `kspeg/engine.kspl` shows a summary with its detail below, and `Mode` in `ksplc/main.kspl` the anchor shape (an empty `//<` on the declaration's line, with the description below).
-
-**The description sits behind the thing it describes**, so no name is written twice and no pair gets out of step: a renamed parameter takes its description along. Javadoc and Doxygen restate the name in a `@param x`. Behind rather than in front, because prose in front pushes the signature down, and the reader meets the description before the shape. That is why Python puts its docstring after the `def` line.
-
-**A run stands one step in** from the line it continues. (A *run* is a description's lines of `//<` one after another.) At the declaration's column it would have the shape of a comment block over the *next* declaration, and only the mark would say which way it points. That is also why Python's docstring takes the body's indent. Where the declaration has braces, the run goes inside them, or a marker trait written `pub trait Move_only {}` would be described from outside. `make test-conventions` holds this.
-
-**A `//<` with no text separates the summary from what follows.** That is Python's rule (PEP 257: a summary line, a blank line, the elaboration), and Rust and Swift take the first paragraph the same way. A first sentence cut at a `.` is not taken. Javadoc and Doxygen's `AUTOBRIEF` do that, and the cut lands at `e.g.`, at `Dr.` and inside version numbers. That is why Javadoc also offers `{@summary}` to mark the summary explicitly.
-
-**The summary is one line that says what the thing is.** It is what the hover, the completion list and `ksplc doc` open with, and a run with no separator carries all of itself there. Such a run would also slip past the six-line cap, which counts only what stands past the separator. The compiler warns about a longer summary (`[W0213]`, in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), asked of the same reader the hover walks. One line rather than one sentence cut at a `.`, for the reason above; Go's doc comments and PEP 257 open with one line too.
-
-**Where the head closes on a later line, the run hangs off that line.** The opening line belongs to the parameters below it, and a run there would read as the last parameter's.
-
-**A description longer than one line stands below a mark with no text.** Begun behind the declaration, it would start wherever the declaration ends and wrap to the run's column, ragged, and reflow on every rename. One that fits stays on the line, since the anchor spends a line saying nothing. Length decides the shape, not preference, so it is one rule and not two spellings. `ksplc fmt` moves a description that does not fit into the anchor shape, and never the reverse, since the anchor is also how a writer groups a run about to grow ("The formatting settings" in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)).
-
-**The run is joined onto one line**, since the record (the published API file, "The published API is recorded in the repository" in [`DESIGN-repository.md`](DESIGN-repository.md)) holds one entry per line. The record's fourth column and the hover read the same words whichever shape the source has. Where the summary meets the rest, a full stop is put in, since a `//<` is written as a fragment. None is put in after a summary that already closes a sentence, looking past a closing backtick, bracket, quote or bold mark. Inside a run none is added: its lines are one paragraph wrapped.
-
-**A continuation that continues nothing, and an anchor with nothing under it, are refused.** The first writes a sentence that reaches neither the hover nor the record. The second publishes an entry saying nothing. Whoever wrote either believes it took effect, the state Principle 5 refuses. Both are compiler warnings, not convention checks (`[W0209]` and `[W0210]` in [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md)), so they reach the editor they were written in and can be set per file. The refusal asks "does this continue something" of the same function the reader uses, so the two cannot drift apart (Principle 4).
-
-**No third marker is added for a description below the code.** Haddock's `-- ^` means "the code above me". Written the wrong way round, it attaches the description to the neighbouring field, and nothing reports it (Principle 8).
-
-**`///` is refused rather than read, and `//<` is not respelled `///` either.** Every product with `///` points it at the thing *after* it. So a writer or a model from Rust, Swift, C# or Zig types it first, before the declaration.
-
-| If `///` were… | What would happen |
-| :-- | :-- |
-| Read as describing the contents | A field's sentence would become the enclosing type's |
-| Read as nothing | A function's sentence would vanish |
-| Given the meaning of `//<` | The fault only moves: the same spelling with the opposite direction is the misreading the caution in "The spelling of reserved words is taken from C" names, and a `///` above a declaration would continue the one before it |
-
-In each case nobody is told (Principle 5). So `///` is a compiler warning (`[W0212]`). So is `//!`, Rust's and Zig's mark for the enclosing thing, which such a writer puts at a file's head. Four slashes or more make an ordinary comment, as in Rust.
-
-**Three things hold this up, none of them new grammar.**
-
-* **`//<` is an ordinary line comment**, so editors, `grep` and every existing tool keep working on it.
-* **`fmt` keeps the shape.** A signature broken one parameter per line stays broken, the trailing comma deciding it (black's magic trailing comma). Decided on width alone, the shape is lost on the next run, which is what a marker behind each parameter meets in practice.
-* **One reader serves four consumers.** The record (`ksplc --emit-surface`'s fourth column), a library's interface (`--library=`), the hover and the completion list all read `ksplc/base/ast_doc.kspl` (Principle 6). The summary crosses the artefact boundary, so a caller holding only a library's header still gets it in its editor.
-
-```mermaid
-flowchart LR
-    S["the doc comments<br/>in the source"] --> R["one reader<br/>ksplc/base/ast_doc.kspl"]
-    R --> A["the record<br/>(--emit-surface)"]
-    R --> B["a library's interface<br/>(--library=)"]
-    R --> C[the editor's hover]
-    R --> D[the completion list]
-```
-
-**Every published entry says what it is.** A record where every entry is silent still matches its API, so the drift check cannot see it. `make test-surface` names each entry with no fourth column.
-
-Caution: **Count against the current shape, not against the record.** The record is what was committed. A declaration added and published in the same round would be judged against a row not there yet, and the entry that most needs a sentence is the one let through.
-
-**The detail does not travel to a declaration file**, which holds headings, not contents. It carries the run's first paragraph and stops at the separator. A run with no separator publishes the lot, and what keeps a detail in its place is the six-line cap on what stands past the separator, which `make test-conventions` counts. Nor does a parameter's description reach the record: a parameter is not an entry, so its description is for the source and the editor to show. The return value's description stands in the same place, read by `return_doc` beside `param_docs`.
-
-**Do not add a third marker for "the file as a whole".** It would be a second means to one end (Principle 6), which Rust's `//!` pays for with two rules the reader must hold apart. So a file says what it is with the same `//<`, opening the file above its imports, with nothing over it but blank lines. A banner over the run pushes what the file is for off the screen, and `make test-conventions` refuses that order.
-
-**The run takes what a *caller* needs, and the banner below it keeps what an *editor* needs.**
-
-| Who reads | What they need | Where it goes |
-| :-- | :-- | :-- |
-| A caller | What is in here, what it costs, what it refuses | The `//<` run |
-| Someone editing the file | Which import must not be added, which shape must not be folded into a generic, where the substance is delegated; any table or worked example | The banner (ordinary comments) below the run, since the run is joined into one line |
-
-The run does not restate the file's name. `ksplc doc` titles the file's reference with it, and shows it beside the summary in the package's listing. Prose repeating it says it twice, and goes stale on a rename with nothing to catch it.
-
-### A function of one enum is its method
-
-**A function whose first parameter is an enum declared in the same file is written as that enum's method, in its `impl` and taking `Self`, so you call `state.text()` or `a.same_role(b)`, not `state_text(state)`.** What an enum does is found where the enum is, the name need not repeat the type (as 11.1 asks of any name), and the call reads in the order the value flows.
-
-**An enum of another file or package is left out.** Its `impl` would hold another package's reading of it (kspage's readers of std's `json.Val` stay in kspage), against the reference direction ("What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md), the chapter "What crosses a package boundary" in [`DESIGN-repository.md`](DESIGN-repository.md) of this document).
-
-**The language allows both shapes; this is the repository's rule for its own sources.** `make test-conventions` checks it (`check_enum_functions` in [`../tests/support/conventions_spell.kspl`](../tests/support/conventions_spell.kspl)), leaving out fixtures whose text a test compiles. It reads one line at a time, so a signature it does not recognize still breaks the rule (Principle 8).

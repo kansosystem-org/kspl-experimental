@@ -4,7 +4,7 @@
 //< Caution: **The decision here (`type_has_arc_content` / `type_is_managed`) and the emission in
 //< `lower/arc.kspl` (`emit_managed_op`) must always change together.** Fix only one and it breaks
 //< silently: a retain without its release, or the reverse ("The rules for implementing ARC" in
-//< `ksplc/docs/DESIGN-compiler.md`). **A caller of these methods must import this file** (importing
+//< `ksplc/docs/DESIGN-lower.md`). **A caller of these methods must import this file** (importing
 //< `sema/type/env` alone does not add them to Env).
 import "ksplc/base/core" as _base_core // `fqn_head` / `fqn_last`
 import "ksplc/sema/type/env" as sema_type_env
@@ -72,10 +72,10 @@ impl sema_type_env.Env
     priv fn owned_parts(r: Self$@, real_id: I32, out: List<|I32|>$@) //<
         //< The types of the positions a value of real_id owns, one level down
         //<
-        //< A struct's fields, every variant's payloads, an array's element (a zero-length array
-        //< owns none) and a Result's success payload (its error side is an error enum's tag). A
-        //< pointer or a slice borrows, and a scalar, a trait value or a function pointer holds no
-        //< part.
+        //< They are a struct's fields, every variant's payloads, and an array's element (a
+        //< zero-length array owns none). They are also a Result's success payload (its error side
+        //< is an error enum's tag). A pointer or a slice borrows. A scalar, a trait value or a
+        //< function pointer holds no part.
         //< Caution: **ARC and Move_only both walk this one list.** A position only one knows is
         //< released without being copied safely, or copied without its release.
         if r.is_pointer(real_id) || r.is_slice(real_id)
@@ -91,8 +91,6 @@ impl sema_type_env.Env
         case .array(base_id, size)
             if size > 0
                 out.push(base_id)
-        case .result(base_id, _err_id)
-            out.push(base_id)
         default {}
 
     fn type_has_arc_content(r: Self$@, type_id: I32): Bool //<
@@ -115,15 +113,15 @@ impl sema_type_env.Env
         resolving: List<|I32|>$@): Bool //<
             //< Whether type_id holds an ARC-managed type as a value field, at any depth
             //<
-            //< Caution: **Do not remove the memoization** (type_id -> memo_no / memo_yes)
-            //< — one type is referenced from several fields, so cycle detection alone leaves
-            //< fanout^d time. **Nor add a depth limit**, which would take away calc_type_layout's
-            //< diagnostic on a legitimate chain.
+            //< Caution: **Do not remove the memoization** (type_id -> memo_no / memo_yes). One type
+            //< is referenced from several fields, so cycle detection alone leaves fanout^d time.
+            //< **Nor add a depth limit**, which would take away calc_type_layout's diagnostic on a
+            //< legitimate chain.
         if type_id <= 0
             return false
         // The immutable qualifier is stripped for the same reason as in is_arc_type.
         real_id: = r.get_clean_real_type(type_id)
-        cached: = memo.get(real_id) catch 0
+        cached: = memo.get(real_id).unwrap_or(0)
         if cached == memo_no
             return false
         if cached == memo_yes
@@ -159,9 +157,9 @@ impl sema_type_env.Env
     fn is_owned(r: Self$@, target_id: I32): Bool //<
         //< Whether target_id is a type that owns an instance and releases it with `free()`
         //<
-        //< True if there is an explicit impl for `std.lang.Owned`, **not derived structurally** as
-        //< Move_only is: an owned part brings no duty to free it (`Sema_ctx` holds a
-        //< `Str_builder`).
+        //< True if there is an explicit impl for `std.lang.Owned`. It is **not derived
+        //< structurally**, as Move_only is: an owned part brings no duty to free it (`Sema_ctx`
+        //< holds a `Str_builder`).
         return r.has_implemented_trait_fqn(r.strip_ptr_full(target_id), owned_trait_fqn)
 
     fn is_move_only(r: Self$@, target_id: I32): Bool //<
@@ -182,7 +180,7 @@ impl sema_type_env.Env
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
             //< `Move_only`" in docs/SPEC-language.md). **Keep the memo and break cycles with
             //< resolving**, as type_has_arc_content_impl does.
-        cached: = memo.get(target_id) catch 0
+        cached: = memo.get(target_id).unwrap_or(0)
         if cached == memo_no
             return false
         if cached == memo_yes
@@ -199,8 +197,8 @@ impl sema_type_env.Env
                 return false
         if depth >= max_move_only_depth
             io.err()
-                .s("\nfatal: value nesting too deep while deriving a structural marker (possible \
-                    unbounded recursive value-embedding chain).\n")
+                .s("\nfatal: value nesting too deep while deriving a structural marker. A recursive \
+                    chain of embedded values may be unbounded.\n")
             sys.exit(1)
         resolving.push(target_id)
 

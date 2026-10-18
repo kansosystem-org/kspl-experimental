@@ -87,7 +87,7 @@ impl Sema_ctx
     fn try_eval_constexpr(r: Self$@, node: Ast_node$@): I32? //<
         //< The same quiet evaluation, but **it tells whether it folded**
         //<
-        //< Caution: Use this where the value becomes a name (a type argument's canonical name):
+        //< Caution: Use this where the value becomes a name (a type argument's canonical name).
         //< eval_constexpr_quiet's default cannot be told apart from a fold that yields the same
         //< value.
         v: = r.fold_quietly(node, true) catch
@@ -97,8 +97,9 @@ impl Sema_ctx
     fn try_eval_constexpr_wide(r: Self$@, node: Ast_node$@): I64? //<
         //< The same quiet fold, not narrowed to I32
         //<
-        //< **Only code that writes values out uses it** (a reference to a `const` in a global's
-        //< initializer, on either backend), so `1U32 << 31` survives.
+        //< **Code that needs a value at its full width uses it.** Examples are a reference to a
+        //< `const` in a global's initializer, on either backend, and a constant compared against a
+        //< type's range. So `1U32 << 31` survives.
         v: = r.fold_quietly(node, false) catch
             return .none
         return .some(v)
@@ -178,15 +179,18 @@ priv const guaranteed_const_chain: I32 = 256 //<
 
 priv const max_constexpr_depth: I32 = guaranteed_const_chain * 4 //< the fold's recursion limit
     //<
-    //< **The higher it is, the more a pathological input costs.** One expression's nesting is
-    //< stopped by max_parse_tree_depth in ksplc/parse/normalize.kspl; only a chain across
-    //< declarations (eval_ident_or_path) reaches here.
+    //< **The higher it is, the more a pathological input costs.** max_parse_tree_depth in
+    //< ksplc/parse/normalize.kspl stops one expression's nesting. Only a chain across declarations
+    //< (eval_ident_or_path) reaches here.
+
+priv enum Bad_init_why //< why a form cannot be a static initializer, which picks the message
+    run_time //< a call, a dereference or a variable's value
+    cycle //< a cycle among constant definitions
+    part_read //< a part of another value: an element, a field, a slice's `.len` or `.ptr`
 
 priv struct Bad_init //< where a form that cannot be a static initializer was found
-    //<
-    //< is_cycle: the cause was a cycle among constant definitions (it changes the message).
     node: Ast_node$@
-    is_cycle: Bool
+    why: Bad_init_why
 
 impl Ast_node
     fn eval_constexpr(r: Self$@, c: Sema_ctx$@): I32!Sema_error //<
@@ -198,8 +202,8 @@ impl Ast_node
     fn eval_constexpr_wide(r: Self$@, c: Sema_ctx$@): I64!Sema_error //<
         //< Folds a constant expression, keeping I64
         //<
-        //< **Only code that writes a value out uses it** (try_eval_constexpr_wide), to emit a value
-        //< that is correct for its type but does not fit I32, like `1U32 << 31`, without the
+        //< **Only code that writes a value out uses it** (try_eval_constexpr_wide). It emits a
+        //< value that is correct for its type but does not fit I32, like `1U32 << 31`, without the
         //< narrowing rejecting it.
         //< Used elsewhere, a value that does not fit I32 would go through unchecked.
         return r.eval_constexpr_internal(c, 0)!
@@ -217,22 +221,22 @@ impl Ast_node
         //< Reports, at the fold's head, a chain the depth limit cut, once per chain
         //<
         //< **At the head, not where the walk stopped**: the cut lands at whatever constant lies
-        //< max_constexpr_depth below the head, a line that says nothing of where the chain starts.
+        //< max_constexpr_depth below the head. That line says nothing of where the chain starts.
         if !c.resolving.cut_waiting
             return
         c.resolving.cut_waiting = false
         $seen: = false
         for decl_key in c.resolving.cut_path
-            seen = seen || (c.resolving.cut_reported.get(decl_key) catch false)
+            seen = seen || c.resolving.cut_reported.get(decl_key).unwrap_or(false)
             c.resolving.cut_reported.set(decl_key, true)
         c.resolving.cut_path.len = 0
         if seen
             return
         c.clear_scratch()
-            .s("constant expression nesting too deep: folding this goes down a chain of constants \
-                defined by constants deeper than the compiler walks. The language guarantees \
-                \{guaranteed_const_chain\} levels of constant reference chaining; folding walks one \
-                native stack frame per level and deeper input would exhaust the stack")
+            .s("constant expression nesting too deep. Folding follows more constants defined by \
+                other constants than the compiler supports. The language guarantees \
+                \{guaranteed_const_chain\} levels of references between constants. Folding uses one \
+                native stack frame per level. Deeper input would exhaust the stack")
         c.err(r, c.scratch.slice())
 
     priv fn fold_step(r: Self$@, c: Sema_ctx$@, depth: I32): I64!Sema_error //<
@@ -270,14 +274,18 @@ impl Ast_node
         case .k_identifier, .k_expr_path, .k_type_path, .k_expr_postfix, .k_method_access
             return r.eval_ident_or_path(c, depth)!
         case .k_enum_init, .k_implicit_enum, .k_expr_implicit_dot
-            // A scalar enum's variant folds to its tag (valid in codegen after mangling too),
-            // written in full (`Color.green`, a k_enum_init) or short where the place gives the
+            // A scalar enum's variant folds to its tag (valid in codegen after mangling too). It is
+            // written in full (`Color.green`, a k_enum_init), or short where the place gives the
             // type (`.green`). Caution: **Look past the immutable mark** a const array's element
             // carries, or the short form names no enum.
             real_type_id: = c.env.get_clean_real_type(r.type_id)
             variant: =
                 (r.last_child() if r.kind_id == .k_enum_init else r.get_implicit_enum_variant())
+            // Caution: **A tagged union's variant is no integer**: folded to its tag, a backend
+            // writes `0` where `{ tag, payload }` belongs.
             if e_def: = c.env.get_enum_def(c.env.get_str(real_type_id))
+                if !e_def.is_scalar()
+                    return r.eval_unknown(c, depth)!
                 switch e_def.get_variant(variant.text if variant != null else "")
                 case .some(v_def)
                     return v_def.tag_value
@@ -360,6 +368,8 @@ impl Ast_node
                                 constant expression")
                     throw .invalid_argument
                 return fit_or_report(r, c, -val, bits, is_uns)!
+            if op.equals("!")
+                return I64::(val == 0)
             return fit_result(~val, bits, is_uns) if op.equals("~") else val
         return r.eval_unknown(c, depth)!
 
@@ -370,7 +380,7 @@ impl Ast_node
             right: = r.get_binary_right().eval_constexpr_internal(c, depth + 1)!
 
             // Caution: Take the width and the sign from **the operands' types** (fold_type),
-            // promoted to the wider: a comparison's own type is Bool, and a shift's width is the
+            // promoted to the wider. A comparison's own type is Bool, and a shift's width is the
             // left side's.
             is_shift: = op.is_shift_op()
             left_id: = r.get_binary_left().fold_type(c, depth + 1)
@@ -478,7 +488,7 @@ impl Ast_node
         //< The names of a `sizeof` target that could read as a value: `x`, `x.a`, `x[i]`, `x@`
         //<
         //< The grammar tries a type first (`ksplc/kspl.kspeg`), so these arrive as type paths (an
-        //< index as an array's length); type arguments or another postfix make a type alone. out
+        //< index as an array's length). Type arguments or another postfix make a type alone. out
         //< stays empty where the target is not such a path.
         if r == null || r.kind_id != .k_type_expr
             return
@@ -505,9 +515,9 @@ impl Ast_node
     fn sizeof_named_value(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
         //< The value a `sizeof` target parsed as a type names, as an expression to infer
         //<
-        //< Where the first name is a variable or a constant in scope, the path reads as that value,
-        //< as C reads a name a local variable hides a typedef with (sizeof_path_names has the
-        //< shapes).
+        //< Where the first name is a variable or a constant in scope, the path reads as that value.
+        //< C reads a name the same way when a local variable hides a typedef with it
+        //< (sizeof_path_names has the shapes).
         $names: = List<|Ast_node$@|>.new(null)
         defer names.free()
         r.sizeof_path_names(names@)
@@ -539,7 +549,7 @@ impl Ast_node
             if type_id == 0
                 prev_sup: = c.suppress_errors
                 c.suppress_errors = true
-                // A type is resolved here; an expression needs type inference (infer_expr_fn in
+                // A type is resolved here. An expression needs type inference (infer_expr_fn in
                 // sema/session/ctx.kspl), and so does a value's name read as a type.
                 value: = target.sizeof_named_value(c).unwrap_or(null)
                 if value != null && c.infer_expr_fn != null
@@ -590,13 +600,13 @@ impl Ast_node
                 if recv != null
                     v: = recv.eval_constexpr_internal(c, depth + 1)!
                     return r.fold_cast(c, v, depth)
-        sym_ptr: = r.resolve_ref_symbol(c)
-        if sym_ptr != null
+        named: = r.resolve_ref_symbol(c)
+        if sym_ptr: = named
             switch sym_ptr.kind
             case .enum_variant(tag_value)
                 return tag_value
             default {}
-        if decl_node: = r.const_decl_of(sym_ptr)
+        if decl_node: = r.const_decl_of(named)
             expr_node: = decl_node.get_var_decl_expr()
             if expr_node != null && expr_node.kind_id != .k_empty
                 // A cycle (`const A = B; const B = A;`) is stopped here rather than at the depth
@@ -604,7 +614,7 @@ impl Ast_node
                 // Caution: Track the path with a Map (keyed by the declaration node's address); a
                 // List costs the square of the chain's length.
                 decl_key: = Sz::decl_node
-                if c.resolving.consts.get(decl_key) catch false
+                if c.resolving.consts.get(decl_key).unwrap_or(false)
                     throw .not_constant
                 c.resolving.consts.set(decl_key, true)
                 defer c.resolving.consts.remove(decl_key)
@@ -638,8 +648,8 @@ impl Ast_node
     fn fold_type(r: Self$@, c: Sema_ctx$@, depth: I32): I32 //<
         //< The type a constant subexpression folds at, unknown where nothing says (a bare literal)
         //<
-        //< Once the bodies are typed it is the node's own type. **The declaration walk folds before
-        //< anything is typed** (an array length, an enum tag), so there it is read from the
+        //< Once the bodies are typed, it is the node's own type. **The declaration walk folds
+        //< before anything is typed** (an array length, an enum tag). So there it is read from the
         //< spelling: a literal's suffix, a cast's target, a constant's declared type, a variant's
         //< base type.
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
@@ -685,40 +695,41 @@ impl Ast_node
         if r.kind_id != .k_identifier && r.kind_id != .k_expr_path && r.kind_id != .k_type_path &&
             r.kind_id != .k_expr_postfix
             return unknown
-        sym_ptr: = r.resolve_ref_symbol(c)
-        if sym_ptr != null
+        named: = r.resolve_ref_symbol(c)
+        if sym_ptr: = named
             switch sym_ptr.kind
             case .enum_variant(_t)
                 return sym_ptr.type_id
             default {}
-        if decl_node: = r.const_decl_of(sym_ptr)
+        if decl_node: = r.const_decl_of(named)
             t_node: = decl_node.get_decl_type_node()
             if t_node != null && t_node.type_id != 0 &&
                 !sema_type_env.is_unknown(t_node.type_id)
                 return t_node.type_id
         return unknown
 
-    priv fn resolve_ref_symbol(r: Self$@, c: Sema_ctx$@): Sema_symbol$@ //<
-        //< The symbol this reference names
+    priv fn resolve_ref_symbol(r: Self$@, c: Sema_ctx$@): Sema_symbol$@? //<
+        //< The symbol this reference names, or none
         //<
-        //< It is read as any value's name is (read_written_name in name.kspl): a copy of the
+        //< It is read as any value's name is (read_written_name in name.kspl). A copy of the
         //< reading drifts until one folds and another does not.
-        $sym: Sema_symbol$@ = null
         if path: = sema_decl_name.name_path_of(r)
-            sym = c.read_written_name(path).sym
-        return sym
+            sym: = c.read_written_name(path).sym
+            if sym != null
+                return .some(sym)
+        return .none
 
-    priv fn const_decl_of(r: Self$@, sym_ptr: Sema_symbol$@): Ast_node$@? //<
+    priv fn const_decl_of(r: Self$@, named: Sema_symbol$@?): Ast_node$@? //<
         //< The referenced constant's declaration node
         //<
         //< Found by name where the lookup succeeds; otherwise the `def_node` Sema linked. null
         //< where it does not point at a constant.
         //< Caution: **Do not rely on the name alone.** The ABI pass (lower/abi.kspl) rewrites a
         //< `priv` top-level identifier's text into a mangled name (`kspl_priv_<file>_<name>`). The
-        //< fold is called from codegen too (emit_llvm_const_scalar_expr in gen/llvm/decl.kspl),
-        //< and by then the tree is rewritten, so the name is not in symtab.
+        //< fold is called from codegen too (emit_llvm_const_scalar_expr in gen/llvm/decl.kspl). By
+        //< then the tree is rewritten, so the name is not in symtab.
         $decl_node: Ast_node$@ = null
-        if sym_ptr != null
+        if sym_ptr: = named
             switch sym_ptr.kind
             case .constant
                 decl_node = sym_ptr.node
@@ -748,8 +759,8 @@ impl Ast_node
                 return .some(expr_node)
         return .none
 
-    priv fn find_bad_init_expr(r: Self$@, seen: Map<|Sz, Bool|>$@, clean: Map<|Sz, Bool|>$@):
-        Bad_init? //<
+    priv fn find_bad_init_expr(r: Self$@, c: Sema_ctx$@, seen: Map<|Sz, Bool|>$@,
+        clean: Map<|Sz, Bool|>$@): Bad_init? //<
             //< The first form in a top-level initializer that a static initializer cannot contain
             //<
             //< It searches the initializer depth-first.
@@ -767,42 +778,59 @@ impl Ast_node
                 return .none
             // A function call and a dereference do not have their value fixed at link time.
             if op.text.equals("(") || op.text.equals("$")
-                return .some(Bad_init::{ .node = r, .is_cycle = false })
+                return .some(Bad_init::{ .node = r, .why = .run_time })
+            // Neither backend writes a part of a value as a static value. C99 has no constant that
+            // reads an element or a member, and the fold reads integers alone.
+            if op.text.equals("[") || r.reads_member(c)
+                return .some(Bad_init::{ .node = r, .why = .part_read })
         if r.def_node != null
             // A variable's reference is a run-time read. An enum variant, a function (a legitimate
             // function pointer initializer) and a field have other def_node kinds.
             if r.def_node.kind_id == .k_decl_var || r.def_node.kind_id == .k_decl_var_item
-                return .some(Bad_init::{ .node = r, .is_cycle = false })
+                return .some(Bad_init::{ .node = r, .why = .run_time })
             if r.def_node.kind_id == .k_decl_const
                 key: = Sz::r.def_node
-                if seen.get(key) catch false
-                    return .some(Bad_init::{ .node = r, .is_cycle = true })
+                if seen.get(key).unwrap_or(false)
+                    return .some(Bad_init::{ .node = r, .why = .cycle })
                 // Caution: **Do not walk a declaration twice once it is known clean.** A
                 // `k_expr_path` and its `k_identifier` point at one reference, so the cost becomes
                 // 2^N. It is clean only where **the walk reached the end and found nothing**; a
                 // partial walk lets a problem by.
-                already: = clean.get(key) catch false
+                already: = clean.get(key).unwrap_or(false)
                 inner: = r.def_node.get_var_decl_expr()
                 if !already && inner != null && inner.kind_id != .k_empty
                     seen.set(key, true)
-                    found: = inner.find_bad_init_expr(seen, clean)
+                    found: = inner.find_bad_init_expr(c, seen, clean)
                     seen.remove(key)
                     if found.is_some()
                         return found
                     clean.set(key, true)
         for child in r.children
-            found: = child.find_bad_init_expr(seen, clean)
+            found: = child.find_bad_init_expr(c, seen, clean)
             if found.is_some()
                 return found
         return .none
 
+    priv fn reads_member(r: Self$@, c: Sema_ctx$@): Bool //<
+        //< Whether it reads a struct's field or a slice's `.len` or `.ptr`
+        //<
+        //< An array's `.len` is no read: sema has made it its integer already. A name through a
+        //< module, an enum variant and a method are other kinds of node.
+        if r.kind_id != .k_expr_postfix || !r.get_postfix_op().text.equals(".")
+            return false
+        if r.def_node != null && r.def_node.kind_id == .k_struct_field
+            return true
+        recv: = r.get_postfix_receiver()
+        return recv != null &&
+            c.env.is_slice(c.env.get_clean_real_type(recv.type_id))
+
     fn check_static_initializer(r: Self$@, c: Sema_ctx$@) //<
         //< Checks a top-level variable's or constant's initializer
         //<
-        //< C requires a constant expression there, so a run-time computation is rejected here
+        //< C requires a constant expression there. So a run-time computation is rejected here,
         //< rather than failing in C with `initializer element is not constant`.
         // Caution: **Track the path (seen) and the finished declarations (clean) with a Map**
-        // (keyed by the declaration node's address); a List goes cubic and **never finishes**. An
+        // (keyed by the declaration node's address). A List goes cubic and **never finishes**. An
         // empty Map takes no memory (Map.new in std/ds.kspl).
         $seen: = Map<|Sz, Bool|>.new(null)
         defer seen.free()
@@ -811,10 +839,16 @@ impl Ast_node
         // (the case const_cycle in tests/negative/const.kspl).
         $clean: = Map<|Sz, Bool|>.new(null)
         defer clean.free()
-        if bad: = r.find_bad_init_expr(seen@, clean@)
-            if bad.is_cycle
+        if bad: = r.find_bad_init_expr(c, seen@, clean@)
+            switch bad.why
+            case .cycle
                 c.err(bad.node, "circular constant definition detected")
-            else
+            case .part_read
+                c.err(bad.node,
+                    "a top-level initializer cannot read a part of another value (an element, a \
+                        field, a slice's `.len` or `.ptr`). Write the value itself, or name a \
+                        `const` that holds it")
+            case .run_time
                 c.err(bad.node, "top-level variable initializer is not a compile-time constant")
             return
         r.report_init_overflow(c)

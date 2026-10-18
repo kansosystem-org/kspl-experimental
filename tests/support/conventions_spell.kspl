@@ -145,12 +145,12 @@ priv fn enum_taken_first(line: U8[], enums: List<|U8[]|>@): U8[] //<
 
 priv fn fixture_text(rel: U8[]): Bool //< a fixture whose functions are what a test compiles
     return rel.starts_with("ksplc/tests/negative/") || rel.starts_with("ksplc/tests/parse/") ||
-        rel.starts_with("ksplc/tests/lint/") || rel.starts_with("ksplc/tests/kspls/")
+        rel.starts_with("ksplc/tests/lint/") || rel.starts_with("ksplc/tests/notation/")
 
 priv fn check_enum_functions(arena: Arena$@) //<
     //< No top-level function takes an enum of its own file as its first parameter
     //<
-    //< **The enum must be declared in the same file**: one from another file or package is skipped,
+    //< **The enum must be declared in the same file.** One from another file or package is skipped,
     //< since its impl would then hold that package's view of it. What this misses still breaks the
     //< rule (Principle 8 in `../../docs/DESIGN-principles.md`).
     $seen: Sz = 0
@@ -286,8 +286,9 @@ priv fn check_arena_default(arena: Arena$@) //<
         "drop the `= null`, and have each heap caller write `null` (why: this section's head)")
 
 // The samples for `defaults_an_arena`.
-// Caution: **Include the side that must not hit**: a variable's initializer (top-level, local,
-// mutable), a comparison, a default on another type, a function type taking an arena, a string.
+// Caution: **Include the side that must not hit.** These are a variable's initializer (top-level,
+// local, mutable), a comparison, a default on another type, a function type taking an arena, a
+// string.
 priv const arena_default_samples: Sample[_] = ::{
     Sample::{ .text = "    arena: Arena$@ = null, //< where the elements go", .hits = true },
     Sample::{ .text = "fn new(loc: Loc, arena: Arena$@ = null): Node$@", .hits = true },
@@ -335,7 +336,7 @@ priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
                 else if rest[i] == ')'
                     depth -= 1
                 i += 1
-            // The call without its closing bracket: an empty fix leaves `""` standing alone at its
+            // The call without its closing bracket. An empty fix leaves `""` standing alone at its
             // end, after a space or a comma (a hint ending in an escaped quote ends `\""`).
             call: = rest.sub(at, i - at - 1).trim_end()
             if call.ends_with("\"\"") && call.len > 2 &&
@@ -348,8 +349,8 @@ priv fn has_hintless_list(src: U8[], arena: Arena$@): Bool //<
     return false
 
 // The samples for `has_hintless_list`.
-// Caution: **Keep a call spread over lines and one inside a `\"\"\"` string**: the first is the
-// usual shape, and the second is a test's material, not a call.
+// Caution: **Keep a call spread over lines and one inside a `\"\"\"` string.** The first is the
+// usual shape. The second is a test's material, not a call.
 priv const hintless_samples: Sample[_] = ::{
     Sample::{ .text = "    verdict.check_list(\"x\", n, \"files\", bad@, \"\")\n", .hits = true },
     Sample::{ .text = "    verdict.check_list(\"x (y)\", n, \"files\",\n        bad@, \"\")\n",
@@ -377,6 +378,61 @@ priv fn check_hintless_lists(arena: Arena$@) //<
     verdict.check_list("every walk's verdict says how to fix what it finds", seen, "files", bad@,
         "give the `verdict.check_list` call a last argument saying what to do")
 
+// ==========================================
+// A diagnostic names a type by its display text, never its internal name
+// ==========================================
+
+priv const internal_name_call: U8[] = "get_str(" //< the call that gives a type's internal name
+
+priv fn interpolates_internal_name(line: U8[], _arena: Arena$@): Bool //<
+    //< Whether a line puts a type's internal name into an interpolation (`\{…get_str(…)…\}`)
+    //<
+    //< **An interpolation writes text for a person**, and the internal name is C's spelling
+    //< (`std_lang_Option_I32`, `U8 immut`); `display` (`ksplc/sema/type/display.kspl`) writes what
+    //< the user wrote. A name bound first and interpolated later escapes this reading and still
+    //< breaks the rule (Principle 8 in `../../docs/DESIGN-principles.md`).
+    if line.trim_spaces().starts_with("//")
+        return false
+    $rest: = line
+    for
+        if at: = rest.find_str("\\{")
+            after: = rest.sub_from(at + 2)
+            end: = after.find_str("\\}").unwrap_or(after.len)
+            if after.sub(0, end).find_str(internal_name_call).is_some()
+                return true
+            rest = after.sub_from(end)
+        else
+            return false
+
+// The samples for `interpolates_internal_name`.
+// Caution: **Include the side that must not hit**: a key built with `.s()`, `display` in the
+// interpolation, a comment, and `get_str` after the interpolation closes.
+priv const internal_name_samples: Sample[_] = ::{
+    Sample::{ .text = "    .s(\"between '\\{c.env.get_str(t)\\}' and\")", .hits = true },
+    Sample::{ .text = "  c.err(n, \"x \\{a\\} and \\{r.env.get_str(b)\\}\")", .hits = true },
+    Sample::{ .text = "    .s(\"between '\\{c.env.display(t)\\}' and\")", .hits = false },
+    Sample::{ .text = "    key.s(r.env.get_str(owner)).c('.').s(name)", .hits = false },
+    Sample::{ .text = "    // \"\\{c.env.get_str(t)\\}\" is the old shape", .hits = false },
+    Sample::{ .text = "    .s(\"\\{n\\} of \").s(c.env.get_str(t))", .hits = false },
+}
+
+priv fn check_internal_names(arena: Arena$@) //<
+    //< No message in the compiler interpolates a type's internal name
+    $bad: = scan.misjudged(Sample[]::internal_name_samples, interpolates_internal_name, arena)
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
+        if !rel.starts_with("ksplc/") || rel.starts_with("ksplc/tests/")
+            continue
+        $i: Sz = 0
+        for line in harness.read_under_root(rel).lines(arena)
+            i += 1
+            seen += 1
+            if interpolates_internal_name(line, arena)
+                bad
+                    .push(arena.text().s(rel).s(":\{i\}: ").s(line.trim_spaces()).take())
+    verdict.check_list("a diagnostic names a type by its display text", seen, "lines", bad@,
+        "write `env.display(id)` in place of `env.get_str(id)` in the message")
+
 fn run(arena: Arena$@)
     check_hintless_lists(arena)
     check_empty_case_payload(arena)
@@ -385,3 +441,4 @@ fn run(arena: Arena$@)
     check_enum_functions_fire(arena)
     check_arena_default(arena)
     check_arena_default_fires(arena)
+    check_internal_names(arena)

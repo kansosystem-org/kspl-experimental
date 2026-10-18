@@ -11,7 +11,7 @@
 # Windows builds in MSYS2's UCRT64 alone (its UCRT is production MSVC's); others fail obscurely.
 ifeq ($(OS),Windows_NT)
 ifneq ($(MSYSTEM),UCRT64)
-$(error Run this project's Windows build from MSYS2's "UCRT64" shell (mintty) [MSYSTEM=$(MSYSTEM) at present : empty means you are running from outside an MSYS2 shell, such as PowerShell or cmd]. Start "MSYS2 UCRT64" (C:\msys64\ucrt64.exe) from the start menu, confirm that `echo $$MSYSTEM` says UCRT64, and then make. Using only tools such as mingw64 through PATH from PowerShell or cmd is unsupported. For the details see "Windows natively, without Docker" in docs/HOWTO-build.md)
+$(error Run this project's Windows build from MSYS2's "UCRT64" shell (mintty) [MSYSTEM=$(MSYSTEM) at present : empty means you are running from outside an MSYS2 shell, such as PowerShell or cmd]. Start "MSYS2 UCRT64" (C:\msys64\ucrt64.exe) from the start menu, confirm that `echo $$MSYSTEM` says UCRT64, and then make. Using only tools such as mingw64 through PATH from PowerShell or cmd is unsupported. For the details see "The environment for each platform" in docs/HOWTO-build.md)
 endif
 
 ifneq (,$(findstring mingw,$(MAKE_HOST)))
@@ -70,10 +70,10 @@ LSP_EXE     := ksplc_server.exe
 # Caution: **Omit no file ksplc reads or `embed`s, nor a `ksplc.cfg`**: its fix would rebuild
 # nothing, and the old compiler passes the tests (`make test-deps` holds this list to ksplc's).
 # The `tests` folders are left out: ksplc reads none of them, and listed, a new test case rebuilt
-# the compiler twice over.
-KSPL_SRCS    := $(shell find ksplc std kspeg -type d -name tests -prune -o \( -name "*.kspl" \
-               -o -name ksplc.cfg \) -print) \
-               ksplc/kspl.kspeg ksplc/docs/SPEC-tools.md \
+# the compiler twice over. So are the `out` folders, where a package's runs leave scratch sources.
+KSPL_SRCS    := $(shell find ksplc std kspeg -type d \( -name tests -o -name out \) -prune -o \
+               \( -name "*.kspl" -o -name ksplc.cfg \) -print) \
+               ksplc/kspl.kspeg ksplc/docs/SPEC-diagnostics.md \
                $(wildcard ksplc/gen/runtime/*.c) $(wildcard ksplc/gen/runtime/*.h)
 
 # --- The toolchain for the host ---
@@ -212,7 +212,7 @@ endif
 # A `.PHONY` declaration in an included makefile is not repeated here. `clean` is shared with
 # the logging wrapper above; these are the remaining root declarations.
 .PHONY: all \
-	stage1 self-host self-host-ship commit-seed \
+	stage1 self-host self-host-ship commit-seed test-seed-sum \
 	fmt lint debug debug-file \
 	test-llvm-abi test-freestanding-math test-simd install-lsp install install-check \
 	run fim-corpus fim-model fim-eval qwen kssrv perf-log
@@ -346,9 +346,21 @@ ifeq ($(BACKEND),c)
 		|| (cp $(TMP_DIR)/seed_stripped.c $(SEED_C) \
 			&& ./$(STAGE1_EXE) run tools/repo_stat.kspl \
 			&& echo "Seed updated successfully.")
+	@./$(STAGE1_EXE) run tools/seed_sum.kspl write $(SEED_SUM) $(SEED_SUM_SRCS)
 else
 	@echo "Cannot update seed.c from LLVM output. Run without LLVM=1."
 endif
+
+# **The seed's record names the compiler source it was taken from** (`tools/seed_sum.kspl`): what
+# ksplc reads under `ksplc/`, its runtime included, but neither the tests nor `SPEC-diagnostics.md`,
+# which needs no re-bake ("The bootstrap, and keeping the seed in step" in
+# ksplc/docs/DESIGN-compiler.md).
+SEED_SUM      := ksplc/seed.sum
+SEED_SUM_SRCS := $(sort $(filter ksplc/%,$(filter-out ksplc/docs/SPEC-diagnostics.md,$(KSPL_SRCS))))
+
+## Gates|test-seed-sum|See that `ksplc/seed.c` was re-baked after the last change to the compiler
+test-seed-sum: $(STAGE1_EXE)
+	@./$(STAGE1_EXE) run tools/seed_sum.kspl check $(SEED_SUM) $(SEED_SUM_SRCS)
 
 # ==================================================================
 # 3. Development tools (formatter / linter / LSP / debugging)
@@ -359,9 +371,12 @@ endif
 # (CP932 under MSYS2), garbling text or eating a `"`; **hand text over as an environment variable**.
 # **Only a leading tab marks a recipe line**, for make and the checks: a `$(foreach)` body starts
 # with one (in a `define`), and a variable's continuation line never does.
-# **`private/` is what the published copy leaves out**: taken in only where it stands, and first,
-# since `mk/lint.mk` and `mk/test.mk` read its lists as they are defined.
--include private/private.mk
+# **A clone's own make files come first** (`KANSO_LOCAL_MK`: each top folder's `local.mk` unless
+# set), since `mk/lint.mk` and `mk/test.mk` read `EXTRA_SUITES` and `EXTRA_LINT_TARGETS` as they
+# are defined. A clone of the published copy has none. **Exported, so the checks read this list**
+# (`make_files` in `tests/suite/recipe_bytes_test.kspl`); a file named that is missing fails.
+export KANSO_LOCAL_MK ?= $(wildcard */local.mk)
+include $(KANSO_LOCAL_MK)
 include mk/ci.mk
 include mk/lint.mk
 include mk/test.mk
@@ -461,6 +476,8 @@ ksos ksos-cm ksos-rp2040 test-ksos-link test-ksos-ramtext test-ksos-qemu test-ks
 
 ## Run|ksos-*|One POSIX host demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
 ## Run|ksos-cm-*|One Cortex-M demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
+## Run|ksos-cm0-*|One Cortex-M demo on the Cortex-M0, under QEMU's micro:bit (listed in `ksos/README.md`)
+## Run|ksos-nrf51-*|One nRF51 demo, under QEMU's micro:bit (listed in `ksos/README.md`)
 ## Run|ksos-rp2040-*|One RP2040 demo (the listing is in `ksos/README.md`, the accounts in `ksos/docs/DESIGN-rtos.md`)
 ## Per-item|ksos-linkcheck-*|One target's worth of `test-ksos-link`
 ## Per-item|ksos-qemugate-*|One target's worth of `test-ksos-qemu`
@@ -479,10 +496,11 @@ include mk/help.mk
 # ==================================================================
 # 5. Cleaning up
 # ==================================================================
-# **Only $(OUT_DIR) is removed**: nothing built is placed outside it, the served page included.
-## Build-and-install|clean|Remove `out/`
+# **$(OUT_DIR) and each package's own `out/` are removed** (a package's Makefile run alone builds
+# into its own). What `install-lsp` and the `fim-*` goals write is kept: it is used, not rebuilt.
+## Build-and-install|clean|Remove `out/` and each package's `out/`
 clean:
-	@rm -rf "$(OUT_DIR)"
-	@echo "Cleaned $(OUT_DIR)"
+	@rm -rf "$(OUT_DIR)" $(wildcard */out)
+	@echo "Cleaned $(OUT_DIR) $(wildcard */out)"
 
 endif

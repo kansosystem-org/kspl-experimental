@@ -7,8 +7,8 @@
 //< always joined with `=`. Otherwise a path containing a space arrives as word-split fragments,
 //< and the failure shows up far from them. **After a lone `--`, every argument is positional**,
 //< so a file named `-x` can still be named (`rm -- -x`).
-//< The design and its costs are in "How an argument's destination is declared, and why
-//< anything unknown is an error" in `std/docs/DESIGN-system.md`.
+//< The design and its costs are in "An argument's destination is declared, and unknown ones
+//< are errors" in `std/docs/DESIGN-system.md`.
 import "std/chars"
 import "std/ds" { List }
 import "std/io"
@@ -26,6 +26,7 @@ pub enum Argp_error //< why the arguments could not be read as declared
     unexpected_value(name: U8[]) //< a flag carried `=value`
     multiple_commands(name: U8[]) //< two commands were named at once
     unexpected_arg(name: U8[]) //< a positional argument was given to a CLI that takes none
+    repeated(name: U8[]) //< an item taking one value was given twice; the second would replace it
 
 priv enum Kind //< an item's kind and its destination
     //<
@@ -62,13 +63,21 @@ priv struct Cmd //< a command selected by a positional argument's name (`fmt` / 
         //< When this is not null, **nothing after this command's first positional argument is
         //< interpreted** (in `ksplc run script.kspl --verbose`, the `--verbose` belongs to the
         //< script).
+    hidden: Bool //< left out of the usage: a command another program calls, never a person
 
-priv fn store_value(o: Opt$@, val: U8[]): Void!Argp_error //<
+priv fn store_value(o: Opt$@, val: U8[], again: Bool): Void!Argp_error //<
     //< Interprets the value by o's kind and stores it in the destination
+    //<
+    //< Caution: **Refuse an item of one value given `again`.** Kept, the later value silently wins,
+    //< so a word added to the end of a command line undoes one before it (`--out=a --out=b`).
     switch o.kind
     case .str_val(out)
+        if again
+            throw .repeated(o.name)
         out$ = val
     case .int_val(out)
+        if again
+            throw .repeated(o.name)
         out$ = val.to_i64() catch
             throw .bad_value(o.name)
     case .str_list(out)
@@ -100,7 +109,7 @@ pub struct Parser //< the declarations, and where the parsed values go
     priv positional_help: U8[] //<
         //< The usage name declared by `positional`. Empty: the CLI takes no positional argument.
     priv takes_positional: Bool
-    pub command: U8[] //< the chosen command, or empty; the caller decides the default.
+    pub command: U8[]? //< the chosen command, or none; the caller decides the default.
         //<
         //< A default kept in argp would drift from the declaration.
     priv own: Own_arena //< the arena it lives in, when `create` was given null
@@ -118,7 +127,7 @@ impl Parser
         cmds: = List<|Cmd|>.create(work.arena)
         rest: = List<|U8[]|>.create(work.arena)
         p: = Parser::{ .prog = prog, .about = about, .opts = opts, .cmds = cmds, .rest = rest,
-            .positional_help = "", .takes_positional = false, .own = work.own }
+            .positional_help = "", .takes_positional = false, .command = .none, .own = work.own }
         return work.arena.create(p)
 
     pub fn free(r: Self$@) //< lets go the parser and all it holds, when `create` was given null
@@ -131,7 +140,7 @@ impl Parser
     pub fn positional( //< declares that this CLI takes positional arguments
         //<
         //< **A positional argument given to a CLI that declares none is an error**, for the same
-        //< reason as an unknown `--name`: a path's word-split fragments arrive **as positional
+        //< reason as an unknown `--name`. A path's word-split fragments arrive **as positional
         //< arguments**, and dropping them silently hides the cause.
         r: Self$@,
         usage: U8[], //< how the `Usage:` line writes them (`<input.kspl> [output]`); kept as a copy
@@ -155,7 +164,16 @@ impl Parser
         name: U8[], //< the command's name as typed
         help: U8[], //< the one line shown beside it in the usage
     )
-        r.cmds.push(Cmd::{ .name = name, .help = help, .trailing = null })
+        r.cmds.push(Cmd::{ .name = name, .help = help, .trailing = null, .hidden = false })
+
+    pub fn subcommand_hidden( //< a command chosen by name that the usage does not list
+        //<
+        //< For a mode only another program starts (a language server's worker). Listed, it reads
+        //< as something a person can type; left undeclared, its name would be read as an input.
+        r: Self$@,
+        name: U8[], //< the command's name as typed
+    )
+        r.cmds.push(Cmd::{ .name = name, .help = "", .trailing = null, .hidden = true })
 
     pub fn subcommand_trailing( //< a command taking one target and an uninterpreted rest
         //<
@@ -165,7 +183,8 @@ impl Parser
         help: U8[], //< the one line shown beside it in the usage
         trailing: List<|U8[]|>$@, //< the rest; never read as options, even if it looks like them
     )
-        r.cmds.push(Cmd::{ .name = name, .help = help, .trailing = trailing })
+        r.cmds
+            .push(Cmd::{ .name = name, .help = help, .trailing = trailing, .hidden = false })
 
     pub fn command_flag( //< a command chosen by an option's name (`--version`); takes no value
         //<
@@ -213,8 +232,7 @@ impl Parser
 
     pub fn str_list_opt( //< a string that can be given any number of times
         //<
-        //< Caution: **It accumulates instead of overwriting.** With `str_opt`, `--define=a
-        //< --define=b` silently keeps only the later value.
+        //< Each value is kept, in order. `str_opt` refuses a second `--define=b` as `repeated`.
         r: Self$@,
         name: U8[], //< the name as typed
         out: List<|U8[]|>$@, //< where each value is pushed, in the order given
@@ -236,23 +254,35 @@ impl Parser
     pub fn saw( //< whether that item was given at all, whatever its value
         //<
         //< It tells "not given" from "given empty" (`--out=`), which the value alone cannot.
+        //< Caution: **A name declared nowhere stops the program**: answered false, a misspelt name
+        //< reads as an item never given.
         r: Self$@,
         name: U8[], //< the declared name
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
     ): Bool
-        if o: = r.find(name)
-            return o.seen
-        return false
+        return r.declared(name, "saw", file, line).seen
 
     pub fn saw_empty( //< whether that item was given with nothing after its `=` (`--out=`)
         //<
         //< An empty value is a value, so parsing takes it; a caller none of whose items means
-        //< anything by one refuses it through here.
+        //< anything by one refuses it through here. A name declared nowhere stops the program, as
+        //< at `saw`.
         r: Self$@,
         name: U8[], //< the declared name
+        file: U8[] = caller_file, //< where it was called, for the stop
+        line: Sz = caller_line, //< where it was called, for the stop
     ): Bool
-        if o: = r.find(name)
-            return o.seen_empty
-        return false
+        return r.declared(name, "saw_empty", file, line).seen_empty
+
+    priv fn declared(r: Self$@, name: U8[], asked: U8$[], file: U8[], line: Sz): Opt$@ //<
+        //< The item declared under name; stops the program where none is
+        o: = r.find(name).unwrap_or(null)
+        if o == null
+            $m: = Panic_msg.new()
+            m.s("Parser.").s(asked).s(": '").s(name).s("' is declared nowhere")
+            panic(m.slice(), file, line)
+        return o
 
     priv fn find(r: Self$@, name: U8[]): Opt$@? //< looks an item up by its declared name
         for i in Range.asc(r.opts.len)
@@ -284,9 +314,9 @@ impl Parser
     priv fn set_command(r: Self$@, name: U8[]): Void!Argp_error //< selects a command
         //<
         //< A second one throws multiple_commands.
-        if r.command.len > 0
+        if r.command.is_some()
             throw .multiple_commands(name)
-        r.command = name
+        r.command = .some(name)
 
     pub fn parse( //< reads the process's own arguments, skipping the program name at the start
         r: Self$@,
@@ -311,7 +341,7 @@ impl Parser
         for $i: Sz = 0; i < argv.len; i += 1
             arg: = argv.get(i)
             // Caution: Make this check before every other one: after the target, not even `--help`
-            // may be interpreted (it would take the script's own).
+            // can be interpreted (it would take the script's own).
             if trail != null && r.rest.len > 0
                 trail.push(arg)
                 continue
@@ -341,6 +371,7 @@ impl Parser
             name: = hit.name
             val: = hit.val
             has_val: = hit.has_val
+            again: = o.seen
             o.seen = true
             switch o.kind
             case .flag(out)
@@ -352,12 +383,12 @@ impl Parser
                     throw .unexpected_value(name)
                 r.set_command(o.name)!
             default
-                // **A value is joined with `=`, never taken from the next argument**, so nothing
+                // **A value is joined with `=`, never taken from the next argument.** So nothing
                 // depends on guessing whether the next argument is a value or an item.
                 if !has_val
                     throw .missing_value(name)
                 o.seen_empty = o.seen_empty || val.len == 0
-                store_value(o, val)!
+                store_value(o, val, again)!
         for i in Range.asc(r.opts.len)
             o: = r.opts.at(i)
             if o.required && !o.seen
@@ -385,12 +416,16 @@ impl Parser
         r: Self$@,
         out: Writer, //< where its usage goes, as `print_usage` takes it
     )
-        if r.cmds.len > 0
-            out.s("\nCommands:\n")
-            for i in Range.asc(r.cmds.len)
-                c: = r.cmds.at(i)
-                help_name(out, c.name, " <target> [args...]" if c.trailing != null else "")
-                out.s(c.help).c('\n')
+        $heading: = false
+        for i in Range.asc(r.cmds.len)
+            c: = r.cmds.at(i)
+            if c.hidden
+                continue
+            if !heading
+                out.s("\nCommands:\n")
+                heading = true
+            help_name(out, c.name, " <target> [args...]" if c.trailing != null else "")
+            out.s(c.help).c('\n')
         out.s("\nOptions:\n")
         for i in Range.asc(r.opts.len)
             o: = r.opts.at(i)
@@ -415,7 +450,7 @@ impl Parser
     pub fn parse_or_exit( //< reads the arguments, or prints why and ends the process
         //<
         //< **It returns only on success.** `--help` prints the usage on standard output and exits
-        //< 0; an error prints the reason and the usage on standard error and exits 2, so a caller
+        //< 0. An error prints the reason and the usage on standard error and exits 2. So a caller
         //< reading the output never takes a refusal for it.
         r: Self$@,
         a: sys.Args, //< what `sys.args()` returned
@@ -437,7 +472,7 @@ impl Argp_error: Formattable //< so a failure can be written straight into a mes
     pub fn fmt(r: Self, w: Writer): Writer //< writes the reason for a person to read
         //<
         //< Interpolation expands into a chain of calls on a Writer ("The expansion specification
-        //< for string interpolation" in docs/SPEC-language.md); returning a `U8[]` would leave the
+        //< for string interpolation" in docs/SPEC-language.md). Returning a `U8[]` would leave the
         //< caller managing a temporary buffer's lifetime.
         switch r
         case .help_requested
@@ -456,3 +491,5 @@ impl Argp_error: Formattable //< so a failure can be written straight into a mes
             return w.s("cannot combine '").s(n).s("' with another command")
         case .unexpected_arg(n)
             return w.s("unexpected argument '").s(n).s("'")
+        case .repeated(n)
+            return w.s("option '").s(n).s("' takes one value and is given more than once")

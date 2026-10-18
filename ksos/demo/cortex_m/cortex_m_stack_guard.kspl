@@ -1,0 +1,72 @@
+//< ARM Cortex-M: a damaged stack canary stops the run at the next switch away from its task
+//<
+//< victim and peer share the CPU under SysTick, and neither yields. victim waits until peer has
+//< run, so it has been switched out and restored once. Then it overwrites its canary (the bytes
+//< `Task.create` wrote at the stack's lowest address), as a stack grown past its end would. The
+//< next tick's `schedule()` must panic with the kernel's overflow message: the panic is the pass.
+//< The demo damages the canary directly, not by deep recursion. The bytes a call takes change
+//< with the optimization and the ABI, so a real overflow lands nowhere predictable.
+import "ksos/demo/common/semihost_console" as con
+import "ksos/kernel/task" + { Task }
+import "std/chars"
+
+extern "C"
+    _estack: U8
+    fn kspl_panic_stack_words(sp: Sz, capacity: Sz): Sz
+
+const expected: U8[] = "ksos: stack overflow detected"
+
+$g_peer_rounds: U32 = 0
+$g_damaged: Bool = false // set once victim has overwritten its canary, after a switch
+
+$tcb_victim: Task
+$tcb_peer: Task
+$stack_victim: U8[1024]
+$stack_peer: U8[1024]
+
+fn on_panic(msg: U8$[]) //< Check that the panic is the kernel's overflow stop, and end
+    con.puts("PANIC: ")
+    con.puts(msg)
+    con.puts("\n")
+    con.check("a damaged canary stops the run with the kernel's overflow panic",
+        msg.starts_with(expected))
+    con.check("the canary was damaged after its task had been switched out and back", g_damaged)
+    switch take_panic_record()
+    case .some(info)
+        con.check("the interrupt panic keeps its message", info.msg.starts_with(expected))
+        con.check("the interrupt panic keeps a bounded stack fragment",
+            info.sp != 0 && info.stack_len > 0 && info.stack_len <= 16)
+    case .none
+        con.check("the interrupt panic keeps a record", false)
+    con.print_summary("Cortex-M stack guard")
+    con.exit()
+
+fn peer(_arg: Void$@): Void //< counts its rounds, never yielding
+    //<
+    //< The write is volatile: in a loop that never ends, a plain one is never seen to be needed.
+    for
+        __kspl_write_volatile(g_peer_rounds@, g_peer_rounds + 1)
+
+fn victim(_arg: Void$@): Void
+    start: = g_peer_rounds
+    // Until a tick has switched to peer and back. The read is volatile: a plain one would be read
+    // once, as nothing in the loop could change it.
+    for __kspl_read_volatile(g_peer_rounds@) == start {}
+    stack_victim[0] = 0 // the canary's first byte, at the stack's lowest address
+    g_damaged = true
+    for {}
+
+#export
+fn ksos_main()
+    con.puts("=== Kanso OS (Cortex-M) stack canary under preemption ===\n")
+    ram_end: = Sz::_estack@
+    con.check("a stack fragment stops at the last RAM word",
+        kspl_panic_stack_words(ram_end - sizeof(Sz), 16) == 1)
+    con.check("a stack fragment cannot start past RAM", kspl_panic_stack_words(ram_end, 16) == 0)
+    con.check("an unaligned stack has no fragment", kspl_panic_stack_words(ram_end - 1, 16) == 0)
+    panic_hook = on_panic
+    tcb_victim.create(U8$[]::stack_victim, victim, null, 1, "victim")
+    tcb_peer.create(U8$[]::stack_peer, peer, null, 1, "peer")
+    task.enable_preemption(50000)
+    task.start_scheduler()
+    for {}

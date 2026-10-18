@@ -1,11 +1,10 @@
 //< Tasks created and deleted on the heap from several tasks at once, under a fast tick
 //<
-//< Three tasks of one priority each create tasks with `create_dyn` and end them with `delete_dyn`,
-//< one way or the other: the new task deletes itself, or its creator deletes it. A tick every few
+//< Three tasks of one priority each create tasks with `create_dyn` and end them with `delete_dyn`.
+//< Either the new task deletes itself, or its creator deletes it. A tick every few
 //< microseconds cuts each of them anywhere in `ksos/kernel/dynamic.kspl`. Every Task and stack
-//< must go back to the heap exactly once: a double free stops the run, and a lost one shows in the
+//< must go back to the heap exactly once. A double free stops the run. A lost one shows in the
 //< heap's count at the end.
-import "ksos/demo/common/task_end"
 import "ksos/kernel/dynamic" as dyn
 import "ksos/kernel/task" + { Task }
 import "std/mem"
@@ -35,8 +34,8 @@ const full_yields: I32 = 1000 // the yields a full table may take to empty befor
 fn create_or_wait(entry: task.Task_fn, name: U8[]): Task$@ //< creates a task once a slot is free
     //<
     //< **A full table is waited out, not a failure.** A task that ends itself frees its slot only
-    //< once it has run, and between ticks a churner can create more of them than there are slots,
-    //< the faster the machine the more. A slot lost for good still fails: the yields run out.
+    //< once it has run. Between ticks, a churner can create more of them than there are slots (the
+    //< faster the machine, the more). A slot lost for good still fails: the yields run out.
     $yields: I32 = 0
     for
         switch Task.create_dyn(entry, null, 1, name, dyn_stack)
@@ -60,9 +59,8 @@ fn main(): I32
     tcb_1.create(U8$[]::stack_1, churn, null, 1, "churn 1")
     tcb_2.create(U8$[]::stack_2, churn, null, 1, "churn 2")
     tcb_3.create(U8$[]::stack_3, churn, null, 1, "churn 3")
-    task.enable_preemption(100) // a tick every 20 us, so every stretch of the work is cut somewhere
+    task.enable_preemption(100) // a tick every 100 us, so every stretch of the work is cut somewhere
     task.start_scheduler() // returns once every task is done
-    task_end.require_all_ended()
     task.enable_preemption(1000000000) // no tick past this point
     dyn.reap_pending()
     assert(g_done == churners, "dyn_race: a churning task did not finish")

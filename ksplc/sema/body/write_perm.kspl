@@ -17,6 +17,7 @@ import "ksplc/sema/body/expr" as sema_body_expr
 import "ksplc/sema/decl/access" as sema_decl_access
 import "ksplc/sema/decl/name" as sema_decl_name
 import "ksplc/sema/session/ctx" { Sema_ctx, Sema_error }
+import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "std/str"
@@ -25,10 +26,10 @@ impl Ast_node
     fn write_target_type(r: Self$@, c: Sema_ctx$@): I32!Sema_error //<
         //< Computes the receiver type along the path to the written place without rewriting the AST
         //<
-        //< infer_expr is destructive (it morphs nodes: "The AST nodes the Sema layer creates (its
-        //< contract with Lower and Genc)" in ksplc/docs/DESIGN-compiler.md), and this runs before
-        //< the main inference. Applied early to a method-call receiver (`node.get_child(0).def_node
-        //< = v`), it would leave broken nodes and wrong code.
+        //< infer_expr is destructive: it morphs nodes ("The nodes Sema creates: its contract with
+        //< Lower and Genc" in ksplc/docs/DESIGN-sema.md). This runs before the main inference.
+        //< Applied early to a method-call receiver (`node.get_child(0).def_node = v`), infer_expr
+        //< would leave broken nodes and wrong code.
         unknown: = I32::sema_type_env.Builtin_type_id.unknown
         if r == null
             return unknown
@@ -54,8 +55,8 @@ impl Ast_node
         if op == null
             return unknown
         // Caution: `$` and `[` have no member, so they are handled before the `.` check. If not
-        // followed, the type reaches reject_write_through_const_ptr as unknown, reads as "not a
-        // pointer", and the check fails open: `pp$$ = v` / `arr[i]$ = v` pass a read-only level.
+        // followed, the type reaches reject_write_through_const_ptr as unknown and reads as "not a
+        // pointer". The check then fails open: `pp$$ = v` / `arr[i]$ = v` pass a read-only level.
         if op.text.equals("$") || op.text.equals("[")
             base_tid: = r.get_postfix_receiver().write_target_type(c)!
             if base_tid == unknown
@@ -99,34 +100,31 @@ impl Ast_node
         if !c.env.is_const(pointee)
             return true // what it points at is mutable: writable
         c.err(err_node,
-            "cannot write through a read-only pointer (use '$@' to allow writing through it)")
+            "cannot write through a read-only pointer. Use '$@' to allow writing through it")
         throw .analysis_failed
 
     fn check_write_path(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks whether the path to the destination crosses a read-only pointer
         //<
         //< **A form that cannot be followed counts as "cannot write" (fail-closed).** An explicit
-        //< cast (`U8$@::(p)`) is **the deliberate way out**, for registers or an external API
-        //< ("Places, and the rules for when they may be written" in docs/SPEC-language.md).
+        //< cast (`U8$@::(p)`) is **the deliberate way out**, for registers or an external API. See
+        //< "Places, and the rules for when they may be written" in docs/SPEC-language.md.
         r.reject_write_to_const_element(c)!
         if !c.place_denies_write(r)
             return
         c.err(r,
-            "cannot write here: the path to this location goes through a read-only pointer, or its \
-                type could not be determined (use '$@' to allow writing through it, or cast \
-                explicitly with 'T$@::(...)' if the write is intended)")
+            "cannot write here. The path to this location goes through a read-only pointer, or its \
+                type could not be determined. Use '$@' to allow writing through the pointer, or \
+                cast explicitly with 'T$@::(...)' if the write is intended")
         throw .analysis_failed
 
     priv fn reject_write_to_const_element(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks the element's mutability (step 3, the type)
         //<
         //< place_crosses_const_elem in `sema/decl/access.kspl` decides; this only reports it.
-        if !c.place_crosses_const_elem(r)
-            return
-        c.err(r,
-            "cannot write to an element of a read-only slice or array (use '$[]' to allow writing \
-                to elements)")
-        throw .analysis_failed
+        if recv: = c.const_elem_receiver(r)
+            report_read_only_element(c, r, recv.type_id)
+            throw .analysis_failed
 
     fn enforce_assignable_place(r: Self$@, c: Sema_ctx$@): Void!Sema_error //<
         //< Checks that the assignment destination is a place
@@ -138,12 +136,12 @@ impl Ast_node
         if r == null || r.is_place_expr()
             return
         c.clear_scratch()
-            .s("cannot assign to this expression: it is a value, not a place. Only a variable, a \
+            .s("cannot assign to this expression. It is a value, not a place. Only a variable, a \
                 field ('a.b'), an element ('a[i]'), or a dereference ('p$') can be assigned to")
         op: = r.get_postfix_op()
         if op != null && op.text.equals("@")
             c.scratch
-                .s("\n  Hint: '@' takes an address, '$' reads through a pointer. To write through \
+                .s("\n  Hint: '@' takes an address. '$' reads through a pointer. To write through \
                     'p', use 'p$ = …'.")
         c.err(r, c.scratch.slice())
         throw .analysis_failed
@@ -158,14 +156,14 @@ impl Ast_node
             return
 
         // **A binding's name is read as any value's** (read_written_name in sema/decl/name.kspl),
-        // a `.` chain of names whole: `m.total` through an import alias names that file's global,
-        // not a field of a value `m`.
+        // and a `.` chain of names is read whole. So `m.total` through an import alias names that
+        // file's global, not a field of a value `m`.
         if path: = sema_decl_name.name_path_of(r)
             named: = c.read_written_name(path)
             if named.sym != null && named.sym.kind.is_var_or_const()
                 if !named.sym.flags.is_mut
                     c.clear_scratch()
-                        .s("cannot assign to immutable variable '\{named.spelled\}'. Prefix the \
+                        .s("cannot assign to an immutable variable '\{named.spelled\}'. Prefix the \
                             declaration with '$' to make it mutable.")
                     c.err(r, c.scratch.slice())
                     throw .analysis_failed
@@ -193,3 +191,23 @@ impl Ast_node
                 if c.index_stops_permission_walk(recv.write_target_type(c)!)
                     return
                 return recv.enforce_mutability(c)
+
+fn report_read_only_element(c: Sema_ctx$@, at: Ast_node$@, recv_type_id: I32) //<
+    //< Reports a write to an element of a built-in array or slice whose elements are read-only
+    //<
+    //< **The fix differs by container** ("4.2.2 Where `$` goes for a fixed-length array and a
+    //< slice" in docs/SPEC-language.md). A slice's permission travels in its type (`U8$[]`). An
+    //< array's elements follow the name or receiver holding it. `U8$[4]` is itself an error, so it
+    //< must never be the advice.
+    base_id: = c.env.receiver_base_id(recv_type_id)
+    shown: = c.env.display(base_id)
+    if c.env.is_slice(base_id)
+        c.clear_scratch()
+            .s("cannot write to an element of the read-only slice '\{shown\}'. Use '$[]' to allow \
+                writing to elements")
+    else
+        c.clear_scratch()
+            .s("cannot write to an element of the read-only array '\{shown\}'. An array's elements \
+                follow the binding that holds it. Declare the binding mutable ('$a'), or take the \
+                receiver as 'Self$@' for a field")
+    c.err(at, c.scratch.slice())

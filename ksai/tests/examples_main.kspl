@@ -47,20 +47,23 @@ fn main(): I32
 priv fn test_llama_trains(exe: U8[], work: U8[], arena: Arena$@) //<
     //< llama_engine trains from the weights embedded in it, and reports that the loss went down
     //<
-    //< **It runs from the working directory**, which has no `ksai/` folder, so a program that still
+    //< **It runs from the working directory**, which has no `ksai/` folder. So a program that still
     //< reads its weights by path fails here instead of in someone else's folder.
     verdict.start("[examples] llama_engine trains from the weights burned into it")
     fs.mkdir_all(work) catch
         panic(U8$[]::arena.text().s("cannot create the working directory: \{work\}").take())
-    r: = subproc.run_capture(U8[][]::{ exe }, work, llama_wait_ms, llama_said_cap, arena)
+    r: =
+        subproc.run_capture(U8[][]::{ exe }, work, llama_wait_ms, llama_said_cap, arena)
+        catch panic("llama_engine must start")
     said: = arena.text().s(r.stdout_data).s(r.stderr_data).take()
     $held: = false
     for line in said.lines(arena)
         if line.starts_with(llama_verdict)
             held = true
-    assert(!r.spawn_failed && !r.timed_out && r.exit_code == 0 && held,
-        U8$[]::arena.text().s("llama_engine did not say the loss fell (exit \{r.exit_code\}):\n")
-        .s(said).take())
+    assert(r.exited_with(0) && held,
+        U8$[]::arena.text()
+        .s("llama_engine did not say the loss fell (exit \{r.exit_code.unwrap_or(-1)\}):\n").s(said)
+        .take())
     verdict.pass("llama_engine trains from its own weights, from any folder, and the loss falls")
 
 // ==========================================
@@ -84,9 +87,11 @@ priv fn byte_vocab(arena: Arena$@): U8[] //< a vocabulary of the 256 bytes alone
 
 priv fn fim_run(argv: U8[][], work: U8[], arena: Arena$@): U8[] //<
     //< one run; its output if it failed
-    r: = subproc.run_capture(argv, work, fim_wait_ms, said_cap, arena)
-    if r.spawn_failed || r.timed_out || r.exit_code != 0
-        return arena.text().s("exit \{r.exit_code\}:\n").s(r.stdout_data).s(r.stderr_data).take()
+    r: = subproc.run_capture(argv, work, fim_wait_ms, said_cap, arena) catch
+        return "fim_coder could not be started"
+    if !r.exited_with(0)
+        return arena.text().s("exit \{r.exit_code.unwrap_or(-1)\}:\n").s(r.stdout_data)
+            .s(r.stderr_data).take()
     return ""
 
 fn test_fim_round_trip(exe: U8[], work: U8[], arena: Arena$@) //<

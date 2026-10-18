@@ -1,6 +1,6 @@
 // ==========================================
-// std/math's cfg(freestanding) side (a software implementation with zero dependencies) is called
-// from this hosted C program and compared against a real libm, which the harness may use freely.
+// This hosted C program calls std/math's cfg(freestanding) side (a software implementation with
+// zero dependencies). It compares it against a real libm, which the harness can use freely.
 // The steps for building and running it have their one source in `make test-freestanding-math`
 // (mk/test.mk).
 // ==========================================
@@ -44,8 +44,8 @@ static void check2(const char* name, double got, double want, double a, double b
     }
 }
 
-// Where libm's answer is NaN, an infinity or a zero, the same answer exactly: a NaN for a NaN, and
-// an infinity or a zero with the same sign (`1/x` tells -0 from +0).
+// Where libm's answer is NaN, an infinity or a zero, the answer must be exactly the same. That is a
+// NaN for a NaN, and an infinity or a zero with the same sign (`1/x` tells -0 from +0).
 static void check_same(const char* name, double got, double want, double a, double b) {
     int same = isnan(want) ? isnan(got)
         : got == want && (want != 0.0 || (1.0 / got > 0.0) == (1.0 / want > 0.0));
@@ -56,7 +56,7 @@ static void check_same(const char* name, double got, double want, double a, doub
     }
 }
 
-// The edges of the range, where libm answers NaN, an infinity or a zero (C99 Annex F), and the
+// The edges of the range, where libm answers NaN, an infinity or a zero (C99 Annex F). Also the
 // largest and smallest finite answers, which must stay finite.
 static void check_edges(void) {
     const double inf = INFINITY, nan = NAN;
@@ -104,8 +104,8 @@ static void check_edges(void) {
     }
 }
 
-// std/strfmt's equivalent of `%.*f` is compared **as a string** against a real libc's snprintf:
-// a rounding one step out (ties to even: 0.5 under `%.0f` as "1" or "0") escapes a relative error.
+// std/strfmt's equivalent of `%.*f` is compared **as a string** against a real libc's snprintf.
+// A relative error misses a rounding one step out (ties to even: 0.5 under `%.0f` as "1" or "0").
 static void check_float_format(void) {
     static const double vals[] = {
         0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1.5, 2.5, 3.5, 0.125, 0.375, 0.0625,

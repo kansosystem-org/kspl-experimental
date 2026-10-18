@@ -1,7 +1,7 @@
 //< The material `../suite/fmt_test.kspl` formats: each input, and the shape it must come out in
 //<
 //< Not a suite. **Each constant is data its case reads**, written by hand in the shape the
-//< formatter must give: `make fmt` does not reach inside a string, so it cannot put one right.
+//< formatter must give. `make fmt` does not reach inside a string, so it cannot put one right.
 
 // The formatted shape.
 // Caution: It is also the expected value, so format it by hand.
@@ -51,7 +51,7 @@ pub struct S
 // The input for a character literal written with a backslash and a brace.
 //
 // Caution: **Do not read it as the start of an interpolation.** Read that way, the closing `'`
-// counts as "a quote inside an interpolation", the span runs to the file's end, and the formatter
+// counts as "a quote inside an interpolation". The span runs to the file's end, and the formatter
 // loses the character (get_string_span in `ksplc/fmt/measure.kspl`). An interpolation opens only
 // inside double quotes.
 const src_brace_char: U8[] =
@@ -115,7 +115,7 @@ import "std/str" as _str
 // this comment belongs to the import below and moves with it.
 import "std/io" as io
 #cfg(blas)
-import "std/time" as _time
+import "std/sys" as _sys
 import "std/ds" { List }
 
 // the second set's heading. it stays at the set's head even under reordering.
@@ -128,7 +128,7 @@ pub fn main(): I32
 """
 
 // The above's expected value: no reordering across sets, and the heading stays.
-// Caution: **An attribute moves with its import, the first of a set's too**: left behind it
+// Caution: **An attribute moves with its import, the first of a set's too.** Left behind, it
 // would bind to whichever import comes to stand under it.
 const src_imports_out: U8[] =
     """// the file's heading. this must not move.
@@ -138,7 +138,7 @@ import "std/io" as io
 #cfg(debug)
 import "std/str" as _str
 #cfg(blas)
-import "std/time" as _time
+import "std/sys" as _sys
 
 // the second set's heading. it stays at the set's head even under reordering.
 import "std/fs" as _fs
@@ -246,8 +246,8 @@ const src_closure_sep: U8[] =
     return 0
 """
 
-// Idempotence means something only from a broken input (a formatted shape does not move at all),
-// hence the newline in an empty block and the space in a unary minus.
+// Idempotence means something only from a broken input (a formatted shape does not move at all).
+// Hence the newline in an empty block and the space in a unary minus.
 const src_messy: U8[] =
     """pub fn f( c : Bool ) : I32
     a : I32$[2] = ::{ - 1 , - 2 }
@@ -261,8 +261,8 @@ const src_messy: U8[] =
 
 // A value too long for its line, where a line break alone would not be read back.
 // **The three shapes split three ways.** A conditional value outside every bracket gets
-// parentheses and breaks between its choices (never after its `if`); one below its `=` too; a
-// `return`'s value stays on its line, with a string carried on.
+// parentheses and breaks between its choices (never after its `if`). So does one below its `=`.
+// A `return`'s value stays on its line, with a string carried on.
 const src_choice_in: U8[] =
     """pub fn rank(op: I32): I32
     return 10 if op == 42 || op == 47 || op == 37 else 9 if op == 43 || op == 45 else 8 if op == 60 || op == 62 else 7 if op == 61 else 0
@@ -477,8 +477,8 @@ fn main(): I32
 
 // The expected result.
 // Caution: **Test the three shapes that must not break, beside the one that must.** A break inside
-// a run of spaces loses one to the indent the mark swallows, one inside `\{ … \}` lands in code,
-// and a word longer than the line has nowhere to break and is written as is. The continuation is
+// a run of spaces loses one to the indent the mark swallows. One inside `\{ … \}` lands in code.
+// A word longer than the line has nowhere to break and is written as is. The continuation is
 // one level in from the line that opened it.
 const src_carried_string: U8[] =
     """import "std/io"
@@ -529,13 +529,14 @@ fn main(): I32
     return I32::record_head.len - 78
 """
 
-// A description too long for its line, and the three that must not move: one short enough, one
-// already carrying its description below, and one after a return type on the line where a wrapped
+// A description too long for its line, and the three that must not move. One is short enough. One
+// already carries its description below. One is after a return type on the line where a wrapped
 // head ends (it describes the return; moved below, it would read as the declaration's own).
 const src_summary_in: U8[] =
     """priv struct Row //< one row
     text: U8[] //< the text as the writer typed it, kept exactly as it came in with neither end trimmed
     hits: Bool //< short enough, so it stays
+    long: Bool //< a description too long for the line below the mark as well, which stays whole there since a cut summary runs two lines
 
 priv fn already(a: Sz): Sz //<
     //< it carries its description below already, and this line must not move
@@ -546,17 +547,19 @@ priv fn wrapped(a: Sz, b: Sz, c: Sz, d: Sz, e: Sz, f: Sz, g: Sz, h: Sz, i: Sz, j
     return a + b + c + d + e + f + g + h + i + j + k + l
 
 fn main(): I32
-    r: Row = ::{ .text = "a", .hits = true }
+    r: Row = ::{ .text = "a", .hits = true, .long = false }
     return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1
 """
 
-// The expected result: the one over the width leaves its mark and moves its text one level in;
-// the other three stay.
+// The expected result: the ones over the width leave their mark and move their text one level in,
+// whole; the other three stay.
 const src_summary_out: U8[] =
     """priv struct Row //< one row
     text: U8[] //<
         //< the text as the writer typed it, kept exactly as it came in with neither end trimmed
     hits: Bool //< short enough, so it stays
+    long: Bool //<
+        //< a description too long for the line below the mark as well, which stays whole there since a cut summary runs two lines
 
 priv fn already(a: Sz): Sz //<
     //< it carries its description below already, and this line must not move
@@ -567,7 +570,7 @@ priv fn wrapped(a: Sz, b: Sz, c: Sz, d: Sz, e: Sz, f: Sz, g: Sz, h: Sz, i: Sz, j
     return a + b + c + d + e + f + g + h + i + j + k + l
 
 fn main(): I32
-    r: Row = ::{ .text = "a", .hits = true }
+    r: Row = ::{ .text = "a", .hits = true, .long = false }
     return I32::(r.text.len + already(0) + wrapped(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) - 1
 """
 
@@ -588,8 +591,8 @@ pub fn f(n: I32): I32
     return n
 """
 
-// A comment line past the column limit: cut at its last space that fits, the cut words joining the
-// paragraph's next line; a caution, a table row, a list item, a long address, a trailing comment
+// A comment line past the column limit is cut at its last space that fits. The cut words join the
+// paragraph's next line. A caution, a table row, a list item, a long address, a trailing comment
 // and a line of wide characters within its columns are left as written.
 const src_comment_cut_in: U8[] =
     """//< Comments that cross the column limit, cut at the last space that fits
@@ -649,4 +652,46 @@ const src_catch_wide_out: U8[] =
         k_view: = r.k_cache.view_rows(0, seq_len, compute_arena)
             catch panic("Self_attention: view_rows failed")
         n: = s.read(buf) catch 0
+"""
+
+// At `ColumnLimit: 40`: a declaration's head, a `for` heading and a `switch` break only where the
+// reader joins the next line. The file's own summary stays one line while its detail is cut.
+const src_narrow_in: U8[] =
+    """//< A file whose own summary is far too long for forty columns
+//<
+//< Its detail is cut where it crosses the limit, as detail may be.
+import "std/str" as str_module + { Str_builder }
+
+fn a_function_with_a_long_name(n: I32): I32
+    $t: I32 = 0
+    for $index: I32 = 0; index < n + 1000; index += 1
+        t += index
+    switch t + n * 1000 + a_function_with_a_long_name(0)
+    case 0
+        t += 1
+    default
+        t += 2
+    return t
+"""
+
+const src_narrow_out: U8[] =
+    """//< A file whose own summary is far too long for forty columns
+//<
+//< Its detail is cut where it crosses
+//< the limit, as detail may be.
+import "std/str" as str_module + { Str_builder }
+
+fn a_function_with_a_long_name(n: I32):
+    I32
+    $t: I32 = 0
+    for $index: I32 = 0; index < n +
+        1000; index += 1
+        t += index
+    switch t + n * 1000 +
+        a_function_with_a_long_name(0)
+    case 0
+        t += 1
+    default
+        t += 2
+    return t
 """

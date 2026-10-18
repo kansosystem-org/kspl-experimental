@@ -1,12 +1,12 @@
 //< The repository's side of the base every tests/*_test.kspl uses
 //<
 //< **It starts ksplc's harness (`../../ksplc/tests/support/harness.kspl`) on the repository's
-//< paths**: a suite ends, runs a child and runs the compiler under test through that one
-//< (`ksplc_harness.*`), and finds here what knows the repository: its root, `make` from
-//< it, the files git knows. Caution: **Do not rewrite either in a suite**: copied, CI's log stops
-//< being readable and the Makefile's reading of the `RESULT:` line stops matching. The compiler
-//< under test is `out/ksplc_stage1.exe` (replaceable by `KANSO_CC_EXE`), **separate from the one
-//< that builds this suite**, which the Makefile pins to the seed (`../README.md`).
+//< paths.** A suite ends, runs a child and runs the compiler under test through that one
+//< (`ksplc_harness.*`). It finds here what knows the repository: its root, `make` from
+//< it, the files git knows. Caution: **Do not rewrite either in a suite.** In a copy, CI's log
+//< stops being readable, and the Makefile's reading of the `RESULT:` line stops matching. The
+//< compiler under test is `out/ksplc_stage1.exe` (replaceable by `KANSO_CC_EXE`). **It is separate
+//< from the one that builds this suite**, which the Makefile pins to the seed (`../README.md`).
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List, Map }
@@ -39,7 +39,7 @@ fn begin(chunk_size: Sz): Arena$@ //< starts a suite on the repository's paths
 priv fn absolute(path: U8[], arena: Arena$@): U8[] //<
     //< the path from the root, joined onto the working directory
     //<
-    //< Caution: **Always return the root as an absolute path**: a child started in another cwd
+    //< Caution: **Always return the root as an absolute path.** A child started in another cwd
     //< (`run_in`) reads a relative root **from its own cwd** and fails to start.
     return fs.absolute(path, arena) catch
         fallback arena.dup_str(path)
@@ -89,8 +89,9 @@ priv fn compiler_under_test(top: U8[], arena: Arena$@): U8[] //<
 
 fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the published copy
     //<
-    //< File names, split at spaces, from `KANSO_PRIVATE_DOCS`, which only such a clone sets; unset,
-    //< the list is empty. A check that names documents takes these as the clone's own.
+    //< Entries split at spaces from `KANSO_PRIVATE_DOCS`, which only such a clone sets; unset, the
+    //< list is empty. An entry is a file name, or a folder from the top ending in `/`. A check that
+    //< names documents takes these as the clone's own (`is_private_doc`).
     arena: = ksplc_harness.arena()
     $out: = List<|U8[]|>.new(arena)
     given: = arena.dup_str(sys.get_env("KANSO_PRIVATE_DOCS").unwrap_or(""))
@@ -98,6 +99,15 @@ fn private_docs(): List<|U8[]|> //< the documents a clone carries beyond the pub
         if w.len > 0
             out.push(w)
     return out
+
+fn is_private_doc(rel: U8[], own: List<|U8[]|>@): Bool //<
+    //< Whether a tracked path is one of the clone's own documents (`private_docs`)
+    //<
+    //< **A folder's entry takes everything under it**; any other matches the file's name.
+    for o in own
+        if o.ends_with("/") && rel.starts_with(o) || sys.get_file_name(rel).equals(o)
+            return true
+    return false
 
 // ==========================================
 // `make` from the root
@@ -113,8 +123,8 @@ fn make_argv(args: U8[][]): U8[][] //<
     //< running it, and on Windows a running exe cannot be replaced. **Do not call `make` by name
     //< (`KANSO_MAKE`)**: PATH may give a different make.
     arena: = ksplc_harness.arena()
-    // Caution: Drop the job server's setting: this process is not make's child and holds no token,
-    // and on Windows the named semaphore cannot open and a warning is printed.
+    // Caution: Drop the job server's setting. This process is not make's child and holds no token.
+    // On Windows the named semaphore cannot open, and a warning is printed.
     sys.unset_env("MAKEFLAGS") catch panic("MAKEFLAGS could not be unset")
     sys.unset_env("MFLAGS") catch panic("MFLAGS could not be unset")
     sys.unset_env("MAKELEVEL") catch panic("MAKELEVEL could not be unset")
@@ -135,7 +145,7 @@ fn sandbox(name: U8[]): U8[] //<
     //<
     //< A suite that cannot make one stops (`ksplc_harness.sandbox`).
     //< It deletes the previous run's `<name>_…` folders first: no Makefile empties `out/tmp`.
-    //< Caution: **Do not delete a fixed folder and then create it**: where it cannot be deleted (a
+    //< Caution: **Do not delete a fixed folder and then create it.** Where it cannot be deleted (a
     //< sync client or virus scanner holding a handle on Windows), no case runs from then on.
     arena: = ksplc_harness.arena()
     sweep_old_dirs(ksplc_harness.tmp_dir(), arena.text().s("\{name\}_").take(), arena)
@@ -221,12 +231,11 @@ fn read_under_root(rel: U8[]): U8[] //<
     arena: = ksplc_harness.arena()
     if texts == null
         texts = arena.create(Map<|U8[], U8[]|>.new(arena))
-    known: = texts.get(rel) catch
-        body: = io.read_file(fs.join(root_dir, rel, arena)) catch
-            fallback ""
-        texts.set(arena.dup_str(rel), body)
-        return body
-    return known
+    if known: = texts.get(rel)
+        return known
+    body: = io.read_file(fs.join(root_dir, rel, arena)) catch ""
+    texts.set(arena.dup_str(rel), body)
+    return body
 
 priv fn spec_match(path: U8[], spec: U8[]): Bool //< whether it matches git's pathspec
     //<
@@ -261,8 +270,8 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
     //< the files git knows that match the pathspec
     //<
     //< Caution: **Do not walk the working tree**: it picks up artifacts and leftovers too. **Do not
-    //< pass a pathspec to `git ls-files`**: on Windows a `git.exe` on MSYS2's runtime **expands the
-    //< wildcards itself**, so `*.md` shrinks to the top level and goes green unseen.
+    //< pass a pathspec to `git ls-files`.** On Windows a `git.exe` on MSYS2's runtime **expands the
+    //< wildcards itself**. So `*.md` shrinks to the top level and goes green unseen.
     arena: = ksplc_harness.arena()
     $out: = List<|U8[]|>.new(arena)
     files: = tracked()
@@ -294,7 +303,7 @@ fn tracked_matching(patterns: U8[][]): List<|U8[]|> //<
 
 priv fn collect_ls_files(argv: U8[][], out: List<|U8[]|>$@, arena: Arena$@): Void!Run_error
     r: = ksplc_harness.run(argv)
-    if r.code != 0
+    if !r.exited_with(0)
         _ok: = verdict.check("git ls-files ran", false, r.out)
         throw .failed
     for ln in r.out.lines(arena)

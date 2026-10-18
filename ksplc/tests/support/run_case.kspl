@@ -22,24 +22,24 @@ const state_ok: Sz = 0 //< the verdict's three states
 const state_failed: Sz = 1
 const state_skip: Sz = 2
 
-struct Result
+struct Outcome
     state: Sz
     why: U8[]
 
-fn ok_result(): Result
-    return Result::{ .state = state_ok, .why = "" }
+fn ok_result(): Outcome
+    return Outcome::{ .state = state_ok, .why = "" }
 
-fn failed(why: U8[]): Result
-    return Result::{ .state = state_failed, .why = why }
+fn failed(why: U8[]): Outcome
+    return Outcome::{ .state = state_failed, .why = why }
 
-fn broke(what: U8[], out: U8[], arena: Arena$@): Result //<
+fn broke(what: U8[], out: U8[], arena: Arena$@): Outcome //<
     //< It makes one failure out of "what did not happen" and the output at the time
     return failed(arena.text().s(what).s("\n").s(out).take())
 
-fn skipped(why: U8[]): Result
-    return Result::{ .state = state_skip, .why = why }
+fn skipped(why: U8[]): Outcome
+    return Outcome::{ .state = state_skip, .why = why }
 
-priv fn report(name: U8[], r: Result)
+priv fn report(name: U8[], r: Outcome)
     if r.state == state_skip
         verdict.skip_check(name, r.why)
         return
@@ -49,19 +49,20 @@ priv fn report(name: U8[], r: Result)
 // The working directory and the cache location
 // ==========================================
 
-priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Result, arena: Arena$@): Result //<
-    //< It makes one working directory and runs the case with the child's cache pointed at it
-    //<
-    //< **Separate them per case**, or "was it rebuilt" passes on the previous case's artifact.
-    //< Caution: **Do not forget to point the child's cache here**, or it pollutes the developer's
-    //< real cache and passes on the last run's artifact.
+priv fn in_sandbox(name: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, arena: Arena$@):
+    Outcome //<
+        //< It makes one working directory and runs the case with the child's cache pointed at it
+        //<
+        //< **Separate them per case**, or "was it rebuilt" passes on the previous case's artifact.
+        //< Caution: **Do not forget to point the child's cache here**, or it pollutes the
+        //< developer's real cache and passes on the last run's artifact.
     dir: = harness.sandbox(name)
     work: = dir
     sys.set_env("KSPLC_CACHE_DIR", fs.join(work, "cache", arena)) catch
         return failed("cannot point the location at the child")
     return body(work, arena)
 
-fn run(name: U8[], slot: U8[], body: fn(work: U8[], arena: Arena$@): Result, arena: Arena$@) //<
+fn run(name: U8[], slot: U8[], body: fn(work: U8[], arena: Arena$@): Outcome, arena: Arena$@) //<
     //< It runs one case and reports
     //<
     //< Caution: **Do not split these two into separate functions**, or reporting without a working
@@ -110,9 +111,9 @@ fn run_script(path: U8[], arena: Arena$@): verdict.Run_out //<
     //< It runs one script (the most common case)
     return ksplc_run(U8[][]::{ path }, arena)
 
-fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Result
-    if r.code != 0 || r.out.find_str(want).is_none()
-        return failed(arena.text().s(what).s("(code=\{r.code\})\n").s(r.out).take())
+fn expect_out(r: verdict.Run_out, want: U8[], what: U8[], arena: Arena$@): Outcome
+    if !r.exited_with(0) || r.out.find_str(want).is_none()
+        return failed(arena.text().s(what).s("(code=\{r.code.unwrap_or(-1)\})\n").s(r.out).take())
     return ok_result()
 
 // ==========================================
@@ -207,15 +208,15 @@ fn same_place(reported: U8[], want: U8[], arena: Arena$@): Bool //<
 // ==========================================
 // Helpers for checking the arguments passed to cc
 // `ksplc run` starts the C compiler as a child, so **what was passed** is not visible from
-// outside: `CC` is replaced by a stand-in that records argv, which this reads.
+// outside. `CC` is replaced by a stand-in that records argv, and this reads it.
 // **The verdict itself is not here** but in `run_test.kspl`, so a diff says which of the two
 // was changed.
 // ==========================================
 fn build_probe(work: U8[], arena: Arena$@): U8[] //<
     //< It builds the C compiler's stand-in and returns it (empty where it cannot build one)
     //<
-    //< Caution: **Build it before replacing CC**, which it uses. **The name has to state the
-    //< notation** — `cc_probe_src` is in braces, and as `.kspl` it never builds, which looks like
+    //< Caution: **Build it before replacing CC**, which it uses. **The name must state the
+    //< notation.** `cc_probe_src` is in braces, and as `.kspl` it never builds. That looks like
     //< "it cannot be run with the stand-in cc".
     fs.write_tree(work, U8[][]::{ "cc_probe.kspl" }, U8[][]::{ run_progs.cc_probe_src }, arena)
         catch
@@ -223,11 +224,11 @@ fn build_probe(work: U8[], arena: Arena$@): U8[] //<
     gen: = fs.join(work, "cc_probe.c", arena)
     src: = fs.join(work, "cc_probe.kspl", arena)
     g: = harness.run_in(harness.ksplc_argv(U8[][]::{ src, gen }), work)
-    if g.code != 0
+    if !g.exited_with(0)
         return ""
     exe: = fs.join(work, "cc_probe.exe", arena)
     b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
-    return "" if b.code != 0 else exe
+    return "" if !b.exited_with(0) else exe
 
 struct Seen //< what the record shows, read one line at a time, counting only the `ARG:` lines
     absolute: U8[] //< The first absolute path found (empty where there is none)

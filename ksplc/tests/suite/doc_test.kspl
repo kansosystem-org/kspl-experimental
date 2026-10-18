@@ -1,7 +1,7 @@
 #!/usr/bin/env -S ksplc run
 //< It pins down what `ksplc doc` prints for a file, an entry and a folder
 //<
-//< **A mistake here breaks nothing visible**: nothing else reads the reference, so one that drops
+//< **A mistake here breaks nothing visible.** Nothing else reads the reference. So one that drops
 //< every member or files a part under the wrong entry still looks complete. A small package is
 //< laid out in a working directory and asked about, the way a reader asks.
 import "ksplc/tests/support/harness"
@@ -136,6 +136,23 @@ fn main(): I32
     harness_markers.check("a folder lists each publishing file with its count and summary",
         U8[][]::{ "* `pk/argp` — 2 entries. reading the command line", "* `pk/run` — " },
         U8[][]::{ "pk/inner", "could not be read" }, list.out)
+    // **A last part of `.` or `..` is a folder**, not a name cut at its first `.`.
+    pk_dir: = fs.join(dir, "pk", arena)
+    here: = doc(pk_dir, U8[][]::{ "." }, arena)
+    harness_markers.check("`ksplc doc .` lists the current folder, its files named from it",
+        U8[][]::{ "* `argp` — 2 entries" }, U8[][]::{ "no file or folder" }, here.out)
+    up: = doc(pk_dir, U8[][]::{ ".." }, arena)
+    harness_markers.check("`ksplc doc ..` lists the folder above",
+        U8[][]::{ "* `../pk/argp` — 2 entries", "* `../pk2/fine`" },
+        U8[][]::{ "no file or folder" }, up.out)
+    inside: = doc(dir, U8[][]::{ "pk/." }, arena)
+    harness_markers.check("a folder named with a last `.` is that folder",
+        U8[][]::{ "* `pk/./argp` — 2 entries" }, U8[][]::{ "no file or folder" }, inside.out)
+    // The specification's own example: the extension is read as an entry's key.
+    ext: = doc(dir, U8[][]::{ "pk/argp.kspl" }, arena)
+    verdict.check("a name written with its extension asks for the entry `kspl`",
+        !ext.exited_with(0) &&
+        ext.out.find_str("publishes nothing called 'kspl'").is_some(), ext.out)
     // **A file that cannot be read is named, not dropped.**
     bad: = doc(dir, U8[][]::{ "pk2" }, arena)
     harness_markers.check("a folder names the file it could not read",
@@ -150,7 +167,7 @@ fn main(): I32
     run: = doc(dir, U8[][]::{ "pk/run" }, arena)
     harness_markers.check("the parameters and the return stand as a list under the declaration",
         U8[][]::{ "* `argv` — the executable and its arguments", "* `cwd` — the working place",
-        "**what comes back** — its standard output" }, U8[][]::{ "run~00" }, run.out)
+        "**Return value** — its standard output" }, U8[][]::{ "run~00" }, run.out)
     verdict.check("the parameters stand in the order the signature writes them",
         before(run.out, "* `argv` —", "* `cwd` —"), run.out)
     // **A part lands on the declaration its key names**, whatever the order puts above it.
@@ -191,9 +208,10 @@ fn main(): I32
     // **A name that names nothing is an error**, so a typo does not read as an empty package.
     gone: = doc(dir, U8[][]::{ "pk/nope" }, arena)
     verdict.check("a name that resolves to nothing fails and says what it looked for",
-        gone.code != 0 &&
+        !gone.exited_with(0) &&
         gone.out.find_str("no file or folder is called 'pk/nope'").is_some(), gone.out)
     miss: = doc(dir, U8[][]::{ "pk/argp.Nope" }, arena)
     verdict.check("an entry the file does not publish fails",
-        miss.code != 0 && miss.out.find_str("publishes nothing called 'Nope'").is_some(), miss.out)
+        !miss.exited_with(0) &&
+        miss.out.find_str("publishes nothing called 'Nope'").is_some(), miss.out)
     return harness.finish()

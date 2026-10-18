@@ -1,6 +1,6 @@
 //< Catches the C runtime and the KSPL side drifting apart (not the suite)
 //<
-//< **Each side builds alone**: a bit, a name or a body the two hold apart compiles either way, and
+//< **Each side builds alone.** A bit, a name or a body the two hold apart compiles either way. It
 //< breaks only on the platform or the path that reads it. Split from `conventions_match.kspl`,
 //< which runs it.
 import "std/chars" // `trim_spaces`
@@ -15,7 +15,7 @@ import "tests/support/harness_text" as htext
 
 // ==========================================
 // The machine table names the hosts as the runtime spells them `kspl_host_machine` (the runtime)
-// builds the host's name from two macros, and ksplc looks that name up in its table; a spelling
+// builds the host's name from two macros. ksplc looks that name up in its table. A spelling
 // changed on one side refuses every compile on that host until `--machine` is given.
 // ==========================================
 priv const host_c: U8[] = "ksplc/gen/runtime/hosted.c"
@@ -44,7 +44,7 @@ priv fn check_host_spellings(arena: Arena$@)
 // ==========================================
 // The LLVM side holds no body for a `kspl_*` Only the C runtime (`ksplc emit-runtime`) holds an
 // OS-touching `kspl_*`'s body; the IR `declare`s it from `std/`'s `extern "C"` (the start of
-// "The backends (Genc / Genllvm) and the runtime ABI" in `../../ksplc/docs/DESIGN-compiler.md`).
+// "The backends (Genc / Genllvm) and the runtime ABI" in `../../ksplc/docs/DESIGN-backends.md`).
 // ==========================================
 priv const llvm_module: U8[] = "ksplc/gen/llvm/module.kspl"
 priv const llvm_ctx: U8[] = "ksplc/gen/llvm/ctx.kspl"
@@ -52,7 +52,7 @@ priv const llvm_ctx: U8[] = "ksplc/gen/llvm/ctx.kspl"
 // The `kspl_*` the IR may hold its own translation unit's copy of.
 // Caution: **To add one, the C side must be `static inline` too.**
 priv const llvm_inline_ok: U8[][_] = ::{ "kspl_bounds_check", "kspl_div_check", "kspl_sdiv",
-    "kspl_smod", "kspl_shift_check", "kspl_tag_check" }
+    "kspl_smod", "kspl_sdiv32", "kspl_smod32", "kspl_shift_check", "kspl_tag_check" }
 
 priv fn is_inline_ok(name: U8[]): Bool
     for e in llvm_inline_ok
@@ -250,8 +250,8 @@ priv fn check_reactor_bits(arena: Arena$@)
 
 // ==========================================
 // The child's stdio bits agree between the KSPL side and the C side `std/subproc.kspl` sums the
-// `stdio_*` constants and `kspl_proc_start` tests each by its number; a bit that one side moves
-// pipes the wrong stream, and nothing fails until a child's output goes missing.
+// `stdio_*` constants, and `kspl_proc_start` tests each by its number. A bit that one side moves
+// pipes the wrong stream. Nothing fails until a child's output goes missing.
 // ==========================================
 priv const stdio_kspl: U8[] = "std/subproc.kspl"
 priv const stdio_c: U8[] = "ksplc/gen/runtime/hosted_spawn.c"
@@ -348,8 +348,8 @@ priv fn status_tables_disagree(text: U8[], arena: Arena$@): Bool //<
         return false
 
 // The samples for the judgment above: the agreeing pair, and one break of each kind.
-// Caution: **Keep a sample for each way the two can part**: a code changed, a name missing on
-// either side, and a half that parses to nothing.
+// Caution: **Keep a sample for each way the two can part.** These are a code changed, a name
+// missing on either side, and a half that parses to nothing.
 priv const status_samples: Sample[_] = ::{
     Sample::{ .text =
         "static int kspl_proc_status_code(DWORD st) {\ncase 0xC0000005u: /* STATUS_ACCESS_VIOLATION \

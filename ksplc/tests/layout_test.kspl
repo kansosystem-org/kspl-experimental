@@ -7,8 +7,8 @@ import "std/verdict"
 
 // ==========================================
 // Checks that a one-line block in the indentation notation gets back the `;` it leaves out
-// **This calls a function inside the compiler directly** (`to_braces` in `parse/layout.kspl`),
-// so it checks the rewritten text itself: where the `;` lands, and what is left alone.
+// **This calls a function inside the compiler directly** (`to_braces` in `parse/layout.kspl`).
+// So it checks the rewritten text itself: where the `;` lands, and what is left alone.
 // ==========================================
 priv fn mend(src: U8[], arena: Arena$@): U8[]
     $notes: = List<|parse_layout.Note|>.new(arena)
@@ -70,6 +70,43 @@ fn test_statements_share_a_line()
         .equals("fn main() {\n    for $i: Sz = 0; i < 3; i += 1 { g(i);} h(); k(); }\n"),
         "after the loop's block has closed, a `;` ends a statement again")
     verdict.pass("each statement on a shared line ended as on a line of its own.")
+
+fn test_joined_line_keeps_its_statement()
+    verdict
+        .start("[layout] a line joined below a statement's start stays in that statement test...")
+    arena: = Arena.new(64 * 1024)
+    defer arena.free()
+    // **The joined line is not a statement's start**: its `;` is still the `for` heading's, read
+    // after a mark or inside a bracket alike.
+    assert(mend("fn main()\n    for $i: Sz = 0; i <\n        3; i += 1\n        g(i)\n", arena)
+        .equals("fn main() {\n    for $i: Sz = 0; i <\n        3; i += 1 {\n        g(i); } }\n"),
+        "a `for` heading wrapped after an operator must stay one `for`")
+    in_bracket: =
+        mend("fn main()\n    for $i: Sz = f(1,\n        2); i < 3; i += 1\n        g(i)\n", arena)
+    bracket_want: =
+        "fn main() {\n    for $i: Sz = f(1,\n        2); i < 3; i += 1 {\n        g(i); } }\n"
+    assert(in_bracket.equals(bracket_want),
+        "a `for` heading wrapped inside a bracket must stay one `for`")
+    // An `import`'s list on a joined line is still a value, after `as` or before `+` alike.
+    assert(mend("import \"std/str\" as\n    s + { Str_builder }\n", arena)
+        .equals("import \"std/str\" as\n    s + { Str_builder };\n"),
+        "an import's list below its `as` must stay a value")
+    assert(mend("import \"std/str\" as s\n    + { Str_builder }\n", arena)
+        .equals("import \"std/str\" as s\n    + { Str_builder };\n"),
+        "an import's list on a line of its own must stay a value")
+    // **A string carried by `\` reads its interpolation as on its first line.** A string inside
+    // `\{ … \}` is that string, not the end of the one around it.
+    carried: = """fn main()
+    io.out().s("a \
+        \{"in \{y\} x"\} end")
+"""
+    carried_want: = """fn main() {
+    io.out().s("a \
+        \{"in \{y\} x"\} end"); }
+"""
+    assert(mend(carried, arena).equals(carried_want),
+        "an interpolation on a carried line must not be read as code")
+    verdict.pass("each joined line stayed in the statement it continues.")
 
 fn test_semicolon_after_block_is_seen()
     verdict
@@ -155,9 +192,9 @@ fn test_first_arm_below_switch()
 
 // ==========================================
 // Checks that the fix-up pass finds a misaligned column in the indentation notation
-// **This calls a function inside the compiler directly**: the note is not a diagnostic yet
-// (that waits on "The indentation notation (`.kspl`)" in `../../docs/DESIGN-language.md`), so the C
-// output cannot show it. `parse/layout.kspl` imports only std, so the compiler stays out.
+// **This calls a function inside the compiler directly.** The note is not a diagnostic yet
+// (that waits on "The indentation notation (`.kspl`)" in `../../docs/DESIGN-notation.md`). So the
+// C output cannot show it. `parse/layout.kspl` imports only std, so the compiler stays out.
 // ==========================================
 priv struct Seen //< the number of notes, and the content of the first one
     //<
@@ -202,8 +239,8 @@ fn test_ragged_sibling_is_seen()
     arena: = Arena.new(64 * 1024)
     defer arena.free()
 
-    // **This passes with zero diagnostics**: `if` at column 2, body at 6, and a line at 4 joins the
-    // block as "deeper than the heading" (only the heading's column is stacked).
+    // **This passes with zero diagnostics.** `if` is at column 2 and the body at 6. A line at 4
+    // joins the block as "deeper than the heading" (only the heading's column is stacked).
     ragged: =
         look("""fn main()
   if 1 < 0
@@ -296,8 +333,8 @@ fn test_carried_string_leaves_the_lines_below()
     arena: = Arena.new(64 * 1024)
     defer arena.free()
 
-    // A `\` at a line's end carries a string onto the next line, so the string is still open there
-    // -- but the **physical line ends where the file's does**.
+    // A `\` at a line's end carries a string onto the next line, so the string is still open there.
+    // But the **physical line ends where the file's does**.
     // Caution: **Check the note's line number, not the count.** Skipping the line terminator after
     // the `\` makes every line below one short, and the count alone passes green.
     carried: =

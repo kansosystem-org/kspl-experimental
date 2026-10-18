@@ -23,13 +23,13 @@ impl Genllvm_ctx
         //< A linear walk of methods_list per call site would be O(N*M). The table is built once per
         //< trait and stored in cg.trait_method_idx_cache, so later calls are O(1).
         cache_key: = Sz::d
-        $idx_map: = r.trait_method_idx_cache.get(cache_key) catch null
+        $idx_map: = r.trait_method_idx_cache.get(cache_key).unwrap_or(null)
         if idx_map == null
             idx_map = base_core.arena.create(Map<|U8[], I32|>.new(base_core.arena))
             for im in Range.asc(d.methods_list.len)
                 idx_map.set(d.methods_list.get(im).name, I32::im)
             r.trait_method_idx_cache.set(cache_key, idx_map)
-        return idx_map.get(name) catch -1
+        return idx_map.get(name).unwrap_or(-1)
 
 priv fn emit_llvm_intrinsic_call(cg: Genllvm_ctx$@, call_node: Ast_node$@,
     intr: sema_body_call.Intrinsic, args_node: Ast_node$@): U8$[] //<
@@ -223,13 +223,13 @@ impl Ast_node
 
         // The internal ABI (ret_needs_sret in gen/llvm/types.kspl). Only a call to a C function
         // (an `#ext` / `#export`) keeps the C ABI. sema's check_ffi_safety lets no aggregate pass
-        // or return by value through the C boundary, so "the caller uses the internal ABI, the
+        // or return by value through the C boundary. So "the caller uses the internal ABI, the
         // definition the C ABI" cannot happen.
         use_kspl_abi: = !callee_uses_c_abi
 
-        // An aggregate argument is passed by pointer. Here it is a value register, so before the
-        // call it is stored into a temporary slot for this call only and replaced by that pointer
-        // (each call has its own slot, so it stays by-value even if the callee writes to it).
+        // An aggregate argument is passed by pointer. Here it is a value register. So before the
+        // call, it is stored into a temporary slot for this call only and replaced by that pointer.
+        // Each call has its own slot, so it stays by-value even if the callee writes to it.
         arg_by_ptr: = pass_aggregates_by_ptr(cg, arg_regs, arg_types, use_kspl_abi)
 
         use_sret: = !is_void && use_kspl_abi && cg.ret_needs_sret(r.type_id)
@@ -294,9 +294,9 @@ priv fn emit_trait_fn_ptr(cg: Genllvm_ctx$@, obj: Ast_node$@, method_idx: I32, o
         //<
         //< obj_ptr receives the object pointer the method takes as its receiver.
     $trait_val: = obj.emit_llvm_expr(cg)
-    // So that automatic dereferencing works on a multi-level pointer too (MyTrait@@, say), the
-    // extra levels are loaded away one at a time before the extraction code below, which assumes
-    // depth 1 (at depth 0 or 1 the loop runs zero times).
+    // Automatic dereferencing must work on a multi-level pointer too (MyTrait@@, say). So the
+    // extra levels are loaded away one at a time before the extraction code below. That code
+    // assumes depth 1 (at depth 0 or 1 the loop runs zero times).
     $depth: = cg.env.ptr_depth(obj.type_id)
     $cur_id: = obj.type_id
     for depth > 1
@@ -353,9 +353,9 @@ priv fn emit_call_args(cg: Genllvm_ctx$@, args_node: Ast_node$@, param_type_ids:
         if param_idx < param_type_ids.len
             p_id: = param_type_ids.get(param_idx)
             // Only numeric scalars are converted to the parameter's type. An aggregate is passed by
-            // pointer, so no named type appears in the call instruction, and every pointer is a
-            // `ptr`, so width matters only for numbers. Conversely, using the parameter's type for
-            // an aggregate gives a "same structure, different name" mismatch: a `%U8_Slice` value
+            // pointer, so no named type appears in the call instruction. Every pointer is a `ptr`,
+            // so width matters only for numbers. Conversely, the parameter's type for an aggregate
+            // gives a "same structure, different name" mismatch. An example is a `%U8_Slice` value
             // stored as a `%Const_U8_Slice` (LLVM requires named types to agree, so it errors).
             if p_id != 0 && cg.env.is_numeric(p_id) && cg.env.is_numeric(arg.type_id)
                 val_reg = cg.emit_numeric_coerce(val_reg, arg.type_id, p_id)
@@ -378,9 +378,9 @@ priv fn pass_aggregates_by_ptr(cg: Genllvm_ctx$@, arg_regs: List<|U8[]|>$@,
     arg_types: List<|I32|>$@, use_kspl_abi: Bool): List<|Bool|>$@ //<
         //< It stores each aggregate argument into a slot of its own and passes that slot instead
         //<
-        //< An aggregate argument is passed by pointer. Here it is a value register, so before the
-        //< call it is stored into a temporary slot for this call only (each call has its own slot,
-        //< so it stays by-value even if the callee writes to it). The result says which went so.
+        //< An aggregate argument is passed by pointer. Here it is a value register. So before the
+        //< call, it is stored into a temporary slot for this call only. Each call has its own slot,
+        //< so it stays by-value even if the callee writes to it. The result says which went so.
     arg_by_ptr: = List<|Bool|>.create(base_core.arena)
     for $i: = 0; i < arg_regs.len; i += 1
         a_type_id: = arg_types.get(i)

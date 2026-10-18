@@ -1,7 +1,7 @@
 //< Self-attention's forward and backward passes for training
 //<
-//< Inference (`ksai/nn`) runs one token at a time against a KV cache; training takes the whole
-//< sequence at once, so a whole-sequence forward pass with a causal mask lives here, **sharing the
+//< Inference (`ksai/nn`) runs one token at a time against a KV cache. Training takes the whole
+//< sequence at once. So a whole-sequence forward pass with a causal mask lives here, **sharing the
 //< weights**. What the forward pass computes is kept in `Attention_train` for the backward pass,
 //< so the layer itself gains no field.
 
@@ -46,10 +46,10 @@ priv struct Qkv_grads<|T|> //<
     dk: Tensor<|T|> //< after RoPE's backward pass [S,d]
     dv: Tensor<|T|> //< [S,d]
 
-// Computes dcontext → the gradients of Q/K/V, the part whose **formulas are the same** in
-// `backward` (updating the weights) and `backward_lora` (base frozen), so it lives here once.
-// Caution: **With two copies, fixing one makes the gradients quietly disagree, and a broken
-// training run still passes the tests.** The callers differ only in how they make dcontext and
+// Computes dcontext → the gradients of Q/K/V. Its **formulas are the same** in `backward`
+// (updating the weights) and `backward_lora` (base frozen), so it lives here once.
+// Caution: **With two copies, a fix to one makes the gradients quietly disagree. A broken
+// training run then still passes the tests.** The callers differ only in how they make dcontext and
 // use this return value.
 priv fn attn_backward_core<|T|>(c: Attention_train<|T|>$@, $dcontext: Tensor<|T|>):
     Qkv_grads<|T|>
@@ -173,7 +173,7 @@ impl<|T|> nn.Self_attention<|T|>
 
     pub fn train_forward_lora( //< the same as `train_forward`, with the adapters' delta added
         //<
-        //< It does not update the base weights (wq/wk/wv/wo) at all, and adds the adapters' delta
+        //< It does not update the base weights (wq/wk/wv/wo) at all. It adds the adapters' delta
         //< to Q's and V's outputs (symmetrical with inference's `forward_lora`).
         r: Self$@,
         x: Tensor<|T|>, //< every position's input together, [S,d]

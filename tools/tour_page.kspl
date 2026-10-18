@@ -14,7 +14,7 @@ priv const page_dir: U8[] = "docs/" //< the page's folder, as a path from the ro
 priv const language_doc: U8[] = "docs/SPEC-language.md"
 priv const project_doc: U8[] = "docs/HOWTO-set-up-a-project.md"
 priv const front_door: U8[] = "README.md"
-priv const laid_src: U8[] = "ksplc/tests/kspls/tour.kspl"
+priv const laid_src: U8[] = "ksplc/tests/notation/tour.kspl"
 
 struct Step //< one step of the walk: its name, its prose, and its code
     name: U8[]
@@ -69,48 +69,85 @@ priv fn is_head_line(line: U8[]): Bool //< whether a line opens a top-level decl
     return line.len > 0 && line[0] != ' ' && !line.starts_with("//") &&
         !line.starts_with("import ")
 
-fn walk_steps(laid: U8[], arena: Arena$@): List<|Step|> //<
-    //< One step per top-level declaration carrying a `//<`, in the order the file writes them
+enum Walk_error //< why the program cannot be laid out as a page
+    untitled //< a declaration with no `//<` title comes before any step it could join
+    title_missing //< a declaration's `//<` has no title after it
+
+priv fn import_step(ls: List<|U8[]|>, arena: Arena$@): Step //< the first step: every `import` line
+    $code: = Str_builder.new()
+    defer code.free()
+    for line in ls
+        if line.starts_with("import ")
+            code.s(line).c('\n')
+    prose: = arena.text()
+        .s("**An `import` names another file by its path, and the program reaches that file's ")
+        .s("names through the path's last part**: after `import \"std/io\"`, it writes ")
+        .s("`io.out()`. A name listed in braces (`{ List }`) is written bare instead. The ")
+        .s("`std/strfmt` line brings in no name the program writes. It lets `\\{x\\}` print ")
+        .s("each type. The `_` opening its `as` name tells the compiler the import is meant to ")
+        .s("go unused.").take()
+    return Step::{ .name = "import", .title = "Bringing in what the program uses", .prose = prose,
+        .code = arena.dup_str(code.slice().trim_end()) }
+
+fn walk_steps(laid: U8[], arena: Arena$@): List<|Step|>!Walk_error //<
+    //< The steps in the order the file writes them: the imports, then one per titled declaration
     //<
-    //< A declaration with no `//<` is a helper the walk does not stop at. An indented `//<` is the
-    //< step's prose, not a step.
+    //< A declaration with no `//<` joins the step before it. So every line of code reaches the
+    //< page, and the blocks joined in order are the whole program. An indented `//<` is the step's
+    //< prose.
     $out: = List<|Step|>.new(arena)
     ls: = laid.lines(arena)
+    imports: = import_step(ls, arena)
+    if imports.code.len > 0
+        out.push(imports)
+    $titled: Sz = 0
     $i: Sz = 0
     for i < ls.len
         line: = ls.get(i)
         if !is_head_line(line)
             i += 1
             continue
+        $prose: = Str_builder.new()
+        defer prose.free()
+        $code: = Str_builder.new()
+        defer code.free()
+        $title: U8[] = ""
+        $name: U8[] = ""
         switch line.find_str(point_mark)
         case .none
-            i += 1
-            continue
+            code.s(line).c('\n')
         case .some(at)
-            title: = line.sub_from(at + point_mark.len).trim_spaces()
-            $prose: = Str_builder.new()
-            defer prose.free()
-            $code: = Str_builder.new()
-            defer code.free()
+            title = line.sub_from(at + point_mark.len).trim_spaces()
+            if title.len == 0
+                throw .title_missing
+            name = declared_name(line.sub(0, at))
             code.s(line.sub(0, at).trim_end()).c('\n')
-            $j: = i + 1
-            for j < ls.len && !is_head_line(ls.get(j))
-                body: = ls.get(j)
-                t: = body.trim_spaces()
-                if t.starts_with(point_mark)
-                    rest: = t.sub_from(point_mark.len).trim_spaces()
-                    if rest.len > 0
-                        (prose.s(rest) if prose.len == 0 else prose.c(' ').s(rest))
-                else
-                    code.s(body).c('\n')
-                j += 1
-            if title.len > 0
-                out
-                    .push(Step::{ .name = declared_name(line.sub(0, at)),
-                    .title = arena.dup_str(title),
-                    .prose = arena.dup_str(prose.slice().trim_spaces()),
-                    .code = arena.dup_str(code.slice().trim_end()) })
-            i = j
+        $j: = i + 1
+        for j < ls.len && !is_head_line(ls.get(j))
+            body: = ls.get(j)
+            t: = body.trim_spaces()
+            if t.starts_with(point_mark)
+                rest: = t.sub_from(point_mark.len).trim_spaces()
+                if rest.len > 0
+                    (prose.s(rest) if prose.len == 0 else prose.c(' ').s(rest))
+            else
+                code.s(body).c('\n')
+            j += 1
+        i = j
+        if title.len > 0
+            titled += 1
+            out
+                .push(Step::{ .name = name, .title = arena.dup_str(title),
+                .prose = arena.dup_str(prose.slice().trim_spaces()),
+                .code = arena.dup_str(code.slice().trim_end()) })
+            continue
+        if titled == 0
+            throw .untitled
+        // **An untitled declaration is shown with the step before it**, so no code is left off.
+        last: = out.get(out.len - 1)
+        joined: = arena.text().s(last.code).s("\n").s(code.slice().trim_end()).take()
+        out.set(out.len - 1,
+            Step::{ .name = last.name, .title = last.title, .prose = last.prose, .code = joined })
     return out
 
 priv fn fenced(b: Str_builder$@, tag: U8[], body: U8[]) //< one code fence, closed on its own line
@@ -126,12 +163,12 @@ priv fn page_head(b: Str_builder$@, arena: Arena$@) //<
         .s("time.** It is for programmers who know another language, such as Python, JavaScript ")
         .s("or C. Each section shows one piece of the program and says what that piece teaches. ")
         .s("At the end, `main` puts the pieces together, and the page shows what the program ")
-        .s("prints. Every piece is code that the gates compile and run.\n\n")
-        .s("The whole program is ")
+        .s("prints. Joined in order, the code blocks are the whole program, which the gates ")
+        .s("compile and run; it is also one file, ")
     link_to(b, laid_src, arena)
     b.s(".\n\n").s("**To run it, or anything of your own, the quick start is in the root ")
     link_to(b, front_door, arena)
-    b.s("** — it fetches `ksplc`, writes a first file and runs it in three steps. Nothing on ")
+    b.s(".** It fetches `ksplc`, writes a first file and runs it in three steps. Nothing on ")
         .s("this page needs more than that.\n\n")
         .s("**Do not edit this page.** It is written by `make tour` from the program and the ")
         .s("program's own output, and `make test-docs` refuses a page older than its program.\n\n")
@@ -142,24 +179,25 @@ priv fn page_head(b: Str_builder$@, arena: Arena$@) //<
         .s("| `Sz` | A size or an index: a signed integer as wide as a pointer |\n")
         .s("| `Bool` | `true` or `false` |\n")
         .s("| `U8[]` | A string: a read-only slice (a view onto memory) of bytes |\n")
-        .s("| `T@` / `T$@` | A pointer to a `T` that only reads / that may write |\n")
+        .s("| `T@` / `T$@` | A pointer to a `T` that only reads / that can write |\n")
         .s("| `T!E` | A `T`, or the error `E` when the function fails |\n\n").s("## The steps\n\n")
 
 priv fn page_foot(b: Str_builder$@, arena: Arena$@) //< where to go on from the walk
     b.s("## Where to go from here\n\n").s("| You want to | Read |\n| :-- | :-- |\n")
         .s("| Look a rule up: the language rule by rule, not for reading through | ")
     link_to(b, language_doc, arena)
-    b.s(" |\n| Set a project of your own up: an executable to hand out, a program split over ")
-        .s("files, VS Code with the language server and the debugger | ")
+    b.s(" |\n| Set a project of your own up. That covers an executable to hand out and a ")
+        .s("program split over files. It also covers VS Code with the language server and the ")
+        .s("debugger | ")
     link_to(b, project_doc, arena)
     b.s(" |\n")
 
-fn render(laid: U8[], printed: U8[], arena: Arena$@): U8[] //<
+fn render(laid: U8[], printed: U8[], arena: Arena$@): U8[]!Walk_error //<
     //< The whole page: the steps in order and the printout
     $b: = Str_builder.new()
     defer b.free()
     page_head(b@, arena)
-    steps: = walk_steps(laid, arena)
+    steps: = walk_steps(laid, arena)!
     for s in steps
         b.s("1. **").s(s.title).s("** — `").s(s.name).s("`\n")
     for s in steps

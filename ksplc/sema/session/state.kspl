@@ -1,8 +1,8 @@
 //< The state the analysis accumulates, one struct per concern
 //<
-//< A generic's instantiation, monomorphization, aliases, imported names, the diagnostics'
-//< bookkeeping, measuring a type and the declarations being resolved are each kept in one struct,
-//< which `Sema_ctx` holds by value.
+//< Each concern is kept in one struct, which `Sema_ctx` holds by value. The concerns are a
+//< generic's instantiation, monomorphization, aliases and imported names. They are also the
+//< diagnostics' bookkeeping, measuring a type, and the declarations being resolved.
 // ==========================================
 // **`Sema_ctx` is not here**: many files import it, and moving it would change all their import
 // blocks.
@@ -40,9 +40,9 @@ struct Pending_inst //<
     //<
     //< The worklist in sema/body/infer.kspl runs it.
     //<
-    //< Caution: Always keep a copy of the bindings. The body is analyzed under the template's file,
-    //< and without `T`'s binding the visibility check treats a reference to the type argument's
-    //< file as an intrusion (check_visibility_and_mark_used's exemption loop).
+    //< Caution: Always keep a copy of the bindings. The body is analyzed under the template's file.
+    //< Without `T`'s binding, the visibility check treats a reference to the type argument's file
+    //< as an intrusion (check_visibility_and_mark_used's exemption loop).
     node: Ast_node$@
     impl_name: U8[]
     bound_args: List<|Generic_arg|>$@ //< a copy of generics.args when it was queued
@@ -56,7 +56,7 @@ struct Pending_constraint //<
     //<
     //< Caution: **Drain it at the instantiation's boundary.** The check reads
     //< `env.implements_trait`, which the instantiation fills (register_generic_trait_impls). Keep
-    //< the constraint node with a copy of the bindings: the literal text alone cannot resolve an
+    //< the constraint node with a copy of the bindings. The literal text alone cannot resolve an
     //< unbound `K`, and a correctly implementing type would be wrongly rejected.
     constraint_node: Ast_node$@ //< .k_type_constraint (the trait's paths)
     arg_type_id: I32 //< the type bound as the actual argument
@@ -67,9 +67,9 @@ struct Pending_constraint //<
 struct Pending_methods //<
     //< An instantiation whose method table and conformance await drain_pending_instances
     //<
-    //< **They cannot be built at the moment of instantiation**: that happens while type annotations
-    //< are resolved (collect's Pass 1 to 3), before every generic impl is registered, so building
-    //< is queued here and done once they all are.
+    //< **They cannot be built at the moment of instantiation.** That happens while type annotations
+    //< are resolved (collect's Pass 1 to 3), before every generic impl is registered. So building
+    //< is queued here, and done once they all are.
     //< Caution: **Clear the outer bindings before pushing again** (drain_pending_instances in
     //< mono.kspl).
     type_id: I32 //< the instance's, whose record (`Env.instance_of`) says what it instantiates
@@ -124,16 +124,16 @@ struct Diag_state //< diagnostics bookkeeping: the counts, what was reported, th
         //< Every error reported, a repeat that `reported` kept from printing included
         //<
         //< **"Did this step report anything" reads this, not `counts.errors`** (`error_mark` in
-        //< `ctx.kspl`): a repeat is printed once and counted once, yet it still means the step
-        //< failed, and a follow-on message there only restates it.
+        //< `ctx.kspl`). A repeat is printed once and counted once, yet it still means the step
+        //< failed. A follow-on message there only restates it.
     undefined_at: Map<|U8[], Bool|>$@ //< where an undefined name was reported, as "file:offset"
     lint_settings: List<|Lint_setting_entry|>$@ //< the levels `##lint(CODE = level)` registered
     line_starts: Map<|U8[], List<|Sz|>$@|>$@ //<
         //< The line-start offset tables for diagnostic positions (file name -> table)
         //<
-        //< **Build one per file only.** Building one per diagnostic makes it O(count × file size)
-        //< and makes compilation several times slower in a file with many warnings (gen/c/ctx.kspl
-        //< keeps the same table for the same reason).
+        //< **Build one per file only.** Building one per diagnostic makes it O(count × file size).
+        //< That makes compilation several times slower in a file with many warnings. gen/c/ctx.kspl
+        //< keeps the same table for the same reason.
 struct Generic_state //< the generics' state
     //<
     //< What exists, what is bound now, and where the binding was requested.
@@ -173,8 +173,8 @@ struct Mono_state //<
     //<
     //< It holds the pending queues, the re-entry flags, the depth and the duplicate records.
     //< **Only the instantiation (`../decl/mono.kspl`) and its queue (`../decl/mono_queue.kspl`)
-    //< touch it**, so the queues' order and the re-entry checks live in one place; other code goes
-    //< through their methods. Visibility cannot enforce this within a package; keep it by
+    //< touch it.** So the queues' order and the re-entry checks live in one place, and other code
+    //< goes through their methods. Visibility cannot enforce this within a package; keep it by
     //< convention.
     trait_inst_seen: Map<|U8[], Bool|>$@ //<
         //< The (conforming type, trait) pairs pushed onto Generic_state.trait_insts
@@ -184,11 +184,12 @@ struct Mono_state //<
         //< The queue of instantiations whose method table and trait conformance are not built yet
         //<
         //< See Pending_methods.
-    method_chain_cut: Bool //<
-        //< Whether the method-table chain was cut at its depth limit (and reported)
+    chain_cut: Bool //<
+        //< Whether an instantiation chain was cut at its depth limit (and reported)
         //<
-        //< The instances left unbuilt then have no methods, and a "no method" error on one only
-        //< repeats that report with a type name too long to read.
+        //< One runaway is reported once: the method-table check and the function check both stay
+        //< quiet after either has reported. The instances left unbuilt then have no methods. A "no
+        //< method" error on one would only repeat that report, with a type name too long to read.
     draining_methods: Bool //<
         //< drain_pending_instances' re-entry flag
         //<
@@ -217,7 +218,7 @@ struct Mono_state //<
         //< instantiate_struct's recursive call depth
         //<
         //< It is a limit for a non-cycling chain of differently named generics (A<|T|> embeds
-        //< B<|T|> ...), which the exact-match cache cannot catch (see max_mono_depth in
+        //< B<|T|> ...). The exact-match cache cannot catch such a chain (see max_mono_depth in
         //< mono.kspl).
 struct Alias_state //< the state for resolving import aliases
     files: Map<|U8[], Alias_info$@|>$@ //< "file::alias" -> the alias information
@@ -289,8 +290,8 @@ struct Resolving_state //<
     cut_reported: Map<|Sz, Bool|>$@ //<
         //< The constants on a chain already reported too deep
         //<
-        //< **One chain is one error**: each constant down a long chain starts a fold of its own
-        //< that is cut the same way, and a cut through any of these is that chain again.
+        //< **One chain is one error.** Each constant down a long chain starts a fold of its own
+        //< that is cut the same way. A cut through any of these is that chain again.
     registries: List<|I32|>$@ //<
         //< The struct / enum types whose fields or variants are being filled in
         //<

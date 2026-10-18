@@ -1,11 +1,11 @@
 #!/usr/bin/env -S ksplc run
 //< Two vendors ship libraries built from KSPL, and a C and a KSPL customer link them
 //<
-//< The vendors' sources are in `ksplc/tests/ship/`; every command is one the shipping section of
+//< The vendors' sources are in `ksplc/tests/ship/`. Every command is one the shipping section of
 //< `ksplc/docs/SPEC-tools.md` shows. The same two libraries built without `--library` must collide
 //< at the link, or the check that they no longer do proves nothing.
-//< Caution: **Link both forms, static and shared**: a symbol left visible collides only in an
-//< archive, and in a shared library binds to the other library's copy without a word.
+//< Caution: **Link both forms, static and shared.** A symbol left visible collides only in an
+//< archive. In a shared library it binds to the other library's copy without a word.
 import "ksplc/tests/support/harness"
 import "std/chars"
 import "std/ds" { List }
@@ -60,9 +60,6 @@ priv struct Toolchain //< one C toolchain, as the steps below spell a library wi
     macho: Bool //< a `.dylib` found through `@rpath`
     link_libs: U8[][] //< `ksplc info link-libs`'s answer for this toolchain's target
 
-priv fn has_tool(name: U8[]): Bool //< whether the tool answers `--version`
-    return harness.run(U8[][]::{ name, "--version" }).code == 0
-
 priv fn link_libs_for(cc: U8[], arena: Arena$@): U8[][] //<
     //< `ksplc info link-libs` asked for the target `cc` builds for
     //<
@@ -83,7 +80,7 @@ priv fn link_libs_for(cc: U8[], arena: Arena$@): U8[][] //<
 priv fn ok_step(name: U8[], argv: U8[][], dir: U8[]): Bool //<
     //< runs one step; its failure is a FAIL
     r: = harness.run_in(argv, dir)
-    return verdict.check(name, r.code == 0, r.out)
+    return verdict.check(name, r.exited_with(0), r.out)
 
 priv fn argv_of(head: U8[][], tail: U8[][], arena: Arena$@): U8[][] //< two runs of words as one
     $out: = List<|U8[]|>.new(arena)
@@ -126,14 +123,14 @@ priv fn check_private(vendor: U8[], obj_dir: U8[], arena: Arena$@) //<
     //< definition that left out `KSPL_LINK` without listing names.
     name: = "only the #export functions are visible outside a --library object"
     nm: = "nm"
-    if !has_tool(nm)
+    if !harness.has_tool(nm)
         verdict.skip_check(name, "nm is not installed")
         return
     $bad: = List<|U8[]|>.new(arena)
     for lib in libs
         r: = harness.run_in(U8[][]::{ nm, "--defined-only", "--extern-only",
             fs.join(obj_dir, arena.text().s("\{lib\}.o").take(), arena) }, vendor)
-        if r.code != 0
+        if !r.exited_with(0)
             bad.push(arena.text().s("nm cannot read \{lib\}.o: \{r.out\}").take())
             continue
         for line in r.out.lines(arena)
@@ -183,7 +180,7 @@ priv fn build_shared(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@): Bo
         argv.push(arena.text().s("\{lib\}.c").take())
         if tc.windows
             argv.push("-shared")
-            // Caution: **Keep `-static-libgcc`**: without it the DLL needs MinGW's libgcc_s, which
+            // Caution: **Keep `-static-libgcc`.** Without it the DLL needs MinGW's libgcc_s, which
             // a customer's machine lacks ("Shipping a library and using it" in
             // ksplc/docs/SPEC-tools.md).
             argv.push("-static-libgcc")
@@ -242,12 +239,15 @@ priv fn check_runs(name: U8[], argv: U8[][], expected: U8[], dir: U8[], arena: A
     //< **Only standard output is compared**: a customer prints there alone, while a host the run
     //< goes through (Wine) writes its own notices to standard error. Stderr is still shown on a
     //< failure.
-    r: = subproc.run_capture(argv, dir, verdict.default_timeout_ms, output_cap, arena)
+    r: =
+        subproc.run_capture(argv, dir, verdict.default_timeout_ms, output_cap, arena) catch
+        verdict.check(name, false, "it could not be started")
+        return
     got: = r.stdout_data.replace("\r\n", "\n", arena)
-    ended: = !r.spawn_failed && !r.timed_out
-    verdict.check(name, ended && r.exit_code == 0 && got.equals(expected),
-        arena.text().s("exit code \{r.exit_code\} (started \{!r.spawn_failed\}, timed out ")
-        .s("\{r.timed_out\}); it printed:\n\{got\}\non standard error:\n").s(r.stderr_data).take())
+    verdict.check(name, r.exited_with(0) && got.equals(expected),
+        arena.text().s("exit code \{r.exit_code.unwrap_or(-1)\} (timed out ")
+        .s("\{r.exit_code.is_none()\}); it printed:\n\{got\}\non standard error:\n")
+        .s(r.stderr_data).take())
 
 priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) //<
     //< The two libraries built without `--library` collide at the link
@@ -276,11 +276,11 @@ priv fn check_collision(tc: Toolchain, vendor: U8[], dir: U8[], arena: Arena$@) 
     argv.push(fs.join(dir, "main.exe", arena))
     r: = harness.run_in(argv.slice(), vendor)
     collided: =
-        r.code != 0 &&
+        !r.exited_with(0) &&
         (r.out.find_str("multiple definition").is_some() ||
         r.out.find_str("duplicate symbol").is_some())
     verdict.check("two libraries built without --library collide at the link", collided,
-        arena.text().s("exit code \{r.code\}:\n\{r.out\}").take())
+        arena.text().s("exit code \{r.code.unwrap_or(-1)\}:\n\{r.out\}").take())
 
 priv fn check_stop(exe: U8[], dir: U8[], arena: Arena$@) //<
     //< A panic inside a library ends the program, its own output written first
@@ -290,9 +290,9 @@ priv fn check_stop(exe: U8[], dir: U8[], arena: Arena$@) //<
     r: = harness.run_in(U8[][]::{ exe, "stop" }, dir)
     out: = r.out.replace("\r\n", "\n", arena)
     verdict.check("a panic in a library ends the program, its earlier output flushed",
-        r.code != 0 && out.find_str("greet stops here\n").is_some() &&
+        !r.exited_with(0) && out.find_str("greet stops here\n").is_some() &&
         out.find_str("panic: greet was asked to stop").is_some(),
-        arena.text().s("exit code \{r.code\}; it printed:\n\{out\}").take())
+        arena.text().s("exit code \{r.code.unwrap_or(-1)\}; it printed:\n\{out\}").take())
 
 priv fn kspl_customer(tc: Toolchain, vendor: U8[], root: U8[], arena: Arena$@) //<
     //< The KSPL customer, given greet's interface and archive but not its source
@@ -331,12 +331,14 @@ priv fn kspl_customer(tc: Toolchain, vendor: U8[], root: U8[], arena: Arena$@) /
 priv fn cross_windows(root: U8[], arena: Arena$@) //<
     //< The same sources built for Windows with the cross compiler, run only under Wine
     //<
-    //< Caution: **Name what was not run**: a check left out in silence reads as one that passed.
+    //< Caution: **Name what was not run.** A check left out in silence reads as one that passed.
+    //< **The cross compiler is required where `KANSO_REQUIRE_MINGW=1`** (Linux, whose image holds
+    //< it). Wine is not in the image, so the run under it stays a SKIP there.
     names: = U8[][]::{ "the libraries cross-compile and link for Windows (static and DLL)",
         "the Windows programs run under Wine" }
-    if !has_tool(cross_cc) || !has_tool(cross_ar)
+    if !harness.has_tool(cross_cc) || !harness.has_tool(cross_ar)
         for n in names
-            verdict.skip_check(n,
+            harness.require_or_skip(n, "KANSO_REQUIRE_MINGW",
                 arena.text().s("\{cross_cc\} is not installed").take())
         return
     vendor: = fs.join(root, "win", arena)
@@ -363,8 +365,8 @@ priv fn cross_windows(root: U8[], arena: Arena$@) //<
     static_exe: = link_main(tc, vendor, static_dir, false, arena) if ok else ""
     shared_exe: = link_main(tc, vendor, shared_dir, true, arena) if ok else ""
     verdict.check(names[0], static_exe.len > 0 && shared_exe.len > 0, "a step above failed")
-    wine: = "wine" if has_tool("wine") else "wine64"
-    if !has_tool(wine)
+    wine: = "wine" if harness.has_tool("wine") else "wine64"
+    if !harness.has_tool(wine)
         verdict.skip_check(names[1], "Wine is not installed")
         return
     if static_exe.len == 0 || shared_exe.len == 0

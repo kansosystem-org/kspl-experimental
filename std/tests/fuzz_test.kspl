@@ -1,7 +1,7 @@
 //< Tests of `std/fuzz`: mutating bytes, picking seeds, and reading how a round ended
 //<
-//< **Read a round's end from a real child where possible**: the marks an abort prints and the
-//< exit codes differ per platform, and a constructed result would agree with itself on every
+//< **Read a round's end from a real child where possible.** The marks an abort prints and the
+//< exit codes differ per platform. A constructed result would agree with itself on every
 //< platform. The line that `report_all` prints is checked in a child, since it goes into the
 //< run's own tally.
 import "std/ds" { List }
@@ -102,13 +102,14 @@ fn test_fuzz_rounds(ksplc: U8[], arena: Arena$@) //< ksplc runs the subject
     io.write_file(script, subject_src) catch panic("the subject must be writable")
     found: = fuzz.findings_new(arena)
     for mode in U8[][]::{ "answer", "refuse", "stop", "fall" }
-        t: = fuzz.run_trial(U8[][]::{ ksplc, "run", script, mode }, 300000, arena)
-        assert(!t.got.spawn_failed && !t.got.timed_out, "the subject must start and come to an end")
+        t: =
+            fuzz.run_trial(U8[][]::{ ksplc, "run", script, mode }, 300000, arena)
+            catch panic("the subject must start")
+        assert(t.got.exit_code.is_some(), "the subject must come to an end")
         fuzz.note(found, t@, 0, mode, mode, work_dir, ".txt")
     // A round that also ran past the extended wait, as `run_trial` returns it.
-    hung: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = true,
-        .exit_code = 0, .stdout_data = "", .stderr_data = "", .output_lost = false },
-        .slow = false }
+    hung: = fuzz.Trial::{ .got = subproc.Run_result::{ .exit_code = .none, .stdout_data = "",
+        .stderr_data = "", .output_lost = false }, .slow = false }
     fuzz.note(found, hung@, 1, "hung", "h", work_dir, ".txt")
     assert(found.aborts.len == 1 && found.aborts.get(0).seed_name.equals("stop"),
         "a panic is a stop the program announced")
@@ -133,8 +134,8 @@ fn main(): I32
   arena: = Arena.new(1 << 20)
   defer arena.free()
   found: = fuzz.findings_new(arena)
-  t: = fuzz.Trial::{ .got = subproc.Run_result::{ .spawn_failed = false, .timed_out = false,
-    .exit_code = 139, .stdout_data = "", .stderr_data = "", .output_lost = false }, .slow = false }
+  t: = fuzz.Trial::{ .got = subproc.Run_result::{ .exit_code = .some(139), .stdout_data = "",
+    .stderr_data = "", .output_lost = false }, .slow = false }
   fuzz.note(found, t@, 3, "seed.txt", "broken", "out/tmp/kspl_test_fuzz", ".txt")
   o: = fuzz.Opts::{ .trials = 5I64, .seed = 9I64 }
   fuzz.report_all(found, o, "probe", 100, "run it", arena)
@@ -160,18 +161,20 @@ fn test_fuzz_report(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
     fs.mkdir_all(work_dir) catch panic("the work directory must be creatable")
     src: = fs.join(work_dir, "report.kspl", arena)
     io.write_file(src, report_main) catch panic("the child's program must be writable")
-    r: = subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
-    assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
+    r: =
+        subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
+        catch panic("the child must start")
+    assert(r.exit_code.is_some(), "the child must come to an end")
     // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
     got: = r.stdout_data.replace("\r\n", "\n", arena)
-    if !got.equals(report_out) || r.exit_code != 1
+    if !got.equals(report_out) || !r.exited_with(1)
         panic(U8$[]::arena.text().s("the report put out\n").s(got)
-            .s("and ended on \{r.exit_code\}\n").s(r.stderr_data).take())
+            .s("and ended on \{r.exit_code.unwrap_or(-1)\}\n").s(r.stderr_data).take())
     verdict
         .pass("Each way of ending has its line, the way to run it again follows, and none is none.")
 
-// A fuzz run over the subject: a seed the run built must read back, one found may be refused and
-// is dropped, one that stops the subject fails, a kind left with no seed fails, and a run the
+// A fuzz run over the subject. A seed the run built must read back. One found can be refused and
+// is dropped. One that stops the subject fails. A kind left with no seed fails. A run the
 // subject refuses throughout fails the reach.
 priv const scatter_main: U8[] =
     """
@@ -237,13 +240,14 @@ fn test_fuzz_scatter(ksplc: U8[], arena: Arena$@) //< ksplc runs the child and t
     io.write_file(script, subject_src) catch panic("the subject must be writable")
     src: = fs.join(work_dir, "scatter.kspl", arena)
     io.write_file(src, scatter_main) catch panic("the child's program must be writable")
-    r: = subproc.run_capture(U8[][]::{ ksplc, "run", src, ksplc, script, work_dir }, "", 600000,
-        1 << 20, arena)
-    assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
+    r: =
+        subproc.run_capture(U8[][]::{ ksplc, "run", src, ksplc, script, work_dir }, "", 600000,
+        1 << 20, arena) catch panic("the child must start")
+    assert(r.exit_code.is_some(), "the child must start and come to an end")
     got: = r.stdout_data.replace("\r\n", "\n", arena)
-    if !got.equals(scatter_out) || r.exit_code != 1
+    if !got.equals(scatter_out) || !r.exited_with(1)
         panic(U8$[]::arena.text().s("the fuzz run put out\n").s(got)
-            .s("and ended on \{r.exit_code\}\n").s(r.stderr_data).take())
+            .s("and ended on \{r.exit_code.unwrap_or(-1)\}\n").s(r.stderr_data).take())
     verdict
         .pass("A refused seed the run made fails, a found one is dropped, one that stops the \
             subject fails, so does a kind left with no seed, and no reach fails.")

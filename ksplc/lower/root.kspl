@@ -1,8 +1,8 @@
 //< The one lowering walk: the dispatch on each node's kind, and blocks, branches and loops
 //<
-//< Every node is lowered through `lower` here. `expr.kspl` (expressions, `!`, a `catch` and its
-//< `fallback`), `defer.kspl` (cleanups and the ways out that run them) and `arc.kspl` (retain and
-//< release) add the kinds they own to the same walk; its state is in `ctx.kspl`.
+//< Every node is lowered through `lower` here. Three files add the kinds they own to the same walk.
+//< `expr.kspl` adds expressions, `!`, a `catch` and its `fallback`. `defer.kspl` adds cleanups and
+//< the ways out that run them, and `arc.kspl` adds retain and release. `ctx.kspl` holds the state.
 import "ksplc/base/ast" as base_ast + { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_kinds" as base_ast_kinds
@@ -29,17 +29,17 @@ const max_lower_depth: Sz = 2000 //<
 fn run(ctx: Sema_ctx$@, root: Ast_node$@)
     base_diag.ice_assert(root != null, "lower_root.run: root is null")
     lctx: = Lowering_ctx.new(ctx)
-    // It caches the answer to "does this value own ARC memory" only during this stage (the reason
-    // and the danger are at arc_content_memo in sema/type/env.kspl).
+    // It caches the answer to "does this value own ARC memory" only during this stage. The reason
+    // and the danger are at arc_content_memo in sema/type/env.kspl.
     // Caution: **Turn it on here and nowhere else.** Only here have the types stopped growing;
     // earlier it would cache answers from before the fields were complete.
     $arc_memo: = Map<|I32, I32|>.new(null)
     defer arc_memo.free()
     ctx.env.arc_content_memo = arc_memo@
-    // Each type's name in the generated code is kept once spelled from here on, through code
-    // generation (the reason and the danger are at c_names_final in sema/type/env.kspl).
+    // Each type's name in the generated code is kept once spelled, from here on through code
+    // generation. The reason and the danger are at c_names_final in sema/type/env.kspl.
     // Caution: **Turn it on here and nowhere else**, for arc_memo's reason: earlier, an instance's
-    // record may still be arriving.
+    // record can still be arriving.
     ctx.env.c_names_final = true
     root.lower(lctx)
     // The ARC helpers (one per type, like Rust's and Swift's drop glue) are created during the walk
@@ -56,8 +56,8 @@ impl Ast_node
         lctx.lower_depth += 1
         if lctx.lower_depth >= max_lower_depth
             io.err()
-                .s("\nfatal: expression/statement nesting too deep during lowering (possible \
-                    unbounded pointer/array/deref chain).\n")
+                .s("\nfatal: expression or statement nesting too deep during lowering. A chain of \
+                    pointers, arrays or dereferences may be unbounded.\n")
             sys.exit(1)
 
         switch r.kind_id
@@ -83,6 +83,8 @@ impl Ast_node
             r.lower_arc_aggregate_literal(lctx)
         case .k_enum_init_call
             r.lower_arc_enum_init_call(lctx)
+        case .k_result_wrap
+            r.lower_result_wrap(lctx)
         case .k_stmt_for
             r.lower_stmt_for(lctx)
         case .k_stmt_switch
@@ -106,12 +108,12 @@ impl Ast_node
         lctx.lower_depth -= 1
 
     fn hoist_complex_expr(r: Ast_node$@, lctx: Lowering_ctx$@, force: Bool = false): Ast_node$@
-        // `force` copies a receiver to a temporary: a literal or computed result has no side effect
+        // `force` copies a receiver to a temporary. A literal or computed result has no side effect
         // but no address either, so it **must be put in a slot** (`&3` is not C).
         if r == null || (!force && !r.has_side_effect())
             return r
 
-        // The temporary is numbered before the lower, not by hoist_to_tmp: the recursive lower can
+        // The temporary is numbered before the lower, not by hoist_to_tmp. The recursive lower can
         // use numbers too, and the order would differ between stage1 and stage2 when self-hosting.
         tmp_name: = lctx.gen_tmp_name()
         r.lower(lctx)
@@ -173,8 +175,8 @@ impl Ast_node
         outer_relocating: = lctx.relocating
         lctx.relocating = 0
 
-        // It flushes the releases pushed for this scope: the arguments' for a function body (the
-        // first block under decl_fn), an arm's bindings for a switch arm.
+        // It flushes the releases pushed for this scope. They are the arguments' for a function
+        // body (the first block under decl_fn), and an arm's bindings for a switch arm.
         if lctx.arc_scope_pending.len > 0
             for pending_stmt in lctx.arc_scope_pending
                 cleanup_scope.push(pending_stmt)
@@ -290,8 +292,8 @@ impl Ast_node
         lctx.push_jump_ctx(cont_label, brk_label, user_label, true)
 
         if has_cond_pre
-            // A condition with pre_stmts cannot go in C's for condition clause, so its evaluation
-            // and the break move to the start of the body and the loop becomes unconditional
+            // A condition with pre_stmts cannot go in C's for condition clause. So its evaluation
+            // and the break move to the start of the body, and the loop becomes unconditional
             // (r.set_child(2, ...) below).
             bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
             not_expr: = Ast_node.build_unary_expr("!", cond_node, bool_id, loc)

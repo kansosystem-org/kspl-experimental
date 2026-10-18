@@ -1,8 +1,9 @@
 //< Builds the URL that opens kspage, the page handing it to a browser, and the server note
 //<
-//< **There is no child process and no network here** (those are in `tools/kspage_open.kspl`),
-//< so a test can confirm from the paths and the files written alone that the right path is
-//< opened and that the token stays off every command line (`tools/tests/page_test.kspl`).
+//< **There is no child process and no network here** (those are in `tools/kspage_open.kspl`).
+//< So a test can confirm from the paths and the files written alone that the right path is
+//< opened. It can also confirm that the token stays off every command line
+//< (`tools/tests/page_test.kspl`).
 //< Caution: **Do not add more places that know the URL's format**: `make kspage`, `make
 //< kspage-open` and the file association all go through these two files.
 import "std/chars"
@@ -10,7 +11,6 @@ import "std/fs"
 import "std/mem" { Arena, dealloc }
 import "std/str" { Str_builder }
 import "std/strnum"
-import "std/sys"
 import "std/url" as url_text
 
 priv fn last_sep(path: U8[]): Sz? //< where the last separator stands, or none
@@ -28,7 +28,7 @@ fn split_path(path: U8[]): U8[][2] //< a path split into its folder and its name
 
 fn trim_end_sep(dir: U8[]): U8[] //< a folder without the separators after its last name
     //<
-    //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder, and the note
+    //< Caution: **Compare folders without them**: `devel/` and `devel` are one folder. The note
     //< matched on the string would start two servers for it, or find none to stop. A root (`/`,
     //< `C:\`) keeps its own.
     $at: = dir
@@ -58,8 +58,8 @@ fn doc_under(root: U8[], path: U8[]): U8[] //< the document's path relative to t
     return path if rest.len == 0 else rest
 
 fn url_in_log(log: U8[]): U8[] //< the URL from the line kssrv printed, empty where there is none
-    // Caution: **The level sits in the middle** (`kssrv: I: open `). Without the `I: ` the marker
-    // matches nothing and the opener waits 30 seconds for a server that is already up
+    // Caution: **The level sits in the middle** (`kssrv: I: open `). Without the `I: `, the marker
+    // matches nothing. The opener then waits 30 seconds for a server that is already up
     // (`kssrv/main.kspl` names this reader and `kspage/Makefile` in the same comment).
     mark: = "kssrv: I: open "
     if at: = log.find_str(mark)
@@ -99,8 +99,8 @@ fn url_for( //< the URL to open, with the document to open added
     //<
     //< **Put it before the fragment (`#`)**, or it becomes part of the token.
     //< Caution: **Escape every byte but the unreserved ones and the separator.** `?doc=` is a query
-    //< the page decodes, so a name escaped only in part opens another file, which Save then
-    //< overwrites: `a+b` reads as `a b`, `notes%2Fx` as `notes/x`, and `x&read=1` adds a setting.
+    //< the page decodes. So a name escaped only in part opens another file, and Save then
+    //< overwrites it. `a+b` reads as `a b`, `notes%2Fx` as `notes/x`, `x&read=1` adds a setting.
     url: U8[], //< the URL kssrv printed, fragment included
     doc: U8[], //< the document to open, relative to the served folder
     win: Bool, //< only when this is set is `\` turned into `/`
@@ -135,9 +135,9 @@ const page_keep_s: I64 = 600 //< how long a handed page is kept [s]
 fn page_text(open_url: U8[], text: Str_builder$@): U8[] //<
     //< The page handed to the browser in place of the URL, which moves on to the URL
     //<
-    //< **The browser is handed this page's path, never the URL**: a command line is open to every
+    //< **The browser is handed this page's path, never the URL.** A command line is open to every
     //< user on the machine (`ps`), and the URL holds the token. The page moves on at once
-    //< (`refresh`) and offers the link where a browser does not; the fragment goes along, so the
+    //< (`refresh`) and offers the link where a browser does not. The fragment goes along, so the
     //< page reads the token as it does from a URL typed by hand.
     text.s("<!doctype html>\n<meta charset=\"utf-8\">\n")
     text.s("<meta http-equiv=\"refresh\" content=\"0;url=")
@@ -162,8 +162,8 @@ priv fn attr_into(text: Str_builder$@, s: U8[]) //< writes s as a quoted attribu
 
 fn write_page( //< writes the page for the URL, readable by its owner alone, and returns its path
     //<
-    //< **A name of its own each time** (`fs.write_unique`): two documents opened at once (several
-    //< chosen and opened together) would otherwise each hand the browser the other's page.
+    //< **A name of its own each time** (`fs.write_unique`). Otherwise two documents opened at once
+    //< (several chosen and opened together) would each hand the browser the other's page.
     open_url: U8[], //< the URL to move on to, token included
     dir: U8[], //< the folder it goes in
     arena: Arena$@, //< where the path goes
@@ -205,18 +205,13 @@ fn sweep_pages(dir: U8[], now: I64, arena: Arena$@) //< removes the pages handed
         if now - info.mtime > page_keep_s
             fs.remove_path(path) catch {}
 
-fn write_owned(path: U8[], data: U8[], arena: Arena$@): Void!fs.Fs_error //<
+fn write_owned(path: U8[], data: U8[]): Void!fs.Fs_error //<
     //< Replaces a file with one only its owner may read
     //<
     //< **The note and the log hold the token as the page does**, so they are written the same way.
-    //< Caution: **Write beside it and rename over it**: a file opened in place keeps the mode it
-    //< had, and a reader that opened it before keeps reading what is written into it.
-    dir: = parent_of(path)
-    name: = sys.get_file_name(path)
-    fresh: = fs.write_unique(dir, arena.text().s(name).c('-').take(), ".new", data, arena)!
-    fs.rename_path(fresh, path) catch
-        fs.remove_path(fresh) catch {}
-        throw .operation_failed
+    //< Caution: **Replace it, never write in place** (`fs.replace_file`). A file opened in place
+    //< keeps the mode it had. A crash partway leaves a note no search can read.
+    fs.replace_file(path, data, .owner_only)!
 
 priv const max_records: Sz = 8 //< the cap on the records listed in the note
     //<

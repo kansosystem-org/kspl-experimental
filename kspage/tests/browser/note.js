@@ -11,8 +11,8 @@ function kspageProbeNote(ks) {
 
   // 27. The note button.
   //
-  // **This can be seen nowhere else**: misspell the field's or the button's id and the core is
-  // unhurt, and it breaks only as "press it and nothing comes out".
+  // **This can be seen nowhere else.** Misspell the field's or the button's id, and the core is
+  // unhurt; it breaks only as "press it and nothing comes out".
   openMenu("note-apply");
   pressAt(8);
   document.getElementById("note-text").value = "the note's text";
@@ -30,9 +30,9 @@ function kspageProbeNote(ks) {
 
   // 27'. The remark button.
   //
-  // **This can be seen nowhere else**: putting the writer in is the page's side (it breaks as "it
+  // **This can be seen nowhere else.** Putting the writer in is the page's side (it breaks as "it
   // is attached and whose it is does not come out").
-  // Caution: **Look at the name put out beside it too** — the field alone lets the name's drawing
+  // Caution: **Look at the name put out beside it too.** The field alone lets the name's drawing
   // come off unnoticed.
   openMenu("remark-apply");
   pressAt(8);
@@ -104,17 +104,17 @@ function kspageProbeNote(ks) {
   check(bullets() === wasBullets, "one undo returns the whole document");
   pressAt(8);
 
-  // The list of slides (the thumbnails): the thumbnails and turning a press into the document's
-  // coordinates are the DOM's (else "lined up, and a press does not go in").
-  // Caution: **Press the tab first, like a person** — the navigation is three sheets with one out
-  // (`kspage/port/web/side.js`), and unpressed, a thumbnail in a folded set reads as "visible".
+  // The list of slides (the thumbnails). The thumbnails, and turning a press into the document's
+  // coordinates, are the DOM's. Else "lined up, and a press does not go in".
+  // Caution: **Press the tab first, like a person.** The navigation is three sheets with one out
+  // (`kspage/port/web/side.js`). Unpressed, a thumbnail in a folded set reads as "visible".
   document.getElementById("side-tab-slides").click();
   const slideStrip = document.getElementById("slides");
   check(!slideStrip.hidden && slideStrip.children.length === app.surfaceCount(),
     "as many thumbnails line up as there are slides ("
       + slideStrip.children.length + ")");
   // **The count must come out on the tab**, or whether there is content cannot be read until
-  // pressed (forgetting what is hidden is the standard complaint).
+  // pressed. Forgetting what is hidden is the standard complaint.
   const tallyOf = (which) =>
     document.getElementById("side-tab-" + which).querySelector(".tally").textContent;
   check(tallyOf("slides") === String(app.surfaceCount()),
@@ -204,8 +204,8 @@ function kspageProbeNote(ks) {
   document.getElementById("put-refer").click();
   check(app.text().length === beforeRefer, "with no such name it cannot be called");
   // Caution: A chapter number must round-trip too. Dropped from the row of numbers, the kind reads
-  // as "no mark", so opening and shutting the style's fields deletes it (two texts, as for a serial
-  // number).
+  // as "no mark". Then opening and shutting the style's fields deletes it (two texts, as for a
+  // serial number).
   app.setStyleMark(h1At, { kind: "outline", before: ".", text: " " });
   const chapter = app.styleMark(h1At);
   check(chapter.kind === "outline",
@@ -232,9 +232,9 @@ function kspageProbeNote(ks) {
     "what goes into the save is the name of what it points at");
   undoKey();
   check(calls() === markOnly, "one undo deletes the calling text");
-  // Caution: **Give the borrowed mark back.** A heading holds no indent, so with the mark left the
+  // Caution: **Give the borrowed mark back.** A heading holds no indent. With the mark left, the
   // body's left edge moves right by the mark (the settlement in
-  // [`../../lay/flow.kspl`](../../lay/flow.kspl)); the next section, pressing the heading's head,
+  // [`../../lay/flow.kspl`](../../lay/flow.kspl)). The next section, pressing the heading's head,
   // lands on the mark and fails as "press it and the style does not land".
   app.setStyleMark(h1At, { kind: "none" });
 
@@ -260,8 +260,8 @@ function kspageProbeNote(ks) {
 
   // The shape buttons and the shapes menu.
   //
-  // **This can be seen nowhere else**: misspell an id of the menu's shape or of what adds, and the
-  // core is unhurt (it breaks as "press it and nothing comes out").
+  // **This can be seen nowhere else.** Misspell an id of the menu's shape or of what adds, and
+  // the core is unhurt (it breaks as "press it and nothing comes out").
   openMenu("put-shape");
   // It sees that the press landed — missed, it passes with the default shape going in (`probe.js`'s
   // `flyPick`).
@@ -290,7 +290,7 @@ function kspageProbeNote(ks) {
 
   // The chart button and the range field.
   //
-  // **This can be seen nowhere else**: the range field and the gathering menu are DOM inside the
+  // **This can be seen nowhere else.** The range field and the gathering menu are DOM inside the
   // menu (a misspelt id breaks as "press it and nothing comes out"). **Painting the bars is the
   // DOM's side too** (failed, "it is laid there and nothing is visible").
   openMenu("put-chart");
@@ -332,7 +332,7 @@ function kspageProbeNote(ks) {
 
   // The CSV buttons.
   //
-  // **This can be seen nowhere else**: what drops and what chooses a file are DOM inside the menu
+  // **This can be seen nowhere else.** What drops and what chooses a file are DOM inside the menu
   // (a misspelt id breaks as "press it and nothing falls"). The file chooser cannot open headless,
   // so the text is handed straight to the entry point.
   openMenu("export-csv");
@@ -381,10 +381,10 @@ function kspageProbeKeys(ks) {
   check(app.text().indexOf("◆") < 0, "what was typed goes back too");
 
   // 28'. Ctrl+B and Ctrl+I, and the icons' shortcuts, are wired to bold and italic.
-  // Caution: **Do not move the positions the later sections rely on** — bold changes the measures
+  // Caution: **Do not move the positions the later sections rely on.** Bold changes the measures
   // and splits a run, so this section comes after the ones looking at the text's positions.
-  // **Read the decoration landed before swapping the fields** (unread, the colour and the underline
-  // fall away). Each press goes to and fro between "land it" and "as the parent has it".
+  // **Read the decoration landed before swapping the fields.** Unread, the colour and the
+  // underline fall away. Each press goes to and fro between "land it" and "as the parent has it".
   pressAt(8);
   ime.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true,
     bubbles: true, cancelable: true }));
@@ -400,7 +400,7 @@ function kspageProbeKeys(ks) {
   check(boldKey() === false && app.spanInk().bold === null,
     "pressing again goes back to as the parent has it");
   // Caution: **Where a text is put out on the row, see that it acts too.** The run here is a link,
-  // underlined from the start, so it is looked at **swapping** (not from nothing landed), and
+  // underlined from the start. So it is looked at **swapping** (not from nothing landed), and
   // going back on another press.
   const underKey = () => ime.dispatchEvent(new KeyboardEvent("keydown",
     { key: "u", ctrlKey: true, bubbles: true, cancelable: true }));
@@ -426,8 +426,8 @@ function kspageProbeKeys(ks) {
     "taking it off takes both off");
   pressAt(8);
 
-  // 28''. Home and End, and Ctrl+A: **taken over by the page** (untaken, Home and End roll the
-  // window and Ctrl+A selects the whole page without the body). The input field following the
+  // 28''. Home and End, and Ctrl+A: **taken over by the page**. Untaken, Home and End roll the
+  // window, and Ctrl+A selects the whole page without the body. The input field following the
   // cursor shows its move.
   const edgeKey = (key, shift) => ime.dispatchEvent(new KeyboardEvent("keydown",
     { key: key, shiftKey: shift === true, bubbles: true, cancelable: true }));

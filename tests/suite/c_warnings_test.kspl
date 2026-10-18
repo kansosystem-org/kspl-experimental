@@ -1,12 +1,13 @@
 #!/usr/bin/env -S ksplc run
-//< Checks that the generated C is warning-free under a C compiler's `-Wall`
+//< Checks that the generated C is warning-free under a C compiler's `-Wall` and strict ISO C99
 //<
-//< Nobody reads the generated C, so warnings pile up unnoticed; held at zero, the check fails the
-//< moment one is added.
+//< Nobody reads the generated C, so warnings pile up unnoticed. Held at zero, the check fails the
+//< moment one is added. `-pedantic` holds it to ISO C99, so a compiler that folds no GNU extension
+//< takes it too.
 //< Caution: **Do not bring existing C files into the scope.** Only the C that ksplc writes is
 //< checked, under `-fsyntax-only` (no linking).
 //< **Both families are mandatory where `KANSO_REQUIRE_BOTH_CC=1`** (`mk/test.mk` sets it on Linux,
-//< whose image holds gcc and clang); elsewhere a missing one gives a `SKIP` line, never a silent
+//< whose image holds gcc and clang). Elsewhere a missing one gives a `SKIP` line, never a silent
 //< pass.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
@@ -30,10 +31,13 @@ priv const families: U8[][_] = ::{ "clang", "gcc" } //< the families both of whi
 
 // **Do not leave `-Wextra` and `-O2` out.** Without them -Wsign-compare and
 // -Wstrict-aliasing (inactive without optimisation) are invisible, and both catch wrong answers.
-// Only `-Wmissing-field-initializers` is left out: genc's `{0}` / `{{0}}` is correct, since the
-// standard zeroes the rest.
-priv const cflags: U8[][_] = ::{ "-std=c99", "-Wall", "-Wextra", "-Wno-missing-field-initializers",
-    "-O2", "-fsyntax-only" }
+// `-Wmissing-field-initializers` is left out: genc's `{0}` / `{{0}}` is correct, the rest zeroed.
+// `-Wstrict-prototypes` is in neither: a `f()` declares no prototype, so a call goes unchecked.
+// `-pedantic` holds it to ISO C99, `-Woverlength-strings` aside ("The generated C is ISO C99, not
+// GNU C" in ksplc/docs/DESIGN-backends.md).
+priv const cflags: U8[][_] = ::{ "-std=c99", "-pedantic", "-Wall", "-Wextra",
+    "-Wno-missing-field-initializers", "-Wno-overlength-strings", "-Wstrict-prototypes", "-O2",
+    "-fsyntax-only" }
 
 priv struct Target //< the inputs that produce the generated C
     //<
@@ -49,9 +53,9 @@ priv const freestanding_ksplc: U8[][_] = ::{ "--freestanding" } //<
     //< The ksplc options for the freestanding target
     //<
     //< Caution: **Keep the list of options in a const.** A `U8[][]::{ ... }` built in a function
-    //< and put in a struct points at the stack frame, gone after the return, with no diagnostic
-    //< ("Which pointers into a frame are stopped from leaving it" in
-    //< `docs/DESIGN-language.md`); it breaks far away, as a garbled argv length.
+    //< and put in a struct points at the stack frame. That frame is gone after the return, with no
+    //< diagnostic ("Which pointers into a frame are stopped from leaving it" in
+    //< `docs/DESIGN-language.md`). It breaks far away, as a garbled argv length.
 priv const freestanding_cc: U8[][_] = ::{ "-ffreestanding" }
 
 priv fn targets(arena: Arena$@): List<|Target|> //<
@@ -91,7 +95,7 @@ priv fn identify(name: U8[], arena: Arena$@): Cc? //< that compiler, where it st
     //< The same compiler gives the same identity. **Not by the name it reports** (`--version`'s
     //< first line): gcc prints the name it was called by, and macOS's `gcc` is clang.
     triple: = ksplc_harness.run(U8[][]::{ name, "-dumpmachine" })
-    if triple.code != 0
+    if !triple.exited_with(0)
         return .none
     version: = ksplc_harness.run(U8[][]::{ name, "-dumpversion" })
     banner: = ksplc_harness.run(U8[][]::{ name, "--version" })
@@ -112,7 +116,7 @@ priv fn compilers(arena: Arena$@): List<|Cc|> //<
         case .none
             continue
         case .some(cc)
-            if !found.any(fn(f: Cc; cc: Cc): Bool {
+            if !found.any(fn(f: Cc@; cc: Cc): Bool {
                 return f.id.equals(cc.id);
             })
                 found.push(cc)
@@ -123,7 +127,7 @@ priv fn check_families(ccs: List<|Cc|>@, arena: Arena$@) //<
     //<
     //< The `SKIP` reason is the one `tools/ci_gates.kspl` expects on a platform holding one alone.
     for fam in families
-        if ccs.any(fn(c: Cc; fam: U8[]): Bool {
+        if ccs.any(fn(c: Cc@; fam: U8[]): Bool {
             return c.family.equals(fam);
         })
             continue
@@ -135,17 +139,17 @@ priv fn check_families(ccs: List<|Cc|>@, arena: Arena$@) //<
 priv fn warning_lines(out: U8[], arena: Arena$@): List<|U8[]|> //<
     //< Collects only the warning lines
     lines: = out.lines(arena)
-    return lines.where(fn(ln: U8[]; ): Bool {
+    return lines.where(fn(ln: U8[]@; ): Bool {
         return ln.find_str(": warning:").is_some();
     }).to_list(arena)
 
 priv fn builtin_slice(gen: U8[]): U8[] //<
     //< The first name of the built-in slice type in the generated C (`kspl_I32_Slice`), or empty
     //<
-    //< **A slice is `std/lang`'s `Slice<|$T|>`** (`std_lang_Slice_I32`); only the runtime's own
+    //< **A slice is `std/lang`'s `Slice<|$T|>`** (`std_lang_Slice_I32`). Only the runtime's own
     //< byte slice keeps a built-in name (`U8_Slice`). **One built-in constructor added back to the
-    //< type table brings the second form back** with nothing else failing, so the name is looked
-    //< for here, in C every gate generates.
+    //< type table brings the second form back**, and nothing else fails. So the check looks for the
+    //< name here, in C that every gate generates.
     $i: Sz = 0
     for i < gen.len
         switch gen.sub_from(i).find_str("_Slice")
@@ -183,7 +187,7 @@ fn main(): I32
         args.push(t.src)
         args.push(gen)
         r: = ksplc_harness.ksplc(args.slice())
-        if r.code != 0
+        if !r.exited_with(0)
             verdict.check(arena.text().s("\{t.slot\}: it can be generated").take(), false, r.out)
             continue
         stray: = builtin_slice(io.read_file(gen) catch "")
@@ -201,6 +205,6 @@ fn main(): I32
             argv.push(gen)
             out: = ksplc_harness.run(argv.slice())
             warns: = warning_lines(out.out, arena)
-            verdict.check(name, out.code == 0 && warns.len == 0,
+            verdict.check(name, out.exited_with(0) && warns.len == 0,
                 arena.text().s("\{warns.len\} found\n").s(out.out).take())
     return ksplc_harness.finish()

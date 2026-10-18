@@ -1,9 +1,9 @@
 //< The state every layer shares: the arenas, the compiler's configuration and the string pools
 //<
-//< `arena` holds the compilation's data and `perm_arena` what must outlive a language-server
-//< request; `config` is what the command line asked for; `pools` turns node kinds, names and
+//< `arena` holds the compilation's data, and `perm_arena` what must outlive a language-server
+//< request. `config` is what the command line asked for. `pools` turns node kinds, names and
 //< sources' logical names into numbers. **A name one layer writes and another matches stands here
-//< once** (`slice_fqn`, `option_fqn`, the format methods), so the two never spell it apart.
+//< once** (`slice_fqn`, `option_fqn`, the format methods). So the two never spell it apart.
 import "std/chars" as std_chars
 import "std/ds" { List, Map }
 import "std/mem" + { Arena, alloc, dealloc }
@@ -36,7 +36,7 @@ const unknown_type_name: U8[] = "Unknown" //< the name of a type not yet known
     //< The parser writes it for an omitted type; Env registers it at `Builtin_type_id.unknown`.
 
 const option_fqn: U8[] = "std.lang.Option" //<
-    //< The FQN of a value that may be absent (`T?`, the enum `Option` in `std/lang`)
+    //< The FQN of a value that can be absent (`T?`, the enum `Option` in `std/lang`)
     //<
     //< A `T?` is sugar for this (`../parse/desugar_slice.kspl`).
     //< Caution: **Match an Option by this and `instance_base`**, never by its mangled name's shape.
@@ -45,13 +45,23 @@ fn option_ident(): U8[] //<
     //< the last word of `option_fqn` (`Option`), the identifier put into the AST
     return option_fqn.fqn_last()
 
+const result_fqn: U8[] = "std.lang.Result" //<
+    //< The FQN of a value or an error (`T!E`, the enum `Result` in `std/lang`)
+    //<
+    //< A `T!E` is sugar for this (`../parse/desugar_slice.kspl`).
+    //< Caution: **Match a Result by this and `instance_base`**, never by its mangled name's shape.
+
+fn result_ident(): U8[] //<
+    //< the last word of `result_fqn` (`Result`), the identifier put into the AST
+    return result_fqn.fqn_last()
+
 const fmt_method_char: U8[] = "fmt_char" //<
     //< The method names that the format spec `\{value:SPEC\}` desugars to
     //<
-    //< Caution: **Keep the strings in one place.** The builder (`build_call` in
-    //< `../parse/format_spec.kspl`) and the code that rewords "there is no such method" in terms
-    //< of the format spec (`format_spec_item` in `../sema/body/dot.kspl`) match on the same name;
-    //< if they drift, the user sees `fmt_prec`, a name they never wrote, for a `:.2`.
+    //< Caution: **Keep the strings in one place.** Two places match on the same name: the builder
+    //< (`build_call` in `../parse/format_spec.kspl`), and the code that rewords "there is no such
+    //< method" in terms of the format spec (`format_spec_item` in `../sema/body/dot.kspl`). If
+    //< they drift, the user sees `fmt_prec`, a name they never wrote, for a `:.2`.
 const fmt_method_hex: U8[] = "fmt_hex"
 const fmt_method_prec: U8[] = "fmt_prec"
 const fmt_method_spec: U8[] = "fmt_spec"
@@ -88,8 +98,7 @@ impl String_pool
     fn intern(r: Self$@, s: U8[]): I32
         if r == null || s.len == 0
             return 0
-        existing: = r.map.get(s) catch -1
-        if existing != -1
+        if existing: = r.map.get(s)
             return existing
 
         new_id: = I32::r.list.len
@@ -105,8 +114,8 @@ impl String_pool
 $arena: Arena$@ = null
 
 // **The arena that is never rewound.** The LSP saves and restores the arena per request
-// (ksplc/lsp/worker.kspl); a table that does **not** outlive a request stays there and is
-// forgotten at the rewind (`wind_back` in ksplc/lsp/state.kspl lists them all).
+// (ksplc/lsp/worker.kspl). A table that does **not** outlive a request stays there. The rewind
+// forgets it (`wind_back` in ksplc/lsp/state.kspl lists them all).
 // **There is no third choice**: a global on the arena that nothing forgets is the bug above.
 $perm_arena: Arena$@ = null
 struct Line_info
@@ -137,7 +146,7 @@ struct Compiler_config
     recover_syntax: Bool //<
         //< Whether a file that fails to parse is read again with the recovery rules enabled.
         //<
-        //< **Only the editor sets it.** Set on a compile, input that should be rejected would be
+        //< **Only the editor sets it.** Set on a compile, input that must be rejected would be
         //< accepted (the grounds are "Only the editor's parse recovers from a syntax error" in
         //< `../docs/DESIGN-tools.md`).
     is_freestanding: Bool
@@ -150,8 +159,8 @@ struct Compiler_config
     is_program: Bool //<
         //< Whether the output must become a program, so a missing `main` is an error (`--program`)
         //<
-        //< `ksplc run` and `ksplc build` pass it to the compile they start. A plain compile may
-        //< lack `main`, since its C may be linked with one written elsewhere.
+        //< `ksplc run` and `ksplc build` pass it to the compile they start. A plain compile can
+        //< lack `main`, since its C can be linked with one written elsewhere.
     machine: U8[] //<
         //< The machine `--machine=` named; empty is the one ksplc runs on
         //<
@@ -171,7 +180,7 @@ struct Compiler_config
         //<
         //< It is for comparing two versions, so it writes every declaration, generics too.
     surface_all: Bool //<
-        //< Whether the record holds everything a sibling file may use, not just what is published
+        //< Whether the record holds everything a sibling file can use, not just what is published
         //<
         //< It is `--surface-scope=all`; **the default is the published API only**.
         //< **It is for a package that publishes nothing**, whose files use one another without
@@ -185,6 +194,10 @@ struct Compiler_config
     defines: List<|U8[]|>$@
     std_dir: U8[] //<
         //< The standard library's folder, empty until std_dir() resolves it; read it through that.
+    std_dir_origin: U8[] //<
+        //< Where std_dir() took std_dir from, for the note on a missing std (`base/locate.kspl`)
+        //<
+        //< Empty where `--std-dir=` set std_dir before std_dir() first ran. Always a literal.
     pkg_src_dir: U8[] //<
         //< The folder of packages other than `std`
         //<
@@ -272,15 +285,15 @@ fn append_defines_from_env() //<
 const source_ext: U8[] = ".kspl" //< the extension of a KSPL source file
     //<
     //< **The string lives here and nowhere else.** Four things depend on it: the file an `import`
-    //< opens (`append_file_path`), the extension a name drops (`strip_kspl_ext`), the one a
-    //< diagnostic or `#line` adds back, and the check that a named file is a source
-    //< (`has_kspl_ext`). Decided apart, a diagnostic names a file that does not exist.
-    //< Why one notation: "The indentation notation (`.kspl`)" in `../../docs/DESIGN-language.md`.
+    //< opens (`append_file_path`), and the extension a name drops (`strip_kspl_ext`). The other two
+    //< are the extension a diagnostic or `#line` adds back, and the check that a named file is a
+    //< source (`has_kspl_ext`). Decided apart, a diagnostic names a file that does not exist.
+    //< Why one notation: "The indentation notation (`.kspl`)" in `../../docs/DESIGN-notation.md`.
 
 const stdin_name: U8[] = "-" //<
     //< the name of a program read from standard input, or given by `--eval=`
     //<
-    //< **It has no file, so it is named as a command line names standard input**, and stands in
+    //< **It has no file, so it is named as a command line names standard input.** It stands in
     //< the current folder: a relative import resolves from there. A diagnostic shows it as it is,
     //< with no extension added (`with_source_ext`).
 
@@ -290,13 +303,13 @@ fn source_of(map: Map<|U8[], U8$[]|>$@, file: U8[]): U8$[] //<
     //< An `import`'s name has no extension, so a miss retries with source_ext added; "" if
     //< neither.
     //< Caution: **Look a file's text up only through here**, so every reader agrees on the retry.
-    got: = map.get(file) catch ""
+    got: = map.get(file).unwrap_or("")
     if got.len > 0
         return got
     $named: = Str_builder.new()
     defer named.free()
     named.s(file).s(source_ext)
-    return map.get(named.slice()) catch ""
+    return map.get(named.slice()).unwrap_or("")
 
 const file_uri_scheme: U8[] = "file://" //< the scheme an LSP document URI carries
     //<
@@ -319,7 +332,7 @@ impl Global_pools
         //< It creates the three pools, empty
         //<
         //< Caution: **Intern the node kinds before anything else uses the kind pool** (`init` in
-        //< `setup.kspl` does it next), so a kind's number in the pool equals its enum value.
+        //< `setup.kspl` does it next). Then a kind's number in the pool equals its enum value.
         if r.ast_kinds != null
             return
         r.ast_kinds = String_pool.new()
@@ -341,7 +354,7 @@ impl Global_pools
     fn name_text(r: Self$@, name: U8[]): U8[] //< the pool's one copy of a name, kept to the end
         //<
         //< **A name built from parts is kept here** (an FQN, a path's segments joined by `.`), each
-        //< distinct name once, NUL-terminated. Such a name is built again on every read of it; a
+        //< distinct name once, NUL-terminated. Such a name is built again on every read of it. A
         //< copy on the arena per read costs a string per read, megabytes on a self-host.
         return r.symbol_names.list.get(r.symbol_names.intern(name))
 
@@ -373,9 +386,9 @@ impl Str_builder
         //<
         //< This rule lives here and nowhere else.
         //< A separator becomes the `.` between parts, and **a `.` inside the name becomes `_`**
-        //< (the extension a non-default notation keeps), so the result can be written in source.
-        //< Caution: **Leave no `.` inside a part.** Many places split a qualified name at `.`;
-        //< write this rule a second time and one copy builds a name the other cannot find.
+        //< (the extension a non-default notation keeps). So the result can be written in source.
+        //< Caution: **Leave no `.` inside a part.** Many places split a qualified name at `.`.
+        //< Write this rule a second time, and one copy builds a name the other cannot find.
         for i in Range.asc(path.len)
             ch: = (path.ptr + i)$
             if ch == '/' || ch == '\\'
@@ -395,7 +408,7 @@ impl U8[]
         //< The name spelt as its file: `source_ext` added where the last part has no extension
         //<
         //< **A name with an extension is a file named as it is** (the grammar's `.kspeg`, a parser
-        //< fixture), so nothing is added to it; only a logical name (`std/io`) carries none. Nor is
+        //< fixture), so nothing is added to it. Only a logical name (`std/io`) carries none. Nor is
         //< anything added to `stdin_name`, which names no file.
         if r.equals(stdin_name)
             return r

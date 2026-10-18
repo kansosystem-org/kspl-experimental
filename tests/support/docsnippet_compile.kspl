@@ -2,9 +2,9 @@
 //< Compiles a document's KSPL fragments, and holds each `// error` mark to what the compiler says
 //<
 //< The rule is "A code block compiles, or says why not" in `docs/SPEC-documents.md`. **A fragment
-//< is compiled inside a copy of the package whose documents hold it** (`place_of`), so a name the
+//< is compiled inside a copy of the package whose documents hold it** (`place_of`). So a name the
 //< package keeps to itself resolves as it does for the package's own files. **It compiles**, since
-//< some refusals are made only after the analysis a lint stops at; a whole program is linted too.
+//< some refusals come only after the analysis that a lint stops at. A whole program is linted too.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars"
 import "std/ds" { List }
@@ -21,8 +21,8 @@ import "tests/support/harness"
 
 priv const tour_name: U8[] = "TOUR.md" //< a tour's blocks are steps of one program
     //<
-    //< `make test-docs` compiles and runs that program in both notations, so its steps are not
-    //< compiled one by one.
+    //< `make test-docs` joins them, compiles and runs the result, so its steps are not compiled
+    //< one by one.
 priv const package_mark: U8[] = "ksplc.cfg" //< a top folder holding it is copied for its fragments
 
 priv struct Case //< one fragment, and what compiling it found
@@ -203,7 +203,7 @@ priv fn mark_judged(c: Case@, j: Job_at@, out: verdict.Run_out@, arena: Arena$@)
             return arena.text().s("an error falls on an unmarked line, ")
                 .s(first_said(c, j, out.out, "error", arena)).take()
         inside += 1
-    if j.mark_at >= 0 && (out.code == 0 || inside == 0)
+    if j.mark_at >= 0 && (out.exited_with(0) || inside == 0)
         return "it is marked `// error`, but compiles"
     return ""
 
@@ -219,11 +219,8 @@ fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
     $cases: = List<|Case|>.new(arena)
     $copied: = List<|U8[]|>.new(arena)
     for s in snippets
-        $skip: =
-            s.doc.starts_with("private/") || sys.get_file_name(s.doc).equals(tour_name)
-        for o in own
-            skip = skip || sys.get_file_name(s.doc).equals(o)
-        if skip
+        if sys.get_file_name(s.doc).equals(tour_name) ||
+            harness.is_private_doc(s.doc, own@)
             continue
         dir: = place_of(s.doc, marked@)
         $have: = dir.len == 0
@@ -257,7 +254,7 @@ fn run(snippets: List<|shape.Snippet|>@, sandbox: U8[], arena: Arena$@) //<
     for b in Range.asc(base.len)
         j: = base.get(b)
         c: = cases[j.case_at]@
-        if !j.lint && base_out.get(b).code == 0 && c.fit == c.shapes.len
+        if !j.lint && base_out.get(b).exited_with(0) && c.fit == c.shapes.len
             c.fit = j.shape_at
             c.fit_run = b
     $compiled: Sz = 0

@@ -4,9 +4,9 @@
 // ==== case addr_of_const_element
 //< `@` on a read-only element must not pass it where a mutable pointer is expected
 //<
-//< **The notation is right and only the permission drops**: handed straight to a `U8$@`, the
-//< expected type descends into `ro[0]`, and the `const_of(U8)` -> `U8` conversion, fit for a copy,
-//< must not retype the place. The type of `x@` is settled by `x` alone, or a ROM write is lost.
+//< **The notation is right and only the permission drops.** Handed straight to a `U8$@`, the
+//< expected type descends into `ro[0]`. The `const_of(U8)` -> `U8` conversion fits a copy. It
+//< must not retype the place. `x` alone settles the type of `x@`, or a ROM write is lost.
 // EXPECT: expected 'U8$@', but got 'U8@'
 // EXPECT: expected 'U8$[]', but got 'U8[]'
 
@@ -53,15 +53,15 @@ fn main(): I32
 // ==== case addr_of_packed_field
 //< A field `#packed` leaves under-aligned must not have its address taken, in any of the ways
 //<
-//< A pointer carries no alignment of its own, so an access through it assumes its type's, and a
-//< word access at an odd address faults on a Cortex-M0. `@`, a receiver taken by pointer (a
+//< A pointer carries no alignment of its own. So an access through it assumes its type's. A word
+//< access at an odd address faults on a Cortex-M0. `@`, a receiver taken by pointer (a
 //< method, an operator, a slice field's subscript) and a slice cast all take one. A one-byte field,
 //< the struct itself and a field that keeps its alignment pass, as do reads and writes.
-// EXPECT: as '@' would: a pointer to 'I32' promises 4. Copy the field into a local
-// EXPECT: as 'bump', which takes its receiver by pointer, would: a pointer to
+// EXPECT: as '@' would. A pointer to 'I32' promises 4. Copy the field into a local
+// EXPECT: as 'bump', which takes its receiver by pointer, would. A pointer to
 // EXPECT: as '+', which takes its receiver by pointer, would
-// EXPECT: as '[]', which takes its receiver by pointer, would: a pointer to 'I32$[]'
-// EXPECT: as a slice cast would: a pointer to 'I32$[2]' promises 4
+// EXPECT: as '[]', which takes its receiver by pointer, would. A pointer to 'I32$[]'
+// EXPECT: as a slice cast would. A pointer to 'I32$[2]' promises 4
 // EXPECT: Finished with 5 error(s)
 
 priv struct In
@@ -142,12 +142,12 @@ fn main()
 //<
 //< A global, a parameter's pointee, `p$` and a slice's element all outlive the frame, as `return`
 //< does. `kept_inside` stores into the frame or stores a global's view, and passes.
-// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored into the global 'g', which
-// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored into the global 'g_views', which
-// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored behind a pointer
-// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored behind a pointer
-// EXPECT: cannot store a slice built from local storage: the descriptor's pointer is synthesized by the compiler (no '@' appears in the source), and it would be stored behind a pointer
-// EXPECT: cannot store an interface value built from local storage: the interface value keeps a pointer to it, and it would be stored into the global 'g_shape'
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into the global 'g', which
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored into the global 'g_views', which
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
+// EXPECT: cannot store a slice built from local storage. The compiler makes the descriptor's pointer, so no '@' appears in the source. It would be stored behind a pointer
+// EXPECT: cannot store an interface value built from local storage. The interface value keeps a pointer to it. The compiler makes that address, so no '@' appears. It would be stored into the global 'g_shape'
 // EXPECT: cannot store 's': it was set from a slice or an interface value built from local storage
 // EXPECT: Finished with 7 error(s)
 import "std/io"
@@ -219,11 +219,11 @@ fn main()
 // ==== case frame_address_leaves
 //< The address of the frame's own storage is refused where it leaves by `return` or `throw`
 //<
-//< A local's or a by-value parameter's `@`, of a field or an element too, stepped or cast, anywhere
-//< inside the value, and through a local set from one: each reads a dead frame. **A store passes**
-//< (`stored_then_cleared`): a local's address kept in a global is taken back before the return.
+//< Each of these reads a dead frame: a local's or a by-value parameter's `@`, of a field or an
+//< element too. It can be stepped or cast, anywhere inside, or reached through a local set from one. **A store passes**
+//< (`stored_then_cleared`). A local's address kept in a global is taken back before the return.
 //< `ok_*` point elsewhere: a global, a pointer's target, an allocation, a call's result.
-// EXPECT: cannot return the address of local storage: 'x' lives in this function's frame, and this function's frame dies here
+// EXPECT: cannot return the address of local storage: 'x' lives in this function's frame. This function's frame dies here
 // EXPECT: cannot return the address of local storage: 'a' lives in this function's frame
 // EXPECT: cannot return the address of local storage: 's' lives in this function's frame
 // EXPECT: cannot return the address of local storage: 'v' lives in this function's frame
@@ -315,9 +315,9 @@ fn main(): I32
 // ==== case mut_method_on_immut_array_elem
 //< A `Self$@` method is rejected on an element of an immutable fixed-length array
 //<
-//< Caution: **Pin the element-receiver road (`a[i].m()`) down separately.** With a scalar (`x.m()`)
-//< and a field (`s.f.m()`) rejected, the decision can still slip at the `[` step: reading
-//< `strip_ptr(x) != x` as "x is a pointer" skips the check whole for a `U8 immut` element.
+//< Caution: **Test the element-receiver road (`a[i].m()`) separately.** Even with a scalar (`x.m()`)
+//< and a field (`s.f.m()`) rejected, the decision can still slip at the `[` step. A reading of
+//< `strip_ptr(x) != x` as "x is a pointer" skips the whole check for a `U8 immut` element.
 // EXPECT: cannot call a method that takes a writable receiver
 // EXPECT: cannot call a method that takes a writable receiver
 
@@ -338,10 +338,10 @@ fn main(): I32
 //< A `Self$@` method cannot be called directly on a call's result
 //<
 //< It rewrites its own memory, and a receiver's address is taken implicitly. Out of scope: `Self@`
-//< methods, which write no memory of their own (with `Self` a `U8$[]` too, as `make test-place`
-//< holds), and a chain returning a pointer (`b.s("x").c('!')`), which is handed over as it stands.
+//< methods, which write no memory of their own (also with `Self` a `U8$[]`, as `make test-place`
+//< holds). A chain returning a pointer (`b.s("x").c('!')`) is out of scope too: it is handed over.
 // EXPECT: cannot call a method that writes its receiver
-// EXPECT: Bind it first
+// EXPECT: Bind the object first
 priv struct Point
   n: I32
 
@@ -357,9 +357,9 @@ fn main(): I32
 // ==== case mutable_slice_from_readonly
 //< A mutable slice must not be made from read-only memory
 //<
-//< The descriptor holds a mutable pointer, so a write makes the C rewrite `.rodata`: silent in
-//< KSPL, it falls at run time on a host and writes to ROM on freestanding. Only read-only memory
-//< is in scope: a cast to an immutable slice, or from a `$` binding's own memory, must pass.
+//< The descriptor holds a mutable pointer, so a write makes the C rewrite `.rodata`. KSPL is
+//< silent. The program fails at run time on a host and writes to ROM on freestanding. Only read-only
+//< memory is in scope: a cast to an immutable slice, or from a `$` binding's own memory, must pass.
 // EXPECT: cannot cast a 'const' declaration to the mutable slice type 'U8$[]'
 // EXPECT: cannot cast a string literal to the mutable slice type 'U8$[]'
 // EXPECT-NOT: cannot cast a 'const' declaration to the mutable slice type 'U8[]'
@@ -439,9 +439,9 @@ fn case_addr_of_rvalue(): I32
   return I32::take(make(a)@)
 
 // A pointer to a fixed-length array. It can be written as a type, but no expression making that
-// value exists (`a@` decays to a pointer to the first element, as in C). So as not to leave a
-// type that can be declared while only an assignment cannot, it is refused at the type-checking
-// step (docs/DESIGN-principles.md Principle 5).
+// value exists (`a@` decays to a pointer to the first element, as in C). The type-checking step
+// refuses it. Otherwise a type could be declared but never assigned
+// (docs/DESIGN-principles.md Principle 5).
 fn case_pointer_to_fixed_array()
   $a: I32[3] = ::{ 1, 2, 3 }
   _p: I32[3]@ = a@
@@ -459,21 +459,21 @@ fn main()
 // EXPECT: cannot write through a read-only pointer
 // EXPECT: cannot write through a read-only pointer
 // EXPECT: cannot write through a read-only pointer
-// EXPECT: cannot write to an element of a read-only slice or array
+// EXPECT: cannot write to an element of the read-only slice 'U8[]'
 
 // The shape writing through a read-only pointer (`T@`) by way of a `$` (an explicit dereference).
-// It is a verification paired with the case `const_ptr_field_write` in `const.kspl` (by way of a
-// `.`), confirming that the `$` side's road is shut too (both are shapes that easily pass through).
+// It pairs with the case `const_ptr_field_write` in `const.kspl` (by way of a `.`). It confirms
+// that the `$` side's road is shut too. Both shapes easily pass through.
 fn case_const_ptr_deref_write()
   x: I32 = 1
   p: I32@ = I32@::x@
   p$ = 5
 
-// A derivation of the case `const_ptr_in_struct_field_write` in `const.kspl`, writing into a
+// A variant of the case `const_ptr_in_struct_field_write` in `const.kspl`. It writes into a
 // "field" at the target: `s.p.n = v` crosses two pointers (`s` and `s.p`), the latter immutable.
-// Having seen the first crossing (`s` being a mutable pointer) it cut short at "a pointer was
-// crossed, so the binding's mutability is not asked about", and did not look at `s.p` midway
-// being immutable.
+// The check saw the first crossing (`s` is a mutable pointer) and stopped at "a pointer was
+// crossed, so the binding's mutability is not asked about". It did not see that `s.p` midway
+// is immutable.
 struct Inner
   n: I32
 
@@ -493,7 +493,7 @@ fn case_const_ptr_in_struct_field_member_write(): I32
 // target. The array itself and the element's slot are mutable (`I32@[2]`), but what the element
 // points at is immutable, so it is refused.
 // The regression: the same fail-open as the case `const_ptr_nested_deref_write` in `const.kspl`.
-// write_target_type returned unknown on a `[` (an index) too, so the check was given up and on the
+// write_target_type returned unknown on a `[` (an index) too. So the check gave up, and on the
 // LLVM backend the write held.
 $g: I32 = 1
 
@@ -518,7 +518,8 @@ fn main()
 //< `p[0] = v` on a `p: U8[]@` auto-dereferences (`docs/SPEC-language.md` §6.2.1), so the elements'
 //< check must peel the pointer step off. A `U8$[]@` (an immutable pointer to a **mutable** slice)
 //< has writable elements: the descriptor's (ptr+len) mutability is a different step.
-// EXPECT: cannot write to an element of a read-only slice or array
+//< The slice is named, not the pointer: `$[]` goes on the slice's step.
+// EXPECT: cannot write to an element of the read-only slice 'U8[]'. Use '$[]'
 
 fn main(): I32
   $buf: U8[4] = ::{ 'a', 'b', 'c', 'd' }

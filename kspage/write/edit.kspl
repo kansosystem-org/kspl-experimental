@@ -35,7 +35,7 @@ struct Editor //< the editing state
         //<
         //< The cursor cannot point at a shape (it holds no text), so the handles, the numbers and
         //< deletion act on this (`frame_at` in `block.kspl`). One at a time
-        //< (`../docs/DESIGN-document.md`, "One frame is selected at a time").
+        //< (`../docs/DESIGN-slides.md`, "One frame is selected at a time").
     read_only: Bool //<
         //< Whether it was opened read-only.
         //<
@@ -93,9 +93,9 @@ fn do_insert(e: Editor$@, into: Step$@, n: Inline$@, at: Sz, s: U8[]) //<
     //< These two are the only functions that change a text.
     //< Caution: **Do not call them from typing.** `Editor.insert` in `typing.kspl` finishes off
     //< the selected range and the composition mark.
-    //< Where `into` is null it goes into neither the record nor the peer: for an incoming operation
-    //< (undoable, the peer's typing would be silently deleted), and for the text being composed
-    //< (`set_preedit` in [`typing.kspl`](typing.kspl)).
+    //< Where `into` is null, it goes into neither the record nor the peer. That is for an incoming
+    //< operation (undoable, the peer's typing would be silently deleted), and for the text being
+    //< composed (`set_preedit` in [`typing.kspl`](typing.kspl)).
     n.insert(at, s)
     keep_insert(e, into, n, at, s)
 
@@ -122,7 +122,7 @@ fn do_set_size(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, index: Sz,
     //< Sets a column's width (or a row's height) while recording.
     //<
     //< Caution: **Do not change the table directly, just as with text.** **The size is brought
-    //< inside the lengths a document holds** (`limit.length_in`): a column fitted to a very long
+    //< inside the lengths a document holds** (`limit.length_in`). A column fitted to a very long
     //< text, kept as measured, would leave a saved file that does not load.
     if into != null
         // Moving the same position again and again adds nothing (the first saved setting undoes
@@ -218,9 +218,9 @@ fn replace_source(e: Editor$@, into: Step$@, n: Inline$@, s: U8[]) //< replaces 
 fn shift_formulas(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz, delta: Sz) //<
     //< Rewrites all formulas in the document to follow rows (or columns) being added or removed
     //<
-    //< Caution: **Record it in the same step as the row or column that moved**, or the first undo
-    //< restores only the row and leaves the formulas stranded. Call it after the removal, so a
-    //< removed row keeps its formulas as they are for restoring.
+    //< Caution: **Record it in the same step as the row or column that moved.** Otherwise the first
+    //< undo restores only the row and leaves the formulas stranded. Call it after the removal, so
+    //< a removed row keeps its formulas as they are for restoring.
     // ---- applying a style ----
     plans: = List<|Shift|>.create(e.arena)
     shift.plan_shift(e.doc, table, axis, at, delta, plans, e.arena)
@@ -233,8 +233,8 @@ fn shift_formulas(e: Editor$@, into: Step$@, table: Block$@, axis: Axis, at: Sz,
 fn split_run(e: Editor$@, into: Step$@, n: Inline$@, offset: Sz): Inline$@? //<
     //< Splits `n` in two at `offset` and returns the second half
     //<
-    //< Where the split is at an end it does nothing and returns null.
-    //< An inline holding a formula is not split — its text is the result, rewritten whole at the
+    //< Where the split is at an end, it does nothing and returns null.
+    //< An inline holding a formula is not split. Its text is the result, rewritten whole at the
     //< next recalculation, and a second half would keep the old value.
     text: = n.text()
     // An inline that refers to something is not split either (its text is one whole name).
@@ -261,8 +261,9 @@ fn merge_runs(e: Editor$@, into: Step$@, b: Block$@) //<
     //< Joins neighbouring inlines with the same style and the same link into one
     //<
     //< Caution: **Call it every time a style is applied**, or applying and removing keeps adding
-    //< inlines. Not joined: an inline holding a formula (out of step at the next recalculation),
-    //< inlines with different links, an inline with a note (its mark would move).
+    //< inlines. An inline holding a formula is not joined (out of step at the next
+    //< recalculation). Nor are inlines with different links, nor an inline with a note (its mark
+    //< would move).
     $i: Sz = 0
     for i + 1 < b.inlines.len
         a: = b.inlines.get(i)
@@ -333,8 +334,8 @@ priv fn apply_inverse(e: Editor$@, st: Step$@, into: Step$@) //<
 impl Editor
     fn shut(r: Self$@): Bool //< whether a change is refused
         //<
-        //< Every function in this folder that opens a step must check this before doing anything,
-        //< so read-only is enforced in one place (`../tests/edit_test.kspl` tries the paths
+        //< Every function in this folder that opens a step must check this before doing anything.
+        //< So read-only is enforced in one place (`../tests/edit_test.kspl` tries the paths
         //< and expects the saved text unchanged).
         //< Caution: **Do not enforce it in the `do_*` functions.** If they quietly did nothing, a
         //< caller that "repeats until it acts" (`join_here` in `block.kspl`) would never end.

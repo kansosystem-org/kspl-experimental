@@ -5,8 +5,8 @@
 //     stack are freed at once, safely.
 //   - Deleting the current task: freeing is deferred, then Task.delete switches away for good.
 //     Another task frees it the next time it calls into this file (or the idle task does).
-//   - g_dyn is read and written only inside a critical section, as Task.create chooses its slot in
-//     one: a tick between choosing an entry and writing it lets another task take or free it too.
+//   - Only code inside a critical section reads and writes g_dyn, as Task.create chooses its slot
+//     in one. A tick between choosing an entry and writing it lets another task take or free it.
 // ==========================================
 import "ksos/kernel/heap"
 import "ksos/kernel/sync"
@@ -54,8 +54,8 @@ priv fn find_dyn_slot(): Sz //<
 
 priv fn release_dyn(idx: Sz): Dyn_entry //< [Call it inside a critical section] frees the entry
     //<
-    //< It returns what the entry held, for the caller to give back to the heap once the critical
-    //< section is over: claimed here, no other task can free the same memory.
+    //< It returns what the entry held. The caller gives it back to the heap once the critical
+    //< section is over. Claimed here, no other task can free the same memory.
     e: = g_dyn[idx]
     g_dyn[idx].tcb = null
     g_dyn[idx].stack = null
@@ -70,8 +70,8 @@ priv fn find_reapable(): Sz //< [Call it inside a critical section] an entry rea
     //<
     //< If there is none it returns max_dyn.
     //< Caution: **Wait for `.done`, not for the flag alone.** delete_dyn sets the flag before the
-    //< task's own delete, which a tick can hold off; `.done` is set inside that delete's critical
-    //< section, which ends in the switch away from the stack.
+    //< task's own delete, and a tick can hold that delete off. `.done` is set inside that delete's
+    //< critical section, which ends in the switch away from the stack.
     for i in Range.asc(g_dyn_count)
         if g_dyn[i].pending_reap && g_dyn[i].tcb.get_state() == .done
             return i
@@ -112,7 +112,7 @@ impl Task
             //< Allocates the Task and the stack from the heap and creates a task
             //<
             //< It frees both and returns none when max_tasks in task.kspl, the port's contexts or
-            //< max_dyn run out (an allocation failure panics inside heap_alloc).
+            //< max_dyn run out. An allocation failure panics inside heap_alloc.
         reap_pending()
         // Allocated before a slot is taken, so the heap is never entered with interrupts held off
         // here: a full table gives them straight back.
@@ -159,11 +159,13 @@ impl Task
             task.irq_restore(s)
             r.delete() // the schedule() inside switches to another task and never returns
             return // unreachable (spelled out for the flow analysis)
-        // Deleting another task: on a single core r is not running. The entry is claimed first, so
-        // r deleting itself meanwhile finds nothing, and r is freed only once it is deleted.
+        // Deleting another task: on a single core r is not running now, but a tick pended in here
+        // switches to it as the section ends. Caution: **Delete r before leaving the section**
+        // (`delete` nests its own; r is not current, so it does not switch). Released but not yet
+        // deleted, r could run, find no entry for its own delete_dyn, and carry on running.
         e: = release_dyn(idx)
-        task.irq_restore(s)
         r.delete()
+        task.irq_restore(s)
         free_dyn(e)
 
 // ============================ The semaphore, mutex and event ============================

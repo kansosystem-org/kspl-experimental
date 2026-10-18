@@ -15,7 +15,7 @@ import "kspage/lay/flow"
 import "kspage/model/doc" { Block, Rect }
 import "kspage/model/filter"
 import "kspage/model/run" { Inline }
-// **Without an import from here the style entry points are not in the wasm** — the generated C
+// **Without an import from here, the style entry points are not in the wasm.** The generated C
 // holds only what is reachable from the entry point; `#export` alone is not enough.
 import "kspage/port/web/face" as _face
 import "kspage/port/web/face_edit" as _face_edit
@@ -60,8 +60,8 @@ priv fn row_of_caret(): Block$@? //<
 fn kspage_web_layout(width: F32): Sz
     return lay_out(width, true)
 
-// Lays out for paper: as `kspage_web_layout`, but **with no cursor**, so the formula being typed in
-// prints its value and a row a filter hides stays hidden. The screen lays out again afterwards.
+// Lays out for paper: as `kspage_web_layout`, but **with no cursor**. So the formula being typed
+// in prints its value, and a row a filter hides stays hidden. The screen lays out again afterwards.
 #export
 fn kspage_web_layout_paper(width: F32): Sz
     return lay_out(width, false)
@@ -76,7 +76,7 @@ priv fn lay_out(width: F32, cursor: Bool): Sz
     calc.recalc(doc, sheet, editing)
     ed.clamp()
     // **The cursor's row is always laid out, whatever a filter says** (`Over.kept_row`), so a row
-    // being typed into does not vanish; only this side knows the cursor, so it is set here before
+    // being typed into does not vanish. Only this side knows the cursor, so it is set here before
     // every layout.
     sheet.over.kept_row = null
     if cursor
@@ -127,10 +127,10 @@ fn kspage_web_recover(): Sz
     now: = mem.heap_used_bytes()
     return was - now
 
-// Writes 15 values into out for box `i`'s shape (x / y / w / h / the size / the weight / italic /
-// composing / whether the text color is set / that color / whether the background is set / that
-// color / underline / strikethrough / letter spacing).
-// Caution: **Pass "whether the color is set" as a separate field** — 0 as unset would make black
+// Writes 15 values into out for box `i`'s shape. The first seven are x / y / w / h / the size /
+// the weight / italic. Then come composing / whether the text color is set / that color / whether
+// the background is set / that color / underline / strikethrough / letter spacing.
+// Caution: **Pass "whether the color is set" as a separate field.** 0 as unset would make black
 // impossible to set. Unset, the text takes the screen's default and no background is painted.
 #export
 fn kspage_web_box(i: Sz, out: F32$@)
@@ -189,8 +189,8 @@ fn kspage_web_input_cap(): Sz
 
 priv fn drop_span(): Bool //< deletes the selection
     //<
-    //< This is the only place that joins the spanned paragraphs into one (the core's `insert` and
-    //< the like delete only the text, leaving an empty paragraph and its marker).
+    //< This is the only place that joins the spanned paragraphs into one. The core's `insert` and
+    //< the like delete only the text, leaving an empty paragraph and its marker.
     return page != null && ed.delete_span(page)
 
 // Types the `len` bytes written in at the cursor.
@@ -318,9 +318,10 @@ fn kspage_web_redo(): I32
     return 1 if ed.redo() else 0
 
 // Where the cursor is and what the layout put around it. **For the debug log only.**
-// Caution: **The document's text is not included** — only which paragraph, how far in, and the
-// shape of the lines: a move that does not move records nothing else. **The number of boxes outside
-// any document matters most** — the lines a block collects, where the cursor cannot stand.
+// Caution: **The document's text is not included.** Only which paragraph, how far in, and the
+// shape of the lines are: a move that does not move records nothing else. **The number of boxes
+// outside any document matters most.** These are the lines a block collects, where the cursor
+// cannot stand.
 #export
 fn kspage_web_caret_report(): Sz
     state.out.clear()
@@ -458,10 +459,10 @@ fn kspage_web_drop_frame(): I32
     ensure()
     return 1 if ed.drop_frame(sheet) else 0
 
-// Inserts one empty table of `rows` × `cols` after the cursor's paragraph, in the style named by
-// the `len` bytes in the typing arena; 1 if inserted. **JS decides the name** (it travels with the
-// document; decided here it would drift from a reloaded document) **and the count** (the grid
-// picker belongs to the page).
+// Inserts one empty table of `rows` × `cols` after the cursor's paragraph; 1 if inserted. Its
+// style is named by the `len` bytes in the typing arena. **JS decides the name**: it travels with
+// the document, and decided here it would drift from a reloaded document. **JS decides the count
+// too**, since the grid picker belongs to the page.
 #export
 fn kspage_web_insert_table(len: Sz, rows: Sz, cols: Sz): I32
     if page == null || len <= 0 || len > input_cap
@@ -478,9 +479,9 @@ fn kspage_web_insert_surface(len: Sz, plan: I32): I32
     if page == null || len <= 0 || len > input_cap
         return 0
     name: = U8[]::{ .ptr = input@, .len = len }
-    // Return the reason as a number (the rule at `kspage_web_set_block_style` in `face.kspl`): 1
-    // inserted, 0 the cursor is in no paragraph, -1 inside a table cell, -2 no slide style, -3 open
-    // read-only, -4 its frames would stand deeper than a document holds.
+    // Return the reason as a number (the rule at `kspage_web_set_block_style` in `face.kspl`).
+    // 1 inserted, 0 the cursor is in no paragraph, -1 inside a table cell, -2 no slide style.
+    // -3 open read-only, -4 its frames would stand deeper than a document holds.
     switch ed.insert_surface(page, sheet, name, state.sketch_at(plan))
     case .done
         return 1
@@ -504,9 +505,10 @@ fn kspage_web_panel_count(): Sz
         return 0
     return page.panels.len
 
-// Writes nine values into out for fill and line `i` (x / y / w / h / the line's thickness / the
-// line's color / whether there is a fill / the fill's color / the shape to draw); thickness 0 draws
-// no line. **They come in document order**, so drawn in order the inner ones end up on top.
+// Writes nine values into out for fill and line `i`. They are x / y / w / h / the line's
+// thickness / the line's color / whether there is a fill / the fill's color / the shape to draw.
+// Thickness 0 draws no line. **They come in document order**, so drawn in order the inner ones
+// end up on top.
 #export
 fn kspage_web_panel(i: Sz, out: F32$@)
     state.clear_out(out, 9)
@@ -577,10 +579,10 @@ fn kspage_web_head_cell_count(i: Sz): Sz
         return 0
     return ask.head_cell_count(page, i)
 
-// Writes seven values into out for cell `c` of table `i`'s heading row: its rectangle (x / y / w /
-// h), the column index with merges counted, whether that column is filtered, and whether it was
-// found. Seven 0s when absent. The filter arrow is drawn from this, so the page knows nothing about
-// the columns.
+// Writes seven values into out for cell `c` of table `i`'s heading row. They are its rectangle
+// (x / y / w / h), the column index with merges counted, whether that column is filtered, and
+// whether it was found. Seven 0s when absent. The filter arrow is drawn from this, so the page
+// knows nothing about the columns.
 #export
 fn kspage_web_head_cell(i: Sz, c: Sz, out: F32$@)
     state.clear_out(out, 7)

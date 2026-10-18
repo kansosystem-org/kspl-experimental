@@ -22,11 +22,11 @@ fn lookup_method_template(r: Sema_ctx$@, owner_id: I32, method_name: U8[]): Meth
     //< The template of the method method_name of the type owner_id
     //<
     //< **A method with its own type parameters (`Holder<|T|>.to<|U|>`) can be looked up only
-    //< here:** it is not in the method table but instantiated at the call site (instantiate_fn
-    //< in `mono.kspl`). An instance's is found under its template's FQN, read from the
-    //< instance's record.
-    r.clear_scratch().s("\{r.env.get_str(owner_id)\}.\{method_name\}")
-    direct: = r.generics.templates.get(r.scratch.slice()) catch null
+    //< here.** It is not in the method table but instantiated at the call site (instantiate_fn in
+    //< `mono.kspl`). An instance's is found under its template's FQN, read from the instance's
+    //< record.
+    r.clear_scratch().s(r.env.get_str(owner_id)).c('.').s(method_name)
+    direct: = r.generics.templates.get(r.scratch.slice()).unwrap_or(null)
     if direct != null
         return .some(Method_template::{ .node = direct,
             .fqn = base_core.arena.dup_str(r.scratch.slice()), .owner = 0 })
@@ -40,13 +40,13 @@ priv fn instance_method_template(r: Sema_ctx$@, inst: sema_type_env.Instance, ow
     method_name: U8[]): Method_template? //<
         //< lookup_method_template's answer for an instance, found under its template's FQN
     fqn: = join_dotted_name(inst.template, method_name)
-    found: = r.generics.templates.get(fqn) catch null
+    found: = r.generics.templates.get(fqn).unwrap_or(null)
     if found == null
         return .none
     // Caution: **Return only methods with their own type parameters.** An ordinary one
     // (`Slice<|T|>.sub_from`) would take the generic-call path, inferring `T` from the actual
     // argument and turning `U8[]` into `Sz[]`.
-    tmpl: = r.generics.templates.get(inst.template) catch null
+    tmpl: = r.generics.templates.get(inst.template).unwrap_or(null)
     if tmpl == null
         return .none
     if !introduces_own_generic_param(found, tmpl.find_child(.k_type_gen_params))
@@ -56,7 +56,7 @@ priv fn instance_method_template(r: Sema_ctx$@, inst: sema_type_env.Instance, ow
 fn introduces_own_generic_param(m_node: Ast_node$@, impl_gen_params: Ast_node$@): Bool //<
     //< Whether m_node's type parameters hold a name not in impl_gen_params (the impl block's own)
     //<
-    //< collect.kspl inserts the impl's T into a method that has none, so having .k_type_gen_params
+    //< collect.kspl inserts the impl's T into a method that has none. So having .k_type_gen_params
     //< does not tell is_some from map<|U|>.
     m_params: = m_node.find_child(.k_type_gen_params)
     if m_params == null

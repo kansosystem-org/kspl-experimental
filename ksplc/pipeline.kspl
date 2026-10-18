@@ -46,12 +46,12 @@ fn emit_runtime(out_path: U8[]): Void!Compile_error //<
     //< It writes the runtime's source as one translation unit (`emit-runtime`)
     //<
     //< The user builds it with their own tools rather than using a prebuilt `.a` ("Embedding the
-    //< runtime" in ksplc/docs/DESIGN-compiler.md). **The contents change with `--freestanding`**,
+    //< runtime" in ksplc/docs/DESIGN-backends.md). **The contents change with `--freestanding`**,
     //< so emit it with the same options as the generated C it links with. **No analysis runs at
     //< all.**
     $out_file: = io.open(out_path, "w") catch e
         throw .io(e)
-    gen_runtime.write_unit(out_file)
+    gen_runtime.write_unit(out_file@)
     out_file.flush()
     out_file.free()
 
@@ -170,8 +170,8 @@ impl Compiler
     // It lets the AST cache keep them; a buffer being edited must not claim it.
     fn parse_file(r: Self$@, file_path: U8[], src_override: U8[]?, src_is_disk: Bool):
         Void!Compile_error
-        // **A logical name is always relative to the project root** or the package's top; with an
-        // absolute path the mangled names change per machine (`name_entry` in base/package.kspl).
+        // **A logical name is always relative to the project root** or the package's top. With an
+        // absolute path, the mangled names change per machine (`name_entry` in base/package.kspl).
         clean_mod: = base_package.name_entry(file_path).strip_kspl_ext()
         perm_file: = base_core.arena.dup_str(clean_mod)
 
@@ -193,6 +193,14 @@ impl Compiler
             parse_load.load_and_parse_file(lang_file, r.loaded_files, r.root_file, r.base_parser,
                 r.source_map, lang_stack, false) catch e
                 r.has_load_error = true
+                // **Std is missing as a whole**: say where it was looked for before the bare line.
+                switch e
+                case .io(io_err)
+                    switch io_err
+                    case .file_not_found
+                        io.err().s(base_locate.std_missing_note())
+                    default {}
+                default {}
                 throw .parse(e)
         import_stack: = List<|U8$[]|>.create(base_core.arena)
         parse_load.load_and_parse_file(perm_file, r.loaded_files, r.root_file, r.base_parser,
@@ -207,17 +215,17 @@ impl Compiler
         bodies: Bodies): Void!Sema_error
         // Desugar runs here, once over root_file, not in parse_file, which the LSP's workspace walk
         // (lsp/worker.build_workspace_state) calls per file. ksplc.cfg is checked here too.
-        // Run the checks in lint mode or when the command line raised a code to an error; a
-        // ksplc.cfg or a `##lint` in this analysis's files may turn them on after this.
+        // Run the checks in lint mode, or when the command line raised a code to an error. A
+        // ksplc.cfg or a `##lint` in this analysis's files can turn them on after this.
         base_core.config.run_lint_checks = is_lint || base_core.config.cli_raises_lint
         for loaded in r.loaded_files
             base_lint_codes.validate_config_for_file(loaded)
 
         t1: = sys.mono_us()
         // A failed closure synthesis has already reported its diagnostic. **It stops the run only
-        // where diagnostics are shown**, so a half-desugared tree cannot cause a distant error;
-        // when they are suppressed, going on lets the rest of a workspace answer ("One bad file
-        // does not poison" in `ksplc/docs/DESIGN-tools.md`).
+        // where diagnostics are shown**, so a half-desugared tree cannot cause a distant error.
+        // When they are suppressed, going on lets the rest of a workspace answer. See "One bad file
+        // does not poison" in `ksplc/docs/DESIGN-tools.md`.
         quiet: = suppress_errors || r.has_load_error
         if !parse_desugar.run(r.root_file, r.base_parser, r.source_map) && !quiet
             throw .analysis_failed
@@ -231,7 +239,7 @@ impl Compiler
         // differs from the logical name `parse_file` made, which shows up far away as "not one lint
         // diagnostic is reported" (`name_entry` in base/package.kspl).
         entry: = base_package.name_entry(main_file)
-        init_src: = r.source_map.get(entry) catch ""
+        init_src: = r.source_map.get(entry).unwrap_or("")
 
         ctx: = Sema_ctx.new(init_src, entry, env, global_scope, r.source_map)
         sema: = base_core.arena.create(ctx)
@@ -251,7 +259,7 @@ impl Compiler
         sema_session_prof.prof.collect_us = t_collect - t3
         // Caution: **After Pass 0 of the collecting, not before it** (the reason is at
         // `report_all`).
-        // **Only where diagnostics are shown**: it reads the text and changes nothing else, so a
+        // **Only where diagnostics are shown.** It reads the text and changes nothing else. So a
         // suppressed run (the editor's workspace view) would compute them only to drop them.
         if !sema.suppress_errors
             source_checks.report_all(r.loaded_files, r.source_map, r.root_file, sema)
@@ -317,7 +325,7 @@ impl Compiler
         case .llvm
             $out_file: = io.open(out_path, "w") catch e
                 throw .io(e)
-            cg: = Genllvm_ctx.new(out_file, r.sema, r.source_map)
+            cg: = Genllvm_ctx.new(out_file@, r.sema, r.source_map)
             defer cg.free()
             gen_llvm_module.run(r.root_file, cg, r.root_file.loc.file())
             cg.flush()
@@ -364,7 +372,7 @@ impl Compiler
         //< It writes one file of the generated C, the part `split` names
         $out_file: = io.open(path, "w") catch e
             throw .io(e)
-        cg: = Genc_ctx.new(out_file, r.sema, r.source_map, split)
+        cg: = Genc_ctx.new(out_file@, r.sema, r.source_map, split)
         defer cg.free()
         gen_c_root.run(r.root_file, cg)
         cg.flush()

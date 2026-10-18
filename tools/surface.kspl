@@ -2,7 +2,7 @@
 //< Writes and checks the record of the API a package publishes
 //<
 //< The API is the declarations published with `pub`.
-//< **The record is committed**, so an API change shows as a diff and versions can be compared
+//< **The record is committed.** So an API change shows as a diff, and versions can be compared
 //< (`make surface` rewrites it, `make test-surface` fails when it is out of date).
 
 // ==========================================
@@ -34,7 +34,7 @@ priv const test_dir: U8[] = "tests" //<
 
 priv fn skip_dir(name: U8[]): Bool //< `tests/`, build output, and git's own folder
     //<
-    //< Caution: **Skip `out/` too.** A package's own tests write programs there, and one read as a
+    //< Caution: **Skip `out/` too.** A package's own tests write programs there. One read as a
     //< source adds an entry, or a "could not be read" line, that the package never wrote.
     return name.equals(test_dir) || fs.skip_build_output(name)
 
@@ -143,8 +143,8 @@ priv fn render_to(ksplc: U8[], target: U8[], path: U8[], arena: Arena$@): Void!f
 priv fn do_pages(pkg: U8[], ksplc: U8[], arena: Arena$@): Void!fs.Fs_error //<
     //< Writes the package's listing and one page per publishing file under `pages_dir`
     //<
-    //< **Each page is `ksplc doc`'s answer as it stands**, so a page here cannot say anything the
-    //< command would not; they are kept only to be browsed.
+    //< **Each page is `ksplc doc`'s answer as it stands.** So a page here cannot say anything the
+    //< command would not. The pages are kept only to be browsed.
     files: = publishing(declarations_only(built(pkg, ksplc, arena)!, arena), arena)
     render_to(ksplc, pkg, fs.join(fs.join(pages_dir, pkg, arena), "index.md", arena), arena)!
     for one in files
@@ -206,7 +206,7 @@ fn main(): I32 //< writes or checks the record of a package's published API
     p.positional("<package>")
     p.str_opt("--ksplc", ksplc@, "the compiler to use (default out/ksplc_stage1.exe)")
     p.parse_or_exit(sys.args(), arena)
-    if p.command.len == 0 || p.rest.len != 1
+    if p.command.is_none() || p.rest.len != 1
         io.err().s("\{sys.program_name()\}: pass write, check or pages, and one package\n")
         return 1
     pkg: = p.rest.get(0).strip_suffix("/")
@@ -214,12 +214,12 @@ fn main(): I32 //< writes or checks the record of a package's published API
         io.err().s("\{sys.program_name()\}: there is no folder called \{pkg\}\n")
         return 1
     exe: = ksplc if ksplc.len > 0 else default_ksplc
-    if p.command.equals("pages")
+    if p.command.unwrap_or("").equals("pages")
         do_pages(pkg, exe, arena) catch e
             io.err().s("\{sys.program_name()\}: failed: \{e\}\n")
             return 1
         return 0
-    if p.command.equals("write")
+    if p.command.unwrap_or("").equals("write")
         do_write(pkg, exe, arena) catch e
             io.err().s("\{sys.program_name()\}: failed: \{e\}\n")
             return 1

@@ -10,7 +10,6 @@ import "ksplc/gen/llvm/ctx" as gen_llvm_ctx + { Genllvm_ctx }
 import "ksplc/sema/decl/layout" as sema_decl_layout
 import "ksplc/sema/type/def" as sema_type_def
 import "ksplc/sema/type/env" as sema_type_env
-import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
 import "std/str"
 
@@ -18,7 +17,7 @@ priv const max_llvm_type_depth: Sz = 1000 //<
     //< The depth limit for Ctx.t's recursive walk down a `[N]` array chain
     //<
     //< The parser does not count a repeated `[N]` as depth, so a very long one could overflow the
-    //< stack; past it, had_error is set and a fallback type returned (codegen_failed reports it).
+    //< stack. Past it, had_error is set and a fallback type returned (codegen_failed reports it).
 
 priv const max_inline_zero_fill_bytes: Sz = 256 //<
     //< The largest aggregate, in bytes, still zeroed with one `store <T> zeroinitializer`
@@ -28,7 +27,7 @@ priv const max_inline_zero_fill_bytes: Sz = 256 //<
 priv fn llvm_prim_name(base_str: U8[]): U8[] //<
     //< It returns the LLVM scalar type for a KSPL primitive type name ("" for a non-primitive)
     //<
-    //< Ctx.t_impl and Ctx.is_llvm_aggregate both read this one table; two tables would let "an i64
+    //< Ctx.t_impl and Ctx.is_llvm_aggregate both read this one table. Two tables would let "an i64
     //< treated as an aggregate" slip in silently.
     prim_map: = U8[][]::{ "I8", "i8", "I16", "i16", "I32", "i32", "I64", "i64", "U8", "i8", "U16",
         "i16", "U32", "i32", "U64", "i64", "Sz", "i64", "Bool", "i8", "F32", "float", "F64",
@@ -48,27 +47,41 @@ impl Genllvm_ctx
         //<
         //< Where it is already an i32/u32, it returns the register unchanged and emits nothing.
         //<
-        //< It lets a main()'s Result error type give the right process exit code even when it is a
-        //< numeric type other than I32, a scalar enum included (see emit_main_wrapper in
-        //< gen/llvm/module.kspl). A fixed `ret i32 %reg` that ignores the value's type gives
-        //< invalid LLVM IR, a type mismatch, for a non-I32 type.
+        //< It lets main()'s value (or its Result's success value) give the right process exit code.
+        //< This holds even for a numeric type other than I32, a scalar enum included (see
+        //< emit_main_wrapper in gen/llvm/module.kspl). A fixed `ret i32 %reg` that ignores the
+        //< value's type gives invalid LLVM IR, a type mismatch, for a non-I32 type. A float, which
+        //< check_main_signature keeps out today, saturates as a cast does.
         resolved_src: = r.env.scalar_repr_id(src_type_id)
         if resolved_src == (I32::sema_type_env.Builtin_type_id.i32_type) ||
             resolved_src == (I32::sema_type_env.Builtin_type_id.u32_type)
             return base_core.arena.dup_str(val_reg)
 
-        is_float: = r.env.is_float(resolved_src)
+        if r.env.is_float(resolved_src)
+            return r.emit_float_to_int_sat(val_reg, resolved_src,
+                I32::sema_type_env.Builtin_type_id.i32_type)
         is_unsigned: = r.env.is_unsigned(resolved_src)
         bits: = r.env.get_primitive_bit_size(resolved_src)
         reg: = r.next_reg()
         r.s("    %\{reg\} = ")
-        if is_float
-            r.s("fptoui " if is_unsigned else "fptosi ")
-        else if bits < 32
+        if bits < 32
             r.s("zext " if is_unsigned else "sext ")
         else
             r.s("trunc ")
         r.t(src_type_id).s(" ").s(val_reg).s(" to i32\n")
+        return r.reg_str(reg)
+
+    fn emit_float_to_int_sat(r: Self$@, val_reg: U8[], src_id: I32, dst_id: I32): U8$[] //<
+        //< It converts a float register to the integer type dst_id, saturating, and returns it
+        //<
+        //< Caution: **Never a bare `fptosi` / `fptoui`.** It is poison for a value the type cannot
+        //< hold; `llvm.fpto[su]i.sat` saturates, as genc's `kspl_F64_to_I32` does.
+        reg: = r.next_reg()
+        sign: = "u" if r.env.is_unsigned(dst_id) else "s"
+        bits: = r.env.get_primitive_bit_size(dst_id)
+        src_word: = "f32" if r.env.get_primitive_bit_size(src_id) == 32 else "f64"
+        r.s("    %\{reg\} = call i\{bits\} @llvm.fpto\{sign\}i.sat.i\{bits\}.\{src_word\}(")
+            .t(src_id).s(" ").s(val_reg).s(")\n")
         return r.reg_str(reg)
 
     fn emit_numeric_coerce(r: Self$@, val_reg: U8[], src_id: I32, dst_id: I32): U8$[] //<
@@ -164,7 +177,7 @@ impl Genllvm_ctx
         //< A large `store <T> zeroinitializer` is expanded per element at -O0, and a big enough one
         //< **crashes clang itself with SIGSEGV**. Above the threshold llvm.memset is used
         //< ("A huge aggregate is not handled as a first-class value" in
-        //< ksplc/docs/DESIGN-compiler.md).
+        //< ksplc/docs/DESIGN-backends.md).
         if !base_core.config.is_freestanding
             lay: = r.sema.type_layout(type_id)
             if lay.size > max_inline_zero_fill_bytes
@@ -181,7 +194,7 @@ impl Genllvm_ctx
     fn op_load_place(r: Self$@, res_reg: I32, type_id: I32, ptr: U8[], place: Ast_node$@) //<
         //< op_load from a place, told the alignment a `#packed` struct leaves it
         //<
-        //< Caution: **A load or store with no `align` takes its type's own**, so a field of a
+        //< Caution: **A load or store with no `align` takes its type's own.** So a field of a
         //< `#packed` struct read or written without one faults on a Cortex-M0.
         r.s("    %\{res_reg\} = load ").t(type_id).s(", ptr ").s(ptr).place_align(place).s("\n")
     fn op_store_place(r: Self$@, type_id: I32, val: U8[], ptr: U8[], place: Ast_node$@) //<
@@ -241,8 +254,6 @@ impl Genllvm_ctx
             if size == -1
                 return r.s("ptr") // where the length is unknown, it becomes a pointer
             return r.s("[\{size\} x ").t_impl(base_id, depth + 1).s("]")
-        case .result(_base_id, _err_id)
-            return r.s("%kspl_").s_mangled(real_id)
         case .enum_type(def)
             if def.is_scalar()
                 return r.t_impl(def.base_type_id, depth + 1)
@@ -259,10 +270,10 @@ impl Genllvm_ctx
     fn is_llvm_aggregate(r: Self$@, type_id: I32): Bool //<
         //< Whether a type_id's LLVM form is a first-class aggregate (a struct or array)
         //<
-        //< Caution: This must match t_impl's branches one to one (both use llvm_prim_name's table),
-        //< or an ABI mismatch (sret in the definition, a value return at the caller) is silently
-        //< built in ("Passing an aggregate is an explicit internal ABI" in
-        //< ksplc/docs/DESIGN-compiler.md).
+        //< Caution: This must match t_impl's branches one to one (both use llvm_prim_name's table).
+        //< Otherwise an ABI mismatch is silently built in: sret in the definition, a value return
+        //< at the caller ("Passing an aggregate is an explicit internal ABI" in
+        //< ksplc/docs/DESIGN-backends.md).
         return r.is_llvm_aggregate_impl(type_id, 0)
 
     priv fn is_llvm_aggregate_impl(r: Self$@, type_id: I32, depth: Sz): Bool
@@ -280,8 +291,6 @@ impl Genllvm_ctx
             return false
         case .array(_base_id, size)
             return size != -1 // an unknown length becomes ptr
-        case .result(_base_id, _err_id)
-            return true // %kspl_<T> = { i8, <err>, <val> }
         case .enum_type(def)
             if def.is_scalar()
                 return r.is_llvm_aggregate_impl(def.base_type_id, depth + 1)
@@ -292,7 +301,7 @@ impl Genllvm_ctx
         return llvm_prim_name(r.env.get_str(r.env.strip_const(real_id))).len == 0
 
     fn ret_needs_sret(r: Self$@, type_id: I32): Bool //<
-        //< Whether a return type type_id should be returned by an explicit `sret` pointer argument
+        //< Whether a return type type_id is returned by an explicit `sret` pointer argument
         //<
         //< The LLVM IR accepts a multi-field first-class aggregate such as `ret { i64, i64 }`, but
         //< which registers or memory it ends up in is not fixed by any ABI. No aggregate return
@@ -303,9 +312,9 @@ impl Genllvm_ctx
     fn get_struct_align(r: Self$@, type_id: I32): I32 //<
         //< The alignment an alloca or global of the type must be told (0 where LLVM's own is right)
         //<
-        //< A named struct type cannot carry an alignment, so each alloca or global adds `, align N`
-        //< taken from here: an `#align(N)` struct's N, and ksplc's own for a laid one (`is_laid`),
-        //< whose packed type LLVM takes for byte-aligned. An array asks of its element.
+        //< A named struct type cannot carry an alignment. So each alloca or global adds `, align N`
+        //< taken from here: an `#align(N)` struct's N, and ksplc's own for a laid one (`is_laid`).
+        //< LLVM takes a laid struct's packed type for byte-aligned. An array asks of its element.
         real_id: = r.env.get_clean_real_type(type_id)
         switch r.env.get_info(real_id)
         case .array(elem_id, _size)
@@ -315,13 +324,9 @@ impl Genllvm_ctx
             if !def.is_scalar()
                 lay_align: = I32::r.sema.type_layout(real_id).align
                 return lay_align if lay_align > 8 else 0
-        case .result(_b, _e)
-            if r.is_laid(real_id, 0)
-                return I32::r.sema.type_layout(real_id).align
-            return 0
         default {}
-        // With an immutability qualifier on the type name, the struct definition is not found and
-        // the `#align(N)` is silently lost (it is stripped for the same reason as in t_impl).
+        // With an immutability qualifier on the type name, the struct definition is not found.
+        // The `#align(N)` is then silently lost (it is stripped for the same reason as in t_impl).
         if sdef: = r.env.get_struct_def(r.env.get_str(real_id))
             if sdef.align_attr > 0
                 return sdef.align_attr
@@ -335,12 +340,66 @@ impl Genllvm_ctx
             return def.base_type_id
         return I32::sema_type_env.Builtin_type_id.i32_type
 
+    fn enum_tag_init(r: Self$@, key: Void$@, real_type_id: I32, tag_value: I64): U8$[] //<
+        //< It zero-fills a tagged union's slot for key, writes the tag and returns the slot
+        tmp_ptr: = r.get_or_alloc_tmp_slot(key, real_type_id)
+        r.s("    store ")
+        r.t(real_type_id).s(" zeroinitializer, ptr ").s(tmp_ptr).s("\n")
+
+        tag_ptr: = r.next_reg()
+        r.s("    %\{tag_ptr\} = getelementptr inbounds ")
+        r.t_gep(real_type_id).s(", ptr ").s(tmp_ptr).s(", i32 0, i32 0\n")
+        r.s("    store ").t(r.enum_tag_type(real_type_id)).s(" \{tag_value\}, ptr %\{tag_ptr\}\n")
+        return tmp_ptr
+
+    fn result_variant(r: Self$@, type_id: I32, name: U8[]): sema_type_def.Enum_variant$@ //<
+        //< The Result type_id's variant `ok` or `err`
+        if e_def: = r.env
+            .get_enum_def(r.env.get_str(r.env.get_clean_real_type(type_id)))
+            if v_def: = e_def.get_variant(name)
+                return v_def
+        base_diag.ice_panic("result_variant: the type is no Result with this variant")
+        return null // not reached: ice_panic stops the compiler
+
+    fn result_of(r: Self$@, key: Void$@, type_id: I32, variant: U8[], val_type_id: I32, val: U8[]):
+        U8$[] //<
+            //< A register holding the Result type_id built at `variant`, with val as its payload
+            //<
+            //< A variant whose field is `Void` (`Void!E`'s `ok`) carries nothing, and val is
+            //< unread. An empty val leaves the payload zero: the end of a body every path of which
+            //< returned.
+        real_id: = r.env.get_clean_real_type(type_id)
+        v_def: = r.result_variant(real_id, variant)
+        tmp_ptr: = r.enum_tag_init(key, real_id, v_def.tag_value)
+        if v_def.payload_fields.len > 0 && val.len > 0
+            field_ptr: = r.payload_field_ptr(tmp_ptr, real_id, v_def, 0)
+            r.s("    store ").t(val_type_id).s(" ").s(val).s(", ptr ").s(field_ptr).s("\n")
+        res_reg: = r.next_reg()
+        r.op_load(res_reg, real_id, tmp_ptr)
+        return r.reg_str(res_reg)
+
+    fn result_is_err(r: Self$@, type_id: I32, ptr: U8[]): U8$[] //<
+        //< A `Bool` (i8) register: whether the Result type_id at ptr holds `err`
+        real_id: = r.env.get_clean_real_type(type_id)
+        tag_type: = r.enum_tag_type(real_id)
+        tag_ptr: = r.next_reg()
+        r.s("    %\{tag_ptr\} = getelementptr inbounds ")
+        r.t_gep(real_id).s(", ptr ").s(ptr).s(", i32 0, i32 0\n")
+        tag: = r.next_reg()
+        r.s("    %\{tag\} = load ").t(tag_type).s(", ptr %\{tag_ptr\}\n")
+        err_tag: = r.result_variant(real_id, "err").tag_value
+        is_err: = r.next_reg()
+        r.s("    %\{is_err\} = icmp eq ").t(tag_type).s(" %\{tag\}, \{err_tag\}\n")
+        res: = r.next_reg()
+        r.s("    %\{res\} = zext i1 %\{is_err\} to i8\n")
+        return r.reg_str(res)
+
     fn payload_field_ptr(r: Self$@, enum_ptr: U8[], enum_type: I32,
         v_def: sema_type_def.Enum_variant$@, k: Sz): U8$[] //<
             //< The address of a tagged union's payload field k, at ksplc's offset from its start
             //<
             //< Caution: **Do not reach it through a struct of the payload's types.** LLVM lays that
-            //< out by its own alignments, so a field after an `#align(N)` struct, or a payload
+            //< out by its own alignments. So a field after an `#align(N)` struct, or a payload
             //< aligned past 8, lands elsewhere than in C and in a global's constant (decl.kspl).
         off: =
             r.sema.enum_payload_offset(enum_type) + r.sema
@@ -353,7 +412,7 @@ impl Genllvm_ctx
         //< Whether the struct's LLVM type is written at ksplc's layout, with explicit padding
         //<
         //< LLVM lays a struct out by its fields' own alignments, and an `#align(N)` struct has none
-        //< to show it, so a struct holding one (or being one) would put its fields elsewhere than C
+        //< to show it. So a struct holding one (or being one) would put its fields elsewhere than C
         //< and `offsetof` do. Such a struct, and every struct holding it, is written packed, each
         //< field at sema's offset and padded to sema's size.
         if depth >= max_llvm_type_depth
@@ -362,10 +421,6 @@ impl Genllvm_ctx
         switch r.env.get_info(real_id)
         case .array(elem_id, _size)
             return r.is_laid(elem_id, depth + 1)
-        case .result(b, e_id)
-            // The same for a Result: by LLVM's alignments its `val` would sit right after the
-            // error.
-            return r.is_laid(b, depth + 1) || r.is_laid(e_id, depth + 1)
         case .enum_type(def)
             // A tagged union aligned past 8 has no LLVM type showing it (its words are i64 at
             // most).
@@ -392,18 +447,6 @@ impl Genllvm_ctx
         $piece: I32 = 0
         $pos: Sz = 0
         switch r.env.get_info(real_id)
-        case .result(b, e_id)
-            offs: Sz[3] = ::{ 0, r.sema.result_err_offset(real_id),
-                r.sema.result_val_offset(real_id) }
-            sizes: Sz[3] = ::{ 1, r.sema.type_layout(e_id).size,
-                r.sema.type_layout(b).size }
-            for i in Range.asc(3)
-                if offs[i] > pos
-                    piece += 1
-                if I32::i == idx
-                    return piece
-                piece += 1
-                pos = offs[i] + sizes[i]
         case .struct_type(def)
             for i in Range.asc(def.fields_list.len)
                 f: = def.fields_list.get(i)
@@ -417,48 +460,7 @@ impl Genllvm_ctx
         default {}
         return idx
 
-priv fn emit_laid_result(cg: Genllvm_ctx$@, m_slice: U8[], type_id: I32, base_id: I32, err_id: I32) //<
-    //< A Result holding a laid value: packed, each field at sema's offset, as a laid struct is
-    //<
-    //< Caution: **Keep the pieces in step with `field_index`**, which counts them to find one.
-    err_off: = cg.sema.result_err_offset(type_id)
-    val_off: = cg.sema.result_val_offset(type_id)
-    cg.s("%kspl_").s(m_slice).s(" = type <{ i8")
-    if err_off > 1
-        cg.s(", [\{err_off - 1\} x i8]")
-    cg.s(", ").t(err_id)
-    $end: = err_off + cg.sema.type_layout(err_id).size
-    if !sema_type_env.is_void(base_id)
-        if val_off > end
-            cg.s(", [\{val_off - end\} x i8]")
-        cg.s(", ").t(base_id)
-        end = val_off + cg.sema.type_layout(base_id).size
-    size: = cg.sema.type_layout(type_id).size
-    if size > end
-        cg.s(", [\{size - end\} x i8]")
-    cg.s(" }>\n")
-
-fn emit_complex_types(cg: Genllvm_ctx$@)
-    $seen: = sema_type_naming.Mangle_seen.new(cg.env)
-    defer seen.free()
-
-    // **A type is admitted only once it is to be emitted** (`Mangle_seen.admit`).
-    for type_id in cg.env.complex_types
-        switch cg.env.get_info(type_id)
-        case .result(base_id, err_id)
-            if !seen.admit(type_id)
-                continue
-            m_slice: = cg.mangled_in_scratch(type_id)
-            // A Result is the struct { is_err (i8), error_code, val }.
-            if cg.is_laid(type_id, 0)
-                emit_laid_result(cg, m_slice, type_id, base_id, err_id)
-                continue
-            cg.s("%kspl_").s(m_slice).s(" = type { i8, ").t(err_id)
-            if !sema_type_env.is_void(base_id)
-                cg.s(", ").t(base_id)
-            cg.s(" }\n")
-        default {}
-    // It defines the base type of a string slice.
+fn emit_slice_base_types(cg: Genllvm_ctx$@) //< it defines the base types of a string slice
     cg.s("%U8_Slice = type { ptr, i64 }\n")
     cg.s("%Const_U8_Slice = type { ptr, i64 }\n\n")
 
@@ -498,7 +500,7 @@ impl Ast_node
                     cg.t(p_type_id)
                 if opts.with_names
                     id_node: = param.find_child(.k_identifier)
-                    cg.s(" %").s(id_node.text if id_node != null else "unknown")
+                    cg.s(" ").s(cg.param_reg(id_node.text if id_node != null else "unknown"))
                 is_first = false
             else if opts.emit_variadic && param.is_literal("...")
                 if !is_first
@@ -569,8 +571,8 @@ impl Ast_node
         if !cg.env.is_scalar_enum(r.type_id)
             // LLVM has no tagged union, so a non-scalar enum is declared as "the tag (i32) plus raw
             // bytes". Field access (emit_llvm_enum_init_call / match) gives the GEP an anonymous
-            // struct of the payload types; with opaque pointers the GEP type only sets the offset.
-            // The tag is the base type, as C's and sema's; the words are as wide as the alignment
+            // struct of the payload types. With opaque pointers, the GEP type only sets the offset.
+            // The tag is the base type, as C's and sema's. The words are as wide as the alignment
             // (8 at most), so the type takes sema's size and, up to 8, its alignment.
             lay: = cg.sema.type_layout(r.type_id)
             tag_id: = cg.enum_tag_type(r.type_id)

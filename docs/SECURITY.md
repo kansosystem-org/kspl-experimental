@@ -4,7 +4,7 @@
 
 ## What counts as a vulnerability
 
-**A vulnerability is anything that lets the author of an input take over execution or writing**: a crafted file, frame or request makes the program run code it should not, or read or write memory or files outside what it is allowed. These are in scope:
+**A vulnerability is anything that lets the author of an input take over execution or writing.** A crafted file, frame or request makes the program run code that it must not run. Or the input makes it read or write memory or files outside what it is allowed. These are in scope:
 
 | Part | In scope when a crafted input makes it … |
 | :-- | :-- |

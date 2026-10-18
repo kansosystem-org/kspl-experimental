@@ -7,7 +7,7 @@ A device uses it to keep, for example, a sensor's readings over time, or a setti
 | Requirement | What it means | What follows from it |
 | :-- | :-- | :-- |
 | **It fits a freestanding microcontroller, with zero dependencies** | A *freestanding* target is a small chip with no operating system and no C library to call | A binding to SQLite does not fit. It passes the work to libsqlite3 through FFI (calling a C library from KSPL), which needs the library and a C backend |
-| **The power may fail at any moment** | The device can lose power in the middle of any write | The one record being written at that instant may break, but the records finished before it must always read back |
+| **The power can fail at any moment** | The device can lose power in the middle of any write | The one record being written at that instant can break, but the records finished before it must always read back |
 
 **The third requirement: the place is flash**, which works differently from RAM. Its three rules shape everything below.
 
@@ -25,7 +25,7 @@ On flash, rewriting one record means erasing and rewriting its whole sector. **E
 
 Caution: **Do not erase a sector on the appending path.** Where `tail` (the position the next record is written at) is partway through a sector, erasing it erases the finished records there too.
 
-Given up: deleting one record, and updating in place. A changing value such as a policy is appended again under the same `kind` (a number the caller tags each record with) and read with `last`, which returns the newest one. So the old value survives a power loss while the new one is written.
+Given up: deleting one record, and updating in place. A changing value such as a policy is appended again under the same `kind`. The `kind` is a number that the caller tags each record with. The caller reads the value with `last`, which returns the newest one. So the old value survives a power loss while the new one is written.
 
 ### The place is swapped through a struct of function pointers
 
@@ -95,7 +95,7 @@ A power loss can land anywhere, so **the order has to read correctly wherever it
 
 **The other order breaks**: a cut after the head leaves a head naming a correct length over missing content.
 
-### The scan does not cut off at a garbled record; it gives up that sector and jumps to the next
+### A garbled record sends the scan to the next sector
 
 When the scan meets something it cannot read as a record, it skips to the start of the next sector and goes on. It never stops early.
 
@@ -116,7 +116,7 @@ flowchart TD
 
 A half-written record fails its CRC. **A scan that stopped there would leave everything appended after one power loss unreadable forever.** Skipping costs only the rest of that sector.
 
-For the same reason, the scan does not stop at an erased place either. Appending leaves a gap at a sector's end rather than straddle (span the boundary between two sectors), and stopping there would miss the next sector's records.
+For the same reason, the scan does not stop at an erased place either. Appending leaves a gap at a sector's end rather than straddle (span the boundary between two sectors). A scan that stopped there would miss the next sector's records.
 
 **How it walks is written once, in `Cursor.next`.** `Log.open` uses it to find the append position, and the latest-record lookup returns a cursor on its match. `Log.last` reads through `Cursor.read`, so buffer-size refusal and copying have one owner too.
 
@@ -128,7 +128,7 @@ For the same reason, the scan does not stop at an erased place either. Appending
 
 A record never crosses from one sector into the next.
 
-A straddling record keeps only its head once the other sector is erased. So content that does not fit in one sector returns `too_large`, and a record that would straddle starts at the next sector's head instead, leaving a gap.
+A straddling record keeps only its head once the other sector is erased. So content that does not fit in one sector returns `too_large`. A record that would straddle starts at the next sector's head instead, leaving a gap.
 
 The picture shows two sectors after a few appends. Record C did not fit in sector 0, so it went to sector 1.
 
@@ -142,7 +142,7 @@ The picture shows two sectors after a few appends. Record C did not fit in secto
 
 The content cap is therefore the **smaller** of "the sector's size − the 8-byte head − the padding" and `0xFFFE`. To keep more, the caller splits it into several records. `ksdb` does no splitting.
 
-### A place that cannot be written is skipped. It does not stop
+### A place that cannot be written is skipped
 
 Before writing, `append` checks that the place is still erased. If it is not, `append` moves on to the next sector instead of giving up.
 
@@ -168,9 +168,9 @@ A record with empty content is legitimate (a marker can carry its kind alone). I
 
 Caution: **Do not append an empty record to a kind read with `catch 0`.** There the two cases merge.
 
-### Power cuts are tested at every point, not at chosen ones
+### Power cuts are tested at every point
 
-**The tests cut the power at every write the log makes, and check after each cut that nothing finished was lost: "the records finished before it must always read back" is this package's promise**, and a hand-picked cut point tests only where it was picked. `tests/ksdb_test.kspl` cuts each write in turn, after 0, 1 and 4 bytes of it. Each time it does three things:
+**The tests cut the power at every write the log makes. After each cut, they check that nothing finished was lost.** "The records finished before it must always read back" is this package's promise. A hand-picked cut point tests only where it was picked, not every point. `tests/ksdb_test.kspl` cuts each write in turn, after 0, 1 and 4 bytes of it. Each time it does three things:
 
 1. it reopens the log;
 2. it checks that the finished records read back in order;

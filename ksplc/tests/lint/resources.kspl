@@ -64,7 +64,8 @@ pub fn probe(a: I32, b: I32, c: I32): I32
 //< The case divide_by_zero in tests/negative/numbers.kspl looks at it.
 // EXPECT: [W0201] Unreachable code detected
 // EXPECT: [W0205] Loop with 'true' condition
-// EXPECT: [W0101] Array index out of bounds
+// EXPECT: [W0101] Array index out of bounds. The array size is 3, but the index is 5.
+// EXPECT: [W0101] Array index out of bounds. The array size is 3, but the index is -1.
 import "std/io"
 
 pub fn after_return(n: I32): I32
@@ -82,16 +83,16 @@ pub fn always_true() //<
 
 pub fn indexes(): I32
   a: I32[3] = ::{ 1, 2, 3 }
-  return a[5]
+  return a[5] + a[-1]
 // ==== case defer_after_way_out
 //< [W0109] An exit between an `Owned` value's binding and the `defer` that frees it
 //<
-//< The `!` in late() and the `continue` in per_round() leave before the `defer` is registered;
-//< a `defer` right after the binding, a value handed back, a hand free and a closure's `!` do not.
+//< The `!` in late() and the `continue` in per_round() leave before the `defer` is registered.
+//< A `defer` right after the binding, a value handed back, a hand free and a closure's `!` do not.
 //< **The line numbers name the way out and the two lines the message gives.** Mend them on a move.
-// EXPECT: defer_after_way_out.kspl:25:8: warning: [W0109] 'arena' leaks if this '!' leaves
-// EXPECT: registered only on line 26. Put the defer on the line after 'arena' is bound (line 24)
-// EXPECT: defer_after_way_out.kspl:54:7: warning: [W0109] 'buf' leaks if this 'continue' leaves
+// EXPECT: defer_after_way_out.kspl:25:8: warning: [W0109] 'arena' leaks if this '!' exits
+// EXPECT: registered only on line 26. Register the defer immediately after binding 'arena' on line 24
+// EXPECT: defer_after_way_out.kspl:54:7: warning: [W0109] 'buf' leaks if this 'continue' exits
 // EXPECT-NOT: defer_after_way_out.kspl:32:
 // EXPECT-NOT: defer_after_way_out.kspl:37:
 // EXPECT-NOT: defer_after_way_out.kspl:45:
@@ -172,7 +173,7 @@ pub fn probe(): Sz
 // ==== case lock_borrow_escape
 //< [W0105] Finds uses of a borrow taken from a lock after the lock is released
 //<
-//< After unlock another thread may rewrite that region at the same time. Both (A) a use after
+//< After unlock another thread can rewrite that region at the same time. Both (A) a use after
 //< unlock and (B) a return of the borrow must be findings, and a use while holding the lock not.
 // ==========================================
 // EXPECT: [W0105] Local 'p' borrows into 'mx' via .lock()
@@ -212,9 +213,9 @@ fn main()
 //< [W0106] Finds places that take a lock and do not release it
 //<
 //< Forget to release and every thread trying to take that lock stops forever (a deadlock).
-//< forgets() alone is a finding; an explicit unlock and a release by defer are not.
+//< forgets() alone is a finding. An explicit unlock and a release by defer are not.
 //< **The marks' line numbers name the `mx.lock()` lines**: the finding points at the lock.
-// EXPECT: [W0106] 'mx' is locked here but never unlocked
+// EXPECT: [W0106] 'mx' is locked here but not unlocked
 // EXPECT: lock_not_released.kspl:16:3: warning: [W0106]
 // EXPECT-NOT: lock_not_released.kspl:22
 // EXPECT-NOT: lock_not_released.kspl:31

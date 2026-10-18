@@ -14,7 +14,7 @@ import "std/str" { Str_builder }
 import "std/sys"
 
 priv const max_mangle_depth: Sz = 1000 //<
-    //< The safety limit on how deep mangle_type_id_to walks a pointer, slice, array or Result type
+    //< The safety limit on how deep mangle_type_id_to walks a pointer, slice or array type
     //<
     //< The parser does not count `@` / `[N]` postfixes as depth, so a long chain (`f: I32@@@...@;`)
     //< could exhaust the native stack. Not every caller has a Ctx, so exceeding it reports with
@@ -43,8 +43,8 @@ impl Env
     priv fn mangle_type_id_to_impl(r: Self$@, type_id: I32, w: Writer, depth: Sz): Writer
         if depth >= max_mangle_depth
             io.err()
-                .s("\nfatal: type expression nesting too deep (possible unbounded \
-                    pointer/array/slice chain).\n")
+                .s("\nfatal: type expression nesting too deep. The chain of pointer, array or slice \
+                    types may be unbounded.\n")
             sys.exit(1)
         if type_id <= 0 || is_unknown(type_id)
             return w.s(base_core.unknown_type_name)
@@ -54,18 +54,16 @@ impl Env
         $base_id: I32 = 0
         $suffix: U8[] = ""
         $arr_size: I32 = -1
-        $err_id: I32 = 0
 
         switch info
         case .const_of(b)
             // **An immutable qualifier on the view descriptor itself** (`U8$[] immut`) as a
-            // `Const_` prefix could collide with one on the element (the type argument), so on a
+            // `Const_` prefix could collide with one on the element (the type argument). So on a
             // view type it is the suffix `_Const`. A slice is a struct, so it is recognized by name
             // (`slice_struct_elem`), not by the constructor.
             b_info: = r.get_info(b)
             is_view: =
-                r.slice_struct_elem(b) != 0 || b_info.is_array() || b_info.is_pointer() ||
-                b_info.is_result()
+                r.slice_struct_elem(b) != 0 || b_info.is_array() || b_info.is_pointer()
             if is_view
                 res = r.mangle_type_id_to_impl(b, res, depth + 1)
                 return res.s("_Const")
@@ -78,10 +76,6 @@ impl Env
             base_id = b
             suffix = "_Array_"
             arr_size = s
-        case .result(b, e)
-            base_id = b
-            suffix = "_Result"
-            err_id = e
         default {}
 
         if base_id != 0
@@ -89,11 +83,6 @@ impl Env
             res = res.s(suffix)
             if arr_size != -1
                 res = res.s("\{arr_size\}")
-            if err_id != 0
-                err_str: = r.get_str(err_id)
-                if !err_str.equals("I32")
-                    res = res.s("_")
-                    res = r.mangle_type_id_to_impl(err_id, res, depth + 1)
             return res
 
         // The immutability at a position that declared variance is dropped from the C name
@@ -103,13 +92,19 @@ impl Env
         base_str: = r.get_str(type_id)
         return base_str.mangle_type_name_to(res)
 
+    fn mangled_into(r: Self$@, type_id: I32, b: Str_builder$@): U8$[] //<
+        //< type_id's mangled name, written afresh into b: valid until b is used again
+        b.clear()
+        r.mangle_type_id_to(type_id, b)
+        return b.slice()
+
     fn c_repr_type_id(r: Self$@, type_id: I32): I32 //<
         //< The type id of what shares the C representation
         //<
         //< **Instances differing only in the immutability at a position that declared it are folded
-        //< into one C struct** (variance_stripped in env.kspl), so the generated C's reordering is
+        //< into one C struct** (variance_stripped in env.kspl). So the generated C's reordering is
         //< matched on this id. Without it, a struct holding a `Slice<|U8 immut|>` is emitted before
-        //< `Slice<|U8|>`'s definition and C fails with `field has incomplete type` (c_order_id in
+        //< `Slice<|U8|>`'s definition. C then fails with `field has incomplete type` (c_order_id in
         //< `../../gen/c/root.kspl`). If there is nothing to fold with, it is returned unchanged.
         if _plain: = r.variance_stripped(type_id)
             // Caution: **Look up the key by the mangled name.** An instance is in the type table
@@ -117,7 +112,7 @@ impl Env
             $key: = Str_builder.new()
             defer key.free()
             r.mangle_type_id_to(type_id, key)
-            return r.type_to_id.get(key.slice()) catch type_id
+            return r.type_to_id.get(key.slice()).unwrap_or(type_id)
         return type_id
 
     fn type_args_to(r: Self$@, args: I32[], w: Writer): Writer //<
@@ -163,11 +158,11 @@ impl Env
 
 struct Mangle_seen //< the record for emitting a composite type "once per mangled name"
     //<
-    //< Caution: **Do not write how duplicates are skipped anywhere but here.** If any of the three
-    //< generators that walk `complex_types` (`../../gen/c/root.kspl`, `../../gen/c/decl.kspl`,
-    //< `../../gen/llvm/types.kspl`) drifts on a copied rule, two definitions of the same name are
-    //< emitted and **clang fails while ksplc reports nothing**. **The key is the mangled name "at
-    //< emission"**, not at registration (stripping a const can later give it the same name).
+    //< Caution: **Do not write how duplicates are skipped anywhere but here.** Two generators walk
+    //< `complex_types` (`../../gen/c/root.kspl`, `../../gen/c/decl.kspl`). If either drifts on a
+    //< copied rule, two definitions of the same name are emitted, and **clang fails while ksplc
+    //< reports nothing**. **The key is the mangled name "at emission"**, not at registration
+    //< (stripping a const can later give it the same name).
     priv env: Env$@
     priv seen: Map<|U8[], I32|>$@
     priv buf: Str_builder
@@ -189,13 +184,13 @@ impl Mangle_seen
         //< A mangled name seen for the first time is noted and true; the second time, false.
         //<
         //< Caution: **Call it "after" the caller's filtering.** Filling a slot with a type that is
-        //< not emitted makes the type of the same name that **should be emitted** go missing
-        //< (noting a length-less array first in `gen/c/root.kspl` made
-        //< `std_lang_Slice_U8_Array_24`'s typedef vanish and the self-host fail).
+        //< not emitted makes the type of the same name that **should be emitted** go missing.
+        //< Noting a length-less array first in `gen/c/root.kspl` made
+        //< `std_lang_Slice_U8_Array_24`'s typedef vanish, and the self-host failed.
         r.buf.len = 0
         r.env.mangle_type_id_to(type_id, r.buf@)
         name: = r.buf.slice()
-        if (r.seen.get(name) catch 0) != 0
+        if r.seen.get(name).unwrap_or(0) != 0
             return false
         r.seen.set(base_core.arena.dup_str(name), 1)
         return true

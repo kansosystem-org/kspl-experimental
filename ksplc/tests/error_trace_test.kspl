@@ -1,14 +1,12 @@
 //< Checks that `!`'s propagation path records the one error reported and no more
 //<
 //< Caution: **Do not count a failure already handled.** A failure caught by `catch` and then
-//< handled normally, such as `Map.get`'s missing key, is a `throw` as well. Left in the chain, it
-//< sits under a later, unrelated error's path (ksplc uses Maps heavily as caches, so the frames
-//< reach the limit and the real path is lost with them). Both backends record the route (genc's
-//< `KSPL_START_TRACE` / `KSPL_RECORD_TRACE`, genllvm's calls to the same runtime), and each frame's
+//< handled normally, such as a lookup that misses, is a `throw` as well. Left in the chain,
+//< it sits under a later, unrelated error's path. A loop that handles many such failures fills the
+//< frames to the limit, and the real path is lost with them. Both backends record the route (genc's
+//< `KSPL_START_TRACE` / `KSPL_RECORD_TRACE`, genllvm's calls to the same runtime). Each frame's
 //< line is the line of its `throw` or `!`, read off `caller_line` beside it, not copied in.
 import "std/chars"
-import "std/ds" { Map }
-import "std/mem" { Arena }
 import "std/str"
 import "std/thread"
 import "std/verdict"
@@ -25,21 +23,22 @@ priv fn level2(): Void!Probe_error
 priv fn level1(): Void!Probe_error
     level2()!
 
-priv fn handled_misses(arena: Arena$@): I32 //<
+priv fn miss(): I32!Probe_error //< a lookup that always misses
+    throw .deep
+
+priv fn handled_misses(): I32 //<
     //< Raises and handles a failure, again and again, outside the chain
-    $m: = Map<|U8[], I32|>.new(arena)
-    m.set("present", 1)
     $found: I32 = 0
     for _i in Range.asc(20)
-        found += m.get("absent") catch 0
+        found += miss() catch 0
     return found
 
-fn test_error_trace(arena: Arena$@)
+fn test_error_trace()
     verdict
         .start("[trace] a failure already dealt with does not mix into `!`'s propagation route \
             test...")
 
-    assert(handled_misses(arena) == 0, "a missing key must yield the catch value")
+    assert(handled_misses() == 0, "a lookup that misses must yield the catch value")
 
     // The chain's length is 1 throw step + 2 `!` steps = 3. The 20 failures above must not appear
     // here.
@@ -48,7 +47,7 @@ fn test_error_trace(arena: Arena$@)
         assert(depth == 3, "the trace must hold this error's chain only")
 
     // Raising it once more in a row does not add to it (the chain starts over).
-    _ignored: = handled_misses(arena)
+    _ignored: = handled_misses()
     level1() catch
         depth: = kspl_error_trace_depth()
         assert(depth == 3, "a second chain must not stack onto the first")
@@ -132,9 +131,9 @@ priv fn relayed_with_forwarding(file: U8[] = caller_file, line: Sz = caller_line
 priv trait Sited //<
     //< A trait whose declared default values the compiler passes on to each implementation
     //<
-    //< **This checks that it works on both paths** (a call on the concrete type resolves to the
-    //< implementation's declaration, and a call through a trait value to the trait's declaration,
-    //< so it is easy to make it work on only one).
+    //< **This checks that it works on both paths.** A call on the concrete type resolves to the
+    //< implementation's declaration. A call through a trait value resolves to the trait's
+    //< declaration. So it is easy to make it work on only one.
     fn where_from(r: Self, file: U8[] = caller_file, line: Sz = caller_line): Site
 
 priv struct Marker

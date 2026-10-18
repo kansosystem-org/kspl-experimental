@@ -1,12 +1,13 @@
 //< The symbol table: from a name to what it declares, through the nested scopes
 //<
 //< A `Sema_symbol` is one declared name: its kind, its visibility, its flags and its declaration
-//< node. A name is looked up in the local scopes from the innermost, then in the current file's
-//< own declarations, then in the other files' `pub` ones; `resolve_fqn` finds one by its FQN alone.
+//< node. A name is looked up in the local scopes from the innermost, then in the current file's own
+//< declarations. Then it is looked up in the other files' `pub` ones. `resolve_fqn` finds one by
+//< its FQN alone.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/core" as base_core
-import "std/ds" + { List, Map }
+import "std/ds" { List, Map }
 
 enum Sym_kind
     variable
@@ -68,8 +69,8 @@ struct Sym_flags
         //<
         //< Such a symbol is a trait thunk, a vtable constant or an ARC drop glue. Do not reuse
         //< is_export: it also means "by the C ABI", and genllvm drops an aggregate's sret/byval on
-        //< it (Principle 5 of docs/DESIGN-principles.md: one option with two meanings silently
-        //< breaks one side).
+        //< it. Principle 5 of docs/DESIGN-principles.md applies: one option with two meanings
+        //< silently breaks one side.
 
 struct Sema_symbol
     kind: Sym_kind
@@ -78,6 +79,11 @@ struct Sema_symbol
     type_id: I32
     vis: Visibility
     flags: Sym_flags
+    hidden_count: I32 //< how many locals of its name it hides, a parameter included
+        //<
+        //< define_symbol counts it. The ABI pass gives such a local a C name of its own
+        //< (`hiding_local_name` in `ksplc/base/c_name.kspl`). In C, a declaration's own initializer
+        //< already sees the new name, so `x: = x + 1` would read itself.
 
 struct File_env
     file_name: U8[]
@@ -164,11 +170,11 @@ impl Symbol_table
             scope.free()
         r.scope_stack.free()
 
-    fn resolve(r: Self$@, name: U8[]): Sema_symbol$@!ds.Ds_error
+    fn resolve(r: Self$@, name: U8[]): Sema_symbol$@? //< what `name` names in scope, marked used
         if sym: = r.peek(name)
             sym.flags.is_used = true
-            return sym
-        throw .key_not_found
+            return .some(sym)
+        return .none
 
     fn peek(r: Self$@, name: U8[]): Sema_symbol$@? //<
         //< What `name` names in scope, found as `resolve` finds it, **not setting the used flag**
@@ -176,22 +182,27 @@ impl Symbol_table
         //< For a question asked before the analysis decides how a name is read: if marked, a name
         //< only asked about counts as used ([W0206], [W0207]).
         id: = base_core.pools.intern_name(name)
-        for $i: = r.scope_stack.len; i > 0; i -= 1
-            local: = r.scope_stack.get(i - 1).get(id) catch null
-            if local != null
-                return .some(local)
+        if local: = r.peek_local(id)
+            return .some(local)
         // On the same name, this file's own top-level declaration (any visibility) beats another
         // file's pub one: current_file holds them all unfiltered.
         if r.current_file != null
-            own: = r.current_file.symbols.get(name) catch null
+            own: = r.current_file.symbols.get(name).unwrap_or(null)
             if own != null
                 return .some(own)
-        global: = r.global_scope.get(id) catch null
+        global: = r.global_scope.get(id).unwrap_or(null)
         if global != null
             return .some(global)
         return .none
 
-    fn resolve_fqn(r: Self$@, fqn: U8[]): Sema_symbol$@!ds.Ds_error //<
+    priv fn peek_local(r: Self$@, id: I32): Sema_symbol$@? //< the innermost local named id
+        for $i: = r.scope_stack.len; i > 0; i -= 1
+            local: = r.scope_stack.get(i - 1).get(id).unwrap_or(null)
+            if local != null
+                return .some(local)
+        return .none
+
+    fn resolve_fqn(r: Self$@, fqn: U8[]): Sema_symbol$@? //<
         //< Looks up a symbol directly from an FQN string, regardless of current_file's state
         //<
         //< Unlike resolve() it does not filter by visibility (for compiler internals and LSP
@@ -210,11 +221,10 @@ impl Symbol_table
 
     fn has_in_current_scope(r: Self$@, name: U8[]): Bool
         if r.scope_stack.len == 0
-            return r.current_file != null &&
-                (r.current_file.symbols.get(name) catch null) != null
+            return r.current_file != null && r.current_file.symbols.get(name).is_some()
         id: = base_core.pools.intern_name(name)
         scope: = r.scope_stack.get(r.scope_stack.len - 1)
-        return (scope.get(id) catch null) != null
+        return scope.get(id).is_some()
 
     fn define_symbol(r: Self$@, name: U8[], sym: Sema_symbol$@, export_global: Bool)
         id: = base_core.pools.intern_name(name)
@@ -228,6 +238,8 @@ impl Symbol_table
                 if sym.vis != Visibility.file_private
                     r.global_scope.set(id, sym)
         else
+            if outer: = r.peek_local(id)
+                sym.hidden_count = outer.hidden_count + 1
             scope: = r.scope_stack.get(r.scope_stack.len - 1)
             scope.set(id, sym)
         if sym.node != null
@@ -263,9 +275,9 @@ impl Sema_symbol
     fn has_program_unique_c_name(r: Self$@): Bool //<
         //< whether the C name is **unique program-wide**
         //<
-        //< A method is unique by the type's FQN (which carries its file's path; sema rejects two
-        //< files adding one method name to one type), an instantiation by its arguments. The
-        //< decision and other languages' approaches are in "Visibility and linkage are separate
+        //< A method is unique by the type's FQN, which carries its file's path; sema rejects two
+        //< files adding one method name to one type. An instantiation is unique by its arguments.
+        //< The decision and other languages' approaches are in "Visibility and linkage are separate
         //< axes" in `../../../docs/DESIGN-language.md`.
         return r != null && (r.flags.is_method || r.flags.is_generated_instance)
     fn apply_attributes(r: Self$@)

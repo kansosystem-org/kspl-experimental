@@ -1,0 +1,35 @@
+//< Hands a file's text to the formatter's read-back check as if `ksplc fmt` had printed it
+//<
+//< **No input makes the formatter print text that does not read back**, so `ksplc fmt` alone cannot
+//< show the check fires. This probe feeds it directly: exit 0 where it lets the text through, 1
+//< where it refuses.
+import "kspeg/notation"
+import "ksplc/base/core"
+import "ksplc/base/setup"
+import "ksplc/fmt/file"
+import "ksplc/parse/load"
+import "std/io"
+import "std/mem" { dealloc }
+import "std/sys"
+
+embed "ksplc/kspl.kspeg" as grammar
+
+fn main(): I32
+    setup.init()
+    defer setup.fin()
+    load.init()
+    defer load.fin()
+    args: = sys.args()
+    if args.len != 2
+        return 2
+    path: = args.get(1)
+    src: = io.read_file(path) catch
+        return 2
+    defer dealloc(Void$@::src.ptr)
+    $meta: = notation.Meta.new(grammar, core.arena)
+    parser: = meta.parse_grammar() catch
+        return 2
+    defer parser.free_memo()
+    file.check_reads_back(src, path, parser, 0) catch
+        return 1
+    return 0

@@ -10,10 +10,10 @@ function kspageKeys(ks) {
   const { w, mem, canvas, enc, str, draw, ime, bar, blink, moveCaret, moveIme,
   nudgeFrame, ARROW_STEPS, scratch, nums } = ks;
 
-  // The non-character keys pressed, newest last and **capped**, for the debug log (the history
-  // holds only changes, so Enter and an arrow that did not move leave no trace).
+  // The non-character keys pressed, newest last and **capped**, for the debug log. The history
+  // holds only changes, so Enter and an arrow that did not move leave no trace.
   // Caution: **A character key is not recorded** (it is the document's contents, which the log
-  // never carries); a longer key name, or a key held with Ctrl, Alt or Meta, is.
+  // never carries). A longer key name, or a key held with Ctrl, Alt or Meta, is recorded.
   const pressed = [];
   const pressedMax = 40;
   const notePress = (e) => {
@@ -30,8 +30,8 @@ function kspageKeys(ks) {
   const ACCENT_KEYS = { b: "bold", i: "italic", u: "underline" };
 
   // Copies text into the wasm's buffer: the length, or -1 (nothing copied) if it does not fit.
-  // Caution: **Do not drop what does not fit**: typed or composed text that long goes in as a paste
-  // does (`type`, `compositionend`), or it would vanish without a word.
+  // Caution: **Do not drop what does not fit.** Typed or composed text that long goes in as a
+  // paste does (`type`, `compositionend`), or it would vanish without a word.
   function stage(text) {
     const bytes = enc.encode(text);
     const cap = w.kspage_web_input_cap();
@@ -73,14 +73,14 @@ function kspageKeys(ks) {
     draw();
   }
 
-  // Caution: **Do not put zoom between** a click and canvas coordinates: the document's unit is one
+  // Caution: **Do not put zoom between** a click and canvas coordinates. The document's unit is one
   // CSS pixel, so a subtraction is enough (zoom is left to the browser).
   const spotOf = (e) => {
     const r = canvas.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
   };
-  // Whether that point is inside the selection, **box by box** (a selection breaks per line, so one
-  // enclosing box would make the space right of a wrap "selected").
+  // Whether that point is inside the selection, **box by box**. A selection breaks per line, so one
+  // enclosing box would make the space right of a wrap "selected".
   const inPick = (x, y) => {
     const many = w.kspage_web_selection_count();
     for (let i = 0; i < many; i += 1) {
@@ -108,7 +108,7 @@ function kspageKeys(ks) {
     const [x, y] = spotOf(e);
     // Caution: **Grab nothing on a right click** (it opens the context menu; grabbing a handle or a
     // border would resize a frame). **On the selection the cursor does not move** (the selection
-    // would vanish); outside it the cursor moves, since the menu's items act where the cursor is.
+    // would vanish). Outside it the cursor moves, since the menu's items act where the cursor is.
     if (e.button === 2) {
       if (!inPick(x, y)) {
         w.kspage_web_click(x, y, 0);
@@ -163,12 +163,12 @@ function kspageKeys(ks) {
       } catch (_) { /* uncaptured, the press goes on */ }
       return;
     }
-    // A contents row jumps to its chapter, **checked before placing the cursor** (its box points at
-    // no text, so the click would look dead); **not with Shift held** (mid-selection).
+    // A contents row jumps to its chapter, **checked before placing the cursor**: its box points at
+    // no text, so the click would look dead. **Not with Shift held** (mid-selection).
     if (!e.shiftKey) {
       const head = w.kspage_web_contents_hit(y);
-      // Caution: **Go through the api** — called directly, remembering the place and scrolling it
-      // to the window's top would get a second copy, and only one would be kept up to date.
+      // Caution: **Go through the api.** Called directly, remembering the place and scrolling it
+      // to the window's top would get a second copy. Only one would be kept up to date.
       if (head >= 0 && ks.api.headingGo(head)) {
         return;
       }
@@ -181,8 +181,8 @@ function kspageKeys(ks) {
     // With Shift held it keeps the anchor and extends the selection.
     w.kspage_web_click(x, y, e.shiftKey ? 1 : 0);
     dragging = true;
-    // Caution: **Capture, but carry on if it fails** (a target that cannot be captured throws, and
-    // the click must not fail with it just for a drag's convenience).
+    // Caution: **Capture, but carry on if it fails.** A target that cannot be captured throws.
+    // The click must not fail with it just for a drag's convenience.
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch (_) { /* uncaptured, the press goes on */ }
@@ -216,15 +216,16 @@ function kspageKeys(ks) {
         canvas.style.cursor = "crosshair";
         return;
       }
-      // Over a contents or notes-list row the pointer shows it can be clicked, **checked before the
-      // borders and handles** (the rows' box points at no text, so the border check would miss).
+      // Over a contents or notes-list row, the pointer shows it can be clicked. **This is checked
+      // before the borders and handles**: the rows' box points at no text, so the border check
+      // would miss.
       if (w.kspage_web_contents_hit(y) >= 0 || w.kspage_web_notes_hit(y) >= 0) {
         canvas.style.cursor = "pointer";
         return;
       }
       const edge = w.kspage_web_edge_at(x, y);
       const grip = edge !== 0 ? 0 : w.kspage_web_grip_at(x, y);
-      // Caution: **A one-direction arrow on an edge handle** (a diagonal says both change); a
+      // Caution: **A one-direction arrow on an edge handle** (a diagonal says both change). A
       // corner has two: top left and bottom right ↖↘, top right and bottom left ↗↙.
       canvas.style.cursor = grip !== 0
         ? ["", "move", "nwse-resize", "ew-resize", "ns-resize", "nesw-resize"][grip]
@@ -235,8 +236,8 @@ function kspageKeys(ks) {
     draw();
   });
   const endDrag = () => {
-    // One shape of the dragged size, **not drawn if too small** (an invisible shape could not be
-    // deleted, the handles being the only way); on a click alone the tool stays armed.
+    // One shape of the dragged size, **not drawn if too small**. An invisible shape could not be
+    // deleted, the handles being the only way. On a click alone the tool stays armed.
     if (ks.drawn) {
       // Caution: **Place it by the shown band's geometry** (`bandRect`), or it jumps on release.
       const band = ks.bandRect();
@@ -354,7 +355,8 @@ function kspageKeys(ks) {
       return;
     }
     // **Ctrl+K opens the link field** (as in Word, Excel and PowerPoint), the selection as the
-    // text; **not bound to the key itself** (with the field empty, a link to nowhere would attach).
+    // text. **It is not bound to the key itself**: with the field empty, a link to nowhere would
+    // attach.
     else if (mod && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
       if (ks.api.reach) ks.api.reach("put-link-fly", "href");
@@ -374,8 +376,8 @@ function kspageKeys(ks) {
       ks.api.arm(null);
       return;
     }
-    // **The selected shape comes first**: holding no text, it has no cursor, and this is the one
-    // key that deletes it (a frame holding text returns 0 and goes on to delete one character).
+    // **The selected shape comes first.** Holding no text, it has no cursor, and this is the one
+    // key that deletes it. A frame holding text returns 0 and goes on to delete one character.
     else if ((e.key === "Delete" || e.key === "Backspace") && ks.api.dropPicked()) {
       e.preventDefault();
       return;
@@ -383,13 +385,13 @@ function kspageKeys(ks) {
     else if (e.key === "Backspace") { w.kspage_web_backspace(); }
     // **Delete removes the next character**; at a paragraph's end it joins the next (not in cells).
     else if (e.key === "Delete") { w.kspage_web_delete(); }
-    // **Enter splits the paragraph**; in a table cell it moves down a row (Shift+Enter up, as
+    // **Enter splits the paragraph.** In a table cell it moves down a row (Shift+Enter up, as
     // Excel's Enter), adding one past the last row as Tab does. Backspace at the start joins back.
     else if (e.key === "Enter") {
       if (w.kspage_web_split_block() === 0) w.kspage_web_move_row(ext);
     }
     // **An arrow with Alt held moves the selected frame** (with Shift it resizes), 1px per press or
-    // 10px with Ctrl — the fine control, acting on the same values as the number fields.
+    // 10px with Ctrl. It is the fine control, acting on the same values as the number fields.
     else if (e.altKey && ARROW_STEPS[e.key] !== undefined) {
       const way = ARROW_STEPS[e.key];
       const step = mod ? 10 : 1;
@@ -405,8 +407,8 @@ function kspageKeys(ks) {
     else if (e.key === "End") { w.kspage_web_move_edge(1, ext); }
     // Caution: **Take over Ctrl+A**, or the window selects the whole page and nothing in the body.
     else if (mod && (e.key === "a" || e.key === "A")) { w.kspage_web_select_all(); }
-    // **Tab moves only inside a table** (outside, focus goes to the next field, or the page could
-    // not be used by keyboard); **no tab is typed as a character** (nothing defines its width).
+    // **Tab moves only inside a table.** Outside, focus goes to the next field, or the page could
+    // not be used by keyboard. **No tab is typed as a character** (nothing defines its width).
     else if (e.key === "Tab") {
       if (w.kspage_web_move_cell(ext) === 0) return;
     }

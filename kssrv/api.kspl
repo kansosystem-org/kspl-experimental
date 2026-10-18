@@ -3,7 +3,7 @@
 //< To add an endpoint, add one row to `routes` and one case to `Api.queue`. How a response is
 //< queued (`conn.queue_response`) lives in `kssrv/conn.kspl`.
 //< **Do not mix the local-use endpoints (`--local`) with the outward-facing ones.** The file
-//< endpoints read and write under the root, so facing outward they **do not exist**; the car's
+//< endpoints read and write under the root, so facing outward they **do not exist**. The car's
 //< endpoints have nothing to answer with for local use (`Reach`).
 import "kssrv/conn"
 import "kssrv/pilot"
@@ -14,7 +14,7 @@ import "std/io"
 import "std/json" + { Json_builder }
 import "std/mem" { heap_used_bytes }
 import "std/str" { Str_builder }
-import "std/time"
+import "std/sys"
 import "std/url"
 
 const api_prefix: U8[] = "/api/" //< the JSON API's prefix
@@ -22,10 +22,6 @@ const api_prefix: U8[] = "/api/" //< the JSON API's prefix
     //< Below it a routing table answers, not static serving.
 
 const bearer: U8[] = "Bearer " //< the prefix before the token in the `Authorization` header
-
-const part_suffix: U8[] = ".kssrv-part" //< the suffix of a partly written file
-    //<
-    //< Caution: **Put it in the same folder**, or the rename fails across file systems.
 
 fn queue_json(c: conn.Conn$@, status: I32, val: json.Val, keep: Bool, allow: U8[] = "") //<
     //< Builds one JSON value and queues it as the response; `allow` is a 405's `Allow`
@@ -36,7 +32,7 @@ fn queue_json(c: conn.Conn$@, status: I32, val: json.Val, keep: Bool, allow: U8[
 
 fn queue_json_error(c: conn.Conn$@, status: I32, allow: U8[] = "") //<
     //< Queues an error answer in JSON; `allow` is a 405's `Allow`
-    reason: = http.reason_phrase(status)
+    reason: = http.reason_phrase(status).unwrap_or("")
     $b: = Json_builder.new(c.arena)
     val: = b.obj().set("error", b.str_val(reason)).set("status", b.int_val(status)).build()
     // An error response closes (the same reason as `queue_error` on the static side).
@@ -58,11 +54,11 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
     // Caution: **Say whether it is for local use.** Otherwise the page shows the local tools even
     // where there are no file endpoints: buttons that do nothing. Without the token this is a 401,
     // so nothing leaks.
-    // **The root is told only for local use**, to the holder of the token: facing outward, its
-    // absolute path tells anyone who asks how this machine's folders are laid out.
+    // **The root is told only for local use**, to the holder of the token. Facing outward, its
+    // absolute path would tell anyone who asks how this machine's folders are laid out.
     val: = b.obj().set("root", b.str_val(ctx.root if ctx.is_local() else ""))
         .set("local", b.bool_val(ctx.is_local()))
-        .set("uptime_s", b.int_val(time.now() - conn.stats.started_s))
+        .set("uptime_s", b.int_val(sys.wall_seconds() - conn.stats.started_s))
         .set("requests", b.int_val(conn.stats.requests))
         .set("commands", b.int_val(conn.stats.commands))
         .set("connections_total", b.int_val(conn.stats.connections_total))
@@ -72,41 +68,35 @@ fn queue_api_status(c: conn.Conn$@, ctx: conn.Ctx$@, keep: Bool) //<
         .set("heap_bytes", b.int_val(heap_used_bytes())).set("pilot", pilot_val).build()
     queue_json(c, 200, val, keep)
 
-priv fn query_value(params: url.Query_param$@, name: U8[]): U8[] //<
-    //< The value of the query's `<name>=`
-    //<
-    //< Empty if there is none.
-    //< Caution: **Do not write it per endpoint.** Copied per endpoint, a name mix-up (`path` versus
-    //< `paths`) gets fixed in only one of them.
-    $p: = params
-    for p != null
-        if p.name.equals(name)
-            return p.value
-        p = p.next
-    return ""
-
 fn rel_or_refuse(c: conn.Conn$@, query: U8[], root: U8[]): U8[]? //<
-    //< Takes the relative path under the root from `path=`
+    //< Takes the relative path under the root from `path=`; empty means none, or the root itself
     //<
-    //< Caution: **Run the query's value through static serving's check (`fs.stays_under`), after
-    //< the decode** ("The path is checked after the decode" in `kssrv/docs/DESIGN-server.md`). **Do
-    //< not write the refusal differently per endpoint**, or a new endpoint refuses another way.
-    //< Empty means no `path=`, or the root itself.
+    //< Caution: **Run the value through static serving's check (`rel_checked`), after the decode**
+    //< ("The path is checked after the decode" in `kssrv/docs/DESIGN-server.md`). **But keep a
+    //< leading `/`.** Only a URL's path opens with one. So here `/etc/passwd` is an absolute path,
+    //< refused, never `etc/passwd` under the root.
     params: = url.parse_query(query, c.arena) catch _e
         queue_json_error(c, 400)
         return .none
-    got: = rel_under(root, query_value(params, "path"))
+    got: = rel_checked(root, params.find("path").unwrap_or(""))
     if !got.is_some()
         queue_json_error(c, 403)
     return got
 
 fn rel_under(root: U8[], path: U8[]): U8[]? //<
-    //< The path with its leading `/`s dropped, if it stays under the root (`fs.stays_under`)
+    //< A URL's path with its leading `/`s dropped, if it stays under the root (`rel_checked`)
     //<
-    //< Empty means the root itself. Static serving and the endpoints taking `path=` both ask this.
+    //< Empty means the root itself. Static serving asks this: a URL's path always opens with `/`.
     $rel: = path
     for rel.len > 0 && rel[0] == '/'
         rel = rel.sub_from(1)
+    return rel_checked(root, rel)
+
+priv fn rel_checked(root: U8[], rel: U8[]): U8[]? //<
+    //< The path itself, if it stays under the root (`fs.stays_under`)
+    //<
+    //< **Empty means the root itself.** An absolute path in any OS's spelling (`/x`, `\\x`, `C:x`)
+    //< is refused by `fs.stays_under`'s text check, on every OS.
     if rel.len > 0 && !fs.stays_under(root, rel)
         return .none
     return .some(rel)
@@ -133,11 +123,6 @@ fn queue_api_file(c: conn.Conn$@, t: conn.Target, req: http.Request$@, root: U8[
     if req.method.equals("GET")
         queue_get_file(c, path, keep)
         return
-    // Caution: **Check the name written first too.** The body goes to `<path>.kssrv-part` and is
-    // renamed after; a link already standing at that name would take the write outside the root.
-    if !fs.stays_under(root, c.arena.text().s(rel).s(part_suffix).take())
-        queue_json_error(c, 403)
-        return
     queue_put_file(c, path, req.body, keep)
 
 fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
@@ -159,17 +144,11 @@ fn queue_get_file(c: conn.Conn$@, path: U8[], keep: Bool) //<
 fn queue_put_file(c: conn.Conn$@, path: U8[], body: U8[], keep: Bool) //<
     //< Writes `body` to the file at `path` and queues a response saying how much was written
     //<
-    //< Caution: **Write to another name, then rename.** Written in place, a crash partway leaves it
-    //< half rewritten. The body's cap is in `kssrv/main.kspl` (a 413 never reaches here).
-    part: = c.arena.text().s(path).s(part_suffix).take()
-    io.write_file(part, body) catch _e
+    //< Caution: **Answer 200 only once the body is on the disk** (`fs.replace_file`). An editor
+    //< told "saved" drops its copy. So a save that a power cut then loses is lost for good. The
+    //< file keeps its mode. The body's cap is in `kssrv/main.kspl` (a 413 never reaches here).
+    fs.replace_file(path, body, .kept) catch _e
         // No folder, or not writable: not a missing name, so not a 404.
-        queue_json_error(c, 500)
-        return
-    fs.rename_path(part, path) catch _e
-        // Caution: Remove the partly written file if the rename fails, or the next write starts on
-        // top of it.
-        fs.remove_path(part) catch {}
         queue_json_error(c, 500)
         return
     $b: = Json_builder.new(c.arena)
@@ -232,14 +211,14 @@ fn queue_api_car(c: conn.Conn$@, req: http.Request$@, p: pilot.Pilot$@, keep: Bo
     doc: = json.parse(req.body, c.arena) catch _e
         queue_json_error(c, 400)
         return
-    // Caution: **Do not default a missing `dist_mm` to 0**, which means "it could not be measured";
-    // as a default it would turn a broken request into a valid observation.
-    dist: = doc.val.get("dist_mm").as_int64(-1I64)
-    line: = doc.val.get("line").as_int64(-1I64)
+    // Caution: **Do not default a missing `dist_mm` to 0**, which means "it could not be measured".
+    // As a default, it would turn a broken request into a valid observation.
+    dist: = doc.val.get("dist_mm").as_int64().unwrap_or(-1I64)
+    line: = doc.val.get("line").as_int64().unwrap_or(-1I64)
     if dist < 0I64 || line < 0I64 || line >= I64::pilot.line_patterns
         queue_json_error(c, 400)
         return
-    seq: = doc.val.get("seq").as_int64(0I64)
+    seq: = doc.val.get("seq").as_int64().unwrap_or(0I64)
     obs: = pilot.Obs::{ .dist_mm = dist, .line = line }
     // The work uses the connection's arena, which `conn_build` rewinds per request.
     act: = pilot.decide(p, obs, c.arena)

@@ -37,7 +37,7 @@ priv fn strip_fixture_ext(name: U8[]): U8[] //< drops a fixture's extension from
 
 priv const case_head: U8[] = "// ==== case " //< opens one case, at the start of its line
     //<
-    //< **A case is the text from the line after its head to the next head**, so it reads as the
+    //< **A case is the text from the line after its head to the next head.** So it reads as the
     //< file it would be alone: a line number in a mark counts from its head. Its name names the
     //< file it is compiled as, in the suite's working directory.
 
@@ -68,9 +68,9 @@ priv fn is_case_name(name: U8[]): Bool //< lower case letters, digits and `_`, a
 
 priv fn take_name(stem: U8[], taken: List<|U8[]|>$@): Bool //< claims a name; false if taken
     //<
-    //< **A name is one file in `work`**, the source and its generated C: a second case under it
+    //< **A name is one file in `work`**, the source and its generated C. A second case under it
     //< would overwrite the first, and one case's result would be read as the other's.
-    if taken.any(fn(t: U8[]; stem: U8[]): Bool {
+    if taken.any(fn(t: U8[]@; stem: U8[]): Bool {
         return t.equals(stem);
     })
         return false
@@ -125,8 +125,8 @@ priv fn fixtures(subdir: U8[], arena: Arena$@): List<|U8[]|> //<
         return List<|U8[]|>.new(arena)
     files: = fs.walk_files(dir, fs.skip_none, arena) catch
         return List<|U8[]|>.new(arena)
-    return files.where(fn(f: U8[]; ): Bool {
-        return strip_fixture_ext(f).len < f.len;
+    return files.where(fn(f: U8[]@; ): Bool {
+        return strip_fixture_ext(f$).len < f.len;
     }).to_list(arena)
 
 priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
@@ -168,8 +168,8 @@ priv fn self_contradictory(out: U8[], arena: Arena$@): U8[] //<
 priv fn unforeseen_errors(out: U8[], expect: U8[][], arena: Arena$@): U8[] //<
     //< The error lines that no EXPECT names, or empty where every one is named
     //<
-    //< **An error the case does not foresee can stop the check an EXPECT-NOT is about**: sema
-    //< skips the rest of a body's analysis after an error in it, and the EXPECT-NOT then holds
+    //< **An error the case does not foresee can stop the check an EXPECT-NOT is about.** Sema
+    //< skips the rest of a body's analysis after an error in it. The EXPECT-NOT then holds
     //< whatever the compiler does. So a case with an EXPECT-NOT names every error it reports.
     b: = arena.text()
         .s("an EXPECT-NOT case reports an error no EXPECT names, which may have stopped the check \
@@ -207,7 +207,7 @@ priv fn fixture_argv(path: U8[], out_c: U8[], args: U8[][], lint_mode: Bool, are
 fn gather_files(name: U8[], files: U8[][], work: U8[], arena: Arena$@): List<|Fixture|> //<
     //< Every case of the files, each where it is compiled
     //<
-    //< A file that cannot be read or split is reported as a failure under its own name and left
+    //< A file that cannot be read or split is reported as a failure under its own name. It is left
     //< out, so its cases are never counted as passing.
     $all: = List<|Fixture|>.new(arena)
     $taken: = List<|U8[]|>.new(arena)
@@ -266,13 +266,13 @@ fn run_suite(name: U8[], subdir: U8[], want_failure: Bool, lint_mode: Bool, grow
         if m.expect.len == 0 && m.deny.len == 0
             verdict.check(case_name, false, "there is no EXPECT / EXPECT-NOT mark")
             continue
-        if want_failure && r.code == 0
+        if want_failure && r.exited_with(0)
             verdict.check(case_name, false, "the compiler ended with 0 (a failure was expected)")
             continue
-        // Caution: **In a suite that does not expect a failure, check the exit code too**, or
-        // EXPECT's string passes a fixture that stopped compiling (many diagnostics come before the
-        // body's analysis).
-        if !want_failure && r.code != 0
+        // Caution: **In a suite that does not expect a failure, check the exit code too.**
+        // Otherwise EXPECT's string passes a fixture that stopped compiling (many diagnostics come
+        // before the body's analysis).
+        if !want_failure && !r.exited_with(0)
             verdict.check(case_name, false,
                 arena.text()
                 .s("the compiler failed (this suite's premise is that it passes)\n\{r.out\}").take())

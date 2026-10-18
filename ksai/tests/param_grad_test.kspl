@@ -16,9 +16,9 @@ import "std/verdict"
 // ==========================================
 // Matches the gradients of the weights being trained against a finite difference.
 // Caution: **The dX tests do not check any weight's gradient.** dW can be wrong where dX is
-// right, so a `grad_matmul_weight` with rows and columns swapped, or a dW missing its
+// right. So a `grad_matmul_weight` with rows and columns swapped, or a dW missing its
 // coefficient, passes those tests.
-// **Do not add a way to return only the gradient**: the code under test and the code training
+// **Do not add a way to return only the gradient.** The code under test and the code training
 // uses would diverge, leaving **the path training actually uses untested**.
 // ==========================================
 
@@ -335,7 +335,7 @@ fn test_attention_lora_weight_grad()
 fn test_block_lora_weight_grad() //< LoRA over the whole block
     //<
     //< **The MLP side's A/B (fc1/fc2) go through different code from the attention side's**
-    //< (`Mlp.backward_lora_grads` in `ksai/nn_grad.kspl`), so this can be wrong even where the
+    //< (`Mlp.backward_lora_grads` in `ksai/nn_grad.kspl`). So this can be wrong even where the
     //< attention side is right.
     verdict.start("[Block+LoRA] the four adapters' A/B gradients match a finite difference...")
     work: = Arena.new(64 * 1024 * 1024)
@@ -456,7 +456,7 @@ fn test_lora_finetune(arena: Arena$@)
         .s("(loss \{loss0\} -> \{loss_final\})").take())
 // ==========================================
 // On-device learning with Self-Attention + Qkv_lora: train_forward_lora/backward_lora checked
-// numerically, the base (wq/wk/wv/wo) frozen and only the LoRA's A and B trained.
+// numerically. The base (wq/wk/wv/wo) is frozen, and only the LoRA's A and B are trained.
 // ==========================================
 fn test_attention_lora_grad(arena: Arena$@)
     verdict.start("[Attn+LoRA] frozen base + Qkv_lora backward numerical gradient check (F64)...")
@@ -514,8 +514,8 @@ fn test_attention_lora_grad(arena: Arena$@)
             differentiation ").s("(F64) (Σout \{before\} -> \{after\})").take()
     verdict.pass(said)
 // ==========================================
-// Transformer_block + Qkv_lora/Mlp_lora: the block version of the Attn+LoRA check, the whole block
-// frozen and only the LoRA on Attention's Q/V and the MLP's fc1/fc2 trained.
+// Transformer_block + Qkv_lora/Mlp_lora: the block version of the Attn+LoRA check. The whole block
+// is frozen, and only the LoRA on Attention's Q/V and the MLP's fc1/fc2 is trained.
 // ==========================================
 fn test_block_lora_grad(arena: Arena$@)
     verdict
@@ -590,8 +590,8 @@ fn test_block_lora_grad(arena: Arena$@)
             numerical ").s("differentiation (F64) (Σout \{before\} -> \{after\})").take()
     verdict.pass(said)
 // ==========================================
-// Persisting a LoRA adapter (save_raw/load_raw): save_set_into/load_set_from (safetensors+JSON) go
-// through Str_builder and so require the global heap, which an arena-only build cannot use.
+// Persisting a LoRA adapter (save_raw/load_raw). save_set_into/load_set_from (safetensors+JSON) go
+// through Str_builder and so require the global heap. An arena-only build cannot use that heap.
 // ==========================================
 fn test_lora_raw_persist()
     verdict.start("[LoRA] save_raw/load_raw: the raw-byte persistence round trip test...")

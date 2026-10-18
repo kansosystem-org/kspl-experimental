@@ -11,18 +11,19 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 
 # --- The plain tools ---
 # Caution: **Name, per tool, the target that calls it**, or what the default build leaves alone
-# looks unused and goes. This is the tool list's canonical source; no mingw-w64 (Windows is
-# watched on real hardware).
+# looks unused and goes. This is the tool list's canonical source.
+#   test-ship's Windows half: gcc-mingw-w64-x86-64-win32 (the x86_64 cross compiler alone, the
+#   one `x86_64-w64-mingw32-gcc` names; Wine, which would run its output, is left out for its size)
 #   BLAS=1: libopenblas-dev · test-ksos-qemu: qemu-system-arm · bare metal: gcc-arm-none-eabi
 #   ksbind's own test (test-extract): libssl-dev, libsqlite3-dev · test-kspage-wasm: nodejs
-#   test-pytools: python3-numpy (without it, a silent SKIP) · test-kspage-desktop: desktop-file-utils
+#   test-pytools: python3-numpy (without it, the Linux round fails)
+#   test-kspage-desktop: desktop-file-utils
 #   the HTTPS download below (Chromium): ca-certificates
 # No pip: nothing here installs from it (the AI helpers' own venv brings its own).
 RUN apt-get update && apt-get install -y \
     python3 \
     nodejs \
     python3-numpy \
-    python-is-python3 \
     make \
     git \
     locales \
@@ -35,6 +36,7 @@ RUN apt-get update && apt-get install -y \
     qemu-system-arm \
     gcc-arm-none-eabi \
     desktop-file-utils \
+    gcc-mingw-w64-x86-64-win32 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Fetch over IPv4: wget ---
@@ -64,14 +66,13 @@ RUN apt-get update && \
 # --- Letting the unversioned names through ---
 # **The Makefile calls the unversioned names**; a tool left out here fails as command not found.
 RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-22 100 && \
-    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-22 100 && \
     update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-22 100 && \
     update-alternatives --install /usr/bin/lldb lldb /usr/bin/lldb-22 100 && \
     update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-22 100 && \
     update-alternatives --install /usr/bin/wasm-ld wasm-ld /usr/bin/wasm-ld-22 100 && \
     update-alternatives --install /usr/bin/llvm-objdump llvm-objdump /usr/bin/llvm-objdump-22 100
 
-# --- A real browser (`make test-kspage-browser` uses it) ---
+# --- A real browser (`make test-kspage-served` uses it) ---
 # Focus, visibility and repeated keystrokes break only in a real browser. Ubuntu's `chromium`
 # is a snap stub that does not run in a container, so the Chromium project's zip (BSD) goes in
 # instead; **amd64 only** (elsewhere the target emits SKIPPED).

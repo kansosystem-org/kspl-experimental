@@ -1,16 +1,16 @@
 //< The memo table: what each rule returned at each position, for one parse at a time
 //<
 //< **One table serves every parse of one grammar** and is shared with it (`share_grammar_from` in
-//< `engine.kspl`). **A parse empties it by starting a new generation**, not by writing zeros: a
+//< `engine.kspl`). **A parse empties it by starting a new generation**, not by writing zeros. A
 //< slot stamped by another generation reads as empty, so starting costs nothing. It is sized by
 //< what is written: about one slot per input byte, doubling at half full.
-//< Caution: **Do not make a table per parse**: zero-filling one per file costs a large share of a
+//< Caution: **Do not make a table per parse.** Zero-filling one per file costs a large share of a
 //< parse, while the answers fill only a sliver of it.
 import "std/mem"
 
 struct Memo_key //< what a rule was asked, and where
     //<
-    //< (rule_id, pos) alone is not enough: is_syntax_mode / is_suppressed change the whitespace
+    //< (rule_id, pos) alone is not enough. is_syntax_mode / is_suppressed change the whitespace
     //< skipping and the nodes built, so they are part of the key
     pos: Sz //< where it was asked, in bytes from the start of the source
     rule_id: I32 //< the rule, by its index in the grammar
@@ -21,7 +21,7 @@ impl Memo_key
     fn hash(r: Self@): U32 //< where the search for the key in the table starts
         //<
         //< Caution: **Do not pass it through `ds.fmix32`.** It runs on every memo lookup, where one
-        //< more mixing round visibly slows the whole parse; `pos`, a byte position, already varies
+        //< more mixing round visibly slows the whole parse. `pos`, a byte position, already varies
         //< enough in its low bits.
         $h: = U32::2166136261
         h = (h ^ (U32::r.pos)) * 16777619
@@ -39,7 +39,7 @@ struct Memo_slot<|V|> //< one slot: the generation that wrote it, the question, 
     key: Memo_key //< the question
     value: V //< the answer.
         //<
-        //< Caution: **Read it only when it carries this parse's stamp.** Another parse's answer may
+        //< Caution: **Read it only when it carries this parse's stamp.** Another parse's answer can
         //< point at nodes whose arena has been rewound.
 
 priv const min_reach: Sz = 32 //< the fewest slots a parse uses

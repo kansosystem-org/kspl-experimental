@@ -32,7 +32,7 @@ priv fn src_block(n: Sz, arena: Arena$@): U8[] //<
     //< It makes one value inside an n-deep block and returns it outwards
     //<
     //< **Every level carries a label** ("A bare block carries a label" in
-    //< `../../../docs/DESIGN-language.md`); `_` names a level there is nothing to call.
+    //< `../../../docs/DESIGN-notation.md`); `_` names a level there is nothing to call.
     b: = arena.text()
     // Each level stands one space in from the one around it.
     b.s("fn main(): I32\n $x: I32 = 0\n")
@@ -132,7 +132,7 @@ priv fn at_limit(slot: U8[], name: U8[], src: U8[], arena: Arena$@) //<
     if !b.built
         verdict.check(name, false, b.out)
         return
-    verdict.check(name, b.code == 0, b.out)
+    verdict.check(name, b.code.unwrap_or(-1) == 0, b.out)
 
 priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@) //<
     //< Checks that a chain too deep is rejected by a diagnostic that names the depth
@@ -142,7 +142,7 @@ priv fn too_deep(slot: U8[], name: U8[], src: U8[], marker: U8[], arena: Arena$@
         return
     gen: = fs.join(sys.get_dir_name(path), "p.c", arena)
     r: = harness.ksplc(U8[][]::{ path, gen })
-    if r.code == 0
+    if r.exited_with(0)
         verdict.check(name, false, "not refused")
         return
     verdict.check(name, r.out.find_str(marker).is_some(),
@@ -183,8 +183,8 @@ fn main(): I32
         src_alias_forward(deep, arena), "chain too deep", arena)
     too_deep("deep_const", "a constant reference chain too deep is refused as a depth",
         src_const_chain(const_chain * 5, arena), "nesting too deep", arena)
-    // Far past the guarantee either the block check or the parser's own depth guard refuses it,
-    // which one depending on the stack a build of ksplc spends per level; both name depth.
+    // Far past the guarantee, either the block check or the parser's own depth guard refuses it.
+    // Which one depends on the stack a build of ksplc spends per level. Both name depth.
     too_deep("deep_block", "a block nested far past the guarantee is refused as a depth",
         src_block(block_nesting * 5, arena), "nesting too deep", arena)
     return harness.finish()

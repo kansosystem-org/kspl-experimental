@@ -5,10 +5,11 @@
 //< for LLVM (the accepted names would depend on the backend).
 
 // ==========================================
-//   1. a type appearing in an `#export` signature — if the layout is Kanso-specific (a Result, a
-//      slice, an array, a trait value, an enum with a payload) it cannot cross the C boundary
-//   2. a name that is a C reserved word — when the name it is renamed to is already taken in
-//      the same scope
+//   1. a type appearing in an `#export` signature — a Kanso-specific layout cannot cross the C
+//      boundary. Such a layout is a Result, a slice, an array, a trait value or an enum with a
+//      payload.
+//   2. a name that is a C reserved word — when the name it is renamed to is already taken in the
+//      same scope
 // ==========================================
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/c_name" as base_c_name
@@ -57,45 +58,46 @@ impl Sema_ctx
                 "slices (T[]) cannot cross C-FFI boundaries. Use raw pointers (T@) and pass length \
                     separately.")
             return
-        switch r.env.get_info(real_id)
-        case .result(_b, _e)
+        if r.env.is_result(real_id)
             r.err(err_node,
-                "result types (T!E) cannot cross C-FFI boundaries (their layout is Kanso-specific).")
+                "result types (T!E) cannot cross C-FFI boundaries. Their layout is Kanso-specific.")
+            return
+        switch r.env.get_info(real_id)
         case .array(_b, _s)
             r.err(err_node,
                 "arrays (T[N]) cannot directly cross C-FFI boundaries. Use raw pointers (T@) \
                     instead.")
         case .trait_type(_d)
             r.err(err_node,
-                "interface values cannot cross C-FFI boundaries (an interface value is a \
-                    Kanso-specific {object, vtable} pair). Pass a raw pointer (T@) to the concrete \
+                "interface values cannot cross C-FFI boundaries. An interface value is a \
+                    Kanso-specific {object, vtable} pair. Pass a raw pointer (T@) to the concrete \
                     type instead.")
         case .enum_type(def)
             // A plain integer enum is C's enum; one with a payload is a tagged union.
             for variant in def.variants_list
                 if variant.payload_fields.len > 0
                     r.err(err_node,
-                        "enums with payloads cannot cross C-FFI boundaries (a payload variant \
-                            lowers to a Kanso-specific tagged union). Use a payload-free enum, or \
-                            pass the fields separately.")
+                        "enums with payloads cannot cross C-FFI boundaries. A payload variant uses \
+                            a Kanso-specific tagged union. Use a payload-free enum, or pass the \
+                            fields separately.")
                     return
         case .struct_type(def)
             // A plain struct passes as a C aggregate, but not by value at the signature itself
-            // (depth 0) on LLVM: genllvm lacks the per-target C ABI classification ("Passing an
-            // aggregate is an explicit internal ABI" in ksplc/docs/DESIGN-compiler.md).
+            // (depth 0) on LLVM. genllvm lacks the per-target C ABI classification. See "Passing an
+            // aggregate is an explicit internal ABI" in ksplc/docs/DESIGN-backends.md.
             if depth == 0 && base_core.is_llvm_target()
                 r.err(err_node,
                     "structs cannot be passed or returned by value across C-FFI boundaries on the \
-                        LLVM backend (genllvm does not implement the per-target C ABI \
-                        classification for by-value aggregates). Pass a pointer (T@) instead.")
+                        LLVM backend. genllvm does not implement the per-target C ABI \
+                        classification for by-value aggregates. Pass a pointer (T@) instead.")
             for field in def.fields_list
                 r.check_ffi_safety_at(field.type_id, err_node, seen, depth + 1)
         default {}
     fn check_c_keyword_collision(r: Self$@, name: U8[], node: Ast_node$@): Bool //<
         //< Whether a name C or the target's headers reserve clashes with its suffixed form in scope
         //<
-        //< Such a name **may be used**: the generated C attaches a suffix (needs_c_escape in
-        //< base/c_name.kspl), so only a clash with the suffixed name is rejected.
+        //< Such a name **can be used**: the generated C attaches a suffix (needs_c_escape in
+        //< base/c_name.kspl). So only a clash with the suffixed name is rejected.
         //< Caution: **Keep this check in sema** (the reason is at this file's header).
         $partner: = c_name_partner(name)
         defer partner.free()
@@ -111,7 +113,7 @@ impl Sema_ctx
             //< not reach them; the same pair is looked up in `seen`.
         $partner: = c_name_partner(name)
         defer partner.free()
-        if partner.slice().len == 0 || !(seen.get(partner.slice()) catch false)
+        if partner.slice().len == 0 || !seen.get(partner.slice()).unwrap_or(false)
             return false
         return r.report_c_name_pair(node, name, partner.slice())
 
@@ -127,8 +129,8 @@ impl Sema_ctx
         //< Caution: **Keep this diagnostic in this one place**, or one failure reads as two for a
         //< local (declare_symbol) and a field.
         r.clear_scratch()
-            .s("'\{kw\}' is a C keyword or macro on some target, so it is emitted as '\{safe\}' in \
-                the generated C, but '\{safe\}' is also declared in this scope. Rename one of them.")
+            .s("'\{kw\}' is a C keyword or macro on some target. The generated C uses '\{safe\}', \
+                but this scope already declares that name. Rename one of them.")
         r.err(node, r.scratch.slice())
         return true
 
@@ -136,7 +138,7 @@ priv fn c_name_partner(name: U8[]): Str_builder //< the other name of `name`'s C
     //<
     //< A reserved word's partner is its suffixed form; a suffixed name's is the word it renames.
     //< Caution: **Check both declaration orders**, or a suffixed name written first passes. Only
-    //< c_safe_name decides the renamed-to name; do not rebuild it here, and **do not build it in
+    //< c_safe_name decides the renamed-to name, so do not rebuild it here. **Do not build it in
     //< r.scratch**: report_c_name_clash overwrites that scratch.
     if name.needs_c_escape()
         return name.c_safe_name()

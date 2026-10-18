@@ -3,10 +3,10 @@
 //< **How a number is shown changes only the text; rounding changes the value itself.** Do not mix
 //< one into the other, or changing the decimal places on the screen would change the total
 //< ([`calc.kspl`](calc.kspl)'s `.round()` is this file's `round_to`).
-//< **Rounding multiplies by 10 to the number of places and then converts to a whole number**, and
-//< no more places are written than the F64 holds (`safe_places`), so the larger the number, the
-//< fewer decimal places appear. **Past `whole_cap` nothing is converted** (the conversion has no
-//< fixed answer there): such a number is written as F64 text.
+//< **Rounding multiplies by 10 to the number of places, then converts to a whole number.** No more
+//< places are written than the F64 holds (`safe_places`): the larger the number, the fewer
+//< decimal places appear. **Past `whole_cap` nothing is converted**, since the conversion has no
+//< fixed answer there. Such a number is written as F64 text.
 //< Pure functions: **they know neither the document nor the cell.**
 import "kspage/model/day"
 import "kspage/model/style" { Number_spec }
@@ -17,7 +17,7 @@ priv const whole_cap: F64 = 9.0e18 //< the largest size converted to an I64 (its
 
 fn whole_of(v: F64): I64? //< v's whole part, or none past `whole_cap` (a NaN included)
     //<
-    //< Caution: **Check the size before converting an F64 to a whole number**: past an I64's range
+    //< Caution: **Check the size before converting an F64 to a whole number.** Past an I64's range
     //< the conversion has no fixed answer (a huge value shows as a wrapped, negative number).
     if !(v <= whole_cap && v >= -whole_cap)
         return .none
@@ -74,8 +74,8 @@ priv const exact_cap: F64 = 9007199254740992.0 //< 2 to the 53rd: past it an F64
 priv fn safe_places(n: F64, want: Sz): Sz //<
     //< The decimal places the F64 n holds, at most want
     //<
-    //< Scaled by 10 to that power it stays under `exact_cap`, so every digit written is one the
-    //< number holds; one place more and the last digit is made up (`…676.8` for an F64 that
+    //< Scaled by 10 to that power, it stays under `exact_cap`, so every digit written is one the
+    //< number holds. With one place more, the last digit is made up (`…676.8` for an F64 that
     //< holds `…680`).
     $p: Sz = want
     for p > 0 && n * F64::pow10(p) > exact_cap
@@ -84,8 +84,9 @@ priv fn safe_places(n: F64, want: Sz): Sz //<
 
 priv fn write_large(out: Str_builder$@, n: F64) //< writes a size past `whole_cap`
     //<
-    //< **It is the F64's own shortest text** (`1e+300`), which reads back as the same number; no
-    //< grouping and no decimal places, which a number this size does not use. A `.0` is dropped.
+    //< **It is the F64's own shortest text** (`1e+300`), which reads back as the same number. It
+    //< has no grouping and no decimal places, which a number this size does not use. A `.0` is
+    //< dropped.
     start: = out.len
     out.s("\{n\}")
     if out.len >= start + 2 && (out.ptr + out.len - 2)$ == '.' &&
@@ -99,8 +100,8 @@ fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
     //< one place comes out as "0.10".
     //< Caution: **Do not truncate**: 1.23 would come out as "1.229999" (an F64's 1.23 is slightly
     //< less).
-    // A date format writes a date, a count of days from the origin day (**no number format is
-    // read**, **the decimals are dropped**); a count too large to convert stays a number.
+    // A date format writes a date, a count of days from the origin day. **No number format is
+    // read** and **the decimals are dropped**. A count too large to convert stays a number.
     if !spec.dated.same_dating(.none)
         if days: = whole_of(v)
             day.write_day(out, days, spec.dated)
@@ -135,7 +136,7 @@ fn write_shown(out: Str_builder$@, v: F64, spec: Number_spec) //<
 fn round_to(v: F64, places: Sz): F64 //< the value rounded to places decimals
     //<
     //< **A half rounds away from 0** (`-0.5` is `-1`). **A value too large is not rounded** (the
-    //< reason is in the file header); past 2 to the 52nd an F64 has no fraction to round anyway.
+    //< reason is in the file header). Past 2 to the 52nd, an F64 has no fraction to round anyway.
     size: = v if v >= 0.0 else -v
     unit: = F64::pow10(safe_places(size, places))
     half: = 0.5 if v >= 0.0 else -0.5

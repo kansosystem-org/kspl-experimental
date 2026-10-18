@@ -1,10 +1,12 @@
-// kspage — the bridge to a browser, JS side. It does only three things: passes the wasm the sizes
-// the canvas's measureText gives, draws the laid-out boxes with fillText, and passes on the click,
-// the key and the text being composed. Layout and editing decisions are the wasm's.
+// kspage — the bridge to a browser, JS side. It does only three things. It passes the wasm the
+// sizes the canvas's measureText gives, and draws the laid-out boxes with fillText. It passes on
+// the click, the key and the text being composed. Layout and editing decisions are the wasm's.
 // Embedded into the served page alongside the wasm.
 
 function kspageBoot(canvas, wasmBytes) {
-  const utf8 = new TextDecoder("utf-8");
+  // Caution: **Keep a BOM** (the default decoder takes one off the front): a text form opened
+  // with one would be saved without it.
+  const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
   const enc = new TextEncoder();
   const ctx = canvas.getContext("2d");
   let mem = null;
@@ -107,19 +109,19 @@ function kspageBoot(canvas, wasmBytes) {
       // The slide grabbed in the list, moved where it is released; **null means none**.
       dragThumb: null,
       // Caution: **External images stay unloaded by default, and this is not remembered** (loading
-      // a document resets it), or permitting once would silently fetch for a later document.
+      // a document resets it). Otherwise permitting once would silently fetch for a later document.
       outsidePics: false,
       // The entry points for the outside, filled in by the entry-point files.
       api: {},
     };
-    // The handler for exhausted memory — **the last safety net**: the core stops once the arena
-    // runs out (`panic` in `../../../std/lang.kspl`), so unhandled **the screen freezes**. It
+    // The handler for exhausted memory, **the last safety net**. The core stops once the arena
+    // runs out (`panic` in `../../../std/lang.kspl`), so unhandled, **the screen freezes**. It
     // returns the call's result, or `null` when memory ran out. **Run every call that lays out or
     // loads through it, and keep it the only net** (with two, one forgets the cleanup).
-    // Caution: **Always clean up** — the chunk being built is referenced by nobody, and unfreed the
-    // arena shrinks **forever** (`bridge.kspl`'s `kspage_web_recover`). **Report only running out
-    // of memory, and throw any other error on** (a fault in the page's code said to be "memory used
-    // up" sends the reader to the wrong cause, and is logged nowhere).
+    // Caution: **Always clean up.** Nobody references the chunk being built; unfreed, the arena
+    // shrinks **forever** (`bridge.kspl`'s `kspage_web_recover`). **Report only running out of
+    // memory, and throw any other error on.** A fault in the page's code called "memory used up"
+    // sends the reader to the wrong cause, and is logged nowhere.
     ks.cramps = (run) => {
       try {
         return run();

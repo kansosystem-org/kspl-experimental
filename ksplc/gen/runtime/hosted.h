@@ -1,6 +1,6 @@
 /* The "declaration half" of the C runtime's preamble header (an environment with an OS).
  * Only macros, extern declarations and static inline functions (the reason is at the head of
- * core.h; the rest is in hosted.c), and only what the generated body calls directly: a KSPL
+ * core.h; the rest is in hosted.c). It holds only what the generated body calls directly. A KSPL
  * `extern fn kspl_...` (kspl_atomic_add and the like) gets its prototype from genc. */
 
 /* What core.c keeps one of for each thread. The runtime is built by clang or gcc alone, which
@@ -66,8 +66,8 @@ static inline KSPL_UNUSED int64_t kspl_tag_check(int64_t value, const int64_t* t
 }
 
 /* std/libc.kspl's `get_stdin` / `get_stdout` / `get_stderr` (the substance is in hosted.c). genc
- * puts no prototype out for std/libc's functions, a standard header having them
- * (`emit_fwd_extern_decls` in ksplc/gen/c/decl.kspl); these three are in none, so they are
+ * puts no prototype out for std/libc's functions, because a standard header has them
+ * (`emit_fwd_extern_decls` in ksplc/gen/c/decl.kspl). These three are in none, so they are
  * declared here.
  * Caution: **Do not make them static inline**: the LLVM artifact borrows them from the runtime. */
 

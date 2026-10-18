@@ -7,7 +7,7 @@
 
 // ==========================================
 // **Kept apart from the single adapter (`Lora` in `ksai/lora`) because the bundle goes through
-// safetensors**: merged there, inference code that only uses one `Linear` would pay for parsing
+// safetensors.** Merged there, inference code that only uses one `Linear` would pay for parsing
 // safetensors and JSON.
 // ==========================================
 import "ksai/lora" { Lora }
@@ -15,6 +15,13 @@ import "ksai/safetensors" as st
 import "ksai/tensor" + { Tensor }
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
+
+pub struct Lora_widths //< the widths of the base layer an adapter read from a file is added to
+    //<
+    //< The file's A has to be `[in_dim, rank]` and its B `[rank, out_dim]`. Take them from the
+    //< base layer's weights (`Linear.weights.shape`), so that what is checked is what it meets.
+    pub in_dim: Sz //< the base layer's input width
+    pub out_dim: Sz //< the base layer's output width
 
 priv fn tensor_name(b: Str_builder$@, i: Sz, group: U8[], name: U8[], part: U8[]): U8$[] //<
     //< A LoRA tensor's name, "blocks.{i}.{group}.{name}.lora_{part}"
@@ -40,7 +47,7 @@ priv fn adapter_error(e: st.Safetensors_error, name: U8[]): st.Safetensors_error
         return e
 
 priv fn lora_load_from(out: Lora<|F32|>$@, $s: st.Safetensors, i: Sz, group: U8[], name: U8[],
-    arena: Arena$@): Void!st.Safetensors_error //<
+    want: Lora_widths, arena: Arena$@): Void!st.Safetensors_error //<
         //< Reads block i's adapter "{group}.{name}", written elsewhere, into `out` for inference
         //<
         //< The writer is an on-device trainer or a LoRA fine-tuner. Exchange through safetensors is
@@ -57,12 +64,15 @@ priv fn lora_load_from(out: Lora<|F32|>$@, $s: st.Safetensors, i: Sz, group: U8[
         s.get_tensor<|F32|>(tensor_name(b@, i, group, name, "scale"), arena) catch e
         throw adapter_error(e, name)
     // Caution: **Check the shapes before reading the scale.** A scale of shape `[0]` is a valid
-    // empty tensor whose data starts at the end of the file, so reading its one value went past the
-    // buffer (or read the neighbouring tensor). A and B must chain (`[in, rank]` · `[rank, out]`),
-    // or the first forward pass stops on a matmul mismatch far from the file that caused it.
+    // empty tensor whose data starts at the end of the file. So a read of its one value goes past
+    // the buffer (or reads the neighbouring tensor). A and B must chain
+    // (`[in, rank]` · `[rank, out]`) and fit the base layer. Otherwise the first forward pass
+    // stops on a matmul mismatch naming nothing.
     if sc.size != 1
         throw .shape_mismatch(name)
     if a.shape.len != 2 || lb.shape.len != 2 || a.shape[1] != lb.shape[0]
+        throw .shape_mismatch(name)
+    if a.shape[0] != want.in_dim || lb.shape[1] != want.out_dim
         throw .shape_mismatch(name)
     out$ = Lora<|F32|>::{ .a = a, .b = lb, .scale = sc.data$ }
 
@@ -92,14 +102,16 @@ impl<|T|> Qkv_lora<|T|>
         //< metal, pass `embed`ed bytes through `Safetensors.load_from_bytes` first.
         s: st.Safetensors, //< the model already parsed, from a file or from bytes in flash
         n_layers: Sz, //< how many blocks to look for; a missing one is an error
+        q: Lora_widths, //< the query projection's widths; an adapter that does not fit is refused
+        v: Lora_widths, //< the value projection's widths, as `q`
         arena: Arena$@, //< the arena the array and every matrix in it are allocated from
     ): Qkv_lora<|T|>$@!st.Safetensors_error
         tensor.require_arena(arena)
         adapters: = Qkv_lora<|T|>$@::arena.alloc(n_layers * sizeof(Qkv_lora<|T|>))
         for i in Range.asc(n_layers)
             entry: = adapters + i
-            lora_load_from(entry.q@, s, i, "attn", "q", arena)!
-            lora_load_from(entry.v@, s, i, "attn", "v", arena)!
+            lora_load_from(entry.q@, s, i, "attn", "q", q, arena)!
+            lora_load_from(entry.v@, s, i, "attn", "v", v, arena)!
         return adapters
     pub fn save_set_into( //< the inverse of `load_set_from`: writes every block's adapters
         //<
@@ -129,14 +141,16 @@ impl<|T|> Mlp_lora<|T|>
         //< parsed Safetensors, not a path (the same as `Qkv_lora.load_set_from`).
         s: st.Safetensors, //< the model already parsed, from a file or from bytes in flash
         n_layers: Sz, //< how many blocks to look for; a missing one is an error
+        fc1: Lora_widths, //< the widening layer's widths; an adapter that does not fit is refused
+        fc2: Lora_widths, //< the narrowing layer's widths, as `fc1`
         arena: Arena$@, //< the arena the array and every matrix in it are allocated from
     ): Mlp_lora<|T|>$@!st.Safetensors_error
         tensor.require_arena(arena)
         adapters: = Mlp_lora<|T|>$@::arena.alloc(n_layers * sizeof(Mlp_lora<|T|>))
         for i in Range.asc(n_layers)
             entry: = adapters + i
-            lora_load_from(entry.fc1@, s, i, "mlp", "fc1", arena)!
-            lora_load_from(entry.fc2@, s, i, "mlp", "fc2", arena)!
+            lora_load_from(entry.fc1@, s, i, "mlp", "fc1", fc1, arena)!
+            lora_load_from(entry.fc2@, s, i, "mlp", "fc2", fc2, arena)!
         return adapters
     pub fn save_set_into( //< the inverse of `load_set_from`: writes every block's adapters
         //<

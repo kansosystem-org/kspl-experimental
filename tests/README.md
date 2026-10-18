@@ -32,7 +32,7 @@ flowchart LR
 | `tests/support/` | The code a suite reads. Not what it runs against |
 | `tests/tools/` | A tool `make` calls directly, passing its subject as an argument (a file or log to inspect) |
 | `tests/debug/` | `make debug`'s entry point, `main.kspl`: it calls each package's `tests/all` in turn. One package alone is `make debug-<name>`, through that package's own `<package>/tests/main.kspl` |
-| `tests/freestanding/` | Fixtures for one check, `make test-freestanding-math`. A *fixture* is a fixed input a check runs against. Here `probe.kspl` exports std/math's functions as built for a target with no operating system, and `harness.c`, a C program, calls them and compares each answer with the C library's |
+| `tests/freestanding/` | Fixtures for one check, `make test-freestanding-math`. A *fixture* is a fixed input a check runs against. Here `probe.kspl` exports std/math's functions as built for a target with no operating system. `harness.c`, a C program, calls them and compares each answer with the C library's |
 | `tests/docs/` | This folder's documents (["Further reading"](#further-reading) below) |
 
 **Do not put a `.kspl` directly under `tests/`**: its name would not say whether `make` runs it or it is material. Only this guide and `ksplc.cfg` live there. Settings are found by walking upwards from a file's folder, so `ksplc.cfg` must be here to cover all of `tests/`.
@@ -51,9 +51,10 @@ The foundation is split by the reason for reading it.
 | File | The reason to read it |
 |---|---|
 | `harness` | What knows the repository: finding the root, a suite's start on its paths, `make` from the root, a temporary folder under `out/tmp`, the files git knows |
-| `harness_text` | Looking at strings (one UTF-8 character, a word boundary, a text's words, a list written in a file, the line after a mark, whether a list holds a string) |
+| `harness_text` | Looking at strings: one UTF-8 character, a word boundary and a text's words. Also a list written in a file, the line after a mark, and whether a list holds a string |
+| `harness_sanitizer` | Building a program through ksplc with a sanitizer, and running it with the package's environment (`race` and `sanitize` build through it) |
 
-The compiler's suites have their own foundation in ksplc's folder, including the build helper and the runner of `EXPECT:` fixtures ([ksplc](../ksplc/README.md)). **Its `harness` is the layer beneath this one**: `harness.begin` starts it on the repository's paths, and a suite here ends, starts a process and runs the compiler under test through it, imported as `ksplc_harness`.
+The compiler's suites have their own foundation in ksplc's folder, including the build helper and the runner of `EXPECT:` fixtures ([ksplc](../ksplc/README.md)). **Its `harness` is the layer beneath this one.** A suite here imports it as `ksplc_harness`. `harness.begin` starts it on the repository's paths. Through it, a suite ends, starts a process and runs the compiler under test.
 
 ## The suites
 
@@ -72,7 +73,7 @@ These are checks that read one file or log `make` hands them, rather than the wh
 | Thing | How it is called |
 |---|---|
 | `tests/tools/llvm_ir_abi_check.kspl` | `make test-llvm-abi` passes it the generated `.ll` files (LLVM's text form of a compiled program). They must include one whose `main` returns a Result, since no other program exercises the entry point's failure path |
-| `tests/tools/perf_guard.kspl` | `make perf-log` (a gate of `make ci-linux`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
+| `tests/tools/perf_guard.kspl` | `make perf-log` (a gate of `make ci`) passes it the two translation logs it measures, cold and warm (reference values in `perf_baseline.json`) |
 
 ## The fixture folders
 
@@ -81,17 +82,17 @@ These folders hold material that a package's own checks run against; this table 
 | Folder | How it is called |
 |---|---|
 | `tests/freestanding/` | `make test-freestanding-math`, comparing `#cfg(freestanding)`'s std/math (the build with no operating system under it) against the real libm |
-| `ksos/tests/` | ksos's own tests, run by its own [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI): the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs. `make test-ksos-qemu` reads the demos' UART output through `uart_probe.py` |
-| `kspage/tests/wasm/` `kspage/tests/browser/` | kspage's checks on its page, run by its own [`kspage/Makefile`](../kspage/Makefile) (`make test-kspage-wasm` / `test-kspage-browser` / `test-kspage-served` from here). How their material is kept apart from the sample shown at startup is in "Each browser-check section has its own document" in [`kspage/docs/DESIGN-architecture.md`](../kspage/docs/DESIGN-architecture.md) |
+| `ksos/tests/` | ksos's own tests, run by its own [`ksos/Makefile`](../ksos/Makefile) (`make debug-ksos` from here, `make test-extract` in CI). They are the unit tests, the USB descriptors read as text, and elf2uf2 fed broken ELFs. `make test-ksos-qemu` reads the demos' UART output through `uart_probe.py` |
+| `kspage/tests/wasm/` `kspage/tests/browser/` | kspage's checks on its page, run by its own [`kspage/Makefile`](../kspage/Makefile) (`make test-kspage-wasm` / `test-kspage-served` from here). How their material is kept apart from the sample shown at startup is in "Each browser-check section has its own document" in [`kspage/docs/DESIGN-architecture.md`](../kspage/docs/DESIGN-architecture.md) |
 
 ## Files near the limit and how they split
 
-Two files here have their split planned before they reach the line limit for one file; the table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). A package's tests live in its `tests/`, so how they split is in that package's README.
+Two files here have their split planned before they reach the line limit for one file. The table says what moves out of each and where. How to choose where a file splits is "Choosing where to split a file" in [`docs/DESIGN-principles.md`](../docs/DESIGN-principles.md). A package's tests live in its `tests/`, so how they split is in that package's README.
 
 | File | What to split out | Destination | Why it parts there |
 | :-- | :-- | :-- | :-- |
 | `tests/suite/docref_test.kspl` | the "what may refer to what" side: `layer_from` / `layer_to` / `spec_may_reach_up` / `ref_heads` / `ref_names` / `group_of` / `may_refer` / `unit_ref_defects` | a new `docref_layer.kspl` under `tests/support/` | It answers "may this folder point at that one" from folder names alone. It is the one part that reads no reference, so the split leaves `docref_refs` and `docref_cite` untouched |
-| `tests/suite/conventions_test.kspl` | the shape of a comment in a source: `max_comment_lines` / `max_header_lines` / `is_header_lead` / `check_comments` / `check_summary_inside` | a new `conventions_comment.kspl` under `tests/support/` | It reads a source as lines of text alone: how long a `//` run may stand over the code, and where a `//<` run goes when the declaration has braces. It touches no AST (the compiler's tree of a parsed program) and no other check's tables |
+| `tests/suite/conventions_test.kspl` | the shape of a comment in a source: `max_comment_lines` / `max_header_lines` / `is_header_lead` / `check_comments` / `check_summary_inside` | a new `conventions_comment.kspl` under `tests/support/` | It reads a source as lines of text alone. It checks how long a `//` run can stand over the code, and where a `//<` run goes when the declaration has braces. It touches no AST (the compiler's tree of a parsed program) and no other check's tables |
 
 ## Further reading
 

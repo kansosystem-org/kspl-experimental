@@ -1,9 +1,9 @@
 //< The lints on statements, called as hooks from where a statement or an initializer is typed
 //<
-//< A constant condition, a call subject that wraps, an empty block, a lock used past its unlock or
-//< never released, an exit between an `Owned` binding and its `defer`, a digit-accumulating loop
-//< with no bound, and a type written twice. **This is not where all the lints are**: the rest sit
-//< with the checks that hold the context to detect them.
+//< They cover a constant condition, a call subject that wraps, an empty block, and a lock used past
+//< its unlock or never released. They also cover an exit between an `Owned` binding and its
+//< `defer`, a digit-accumulating loop with no bound, and a type written twice. **This is not where
+//< all the lints are**: the rest sit with the checks that hold the context to detect them.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -27,7 +27,8 @@ fn lint_constant_condition(c: Sema_ctx$@, cond_node: Ast_node$@, is_loop: Bool) 
     if is_loop
         if cond_node.text.equals("true")
             c.warn(cond_node,
-                "[W0205] Loop with 'true' condition. Use an unconditional 'for { ... }' instead.")
+                "[W0205] Loop with 'true' condition. Remove the condition. A bare 'for' loops \
+                    forever.")
         else
             c.warn(cond_node, "[W0205] Loop with 'false' condition. This loop will never execute.")
     else
@@ -72,9 +73,8 @@ fn lint_multiline_call_subject(c: Sema_ctx$@, node: Ast_node$@, label: U8$[]) //
         return
     c.clear_scratch()
         .s("[H0804] This '\{label\}' directly wraps a call whose argument list spans multiple \
-            lines. Consider extracting the call into a named temporary variable first, then \
-            \{label\} on that variable, so the wrapping doesn't get tangled with the call's own \
-            argument list.")
+            lines. Assign the call to a named temporary variable first. Then apply \{label\} to \
+            that variable to separate the operations.")
     c.hint(node, c.scratch.slice())
 
 fn subtree_has_multiline_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
@@ -113,9 +113,8 @@ fn lint_multiline_nested_call(c: Sema_ctx$@, node: Ast_node$@): Bool //<
                 subtree_has_multiline_call(c, args)
                 c.hint(node,
                     "[H0802] This call passes another call as an argument and its argument list \
-                        wraps across lines. Extract the inner call into a named temporary variable \
-                        first, then pass that variable, so the statement splits cleanly instead of \
-                        the wrapping getting tangled.")
+                        wraps across lines. Assign the inner call to a named temporary variable \
+                        first. Pass that variable to separate the calls.")
                 return true
     for child in node.children
         if lint_multiline_nested_call(c, child)
@@ -306,19 +305,20 @@ fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
             if e.released && !e.reported && stmt.refs_ident(e.borrow)
                 c.clear_scratch()
                     .s("[W0105] Local '\{e.borrow\}' borrows into '\{e.guard\}' via .lock(), but is \
-                        used here after '\{e.guard\}.unlock()'. The lock is no longer held, so \
-                        another thread may access the data concurrently. Use it before unlock(), or \
-                        re-lock first.")
+                        used here after '\{e.guard\}.unlock()'. The lock is no longer held. Another \
+                        thread can access the data concurrently. Use it before unlock(), or re-lock \
+                        first.")
                 c.warn(stmt, c.scratch.slice())
                 e.reported = true
     // Reports the locks still held when leaving the block.
     for s in sites
         if !s.settled
             c.clear_scratch()
-                .s("[W0106] '\{s.guard\}' is locked here but never unlocked before leaving this \
-                    scope, so every thread that later takes this lock will block forever. Call \
-                    '\{s.guard\}.unlock()' when done, or register 'defer \{s.guard\}.unlock()' \
-                    right after locking so it is released on every exit path.")
+                .s("[W0106] '\{s.guard\}' is locked here but not unlocked before this scope ends. \
+                    Every thread that later takes the lock will block forever. Call \
+                    '\{s.guard\}.unlock()' when done. Alternatively, register 'defer \
+                    \{s.guard\}.unlock()' immediately after locking to release it on every exit \
+                    path.")
             c.warn(s.node, c.scratch.slice())
 
 fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
@@ -374,9 +374,9 @@ priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, 
     else if k == .k_stmt_continue
         what = "continue"
     c.clear_scratch()
-        .s("[W0109] '\{name\}' leaks if this '\{what\}' leaves: its 'defer \{name\}.free()' is \
-            registered only on line \{freed\}. Put the defer on the line after '\{name\}' is bound \
-            (line \{bound\}), so it runs on every way out.")
+        .s("[W0109] '\{name\}' leaks if this '\{what\}' exits. Its 'defer \{name\}.free()' is \
+            registered only on line \{freed\}. Register the defer immediately after binding \
+            '\{name\}' on line \{bound\}. This covers every exit path.")
     c.warn(way, c.scratch.slice())
 
 impl Ast_node
@@ -438,14 +438,14 @@ priv fn lint_lock_return_escape(c: Sema_ctx$@, stmt: Ast_node$@,
     if flagged
         c.clear_scratch()
             .s("[W0105] Returning a pointer obtained from Mutex.lock() lets the caller use the data \
-                with the lock released (a data race). Copy the needed value out while the lock is \
-                held and return the copy instead.")
+                with the lock released (a data race). Copy the needed value while holding the lock. \
+                Return that copy.")
         c.warn(stmt, c.scratch.slice())
 fn lint_empty_block(c: Sema_ctx$@, node: Ast_node$@, kind_name: U8[], action: U8[]) //<
     //< [I0307] Detects a stmt_block with nothing inside (action is the advice for the context)
     //<
     //< Skipped while instantiating a generic: a branch on a type argument (`if sizeof(T) == 4`)
-    //< folds and one side looks empty though the source is not (the same reason as
+    //< folds. One side then looks empty though the source is not (the same reason as
     //< check_unnecessary_cast in coerce.kspl).
     if c.is_instantiating()
         return
@@ -474,8 +474,8 @@ fn lint_if_stmt(c: Sema_ctx$@, r: Ast_node$@, then_block: Ast_node$@, else_block
                     c.information(r,
                         "[I0308] Redundant if-return for boolean. Consider returning the condition \
                             directly.")
-        // **Only where no `break` leaves this `if`**: `break ui` continues after it, so without
-        // the `else` its body would run after the `break` too, and a `break ui` inside the `else`
+        // **Only where no `break` leaves this `if`**: `break ui` continues after it. Without the
+        // `else`, its body would run after the `break` too, and a `break ui` inside the `else`
         // would be left with no label.
         if !r.is_left_by_break() && then_block.is_guaranteed_to_leave(true)
             c.hint(r,
@@ -488,11 +488,11 @@ fn lint_loop_stmt(c: Sema_ctx$@, block_node: Ast_node$@, label_name: U8[], has_c
     if !base_core.config.run_lint_checks || block_node == null
         return
     // A bare `for { }` is the deliberate "wait here forever" idiom (a halt after a semihosting
-    // exit); only `for cond { }`, checking a condition and doing nothing, suggests a forgotten
+    // exit). Only `for cond { }`, checking a condition and doing nothing, suggests a forgotten
     // body.
     if block_node.children.len == 0 && has_cond
         lint_empty_block(c, block_node, "for",
-            "This may cause an infinite hang. Consider adding a body or a break condition.")
+            "This can run forever. Add a body or a break condition.")
     else
         last_stmt: = block_node.last_child()
         if last_stmt.kind_id == .k_stmt_continue
@@ -585,7 +585,7 @@ priv fn collect_if_cond_idents(node: Ast_node$@, out: Map<|U8[], Bool|>$@) //<
         collect_if_cond_idents(child, out)
 priv fn resolved_real_type(c: Sema_ctx$@, name: U8[]): I32 //<
     //< Returns the real type id of name once its symbol is resolved (-1 if it cannot be resolved)
-    sym_opt: = c.symtab.resolve(name) catch null
+    sym_opt: = c.symtab.resolve(name).unwrap_or(null)
     if sym_opt == null
         return -1
     return c.env.get_real_type(sym_opt.type_id)
@@ -647,11 +647,11 @@ priv fn find_accumulator_assigns(c: Sema_ctx$@, node: Ast_node$@,
         (mul_name.len > 0 && is_integer_symbol(c, mul_name))
     name: = digit_name if digit_name.len > 0 else mul_name
     if is_candidate
-        has_guard: = guarded_names.get(name) catch false
+        has_guard: = guarded_names.get(name).unwrap_or(false)
         if !has_guard && !has_preceding_bound_check
             c.clear_scratch()
-                .s("[W0103] Accumulating into '\{name\}' with no upper-bound check in this loop; \
-                    this may overflow on untrusted input.")
+                .s("[W0103] Accumulating into '\{name\}' with no upper-bound check in this loop. \
+                    Untrusted input can cause overflow.")
             c.warn(node, c.scratch.slice())
     for child in node.children
         find_accumulator_assigns(c, child, guarded_names, has_preceding_bound_check)
@@ -675,11 +675,11 @@ fn lint_repeated_type(c: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$
         //< [H0302] Reports a local's type written again at the start of its initializer
         //<
         //< Or `Bool` written on `true` / `false`. **Only where deleting the annotation keeps the
-        //< type**: the initializer already has the declared type with nothing wrapped round it (a
-        //< conversion, an upcast or a Result wrap, none of which names a type here). **Only where
-        //< the text still shows the type**: `count: Sz = items.len` names none, so there the
-        //< annotation is the only place a reader without hover sees it ("A type is redundant only
-        //< where it is written twice" in `docs/DESIGN-language.md`).
+        //< type**: the initializer already has the declared type with nothing wrapped round it. A
+        //< conversion, an upcast or a Result wrap names no type here. **Only where the text still
+        //< shows the type**: `count: Sz = items.len` names none. There the annotation is the only
+        //< place a reader without hover sees it ("A type is redundant only where it is written
+        //< twice" in `docs/DESIGN-language.md`).
     if !base_core.config.run_lint_checks || type_node.kind_id != .k_type_expr ||
         sema_type_env.is_unknown(declared_id) || expr_id != declared_id
         return
@@ -699,10 +699,10 @@ fn lint_repeated_type(c: Sema_ctx$@, type_node: Ast_node$@, expr_node: Ast_node$
 fn lint_type_given(c: Sema_ctx$@, value: Ast_node$@, expected_id: I32, giver: U8[]) //<
     //< [H0302] Reports an enum's type written at its variant where the place already gives it
     //<
-    //< The caller is one of the places where `.variant` alone is allowed ("6.6.2 Where the type may
-    //< be omitted" in `docs/SPEC-language.md` lists them; `expected_id` is the type it fixes).
+    //< The caller is one of the places where `.variant` alone is allowed. "6.6.2 Where the type may
+    //< be omitted" in `docs/SPEC-language.md` lists them; `expected_id` is the type it fixes.
     //< **Only where deleting the name keeps the value**: the variant's type is the expected type
-    //< itself (a `!E`'s success side for a `return`), so `.variant` is looked up in the same enum.
+    //< itself (a `!E`'s success side for a `return`). So `.variant` is looked up in the same enum.
     //< giver ends the message, naming what gives the type.
     if !base_core.config.run_lint_checks || value == null ||
         sema_type_env.is_unknown(expected_id)

@@ -2,9 +2,9 @@
 //<
 //< It moves forward through the original text only, never back.
 //<
-//< **This file decides, token by token, where a line breaks and how far it is indented**; what
-//< stands between two tokens (comments, blank lines) belongs to `trivia.kspl`, and the checks
-//< that read no printer state (a space, a wrap) to `space.kspl`. `text.kspl` is the entry point.
+//< **This file decides, token by token, where a line breaks and how far it is indented.** What
+//< stands between two tokens (comments, blank lines) belongs to `trivia.kspl`. The checks
+//< that read no printer state (a space, a wrap) belong to `space.kspl`. `text.kspl` is the entry.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_doc" { is_continuation_line }
 import "ksplc/base/ast_ext" as base_ast_ext
@@ -16,7 +16,8 @@ import "ksplc/fmt/space" { Fmt_flags, calc_spacing_requirement, check_line_wrap,
     string_piece_end }
 import "ksplc/fmt/style" { Config }
 import "ksplc/fmt/trivia" as fmt_trivia
-import "ksplc/parse/line_cont" { breaks_off_a_value, ends_in_catch, takes_value_on_its_line }
+import "ksplc/parse/line_cont" { breaks_off_a_value, ends_in_catch, joins_next,
+    takes_value_on_its_line }
 import "std/chars"
 import "std/ds" { List }
 import "std/mem" { Arena }
@@ -54,9 +55,15 @@ struct Formatter
     paren_depth: Sz //<
         //< The depth of the round and square brackets
         //<
-        //< Caution: **Do not remove braces inside a bracket** — a newline there does not become a
+        //< Caution: **Do not remove braces inside a bracket.** A newline there does not become a
         //< level, so removing them cannot be undone (the continuation rules in
         //< `../parse/layout.kspl`).
+    open_brackets: Sz //<
+        //< How many brackets the written code holds open: `(` `[` `{` `::{` `<|`
+        //<
+        //< **Every one the reader counts** (`scan_phys` in `../parse/layout.kspl`), braces
+        //< included: inside any of them a newline joins the line, so a break there needs no mark
+        //< (`reader_joins`). Only written tokens count; a block's left-out braces are none.
     paren_indent_level: Sz //<
         //< The indent level held when the outermost bracket opened
         //<
@@ -80,6 +87,11 @@ struct Formatter
         //< run is open** — 0 is a real column (a run opened at the top level), so it cannot mean
         //< "none".
     summary_run_open: Bool
+    summary_said: Bool //<
+        //< Whether the `//<` lines written last, one after another, include one with text
+        //<
+        //< **The next such line with text is then not the summary's first**, so it may be cut
+        //< (`write_own_comment` in `trivia.kspl`).
     flags: Fmt_flags
     ternary_depth: Sz //<
         //< The bracket depth at which the conditional value now being watched opened, or -1
@@ -95,13 +107,13 @@ struct Formatter
     block_on_one_line: Bool //<
         //< Whether the block written last stands on one line (`{}`, or a short one folded)
         //<
-        //< **A `switch`'s next arm reads it**: it follows a `}` that closes a line of its own, and
-        //< after a block on one line it starts a line instead.
+        //< **A `switch`'s next arm reads it.** The arm follows a `}` that closes a line of its own.
+        //< After a block on one line, it starts a line instead.
     paren_spans: List<|Sz|> //<
         //< The start and end of each conditional value split outside every bracket, in pairs
         //<
-        //< **The formatter only rearranges the tokens it was given**, so the parentheses such a
-        //< value needs go into the text and it is formatted again (`with_parens` below), as the
+        //< **The formatter only rearranges the tokens it was given.** So the parentheses such a
+        //< value needs go into the text, and it is formatted again (`with_parens` below), as the
         //< imports' reordering does.
     postfix_mark_next: Bool //< whether the next token is a postfix `!` (set by its parent node)
     too_deep: Bool //<
@@ -166,10 +178,10 @@ impl Formatter
             .last_text = Str_builder.new(), .code_end = 0, .suppress_nl_depth = 0,
             .pending_seg_len = 0, .pending_dot_break_ok = false, .too_deep = false,
             .postfix_mark_next = false, .from_layout = from_layout, .paren_depth = 0,
-            .paren_indent_level = 0, .line_indent = 0, .line_wrapped = false, .summary_cont_col = 0,
-            .summary_run_open = false, .ternary_depth = -1, .ternary_broke = false,
-            .bare_close = -1, .block_on_one_line = false,
-            .paren_spans = List<|Sz|>.new(null),
+            .open_brackets = 0, .paren_indent_level = 0, .line_indent = 0, .line_wrapped = false,
+            .summary_cont_col = 0, .summary_run_open = false, .summary_said = false,
+            .ternary_depth = -1, .ternary_broke = false, .bare_close = -1,
+            .block_on_one_line = false, .paren_spans = List<|Sz|>.new(null),
             .flags = Fmt_flags::{
             .is_line_start = true,
             .wrap_indent = false,
@@ -204,7 +216,7 @@ impl Formatter
             return true
         // **Only where a comment follows the code**, on its line or on lines of its own below. A
         // line the formatter broke itself, or one broken between a level's items (`::{ … }`'s),
-        // already takes its indent from that level, and true there would push every such item one
+        // already takes its indent from that level. True there would push every such item one
         // step further in.
         line: = r.out.slice()
         if r.code_end > line.len || !comment_between
@@ -271,7 +283,21 @@ impl Formatter
             return false
         space_len: Sz = 1 if require_space else 0
         return check_line_wrap(last_txt, text, require_space, r.current_col, space_len, text_len,
-            r.config.column_limit, dot_break_ok, r.ends_open_catch())
+            r.config.column_limit, dot_break_ok, r.ends_open_catch()) && r.reader_joins(text)
+
+    priv fn reader_joins(r: Self$@, text: U8[]): Bool //<
+        //< Whether the indentation reader joins a line broken before `text` back into this one
+        //<
+        //< **The printer breaks only where the reader asks the same question** (`joins_next` in
+        //< `../parse/line_cont.kspl`). Elsewhere the line runs past the width: broken after `fn`
+        //< or `switch`, the next line would read as a statement of its own.
+        if r.open_brackets > 0
+            return true
+        line: = r.out.slice()
+        if r.code_end > line.len
+            return false
+        b: = line_start(line, r.code_end)
+        return joins_next(line.sub(b, r.code_end - b).trim_spaces(), text)
 
     priv fn ends_open_catch(r: Self$@): Bool //<
         //< Whether what stands on this line so far ends in `catch` or `catch <name>`
@@ -292,7 +318,7 @@ impl Formatter
         //< The column a line opening with `text` is written at
         //<
         //< **A `//<` continuing the run above it goes one step in from the line that opened the
-        //< run**, so it reads as part of that declaration rather than as a block beside it. After
+        //< run.** So it reads as part of that declaration rather than as a block beside it. After
         //< an opener ending in `{` that is the body's own indent, so the shape holds with or
         //< without contents.
         if r.summary_run_open && is_continuation_line(text, 0)
@@ -310,10 +336,13 @@ impl Formatter
         //< none).
         if !is_continuation_line(text, 0)
             r.summary_run_open = false
+            r.summary_said = false
             return
         if !at_line_start
             r.summary_cont_col = r.line_indent + r.config.indent_width
             r.summary_run_open = true
+            r.summary_said = false
+        r.summary_said = r.summary_said || text.sub_from(3).trim_spaces().len > 0
 
     priv fn write_indent_at(r: Self$@, col: Sz) //<
         //< It writes an indent of `col` spaces on a line just started
@@ -330,7 +359,7 @@ impl Formatter
     fn write_carried_string(r: Self$@, text: U8[]) //<
         //< It writes a joined literal, carrying it onto the next line where it does not fit
         //<
-        //< The `\` after each piece stands for no byte, and a carried piece is indented one step
+        //< The `\` after each piece stands for no byte. A carried piece is indented one step
         //< from the opening line, as a `//<` run is ("Escape sequences" in
         //< `../../docs/SPEC-language.md`).
         //< Caution: **Measure each piece from the column it starts at.** Measured from the first, a
@@ -392,7 +421,7 @@ impl Formatter
             span: = node.get_string_span(r.src)
             text = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
             advance_len = span
-            // A literal is laid out from its joined spelling, so its place on the line decides
+            // A literal is laid out from its joined spelling. So its place on the line decides
             // where it breaks, and formatting twice gives the same result.
             if kind != .k_char && join_string_lines(text, joined@)
                 carry = true
@@ -405,8 +434,8 @@ impl Formatter
 
         last_txt: = r.last_text.slice()
         // Caution: **Join `}` and `else` on one line only where nothing stands between them.** A
-        // comment in between would move onto the `}` line, its later lines would break off at a
-        // level of their own, and the `else` cannot follow on that line anyway.
+        // comment in between would move onto the `}` line. Its later lines would break off at a
+        // level of their own. The `else` cannot follow on that line anyway.
         force_no_nl: =
             last_txt.equals("}") && follows_a_block(text) &&
             !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset)
@@ -438,7 +467,7 @@ impl Formatter
             (last_txt.is_op() && !r.flags.last_was_postfix_mark) || last_txt.equals(",") ||
             last_txt.equals(";"))
         // On a chain's `.`, wrapping is decided by the width of the whole .m(args) that follows
-        // (pending_seg_len, set by format_internal); measured per token, a segment looks too short,
+        // (pending_seg_len, set by format_internal). Measured per token, a segment looks too short,
         // especially with a string argument.
         $text_len: = text.len
         $dot_break_ok: = false
@@ -468,6 +497,10 @@ impl Formatter
             r.write_carried_string(text)
         else
             r.write_raw(text)
+        if text.is_opening_bracket()
+            r.open_brackets += 1
+        else if text.is_closing_bracket() && r.open_brackets > 0
+            r.open_brackets -= 1
         r.seek_to(node.loc.offset + advance_len)
         r.set_last_text(text)
         r.flags.last_was_no_space = no_space_mode
@@ -479,9 +512,9 @@ impl Formatter
     priv fn break_before_choice(r: Self$@, node: Ast_node$@, i: Sz) //<
         //< It breaks before a conditional value's `if` / `else` (`i`) whose choice does not fit
         //<
-        //< A choice runs from the keyword through the value after it, and for an `else` that opens
-        //< a chain's next choice (`else b if d`) through that choice's condition too, so a chain
-        //< breaks between its choices and never between an `if` and its condition.
+        //< A choice runs from the keyword through the value after it. For an `else` that opens
+        //< a chain's next choice (`else b if d`), it runs through that choice's condition too. So a
+        //< chain breaks between its choices and never between an `if` and its condition.
         if r.flags.is_line_start
             return
         next: = node.get_child(i + 1)
@@ -530,9 +563,9 @@ impl Formatter
             if peek_ch.is_block_like() || peek_ch.has_dot_chain(r.src)
                 return
         // Caution: **Do not break before a line comment the author put on this line.** The break
-        // moves it down, so a `//<` no longer sits on the line it describes and is not read as its
-        // documentation (`decl_summary` in `../base/ast_doc.kspl`); in the indentation notation it
-        // separates the heading from its value and the file no longer parses.
+        // moves it down. Then a `//<` no longer sits on the line it describes, and it is not read
+        // as its documentation (`decl_summary` in `../base/ast_doc.kspl`). In the indentation
+        // notation it separates the heading from its value, and the file no longer parses.
         if fmt_source.has_comment_in(r.src, r.last_offset, node.get_child(i + 1).loc.offset)
             return
         r.write_nl()
@@ -557,11 +590,11 @@ impl Formatter
     priv fn format_string_token(r: Self$@, node: Ast_node$@, no_space_mode: Bool) //<
         //< It writes a string literal, joined and carried onto the next line where it does not fit
         //<
-        //< A whole string (its \{...\} interpolations included) is one token, so its leading space
+        //< A whole string (its \{...\} interpolations included) is one token. So its leading space
         //< and its wrapping are decided by calc_spacing_requirement / check_line_wrap, as for the
         //< other leaves.
         // Caution: **Keep the line break where a comment stands before the string.** Pulled up, a
-        // comment on a line of its own moves onto the line above, and after a `//<` there it would
+        // comment on a line of its own moves onto the line above. After a `//<` there, it would
         // join the summary's text.
         r.catch_up_trivia(node.loc.offset,
             !fmt_source.has_comment_in(r.src, r.last_offset, node.loc.offset))
@@ -593,10 +626,10 @@ impl Formatter
         allow_single_line_block: Bool): Brace_shape //<
             //< Whether a node's braces open a block, stay a container on one line, or must break
             //<
-            //< Three ways fold a block onto one line: (1) an empty body folds to "{}", (2) a short
-            //< function or `defer` body where the setting allows it, (3) a short control statement.
+            //< Three ways fold a block onto one line. (1) An empty body folds to "{}". (2) A short
+            //< function or `defer` body, if the setting allows it. (3) A short control statement.
             //< Caution: **(1) and (3) both require no comment inside.** If folded, only the
-            //< comment's first line moves onto the `{` line and the rest splits across the brace
+            //< comment's first line moves onto the `{` line. The rest splits across the brace
             //< (and loses a level of indentation). The split shape is **idempotent**, so
             //< the tree's round trip does not catch it.
         kind_id: = node.kind_id
@@ -705,12 +738,12 @@ impl Formatter
             r.postfix_mark_next =
                 (kind_id == .k_expr_postfix || kind_id == .k_type_postfix) &&
                 child.kind_id == .k_literal && child.text.equals("!")
-            // **Each arm starts a line at the `switch`'s column**, after any comment before it:
-            // the first below the `switch`, one after an arm on one line (`case .a {}`) below it.
-            // Only a `}` closing a line of its own takes the next arm (`} case .b {`), and the
-            // indentation notation writes none (`force_next_nl`). Caution: **Never one level in**:
-            // the `switch` opens no block ("No lines are added, and `switch` gets no block" in
-            // `../../docs/DESIGN-language.md`): there an arm reads as the block's statement.
+            // **Each arm starts a line at the `switch`'s column**, after any comment before it. The
+            // first is below the `switch`. One after an arm on one line (`case .a {}`) is below it.
+            // Only a `}` closing a line of its own takes the next arm (`} case .b {`). The
+            // indentation notation writes none (`force_next_nl`). Caution: **Never one level in.**
+            // The `switch` opens no block ("No lines are added, and `switch` gets no block" in
+            // `../../docs/DESIGN-notation.md`). There an arm reads as the block's statement.
             if kind_id == .k_stmt_switch &&
                 (child.is_keyword("case") || child.is_keyword("default"))
                 if (first_arm || r.block_on_one_line) && r.suppress_nl_depth == 0
@@ -724,18 +757,18 @@ impl Formatter
             is_block_close: = child.is_literal("}")
             is_block_open: = child.is_literal("{")
             is_semi: = child.is_literal(";")
-            // A `;` ends a statement, except where it splits a header: a loop's three parts, and a
-            // closure signature's parameters from its captures (`fn(x: I32; n: I32)`, even with no
-            // capture after it). Those get a space, never a newline.
+            // A `;` ends a statement, except where it splits a header. It splits a loop's three
+            // parts, and a closure signature's parameters from its captures (`fn(x: I32; n: I32)`,
+            // even with no capture after it). Those get a space, never a newline.
             ends_stmt: =
                 is_semi && kind_id != .k_stmt_for && kind_id != .k_for_init &&
                 kind_id != .k_expr_fn_lit_sig
             is_comma: = child.is_literal(",")
             is_assign: = child.kind_id == .k_assign_op || child.is_literal("=")
             is_logical: = child.is_literal("&&") || child.is_literal("||")
-            // The `:` before a type_fn_sig's return type (a param's own `:` sits in its param_list,
-            // a separate node). As with is_assign, it checks ahead whether the whole return type
-            // fits, so no wrap lands inside it ("Void" fitting and "Void!Sema_error" not).
+            // The `:` before a type_fn_sig's return type. A param's own `:` sits in its param_list,
+            // a separate node. As with is_assign, it checks ahead whether the whole return type
+            // fits. So no wrap lands inside it ("Void" fitting and "Void!Sema_error" not).
             is_ret_colon: = kind_id == .k_type_fn_sig && child.is_literal(":")
 
             if (is_brace_container && force_multiline && is_close_brace) ||
@@ -791,7 +824,7 @@ impl Formatter
                 ((is_block && body_count > 0 && (is_block_open || is_block_close)) || ends_stmt))
             if hide
                 // Caution: **Write the trivia before skipping.** A comment right before the hidden
-                // mark is the author's, and skipping the token alone moves the reading position
+                // mark is the author's. Skipping the token alone moves the reading position
                 // past it, so it is silently lost.
                 r.catch_up_trivia(child.loc.offset, false)
                 r.skip_token(child)

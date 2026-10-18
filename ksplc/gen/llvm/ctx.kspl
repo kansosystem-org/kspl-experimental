@@ -84,13 +84,13 @@ struct Genllvm_ctx
         //< The cached "method name -> vtable index" table per trait implementation
         //<
         //< It is keyed by a Trait_def@'s pointer value. get_or_build_trait_method_idx in
-        //< gen/llvm/expr_call.kspl uses it (a linear walk of methods_list per method call would be
-        //< O(calls × methods)).
+        //< gen/llvm/expr_call.kspl uses it. A linear walk of methods_list per method call would be
+        //< O(calls × methods).
     extern_declared: Map<|U8[], I32|>$@ //<
         //< The names already emitted as a `declare` from an `extern "C"`, or defined by the module
         //<
         //< Even where two files declare the same function (`kspl_path_info` is in both std/io and
-        //< std/fs), it may appear in the IR only once: C allows repeated prototypes, but LLVM
+        //< std/fs), it can appear in the IR only once. C allows repeated prototypes. But LLVM
         //< rejects a second `declare` of the same name, or one beside a `define`, as a
         //< redefinition.
 
@@ -122,16 +122,15 @@ impl Genllvm_ctx
         //< It adds a raw name (a file name and the like) to the string pool
         //<
         //< Caution: **Wrap it in `"""`.** The pool holds a literal's spelling, and emit_string_pool
-        //< in `module.kspl` strips the outer quotes with literal_span in base/literal.kspl;
-        //< without them, one character is lost at each end.
+        //< in `module.kspl` strips the outer quotes with literal_span in base/literal.kspl.
+        //< Without them, one character is lost at each end.
         //< Triple quotes keep the `\` from being read as an escape (a Windows path looks like
         //< `C:\foo`). literal_span treats a triple-quoted string as raw.
         r.clear_scratch().s("\"\"\"").s(text).s("\"\"\"")
         return r.get_or_add_str_literal(r.take_scratch())
 
     fn get_or_add_str_literal(r: Self$@, text: U8[]): I32
-        existing: = r.str_pool.map.get(text) catch -1
-        if existing != -1
+        if existing: = r.str_pool.map.get(text)
             return existing
         id: = I32::r.str_pool.list.len
         perm_text: = base_core.arena.dup_str(text)
@@ -152,9 +151,7 @@ impl Genllvm_ctx
         return r.scratch.clear()
     fn mangled_in_scratch(r: Self$@, type_id: I32): U8$[] //<
         //< A type's mangled name, written into scratch: valid until scratch is used again
-        r.clear_scratch()
-        r.env.mangle_type_id_to(type_id, r.scratch)
-        return r.scratch.slice()
+        return r.env.mangled_into(type_id, r.scratch@)
     fn take_scratch(r: Self$@): U8$[] //<
         //< It copies scratch into the AST arena and returns the copy
         //<
@@ -174,7 +171,7 @@ impl Genllvm_ctx
         if def_node == null
             return false
         key: = Sz::def_node
-        id: = r.local_var_ids.get(key) catch 0
+        id: = r.local_var_ids.get(key).unwrap_or(0)
         return id != 0
 
     fn get_or_add_local_var_id(r: Self$@, def_node: Void$@): I32
@@ -182,7 +179,7 @@ impl Genllvm_ctx
             return 0
         // It gives a stable serial number keyed on the pointer address.
         key: = Sz::def_node
-        id: = r.local_var_ids.get(key) catch 0
+        id: = r.local_var_ids.get(key).unwrap_or(0)
         if id != 0
             return id
 
@@ -190,6 +187,17 @@ impl Genllvm_ctx
         r.var_counter += 1
         r.local_var_ids.set(key, new_id)
         return new_id
+
+    fn param_reg(r: Self$@, name: U8[]): U8$[] //< the register a parameter arrives in: `%<name>`
+        //<
+        //< **The signature and the copy into the parameter's slot both name it through here.** A
+        //< made name's stem follows a `.`, as in local_slot_name, since `%` cannot stand in a name.
+        r.clear_scratch().c('%')
+        if name.is_made_name()
+            r.scratch.c('.').s(name.made_stem())
+        else
+            r.scratch.s(name)
+        return r.take_scratch()
 
     fn has_local_slot(r: Self$@, name: U8[], decl: Ast_node$@): Bool //<
         //< Whether the local that decl declares already has its alloca (never for an MIR temporary)
@@ -333,11 +341,11 @@ priv fn local_slot_key(decl: Ast_node$@): Void$@ //<
 fn format_f32_hex_literal(text: U8[]): U8$[] //<
     //< It writes an F32 literal as the hex bit pattern that LLVM's float constants accept
     //<
-    //< In decimal, LLVM can reject it as "floating point constant invalid for type": LLVM requires
+    //< In decimal, LLVM can reject it as "floating point constant invalid for type". LLVM requires
     //< the decimal form to round-trip exactly, and many ordinary values such as 0.1 do not.
     //<
-    //< It takes the literal as written: `_` separators and the type suffix are removed here, where
-    //< `strtod` would otherwise stop at them and read `1_000.5` as 1.
+    //< It takes the literal as written. `_` separators and the type suffix are removed here.
+    //< Otherwise `strtod` would stop at them and read `1_000.5` as 1.
     $clean: = Str_builder.new()
     defer clean.free()
     _stop: = text.append_clean_number(clean@, "Ff")
@@ -404,15 +412,15 @@ const sret_param_name: U8[] = "%kspl.sret" //<
     //< The register name of the hidden return-value pointer of a function returning an aggregate
     //<
     //< See ret_needs_sret in gen/llvm/types.kspl.
-    //< It contains a `.` so no KSPL identifier can spell it: a parameter is emitted as
-    //< `%<argument name>`, so a name such as `_sret` would silently collide as soon as a user
+    //< It contains a `.` so no KSPL identifier can spell it. A parameter is emitted as
+    //< `%<argument name>`. So a name such as `_sret` would silently collide as soon as a user
     //< declared an argument with that name.
 
 fn is_kspl_prefixed_or_ext(name: U8[], is_ext: Bool): Bool //<
-    //< Whether a global symbol name should be emitted as `@name` unchanged
+    //< Whether a global symbol name is emitted as `@name` unchanged
     //<
     //< A symbol marked extern/export, or a name that already has a kspl_ / priv_ prefix, is used
-    //< unchanged (otherwise the caller builds @kspl_<name>, avoiding a double prefix). Several
+    //< unchanged. Otherwise the caller builds @kspl_<name>; this avoids a double prefix. Several
     //< places in decl.kspl / expr.kspl / expr_call.kspl share this answer.
     return is_ext || name.has_kspl_prefix() || name.starts_with("priv_")
 

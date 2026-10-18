@@ -1,29 +1,32 @@
-# docs — the documents that belong to no single source folder
+# docs — documents for the whole repository
 
-**This folder holds the documents that cover Kanso as a whole: learning and using the language, building it, and the rules for changing it.** Find the row for what you want to do. This page only routes: what each document says stays in that document, and nothing below restates it.
+**This folder covers Kanso as a whole.** Its documents explain how to learn, use, build and change the language. Find the row for your task. This page directs you to those documents without repeating their contents.
 
 | Document | Contents | Who reads it |
 | :-- | :-- | :-- |
 | [`TOUR.md`](TOUR.md) | The language one step at a time, each step a declaration of one program. | Whoever is learning to write KSPL |
 | [`SPEC-language.md`](SPEC-language.md) | The language specification: syntax, type system, semantics. | Whoever writes KSPL |
-| [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) | After the quick start: running a program, working in another folder, an executable to distribute, splitting into files, VS Code with the language server and debugger. The last section opens a `.kspage` document on a double-click. | Whoever writes KSPL and has `ksplc`, unpacked or built. For the last section, whoever wants a document to open from the file manager, with a clone that builds from source |
+| [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md) | Running programs, using another folder, distributing executables and splitting programs into files. Setting up VS Code with the language server and debugger. Opening a `.kspage` document by double-clicking it. | Whoever writes KSPL and has an unpacked or built `ksplc`. The last section requires a clone that builds from source. It serves readers who open documents from the file manager. |
 | [`SPEC-local-server.md`](SPEC-local-server.md) | The protocol a page opened in a browser uses to ask the local machine for files. | Whoever writes such a page or client, in any language |
-| [`SECURITY.md`](SECURITY.md) | Where to report a vulnerability, and what counts as one. | Whoever has found a way to make an input take over execution or writing |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Where to start changing Kanso: which document to read for what, naming yourself, AI-written work. | Whoever is about to change Kanso for the first time |
-| [`HOWTO-build.md`](HOWTO-build.md) | Building from source, the compiler rebuilding itself, the formatter, linter and tests, and the Windows environment without Docker. | Whoever changes Kanso, and whoever writes KSPL with no prebuilt `ksplc` for their system; both need a C compiler and Make |
+| [`SECURITY.md`](SECURITY.md) | Where to report a vulnerability, and what counts as one. | Whoever finds input that causes unauthorized execution or writing |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Where to start changing Kanso: the first commands, setting your git identity, how a change gets in, AI-written work. | Whoever is about to change Kanso for the first time |
+| [`HOWTO-build.md`](HOWTO-build.md) | Building from source, the compiler rebuilding itself, the formatter, linter and tests, and the environment for each platform. | Whoever changes Kanso, and whoever writes KSPL with no prebuilt `ksplc` for their system; both need a C compiler and Make |
 | [`HOWTO-add-a-package.md`](HOWTO-add-a-package.md) | The steps to add a top-level package: its folder, the checks that must learn its name, and what nothing checks. | Whoever adds a package; needs a clone that builds |
-| [`HOWTO-add-a-gate.md`](HOWTO-add-a-gate.md) | The steps to add a CI gate or a suite, and the message each forgotten place prints. | Whoever adds a check; needs a clone that builds |
+| [`HOWTO-add-a-gate.md`](HOWTO-add-a-gate.md) | The steps to add a CI gate, and the message each forgotten place prints (a suite's steps are in [`../tests/docs/HOWTO-write-a-suite.md`](../tests/docs/HOWTO-write-a-suite.md)). | Whoever adds a check; needs a clone that builds |
 | [`HOWTO-release.md`](HOWTO-release.md) | Publishing a release: the checks before the tag, the tag, and what the workflow builds. | Whoever publishes a release; needs push access |
-| [`SPEC-gates.md`](SPEC-gates.md) | What CI (the automatic build-and-test run) runs on each platform, the verdict line, the per-item pass/fail line, and what the convention checks count. | Whoever changes Kanso |
+| [`SPEC-gates.md`](SPEC-gates.md) | What continuous integration (CI) runs on each platform. The verdict line, each item’s pass/fail line, and what the convention checks count. | Whoever changes Kanso |
 | [`DESIGN-principles.md`](DESIGN-principles.md) | The Development Principles, why each purpose has one notation, and how a model reads and writes KSPL. | Whoever changes Kanso |
-| [`DESIGN-language.md`](DESIGN-language.md) | Why the language is as it is: its symbols, types, traits, function values, ownership, concurrency, visibility, the boundary with C, and the indentation notation. | Whoever changes the language, or meets two readings of its specification |
+| [`DESIGN-language.md`](DESIGN-language.md) | The reasons for the language’s design: its symbols, types, traits, function values, ownership, concurrency, visibility, and the boundary with C. | Whoever changes the language or finds an ambiguity in its specification |
+| [`DESIGN-notation.md`](DESIGN-notation.md) | The reasons for the source notation: the indentation notation, names, keywords, line ends, long strings and documentation comments. | Whoever changes the language's notation or the formatter |
 | [`DESIGN-repository.md`](DESIGN-repository.md) | Why the documents, the packages, the one repository and the gates have their shape. | Whoever changes a document, a package's boundary or a gate |
 | [`SPEC-documents.md`](SPEC-documents.md) | What every document must satisfy: the terms of art, the six kinds, wording and formatting, reference direction. | Whoever adds or changes a document |
+| [`SPEC-plain-language.md`](SPEC-plain-language.md) | Reusable writing rules, followed by replaceable chapters for software and Kanso. | Whoever writes any text in the repository |
 | [`PLAN.md`](PLAN.md) | What is left, a section per package with work left. | Whoever changes Kanso and looks for the next step |
 
 ## Further reading
 
 * ["Repository layout" in `../README.md`](../README.md#-repository-layout) — every folder, with a link to each package's `README.md`.
-* [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md) — the compiler's options and the formatter's and linter's diagnostic codes.
+* [`../ksplc/docs/SPEC-tools.md`](../ksplc/docs/SPEC-tools.md) — the compiler's options, the formatter and the linter.
+* [`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md) — what each diagnostic code means.
 * [`../LICENSE.md`](../LICENSE.md) and [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — the root's own files: the MIT license, and the attribution for files under another license.
-* Why the documents are laid out this way: "A document's name says what it is for" and "Who reads a document is said by a column, not a folder" in [`DESIGN-repository.md`](DESIGN-repository.md).
+* Read "A document's name says what it is for" in [`DESIGN-repository.md`](DESIGN-repository.md). Also read "A column, not a folder, says who reads a document" there.

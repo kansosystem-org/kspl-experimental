@@ -1,10 +1,10 @@
 //< The workflow's jobs, and how the conditions that run them are written (not the suite)
 //<
-//< **One `if:` line decides whether a job runs**, and GitHub is silent on a condition that does
-//< not take effect, so a job run by mistake and one never run both go unseen; only this file
+//< **One `if:` line decides whether a job runs.** GitHub is silent on a condition that does not
+//< take effect. So a job run by mistake and one never run both go unseen. Only this file
 //< stops them.
-//< Note: The workflow and `tools/ci_gates.kspl` are compared, and the gates and the suites with
-//< the platform table of `docs/SPEC-gates.md`. Disagreements inside ksplc are checked by
+//< Note: The workflow is compared with `tools/ci_gates.kspl`. The gates and the suites are compared
+//< with the platform table of `docs/SPEC-gates.md`. Disagreements inside ksplc are checked by
 //< `conventions_match.kspl`.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/chars" // `trim_spaces`
@@ -47,8 +47,8 @@ priv fn check_shebang_modes(arena: Arena$@) //< checks Git's index, including on
     verdict.check_list("the shebang permission check can fire", want.len, "samples", samples@,
         "mend the judgment, not the samples")
     result: = ksplc_harness.run(U8[][]::{ "git", "ls-files", "--stage", "-z" })
-    if !verdict.check("git lists indexed file modes", result.code == 0 && result.out.len > 0,
-        result.out)
+    if !verdict.check("git lists indexed file modes",
+        result.exited_with(0) && result.out.len > 0, result.out)
         return
     $bad: = List<|U8[]|>.new(arena)
     $seen: Sz = 0
@@ -185,7 +185,7 @@ priv const set_head: U8[] = "enum Set "
 priv const set_order_head: U8[] = "const set_order:"
 priv const shard_prefix: U8[] = "ci_shard_" //< the sets one job of `ci` runs
 priv const matrix_head: U8[] = "target: ["
-priv const linux_only: U8[] = "ci-linux-only" //<
+priv const linux_only: U8[] = "ci-shard-linux" //<
     //< What only the Linux runner runs (qemu, wasm, the browser, BLAS)
 
 fn set_variants(src: U8[], arena: Arena$@): List<|U8[]|> //<
@@ -252,8 +252,9 @@ priv fn check_ci_shards(arena: Arena$@)
             order.find_str(arena.text().s("Set.").s(v).s(" ").take()).is_none()
             bad
                 .push(arena.text().s("Set.").s(v).s(" is not in set_order in ").s(gates_src).take())
-        if v.starts_with(shard_prefix)
-            want.push(v.replace("_", "-", arena))
+        name: = v.replace("_", "-", arena)
+        if v.starts_with(shard_prefix) && !name.equals(linux_only)
+            want.push(name)
     if want.len == 0
         verdict.check("the CI's shards agree with the workflow's matrix", false,
             arena.text().s("could not read the ci_shard_ sets out of ").s(gates_src).take())
@@ -261,7 +262,7 @@ priv fn check_ci_shards(arena: Arena$@)
     $names: = List<|U8[]|>.new(arena)
     $bodies: = List<|U8[]|>.new(arena)
     job_blocks(harness.read_under_root(ci_yml), names@, bodies@, arena)
-    // **Linux has one more**: what runs only there is a set of its own (`ci-linux-only`).
+    // **Linux has one more**: what runs only there is a shard of its own (`ci-shard-linux`).
     $with_linux: = List<|U8[]|>.new(arena)
     for i in Range.asc(want.len)
         with_linux.push(want.get(i))
@@ -297,8 +298,8 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
         if guard.find_str(want).is_none()
             bad
                 .push(arena.text().s(names.get(i)).s("'s if: does not look at ").s(want).take())
-        // Caution: Allow a cron that is not declared and the condition silently stops taking effect
-        // (a condition meant to leave out the weekdays matches no run).
+        // Caution: If a cron that is not declared is allowed, the condition silently has no effect.
+        // (A condition meant to leave out the weekdays matches no run.)
         for c in quoted_crons(guard, arena)
             if !htext.has(crons@, c)
                 bad
@@ -311,7 +312,7 @@ priv fn check_dispatch_switches(arena: Arena$@) //<
 priv const lint_mk: U8[] = "mk/lint.mk" //<
     //< The static analysis' list of entry points agrees with the tree
     //<
-    //< Caution: **A source holding `fn main` that is missing from the list is never linted**: the
+    //< Caution: **A source holding `fn main` that is missing from the list is never linted.** The
     //< analysis walks imports, so **an entry point nobody imports is not covered**.
 
 priv const lint_sources: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/*",
@@ -351,7 +352,7 @@ priv fn lint_targets(arena: Arena$@): List<|U8[]|> //<
         .make(U8[][]::{ "LOGGING=1", "-s", "--no-print-directory", "--eval",
         "lint-print: ; @echo $(LINT_TARGETS) $(LINT_TARGETS_FREE) $(LINT_TARGETS_OWN)",
         "lint-print" })
-    if r.code != 0
+    if !r.exited_with(0)
         return out
     for w in r.out.trim_spaces().split(' ', arena)
         if w.len > 0
@@ -378,8 +379,8 @@ priv fn check_lint_entries(arena: Arena$@)
 
 // ==========================================
 // The platform table names every gate and every suite CI runs
-// **It is written by hand, for people**, so a check added to the gates or to a suite list and not
-// to the table stays out of sight on every platform at once.
+// **It is written by hand, for people.** So a check added to the gates or to a suite list, but not
+// to the table, stays out of sight on every platform at once.
 // ==========================================
 priv const gates_doc: U8[] = "docs/SPEC-gates.md"
 priv const table_head: U8[] = "| Check | Linux"
@@ -430,7 +431,7 @@ priv fn cell_names(text: U8[], arena: Arena$@): Bool //<
                         return true
     return false
 
-// Caution: **Keep a prefix, a longer name and a word of prose on the miss side**: a search for
+// Caution: **Keep a prefix, a longer name and a word of prose on the miss side.** A search for
 // the name anywhere in the cell hits all three.
 priv const cell_samples: Sample[_] = ::{
     Sample::{ .text = "test-lsp (the language server)\tlsp", .hits = true },
@@ -484,7 +485,7 @@ priv fn check_platform_table(arena: Arena$@)
 priv fn check_linux_suites_gated(arena: Arena$@) //<
     //< Each suite out of `test-suites` (`LINUX_SUITES`) has a gate of its own
     //<
-    //< **No half of the suites runs it**, so a name added to the list and not to the gates' table
+    //< **No half of the suites runs it.** So a name added to the list, but not to the gates' table,
     //< runs on no platform, and every round stays green.
     $gated: = List<|U8[]|>.new(arena)
     for args in scan.find_all(harness.read_under_root(gates_src), args_mark, "\"", arena)
@@ -502,7 +503,7 @@ priv const blas_home: U8[] = "ksai/" //<
     //< The one package `make test-blas` builds with `BLAS=1`
     //<
     //< **A `#cfg(blas)` elsewhere is never built**: `lint-cfg` analyses it, but no gate links or
-    //< runs it ("note 17" in `docs/SPEC-gates.md`).
+    //< runs it ("note 15" in `docs/SPEC-gates.md`).
 
 priv fn holds_blas(src: U8[], arena: Arena$@): Bool //<
     //< Whether a source puts a declaration under the `blas` flag, outside a `"""` string
@@ -597,6 +598,72 @@ priv fn check_msys2_list(arena: Arena$@)
         arena.text().s("set MSYS2 up through ").s(msys2_action).s(", and add a package to ")
         .s(msys2_list).take())
 
+priv fn check_job_timeouts(arena: Arena$@) //< every workflow job states its own time limit
+    //<
+    //< **A job with no `timeout-minutes:` falls back to GitHub's 360 minutes**, and one hung test
+    //< then bills six hours, ten times over on macOS ("How CI runs" in `docs/SPEC-gates.md`).
+    $bad: = List<|U8[]|>.new(arena)
+    $seen: Sz = 0
+    for path in U8[][]::{ ci_yml, ".github/workflows/release.yml" }
+        yml: = harness.read_under_root(path)
+        $names: = List<|U8[]|>.new(arena)
+        $bodies: = List<|U8[]|>.new(arena)
+        job_blocks(yml, names@, bodies@, arena)
+        if names.len == 0
+            bad
+                .push(arena.text().s("could not read the jobs out of ").s(path).take())
+        seen += names.len
+        for i in Range.asc(names.len)
+            if bodies.get(i).find_str("\n    timeout-minutes: ").is_none()
+                bad
+                    .push(arena.text().s(path).s(": job ").s(names.get(i))
+                    .s(" states no timeout-minutes").take())
+    verdict.check_list("every workflow job states timeout-minutes", seen, "jobs", bad@,
+        "add `timeout-minutes:` to the job, sized from its longest recent run")
+
+// ==========================================
+// Every runner is named by its image's version
+// **GitHub moves a `-latest` label to the next image on its own day.** So a round would change
+// its compiler and system libraries with no commit behind it ("How CI runs" in
+// `docs/SPEC-gates.md`).
+// ==========================================
+priv fn names_latest(text: U8[], arena: Arena$@): Bool //<
+    //< Whether a workflow's text names a `-latest` label, outside a comment
+    for line in text.lines(arena)
+        $code: = line
+        if line.trim_spaces().starts_with("#")
+            continue
+        if at: = line.find_str(" #")
+            code = line.sub(0, at)
+        if code.find_str("-latest").is_some()
+            return true
+    return false
+
+// Caution: **Keep a comment, a trailing comment and a matrix variable on the miss side.** A plain
+// search hits the first two. A check that reads only `runs-on:` misses a matrix's `os:`.
+priv const latest_samples: Sample[_] = ::{
+    Sample::{ .text = "    runs-on: ubuntu-latest\n", .hits = true },
+    Sample::{ .text = "          - { os: macos-latest, slug: macos-arm64 }\n", .hits = true },
+    Sample::{ .text = "    runs-on: macos-latest-large\n", .hits = true },
+    Sample::{ .text = "    runs-on: ubuntu-24.04\n", .hits = false },
+    Sample::{ .text = "    # not ubuntu-latest, which moves\n", .hits = false },
+    Sample::{ .text = "    runs-on: windows-2025 # not windows-latest\n", .hits = false },
+    Sample::{ .text = "    runs-on: ${{ matrix.os }}\n", .hits = false },
+}
+
+priv fn check_runner_pins(arena: Arena$@)
+    $bad: = scan.misjudged(Sample[]::latest_samples, names_latest, arena)
+    $seen: Sz = 0
+    for rel in harness.tracked_matching(U8[][]::{ "*.yml", "*.yaml" })
+        if !rel.starts_with(".github/")
+            continue
+        seen += 1
+        if names_latest(harness.read_under_root(rel), arena)
+            bad.push(rel)
+    verdict.check_list("every runner is named by its image's version, never `-latest`", seen,
+        "workflow files", bad@,
+        "name the image the label stands for today (`ubuntu-24.04`, not `ubuntu-latest`)")
+
 fn run(arena: Arena$@) //< this section's entry point
     //<
     //< Caution: **Call it from `conventions_match.kspl`'s `run`** (there is one suite).
@@ -604,6 +671,8 @@ fn run(arena: Arena$@) //< this section's entry point
     check_extracted_suite_shares(arena)
     check_msys2_list(arena)
     check_dispatch_switches(arena)
+    check_job_timeouts(arena)
+    check_runner_pins(arena)
     check_ci_shards(arena)
     check_platform_table(arena)
     check_linux_suites_gated(arena)

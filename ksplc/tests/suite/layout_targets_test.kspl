@@ -2,10 +2,10 @@
 //< The test that pins down that every size ksplc folds is the target machine's, for each machine
 //<
 //< For each row of the table of machines (`base/target.kspl`) the probe is compiled with
-//< `--machine` and its C compiled by clang for the same machine: the C checks each folded number,
+//< `--machine`, and clang compiles its C for the same machine. The C checks each folded number,
 //< so one laid out wrongly fails there. **Each check is shown to fire**: a 32-bit machine's C
 //< compiled for a 64-bit one, and the other way round, must fail. Where `wasm-ld` and `node` are
-//< found, the wasm32 build runs, and each way a folded size decides the program answers 32 bits.
+//< found, the wasm32 build runs. Each way a folded size decides the program answers 32 bits.
 import "ksplc/base/target" as base_target
 import "ksplc/tests/support/harness"
 import "ksplc/usage"
@@ -57,8 +57,8 @@ priv fn generate(dir: U8[], machine: U8[], arena: Arena$@): U8[] //<
     r: = harness
         .ksplc(U8[][]::{ arena.text().s("--machine=").s(machine).take(), "--freestanding", probe,
         out })
-    if !verdict.check(arena.text().s("\{machine\}: ksplc compiles the probe").take(), r.code == 0,
-        r.out)
+    if !verdict.check(arena.text().s("\{machine\}: ksplc compiles the probe").take(),
+        r.exited_with(0), r.out)
         return ""
     mark: = arena.text().s("typedef char ").s(check_name).take()
     count: = harness.read_generated(out).count_str(mark)
@@ -84,7 +84,7 @@ priv fn check_machines(dir: U8[], arena: Arena$@): U8[] //<
             continue
         r: = compile_for(c_file, name, arena.text().s(c_file).s(".o").take())
         verdict.check(arena.text().s("\{name\}: clang agrees with every folded number").take(),
-            r.code == 0, r.out)
+            r.exited_with(0), r.out)
         if name.equals(wasm_machine)
             wasm_c = c_file
     return wasm_c
@@ -101,23 +101,22 @@ priv fn check_fires(dir: U8[], arena: Arena$@) //<
         r: = compile_for(c_file, other, fs.join(dir, "mismatch.o", arena))
         named: = arena.text().s(check_name).s(folded.replace("-", "_", arena)).take()
         verdict.check(arena.text().s("\{folded\}'s C compiled for \{other\} fails at a check")
-            .take(), r.code != 0 && r.out.find_str(named).is_some(), r.out)
+            .take(), !r.exited_with(0) && r.out.find_str(named).is_some(), r.out)
 
 priv fn wasm_builtins(arena: Arena$@): U8[] //<
     //< clang's builtins library for wasm32, empty if absent
     //<
-    //< **A wasm32 module links it as a bare-metal ARM one links libgcc**: clang lowers what wasm32
+    //< **A wasm32 module links it as a bare-metal ARM one links libgcc.** Clang lowers what wasm32
     //< has no instruction for (a 128-bit product) to calls only it defines. clang files it under
     //< the `wasi` machine's folder, which serves `wasm32-unknown-unknown` too.
     //< Caution: **Read its standard output alone.** clang 22 warns on standard error that the
     //< `wasi` name is old, and the path read with that warning names no file.
-    r: = subproc.run_capture(U8[][]::{ clang, "--target=wasm32-wasi", "-rtlib=compiler-rt",
-        "-print-libgcc-file-name" }, "", 30000, 4096, arena)
+    r: =
+        subproc.run_capture(U8[][]::{ clang, "--target=wasm32-wasi", "-rtlib=compiler-rt",
+        "-print-libgcc-file-name" }, "", 30000, 4096, arena) catch
+        return ""
     path: = r.stdout_data.trim_spaces()
-    return path if !r.spawn_failed && r.exit_code == 0 && fs.exists(path) else ""
-
-priv fn has_tool(name: U8[]): Bool //< whether the tool answers `--version`
-    return harness.run(U8[][]::{ name, "--version" }).code == 0
+    return path if r.exited_with(0) && fs.exists(path) else ""
 
 priv const node_script: U8[] =
     "const m = await WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]));for \
@@ -134,10 +133,10 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
         return
     // Building and running wasm32 takes both. **Each skip's reason is one literal**, so a check
     // reading the source sees the whole text a platform's round expects.
-    if !has_tool("wasm-ld")
+    if !harness.has_tool("wasm-ld")
         verdict.skip_check(name, "wasm-ld is not installed")
         return
-    if !has_tool("node")
+    if !harness.has_tool("node")
         verdict.skip_check(name, "node is not installed")
         return
     builtins: = wasm_builtins(arena)
@@ -148,14 +147,14 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
     wide_o: = fs.join(dir, "wide.o", arena)
     probe_o: = arena.text().s(wasm_c).s(".o").take()
     if !verdict.check("the wasm32 helpers compile",
-        compile_for(probe_rt, wasm_machine, rt_o).code == 0 &&
-        compile_for(probe_wide, wasm_machine, wide_o).code == 0, "")
+        compile_for(probe_rt, wasm_machine, rt_o).exited_with(0) &&
+        compile_for(probe_wide, wasm_machine, wide_o).exited_with(0), "")
         return
     module: = fs.join(dir, "probe.wasm", arena)
     link: = harness
         .run(U8[][]::{ "wasm-ld", "--no-entry", "--gc-sections", probe_o, rt_o, wide_o, builtins,
         "-o", module })
-    if !verdict.check("the wasm32 module links, borrowing nothing", link.code == 0, link.out)
+    if !verdict.check("the wasm32 module links, borrowing nothing", link.exited_with(0), link.out)
         return
     $argv: = List<|U8[]|>.new(arena)
     for word in U8[][]::{ "node", "-e",
@@ -164,7 +163,7 @@ priv fn check_wasm_run(dir: U8[], wasm_c: U8[], arena: Arena$@) //<
     for a in wasm_answers
         argv.push(a.name)
     ran: = harness.run(argv.slice())
-    if !verdict.check("the wasm32 module runs under node", ran.code == 0, ran.out)
+    if !verdict.check("the wasm32 module runs under node", ran.exited_with(0), ran.out)
         return
     for a in wasm_answers
         line: = arena.text().s(a.name).c('=').s(a.want).c('\n').take()
@@ -211,7 +210,7 @@ fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     dir: = harness.sandbox("layout_targets")
     io.out().s("# the sizes ksplc folds, for each machine it knows\n")
-    if !has_tool(clang)
+    if !harness.has_tool(clang)
         return harness.fatal("clang is not installed: it alone builds for every machine")
     wasm_c: = check_machines(dir, arena)
     check_fires(dir, arena)

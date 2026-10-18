@@ -6,7 +6,7 @@
 //<
 //< `fs.max_path_len` names that file's constant, not a field of a value `fs`. Read as a field, the
 //< binding checked is `fs`, which names no value, and the write reaches the generated C.
-// EXPECT: cannot assign to immutable variable 'fs.max_path_len'
+// EXPECT: cannot assign to an immutable variable 'fs.max_path_len'
 import "std/fs"
 
 fn main(): I32
@@ -18,8 +18,8 @@ fn main(): I32
 //< **Let it through and not one diagnostic comes out**: genc emits C like `&x = …` / `f() = …`,
 //< and the C compiler's `expression is not assignable` reaches the user (Principle 2).
 //< Caution: **Keep the stopping side last**: a passing side wrongly refused hides the `@` hint.
-// EXPECT: cannot assign to this expression: it is a value, not a place
-// EXPECT: '@' takes an address, '$' reads through a pointer
+// EXPECT: cannot assign to this expression. It is a value, not a place
+// EXPECT: '@' takes an address. '$' reads through a pointer
 import "std/io"
 
 priv struct P
@@ -45,9 +45,9 @@ fn main(): I32
 //< A `priv` type in a `pub enum`'s payload is rejected as less visible than the variant
 //<
 //< Allowed, code that cannot name that type could still bind and read it with `switch v case
-//< .some(x) { x.v }`: the leak of a struct's `pub` field, under the same check (docs/DESIGN-language.md "Why
-//< a typedef cannot be published wider than its target"). A payload has no visibility of its own,
-//< so the enum's side settles it.
+//< .some(x) { x.v }`. It is the leak of a struct's `pub` field, under the same check
+//< (docs/DESIGN-language.md "Why a typedef cannot be published wider than its target"). A payload
+//< has no visibility of its own, so the enum's side settles it.
 // EXPECT: payload type 'Hidden' is less visible than the variant exposing it
 
 priv struct Hidden
@@ -64,7 +64,7 @@ fn main()
 //<
 //< **Let it through and each backend picks its own answer**: C refuses the `switch` on it
 //< ("duplicate case value"), and LLVM sends both cases to the first.
-// EXPECT: variant 'b' has the tag 1, which 'a' already has
+// EXPECT: variant 'b' has the tag 1. Variant 'a' already has that tag
 enum D
   a = 1
   b = 1
@@ -85,6 +85,19 @@ enum C
 
 fn main(): I32
   return I32::C.a
+// ==== case enum_tag_bare_sibling
+//< A tag names an earlier variant through its enum, as every other place names a variant
+//<
+//< **The bare name is no constant in scope**, so the general refusal would deny that a variant
+//< folds; the report names the spelling that does.
+// EXPECT: 'a' is a variant of 'E'. Name the variant through its enum here too ('E.a')
+// EXPECT-NOT: is not a compile-time constant
+enum E
+  a = 1
+  b = a + 1
+
+fn main(): I32
+  return I32::E.b
 // ==== case enum_tag_out_of_base
 //< A tag must fit the enum's base type, the written one and the one counted after it alike
 //<
@@ -109,7 +122,7 @@ fn main(): I32
 //< Caution: Keep the non-firing side: a simple enum's `==` and a tagged union's `switch` pass.
 // EXPECT: Operator '==' requires
 // EXPECT: to implement 'Eq' interface
-// EXPECT: its variants carry data, so it has no built-in '=='; take it apart with 'switch'
+// EXPECT: Its variants carry data, so it has no built-in '=='. Take it apart with 'switch'
 enum Simple
   a
   b
@@ -136,10 +149,10 @@ fn main()
 // ==== case field_called_as_method
 //< A field written with `()` as though it were a method (`sys.args().len()`)
 //<
-//< **A writer from Rust or C++ reaches for a method**, and in KSPL a slice's or a struct's `len`
-//< is a field; the report names the field and its owner and takes the `()` away. Joined, the
-//< callee's pieces would spell a name no function carries, so they must not reach the message.
-// EXPECT: cannot call 'len': it is a field of 'std.sys.Args' (type 'Sz'), not a method
+//< **A writer from Rust or C++ reaches for a method.** In KSPL, a slice's or a struct's `len` is a
+//< field. The report names the field and its owner and removes the `()`. Joined, the callee's
+//< pieces would spell a name that no function has. So they must not reach the message.
+// EXPECT: cannot call 'len'. It is a field of 'std.sys.Args' with type 'Sz', not a method
 // EXPECT: Read it without the '()': '.len'
 // EXPECT-NOT: postfix
 import "std/sys"
@@ -150,8 +163,8 @@ fn main(): I32
 // ==== case field_name_misspelt
 //< A field that does not exist names the nearest field, never the import of an extension method
 //<
-//< **Without a call only a field can stand there**, and no other file can add one, so the import
-//< note would send the writer the wrong way. A name with no field near it gets no guess, and the
+//< **Without a call only a field can stand there**, and no other file can add one. So the import
+//< note would send the writer the wrong way. A name with no field near it gets no guess. The
 //< member of a type with no fields (`I32`) gets neither note.
 // EXPECT: field_name_misspelt.kspl:19:5: error: type 'field_name_misspelt.P' has no field or method named 'y'
 // EXPECT: Note: the field with the nearest name is 'x'.
@@ -175,8 +188,8 @@ fn main(): I32
 //< A `priv` type in a `pub struct`'s `pub` field is rejected as less visible than the field
 //<
 //< Allowed, even code that cannot name that type could read the value itself with `s.slot`. It is
-//< a leak of the same nature as at the return-value position, so it is put through the same check
-//< (docs/DESIGN-language.md "Why a narrow type may not sit in a position with wide visibility").
+//< the same kind of leak as at the return-value position. So the same check covers it
+//< (docs/DESIGN-language.md "Why a narrow type cannot stand where visibility is wide").
 // EXPECT: field type 'Hidden' is less visible than the field exposing it
 
 priv struct Hidden
@@ -224,8 +237,8 @@ fn main()
 //< A `priv` type in a `pub` global's type annotation is rejected as less visible than the global
 //<
 //< Allowed, even code that cannot name that type could read the value itself with `lib.g`. It is
-//< a leak of the same nature as at the return-value and field positions, so it is put through the
-//< same check (docs/DESIGN-language.md "Why a narrow type may not sit in a position with wide visibility").
+//< the same kind of leak as at the return-value and field positions. So the same check covers it
+//< (docs/DESIGN-language.md "Why a narrow type cannot stand where visibility is wide").
 // EXPECT: declared type 'Hidden' is less visible than the declaration exposing it
 
 priv struct Hidden
@@ -263,7 +276,7 @@ fn main()
 //<
 //< Its count is kept through the field's address, which a pointer could not give aligned. A struct
 //< holding one counts too; a raw pointer to one is not managed and passes.
-// EXPECT: field 'r' holds the ARC-managed 'std.refcount.Rc<|I32|>', whose count is kept through
+// EXPECT: field 'r' holds the ARC-managed 'std.refcount.Rc<|I32|>'. Its count is kept through
 // EXPECT: field 'h' holds the ARC-managed 'packed_managed_field.Holder'
 // EXPECT: Finished with 2 error(s)
 import "std/refcount" { Rc }
@@ -326,10 +339,10 @@ fn main(): I32
 // ==== case struct_literal_hidden_field
 //< A type with a field hidden from the caller cannot be built from outside with `::{}`
 //<
-//< A field not written is filled with zero, so without refusing it a "value whose content should
-//< not be settleable" can be made from outside (for a type holding an owning handle, a fake goes
-//< about pointing at no substance).
-// EXPECT: cannot be built here: field 'head' is not visible at this point
+//< A field not written is filled with zero. Without the refusal, code outside can make a "value
+//< whose content it must not settle". For a type that holds an owning handle, a fake then points
+//< at no substance.
+// EXPECT: cannot be built here. Field 'head' is not visible at this point
 // EXPECT-NOT: [
 import "std/mem" { Arena }
 
@@ -360,7 +373,7 @@ fn case_index_after_position(): I32[3]
 //<
 //< The bare "too many initializers for struct" named neither, though the literal's type may come
 //< from far off (an expected type, a parameter).
-// EXPECT: P', which has 2 field(s)
+// EXPECT: P'. The type has 2 field(s)
 // EXPECT: too many initializers for '
 struct P
     x: I32

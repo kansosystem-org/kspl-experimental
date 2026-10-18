@@ -1,0 +1,49 @@
+//< The nRF51's TIMER0 as a one-shot interrupt (the chip of the BBC micro:bit, which QEMU models)
+//<
+//< ksos runs on the nRF51 only under QEMU (`-M microbit`), as a Cortex-M0 for the Armv6-M port.
+//< This driver gives a demo an interrupt that arrives on its own, after a set time, with no peer
+//< process. That interrupt wakes the scheduler's sleep on WFI. Only what that needs is written.
+
+import "ksos/drivers/mmio"
+
+// ==========================================
+// TIMER0's registers. A task register acts when 1 is written. EVENTS_COMPARE[0] reads 1 once the
+// counter reaches CC[0]. The interrupt stays raised until it is written back to 0.
+// ==========================================
+
+const irq: U32 = 8 //< TIMER0's NVIC line
+
+const base: U32 = 0x40008000
+const tasks_start: U32 = base + 0x000
+const tasks_stop: U32 = base + 0x004
+const tasks_clear: U32 = base + 0x00c
+const events_compare0: U32 = base + 0x140
+const shorts: U32 = base + 0x200
+const intenset: U32 = base + 0x304
+const mode: U32 = base + 0x504
+const bitmode: U32 = base + 0x508
+const prescaler: U32 = base + 0x510
+const cc0: U32 = base + 0x540
+
+const shorts_compare0_clear: U32 = 1U32 << 0
+const shorts_compare0_stop: U32 = 1U32 << 8
+const inten_compare0: U32 = 1U32 << 16
+const prescaler_1mhz: U32 = 4 // 16 MHz >> 4
+
+fn start_once(us: U32) //< raises TIMER0's interrupt once, `us` microseconds from now
+    //<
+    //< The counter stops and clears itself at the compare (SHORTS), so it raises nothing more
+    //< until the next call. The handler must call `ack`.
+    mmio.write32(tasks_stop, 1)
+    mmio.write32(tasks_clear, 1)
+    mmio.write32(mode, 0)
+    mmio.write32(bitmode, 3)
+    mmio.write32(prescaler, prescaler_1mhz)
+    mmio.write32(cc0, us)
+    mmio.write32(shorts, shorts_compare0_clear | shorts_compare0_stop)
+    mmio.write32(events_compare0, 0)
+    mmio.write32(intenset, inten_compare0)
+    mmio.write32(tasks_start, 1)
+
+fn ack() //< lowers the interrupt (clears COMPARE[0]'s event); its handler calls it first
+    mmio.write32(events_compare0, 0)

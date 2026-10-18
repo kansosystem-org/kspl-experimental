@@ -1,17 +1,17 @@
 //< The few lines that build the LSP params sent to `ksplc lsp`
 //<
-//< Not a suite; the suites that drive the language server use it: ksplc's own, on the files they
+//< Not a suite. The suites that drive the language server use it: ksplc's own, on the files they
 //< are given, and the root's, over the repository's whole tree.
-//< **The framing is not here**: `std/jsonrpc` handles the Content-Length frame, the id, standard
+//< **The framing is not here.** `std/jsonrpc` handles the Content-Length frame, the id, standard
 //< error and the timeout. Here is only "which LSP method gets what".
-//< **It knows no harness**: the caller passes the workspace, so the root's suites can use it, and
-//< what they call is `pub`.
+//< **It knows no harness.** The caller passes the workspace, so the root's suites can use it.
+//< What they call is `pub`.
 //< Caution: **Start it with `KSPLC_STD_DIR` set.** The language server rejects `--std-dir=` (the
 //< analysis worker is a separate process), so only the environment tells it where std is.
+import "ksplc/tests/support/jsonrpc_client"
 import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/subproc"
@@ -29,7 +29,7 @@ pub const send_ms: I32 = 15000 //< how long the server may go without reading wh
     //< check names the server's standard error.
 
 pub fn start(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
-    jsonrpc.Client!subproc.Spawn_error //<
+    jsonrpc_client.Client!subproc.Spawn_error //<
         //< It starts `ksplc lsp`, with `extra` after the subcommand (empty for none)
         //<
         //< **`cwd` is the workspace**: imports, the walk and the paths returned are relative to it.
@@ -39,7 +39,7 @@ pub fn start(exe: U8[], extra: U8[][], cwd: U8[], arena: Arena$@):
     argv.push("lsp")
     for a in extra
         argv.push(a)
-    return jsonrpc.spawn(argv.slice(), cwd)
+    return jsonrpc_client.spawn(argv.slice(), cwd)
 
 // ==========================================
 // The two spellings a client names a document by
@@ -75,13 +75,13 @@ pub fn did_open(uri: U8[], text: U8[], arena: Arena$@): json.Val //<
         .set("version", b.int_val(1I64)).set("text", b.str_val(text)).build()
     return b.obj().set("textDocument", doc).build()
 
-pub fn close(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@) //<
+pub fn close(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@) //<
     //< It sends didClose for `uri`
     //<
     //< **A check closes what it opened where the server is later made to recover** (the `lsp`
     //< suite's crash and hang hooks), by `defer` right after its didOpen. The worker the
-    //< supervisor remakes analyses every open document again while the editor is idle, so a
-    //< document left behind is work the recovery's request may find under way.
+    //< supervisor remakes analyses every open document again while the editor is idle. So a
+    //< document left behind is work the recovery's request can find under way.
     c.notify("textDocument/didClose", at_doc(uri, arena), send_ms, arena) catch {}
 
 fn at_doc(uri: U8[], arena: Arena$@): json.Val //<
@@ -104,7 +104,7 @@ pub fn empty_obj(arena: Arena$@): json.Val //< `{}`, the params of a request tha
     return b.obj().build()
 
 pub fn answer( //< the reply to a request; `null` when none comes, so the check reading it fails
-    c: jsonrpc.Client$@,
+    c: jsonrpc_client.Client$@,
     method: U8[], //< the LSP method asked
     params: json.Val, //< what it is asked with
     timeout_ms: I32, //< how long the round trip may take
@@ -117,14 +117,14 @@ pub fn answer( //< the reply to a request; `null` when none comes, so the check 
 pub fn hover_text(msg: json.Val): U8[] //< `result.contents.value` (the hover's body)
     //<
     //< Empty where there is none.
-    return msg.get("result").get("contents").get("value").as_str()
+    return msg.get("result").get("contents").get("value").as_str().unwrap_or("")
 
 // ==========================================
 // Explaining why a request failed
 // Caution: **Include the supervisor's log.** `result: null` is both "nothing at that position" and
 // "the worker crashed and the supervisor answered null"; the response cannot tell.
 // ==========================================
-pub fn why(c: jsonrpc.Client$@, msg: U8[], arena: Arena$@): U8[] //<
+pub fn why(c: jsonrpc_client.Client$@, msg: U8[], arena: Arena$@): U8[] //<
     //< `msg` with the supervisor's log
     return arena.text().s(msg).s(" | supervisor: ").s(c.err_tail()).take()
 

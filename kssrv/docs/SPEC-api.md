@@ -1,8 +1,14 @@
 # kssrv — what a client can ask for
 
-**This document is the agreement between the kssrv server and whoever calls it over HTTP: every request the server answers and what each answer holds, what the JSON API under `/api/` holds, and the limits a caller has to write against.** A *client* is any program that sends the server HTTP requests: a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
+**This document is the agreement between the kssrv server and whoever calls it over HTTP.** It sets three things:
 
-How to start it is in [`kssrv/README.md`](../README.md), and why the server is shaped this way is in [`DESIGN-server.md`](DESIGN-server.md). The five endpoints a page opened in a browser may use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
+* every request the server answers, and what each answer holds;
+* what the JSON API under `/api/` holds;
+* the limits a caller has to write against.
+
+A *client* is any program that sends the server HTTP requests. It can be a browser, `curl`, your own code, or the small robot car described under "Steering the car". A client is written against this document, so a change here is a change to what somebody else's code depends on.
+
+How to start it is in [`kssrv/README.md`](../README.md), and why the server is shaped this way is in [`DESIGN-server.md`](DESIGN-server.md). The five endpoints a page opened in a browser can use are set one level up, in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md). That document is the agreement between the client page and this server and belongs to neither. Where the two documents meet, it is the canonical source (the one place the rule lives).
 
 **The server runs in one of two modes, picked when it starts**, and several answers below depend on the mode. Why one flag decides all of this is "Local use and outward-facing use are split by one decision" in [`DESIGN-server.md`](DESIGN-server.md).
 
@@ -58,7 +64,7 @@ Paths that start with `/api/` are not files. The server answers them itself, and
 
 Everything under `/api/` skips static serving (handing out files from the root) and is handled by a routing table. Even where a directory under the root is named `api`, the API takes priority.
 
-**Every answer under `/api/` is `application/json`, a refusal's included**: a 404 or a 405 there carries a JSON body such as `{"error":"Not Found","status":404}`, where a file outside `/api/` would get a line of plain text. A `HEAD` is answered the same way. No endpoint under `/api/` takes `HEAD`, so `HEAD /api/status` gets a 405 whose head says `Content-Type: application/json` and gives the JSON's length in `Content-Length`, with no body after it. Three answers are not JSON:
+**Every answer under `/api/` is `application/json`, a refusal's included.** A 404 or a 405 there carries a JSON body such as `{"error":"Not Found","status":404}`. A file outside `/api/` would get a line of plain text instead. A `HEAD` is answered the same way. No endpoint under `/api/` takes `HEAD`, so `HEAD /api/status` gets a 405 whose head says `Content-Type: application/json` and gives the JSON's length in `Content-Length`, with no body after it. Three answers are not JSON:
 
 | Answer | `Content-Type` |
 | :-- | :-- |
@@ -100,7 +106,7 @@ For local use only (the page's endpoints; their rules are in [`../../docs/SPEC-l
 | `GET` | `/api/file?path=<p>` | Reads a file | that file's byte sequence |
 | `PUT` | `/api/file?path=<p>` | Writes the body to that name | `{"wrote":<byte count>}` |
 | `GET` | `/api/stat?path=<p>` | Tells whether a file changed | the size and the last modification |
-| `GET` | `/api/here` | Keeps the server alive while a page is open | a head naming no length, then nothing until the client closes: the connection itself says a page is open ("Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
+| `GET` | `/api/here` | Keeps the server alive while a page is open | a head naming no length, then nothing until the client closes. The connection itself says a page is open ("Keeping the server alive while a page is open" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)) |
 | `POST` | `/api/stop` | Stops the server | `{}`, then the server stops |
 
 Facing outward only (the car's endpoints):
@@ -123,6 +129,8 @@ Anything else under `/api/`:
 
 Started with `--local`, the server lets a program on the same machine read and write files under the root. Each request carries the token the server printed at start-up, in the header `Authorization: Bearer <token>`.
 
+**`path=<p>` names a place relative to the root.** An absolute path, in any operating system's spelling (`/etc/passwd`, `C:\x`, `\\server\share\x`), is refused with 403 on every OS, as the text refusal in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md) requires. Only a URL's own path opens with `/`, so static serving drops that `/`, and `path=` does not.
+
 ```console
 $ ./out/kssrv.exe 8080 ./public --local
 kssrv: I: listening on 127.0.0.1:8080, root=./public
@@ -137,7 +145,7 @@ $ curl -s -H "Authorization: Bearer $T" -X PUT --data-binary @notes.md \
 {"wrote":19}
 ```
 
-Caution: **The token above is a sample. Do not paste a token you ran into a document.** The token is made again on every startup, so a pasted one would not work anyway. But a reader would take it as a value that may be pasted. A sample gets an obviously fake value.
+Caution: **The token above is a sample. Do not paste a token you ran into a document.** The token is made again on every startup, so a pasted one would not work anyway. But a reader would take it as a value that can be pasted. A sample gets an obviously fake value.
 
 The diagram follows one request from start-up to its answer, and shows which refusal comes from which check. The statuses are the ones in "How it refuses" in [`../../docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md).
 
@@ -157,15 +165,10 @@ sequenceDiagram
     S-->>C: 200 and the JSON size and changed_at
 ```
 
-**The token goes across in the fragment (`#`) of the URL to open.** The fragment is the part of a URL after `#`, and a browser never sends it to the server. So another process on the same machine sending a `GET /` cannot get the token. The page picks it up and clears it from the URL ("How the token gets across" in [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md)).
+**These endpoints are the protocol's, and their rules stand there.** [`docs/SPEC-local-server.md`](../../docs/SPEC-local-server.md) says how the token reaches the page and why there is no `HEAD`. It also gives the type a file comes back as, and how a write keeps the original whole. The rules are under two headings there:
 
-**The token is not taken as a parameter.** Anyone on the same machine can see a program's command line through `ps` (the command that lists running programs), so a token passed in has already leaked. kssrv makes it from the OS's source of randomness and prints it once; no endpoint returns it on request.
-
-There is no `HEAD /api/file`. `/api/stat` returns the size and whether the file exists, so the same thing is not done two ways (Principle 6 in [`docs/DESIGN-principles.md`](../../docs/DESIGN-principles.md): one means to one purpose).
-
-**`GET /api/file` returns `application/octet-stream`** (plain bytes, with no type claimed). The type is not guessed from the content, since a receiver believes a guessed type and reads the content by it. Reading it as a UTF-8 string is the client's business.
-
-A write **goes to a different name and is then swapped in**, so a failure partway leaves the original file whole.
+* "How the token gets across";
+* "Only three things can be asked for".
 
 ## Steering the car
 
@@ -193,7 +196,7 @@ What comes back:
 | `seq` | the caller's serial, as it was sent |
 | `cmd` | the manoeuvre's name (the table below) |
 | `lon` / `lat` / `rot` | the fore-aft, side-to-side and rotation values. They can be passed to the car's `motor.drive` unchanged, with **positive = forward / right / clockwise** |
-| `valid_ms` | how long this instruction may be trusted. Past that, with no next answer arriving, the car stops |
+| `valid_ms` | how long this instruction can be trusted. Past that, with no next answer arriving, the car stops |
 
 | Manoeuvre | lon | lat | rot |
 |---|--:|--:|--:|
@@ -243,7 +246,7 @@ Kssrv and ksos (the operating system for small boards) do not reference each oth
 
 ## Downloading the policy
 
-`GET /api/pilot` returns **the very same whole policy** `POST /api/car` is using, in one file in safetensors format (a common file format for a neural network's weights: a JSON header, then the numbers). A car that carries it can decide for itself, without asking on every observation.
+`GET /api/pilot` returns **the very same whole policy** `POST /api/car` is using, in one file in safetensors format. Safetensors is a common file format for a neural network's weights: a JSON header, then the numbers. A car that carries it can decide for itself, without asking on every observation.
 
 ```console
 $ curl -s -o pilot.safetensors localhost:8080/api/pilot
@@ -261,8 +264,13 @@ $ python3 -c "import json,struct; d=open('pilot.safetensors','rb').read(); \
 | `__metadata__.kspl_pilot` | — | the format's version. Always confirm it before reading |
 
 * **The weights are not sent alone.** A receiver holding its own copy of how the features are made (`far_mm`) and of the manoeuvres' meaning cannot notice when the server's code is fixed. So the file holds everything needed to give the same answer as `POST /api/car` (`kssrv/tests/car.kspl` matches them at 968 points).
-* **`valid_ms` is not in it.** It is how long a car that asks may wait for an answer, and it means nothing to a car that carries the policy.
-* Caution: **Check `__metadata__.kspl_pilot` before using the weights, and refuse a version the reader was not written for.** A reader written for an older version still loads a newer file without any error, then steers wrongly. The version rises when one of three things changes: the order of the five features (whether the distance was measured, the distance, then the left, centre and right line sensors), the activation (SiLU), or what each row of `maneuvers` means. None of these changes a tensor's shape, so a reader that checks only the shapes cannot notice. For example, if left and right swapped places among the features, every weight would still fit, and the old reader would turn the wrong way on every correction.
+* **`valid_ms` is not in it.** It is how long a car that asks can wait for an answer, and it means nothing to a car that carries the policy.
+* Caution: **Check `__metadata__.kspl_pilot` before using the weights, and refuse a version the reader was not written for.** A reader written for an older version still loads a newer file without any error, then steers wrongly. The version rises when one of three things changes:
+  * the order of the five features (whether the distance was measured, the distance, then the left, centre and right line sensors);
+  * the activation (SiLU);
+  * what each row of `maneuvers` means.
+
+  None of these changes a tensor's shape, so a reader that checks only the shapes cannot notice. For example, left and right could swap places among the features. Every weight would still fit, and the old reader would turn the wrong way on every correction.
 
 The `Content-Type` is looked up from the extension. **An extension it does not know is not guessed at but made `application/octet-stream`.** A receiver believes a wrong type and reads the content another way, so saying "unknown" is safer than guessing. No type is registered for safetensors, so `/api/pilot` is returned this way too.
 
@@ -281,11 +289,11 @@ These hold for every connection, in both modes.
 
 ## Known limits
 
-These are the places where the server does less than a client might expect.
+These are the places where the server does less than a client can expect.
 
 * **`%2f` works as a separator.** It becomes a `/` after the decode, so `/a%2Fb` is the same as `/a/b`. The check for outside the root is applied after the decode, so it is not a hole.
 * **The steering policy is not saved.** It is trained again on every outward-facing startup. The seed is fixed, so the same version gives the same weights every time.
 * **`Range` and conditional requests (`If-Modified-Since` and the like) are not supported.** It always returns the whole thing.
-* **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served: a folder is checked together with its `index.html`.
-* **Only a regular file is served**: a FIFO or a device in the root answers 404, as if absent, since its read may never end and would hold the server.
+* **A symbolic link is refused, not followed** (403), at any level of the path and at the name actually served. A folder is checked together with its `index.html`.
+* **Only a regular file is served.** A FIFO or a device in the root answers 404, as if absent. Its read can go on forever and would hold the server.
 * **A name starting with a dot is not served** (404, as if absent), at any level of the path: `/.git/config`, `/.env`, `/sub/.hidden`. `/.well-known/` is the exception, since certificate issuance and other discovery read under it (RFC 8615).

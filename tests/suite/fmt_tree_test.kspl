@@ -1,22 +1,28 @@
-//< Checks that every tracked source is already formatted
+//< Checks that every tracked source is already formatted, and still reads formatted narrow
 //<
 //< Every tracked source goes through `ksplc fmt` and must come out byte for byte: it is the tree's
-//< formatting gate. **It reads the whole tree**, so it lives here; ksplc's own `fmt` and `kspls`
+//< formatting gate. At a narrow width its output must read back and come out of a second pass
+//< unchanged. **It reads the whole tree**, so it lives here; ksplc's own `fmt` and `notation`
 //< suites test the formatter and the notation themselves.
 //< Caution: **The files run as batches** (`ksplc_harness.run_all`); one process at a time is far
 //< too slow.
 import "ksplc/tests/support/harness" as ksplc_harness
 import "std/ds" { List }
+import "std/fs"
+import "std/io"
 import "std/mem" { Arena }
 import "std/str"
 import "std/subproc"
 import "std/verdict"
 import "tests/support/harness"
 
-priv fn fmt_job(rel: U8[], arena: Arena$@): subproc.Job //< the child that formats `rel`
+priv fn fmt_job(rel: U8[], style: U8[], arena: Arena$@): subproc.Job //<
+    //< The child that formats `rel` to its output, under `style` (`--style=`) unless it is empty
     $argv: = List<|U8[]|>.new(arena)
     argv.push(ksplc_harness.ksplc_exe())
     argv.push("fmt")
+    if style.len > 0
+        argv.push(arena.text().s("--style=").s(style).take())
     argv.push(rel)
     return subproc.Job::{ .argv = argv.slice(), .cwd = harness.root() }
 
@@ -74,19 +80,18 @@ priv const fmt_specs: U8[][_] = ::{ "*.kspl", ":!ksplc/tests/negative/", ":!kspl
     //< `ksplc/tests/lint/` misaligned on purpose, which formatting **realigns**), as `make fmt`
     //< does in `mk/lint.mk`.
 
-priv fn check_formatted(arena: Arena$@)
+priv fn check_formatted(rels: List<|U8[]|>@, arena: Arena$@)
     $bad: = List<|U8[]|>.new(arena)
-    rels: = harness.tracked_matching(U8[][]::fmt_specs)
     $jobs: = List<|subproc.Job|>.new(arena)
     for rel in rels
-        jobs.push(fmt_job(rel, arena))
+        jobs.push(fmt_job(rel, "", arena))
     rs: = ksplc_harness.run_all(jobs.slice(), "fmt_tree")
-    // Caution: **Compare with the source itself, not with a second formatting**; a wrong reading
-    // is as stable as a right one, so a fixed point of the output passes a moved comment.
+    // Caution: **Compare with the source itself, not with a second formatting.** A wrong reading
+    // is as stable as a right one. So a fixed point of the output passes a moved comment.
     for k in Range.asc(rels.len)
         rel: = rels.get(k)
         r: = rs.get(k)
-        if r.code != 0
+        if !r.exited_with(0)
             bad.push(arena.text().s(rel).s(": it does not format").take())
             continue
         src: = harness.read_under_root(rel)
@@ -100,8 +105,75 @@ priv fn check_formatted(arena: Arena$@)
             compiler under test, so after a change to ksplc's formatter run `make commit-seed` \
             first")
 
+// ==========================================
+// At a narrow width every source still reads, and one formatting is final
+// ==========================================
+
+priv const narrow_limits: Sz[_] = ::{ 40, 50, 60 } //<
+    //< The column limits the tree is also formatted at
+    //<
+    //< **A narrow width breaks lines where the default never does**: a declaration's head, an
+    //< `import`'s list, a `for` heading. **Each source takes one of them in turn** (the `k`th the
+    //< `k % 3`th), so the tree is formatted narrow once, not three times.
+
+priv fn narrow_style(k: Sz, arena: Arena$@): U8[] //< the `--style` the `k`th source is formatted at
+    return arena.text().s("ColumnLimit: \{narrow_limits[k % narrow_limits.len]\}").take()
+
+priv fn narrow_name(rels: List<|U8[]|>@, k: Sz, arena: Arena$@): U8[] //<
+    //< How a finding names the `k`th source: its path and the style it was formatted at
+    return arena.text().s(rels.get(k)).s(" at `").s(narrow_style(k, arena)).s("`").take()
+
+priv fn check_narrow(rels: List<|U8[]|>@, arena: Arena$@)
+    $bad: = List<|U8[]|>.new(arena)
+    $jobs: = List<|subproc.Job|>.new(arena)
+    for k in Range.asc(rels.len)
+        jobs.push(fmt_job(rels.get(k), narrow_style(k, arena), arena))
+    firsts: = ksplc_harness.run_all(jobs.slice(), "fmt_narrow")
+    // **The output is formatted again from a file**, which also reads it as a source. This gate
+    // does not trust the formatter's own read-back check.
+    dir: = harness.sandbox("fmt_narrow")
+    $again: = List<|subproc.Job|>.new(arena)
+    $which: = List<|Sz|>.new(arena) // the source each second formatting started from
+    for k in Range.asc(rels.len)
+        first: = firsts.get(k)
+        said: = narrow_name(rels, k, arena)
+        if !first.exited_with(0)
+            bad
+                .push(arena.text().s(said).s(": it does not format: ")
+                .s(line_of(first.out, 1, arena)).take())
+            continue
+        copy: = fs.join(dir, arena.text().s("\{k\}.kspl").take(), arena)
+        io.write_file(copy, first.out) catch
+            bad
+                .push(arena.text().s(said).s(": its output cannot be written to ").s(copy).take())
+            continue
+        again.push(fmt_job(copy, narrow_style(k, arena), arena))
+        which.push(k)
+    seconds: = ksplc_harness.run_all(again.slice(), "fmt_narrow_again")
+    for n in Range.asc(which.len)
+        k: = which.get(n)
+        said: = narrow_name(rels, k, arena)
+        second: = seconds.get(n)
+        if !second.exited_with(0)
+            bad
+                .push(arena.text().s(said).s(": its output does not format again: ")
+                .s(line_of(second.out, 1, arena)).take())
+            continue
+        at: = first_difference(firsts.get(k).out, second.out)
+        if at > 0
+            bad
+                .push(arena.text().s(said).s(": formatting again changes line \{at\} to `")
+                .s(line_of(second.out, at, arena)).s("`").take())
+    verdict.check_list("a source formatted at a narrow width reads back, and stays put", rels.len,
+        "sources", bad@,
+        "the formatter broke a line where the indentation reader does not join it, or its second \
+            pass moves what the first wrote: mend `ksplc/fmt/` or `ksplc/parse/layout.kspl`, not \
+            the source named")
+
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
     check_parting(arena)
-    check_formatted(arena)
+    rels: = harness.tracked_matching(U8[][]::fmt_specs)
+    check_formatted(rels@, arena)
+    check_narrow(rels@, arena)
     return ksplc_harness.finish()

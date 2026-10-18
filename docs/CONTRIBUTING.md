@@ -1,39 +1,35 @@
 # Contributing to Kanso
 
-**Start here to change Kanso itself**: the compiler, the libraries, the tools or the documents. If you only want to write programs in KSPL, the quick start in the root [`README.md`](../README.md) is enough. Each task below has one document to read.
+**Start here to change Kanso itself**: the compiler, the libraries, the tools or the documents. If you only want to write programs in KSPL, the quick start in the root [`README.md`](../README.md) is enough.
 
-The first two commands to type, once you have a C compiler and Make ([`HOWTO-build.md`](HOWTO-build.md) says how to get them):
+Install a C compiler and Make as described in [`HOWTO-build.md`](HOWTO-build.md). Then run these commands:
 
 ```sh
 make help        # every target you can type, one line each
-make ci-linux    # every gate on Linux: run it before you propose a change
+make ci          # every gate this machine runs: run it before you propose a change
 ```
+
+**Use the table in [`README.md`](README.md) to find a document for your task.** It covers building, gates, principles, document rules, plans and security reports. These three starting points are outside that table:
 
 | To | Read |
 | :-- | :-- |
-| Build the compiler and have it rebuild itself, format, lint and test, on Linux, macOS or Windows without Docker | [`HOWTO-build.md`](HOWTO-build.md) |
-| Know what every gate checks, and on which platform | [`SPEC-gates.md`](SPEC-gates.md) |
-| Write code and documents this repository's way | [`DESIGN-principles.md`](DESIGN-principles.md) |
-| Add or change a document (its name is its kind) | [`SPEC-documents.md`](SPEC-documents.md) |
 | Find a package; each carries its own `README.md` | ["Repository layout" in `../README.md`](../README.md#-repository-layout) |
-| See what is left, package by package | [`PLAN.md`](PLAN.md) |
-| Change the compiler | [`../ksplc/README.md`](../ksplc/README.md), then [`../ksplc/docs/DESIGN-compiler.md`](../ksplc/docs/DESIGN-compiler.md) |
+| Change the compiler | [`../ksplc/README.md`](../ksplc/README.md) |
 | Propose a change, as an issue or a pull request | "How a change gets in" below |
-| Report a security problem | [`SECURITY.md`](SECURITY.md) |
 
 ## The make targets
 
-**`make help` lists the targets.** Every target you can type has a one-line description, because `make test-recipe-bytes` fails on a typable target without one. How to write a description is in the header of `mk/help.mk`.
+**`make help` lists the targets.** Every available target has a one-line description. `make test-recipe-bytes` fails when a target lacks one. How to write a description is in the header of `mk/help.mk`.
 
-Caution: **Do not copy the list into this document.** It goes out of date as soon as one target is added (Principle 4 in [`DESIGN-principles.md`](DESIGN-principles.md)).
+Caution: **Do not copy the list into this document.** Adding a target would make the copy outdated (Principle 4 in [`DESIGN-principles.md`](DESIGN-principles.md)).
 
-The list names targets only. A variable (a setting passed as `NAME=value`) is described beside the task it serves: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
+The list names targets only. A variable is a setting passed as `NAME=value`. Each task describes its variables: `LLVM=1`, `PREFIX=`, `FMT_JOBS=`, `SRC_KSPL=` in [`HOWTO-build.md`](HOWTO-build.md), and `FILE=` in [`HOWTO-set-up-a-project.md`](HOWTO-set-up-a-project.md).
 
 ## Setting your git identity
 
-Set the name and e-mail address git records on your commits once per repository, and make git stop when none is set.
+Set your commit name and e-mail address for each repository. Configure git to stop when no identity is set.
 
-**Do not put a default identity into `~/.gitconfig`**: git would use it even in repositories where you did not mean it. Instead, follow these two steps.
+**Do not put a default identity into `~/.gitconfig`.** Git would use it even in repositories where you want another identity. Follow these steps:
 
 1. Add the one setting that stops git unless an identity is set:
 
@@ -50,13 +46,13 @@ Set the name and e-mail address git records on your commits once per repository,
    git config user.email "<address>"
    ```
 
-**If you forget step 2, the commit stops** with `fatal: no email was given and auto-detection is disabled`. Without `useConfigOnly`, git would build an identity from the computer's user and host names and let the commit through, silently wrong.
+**If you forget step 2, the commit stops** with `fatal: no email was given and auto-detection is disabled`. Without `useConfigOnly`, git constructs an identity from the computer's user and host names. It accepts the commit without checking that identity.
 
-`git config --show-origin --show-scope user.email` shows where an identity comes from. **If `$HOME` differs between MSYS2 and Windows, each reads a different `.gitconfig`**, so run it from both shells. To switch identity per folder, use `~/.gitconfig`'s `includeIf "gitdir/i:<folder>/"`, still with no default.
+`git config --show-origin --show-scope user.email` shows where an identity comes from. **If `$HOME` differs between MSYS2 and Windows, each reads a different `.gitconfig`.** Run the command from both shells. To switch identity per folder, use `~/.gitconfig`'s `includeIf "gitdir/i:<folder>/"`, still with no default.
 
 ## Reading a document's diff
 
-**Read a document's diff with `--word-diff`** (`git diff --word-diff`). A paragraph is one line ("Wording and formatting rules" in [`SPEC-documents.md`](SPEC-documents.md)), so a plain diff shows a one-word fix as a whole line replaced. It needs no setting, since git splits words at whitespace. The changed word then shows inside the line:
+**Read a document's diff with `--word-diff`** (`git diff --word-diff`). A paragraph occupies one line ("Wording and formatting rules" in [`SPEC-documents.md`](SPEC-documents.md)). A plain diff therefore marks the whole line as replaced for a one-word edit. No setting is needed: git splits words at whitespace. The changed word then shows inside the line:
 
 ```
 | **rule** | A settled [-decision.-]{+verdict.+} Not a suggestion |
@@ -64,7 +60,7 @@ Set the name and e-mail address git records on your commits once per repository,
 
 ## How a change gets in
 
-**A pull request in the published repository is read as a proposal, not merged.** The published repository is a snapshot of the one Kanso is developed in, taken whole into one commit each time. An accepted change is carried into the development repository by hand, and comes back with the next snapshot. Merged in the published repository, it would sit on a history that the next snapshot does not contain.
+**The maintainers review pull requests in the published repository as proposals.** They do not merge them there. Each publication copies the development repository into one snapshot commit. Maintainers apply accepted changes to the development repository by hand. The next snapshot includes those changes. Merging into the published repository would create history that the next snapshot omits.
 
 The path of a change, from you to the published repository and back:
 
@@ -80,21 +76,19 @@ sequenceDiagram
     Pub->>You: the pull request closed, with a note crediting you
 ```
 
-* **Open an issue first** for anything beyond a small fix: what goes wrong now, and what should happen instead. It settles whether a change is wanted before anyone works on it.
-* **A pull request is welcome as a proposal.** It is read, and an accepted change arrives with the next snapshot. The pull request is then closed with a note saying so. The note credits its author, since a snapshot's one commit names no one else.
-* **Run the gates before proposing.** A change must pass the same gates as everything else (`make ci-linux` on Linux; each platform's set is in [`SPEC-gates.md`](SPEC-gates.md)).
+* **Open an issue first** for anything beyond a small fix. Describe the problem and the expected result. This lets maintainers decide whether they want the change before work starts.
+* **Submit a pull request as a proposal.** Maintainers review it and include accepted changes in the next snapshot. They then close the pull request with a note crediting its author. A snapshot commit does not name each contributor.
+* **Run the gates before proposing a change.** Every change must pass the applicable gates. Run `make ci`. Outside Linux, also run it in the dev container to cover the Linux-only gates. [`SPEC-gates.md`](SPEC-gates.md) lists each platform's gates.
 
 ## How AI-written work is handled
 
-**Kanso is developed with AI coding agents, and the gates check what they write like any other change.** Work made with AI **carries the same license** ([`LICENSE.md`](../LICENSE.md)'s MIT), and whoever submits it answers for its content, as for any change.
+**Kanso uses AI coding agents for development.** The gates check their work like any other change. AI-written work **carries the same MIT license** ([`LICENSE.md`](../LICENSE.md)). Whoever submits it is responsible for its content.
 
-Caution: **Read it yourself before submitting.** Generated code can closely resemble somebody else's, and once it is merged, nobody looks at it.
+Caution: **Read it yourself before submitting.** Generated code can closely resemble another author's code. Do not rely on someone reviewing it after the merge.
 
-Review covers more than whether it works: the conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md) apply to what AI wrote as well. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
+Review also covers the conventions in [`DESIGN-principles.md`](DESIGN-principles.md) and [`SPEC-documents.md`](SPEC-documents.md). These apply to AI-written work too. **Borrowed weights and models are separate from the code**: a converted model file keeps the original's license ("How borrowed models are handled" in [`tools/ai_assist/README.md`](../tools/ai_assist/README.md)).
 
 ## Further reading
 
-Beyond the table above:
-
 * [`README.md`](README.md) — the documents that belong to no single package, and which reader each is for.
-* [`../README.md`](../README.md) — the front door: what Kanso is, how far it works, and where everything is.
+* [`../README.md`](../README.md) — the entry point: what Kanso is, what works, and where everything is.

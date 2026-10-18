@@ -6,15 +6,17 @@
  * The thread / mutex primitives (for std/thread.kspl)
  * As with kspl_proc_*, a handle is opaque in an I64.
  *
- * **A mutex is not re-entrant, and misusing one stops the program** on every OS: locking it on the
- * thread that holds it, unlocking it or waiting on it from a thread that does not ("A mutex is
- * locked once, by one thread" in std/docs/DESIGN-system.md). POSIX's error-checking mutex reports each
- * as an error number; Windows's SRWLOCK reports nothing, so the owner is kept beside it.
+ * **A mutex is not re-entrant, and misusing one stops the program** on every OS. Misuse is
+ * locking it on the thread that holds it, or unlocking it or waiting on it from another thread
+ * ("A mutex is locked once, by one thread" in std/docs/DESIGN-system.md). POSIX's error-checking
+ * mutex reports each as an error number. Windows's SRWLOCK reports nothing, so the owner is kept
+ * beside it.
  * ============================================================ */
 
 /* On a thread's trampoline, which calls the entry std/thread hands over. **The entry's parameter is
- * the thread function's own `T$@`**, reached through `void *(*)(void *)` as pthread_create and
- * CreateThread reach it, so clang's `-fsanitize=function` would report the call it cannot see. */
+ * the thread function's own `T$@`.** It is reached through `void *(*)(void *)`, as pthread_create
+ * and CreateThread reach it. So clang's `-fsanitize=function` would report the call it cannot
+ * see. */
 #if defined(__clang__)
 #define KSPL_CALLS_THREAD_ENTRY __attribute__((no_sanitize("function")))
 #else
@@ -127,10 +129,25 @@ KSPL_LINK void kspl_mutex_destroy(I64 handle) {
     free(m);
 }
 
+/* Caution: **Time a wait on the monotonic clock** (kspl_cond_wait_for). The default is the wall
+ * clock, so a clock set back by NTP or a person stretches every wait by as much. macOS cannot set
+ * the clock, and waits by a relative time instead. */
 KSPL_LINK I64 kspl_cond_create(void) {
     pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
+    pthread_condattr_t attr;
+    int ok;
     if (c == NULL) return 0;
-    if (pthread_cond_init(c, NULL) != 0) {
+    if (pthread_condattr_init(&attr) != 0) {
+        free(c);
+        return 0;
+    }
+#if defined(__APPLE__)
+    ok = pthread_cond_init(c, &attr) == 0;
+#else
+    ok = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) == 0 && pthread_cond_init(c, &attr) == 0;
+#endif
+    pthread_condattr_destroy(&attr);
+    if (!ok) {
         free(c);
         return 0;
     }
@@ -147,9 +164,41 @@ KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
     }
 }
 
+/* kspl_cond_wait for at most timeout_ms (read through kspl_wait_ms): 0 when woken, a spurious
+ * wakeup included, and 1 when the time ran out. */
+KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_ms) {
+    pthread_cond_t *c = (pthread_cond_t *)(intptr_t)cond_handle;
+    pthread_mutex_t *m = (pthread_mutex_t *)(intptr_t)mutex_handle;
+    struct timespec ts;
+    int rc;
+    if (cond_handle == 0 || mutex_handle == 0) return 1;
+    timeout_ms = kspl_wait_ms(timeout_ms);
+#if defined(__APPLE__)
+    ts.tv_sec = timeout_ms / 1000;
+    ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+    rc = pthread_cond_timedwait_relative_np(c, m, &ts);
+#else
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 1;
+    ts.tv_sec += timeout_ms / 1000;
+    ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec += 1;
+        ts.tv_nsec -= 1000000000L;
+    }
+    rc = pthread_cond_timedwait(c, m, &ts);
+#endif
+    if (rc == EPERM) kspl_lock_misuse(kspl_foreign_wait_msg);
+    return rc == ETIMEDOUT ? 1 : 0;
+}
+
 KSPL_LINK void kspl_cond_signal(I64 handle) {
     if (handle == 0) return;
     pthread_cond_signal((pthread_cond_t *)(intptr_t)handle);
+}
+
+KSPL_LINK void kspl_cond_broadcast(I64 handle) {
+    if (handle == 0) return;
+    pthread_cond_broadcast((pthread_cond_t *)(intptr_t)handle);
 }
 
 KSPL_LINK void kspl_cond_destroy(I64 handle) {
@@ -251,9 +300,26 @@ KSPL_LINK void kspl_cond_wait(I64 cond_handle, I64 mutex_handle) {
     InterlockedExchange(&m->owner, kspl_thread_self());
 }
 
+/* The POSIX side's contract. The timeout is relative, so no clock setting stretches it. */
+KSPL_LINK I32 kspl_cond_wait_for(I64 cond_handle, I64 mutex_handle, I32 timeout_ms) {
+    if (cond_handle == 0 || mutex_handle == 0) return 1;
+    kspl_mutex_t *m = (kspl_mutex_t *)(intptr_t)mutex_handle;
+    if (m->owner != kspl_thread_self()) kspl_lock_misuse(kspl_foreign_wait_msg);
+    InterlockedExchange(&m->owner, 0);
+    BOOL woke = SleepConditionVariableSRW((CONDITION_VARIABLE *)(intptr_t)cond_handle, &m->lock,
+        (DWORD)kspl_wait_ms(timeout_ms), 0);
+    InterlockedExchange(&m->owner, kspl_thread_self());
+    return woke ? 0 : 1;
+}
+
 KSPL_LINK void kspl_cond_signal(I64 handle) {
     if (handle == 0) return;
     WakeConditionVariable((CONDITION_VARIABLE *)(intptr_t)handle);
+}
+
+KSPL_LINK void kspl_cond_broadcast(I64 handle) {
+    if (handle == 0) return;
+    WakeAllConditionVariable((CONDITION_VARIABLE *)(intptr_t)handle);
 }
 
 /* A CONDITION_VARIABLE has no destroy function; free() is all. */
@@ -265,17 +331,18 @@ KSPL_LINK void kspl_cond_destroy(I64 handle) {
 
 /* ============================================================
  * Where the calling thread's stack ends (for std/stack_limit.kspl)
- * The lowest address the stack may grow down to, above the guard the thread's bounds carry; 0
- * where the OS does not say. A level's cost moves with the backend, so a walk compares its
+ * The lowest address the stack can grow down to, above the guard the thread's bounds carry; 0
+ * where the OS does not say. A level's cost moves with the backend. So a walk compares its
  * position with this rather than counting levels.
- * **It is not cheap** (on Linux the main thread reads /proc/self/maps): ask once per walk and keep
+ * **It is not cheap** (on Linux the main thread reads /proc/self/maps). Ask once per walk and keep
  * the answer (`Stack_limit.new`).
  * ============================================================ */
 #if defined(_WIN32)
-/* Caution: **The bounds are the whole reservation, and its bottom is never the program's**: the
- * last page is never committed, the guard page stands above it, and the stack guarantee is kept for
- * the overflow handler. **The guarantee asked for is not the one kept**: it answers 0 unless set,
- * while Windows keeps 8KB at least (4KB on 32 bits), as Rust's `stacker` measured on Windows 10. */
+/* Caution: **The bounds are the whole reservation, and its bottom is never the program's.** The
+ * last page is never committed, and the guard page stands above it. The stack guarantee is kept
+ * for the overflow handler. **The guarantee asked for is not the one kept.** It answers 0 unless
+ * set, but Windows keeps 8KB at least (4KB on 32 bits), as Rust's `stacker` measured on
+ * Windows 10. */
 KSPL_LINK Sz kspl_stack_floor(void) {
     ULONG_PTR low = 0;
     ULONG_PTR high = 0;

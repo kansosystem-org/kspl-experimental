@@ -5,13 +5,13 @@
 //< Each refusal is shown beside a rename that goes through, so a server answering every request
 //< with an error cannot pass.
 import "ksplc/tests/support/harness"
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, is_missing }
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/json" + { Json_builder }
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -60,7 +60,7 @@ impl Pair
 """
 
 priv struct Ask //< one client, and where the probe's names stand in its document
-    c: jsonrpc.Client$@
+    c: jsonrpc_client.Client$@
     arena: Arena$@
 
 impl Ask
@@ -89,7 +89,7 @@ impl Ask
 
     priv fn refuses(r: Self, label: U8[], got: json.Val, says: U8[]) //<
         //< Checks that a response is an error whose message says `says`, and carries no edit
-        message: = got.get("error").get("message").as_str()
+        message: = got.get("error").get("message").as_str().unwrap_or("")
         verdict.check(label,
             is_missing(got.get("result")) && message.find_str(says).is_some(),
             lsp_client.why(r.c, lsp_client.dump(got, r.arena), r.arena))
@@ -99,7 +99,8 @@ fn run_rename(exe: U8[], plain_caps: json.Val, arena: Arena$@) //<
     //<
     //< `plain_caps` is the capabilities the suite's own server gave a client that said nothing.
     verdict.check("a client that does not ask prepareRename is told only that renaming is answered",
-        plain_caps.get("renameProvider").as_bool(false), lsp_client.dump(plain_caps, arena))
+        plain_caps.get("renameProvider").as_bool().unwrap_or(false),
+        lsp_client.dump(plain_caps, arena))
     dir: = harness.sandbox("lsp_rename")
     fs.write_tree(dir, U8[][]::{ "lib.kspl", user_uri, pick_uri, alias_uri },
         U8[][]::{ lib_src, user_src, pick_src, alias_src }, arena) catch
@@ -122,7 +123,7 @@ fn run_rename(exe: U8[], plain_caps: json.Val, arena: Arena$@) //<
         return
     caps: = init.val.get("result").get("capabilities")
     verdict.check("a client that asks prepareRename is told it is answered",
-        caps.get("renameProvider").get("prepareProvider").as_bool(false),
+        caps.get("renameProvider").get("prepareProvider").as_bool().unwrap_or(false),
         lsp_client.dump(caps, arena))
     c.notify("textDocument/didOpen", lsp_client.did_open(user_uri, user_src, arena),
         lsp_client.send_ms, arena) catch {}
@@ -141,9 +142,9 @@ priv fn check_prepare(ask: Ask) //< prepareRename: the name's range here, a refu
         ask.at("    total: =", "total"), lsp_client.read_ms, ask.arena)
     r: = local.get("result")
     verdict.check("prepareRename on a local answers its range and its name",
-        r.get("placeholder").as_str().equals("total") &&
-        r.get("range").get("start").get("character").as_int(-1) == 4 &&
-        r.get("range").get("end").get("character").as_int(-1) == 9,
+        r.get("placeholder").as_str().unwrap_or("").equals("total") &&
+        r.get("range").get("start").get("character").as_int().unwrap_or(-1) == 4 &&
+        r.get("range").get("end").get("character").as_int().unwrap_or(-1) == 9,
         lsp_client.why(ask.c, lsp_client.dump(local, ask.arena), ask.arena))
     std_name: = lsp_client.answer(ask.c, "textDocument/prepareRename",
         ask.at("    io.out()", "out"), lsp_client.read_ms, ask.arena)
@@ -191,8 +192,8 @@ priv fn starts_at(edits: List<|json.Val|>@, line: Sz, character: Sz): Bool //<
     //< whether one of the edits starts at that line and column
     for i in Range.asc(edits.len)
         start: = edits.get(i).get("range").get("start")
-        if start.get("line").as_int(-1) == line &&
-            start.get("character").as_int(-1) == character
+        if start.get("line").as_int().unwrap_or(-1) == line &&
+            start.get("character").as_int().unwrap_or(-1) == character
             return true
     return false
 
@@ -201,10 +202,11 @@ priv fn places(found: List<|json.Val|>@, arena: Arena$@): U8[] //<
     out: = arena.text()
     for i in Range.asc(found.len)
         start: = found.get(i).get("range").get("start")
-        uri: = found.get(i).get("uri").as_str()
+        uri: = found.get(i).get("uri").as_str().unwrap_or("")
         if uri.len > 0
             out.s(uri).c(':')
-        out.s("\{start.get("line").as_int(-1)\}:\{start.get("character").as_int(-1)\} ")
+        out
+            .s("\{start.get("line").as_int().unwrap_or(-1)\}:\{start.get("character").as_int().unwrap_or(-1)\} ")
     return out.take()
 
 priv fn check_selected(ask: Ask) //<
@@ -212,7 +214,7 @@ priv fn check_selected(ask: Ask) //<
     //<
     //< **The import line names it, so a rename that skips the line stops the program compiling.**
     //< Renaming the declaration changes the left side of an `as` and the uses written by that
-    //< name; renaming the new name, the right side and its uses alone.
+    //< name. Renaming the new name changes the right side and its uses alone.
     by_name: = ask.rename_in(pick_uri, pick_src, "    return helper()", "helper", "aid")
     pick: = edits_in(by_name, pick_uri, ask.arena)
     verdict.check("a name a selective import brings in is renamed in the import line too",

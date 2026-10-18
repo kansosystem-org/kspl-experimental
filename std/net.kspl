@@ -54,7 +54,7 @@ pub enum Net_error //< why a socket operation failed
     set_option_failed //< changing a socket option failed
     resolve_failed //< the host name did not resolve to an address.
         //<
-        //< **Keep "it did not resolve" apart from "it did not connect"**: otherwise a wrong name
+        //< **Keep "it did not resolve" apart from "it did not connect".** Otherwise a wrong name
         //< and a missing peer look the same, and nobody can tell which to fix.
     addr_buffer_too_small //< the buffer for the address is shorter than `addr_text_max`
     bad_port //< the port is outside 0 to 65535, which a socket address cannot hold
@@ -94,9 +94,9 @@ priv fn transferred(n: I32): Sz!Net_error //<
 // ============================ Tcp_listener ============================
 priv fn handle_set_nonblocking(handle: I64): Void!Net_error //< makes a handle non-blocking
     //<
-    //< Both socket types use it. **It can fail, so it returns `!Net_error`**: a discarded
-    //< `Bool` would not trigger [W0701], and the failure would pass unnoticed
-    //< ("A failure is returned as `T!E`" in std/docs/DESIGN-core.md).
+    //< Both socket types use it. **It can fail, so it returns `!Net_error`.** A discarded
+    //< `Bool` passes without a word, but a dropped result is a compile error
+    //< ("Absent or failed: one rule" in std/docs/DESIGN-core.md).
     if !kspl_net_set_nonblocking(handle)
         throw .set_option_failed
 
@@ -108,7 +108,7 @@ impl Tcp_listener
         //<
         //< "0.0.0.0" listens on every IPv4 interface, "::" on every IPv6 one. **"::" does not
         //< accept IPv4 clients**, whatever the system default ("Connecting by name tries the
-        //< candidates overlapped" in std/docs/DESIGN-system.md); to accept both, open two
+        //< candidates overlapped" in std/docs/DESIGN-system.md). To accept both, open two
         //< listeners.
         host: U8[], //< the address to listen on; empty means `"0.0.0.0"`
         port: I32, //< the port to listen on; 0 lets the OS choose a free one (see `port`)
@@ -164,8 +164,8 @@ priv const poll_writable: U8 = 0x2 //< `std/reactor`'s `writable`, the mark kspl
 priv const poll_readable: U8 = 0x1 //< `std/reactor`'s `readable`
 priv const connect_wait_ms: I64 = 30000I64 //< how long a connect waits for any candidate at all
     //<
-    //< Caution: **Bound it here.** A candidate whose packets are dropped never refuses, and the
-    //< OS's own limit is minutes, so a connect to a dead address would hang its caller that long.
+    //< Caution: **Bound it here.** A candidate whose packets are dropped never refuses. The OS's
+    //< own limit is minutes, so a connect to a dead address would hang its caller that long.
 
 priv struct Round //< what one round of the attempts settled
     winner: I64 //< the attempt that connected (the others are closed), or 0
@@ -189,11 +189,11 @@ priv fn settle_round(live: I64$[], revents: U8$[]): Round //<
     //< Looks at each attempt: the first connected one wins, a refused one is closed
     //<
     //< A refusal is the socket's own answer (`kspl_net_connect_result`), which a wait on Windows
-    //< never reports. **A win needs both the wait's writable and the socket's answer**: the socket
-    //< alone can call an attempt still in flight connected on Windows, and the first such attempt
-    //< would win over the one that did connect.
+    //< never reports. **A win needs both the wait's writable and the socket's answer.** On Windows
+    //< the socket alone can call an attempt still in flight connected. The first such attempt
+    //< would then win over the one that did connect.
     //< Caution: **On a win, close only what is still open**: the kept ones already packed in front,
-    //< and the ones not yet looked at. A refused one is closed, and its slot may hold another.
+    //< and the ones not yet looked at. A refused one is closed, and its slot can hold another.
     $left: Sz = 0
     for i in Range.asc(live.len)
         state: = kspl_net_connect_result(live[i])
@@ -298,10 +298,10 @@ impl Tcp_stream
     ): Sz!Net_error
         return transferred(kspl_tcp_send(r.handle, buf.ptr, buf.len))
 
-    pub fn write_all( //< sends every byte in a loop; a non-blocking socket may still fail
+    pub fn write_all( //< sends every byte in a loop; a non-blocking socket can still fail
         //<
-        //< On a non-blocking socket it throws would_block rather than spinning, and the amount
-        //< already sent is lost; to resume a partial send, use write and track the progress
+        //< On a non-blocking socket it throws would_block rather than spinning. The amount
+        //< already sent is then lost. To resume a partial send, use write and track the progress
         //< yourself.
         r: Self$@,
         buf: U8[], //< the bytes sent
@@ -321,7 +321,7 @@ impl Tcp_stream
 
     pub fn read_for( //< receives as `read` does, waiting at most `timeout_ms` for the first byte
         //<
-        //< For a blocking stream whose peer may go quiet: `read` would wait for it for good.
+        //< For a blocking stream whose peer can go quiet: `read` would wait for it for good.
         r: Self$@,
         buf: U8$[], //< where the bytes go
         timeout_ms: I32, //< how long to wait for something to read; `timed_out` past it

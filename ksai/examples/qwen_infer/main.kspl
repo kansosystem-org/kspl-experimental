@@ -1,10 +1,10 @@
 //< A faithful native inference engine for the Qwen2.5 family, and the CLI that drives it
 //<
 //< It is built from `ksai/nn`'s `Gqa_attention` / `Swiglu_mlp` / `Rms_norm` / `Embedding` /
-//< `Linear`; under `tie_word_embeddings`, `LM_head`'s weight is the embedding's transpose, exported
+//< `Linear`. Under `tie_word_embeddings`, `LM_head`'s weight is the embedding's transpose, exported
 //< as `"lm_head.weight"` [hidden, vocab].
-//< **The weights and the settings both come from the safetensors `export_qwen_to_kspl.py` wrote**:
-//< PyTorch's [out,in] is already KSPL's `Linear` [in,out] there, and the settings are its `"cfg"`
+//< **The weights and the settings both come from the safetensors `export_qwen_to_kspl.py` wrote.**
+//< PyTorch's [out,in] is already KSPL's `Linear` [in,out] there. The settings are its `"cfg"`
 //< tensor (one-dimensional F32). **To change a tensor's name or `"cfg"`'s order, change the
 //< exporter too**, or loading fails.
 
@@ -44,7 +44,7 @@ priv struct Qwen_layer<|T|> //<
     //< One Qwen decoder layer: attention and an MLP, each after its RMS norm
     //<
     //< The naming matches ksai/examples/llama_engine/model.Mini_llama
-    //< (ksai/nn.Transformer_block): attention / attention_norm / ffn_norm, though this one's fourth
+    //< (ksai/nn.Transformer_block): attention / attention_norm / ffn_norm. But this one's fourth
     //< field is mlp, not ffn.
     priv attention_norm: nn.Rms_norm<|T|>
     priv attention: nn.Gqa_attention<|T|>
@@ -75,7 +75,7 @@ impl<|T|> Qwen_model<|T|>
         defer b.free()
         for i in Range.asc(cfg.n_layers)
             // A safetensors key (".attn.wq.weight" and the like) is an external format fixed by
-            // export_qwen_to_kspl.py, so it does not follow the field names above.
+            // export_qwen_to_kspl.py. So it does not follow the field names above.
             $attention: = nn.Gqa_attention<|T|>
                 .new(cfg.hidden, cfg.n_heads, cfg.n_kv_heads, cfg.head_dim, max_seq_len,
                 cfg.rope_theta, arena)
@@ -111,7 +111,12 @@ impl<|T|> Qwen_model<|T|>
             //<
             //< They are named "blocks.{i}.attn.{q,v}.lora_{a,b,scale}" (`load_qkv_lora_set` in
             //< ksai/model_file.kspl).
-        return ai_file.load_qkv_lora_set<|T|>(path, r.cfg.n_layers, arena)
+        attention: = r.layers.attention
+        q: = attention.wq.weights.shape
+        v: = attention.wv.weights.shape
+        return ai_file.load_qkv_lora_set<|T|>(path, r.cfg.n_layers,
+            lora_set.Lora_widths::{ .in_dim = q[0], .out_dim = q[1] },
+            lora_set.Lora_widths::{ .in_dim = v[0], .out_dim = v[1] }, arena)
     priv fn forward(r: Self$@, token_id: I32, start_pos: Sz,
         adapters: lora_set.Qkv_lora<|T|>$@, ca: Arena$@): Tensor<|T|> //<
             //< Streams token_id one step at start_pos and returns the logits [1, vocab]
@@ -133,8 +138,8 @@ impl<|T|> Qwen_model<|T|>
 
 // Reads one F32 field of the cfg tensor as an Sz dimension.
 // Caution: The F32→Sz cast (fptosi) is poison (undefined behaviour) out of range (NaN, Inf, a
-// huge value, a negative), with neither saturation nor wrap-around, and a tampered "cfg" can hold
-// any of them; so the value is compared while still F32 (safe even against NaN or Inf).
+// huge value, a negative), with neither saturation nor wrap-around. A tampered "cfg" can hold
+// any of them. So the value is compared while still F32 (safe even against NaN or Inf).
 priv fn safe_cfg_dim(v: F32): Sz!st.Safetensors_error //< a setting no tensor can outgrow
     if !(v >= 0.0 && v <= F32::tensor.max_tensor_elems)
         throw .invalid_header
@@ -142,7 +147,7 @@ priv fn safe_cfg_dim(v: F32): Sz!st.Safetensors_error //< a setting no tensor ca
 
 priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config!st.Safetensors_error
     c: = s.get_tensor<|F32|>("cfg", arena)! // [9] = Qwen_config's field order
-    // get_tensor verifies only that the declared shape fits inside the file; with fewer than 9
+    // get_tensor verifies only that the declared shape fits inside the file. With fewer than 9
     // elements, the fixed nine-element read below would run past the raw data.
     if c.size < 9
         throw .invalid_header
@@ -156,13 +161,13 @@ priv fn read_cfg($s: st.Safetensors, arena: Arena$@): Qwen_config!st.Safetensors
     cfg: = Qwen_config::{ .n_layers = n_layers, .hidden = hidden, .n_heads = n_heads,
         .n_kv_heads = n_kv_heads, .head_dim = head_dim, .intermediate = intermediate,
         .vocab = vocab, .rope_theta = (c.data + 7)$, .eps = (c.data + 8)$ }
-    // Beyond each field's range, the values' consistency: a broken or tampered cfg can divide by
-    // zero (n_heads/n_kv_heads=0) or overflow Sz into an out-of-bounds write (an abnormal
-    // n_layers).
+    // Beyond each field's range, check the values' consistency. A broken or tampered cfg can
+    // divide by zero (n_heads/n_kv_heads=0). It can also overflow Sz into an out-of-bounds write
+    // (an abnormal n_layers).
     if cfg.n_layers == 0 || cfg.hidden == 0 || cfg.n_heads == 0 || cfg.n_kv_heads == 0 ||
         cfg.head_dim == 0 || cfg.intermediate == 0 || cfg.vocab == 0
         throw .invalid_header
-    // GQA assumes each KV head serves n_heads/n_kv_heads query heads evenly, and the Q projection's
+    // GQA assumes each KV head serves n_heads/n_kv_heads query heads evenly. The Q projection's
     // width must be hidden (what goes back to the residual stream through wo).
     if cfg.n_heads % cfg.n_kv_heads != 0 || cfg.n_heads * cfg.head_dim != cfg.hidden
         throw .invalid_header
@@ -182,24 +187,28 @@ fn read_tokens(arena: Arena$@): List<|I32|>$@ //<
     $word: = Str_builder.new()
     defer word.free()
     for
-        c: = io.getchar()
-        if c >= 0 && (U8::c).is_digit()
-            word.c(U8::c)
-            continue
+        // A failed read ends the list as the end of input does; the warning says which.
+        c: = io.getchar() catch
+            io.err().s("[warn] reading standard input failed; the IDs read so far are used\n")
+            fallback .none
+        if got: = c
+            if got.is_digit()
+                word.c(got)
+                continue
         if word.len > 0
             if id: = tokenizer.parse_token_id(word.slice())
                 list.push(id)
             else
                 io.err().s("[warn] token ID overflowed I32 range, skipping\n")
             word.clear()
-        if c < 0
+        if c.is_none()
             break
     return list
 
 priv fn outside_vocab(ids: List<|I32|>$@, vocab: Sz): Bool //<
     //< Whether a token ID falls outside the model's table, said on standard error
     //<
-    //< Caution: **Check before the first step**, not inside it: the embedding's own bound is a
+    //< Caution: **Check before the first step**, not inside it. The embedding's own bound is a
     //< panic, which reads as a crash rather than as a bad input.
     for t in ids
         if t < 0 || Sz::t >= vocab

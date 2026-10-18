@@ -41,7 +41,7 @@ struct Mono_state_backup //<
     file_name: U8[]
     current_impl: U8[]
 
-priv const max_mono_depth: Sz = 128 //< the limit on instantiate_struct's recursive call depth
+const max_mono_depth: Sz = 128 //< the limit on instantiate_struct's recursive call depth
     //<
     //< A cycle hits instantiated_nodes' cache (register_inst_node); a non-cycling chain (A<|T|>
     //< embedding B<|T|>, B embedding C, ...) does not.
@@ -61,8 +61,8 @@ fn check_written_generic_arity(c: Sema_ctx$@, tmpl_node: Ast_node$@, arg_count: 
     name: = tmpl_node.get_decl_id_text()
     direction: = "too many" if arg_count > param_count else "too few"
     c.clear_scratch()
-        .s("\{direction\} type arguments for generic '\{name\}': it declares \{param_count\}, but \
-            \{arg_count\} given")
+        .s("\{direction\} type arguments for generic '\{name\}'. Expected \{param_count\}, but got \
+            \{arg_count\}")
     c.err(site, c.scratch.slice())
 
 fn written_generic_arity_matches(tmpl_node: Ast_node$@, arg_count: Sz): Bool //<
@@ -110,10 +110,11 @@ impl Sema_ctx
         args: I32[]): Ast_node$@?
         // Caution: Look up the mangled-name key too. The literal text `Base<|args|>` varies with
         // qualification, and the same instance created twice fails in C with `redefinition of ...`.
-        cached_inst: = r.env.instantiated_nodes.get(full_inst_name)
-            catch (r.env.instantiated_nodes.get(inst_name) catch null)
-        tmpl_node: = r.generics.templates.get(base_name) catch null
-        if cached_inst != null || tmpl_node == null
+        if r.env.instantiated_nodes.get(full_inst_name).is_some() ||
+            r.env.instantiated_nodes.get(inst_name).is_some()
+            return .none
+        tmpl_node: = r.generics.templates.get(base_name).unwrap_or(null)
+        if tmpl_node == null
             return .none
         inst: = prepare_inst_node(r, tmpl_node, inst_name, args)
         return .some(inst)
@@ -122,9 +123,9 @@ impl Sema_ctx
         //< Adds an instantiated trait's methods to the name table as `<instantiation>.<method>`
         //<
         //< **Named the same way as for a non-generic trait**
-        //< Caution: declare_symbol_with_fqn cannot be used: during an expression's inference
-        //< (scopes pushed) the entry is lost when the scope is left. A `priv` method is added too;
-        //< hidden here, its return type is lost silently (check_visibility_and_mark_used handles
+        //< Caution: declare_symbol_with_fqn cannot be used. During an expression's inference
+        //< (scopes pushed), the entry is lost when the scope is left. A `priv` method is added too.
+        //< Hidden here, its return type is lost silently (check_visibility_and_mark_used handles
         //< visibility).
         full_name: = join_dotted_name(inst_name, m_sym.name)
         m_sym.flags.is_global = true
@@ -141,6 +142,19 @@ impl Sema_ctx
         //< type, the reflection table). **Return unknown if the instantiation fails** (it is
         //< reported).
         $inst: = r.instantiate_struct(base_core.slice_fqn, I32[]::{ elem_id }) catch
+            return I32::sema_type_env.Builtin_type_id.unknown
+        defer inst.free()
+        return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
+
+    fn result_type_of(r: Self$@, ok_id: I32, err_id: I32): I32 //< makes one result type
+        //<
+        //< `T!E` is `std/lang`'s `Result<|T, E|>`; code that builds one without a written type
+        //< (a `catch` whose substitute is a result) goes through here, as a slice does through
+        //< `slice_type_of`. **Return unknown if the instantiation fails** (it is reported).
+        if sema_type_env.is_unknown(ok_id) || sema_type_env.is_unknown(err_id)
+            return I32::sema_type_env.Builtin_type_id.unknown
+        $inst: =
+            r.instantiate_struct(base_core.result_fqn, I32[]::{ ok_id, err_id }) catch
             return I32::sema_type_env.Builtin_type_id.unknown
         defer inst.free()
         return r.env.get_or_add(base_core.arena.dup_str(inst.slice()))
@@ -221,10 +235,11 @@ impl Sema_ctx
             trait_vis: = sym.vis
             for m_node in inst_node.children
                 // A method with a default body is handled the same way (as in registry.kspl).
-                if m_node.kind_id == .k_decl_fn_proto || m_node.kind_id == .k_decl_fn
-                    m_sym: = r.add_trait_method(m_node, trait_def, trait_vis)!
-                    if m_sym != null
-                        r.declare_inst_trait_method(arena_inst_name, m_sym)
+                m_name_node: = m_node.find_child(.k_identifier)
+                if (m_node.kind_id == .k_decl_fn_proto || m_node.kind_id == .k_decl_fn) &&
+                    m_name_node != null
+                    m_sym: = r.add_trait_method(m_node, m_name_node.text, trait_def, trait_vis)!
+                    r.declare_inst_trait_method(arena_inst_name, m_sym)
         else if is_enum
             // A generic enum: the substituted clone's variants resolve under generics.args, as a
             // plain enum's do.
@@ -308,8 +323,8 @@ impl Sema_ctx
     priv fn check_const_arg(r: Self$@, param: Ast_node$@, name: U8[], value: U8[]) //<
         //< Refuses a value type argument its `const` parameter's type does not hold, at the use
         //<
-        //< Caution: **Check it here, at the instantiation's first binding**: inside the instance a
-        //< diagnostic hanging on a type argument is not emitted, so `Ring<|3000000000|>` for
+        //< Caution: **Check it here, at the instantiation's first binding.** Inside the instance, a
+        //< diagnostic hanging on a type argument is not emitted. So `Ring<|3000000000|>` for
         //< `const n: I32` was truncated in silence, and `Ring<|true|>` was reported inside the
         //< body.
         type_node: = param.find_child(.k_type_expr)
@@ -328,7 +343,7 @@ impl Sema_ctx
             return
         shown: = r.env.display(t_id)
         r.clear_scratch()
-            .s("type argument '\{value\}' does not fit 'const \{name\}: \{shown\}'; pass a value ")
+            .s("type argument '\{value\}' does not fit 'const \{name\}: \{shown\}'. Pass a value ")
             .s("of that type")
         site: = r.generics.inst_site if r.generics.inst_site != null else param
         r.err(site, r.scratch.slice())
@@ -340,7 +355,7 @@ impl Sema_ctx
         //< lower builds the thunks and the vtable from it (Trait_inst in sema/session/state.kspl).
         //< The key rejects a second pair (a vtable redefinition).
         key: = r.clear_scratch().s("\{target_id\}:\{trait_id\}").slice()
-        if r.mono.trait_inst_seen.get(key) catch false
+        if r.mono.trait_inst_seen.get(key).unwrap_or(false)
             return
         r.mono.trait_inst_seen.set(base_core.arena.dup_str(key), true)
         r.generics.trait_insts
@@ -387,9 +402,9 @@ impl Sema_ctx
         inst: sema_type_env.Instance): Bool //<
             //< Whether a generic impl covers the instance inst
             //<
-            //< Its target must name inst's template and its marks accept inst's arguments
-            //< (impl_target_rejects in mono_target.kspl), or a mutable-only impl's methods and
-            //< trait reach the immutable instance.
+            //< Its target must name inst's template, and its marks must accept inst's arguments
+            //< (impl_target_rejects in mono_target.kspl). Otherwise a mutable-only impl's methods
+            //< and trait reach the immutable instance.
         target_node: = generic_impl.get_decl_type_node()
         if target_node == null
             return false
@@ -403,8 +418,10 @@ impl Sema_ctx
         r.set_current_file(prev_file)
         if !target_fqn.equals(inst.template)
             return false
+        // The variances are kept under the generic base's name; the instance's name finds none.
+        variances: = r.env.variance_masks.get(inst.template).unwrap_or(0)
         return !sema_decl_mono_target.impl_target_rejects(r, generic_impl,
-            raw_target_type.slice(), inst.args, r.variance_mask_of(inst.template))
+            raw_target_type.slice(), inst.args, variances)
 
     fn instantiate_generic_methods(r: Self$@, type_id: I32, inst: sema_type_env.Instance,
         site: Ast_node$@): Void!Sema_error //<
@@ -439,7 +456,7 @@ impl Sema_ctx
                 arena_inst_m_name: = base_core.arena.dup_str(inst_m_name.slice())
 
                 m_id: = base_core.pools.intern_name(arena_inst_m_name)
-                m_sym_res: = r.symtab.global_scope.get(m_id) catch null
+                m_sym_res: = r.symtab.global_scope.get(m_id).unwrap_or(null)
                 if m_sym_res == null
                     continue
                 arena_short: = base_core.arena.dup_str(m_name)
@@ -455,7 +472,7 @@ impl Sema_ctx
         impl_name: = r.env.get_str(type_id)
 
         // Queued on pending, not inferred here (the reason is at instantiate_fn below).
-        // Caution: **Queue it at the same depth as the table** (not 0); what the body instantiates
+        // Caution: **Queue it at the same depth as the table** (not 0). What the body instantiates
         // is one level deeper (inst_chain_depth in sema/session/state.kspl).
         for i in Range.asc(inst_nodes.len)
             r.queue_fn_body(inst_nodes.get(i), base_core.arena.dup_str(impl_name),
@@ -494,17 +511,17 @@ impl Sema_ctx
     priv fn fn_owner_of(r: Self$@, fi: Fn_instance): Fn_owner!Sema_error //<
         //< Which of fn_instance_names's shapes fi has, its type instantiated where it must be
         //<
-        //< A method of a generic type's instance binds that instance's arguments: with its own
-        //< type arguments as well, to the type's parameters; without, to the impl's, which its
-        //< template carries (`collect_impl_decl` in collect.kspl copies them in).
+        //< A method of a generic type's instance binds that instance's arguments. With its own type
+        //< arguments as well, it binds them to the type's parameters. Without, it binds them to the
+        //< impl's, which its template carries (`collect_impl_decl` in collect.kspl copies them in).
         type_fqn: = fn_type_fqn(fi)
-        type_tmpl: = r.generics.templates.get(type_fqn) catch null
+        type_tmpl: = r.generics.templates.get(type_fqn).unwrap_or(null)
         if type_tmpl == null
             return .free
         if fi.owner != 0
             if inst: = r.env.instance_of(fi.owner)
                 type_name: = r.env.get_str(fi.owner)
-                m_tmpl: = r.generics.templates.get(fi.template) catch null
+                m_tmpl: = r.generics.templates.get(fi.template).unwrap_or(null)
                 if m_tmpl != null &&
                     sema_decl_mono_name.introduces_own_generic_param(m_tmpl,
                     type_tmpl.find_child(.k_type_gen_params))
@@ -536,7 +553,7 @@ impl Sema_ctx
         default {}
         $is_method: = false
         $struct_inst_name_str: U8[] = ""
-        // Caution: **A dotted template counts as a method**, a free function's FQN too: its
+        // Caution: **A dotted template counts as a method**, a free function's FQN too. Its
         // signature is resolved with `Self` standing for what precedes the last dot, as every
         // function instance's always was.
         if fi.template.rfind_char_out('.') >= 0
@@ -557,10 +574,10 @@ impl Sema_ctx
         $backup: = r.backup_mono_state()
         switch owner
         case .own_args(_n)
-            // Bind the type's own parameters from the instance's record, for this call only (the
-            // struct's instantiation left generics.args long ago); restore_mono_state undoes it.
+            // Bind the type's own parameters from the instance's record, for this call only. The
+            // struct's instantiation left generics.args long ago. restore_mono_state undoes it.
             if inst: = r.env.instance_of(fi.owner)
-                type_tmpl: = r.generics.templates.get(inst.template) catch null
+                type_tmpl: = r.generics.templates.get(inst.template).unwrap_or(null)
                 struct_gen_params: =
                     type_tmpl.find_child(.k_type_gen_params) if type_tmpl != null else null
                 if struct_gen_params != null
@@ -579,9 +596,11 @@ impl Sema_ctx
         // reason is at inst_chain_depth in sema/session/state.kspl).
         chain_depth: = r.generics.inst_chain_depth + 1
         if chain_depth > max_mono_depth
-            r.err(inst_node,
-                "generic function instantiation chain too deep (possible unbounded recursive \
-                    generic function)")
+            if !r.mono.chain_cut
+                r.err(inst_node,
+                    "generic function instantiation chain too deep (possible unbounded recursive \
+                        generic function)")
+            r.mono.chain_cut = true
             throw .analysis_failed
         r.register_inst_node(full_inst_name.slice(), inst_name.slice(), inst_node, true)
 
@@ -628,7 +647,7 @@ impl Sema_ctx
             if is_method
                 impl_name_val = r.env.get_str(r.env.get_or_add(struct_inst_name_str))
             // Only queued on pending: inferring under the caller's symtab scopes and fn_ctx would
-            // break, so infer.kspl's worklist loop infers it after resetting the scopes.
+            // break. So infer.kspl's worklist loop infers it after resetting the scopes.
             r.queue_fn_body(inst_node, base_core.arena.dup_str(impl_name_val), chain_depth,
                 r.env.display_key(full_inst_name.slice()), r.generics.inst_site)
 
@@ -643,8 +662,8 @@ struct Fn_instance //< one instance of a generic function: what it instantiates 
     owner: I32 //<
         //< The generic type's instance a method is reached through, or 0
         //<
-        //< 0 for a free function and a plain type's method; also for a generic type's method named
-        //< through the template itself, whose type arguments are then args.
+        //< 0 for a free function and a plain type's method. Also 0 for a generic type's method
+        //< named through the template itself, whose type arguments are then args.
     args: I32[] //< its own type arguments; a method of an instance declaring none has none
 
 enum Fn_owner //< which of the three shapes a function instance has (fn_instance_names)

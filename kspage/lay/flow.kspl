@@ -189,10 +189,10 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
         look = style.resolve_look(w, look)
 
     // A page break before the block.
-    // Caution: **Move to the next page before the space above** (moved after it, the space meant
-    // for the previous page is left at the top of the new page). **It does not move mid-fence**
-    // (the fill's band would be split across two pages), nor at the top of a page (`page_break`
-    // decides).
+    // Caution: **Move to the next page before the space above.** Moved after it, the space meant
+    // for the previous page is left at the top of the new page. **It does not move mid-fence**,
+    // since the fill's band would be split across two pages. Nor does it move at the top of a
+    // page (`page_break` decides).
     if breaks && !joint.joined()
         if top: = page_break(p.page_height, p.y, p.page_height)
             p.y = top
@@ -201,8 +201,8 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
     if !joint.joined()
         p.y += space_before
     // The inner space. **Only the contents narrow the region** (the fill's band spans all of it).
-    // Caution: **Always restore the right edge**: the pen holds one right edge for the region, so
-    // without restoring it the next sibling is laid out that much narrower.
+    // Caution: **Always restore the right edge.** The pen holds one right edge for the region.
+    // Without restoring it, the next sibling is laid out that much narrower.
     $gutter: F32 = indent
     if p.mark.len > 0
         need: = p.out.src.measure_width(look.font, p.mark) - pad
@@ -255,8 +255,8 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
             at.y = top
         used = absolute.place_surface(p.out, b, sheet, at, width, height, look, p.arena)
     case .flow
-        // Columns. **The style gives the number of columns** (not a section break), and **a block
-        // with no children is not laid out in columns** (there is nothing to distribute).
+        // Columns. **The style gives the number of columns** (not a section break). **A block
+        // with no children is not laid out in columns**, since there is nothing to distribute.
         if column_count > 1 && b.children.len > 0
             used =
                 place_columns_on_one_page(p, b, sheet, at@, look, column_count, column_gap)
@@ -282,13 +282,13 @@ priv fn layout_block(p: Pen$@, b: Block$@, sheet: Sheet$@, parent: Look, left: F
     // indent.
     child_left: = p.left
     // **The lower edge is not passed to the children**: only the frame's own band closes at its
-    // height (passed on, the fill of a paragraph inside would stretch to the frame's floor).
+    // height. Passed on, the fill of a paragraph inside would stretch to the frame's floor.
     place_siblings(p, b.children, sheet, look, child_left, 0.0)
     // Caution: **Lay it out after the contents**, or the text covers the figure.
     absolute.hang_framed(p.out, b, sheet, held_box(left, head, room, p.y), look, p.arena)
-    // **Close a fence only where it closes** (closed partway, the band is cut at one line's
-    // height), **but always restore the region's right edge** (not restored, the next sibling
-    // narrows).
+    // **Close a fence only where it closes.** Closed partway, the band is cut at one line's
+    // height. **But always restore the region's right edge.** Not restored, the next sibling
+    // narrows.
     if !joint.closes()
         p.right = room
         return
@@ -338,8 +338,8 @@ priv fn place_siblings(p: Pen$@, blocks: List<|Block$@|>$@, sheet: Sheet$@, look
     outer: = p.fence
     outer_from: = p.fence_from
     $ord: Sz = 0
-    // The extent of the fence it is in, **computed here, where the list is walked in order**
-    // (computed from each block, the whole list would be walked once per block).
+    // The extent of the fence it is in, **computed here, where the list is walked in order**.
+    // Computed from each block, the whole list would be walked once per block.
     $head: Sz = 0
     $end: Sz = 0
     for $i: Sz = 0; i < blocks.len; i += 1
@@ -381,8 +381,9 @@ fn place_blocks(dst: Page$@, blocks: List<|Block$@|>$@, sheet: Sheet$@, at: Rect
 priv fn fitted(dst: Page$@, from: Placed, band: Rect, kind: Arrange): Rect //<
     //< The region's width, narrowed to the contents that were laid out
     //<
-    //< Caution: **Keep the height at the band** (the space around a paragraph belongs to the region
-    //< too), but not the width, or a page-wide frame appears around a narrow table or slide.
+    //< Caution: **Keep the height at the band** (the space around a paragraph belongs to the
+    //< region too). Do not keep the width, or a page-wide frame appears around a narrow table or
+    //< slide.
     $lo: F32 = band.x + band.w
     $hi: F32 = band.x
     switch kind
@@ -501,8 +502,9 @@ priv fn top_after(dst: Page$@, from: Placed, bottom: F32): F32 //<
     //< The topmost y of what was laid out after from
     //<
     //< Where nothing was laid out, bottom.
-    //< **The height when it was opened cannot be used instead**: a block crossing pages is moved on
-    //< afterwards, and the band would start on the page before. Looking up to the slide is enough.
+    //< **The height when it was opened cannot be used instead.** A block that crosses pages is
+    //< moved on afterwards, and the band would start on the page before. Looking up to the slide
+    //< is enough.
     $top: F32 = bottom
     for $i: Sz = from.boxes; i < dst.boxes.len; i += 1
         top = upper_of(top, dst.boxes.get(i).rect.y)

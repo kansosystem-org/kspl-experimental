@@ -1,11 +1,12 @@
 //< Fixes the order in which an expression's operands run, where C would leave it open
 //<
 //< C evaluates a call's arguments, an operator's two sides and a compound literal's fields in an
-//< order of its own choosing (gcc takes a call's arguments from the right, clang from the left).
-//< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-language.md), so an operand
+//< order of its own choosing. gcc takes a call's arguments from the right, clang from the left.
+//< KSPL evaluates them left to right ("Evaluation order" in docs/SPEC-language.md). So an operand
 //< that a later operand could disturb is moved into a temporary ahead of the statement.
-//< It also places the retain an operand taken with a count owes ("The rules for implementing ARC"
-//< in ksplc/docs/DESIGN-compiler.md), so a later operand's `!` never leaves that count behind.
+//< It also places the retain that an operand taken with a count owes, so a later operand's `!`
+//< never leaves that count behind. See "The rules for implementing ARC" in
+//< ksplc/docs/DESIGN-lower.md.
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/ast_ext" as base_ast_ext
 import "ksplc/base/ast_place" as base_ast_place
@@ -87,12 +88,12 @@ impl Operand_order
     fn apply(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It moves into a temporary each operand that C could run on the wrong side of another
         //<
-        //< That is an operand that is not `fixed`, with a later one that acts, or acting itself
-        //< with a later one that is not `fixed`. It is lowered as it moves, so the statements it
-        //< hoists keep their place in the order; the rest are lowered later by the caller, where
-        //< they stand.
-        //< An operand taken with a count that a later acting operand could leave behind is held in
-        //< a flagged temporary (arc_hold_until_taken); a new value moves for it even where `fixed`.
+        //< That is an operand that is not `fixed` with a later one that acts, or an acting one with
+        //< a later one not `fixed`. It is lowered as it moves, so the statements it hoists keep
+        //< their place in the order. The caller lowers the rest later, where they stand.
+        //< A later acting operand can leave behind an operand taken with a count. Such an operand
+        //< is held in a flagged temporary (arc_hold_until_taken). A new value moves for it even
+        //< where `fixed`.
         if !lctx.in_fn_body || r.slots.len < 2
             return
         $classes: = List<|Order_class|>.new(null)
@@ -133,7 +134,7 @@ impl Operand_order
     fn finish(r: Self$@, lctx: Lowering_ctx$@) //<
         //< Once the consumer's operands are lowered: the retains still owed, and the held counts
         //<
-        //< A retain of an operand not moved goes here, after every operand that could leave: such
+        //< A retain of an operand not moved goes here, after every operand that could leave. Such
         //< an operand is `fixed` or nothing after it acts, so nothing between disturbs it. A held
         //< count is now the consumer's, so no exit releases it any more.
         r.finished = true
@@ -303,9 +304,9 @@ impl Ast_node
     priv fn hoist_packed_holder(r: Self$@, lctx: Lowering_ctx$@): Ast_node$@ //<
         //< hoist_address for a field `#packed` leaves under-aligned: the holder is fixed instead
         //<
-        //< A pointer to the field would claim its type's alignment, so the struct holding it is
+        //< A pointer to the field would claim its type's alignment. So the struct holding it is
         //< fixed (its address, or the pointer reaching it). The steps from there are `.` and an
-        //< array's `[]`; an index among them moves by value, so it runs in order too, and its
+        //< array's `[]`. An index among them moves by value, so it runs in order too, and its
         //< bounds check runs where the field is used.
         $chain: = List<|Ast_node$@|>.new(null)
         defer chain.free()

@@ -1,20 +1,20 @@
 //< Checks that ksplc reads the indentation notation (`.kspl`) the same however it is saved
 //<
 //< **1. A file saved with CRLF is the same program as with LF.** The indentation notation **counts
-//< lines**, so once a `\r` is read as a character a blank line is not blank, and the inserted
+//< lines**. Once a `\r` is read as a character, a blank line is not blank. Then the inserted
 //< terminator and brace land after the `\r`.
-//< **It reads only this package's own folder**: the samples in `../kspls/`, the grammar and the
+//< **It reads only this package's own folder**: the samples in `../notation/`, the grammar and the
 //< code that rewrites the indentation.
 import "ksplc/tests/support/harness"
-import "ksplc/tests/support/kspls_crlf"
-import "ksplc/tests/support/kspls_doc"
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read"
+import "ksplc/tests/support/notation_crlf"
+import "ksplc/tests/support/notation_doc"
 import "std/chars"
 import "std/ds" { List }
 import "std/fs"
 import "std/io"
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str" { Str_builder }
 import "std/strfmt" as _strfmt
@@ -30,7 +30,7 @@ priv fn sample_stems(arena: Arena$@): List<|U8[]|> //< it collects the samples' 
     //< Caution: **Do not keep a list of names** — a sample added later would be missed. The folder
     //< is the list.
     $out: = List<|U8[]|>.new(arena)
-    names: = fs.read_dir(kspls_crlf.sample_dir, arena) catch
+    names: = fs.read_dir(notation_crlf.sample_dir, arena) catch
         return out
     for leaf in names
         if leaf.ends_with(".kspl")
@@ -74,7 +74,7 @@ priv const decl_line: I64 = 2I64 //< the line `twice`'s declaration is on (0-bas
     //<
     //< It is the `priv fn twice` line of `probe_src`.
 
-priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
+priv fn check_diagnostics(c: jsonrpc_client.Client$@, arena: Arena$@) //< the squiggles
     //<
     //< **The returned URI must be `.kspl`**, or the editor puts squiggles on a different file.
     c.notify("textDocument/didOpen", lsp_client.did_open(probe_uri, probe_src, arena),
@@ -86,36 +86,36 @@ priv fn check_diagnostics(c: jsonrpc.Client$@, arena: Arena$@) //< the squiggles
     for _k in Range.asc(8)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
         p: = msg.val.get("params")
-        if !p.get("uri").as_str().ends_with("laid_probe.kspl")
+        if !p.get("uri").as_str().unwrap_or("").ends_with("laid_probe.kspl")
             continue
         found = true
         diags: = p.get("diagnostics").arr_list(arena)
         count = diags.len
         if count > 0
             start: = diags.get(0).get("range").get("start")
-            line = start.get("line").as_int64(-1I64)
-            col = start.get("character").as_int64(-1I64)
+            line = start.get("line").as_int64().unwrap_or(-1I64)
+            col = start.get("character").as_int64().unwrap_or(-1I64)
         break
     seen: = arena.text().s("arrived=\{found\} count=\{count\} line=\{line\} col=\{col\}").take()
     verdict.check("a squiggle points at the indentation notation's line and column",
         found && count == 1 && line == bad_line && col == bad_col, seen)
 
-priv fn check_hover(c: jsonrpc.Client$@, arena: Arena$@) //< the hovers
+priv fn check_hover(c: jsonrpc_client.Client$@, arena: Arena$@) //< the hovers
     //<
     //< Caution: **Check the content**; with the position drifted, something still comes back.
     got: = lsp_client.answer(c, "textDocument/hover",
         lsp_client.at_pos(probe_uri, bind_line_at, bind_col_at, arena), lsp_client.read_ms, arena)
-    text: = got.get("result").get("contents").get("value").as_str()
+    text: = got.get("result").get("contents").get("value").as_str().unwrap_or("")
     // Caution: **Check the name too.** The type alone passes with the position drifted to another
     // `I32`.
     verdict.check("a hover answers with the name and the type under the indentation notation",
         text.find_str("v: I32").is_some(),
         arena.text().s("returned=").s(lsp_client.dump(got, arena)).take())
 
-priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a definition
+priv fn check_definition(c: jsonrpc_client.Client$@, arena: Arena$@) //< jumping to a definition
     //<
     //< **The destination's line must be the indentation notation's line.**
     got: = lsp_client.answer(c, "textDocument/definition",
@@ -128,8 +128,8 @@ priv fn check_definition(c: jsonrpc.Client$@, arena: Arena$@) //< jumping to a d
             false, lsp_client.dump(got, arena))
         return
     one: = res if lsp_read.is_missing(res.get_at(0)) else res.get_at(0)
-    uri = one.get("uri").as_str()
-    line = one.get("range").get("start").get("line").as_int64(-1I64)
+    uri = one.get("uri").as_str().unwrap_or("")
+    line = one.get("range").get("start").get("line").as_int64().unwrap_or(-1I64)
     seen: = arena.text().s("destination=\{uri\} line=\{line\}").take()
     verdict.check("the jump-to-definition destination points at the indentation notation's line",
         line == decl_line && uri.ends_with("laid_probe.kspl"), seen)
@@ -172,7 +172,7 @@ priv fn check_import(work: U8[], arena: Arena$@)
         return
     r: = harness.ksplc(U8[][]::{ "run", user })
     verdict.check("the indentation notation can import the indentation notation",
-        r.code == 0 && r.out.find_str("v=8").is_some(), r.out)
+        r.exited_with(0) && r.out.find_str("v=8").is_some(), r.out)
 
 // The same helper, and a user spelling the extension out.
 priv const spelt_user_src: U8[] =
@@ -202,7 +202,7 @@ priv fn check_import_spelt(work: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the importing file cannot be written")
         return
     r: = harness.ksplc(U8[][]::{ "run", user })
-    verdict.check(name, r.code == 0 && r.out.find_str("v=8").is_some(), r.out)
+    verdict.check(name, r.exited_with(0) && r.out.find_str("v=8").is_some(), r.out)
 
 priv const labelled_block_src: U8[] = //< a block carrying a label
     """import "std/io"
@@ -216,8 +216,8 @@ fn main(): I32
 priv fn check_labelled_block_kept(work: U8[], arena: Arena$@) //<
     //< A block carrying a label is formatted with the label kept
     //<
-    //< **A bare one never reaches here** — it does not parse (pinned by the case
-    //< `bare_block_without_label` in `ksplc/tests/parse/syntax.ksplb`); this checks that the valid
+    //< **A bare one never reaches here.** It does not parse (pinned by the case
+    //< `bare_block_without_label` in `ksplc/tests/parse/syntax.ksplb`). This checks that the valid
     //< shape is not rejected along with it.
     name: = "fmt keeps a block's label"
     dir: = fs.join(work, "labelled_block", arena)
@@ -229,8 +229,8 @@ priv fn check_labelled_block_kept(work: U8[], arena: Arena$@) //<
         verdict.check(name, false, "the material cannot be written")
         return
     yes: = harness.ksplc_bare(U8[][]::{ "fmt", labelled })
-    verdict.check(name, yes.code == 0 && yes.out.equals(labelled_block_src),
-        arena.text().s("labelled=\{yes.code\}\n\{yes.out\}").take())
+    verdict.check(name, yes.exited_with(0) && yes.out.equals(labelled_block_src),
+        arena.text().s("labelled=\{yes.code.unwrap_or(-1)\}\n\{yes.out\}").take())
 
 // ---------------------------------------------------------
 // 4. A doc comment keeps its place
@@ -291,15 +291,15 @@ fn main(): I32
 priv fn check_doc_comments(work: U8[], arena: Arena$@) //<
     //< Formatting leaves every doc comment where it stands
     //<
-    //< It checks the placement (`../support/kspls_doc.kspl` checks reading them as documentation),
-    //< with a run below a `//<` on a field, on a parameter and at a block's end.
+    //< It checks the placement (`../support/notation_doc.kspl` checks reading them as
+    //< documentation), with a run below a `//<` on a field, on a parameter and at a block's end.
     name: = "a doc comment stands in the same place after formatting"
     path: = fs.join(work, "doc_marks.kspl", arena)
     io.write_file(path, doc_src) catch
         verdict.check(name, false, "the material cannot be written")
         return
     r: = harness.ksplc_bare(U8[][]::{ "fmt", path })
-    verdict.check(name, r.code == 0 && r.out.equals(doc_src),
+    verdict.check(name, r.exited_with(0) && r.out.equals(doc_src),
         arena.text()
         .s("formatting moved it\n--- expected ---\n\{doc_src\}--- actual ---\n\{r.out\}").take())
 
@@ -590,7 +590,7 @@ priv fn check_shown_line(work: U8[], arena: Arena$@)
 
 // ---------------------------------------------------------
 // 7. A string carried onto the next line is rewritten like any other
-// A `\` at a line's end leaves a string open there: it must be rewritten, compile, and print the
+// A `\` at a line's end leaves a string open there. It must be rewritten, compile, and print the
 // line the author wrote. **The note's own line number is pinned elsewhere**
 // (`test_carried_string_leaves_the_lines_below` in `../layout_test.kspl`).
 priv const carried_src: U8[] =
@@ -613,16 +613,16 @@ priv fn check_carried_line(work: U8[], arena: Arena$@)
 
 fn main(): I32
     arena: = harness.begin(64 * 1024 * 1024)
-    work: = harness.sandbox("kspls")
+    work: = harness.sandbox("notation")
     $stems: = sample_stems(arena)
     if stems.len == 0
         return harness.fatal("not one sample")
     io.out().s("# the line terminator changes nothing (\{stems.len\} samples)\n")
     for s in stems.slice()
-        kspls_crlf.check_crlf(work, s, arena)
+        notation_crlf.check_crlf(work, s, arena)
 
-    kspls_crlf.check_crlf_raw_text(work, arena)
-    kspls_crlf.check_crlf_fmt(work, arena)
+    notation_crlf.check_crlf_raw_text(work, arena)
+    notation_crlf.check_crlf_fmt(work, arena)
     check_import(work, arena)
     check_import_spelt(work, arena)
     check_labelled_block_kept(work, arena)
@@ -652,5 +652,5 @@ fn main(): I32
     check_diagnostics(c@, arena)
     check_hover(c@, arena)
     check_definition(c@, arena)
-    kspls_doc.run(c@, arena)
+    notation_doc.run(c@, arena)
     return harness.finish()

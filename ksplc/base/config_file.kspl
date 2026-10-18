@@ -58,8 +58,11 @@ struct Cfg_file //< one folder's own `ksplc.cfg`: whether it exists, and what it
 priv $own_cache: Map<|U8[], Cfg_file$@|>$@ = null
 priv $in_force_cache: Map<|U8[], List<|Setting|>$@|>$@ = null
 
-priv fn fail(file: U8[], line: Sz, msg: U8[])
-    base_diag.print_unplaced(file, line, msg)
+priv fn fail(file: U8[], line: Sz, msg: U8[]) //< it refuses a line of a settings file, and exits
+    //<
+    //< **Every refusal names the file from the project's root**, however the folder was reached.
+    //< Some callers reach it by an absolute path, and the two spellings read as two files.
+    base_diag.print_unplaced(base_locate.to_project_relative(file), line, msg)
     sys.exit(1)
 
 // The `ksplc.cfg` files read so far, each once. **A settings file is an input of the build**
@@ -126,8 +129,9 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
                 fail(path, line_no,
                     "unknown configuration section (known sections: 'lint', 'package')")
             section = base_core.perm_arena.dup_str(name)
-            // **A `[package]` header is kept as a setting with an empty key**: it marks a package's
-            // top, so one with no name is still seen and rejected (`ksplc/base/package.kspl`).
+            // **A `[package]` header is kept as a setting with an empty key.** It marks a
+            // package's top. So one with no name is still seen and rejected
+            // (`ksplc/base/package.kspl`).
             if section.equals(package_section)
                 out
                     .push(Setting::{ .section = section, .key = "", .value = "", .file = file_perm,
@@ -142,6 +146,14 @@ priv fn load_one(path: U8[], out: List<|Setting|>$@): Bool //<
         value: = line.sub_from(eq + 1).trim_spaces()
         if key.len == 0 || value.len == 0
             fail(path, line_no, "expected 'key = value'")
+        // **A key is set once in its section**: a second line would silently override the first
+        // (Principle 5 in docs/DESIGN-principles.md).
+        for earlier in out
+            if earlier.key.equals(key) && earlier.section.equals(section)
+                said: = base_core.arena.text()
+                    .s("'\{key\}' is set twice in [\{section\}] (first on line \{earlier.line\}); \
+                        set it once").take()
+                fail(path, line_no, said)
         key_perm: = base_core.perm_arena.dup_str(key)
         value_perm: = base_core.perm_arena.dup_str(value)
         out
@@ -164,8 +176,7 @@ priv fn settings_for_dir(dir: U8[]): List<|Setting|>$@ //<
     if in_force_cache == null
         in_force_cache = base_core.perm_arena
             .create(Map<|U8[], List<|Setting|>$@|>.new(base_core.perm_arena))
-    hit: = in_force_cache.get(dir) catch null
-    if hit != null
+    if hit: = in_force_cache.get(dir)
         return hit
     $in_force: = none()
     $dirs: = List<|U8[]|>.new(null)
@@ -185,7 +196,7 @@ fn settings_in(dir: U8[]): List<|Setting|>$@ //< what dir's own `ksplc.cfg` says
 fn package_top(dir: U8[]): U8[] //<
     //< The nearest folder at or above dir whose own `ksplc.cfg` names a package; empty where none
     //<
-    //< **It walks on past the nearest file**, which may be inside the package and name none.
+    //< **It walks on past the nearest file**, which can be inside the package and name none.
     $dirs: = List<|U8[]|>.new(null)
     defer dirs.free()
     walk_up(dir, dirs@)
@@ -203,14 +214,14 @@ priv fn walk_up(dir: U8[], out: List<|U8[]|>$@) //< dir and each folder above it
     $start: = base_locate.fold_dots(dir)
     if !sys.is_absolute(start) && (start.equals("..") || start.starts_with("../"))
         start = base_locate.canonical_path(start)
-    from_root: = sys.is_absolute(start)
     $cur: = start
     for _steps in Range.asc(max_parent_walk)
         out.push(cur)
         if cur.len == 0
             break
+        // The root is its own folder, so the walk ends where the answer stops changing.
         parent: = sys.get_dir_name(cur)
-        if parent.len == 0 && from_root
+        if parent.equals(cur)
             break
         cur = parent
 
@@ -218,8 +229,7 @@ priv fn own_file(dir: U8[]): Cfg_file$@ //< dir's own `ksplc.cfg`, read once
     if own_cache == null
         own_cache = base_core.perm_arena
             .create(Map<|U8[], Cfg_file$@|>.new(base_core.perm_arena))
-    hit: = own_cache.get(dir) catch null
-    if hit != null
+    if hit: = own_cache.get(dir)
         return hit
     // Caution: **Allocate the list from perm_arena.** It stays in the cache for good; from the heap
     // (`new()`) it would leak.

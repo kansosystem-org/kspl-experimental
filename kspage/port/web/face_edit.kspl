@@ -1,6 +1,6 @@
 //< The entry points that change a style's contents
 //<
-//< **Every entry point here acts on "style `i`"**, and **a replacement is whole**, so "whether it
+//< **Every entry point here acts on "style `i`"**, and **a replacement is whole**. So "whether it
 //< is set" is a separate field per setting (that keeps the inheritance intact). No state is kept
 //< here. **Do not put a slice out at the boundary** ("The restrictions on types at the FFI
 //< boundary" in the language spec).
@@ -50,7 +50,7 @@ fn kspage_web_style_family(i: Sz): Sz
 // Replaces style `i`'s look (the font and the colors) whole; 1 if replaced. The name is
 // `family_len` bytes from the typing arena (negative: "unset"); a color is a `0xRRGGBB` number
 // (`has_*` 0: "unset").
-// Caution: **Do not make one entry point per field** — "unset" is a setting too, and replacing the
+// Caution: **Do not make one entry point per field.** "Unset" is a setting too. Replacing the
 // whole keeps "there was none" apart from "it was 0" (as replacing a formula whole does).
 #export
 fn kspage_web_set_style_look(i: Sz, family_len: Sz, has_size: I32, size: F32, has_weight: I32,
@@ -118,10 +118,10 @@ fn kspage_web_style_affix(i: Sz, tail: I32): Sz
 fn kspage_web_set_style_number(i: Sz, affix_len: Sz, has_places: I32, places: F32, grouped: I32,
     percent: I32, dated: I32): I32
     ensure()
-    // Decimal places are accepted only within range too (`kspage/model/limit`); outside it the text
-    // does not change, so accepting it would make a field that does nothing.
-    // Caution: **Check it while it is still F32** — converted to an integer first, where NaN lands
-    // is undefined; as F32, NaN fails both comparisons and is refused.
+    // Decimal places are accepted only within range too (`kspage/model/limit`). Outside it the
+    // text does not change, so accepting it would make a field that does nothing.
+    // Caution: **Check it while it is still F32.** Converted to an integer first, where NaN lands
+    // is undefined. As F32, NaN fails both comparisons and is refused.
     in_range: = places >= 0.0 && places <= F32::limit.most_places
     if !state.has_style(i) || affix_len > input_cap || (has_places != 0 && !in_range)
         return 0
@@ -139,10 +139,10 @@ fn kspage_web_set_style_number(i: Sz, affix_len: Sz, has_places: I32, places: F3
     ed.set_look(sheet.styles.get(i), fresh)
     return 1
 
-// Adds one style named by the `len` bytes in the typing arena and returns its index; **where the
-// name exists it returns that index** (a second style of the name could never be looked up).
+// Adds one style named by the `len` bytes in the typing arena and returns its index. **Where the
+// name exists, it returns that index**, since a second style of the name could never be looked up.
 // Caution: **Return the reason as a number** (the rule at `kspage_web_set_block_style` in
-// `face.kspl`): -1 "no name", **-2 "the name holds whitespace"** — with one number, the screen
+// `face.kspl`): -1 "no name", **-2 "the name holds whitespace"**. With one number, the screen
 // asks for a name that was already typed.
 #export
 fn kspage_web_add_style(len: Sz): Sz
@@ -160,10 +160,10 @@ fn kspage_web_add_style(len: Sz): Sz
 
 // ---- A paragraph's settings ----
 
-// Writes nine values into out for style `i`'s paragraph settings (the alignment / the line height
-// multiple / the space before / after / the indent / whether it wraps / the columns / the gap
-// between them / the padding). The alignment is `Align`'s list (0 left, 1 center, 2 right); **a
-// multiple of 0 means "unset"** (the font's height).
+// Writes nine values into out for style `i`'s paragraph settings. They are the alignment / the
+// line height multiple / the space before / after / the indent / whether it wraps / the columns /
+// the gap between them / the padding. The alignment is `Align`'s list (0 left, 1 center, 2
+// right). **A multiple of 0 means "unset"** (the font's height).
 #export
 fn kspage_web_style_para(i: Sz, out: F32$@)
     state.clear_out(out, 9)
@@ -182,7 +182,7 @@ fn kspage_web_style_para(i: Sz, out: F32$@)
     (out + 8)$ = s.pad
 
 // Whether style `i` "starts a new page before it"; 0 when absent.
-// Caution: **Do not add it to the paragraph-settings entry point** — a tenth argument would let a
+// Caution: **Do not add it to the paragraph-settings entry point.** A tenth argument would let a
 // caller's wrong order pass the type check (only the count is checked).
 #export
 fn kspage_web_style_breaks(i: Sz): I32
@@ -256,8 +256,8 @@ fn kspage_web_set_style_para(i: Sz, align: I32, spacing: F32, before: F32, after
 
 // ---- The frame and the fill ----
 
-// Writes five values into out for style `i`'s border and fill (the line's thickness / its color /
-// whether there is a fill / the fill's color / the shape).
+// Writes five values into out for style `i`'s border and fill. They are the line's thickness /
+// its color / whether there is a fill / the fill's color / the shape.
 #export
 fn kspage_web_style_edge(i: Sz, out: F32$@)
     state.clear_out(out, 5)
@@ -305,7 +305,7 @@ priv fn split_kept(both: U8[]): state.Split //<
 
 // Writes four values into out for style `i`'s lines (whether the underline is set / drawn /
 // whether the strikethrough is set / drawn).
-// Caution: **Pass "whether it is set" as a separate field** — 0 as unset makes "do not draw"
+// Caution: **Pass "whether it is set" as a separate field.** 0 as unset makes "do not draw"
 // impossible to write (the parent's underline could not be removed).
 #export
 fn kspage_web_style_decor(i: Sz, out: F32$@)
@@ -336,8 +336,8 @@ fn kspage_web_set_style_decor(i: Sz, has_under: I32, under: I32, has_strike: I32
 // ---- The marker ----
 
 // Writes style `i`'s marker kind into `kind` (0 none, 1 a bullet, 2 a number) and its text,
-// returning the length; the text is the bullet itself or what follows the number.
-// Caution: **Do not name the output parameter `out`** — the arena is `state.out` too, and using
+// returning the length. The text is the bullet itself or what follows the number.
+// Caution: **Do not name the output parameter `out`.** The arena is `state.out` too, and using
 // both in one function fails name resolution.
 #export
 fn kspage_web_style_mark(i: Sz, kind: F32$@): Sz
@@ -391,8 +391,8 @@ fn kspage_web_set_style_mark(i: Sz, kind: I32, len: Sz): I32
 
 // ---- Headings and the table of contents ----
 
-// Writes two values into out for style `i`'s heading depth (0: not a heading) and what it
-// collects (0 none, 1 a table of contents, 2 a list of notes).
+// Writes two values into out for style `i`. One is its heading depth (0: not a heading). The
+// other is what it collects (0 none, 1 a table of contents, 2 a list of notes).
 #export
 fn kspage_web_style_outline(i: Sz, out: F32$@)
     ensure()
@@ -409,8 +409,8 @@ fn kspage_web_style_outline(i: Sz, out: F32$@)
 #export
 fn kspage_web_set_style_outline(i: Sz, level: Sz, gather: I32): I32
     ensure()
-    // The depth is accepted only within range (`kspage/model/limit`): a chapter number adds digits
-    // by it, so a huge one would be used as is; a negative is refused by the same check.
+    // The depth is accepted only within range (`kspage/model/limit`). A chapter number adds digits
+    // by it, so a huge one would be used as is. A negative is refused by the same check.
     if !state.has_style(i) || !limit.outline_fits(level)
         return 0
     $fresh: style.Style = sheet.styles.get(i)$

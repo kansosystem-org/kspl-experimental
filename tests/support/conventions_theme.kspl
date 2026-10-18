@@ -27,7 +27,7 @@ priv fn holds_color(code: U8[], _arena: Arena$@): Bool
             continue
         $digits: Sz = 0
         for $k: Sz = i + 1; k < code.len && digits < 8; k += 1
-            if code[k].hex_val() >= 0
+            if code[k].hex_val().is_some()
                 digits += 1
                 continue
             break
@@ -63,9 +63,9 @@ priv fn check_theme_roles(arena: Arena$@)
 
 priv const lum_weight: F64[_] = ::{ 0.2126, 0.7152, 0.0722 } //< the contrast's luminance weights
     //<
-    //< **A pair is measured only where both roles hold a written colour**: a role set from the
-    //< environment (`CanvasText` and the like) follows the screen's light or dark, which the
-    //< browser keeps readable.
+    //< **A pair is measured only where both roles hold a written colour.** A role set from the
+    //< environment (`CanvasText` and the like) follows the screen's light or dark. The
+    //< browser keeps that readable.
     //< Note: The threshold is 4.5:1, the same as WCAG 2.2's 1.4.3 (the decision is in
     //< `kspage/docs/DESIGN-architecture.md`).
 
@@ -78,8 +78,8 @@ priv fn luminance(hex: U8[]): F64 //< the relative luminance of a `#rrggbb`
     //< `color-mix(…)` and system colours.
     $out: F64 = 0.0
     for k in Range.asc(3)
-        hi: = hex[1 + k * 2].hex_val()
-        lo: = hex[2 + k * 2].hex_val()
+        hi: = hex[1 + k * 2].hex_val().unwrap_or(0)
+        lo: = hex[2 + k * 2].hex_val().unwrap_or(0)
         out += lum_weight[k] * srgb_part(F64::(hi * 16 + lo) / 255.0)
     return out
 
@@ -98,7 +98,7 @@ priv fn is_hex6(v: U8[]): Bool
     if v.len != 7 || v[0] != '#'
         return false
     for k in Range.asc(6)
-        if v[1 + k].hex_val() < 0
+        if v[1 + k].hex_val().is_none()
             return false
     return true
 
@@ -179,8 +179,8 @@ priv fn check_theme_contrast(arena: Arena$@) //<
         "deepen the role's colour (`:root` in kspage/port/web/page.css)")
 
 // The samples for the judgment of whether a line holds a colour.
-// Caution: **Include both a role's name and a selector that looks like hex but is not**, or a
-// check that hits every line of CSS passes. `#ab` shows why fewer than three digits are not a
+// Caution: **Include both a role's name and a selector that looks like hex but is not.** Otherwise
+// a check that hits every line of CSS passes. `#ab` shows why fewer than three digits are not a
 // colour (`#id`).
 priv const color_samples: Sample[_] = ::{ Sample::{ .text = "  --ink: #1a1a1a;", .hits = true },
     Sample::{ .text = "  --ink: #eee;", .hits = true },
@@ -192,8 +192,8 @@ priv const color_samples: Sample[_] = ::{ Sample::{ .text = "  --ink: #1a1a1a;",
     Sample::{ .text = "  border-radius: 4px;", .hits = false } }
 
 // The samples for whether it is six hex digits.
-// Caution: **Include both a value short of digits and one with a non-hex letter** (a role's value
-// may be `color-mix(…)` or a system colour, which the luminance cannot read).
+// Caution: **Include both a value short of digits and one with a non-hex letter.** A role's value
+// can be `color-mix(…)` or a system colour, which the luminance cannot read.
 priv const hex6_samples: U8[][_] = ::{ "#1a1a1a", "#1a1a1", "#1a1a1g", "Canvas",
     "color-mix(in srgb, Canvas 50%, CanvasText)" }
 priv const hex6_want: Bool[_] = ::{ true, false, false, false, false }
@@ -257,8 +257,8 @@ priv fn check_theme_fires(arena: Arena$@)
 // ---- A style's name holds no whitespace ----
 
 // The marks with which the product writes a style's name.
-// Caution: **Do not search for the names themselves**: a table of names needs a fix for each name
-// added, and **a name added in the wrong form is exactly the case that must fail**. `sheet.add`
+// Caution: **Do not search for the names themselves.** A table of names needs a fix for each name
+// added. **A name added in the wrong form is exactly the case that must fail**. `sheet.add`
 // makes every product name; the `…_name` constants are the ones code uses.
 priv const style_marks: U8[][_] = ::{ "sheet.add(\"", "_name: U8[] = \"" }
 

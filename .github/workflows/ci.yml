@@ -41,11 +41,15 @@ permissions:
 # Which check runs in which job is "What each platform runs" in docs/SPEC-gates.md; the gates and
 # their order are `tools/ci_gates.kspl`'s table, run by a make target (`ci`, `ci-macos`,
 # `ci-shard-*`), so the same target runs locally.
+# **Each runner is named by its image's version, never `-latest`**, which GitHub moves on its own
+# day; Dependabot does not propose the next one, so it is a bump by hand ("How CI runs" in
+# docs/SPEC-gates.md).
 jobs:
   # --- Linux: every gate, in the devcontainer image of .devcontainer/Dockerfile ---
   linux:
     if: github.event_name != 'workflow_dispatch' || inputs['linux']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write # to push the image cache below to GHCR
@@ -55,7 +59,7 @@ jobs:
       matrix:
         # What runs is the gate table's (`Set` and `gates` in tools/ci_gates.kspl); a shard
         # missing here stops running unseen (tests/support/conventions_ci.kspl guards it).
-        target: [ci-shard-core, ci-shard-rest, ci-linux-only]
+        target: [ci-shard-core, ci-shard-rest, ci-shard-linux]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,7 +118,9 @@ jobs:
   # job for good the day the text drifts (tests/support/conventions_ci.kspl).
   macos:
     if: github.event_name != 'workflow_dispatch' || inputs['macos']
-    runs-on: macos-latest
+    runs-on: macos-26
+    # Above `CI_GATE_CAP` in mk/ci.mk, so a gate that hangs is stopped and named before the job is.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -142,7 +148,8 @@ jobs:
   # --- Windows (MSYS2 UCRT64 / mingw): both native shared sections ---
   windows-ucrt64:
     if: github.event_name != 'workflow_dispatch' || inputs['windows-ucrt64']
-    runs-on: windows-latest
+    runs-on: windows-2025
+    timeout-minutes: 45
     defaults:
       run:
         shell: msys2 {0}

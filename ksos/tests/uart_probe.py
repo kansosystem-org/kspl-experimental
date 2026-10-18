@@ -93,11 +93,21 @@ def echo_probe(elf, sock_name, payload, pass_note):
 
         print(f"sent    : {payload!r}")
         print(f"received: {received!r}")
-        if received == payload:
-            print(f"RESULT: ALL PASS ({pass_note})")
-            return 0
-        print("RESULT: SOME FAILED (1) -> the echoed bytes did not match")
-        return 1
+        if received != payload:
+            print("RESULT: SOME FAILED (1) -> the echoed bytes did not match")
+            return 1
+        # **QEMU's exit status is the demo's own verdict** (`con.exit`): bytes that match can
+        # still come from a run whose checks failed, such as one that dropped and resent nothing.
+        try:
+            status = proc.wait(timeout=QEMU_WAIT_S)
+        except subprocess.TimeoutExpired:
+            print("RESULT: SOME FAILED (1) -> QEMU did not end after the echo")
+            return 1
+        if status != 0:
+            print(f"RESULT: SOME FAILED (1) -> the demo's own checks failed (QEMU exit {status})")
+            return 1
+        print(f"RESULT: ALL PASS ({pass_note})")
+        return 0
     finally:
         # **Always tidy up**, or the next round cannot take the same socket.
         try:
@@ -111,13 +121,14 @@ def echo_probe(elf, sock_name, payload, pass_note):
 
 # The two demonstrations, by the name `ksos/Makefile` passes: the socket's name, the bytes sent and
 # the sentence reported.
-# **One byte is enough for `irq`**: the demo receives it only once NVIC IRQ0 (the UART0 RX
-# interrupt) wakes it from WFI, so the round trip is itself the proof of interrupt-driven I/O.
+# **`irq` sends a line, not one byte**: the demo receives each byte only once NVIC IRQ0 (the UART0
+# RX interrupt) wakes it from WFI, and it echoes nothing before the newline, so a byte the driver
+# let a later one overwrite comes back missing.
 DEMOS = {
     "polled": ("uart_echo_test.sock", b"hello-uart\n",
                "UART0 RX echoed back exactly what was sent"),
-    "irq": ("uart_irq_echo_test.sock", b"Q",
-            "UART0 RX byte echoed back via a genuine NVIC interrupt + WFI wakeup"),
+    "irq": ("uart_irq_echo_test.sock", b"hello-irq\n",
+            "UART0 RX line echoed back via genuine NVIC interrupts + WFI wakeups"),
 }
 
 if __name__ == "__main__":

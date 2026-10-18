@@ -1,14 +1,14 @@
-//< The math functions: square root, powers, logarithms, sine, cosine and tangent
+//< The math functions (square root, powers, logarithms, sine, cosine, tangent), and `x.to_i32()`
 //<
 //< A hosted build passes `sqrt` / `exp` / `log` / `sin` / `cos` / `tan` / `pow` straight to libm. A
 //< freestanding build has no libm, so it uses software implementations with no dependencies
-//< (Newton's method, the Taylor and atanh series, range reduction). **The two must agree**: a
-//< model's softmax, rmsnorm and RoPE depend on these, and one model must give the same answer
-//< whether it runs hosted or embedded. That holds at the edges too: a NaN, an infinity, a negative
+//< (Newton's method, the Taylor and atanh series, range reduction). **The two must agree.** A
+//< model's softmax, rmsnorm and RoPE depend on these. One model must give the same answer
+//< whether it runs hosted or embedded. That holds at the edges too. A NaN, an infinity, a negative
 //< under `sqrt` or `log` and an `exp` past F64's range get libm's answers (C99 Annex F), not a
-//< panic, so a masked softmax's `exp(-inf)` is 0 on both. The one gap: freestanding `sin`, `cos`
-//< and `tan` panic for a finite |x| of 2^63 × pi/2 (about 1.4e19) or more, which libm reduces
-//< exactly and the series here cannot.
+//< panic. So a masked softmax's `exp(-inf)` is 0 on both. The one gap: freestanding `sin`, `cos`
+//< and `tan` panic for a finite |x| of 2^63 × pi/2 (about 1.4e19) or more. libm reduces those
+//< exactly, and the series here cannot.
 #cfg(!freestanding)
 import "std/libc"
 
@@ -53,11 +53,82 @@ priv fn is_already_integral_or_non_finite(x: F64): Bool //<
 
 // It needs only the integer cast, so hosted and freestanding builds share it.
 pub fn round(x: F64): F64 //< rounds to the nearest whole number, halves away from 0
-    // Caution: For a NaN, an Infinity or a value outside I64's range, the I64::(...) cast below is
-    // undefined behaviour in C. From 2^52 up an F64 is already an integer, so x is returned uncast.
+    // Caution: For a NaN, an Infinity or a value outside I64's range, the I64::(...) cast below
+    // saturates, and the answer would be that bound. From 2^52 up an F64 is already an integer, so
+    // x is returned uncast.
     if is_already_integral_or_non_finite(x)
         return x
-    return F64::(I64::(x + 0.5)) if x >= 0.0 else -(F64::(I64::(-x + 0.5)))
+    // Caution: **Compare the dropped fraction with 0.5; never add 0.5 and cut.** The addition
+    // rounds: 0.49999999999999994 + 0.5 is 1.0 in F64, so it would round to 1.
+    t: = F64::(I64::x)
+    if x - t >= 0.5
+        return t + 1.0
+    if t - x >= 0.5
+        return t - 1.0
+    return t
+
+// ==========================================
+// The checked conversions from floating point to an integer
+// ==========================================
+// `I32::x` saturates (NaN gives 0); each `to_<type>` here gives none instead, for a caller who must
+// notice. A bound is the first value past the type's range that the truncation toward zero
+// reaches, so it is open: `-128.9` gives `I8`'s -128.
+
+priv fn within(x: F64, below: F64, above: F64): Bool //< whether below < x < above; false for NaN
+    return x > below && x < above
+
+impl F64
+    pub fn to_i8(r: Self): I8? //< truncated toward zero, or none where `I8` cannot hold it
+        return .some(I8::r) if within(r, -129.0, 128.0) else .none
+    pub fn to_i16(r: Self): I16? //< truncated toward zero, or none where `I16` cannot hold it
+        return .some(I16::r) if within(r, -32769.0, 32768.0) else .none
+    pub fn to_i32(r: Self): I32? //< truncated toward zero, or none where `I32` cannot hold it
+        return .some(I32::r) if within(r, -2147483649.0, 2147483648.0) else .none
+    pub fn to_i64(r: Self): I64? //< truncated toward zero, or none where `I64` cannot hold it
+        // -2^63 - 1 is no `F64`, so the lower bound is the closed -2^63.
+        fits: = r >= -9223372036854775808.0 && r < 9223372036854775808.0
+        return .some(I64::r) if fits else .none
+    pub fn to_u8(r: Self): U8? //< truncated toward zero, or none where `U8` cannot hold it
+        return .some(U8::r) if within(r, -1.0, 256.0) else .none
+    pub fn to_u16(r: Self): U16? //< truncated toward zero, or none where `U16` cannot hold it
+        return .some(U16::r) if within(r, -1.0, 65536.0) else .none
+    pub fn to_u32(r: Self): U32? //< truncated toward zero, or none where `U32` cannot hold it
+        return .some(U32::r) if within(r, -1.0, 4294967296.0) else .none
+    pub fn to_u64(r: Self): U64? //< truncated toward zero, or none where `U64` cannot hold it
+        return .some(U64::r) if within(r, -1.0, 18446744073709551616.0) else .none
+    pub fn to_sz(r: Self): Sz? //< truncated toward zero, or none where `Sz` cannot hold it
+        fits: =
+            r.to_i32().is_some() if sizeof(Sz) == sizeof(I32) else r.to_i64().is_some()
+        return .some(Sz::r) if fits else .none
+
+impl F32 //< the same, through `F64`, which holds every `F32` exactly
+    pub fn to_i8(r: Self): I8? //< truncated toward zero, or none where `I8` cannot hold it
+        wide: = F64::r
+        return wide.to_i8()
+    pub fn to_i16(r: Self): I16? //< truncated toward zero, or none where `I16` cannot hold it
+        wide: = F64::r
+        return wide.to_i16()
+    pub fn to_i32(r: Self): I32? //< truncated toward zero, or none where `I32` cannot hold it
+        wide: = F64::r
+        return wide.to_i32()
+    pub fn to_i64(r: Self): I64? //< truncated toward zero, or none where `I64` cannot hold it
+        wide: = F64::r
+        return wide.to_i64()
+    pub fn to_u8(r: Self): U8? //< truncated toward zero, or none where `U8` cannot hold it
+        wide: = F64::r
+        return wide.to_u8()
+    pub fn to_u16(r: Self): U16? //< truncated toward zero, or none where `U16` cannot hold it
+        wide: = F64::r
+        return wide.to_u16()
+    pub fn to_u32(r: Self): U32? //< truncated toward zero, or none where `U32` cannot hold it
+        wide: = F64::r
+        return wide.to_u32()
+    pub fn to_u64(r: Self): U64? //< truncated toward zero, or none where `U64` cannot hold it
+        wide: = F64::r
+        return wide.to_u64()
+    pub fn to_sz(r: Self): Sz? //< truncated toward zero, or none where `Sz` cannot hold it
+        wide: = F64::r
+        return wide.to_sz()
 
 // ==========================================
 // cfg(freestanding): the dependency-free software implementations
@@ -89,7 +160,7 @@ priv fn sqrt_reduce(x: F64, scale_out: F64$@): F64
     scale_out$ = scale
     return v
 
-// Newton's method, y_{n+1} = (y_n + v/y_n)/2: with v in [1,4) the correct digits double each step,
+// Newton's method, y_{n+1} = (y_n + v/y_n)/2. With v in [1,4) the correct digits double each step,
 // so 8 steps reach F64's precision with room to spare.
 #cfg(freestanding)
 pub fn sqrt(x: F64): F64 //< the non-negative square root
@@ -138,8 +209,8 @@ pub fn exp(x: F64): F64 //< e raised to the power of `x`
     if x != x
         return x
     // Past these the true value is over F64's largest, or under half its smallest subnormal, as
-    // libm answers. Caution: **Cut before the cast below**, which is undefined behaviour in C for
-    // an infinity.
+    // libm answers. Caution: **Cut before the cast below**, which saturates for an infinity and
+    // would scale by I64's bound.
     if x > 709.782712893384
         return infinity()
     if x < -745.1332191019412
@@ -198,7 +269,7 @@ priv fn is_odd_integral(x: F64): Bool
     return I64::x % 2I64 != 0I64
 
 // libm's answers (C99 Annex F): anything to the 0 is 1, and 1 to anything, NaN included. A base
-// below 0 (or -0) takes its magnitude's answer, negated for an odd whole exponent; a finite one
+// below 0 (or -0) takes its magnitude's answer, negated for an odd whole exponent. A finite one
 // under an exponent that is not whole has no real answer, NaN. The rest is exp(y * log(x)), whose
 // infinities and zeros fall out as Annex F's do.
 #cfg(freestanding)
@@ -237,8 +308,8 @@ priv fn sincos_reduce(x: F64, sin_out: F64$@, cos_out: F64$@)
     half_pi: = pi / 2.0
     scaled: = (x / half_pi + 0.5) if x >= 0.0 else (x / half_pi - 0.5)
     // A NaN or an infinity has no angle: NaN, as libm answers. Caution: **Cut before the cast
-    // below**, undefined behaviour in C for a non-finite or huge x; a huge finite one is the gap
-    // the file's header names.
+    // below.** The cast is undefined behaviour in C for a non-finite or huge x. A huge finite one
+    // is the gap the file's header names.
     if !is_finite(x)
         sin_out$ = not_a_number()
         cos_out$ = not_a_number()

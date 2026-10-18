@@ -31,7 +31,7 @@ priv fn try_parse(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): Bool?
     t.share_grammar_from(parser)
     node: = t.parse_rule(rule) catch
         return .some(false)
-    return .some(node != null)
+    return .some(node.is_some())
 
 priv const deep_msg: U8[] = "nesting too deep" //<
     //< The message the engine gives when it stops on depth (Rule.parse in kspeg/engine.kspl)
@@ -52,7 +52,7 @@ priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$
     //< That too deep a nesting comes out **as a stop (`fatal`), not a non-match (`mismatch`)**
     //<
     //< Caution: **Do not write it with `expect(..., want=false)`.** That does not tell the two
-    //< apart, so it passes even when an alternation, an option or a repetition swallows the stop
+    //< apart. So it passes even when an alternation, an option or a repetition swallows the stop
     //< and the search goes on at the same depth.
     $meta: = kspeg_notation.Meta.new(grammar, arena)
     parser: = meta.parse_grammar() catch
@@ -68,7 +68,7 @@ priv fn expect_deep_fatal(label: U8[], grammar: U8[], input: U8[], arena: Arena$
             got = msg
         case .mismatch
             got = "mismatch"
-        fallback null
+        fallback .none
     if !got.equals(deep_msg)
         fail(label, arena.text().s("got=\{got\}, want=\{deep_msg\}").take())
     verdict.pass(label)
@@ -93,15 +93,14 @@ priv fn parts_under(grammar: U8[], input: U8[], rule: U8[], arena: Arena$@): U8[
     $t: = kspeg.Target.new(input, arena)
     defer t.free_memo()
     t.share_grammar_from(parser)
-    node: = t.parse_rule(rule) catch
-        return ""
-    if node == null
+    got: = t.parse_rule(rule) catch
         return ""
     b: = arena.text()
-    $sep: U8[] = ""
-    for kid in node.children
-        b.s(sep).s(kid.text if kid.kind.equals("Literal") else kid.kind)
-        sep = " "
+    if node: = got
+        $sep: U8[] = ""
+        for kid in node.children
+            b.s(sep).s(kid.text if kid.kind.equals("Literal") else kid.kind)
+            sep = " "
     return b.take()
 
 priv fn expect_parts(label: U8[], grammar: U8[], input: U8[], rule: U8[], want: U8[],
@@ -155,7 +154,7 @@ priv fn profile(grammar: U8[], input: U8[], rule: U8[], want: U8[], stats: Bool,
     t.share_grammar_from(parser)
     t.enable_profiling = stats
     _node: = t.parse_rule(rule) catch
-        fallback null
+        fallback .none
     sum.loaded = true
     for p in t.prof_list
         sum.rows += 1
@@ -216,18 +215,17 @@ priv fn outcome(grammar: U8[], input: U8[], rule: U8[], skips: Bool, arena: Aren
     t.share_grammar_from(parser)
     t.checks_first_byte = skips
     b: = arena.text()
-    $node: kspeg.Node$@ = null
     $parsed: = true
-    node = t.parse_rule(rule) catch
+    got: = t.parse_rule(rule) catch
         parsed = false
-        fallback null
-    if parsed && node != null
+        fallback .none
+    if node: = got
         dump_node(b, node)
     $rest: = t.pos
     for rest < input.len && input[rest] == ' '
         rest += 1
     if parsed && rest == input.len
-        // Only a syntax error may run again: here it would mean a rule skipped that could match.
+        // Only a syntax error can run again: here it would mean a rule skipped that could match.
         if t.ran_twice
             b.s(" ran twice")
         return b.take()
@@ -287,7 +285,7 @@ priv fn overridden_tokens(arena: Arena$@) //<
     expect("grammar _Space replaces the default", own_space, "a...b", "pair", true, arena)
     expect("grammar _Space makes a space not a separator", own_space, "a b", "pair", false, arena)
 
-    // Narrow `_Boundary` to digits only, and a letter may follow a keyword directly.
+    // Narrow `_Boundary` to digits only, and a letter can follow a keyword directly.
     // Caution: Keep the pair on the same input and rule; with one alone, "the override took effect"
     // and "it happened to pass" look the same.
     word_default: U8[] = "word = 'a' Tail\nTail = [x-z]+\n"
@@ -350,7 +348,7 @@ priv fn first_byte_skips(arena: Arena$@) //<
         arena)
     expect_same_entering_all("a syntax error inside a group", firsts, "(1 ? ;", "top", arena)
     expect_same_entering_all("an input that ends early", firsts, "1 (", "top", arena)
-    // **A syntax-mode rule entered from a lexical one skips whitespace first**, so the byte before
+    // **A syntax-mode rule entered from a lexical one skips whitespace first.** So the byte before
     // it is not its first: `inside` is entered at the space after `<`.
     expect_same_entering_all("a syntax rule inside a token sees past the space", firsts,
         "< ab cd> ;", "top", arena)
@@ -435,17 +433,17 @@ priv fn unicode_escapes(arena: Arena$@) //<
     expect("a \\u escape is not the letter u", hex_lit, "au0041b", "pair", false, arena)
     expect("a \\u escape decodes in a character class", "pair = [\\u0041-\\u0043]+\n", "AB", "pair",
         true, arena)
-    // **A character class matches one byte at a time, so a multi-byte `\u` is not allowed in it**;
-    // if it were, あ would match any one of its three bytes, with no diagnostic.
+    // **A character class matches one byte at a time, so a multi-byte `\u` is not allowed in it.**
+    // If it were, あ would match any one of its three bytes, with no diagnostic.
     expect_bad_grammar("a wide \\u in a character class is rejected", "pair = [\\u3042]+\n", arena)
-    // The control: in a literal it may resolve to several bytes (matched as a run).
+    // The control: in a literal it can resolve to several bytes (matched as a run).
     expect("a wide \\u decodes in a literal", "pair = \"\\u3042\"\n", "あ", "pair", true, arena)
     // **Reject a `\u` with too few digits** (it must not pass as the three bytes `u00`).
     expect_bad_grammar("a short \\u is rejected", "pair = \"\\u00\"\n", arena)
 
 priv fn peg_termination(arena: Arena$@) //<
     //< The classic shapes on which a PEG parser fails to terminate
-    // **What is checked is that it stops, before the answer**; when broken, it shows as a hang, a
+    // **What is checked is that it stops, before the answer.** When broken, it shows as a hang, a
     // CI timeout. Left recursion never ends under PEG, so the grammar is refused when it is read.
     expect_bad_grammar("direct left recursion is rejected", "pair = pair \"x\" | \"y\"\n", arena)
     expect_bad_grammar("indirect left recursion is rejected",
@@ -456,7 +454,7 @@ priv fn peg_termination(arena: Arena$@) //<
     expect("repetition of an empty literal terminates", "pair = \"\"*\n", "abc", "pair", true, arena)
     // A grammar that refers to an undefined rule must be rejected **when it is read**.
     // Caution: Each case below sits on a branch that never runs (an alternation's other branch, an
-    // option, a repetition), so a check delayed until parsing would miss it.
+    // option, a repetition). So a check delayed until parsing would miss it.
     expect_bad_grammar("a reference to an undefined rule is rejected", "pair = Nope\n", arena)
     expect_bad_grammar("an undefined rule inside a choice is rejected", "pair = \"x\" | Nope\n",
         arena)
@@ -479,7 +477,7 @@ priv fn peg_termination(arena: Arena$@) //<
         "((((((((((((((((x))))))))))))))))", "pair", true, arena)
     // A stop on depth must reach the caller without being swallowed.
     // Caution: **Test all three constructs** that turn an inner failure into "it did not match": an
-    // alternation, an option and a repetition (`try_parse` in kspeg/engine.kspl); fixing one
+    // alternation, an option and a repetition (`try_parse` in kspeg/engine.kspl). A fix to one
     // leaves the other two silently swallowing it.
     deep_in: = nested("(", ")", arena)
     expect_deep_fatal("a depth cutoff inside a choice reaches the caller",
@@ -498,9 +496,9 @@ priv fn rule_profile(arena: Arena$@) //<
     expect_prof("a rule read once counts one call and one success", seq, "ab", "top", "one",
         Prof_row::{ .found = true, .calls = 1, .memo_hits = 0, .parsed_ok = 1, .failed = 0 }, arena)
 
-    // `alt`'s first alternative always misses. On "1-2": plus is called once and fails at "+"; num
+    // `alt`'s first alternative always misses. On "1-2", plus is called once and fails at "+". num
     // is read by plus at 0, hit in the memo by minus, and read again at 2 (calls 3, memo hits 1,
-    // succeeded 2), pinning all four counts at once.
+    // succeeded 2). That pins all four counts at once.
     alt: U8[] = "top = plus | minus\nplus = num \"+\" num\nminus = num \"-\" num\nnum = [0-9]\n"
     expect_prof("a failed alternative counts as read-and-failed", alt, "1-2", "top", "plus",
         Prof_row::{ .found = true, .calls = 1, .memo_hits = 0, .parsed_ok = 0, .failed = 1 }, arena)

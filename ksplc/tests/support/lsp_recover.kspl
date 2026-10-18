@@ -5,6 +5,7 @@
 //<
 //< Not a suite; `../suite/lsp_test.kspl` runs each part.
 import "ksplc/tests/support/harness"
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "ksplc/tests/support/lsp_read" { col_in_line, decl_line, end_text, is_missing }
 import "std/chars"
@@ -18,14 +19,16 @@ import "std/strfmt" as _strfmt
 import "std/sys"
 import "std/verdict"
 
-priv fn expect_symbols(c: jsonrpc.Client$@, uri: U8[], want: U8[], name: U8[], arena: Arena$@)
+priv fn expect_symbols(c: jsonrpc_client.Client$@, uri: U8[], want: U8[], name: U8[],
+    arena: Arena$@)
     got: = lsp_client.answer(c, "textDocument/documentSymbol", lsp_client.at_doc(uri, arena),
         lsp_client.read_ms, arena)
     result: = got.get("result")
     symbols: = result.arr_list(arena)
     matches: =
         (symbols.len == 0 if want.len == 0
-        else symbols.len == 1 && symbols.get(0).get("name").as_str().equals(want))
+        else symbols.len == 1 &&
+        symbols.get(0).get("name").as_str().unwrap_or("").equals(want))
     verdict.check(name, !is_missing(result) && matches, lsp_client.dump(got, arena))
 
 fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous and saved text
@@ -74,7 +77,7 @@ fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous 
         jump: = lsp_client.answer(c@, "textDocument/definition", pos, lsp_client.read_ms, arena)
         result: = lsp_client.dump(jump.get("result"), arena)
         verdict.check("an imported empty buffer hides its saved declarations",
-            jump.get("id").as_int(0) > 0 && is_missing(jump.get("error")) &&
+            jump.get("id").as_int().unwrap_or(0) > 0 && is_missing(jump.get("error")) &&
             (result.equals("null") || result.equals("[]")), lsp_client.dump(jump, arena))
         expect_symbols(c@, uri, "", "an imported empty buffer remains queryable", arena)
         lsp_client.close(c@, use_uri, arena)
@@ -82,10 +85,10 @@ fn run_empty(exe: U8[], arena: Arena$@) //< an empty buffer hides both previous 
 
 // ==========================================
 // A file holding one broken line still answers in the editor
-// Not a suite; part of `../suite/lsp_test.kspl`, whose client it uses (one of its own would start
-// the language server a second time). **The editor reads the file a second time with the
+// Not a suite. It is part of `../suite/lsp_test.kspl` and uses its client (one of its own would
+// start the language server a second time). **The editor reads the file a second time with the
 // recovering branches enabled** ("Only the editor's parse recovers from a syntax error" in
-// `../../docs/DESIGN-tools.md`), so after a half-typed `pt.` the hover and the jump still answer.
+// `../../docs/DESIGN-tools.md`). So after a half-typed `pt.` the hover and the jump still answer.
 // ==========================================
 // The `q: = pt.` line is broken. Everything above and below it is valid.
 priv const broken_src: U8[] =
@@ -108,7 +111,7 @@ fn main(): I32
 
 priv const broken_uri: U8[] = "file:///recover_probe.kspl"
 
-priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
+priv fn check_answers_beside_the_break(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(broken_uri, broken_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, broken_uri, arena)
@@ -131,13 +134,14 @@ priv fn check_answers_beside_the_break(c: jsonrpc.Client$@, arena: Arena$@)
         lsp_client.read_ms, arena) catch e
         verdict.check("a jump beside a broken line still lands", false, end_text(e))
         return
-    def_line: = def_got.val.get("result").get("range").get("start").get("line").as_int(-1)
+    def_line: = def_got.val.get("result").get("range").get("start").get("line").as_int()
+        .unwrap_or(-1)
     want: = decl_line(broken_src, "fn area(p: Point): I32", arena)
     landed: = arena.text().s("landed on line ").s("\{def_line\}").take()
     verdict.check("a jump beside a broken line still lands", def_line == want,
         lsp_client.why(c, landed, arena))
 
-priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
+priv fn check_one_account_only(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< It checks a missing bracket is reported once, by the parse
     //<
     //< **Only the parse reports it**. In a recovered tree the later stages find only the chain of
@@ -150,10 +154,10 @@ priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
     for _k in Range.asc(12)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
         got: = msg.val.get("params")
-        if !got.get("uri").as_str().ends_with("recover_probe.kspl")
+        if !got.get("uri").as_str().unwrap_or("").ends_with("recover_probe.kspl")
             continue
         list: = got.get("diagnostics").arr_list(arena)
         count = list.len
@@ -162,7 +166,7 @@ priv fn check_one_account_only(c: jsonrpc.Client$@, arena: Arena$@) //<
     verdict.check("a broken line is accounted for once and no more", came && count == 1,
         lsp_client.why(c, arena.text().s("\{count\} diagnostics, came=\{came\}").take(), arena))
 
-// A declaration whose block is never closed, **holding everything below it**: the file above must
+// A declaration whose block is never closed, **holding everything below it**. The file above must
 // still answer, and the parse must not run on to the end of the input.
 priv const unclosed_src: U8[] =
     """fn area(p: I32): I32 //< how much it covers
@@ -176,7 +180,7 @@ fn tail(): I32
 
 priv const unclosed_uri: U8[] = "file:///unclosed_probe.kspl"
 
-priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
+priv fn check_an_unclosed_block(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(unclosed_uri, unclosed_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, unclosed_uri, arena)
@@ -192,7 +196,7 @@ priv fn check_an_unclosed_block(c: jsonrpc.Client$@, arena: Arena$@)
         text.find_str("how much it covers").is_some(),
         lsp_client.why(c, arena.text().s("'").s(text).s("'").take(), arena))
 
-fn run_recover(c: jsonrpc.Client$@, arena: Arena$@)
+fn run_recover(c: jsonrpc_client.Client$@, arena: Arena$@)
     check_answers_beside_the_break(c, arena)
     check_one_account_only(c, arena)
     check_an_unclosed_block(c, arena)
@@ -200,9 +204,9 @@ fn run_recover(c: jsonrpc.Client$@, arena: Arena$@)
 // ==========================================
 // What the language server answers after its worker is remade, with many documents open. **Each
 // check starts a client of its own.** **The first answer after a recovery waits for its own
-// document's analysis** ("The language server is split into two processes: the watcher and the
-// analyser" in `../../docs/DESIGN-tools.md`), measured against analysing every open document in
-// the same run, so a slow machine moves both alike.
+// document's analysis** ("The language server runs as two processes: watcher and
+// analyser" in `../../docs/DESIGN-tools.md`). It is measured against analysing every open document
+// in the same run, so a slow machine moves both alike.
 // ==========================================
 priv const watchdog_ms: I64 = 10000 //<
     //< The supervisor's hang timeout (`worker_timeout_ms` in `../../lsp/server.kspl`)
@@ -212,16 +216,16 @@ priv const copies: Sz = 20 //< how many documents are open when the worker is re
 priv const share_of_all: I64 = 2 //<
     //< The recovery may take at most 1/`share_of_all` of analysing every open copy
     //<
-    //< **What the check tells apart**: waiting for every open document costs about all of it, and
-    //< waiting for its own document (plus an idle-time analysis the request may find under way)
-    //< about 2/`copies` of it. Half sits far from both, so neither a loaded machine nor the
-    //< watchdog's own jitter moves a run across it; a multiple of one document's recovery
+    //< **What the check tells apart**: waiting for every open document costs about all of it.
+    //< Waiting for its own document (plus an idle-time analysis the request can find under way)
+    //< costs about 2/`copies` of it. Half sits far from both. So neither a loaded machine nor the
+    //< watchdog's own jitter moves a run across it. A multiple of one document's recovery
     //< does.
 priv const copy_fns: Sz = 250 //<
     //< How many functions each copy holds, so analysing one takes measurable work
     //<
-    //< **Made here, not read from a file of the package**: the work stays the same whatever the
-    //< package's files become, and none is imported, so each analysis is the copy alone.
+    //< **Made here, not read from a file of the package.** The work stays the same whatever the
+    //< package's files become. None is imported, so each analysis is the copy alone.
 priv const hover_decl: U8[] = "fn first(" //< the declaration the hover asks about
 priv const crash_hook: U8[] = "$/ksplTestCrash"
 priv const hang_hook: U8[] = "$/ksplTestHang"
@@ -247,8 +251,8 @@ priv fn copy_of(uri: U8[], open: Sz, arena: Arena$@): I32 //< which open copy `u
             return I32::k
     return -1
 
-priv fn recover(c: jsonrpc.Client$@, hook: U8[], open: Sz, id: I32, text: U8[], arena: Arena$@):
-    Recovery //<
+priv fn recover(c: jsonrpc_client.Client$@, hook: U8[], open: Sz, id: I32, text: U8[],
+    arena: Arena$@): Recovery //<
         //< It sends `hook` and at once a hover on the first copy, and reads all that comes back
         //<
         //< It reads until the answer and every open copy's diagnostics have come.
@@ -267,19 +271,20 @@ priv fn recover(c: jsonrpc.Client$@, hook: U8[], open: Sz, id: I32, text: U8[], 
         wait: = I32::(watchdog_ms + I64::lsp_client.read_ms)
         msg: = c.read_msg(wait, arena) catch
             break
-        if msg.val.get("id").as_int(-1) == id
+        if msg.val.get("id").as_int().unwrap_or(-1) == id
             out.ms = (sys.mono_us() - t0) / 1000I64
             out.answered = lsp_client.hover_text(msg.val).find_str("first").is_some()
             continue
-        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
-        k: = copy_of(msg.val.get("params").get("uri").as_str(), open, arena)
+        k: =
+            copy_of(msg.val.get("params").get("uri").as_str().unwrap_or(""), open, arena)
         if k >= 0 && !seen[k]
             seen[k] = true
             out.published += 1
     return out
 
-priv fn open_copies(c: jsonrpc.Client$@, from: Sz, to: Sz, text: U8[], arena: Arena$@): Bool //<
+priv fn open_copies(c: jsonrpc_client.Client$@, from: Sz, to: Sz, text: U8[], arena: Arena$@): Bool //<
     //< It opens copies `from` to `to` (excluded) and waits for each one's diagnostics
     //<
     //< **Settle before the hook**: diagnostics still on the way would be counted as the recovery's.
@@ -291,11 +296,11 @@ priv fn open_copies(c: jsonrpc.Client$@, from: Sz, to: Sz, text: U8[], arena: Ar
     for left > 0
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             return false
-        if msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             left -= 1
     return true
 
-priv fn told(c: jsonrpc.Client$@, line: U8[], arena: Arena$@): Bool //<
+priv fn told(c: jsonrpc_client.Client$@, line: U8[], arena: Arena$@): Bool //<
     //< Whether the supervisor's log carries `line`, copied at once (`err_tail` borrows its buffer)
     return arena.text().s(c.err_tail()).take().find_str(line).is_some()
 
@@ -346,7 +351,7 @@ fn check_first_answer(exe: U8[], arena: Arena$@) //<
             got.published == copies,
             lsp_client.why(c@, arena.text().s("\{got.published\} of \{copies\}").take(), arena))
     verdict.check("the supervisor's log counts the documents it restores",
-        told(c@, arena.text().s("open documents to restore: \{copies\})").take(), arena),
+        told(c@, arena.text().s("Open documents to restore: \{copies\}").take(), arena),
         lsp_client.why(c@, "", arena))
 
 // ==========================================
@@ -358,7 +363,7 @@ priv const kept_uris: U8[][_] = ::{ "file:///kept_a.kspl", "file:///kept_b.kspl"
 priv const poison_uri: U8[] = "kspl-test-poison:///poison.kspl" //<
     //< A name whose analysis crashes the worker (`test_poison_scheme` in `../../lsp/worker.kspl`)
 
-priv fn probe_hover(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): json.Val
+priv fn probe_hover(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): json.Val
     got: = lsp_client.answer(c, "textDocument/hover", lsp_client.at_pos(uri, 1, 3, arena),
         lsp_client.read_ms, arena)
     return got
@@ -405,8 +410,8 @@ fn run_restart(exe: U8[], arena: Arena$@)
 // ==========================================
 // A package that names itself, edited in an editor opened on its own folder
 // **The folder's name differs from the package's** (`alone/` holding `mypkg`). A server naming a
-// document by its path (`use/user`) disagrees with the pipeline's `mypkg/use/user`: the jump, the
-// rename and the hover find nothing, and a logical-name answer points into a missing `mypkg/`.
+// document by its path (`use/user`) disagrees with the pipeline's `mypkg/use/user`. The jump, the
+// rename and the hover find nothing. A logical-name answer points into a missing `mypkg/`.
 // ==========================================
 priv const heavy_ms: I32 = 60000 //< the first answer analyses the prelude's import tree too
 
@@ -420,24 +425,24 @@ priv const own_bodies: U8[][_] = ::{ "[package]\nname = mypkg\n", "pub fn hit():
     own_user, own_gated }
 priv const own_call: U8[] = "  return lib.hit()"
 
-priv fn def_uri(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): U8[] //<
+priv fn def_uri(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): U8[] //<
     //< Where `hit` is defined, asked from the user's document under that spelling
     pos: = lsp_client.at_pos(uri, decl_line(own_user, own_call, arena),
         col_in_line(own_user, own_call, "hit", arena) + 1, arena)
     got: = lsp_client.answer(c, "textDocument/definition", pos, heavy_ms, arena)
-    return got.get("result").get("uri").as_str()
+    return got.get("result").get("uri").as_str().unwrap_or("")
 
-priv fn marks_on(c: jsonrpc.Client$@, uri: U8[], arena: Arena$@): I32 //<
+priv fn marks_on(c: jsonrpc_client.Client$@, uri: U8[], arena: Arena$@): I32 //<
     //< How many diagnostics a `didOpen` of the user's document reports; -1 where none came
     c.notify("textDocument/didOpen", lsp_client.did_open(uri, own_user, arena), lsp_client.send_ms,
         arena) catch {}
     for _k in Range.asc(12)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
         got: = msg.val.get("params")
-        if !got.get("uri").as_str().equals(uri)
+        if !got.get("uri").as_str().unwrap_or("").equals(uri)
             continue
         return I32::got.get("diagnostics").arr_list(arena).len
     return -1
@@ -485,7 +490,7 @@ fn run_package(exe: U8[], arena: Arena$@)
     renamed: = lsp_client.answer(c@, "textDocument/rename", params, heavy_ms, arena)
     changes: = renamed.get("result").get("changes")
     verdict.check("a rename reaches the callers in its other folders",
-        changes.has_key("lib.kspl") && changes.has_key("use/user.kspl"),
+        changes.find("lib.kspl").is_some() && changes.find("use/user.kspl").is_some(),
         lsp_client.dump(changes, arena))
     // **The range left out is recorded under the logical name**, which a copy's URI need not end
     // with.
@@ -501,8 +506,8 @@ fn run_package(exe: U8[], arena: Arena$@)
 
 // ==========================================
 // Checks the type-argument constraints of a template that is never instantiated
-// Checked at the template, it always fails as **not satisfying a constraint it declared itself** —
-// a template's `K` is bound to nothing, so the conformance table is empty. **It is a file of its
+// Checked at the template, it always fails as **not satisfying a constraint it declared itself**.
+// A template's `K` is bound to nothing, so the conformance table is empty. **It is a file of its
 // own for its subject**, "a diagnostic that appears only while editing".
 // ==========================================
 priv const bound_src: U8[] =
@@ -528,7 +533,7 @@ impl<|K: Hashable<|K|>|> Box<|K|>
 
 priv const bound_uri: U8[] = "file:///bound_probe.kspl"
 
-fn check_template_bound(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_template_bound(c: jsonrpc_client.Client$@, arena: Arena$@)
     c.notify("textDocument/didOpen", lsp_client.did_open(bound_uri, bound_src, arena),
         lsp_client.send_ms, arena) catch {}
     defer lsp_client.close(c, bound_uri, arena)
@@ -538,16 +543,16 @@ fn check_template_bound(c: jsonrpc.Client$@, arena: Arena$@)
     for _k in Range.asc(8)
         msg: = c.read_msg(lsp_client.read_ms, arena) catch
             break
-        if !msg.val.get("method").as_str().equals("textDocument/publishDiagnostics")
+        if !msg.val.get("method").as_str().unwrap_or("").equals("textDocument/publishDiagnostics")
             continue
         p: = msg.val.get("params")
-        if !p.get("uri").as_str().ends_with("bound_probe.kspl")
+        if !p.get("uri").as_str().unwrap_or("").ends_with("bound_probe.kspl")
             continue
         found = true
         got: = p.get("diagnostics").arr_list(arena)
         count = got.len
         if count > 0
-            first = got.get(0).get("message").as_str()
+            first = got.get(0).get("message").as_str().unwrap_or("")
         break
     seen_text: =
         arena.text().s("\{count\}: \{first\}").take() if found else "(no publishDiagnostics came)"

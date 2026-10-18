@@ -4,7 +4,7 @@
 //< The tools that can only be written in Python (the pretty-printer loaded into LLDB, the
 //< converters reading Hugging Face weights) each hold a self-test.
 //< Caution: **Holding one does not make it work.** Called by nobody, it is a button that does
-//< nothing when pressed, and it stays green while the tool rots: the demangler in
+//< nothing when pressed. It stays green while the tool rots: the demangler in
 //< `tools/kspl_lldb.py` can go on looking for a name the compiler no longer emits.
 //< **There is one way to start it**: every tool self-tests when run with no argument. Keep it the
 //< same as tools are added, or this file comes to hold a branch per tool.
@@ -53,14 +53,14 @@ priv const libraries: U8[][_] = ::{ "tools/ai_assist/safetensors_io.py" } //<
 priv fn importable(name: U8[]): Bool //< whether `python3` can import the module `name`
     arena: = ksplc_harness.arena()
     return ksplc_harness
-        .run(U8[][]::{ python, "-c", arena.text().s("import ").s(name).take() }).code == 0
+        .run(U8[][]::{ python, "-c", arena.text().s("import ").s(name).take() }).exited_with(0)
 
 priv const mark_selftest: U8[] = "[self-test]" //< the other opening a self-test's line may have
 
 priv fn ran_one(out: U8[]): Bool //< whether a line of the output opens with a self-test's mark
     //<
-    //< Caution: **Judge by the line's first word.** The mark is lower case, so a plain search also
-    //< hits an English word in the output or Python's `pass` statement, and passes a round where
+    //< Caution: **Judge by the line's first word.** The mark is lower case. So a plain search also
+    //< hits an English word in the output or Python's `pass` statement. It passes a round where
     //< not one self-test ran. The same holds for `[self-test]`: searched anywhere, a usage message
     //< naming the self-test passed.
     arena: = ksplc_harness.arena()
@@ -98,9 +98,10 @@ priv fn check_tool(t: Tool@) //< runs one tool's self-test and reports it
         (U8[][]::{ python, t.path } if t.module.len == 0
         else U8[][]::{ python, "-m", t.module })
     r: = ksplc_harness.run_capped(argv, harness.root(), selftest_timeout_ms)
-    if r.code != 0
+    if !r.exited_with(0)
         verdict.check(name, false,
-            arena.text().s("the self-test failed (exit code \{r.code\})\n").s(r.out).take())
+            arena.text().s("the self-test failed (exit code \{r.code.unwrap_or(-1)\})\n").s(r.out)
+            .take())
         return
     // Caution: **The exit code alone is not enough.** It passes a run that returned 0 with not one
     // self-test run (a wrong entry point printing its usage, and the like).

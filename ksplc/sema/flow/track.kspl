@@ -9,6 +9,7 @@ import "ksplc/base/ast_place" as base_ast_place
 import "ksplc/base/ast_spell" as base_ast_spell
 import "ksplc/base/core" as base_core
 import "ksplc/base/mangle" as base_mangle
+import "ksplc/sema/flow/field" as sema_flow_field
 import "ksplc/sema/flow/release" as sema_flow_release
 import "ksplc/sema/flow/report" as sema_flow_report
 import "ksplc/sema/flow/stmt" as sema_flow_stmt
@@ -23,23 +24,22 @@ import "std/str"
 struct Df_set //< the "set of local declaration nodes" the dataflow tracks
     //<
     //< One type for sets that differ only in merge direction, so the set operations are written
-    //< once. **These structs and Df_ctx belong only to the dataflow's three files**; they are not
+    //< once. **These structs and Df_ctx belong only to the dataflow's four files**; they are not
     //< priv only because of the file split. From elsewhere, add a function that returns the result
     //< rather than reading them directly.
-    items: List<|Ast_node$@|>$@
+    items: List<|Ast_node$@|> //< held by value, so a state is one allocation with its sets
     merge_is_intersect: Bool //<
         //< The merge's direction: true = intersection, false = union
         //<
         //< Intersection is must, as "initialized"; union is may, as "released or moved".
 
 impl Df_set
-    fn new(merge_is_intersect: Bool): Df_set$@
-        items: = List<|Ast_node$@|>.create(base_core.arena)
-        return base_core.arena
-            .create(Df_set::{ .items = items, .merge_is_intersect = merge_is_intersect })
+    fn new(merge_is_intersect: Bool): Df_set
+        return Df_set::{ .items = List<|Ast_node$@|>.new(base_core.arena),
+            .merge_is_intersect = merge_is_intersect }
 
     fn contains(r: Self$@, v: Ast_node$@): Bool
-        return df_list_contains(r.items, v)
+        return df_list_contains(r.items@, v)
 
     fn add(r: Self$@, v: Ast_node$@)
         if v != null && !r.contains(v)
@@ -58,47 +58,57 @@ impl Df_set
         for v in other.items
             r.items.push(v)
 
-    fn merged(a: Df_set$@, b: Df_set$@): Df_set$@ //<
-        //< Returns a new set merging a and b according to a's direction (intersection / union)
-        ns: = Df_set.new(a.merge_is_intersect)
-        if a.merge_is_intersect
+    fn fill_merged(r: Self$@, a: Df_set$@, b: Df_set$@) //<
+        //< Fills r, an empty set, with a and b merged in r's direction (intersection / union)
+        //<
+        //< Filled in place, so a merge allocates no set beside the new state's own.
+        if r.merge_is_intersect
             for v in a.items
                 if b.contains(v)
-                    ns.add(v)
-            return ns
-        ns.copy_from(a)
+                    r.add(v)
+            return
+        r.copy_from(a)
         for v in b.items
-            ns.add(v)
-        return ns
+            r.add(v)
 
 struct Df_state
-    init_vars: Df_set$@ //< the initialized locals (must-be-initialized)
-    freed_vars: Df_set$@ //< the locals possibly released (may-be-freed, for use-after-free)
-    gone_vars: Df_set$@ //<
+    init_vars: Df_set //< the initialized locals (must-be-initialized)
+    freed_vars: Df_set //< the locals possibly released (may-be-freed, for use-after-free)
+    gone_vars: Df_set //<
         //< The released locals possibly with nothing left to give back, not even to `dealloc`
         //<
         //< A pointer's `free()` releases what it points at and leaves the block, which only
         //< `dealloc` may name afterwards; every other release puts the local here too.
-    moved_vars: Df_set$@ //< the locals possibly moved (may-be-moved, for Move_only)
+    moved_vars: Df_set //< the locals possibly moved (may-be-moved, for Move_only)
+    carried_vars: Df_set //<
+        //< The locals in freed_vars or moved_vars only by way of an earlier pass of a loop
+        //<
+        //< A report on one says so (sema/flow/report.kspl). The line that moved or freed it is
+        //< below the use, and without the note the reader looks above it in vain.
+    moved_fields: Df_set //<
+        //< The field reads that possibly moved a `Move_only` field out of a local (`take(b.m)`)
+        //<
+        //< Each item is the `.` node of that read. Its path is worked out from the node when needed
+        //< (field_path_root, field_path_text). That is rare, as few reads move a field.
     reachable: Bool
 
 impl Df_state
     fn new(): Df_state$@
-        init_vars: = Df_set.new(true)
-        freed_vars: = Df_set.new(false)
-        gone_vars: = Df_set.new(false)
-        moved_vars: = Df_set.new(false)
         return base_core.arena
-            .create(Df_state::{ .init_vars = init_vars, .freed_vars = freed_vars,
-            .gone_vars = gone_vars, .moved_vars = moved_vars, .reachable = true })
+            .create(Df_state::{ .init_vars = Df_set.new(true), .freed_vars = Df_set.new(false),
+            .gone_vars = Df_set.new(false), .moved_vars = Df_set.new(false),
+            .carried_vars = Df_set.new(false), .moved_fields = Df_set.new(false),
+            .reachable = true })
 
     fn clone(r: Self$@): Df_state$@
         ns: = Df_state.new()
         ns.reachable = r.reachable
-        ns.init_vars.copy_from(r.init_vars)
-        ns.freed_vars.copy_from(r.freed_vars)
-        ns.gone_vars.copy_from(r.gone_vars)
-        ns.moved_vars.copy_from(r.moved_vars)
+        ns.init_vars.copy_from(r.init_vars@)
+        ns.freed_vars.copy_from(r.freed_vars@)
+        ns.gone_vars.copy_from(r.gone_vars@)
+        ns.moved_vars.copy_from(r.moved_vars@)
+        ns.carried_vars.copy_from(r.carried_vars@)
+        ns.moved_fields.copy_from(r.moved_fields@)
         return ns
 
     fn apply_merged_state(r: Self$@, merged: Df_state$@) //<
@@ -107,6 +117,8 @@ impl Df_state
         r.freed_vars = merged.freed_vars
         r.gone_vars = merged.gone_vars
         r.moved_vars = merged.moved_vars
+        r.carried_vars = merged.carried_vars
+        r.moved_fields = merged.moved_fields
         r.reachable = merged.reachable
 
     fn contains(r: Self$@, v: Ast_node$@): Bool
@@ -121,14 +133,52 @@ impl Df_state
     fn add_freed(r: Self$@, v: Ast_node$@) //< a release that leaves nothing to give back
         r.freed_vars.add(v)
         r.gone_vars.add(v)
+        r.carried_vars.remove(v)
 
     fn add_contents_freed(r: Self$@, v: Ast_node$@) //< a pointer's `free()`: its block stays
         r.freed_vars.add(v)
+        r.carried_vars.remove(v)
 
     fn remove_freed(r: Self$@, v: Ast_node$@) //<
         //< Clears the released flag once a reassignment (x = ...) has stored a new value
         r.freed_vars.remove(v)
         r.gone_vars.remove(v)
+        r.carried_vars.remove(v)
+
+    fn add_moved(r: Self$@, v: Ast_node$@) //< a move on this pass
+        r.moved_vars.add(v)
+        r.carried_vars.remove(v)
+
+    fn remove_moved(r: Self$@, v: Ast_node$@) //< a new value: the binding is usable again
+        r.moved_vars.remove(v)
+        r.carried_vars.remove(v)
+
+    fn bind(r: Self$@, v: Ast_node$@, has_value: Bool) //<
+        //< A declaration starts a binding afresh: with a value or without, and nothing released
+        //<
+        //< **A loop walks a declaration in its body more than once** (df_stmt_for in
+        //< sema/flow/stmt.kspl). So what the last pass did to the binding must not reach this one.
+        if has_value
+            r.init_vars.add(v)
+        else
+            r.init_vars.remove(v)
+        r.remove_freed(v)
+        r.remove_moved(v)
+        r.forget_moved_fields(v, null)
+
+    fn forget_moved_fields(r: Self$@, root: Ast_node$@, at: Ast_node$@) //<
+        //< Clears the moved fields of `root` at the path `at` or below it, once it holds a value
+        //<
+        //< A null `at`, or a bare name, is the whole binding. The path's text is made only when
+        //< something was moved, which is rare.
+        if r.moved_fields.items.len == 0
+            return
+        path: = at.field_path_text() if at != null else ""
+        for $i: = r.moved_fields.items.len; i > 0; i -= 1
+            m: = r.moved_fields.items.get(i - 1)
+            if m.field_path_root().unwrap_or(null) == root &&
+                sema_flow_field.path_is_within(m.field_path_text(), path)
+                r.moved_fields.remove(m)
 
 struct Local_state
     node: Ast_node$@
@@ -159,11 +209,23 @@ struct Df_ctx
     exit_targets: List<|Df_exit_target|>$@ //<
         //< the statements a `break`, `continue` or `fallback` leaves
     exit_from: Ast_node$@ //< the early exit whose defer bodies are being analyzed, else null
-    reported_in_defers: Df_set$@ //< the reads in defer bodies already reported at an early exit
+    reported_in_defers: Df_set //< the reads in defer bodies already reported at an early exit
+    in_field_path: Bool //<
+        //< Set while walking the receivers inside a field path (`b.m.x`)
+        //<
+        //< The moved-field check is made once, for the whole path, at its outermost `.`; a
+        //< receiver inside it is not a read of the whole binding.
 
 struct Df_exit_target //< a statement a jump can leave, and the defers registered before it
     stmt: Ast_node$@ //< a `for`, `if`, `switch` or labelled block, or a `catch` for `fallback`
     defers_before: Sz //< pending_defers' length on entering it; leaving runs the bodies past it
+    jump_state: Df_state$@ //<
+        //< The states merged from the jumps that leave it (`break`, `fallback`), else null
+        //<
+        //< **What follows the statement starts from this as well as from its own end.** A binding
+        //< set before every `break` is set after the loop, and one moved before any is moved.
+        //< A `for` also merges its condition's exit here.
+    continue_state: Df_state$@ //< the states merged from the `continue`s to it, else null
 
 impl Ast_node
     fn get_assign_target_def(r: Self$@): Ast_node$@?
@@ -264,13 +326,15 @@ impl Ast_node
             r.df_method_access(c, state)
         case .k_expr_postfix
             r.df_expr_postfix(c, state)
-        case .k_stmt_if, .k_stmt_switch
+        case .k_stmt_if, .k_stmt_switch, .k_stmt_labeled_block
             c.enter_exit_target(r)
             if r.kind_id == .k_stmt_if
                 r.df_stmt_if(c, state)
-            else
+            else if r.kind_id == .k_stmt_switch
                 r.df_stmt_switch(c, state)
-            c.exit_targets.len -= 1
+            else if r.children.len > 1
+                r.get_labeled_block_inner().analyze_df_node(c, state)
+            c.leave_exit_target(state)
             // **A `break` to its label leaves it**, so what follows can run whatever its branches
             // do (`is_left_by_break`, which the missing-return check reads too).
             if r.is_left_by_break()
@@ -278,10 +342,6 @@ impl Ast_node
         case .k_stmt_for
             c.enter_exit_target(r)
             r.df_stmt_for(c, state)
-            c.exit_targets.len -= 1
-        case .k_stmt_labeled_block
-            c.enter_exit_target(r)
-            r.df_stmt_labeled_block(c, state)
             c.exit_targets.len -= 1
         case .k_stmt_block
             r.df_stmt_block_scope(c, state)
@@ -338,9 +398,10 @@ impl Ast_node
         if id_node != null
             c.add_local(r)
             r.get_var_decl_type_node().df_type_array_sizes(c, state)
-            if expr_node != null && expr_node.kind_id != .k_empty
+            has_value: = expr_node != null && expr_node.kind_id != .k_empty
+            if has_value
                 expr_node.analyze_df_node(c, state)
-                state.add(r)
+            state.bind(r, has_value)
 
     fn df_type_array_sizes(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Walks the array-size expression written in a type annotation (the `n` of `a: I32[n]`)
@@ -380,10 +441,11 @@ impl Ast_node
                     if is_simple
                         state.add(def)
                         state.remove_freed(def) // a reassignment makes it a new value, so clear released
-                        state.moved_vars.remove(def) // and moved
+                        state.remove_moved(def) // and moved
+                        state.forget_moved_fields(def, null)
                         return
             // `x$ = value` overwrites all of what x points at, so the released state up to then can
-            // be cleared (x's own initialization state is separate, so init_vars is not touched).
+            // be cleared. x's own initialization state is separate, so init_vars is not touched.
             // Example: `pending_ast.free(); pending_ast$ = next_pending_ast;` in
             // ksplc/gen/c/root.kspl.
             if op.text.equals("=") && left != null && left.kind_id == .k_expr_postfix
@@ -391,8 +453,17 @@ impl Ast_node
                 if deref_op != null && deref_op.text.equals("$")
                     deref_def: = left.get_postfix_receiver().get_direct_local_def().unwrap_or(null)
                     state.remove_freed(deref_def)
-        if left != null
-            left.analyze_df_node(c, state)
+        if left == null
+            return
+        if right == null || op == null
+            left.analyze_df_node(c, state) // an expression statement, not an assignment
+            return
+        // Storing a new value in a field makes it usable again, and anything below it.
+        if op.text.equals("=")
+            if root: = left.owned_field_root(c)
+                state.forget_moved_fields(root, left)
+        // A place written to is not read as a value, so nothing moves out of it.
+        left.analyze_as_borrow(c, state)
 
     fn df_identifier(r: Self$@, c: Df_ctx$@, state: Df_state$@)
         def: = r.def_node
@@ -401,10 +472,14 @@ impl Ast_node
             sema_flow_report.report_uninit_if_needed(c, state, def, r)
             sema_flow_report.report_freed_if_needed(c, state, def, r)
             sema_flow_report.report_moved_if_needed(c, state, def, r)
+            // Read as a whole, the binding must still hold every field (inside a field path, the
+            // path's outermost `.` checks only what it reads).
+            if !c.in_field_path
+                sema_flow_report.report_moved_field_if_needed(c, state, def, r)
             // A Move_only binding read as a value moves, except the borrows under suppress_move
             // (listing the exceptions misses fewer cases than listing the copies).
             if !c.suppress_move && c.sema.env.is_move_only(def.type_id)
-                state.moved_vars.add(def)
+                state.add_moved(def)
 
     fn analyze_as_borrow(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
         //< Analyzes a child node as "a read that copies nothing", such as a receiver position
@@ -415,27 +490,36 @@ impl Ast_node
         r.analyze_df_node(c, state)
         c.suppress_move = saved
 
-    fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@)
+    fn df_expr_catch(r: Self$@, c: Df_ctx$@, state: Df_state$@) //<
+        //< Walks `expr catch …`: the expression on both paths, then the failure path apart
+        //<
+        //< What follows starts from the success path, the catch block's end and each `fallback`
+        //< (record_jump). Caution: **Walk the expression before the paths part**: walked on the
+        //< failure path alone, a move in it is lost wherever that path ends in `return`.
+        r.get_catch_chain_expr().analyze_df_node(c, state)
         catch_state: = state.clone()
         $target_block: Ast_node$@ = null
         c.enter_exit_target(r) // the target of a `fallback`
-        for ch in r.children
+        for i in Range.asc(r.children.len)
+            ch: = r.get_child(i)
+            if i == 0
+                continue
             if ch.kind_id == .k_identifier
                 c.add_local(ch)
-                catch_state.add(ch)
+                catch_state.bind(ch, true)
             else if ch.kind_id == .k_stmt_block
                 target_block = ch
                 ch.analyze_df_node(c, catch_state)
             else if !ch.is_keyword("catch") && ch.kind_id != .k_literal
                 ch.analyze_df_node(c, catch_state)
-        c.exit_targets.len -= 1
         if target_block != null
             is_void: =
                 sema_type_env.is_void(r.type_id) || sema_type_env.is_unknown(r.type_id)
             if !is_void && catch_state.reachable
-                c.sema.err(r, "catch block must yield a value using 'fallback' or exit")
+                c.sema.err(r, "a 'catch' block must produce a value with 'fallback' or exit")
                 c.has_error = true
         state.apply_merged_state(intersect_states(state, catch_state))
+        c.leave_exit_target(state)
 
     fn mark_postfix_receiver_mutated(r: Self$@, c: Df_ctx$@)
         receiver: = r.get_postfix_receiver()
@@ -446,10 +530,10 @@ impl Ast_node
     fn mark_value_receiver_reassigned(r: Self$@, c: Df_ctx$@) //<
         //< Sets the binding axis on a method call whose receiver is **a value**
         //<
-        //< A value is not a pointer or a slice, so a `Self$@` method amounts to writing the
-        //< binding itself, as `v.f = x` does; otherwise [I0601] says "`$` is not needed". A pointer
-        //< or slice receiver, or one reached through them (`s[0].m()`, `p.f.m()`), writes the
-        //< pointee, and a `Self@` or `Self` method writes nothing.
+        //< A value is not a pointer or a slice, so a `Self$@` method amounts to writing the binding
+        //< itself, as `v.f = x` does. Otherwise [I0601] says "`$` is not needed". A pointer or
+        //< slice receiver, or one reached through them (`s[0].m()`, `p.f.m()`), writes the pointee.
+        //< A `Self@` or `Self` method writes nothing.
         receiver: = r.get_postfix_receiver()
         if receiver == null
             return
@@ -553,7 +637,7 @@ impl Ast_node
             return
         c.sema.clear_scratch()
             .s("[W0104] This pointer was handed out by an arena, so it cannot be released here. \
-                Arena memory is freed all at once by 'Arena.free()'; releasing one handout corrupts \
+                'Arena.free()' releases all arena memory at once. Releasing one allocation corrupts \
                 the heap")
         c.sema.warn(r, c.sema.scratch.slice())
 
@@ -576,8 +660,10 @@ impl Ast_node
         is_method: = callee.kind_id == .k_method_access
         $param_idx: Sz = 0
         for p in base_ast_ext.Param_cursor.new(param_list, false)
-            arg: = sema_flow_release.call_arg_for_param(callee, args_node, param_idx, is_method)
-            if arg == null
+            $arg: Ast_node$@ = null
+            if given: = sema_flow_release.call_arg_for_param(callee, args_node, param_idx, is_method)
+                arg = given
+            else
                 break
             if fn_node.body_frees_param_directly(p.get_decl_id_text(), c.sema)
                 if def: = arg.get_addressed_local_def()
@@ -622,10 +708,10 @@ impl Ast_node
         //< Whether this `@` / `[` / mutable-view cast hands out the root binding's storage writable
         //<
         //< Only the `$` before the name allows that (the binding axis).
-        //< **Only a path that crosses no pointer or slice reaches that storage** (fields and a
-        //< fixed-length array's elements are part of the value; see Local_state). A read through
+        //< **Only a path that crosses no pointer or slice reaches that storage.** Fields and a
+        //< fixed-length array's elements are part of the value (see Local_state). A read through
         //< `$`, a `T$@`'s target and a `T$[]`'s elements are written under the type's `$`, so they
-        //< leave it out; a write itself is set by df_stmt_expr.
+        //< leave it out. df_stmt_expr sets a write itself.
         recv: = r.get_postfix_receiver()
         if recv == null || recv.write_crosses_indirection(c)
             return false
@@ -640,8 +726,8 @@ impl Ast_node
             return r.cast_makes_mutable_view(c) && !env.is_pointer(recv.type_id) &&
                 !env.is_slice(recv.type_id)
         // A pointer's or a slice's element is not the binding's. A fixed-length array's is, and its
-        // type follows the `$` even when only read (a trait-object element of an unmarked array
-        // reads as immutable, which a `T` slot rejects); a value with its own subscript may run an
+        // type follows the `$` even when only read. A trait-object element of an unmarked array
+        // reads as immutable, which a `T` slot rejects. A value with its own subscript can run an
         // `at(r: Self$@, …)` on the binding.
         if op.equals("[")
             return !env.is_pointer(recv.type_id) && !env.is_slice(recv.type_id)
@@ -661,10 +747,7 @@ impl Ast_node
                     if def != null
                         c.mark_reassigned(def)
         if op_text.equals(".") && r.children.len > 0
-            // A field read's receiver is not a use as a value (see df_method_access).
-            r.get_postfix_receiver().analyze_as_borrow(c, state)
-            for $i: = 1; i < r.children.len; i += 1
-                r.get_child(i).analyze_df_node(c, state)
+            r.df_field_read(c, state)
         else if op_text.equals("@") || op_text.equals("$") || op_text.equals("[")
             // Address-taking, dereferencing and indexing borrow.
             r.get_postfix_receiver().analyze_as_borrow(c, state)
@@ -698,10 +781,12 @@ fn intersect_states(s1: Df_state$@, s2: Df_state$@): Df_state$@
         return s1.clone()
     ns: = Df_state.new()
     ns.reachable = true
-    ns.init_vars = Df_set.merged(s1.init_vars, s2.init_vars)
-    ns.freed_vars = Df_set.merged(s1.freed_vars, s2.freed_vars)
-    ns.gone_vars = Df_set.merged(s1.gone_vars, s2.gone_vars)
-    ns.moved_vars = Df_set.merged(s1.moved_vars, s2.moved_vars)
+    ns.init_vars.fill_merged(s1.init_vars@, s2.init_vars@)
+    ns.freed_vars.fill_merged(s1.freed_vars@, s2.freed_vars@)
+    ns.gone_vars.fill_merged(s1.gone_vars@, s2.gone_vars@)
+    ns.moved_vars.fill_merged(s1.moved_vars@, s2.moved_vars@)
+    ns.carried_vars.fill_merged(s1.carried_vars@, s2.carried_vars@)
+    ns.moved_fields.fill_merged(s1.moved_fields@, s2.moved_fields@)
     return ns
 
 impl Df_ctx
@@ -709,16 +794,17 @@ impl Df_ctx
         //< Starts tracking a local binding, once
         //<
         //< A defer body is analyzed at each exit that leaves it, so its declarations come here
-        //< again; a second entry would never be marked read and would be reported unused.
+        //< again. A second entry would never be marked read, and would be reported unused.
         if r.find_local(v) < 0
             r.locals
                 .push(Local_state::{ .node = v, .is_read = false, .is_reassigned = false,
                 .is_mutated = false })
 
     fn enter_exit_target(r: Self$@, stmt: Ast_node$@) //<
-        //< the matching leave is `exit_targets.len -= 1`
+        //< the matching leave is leave_exit_target
         r.exit_targets
-            .push(Df_exit_target::{ .stmt = stmt, .defers_before = r.pending_defers.len })
+            .push(Df_exit_target::{ .stmt = stmt, .defers_before = r.pending_defers.len,
+            .jump_state = null, .continue_state = null })
 
     fn find_local(r: Self$@, v: Ast_node$@): I32
         if v == null
@@ -756,7 +842,7 @@ fn analyze_definite_initialization(c: Sema_ctx$@, fn_node: Ast_node$@, block: As
         .has_error = false, .has_reported_unreachable = false, .suppress_move = false,
         .pending_defers = List<|Ast_node$@|>.create(base_core.arena),
         .exit_targets = List<|Df_exit_target|>.create(base_core.arena), .exit_from = null,
-        .reported_in_defers = Df_set.new(false) }
+        .reported_in_defers = Df_set.new(false), .in_field_path = false }
     state: = Df_state.new()
 
     param_list: = fn_node.get_fn_params()

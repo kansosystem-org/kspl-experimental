@@ -46,9 +46,9 @@ priv const peak_pattern: U8[] = "System Peak Memory:\\s*([\\d,]+) bytes" //<
     //< **The build time is not used for the verdict**; only its ratio against the baseline is
     //< recorded.
     //< On the same tree and machine, cold time varies by nearly a factor of two while the peak
-    //< memory stays the same — time measures the machine and its load, not the work. A loose bound
+    //< memory stays the same. Time measures the machine and its load, not the work. A loose bound
     //< buries a real regression; a tight one fails on noise. `--stats` adds the per-stage
-    //< breakdown; to investigate time, compare the minimum of several runs on a quiet machine.
+    //< breakdown. To investigate time, compare the minimum of several runs on a quiet machine.
 priv const ast_pattern: U8[] = "AST Arena usage\\s*:\\s*([\\d,]+) /" //<
     //< The memory the AST occupies
     //<
@@ -91,7 +91,7 @@ priv const want_node_bytes: I64 = 64I64 //<
     //< The fixed sizes of the tree's two types (64-bit: `Sz` and a pointer are 8 bytes)
     //<
     //< Caution: **When it fails, do not change these numbers first.** 8 bytes more each is tens of
-    //< MB over the tree, yet `ast_threshold` absorbs it — **`AST bytes` passes while it gains
+    //< MB over the tree, but `ast_threshold` absorbs it. **`AST bytes` passes while it gains
     //< weight**.
 priv const want_kids_bytes: I64 = 32I64
 priv const node_pattern: U8[] = "AST Node bytes\\s*:\\s*([\\d,]+)"
@@ -144,9 +144,10 @@ priv fn max_capture(text: U8[], pattern: U8[], path: U8[], arena: Arena$@): I64!
         throw .failed
     $best: I64 = 0
     for m in ms
-        v: = digits_value(m.group(1, text))
+        digits: = m.group(1, text).unwrap_or("")
+        v: = digits_value(digits)
         if v < 0I64
-            io.err().s("[perf_guard] the value is too large: ").s(m.group(1, text)).s("\n")
+            io.err().s("[perf_guard] the value is too large: ").s(digits).s("\n")
             throw .failed
         if v > best
             best = v
@@ -167,10 +168,11 @@ priv fn parse_headroom(text: U8[], path: U8[], arena: Arena$@): Headroom!Guard_e
         throw .failed
     $out: = Headroom::{ .free = value_ceiling, .step = 0I64 }
     for m in ms
-        free: = digits_value(m.group(1, text))
-        step: = digits_value(m.group(2, text))
+        free_digits: = m.group(1, text).unwrap_or("")
+        free: = digits_value(free_digits)
+        step: = digits_value(m.group(2, text).unwrap_or(""))
         if free < 0I64 || step < 0I64
-            io.err().s("[perf_guard] the value is too large: ").s(m.group(1, text)).s("\n")
+            io.err().s("[perf_guard] the value is too large: ").s(free_digits).s("\n")
             throw .failed
         if free < out.free
             out = Headroom::{ .free = free, .step = step }
@@ -233,7 +235,7 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
     //< branch changes.
     //<
     //< Taken on the Linux CI's devcontainer image (used as they are on macOS, they raise false
-    //< alarms; "note 18" in `docs/SPEC-gates.md`). The memory figures repeat exactly for one
+    //< alarms; "note 16" in `docs/SPEC-gates.md`). The memory figures repeat exactly for one
     //< source.
     text: = io.read_file(path) catch
         io.err().s("[perf_guard] the baseline cannot be read: ").s(path).s("\n")
@@ -244,8 +246,8 @@ priv fn read_baseline(path: U8[], arena: Arena$@): Baseline!Guard_error //<
         throw .failed
     // **A missing key or a wrong kind is refused, not filled with a default** (filled in, an old
     // baseline shows only as "the value was 0").
-    // Caution: **Print the name the error carries as it is**: folded into "something went wrong",
-    // the only remedy is to measure again; with the name printed, the key to add is known.
+    // Caution: **Print the name the error carries as it is.** Folded into "something went wrong",
+    // the only remedy is to measure again. With the name printed, the key to add is known.
     $out: Baseline = ::{}
     json_struct.into_struct(root.val, out@, arena) catch e
         io.err().s("[perf_guard] the baseline cannot be read: ")
@@ -335,8 +337,8 @@ fn main(): I32 //<
     //< --cold=<log> --warm=<log> [--update]`
     //<
     //< Caution: **Let `make perf-log` produce the logs.** It measures on an empty cache (cold) and
-    //< again on the same cache (warm), **against separate baselines** — whether the AST disk cache
-    //< (`ksplc/parse/ast_cache.kspl`) hits changes time and peak memory several-fold, so one
+    //< again on the same cache (warm), **against separate baselines**. A hit in the AST disk cache
+    //< (`ksplc/parse/ast_cache.kspl`) changes time and peak memory several-fold. So one
     //< baseline for both leaves one side unchecked.
     arena: = Arena.new(1024 * 1024)
     defer arena.free()

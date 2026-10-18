@@ -21,7 +21,7 @@ FUZZ_ARGS ?=
 KANSO_REQUIRE_ASAN ?=
 # -O1, as the sanitizer slows it; `-g` and the frame pointer keep a stop's call row readable.
 ASAN_BUILD := --sanitize=address --cflags="-O1 -g -fno-omit-frame-pointer"
-# Where the page is written: one `kspage.html` that opens alone, beside the `kspage.wasm` bound in.
+# Where the page is written: one `kspage.html` with the wasm bound in, which `kssrv --local` serves.
 WEB ?= $(OUT)/web
 
 .PHONY: test test-fuzz web test-wasm test-served
@@ -68,7 +68,7 @@ WASM_LD  := wasm-ld --no-entry --gc-sections --stack-first -z stack-size=1048576
 # as soon as it formats a float. clang files it under the `wasi` machine's folder.
 WASM_BUILTINS := $(shell clang --target=wasm32-wasi -rtlib=compiler-rt -print-libgcc-file-name 2>/dev/null)
 
-export KSPAGE_OPEN_NOTE := (opening it in a browser is enough; no web server is wanted)
+export KSPAGE_OPEN_NOTE := (serve it with kssrv --local and open the URL kssrv prints)
 # **Write `#` as `\#`** (make cuts an assignment at a `#`) and **put no ` in either**: the recipe's
 # printf expands them inside double quotes, where one opens a command substitution.
 export KSPAGE_EXPORTS_NOTE := what settles the entry points JS calls is the source side's \#export (they are not lined up by hand)
@@ -120,7 +120,7 @@ KSPAGE_BROWSER := $(firstword \
 # whose image lost the tool stays green unverified (macOS and Windows at hand may hold no browser).
 KSPAGE_REQUIRE_BROWSER ?=
 # $(kspage_no_browser), at a recipe's head: with no browser the round ends there, SKIPPED, or
-# failed where one is required. **Both checks stop through it**, so they say it the same way.
+# failed where one is required.
 kspage_no_browser = if [ -z "$(KSPAGE_BROWSER)" ]; then \
   if [ -n "$(KSPAGE_REQUIRE_BROWSER)" ]; then \
     echo "RESULT: SOME FAILED (1) -> no browser found (KSPAGE_REQUIRE_BROWSER)"; exit 1; fi; \
@@ -128,8 +128,8 @@ kspage_no_browser = if [ -z "$(KSPAGE_BROWSER)" ]; then \
   fi
 # Checks press at named places, so the window's size is set (headed Chrome's own is too narrow).
 KSPAGE_WINDOW := 1280,1024
-# The cap that stops the browser (ordinary Chrome does not quit after dumping; the served side waits
-# for the marker). **Do not make it too short**: a busy machine's round is cut with no marker out.
+# The cap that stops the browser (ordinary Chrome does not quit by itself; the round waits for the
+# marker). **Do not make it too short**: a busy machine's round is cut with no marker out.
 KSPAGE_BROWSER_LIMIT := 300
 
 # Caution: **Leave no option out**: the contents shrink while green, or not one marker comes out.
@@ -137,7 +137,7 @@ KSPAGE_BROWSER_LIMIT := 300
 # `--disable-dev-shm-usage`: **a must in a container**, whose `/dev/shm` jams it (never at hand).
 # `--disable-popup-blocking`: a scripted press is no gesture, so a real browser stops `window.open`.
 # `--disable-background-networking` to `--host-resolver-rules`: a request never coming back stalls
-# the dumping side (`127.0.0.1` left for `test-served`). **Both checks share this one list.**
+# the round (`127.0.0.1` is left for the server).
 KSPAGE_BROWSER_FLAGS := --headless --no-sandbox --disable-gpu --disable-dev-shm-usage \
   --disable-popup-blocking \
   --disable-background-networking --disable-component-update \
@@ -146,14 +146,14 @@ KSPAGE_BROWSER_FLAGS := --headless --no-sandbox --disable-gpu --disable-dev-shm-
   --window-size=$(KSPAGE_WINDOW)
 
 # ==========================================
-# The browser's held-back place, for the side that served alone (`--user-data-dir`)
+# The browser's profile (`--user-data-dir`)
 # ==========================================
 # Give each run a fresh on-disk browser profile so storage and reload checks use real IndexedDB.
 KSPAGE_UDD := $(OUT)/kspage_udd
 
 # What the page itself said, cut back out of the browser's stderr (`--enable-logging=stderr` puts
-# it there): $(call kspage_said,<file>). **Both readers cut it here, the same way**: worded twice,
-# the day the name moves one reads nothing (`make test-conventions` holds it to the page's opening).
+# it there): $(call kspage_said,<file>), read where no marks came back as a file. The name is held
+# to the page's by `make test-conventions`: moved on one side, nothing would be read.
 KSPAGE_SAID := kspage-probe
 kspage_said = sed -n 's/^.*"$(KSPAGE_SAID): //p' "$(1)" | sed 's/", source: .*$$//'
 

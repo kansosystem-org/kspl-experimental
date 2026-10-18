@@ -1,43 +1,52 @@
 //< ARM Cortex-M (mps2-an385) bare metal: a probe showing an interrupt-driven UART0 RX echo
 //<
-//< What it verifies: the `wait-with-wfi` loop never returns, and hangs, if the NVIC/ISR does not
-//< work (WFI really halts the core, and there is no busy-polling fallback). Like the other
-//< Cortex-M demos it runs as one task on ksos/kernel/task's scheduler (so that the link includes
-//< the ksos_tick that SysTick_Handler needs), but it uses no blocking synchronization such as a
-//< semaphore on purpose (the reason is at the top of ksos/drivers/mps2/uart_irq.kspl).
+//< What it verifies: the task waits for each byte in `getc`, blocked on a semaphore the RX
+//< interrupt gives. Meanwhile the scheduler sleeps on WFI with nothing else to run. There is no
+//< busy-polling fallback. So if the NVIC/ISR does not work, the wait never ends and the run hangs.
+//< It reads a whole line before echoing any of it. So the bytes that arrive meanwhile queue in
+//< the driver's ring rather than overwrite each other.
 import "ksos/demo/common/semihost_console" as con
 import "ksos/drivers/mps2/uart_irq" as uart
 import "ksos/kernel/task" + { Task }
-import "std/strfmt" as _strfmt // `:02x`
-
-extern "C"
-    fn ksos_port_wfi()
+import "std/chars" // slicing the line
 
 $tcb_probe: Task
 $stack_probe: U8[4096]
+
+priv const line_max: Sz = 32 //< the longest line it keeps (`tests/uart_probe.py irq` sends less)
+$line: U8[line_max]
 
 fn uart_irq_echo_task(_arg: Void$@): Void
     con.puts("[semihosting] Kanso OS UART0 interrupt-driven RX echo probe starting...\n")
 
     uart.init()
-    con.puts("[IRQ] waiting for a byte via WFI (real interrupt-driven wait; hangs forever\n")
+    con.puts("[IRQ] waiting for a line in getc (the scheduler sleeps on WFI; hangs forever\n")
     con.puts("[IRQ] here if NVIC/ISR is not actually wired correctly)...\n")
 
-    for !uart.has_byte()
-        ksos_port_wfi()
-    byte: = uart.take_byte()
+    $n: Sz = 0
+    $got_newline: = false
+    for n < line_max
+        c: = uart.getc()
+        line[n] = c
+        n += 1
+        if c == '\n'
+            got_newline = true
+            break
 
-    con.out().s("[IRQ] received byte: 0x\{byte:02x\} (ISR fire count: \{uart.irq_count()\})\n")
-    con.puts("[IRQ] echoing it back...\n")
+    con.out().s("[IRQ] received \{n\} bytes (ISR fire count: \{uart.irq_count()\})\n")
+    con.puts("[IRQ] echoing them back...\n")
     $echoed: = true
-    uart.putc(byte) catch
+    uart.puts((U8[]::line).sub(0, n)) catch
         con.puts("[IRQ] UART0 putc() timed out\n")
         echoed = false
 
     con.puts("[semihosting] UART0 interrupt-driven RX echo probe done.\n")
-    // The byte itself is matched outside (`tests/uart_probe.py`), which holds the verdict the gate
-    // reads; these say what the probe saw from its side.
-    con.check("the byte came in through the RX interrupt", uart.irq_count() > 0)
+    // The bytes themselves are matched outside (`tests/uart_probe.py`), which holds the verdict the
+    // gate reads; these say what the probe saw from its side.
+    con.check("the line ended in a newline within the buffer", got_newline)
+    con.check("the bytes came in through the RX interrupt", uart.irq_count() > 0)
+    con.check("the handler took every byte the task read", uart.received() == U32::n)
+    con.check("no byte was dropped for want of room", uart.dropped() == 0)
     con.check("it went back out", echoed)
     con.print_summary("UART0 RX interrupt echo, the probe's side")
 // The bare-metal entry called from startup.S.

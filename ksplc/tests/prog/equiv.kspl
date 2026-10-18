@@ -1,18 +1,18 @@
 //< The program for the backend-equivalence test
 //<
-//< It avoids floating point and prints deterministic work that should agree bit for bit on both
-//< backends — integer arithmetic, strings (raw ones included), structs, enums, slices, control
+//< It avoids floating point and prints deterministic work that must agree bit for bit on both
+//< backends: integer arithmetic, strings (raw ones included), structs, enums, slices, control
 //< flow and the like.
-import "ksplc/tests/prog/equiv_shapes" { eval_order_lines, layout_lines, tagged_union_lines,
-    wrap16_lines }
+import "ksplc/tests/prog/equiv_shapes" { eval_order_lines, float_cast_lines, global_ref_lines,
+    layout_lines, tagged_union_lines, verbatim_hiding_lines, wrap16_lines }
 import "std/ds" { List }
 import "std/io"
 import "std/libc"
 import "std/str" { Str_builder }
 import "std/strfmt"
 
-// The four shapes of embedding (`embed`). **All four are needed** — the generated C has two paths,
-// "print it as a string" and "print it as hex bytes", while the LLVM backend always prints hex.
+// The four shapes of embedding (`embed`). **All four are needed.** The generated C has two paths,
+// "print it as a string" and "print it as hex bytes". The LLVM backend always prints hex.
 // Neither path, nor the special handling of the empty case, is checked unless it is taken.
 // The setting that keeps `git` from touching the samples is in `.gitattributes`.
 embed "ksplc/tests/prog/embed_data/text.txt" as e_text
@@ -72,8 +72,8 @@ priv const g_text: U8[] = "ksplc.cfg" //< a global declaration's initialiser
     //<
     //< Unlike C, the LLVM backend has to rebuild an initialiser as a static constant expression
     //< itself.
-    //< Caution: Leave out a string, an array or a mutable global and it becomes 0 / an empty slice
-    //< with no warning (emit_llvm_const_init in ksplc/gen/llvm/decl.kspl).
+    //< Caution: Leave out a string, an array or a mutable global, and it becomes 0 / an empty
+    //< slice. No warning comes (emit_llvm_const_init in ksplc/gen/llvm/decl.kspl).
 priv const g_num: I32 = 7
 priv const g_point: Point = Point::{ .x = 1, .y = 2 }
 priv $g_mut_text: U8[] = "mutable"
@@ -92,16 +92,16 @@ priv fn form_tag(f: Form): I32 //< a variant built through the alias, taken as t
 
 priv typedef Unary_op = fn(a: I32): I32 //< a function pointer's size
     //<
-    //< The layout computation (ksplc/sema/decl/layout.kspl) answers `sizeof`, so measuring a
+    //< The layout computation (ksplc/sema/decl/layout.kspl) answers `sizeof`. So measuring a
     //< function pointer as "a type it does not know" disagrees with the generated C's `sizeof`,
-    //< with no diagnostic, and the error flows straight into array lengths, allocation sizes and
+    //< with no diagnostic. The error flows straight into array lengths, allocation sizes and
     //< offsets.
 
 priv typedef Unary_op2 = Unary_op //< a chain of aliases
     //<
     //< Only the chain's head (`Unary_op`) writes the signature. A call through the chain's tail
     //< reads its return value and arguments from the function type the chain ends at (fn_sig_of in
-    //< sema/type/env.kspl); read as Void instead, both backends break: "it can be called, but the
+    //< sema/type/env.kspl). Read as Void instead, both backends break: "it can be called, but the
     //< value cannot be used".
 priv typedef Unary_op3 = Unary_op2
 
@@ -124,8 +124,8 @@ priv const g_const_op: Unary_op = twice //< a function pointer placed in a globa
     //< Each backend breaks at a different place, so both are tested. In C a `const` cannot go in
     //< front of the type name.
     //< Caution: **Test both the signature written directly and the one through an alias.** With an
-    //< alias (`Unary_op`) the C type name is a typedef, so the `const` goes in front again; choose
-    //< the position by the resolved type ID and the two disagree, the alias's `const` quietly lost.
+    //< alias (`Unary_op`) the C type name is a typedef, so the `const` goes in front again. Choose
+    //< the position by the resolved type ID, and the two disagree: the alias's `const` is lost.
 priv const g_const_op_direct: fn(a: I32): I32 = negate
 priv const g_chained_op: Unary_op3 = negate
 priv $g_mut_op: Unary_op = twice
@@ -134,7 +134,7 @@ priv $g_null_op: Unary_op = Unary_op::null
 priv fn pick_op(neg: Bool): fn(a: I32): I32 //< an unnamed function type as a return type
     //<
     //< Where the generated C names a function type (the prototype, an inferred local), the only
-    //< name is the typedef the C backend writes for it; without one, `unknown type name`.
+    //< name is the typedef the C backend writes for it. Without one, `unknown type name`.
     if neg
         return negate
     return twice
@@ -179,8 +179,8 @@ priv fn apply_c1_nocap(a: I32, f: Callable1<|I32, I32|>): I32 //<
 priv fn apply_slice(s: U8$[], f: Callable1<|U8$[], Sz|>): Sz //<
     //< The capture and the argument of a type holding a mutability marker
     //<
-    //< Take the type's text from `extract_type_name()` and the `$` is dropped (`U8$[]` → `U8[]`),
-    //< so the synthesised impl conforms to a `Callable` of another type argument and fails with
+    //< Take the type's text from `extract_type_name()`, and the `$` is dropped (`U8$[]` → `U8[]`).
+    //< Then the synthesised impl conforms to a `Callable` of another type argument and fails with
     //< "does not explicitly implement interface" (written_type_text in
     //< parse/desugar_closure.kspl).
     return f.call(s)
@@ -188,7 +188,7 @@ priv fn apply_slice(s: U8$[], f: Callable1<|U8$[], Sz|>): Sz //<
 priv fn cmp_positive(a: I32, b: I32, f: Callable2<|I32, I32, I32|>): Sz //<
     //< It calls an instantiated generic trait's method **where no expected type flows in**
     //<
-    //< Use the return value where there is an expected type, as in `return f.call(a);`, and the
+    //< Use the return value where there is an expected type, as in `return f.call(a);`. Then the
     //< type is filled from the context, so a type lost on the method goes unseen. Use it where the
     //< expected type stays `unknown`, such as a comparison's operand (declare_inst_trait_method in
     //< sema/decl/mono.kspl).
@@ -211,9 +211,9 @@ priv fn conv_positive(k: Conv<|I32, I32|>, a: I32): Sz
 priv trait Ranked //<
     //< A trait passed as the argument of a generic method with an explicit type argument
     //<
-    //< **Under a generic call an argument's expected type passes as `unknown`**, so the upcast has
-    //< to be applied again at the instantiated parameter's type (upcast_trait_args_for_instance in
-    //< sema/body/call.kspl). Without it ksplc passes with zero diagnostics, C fails on
+    //< **Under a generic call an argument's expected type passes as `unknown`.** So the upcast must
+    //< be applied again at the instantiated parameter's type (upcast_trait_args_for_instance in
+    //< sema/body/call.kspl). Without it ksplc passes with zero diagnostics. C fails on
     //< `incompatible type`, and LLVM passes an aggregate where a scalar belongs.
     fn score(r: Self): I32
 
@@ -228,9 +228,9 @@ priv struct Boxed<|T|> //<
     //< A generic struct with a generic impl of a trait, passed on as a trait value
     //<
     //< A generic impl's instantiation **makes the methods as separate `decl_fn`s**, so no
-    //< `decl_impl` is left in the tree. The thunks and the vtable are made by walking the tree, so
-    //< without recording the instantiated conformance separately (Trait_inst in
-    //< sema/session/ctx.kspl) the upcast makes C that refers to an undefined
+    //< `decl_impl` is left in the tree. The thunks and the vtable are made by walking the tree. So
+    //< the instantiated conformance is recorded separately (Trait_inst in sema/session/ctx.kspl).
+    //< Without it, the upcast makes C that refers to an undefined
     //< `kspl_vtable_impl_...`, with zero diagnostics from ksplc.
     priv v: T
 
@@ -247,7 +247,7 @@ priv struct Holder<|T|>
 priv fn tagged<|T, U|>(_h: Holder<|T|>@, k: Ranked, _tag: U): I32 //<
     //< A generic free function that has U written explicitly (the same shape as select in std/seq)
     //<
-    //< It cannot be a method: a generic type's method can use only the type arguments its receiver
+    //< It cannot be a method. A generic type's method can use only the type arguments its receiver
     //< holds ("A type argument with nothing to bind to is rejected" in docs/DESIGN-language.md).
     return k.score() + I32::sizeof(U) + I32::sizeof(T) * 0
 
@@ -256,7 +256,7 @@ impl<|T|> Holder<|T|>
         //<
         //< Caution: Write the type arguments into the call as **children** of `type_args`. Merely
         //< putting `<|T|>` in the path's text puts it out of reach of the instantiation's
-        //< substitution (replace_type_vars in sema/decl/mono.kspl), and it fails: an environment
+        //< substitution (replace_type_vars in sema/decl/mono.kspl). Then it fails: an environment
         //< instantiated still as `T` does not conform to `Callable1<|I32, …|>`. Test both zero
         //< captures and captures.
         nocap: = apply_c1_gen<|T|>(r.v, fn(x: T; ): T {
@@ -272,10 +272,10 @@ priv fn apply_c1_gen<|T|>(v: T, f: Callable1<|T, T|>): T
 
 priv const reg_base: U32 = 0x40000000 //< the constant folding of a global initialiser
     //<
-    //< Caution: All three shapes "silently become a different value when not folded": a reference
-    //< to another constant (the ABI path mangles the name), a value that does not fit an I32
-    //< (`1U32 << 31`), and a hex `F` (it looks like the type suffix). A register's definition has
-    //< all three together.
+    //< Caution: All three shapes "silently become a different value when not folded". They are a
+    //< reference to another constant (the ABI path mangles the name), a value that does not fit an
+    //< I32 (`1U32 << 31`), and a hex `F` (it looks like the type suffix). A register's definition
+    //< has all three together.
 priv const reg_ctrl: U32 = reg_base + 0x0C
 priv const bit_top: U32 = 1U32 << 31
 priv const bit_mask: U32 = bit_top | 0xFF
@@ -289,7 +289,7 @@ priv const bits_u64: U64 = 0b1111000011110000U64
 priv $g_hexlen: I32[0x1F] = ::{}
 priv const g_cast_back: I32 = U8::(0 - 1) //< a cast in a global, which LLVM folds itself
     //<
-    //< Caution: **Keep a constant naming another through a cast**: C inlines the folded value
+    //< Caution: **Keep a constant naming another through a cast.** C inlines the folded value
     //< there, so a fold that drops the cast is wrong on both backends at once.
 priv const g_cast_u16: I32 = U16::70000
 priv const g_cast_sz: Sz = Sz::(0xFFFFFFFFFFFFFFFFU64 >> 1U64) //<
@@ -301,6 +301,19 @@ priv const g_picked: Sz = 64 if g_wide else 8 //< a conditional in a top-level c
     //< Caution: **Use it as an array length too.** Lower hoists a conditional into a statement,
     //< which a top-level initializer has none of; C then names a temporary at file scope.
 priv const g_picked_buf: U8[g_picked] = ::{}
+priv const g_and: Bool = g_wide && !g_wide //< `&&` and `||` in top-level constants
+    //<
+    //< Caution: **Keep a `!` over one, and one naming another constant.** Lower turns `&&` into a
+    //< temporary and a branch inside a function, which a top-level initializer has none of.
+priv const g_not_and: Bool = !(g_wide && g_and)
+priv const g_or: Bool = g_and || !g_wide
+priv const g_div_neg: I32 = 7 / -1 //< a division and a remainder by `-1` in top-level constants
+    //<
+    //< Caution: **Keep the divisor `-1`.** Inside a function it goes to the run-time helper that
+    //< defines a minimum divided by `-1`. At the top level it must fold, as a C file-scope
+    //< initializer cannot call.
+priv const g_mod_neg: I32 = 9 % -1
+priv const g_div_chain: I32 = case_two * -1 / -1
 priv const case_one: I32 = 1
 priv const case_two: I32 = case_one + 1
 
@@ -346,7 +359,7 @@ priv struct Width_probe //<
     //< A pair that passes a value to a field and to an argument of a different width
     //<
     //< **KSPL's integer literals are `I32` by default**, so writing one into an `Sz` field is
-    //< common. C converts implicitly at an assignment and when passing an actual argument, whereas
+    //< common. C converts implicitly at an assignment and when passing an actual argument. But
     //< genllvm must emit instructions to match the widths, so **only the LLVM backend can
     //< disagree**.
     wide: Sz
@@ -376,9 +389,9 @@ priv fn runtime_divisor(n: I32): I32 //< a divisor decided at run time
 priv fn runtime_u16(v: U16): U16 //< a floating-point value decided at run time
     //<
     //< **Do not make it `const`.** Folded, the conversion itself vanishes. **Always include
-    //< something narrower than `int`, and an `F32`** — C promotes those to `int` / `double` in the
-    //< variadic part, so the C backend is safe because the C compiler promotes, and **only the LLVM
-    //< backend has to emit the promotion itself**.
+    //< something narrower than `int`, and an `F32`.** C promotes those to `int` / `double` in the
+    //< variadic part, so the C backend is safe because the C compiler promotes. **Only the LLVM
+    //< backend must emit the promotion itself**.
     return v
 priv fn runtime_i16(v: I16): I16
     return v
@@ -397,8 +410,8 @@ priv fn variadic_line(buf: U8$[]): U8[]
 
 priv fn embed_sum(d: U8[]): U64 //< it folds the embedded content into one number
     //<
-    //< **The length alone is not enough** — a trigraph's reinterpretation changes both the length
-    //< and the content, while a one-byte mix-up does not show in the length.
+    //< **The length alone is not enough.** A trigraph's reinterpretation changes both the length
+    //< and the content. A one-byte mix-up does not show in the length.
     $sum: U64 = 1469598103934665603U64
     for i in Range.asc(d.len)
         b: = (d.ptr + i)$
@@ -414,7 +427,7 @@ priv fn runtime_f64(v: F64): F64
 priv fn runtime_u64(v: U64): U64
     return v
 
-// Caution: **`Exit_probe` has to be `pub`.** `main` is visible from outside as the entry point, so
+// Caution: **`Exit_probe` must be `pub`.** `main` is visible from outside as the entry point. So
 // its Result's error type cannot be narrowed ([I0402] finds "a `pub` used only inside the unit",
 // but this one cannot be narrowed).
 ##lint(I0402 = off)
@@ -437,9 +450,89 @@ priv const shift_mask: U32 = 6U32 //<
     //< Conversely, the constant for building an amount that can be folded at translation time
 priv const div_pick: I32 = 6
 
+// Hiding a local is the shape shadow_lines tests, and the one [I0501] is for.
+##lint(I0501 = off)
+
+priv const r: I32 = 100 //< a global named as a method's receiver usually is, read in a closure
+
+priv fn shadow_param(n: I32): I32 //< a body's local hiding the parameter its initializer reads
+    n: = n + 1
+    return n * 10
+
+priv fn even_only(n: I32): I32!U8[]
+    if n % 2 != 0
+        throw "odd"
+    return n
+
+priv fn shadow_lines(b: Str_builder$@) //< a local hiding an outer one of its name
+    // **Its initializer reads the outer one** ("Scope and shadowing" in docs/SPEC-language.md).
+    // But C sees a declaration from its own declarator on. So the C gives the inner local a
+    // name of its own (hiding_local_name in base/c_name.kspl). Each shape declares one another
+    // way: a block, a labelled block, `if v: = v`, a `switch` arm, a `catch` and a parameter.
+    x: I32 = runtime_divisor(5)
+    $sum: = 0
+    if x > 0
+        x: = x + 1
+        if x > 0
+            x: = x * 10
+            sum += x
+        sum += x
+    s: = "10"
+    inner:
+        s: = s.len
+        sum += I32::s * 1000
+    v: = Opt_i32.some(runtime_divisor(7))
+    if v: = v
+        sum += v * 100000
+    len: = runtime_divisor(2)
+    switch Shape.line(len + 1)
+    case .line(len)
+        len: = len * len
+        sum += len * 1000000
+    case .dot {}
+    e: = runtime_divisor(3)
+    caught: = even_only(e) catch e
+        fallback I32::e.len
+    b.s("shadow=\{sum\}/\{x\}/\{len\}/\{caught\}/\{e\}/\{shadow_param(runtime_divisor(4))\}")
+    // A closure's receiver takes a made name, which no capture, parameter or global can meet.
+    // The closure's body reads the capture `r`, the parameter `r` and the global `r` in turn.
+    r: = runtime_divisor(40)
+    b.s(" recv=\{apply_c1(2, fn(a: I32; r: I32): I32 { return a + r; })\}")
+        .s("/\{apply_c1(r, fn(r: I32; ): I32 { return r * 2; })\}")
+        .s("/\{apply_c1(2, fn(a: I32; s: U8[]): I32 { return a + I32::s.len + r; })\}\n")
+
+priv fn ptr_lines(b: Str_builder$@, msg: U8[]) //< pointer arithmetic, counted in elements
+    // Pointer arithmetic ("Pointer arithmetic and implicit dereferencing" in
+    // docs/SPEC-language.md). **It counts in elements.** An implementation that counts in bytes
+    // differs only for an element size other than 1, so it is checked on an array of `I32`.
+    // Caution: **Make the amount a run-time value.** Folded, the arithmetic itself vanishes.
+    cells: I32[4] = ::{ 10, 20, 30, 40 }
+    hop: = runtime_divisor(3)
+    // **Test both `+` and `-` between a pointer and an integer.** genllvm emits `-` as "subtract
+    // from 0, then add", so `+` alone passes an implementation that drops the sign.
+    b.s("ptrstep=\{(cells[0]@ + hop)$\}/\{(cells[hop]@ - hop)$\}\n")
+    b.s("ptrdiff=\{cells[hop]@ - cells[0]@\}/\{(msg.ptr + hop) - msg.ptr\}\n")
+    // Caution: **Test the compound assignment that advances a pointer too.** genllvm emits it by a
+    // path separate from the arithmetic (GEP). So even where `p = p + i` agrees, this one alone can
+    // end up adding bytes to the address.
+    $walk: = cells[0]@
+    walk += hop
+    at_hop: = walk$
+    walk -= hop
+    b.s("ptrwalk=\{at_hop\}/\{walk$\}\n")
+    // **Step by an unsigned amount past the signed range of its width.** genllvm hands the amount
+    // to GEP, which reads it as signed: a U8 200 left narrow moves the pointer back 56 elements.
+    wide_buf: U8[256] = ::{}
+    far: = runtime_u8(200)
+    $far_walk: = wide_buf[0]@
+    far_walk += far
+    b.s("ptrwide=\{(wide_buf[0]@ + far) - wide_buf[0]@\}/\{(wide_buf[255]@ - far) - wide_buf[0]@\}")
+        .s("/\{far_walk - wide_buf[0]@\}\n")
+
 priv fn global_cast_lines(b: Str_builder$@) //< the casts and choices folded in global constants
     b.s("gcast=\{g_cast_back\}/\{g_cast_u16\}/\{g_cast_ref\}/\{g_picked\}/\{g_picked_buf.len\}")
         .s(" gsz=\{g_cast_sz\}")
+    b.s(" glogic=\{g_and\}/\{g_not_and\}/\{g_or\} gdiv=\{g_div_neg\}/\{g_mod_neg\}/\{g_div_chain\}")
     b.s("/\{case_named(runtime_divisor(1))\}\{case_named(runtime_divisor(2))\}")
 
 fn main(): Void!Exit_probe
@@ -459,15 +552,15 @@ raw-line-1
 raw-line-2""").s("<END>\n")
     // A `\` at a line's end carries the text onto the next line, and the source's indent is dropped
     // with the mark.
-    // Caution: **Check the length beside the contents.** KSPL_STR counts by sizeof, so a backend
-    // that kept the line terminator or the indent disagrees on the length first, while on a wide
+    // Caution: **Check the length beside the contents.** KSPL_STR counts by sizeof. So a backend
+    // that kept the line terminator or the indent disagrees on the length first. On a wide
     // terminal the contents alone look the same either way.
     carried: U8[] = "carried onto the next line"
     b.s("carried=[").s(carried).s("]len=\{I64::carried.len\}\n")
     // Caution: **Always include text that means something different in C.** The generated C must
     // not pass a literal's text to C's lexer. `??(` is a C99 trigraph and turns into `[` (and `??/`
-    // becomes a backslash and swallows the next character), and a digit after `\0` is one octal
-    // character in C while in KSPL it is a NUL followed by a digit.
+    // becomes a backslash and swallows the next character). A digit after `\0` is one octal
+    // character in C, but in KSPL it is a NUL followed by a digit.
     // Check the length as well. KSPL_STR counts by sizeof, so different characters mean a different
     // `.len` too.
     tri: U8[] = "??( ??) ??/ ??' ??!"
@@ -481,7 +574,7 @@ raw-line-2""").s("<END>\n")
     ch_close: U8 = '\}'
     ch_run: = char_id('\{')
     b.s("chr=\{I64::ch_const\}/\{I64::ch_close\}/\{I64::ch_run\}\n")
-    // **A `\uXXXX` is not one byte.** It widens to the 1 to 3 bytes of the code point in UTF-8, so
+    // **A `\uXXXX` is not one byte.** It widens to the 1 to 3 bytes of the code point in UTF-8. So
     // check both the content and the `.len` (literal_span in base/literal.kspl counts;
     // gen/c/literal.kspl and gen/llvm/ctx.kspl write). One-, two- and three-byte characters are
     // mixed in one string, catching a miscount at the boundaries too.
@@ -577,9 +670,9 @@ raw-line-2""").s("<END>\n")
     chained: Unary_op3 = twice
     chained_slot: = Op_slot::{ .tag = 3, .op = negate }
     b.s("aliaschain=\{chained(5)\}/\{g_chained_op(5)\}/\{chained_slot.op(5)\}\n")
-    // Unnamed function types wherever a type can stand: a list's element, a return, an inferred
-    // local, a generic's field, a call of a call's result, a pointer to one, an array of them. Each
-    // call reads its signature from the value's type.
+    // Unnamed function types wherever a type can stand. Examples: a list's element, a return, an
+    // inferred local, a generic's field, a call of a call's result, a pointer to one, an array of
+    // them. Each call reads its signature from the value's type.
     $fn_list: = List<|fn(a: I32): I32|>.new(null)
     defer fn_list.free()
     fn_list.push(twice)
@@ -616,6 +709,9 @@ raw-line-2""").s("<END>\n")
     bare: Bare_fn = naked_ret
     bare()
     b.s("/naked\n")
+    global_ref_lines(b@)
+    verbatim_hiding_lines(b@)
+    float_cast_lines(b@)
     // A constant widened by a cast takes its source's sign: genllvm extends the constant's text
     // itself, and `U32::-1`'s text is `-1`.
     b.s("cext=\{I64::(U32::-1)\}/\{I64::(I8::-1)\}/\{U64::(U16::(0 - 1))\}\n")
@@ -641,8 +737,8 @@ raw-line-2""").s("<END>\n")
     b
         .s("stshift=\{Sz::(1U32 << (shift_mask & 3U32))\}/\{Sz::(1U32 << (2U32 if shift_mask > 3U32 else 5U32))\}\n")
     // A divisor decided at run time (the same run-time conditions).
-    // Caution: **Test both unsigned and signed.** The C code does the check in ptrdiff_t, so not
-    // converting back to the original type makes `U32 / ptrdiff_t` a signed 64-bit division, and
+    // Caution: **Test both unsigned and signed.** The C code does the check in ptrdiff_t. Not
+    // converting back to the original type makes `U32 / ptrdiff_t` a signed 64-bit division. Then
     // the answer changes for a value with the top bit set. The remainder's sign and a negative
     // divisor are checked as well.
     $div_compound: I32 = 100
@@ -673,24 +769,8 @@ raw-line-2""").s("<END>\n")
     neg_sz: Sz = runtime_divisor(-1)
     sz_signed: = neg_sz > sizeof(I32)
     b.s("sizeof_sign=\{sz_signed\}/\{I64::(neg_sz - sizeof(I32))\}\n")
-    // Pointer arithmetic ("Pointer arithmetic and implicit dereferencing" in
-    // docs/SPEC-language.md). **It counts in elements.** An implementation that counts in bytes
-    // differs only for an element size other than 1, so it is checked on an array of `I32`.
-    // Caution: **Make the amount a run-time value.** Folded, the arithmetic itself vanishes.
-    cells: I32[4] = ::{ 10, 20, 30, 40 }
-    hop: = runtime_divisor(3)
-    // **Test both `+` and `-` between a pointer and an integer.** genllvm emits `-` as "subtract
-    // from 0, then add", so `+` alone passes an implementation that drops the sign.
-    b.s("ptrstep=\{(cells[0]@ + hop)$\}/\{(cells[hop]@ - hop)$\}\n")
-    b.s("ptrdiff=\{cells[hop]@ - cells[0]@\}/\{(msg.ptr + hop) - msg.ptr\}\n")
-    // Caution: **Test the compound assignment that advances a pointer too.** genllvm emits it by a
-    // path separate from the arithmetic (GEP), so even where `p = p + i` agrees, this one alone can
-    // end up adding bytes to the address.
-    $walk: = cells[0]@
-    walk += hop
-    at_hop: = walk$
-    walk -= hop
-    b.s("ptrwalk=\{at_hop\}/\{walk$\}\n")
+    ptr_lines(b@, msg)
+    shadow_lines(b@)
     // Floating-point conversion ("Primitive types" in docs/SPEC-language.md).
     // Caution: **Print with high precision.** At the default six digits single precision's rounding
     // is invisible, and an implementation that computes in double precision and converts back

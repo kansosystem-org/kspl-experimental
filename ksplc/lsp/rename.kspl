@@ -1,11 +1,11 @@
 //< LSP: renaming, and the checks that refuse a rename before it writes anything
 //<
 //< The places come from the references' walk (`collect_spots` in `uses.kspl`). A rename is
-//< refused, with a message naming why, where ① the new name is not one the grammar reads as an
-//< identifier (`Identifier` in `../kspl.kspeg`), ② a place lies in a file the workspace walk does
-//< not list (`holds` in `workspace.kspl`), or ③ the new name is already declared where it would
-//< land. `prepareRename` asks ② of the declaration alone, so the editor refuses before a name is
-//< typed.
+//< refused with a message naming why, in these cases. ① The grammar does not read the new
+//< name as an identifier (`Identifier` in `../kspl.kspeg`). ② A place lies in a file the
+//< workspace walk does not list (`holds` in `workspace.kspl`). ③ The new name is already
+//< declared where it would land. `prepareRename` asks ② of the declaration alone, so the
+//< editor refuses before a name is typed.
 import "kspeg/engine" as kspeg
 import "ksplc/base/ast" { Ast_node }
 import "ksplc/base/core" as base_core
@@ -55,7 +55,7 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
         //< `textDocument/rename`: the uses as per-file edits, or why the rename is refused
         //<
         //< **Rewrite the declaration too**, or the workspace no longer compiles.
-    new_name: = params.get("newName").as_str()
+    new_name: = params.get("newName").as_str().unwrap_or("")
     if new_name.len == 0
         lsp_msg.send_error_response(id_val, lsp_msg.invalid_params,
             "a rename names the new name in 'newName'", arena)
@@ -69,7 +69,7 @@ fn handle_rename(ws_state: Doc_state$@, parser: kspeg.Target$@, params: json.Val
         return
     old_name: = t.name.text.get_generic_base_name()
     $why: = name_refusal(new_name, parser, arena)
-    uri: = params.get("textDocument").get("uri").as_str()
+    uri: = params.get("textDocument").get("uri").as_str().unwrap_or("")
     spots: = lsp_uses.collect_spots(ws_state, t, base_locate.uri_style_of(uri), arena)
     if why.len == 0
         why = place_refusal(spots@, old_name, arena)
@@ -175,7 +175,7 @@ priv fn is_member_scope(n: Ast_node$@): Bool //<
 priv fn decl_name(n: Ast_node$@): U8[] //< the name a node declares; empty where it declares none
     //<
     //< **What the compiler bound is read from its own record** (`sym_ptr`), so a binding written in
-    //< any form is found; a field is no symbol, so it is read from the tree.
+    //< any form is found. A field is no symbol, so it is read from the tree.
     if n.sym_ptr != null
         sym: = Sema_symbol$@::n.sym_ptr
         if sym.node == n
@@ -226,17 +226,17 @@ impl Clash
         //< Why the new name would collide; empty where it would not
         //<
         //< A member (a field, a variant, a method) is compared with its type's other members. Any
-        //< other name is compared, at every place it is written bare, with each scope around it:
-        //< one declared there would be hidden by it, hide it, or be declared twice.
-        //< Caution: **A scope reached after a `.` is not searched for a bare name**, or a local is
-        //< refused for sharing a name with some type's method.
+        //< other name is compared with each scope around every place it is written bare. A name
+        //< declared there would be hidden by it, hide it, or be declared twice.
+        //< Caution: **A scope reached after a `.` is not searched for a bare name.** Otherwise a
+        //< local is refused for sharing a name with some type's method.
         for i in Range.asc(spots.len)
             s: = spots.get(i)
             if s.is_decl
                 if scope: = own_scope(s)
                     if is_member_scope(scope)
                         return r.member_refusal(s, scope)
-        // **Every file's top hangs under one node**, searched per file; the places come ordered by
+        // **Every file's top hangs under one node**, searched per file. The places come ordered by
         // file, so a file's top is searched once, not once per place.
         $top_done: U8[] = ""
         for j in Range.asc(spots.len)
@@ -262,7 +262,7 @@ impl Clash
     priv fn member_refusal(r: Self, s: Spot, scope: Ast_node$@): U8[] //<
         //< Why a member's new name is taken among its type's members; empty where it is not
         //<
-        //< **A type's methods may be spread over several `impl`s**, so a method is looked up by
+        //< **A type's methods can be spread over several `impl`s.** So a method is looked up by
         //< its full name as well as in its own block.
         if got: = declared_in(scope, s.file, r.new_name, 0)
             return r.taken(got, s)
@@ -274,9 +274,8 @@ impl Clash
             return ""
         if dot: = sym.name.rfind_char('.')
             sibling: = r.arena.text().s(sym.name.sub(0, dot + 1)).s(r.new_name).take()
-            other: = r.c.symtab.resolve_fqn(sibling) catch
-                return ""
-            return r.taken(other.node, s)
+            if other: = r.c.symtab.resolve_fqn(sibling)
+                return r.taken(other.node, s)
         return ""
 
     priv fn import_refusal(r: Self, s: Spot): U8[] //<

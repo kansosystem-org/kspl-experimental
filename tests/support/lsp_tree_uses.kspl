@@ -1,15 +1,15 @@
 //< Checks "find the uses of a name" (not a suite; part of `../suite/lsp_tree_test.kspl`)
 //<
 //< Caution: **Do not check references and renaming separately.** The language server collects them
-//< in one place (`ksplc/lsp/uses.kspl`), so a case where only one fails means that place is
-//< broken; here both are asked at the same position and compared.
-//< **It is split off from the body for more than the line count**: this section checks "does it
+//< in one place (`ksplc/lsp/uses.kspl`). So a case where only one fails means that place is
+//< broken. Here both are asked at the same position and compared.
+//< **It is split off from the body for more than the line count.** This section checks "does it
 //< reach a file that is not open".
+import "ksplc/tests/support/jsonrpc_client"
 import "ksplc/tests/support/lsp_client"
 import "std/chars"
 import "std/ds" { List }
 import "std/json" + { Json_builder }
-import "std/jsonrpc"
 import "std/mem" { Arena }
 import "std/str"
 import "std/verdict"
@@ -26,11 +26,11 @@ priv const rename_file: U8[] = "ksos/drivers/ht16k33.kspl" //<
     //< The file holding the function the rename starts from
     //<
     //< Caution: **Check that it reaches a file that is not open.** It walks the tree from the root
-    //< file; if it returned only open files, **the other files would keep the old name** (a
+    //< file. If it returned only open files, **the other files would keep the old name** (a
     //< complaint against other products). Only identifier nodes match.
 priv const rename_old: U8[] = "draw"
 
-priv fn refs_at(c: jsonrpc.Client$@, with_decl: Bool, arena: Arena$@): List<|json.Val|> //<
+priv fn refs_at(c: jsonrpc_client.Client$@, with_decl: Bool, arena: Arena$@): List<|json.Val|> //<
     //< Asks for the places that use the name at that position
     $b: = Json_builder.new(arena)
     $pos: = json.Val.null_val
@@ -48,7 +48,7 @@ priv fn refs_at(c: jsonrpc.Client$@, with_decl: Bool, arena: Arena$@): List<|jso
     msg: = lsp_client.answer(c, "textDocument/references", params, heavy_ms, arena)
     return msg.get("result").arr_list(arena)
 
-fn check_references(c: jsonrpc.Client$@, arena: Arena$@) //<
+fn check_references(c: jsonrpc_client.Client$@, arena: Arena$@) //<
     //< References point at the same places as renaming
     $with_decl: = refs_at(c, true, arena)
     d1: = lsp_client.why(c, arena.text().s("\{with_decl.len\} found").take(), arena)
@@ -60,11 +60,11 @@ fn check_references(c: jsonrpc.Client$@, arena: Arena$@) //<
     $off: = List<|U8[]|>.new(arena)
     for i in Range.asc(with_decl.len)
         one: = with_decl.get(i)
-        spot_uri: = one.get("uri").as_str()
+        spot_uri: = one.get("uri").as_str().unwrap_or("")
         r: = one.get("range")
-        line: = Sz::r.get("start").get("line").as_int(-1I32)
-        from: = Sz::r.get("start").get("character").as_int(-1I32)
-        to: = Sz::r.get("end").get("character").as_int(-1I32)
+        line: = Sz::r.get("start").get("line").as_int().unwrap_or(-1I32)
+        from: = Sz::r.get("start").get("character").as_int().unwrap_or(-1I32)
+        to: = Sz::r.get("end").get("character").as_int().unwrap_or(-1I32)
         got: = span_at(spot_uri, line, from, to, arena)
         if !got.equals(rename_old)
             off
@@ -93,7 +93,7 @@ priv fn spread(list: List<|json.Val|>@, arena: Arena$@): List<|U8[]|> //<
     //< The distinct URIs in the list
     $out: = List<|U8[]|>.new(arena)
     for i in Range.asc(list.len)
-        rel: = list.get(i).get("uri").as_str()
+        rel: = list.get(i).get("uri").as_str().unwrap_or("")
         $seen: = false
         for k in Range.asc(out.len)
             if out.get(k).equals(rel)
@@ -104,22 +104,23 @@ priv fn spread(list: List<|json.Val|>@, arena: Arena$@): List<|U8[]|> //<
 
 priv fn ahead(a: json.Val, b: json.Val): Bool //<
     //< Whether `a` comes before `b` (in path, line, column order)
-    order: = a.get("uri").as_str().compare(b.get("uri").as_str())
+    order: = a.get("uri").as_str().unwrap_or("")
+        .compare(b.get("uri").as_str().unwrap_or(""))
     if order != 0
         return order < 0
-    a_line: = a.get("range").get("start").get("line").as_int(0)
-    b_line: = b.get("range").get("start").get("line").as_int(0)
+    a_line: = a.get("range").get("start").get("line").as_int().unwrap_or(0)
+    b_line: = b.get("range").get("start").get("line").as_int().unwrap_or(0)
     if a_line != b_line
         return a_line < b_line
-    return a.get("range").get("start").get("character").as_int(0) <= b.get("range").get("start")
-        .get("character").as_int(0)
+    return a.get("range").get("start").get("character").as_int().unwrap_or(0) <= b.get("range")
+        .get("start").get("character").as_int().unwrap_or(0)
 
 priv fn name_pos(rel: U8[], lead: U8[], name: U8[], arena: Arena$@): Lsp_pos? //<
     //< The position of name in the line starting with lead, as an LSP position (both from 0)
     //<
-    //< Caution: **Do not hard-code the line number**: a longer comment above `fn draw` moves the
-    //< position onto a comment line and **both the renaming and the references come back empty**.
-    //< **Fail loudly where it cannot be found**: a 0 points at the first line and reports "0 files"
+    //< Caution: **Do not hard-code the line number.** A longer comment above `fn draw` moves the
+    //< position onto a comment line. **Both the renaming and the references then come back empty**.
+    //< **Fail loudly where it cannot be found.** A 0 points at the first line and reports "0 files"
     //< for an unrelated reason.
     $i: Sz = 0
     for text in harness.read_under_root(rel).lines(arena)
@@ -152,7 +153,7 @@ priv fn span_at(uri: U8[], line: Sz, from: Sz, to: Sz, arena: Arena$@): U8[]
         i += 1
     return ""
 
-fn check_rename(c: jsonrpc.Client$@, arena: Arena$@)
+fn check_rename(c: jsonrpc_client.Client$@, arena: Arena$@)
     $b: = Json_builder.new(arena)
     $pos: = json.Val.null_val
     switch draw_pos(b@, arena)
@@ -178,15 +179,16 @@ fn check_rename(c: jsonrpc.Client$@, arena: Arena$@)
     // list an object's keys, so the tracked file list is used, and a key comes back spelt as sent.
     for rel in harness.tracked_matching(U8[][]::scan.kspl_specs)
         uri: = lsp_client.uri_of(harness.root(), rel, arena)
-        if !changes.has_key(uri)
+        if !changes.find(uri).is_some()
             continue
         files.push(rel)
         for e in changes.get(uri).arr_list(arena)
             spots += 1
             r: = e.get("range")
-            line: = Sz::r.get("start").get("line").as_int(-1I32)
-            from: = Sz::r.get("start").get("character").as_int(-1I32)
-            to: = Sz::r.get("end").get("character").as_int(-1I32)
+            line: = Sz::r.get("start").get("line").as_int().unwrap_or(-1I32)
+            from: =
+                Sz::r.get("start").get("character").as_int().unwrap_or(-1I32)
+            to: = Sz::r.get("end").get("character").as_int().unwrap_or(-1I32)
             got: = span_at(uri, line, from, to, arena)
             if !got.equals(rename_old)
                 off

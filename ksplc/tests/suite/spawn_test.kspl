@@ -61,11 +61,11 @@ priv fn build_child(work: U8[], name: U8[], source: U8[], arena: Arena$@): U8[] 
         verdict.check("the child's source can be written", false, src)
         return ""
     c: = harness.run(harness.ksplc_argv(U8[][]::{ src, gen }))
-    if c.code != 0
+    if !c.exited_with(0)
         verdict.check("the child translates to C", false, c.out)
         return ""
     b: = harness_build.build_exe(U8[][]::{ gen }, exe, U8[][]::harness_build.default_cflags)
-    if b.code != 0
+    if !b.exited_with(0)
         verdict.check("the child builds", false, b.out)
         return ""
     return exe
@@ -77,7 +77,7 @@ priv fn ran(exe: U8[], out_path: U8[], err_path: U8[]): U8[] //<
     argv: = U8[][]::{ exe }
     $child: = subproc.spawn_redirect(argv, "", out_path, err_path) catch
         return ""
-    child.wait()
+    _code: = child.wait()
     return io.read_file(out_path) catch
         return ""
 
@@ -141,7 +141,7 @@ priv fn check_long(work: U8[], arena: Arena$@) //<
     r: = harness.run(U8[][]::{ exe, kana.slice() })
     sys.unset_env("KSPL_SPAWN_LONG") catch panic("KSPL_SPAWN_LONG could not be unset")
     verdict.check("an argument of 2800 kana starts the child and arrives whole",
-        r.code == 0 && r.out.find_str("arg ok").is_some(), r.out)
+        r.exited_with(0) && r.out.find_str("arg ok").is_some(), r.out)
     verdict.check("an environment value of 5000 characters reaches the child whole",
         r.out.find_str("env ok").is_some(), r.out)
 
@@ -244,16 +244,17 @@ priv fn check_bytes(arena: Arena$@) //<
         b.built && b.out.find_str("out\n").is_some() && b.out.find_str("err\n").is_some() &&
         b.out.find_char('\r').is_none(), b.out)
 
-// A prompt, a read, then a death by signal: only what was written before the death remains, so a
+// A prompt, a read, then a death by signal. Only what was written before the death remains. So a
 // prompt in the output went out before the program waited to read.
 priv const prompt_src: U8[] =
     """import "std/io"
 
 fn main(): I32
     io.out().s("Name? ")
-    c: = io.getchar()
+    c: = io.getchar() catch
+        return 1
     p: I32$@ = null
-    p$ = c
+    p$ = I32::c.unwrap_or(0)
     return 0
 
 """
@@ -267,19 +268,19 @@ priv fn check_prompt(arena: Arena$@) //<
     //< A prompt written to a terminal shows before the program waits to read
     //<
     //< The terminal is util-linux's `script`. Where there is none (macOS's takes other options),
-    //< the case is a skip, and on Windows too: MSYS2's `script` makes a pseudo-terminal a native
-    //< program sees as a pipe, and `/bin/sh` is no path a native program can start.
+    //< the case is a skip, and on Windows too. MSYS2's `script` makes a pseudo-terminal that a
+    //< native program sees as a pipe. `/bin/sh` is no path a native program can start.
     name: = "a prompt to a terminal shows before the read"
     if sys.is_windows()
         verdict.skip_check(name, "Windows has no terminal `script` can give a native program")
         return
-    // Feed the probe too: inherited terminal input belongs to the foreground process group,
-    // and `script` in the harness's background group is suspended when it touches that terminal.
+    // Feed the probe too: inherited terminal input belongs to the foreground process group.
+    // `script` in the harness's background group is suspended when it touches that terminal.
     probe: = run_prompt("true", arena)
-    if probe.code < 0
+    if probe.code.is_none()
         verdict.check(name, false, probe.out)
         return
-    if probe.code != 0
+    if !probe.exited_with(0)
         verdict.skip_check(name, "no util-linux `script` to give the program a terminal")
         return
     exe: = build_child(harness.sandbox("flush_prompt"), "prompt", prompt_src, arena)
@@ -290,9 +291,10 @@ priv fn check_prompt(arena: Arena$@) //<
     piped: = run_prompt(arena.text().s("'\{exe\}' | cat").take(), arena)
     // Caution: **Check that it ran.** A run that could not start prints no prompt either.
     verdict.check("a prompt into a pipe is lost on a death by signal (confirming the premise)",
-        piped.code == 0 && piped.out.find_str("Name? ").is_none(), piped.out)
+        piped.exited_with(0) && piped.out.find_str("Name? ").is_none(), piped.out)
     on_tty: = run_prompt(arena.text().s("'\{exe\}'").take(), arena)
-    verdict.check(name, on_tty.code == 139 && on_tty.out.find_str("Name? ").is_some(), on_tty.out)
+    verdict.check(name,
+        on_tty.exited_with(139) && on_tty.out.find_str("Name? ").is_some(), on_tty.out)
 
 priv fn run_output_flush(arena: Arena$@) //< the output kept on an abnormal exit
     io.out().s("# keeping the output on an abnormal exit: 6\n")

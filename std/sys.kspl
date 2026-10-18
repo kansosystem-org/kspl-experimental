@@ -1,8 +1,8 @@
 //< The process itself: its arguments, its environment, the clock and signals
 //<
-//< The path helpers are here too (`get_dir_name`, `last_ext`, `is_absolute` and the rest), because
-//< they read a path as text and never touch the filesystem; operations on the tree are in `std/fs`.
-//< **`panic`, `assert` and the error trace are not here** but in `std/lang`: here, `mem` and `ds`
+//< The path helpers are here too (`get_dir_name`, `last_ext`, `is_absolute` and the rest). They
+//< read a path as text and never touch the filesystem. Operations on the tree are in `std/fs`.
+//< **`panic`, `assert` and the error trace are not here** but in `std/lang`. Here, `mem` and `ds`
 //< would have to import `sys`, and a failing `main` could print no trace without it.
 import "std/chars"
 import "std/libc"
@@ -41,7 +41,7 @@ pub fn exit( //< ends the process at once, without unwinding
 
 // **The result stays valid across later reads**, so two values read one after the other can both
 // be kept (`CC` in a link's argv, then `CC` again).
-// Caution: **Setting or unsetting that variable may free it** (POSIX's `setenv` may); copy it to
+// Caution: **Setting or unsetting that variable can free it** (POSIX's `setenv` can); copy it to
 // keep it past a change.
 // **It exists only on the `#cfg(!freestanding)` side**, like `set_env` / `unset_env`.
 #cfg(!freestanding)
@@ -51,9 +51,9 @@ pub fn get_env(name: U8[]): U8[]? //< an environment variable, or nothing when u
     if name_buf == null
         return .none
     defer dealloc(Void$@::name_buf)
-    // Caution: **Do not use `libc.getenv`.** Windows's narrow API returns the current code page, so
-    // passing its result straight into a path mixes two encodings ("Paths are held in UTF-8, and
-    // converted to the wide API on Windows" in `std/docs/DESIGN-system.md`).
+    // Caution: **Do not use `libc.getenv`.** Windows's narrow API returns the current code page.
+    // Its result passed straight into a path mixes two encodings ("Paths are UTF-8, converted to
+    // the wide API on Windows" in `std/docs/DESIGN-system.md`).
     val: = kspl_get_env(name_buf)
     if val == null
         return .none
@@ -68,18 +68,23 @@ extern "C"
     fn kspl_get_env(name: U8@): U8@
 
 // **The separator is the OS's own** (`\` on Windows). **No trailing separator is added** (except
-// for the root `/`). **When the path does not fit in buf, it returns empty**, not a truncated path
-// that points somewhere else.
+// for the root `/`). **When the path does not fit in buf, it fails**, rather than returning a
+// truncated path that points somewhere else.
 #cfg(!freestanding)
-pub fn cwd( //< the working directory, or empty if it cannot be read or does not fit
+pub fn cwd( //< the working directory
     buf: U8$[], //< where the path is written; the result is a view into it
-): U8[] //< the path, as a view into `buf`
+): U8[]!Cwd_error //< the path, as a view into `buf`
     n: = kspl_cwd(buf.ptr, buf.len)
+    if n == 0
+        throw .unreadable
     return U8[]::{ .ptr = buf.ptr, .len = n }
+
+pub enum Cwd_error //< why the working directory could not be given
+    unreadable //< the OS refused it, or it does not fit the buffer; the C side cannot tell which
 
 // For "how many to run in parallel": more than this is no faster, only more overhead.
 #cfg(!freestanding)
-pub fn cpu_count(): Sz //< how many CPUs this process may run on; 1 if unknown, never 0
+pub fn cpu_count(): Sz //< how many CPUs this process can run on; 1 if unknown, never 0
     //<
     //< It follows the affinity (`taskset`, a job object) where the OS has one; a container's CPU
     //< quota is not read.
@@ -99,11 +104,11 @@ pub enum Env_error //< why an environment variable was not set or deleted
     refused //< the OS did not take it (out of memory, say)
 
 // Overwrites an existing value. **A value set here is inherited by child processes, and by
-// grandchildren too**, so it does not apply to this launch only. **An empty value is refused**:
+// grandchildren too**, so it does not apply to this launch only. **An empty value is refused.**
 // Windows's CRT treats an empty assignment as "delete", so the same call would do different things
 // per OS. To delete, call `unset_env`.
-// Caution: **A failure is an error value, not a Bool**: a Bool left unread let a test go on under
-// the environment it meant to change, and its failure showed somewhere else.
+// Caution: **A failure is an error value, not a Bool.** A Bool left unread lets a test go on under
+// the environment it meant to change. Its failure then shows somewhere else.
 #cfg(!freestanding)
 pub fn set_env( //< sets an environment variable, which children inherit
     name: U8[], //< the variable's name
@@ -136,8 +141,8 @@ pub fn unset_env(name: U8[]): Void!Env_error //<
 #cfg(!freestanding)
 priv fn env_name_cstr(name: U8[]): U8$@!Env_error //< the name as C takes it; the caller frees it
     //<
-    //< **Refused here, the same on every OS**: POSIX's `setenv` refuses `=` while Windows's
-    //< `_wputenv_s` reads it as the end of the name, so the two would store different variables.
+    //< **Refused here, the same on every OS.** POSIX's `setenv` refuses `=`, but Windows's
+    //< `_wputenv_s` reads it as the end of the name. So the two would store different variables.
     if name.len == 0 || name.find_char('=').is_some()
         throw .bad_name
     switch name.to_cstr()
@@ -165,8 +170,8 @@ pub fn script_path(): U8[]? //< the script being run, if a launcher started this
     return .none
 
 // The running program's **path as typed** (without the folder).
-// Caution: **Do not keep two paths**: argp uses the same `prog` for the usage and for errors, so
-// splitting them makes the wording differ within one tool.
+// Caution: **Do not keep two paths.** argp uses the same `prog` for the usage and for errors.
+// Splitting them makes the wording differ within one tool.
 // **Do not use `caller_file` instead**: it embeds the absolute path of the machine that built it.
 #cfg(!freestanding)
 pub fn program_name(): U8[] //< this program's name for messages, without folder or extension
@@ -200,8 +205,8 @@ priv fn last_path_sep(path: U8[]): Sz? //< the position of the last separator in
 pub fn is_absolute(path: U8[]): Bool //< whether it starts from the root; on Windows `C:\` counts
     //<
     //< Caution: **Check up to the separator after the drive.** On Windows `C:name` is relative to
-    //< **that drive's current working directory**, not the root; skipping the separator creates a
-    //< copy that answers differently in just that case. On POSIX `C:\x` is a relative name.
+    //< **that drive's current working directory**, not the root. A copy that skips the separator
+    //< answers differently in just that case. On POSIX `C:\x` is a relative name.
     //< A root that opens with a separator is from the root whatever follows (`\\server\share`).
     n: = root_len(path)
     return n > 0 && (is_path_sep(path[0]) || is_path_sep(path[n - 1]))
@@ -215,7 +220,7 @@ pub fn is_path_sep(c: U8): Bool //< a path separator, `/` or `\`, on every OS; s
 pub fn root_len(path: U8[]): Sz //< the length of the root a path starts from; 0 if it has none
     //<
     //< A separator is one byte. **A drive is part of the root on Windows only**: `C:` is two and
-    //< `C:\` three there, while on POSIX `C:\x` is a relative name whose first folder is `C:`.
+    //< `C:\` three there. On POSIX `C:\x` is a relative name whose first folder is `C:`.
     //< On Windows a share is a root too, `\\server\share\`, and so is what follows `\\?\` or
     //< `\\.\` (`\\?\C:\`, `\\?\UNC\server\share\`). A share needs its server's name: `\\` alone, or
     //< a third separator, is the plain root `\`. std/fs measures the root by this too, so the two
@@ -236,7 +241,7 @@ priv fn drive_root_len(path: U8[]): Sz //< `C:` is two and `C:\` three; 0 for no
 
 priv fn windows_long_root_len(path: U8[]): Sz //< the root of a path opening with two separators
     //<
-    //< Caution: **A share's root is its server and its share**: cut at the first separator, every
+    //< Caution: **A share's root is its server and its share.** Cut at the first separator, every
     //< path on `\\server\share` would read as directly under `\\`, and its parent as the server.
     //< After `\\?\` the next name is the root's (`C:`, `Volume{...}`), save `UNC`, which a share
     //< follows.
@@ -257,18 +262,19 @@ priv fn name_len(rest: U8[]): Sz //< the first name's length in rest, with the s
         i += 1
     return i + 1 if i < rest.len else i
 
-pub fn get_dir_name(path: U8[]): U8[] //< the folder part, or empty if there is none
+pub fn get_dir_name(path: U8[]): U8[] //<
+    //< the folder part; empty for a bare name, the root for the root
     //<
-    //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`),
-    //< as Python, Go, Rust and C++ answer; the root itself is in nothing.
+    //< **A file directly under the root is in the root** (`/x` in `/`, on Windows `C:\x` in `C:\`
+    //< and `\\srv\sh\x` in `\\srv\sh\`). **The root is its own folder**: `/`, `C:\` and
+    //< `\\srv\sh\` give themselves. So a walk up ends where the answer stops changing.
     if last_slash: = last_path_sep(path)
-        // Caution: **Do not return empty for a file under the root.** Empty means the current
-        // directory, so a search beside `/x` would search beside the working directory instead,
-        // and a file there would pick up the settings of wherever the compiler was started.
+        // Caution: **Do not return empty for the root or a file under it.** Empty means the
+        // current directory. So a search beside `/x` would search beside the working directory
+        // instead. A file there would pick up the settings of wherever the compiler was
+        // started.
         top: = root_len(path)
-        if last_slash < top
-            return "" if path.len == top else path.sub(0, top)
-        return path.sub(0, last_slash)
+        return path.sub(0, top if last_slash < top else last_slash)
     return ""
 
 pub fn get_file_name(path: U8[]): U8[] //< the last segment, without the folder part
@@ -315,15 +321,22 @@ extern "C"
 pub fn mono_us(): I64 //< a clock that only goes forward, in microseconds
     //<
     //< **Only a difference has meaning**; the origin is not defined.
-    //< Caution: **Do not measure elapsed time with the wall clock (`time.now`).** NTP or the user
-    //< can rewind it, so a difference can go negative. **It is not CPU time**: it advances while
-    //< waiting.
+    //< Caution: **Do not measure elapsed time with the wall clock (`wall_seconds`).** NTP or the
+    //< user can rewind it, so a difference can go negative. **It is not CPU time**: it advances
+    //< while waiting.
     return kspl_mono_us()
 
 pub fn deadline_after_ms(ms: I64): I64 //< the `mono_us` reading `ms` milliseconds from now
     //<
     //< **Each caller rounds what is left its own way** (a wait that must not end early rounds up).
     return mono_us() + ms * 1000I64
+
+pub fn wall_seconds(): I64 //< the wall clock: the seconds elapsed since 1970-01-01T00:00:00Z
+    //<
+    //< **It is the date and time, not a stopwatch.** NTP or the user can set it back. So a
+    //< difference between two readings can be negative. To measure how long something takes, use
+    //< `mono_us`.
+    return libc.time(null)
 
 pub fn timing_available(): Bool //< whether this environment has a clock at all
     //<

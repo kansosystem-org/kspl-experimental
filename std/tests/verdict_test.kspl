@@ -11,6 +11,8 @@ import "std/log" { Log }
 import "std/mem" { Arena }
 import "std/str" + { Str_builder }
 import "std/subproc"
+import "std/sys"
+import "std/tests/sys_test"
 import "std/verdict"
 
 priv const work_dir: U8[] = "out/tmp/kspl_test_verdict"
@@ -71,6 +73,17 @@ FAIL probe: its material is not there
 RESULT: SOME FAILED (1)
 """
 
+// A run that reported no check fails: nothing it held up says that anything passed.
+priv const empty_main: U8[] = """
+  verdict.begin("probe")
+  return verdict.finish()
+"""
+priv const empty_out: U8[] =
+    """
+FAIL probe: no check ran
+RESULT: SOME FAILED (1) -> no check ran
+"""
+
 // A walk of no files fails, just as one that finds something does; the findings are indented below.
 priv const walks_main: U8[] =
     """
@@ -111,8 +124,10 @@ priv fn run_child( //< writes one child's program and runs it to the end
     src: = arena.text().s(work_dir).c('/').s(name).s(".kspl").take()
     io.write_file(src, arena.text().s(child_head).s(body).take()) catch
         panic("the child's program must be writable")
-    r: = subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
-    assert(!r.spawn_failed && !r.timed_out, "the child must start and come to an end")
+    r: =
+        subproc.run_capture(U8[][]::{ ksplc, "run", src }, "", 300000, 1 << 20, arena)
+        catch panic("the child must start")
+    assert(r.exit_code.is_some(), "the child must start and come to an end")
     return r
 
 priv fn holds_to( //< runs one child and stops if its output or exit code is not what is wanted
@@ -126,10 +141,10 @@ priv fn holds_to( //< runs one child and stops if its output or exit code is not
     r: = run_child(ksplc, name, body, arena)
     // A child's standard output is text mode on Windows, so its lines arrive as CRLF.
     got: = r.stdout_data.replace("\r\n", "\n", arena)
-    if got.equals(want) && r.exit_code == want_code
+    if got.equals(want) && r.exited_with(want_code)
         return
     panic(U8$[]::arena.text().s(name).s(" put out\n").s(got)
-        .s("and ended on \{r.exit_code\}, where ").s("it should put out\n").s(want)
+        .s("and ended on \{r.exit_code.unwrap_or(-1)\}, where ").s("it should put out\n").s(want)
         .s("and end on \{want_code\}\n").s(r.stderr_data).take())
 
 fn test_verdict_goes_on_past_a_failure(ksplc: U8[], arena: Arena$@)
@@ -137,9 +152,10 @@ fn test_verdict_goes_on_past_a_failure(ksplc: U8[], arena: Arena$@)
     holds_to(ksplc, "falls", falls_main, falls_out, 1, arena)
     holds_to(ksplc, "passes", passes_main, passes_out, 0, arena)
     holds_to(ksplc, "stops", stops_main, stops_out, 1, arena)
+    holds_to(ksplc, "empty", empty_main, empty_out, 1, arena)
     verdict
-        .pass("A failed check does not stop the run, and the `RESULT:` line and the exit code say \
-            it.")
+        .pass("A failed check does not stop the run, and a run with no check fails; the `RESULT:` \
+            line and the exit code say it.")
 
 fn test_verdict_walk_of_nothing_fails(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a walk that walked nothing failing test...")
@@ -150,7 +166,7 @@ fn test_verdict_names_what_fits(ksplc: U8[], arena: Arena$@)
     verdict.start("[Verdict] a `RESULT:` line naming more than its room holds test...")
     r: = run_child(ksplc, "overflows", overflows_main, arena)
     lines: = r.stdout_data.lines(arena)
-    assert(r.exit_code == 1 && lines.len == 301,
+    assert(r.exited_with(1) && lines.len == 301,
         "each failure puts its line out, and the run ends on 1")
     last: = lines.get(lines.len - 1)
     assert(last.starts_with("RESULT: SOME FAILED (300) -> a check whose name"),
@@ -171,14 +187,14 @@ fn test_verdict_names_an_unmade_work_folder(arena: Arena$@) //<
     outs: = verdict.run_children(subproc.Job[]::{ job, job }, "out/tmp/kspl_test_not_a_folder/w",
         arena)
     assert(outs.len == 2, "every run gets its answer")
-    assert(outs.get(0).code == -1 &&
+    assert(outs.get(0).code.is_none() &&
         outs.get(0).out.find_str("work folder").is_some(),
         "the answer names the work folder, not a start that failed")
     verdict.pass("A work folder that cannot be made is named in each run's answer.")
 
 // ==========================================
 // Tests of the message a panic stops with (`Panic_msg` in `std/lang`)
-// **The stop itself cannot run in the tests' own process**, so these check the message builder
+// **The stop itself cannot run in the tests' own process.** So these check the message builder
 // a failure uses. `Panic_msg` needs no other file: this test imports only `std/verdict` to report.
 // ==========================================
 priv fn said(m: Panic_msg$@, want: U8[]): Bool //< whether the message is exactly `want`
@@ -203,7 +219,7 @@ fn test_panic_msg_numbers()
 // ==========================================
 // Tests of log lines that carry a severity level (`std/log`)
 // **Every test writes into a `Str_builder` rather than a stream**, so the output reads as a
-// string; the destination is only a `Writer`, as in a freestanding build.
+// string. The destination is only a `Writer`, as in a freestanding build.
 // ==========================================
 fn test_log_keeps_what_is_heavy_enough()
     verdict.start("[Log] a line lighter than the level set being dropped test...")
@@ -364,13 +380,51 @@ fn test_log_pushes_a_heavy_line_out_at_once()
     lg.say(.error, "d")
     assert(t.flushes == 2, "Log: an error goes over the moment it closes")
 
-    // **The line opened through `at` counts the same**: both paths close the same way.
+    // **A body written through `at` goes over piece by piece**: nothing says when it ends, and the
+    // line closes only when the next one opens.
     if ln: = lg.at(.error)
         ln.s("e")
-    assert(t.flushes == 2, "Log: it is the close that pushes, not the open")
+    assert(t.flushes == 3, "Log: a heavy body written through at goes over as it is written")
     lg.done()
-    assert(t.flushes == 4, "Log: done closes the heavy line, and flushes on its own besides")
-    assert(t.text.slice().equals("t: I: a\nt: H: b\nt: W: c\nt: E: d\nt: E: e\n"),
+    assert(t.flushes == 5, "Log: done closes the heavy line, and flushes on its own besides")
+    if ln: = lg.at(.information)
+        ln.s("f")
+    assert(t.flushes == 5, "Log: a light body written through at is left to pile up")
+    lg.done()
+    assert(t.text.slice().equals("t: I: a\nt: H: b\nt: W: c\nt: E: d\nt: E: e\nt: I: f\n"),
         "Log: what came out is unchanged by the pushing")
 
     verdict.pass("an error and a warning are handed over as they close, and a lighter line piles.")
+
+priv const killed_src: U8[] = //< a child killed outright right after a warning written through `at`
+    """import "std/io"
+import "std/log" { Log }
+import "std/subproc"
+import "std/sys"
+
+fn main()
+  _killer: = subproc.spawn_async(U8[][]::{ "/bin/sh", "-c", "sleep 1; kill -9 $PPID" }, "")
+    catch panic("the shell must start")
+  $lg: = Log.new(io.out(), .hint, "c")
+  if w: = lg.at(.warning)
+    w.s("last words")
+  sys.sleep_ms(30000)
+"""
+
+fn test_log_keeps_a_heavy_line_through_a_kill(ksplc: U8[], arena: Arena$@) //< ksplc runs the child
+    //<
+    //< **SIGKILL runs no exit path**: what still waits in a buffer is gone, so only a line already
+    //< passed on reaches the reader. The killer starts first, since starting a child flushes the
+    //< outputs; the child is killed a second later, with the line still open.
+    verdict.start("[Log] a warning written through at surviving a kill right after it test...")
+    if sys.is_windows()
+        verdict.skip("it hands over shell command lines")
+        return
+    r: =
+        subproc.run_capture(sys_test.child_argv(ksplc, "log_killed", killed_src, arena), "", 300000,
+        4096, arena) catch panic("the child must start")
+    assert(r.exit_code.is_some(), "the child must start and come to an end")
+    assert(r.exited_with(137), "the child must end by SIGKILL, before any exit path")
+    assert(r.stdout_data.equals("c: W: last words"),
+        "Log: a warning written through at is out before the program dies")
+    verdict.pass("a warning written through at reached the reader though the run was killed.")

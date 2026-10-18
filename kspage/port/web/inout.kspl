@@ -51,10 +51,10 @@ fn kspage_web_markdown(): Sz
     markdown.write(doc, sheet, state.out@)
     return state.out.len
 
-// Writes the current document as a text form and returns the length — not one box's text after
-// layout (`kspage_web_box_text`), but the whole document in a savable form. **Nothing is dropped**:
-// a text form round-trips byte for byte (the header of `../../share/text.kspl`), so there is no
-// count to report.
+// Writes the current document as a text form and returns the length. It is not one box's text
+// after layout (`kspage_web_box_text`), but the whole document in a savable form. **Nothing is
+// dropped**: a text form round-trips byte for byte (the header of `../../share/text.kspl`). So
+// there is no count to report.
 #export
 fn kspage_web_plain_text(): Sz
     ensure()
@@ -88,16 +88,16 @@ const too_big: I32 = -1 //<
     //< The result when it can be read but memory is too short to lay it out and write it back
     //<
     //< Caution: **Keep it separate from "cannot be read"** (the fixes are opposite), **as a value
-    //< neither 0 nor 1** — callers read "1 means read", so 0 would say "it is broken".
+    //< neither 0 nor 1**. Callers read "1 means read", so 0 would say "it is broken".
 
 const not_text: I32 = -2 //<
     //< The result when a file opened as a text form is not text (it holds a NUL)
     //<
-    //< Caution: **Keep it separate from both "too large" and "cannot be read"** — an image or an
+    //< Caution: **Keep it separate from both "too large" and "cannot be read".** An image or an
     //< executable is not something to fix; it opens with a different tool. Only `texty` in
     //< `../../share/text.kspl` decides it.
 
-// The largest document in bytes that can be opened, **so a refusal can give its reason**: "cannot
+// The largest document in bytes that can be opened, **so a refusal can give its reason**. "Cannot
 // be read" (a writing mistake) and "too large" (the arena) have opposite fixes.
 #export
 fn kspage_web_doc_limit(): Sz
@@ -110,14 +110,14 @@ fn kspage_web_doc_limit(): Sz
 fn kspage_web_load(len: Sz): I32
     if in_ptr == null || len <= 0
         return 0
-    // The arena is global (`state.load_arena`) so it can be freed when things stop partway; as a
-    // local, unwinding would leave nothing pointing at it and the arena would leak **forever**.
+    // The arena is global (`state.load_arena`), so it can be freed when things stop partway. As a
+    // local, unwinding would leave nothing pointing at it, and the arena would leak **forever**.
     load_arena = Arena.new(state.fresh_chunk)
     got: = store.load(U8[]::{ .ptr = in_ptr, .len = len }, load_arena) catch
         state.drop_load()
         return 0
-    // Caution: **Check that it can be laid out and written back before replacing** — a readable
-    // document can still exhaust the arena at layout, and after the replacement **the currently
+    // Caution: **Check that it can be laid out and written back before replacing.** A readable
+    // document can still exhaust the arena at layout. After the replacement, **the currently
     // open document is lost with it**. So that refusal is a separate result from "cannot be read".
     if !state.room_for(got.doc, got.sheet, doc_arena)
         state.drop_load()

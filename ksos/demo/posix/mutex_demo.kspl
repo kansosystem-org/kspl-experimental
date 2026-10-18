@@ -1,13 +1,12 @@
 //< Mutual exclusion with a mutex (a POSIX host)
 //<
-//< Two workers add to a shared counter by "read, yield, write back". Because they yield between
-//< the read and the write, without mutual exclusion the other worker reads the same value and an
+//< Two workers add to a shared counter by "read, yield, write back". They yield between the read
+//< and the write. So without mutual exclusion, the other worker reads the same value, and an
 //< addition is lost (a lost update). With the mutex, the other worker's lock blocks while it is
 //< held, so each addition is indivisible and the final value is exactly 10 (2 workers × 5 times).
-//< Both workers have one priority, so priority inheritance does not act here, but lock/unlock and
-//< waiting and waking can be verified (make ksos-mutex-nested and make ksos-cm-pi show the
+//< Both workers have one priority, so priority inheritance does not act here. But the demo checks
+//< lock/unlock, waiting and waking (make ksos-mutex-nested and make ksos-cm-pi show the
 //< inheritance).
-import "ksos/demo/common/task_end"
 import "ksos/kernel/sync"
 import "ksos/kernel/task" + { Task }
 import "std/io"
@@ -43,8 +42,7 @@ fn main(): I32
     tcb_a.create(U8$[]::stack_a, worker, Void$@::g_id_a@, 1, "A")
     tcb_b.create(U8$[]::stack_b, worker, Void$@::g_id_b@, 1, "B")
     task.start_scheduler()
-    task_end.require_all_ended()
-    assert(shared == 10, "mutex: a lost update slipped through the lock")
-    io.out().s("[main] final shared=10 -> mutual exclusion held\n")
+    verdict.check("mutex: two workers' 10 increments under the lock all land", shared == 10,
+        "a lost update slipped through the lock")
     io.out().s("=== scheduler finished (all tasks done) ===\n")
     return verdict.finish()
