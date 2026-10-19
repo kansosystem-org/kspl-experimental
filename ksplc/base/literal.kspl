@@ -273,7 +273,7 @@ impl U8[]
             byte_len += step.byte_count()
         return Str_span::{ .start = 1, .end = end, .byte_len = byte_len, .is_raw = false }
 
-    fn append_literal_bytes(r: U8[], out: Str_builder$@) //<
+    fn append_literal_bytes(r: U8[], out: Writer, emit: fn(out: Writer, b: U8)) //<
         //< It appends the bytes a string literal's spelling stands for to out
         //<
         //< **Both backends write these bytes**, each with its own escapes (`gen/c/literal.kspl`,
@@ -285,9 +285,9 @@ impl U8[]
             j += step.advance
             if step.code_point >= 0
                 for k in Range.asc(chars.codepoint_len(step.code_point))
-                    out.c(chars.codepoint_byte(step.code_point, k))
+                    emit(out, chars.codepoint_byte(step.code_point, k))
             else if !step.is_cont
-                out.c(step.byte)
+                emit(out, step.byte)
 
     fn literal_value(r: U8[], arena: Arena$@): U8[] //< the bytes a string literal stands for
         //<
@@ -295,8 +295,9 @@ impl U8[]
         //< **Do not cut the quotes off by hand.** `"a\"b"` would keep its backslash. A path read
         //< one way at loading and another way at emitting names two files.
         $b: = Str_builder.new()
-        defer b.free()
-        r.append_literal_bytes(b@)
+        r.append_literal_bytes(b, fn(out: Writer, byte: U8) {
+            out.c(byte);
+        })
         return arena.dup_str(b.slice())
 
     fn append_clean_number(r: U8[], out: Str_builder$@, stops: U8[]): I32 //<
@@ -346,6 +347,5 @@ impl U8[]
         //< The spelling can use `_` separators, `0x`/`0b`, and a type suffix.
         //< In source, `-1` is unary minus on `1`; the caller handles the sign.
         $clean: = Str_builder.new()
-        defer clean.free()
         _stop: = r.append_clean_number(clean@, "UIS")
         return clean.slice().parse_clean_number_u64()

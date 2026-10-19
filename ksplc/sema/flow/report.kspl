@@ -22,7 +22,7 @@ fn is_arc_related(c: Sema_ctx$@, type_id: I32): Bool //<
     //< One pointer is stripped at the top level only (`Rc<|T|>@`), not in the recursion (see
     //< Env.type_has_arc_content).
     stripped: = c.env.strip_ptr(type_id)
-    return c.env.type_is_managed(stripped)
+    return c.env.is_arc_type(stripped) || c.env.type_has_arc_content(stripped)
 
 priv const MAX_HOLDS_ARRAY_DEPTH: Sz = 16 //< how deep holds_fixed_array follows nested fields
 
@@ -166,8 +166,8 @@ fn report_moved_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df
         return
     var_name: = err_node_var_name(err_node)
     c.sema.clear_scratch()
-        .s("variable '\{var_name\}' was moved out of and cannot be used again. Its type opts into \
-            'Move_only', so copying it would duplicate an owned handle and free it twice. Borrow it \
+        .s("variable '\{var_name\}' was moved out of and cannot be used again. Its type has unique \
+            ownership, so copying it would duplicate an owned handle and free it twice. Borrow it \
             with '\{var_name\}@' instead of passing it by value, or re-assign it before this use.")
     if state.carried_vars.contains(def)
         c.sema.scratch.s(" It was moved by an earlier pass of the loop around this use.")
@@ -195,7 +195,7 @@ fn report_moved_field_if_needed(c: sema_flow_track.Df_ctx$@, state: sema_flow_tr
         root_name: = root_name_of(m)
         c.sema.clear_scratch()
             .s("field '\{root_name\}.\{moved\}' was moved out of, so neither it nor what holds it \
-                can be used again. Its type opts into 'Move_only', so copying it would duplicate an \
+                can be used again. Its type has unique ownership, so copying it would duplicate an \
                 owned handle and free it twice. Borrow it with '\{root_name\}.\{moved\}@' instead \
                 of passing it by value, or assign '\{root_name\}.\{moved\}' a new value before this \
                 use.")

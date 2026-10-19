@@ -33,7 +33,6 @@ priv fn flat(src: U8[], from: Sz, to: Sz): U8[] //< it folds the text onto one l
     //< Caution: **Do not fold inside a string.** A default argument's literal holds whitespace and
     //< `//` as text, so inside quotes it is copied unchanged, escapes (`\`) included.
     $out: = Str_builder.new()
-    defer out.free()
     $i: = from
     $gap: = false
     // The comma held back until the next letter is seen. **A trailing comma is formatting, not
@@ -152,14 +151,13 @@ priv fn key_of(owner: U8[], name: U8[], attrs: U8[]): U8[] //<
     //< two entries would share a key and the comparing side could not tell which it compares.
     if name.len == 0
         return ""
-    $s: = Str_builder.new()
-    defer s.free()
+    s: = base_core.arena.text()
     if owner.len > 0
         s.s(owner).c('.')
     s.s(name)
     if attrs.len > 0
         s.c(' ').s(attrs)
-    return base_core.arena.dup_str(s.slice())
+    return s.take()
 
 priv struct Held //< the marks carried across a body's members
     //<
@@ -186,10 +184,7 @@ priv const FILE_KEY: U8[] = "~" //<
 priv fn param_key(key: U8[], at: Sz, name: U8[]): U8[] //< the key of one parameter
     if key.len == 0
         return ""
-    $s: = Str_builder.new()
-    defer s.free()
-    s.s(key).c(PART_MARK).s("\{at:02\}").c('.').s(name)
-    return base_core.arena.dup_str(s.slice())
+    return base_core.arena.text().s(key).c(PART_MARK).s("\{at:02\}").c('.').s(name).take()
 
 priv fn return_key(key: U8[]): U8[] //< the key of a declaration's return value
     //<

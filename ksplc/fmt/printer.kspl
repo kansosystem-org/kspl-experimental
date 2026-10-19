@@ -409,7 +409,6 @@ impl Formatter
         r.postfix_mark_next = false
         // The joined spelling of a string literal, held for as long as `text` points into it.
         $joined: = Str_builder.new()
-        defer joined.free()
         $carry: = false
         if kind == .k_assign_op || (kind == .k_literal && node.text.equals("assign_op"))
             op_len: = node.get_assign_op_len(r.src)
@@ -602,7 +601,6 @@ impl Formatter
         raw_text: = U8[]::{ .ptr = r.src.ptr + node.loc.offset, .len = span }
         // Laid out from its joined spelling, as in `write_token`.
         $joined: = Str_builder.new()
-        defer joined.free()
         carry: = join_string_lines(raw_text, joined@)
         text: = joined.slice() if carry else raw_text
         last_txt: = r.last_text.slice()
@@ -900,5 +898,6 @@ fn with_parens(src: U8[], spans: List<|Sz|>@, arena: Arena$@): U8[] //<
     out.s(src.sub_from(at))
     return out.take()
 
-// It owns memory and releases it with `free()` (why it must conform: `Owned` in std/lang.kspl).
-impl Formatter: Owned {}
+// It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
+// std/lang.kspl).
+impl Formatter: Manual_free {}

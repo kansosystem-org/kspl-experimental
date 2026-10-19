@@ -20,6 +20,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" as sema_type_scope + { Sema_symbol }
+import "std/buf" { Buf_writer }
 import "std/chars"
 import "std/ds" { Map, List }
 import "std/mem" { dealloc }
@@ -346,8 +347,9 @@ impl Ast_node
             // `append_c_string_byte` in `literal.kspl` (a copy is left behind when that is fixed).
             // The literal is split roughly every 100 columns, never before a UTF-8 continuation
             // byte.
-            $esc: = Str_builder.new()
-            defer esc.free()
+            // A byte's longest C escape is a backslash and three octal digits.
+            esc_buf: U8[4] = ::{}
+            $esc: = Buf_writer.new(U8$[]::esc_buf)
             for bi in Range.asc(file_data.len)
                 b: = (file_data.ptr + bi)$
                 if b == '\n'
@@ -355,8 +357,8 @@ impl Ast_node
                     cg.s("\\n\"\n    \"")
                     col = 4
                     continue
-                esc.len = 0
-                gen_c_literal.append_c_string_byte(esc@, b)
+                esc.clear()
+                gen_c_literal.append_c_string_byte(esc, b)
                 cg.s(esc.slice())
                 col += esc.len
 
@@ -614,7 +616,6 @@ priv fn emit_array_typedef_fwd(cg: Genc_ctx$@, type_id: I32, m_slice: U8[]) //<
         cg.s("typedef struct \{m_slice\} \{m_slice\};\n")
         return
     $plain_arr_b: = Str_builder.new()
-    defer plain_arr_b.free()
     cg.env.mangle_type_id_to(plain_arr_id, plain_arr_b)
     cg.s("typedef struct \{plain_arr_b.slice()\} \{m_slice\};\n")
 

@@ -162,6 +162,8 @@ fn ensure()
     if doc_arena != null
         return
     mem.init_freestanding_heap(U8$[]::{ .ptr = heap@, .len = HEAP_BYTES })
+    out = mem.alloc_as<|Str_builder|>()
+    mem.init_at(out, Str_builder.new())
     // Caution: **It must be set up** (before or after the arena), or the page freezes when the
     // arena runs out (the header of `kspage_js_gave_up` above).
     panic_hook = give_up
@@ -228,8 +230,9 @@ const INPUT_CAP: Sz = 256 //< the buffer that JS writes typed text into
     //< loading arena, as a paste does (`keys.js`'s `type`).
 $input: U8[256] = ::{}
 
-// The buffer for exported text, reused by every export.
-$out: Str_builder = ::{}
+// The buffer for exported text lives in the WASM heap until that instance is discarded.
+// Resetting the heap recreates its slot before any export writes through it.
+$out: Str_builder$@ = null
 
 fn say(text: U8[]): Sz //< puts text alone in `out`, for the page to read, and returns its length
     out.clear()

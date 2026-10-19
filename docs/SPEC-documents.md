@@ -46,14 +46,14 @@ These definitions apply to technical terms used across Kanso. Each package's glo
 | **trait value**, **fat pointer**, **vtable**, **thunk** | A value whose type is a trait. It is a *fat pointer*: a pointer carried with a second word, here a pointer to the object plus a pointer to its vtable. The vtable is the table of that type's methods; each entry points at a *thunk*, a small adapter function that calls the type's own method |
 | **receiver** | The value a method is called on: `b` in `b.free()` |
 | **ARC** | Automatic reference counting. For a type that conforms to `Ref_counted`, each value counts the places holding it; the compiler inserts `retain` (count up) and `release` (count down, free at zero). This differs from `Arc`, a reference-counted library container |
-| **arena** | A block of memory that hands out pieces and gives all of them back at once, when the arena itself is freed. Nothing inside is freed one by one. `std/mem`'s `Arena` is one ("8.4 The memory management model" in [`SPEC-programming-language.md`](SPEC-programming-language.md#84-the-memory-management-model-defer--arc--arenas)) |
+| **arena** | A block of memory that hands out pieces and gives all of them back at once, when the arena itself is freed. Nothing inside is freed one by one. `std/mem`'s `Arena` is one ("8.4 Memory management" in [`SPEC-programming-language.md`](SPEC-programming-language.md#84-memory-management)) |
 | **FQN** | Fully qualified name: a name with its file's path in front (`std.Ref_counted`), unique in the program |
 | **FFI**, **ABI** | FFI is calling between KSPL and C. The ABI is the binary agreement such a call rests on: how a type is laid out, and how arguments are passed. Both of `ksplc`'s backends keep it identical, so C output and LLVM output can call each other |
 | **hosted**, **freestanding**, **bare metal** | *Hosted* code runs under an operating system and can call libc. *Freestanding* code (`--freestanding`) cannot; it is for *bare metal*, a chip with no operating system, such as a microcontroller |
 | **libc** | The C standard library (`printf`, `strtod`, `fopen` …). glibc is the usual one on Linux, and the CRT (UCRT) is Windows'. A freestanding build has none |
 | **the C runtime** | The C code in `ksplc/gen/runtime/` that every hosted program needs besides its own: files, threads, the clock, the checks. Its functions are named `kspl_*`, and they are the only place `std` touches an operating system's API directly |
 | **the seed**, **bootstrap** | The compiler is written in KSPL, so building it needs a compiler: the *bootstrap*. The *seed* (`ksplc/seed.c`) is the compiler, `std` included, frozen as C; any C compiler builds it into the first `ksplc`. A change the compiler needs at build time takes effect only once it reaches the seed |
-| **borrow checker** | Rust's compile-time proof that no reference outlives its data and that no two places change the same data at once. KSPL has none ([8.4 in `SPEC-programming-language.md`](SPEC-programming-language.md#84-the-memory-management-model-defer--arc--arenas)) |
+| **borrow checker** | Rust's compile-time proof that no reference outlives its data and that no two places change the same data at once. KSPL has none ([8.4 in `SPEC-programming-language.md`](SPEC-programming-language.md#84-memory-management)) |
 
 ## Names for units
 

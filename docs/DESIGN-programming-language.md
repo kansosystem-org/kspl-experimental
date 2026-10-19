@@ -624,7 +624,7 @@ Rust extends the temporary's lifetime to the end of the statement and accepts th
 
 ### Whether a marker is an attribute or a trait
 
-A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed ("The order of decision").
+A marker that changes how the compiler treats a type or a declaration has two means. One is an attribute (`#inline`). The other is a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Drop`, and the operator group in `std/lang`). Often either fits, so the order of decision is fixed ("The order of decision").
 
 #### The order of decision
 
@@ -699,7 +699,7 @@ Three markers are deliberately absent: `#arc`, `#deterministic` and `Thread_shar
 
 The traits the compiler looks up by name all live in one file, `std/lang`. Whoever renames something there can see that the name is special.
 
-The traits the compiler names by FQN (the operator traits, and `Ref_counted` / `Move_only` / `Owned` / `Callable1` / `Callable2`) stand only in `std/lang`, with one exception, under "When it can sit outside `std/lang`" below.
+The traits the compiler names by FQN (the operator traits, and `Ref_counted` / `Move_only` / `Manual_free` / `Drop` / `Callable1` / `Callable2`) stand only in `std/lang`, with one exception, under "When it can sit outside `std/lang`" below.
 
 **The motive**: "The order of decision" names a cost: "the compiler depends on a name in the standard library". That cost cannot be removed, since a name is the only tie. What is left is to show by placement which names bear the load.
 
@@ -948,9 +948,37 @@ The rules are "8.1 Definitions" in [`SPEC-programming-language.md`](SPEC-program
 
 **What is given up: how a type's memory is managed has to be read from its name.** Raw pointers and ARC live side by side, so the reader checks which one manages a type. Consistency is chosen per project, not by the language. The lints [W0601] and [I0602], off by default, find code departing from the chosen policy ([`../ksplc/docs/SPEC-diagnostics.md`](../ksplc/docs/SPEC-diagnostics.md)).
 
+### Automatic cleanup follows one owner
+
+A builder needs cleanup on every exit. Repeating that obligation at every call site lets one missing line leak its buffer. The type declares that obligation once, through `Drop`.
+
+**One trait supplies both cleanup and moves.** Copying an automatic owner would schedule two cleanups for one resource. Therefore `Drop` also forbids ownership copies. Borrowing through pointers or trait views transfers nothing. There is no separate marker to remember alongside `Drop`.
+
+| Contract | What the compiler supplies | Where it belongs |
+| :-- | :-- | :-- |
+| `Drop` | Automatic cleanup and ownership moves | An ordinary resource owner, including `Str_builder` |
+| `Manual_free` | Checks after an explicit `free()` | A low-level owner whose caller chooses cleanup |
+| `Move_only` | Checks after ownership transfers | A manual handle that must not be copied |
+
+**Manual cleanup remains a separate contract.** An arena and its containers often share one explicit lifetime. Automatically destroying their owning fields would conflict with their `free()` implementations. `Manual_free` leaves those fields under that explicit contract. It does not prove pointer lifetimes or prevent copies; its name states the narrower guarantee.
+
+**Cleanup uses the same exit machinery as `defer`.** It runs on ordinary exits and propagated errors, in reverse acquisition order. A move cancels the source cleanup, and assignment destroys the previous value before installing its replacement. Uninitialized storage receives no destruction. A destructor cannot report failure, so flushing or committing remains an explicit operation when its failure matters.
+
+A custom hook runs before its automatic fields. The hook needs those fields alive, so moving or explicitly releasing one is refused. Assignment can replace a field while preserving a complete object. An aggregate without a custom hook tracks field moves separately.
+
+**Raw storage needs separate operations.** Assignment replaces a live value; allocation supplies bytes without a live value. `mem.init_at`, `mem.take_at` and `mem.drop_at` distinguish initialization, transfer and destruction. Treating initialization as replacement would read garbage and run a destructor on it. These operations belong to raw slots; normal locals use ordinary moves and assignment.
+
+### A generic method body is checked when needed
+
+A container can store an automatic owner without being able to copy it. Checking every method body when its type is instantiated would reject even unused copying methods. Separate container families would repeat almost every operation.
+
+**Signatures and trait requirements are checked independently of bodies.** Method bodies are checked when referenced, as generic free functions already are. A trait view requires every method in its table. Automatic cleanup requires its hooks. The compiler follows those dependencies until no new body is needed, and emits only checked bodies.
+
+An invalid method stays unusable. Its first use reports the error with the concrete type arguments. This changes when a generic body is diagnosed, without making a forbidden ownership copy valid.
+
 ### Why there is no borrow checker, only a move-only marker
 
-KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` value is handed over, the old name cannot be used again.
+KSPL checks one simple thing instead of every pointer's lifetime: once a `Move_only` or `Drop` value is handed over, the old name cannot be used again.
 
 Conformance to `Move_only` forbids implicitly copying an owning handle, such as an OS lock or a file descriptor. There a duplicate means a double free (docs/SPEC-programming-language.md §5.4). Rust's borrow checker is not adopted.
 
@@ -1081,7 +1109,7 @@ A store's place outlives the frame when it is a global. It does so too when it l
 
 * **It asks only where a later `defer` in the same block frees the value.** A value freed by hand, passed on or kept has another shape. Calling it a leak would be a false report.
 * **A shape rather than every path.** Checkers that follow a resource along every path pay in false reports. A rule read off the code as written, like Error Prone's `MustBeClosed`, does not. The gap before a `defer` is such a rule.
-* **`Owned` says which values are asked about.** `Owned` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-programming-language.md §8.4.5), so a type taking part in one takes part in the other.
+* **`Manual_free` says which values are asked about.** `Manual_free` is the trait whose `free()` the compiler reads as freeing the value. It is the same contract the use-after-free check reads (docs/SPEC-programming-language.md §8.4.5), so a type taking part in one takes part in the other.
 
 **What is given up**: a value with no later `defer` in the block, never freed at all, is not this warning's to find.
 

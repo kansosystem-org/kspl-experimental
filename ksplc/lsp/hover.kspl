@@ -55,7 +55,6 @@ priv fn send_cfg_inactive_hover(state: Doc_state$@, params: json.Value, id_val: 
     // name (`alone/log.kspl` for `ksdb/log`) shares no tail with it.
     if region: = base_cfg_inactive.find_cfg_inactive(state.mod_name_perm, offset)
         $md: = Str_builder.new()
-        defer md.free()
         md.s("`#cfg(")
         if region.is_neg
             md.c('!')
@@ -144,7 +143,6 @@ priv fn owner_name_of(c: Sema_ctx$@, decl: Ast_node$@): U8[] //<
     if id_n == null
         return ""
     $b: = Str_builder.new()
-    defer b.free()
     lsp_nav.write_full_name(id_n.text, owner.loc.file(), b@)
     return base_core.arena.dup_str(b.slice())
 
@@ -287,7 +285,6 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
     // would read as a variable typed by its own name (`with_setup: with_setup`).
     if is_label_name(path, target_node)
         $md_label: = Str_builder.new()
-        defer md_label.free()
         md_label.s("```kspl\nlabel ").s(target_node.text).s("\n```")
         send_markdown(id_val, md_label.slice(), arena)
         return
@@ -306,22 +303,17 @@ priv fn answer_at(state: Doc_state$@, path: List<|Ast_node$@|>$@, $target_node: 
         lsp_msg.send_null_response(id_val, arena)
         return
     $formatted_name: = Str_builder.new()
-    defer formatted_name.free()
     write_shown_type(state, ctx@, formatted_name@)
     $def_code: = Str_builder.new()
-    defer def_code.free()
     build_hover_def_code(state, ctx@, def_code@)
     $fqn_name: = Str_builder.new()
-    defer fqn_name.free()
     get_fqn_name(state, ctx@, target_node, fqn_name@)
     f_name_slice: =
         formatted_name.slice() if formatted_name.len > 0 else ctx.fallback_str.slice()
     $hover_text: = Str_builder.new()
-    defer hover_text.free()
     write_hover_head(state, ctx@, def_code.slice(), fqn_name.slice(), f_name_slice, hover_text@)
     append_enum_variant_hover(hover_text@, ctx@, state)
     $md_str: = Str_builder.new()
-    defer md_str.free()
     md_str.s("```kspl\n\{hover_text.slice()\}\n\n```")
     // **The description goes below the fence**, or the editor shows it as part of the signature.
     doc: = lsp_nav.linked_doc(state.sema, state.root_file, ctx.def_node)
@@ -420,7 +412,6 @@ priv fn send_literal_type(state: Doc_state$@, literal: Ast_node$@, id_val: json.
         return
     shown: = state.sema.env.display(literal.type_id)
     $md: = Str_builder.new()
-    defer md.free()
     md.s("```kspl\n").s(shown).s("\n```")
     send_markdown(id_val, md.slice(), arena)
 
@@ -716,7 +707,6 @@ priv fn get_fqn_name(state: Doc_state$@, ctx: Hover_ctx$@, target_node: Ast_node
         // orig_name points into this content, so keep this binding alive to the end of the
         // function.
         $shown_sb: = Str_builder.new()
-        defer shown_sb.free()
         // **Do not use `type_id` for a function.** It is **the return type**, so the return type
         // would stand where the name goes; the owner is the signature's first argument.
         is_fn_def: = ctx.def_node.is_fn_decl()

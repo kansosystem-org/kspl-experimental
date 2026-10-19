@@ -424,7 +424,8 @@ priv fn check_map_at_boundary(arena: Arena$@)
 priv fn check_compiler_named_std(arena: Arena$@)
     $seen: Sz = 0
     $bad: = List<|U8[]|>.new(arena)
-    // Only the compiler: its tests quote editor text (`std.lang.Owned.free`) naming no declaration.
+    // Only the compiler: its tests quote editor text (`std.lang.Manual_free.free`) naming no
+    // declaration.
     for rel in harness.tracked_matching(U8[][]::{ "ksplc/*.kspl", ":!ksplc/tests/" })
         $i: Sz = 0
         for line in harness.read_under_root(rel).lines(arena)
@@ -443,7 +444,9 @@ priv fn check_compiler_named_std(arena: Arena$@)
                     // A source's extension (`SOURCE_EXT` in `../../ksplc/base/core.kspl`).
                     file: = arena.text().s("std/").s(rest.sub(0, cut)).s(".kspl").take()
                     name: = rest.sub_from(cut + 1)
-                    if !declares_name(harness.read_under_root(file), name, arena)
+                    // Raw storage is a private compiler primitive; API names remain public.
+                    private_storage: = fqn.equals("std.mem.Raw_value")
+                    if !declares_name(harness.read_under_root(file), name, arena, private_storage)
                         bad
                             .push(arena.text().s(rel).s(":\{i\}: ").s(fqn).s(" is not in ").s(file)
                             .take())
@@ -474,13 +477,14 @@ priv fn std_fqns_in(line: U8[], arena: Arena$@): List<|U8[]|>$@ //<
             at = end
     return found
 
-priv fn declares_name(src: U8[], name: U8[], arena: Arena$@): Bool //<
+priv fn declares_name(src: U8[], name: U8[], arena: Arena$@, allow_private: Bool = false): Bool //<
     //< Whether that file declares `name`
     //<
     //< Caution: Check only the declaring lines (count the using lines and it answers "it is there"
     //< even when the name is gone).
     for line in src.lines(arena)
-        t: = line.trim_spaces()
+        trimmed: = line.trim_spaces()
+        t: = trimmed.strip_prefix("priv ") if allow_private else trimmed
         for kw in U8[][]::{ "pub trait ", "pub struct ", "pub enum ", "pub typedef ", "pub fn ",
                 "trait ", "struct ", "enum ", "typedef ", "fn ",
         }
@@ -666,6 +670,8 @@ priv fn check_named_std_fires(arena: Arena$@)
         if got != DECLARES_WANT[i]
             c
                 .push(arena.text().s("\"").s(DECLARES_NAMES[i]).s("\" was read as \{got\}").take())
+    verdict.check("private storage can be checked without exposing an API name",
+        declares_name(DECLARES_SRC, "hidden", arena, true), "the private declaration was missed")
     verdict.check_list("the place hunting a declaration's name can fire", DECLARES_NAMES.len,
         "samples", c@, "the judgment misreads its own samples: mend the judgment, not the table")
 
@@ -849,7 +855,6 @@ priv fn calls_in(src: U8[], name: U8[]): Sz //< how often `name(` is called in s
 
 priv fn check_tests_registered(arena: Arena$@)
     $called: = Str_builder.new() // every `.test_…` name, each between spaces
-    defer called.free()
     called.c(' ')
     for rel in harness.tracked_matching(U8[][]::scan.KSPL_SPECS)
         src: = harness.read_under_root(rel)

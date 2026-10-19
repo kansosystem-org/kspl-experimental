@@ -89,7 +89,7 @@ Each row is one idea that shapes the whole language, and what it means when you 
 | **A compiler a tool can read** | `--diagnostic-format=json` requests error messages as JSON. `ksplc explain <code>` explains each message code. Editors, scripts and AI models can read this output directly. |
 | **AI runs in it** | KSPL runs and trains AI models (`ksai/`). The models need no second implementation language. The same code runs on microcontrollers and servers. |
 
-Read [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md) for the reasons behind these ideas. Its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) defines imports in "The three strict rules of path resolution". Its section "8.4 The memory management model: `defer` / ARC / arenas" covers how to choose memory management.
+Read [`docs/DESIGN-principles.md`](docs/DESIGN-principles.md) for the reasons behind these ideas. Its section "Models write it, and AI runs in it" covers the last two rows. [`docs/SPEC-programming-language.md`](docs/SPEC-programming-language.md) defines imports in "The three strict rules of path resolution". Its section "8.4 Memory management" covers how to choose memory management.
 
 ## 📊 What works, and how far
 

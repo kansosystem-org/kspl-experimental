@@ -428,7 +428,6 @@ priv fn member_of(c: Sema_ctx$@, raw_type: U8[], name: U8[]): Ast_node$@? //<
         return .some(f)
     case .none {}
     $method_prefix: = Str_builder.new()
-    defer method_prefix.free()
     method_prefix.s(base_type_only).s(".").s(name)
     full_m_name: = method_prefix.slice()
 
@@ -455,7 +454,6 @@ priv fn resolve_dot_access_def(c: Sema_ctx$@, path: List<|Ast_node$@|>$@, target
         case .none {}
     if recv_node.kind_id == .k_identifier
         $mod_m_name: = Str_builder.new()
-        defer mod_m_name.free()
         mod_m_name.s(recv_node.text).s(".").s(target_text)
         mod_sym: = c.symtab.resolve(mod_m_name.slice()).unwrap_or(null)
         if mod_sym != null && mod_sym.node != null
@@ -560,7 +558,6 @@ fn get_definition_node(c: Sema_ctx$@, path: List<|Ast_node$@|>$@): Ast_node$@? /
         p: = path.get(path.len - 2)
         if p.kind_id == .k_type_path || p.kind_id == .k_expr_path
             $sb: = Str_builder.new()
-            defer sb.free()
             p.get_full_path_str_to(sb)
             full_str: = sb.slice().get_generic_base_name()
             if full_str.len > 0 && !full_str.equals(target_text)
@@ -662,29 +659,14 @@ fn linked_doc(c: Sema_ctx$@, root: Ast_node$@, def_node: Ast_node$@): U8[] //<
     if doc.len == 0
         return doc
     file: = def_node.loc.file()
-    $out: = Str_builder.new()
-    defer out.free()
-    $copied: Sz = 0
-    $from: Sz = 0
-    for
-        p: = sema_session_pointer.next_pointer(doc, from)
-        if p.open >= doc.len
-            break
-        from = p.end
-        pointed: = sema_session_pointer.pointed_at(c, root, file, def_node.loc.offset,
-            doc.sub(p.at, p.len))
-        switch pointed
-        case .found(node)
-            target: = place_of(c, node)
-            if target.len > 0
-                out.s(doc.sub(copied, p.open - copied)).c('[')
-                    .s(doc.sub(p.open, p.end - p.open)).s("](").s(target).c(')')
-                copied = p.end
-        default {}
-    if copied == 0
-        return doc
-    out.s(doc.sub_from(copied))
-    return base_core.arena.dup_str(out.slice())
+    return sema_session_pointer.link_names(doc, sema_session_pointer.next_pointer, "",
+        fn(name: U8[]; c: Sema_ctx$@, root: Ast_node$@, file: U8[], def_node: Ast_node$@): U8[] {
+        switch sema_session_pointer.pointed_at(c, root, file, def_node.loc.offset, name) case .found(node) {
+            return place_of(c, node);
+        } default {
+            return "";
+        }
+    })
 
 priv fn scan_enum_variant(sym: Sema_symbol$@, target_node: Ast_node$@, res: Enum_resolve_result$@)
     if sym == null || sym.node == null || sym.node.kind_id != .k_decl_enum

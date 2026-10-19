@@ -76,7 +76,6 @@ priv fn built_json(arena: Arena$@): U8[] //<
         .push(b.arr().push(b.str_val("")).build()).build()
     root: = b.obj().set("items", arr).set("empty_obj", b.obj().build()).build()
     $out: = Str_builder.new()
-    defer out.free()
     root.dump(out@, 2)
     return arena.dup_str(out.slice())
 
@@ -84,7 +83,6 @@ priv fn built_query(arena: Arena$@): U8[] //< the query that std's writer produc
     //<
     //< Caution: **Keep the `%` and the `+`**: decoding branches on those two.
     $out: = Str_builder.new()
-    defer out.free()
     for one in U8[][]::{ "name", "value with spaces", "a+b", "%" }
         if out.len > 0
             out.c('&')
@@ -106,7 +104,6 @@ priv fn built_response(arena: Arena$@): U8[] //< the HTTP response that std's wr
         .add("X-Long", "0123456789012345678901234567890123456789").add("Connection", "close")
         .build()
     $out: = Str_builder.new()
-    defer out.free()
     http.format_response(out@, 200, head, "this is the body.") catch
         return ""
     return arena.dup_str(out.slice())
@@ -125,7 +122,6 @@ priv fn built_numbers(arena: Arena$@): U8[] //< `BUILT_FLOATS`, and I64's ends, 
     for f in BUILT_FLOATS
         arr = arr.push(b.float_val(f))
     $out: = Str_builder.new()
-    defer out.free()
     arr.build().dump(out@)
     return arena.dup_str(out.slice())
 
@@ -134,7 +130,6 @@ priv fn built_frames(arena: Arena$@): U8[] //< two JSON-RPC frames that std's wr
     //< A request and a notification, so a mutation reaches the second frame's head too.
     $b: = Json_builder.new(arena)
     $out: = Str_builder.new()
-    defer out.free()
     params: = b.obj().set("uri", b.str_val("file:///a b.kspl")).set("n", b.int_val(7I64)).build()
     jsonrpc.frame_into(out@, jsonrpc.encode("textDocument/hover", params, 3, arena))
     jsonrpc.frame_into(out@, jsonrpc.encode("exit", b.arr().build(), -1, arena))
@@ -169,7 +164,6 @@ priv fn built_shape(arena: Arena$@): U8[] //<
         .set("parts", b.arr().push(part).build()).set("note", b.str_val("é"))
         .set("limit", b.int_val(7I64)).set("spare", part).build()
     $out: = Str_builder.new()
-    defer out.free()
     root.dump(out@)
     return arena.dup_str(out.slice())
 

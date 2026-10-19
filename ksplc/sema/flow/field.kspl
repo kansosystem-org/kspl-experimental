@@ -16,6 +16,19 @@ import "std/str"
 import "std/str" { Str_builder }
 
 impl Ast_node
+    fn has_drop_parent(r: Self$@, c: sema_flow_track.Df_ctx$@): Bool //<
+        //< a hook needs all its fields alive
+        if r == null || r.kind_id != .k_expr_postfix || !r.postfix_op_text().equals(".")
+            return false
+        $parent: = r.get_postfix_receiver()
+        for parent != null
+            if c.sema.env.is_drop_type(c.sema.env.strip_ptr_full(parent.type_id))
+                return true
+            if parent.kind_id != .k_expr_postfix || !parent.postfix_op_text().equals(".")
+                break
+            parent = parent.get_postfix_receiver()
+        return false
+
     fn df_field_read(r: Self$@, c: sema_flow_track.Df_ctx$@, state: sema_flow_track.Df_state$@) //<
         //< Walks a field read (`b.m`); read as a value, a `Move_only` field moves out of its local
         //<
@@ -36,6 +49,20 @@ impl Ast_node
         c.in_field_path = saved
         for $i: = 1; i < r.children.len; i += 1
             r.get_child(i).analyze_df_node(c, state)
+        if !c.suppress_move && c.sema.env.type_has_drop(r.type_id)
+            parent: = r.get_postfix_receiver()
+            if c.sema.env.is_pointer(parent.type_id)
+                c.sema
+                    .err(r,
+                    "cannot move a Drop field through a borrowed pointer; use mem.take_at to \
+                        transfer the slot")
+                c.has_error = true
+                return
+            if r.has_drop_parent(c)
+                c.sema
+                    .err(r, "cannot move a field out of a type with Drop; borrow the field instead")
+                c.has_error = true
+                return
         if root != null && !c.suppress_move && c.sema.env.is_move_only(r.type_id)
             state.moved_fields.add(r)
 
@@ -85,7 +112,6 @@ impl Ast_node
         //<
         //< Empty for a bare name: the whole binding.
         $sb: = Str_builder.new()
-        defer sb.free()
         r.append_field_path(sb@)
         return base_core.arena.dup_str(sb.slice())
 

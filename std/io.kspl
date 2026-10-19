@@ -78,10 +78,10 @@ impl File_stream: Reader //< so it can be used wherever a `Reader` is expected
             throw .read_failed("")
         return got
 
-impl File_stream: Owned //< it owns the handle and releases it in `free()`
+impl File_stream: Manual_free //< it owns the handle and releases it in `free()`
     pub fn free(r: Self$@) //< closes the handle; a failure while closing is not reported
         //<
-        //< That is `Owned`'s contract.
+        //< That is `Manual_free`'s contract.
         //< Caution: **To know whether the written data arrived, call `sync()!` before freeing it.**
         if r.stream != null
             _res: = libc.fclose(r.stream)
@@ -291,7 +291,6 @@ pub fn read_stdin( //< the whole of standard input, read to the end
     arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
 ): U8[]!Io_error //< the text read, empty if nothing came; `read_failed("")` if a read failed
     $b: = Str_builder.new()
-    defer b.free()
     $from: = File_stream::{ .stream = libc.get_stdin() }
     $chunk: U8[4096] = ::{}
     for

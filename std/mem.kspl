@@ -334,9 +334,8 @@ pub fn heap_capacity_bytes(): Sz //< the size of the static buffer the heap uses
 pub fn heap_requested_total_bytes(): Sz //< every byte requested since start-up; never decreases
     return kspl_atomic_load(heap_total@)
 
-// Caution: **A container whose elements can be ARC zeroes newly allocated memory with this
-// before using it.** Assigning to an element releases the old value, so following garbage as ARC
-// crashes; zero means "an empty handle that owns nothing" (see `Rc<|T|>`).
+// Caution: **Zeroing bytes runs no cleanup.** Use `init_at` to initialize raw value storage,
+// `take_at` to transfer its live value, and `drop_at` to destroy it before reusing the slot.
 pub fn zero( //< sets a range of bytes to 0
     dest: Void$@, //< where the range begins
     bytes: Sz, //< how long it is
@@ -355,6 +354,40 @@ pub fn zero( //< sets a range of bytes to 0
         d: = U8$@::dest
         for i in Range.asc(bytes)
             (d + i)$ = 0
+
+priv struct Raw_value<|T|> //< compiler-known storage whose bytes carry no automatic cleanup
+    value: T
+
+impl<|T|> Raw_value<|T|>: Move_only {} //< transfers stored bytes without copying ownership
+
+priv struct Live_value<|T|> //< an initialized slot whose contained value receives normal cleanup
+    value: T
+
+#inline
+pub fn init_at<|T|>(dest: T$@, value: T) //< transfers value into uninitialized storage
+    //<
+    //< Caution: **The destination must hold no live value.** Assignment replaces an initialized
+    //< value and runs its cleanup; this operation initializes storage without reading its old
+    //< bytes.
+    held: Raw_value<|T|> = ::{ .value = value }
+    copy(Void$@::dest, Void$@::held.value@, sizeof(T))
+
+#inline
+pub fn take_at<|T|>(src: T$@): T //< transfers the initialized value out and zeroes its old storage
+    //<
+    //< Caution: **The slot must hold a live value.** The result owns its cleanup. The source slot
+    //< becomes uninitialized; initialize it before reading it again. Use ordinary moves for locals,
+    //< whose compiler-managed lifetime must not be changed through these raw-storage operations.
+    $held: Raw_value<|T|> = ::{}
+    copy(Void$@::held@, Void$@::src, sizeof(T))
+    zero(Void$@::src, sizeof(T))
+    return held.value
+
+#inline
+pub fn drop_at<|T|>(src: T$@) //< ends an initialized value's lifetime and clears its storage
+    //<
+    //< Drop and ARC cleanup runs here. A manually freed resource still requires its explicit free.
+    _value: Live_value<|T|> = ::{ .value = take_at(src) }
 
 pub fn copy( //< copies a range of bytes; the two ranges must not overlap (`move` where they can)
     dest: Void$@, //< where the bytes go
@@ -654,9 +687,9 @@ impl Arena
         init_val: T, //< the value to write
     ): T$@
         ptr: = r.alloc_as<|T|>()
-        ptr$ = init_val
+        init_at(ptr, init_val)
         return ptr
-impl Arena: Owned {} //< it owns its resources and releases them with `free()`.
+impl Arena: Manual_free {} //< it owns its resources and releases them with `free()`.
 
 // ==========================================
 // Where a std function does work it does not return, and where a value of many blocks lives
@@ -673,7 +706,7 @@ impl Own_arena
         if r.arena != null
             r.arena.free()
             r.arena = null
-impl Own_arena: Owned {} //< `free()` releases the arena it holds
+impl Own_arena: Manual_free {} //< `free()` releases the arena it holds
 
 struct Scratch //< the arena a function works in: the caller's, or one of its own
     //<
@@ -704,4 +737,4 @@ impl Scratch
         else if r.arena != null
             r.arena.restore(r.lent_at)
         r.arena = null
-impl Scratch: Owned {} //< `free()` gives the work back
+impl Scratch: Manual_free {} //< `free()` gives the work back

@@ -1,7 +1,7 @@
 //< The lints on statements, called as hooks from where a statement or an initializer is typed
 //<
 //< They cover a constant condition, a call subject that wraps, an empty block, and a lock used past
-//< its unlock or never released. They also cover an exit between an `Owned` binding and its
+//< its unlock or never released. They also cover an exit between a `Manual_free` binding and its
 //< `defer`, a digit-accumulating loop with no bound, and a type written twice. **This is not where
 //< all the lints are**: the rest sit with the checks that hold the context to detect them.
 import "ksplc/base/ast" { Ast_node }
@@ -322,7 +322,7 @@ fn lint_lock_escape(c: Sema_ctx$@, block: Ast_node$@) //<
             c.warn(s.node, c.scratch.slice())
 
 fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
-    //< [W0109] An exit between an `Owned` value's binding and the `defer` that frees it
+    //< [W0109] An exit between a `Manual_free` value's binding and the `defer` that frees it
     //<
     //< A `!`, `return`, `throw`, `break` or `continue` there leaves before the `defer` is
     //< registered, so the value leaks on that path. Every block of the body is walked, a closure's
@@ -335,11 +335,12 @@ fn lint_defer_gap(c: Sema_ctx$@, node: Ast_node$@) //<
         lint_defer_gap(c, child)
 
 priv fn lint_block_defer_gap(c: Sema_ctx$@, block: Ast_node$@) //<
-    //< Checks each binding of an `Owned` value in one block against the exits before its `defer`
+    //< Checks each binding of a `Manual_free` value in one block against the exits before its `defer`
     for i in Range.asc(block.children.len)
         stmt: = block.get_child(i)
         id: = stmt.get_var_decl_id() if stmt.kind_id == .k_decl_var else null
-        if id == null || !c.env.is_owned(stmt.type_id)
+        if id == null || !c.env.has_release_contract(stmt.type_id) ||
+            c.env.type_has_drop(stmt.type_id)
             continue
         // Caution: **Check only where a `defer` later in the same block frees it.** A value freed
         // by hand, passed on or kept is a different case, and reporting it as a leak would be
@@ -381,7 +382,7 @@ priv fn report_defer_gap(c: Sema_ctx$@, way: Ast_node$@, name: U8[], bound: Sz, 
 
 impl Ast_node
     priv fn frees_local(r: Self$@, c: Sema_ctx$@, name: U8[]): Bool //<
-        //< Whether the subtree holds `name.free()` on an `Owned` value
+        //< Whether the subtree holds `name.free()` on a `Manual_free` value
         //<
         //< It looks in a `defer`'s body, or at a hand-written free along the way.
         if r == null

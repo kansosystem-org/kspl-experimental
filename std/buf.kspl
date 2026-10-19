@@ -10,6 +10,7 @@
 //   $w: = Buf_writer.new(U8$[]::buf);
 //   w.s("seq=\{seq\} dist=\{mm\}");
 // ==========================================
+import "std/bytes" // bounded copying, including overlapping views of this buffer
 
 pub struct Buf_writer //< a destination that writes into memory the caller holds
     priv buf: U8$[]
@@ -28,10 +29,7 @@ impl Buf_writer: Writer //< so it can be used wherever a `Writer` is expected
         return Buf_writer::{ .buf = buf, .len = 0, .dropped = 0 }
 
     pub fn s(r: Self$@, val: U8[]): Self$@ //< writes a string, dropping what does not fit
-        room: = r.buf.len - r.len
-        n: = val.len if val.len <= room else room
-        for i in Range.asc(n)
-            (r.buf.ptr + r.len + i)$ = val[i]
+        n: = r.buf.copy_from(r.len, val)
         r.len += n
         r.dropped += val.len - n
         return r

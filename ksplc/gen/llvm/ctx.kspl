@@ -13,6 +13,7 @@ import "ksplc/gen/entry" as gen_entry
 import "ksplc/sema/session/ctx" { Sema_ctx }
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
+import "std/buf" { Buf_writer }
 import "std/chars"
 import "std/ds" { List, Map }
 import "std/libc"
@@ -264,32 +265,7 @@ impl Genllvm_ctx
         //< The quotes and the trailing \00 are not included. String constants and inline asm
         //< templates share it, so the escape rules exist once. The bytes are the ones the literal
         //< stands for (append_literal_bytes in base/literal.kspl, which genc uses too).
-        $bytes: = Str_builder.new()
-        defer bytes.free()
-        s.append_literal_bytes(bytes@)
-        for b in bytes.slice()
-            r.emit_llvm_str_byte(b)
-
-    fn emit_llvm_str_byte(r: Self$@, b: U8) //<
-        //< it emits one byte as part of the contents of LLVM's c"..."
-        //<
-        //< A `"` and a `\` would break the string, so they are always escaped. Anything else can be
-        //< written raw (the high bytes included).
-        switch b
-        case '\n'
-            r.s("\\0A")
-        case '\r'
-            r.s("\\0D")
-        case '\t'
-            r.s("\\09")
-        case '"'
-            r.s("\\22")
-        case '\\'
-            r.s("\\5C")
-        case 0
-            r.s("\\00")
-        default
-            r.c(b)
+        s.append_literal_bytes(r, emit_llvm_str_byte)
 
     priv fn emit_buf(r: Self$@): Str_builder$@? //<
         //< The current output buffer (alloca / body)
@@ -328,6 +304,12 @@ impl Genllvm_ctx: Writer
             r.out = r.out.flush()
         return r
 
+priv fn emit_llvm_str_byte(out: Writer, b: U8) //< a byte inside LLVM's c"...", escaped as needed
+    if b == '\n' || b == '\r' || b == '\t' || b == '"' || b == '\\' || b == 0
+        out.s("\\").c((b >> 4U8).to_hex_upper()).c((b & 15U8).to_hex_upper())
+    else
+        out.c(b)
+
 priv fn local_slot_key(decl: Ast_node$@): Void$@ //<
     //< What a local's slot ID is keyed on: its symbol, which survives a node's address changing
     //<
@@ -347,7 +329,6 @@ fn format_f32_hex_literal(text: U8[]): U8$[] //<
     //< It takes the literal as written. `_` separators and the type suffix are removed here.
     //< Otherwise `strtod` would stop at them and read `1_000.5` as 1.
     $clean: = Str_builder.new()
-    defer clean.free()
     _stop: = text.append_clean_number(clean@, "Ff")
     clean.c(0U8)
     parsed: = libc.strtod(Void$@::clean.slice().ptr, null)
@@ -366,13 +347,10 @@ fn format_f64_hex(v: F64): U8$[] //<
     $bits: U64 = 0U64
     mem.copy(Void$@::bits@, Void$@::widened@, sizeof(U64))
 
-    $out: = Str_builder.new()
-    defer out.free()
-    out.s("0x")
-    for i in Range.asc(16)
-        shift: = (15 - i) * 4
-        nib: = U8::((bits >> shift) & 0xF)
-        out.c(nib.to_hex_upper())
+    // The prefix and 16 hex digits fit exactly; no temporary heap buffer is needed.
+    buf: U8[18] = ::{}
+    $out: = Buf_writer.new(U8$[]::buf)
+    out.s("0x\{bits:016X\}")
     return base_core.arena.dup_str(out.slice())
 
 struct Preamble_fn //< a function that hosted's preamble emits itself
@@ -424,4 +402,4 @@ fn is_kspl_prefixed_or_ext(name: U8[], is_ext: Bool): Bool //<
     //< places in decl.kspl / expr.kspl / expr_call.kspl share this answer.
     return is_ext || name.has_kspl_prefix() || name.starts_with("priv_")
 
-impl Genllvm_ctx: Owned {}
+impl Genllvm_ctx: Manual_free {}

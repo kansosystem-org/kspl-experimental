@@ -1,10 +1,10 @@
 #!/usr/bin/env -S ksplc run
-//< ksplc's and std's own tests, built with the memory and undefined-behaviour sanitizers, are clean
+//< Compiler, library and editor tests are clean under the memory and undefined-behaviour sanitizers
 //<
 //< **This sees what counting bytes cannot.** ksplc's ARC tests judge a balance by the bytes in use
 //< (`heap_used_bytes`). Some faults leave that count unchanged: a use after free, a binding left
-//< pointing at freed memory, an undefined operation in the generated C. So the language's and std's
-//< tests are built through both backends with the sanitizers and run as their own `make test` runs
+//< pointing at freed memory, an undefined operation in the generated C. These packages' tests are
+//< built through both backends with the sanitizers and run as their own `make test` runs
 //< them. Any report from any process fails the gate, leaks included, and nothing is suppressed.
 //< **Mandatory where `KANSO_REQUIRE_ASAN=1`** (`mk/test.mk` sets it on Linux, whose image holds the
 //< runtimes). Elsewhere a C compiler or a platform without them gives a `SKIP` line, never a silent
@@ -303,13 +303,15 @@ struct Pkg_tests //< a package's own tests, as its own `make test` runs them
         //< **For tests that write fixed names under the `out/tmp` they run beside.** Two builds
         //< run side by side in one folder would write over each other's files.
 
-// **ksplc's and std's**: the language and the library every program holds. The other packages'
-// tests exercise what is built on these two.
+// The compiler, library and editor exercise owned buffers and their borrowed views. Memory checks
+// catch a stale view even when the allocator leaves the freed bytes unchanged.
 priv const PKG_TESTS: Pkg_tests[_] = ::{
     Pkg_tests::{ .pkg = "ksplc", .entry = "ksplc/tests/main.kspl", .takes_ksplc = false,
         .own_folder = false },
     Pkg_tests::{ .pkg = "std", .entry = "std/tests/main.kspl", .takes_ksplc = true,
         .own_folder = true },
+    Pkg_tests::{ .pkg = "kspage", .entry = "kspage/tests/main.kspl", .takes_ksplc = false,
+        .own_folder = false },
 }
 
 priv fn sanitize_pkg_tests(work: U8[], arena: Arena$@) //<
@@ -362,7 +364,7 @@ fn main(): I32
         lacks: = arena.text()
             .s("the C compiler cannot build with the address and undefined-behaviour sanitizers \
                 here: ").s(said).take()
-        ksplc_harness.require_or_skip("ksplc's and std's own tests, sanitized", "KANSO_REQUIRE_ASAN",
+        ksplc_harness.require_or_skip("the packages' own tests, sanitized", "KANSO_REQUIRE_ASAN",
             lacks)
         return ksplc_harness.finish()
     check_fires(work, arena)

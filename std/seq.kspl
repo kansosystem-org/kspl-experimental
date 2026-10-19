@@ -127,10 +127,11 @@ impl<|T|> List<|T|>
             .f = f }
 
     priv fn copy_range(r: Self@, from: Sz, to: Sz, arena: Arena$@): List<|T|> //<
-        //< A new list copying [from, to), for take/skip
+        //< A new list copying [from, to), with room for every element before copying
         //<
         //< Caution: The caller clamps from/to to len before passing them.
-        $out: = List<|T|>.new(arena)
+        $out: =
+            (List<|T|>.new_with_cap(to - from, arena) if to > from else List<|T|>.new(arena))
         for $i: Sz = from; i < to; i += 1
             out.push((r.ptr + i)$)
         return out
@@ -197,9 +198,7 @@ impl<|T|> List<|T|>
         cmp: Callable2<|T@, T@, I32|>, //< < 0, 0 or > 0 as `a` is below, equal to or above `b`
         arena: Arena$@, //< where the new list goes; null means the heap and a `free()`
     ): List<|T|>
-        $out: = List<|T|>.new_with_cap(r.len if r.len > 0 else 1, arena)
-        for i in Range.asc(r.len)
-            out.push((r.ptr + i)$)
+        $out: = r.copy_range(0, r.len, arena)
         n: = out.len
         for $lo: Sz = 0; lo < n; lo += SORT_RUN
             hi: = (lo + SORT_RUN) if lo + SORT_RUN < n else n
@@ -219,9 +218,7 @@ impl<|T|> List<|T|>
             return out
         // Caution: **Take from the right run only when it is strictly smaller.** Taking it on a tie
         // reverses equal elements, and the sort is no longer stable.
-        $spare: = List<|T|>.new_with_cap(n, arena)
-        for i in Range.asc(n)
-            spare.push(out.get(i))
+        spare: = out.copy_range(0, n, arena)
         $from: = out
         $to: = spare
         for $width: Sz = SORT_RUN; width < n; width *= 2

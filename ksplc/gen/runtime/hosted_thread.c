@@ -215,6 +215,7 @@ typedef struct { HANDLE h; void *(*entry)(void *arg); void *arg; void *result; }
 
 KSPL_CALLS_THREAD_ENTRY static DWORD WINAPI kspl_thread_trampoline(LPVOID param) {
     kspl_thread_t *t = (kspl_thread_t *)param;
+    kspl_crash_thread_enter();
     t->result = t->entry(t->arg);
     return 0;
 }

@@ -139,12 +139,12 @@ priv fn step_twice(n: I32): I32!Step_error //< Passing a failure on with `!`
     once: = step(n)!
     return step(once)!
 
-priv fn pick_builder(ok: Bool): Str_builder!Step_error //< `defer`, right below what it cleans up
+priv fn pick_builder(ok: Bool): Str_builder!Step_error //< Automatic ownership
     //<
-    //< **`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or
-    //< a `!` that leaves early. It takes one statement that names what it cleans up (`defer
-    //< b.free()` in `main` below). So it sits on the line after the binding. A cleanup of more than
-    //< one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
+    //< **A builder releases its buffer automatically.** Returning it transfers ownership to the
+    //< caller. Passing it by value also transfers ownership; a pointer or Writer view borrows it.
+    //< The caller needs no `defer`. A borrowed `slice()` stays valid only while its builder lives.
+    //< Manual owners still use `defer`, as `Arena` does in `main` below.
     if !ok
         throw .too_far
     return Str_builder.new()
@@ -221,7 +221,6 @@ fn main(): I32 //< Putting it together
     $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
         fallback Str_builder.new()
-    defer b.free()
     b.s("held")
     note(true)
     note(false)

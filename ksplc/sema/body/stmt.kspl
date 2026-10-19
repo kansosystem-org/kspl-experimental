@@ -26,6 +26,7 @@ import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/decl/trait_check" as sema_decl_trait_check
 import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
+import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
@@ -268,6 +269,8 @@ impl Ast_node
                     c.err(id_node, c.scratch.slice())
             final_id = I32::sema_type_env.Builtin_type_id.unknown
         is_const: = r.kind_id == .k_decl_const || kw_text.equals("const")
+        if is_const && c.env.type_has_drop(final_id)
+            c.err(id_node, "a constant cannot own automatic cleanup; use a local value binding")
         is_mut: = !is_const && kw_text.is_mut_binding_kw()
         sym_kind: =
             sema_type_scope.Sym_kind.constant if is_const else sema_type_scope.Sym_kind.variable

@@ -35,7 +35,6 @@ impl Env
         entry: = r.id_to_type.get(type_id)
         if entry.c_name.len == 0
             $spelled: = Str_builder.new()
-            defer spelled.free()
             r.mangle_type_id_to_impl(type_id, spelled, 0)
             entry.c_name = base_core.arena.dup_str(spelled.slice())
         return w.s(entry.c_name)
@@ -110,7 +109,6 @@ impl Env
             // Caution: **Look up the key by the mangled name.** An instance is in the type table
             // under its mangled name, and `mangle_type_id_to` already drops the immutability.
             $key: = Str_builder.new()
-            defer key.free()
             r.mangle_type_id_to(type_id, key)
             return r.type_to_id.get(key.slice()).unwrap_or(type_id)
         return type_id
@@ -138,7 +136,6 @@ impl Env
         switch r.instance_of(type_id)
         case .some(inst)
             $key: = Str_builder.new()
-            defer key.free()
             r.instance_key_to(inst, key)
             return base_core.arena.dup_str(key.slice())
         case .none
@@ -150,7 +147,6 @@ impl Env
         //< Caution: **Name an instance through here only.** A second spelling of the rule makes
         //< two names for one instance, and C fails with `redefinition` or `unknown type name`.
         $full: = Str_builder.new()
-        defer full.free()
         full.s(inst.template)
         if inst.args.len > 0
             r.type_args_to(inst.args, full.s("_"))
@@ -167,8 +163,8 @@ struct Mangle_seen //< the record for emitting a composite type "once per mangle
     priv seen: Map<|U8[], I32|>$@
     priv buf: Str_builder
 
-// It releases what it owns with `free()`; see `Owned` in std/lang.kspl for why it conforms.
-impl Mangle_seen: Owned {}
+// It releases what it owns with `free()`; see `Manual_free` in std/lang.kspl for why it conforms.
+impl Mangle_seen: Manual_free {}
 
 impl Mangle_seen
     fn new(env: Env$@): Mangle_seen

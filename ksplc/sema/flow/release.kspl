@@ -4,7 +4,7 @@
 //< conditional, delegated two levels deep) counts as "does not release".
 
 // ==========================================
-//   1. `x.free()`   — whether the receiver's type conforms to `Owned` (not decided by the name)
+//   1. `x.free()`   — whether the receiver's type conforms to `Manual_free` (not decided by the name)
 //   2. `dealloc(x)` — a free function that releases its actual argument
 //   3. whether the callee releases a formal parameter unconditionally (walked one level only)
 // ==========================================
@@ -18,7 +18,7 @@ import "ksplc/sema/type/query" as sema_type_query
 import "std/str"
 
 fn is_untracked_release_name(name: U8[]): Bool //<
-    //< A method name that suggests a release but is outside `Owned`'s contract ([W0107]'s subject)
+    //< A method name that suggests a release but is outside `Manual_free`'s contract ([W0107]'s subject)
     //<
     //< Not `release` (`Ref_counted`'s, correct on an ARC type) nor `clear` / `reset` (the value
     //< lives on).
@@ -72,6 +72,18 @@ priv fn expr_names_local(e: Ast_node$@, name: U8[]): Bool //<
     return (curr.kind_id == .k_identifier || curr.kind_id == .k_expr_path) &&
         curr.text.equals(name)
 
+priv fn may_exit_body(node: Ast_node$@): Bool //< an earlier exit makes a later release conditional
+    if node == null || node.kind_id == .k_decl_fn || node.kind_id == .k_stmt_defer
+        return false
+    if node.kind_id == .k_stmt_return || node.kind_id == .k_stmt_throw
+        return true
+    if node.kind_id == .k_expr_postfix && node.postfix_op_text().equals("!")
+        return true
+    for child in node.children
+        if may_exit_body(child)
+            return true
+    return false
+
 fn call_arg_for_param(callee: Ast_node$@, args_node: Ast_node$@, param_idx: Sz, is_method: Bool):
     Ast_node$@? //<
         //< The actual-argument node for the formal parameter param_idx, or none
@@ -90,13 +102,13 @@ impl Ast_node
     fn get_free_call_receiver(r: Self$@, c: Sema_ctx$@): Ast_node$@? //<
         //< The receiver node where the method call is a release method, or null for any other call
         //<
-        //< **It decides by whether the receiver's type conforms to `Owned`, not by the name** (a
-        //< `free` without it gets [W0107] at the declaration).
+        //< **It decides by whether the receiver's type conforms to `Manual_free`, not by the name**
+        //< (a `free` without it gets [W0107] at the declaration).
         member: = r.get_postfix_member()
         if member == null || !member.text.equals("free")
             return .none
         receiver: = r.get_postfix_receiver()
-        if receiver == null || !c.env.is_owned(receiver.type_id)
+        if receiver == null || !c.env.has_release_contract(receiver.type_id)
             return .none
         return .some(receiver)
 
@@ -164,6 +176,8 @@ impl Ast_node
             return false
         $is_shadowed: = false
         for stmt in block.children
+            if may_exit_body(stmt)
+                return false
             if stmt.kind_id == .k_decl_var || stmt.kind_id == .k_decl_const
                 if stmt.get_decl_id_text().equals(param_name)
                     is_shadowed = true

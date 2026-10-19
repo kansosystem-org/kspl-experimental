@@ -504,52 +504,28 @@ Caution: **Register it at Pass 2a** (`impl_needs_early_collect`). At 2b, resolvi
 
 Caution: **Do not add a test rejecting it.** Monomorphization has one starting point, `instantiate_struct`, so there is nothing to reject. The reason is "A slice is a std struct, under generics' rules" in [`../../docs/DESIGN-programming-language.md`](../../docs/DESIGN-programming-language.md).
 
-#### Instantiation's two axes, and which of them to change
+#### Instantiation's two axes
 
-**Two independent choices shape generics.** One is how often a generic body is type-checked (the unit of checking). The other is which parts of it are copied (the range of instantiation). Mixed up, "is KSPL the same as C++ or different" has no answer. KSPL checks each copy, and copies every method of a type it uses; both stay as they are, for the reasons below. Only KSPL's side is written here.
+**Checking and instantiation answer different questions.** KSPL checks a generic body for each concrete set of type arguments. It checks a method body only when that method is needed. Resolving a type's method signatures does not require checking all their bodies.
 
-| axis | KSPL | its relation to the wasted work measured in "Profiling where Sema's time goes" |
+| Axis | KSPL's choice | What it permits |
 | :-- | :-- | :-- |
-| **A. The unit of checking** | per instantiation | unrelated |
-| **B. The range of instantiation** | Per type, on demand: a method table is built when one of its methods is first looked up ("Where the instantiation queue is drained"). Within a type, every method, each body checked. | the whole cause |
+| The unit of checking | Each concrete instantiation | Operations whose validity depends on the actual type arguments |
+| The range of body checking | Referenced methods and required implicit hooks | A container of automatic owners, even when unused copying methods cannot support them |
 
-**Axis A is not moved to "once, against the constraints":**
+**The benefit includes which programs can be written.** `List<|Str_builder|>` can push and pop values without copying them. Its copying methods remain invalid when called. Separate container families would duplicate those working operations. Less inference work is an additional benefit, rather than the reason to weaken a diagnostic.
 
-* **What is gained**: type-checking the bodies drops from the count of instantiations to the count of declarations. At most, nearly all of Infer's time is in scope.
-* **The other stages get neither lighter nor heavier.** KSPL holds no type information at run time, so code generation needs a body per instantiation. Monomorphization remains even with the checking done once, so Lower and Genc are neutral. Axis B's wasted work would still need fixing separately: this is a trade within Sema alone.
-* **The language bears the loss, not a layer.** Declaring the constraints in full becomes the writer's burden. On top of that comes the same trap as rejecting a blanket impl ("Impls of generic types"). The language also loses the features whose shape is decided per instantiation (["`for x in` is expanded in Sema, since its shape needs types"](#for-x-in-is-expanded-in-sema-since-its-shape-needs-types)).
-* **Moving it does not remove the errors at instantiation time** (Rust's post-monomorphization errors), so there would be two checking regimes.
+The body queue retains each declaration's type-argument bindings when its method table is made. `sema/body/infer.kspl` checks referenced bodies, then repeats until no additional body is needed. Each declaration is checked once. Only checked function bodies enter the tree passed to Lower. Signatures remain in their method tables for lookup.
 
-**This does not mean "C++'s scheme is better on the whole".** Only on axis B does C++ differ usefully: it instantiates a class template's member only when that member is used. On axis A, C++ pays the price of diagnostics reported inside the instantiated body, and C++20 added concepts to check against declared constraints. KSPL took C++'s side of axis A deliberately and inherits the same price, so a diagnostic must name the instantiated type.
+**Implicit calls count as uses.** An upcast requires every slot of its trait table. `Ref_counted` requires `retain` and `release`; `Drop` requires its cleanup hook. Their tables cannot wait until Lower, which synthesizes those calls after semantic analysis ends. `Manual_free.free` is explicit and follows ordinary reference tracking.
 
-**Axis B is the one that could move, to checking only the methods used. It is not moved, because the gain is small until Sema knows what is reachable from the root.** Moved, the gain would reach both Sema and Lower, and the checking model would stay as it is. The price is the one C++ pays: an unused method goes unchecked on that type. But dead-code elimination's drop rate does not measure wasted work. Judged by what drops, a good part of Infer ("Profiling where Sema's time goes") looks wasted. Yet instantiating on demand puts off only a small fraction. The two kinds of "unused" differ:
+A use mark records a reference from any body being checked. It does not prove reachability from the program's entry point. Nongeneric unused functions can still reference generic methods. Lower's removal of unreachable code remains a separate pass.
 
-| kind | the question | its reach |
-| :-- | :-- | :-- |
-| **Sema's `is_used`** | was it referred to from anywhere | a local mark |
-| **Dead-code elimination's reachability** | can it be reached from the root | where A calls B and both are referred to, both drop if A cannot be reached from the root |
+**Source identity survives instantiation.** `Env.fn_templates` records each instantiated function's canonical template. Cleanup-hook checks and raw-storage contracts read that record, rather than deriving a source name from a mangled C identifier.
 
-Most of what drops is such transitively dead code, "referred to" as far as Sema can tell. **Catching the rest needs reachability from the root inside Sema. But the root is known only after all the analysis is done** (the order is reversed).
+An unused generic body still needs its imports. Explicit names are recorded before templates are discarded. Written extension calls also keep candidate provider imports, even when their receiver's concrete type is not yet known. An actual instantiation still checks method resolution and visibility.
 
-**What the gain would cost**: draining only the bodies whose `is_used` mark is raised type-checks measurably fewer bodies in measurably less time. The peak memory is unchanged, since the nodes are made and only the bodies are not inferred. For that small a gain, four pieces of machinery would grow:
-* the holding place;
-* the entry point that moves it;
-* sorting the tree;
-* the exception for the compiler-known traits.
-
-That is not worth the simplicity lost.
-
-**The traps on that path are kept here**, for whoever builds it:
-
-1. An instantiation node enters the tree inferred or not, so the sorting belongs to the code that puts it into the tree.
-2. The "used" mark is raised in eight scattered places, so hooking the entry points on the user's side misses some. Pick the raised marks up afterwards instead.
-3. The copy of the type-argument bindings must be taken at the moment of recording; picked up afterwards, there is nothing left to copy.
-4. `drain_pending_instances` is the method table's queue, not the bodies'. Confuse them, and bodies are left with the mark raised but never inferred. The one place that drains the bodies is the queue loop in `sema/body/infer.kspl`.
-5. **The impls of the traits the compiler knows by name (`Ref_counted` / `Owned` / `Move_only`) cannot be put off.** Lower synthesizes the code calling `retain` / `release` / `free`, and the callee is decided after Sema is done, so no use mark is raised.
-
-**The premise is in place: resolving an instantiation's signature is separate from inferring its body.** `resolve_fn_signature_types` in `sema/decl/resolve.kspl` is called where the instantiation happens. So the signature's completeness is not a side effect of inferring the body, a coupling independent of 1 to 5 above.
-
-Caution: **Raise `Self`'s counterpart (`fn_ctx.impl_name`) before calling it**, or `Self` is copied into `type_id` as it stands, and the body's inference reads that copy.
+Caution: **Raise `Self`'s counterpart (`fn_ctx.impl_name`) before resolving the signature.** Otherwise the unresolved `Self` enters the parameter types before the body is checked.
 
 #### `for x in` is expanded in Sema, since its shape needs types
 
@@ -665,7 +641,7 @@ When the C backend translates `ksplc/main.kspl` (warm), Infer takes several time
 
 **Infer's top is nearly all generic instantiation.** The same few generics recur at the top by name (`List<|U8[]|>`'s methods, `U8[]?`, `Arena.create`), each with matching counts across its methods. That shows the instantiation happens all together, not for the used methods alone. There are two places that queue a body (`queue_fn_body` in `sema/decl/mono_queue.kspl`). The call site queues on demand, while the method-table builder queues them all at once.
 
-Note: **Dead-code elimination (`lower/prune.kspl`) drops about half of the function declarations it sees**, each body already type-checked per instantiation. ["Instantiation's two axes, and which of them to change"](#instantiations-two-axes-and-which-of-them-to-change) says why that is not the wasted work it looks like.
+Note: **Dead-code elimination (`lower/prune.kspl`) drops about half of the function declarations it sees**, each body already type-checked per instantiation. ["Instantiation's two axes"](#instantiations-two-axes) distinguishes references from reachability.
 
 **Three choices keep Sema cheap without changing the model**, the largest first, as callgrind shows on a cold compile of `ksplc/main.kspl`:
 

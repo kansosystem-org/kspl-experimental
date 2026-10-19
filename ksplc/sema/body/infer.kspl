@@ -28,6 +28,7 @@ import "ksplc/sema/session/ctx" as sema_session_ctx + { Sema_ctx, Sema_error }
 import "ksplc/sema/session/import_table" as sema_session_import_table
 import "ksplc/sema/session/imports" as sema_session_imports
 import "ksplc/sema/session/prof" as sema_session_prof
+import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
@@ -114,6 +115,17 @@ priv fn wants_body(c: Sema_ctx$@, decl: Ast_node$@): Bool //< whether `c.bodies`
     case .mentioning(_name)
         return names_any(decl, c.body_names, null, 0)
 
+priv fn implicit_cleanup_method(c: Sema_ctx$@, node: Ast_node$@): Bool //<
+    //< cleanup is a use without a source call
+    $params: = base_ast_ext.Param_cursor.new(node.get_fn_params(), false)
+    if p: = params.next()
+        owner: = c.env.strip_ptr_full(p.param_type_id())
+        name: = c.env.source_fn_name(node)
+        return (c.env.is_arc_type(owner) &&
+            (name.equals("retain") || name.equals("release"))) ||
+            (c.env.is_drop_type(owner) && name.equals("drop"))
+    return false
+
 fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
     base_diag.ice_assert(r != null, "infer: file_node is null")
     $has_err: = false
@@ -141,6 +153,9 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
                 child.infer_impl_decl(c) catch
                     has_err = true
         else if child.kind_id == .k_decl_var || child.kind_id == .k_decl_const
+            if c.env.type_has_drop(child.type_id)
+                c.err(child,
+                    "an automatic owner cannot be a global; keep its lifetime inside a function")
             expr_node: = child.get_var_decl_expr()
             if expr_node != null && expr_node.kind_id != .k_empty
                 expected_id: = child.type_id
@@ -161,47 +176,58 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
     // monomorphized templates.
     c.set_in_generic_instance(true)
     defer c.set_in_generic_instance(false)
-    $pending_at: Sz = 0
-    for pending_at < c.generics.pending.len
-        pending: = c.generics.pending.get(pending_at)
-        pending_at += 1
-        // Caution: **Drain the constraints before each body is checked.** Drained once outside the
-        // loop, a violation by an instantiation made inside some body would be known only after its
-        // method body is checked.
-        // **Drain the instantiations first**: they fill the conformance table the check reads.
-        c.drain_pending_instances() catch
-            has_err = true
-        c.drain_pending_constraints()
-        // A constraint-violating instantiation's body is not checked (for the same reason).
-        if c.has_failed_constraint(pending.impl_name)
-            continue
-        c.set_current_file(pending.node.loc.file())
-        c.symtab.scope_stack.len = 0
-        c.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0,
-            .impl_name = pending.impl_name, .fallback_type = 0, .catch_depth = 0,
-            .in_fallback_value = false, .in_defer = false, .defer_boundary = 0 }
+    $checked: = Map<|Sz, Bool|>.new(base_core.arena)
+    $more: = true
+    for more
+        more = false
+        $pending_at: Sz = 0
+        for pending_at < c.generics.pending.len
+            pending: = c.generics.pending.get(pending_at)
+            pending_at += 1
+            if checked.get(Sz::pending.node).unwrap_or(false)
+                continue
+            sym: = Sema_symbol$@::pending.node.sym_ptr
+            if sym.flags.is_method && !sym.flags.is_used &&
+                !implicit_cleanup_method(c, pending.node)
+                continue
+            checked.set(Sz::pending.node, true)
+            more = true
+            // Caution: **Drain the constraints before each body is checked.** Drained once outside
+            // the loop, a violation by an instantiation made inside some body would be known only
+            // after its method body is checked.
+            // **Drain the instantiations first**: they fill the conformance table the check reads.
+            c.drain_pending_instances() catch
+                has_err = true
+            c.drain_pending_constraints()
+            // A constraint-violating instantiation's body is not checked (for the same reason).
+            if c.has_failed_constraint(pending.impl_name)
+                continue
+            c.set_current_file(pending.node.loc.file())
+            c.symtab.scope_stack.len = 0
+            c.fn_ctx = sema_session_ctx.Fn_ctx::{ .name = "", .ret_id = 0,
+                .impl_name = pending.impl_name, .fallback_type = 0, .catch_depth = 0,
+                .in_fallback_value = false, .in_defer = false, .defer_boundary = 0 }
 
-        base_diag.ice_assert(pending.node.sym_ptr != null,
-            "infer: pending instantiation node missing sym_ptr")
-        sym: = Sema_symbol$@::pending.node.sym_ptr
-        c.fn_ctx.name = sym.name
+            base_diag.ice_assert(pending.node.sym_ptr != null,
+                "infer: pending instantiation node missing sym_ptr")
+            c.fn_ctx.name = sym.name
 
-        // Restores the type-argument bindings as queued, then analyzes the body. Always restore the
-        // previous ones afterwards (instantiations nest; see Pending_inst in
-        // sema/session/state.kspl).
-        saved_args_len: = c.generics.args.len
-        for j in Range.asc(pending.bound_args.len)
-            c.generics.args.push(pending.bound_args.get(j))
-        // This body's depth in the chain; an instantiation made inside it is one deeper
-        // (inst_chain_depth in sema/session/state.kspl).
-        c.generics.inst_chain_depth = pending.depth
-        // What this body instantiates, and an error in it, name it (`Generic_state.analysing`).
-        c.generics.analysing = pending_at - 1
-        pending.node.infer_fn(c) catch
-            has_err = true
-        c.generics.analysing = -1
-        c.generics.inst_chain_depth = 0
-        c.generics.args.len = saved_args_len
+            // Restores the type-argument bindings as queued, then analyzes the body. Always restore
+            // the previous ones afterwards (instantiations nest; see Pending_inst in
+            // sema/session/state.kspl).
+            saved_args_len: = c.generics.args.len
+            for j in Range.asc(pending.bound_args.len)
+                c.generics.args.push(pending.bound_args.get(j))
+            // This body's depth in the chain; an instantiation made inside it is one deeper
+            // (inst_chain_depth in sema/session/state.kspl).
+            c.generics.inst_chain_depth = pending.depth
+            // What this body instantiates, and an error in it, name it (`Generic_state.analysing`).
+            c.generics.analysing = pending_at - 1
+            pending.node.infer_fn(c) catch
+                has_err = true
+            c.generics.analysing = -1
+            c.generics.inst_chain_depth = 0
+            c.generics.args.len = saved_args_len
 
     for child_node in r.children
         child: = child_node.unwrap_top_level()
@@ -225,6 +251,9 @@ fn run(r: Ast_node$@, c: Sema_ctx$@): Void!Sema_error
         clean_children.push(child)
 
     for inst_node in c.env.instantiated_nodes_list
+        if inst_node.kind_id == .k_decl_fn && inst_node.find_child(.k_stmt_block) != null &&
+            !checked.get(Sz::inst_node).unwrap_or(false)
+            continue
         clean_children.push(inst_node)
     c.env.instantiated_nodes_list.len = 0
     r.children = clean_children
@@ -370,7 +399,7 @@ impl Ast_node
             return false
         // [W0105] A lock's borrow used outside the lock (lint only).
         sema_body_lint_stmt.lint_lock_escape(c, block)
-        // [W0109] A way out between an `Owned` value's binding and the `defer` freeing it.
+        // [W0109] A way out between a `Manual_free` value's binding and the `defer` freeing it.
         sema_body_lint_stmt.lint_defer_gap(c, block)
         if r.has_attribute("naked") && !block.holds_only_asm(c)
             return false

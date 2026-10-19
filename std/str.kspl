@@ -1,7 +1,7 @@
 //< Strings that are built and grown: `Str_builder`, and the string functions that allocate
 //<
-//< Reading and slicing a `U8[]` without allocating is in `std/chars`. A `Str_builder` grows, so it
-//< needs a `free()`; where growth is not acceptable use `std/buf`'s `Buf_writer`, and for text that
+//< Reading and slicing a `U8[]` without allocating is in `std/chars`. A `Str_builder` receives
+//< automatic cleanup. Where growth is not acceptable use `std/buf`'s `Buf_writer`; for text that
 //< lives as long as an arena, use `Arena_text`.
 import "std/chars" // classifying and converting characters, and code points as strings
 import "std/ds" + { List }
@@ -22,7 +22,7 @@ pub fn from_cstr(c_str: U8$@): U8$[] //<
     //< A null pointer gives an empty slice, so what a C function returns can be passed as it is.
     return U8$[]::{ .ptr = null, .len = 0 } if c_str == null else c_str.to_slice()
 
-pub struct Str_builder //< a buffer that grows as needed, so it needs a `free()`
+pub struct Str_builder //< a growing buffer whose owner releases it automatically
     pub ptr: U8$@ //< the memory holding the written bytes
     pub len: Sz //< how many bytes have been written
     pub cap: Sz //< how many bytes fit before it has to grow
@@ -256,7 +256,6 @@ impl U8[]
         arena: Arena$@, //< where the new string goes; null uses the global heap, freed with `dealloc`
     ): U8[]
         $b: = Str_builder.new()
-        defer b.free()
         $pos: Sz = 0
         for old.len > 0 && pos < r.len
             rest: = r.sub_from(pos)
@@ -431,7 +430,9 @@ impl U8[]
             res.len = line_start
         return res
 
-impl Str_builder: Owned {} //< it owns its resources and frees them with `free()`.
+impl Str_builder: Drop //< releases the buffer when its owner leaves scope
+    priv fn drop(r: Self$@)
+        r.free()
 
 // Caution: **Call `take()`.** Without it the builder's memory leaks (`make debug` fails at the end
 // with "Should be 0 - memory leak").

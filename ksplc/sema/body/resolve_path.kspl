@@ -124,7 +124,6 @@ priv fn specialization_named(node: Ast_node$@, c: Sema_ctx$@, named: sema_decl_n
         return .none
     if type_args == null
         $form: = Str_builder.new()
-        defer form.free()
         form.s(sym.name).s("<|…|>")
         refuse_unwritten_type_args(c, node, "function", sym.name, form.slice(), gen_params)
         return .none
@@ -175,11 +174,9 @@ fn infer_method_value(node: Ast_node$@, c: Sema_ctx$@, owner_id: I32, owner: Ast
     owner_name: = c.env.get_str(owner_real)
     // The path as written (`Holder<|I32|>.get`), for a diagnostic.
     $written: = Str_builder.new()
-    defer written.free()
     owner.get_full_path_str_to(written)
     written.s(".").s(member.text)
     $fqn: = Str_builder.new()
-    defer fqn.free()
     fqn.s(owner_name).s(".").s(member.text)
     // A trait's method is a slot each conforming type fills, with no function of its own.
     switch c.env.get_info(owner_real)
@@ -235,7 +232,6 @@ fn refuse_method_of_bare_generic(c: Sema_ctx$@, node: Ast_node$@, owner: Ast_nod
         //< here says which. A call's arguments do not choose it either: a generic type's are
         //< written on the type ("Structs (`struct`)" in docs/SPEC-programming-language.md).
     $name: = Str_builder.new()
-    defer name.free()
     owner.get_full_path_str_to(name)
     n: = name.slice()
     m: = member.text
@@ -315,10 +311,9 @@ priv fn report_unread_name(c: Sema_ctx$@, node: Ast_node$@, named: sema_decl_nam
         if !c.get_file_alias(c.file_name, name) && !c.is_type_name(name)
             report_undefined_path(c, node, name, false, "", name, false)
         return
-    $full_name: = node.get_full_path_str()
-    defer full_name.free()
-    report_undefined_path(c, node, full_name.slice(), named.head_file.len > 0,
-        node.get_child(0).text, node.get_path_name(), named.reach == .absent)
+    full_name: = node.get_full_path_str()
+    report_undefined_path(c, node, full_name, named.head_file.len > 0, node.get_child(0).text,
+        node.get_path_name(), named.reach == .absent)
 
 fn refuse_type_name(c: Sema_ctx$@, node: Ast_node$@): Bool //<
     //< Reports a value's expression that is a type's name (`Row`, `m.Row`, `Box<|I32|>`)
@@ -335,12 +330,10 @@ fn refuse_type_name(c: Sema_ctx$@, node: Ast_node$@): Bool //<
         (node.def_node == null || node.def_node.sym_ptr == null ||
         !(Sema_symbol$@::node.def_node.sym_ptr).kind.is_type())
         return false
-    $written: = node.get_full_path_str()
-    defer written.free()
+    written: = node.get_full_path_str()
     c.clear_scratch()
-        .s("'\{written.slice()\}' names a type. A type is not a value. Write the value itself, a \
-            cast ('\{written.slice()\}::x'), or a member of the type \
-            ('\{written.slice()\}.new(…)')")
+        .s("'\{written\}' names a type. A type is not a value. Write the value itself, a cast \
+            ('\{written\}::x'), or a member of the type ('\{written\}.new(…)')")
     c.err(node, c.scratch.slice())
     return true
 

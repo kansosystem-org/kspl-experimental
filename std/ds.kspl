@@ -31,9 +31,8 @@ priv fn alloc_zeroed(bytes: Sz, arena: Arena$@): Void$@ //<
     //< Zeroes newly allocated memory and returns it
     //<
     //< All of `List`'s and `Map`'s memory comes from here.
-    //< Caution: **Do not skip the zeroing.** Storing an element is an ordinary assignment, so for
-    //< ARC elements the compiler releases the old value being overwritten, and following garbage
-    //< crashes.
+    //< Empty slots start with zero bytes. Map metadata needs that state; element lifetimes start
+    //< separately through `mem.init_at` when a slot becomes active.
     p: = arena.alloc(bytes)
     mem.zero(p, bytes)
     return p
@@ -151,16 +150,14 @@ impl<|T|> List<|T|>
     #inline
     pub fn push(r: Self$@, item: T) //< adds one element at the end, growing if it must
         r.ensure_cap()
-        (r.ptr + r.len)$ = item
+        mem.init_at(r.ptr + r.len, item)
         r.len += 1
 
     pub fn pop(r: Self$@): T? //< removes and returns the last element, or none if empty
         if r.len == 0
             return .none
         last: = r.len - 1
-        item: = (r.ptr + last)$
-        $empty: T[1] = ::{}
-        (r.ptr + last)$ = empty[0]
+        item: = mem.take_at(r.ptr + last)
         r.len = last
         return .some(item)
 
@@ -174,16 +171,14 @@ impl<|T|> List<|T|>
         if index < 0 || index > r.len
             bounds_panic("List.insert", index, r.len, file, line)
         r.ensure_cap()
-        for $i: = r.len; i > index; i -= 1
-            (r.ptr + i)$ = (r.ptr + i - 1)$
-        (r.ptr + index)$ = item
+        mem.move(Void$@::(r.ptr + index + 1), Void$@::(r.ptr + index),
+            (r.len - index) * sizeof(T))
+        mem.init_at(r.ptr + index, item)
         r.len += 1
 
     pub fn remove_at( //< removes one element, shifting the following elements back
         //<
-        //< Caution: **Overwrite the freed last slot with zero.** If T holds ARC content, that
-        //< assignment releases the old value being overwritten (the same reason as in `free`);
-        //< without it, every removal leaks.
+        //< The removed value is released before the following values move over its slot.
         r: Self$@,
         index: Sz, //< which element to remove; an index out of range stops the program
         file: U8[] = caller_file, //< keep the default unless this is called from a wrapper
@@ -191,19 +186,17 @@ impl<|T|> List<|T|>
     )
         if index < 0 || index >= r.len
             bounds_panic("List.remove_at", index, r.len, file, line)
-        for $i: = index; i < r.len - 1; i += 1
-            (r.ptr + i)$ = (r.ptr + i + 1)$
-        $empty: T[1] = ::{}
-        (r.ptr + r.len - 1)$ = empty[0]
+        mem.drop_at(r.ptr + index)
+        mem.move(Void$@::(r.ptr + index), Void$@::(r.ptr + index + 1),
+            (r.len - index - 1) * sizeof(T))
+        mem.zero(Void$@::(r.ptr + r.len - 1), sizeof(T))
         r.len -= 1
 
     pub fn clear(r: Self$@) //< releases every element, keeping the capacity for reuse; O(n)
         //<
-        //< Caution: **Use assignment, not `mem.zero` or a length reset.** Assignment releases ARC
-        //< values. A raw pointer or a manually owned resource still needs its own cleanup.
-        $empty: T[1] = ::{}
-        for i in Range.asc(r.len)
-            (r.ptr + i)$ = empty[0]
+        //< Drop and ARC values release their resources. Manual resources need their explicit free.
+        for $i: = r.len; i > 0; i -= 1
+            mem.drop_at(r.ptr + i - 1)
         r.len = 0
 
     pub fn free(r: Self$@) //< frees the elements and the memory
@@ -295,14 +288,12 @@ pub struct Map_entry<|K, V|> //< one slot of a `Map`, live, empty or a tombstone
         //< key sits one slot further on, and a plain empty slot before it ends the lookup.
 
 impl<|K, V|> Map_entry<|K, V|>
-    fn drop_pair(r: Self$@) //< gives up the key's and the value's ARC counts, leaving both empty
+    fn drop_pair(r: Self$@) //< ends the key's and value's lifetimes, leaving both slots empty
         //<
         //< Caution: **Empty the key too.** A key holding an `Rc` is counted as a value is, and
         //< `mem.zero` or a freed slot runs no release.
-        $no_key: K[1] = ::{}
-        $no_value: V[1] = ::{}
-        r.key = no_key[0]
-        r.value = no_value[0]
+        mem.drop_at(r.value@)
+        mem.drop_at(r.key@)
 
 pub struct Map<|K: Hashable<|K|>, V|> //< keys to values, held in an open-addressed table
     pub entries: Map_entry<|K, V|>$@ //< the slots, `cap` of them
@@ -392,14 +383,14 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
 
         r$ = ::{ .entries = new_entries, .cap = new_cap, .len = 0, .used = 0, .arena = r.arena }
 
-        // Caution: Release the ownership of the old slots once moved. set_with_hash copies
-        // (retains) the key and the value, so freeing the old array as it is leaks on every growth
-        // with ARC content.
+        // Each old pair transfers into a new slot. Raw initialization neither retains an ARC
+        // value nor destroys the uninitialized destination.
         for j in Range.asc(old_cap)
             old_e: = old_entries + j
             if old_e.is_active
-                r.set_with_hash(old_e.key, old_e.value, old_e.hash)
-                old_e.drop_pair()
+                key: = mem.take_at(old_e.key@)
+                value: = mem.take_at(old_e.value@)
+                r.set_with_hash(key, value, old_e.hash)
 
         if old_cap > 0 && r.arena == null
             dealloc(Void$@::old_entries)
@@ -430,11 +421,10 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
                 to = (to + 1) & mask
             if to != at
                 dest: = r.entries + to
-                dest.key = e.key
-                dest.value = e.value
+                mem.init_at(dest.key@, mem.take_at(e.key@))
+                mem.init_at(dest.value@, mem.take_at(e.value@))
                 dest.hash = e.hash
                 dest.is_active = true
-                e.drop_pair()
                 e.is_active = false
         r.used = r.len
 
@@ -467,8 +457,8 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         if !slot.is_tombstone
             r.used += 1
         r.len += 1
-        slot.key = key
-        slot.value = value
+        mem.init_at(slot.key@, key)
+        mem.init_at(slot.value@, value)
         slot.hash = h
         slot.is_active = true
         slot.is_tombstone = false
@@ -492,6 +482,13 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>
         //< element type** for every `Map`. That increases translation time and peak memory
         //< ("Returning every entry builds no nested generic" in `std/docs/DESIGN-core.md`).
         return Map_seq<|K, V|>::{ .m = r, .i = 0 }
+
+    pub fn get_ptr(r: Self$@, key: K): V$@? //< borrows the value, or none if the key is absent
+        //<
+        //< The pointer stays valid until the map grows, removes the pair, or is freed.
+        if entry: = r.find_entry(key)
+            return .some(entry.value@)
+        return .none
 
 pub struct Map_seq<|K: Hashable<|K|>, V|> //< walks a `Map` one live pair at a time
     //<
@@ -522,5 +519,5 @@ impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Index<|K, V?|> //< so `m[k]` reads a pa
         if entry: = r.find_entry(key)
             return .some(entry.value)
         return .none
-impl<|T|> List<|T|>: Owned {} //< it owns its resources and releases them with `free()`.
-impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Owned {} //< it owns its memory, released with `free()`
+impl<|T|> List<|T|>: Manual_free {} //< explicit cleanup
+impl<|K: Hashable<|K|>, V|> Map<|K, V|>: Manual_free {} //< explicit cleanup

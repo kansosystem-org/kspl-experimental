@@ -83,7 +83,7 @@ impl U8[]
         r: U8[],
         at: Sz, //< where the four digits begin
     ): I32?
-        if at < 0 || at + 4 > r.len
+        if at < 0 || at > r.len || r.len - at < 4
             return .none
         $v: I32 = 0
         for k in Range.asc(4)
@@ -140,8 +140,8 @@ impl U8[]
         prefix: U8[], //< the text to look for
         offset: Sz = 0, //< where to look; omitted, the start
     ): Bool
-        // offset < 0 too: Sz is signed, and a negative offset would make memcmp read before r.ptr.
-        if offset < 0 || offset + prefix.len > r.len
+        // Check the offset first: offset + prefix.len could overflow before the bounds check.
+        if offset < 0 || offset > r.len || prefix.len > r.len - offset
             return false
         if prefix.len == 0
             return true
@@ -200,7 +200,7 @@ impl U8[]
             return 0
         $seen: Sz = 0
         $i: Sz = 0
-        for i + target.len <= r.len
+        for i <= r.len - target.len
             if r.starts_with(target, i)
                 seen += 1
                 i += target.len

@@ -326,6 +326,8 @@ impl Ast_node
             r.df_method_access(c, state)
         case .k_expr_postfix
             r.df_expr_postfix(c, state)
+        case .k_expr_upcast
+            r.get_upcast_inner().analyze_as_borrow(c, state)
         case .k_stmt_if, .k_stmt_switch, .k_stmt_labeled_block
             c.enter_exit_target(r)
             if r.kind_id == .k_stmt_if
@@ -596,6 +598,15 @@ impl Ast_node
                 frees_the_pointer = true
         $def: Ast_node$@ = null
         if freed_expr != null
+            if c.sema.env.type_has_drop(freed_expr.type_id)
+                if freed_expr.has_drop_parent(c)
+                    c.sema
+                        .err(freed_expr,
+                        "cannot release an automatic field of a type with Drop; replace the field \
+                            by assignment")
+                    c.has_error = true
+                else if freed_expr.owned_field_root(c).is_some()
+                    state.moved_fields.add(freed_expr)
             if d: = freed_expr.get_addressed_local_def()
                 def = d
         if def != null && def.is_tracked_local(c)
@@ -738,6 +749,18 @@ impl Ast_node
         $op_text: = r.text
         if op_node != null
             op_text = op_node.text
+        if op_text.equals("$") && !c.suppress_move && c.sema.env.type_has_drop(r.type_id)
+            c.sema
+                .err(r,
+                "cannot move a Drop value through a borrowed pointer; use mem.take_at to transfer \
+                    the slot")
+            c.has_error = true
+        if op_text.equals("[") && !c.suppress_move && c.sema.env.type_has_drop(r.type_id)
+            receiver: = r.get_postfix_receiver()
+            if receiver != null && !c.sema.env.is_pointer(receiver.type_id)
+                c.sema
+                    .err(r, "cannot move a Drop value through an index; borrow the element instead")
+                c.has_error = true
         if op_text.equals("@") || op_text.equals("[") || op_text.equals("$") ||
             (op_text.equals("::") && r.cast_makes_mutable_view(c))
             r.mark_postfix_receiver_mutated(c)
@@ -764,6 +787,30 @@ impl Ast_node
                 // level).
                 r.mark_free_call_if_any(c, state)
                 r.mark_call_freed_args(c, state)
+                r.check_raw_storage_arg(c)
+
+    priv fn check_raw_storage_arg(r: Self$@, c: Df_ctx$@) //< raw storage has no local cleanup flag
+        callee: = r.get_postfix_receiver()
+        decl: = callee.def_node if callee != null else null
+        if decl == null
+            return
+        name: = c.sema.env.fn_templates.get(Sz::decl).unwrap_or("")
+        if !name.equals("std.mem.init_at") && !name.equals("std.mem.take_at") &&
+            !name.equals("std.mem.drop_at")
+            return
+        args: = r.find_child(.k_expr_args)
+        if args == null || args.children.len == 0
+            return
+        arg: = args.get_child(0)
+        if arg.kind_id != .k_expr_postfix || !arg.postfix_op_text().equals("@")
+            return
+        place: = arg.get_postfix_receiver()
+        if c.sema.env.type_has_drop(place.type_id) && !place.write_crosses_indirection(c)
+            c.sema
+                .err(arg,
+                "raw-storage operations cannot end a local owner's lifetime; move or assign the \
+                    local directly")
+            c.has_error = true
 
 fn df_list_contains(list: List<|Ast_node$@|>$@, v: Ast_node$@): Bool //<
     //< Whether v is held in a node list (null never is)

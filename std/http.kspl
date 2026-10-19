@@ -193,7 +193,7 @@ impl Headers
 
     priv fn has(r: Self, name: U8[]): Bool
         return r.find(name).is_some()
-impl Headers: Owned {} //< `free()` lets go the arena a list from `headers(null)` lives in
+impl Headers: Manual_free {} //< `free()` lets go the arena a list from `headers(null)` lives in
 
 pub struct Header_seq //< walks a list of headers one at a time, in order
     priv at: Header$@
@@ -308,7 +308,7 @@ impl Request
         //< Made in the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
-impl Request: Owned {} //< `free()` lets go the arena a request read with null lives in
+impl Request: Manual_free {} //< `free()` lets go the arena a request read with null lives in
 
 pub struct Response //< one received response, and how much of the buffer it used
     pub version: U8$[] //< the version as it arrived, such as `HTTP/1.1`
@@ -325,7 +325,7 @@ impl Response
         //< Read into the caller's arena, it frees nothing: that arena does.
         $own: = r.own
         own.free()
-impl Response: Owned {} //< `free()` lets go the arena a response read with null lives in
+impl Response: Manual_free {} //< `free()` lets go the arena a response read with null lives in
 
 // ---------------------------------------------------------
 // The shared core of buffer parsing (the state of one CRLF-delimited scan)
@@ -621,7 +621,6 @@ priv fn response_from(stream: net.Tcp_stream$@, work: mem.Scratch, max_body: Sz,
         //< read_response's work, every part in `work`'s arena
     deadline: = sys.deadline_after_ms(timeout_ms)
     $b: = Str_builder.new()
-    defer b.free()
     chunk: U8[READ_CHUNK] = ::{}
     h: = read_head(stream, b@, work.arena, max_body, deadline, U8$[]::chunk)!
     status_line: = parse_status_line(h.first_line, work.arena)!
@@ -707,7 +706,6 @@ pub fn write_request( //< sends one whole request: the first line, the headers a
     head: Headers, //< the headers, `Host` among them once
     body: U8[]): Void!Http_error
     $b: = Str_builder.new()
-    defer b.free()
     format_request(b@, method, target, head, body)!
     // Caution: write can stop partway and silently truncate the message. Use write_all (see the
     // note in std/net.kspl).

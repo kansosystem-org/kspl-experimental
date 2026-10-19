@@ -12,8 +12,10 @@ import "ksplc/base/diag" as base_diag
 import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Fallback_ctx, Jump_ctx, Lowering_ctx }
 import "ksplc/lower/defer" as lower_defer
+import "ksplc/lower/drop" as lower_drop
 import "ksplc/lower/expr" as lower_expr
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "std/ds" { List, Map }
 import "std/io"
@@ -36,11 +38,15 @@ fn run(ctx: Sema_ctx$@, root: Ast_node$@)
     $arc_memo: = Map<|I32, I32|>.new(null)
     defer arc_memo.free()
     ctx.env.arc_content_memo = arc_memo@
+    $drop_memo: = Map<|I32, I32|>.new(null)
+    defer drop_memo.free()
+    ctx.env.drop_content_memo = drop_memo@
     // Each type's name in the generated code is kept once spelled, from here on through code
     // generation. The reason and the danger are at c_names_final in sema/type/env.kspl.
     // Caution: **Turn it on here and nowhere else**, for arc_memo's reason: earlier, an instance's
     // record can still be arriving.
     ctx.env.c_names_final = true
+    lower_drop.collect_release_effects(lctx, root, 0)
     root.lower(lctx)
     // The ARC helpers (one per type, like Rust's and Swift's drop glue) are created during the walk
     // and added after it.
@@ -48,6 +54,7 @@ fn run(ctx: Sema_ctx$@, root: Ast_node$@)
         root.add_child(helper)
     // Caution: Always turn it off when leaving the stage; arc_memo is freed right after.
     ctx.env.arc_content_memo = null
+    ctx.env.drop_content_memo = null
 
 impl Ast_node
     fn lower(r: Self$@, lctx: Lowering_ctx$@)
@@ -127,6 +134,9 @@ impl Ast_node
         old_cleanup_stack: = lctx.cleanup_stack
         old_jump_stack: = lctx.jump_stack
         old_in_fn_body: = lctx.in_fn_body
+        old_drop_flags: = lctx.drop_flags
+        lctx.drop_flags = base_core.arena
+            .create(Map<|U8[], U8[]|>.new(base_core.arena))
         lctx.in_fn_body = true
 
         lctx.fb = Fallback_ctx::{ .target = "", .label = "", .label_used = false, .depth = 0 }
@@ -145,6 +155,7 @@ impl Ast_node
         lctx.cleanup_stack = old_cleanup_stack
         lctx.jump_stack = old_jump_stack
         lctx.in_fn_body = old_in_fn_body
+        lctx.drop_flags = old_drop_flags
 
     fn lower_stmt_labeled_block(r: Self$@, lctx: Lowering_ctx$@)
         if r.children.len < 2
@@ -184,6 +195,9 @@ impl Ast_node
 
         old_children: = r.children
         new_children: = base_ast.new_ast_node_list()
+        for entry in lctx.entry_stmts
+            new_children.push(entry)
+        lctx.entry_stmts.len = 0
 
         for stmt in old_children
             start_pre: = lctx.pre_stmts.len
@@ -347,10 +361,13 @@ impl Ast_node
         cond: = r.get_switch_cond()
         // A subject built in place (`switch Wrap.filled(mk(9))`) is owned by its temporary.
         owned: = lctx.can_own_temporaries() && cond.is_arc_fresh(lctx)
+        moving: = lctx.sema.env.type_has_drop(cond.type_id)
+        take: = lower_arc.Arc_take.decide(cond if moving else null, lctx)
         cond.lower(lctx)
-        if !cond.is_plain_name()
+        if moving || !cond.is_plain_name()
             tmp: = cond.hoist_to_tmp(lctx, cond.loc)
-            if owned
+            take.retain(tmp, lctx)
+            if owned || moving
                 lctx.register_arc_release(tmp, cond.type_id)
             r.set_child(1, tmp)
 
@@ -363,7 +380,7 @@ impl Ast_node
                 continue
 
             if child.kind_id == .k_stmt_block
-                retains: = lctx.register_arc_arm_bindings(arm_pattern)
+                retains: = lctx.register_arc_arm_bindings(arm_pattern, r.get_switch_cond())
                 child.lower(lctx)
                 for $k: = retains.len; k > 0; k -= 1
                     child.insert_child(0, retains.get(k - 1))

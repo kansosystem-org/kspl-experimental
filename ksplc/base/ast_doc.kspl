@@ -61,16 +61,11 @@ priv fn described(summary: U8[], account: U8[]): U8[] //<
     return s.take()
 
 fn joined(a: U8[], b: U8[]): U8[] //< it joins two words with a space (an empty word is skipped)
-    words: U8[][2] = ::{ a, b }
-    $s: = Str_builder.new()
-    defer s.free()
-    for w in words
-        if w.len == 0
-            continue
-        if s.slice().len > 0
-            s.c(' ')
-        s.s(w)
-    return base_core.arena.dup_str(s.slice())
+    if a.len == 0
+        return base_core.arena.dup_str(b)
+    if b.len == 0
+        return base_core.arena.dup_str(a)
+    return base_core.arena.text().s(a).c(' ').s(b).take()
 
 fn is_continuation_line(src: U8[], at: Sz): Bool //<
     //< Whether the line starting at `at` holds nothing but a `//<` and its text
@@ -135,9 +130,7 @@ priv fn run_at(src: U8[], at: Sz, limit: Sz): Doc_run //<
     if at + mark >= limit
         return empty
     $head: = Str_builder.new()
-    defer head.free()
     $tail: = Str_builder.new()
-    defer tail.free()
     head.s(line.sub_from(mark + 3).trim_spaces())
     $lines: Sz = 1 if head.slice().len > 0 else 0
     $parted: = false
@@ -278,13 +271,12 @@ fn doc_parted(src: U8[], at: Sz, brace: Sz): U8[] //<
     account: = run.detail
     if summary.len == 0 || account.len == 0
         return joined(summary, account)
-    $s: = Str_builder.new()
-    defer s.free()
+    s: = base_core.arena.text()
     s.s(summary)
     if wants_a_stop(summary)
         s.c('.')
     s.s("\n\n").s(account)
-    return base_core.arena.dup_str(s.slice())
+    return s.take()
 
 priv fn has_contents(n: Ast_node$@): Bool //<
     //< Whether this kind of declaration has contents where a run can go

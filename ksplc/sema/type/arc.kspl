@@ -1,4 +1,4 @@
-//< Decides whether a type is managed by ARC (automatic reference counting)
+//< Classifies shared ownership, automatic cleanup and ownership moves
 //<
 //< An extension to `Env` in `sema/type/env.kspl`; it does not hold the type table itself.
 //< Caution: **The decision here (`type_has_arc_content` / `type_is_managed`) and the emission in
@@ -30,15 +30,16 @@ priv const ARC_TRAIT_FQN: U8[] = "std.lang.Ref_counted" //<
     //<
     //< Each means this declaration alone, not a same-named other (see is_arc_type).
 priv const MOVE_ONLY_TRAIT_FQN: U8[] = "std.lang.Move_only"
-priv const OWNED_TRAIT_FQN: U8[] = "std.lang.Owned"
+priv const MANUAL_FREE_TRAIT_FQN: U8[] = "std.lang.Manual_free"
+priv const DROP_TRAIT_FQN: U8[] = "std.lang.Drop"
 
 fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     //< The known trait (listed above) that trait_fqn only shares a name with, or empty
     //<
     //< Such a trait is a different declaration with the same name.
-    //< Returns empty if there are none. **Only these three are looked at**: a same-named operator
-    //< trait errors on its own, but these three, matched by FQN, would silently stop working.
-    known: U8[][3] = ::{ ARC_TRAIT_FQN, MOVE_ONLY_TRAIT_FQN, OWNED_TRAIT_FQN }
+    //< Returns empty if there are none. **Only these four are looked at**: a same-named operator
+    //< trait errors on its own, but these four, matched by FQN, would silently stop working.
+    known: U8[][4] = ::{ ARC_TRAIT_FQN, MOVE_ONLY_TRAIT_FQN, MANUAL_FREE_TRAIT_FQN, DROP_TRAIT_FQN }
     own_simple: = trait_fqn.fqn_last()
     for k in known
         if trait_fqn.equals(k)
@@ -48,6 +49,9 @@ fn shadowed_known_trait(trait_fqn: U8[]): U8[] //<
     return ""
 
 impl sema_type_env.Env
+    fn is_raw_value(r: Self$@, type_id: I32): Bool //< the memory helpers' uninitialized storage
+        return r.instance_base(r.get_clean_real_type(type_id)).equals("std.mem.Raw_value")
+
     fn is_arc_type(r: Self$@, type_id: I32): Bool //<
         //< Whether the type_id itself is ARC-managed
         //<
@@ -121,6 +125,8 @@ impl sema_type_env.Env
             return false
         // The immutable qualifier is stripped for the same reason as in is_arc_type.
         real_id: = r.get_clean_real_type(type_id)
+        if r.is_raw_value(real_id)
+            return false
         cached: = memo.get(real_id).unwrap_or(0)
         if cached == MEMO_NO
             return false
@@ -149,33 +155,48 @@ impl sema_type_env.Env
             r.type_has_arc_content_impl(type_id, memo, resolving)
 
     fn type_is_managed(r: Self$@, type_id: I32): Bool //<
-        //< Whether it gets automatic retain/release
+        //< Whether its lifetime needs automatic cleanup
         //<
-        //< That is an ARC-managed type itself, or an aggregate owning one by value.
-        return r.is_arc_type(type_id) || r.type_has_arc_content(type_id)
+        //< ARC values share ownership; Drop values transfer it. Aggregates own their value fields.
+        return r.is_arc_type(type_id) || r.type_has_drop(type_id) ||
+            r.type_has_arc_content(type_id)
 
-    fn is_owned(r: Self$@, target_id: I32): Bool //<
-        //< Whether target_id is a type that owns an instance and releases it with `free()`
-        //<
-        //< True if there is an explicit impl for `std.lang.Owned`. It is **not derived
-        //< structurally**, as Move_only is: an owned part brings no duty to free it (`Sema_ctx`
-        //< holds a `Str_builder`).
-        return r.has_implemented_trait_fqn(r.strip_ptr_full(target_id), OWNED_TRAIT_FQN)
+    fn is_drop_type(r: Self$@, type_id: I32): Bool //< whether this value declares automatic cleanup
+        if type_id <= 0 || r.is_pointer(type_id) || r.is_slice(type_id)
+            return false
+        return r.has_implemented_trait_fqn(r.get_clean_real_type(type_id), DROP_TRAIT_FQN)
 
-    fn is_move_only(r: Self$@, target_id: I32): Bool //<
-        //< Whether target_id is Move_only (implicit copying forbidden)
-        //<
-        //< True if there is an explicit impl for `std.lang.Move_only`. Where there is none it is
-        //< derived structurally (derives_move_only below).
+    fn type_has_drop(r: Self$@, type_id: I32): Bool //< whether this value owns automatic cleanup
         $memo: = Map<|I32, I32|>.new(null)
         defer memo.free()
         $resolving: = List<|I32|>.new(null)
         defer resolving.free()
-        return r.derives_move_only(target_id, memo@, resolving@, 0)
+        if r.drop_content_memo != null
+            return r.derives_marker(type_id, r.drop_content_memo, resolving@, false, 0)
+        return r.derives_marker(type_id, memo@, resolving@, false, 0)
 
-    priv fn derives_move_only(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
-        resolving: List<|I32|>$@, depth: Sz): Bool //<
-            //< Whether target_id is Move_only by what it owns, where it declares no impl
+    fn has_release_contract(r: Self$@, target_id: I32): Bool //<
+        //< Whether target_id is a type that owns an instance and releases it with `free()`
+        //<
+        //< An explicit `Manual_free` or `Drop` supplies this contract. It is not derived from
+        //< fields: an owning part alone does not promise that the containing type has `free()`.
+        bare: = r.strip_ptr_full(target_id)
+        return r.has_implemented_trait_fqn(bare, MANUAL_FREE_TRAIT_FQN) || r.is_drop_type(bare)
+
+    fn is_move_only(r: Self$@, target_id: I32): Bool //<
+        //< Whether target_id is Move_only (implicit copying forbidden)
+        //<
+        //< Drop supplies this rule too. Otherwise an explicit marker or an owning field supplies
+        //< it.
+        $memo: = Map<|I32, I32|>.new(null)
+        defer memo.free()
+        $resolving: = List<|I32|>.new(null)
+        defer resolving.free()
+        return r.derives_marker(target_id, memo@, resolving@, true, 0)
+
+    priv fn derives_marker(r: Self$@, target_id: I32, memo: Map<|I32, I32|>$@,
+        resolving: List<|I32|>$@, move_only: Bool, depth: Sz): Bool //<
+            //< Whether target_id derives move-only behavior or automatic cleanup from its fields
             //<
             //< The positions walked are `owned_parts`' ("Worked example: forbidding copies with
             //< `Move_only`" in docs/SPEC-programming-language.md). **Keep the memo and break cycles
@@ -189,13 +210,21 @@ impl sema_type_env.Env
         if r.is_pointer(target_id) || r.is_slice(target_id)
             memo.set(target_id, MEMO_NO)
             return false
-        if r.has_implemented_trait_fqn(target_id, MOVE_ONLY_TRAIT_FQN)
+        if !move_only && r.is_raw_value(target_id)
+            memo.set(target_id, MEMO_NO)
+            return false
+        if r.is_drop_type(target_id) ||
+            (move_only && r.has_implemented_trait_fqn(target_id, MOVE_ONLY_TRAIT_FQN))
             memo.set(target_id, MEMO_YES)
             return true
+        // Explicit owners retain their manual lifetime, including the fields they release.
+        if !move_only && r.has_implemented_trait_fqn(target_id, MANUAL_FREE_TRAIT_FQN)
+            memo.set(target_id, MEMO_NO)
+            return false
         for seen_id in resolving
             if seen_id == target_id
                 return false
-        if depth >= MAX_MOVE_ONLY_DEPTH
+        if move_only && depth >= MAX_MOVE_ONLY_DEPTH
             io.err()
                 .s("\nfatal: value nesting too deep while deriving a structural marker. A recursive \
                     chain of embedded values may be unbounded.\n")
@@ -207,7 +236,7 @@ impl sema_type_env.Env
         defer parts.free()
         r.owned_parts(r.get_real_type(target_id), parts@)
         for part in parts
-            if r.derives_move_only(part, memo, resolving, depth + 1)
+            if r.derives_marker(part, memo, resolving, move_only, depth + 1)
                 derived = true
                 break
         resolving.len -= 1

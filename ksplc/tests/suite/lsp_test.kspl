@@ -602,7 +602,6 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
     $b: = Json_builder.new(arena)
     root: = b.obj().set("rootUri", b.str_val(top)).build()
     $frames: = Str_builder.new()
-    defer frames.free()
     jsonrpc.frame_into(frames@, jsonrpc.encode("initialize", root, 1, arena))
     opened: = jsonrpc.encode("textDocument/didOpen",
         lsp_client.did_open(CH_FILE, ch_text, arena), -1, arena)
@@ -620,7 +619,6 @@ priv fn check_worker_alive(exe: U8[], top: U8[], ch_text: U8[], arena: Arena$@)
         return
     w.close_stdin() // if not closed, the worker keeps waiting: it answers after reading everything
     $answers: = Str_builder.new()
-    defer answers.free()
     buf: = U8$[]::{ .ptr = U8$@::arena.alloc(64 * 1024), .len = 64 * 1024 }
     for _k in Range.asc(4000)
         got: = w.read(buf, 300000) catch

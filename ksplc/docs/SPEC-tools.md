@@ -927,7 +927,7 @@ Only warnings, information and hints carry a code: a fixed number such as `W0201
 
 You can turn each coded diagnostic off, turn on one that is off by default, or make it an error. You set this per file, on the command line, or for a folder in `ksplc.cfg`.
 
-**Which diagnostics are needed depends on what is being built, sometimes in opposite directions.** An OS kernel wants to see every hidden reference count; a web server wants hand-made ownership flagged. The memory strategies are described in [8.4 of `SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-the-memory-management-model-defer--arc--arenas).
+**Which diagnostics are needed depends on what is being built, sometimes in opposite directions.** An OS kernel wants to see every hidden reference count; a web server wants hand-made ownership flagged. The memory strategies are described in [8.4 of `SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-memory-management).
 
 #### 5.3.1 The levels
 

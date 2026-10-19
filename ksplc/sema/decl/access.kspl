@@ -18,6 +18,7 @@ import "ksplc/sema/decl/mono_queue" as _sema_decl_mono_queue // `ensure_instance
 import "ksplc/sema/decl/name" as _sema_decl_name
 import "ksplc/sema/decl/resolve" as sema_decl_resolve
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/def" { Struct_field }
 import "ksplc/sema/type/display" as sema_type_display
 import "ksplc/sema/type/query" as sema_type_query
@@ -424,7 +425,6 @@ impl Sema_ctx
                 // instance. Differing internal names slip past report_diagnostic's de-duplication
                 // (the file:offset:msg key), and give N entries for one line.
                 $shown: = Str_builder.new()
-                defer shown.free()
                 r.write_shown_name(sym, node, shown@)
                 r.clear_scratch()
                     .s("\{position\} '\{shown.slice()\}' is less visible than the \{owner\} \
@@ -548,6 +548,15 @@ impl Sema_ctx
             out.s(sym.name)
 
     fn check_visibility_and_mark_used(r: Self$@, sym: Sema_symbol$@, loc: Ast_node$@)
+        if sym.flags.is_method && sym.node != null &&
+            r.env.source_fn_name(sym.node).equals("drop")
+            $params: = base_ast_ext.Param_cursor.new(sym.node.get_fn_params(), false)
+            if p: = params.next()
+                if r.env.is_drop_type(r.env.strip_ptr_full(p.param_type_id()))
+                    r.err(loc,
+                        "a destructor cannot be called or taken as a function value; let its owner \
+                            leave scope")
+                    return
         if sym.flags.is_deprecated
             r.clear_scratch().s("[W0702] Symbol '\{sym.name\}' is deprecated.")
             r.warn(loc, r.scratch.slice())
@@ -569,7 +578,6 @@ impl Sema_ctx
             // source spells the type. See "A diagnostic points at 'the position the user wrote'" in
             // ksplc/docs/DESIGN-diagnostics.md.
             $shown: = Str_builder.new()
-            defer shown.free()
             r.write_shown_name(sym, loc, shown@)
             r.clear_scratch()
                 .s("cannot access symbol '\{shown.slice()\}'\n(defined in \{defined_in\})")

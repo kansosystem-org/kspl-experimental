@@ -102,6 +102,7 @@ The design is "The Sema layer: it knows the types" in [`ksplc/docs/DESIGN-sema.m
   * [`defer.kspl`](lower/defer.kspl) flattens `defer` and the exits that run it.
   * [`order.kspl`](lower/order.kspl) moves an operand into a temporary where C could run it out of the written order.
   * [`ctx.kspl`](lower/ctx.kspl) holds the walk's state.
+* [`drop.kspl`](lower/drop.kspl) — tracks which automatic owner still needs cleanup after a move or explicit release.
 * [`arc.kspl`](lower/arc.kspl) — inserts ARC's `retain()` / `release()` on the way (ARC: automatic reference counting, where a value is freed when its last holder lets go).
 * [`vtable.kspl`](lower/vtable.kspl) — a trait value's thunks and vtables. These are the go-between functions and the tables of function pointers. They let one call reach whichever type stands behind a trait.
 * [`abi.kspl`](lower/abi.kspl) — the ABI mangling (turning KSPL's names into unique names in the output by a fixed rule), and desugaring the method calls.
@@ -287,6 +288,7 @@ The steps, the marks a fixture carries and the rules each fixture folder keeps a
 
 * **`make fmt` uses the seed**, so in a split that touches the grammar, run `make commit-seed` first (why is "The bootstrap, and keeping the seed in step" in [`ksplc/docs/DESIGN-compiler.md`](docs/DESIGN-compiler.md)).
 * [`fmt/printer.kspl`](fmt/printer.kspl): **the decisions on where a line breaks** move to a new `fmt/wrap.kspl`, an `impl Formatter` as `fmt/trivia.kspl` is. That is `calc_will_break`, `reader_joins`, `ends_open_catch`, `break_before_choice` and `wrap_before_next_element`. The cut lies between deciding a break and writing tokens: `write_token` and `format_internal` stay, and call across it.
+* [`sema/flow/track.kspl`](sema/flow/track.kspl): call-release effects and raw-storage argument checks move into `sema/flow/call.kspl`. Local state, expression traversal and assignment tracking remain together.
 * **A suite splits where what it reads splits.** Some answers need the repository's whole tree, such as a common word read across every package, or a rename reaching another package's files. A copy of this folder has no such tree, so this folder does not ask them. The queries this folder can answer for itself stay in `lsp`, with this folder as the workspace.
 
 ## Further reading

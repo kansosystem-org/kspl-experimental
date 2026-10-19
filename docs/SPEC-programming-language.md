@@ -677,7 +677,7 @@ The destination (the `Writer` from `io.out()`, a `Str_builder`, …) must theref
 
 The chain always begins with an `s(...)` on the destination; when `\{…\}` comes first, a step writing the empty string is inserted. Without that step, a destination held by value (the `b` of `$b: = Str_builder.new()`) would reach `put` as a copy, and `b`'s own length would not advance. Only a method's receiver takes an address implicitly.
 
-**Interpolation pours into a Writer; it does not build a value.** It can be written only as an argument in a Writer chain (`io.out().s("...")` / `b.s("...")` / `w.s("...")`). In an assignment to a variable, or as an argument to a plain function, it is a compile error. Where it pours is always written in the source: out to a peer, into the caller's array, or into memory allocated and kept. For the string itself, keep it in an arena (a block of memory freed all at once, [8.4](#84-the-memory-management-model-defer--arc--arenas)) with `arena.text().s("...").take()`, or write into a `Str_builder` / `Buf_writer` and chain `.slice()`.
+**Interpolation pours into a Writer; it does not build a value.** It can be written only as an argument in a Writer chain (`io.out().s("...")` / `b.s("...")` / `w.s("...")`). In an assignment to a variable, or as an argument to a plain function, it is a compile error. Where it pours is always written in the source: out to a peer, into the caller's array, or into memory allocated and kept. For the string itself, keep it in an arena (a block of memory freed all at once, [8.4](#84-memory-management)) with `arena.text().s("...").take()`, or write into a `Str_builder` / `Buf_writer` and chain `.slice()`.
 
 ```kspl
 import "std/io"
@@ -1085,7 +1085,7 @@ A top-level `const` sits in memory that cannot be written ([4.1.2](#412-const-co
 * An array or slice literal (`$slots: Rc<|Conn|>[8] = ::{};`, and any element left unfilled)
 * A struct literal omitting visible fields (when something invisible sits **inside** such a field)
 
-That is what allocating memory is. Where there is no allocator, the standard shape is to declare `priv $g: sync.Mutex;` and call `g.init()` at startup. The zero value of an ARC handle (`Rc` / `Arc`, a reference-counted pointer, [8.4](#84-the-memory-management-model-defer--arc--arenas)) is a defined state, "owning nothing". `std/ds`'s containers use it as an empty slot: letting an element go assigns the zero value. Zero filling can break only an invariant the type sets for itself (a condition its own code relies on always holding).
+That is what allocating memory is. Where there is no allocator, the standard shape is to declare `priv $g: sync.Mutex;` and call `g.init()` at startup. The zero value of an ARC handle (`Rc` / `Arc`, a reference-counted pointer, [8.4](#84-memory-management)) is a defined state, "owning nothing". `std/ds`'s containers use it as an empty slot: letting an element go assigns the zero value. Zero filling can break only an invariant the type sets for itself (a condition its own code relies on always holding).
 
 Caution: **A type holding an invariant must therefore express the "not yet opened" state in its own API.** Publish `init`, and define the state until it is called. The type can be called in the zero state, and only the type can tell its user that it cannot be used until opened.
 
@@ -1518,7 +1518,7 @@ Desugaring applies only to conformance to the `std/lang` trait **itself**, not t
 
 A pointer holds an address. In KSPL a value and a pointer to it are different types, but you rarely write a dereference. **Only a field access with `.` and a method call need no written dereference.** One `.` serves a value and a pointer alike, so there is no counterpart to C's `->`.
 
-* **Taking an address (`@`)**: a postfix operator giving the address of a "place" ([4.3](#43-places-and-the-rules-for-when-they-may-be-written)). An address into the function's own local storage cannot leave it by `return` or `throw` ([8.4.5](#845-tracking-a-free-with-owned)).
+* **Taking an address (`@`)**: a postfix operator giving the address of a "place" ([4.3](#43-places-and-the-rules-for-when-they-may-be-written)). An address into the function's own local storage cannot leave it by `return` or `throw` ([8.4.5](#845-tracking-a-free-with-manual_free)).
 * **Dereferencing (`$`)**: a postfix operator reaching what a pointer points at. It is written where `.` does not reach: to read or write the pointee itself.
 
 ```kspl
@@ -2205,7 +2205,7 @@ However it escapes, every `defer` registered along the way runs ([8.4.1](#841-th
 ---
 ## 8. Functions and error handling
 
-This chapter fixes how a function is written ([8.1](#81-definitions)), where a program begins ([8.2](#82-the-entry-point)), how a failure is returned ([8.3](#83-error-handling)), and how allocated memory is let go ([8.4](#84-the-memory-management-model-defer--arc--arenas)).
+This chapter fixes how a function is written ([8.1](#81-definitions)), where a program begins ([8.2](#82-the-entry-point)), how a failure is returned ([8.3](#83-error-handling)), and how allocated memory is let go ([8.4](#84-memory-management)).
 
 ### 8.1 Definitions
 
@@ -2214,6 +2214,8 @@ A function is defined with `fn`, always at the top level or inside an `impl` blo
 **The receiver**: a method receives the value it acts on as its first argument, in a shape written by hand ([5.2](#52-implementations-impl-and-receivers)).
 
 * **Generics and their constraints**: a *generic* function works for many types. `fn name<|T|>(...): return type` declares a type parameter `T`, which each use fills with a real type. `<|T: Trait|>` admits only types implementing that trait, and `+` joins several constraints (`<|T: Drawable + Serializable|>`).
+* **A generic method body is checked when used.** A call or a function-value reference requires its body. A trait view requires all methods in its table. Automatic cleanup requires its hooks. Signatures and trait requirements are checked independently of bodies. An unused copying method does not prevent storing an automatic owner in that type.
+
 
 ```kspl
 // it writes to what they point at, so the pointers must be `T$@` (mutable) (§3.2)
@@ -2574,17 +2576,18 @@ x: = parse_data() catch e
 
 **The failure types must agree** (`!` on an `EB` failure inside a function returning `I32!EA` is a compile error). When they differ, take the failure with `catch`, convert it yourself, and `throw` it.
 
-### 8.4 The memory management model: `defer` / ARC / arenas
+### 8.4 Memory management
 
-There is no garbage collector (a run-time system that finds and frees unused memory by itself). Instead there are three ways of deciding when memory is let go, **chosen per type** and mixable within one program.
+There is no garbage collector (a run-time system that finds and frees unused memory by itself). Each type uses automatic cleanup, manual cleanup, an arena, or reference counting. These methods can coexist within one program.
 
 | Method | Where it fits | When it frees |
 | :-- | :-- | :-- |
+| **An automatic owner (`Drop`)** ([8.4.6](#846-automatic-cleanup-with-drop)) | A value that owns a buffer or another resource, such as `Str_builder` | When its current owner leaves scope, or before assignment replaces it |
 | **A raw pointer (`T@`) + `defer`** ([8.4.1](#841-the-defer-statement)) | FFI with C (calling C code), bare metal (running with no operating system): where maximal control is needed | Where its `defer x.free()` was written. Tracking ownership is the programmer's job |
 | **An arena (`Arena`)** ([8.4.3](#843-arenas-arena)) | Data whose lifetime is one bundle, such as one request or one compilation unit | All at once at the end of the scope. Nothing is tracked, so tracking costs nothing |
 | **ARC (`Ref_counted` conformance)** ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)) | Data shared by several owners, whose lifetime does not fit one scope | When the last owner disappears. The compiler inserts the counting |
 
-**All three work on bare metal with no `malloc`**: pass one static buffer to `mem.init_freestanding_heap()` in the startup routine. Ordinary heap allocation, `Rc`/`Arc` included, then works.
+**All four work on bare metal with no `malloc`**: pass one static buffer to `mem.init_freestanding_heap()` in the startup routine. Ordinary heap allocation, `Rc`/`Arc` included, then works.
 
 **A lint reports a notation departing from the chosen policy.** An ARC-managed type in a local variable or an argument is [W0601], and a struct with a hand-built reference count is [I0602]. Both are off by default. How to enable them, and the `ksplc.cfg` that applies them across a directory tree, are in the Lint section of the development tools specification.
 
@@ -2605,15 +2608,15 @@ There is no garbage collector (a run-time system that finds and frees unused mem
   * **A capture list (`defer a, b { ... }`) cannot be written** (a compile error).
 
 * **A `defer` is a statement of its own**, on the line after the binding it cleans up, naming it (`defer buf.free()`). It does not ride on the end of a declaration, and nothing is filled in for it. A `.free()` with nothing in front is a compile error on any line.
-  * **Put it right after the binding.** A statement that can leave the scope (`!`, `return`, `throw`, or a `break` / `continue` out of it) placed between the two leaves before the `defer` is registered. What was acquired is then never cleaned up. For a value whose type conforms to `Owned`, the warning `ksplc explain W0109` reports such an exit.
+  * **Put it right after the binding.** A statement that can leave the scope (`!`, `return`, `throw`, or a `break` / `continue` out of it) placed between the two leaves before the `defer` is registered. What was acquired is then never cleaned up. For a value whose type conforms to `Manual_free`, the warning `ksplc explain W0109` reports such an exit.
 
 ```kspl
-fn work()
-    buf: = Str_builder.new()
-    defer buf.free() // it runs on leaving the scope
+import "std/mem" { Arena }
 
-    buf.s("hello") // even if the internal buffer grows, what is freed is the entity at the point of leaving
-    io.out().s(buf.slice()).s("\n")
+fn work()
+    arena: = Arena.new(1024)
+    defer arena.free() // it runs on leaving the scope
+    _bytes: = arena.alloc(32)
 ```
 
 #### 8.4.2 Automatic reference counting via `Ref_counted` conformance
@@ -2728,7 +2731,7 @@ An arena is one large block of memory that hands out pieces of itself. It lets e
 
 #### 8.4.4 What may be handed to `dealloc`
 
-**`mem.dealloc` frees only memory that `mem.alloc` itself gave out, and nothing else.** The three methods of §8.4 handle the same `T$@`, so the origin cannot be told from the type. Three things must not be passed to it:
+**`mem.dealloc` frees only memory that `mem.alloc` itself gave out, and nothing else.** The ownership methods of §8.4 handle the same `T$@`, so the origin cannot be told from the type. Three things must not be passed to it:
 
 | What must not be handed to it | Examples |
 | :-- | :-- |
@@ -2742,11 +2745,11 @@ Caution: **It stays silent on a binding carrying `$`.** Such a binding can later
 
 **A mistake does not break quietly.** `mem.alloc` records its own address inside the block it returns, and `dealloc` stops without touching the heap unless that record agrees. On bare metal it also checks that the address lies within the heap. Do not count on libc's diagnostics: whether libc notices depends on how the mistake lands, and bare metal has no libc.
 
-The record uses a free field in the header, so **an allocation takes no extra bytes**. Passing the same pointer twice mostly stops here (through a local variable, at translation time: [8.4.5](#845-tracking-a-free-with-owned)).
+The record uses a free field in the header, so **an allocation takes no extra bytes**. Passing the same pointer twice mostly stops here (through a local variable, at translation time: [8.4.5](#845-tracking-a-free-with-manual_free)).
 
-#### 8.4.5 Tracking a free with `Owned`
+#### 8.4.5 Tracking a free with `Manual_free`
 
-The compiler notices when a local variable is used after it was freed. It recognizes a free by the variable's type conforming to `Owned`, or by a call to `dealloc`.
+The compiler notices when a local variable is used after it was freed. It recognizes a free by the variable's type conforming to `Manual_free`, or by a call to `dealloc`.
 
 **Touching memory whose lifetime has ended is undefined** ([14.2](#142-undefined---no-answer-is-fixed)). KSPL has no borrow check: a compile-time proof, as in Rust, that no pointer outlives what it points at. So it refuses only what one function's code shows:
 
@@ -2755,7 +2758,7 @@ The compiler notices when a local variable is used after it was freed. It recogn
 
 A pointer parameter's target (`p$@`, `p.f@`), a global's address and a call's result are not the frame's and pass. Beyond these, the writer is responsible for not touching such memory. A pointer handed to a call that keeps it, or set into a local struct's field afterwards, is not followed.
 
-**Whether something was freed is tracked through the type's contract.** In place of a borrow check, KSPL reads `x.free()` on a local variable of a type conforming to `Owned` as "what that variable points at was freed". It reads the free function `dealloc(x)`, which frees raw bytes, the same way. A path reaching that variable after the free is refused as `variable 'x' may already be freed here (use-after-free or double free)`. A free registered with `defer` counts at the point of leaving the scope.
+**Whether something was freed is tracked through the type's contract.** KSPL recognizes `x.free()` on a local whose type conforms to `Manual_free` or `Drop`. It records that the local's resource was freed. It reads the free function `dealloc(x)`, which frees raw bytes, the same way. A path reaching that variable after the free is refused as `variable 'x' may already be freed here (use-after-free or double free)`. A free registered with `defer` counts at the point of leaving the scope.
 
 ```kspl
 pub struct Buf
@@ -2763,15 +2766,42 @@ pub struct Buf
 impl Buf
     pub fn free(r: Self$@)
         …
-impl Buf: Owned {} // without this the check does not work (an empty block keeps its braces)
+impl Buf: Manual_free {} // without this the check does not work (an empty block keeps its braces)
 ```
 
 * **A non-conforming type is not tracked.** With the name `free` alone as the mark, renaming it would silently switch the check off; conformance makes the compiler confirm the required shape too. The linter reports, at the declaration, a type whose conformance was forgotten, and a type freeing under another name such as `close`.
-* **`Owned`'s `free` returns no failure**: a free runs from a `defer` or partway along an escape path, where the caller could do nothing with one. Put cleanup that needs confirming in a separate method (`sync(): Void!Io_error` for `io.File_stream`).
+* **`Manual_free`'s `free` returns no failure**: a free runs from a `defer` or partway along an escape path, where the caller could do nothing with one. Put cleanup that needs confirming in a separate method (`sync(): Void!Io_error` for `io.File_stream`).
 * **A pointer's `free()` leaves its block, which `dealloc` can still give back.** On a local pointer (`T$@`), `p.free()` releases what `p` points at, not the block it points at, so `dealloc(p)` or `dealloc(Void$@::p)` can follow it: that is the one use allowed. After it nothing is left: any use is refused, a second `dealloc` included. `dealloc(p@)` gives back the variable's own address and is never this shape. A `free()` whose own body gives back its receiver (followed one level, as below) leaves nothing either, so a `dealloc` after it is refused.
 * Only a **bare local variable** is inspected. A per-field free such as `r.field.free()`, and a free through an index, are not tracked. So a shape that cannot be tracked is never wrongly counted as freed.
 * A free wrapped in another function is followed **one level only**. If the callee's body always frees the matching parameter, in the `x.free()` or the `dealloc(x)` shape, the caller's argument counts as freed. A method shape (`x.close_it()`) is followed the same way, with the receiver as the first parameter.
-  * So a body that frees the parameter itself is tracked even when its name is not `free` and its type does not conform to `Owned`. `Owned` is needed for a type whose `free()` frees **a field** instead of the parameter (such as `Str_builder`).
+  * So a body that frees the parameter itself is tracked even when its name is not `free` and its type does not conform to `Manual_free`. A release contract is needed when `free()` frees **a field** instead of the parameter. `Manual_free` supplies that contract for manual owners; `Drop` supplies it for automatic owners.
+
+
+#### 8.4.6 Automatic cleanup with `Drop`
+
+**A `Drop` value has one owner, and the compiler releases it automatically.** `Str_builder` uses this rule. Its callers need no `defer`:
+
+```kspl
+import "std/io"
+import "std/str" { Str_builder }
+
+fn main()
+    $msg: = Str_builder.new()
+    msg.s("hello")
+    io.out().s(msg.slice()).s("\n")
+```
+
+* **A type opts in with `impl T: Drop`.** Its hook is `priv fn drop(r: Self$@)`, returning `Void`. The trait itself spells its receiver as `Self`, like other traits. The implementation must borrow the value through `Self$@`. A by-value receiver would destroy itself recursively. Only the compiler can call or take the hook as a function value.
+* **Passing a value transfers its ownership.** Assignment, a by-value argument and a returned value move it. The old binding cannot be used until assigned a new value. A pointer or trait view borrows it. `Drop` needs no separate `Move_only` implementation.
+* **Cleanup follows the current owner.** Normal scope exit, `return`, `throw`, `!`, `break` and `continue` run it. Owners and `defer` statements share reverse registration order. Reassignment releases the previous value after evaluating the replacement. Uninitialized and moved slots receive no cleanup.
+* **Owned fields follow the same rule.** A struct, enum payload, fixed-length array or Result containing a `Drop` value receives automatic cleanup. A struct's hook runs first, then its automatic fields in reverse declaration order. An array releases elements in reverse index order. A `Manual_free` owner keeps its fields under its explicit cleanup contract.
+* **A custom hook needs its whole value.** Moving an owning field out of a type declaring `Drop` is refused. Explicitly freeing an automatic field of a custom-hook type is also refused. Replace that field by assignment. An aggregate without a custom hook permits field moves; each remaining field keeps its cleanup. An indexed element or a value behind a borrowed pointer cannot be moved by a plain read. Borrow it instead. Low-level storage transfers use `mem.take_at` under that function's contract. These raw-storage operations cannot target a written address of an automatic local or its elements.
+* **A destructor reports no failure.** A panic aborts without cleanup or stack unwinding. Operations whose failure needs handling, such as flushing a file, remain separate explicit calls.
+* **Automatic owners are local values.** They cannot be globals or constants. Pointers and slices do not acquire ownership of their targets. An arena releases its chunks, without running destructors for objects placed inside them. Raw-storage users release such objects before freeing their storage.
+
+**Borrowed views retain their original lifetime.** Returning a builder moves its buffer to the caller. Returning `msg.slice()` returns a borrowed view; cleanup of `msg` invalidates it. `Drop` supplies no borrow checker.
+
+`Str_builder.free()` can release a buffer early. Calling it ends the local's lifetime and cancels its automatic cleanup. Assigning a new builder makes that local usable again. A manually managed type instead implements `Manual_free` and requires explicit cleanup ([8.4.5](#845-tracking-a-free-with-manual_free)).
 
 ---
 
@@ -2893,8 +2923,8 @@ After an import, you reach the file's names through its alias (`math.sin()`). Or
 
 **`std/lang` is in every file without being written**, and writing `import "std/lang"` is a compile error. It alone enters every file as a selective import of everything it publishes, together with the alias `lang`.
 
-* **An implicit name is the weakest.** The file's own declarations and the names a selective import lists come first. Declare `Owned` or `Ref_counted` in your own file, and the unqualified name refers to yours.
-* **`lang.X` always refers to `std/lang`'s declaration**, so `impl My_type: lang.Ref_counted` conforms to `std/lang`'s trait even when your own declaration holds the name. The compiler matches the traits it knows (`Ref_counted` / `Move_only` / `Owned` / `Callable1` / `Callable2` and the operator group) by FQN. The FQN is the fully qualified name: the name together with the file that declares it. So in such a file, dropping the qualification makes the name mean your own declaration. The type then loses what the trait gives. That is ARC (the counting the compiler inserts, [8.4](#84-the-memory-management-model-defer--arc--arenas)), or operator desugaring (turning `a + b` into a method call). For `Ref_counted` / `Move_only` / `Owned` the linter reports it as W0501; for an operator trait the operator's use is an error (`Operator '+' requires 'V' to implement 'Add' interface`).
+* **An implicit name is the weakest.** The file's own declarations and the names a selective import lists come first. Declare `Manual_free` or `Ref_counted` in your own file, and the unqualified name refers to yours.
+* **`lang.X` always refers to `std/lang`'s declaration**, so `impl My_type: lang.Ref_counted` conforms to `std/lang`'s trait even when your own declaration holds the name. The compiler matches the traits it knows (`Ref_counted` / `Move_only` / `Manual_free` / `Drop` / `Callable1` / `Callable2` and the operator group) by FQN. The FQN is the fully qualified name: the name together with the file that declares it. So in such a file, dropping the qualification makes the name mean your own declaration. The type then loses what the trait gives. That is ARC (the counting the compiler inserts, [8.4](#84-memory-management)), or operator desugaring (turning `a + b` into a method call). For `Ref_counted` / `Move_only` / `Manual_free` / `Drop` the linter reports it as W0501; for an operator trait the operator's use is an error (`Operator '+' requires 'V' to implement 'Add' interface`).
 * **Write `lang.` only when the unqualified name is blocked**; otherwise `Option` and `lang.Option` would be two names for one thing (`make test-conventions` checks this).
 * When the file declares a name `lang`, the alias does not enter (your own declaration wins).
 
@@ -3339,7 +3369,7 @@ These shapes must not be written. The implementation need not diagnose them, and
 | Shape | Where it is written |
 | :-- | :-- |
 | A write to read-only data (`.rodata` / ROM) | [4.3](#43-places-and-the-rules-for-when-they-may-be-written) |
-| A dangling pointer (one to memory already freed), use after free | [8.4](#84-the-memory-management-model-defer--arc--arenas) |
+| A dangling pointer (one to memory already freed), use after free | [8.4](#84-memory-management) |
 | A data race: two threads touching one place, at least one writing, with no lock or atomic operation ordering them | [5.4](#54-worked-example-forbidding-copies-with-move_only) |
 | An enum value that is none of its variants, made through raw memory (a write through a pointer cast, a C function). The cast checks its own | [6.4](#64-type-conversion--and-implicit-casts) |
 
@@ -3360,7 +3390,7 @@ Many languages have features KSPL leaves out on purpose. The table names each on
 | Feature | The alternative in KSPL |
 | --- | --- |
 | **try-finally** | The `defer` statement, which runs on every way out (`return` / `throw` / `break` / `continue`) ([8.4.1](#841-the-defer-statement)). |
-| **A destructor (`Drop`)**, a method run automatically when a value goes away | An explicit free via `defer`; for a type conforming to `Ref_counted` (such as `Rc` / `Arc`), the compiler inserts the counting ([8.4.2](#842-automatic-reference-counting-via-ref_counted-conformance)). |
+| **An explicit destructor call (`x.drop()`)** | The compiler invokes `Drop` at the owner’s lifetime end ([8.4.6](#846-automatic-cleanup-with-drop)). Use an explicit `free()` for early release where the type provides it. |
 | **Garbage collection** (GC: a runtime that finds and frees unused memory by itself) | `defer`, and values kept on the stack. |
 | **A cleanup joined onto its declaration** (C#'s `using var`, Lombok's `@Cleanup`, GCC's `cleanup` attribute, `buf: = Str_builder.new() defer .free()`) | A `defer` of its own on the line after the binding, naming it: `defer buf.free()` ([8.4.1](#841-the-defer-statement)). |
 | **Class inheritance** | Hold a struct inside another, and gather common behavior in a `trait`. |

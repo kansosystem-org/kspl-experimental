@@ -38,7 +38,6 @@ priv fn shown(e: Line): Bool //< whether the line is an entry of its own, not a 
 
 priv fn file_path_of(logical: U8[]): U8[] //< the path a logical name's file is read from
     $out: = Str_builder.new()
-    defer out.free()
     base_locate.append_file_path(logical, out@)
     return base_core.arena.dup_str(out.slice())
 
@@ -102,7 +101,6 @@ priv fn anchor_taken(seen: List<|U8[]|>$@, key: U8[]): U8[] //<
     //< **A repeat is numbered**: the second heading reducing to the same text gets `-1`, the third
     //< `-2` (`#cfg(!freestanding)` and `#cfg(freestanding)` do collide).
     $base: = Str_builder.new()
-    defer base.free()
     anchor_of(key, base@)
     $n: Sz = 0
     for one in seen
@@ -160,25 +158,10 @@ priv fn linked(doc: U8[], rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[])
     //<
     //< Caution: **Leave a span already inside a link alone** (`[`name`](…)`); wrapped again, one
     //< link would nest in another.
-    $out: = Str_builder.new()
-    defer out.free()
-    $copied: Sz = 0
-    $from: Sz = 0
-    for
-        p: = sema_session_pointer.next_dotted(doc, from)
-        if p.len == 0
-            break
-        if p.open == 0 || doc[p.open - 1] != '['
-            target: = target_of(rows, links, tail, doc.sub(p.at, p.len))
-            if target.len > 0
-                out.s(doc.sub(copied, p.open - copied)).c('[')
-                    .s(doc.sub(p.open, p.end - p.open)).s("](#").s(target).c(')')
-                copied = p.end
-        from = p.end
-    if copied == 0
-        return doc
-    out.s(doc.sub_from(copied))
-    return base_core.arena.dup_str(out.slice())
+    return sema_session_pointer.link_names(doc, sema_session_pointer.next_dotted, "#",
+        fn(name: U8[]; rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[]): U8[] {
+        return target_of(rows, links, tail, name);
+    })
 
 priv fn next_label(doc: U8[], from: Sz): Sz //< where the next label after `from` starts
     //<
@@ -248,7 +231,7 @@ priv fn write_entry(rows: List<|Line|>@, links: List<|U8[]|>@, tail: U8[], at: S
     heading: = "###" if r.key.find_char('.').is_some() else "##"
     out.s("\n").s(heading).s(" `").s(r.key).s("`\n\n")
     // **The declaration goes in a fence that names no language.** The fence keeps a generic's `|`
-    // from reading as a table column. `impl X: Owned` alone is not a program.
+    // from reading as a table column. `impl X: Manual_free` alone is not a program.
     out.s("```\n").s(r.text).s("\n```\n")
     if r.doc.len > 0
         out.c('\n')
@@ -393,7 +376,6 @@ fn print_doc(target: U8[], parser: kspeg.Target$@): Bool //<
     name: = target.sub(0, cut)
     key: = "" if cut >= target.len else target.sub_from(cut + 1)
     $out: = Str_builder.new()
-    defer out.free()
     path: = file_path_of(name)
     if !fs.exists(path)
         dir: = folder_path_of(name)

@@ -9,16 +9,11 @@
 // `Ref_counted` in `std/lang.kspl`, not by where this type lives. **`Arena` is in
 // `std/mem.kspl`** (`ksplc` hard-codes the name `std.mem.Arena`).
 // ==========================================
-import "std/mem" { alloc_as, dealloc, zero }
+import "std/mem" { alloc_as, dealloc, init_at, drop_at }
 
 priv fn release_value<|T|>(place: T$@) //<
-    //< Releases every ARC value the value at `place` holds, leaving it the zero value
-    //<
-    //< Assigning the zero value makes the compiler release the value overwritten, chained through
-    //< fields, payloads and elements as on leaving a scope. For a `T` holding no ARC it is a plain
-    //< write. `List.free` gives its elements back the same way.
-    $empty: T[1] = ::{}
-    place$ = empty[0]
+    //< Releases the initialized payload when its last shared owner disappears
+    drop_at(place)
 
 // ============================ Rc<T> ============================
 
@@ -27,23 +22,21 @@ priv struct Control<|T|> //< the storage shared by the single-thread and atomic 
     weak: Sz //< explicit weak handles plus one held by all strong owners together
     value: T
 
-priv fn new_control<|T|>(value: T@): Control<|T|>$@
+priv fn new_control<|T|>(value: T): Control<|T|>$@
     c: = alloc_as<|Control<|T|>|>()
-    // Zero before assignment: ARC releases the overwritten value, so garbage would be followed.
-    zero(Void$@::c.value@, sizeof(T))
     c.strong = 1
     c.weak = 1
-    c.value = value$
+    init_at(c.value@, value)
     return c
 
 pub struct Rc<|T|> //< a shared owner counted by the compiler, for one thread
     //<
-    //< **The last release takes the value apart.** Every ARC value `T` holds (an `Rc` field, an
-    //< array of them) is released too, to any depth, as when `T` leaves a scope on the stack.
+    //< **The last release takes the value apart.** ARC and `Drop` values inside `T` are released
+    //< too, to any depth, as when `T` leaves a scope on the stack.
     //< Caution: **That release runs at the line where the last owner goes.** A long chain
     //< (`next: Rc<|Node|>` a million deep) recurses once per node there. Walk such a chain in a
-    //< loop first ("Release takes the value apart" in `std/docs/DESIGN-core.md`). A resource that
-    //< is not ARC (a `List`, a file) still needs its `free()`.
+    //< loop first ("Release takes the value apart" in `std/docs/DESIGN-core.md`). A resource
+    //< using `Manual_free` (a `List`, a file) still needs its explicit `free()`.
     priv ctrl: Control<|T|>$@
 
 pub struct Weak_rc<|T|> //< a handle that does not own the value, so a cycle does not leak
@@ -60,7 +53,7 @@ impl<|T|> Rc<|T|>
     pub fn new( //< moves a value onto the heap and returns the first owner
         value: T, //< the value to share; it is copied in once and never again
     ): Rc<|T|>
-        return ::{ .ctrl = new_control<|T|>(value@) }
+        return ::{ .ctrl = new_control<|T|>(value) }
     pub fn empty(): Rc<|T|> //< a handle that owns nothing
         //<
         //< Caution: `get()` / `clone()` / `downgrade()` on an empty handle are undefined, like a
@@ -161,7 +154,7 @@ impl<|T|> Arc<|T|>
     pub fn new( //< moves a value onto the heap and returns the first owner
         value: T, //< the value threads share; it is copied in once and never again
     ): Arc<|T|>
-        return ::{ .ctrl = new_control<|T|>(value@) }
+        return ::{ .ctrl = new_control<|T|>(value) }
     pub fn empty(): Arc<|T|> //< a handle owning nothing
         //<
         //< Caution: As with `Rc<|T|>`, `get()` / `clone()` / `downgrade()` on an empty handle are

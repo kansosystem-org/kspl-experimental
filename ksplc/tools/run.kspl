@@ -245,7 +245,6 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
     //< The reader is deps_are_fresh above; change both when changing the format. A failure still
     //< leaves the compile a success: without the deps, the next run is just "stale" and rebuilds.
     $out: = Str_builder.new()
-    defer out.free()
     for import_path in loaded_files
         // **A program with no file has no line**: it has no digest to check, and its run's slot is
         // keyed by its text (`append_slot_key`).
@@ -254,7 +253,6 @@ fn write_deps_file(deps_path: U8[], loaded_files: List<|U8$[]|>$@) //<
         // A name in `loaded_files` is a logical name, so each has one path
         // (`append_file_path` in `../base/locate.kspl`).
         $file_path: = Str_builder.new()
-        defer file_path.free()
         base_locate.append_file_path(import_path, file_path@)
         if !append_dep_line(file_path.slice(), out@)
             return // where a file cannot be read, no deps file is written (an incomplete list is a lie)
@@ -291,7 +289,6 @@ priv fn exit_mkdir_failed(what: U8[], path: U8[], e: fs.Fs_error) //<
     //< It names the one level that could not be created (`fs.Fs_error.mkdir_failed`); the whole
     //< path alone does not tell a name problem from a permission problem.
     $at: = Str_builder.new()
-    defer at.free()
     switch e
     case .mkdir_failed(part)
         at.s("\n  failed at: ").s(part)
@@ -307,7 +304,6 @@ priv fn append_slot_key(script: U8[], given: U8[]?, out: Str_builder$@): Bool //
     //< binary. **A program with no file adds its text**: its path (`-` in the current folder) is
     //< the same for every program.
     $h: = Str_builder.new()
-    defer h.free()
     // Caution: **Key the script by its absolute path, not as it was typed.** `tests/main.kspl`
     // names a different file in every folder it is run from. Keyed by the text, two packages' tests
     // would share one slot. Two such runs at once would sweep away each other's objects before
@@ -372,7 +368,6 @@ priv fn object_key(unit_src: U8[], header: U8[]): Hash_hex!io.Io_error //<
     //< changes the code with the `.c` unchanged. Include the C compiler's name and flags too, or
     //< switching CC links the previous compiler's objects.
     $h: = Str_builder.new()
-    defer h.free()
     h.s(cc_name()).c(0U8)
     append_flags_key(h@)
     h.c(0U8)
@@ -493,7 +488,6 @@ priv fn exec_program(script: U8[], exe: U8[], script_args: List<|U8[]|>$@, arena
     //< Python's `__file__`), so the arguments the script receives stay unchanged.
     //< Caution: **Write the path of the executable being started alongside it** in the value.
     $env_val: = Str_builder.new()
-    defer env_val.free()
     env_val.s(exe).c('\n').s(script)
     sys.set_env(sys.SCRIPT_ENV_NAME, env_val.slice()) catch
         io.err()
@@ -515,7 +509,6 @@ priv fn commit_path(from: U8[], to: U8[]): Bool //<
         if !fs.exists(to)
             return false
         $aside: = Str_builder.new()
-        defer aside.free()
         fs.rename_path(to, aside_name(to, aside@)) catch
             return false
         fs.rename_path(from, to) catch
@@ -627,7 +620,6 @@ priv struct Run_slot //< a script's place in the run cache, and the paths a buil
 priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
     //< The script's slot in the run cache, made where it is new and marked used
     $root: = Str_builder.new()
-    defer root.free()
     if !base_cache.append_cache_root(root@)
         base_cache.exit_unlocated("ksplc run")
     refusal: = base_cache.refused_root(root.slice(), arena)
@@ -635,7 +627,6 @@ priv fn open_run_slot(script: U8[], given: U8[]?, arena: Arena$@): Run_slot //<
         base_cache.exit_refused("ksplc run", refusal)
     runs_dir: = fs.join(root.slice(), base_cache.RUN_KIND, arena)
     $slot_key: = Str_builder.new()
-    defer slot_key.free()
     cacheable: = append_slot_key(script, given, slot_key@)
     dir: = fs.join(runs_dir, slot_key.slice(), arena)
     is_new_slot: = !fs.is_dir(dir)
@@ -673,7 +664,6 @@ priv fn rebuild_in_slot(slot: Run_slot@, script: U8[], given: U8[]?, arena: Aren
     // Caution: **The libraries go into the record too.** Adding only a `#link` leaves every object
     // unchanged, so the link would be skipped and the executable would lack the library.
     $want_objs: = Str_builder.new()
-    defer want_objs.free()
     for u in units
         want_objs.s(sys.get_file_name(u.obj)).c('\n')
     for lib in named_libs
@@ -736,13 +726,11 @@ priv fn plan_units(slot: Run_slot@, units_n: Sz, units: List<|Unit|>$@, arena: A
     fs.mkdir_all(obj_dir) catch e
         exit_mkdir_failed("object directory", obj_dir, e)
     $header_path: = Str_builder.new()
-    defer header_path.free()
     if units_n > 1
         header_path.s(sys.strip_last_ext(slot.new_c)).s(".h")
     $all_cached: = true
     for i in Range.asc(units_n)
         $src: = Str_builder.new()
-        defer src.free()
         if units_n > 1
             append_unit_path(sys.strip_last_ext(slot.new_c), i, src@)
         else

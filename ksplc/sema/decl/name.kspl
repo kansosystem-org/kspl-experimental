@@ -83,7 +83,6 @@ impl Path_parts
 priv fn spelled_before_args(parts: Path_parts): U8[] //<
     //< The segments up to the first `<|…|>`, joined by `.` (`m.Plain.gen` of `m.Plain.gen<|U16|>`)
     $b: = Str_builder.new()
-    defer b.free()
     for i in Range.asc(parts.len())
         part: = parts.get(i)
         if part.kind_id == .k_type_args
@@ -208,7 +207,6 @@ priv fn spelled_name(path: Ast_node$@): U8[] //< a path's segments joined by `.`
     if path.children.len == 0
         return path.text
     $b: = Str_builder.new()
-    defer b.free()
     $is_first: = true
     for child in path.children
         if child.kind_id == .k_type_args
@@ -482,7 +480,6 @@ impl Sema_ctx
         file: =
             named.sym.get_defined_in() if named.sym != null else named.template.loc.file()
         $dotted: = Str_builder.new()
-        defer dotted.free()
         dotted.s_path_as_dots(file).c('.')
         within: =
             (named.spelled.sub_from(dotted.slice().len)
@@ -636,9 +633,8 @@ impl Sema_ctx
         if file.len > 0
             r.read_name_in_file(path, file, first, seg_start, w)
             return
-        $full: = path.get_full_path_str()
-        defer full.free()
-        w.sym = r.symtab.resolve(full.slice()).unwrap_or(null)
+        full: = path.get_full_path_str()
+        w.sym = r.symtab.resolve(full).unwrap_or(null)
         // **Found under its FQN written out** (`other.lib.twice`), a declaration of another file
         // is reached through no import of this one.
         $is_fqn: =
@@ -664,7 +660,6 @@ impl Sema_ctx
             //< `new` of `ds.List<|I32|>.new` is not in the table until monomorphization, so
             //< checking the whole path would reject a legitimate name; the head is known now.
         $b: = Str_builder.new()
-        defer b.free()
         $head_name: U8[] = ""
         for $j: = seg_start; j < path.children.len; j += 1
             child: = path.get_child(j)

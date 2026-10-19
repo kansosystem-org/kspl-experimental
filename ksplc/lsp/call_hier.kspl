@@ -79,7 +79,6 @@ priv fn build_call_hier_item(target: Ast_node$@, id_n: Ast_node$@, name: U8[], f
     // The detail carries the defining file's name: a call hierarchy crosses files, and the function
     // name alone does not say which definition it is.
     $file_name: = Str_builder.new()
-    defer file_name.free()
     file_name.s(sys.get_file_name(target.loc.file()))
     file_name.ensure_kspl_ext()
     // Caution: **It must not look the same as a call.** A function pointer passed along may only be
@@ -167,7 +166,6 @@ priv fn build_fqn_lookup_idx(sema: Sema_ctx$@): Fqn_lookup_idx$@
     template_locs: = base_core.arena.create(Map<|U8[], U8[]|>.new(base_core.arena))
     for e in sema.generics.templates.items()
         $key_sb: = Str_builder.new()
-        defer key_sb.free()
         node_loc_key(e.value, key_sb@)
         template_locs.set(base_core.arena.dup_str(key_sb.slice()), e.key)
 
@@ -176,7 +174,6 @@ priv fn build_fqn_lookup_idx(sema: Sema_ctx$@): Fqn_lookup_idx$@
 
 priv fn find_template_fqn_indexed(idx: Fqn_lookup_idx$@, node: Ast_node$@): U8[]
     $key_sb: = Str_builder.new()
-    defer key_sb.free()
     node_loc_key(node, key_sb@)
     return idx.template_locs.get(key_sb.slice()).unwrap_or("")
 
@@ -190,7 +187,6 @@ priv fn qualified_sym_name(sym: Sema_symbol$@): U8[] //<
     if !sym.flags.is_global
         return sym.name
     $full: = Str_builder.new()
-    defer full.free()
     lsp_nav.write_full_name(sym.name, sym.get_defined_in(), full@)
     return base_core.arena.dup_str(full.slice())
 
@@ -233,7 +229,6 @@ priv fn mark_fn_ids(node: Ast_node$@, set: Map<|U8[], I32|>$@, depth: Sz) //<
         return
     if node.kind_id == .k_identifier && is_fn_or_impl_decl(node.def_node)
         $key: = Str_builder.new()
-        defer key.free()
         node_loc_key(node, key@)
         set.set(base_core.arena.dup_str(key.slice()), 1)
     for child in node.children
@@ -249,7 +244,6 @@ priv fn is_fn_ref_use(node: Ast_node$@, callee_ids: Map<|U8[], I32|>$@): Bool //
     if node.def_node.find_child(.k_identifier) == node
         return false
     $key: = Str_builder.new()
-    defer key.free()
     node_loc_key(node, key@)
     return callee_ids.get(key.slice()).unwrap_or(0) == 0
 

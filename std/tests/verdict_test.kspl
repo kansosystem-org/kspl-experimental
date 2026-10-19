@@ -225,7 +225,6 @@ fn test_log_keeps_what_is_heavy_enough()
     verdict.start("[Log] a line lighter than the level set being dropped test...")
 
     $out: = Str_builder.new()
-    defer out.free()
     $lg: = Log.new(out, .information, "t")
     lg.say(.error, "a")
     lg.say(.warning, "b")
@@ -237,7 +236,6 @@ fn test_log_keeps_what_is_heavy_enough()
 
     // **The most severe level keeps only its own lines.**
     $only: = Str_builder.new()
-    defer only.free()
     $strict: = Log.new(only, .error, "t")
     strict.say(.error, "a")
     strict.say(.warning, "b")
@@ -250,7 +248,6 @@ fn test_log_at_does_not_run_the_body_when_light()
     verdict.start("[Log] the body of a line that is not emitted not running test...")
 
     $out: = Str_builder.new()
-    defer out.free()
     $lg: = Log.new(out, .information, "")
     // **This is the guarantee the whole design exists for**: if `ran` changed for the dropped line,
     // a body would be built and thrown away.
@@ -272,7 +269,6 @@ fn test_log_closes_the_line_it_opened()
 
     // **The next line closes a line left open**, so a caller that writes the body never ends it.
     $out: = Str_builder.new()
-    defer out.free()
     $lg: = Log.new(out, .hint, "t")
     if w: = lg.at(.information)
         w.s("first")
@@ -295,7 +291,6 @@ fn test_log_says_where_it_was_called_from()
     // Passed by name, file and line override the default. **The line number is not this call's**,
     // so the check holds however this file is edited.
     $out: = Str_builder.new()
-    defer out.free()
     $lg: = Log.new(out, .hint, "t", ": ", true)
     lg.say(.error, "boom", "a/b.kspl", 42)
     assert(out.slice().equals("t: E: a/b.kspl: 42: boom\n"),
@@ -303,7 +298,6 @@ fn test_log_says_where_it_was_called_from()
 
     // With the default it names **this** file, not `std/log`: `say` passes both on to `at`.
     $here: = Str_builder.new()
-    defer here.free()
     $lg2: = Log.new(here, .hint, "t", ": ", true)
     lg2.say(.error, "boom")
     assert(here.slice().find_str("verdict_test").is_some(),
@@ -312,7 +306,6 @@ fn test_log_says_where_it_was_called_from()
 
     // **The place is off unless the logger is created with it on**, so a plain logger is unchanged.
     $plain: = Str_builder.new()
-    defer plain.free()
     $lg3: = Log.new(plain, .hint, "t")
     lg3.say(.error, "boom")
     assert(plain.slice().equals("t: E: boom\n"), "Log: with place off the line carries no place")
@@ -324,7 +317,6 @@ fn test_log_parts_its_fields_with_the_separator_given()
 
     // **A comma separator gives rows a spreadsheet can filter**, each with the same field count.
     $out: = Str_builder.new()
-    defer out.free()
     $csv: = Log.new(out, .hint, "srv", ",", true)
     csv.say(.error, "cannot listen", "a/b.kspl", 7)
     csv.say(.hint, "chasing it", "a/b.kspl", 9)
@@ -334,7 +326,6 @@ fn test_log_parts_its_fields_with_the_separator_given()
 
     // **The body is written unchanged**, so a caller that wants extra columns writes them itself.
     $raw: = Str_builder.new()
-    defer raw.free()
     $loose: = Log.new(raw, .hint, "t", ",")
     loose.say(.error, "row 1 value,row 2 value")
     loose.done()

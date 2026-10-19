@@ -205,7 +205,7 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 | Not carried | Why |
 | :-- | :-- |
 | **try-finally** | Each resource nests a level deeper, and an early `return` sits badly. `defer` gives `finally`'s guarantee, running on every way out |
-| **A destructor** | No hidden calls by default, so behavior stays deterministic. A use with frequent allocation and freeing (concurrency, shared ownership) chooses reference counting per type; no GC or ARC covers every type |
+| **Automatic cleanup for every type** | A type opts into `Drop` or `Ref_counted`. Manual owners keep explicit cleanup. No collector or automatic policy covers every type |
 | **Garbage collection** | When something is freed can be read from the source |
 | **A cleanup joined onto its declaration** | One form for every cleanup, naming what it cleans up. A form bound to the declaration fixes what runs (`Dispose`, `close`, the attribute's function). A form that took any call would need a receiver filled in, as no other construct does. See "A `defer` is not joined onto a declaration" below |
 | **Class inheritance** | It keeps the memory layout simple |
@@ -273,17 +273,17 @@ What KSPL leaves out, and what to write instead, is "Appendix A: Features not ca
 
 #### A `defer` is not joined onto a declaration
 
-Write cleanup as its own line, `defer buf.free()`, right after the line that acquires `buf`. The joined form `buf: = … defer .free()` is not KSPL.
+For a manually managed resource, write cleanup as its own line, `defer buf.free()`, right after the line that acquires `buf`. The joined form `buf: = … defer .free()` is not KSPL.
 
 `defer` runs a statement when the enclosing block exits; it is how a file is closed or memory freed on every way out.
 
 ```kspl
-import "std/str" { Str_builder }
+import "std/ds" { List }
 
 priv fn greet()
-    $buf: = Str_builder.new()
+    $buf: = List<|I32|>.new(null)
     defer buf.free()
-    buf.s("hello")
+    buf.push(1)
 ```
 
 **Frequent use does not keep the joined `defer`.** Step 2 of the decision order keeps a sugar used in hundreds of places. This one saves only a name and a line, and it costs three things.

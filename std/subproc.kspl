@@ -61,7 +61,6 @@ priv fn start(argv: U8[][], cwd: U8[], stdio: I32, out_path: U8[], err_path: U8[
     //< Arguments are packed with NUL separators. An embedded NUL fails the start: the C side
     //< checks the count, so it cannot split an argument in two. An empty argument is allowed.
     $argv_buf: = Str_builder.new()
-    defer argv_buf.free()
     for a in argv
         argv_buf.s(a).c(0U8)
     return kspl_proc_start(argv_buf.ptr, argv_buf.len, I32::argv.len, cwd.ptr, cwd.len, stdio,
@@ -83,13 +82,12 @@ impl Run_result
         r: Self@,
         arena: Arena$@, //< where the text goes; null means the heap, freed with `dealloc`
     ): U8[]
-        $b: = Str_builder.new()
-        defer b.free()
-        fold_crlf_into(b@, r.stdout_data)
-        fold_crlf_into(b@, r.stderr_data)
-        return arena.dup_str(b.slice())
+        b: = arena.text()
+        fold_crlf_into(b, r.stdout_data)
+        fold_crlf_into(b, r.stderr_data)
+        return b.take()
 
-priv fn fold_crlf_into(b: Str_builder$@, text: U8[]) //< appends text, with each `\r\n` as `\n`
+priv fn fold_crlf_into(b: Writer, text: U8[]) //< appends text, with each `\r\n` as `\n`
     for i in Range.asc(text.len)
         if text[i] == '\r' && i + 1 < text.len && text[i + 1] == '\n'
             continue
@@ -148,9 +146,7 @@ pub fn run_capture( //< runs one child to the end and collects both its outputs
     if h == 0
         throw .spawn_failed
     $out: = Str_builder.new()
-    defer out.free()
     $err: = Str_builder.new()
-    defer err.free()
     $chunk: U8[4096] = ::{}
     deadline: = sys.deadline_after_ms(timeout_ms)
     $until: = deadline // the deadline, or the end of the grace once the child has ended

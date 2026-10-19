@@ -182,7 +182,6 @@ impl Sema_ctx
                 break
         inst_rec: = sema_type_env.Instance::{ .template = base_name, .args = args }
         $args_text: = Str_builder.new()
-        defer args_text.free()
         r.env.type_args_to(args, args_text)
         if sema_decl_mono_name.contains_unknown(args_text.slice())
             return sema_decl_mono_name.unknown_type_str()
@@ -198,7 +197,6 @@ impl Sema_ctx
         $inst_name: = Str_builder.new()
         r.env.instance_c_name_to(inst_rec, inst_name)
         $full_inst_name: = Str_builder.new()
-        defer full_inst_name.free()
         r.env.instance_key_to(inst_rec, full_inst_name)
 
         $backup: = r.backup_mono_state()
@@ -555,7 +553,6 @@ impl Sema_ctx
         //< It returns the instance's mangled name (fn_instance_names derives it). The signature is
         //< resolved at once; the body joins the work list (`queue_fn_body`) unless skip_infer.
         $bound_text: = Str_builder.new()
-        defer bound_text.free()
         r.env.type_args_to(fi.args, bound_text)
         if sema_decl_mono_name.contains_unknown(bound_text.slice())
             return sema_decl_mono_name.unknown_type_str()
@@ -584,7 +581,6 @@ impl Sema_ctx
 
         $inst_name: = Str_builder.new()
         $full_inst_name: = Str_builder.new()
-        defer full_inst_name.free()
         r.fn_instance_names(fi, owner, full_inst_name@, inst_name@)
 
         $backup: = r.backup_mono_state()
@@ -653,6 +649,7 @@ impl Sema_ctx
         inst_id: = base_core.pools.intern_name(arena_inst_name)
         r.symtab.global_scope.set(inst_id, sym)
 
+        r.env.fn_templates.set(Sz::inst_node, base_core.arena.dup_str(fi.template))
         inst_node.resolve_fn_signature_types(r) catch e
             r.fn_ctx.impl_name = old_impl_name
             throw e

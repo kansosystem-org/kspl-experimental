@@ -160,7 +160,6 @@ priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
     //< **`bash -o pipefail`**, or the pipe answers with `tee`'s status and a fallen gate passes.
     log: = ci_gates.log_path(g.log, arena)
     $cmd: = Str_builder.new()
-    defer cmd.free()
     cmd.c('\'').s(r.make).c('\'')
     if g.par != ci_gates.Par.serial
         cmd.s(" -j\{r.jobs\}")
@@ -184,7 +183,6 @@ priv fn run_gate(g: Gate, r: Round, arena: Arena$@): Bool //<
             io.out().s("# \{g.log\}: a SKIP no row of `expected_skips` holds for \{r.platform\}: ")
                 .s(odd).c('\n')
     $end: = Str_builder.new()
-    defer end.free()
     end.s("\{rc\} \{sec\} \{r.platform\}\n")
     io.write_file(ci_gates.end_path(g.log, arena), end.slice()) catch {}
     if rc != 0
@@ -220,7 +218,6 @@ priv fn annotate(g: Gate, text: U8[], rc: I32, j: ci_gates.Judge@, arena: Arena$
         return
     why: = ci_gates.causes(text, g.log, g.verdict, j, arena)
     $b: = Str_builder.new()
-    defer b.free()
     if why.len > 0
         ci_gates.put_cause(why.get(0), b@)
     else
@@ -232,7 +229,6 @@ priv fn print_digest(r: Round, arena: Arena$@) //<
     j: = ci_gates.Judge::{ .platform = r.platform, .relaxed = r.relaxed }
     outs: = ci_gates.outcomes(j@, arena)
     $b: = Str_builder.new()
-    defer b.free()
     ci_gates.digest_plain(outs@, r.jobs, j@, b@)
     io.out().s(b.slice())
 
@@ -243,7 +239,6 @@ priv fn summary(title: U8[], jobs: I64, j: ci_gates.Judge, arena: Arena$@): I32 
     //< is the step above.
     outs: = ci_gates.outcomes(j@, arena)
     $b: = Str_builder.new()
-    defer b.free()
     if outs.len == 0
         b.s("no gate log: the round fell before a gate ran (the cause is the step above)\n")
     else
@@ -253,7 +248,6 @@ priv fn summary(title: U8[], jobs: I64, j: ci_gates.Judge, arena: Arena$@): I32 
         // The file may hold an earlier step's lines; they stay.
         had: = io.read_file(path) catch ""
         $all: = Str_builder.new()
-        defer all.free()
         all.s(had).s(b.slice())
         if had.len > 0
             dealloc(Void$@::had.ptr)

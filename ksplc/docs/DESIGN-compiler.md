@@ -345,7 +345,7 @@ Making and discarding things uses the same few names everywhere. So a reader (an
 | **Global and file state** | `init()` | `fin()` | the global lifecycle, with no receiver |
 | **Raw memory (`std/mem` only)** | `alloc` | `dealloc` | tier C's byte allocation and freeing |
 
-**`free` and `dealloc` are the only names that carry an effect.** Sema's use-after-free and double-free tracking recognizes a freeing by these names alone ("Measuring what suppression costs" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). The rule is "8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). Under any other name the check silently stops.
+**`free` and `dealloc` are the only names that carry an effect.** Sema's use-after-free and double-free tracking recognizes a freeing by these names alone ("Measuring what suppression costs" in [`DESIGN-diagnostics.md`](DESIGN-diagnostics.md)). The rule is "8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md). Under any other name the check silently stops.
 
 * **`Arena.create<|T|>` copies an existing value onto an arena** and returns a permanent `T@` (`base_core.arena.create(Foo::{...})`). It is a typed `alloc`, apart from `new`, which constructs. It lets an ad-hoc struct with no arena-taking `new` go on the arena too.
 * **One `init()` / `fin()` pair per layer**, in the layer's entry file, gathers its globals, and `main` calls only those pairs. `base_setup`'s covers the shared arena, the pools, the AST's shared state and the diagnostics; `parse_load`'s covers the Profiler and the kspeg arena. Do not init or fin a single global directly from `main`.

@@ -323,7 +323,8 @@ impl Ast_node
         if params == null || params.children.len == 0
             return
         recv: = params.get_child(0)
-        if recv == null || !c.env.is_pointer(recv.type_id) || c.env.is_owned(recv.type_id)
+        if recv == null || !c.env.is_pointer(recv.type_id) ||
+            c.env.has_release_contract(recv.type_id)
             return
         if r.body_frees_param_directly(recv.get_decl_id_text(), c)
             return // tracked by route 2
@@ -331,14 +332,14 @@ impl Ast_node
         if c.fn_ctx.impl_name.len > 0
             sb
                 .s("[W0107] '\{name\}' releases the receiver, but its type does not conform to \
-                    'Owned'. Use-after-free is therefore not tracked. Add 'impl \
-                    \{c.fn_ctx.impl_name\}: Owned {}'")
+                    'Manual_free'. Use-after-free is therefore not tracked. Add 'impl \
+                    \{c.fn_ctx.impl_name\}: Manual_free {}'")
                 .s(" and spell the method 'free'." if !is_free else ".")
         else
             sb
                 .s("[W0107] '\{name\}' releases its first parameter, but that type does not conform \
-                    to 'Owned'. Use-after-free is therefore not tracked. Make it a 'free' method on \
-                    the type and conform it to 'Owned'.")
+                    to 'Manual_free'. Use-after-free is therefore not tracked. Make it a 'free' \
+                    method on the type and conform it to 'Manual_free'.")
         c.warn(r, c.scratch.slice())
 
     fn lint_nullable_pointer_return(r: Self$@, c: Sema_ctx$@, block: Ast_node$@, base_ret_id: I32) //<

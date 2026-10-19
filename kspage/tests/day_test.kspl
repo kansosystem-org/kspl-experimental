@@ -16,10 +16,10 @@ import "std/verdict"
 // and a date in a table's arithmetic.
 // ==========================================
 
-priv fn shown_of(days: I64, how: Dating): U8[] //< makes a date's text from a day count
+priv fn shown_of(days: I64, how: Dating): Str_builder //< owns a date's text from a day count
     $sb: = Str_builder.new()
     day.write_day(sb@, days, how)
-    return sb.slice()
+    return sb
 
 priv fn day_num(text: U8[]): I64
     if v: = day.day_of(text)
@@ -107,12 +107,14 @@ fn test_a_day_is_written_in_the_form_the_style_asks_for() //<
     //< `plain` pads to two digits, and `long` does not
     verdict.start("[kspage/day] the writing a date test...")
     n: = day_num("2026-08-05")
-    assert(shown_of(n, .plain).equals("2026-08-05"), "the month and the day pad to two")
-    written_out: = shown_of(n, .long)
-    assert(written_out.equals("5 August 2026"), "a date written out carries no leading zero")
-    assert(shown_of(n, .none).len == 0, "nothing is written where it is not shown as a date")
+    $plain: = shown_of(n, .plain)
+    $written_out: = shown_of(n, .long)
+    hidden: = shown_of(n, .none)
+    assert(plain.slice().equals("2026-08-05"), "the month and the day pad to two")
+    assert(written_out.slice().equals("5 August 2026"), "a date written out carries no leading zero")
+    assert(hidden.len == 0, "nothing is written where it is not shown as a date")
     // **What is written out reads back**; fix only one side and the shown form cannot be typed.
-    assert(day_num(written_out) == n, "what was written out reads back as the same day")
+    assert(day_num(written_out.slice()) == n, "what was written out reads back as the same day")
     verdict.pass("a date is written the way it is shown.")
 
 priv fn dated_sheet(arena: Arena$@, how: Dating): Sheet$@ //<

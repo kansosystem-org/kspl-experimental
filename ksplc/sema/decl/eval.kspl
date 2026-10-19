@@ -16,6 +16,7 @@ import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/query" as sema_type_query
 import "ksplc/sema/type/scope" { Sema_symbol }
 import "std/chars" // testing and slicing single characters
+import "std/checked_int" // the signed overflow checks shared with run-time arithmetic
 import "std/ds" { List, Map }
 import "std/str"
 
@@ -400,41 +401,27 @@ impl Ast_node
                     if !c.suppress_errors
                         c.err(r, "division or modulo by zero in constant expression")
                     throw .division_by_zero
-            // Check signed overflow **before** operating; afterwards, the wrapped value looks in
-            // range.
-            // Caution: Do not check unsigned. C wraps it mod 2^N (fit_result), so an error here
-            // would reject a constant that works at run time.
+            // Signed checks belong to std/checked_int. Unsigned constants wrap as at run time;
+            // fit_or_report then applies the operands' narrower width.
             if op.equals("+")
-                if !is_uns &&
-                    ((right > 0 && left > I64_MAX_VAL - right) ||
-                    (right < 0 && left < I64_MIN_VAL - right))
-                    return r.report_overflow(c)!
-                return fit_or_report(r, c, left + right, bits, is_uns)!
+                v: = left + right if is_uns else (left.checked_add(right)
+                    catch r.report_overflow(c)!)
+                return fit_or_report(r, c, v, bits, is_uns)!
             if op.equals("-")
-                if !is_uns &&
-                    ((right < 0 && left > I64_MAX_VAL + right) ||
-                    (right > 0 && left < I64_MIN_VAL + right))
-                    return r.report_overflow(c)!
-                return fit_or_report(r, c, left - right, bits, is_uns)!
+                v: = left - right if is_uns else (left.checked_sub(right)
+                    catch r.report_overflow(c)!)
+                return fit_or_report(r, c, v, bits, is_uns)!
             if op.equals("*")
-                if !is_uns && left != 0 && right != 0
-                    // Checked by absolute value; I64's minimum has none, so it is rejected
-                    // outright.
-                    if left == I64_MIN_VAL || right == I64_MIN_VAL
-                        return r.report_overflow(c)!
-                    la: = -left if left < 0 else left
-                    ra: = -right if right < 0 else right
-                    if la > I64_MAX_VAL / ra
-                        return r.report_overflow(c)!
-                return fit_or_report(r, c, left * right, bits, is_uns)!
+                v: = left * right if is_uns else (left.checked_mul(right)
+                    catch r.report_overflow(c)!)
+                return fit_or_report(r, c, v, bits, is_uns)!
             // Signed `/` and `%` follow kspl_sdiv / kspl_smod (ksplc/gen/runtime/core.h): the
             // minimum by -1 is an overflow the compiler can see for `/`, and 0 for `%`.
             if op.equals("/")
                 if is_uns
                     return I64::(ul / ur)
-                if right == -1 && left == I64_MIN_VAL
-                    return r.report_overflow(c)!
-                return fit_or_report(r, c, left / right, bits, is_uns)!
+                v: = left.checked_div(right) catch r.report_overflow(c)!
+                return fit_or_report(r, c, v, bits, is_uns)!
             if op.equals("%")
                 if is_uns
                     return I64::(ul % ur)

@@ -60,7 +60,6 @@ priv fn build_paths(logical_name: U8[], src: U8[], path: Str_builder$@, key: Str
     //<
     //< It returns false where the path cannot be determined (the cache is then not used).
     $material: = Str_builder.new()
-    defer material.free()
     material.s(MAGIC).c(0U8).s("\{Sz::FORMAT_VERSION\}").c(0U8)
     material.s(logical_name).c(0U8)
     // Caution: **Include the `--define` flags**: `#cfg()` drops declarations during normalization
@@ -151,15 +150,12 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     //< **Every node's `loc.file` must be logical_name** (one per entry, as parse_raw_ast produces);
     //< otherwise nothing is saved, rather than a wrong file name.
     $path: = Str_builder.new()
-    defer path.free()
     $key: = Str_builder.new()
-    defer key.free()
     if !build_paths(logical_name, src, path@, key@)
         return
 
     tbl: = Str_table.new(base_core.arena)
     $body: = Str_builder.new()
-    defer body.free()
     $n_nodes: Sz = 0
     for d in decls
         if !d.loc.file().equals(logical_name) || !write_subtree(d, tbl, body@, n_nodes@)
@@ -171,7 +167,6 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     // Whether a file shows the reason would then depend on whether a build cached it. Their
     // flag's spelling goes into the string table, so collect them before the table is written.
     $regions: = Str_builder.new()
-    defer regions.free()
     $n_regions: Sz = 0
     for region in base_cfg_inactive.cfg_inactive
         if !region.file.equals(logical_name)
@@ -183,7 +178,6 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
         n_regions += 1
 
     $out: = Str_builder.new()
-    defer out.free()
     out.s(MAGIC)
     put_u32(out@, FORMAT_VERSION)
     out.s(key.slice())
@@ -202,7 +196,6 @@ fn store(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@) //<
     // process; if two clash, the key and length checks discard the entry and the next writer
     // repairs it.
     $tmp: = Str_builder.new()
-    defer tmp.free()
     tmp.s(path.slice()).s(".tmp\{temp_nonce()\}")
     io.write_file(tmp.slice(), out.slice()) catch
         return
@@ -287,9 +280,7 @@ fn load(logical_name: U8[], src: U8[], decls: List<|Ast_node$@|>$@): Bool //<
     //<
     //< Otherwise it adds nothing and returns false (the caller parses as usual).
     $path: = Str_builder.new()
-    defer path.free()
     $key: = Str_builder.new()
-    defer key.free()
     if !build_paths(logical_name, src, path@, key@)
         return false
     data: = io.read_file(path.slice()) catch

@@ -36,7 +36,7 @@ A *diagnostic* is a message the compiler prints about your code (an error, a war
 
   Checked only at the block's end, `defer use(x)` followed by `if early { return; }` and `x = 4` would pass. The early path would then read `x` uninitialized.
 * **Building the generics' registry.** A generic instance's `Struct_def` / `Enum_def` is assembled on its own path in `sema/decl/mono.kspl`. So the visibility check on struct fields and enum payloads goes there as well as in `sema/decl/collect.kspl`. In the latter alone, generics pass, and `pub struct W<|T|> { pub h: Hidden; }` leaks a `priv` type into another file.
-* **The walk over the structural markers.** Deriving `Move_only` follows an `enum`'s payloads and an array's elements as well as a `struct`'s fields, in the one walk `derives_move_only` (`sema/type/arc.kspl`). Without them, a struct that holds an array of owning handles (`H[2]`) can be copied silently.
+* **The walk over the structural markers.** Deriving `Move_only` follows an `enum`'s payloads and an array's elements as well as a `struct`'s fields, in the one walk `derives_marker` (`sema/type/arc.kspl`). Without them, a struct that holds an array of owning handles (`H[2]`) can be copied silently.
 * **Resolving an operator trait.** Unary and binary operators, `[]` reads and `[]=` writes all use the one `resolve_operator_call` in `sema/decl/trait_check.kspl`. Each caller handles all three `Op_method` cases (`user` / `builtin` / `failed`). A trait implemented with no method found by name is the compiler's own inconsistency. Silently taking the built-in path would ignore the user's implementation.
 * **The subscript's type.** `Index` / `Index_mut` / `Index_place` take it from the implementation's declaration, for reads and writes alike (`operator_index_param_id` in `sema/decl/trait_check.kspl`). Fixed at `Sz`, `m["k"]` on a `Map<|U8[], I32|>` would always fail with "expected 'Sz'". An instantiated method's parameter node can lack its `type_id` even after the names are substituted. So the type is resolved again in the declaring file's context.
 * **`!` and `catch`.** Both accept a Result and nothing else (`sema/body/postfix.kspl`, and `infer_catch_chain` in `sema/body/expr.kspl`). Miss the check in one, and the backends read a tag and a payload off a value that has neither. The C compiler then fails with zero diagnostics from ksplc (Principle 2).
@@ -67,7 +67,7 @@ Caution: **Do not use this flag to suppress the use-after-free check as well.** 
 
 **Strip the wrapping.** `dealloc` takes a `Void$@`, so a real call nearly always carries a cast (`dealloc(Void$@::p)`). The `@` and the `::` are stripped recursively back to the original local. Unstripped, the check catches almost nothing.
 
-**A pointer's `free()` leaves a block that `dealloc` can still name** (`p.free()` then `dealloc(Void$@::p)`, the rule in 8.4.5 of [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-owned)). `Df_state` keeps two may-sets:
+**A pointer's `free()` leaves a block that `dealloc` can still name** (`p.free()` then `dealloc(Void$@::p)`, the rule in 8.4.5 of [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-manual_free)). `Df_state` keeps two may-sets:
 * `freed_vars`, what is released, any use of which is refused;
 * `gone_vars`, what has nothing left to give back.
 

@@ -130,8 +130,8 @@ KSPL has no garbage collector. Memory that `std` hands you lives in one of four 
 
 | Where it lives | How you ask for it | Who frees it, and when |
 | :-- | :-- | :-- |
-| The global heap | Pass `null` as the arena: `List.new(null)` | You, usually with `defer xs.free()` right after |
-| An arena | Pass the arena: `List.new(arena)` | Nobody frees it piece by piece: it all goes when the arena is freed |
+| The global heap | Pass `null` as the arena: `List.new(null)` | The type decides: `Str_builder` uses `Drop`; manual owners use `defer xs.free()` |
+| An arena | Pass the arena: `List.new(arena)` | The arena releases storage; containers still release their automatic elements |
 | Your own buffer | `Buf_writer.new(U8$[]::buf)`, `Arena.from_buffer(…)` | Nothing is allocated, and the buffer stays yours |
 | Shared by several owners | `Rc<\|T\|>.new(v)` / `Arc<\|T\|>.new(v)` (ARC) | The compiler, when the last owner lets go |
 
@@ -153,6 +153,14 @@ fn main()
     $in_arena: = List<|I32|>.new(arena)
     in_arena.push(2)
 ```
+
+### Builders own their cleanup
+
+`Str_builder` implements `Drop`. A local builder needs no `defer`; moving it transfers responsibility for its buffer. A slice borrows the builder's bytes and becomes invalid when that owner is destroyed. Returning the builder transfers ownership, while returning its slice does not.
+
+**Containers distinguish a live element from an empty slot.** Push and insertion initialize storage without destroying its old bytes. Pop transfers a live element out. Removal, replacement and clear destroy the old element exactly once. Resizing transfers bytes without creating another owner. A manually managed container still needs its `free()`, including one whose storage belongs to an arena.
+
+**Shared ownership owns its payload once.** `Rc` and `Arc` transfer a new payload into their control block. The last strong owner destroys that payload through the same storage operations. A payload can itself contain an automatic owner.
 
 ### A null arena is the heap, for every function
 
@@ -176,7 +184,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 
 #### A list's `free()` leaves the list itself
 
-**`free()` gives back what a list holds, never the block that the list stands in.** A list from `new` stands in the caller's variable. A list that `create` put in an arena goes with the arena. So only a list that `create` put on the heap leaves a block behind. If `free()` gave that one back, every list would have to carry where it stands. That is 8 more bytes on each list's 32, paid by every list for the few made on the heap. The many small lists that a tree keeps in each node would pay too. So the caller who passed `null` gives the block back, as for any one block: `xs.free()`, then `mem.dealloc(Void$@::xs)`. The compiler reads that `dealloc` as the block's own release, not as a use of what `free()` released. It refuses any use after it ("8.4.5 Tracking a free with `Owned`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-owned)).
+**`free()` gives back what a list holds, never the block that the list stands in.** A list from `new` stands in the caller's variable. A list that `create` put in an arena goes with the arena. So only a list that `create` put on the heap leaves a block behind. If `free()` gave that one back, every list would have to carry where it stands. That is 8 more bytes on each list's 32, paid by every list for the few made on the heap. The many small lists that a tree keeps in each node would pay too. So the caller who passed `null` gives the block back, as for any one block: `xs.free()`, then `mem.dealloc(Void$@::xs)`. The compiler reads that `dealloc` as the block's own release, not as a use of what `free()` released. It refuses any use after it ("8.4.5 Tracking a free with `Manual_free`" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#845-tracking-a-free-with-manual_free)).
 
 #### A value of many blocks keeps its own arena
 
@@ -186,7 +194,7 @@ Pass `null` where a function takes an arena, and it works on the heap instead. *
 | :-- | :-- |
 | **No free walks the value block by block.** A walk names every block that the build made. So a part added to the build and not to the walk leaks without a word. And a failure halfway leaves a partial structure that the walk must take apart | The value is built in one arena. So a failed call frees that arena and leaves nothing, and `free()` is one line whatever the value holds |
 | **A free of a part frees nothing.** A header further down a list, or a request's `headers`, has the same type as the whole | Only the value that the call returned holds the arena. Every part holds an empty one, so a free of a part cannot tear a hole in the whole |
-| **A second free is refused where it can be seen.** Each such type conforms to `Owned`. So a second `free()` of a local, or a use after it, is a compile error, as for a `List` | Through a copy or a field, it is not seen, as for any block given back |
+| **A second free is refused where it can be seen.** Each such type conforms to `Manual_free`. So a second `free()` of a local, or a use after it, is a compile error, as for a `List` | Through a copy or a field, it is not seen, as for any block given back |
 | **Code outside std cannot make a value that claims an arena** | `mem.Own_arena`'s field is visible only inside std. So such a value is built through std's own functions |
 
 **A parsed JSON document is a type of its own, `json.Doc`.** It holds the value (`doc.val`), and the arena that `parse` made for it, given `null`. Any kind of JSON value can be the whole document. So an arena kept in the value would sit in the string, array and object variants alike. The document keeps it apart instead:
@@ -203,7 +211,7 @@ Caution: **The arena of its own takes a whole chunk at its first allocation**, h
 
 **No free function takes the arena as an argument** (an `alloc_in(arena, n)`). It would be a second spelling of `arena.alloc(n)`.
 
-The rules of the language itself (`defer`, ARC, arenas) are "8.4 The memory management model" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-the-memory-management-model-defer--arc--arenas). The sections below say how `std` uses them.
+The rules of the language itself (`defer`, ARC, arenas) are "8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#84-memory-management). The sections below say how `std` uses them.
 
 ### The names of the reference-counting types
 
@@ -512,9 +520,9 @@ String interpolation (`"n=\{n\}"`, which puts the value of `n` into the text) al
 
 It is Zig's three-way split (`w.print` / `bufPrint` / `allocPrint`) without the allocator argument. A `Str_builder` allocates on its own.
 
-**Interpolation that yields a value is not taken.** Examples are Python's f-string, Go's `Sprintf` and C++'s `std::format`. That notation returns a new string whose memory something else frees. In Python and Go, that is the garbage collector; in C++, it is `std::string`'s destructor. KSPL frees nothing that it was not told to. So the same notation would hide an allocation and a lifetime (to the end of the enclosing block). That goes against `docs/DESIGN-programming-language.md`'s "Responsibility can only be assigned for what the writer can see". Before you add a fourth shape, confirm that it cannot be written with the three.
+**Interpolation that yields a value is not taken.** Examples are Python's f-string, Go's `Sprintf` and C++'s `std::format`. That notation returns a new string whose memory something else frees. In Python and Go, that is the garbage collector; in C++, it is `std::string`'s destructor. An automatic owner could release that memory, but the notation would still hide its allocation and lifetime. That goes against `docs/DESIGN-programming-language.md`'s "Responsibility can only be assigned for what the writer can see". Before you add a fourth shape, confirm that it cannot be written with the three.
 
-**Why two writers?** `std/str` has the growing `Str_builder`. `std/buf` has `Buf_writer`, which writes into the caller's array and never allocates. Some places cannot allocate (freestanding). Some must not allocate inside a loop. A `Str_builder.new()` with its `defer b.free()` in a control loop costs a malloc/free every round. Yet output of unpredictable length, forced into a fixed buffer, spreads the decision to truncate across its callers. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else.** A split by speed or by an upper bound would make two ways to one purpose.
+**Why two writers?** `std/str` has the growing `Str_builder`. `std/buf` has `Buf_writer`, which writes into the caller's array and never allocates. Some places cannot allocate (freestanding). Some must not allocate inside a loop. A `Str_builder.new()` in a control loop costs a malloc/free every round. Yet output of unpredictable length, forced into a fixed buffer, spreads the decision to truncate across its callers. Both are `Writer`s, so interpolation works with either. **The choice is "can it allocate" and nothing else.** A split by speed or by an upper bound would make two ways to one purpose.
 
 **Why an overflow is not a panic**: the length is unknown until the text is assembled. A stop of a program because a display string outgrew its buffer is out of proportion. `Buf_writer` counts what it dropped, and reports it through `overflowed()`. That serves the purpose of C's `snprintf`, which returns the length it could have written. The count is held in the writer instead. Partway along a chain of calls, no return value can be checked.
 
@@ -920,6 +928,7 @@ The cause is often small: one error type in a signature brings its whole file al
 
 | File | What it brings along, and why |
 | :-- | :-- |
+| `buf` | `bytes` owns bounded copying, including overlapping views. Both files allocate nothing |
 | `str` | `strfmt`, which it imports for `to_hex_lower`. It is also the anchor that brings `\{x\}`'s conformances into every program that uses `str` |
 | `str` | Not `io`: the `Writer` / `Formattable` contract is in `std/lang`, so code that only uses strings is spared file I/O. The reverse, `io` bringing `str` along, remains |
 | `sha256`, `url` | `chars` holds the package's hex-digit encoder, so neither needs numeric formatting. `strfmt` uses the same encoder behind its public `to_hex_lower` / `to_hex_upper` methods. Their callers still import `strfmt` |

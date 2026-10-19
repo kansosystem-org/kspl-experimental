@@ -201,6 +201,7 @@ impl Sema_ctx
                     .create(Map<|U8[], Alias_info$@|>.new_with_cap(64, null)),
                 .withheld = base_core.arena
                     .create(Map<|U8[], U8[]|>.new_with_cap(16, null)),
+                .written_methods = base_core.arena.create(Map<|U8[], Bool|>.new(null)),
             },
             .import_symbols = Import_symbol_state::{
                 .files = base_core.arena
@@ -247,6 +248,7 @@ impl Sema_ctx
         r.generics.args.free()
         r.aliases.files.free()
         r.aliases.withheld.free()
+        r.aliases.written_methods.free()
         r.import_symbols.files.free()
         r.drop_import_reach()
         r.env.free()
@@ -351,7 +353,6 @@ impl Sema_ctx
         //< ksplc/base/core.kspl holds. It is built in a builder of its own, so a name held in
         //< the context's scratch is read intact.
         $b: = Str_builder.new()
-        defer b.free()
         b.s_path_as_dots(file_path).c('.').s(name)
         return base_core.pools.name_text(b.slice())
 
@@ -451,7 +452,6 @@ impl Sema_ctx
         if eff_sev == base_diag.Diagnostic_severity.error
             r.diags.errors_met += 1
         $key_sb: = Str_builder.new()
-        defer key_sb.free()
         if has_pos
             key_sb.s(file).c(':').s("\{offset\}").c(':')
         // **One error per place in a generic's body**, whichever instance found it. Each instance
@@ -475,7 +475,6 @@ impl Sema_ctx
             if r.diags.counts.errors == MAX_ERRORS - 1
                 starts: = r.line_starts_for(file, src)
                 $cap: = Str_builder.new()
-                defer cap.free()
                 cap.s("Too many errors (>= \{MAX_ERRORS\}). Further errors are suppressed.")
                 base_diag.print_diagnostic(file, src, offset, span, cap.slice(), eff_sev, starts)
                 r.diags.counts.errors += 1
@@ -608,14 +607,12 @@ impl Sema_ctx
         //< A call's callee is resolved as a name before the call is. So its undefined head is
         //< reported there first, and the call's own report is skipped (`undefined_reported_at`).
         $key: = Str_builder.new()
-        defer key.free()
         r.offset_key(node, key@)
         r.diags.undefined_at.set(base_core.arena.dup_str(key.slice()), true)
 
     fn undefined_reported_at(r: Self$@, node: Ast_node$@): Bool //<
         //< whether one was reported where node starts
         $key: = Str_builder.new()
-        defer key.free()
         r.offset_key(node, key@)
         return r.diags.undefined_at.get(key.slice()).unwrap_or(false)
 
@@ -639,7 +636,6 @@ impl Sema_ctx
         //< undefined identifier and an undefined callee. With a copy, only one of them gets each
         //< fix.
         $key: = Str_builder.new()
-        defer key.free()
         key.s(r.file_name).s("::").s(name)
         path: = r.aliases.withheld.get(key.slice()).unwrap_or("")
         if path.len == 0
@@ -810,13 +806,12 @@ impl Sema_ctx
         default {}
         r.check_snake_case(name, target_node, "Identifier")
 
-// It releases what it owns with `free()`; see `Owned` in std/lang.kspl for why it conforms.
-impl Sema_ctx: Owned {}
+// It releases what it owns with `free()`; see `Manual_free` in std/lang.kspl for why it conforms.
+impl Sema_ctx: Manual_free {}
 
 fn join_dotted_name(base_name: U8[], sub_name: U8[]): U8[] //<
     //< `base_name.sub_name`, a member's name under its owner's (`Enum.variant`), kept by name_text
     $b: = Str_builder.new()
-    defer b.free()
     b.s(base_name).c('.').s(sub_name)
     return base_core.pools.name_text(b.slice())
 

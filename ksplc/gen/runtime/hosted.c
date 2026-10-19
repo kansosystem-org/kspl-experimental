@@ -583,11 +583,12 @@ KSPL_LINK void kspl_io_broken_pipe(void) {}
  * strike inside malloc or stdio, holding their locks. So standard output is not flushed, and a
  * program whose last lines matter is line-buffered ("A program keeps its own output on an
  * abnormal exit" in std/docs/DESIGN-system.md).
- * Caution: **A stack overflow needs a stack of its own** (sigaltstack) for the handler to run on.
- * The main thread's is set at start-up, a std/thread thread's as it starts. A thread that C code
- * starts has none, and its overflow ends with 139 and no line.
+ * Caution: **Reserve stack room before user code runs.** POSIX uses sigaltstack; Windows keeps
+ * space on the thread's own stack. The main thread is set up at start-up, a std/thread thread as
+ * it starts. A thread that C code starts has none, and its overflow can end with 139 and no line.
  * ============================================================ */
 #if !defined(KSPL_LIBRARY)
+#define KSPL_CRASH_STACK_SIZE 65536
 /* One crash line, built with no allocation and no stdio (either can be what broke). */
 typedef struct {
     char text[160];
@@ -639,8 +640,7 @@ static const char *kspl_crash_what(uintptr_t addr, uintptr_t floor, const char *
 #include <sys/resource.h>
 KSPL_LINK Sz kspl_stack_floor(void);
 
-#define KSPL_ALT_STACK_SIZE 65536
-static char kspl_main_alt_stack[KSPL_ALT_STACK_SIZE];
+static char kspl_main_alt_stack[KSPL_CRASH_STACK_SIZE];
 static int kspl_crash_taken = 0; /* whether the handler is in place, so a thread sets a stack */
 static KSPL_PER_THREAD uintptr_t kspl_crash_floor = 0; /* where this thread's stack ends, or 0 */
 
@@ -702,8 +702,8 @@ static void *kspl_crash_thread_enter(void) {
     void *mem;
     if (!kspl_crash_taken) return NULL;
     kspl_crash_floor = (uintptr_t)kspl_stack_floor();
-    mem = malloc(KSPL_ALT_STACK_SIZE);
-    if (mem != NULL && !kspl_crash_alt_stack(mem, KSPL_ALT_STACK_SIZE)) {
+    mem = malloc(KSPL_CRASH_STACK_SIZE);
+    if (mem != NULL && !kspl_crash_alt_stack(mem, KSPL_CRASH_STACK_SIZE)) {
         free(mem);
         mem = NULL;
     }
@@ -725,10 +725,21 @@ static void *kspl_crash_thread_enter(void) { return NULL; }
 static void kspl_crash_thread_leave(void *mem) { (void)mem; }
 #endif
 
+#if defined(_WIN32)
+/* The default guard's spare room can run out before the crash filter writes its line. The
+ * guarantee belongs to the calling thread, so every runtime thread sets it before user code. */
+static void kspl_crash_thread_enter(void) {
+#if !defined(KSPL_LIBRARY)
+    ULONG guarantee = KSPL_CRASH_STACK_SIZE;
+    (void)SetThreadStackGuarantee(&guarantee);
+#endif
+}
+#endif
+
 #if defined(_WIN32) && !defined(KSPL_LIBRARY)
 /* Asked only where no handler took the exception, so a C library's own __try still sees its
- * faults first. A fault this does not name goes on to the filter it replaced. No alternate stack is
- * needed: Windows leaves the overflowing thread its guard's room to report in. */
+ * faults first. A fault this does not name goes on to the filter it replaced. Windows runs the
+ * filter on the overflowing thread, using the room reserved before user code. */
 static LPTOP_LEVEL_EXCEPTION_FILTER kspl_crash_prev_filter = NULL;
 
 static LONG WINAPI kspl_crash_filter(EXCEPTION_POINTERS *info) {
@@ -753,6 +764,7 @@ static LONG WINAPI kspl_crash_filter(EXCEPTION_POINTERS *info) {
 
 __attribute__((constructor)) static void kspl_crash_init(void) {
     kspl_crash_prev_filter = SetUnhandledExceptionFilter(kspl_crash_filter);
+    kspl_crash_thread_enter();
 }
 #endif
 

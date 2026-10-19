@@ -148,6 +148,33 @@ fn next_dotted(text: U8[], from: Sz): Pointer //<
         i = close + 1
     return Pointer::{ .open = text.len, .at = text.len, .len = 0, .end = text.len }
 
+fn link_names(text: U8[], scan: fn(text: U8[], from: Sz): Pointer, prefix: U8[],
+    resolve: Callable1<|U8[], U8[]|>): U8[] //<
+        //< Links the names the reader finds, preserving existing links and unresolved names
+        //<
+        //< The caller chooses which names to read and where they point. Only the rewriting is
+        //< shared by the CLI reference and editor hover.
+    $out: = Str_builder.new()
+    $copied: Sz = 0
+    $from: Sz = 0
+    for
+        p: = scan(text, from)
+        if p.len == 0
+            break
+        from = p.end
+        if p.open > 0 && text[p.open - 1] == '['
+            continue
+        target: = resolve.call(text.sub(p.at, p.len))
+        if target.len == 0
+            continue
+        out.s(text.sub(copied, p.open - copied)).c('[')
+            .s(text.sub(p.open, p.end - p.open)).s("](").s(prefix).s(target).c(')')
+        copied = p.end
+    if copied == 0
+        return text
+    out.s(text.sub_from(copied))
+    return base_core.arena.dup_str(out.slice())
+
 priv struct At //< what the walk stands on once a part is read
     module: U8[] //< a module's logical name, where the part named one (empty otherwise)
     sym: Sema_symbol$@ //< the declaration the part named, where it has a symbol

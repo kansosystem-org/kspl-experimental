@@ -30,6 +30,11 @@ priv const I64_MIN_LITERAL: I64 = -9223372036854775808 //<
     //<
     //< Its magnitude alone fits no I64, and C reads it as unsigned with a warning.
 priv const I64_MIN_LEN: I32[I32::(I64_MIN_LITERAL >> 63) + 2] = ::{ 7 }
+priv const I64_MIN_PRODUCT: I64 = I64_MIN_LITERAL * 1I64
+priv const I64_MIN_FROM_HALF: I64 = -4611686018427387904I64 * 2I64
+priv const I64_MIN_REVERSED: I64 = 2I64 * -4611686018427387904I64
+priv const I64_MIN_ZERO: I64 = I64_MIN_LITERAL * 0I64
+priv const I64_PRODUCT_LEN: I32[I32::(I64_MIN_PRODUCT >> 63) + 2] = ::{ 9 }
 
 priv enum Tag_min: I64 //< an I64 tag at the minimum, written as one literal
     lo = -9223372036854775808
@@ -324,7 +329,6 @@ priv fn check_min_rendering() //<
     // (write_int in std/strnum.kspl).
     min_i64: I64 = -9223372036854775807I64 - 1I64
     $shown: = Str_builder.new()
-    defer shown.free()
     shown.s("\{min_i64\}")
     assert(shown.slice().equals("-9223372036854775808"),
         "I64::MIN must render every digit, not just the sign")
@@ -335,6 +339,10 @@ priv fn check_min_literal() //<
     assert(I64_MIN_LITERAL == local && local == -9223372036854775807I64 - 1,
         "-9223372036854775808 must be I64's minimum, folded and computed alike")
     assert(I64_MIN_LEN.len == 1, "the minimum folds as a value an array length can use")
+    assert(I64_MIN_PRODUCT == local && I64_MIN_FROM_HALF == local && I64_MIN_REVERSED == local,
+        "a representable product at the signed minimum must fold in either operand order")
+    assert(I64_MIN_ZERO == 0 && I64_PRODUCT_LEN.len == 1,
+        "products with the minimum fold to values that can size an array")
     assert(I64::Tag_min.lo == local && I64::Tag_min.hi == -(local + 1),
         "an I64 tag at the minimum must keep its value")
 

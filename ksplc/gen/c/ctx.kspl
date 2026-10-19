@@ -8,6 +8,7 @@ import "ksplc/base/core" as base_core
 import "ksplc/base/diag" as base_diag
 import "ksplc/base/locate" as base_locate
 import "ksplc/sema/session/ctx" { Sema_ctx }
+import "ksplc/sema/type/arc" as sema_type_arc
 import "ksplc/sema/type/env" as sema_type_env
 import "ksplc/sema/type/naming" as sema_type_naming
 import "ksplc/sema/type/query" as sema_type_query
@@ -267,7 +268,6 @@ impl Genc_ctx
             // name. So a debugger started in a package's own folder finds the file. Symbols and
             // `last_file` keep the logical name, so the current folder changes no symbol.
             $named: = Str_builder.new()
-            defer named.free()
             base_locate.recorded_name_to(loc_file, named@)
             r.s("#line \{loc_line\} \"").s(named.slice()).s("\"\n")
 
@@ -334,7 +334,7 @@ impl Genc_ctx
             // An array whose elements are immutable shares its struct tag with the bare type (see
             // gen/c/decl.kspl), so this outer `const ` makes it read-only. Drop it and an element
             // write passes at the C level.
-            if r.env.is_const(base_id) && !suppress_const
+            if r.env.is_const(base_id) && !suppress_const && !r.env.type_has_drop(type_id)
                 res = res.s("const ")
             return r.env.mangle_type_id_to(type_id, res)
         default {}
@@ -427,7 +427,7 @@ impl Genc_ctx: Writer
         r.out = r.out.flush()
         return r
 
-impl Genc_ctx: Owned {}
+impl Genc_ctx: Manual_free {}
 
 priv fn emits_c_const(env: sema_type_env.Env$@, type_id: I32): Bool //<
     //< Whether the C type name itself carries the `const `, so the declaration adds none

@@ -158,7 +158,6 @@ impl Profiler
             if p.memo_off
                 memo_off += 1
         $head: = Str_builder.new()
-        defer head.free()
         head.s("\n[KSPEG Rule] \{Sz::total:,\} rule invocations, ")
             .s("\{Sz::total_memo:,\} from memo, \{memo_off:,\} rules left it (Top 20 by calls)\n")
         io.err().s(head.slice())
@@ -170,7 +169,6 @@ impl Profiler
             p: = ranked.get(i)
             failed: = p.calls - p.memo_hits - p.parsed_ok
             $sb: = Str_builder.new()
-            defer sb.free()
             sb.s("      \{Sz::p.calls:7,\}\{Sz::p.memo_hits:11,\}\{Sz::p.parsed_ok:11,\}")
                 .s("\{Sz::failed:11,\}  \{p.name\}\n")
             io.err().s(sb.slice())
@@ -252,7 +250,6 @@ impl Parse_error
             //< "already reported" (as parse_raw_ast does) that outer stages pass along, so it is
             //< reported once.
         $why: = Str_builder.new()
-        defer why.free()
         switch e
         case .io(io_err)
             // Caution: **Print the absolute name.** Some import names are looked up from the
@@ -283,7 +280,6 @@ fn parse_raw_ast(src: U8[], file_path: U8[], parser: kspeg.Target$@, laid_out: B
     bad: = parse_source_fix.first_bad_utf8(src)
     if bad >= 0
         $msg: = Str_builder.new()
-        defer msg.free()
         msg
             .s("this byte (0x\{src[bad]:02X\}) does not begin a valid UTF-8 sequence. KSPL source \
                 is UTF-8 throughout, including comments and strings. Save the file as UTF-8. Write \
@@ -471,7 +467,6 @@ fn load_and_parse_file(import_path: U8[], loaded_files: List<|U8$[]|>$@, root_fi
         // The logical name (import_path) and the path read from are different things. A `std/...`
         // resolves pinned to base_locate.std_dir() (see base/locate.kspl).
         $file_path: = Str_builder.new()
-        defer file_path.free()
         base_locate.append_file_path(import_path, file_path@)
         raw: = read_source(file_path.slice())!
         // The notes are only collected (the reason is at `layout_notes` above).
@@ -597,7 +592,6 @@ priv fn append_enum_variant_names(decls: List<|Ast_node$@|>$@, file_path: U8[],
         //< Caution: **Keep the return value at U8[] and do not use a Writer.** Making every enum
         //< depend on std/io would pull all of the trait's thunks into a freestanding build.
     $src: = Str_builder.new()
-    defer src.free()
     // Where each generated impl goes (`place_as_made` in `../base/ast_ext.kspl`): the enum's name,
     // in the order the impls are written into `src`.
     $origins: = List<|base_ast.Loc|>.new(null)
@@ -611,7 +605,6 @@ priv fn append_enum_variant_names(decls: List<|Ast_node$@|>$@, file_path: U8[],
         if name_node == null || name.len == 0 || has_user_variant_name(decls, name)
             continue
         $params: = Str_builder.new()
-        defer params.free()
         if !append_gen_params(decl, params@)
             continue // a const generic is out of scope for the synthesis
         p: = params.slice()
@@ -623,7 +616,6 @@ priv fn append_enum_variant_names(decls: List<|Ast_node$@|>$@, file_path: U8[],
         // and cleared in `src`, one enum without variants would discard the impls of the enums
         // before it.
         $one: = Str_builder.new()
-        defer one.free()
         one.s("impl").s(p).s(" ").s(name).s(p).s(" {\n  ").s(vis).s("fn variant_name(r: ").s(name)
             .s(p).s("): U8[] {\n    switch r")
         $any: = false
@@ -695,5 +687,6 @@ priv fn append_gen_params(decl: Ast_node$@, out: Str_builder$@): Bool //<
     out.s("|>")
     return true
 
-// It owns memory and releases it with `free()` (why it must conform: `Owned` in std/lang.kspl).
-impl Profiler: Owned {}
+// It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
+// std/lang.kspl).
+impl Profiler: Manual_free {}

@@ -36,7 +36,7 @@
 1. **An error is a value, and it is listed** — `Step_error`
 1. **Failing, and a return type that says so** — `step`
 1. **Passing a failure on with `!`** — `step_twice`
-1. **`defer`, right below what it cleans up** — `pick_builder`
+1. **Automatic ownership** — `pick_builder`
 1. **Leaving early** — `note`
 1. **Where the braces have to stay** — `tally`
 1. **A global, and why there is one here** — `seen`
@@ -205,9 +205,9 @@ priv fn step_twice(n: I32): I32!Step_error
     return step(once)!
 ```
 
-## `defer`, right below what it cleans up
+## Automatic ownership
 
-**`defer` runs when the block ends, however it ends**: at its last line, or at a `return` or a `!` that leaves early. It takes one statement that names what it cleans up (`defer b.free()` in `main` below). So it sits on the line after the binding. A cleanup of more than one statement goes in a block. A bare `.free()` has nothing in front of it and is refused.
+**A builder releases its buffer automatically.** Returning it transfers ownership to the caller. Passing it by value also transfers ownership; a pointer or Writer view borrows it. The caller needs no `defer`. A borrowed `slice()` stays valid only while its builder lives. Manual owners still use `defer`, as `Arena` does in `main` below.
 
 ```kspl
 priv fn pick_builder(ok: Bool): Str_builder!Step_error
@@ -296,7 +296,6 @@ fn main(): I32
     $b: = pick_builder(true) catch
         io.out().s("the place to assemble into could not be taken.\n")
         fallback Str_builder.new()
-    defer b.free()
     b.s("held")
     note(true)
     note(false)

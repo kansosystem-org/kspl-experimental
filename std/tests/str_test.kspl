@@ -130,7 +130,6 @@ fn test_str_ops(arena: Arena$@)
 
     // --- drop_prefix: discards only the parsed prefix and moves the rest to the front ---
     $b: = Str_builder.new()
-    defer b.free()
     b.s("msg1|msg2")
     b.drop_prefix(5)
     assert(b.slice().equals("msg2"), "drop_prefix: the rest is packed forward to the head")
@@ -236,7 +235,6 @@ fn test_strnum_roundtrip() //<
     //< Caution: **Include the refusals too**, or a reader that accepts everything passes.
     verdict.start("[strnum] a number's round trip and refusal test...")
     $b: = Str_builder.new()
-    defer b.free()
 
     vals: I64[_] = ::{ 0I64, 1I64, -1I64, 42I64, -42I64, 2147483647I64, -2147483648I64,
         9223372036854775807I64, -9223372036854775807I64 - 1I64 }
@@ -452,9 +450,7 @@ import "std/str" + { Str_builder }
 
 fn main()
   $b: = Str_builder.new()
-  defer b.free()
   $want: = Str_builder.new()
-  defer want.free()
   for _i in Range.asc(256)
     b.s("abcdefgh")
   want.s(b.slice()).s(b.slice())
@@ -468,7 +464,6 @@ fn main()
   b.clear().s("--").s(w.sub(0, 6))
   assert(b.slice().equals("----xycd"), "s: a view overlapping where its bytes land")
   $e: = Str_builder.new()
-  defer e.free()
   want.clear()
   for _i in Range.asc(512)
     e.s("a\"")
@@ -530,6 +525,12 @@ fn test_buf_writer() //<
     assert(!v.clear().overflowed(), "clear() wipes the record of what was dropped too")
     v.c('a').c('b').c('c').c('d').c('e')
     assert(v.slice().equals("abcd") && v.overflowed(), "c() counts an overflow too")
+    // The source can be a view of bytes that this write is about to overwrite.
+    $overlap: U8[8] = ::{ 97, 98, 99, 100, 101, 102, 103, 104 }
+    $same: = Buf_writer.new(U8$[]::overlap)
+    same.s("ab").s((U8[]::overlap).sub(0, 6))
+    assert(same.slice().equals("ababcdef") && !same.overflowed(),
+        "overlapping bytes must be copied before the destination overwrites them")
     verdict.pass("The case that fits, the case that overflows, and reuse are all confirmed.")
 
 // ==========================================
@@ -562,6 +563,12 @@ fn test_text_edges()
     assert("zzzz".hex4(0).is_none() && "123".hex4(0).is_none() && "12345".hex4(2).is_none() &&
         "1234".hex4(-1).is_none() && "12g4".hex4(0).is_none(),
         "hex4: none for a non-digit, fewer than four, or an offset outside")
+    for at in Sz[]::{ sz_max - 3, sz_max - 1, sz_max }
+        assert("1234".hex4(at).is_none(), "hex4: a large offset is refused before it can overflow")
+        assert(!"abc".starts_with("a", at),
+            "starts_with: a large offset is refused before it can overflow")
+    assert("abc".starts_with("", 3) && !"abc".starts_with("", 4) &&
+        !"abc".starts_with("", -1), "starts_with: an empty prefix still checks its offset")
     assert('7'.hex_val().unwrap_or(-1) == 7 && 'f'.hex_val().unwrap_or(-1) == 15 &&
         'F'.hex_val().unwrap_or(-1) == 15 && 'g'.hex_val().is_none() &&
         '/'.hex_val().is_none(), "hex_val: a digit's value in either case, none for anything else")
@@ -604,7 +611,6 @@ fn test_text_edges()
 fn test_builder_room_and_c_strings()
     verdict.start("[str] reserve, and a C string out and back...")
     $b: = Str_builder.new()
-    defer b.free()
     b.reserve(100)
     assert(b.cap >= 100 && b.len == 0, "reserve: room for 100, nothing written")
     room: = b.cap

@@ -57,7 +57,7 @@ fn register_implicit_lang_imports(r: Ast_node$@, c: Sema_ctx$@) //<
     //< The import alias (`lang`) too. **Call it right after Pass 0**: Pass 1 resolves the declared
     //< type nodes, where `Option` or `Range` would be undefined.
     //< Caution: **Do not add them to a file that declares the same name itself**, or the user can
-    //< no longer define `Owned` there. An implicit name always loses.
+    //< no longer define `Manual_free` there. An implicit name always loses.
     $lang_names: = List<|U8[]|>.new(null)
     defer lang_names.free()
     $files: = List<|U8[]|>.new(null)
@@ -114,6 +114,23 @@ impl Import_symbol_info
             .original_name = original_name, .is_used = false, .decl_node = decl_node })
 
 impl Sema_ctx
+    fn supplies_written_method(r: Self$@, from_file: U8[], provider: U8[]): Bool //<
+        //< An uninstantiated body still needs the imports that supply its written extension calls
+        if file: = r.env.files.get(provider)
+            for entry in file.symbols.items()
+                sym: = entry.value
+                if sym.flags.is_method && sym.node != null
+                    key: = r.import_key(from_file, sym.node.get_decl_id_text())
+                    if r.aliases.written_methods.get(key).unwrap_or(false)
+                        return true
+        for entry in r.generics.templates.items()
+            node: = entry.value
+            if node.kind_id == .k_decl_fn && node.loc.file().equals(provider)
+                key: = r.import_key(from_file, node.get_decl_id_text())
+                if r.aliases.written_methods.get(key).unwrap_or(false)
+                    return true
+        return false
+
     priv fn import_key(r: Self$@, file: U8[], name: U8[]): U8[] //<
         //< The table's key for `name` in `file`, built in the scratch buffer
         //<
@@ -399,9 +416,9 @@ impl Ast_node
         //< unused.
         //< Caution: Do not descend into an import declaration itself. Its selectors and alias are
         //< identifiers too, and every import would mark itself used, silencing I0401.
-        r.mark_written_under(c, false)
+        r.mark_written_under(c, false, r.is_generic_template())
 
-    priv fn mark_written_under(r: Self$@, c: Sema_ctx$@, heads_member: Bool) //<
+    priv fn mark_written_under(r: Self$@, c: Sema_ctx$@, heads_member: Bool, generic_body: Bool) //<
         //< One node of mark_written_imports; heads_member: whether a `.member` follows r
         //<
         //< Caution: **Count a file alias only where a member follows it** (the head of `io.out` or
@@ -410,6 +427,15 @@ impl Ast_node
         //< skipped.
         if r == null || r.kind_id == .k_decl_import
             return
+        in_generic: = generic_body || r.is_generic_template()
+        if in_generic && r.kind_id == .k_expr_postfix && r.postfix_op_text().equals("(")
+            callee: = r.get_postfix_receiver()
+            if callee != null &&
+                (callee.kind_id == .k_method_access || callee.postfix_op_text().equals("."))
+                member: = callee.get_postfix_member()
+                if member != null
+                    key: = c.import_key(r.loc.file(), member.text)
+                    c.aliases.written_methods.set(base_core.arena.dup_str(key), true)
         if r.kind_id == .k_identifier
             c.mark_import_written(r.loc.file(), r.text, heads_member)
             return
@@ -421,10 +447,10 @@ impl Ast_node
             $seen: Sz = 0
             for item in r.children
                 if item.kind_id != .k_identifier
-                    item.mark_written_under(c, false)
+                    item.mark_written_under(c, false, in_generic)
                 else
                     if seen == 0
-                        item.mark_written_under(c, heads_member || idents > 1)
+                        item.mark_written_under(c, heads_member || idents > 1, in_generic)
                     seen += 1
             return
         $receiver: Ast_node$@ = null
@@ -439,4 +465,4 @@ impl Ast_node
                 member = r.get_postfix_member()
         for item in r.children
             if item != member
-                item.mark_written_under(c, receiver != null && item == receiver)
+                item.mark_written_under(c, receiver != null && item == receiver, in_generic)

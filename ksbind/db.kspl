@@ -174,8 +174,7 @@ impl Db
             code: = rc if rc != SQLITE_OK else SQLITE_NOMEM
             throw .open_failed(code, fixed_said(code))
         d: = mem.alloc_as<|Db|>()
-        d.handle = handle
-        d.said = Str_builder.new()
+        mem.init_at(d, Db::{ .handle = handle, .said = Str_builder.new() })
         return d
 
     pub fn prepare( //< prepares one statement from SQL; a second statement after it is refused
@@ -206,8 +205,7 @@ impl Db
             sqlite3_finalize(handle)
             throw .several_statements
         s: = mem.alloc_as<|Statement|>()
-        s.handle = handle
-        s.said = Str_builder.new()
+        mem.init_at(s, Statement::{ .handle = handle, .said = Str_builder.new() })
         return s
 
     pub fn exec( //< prepares, steps and frees in one call, for SQL with no parameters and no rows
@@ -235,8 +233,8 @@ impl Db
         //< frees it; the database closes once its statements are freed too
         //<
         //< Caution: **The name must be `free`.** The use-after-free check treats a call as a
-        //< release when "the receiver's type conforms to `Owned` and the method called is `free`"
-        //< (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name,
+        //< release when "the receiver's type conforms to `Manual_free` and the method called is
+        //< `free`" (get_free_call_receiver in ksplc/sema/flow/track.kspl). Under a different name,
         //< `c.free(); c.query(…);` compiles with no diagnostics. [W0107] reports it.
         sqlite3_close_v2(r.handle)
         r.said.free()
@@ -357,8 +355,8 @@ impl Statement
         r.said.free()
         dealloc(Void$@::r)
 
-impl Db: Owned {} //< it owns its memory and releases it with `free()`
-impl Statement: Owned {} //< it owns its memory and releases it with `free()`
+impl Db: Manual_free {} //< it owns its memory and releases it with `free()`
+impl Statement: Manual_free {} //< it owns its memory and releases it with `free()`
 
 // ---------------------------------------------------------
 // The round trip between a struct and one row, walking `std/reflect`'s table.

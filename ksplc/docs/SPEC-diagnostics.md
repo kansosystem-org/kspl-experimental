@@ -59,16 +59,17 @@ It walks one function's straight-line code. A user-defined guard type of the sam
 After `thread.Mutex<|T|>.lock()`, neither an `unlock()` nor a `defer` releasing it is found before the scope is left. Another thread waiting for the lock then waits forever. It uses [W0105]'s straight-line walk, with the same limits. A registered `defer g.unlock()` releases on every exit, so it is not reported.
 * **Fix**: call `g.unlock()` when done, or, more safely, `defer g.unlock()` right after locking, which releases on every exit, `return`, `throw` and `break` included.
 
-### [W0107] A method that frees outside `Owned`'s contract
-A method frees its object, but the compiler cannot tell, so using the object afterwards goes unreported. The use-after-free check reads "freed" only when the receiver's type conforms to `Owned` and the method called is `free`. So a `pub` method that frees its receiver outside that contract lets `x.close(); x.read();` compile with zero diagnostics. It is reported where the name differs (one of `close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`), or where it does not conform (the name is `free`, but the type has no `impl X: Owned {}`).
-* **Fix**: where it frees, name it `free` and add `impl X: Owned {}`. `Owned`'s `free` returns no failure, so move a clean-up whose result must be checked (a flush, say) into a separate method. An operation that does not free the receiver, or that takes an argument (`delete(key)`), is out of scope.
+### [W0107] A method that frees outside a release contract
+A method frees its object, but the compiler cannot tell, so using the object afterwards goes unreported. The use-after-free check reads "freed" only when the receiver's type conforms to `Manual_free` or `Drop` and the method called is `free`. So a `pub` method that frees its receiver outside that contract lets `x.close(); x.read();` compile with zero diagnostics. It is reported where the name differs (one of `close` / `destroy` / `deinit` / `dispose` / `shutdown` / `delete` / `teardown`), or where it does not conform (the name is `free`, but the type has no `impl X: Manual_free {}`).
+* **Fix**: where it frees, name it `free` and add `impl X: Manual_free {}`. `Manual_free`'s `free` returns no failure, so move a clean-up whose result must be checked (a flush, say) into a separate method. An operation that does not free the receiver, or that takes an argument (`delete(key)`), is out of scope.
 
 ### [W0108] A bit operation's operand is compared without brackets
 The result of `&` / `|` / `^` is compared without brackets, as in `a & b == c`. KSPL binds all three more tightly than comparison, so it reads `(a & b) == c`. **C reads it the other way** (`a & (b == c)`), and neither the types nor a run-time check catch it. Where each operator stands is the table in "6.1 The operator list and precedence" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#61-the-operator-list-and-precedence).
 * **Fix**: bracket the intended grouping (`(a & b) == c`). [H0301]'s "unneeded brackets" does not look at binary operations, so both can be followed.
 
-### [W0109] An early exit before the `defer` that frees an `Owned` value
-A value that must be freed can leave the function before its `defer` is reached, so it leaks. The `defer` is the statement that frees it at the end of the block. A `!`, `return`, `throw`, or a `break` / `continue` out of the block stands between binding a value whose type conforms to `Owned` and the `defer name.free()` later in the same block. That path leaves before the `defer` is registered, so the value is never freed. The finding sits on the exit and names both lines.
+### [W0109] An early exit before the `defer` that frees a `Manual_free` value
+A value that must be freed can leave the function before its `defer` is reached, so it leaks. The `defer` is the statement that frees it at the end of the block. A `!`, `return`, `throw`, or a `break` / `continue` out of the block stands between binding a value whose type conforms to `Manual_free` and the `defer name.free()` later in the same block. That path leaves before the `defer` is registered, so the value is never freed. The finding sits on the exit and names both lines.
+Automatic owners receive no such warning: their cleanup already covers every exit.
 * **Only a later `defer` in the same block starts the question.** A value freed by hand, passed on or kept has another shape. It is not read as a leak.
 * **Not reported**:
   * a `return` that returns the value itself (the caller owns it then);
@@ -143,7 +144,7 @@ The summary is the first paragraph of a `//<` run: everything before the first `
 * **Not reported**: a run whose summary is one line, however long the detail below the parting mark.
 
 ### [W0501] Conformance to a look-alike of a known trait
-A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Owned`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, the move check or the free tracking. **Nothing else reports this for these three.**
+A type claims a trait that only looks like one the compiler treats specially, so the special treatment never happens. The `X` of `impl <type>: X` names a different declaration with the same name as a trait the compiler knows (`Ref_counted` / `Move_only` / `Manual_free` / `Drop`). The known traits are matched by FQN, the name with its full module path (`std.lang.Ref_counted` and so on). So conforming to the look-alike turns on none of ARC's `retain`/`release`, automatic cleanup, move checks or free tracking. **Nothing else reports this for these four.**
 * **Fix**: to conform to the real trait, qualify it with `lang.`, as in `impl <type>: lang.Ref_counted` (the `std/lang` item in ["9. Files and import" in `../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md#9-files-and-import)). Where the name serves an unrelated purpose, rename it, or silence this for that one file with `##lint(W0501 = off)`.
 
 ### [W0502] A local or parameter hiding an imported module
@@ -272,7 +273,7 @@ A variable or parameter declared with the mutability marker `$` is never reassig
 
 ### [I0602] Detecting a hand-made ownership struct
 Off by default ("5.3" in [`SPEC-tools.md`](SPEC-tools.md#53-enabling-disabling-or-promoting-a-diagnostic-to-an-error-lint----lint--ksplccfg)). Reported where a struct not conforming to `Ref_counted` holds a raw-pointer field and defines its own `free` method: hand-made ownership. Structs under `std/` are out of scope (ARC's own primitives, such as `Arena` and `List`, would make the advice circular).
-* **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 The memory management model: `defer` / ARC / arenas" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
+* **Fix**: following `Rc<|T|>` / `Arc<|T|>`, consider conforming it to `Ref_counted` so that reference counting manages its lifetime ("8.4 Memory management" in [`../../docs/SPEC-programming-language.md`](../../docs/SPEC-programming-language.md)).
 
 ### [I0701] Error propagation using '!' is recommended
 A `catch` that only rethrows the caught error, as in `catch e { throw e; }`.

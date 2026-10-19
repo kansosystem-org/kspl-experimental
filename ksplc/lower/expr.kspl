@@ -11,6 +11,7 @@ import "ksplc/lower/abi" as lower_abi
 import "ksplc/lower/arc" as lower_arc
 import "ksplc/lower/ctx" { Lowering_ctx }
 import "ksplc/lower/defer" as lower_defer
+import "ksplc/lower/drop" as lower_drop
 import "ksplc/lower/order" as lower_order + { Operand_order }
 import "ksplc/lower/root" as lower_root
 import "ksplc/sema/body/call_defaults" as sema_body_call_defaults
@@ -31,10 +32,13 @@ struct Unwrap_ctx
 
 priv fn setup_result_unwrap(lhs: Ast_node$@, val_type_id: I32, lctx: Lowering_ctx$@,
     loc: base_ast.Loc): Unwrap_ctx
+    move: = lower_arc.Arc_take.decide(lhs, lctx)
     lhs.lower(lctx)
     res_type_id: = lhs.type_id
     err_type_id: = lctx.sema.env.get_result_err_id(res_type_id)
     res_name: = lhs.hoist_to_tmp(lctx, loc).text
+    if lctx.sema.env.type_has_drop(res_type_id)
+        move.retain(Ast_node.build_ident(res_name, res_type_id, loc), lctx)
 
     bool_id: = I32::sema_type_env.Builtin_type_id.bool_type
     is_err_expr: = Ast_node.build_result_access(res_name, res_type_id, .is_err, bool_id, loc)
@@ -181,7 +185,9 @@ impl Ast_node
         catch_node: = r.get_catch_chain_catch()
         // A Result some binding still owns lends its success, which the catch's value then
         // retains; a fresh one hands it over. Decided before lowering, as is_arc_fresh says.
-        recv_owned: = recv_node.is_arc_fresh(lctx)
+        recv_owned: =
+            recv_node.is_arc_fresh(lctx) ||
+            lctx.sema.env.type_has_drop(recv_node.type_id)
         u: = setup_result_unwrap(recv_node, r.type_id, lctx, loc)
         val_name: = gen_result_placeholder(lctx, u.val_type_id, u.is_void, loc)
 
@@ -468,6 +474,9 @@ impl Ast_node
             r.hoist_method_receiver(lctx)
         r.lower_default(lctx)
         ops.finish(lctx)
+
+        if op_text.equals("(")
+            lower_drop.finish_explicit_release(lctx, r)
 
     priv fn hoist_index_receiver(r: Self$@, lctx: Lowering_ctx$@) //<
         //< It copies a subscript's slice receiver with a side effect into a temporary

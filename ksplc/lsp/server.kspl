@@ -87,7 +87,6 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
     cap: Sz = 65536
     rbuf: = U8$@::arena.alloc(cap)
     $acc: = Str_builder.new()
-    defer acc.free()
     $ok: = Worker_end.exited
     // Each search resumes marker-length-1 before where the last found none. So a marker crossing a
     // chunk boundary is still found. Re-walking the whole buffer per chunk is quadratic in an
@@ -112,7 +111,6 @@ priv fn pump_worker_output(worker: subproc.Piped_child@, arena: Arena$@): Worker
         if idx >= 0
             if idx > 0
                 $clean: = Str_builder.new()
-                defer clean.free()
                 relay_stripping_alive(acc.slice().sub(0, idx), clean@)
                 io.out().s(clean.slice())
                 io.out().flush()
@@ -225,9 +223,10 @@ impl Lsp_docs
                 return e.key
         return ""
 
-// It owns memory and releases it with `free()` (why it must conform: `Owned` in std/lang.kspl).
-// [W0107] checks only `pub` methods, so nothing warns if this one, with `priv fn free`, is missing.
-impl Lsp_docs: Owned {}
+// It owns memory and releases it with `free()` (why it must conform: `Manual_free` in
+// std/lang.kspl). [W0107] checks only `pub` methods, so nothing warns if this one, with `priv fn
+// free`, is missing.
+impl Lsp_docs: Manual_free {}
 priv fn build_doc_frame(method: U8[], uri: U8[], text: U8[], arena: Arena$@): Str_builder //<
     //< It builds a message (framed) carrying one document's cached text: a didOpen or a restore
     $b: = Json_builder.new(arena)
@@ -371,7 +370,6 @@ fn ksplc_lsp_read_editor(r: Editor_reader$@): Void$@ //<
     defer arena.free()
     base: = arena.save()
     $body: = Str_builder.new()
-    defer body.free()
     for
         arena.restore(base)
         $got: = true
@@ -443,7 +441,7 @@ impl Editor_reader
         r.arrived.free()
         dealloc(Void$@::r)
 
-impl Editor_reader: Owned {}
+impl Editor_reader: Manual_free {}
 
 fn run_lsp_supervisor(base_parser: kspeg.Target$@): Void
     // Where no worker or no reading thread can be started, it runs in-process instead.
@@ -468,7 +466,6 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
     defer arena.free()
     base: = arena.save()
     $taken: = Str_builder.new()
-    defer taken.free()
 
     for
         arena.restore(base)
@@ -497,7 +494,6 @@ priv fn supervise(reader: Editor_reader$@, first_worker: subproc.Piped_child?) /
             worker = check_doc(docs@, worker, named, arena)
         // forward to the worker (rebuilt with a proper header)
         $frame: = Str_builder.new()
-        defer frame.free()
         jsonrpc.frame_into(frame@, msg_body)
         end: = exchange(worker@, frame.slice(), arena)
         $handled: = false

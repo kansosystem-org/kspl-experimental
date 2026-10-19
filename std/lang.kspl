@@ -606,10 +606,17 @@ pub trait Move_only { //< a value that cannot be copied implicitly
     //< A structure containing a `Move_only` field by value is also `Move_only`.
 }
 
-pub trait Owned //< this type owns memory or a resource, and releases it with `free()`
+pub trait Drop //< an owner whose cleanup runs automatically when its lifetime ends
     //<
-    //< **Implement this trait for types that release resources.** A `free()` method alone does not
-    //< enable ownership tracking. [W0107] identifies a missing implementation.
+    //< Passing it by value transfers ownership. The compiler calls `drop` on the remaining owner
+    //< on every normal exit, including a propagated error. A panic aborts without cleanup.
+    //< No separate `Move_only` implementation is needed. The method cannot report failure.
+    priv fn drop(r: Self) //< releases the owned resource; only the compiler calls it
+
+pub trait Manual_free //< an explicit free ends this value's usable lifetime
+    //<
+    //< Use this for manual cleanup. Use `Drop` for automatic cleanup; it needs neither this trait
+    //< nor a separate `Move_only`. A `free()` method alone does not enable release tracking.
     //< **`free` cannot report failure.** It runs during exit or `defer`, when the caller cannot
     //< handle an error. Put cleanup that needs an error check in a separate method, such as
     //< `io.File_stream.sync()`.

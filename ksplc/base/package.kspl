@@ -107,7 +107,6 @@ priv fn decl_of(unit: U8[]): Package_decl //<
     decl: = decl_at(base_locate.package_dir(unit))
     if decl.name.len > 0 && !decl.name.equals(unit)
         $why: = Str_builder.new()
-        defer why.free()
         why.s("this folder is reached as the package '\{unit\}' but names itself ")
             .s("'\{decl.name\}'")
         base_config_file.reject(name_line(decl.file), why.slice())
@@ -207,12 +206,11 @@ fn refused_use(importer: U8[], target: U8[]): U8[] //<
     for u in decl.uses
         if u.equals(to)
             return ""
-    $why: = Str_builder.new()
-    defer why.free()
+    why: = base_core.arena.text()
     why
         .s("the package '\{from\}' does not say it uses '\{to\}' (add it to 'uses' in the [package] \
             ").s("section of \{base_locate.to_project_relative(decl.file)\})")
-    return base_core.arena.dup_str(why.slice())
+    return why.take()
 
 fn here(): Package_decl //< the package the current folder is in (`ksplc info package`)
     top: = base_config_file.package_top(base_locate.cwd())

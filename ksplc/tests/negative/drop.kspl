@@ -1,0 +1,184 @@
+//< Automatic cleanup rejects duplicate ownership and explicit destructor calls
+// ==== case drop_moves_without_a_second_marker
+// EXPECT: was moved out of and cannot be used again
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn take(h: Handle) {}
+fn main()
+  h: Handle = ::{ .id = 1 }
+  take(h)
+  take(h)
+// ==== case drop_receiver_cannot_be_by_value
+// EXPECT: Drop.drop must receive 'Self$@'
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self) {}
+fn main() {}
+// ==== case drop_must_be_private
+// EXPECT: Drop.drop must be priv
+pub struct Handle
+  id: I32
+impl Handle: Drop
+  pub fn drop(r: Self$@) {}
+fn main() {}
+// ==== case drop_cannot_be_called_even_in_its_file
+// EXPECT: a destructor cannot be called or taken as a function value
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  $h: Handle = ::{ .id = 1 }
+  h.drop()
+// ==== case drop_cannot_be_taken_as_a_function
+// EXPECT: a destructor cannot be called or taken as a function value
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  _f: fn(r: Handle$@) = Handle.drop
+// ==== case drop_cannot_report_failure
+// EXPECT: method 'drop': return type mismatch
+enum Failure
+  failed
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@): Void!Failure
+    throw .failed
+fn main() {}
+// ==== case drop_cannot_be_global
+// EXPECT: an automatic owner cannot be a global
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+$h: Handle = ::{ .id = 1 }
+fn main() {}
+// ==== case drop_owns_its_fields_until_its_hook_runs
+// EXPECT: cannot move a field out of a type with Drop
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+struct Outer
+  inner: Handle
+impl Outer: Drop
+  priv fn drop(r: Self$@) {}
+fn take(h: Handle) {}
+fn main()
+  h: Outer = ::{ .inner = ::{ .id = 1 } }
+  take(h.inner)
+// ==== case drop_cannot_move_out_through_an_index
+// EXPECT: cannot move a Drop value through an index
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn take(h: Handle) {}
+fn main()
+  h: Handle[1] = ::{ ::{ .id = 1 } }
+  take(h[0])
+// ==== case drop_requires_a_value_struct
+// EXPECT: Drop requires a struct type
+impl I32: Drop
+  priv fn drop(r: Self$@) {}
+fn main() {}
+// ==== case drop_cannot_share_its_owner
+// EXPECT: a type cannot implement both Drop and Ref_counted
+struct Handle
+  id: I32
+impl Handle: Ref_counted
+  priv fn retain(r: Self) {}
+  priv fn release(r: Self) {}
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main() {}
+// ==== case drop_cannot_be_a_constant
+// EXPECT: a constant cannot own automatic cleanup
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  const h: Handle = ::{ .id = 1 }
+// ==== case drop_cannot_move_through_a_pointer
+// EXPECT: cannot move a Drop value through a borrowed pointer
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn take(h: Handle) {}
+fn transfer(p: Handle$@)
+  take(p$)
+fn main() {}
+// ==== case raw_storage_cannot_take_a_local_owner
+// EXPECT: raw-storage operations cannot end a local owner's lifetime
+import "std/mem"
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  $h: Handle = ::{ .id = 1 }
+  _taken: = mem.take_at(h@)
+// ==== case raw_storage_cannot_take_a_local_array_element
+// EXPECT: raw-storage operations cannot end a local owner's lifetime
+import "std/mem"
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  $h: Handle[1] = ::{ ::{ .id = 1 } }
+  _taken: = mem.take_at(h[0]@)
+// ==== case used_generic_method_cannot_copy_an_automatic_owner
+// EXPECT: cannot move a Drop value through a borrowed pointer
+import "std/ds" { List }
+struct Handle
+  id: I32
+impl Handle: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  $items: = List<|Handle|>.new(null)
+  defer items.free()
+  items.push(::{ .id = 1 })
+  _copy: = items.get(0)
+// ==== case generic_destructor_cannot_be_called
+// EXPECT: a destructor cannot be called or taken as a function value
+struct Handle<|T|>
+  value: T
+impl<|T|> Handle<|T|>: Drop
+  priv fn drop(r: Self$@) {}
+fn main()
+  $h: Handle<|I32|> = ::{ .value = 1 }
+  h.drop()
+// ==== case generic_trait_view_checks_every_required_method
+// EXPECT: has no field
+trait Inspect
+  fn good(r: Self): I32
+  fn bad(r: Self): I32
+struct Box<|T|>
+  value: T
+impl<|T|> Box<|T|>: Inspect
+  fn good(r: Self@): I32
+    return 1
+  fn bad(r: Self@): I32
+    return r.value.no_such_field
+fn use(v: Inspect) {}
+fn main()
+  value: Box<|I32|> = ::{ .value = 1 }
+  use(value)
+// ==== case custom_destructor_keeps_automatic_fields_alive
+// EXPECT: cannot release an automatic field of a type with Drop
+import "std/str" { Str_builder }
+struct Outer
+  builder: Str_builder
+impl Outer: Drop
+  priv fn drop(r: Self$@)
+    r.builder.free()
+fn main() {}
